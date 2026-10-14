@@ -73,3 +73,15 @@ test('a real reconcile emits no progress for unchanged folders and one message f
     assert.match(result.stdout, /unchanged and changed folder progress verified/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('a readonly projects query never launches a nested worker for pending local bridge repair', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'projects-pending-repair-'));
+  try {
+    const result = spawnSync(require('electron'), [path.join(__dirname, 'fixtures/projects-worker-equivalence.cjs')], {
+      cwd: path.join(__dirname, '..'), encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: dir, PROJECTS_QUERY_PENDING_REPAIR: '1' },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /pending repair query verified/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

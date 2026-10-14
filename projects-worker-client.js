@@ -3,13 +3,14 @@
 // see .ai/contexts/session-cache.md ("Projects query worker")
 const RECONCILE_TIMEOUT_MS = 5 * 60 * 1000;
 
-function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3 }) {
+function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3, yieldProgress = false }) {
   let worker = null;
   let stopped = false;
   let active = null;
   let pending = null;
   let nextId = 0;
   const waiters = new Set();
+  let receiving = Promise.resolve();
   const mergeOptions = (a, b) => ({ ...a, ...b, reconcile: !!(a?.reconcile || b?.reconcile), measureBytes: !!(a?.measureBytes || b?.measureBytes) });
 
   function settle(waiter, error, result) {
@@ -75,7 +76,14 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
       if (!worker) {
         const current = workerFactory();
         worker = current;
-        current.on('message', message => { if (worker === current) receive(message); });
+        current.on('message', message => {
+          if (worker !== current) return;
+          if (!yieldProgress) { receive(message); return; }
+          receiving = receiving.then(async () => {
+            await new Promise(resolve => setImmediate(resolve));
+            if (worker === current) receive(message);
+          }).catch(error => fail(error));
+        });
         current.on('error', error => { if (worker === current) fail(error); });
         current.on('exit', code => { if (worker === current) fail(new Error(`projects worker exited ${code}`)); });
       }

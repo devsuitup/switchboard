@@ -4,6 +4,7 @@
 const { parentPort, workerData } = require('node:worker_threads');
 const Database = require('better-sqlite3');
 const cache = require('../session-cache');
+const { effectBatches } = require('../index-effect-batches');
 const db = new Database(workerData.dbPath, { readonly: true, fileMustExist: true });
 db.pragma('busy_timeout = 5000');
 
@@ -12,6 +13,7 @@ const readSnapshot = db.transaction(() => ({
   meta: db.prepare('SELECT * FROM session_meta').all(),
   folders: db.prepare('SELECT * FROM cache_meta').all(),
   settings: db.prepare('SELECT key, value FROM settings').all(),
+  search: db.prepare('SELECT id, type, folder FROM search_map').all(),
 }));
 
 function build(message) {
@@ -46,10 +48,16 @@ function build(message) {
     deleteSearchFolder: () => {},
     deleteSearchSession: () => {},
     upsertSearchEntries: () => {},
+    setSetting: (key, value) => settings.set(key, value),
   };
   for (const [name, write] of Object.entries(writers)) {
     adapter[name] = (...args) => {
-      effects.push({ name, args: structuredClone(args) });
+      if (name === 'deleteCachedFolder') {
+        for (const row of rows.values()) if (row.folder === args[0]) effects.push({ name: 'deleteCachedSession', args: [row.sessionId] });
+        effects.push({ name: 'deleteFolderMeta', args });
+      } else if (name === 'deleteSearchFolder') {
+        for (const row of data.search) if (row.folder === args[0]) effects.push({ name: 'deleteSearchEntry', args: [row.type, row.id] });
+      } else effects.push({ name, args: structuredClone(args) });
       return write(...args);
     };
   }
@@ -61,17 +69,26 @@ function build(message) {
     getMainWindow: () => null,
     log: console,
     db: adapter,
+    skipRepair: true,
   });
   cache.setRemoteRoots(new Map(message.remoteRoots || []));
   cache.resetProjectsWorkerRetainedRows();
   let publishedLiveRows = new Map();
   const reconciled = !!message.reconcile && adapter.isInitialScanComplete();
-  if (reconciled) cache.reconcileCacheFromFilesystem({ throttle: false, onFolder: () => {
+  if (reconciled) cache.reconcileCacheFromFilesystem({ throttle: false, onFolder: folder => {
     const keptLiveRows = cache.getProjectsWorkerRetainedRows();
     const liveRowsChanged = keptLiveRows.length !== publishedLiveRows.size
       || keptLiveRows.some(([id, folder]) => publishedLiveRows.get(id) !== folder);
     if (!effects.length && !liveRowsChanged) return;
-    parentPort.postMessage({ id: message.id, progress: { effects: effects.splice(0), keptLiveRows } });
+    const pending = settings.get('indexing_incomplete_folders') || [];
+    const writes = effects.splice(0);
+    if (writes.length) {
+      writes.unshift({ name: 'setSetting', args: ['indexing_incomplete_folders', [...new Set([...pending, folder])]] });
+      writes.push({ name: 'setSetting', args: ['indexing_incomplete_folders', pending.filter(key => key !== folder)] });
+      settings.set('indexing_incomplete_folders', pending.filter(key => key !== folder));
+    }
+    const batches = effectBatches(writes);
+    for (const batch of batches.length ? batches : [{ effects: [] }]) parentPort.postMessage({ id: message.id, progress: { ...batch, keptLiveRows } });
     publishedLiveRows = new Map(keptLiveRows);
   } });
   const defaultProjects = cache.buildProjectsFromCache(false);

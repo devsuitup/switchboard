@@ -132,7 +132,7 @@ test('an empty custom-title backfill is memoized without rescanning cached rows 
       const first = cache.backfillCustomTitles();
       await first;
       assert.equal(cache.backfillCustomTitles(), first);
-      assert.equal(reads, 1);
+      assert.equal(reads, 0, 'the worker must read missing-title candidates instead of main');
     })().catch(error => { console.error(error); process.exitCode = 1; });
   `, root);
 });
@@ -148,18 +148,19 @@ test('header-only upserts leave unknown titles eligible for backfill and preserv
     db.upsertCachedSessions([{ ...row, modified: '2026-10-14T01:00:00.000Z' }]);
     assert.equal(db.getCachedSession(id).customTitle, null, 'header refresh does not mark a legacy title absent');
     fs.utimesSync(file, new Date('2026-10-14T01:00:00.000Z'), new Date('2026-10-14T01:00:00.000Z'));
-    cache.refreshFolder(folder);
-    assert.equal(db.getCachedSession(id).customTitle, null, 'the public header refresh preserves unknown titles');
     (async () => {
+      await cache.refreshFolder(folder);
+      assert.equal(db.getCachedSession(id).customTitle, null, 'the public header refresh preserves unknown titles');
       await cache.backfillCustomTitles();
       assert.equal(db.getCachedSession(id).customTitle, 'launch (3)');
       db.upsertCachedSessions([row]);
       assert.equal(db.getCachedSession(id).customTitle, 'launch (3)', 'an omitted title does not overwrite a known title');
       fs.utimesSync(file, new Date('2026-10-14T02:00:00.000Z'), new Date('2026-10-14T02:00:00.000Z'));
-      cache.refreshFolder(folder);
+      await cache.refreshFolder(folder);
       assert.equal(db.getCachedSession(id).customTitle, 'launch (3)', 'the public header refresh preserves known titles');
       db.upsertCachedSessions([{ ...row, customTitle: '' }]);
       assert.equal(db.getCachedSession(id).customTitle, '', 'a full scan can record a known absence');
+      cache.shutdownIndexing();
       db.closeDb();
     })().catch(error => { console.error(error); process.exitCode = 1; });
   `, root);

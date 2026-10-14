@@ -173,12 +173,19 @@ function createRemoteIndexer(ctx) {
   // Nothing else ever revisits a folder whose alias is no longer declared.
   function pruneUnknownAliases(list) {
     if (!ctx.listIndexedFolderKeys || !ctx.dropFolder) return 0;
+    const keys = ctx.listIndexedFolderKeys();
+    return keys?.then ? keys.then(value => pruneIndexedKeys(list, value)) : pruneIndexedKeys(list, keys);
+  }
+
+  function pruneIndexedKeys(list, keys) {
     const known = new Set(list.map(h => h.alias));
     let dropped = 0;
-    for (const key of ctx.listIndexedFolderKeys()) {
+    const pending = [];
+    for (const key of keys) {
       const { alias } = parseFolderKey(key);
       if (alias === null || known.has(alias)) continue;
-      ctx.dropFolder(key);
+      const drop = ctx.dropFolder(key);
+      if (drop?.then) pending.push(drop);
       dropped++;
     }
     for (const alias of [...remoteSessions.keys()]) {
@@ -193,10 +200,11 @@ function createRemoteIndexer(ctx) {
     for (const alias of [...hostBackoff.keys()]) {
       if (!known.has(alias)) hostBackoff.delete(alias);
     }
-    return dropped;
+    return pending.length ? Promise.all(pending).then(() => dropped) : dropped;
   }
 
   function mirrorFolders(projectsDir) {
+    if (ctx.listMirrorFolders) return ctx.listMirrorFolders(projectsDir);
     try {
       return fs.readdirSync(projectsDir, { withFileTypes: true })
         .filter(d => d.isDirectory() && d.name !== '.git')
@@ -229,7 +237,7 @@ function createRemoteIndexer(ctx) {
   async function refreshHost(host) {
     const projectsDir = mirrorProjectsDirFor(ctx.dataDir, host.alias);
     const manifestPath = manifestPathFor(ctx.dataDir, host.alias);
-    fs.mkdirSync(projectsDir, { recursive: true });
+    await fs.promises.mkdir(projectsDir, { recursive: true });
 
     const result = await sync({
       alias: host.alias,
@@ -251,11 +259,11 @@ function createRemoteIndexer(ctx) {
     // A mirror on disk but absent from the cache reports no change; index it once.
     const indexed = new Set();
     if (ctx.listIndexedFolderKeys) {
-      for (const key of ctx.listIndexedFolderKeys()) {
+      for (const key of await ctx.listIndexedFolderKeys()) {
         const parsed = parseFolderKey(key);
         if (parsed.alias === host.alias) indexed.add(parsed.folder);
       }
-      const present = mirrorFolders(projectsDir);
+      const present = await mirrorFolders(projectsDir);
       for (const folder of present) {
         if (!indexed.has(folder)) toScan.add(folder);
       }
@@ -263,7 +271,7 @@ function createRemoteIndexer(ctx) {
       if (ctx.dropFolder) {
         const presentSet = new Set(present);
         for (const folder of indexed) {
-          if (!presentSet.has(folder)) ctx.dropFolder(joinFolderKey(host.alias, folder));
+          if (!presentSet.has(folder)) await ctx.dropFolder(joinFolderKey(host.alias, folder));
         }
       }
     }
@@ -299,10 +307,11 @@ function createRemoteIndexer(ctx) {
     if (list.length === 0) return { skipped: true, hosts: 0 };
 
     inFlight = true;
-    let changed = pruneUnknownAliases(list) > 0;
+    let changed = false;
     const errors = [];
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
     try {
+      changed = await pruneUnknownAliases(list) > 0;
       for (const host of list) {
         if (stopped) break;
         if (hostInFlight.has(host.alias)) continue;
@@ -374,7 +383,8 @@ function createRemoteIndexer(ctx) {
     publishRoots(list);
     // No host declared: no timer, and the transport is never touched.
     if (list.length === 0) return false;
-    pruneUnknownAliases(list);
+    const pruning = pruneUnknownAliases(list);
+    if (pruning?.then) pruning.catch(error => log.warn(`[remote] prune failed: ${error.message}`));
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
     timer = timers.setInterval(() => { refreshNow().catch(() => {}); }, intervalMs);
     if (timer && typeof timer.unref === 'function') timer.unref();

@@ -41,8 +41,11 @@ async function run() {
     ['panel', { isPlainTerminal: true, projectPath: project, _openedAt: Date.parse(base.created), panelFor: 'archived' }],
     ['archived', { projectPath: project }],
   ]);
-  cache.init({ PROJECTS_DIR: projectsDir, activeSessions, getMainWindow: () => null, log: console, db });
-  const worker = new Worker(path.join(__dirname, '../../workers/projects-query.js'), { workerData: { dbPath: db.DB_PATH, projectsDir } });
+  cache.init({ PROJECTS_DIR: projectsDir, activeSessions, getMainWindow: () => null, log: console, db: { ...db, DB_PATH: undefined } });
+  if (process.env.PROJECTS_QUERY_PENDING_REPAIR) db.setSetting('bridge_uuid_reindex_folders', [folder]);
+  const worker = new Worker(process.env.PROJECTS_QUERY_PENDING_REPAIR
+    ? path.join(__dirname, 'projects-query-repair-probe.cjs') : path.join(__dirname, '../../workers/projects-query.js'),
+  { workerData: { dbPath: db.DB_PATH, projectsDir } });
   let nextId = 0;
   const request = reconcile => new Promise((resolve, reject) => {
     const id = ++nextId;
@@ -60,6 +63,13 @@ async function run() {
     worker.postMessage({ id, reconcile, activeSessions: [...activeSessions], remoteRoots: [] });
   });
   try {
+    if (process.env.PROJECTS_QUERY_PENDING_REPAIR) {
+      const reply = await request(false);
+      assert.equal(reply.nestedWorkers, 0, 'a readonly projects query must leave pending repairs to the indexing lane');
+      assert.deepEqual(db.getSetting('bridge_uuid_reindex_folders'), [folder]);
+      console.log('pending repair query verified');
+      return;
+    }
     for (const complete of [true, false]) {
       db.setSetting('initial_scan_complete', complete);
       const expected = { defaultProjects: cache.buildProjectsFromCache(false), allProjects: cache.buildProjectsFromCache(true) };
@@ -93,7 +103,7 @@ async function run() {
     process.env.SWITCHBOARD_DATA_DIR = copyDir;
     delete require.cache[require.resolve('../../db')];
     const workerDb = require('../../db');
-    cache.init({ PROJECTS_DIR: projectsDir, activeSessions, getMainWindow: () => null, log: console, db: workerDb });
+    cache.init({ PROJECTS_DIR: projectsDir, activeSessions, getMainWindow: () => null, log: console, db: { ...workerDb, DB_PATH: undefined } });
     cache.resetProjectsWorkerRetainedRows();
     if (process.env.PROJECTS_WORKER_DROP_WRITE) actual.effects = actual.effects.filter(effect => effect.name !== 'upsertCachedSessions');
     cache.applyProjectsWorkerEffects(actual);

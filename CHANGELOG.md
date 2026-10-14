@@ -17,6 +17,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Running subagents stay visible during long, silent tool calls when Claude records their launch, and disappear as soon as it records their completion. The sidebar and grid share the same running tasks; file activity remains the fallback for older records. Failed attempts to message a finished subagent no longer leave it shown as running, including overlapping attempts. (#624)
+- Sessions appear progressively during startup and refresh without holding up the window. Typing and navigation can continue while a large session history is indexed. (#616)
 - When several subagents work under one conversation, each now shows its own activity, including the final update during a burst, for both local and remote sessions. (#622)
 - Memory and Work Files lists open without blocking the window while sessions stream, and show their files before search indexing finishes, including when you reopen a list while its previous indexing is still running. Search indexing errors retry in the background without interrupting a list that is still loading. If loading fails, the previous list stays visible and a notice explains how to retry by reopening the tab. (#616)
 - Reading old transcripts no longer marks sessions as Working or makes historical subagents appear active. Transcript writes still update activity, including a newly created transcript's first write and a final write during a burst. (#621)

@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const os = require('os');
+const deferCacheRepairs = process.env.SWITCHBOARD_DEFER_CACHE_REPAIRS === '1';
 
 // SWITCHBOARD_DATA_DIR lets dev/agent runs use a separate DB from the
 // installed AppImage so they don't race on session_cache (main.js also
@@ -239,6 +240,10 @@ const migrations = [
     try {
       // Both tag orders the CLI writes: <command-name> first, and
       // <command-message> first (/auto-compact, /pre-compact).
+      if (deferCacheRepairs) {
+        db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('bookkeeping_repair_pending', 'true')").run();
+        return;
+      }
       const bad = db.prepare(`SELECT sessionId, folder FROM session_cache
          WHERE summary LIKE '<command-name>%' OR summary LIKE '<command-message>%'
             OR summary LIKE '<local-command-stdout>%'`
@@ -599,6 +604,42 @@ function replaceSessionMetrics(sessionId, rows) {
   replaceSessionMetricsBatch(sessionId, rows);
 }
 
+const appendSessionMetrics = db.transaction((sessionId, rows) => {
+  for (const r of rows) {
+    stmts.metricsInsert.run(sessionId, r.date, r.model || '', r.messageCount | 0, r.toolCallCount | 0,
+      r.inputTokens | 0, r.outputTokens | 0, r.cacheReadTokens | 0, r.cacheCreationTokens | 0);
+  }
+});
+
+function deleteFolderMeta(folder) { stmts.metaDelete.run(folder); }
+
+function deleteSearchEntry(type, id) { applySearchFileBatch(type, [id], []); }
+
+function withIndexTransaction(callback) { return db.transaction(callback)(); }
+
+const cachedAppendStatements = new Map();
+function appendCachedField(id, field, chunk) {
+  const fields = ['projectPath', 'summary', 'firstPrompt', 'slug', 'aiTitle', 'subagentType', 'description',
+    'entrypoint', 'scheduleSlug', 'continuationIndex', 'customTitle'];
+  if (!fields.includes(field)) throw new Error('unsupported cached field');
+  if (!cachedAppendStatements.has(field)) cachedAppendStatements.set(field,
+    db.prepare(`UPDATE session_cache SET ${field} = COALESCE(${field}, '') || ? WHERE sessionId = ?`));
+  cachedAppendStatements.get(field).run(chunk, id);
+}
+
+function appendSessionName(id, chunk) {
+  db.prepare("UPDATE session_meta SET name = COALESCE(name, '') || ? WHERE sessionId = ?").run(chunk, id);
+}
+
+function appendSearchField(type, id, field, chunk) {
+  if (field !== 'title' && field !== 'body') throw new Error('unsupported search field');
+  const row = stmts.searchMapLookup.get(id, type);
+  if (!row) return;
+  stmts.searchDeleteByRowid.run(row.rowid);
+  db.prepare(`UPDATE search_content SET ${field} = COALESCE(${field}, '') || ? WHERE rowid = ?`).run(chunk, row.rowid);
+  db.prepare('INSERT INTO search_fts(rowid, type, id, folder, title, body) SELECT rowid, type, id, folder, title, body FROM search_content WHERE rowid = ?').run(row.rowid);
+}
+
 function getCachedByParent(parentSessionId) {
   return stmts.cacheGetByParent.all(parentSessionId);
 }
@@ -938,7 +979,7 @@ function closeDb() {
 
 // see .ai/contexts/session-cache.md ("Bridge history divergence")
 try {
-  if (getSetting('bridge_uuid_index_version') !== 1) {
+  if (!deferCacheRepairs && getSetting('bridge_uuid_index_version') !== 1) {
     db.transaction(() => {
       const bridged = db.prepare("SELECT sessionId, folder FROM session_cache WHERE parentSessionId IS NULL AND bridgeSessionId IS NOT NULL AND bridgeSessionId != ''").all();
       setSetting('bridge_uuid_reindex_folders', [...new Set(bridged.map(row => row.folder))]);
@@ -962,7 +1003,8 @@ module.exports = {
   setCachedContinuationIndex: (sessionId, index) => stmts.cacheSetContinuationIndex.run(index, sessionId),
   setCachedCustomTitles, getCachedMissingCustomTitle,
   deleteCachedSession, deleteCachedFolder,
-  replaceSessionMetrics,
+  replaceSessionMetrics, appendSessionMetrics, deleteFolderMeta, deleteSearchEntry,
+  withIndexTransaction, appendCachedField, appendSessionName, appendSearchField,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   getSearchFileIds, applySearchFileBatch,

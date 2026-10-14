@@ -7,7 +7,9 @@
 | File | LOC | Role |
 |---|---|---|
 | `db.js` | ~895 | SQLite (better-sqlite3) schema + prepared statements. Owns `session_cache`, `session_meta`, `cache_meta`, `settings`, `search_fts` (FTS5 + trigram tokenizer). |
-| `session-cache.js` | ~690 | Indexer + watcher. Reads `~/.claude/projects/<folder>/*.jsonl` (+ subagents subdir), populates rows, emits projects-changed events. |
+| `session-cache.js` | ~1450 | Cache semantics, indexing/query relays and fixture oracle; emits projects-changed events. |
+| `workers/index-sessions.js`, `indexing-worker-client.js`, `index-effect-batches.js` | — | Readonly indexing/query worker, mutation lifecycle and bounded ordered effects. |
+| `workers/session-transitions-query.js` | — | Filesystem observations for live parent/subagent transitions. |
 | `read-session-file.js` | ~420 | Streaming JSONL reader. `readSessionFile()` (full) + `readSessionDisplayHeader()` (256 KB / 500 lines — cheap header for huge files). |
 | `encode-project-path.js` | 28 | `/path/to/project` → `-path-to-project` folder name. Mirrors Claude CLI's encoding. |
 | `derive-project-path.js` | ~155 | Inverse: read `cwd` field from JSONL, derive original projectPath. **Collapses worktrees back to parent repo** via `resolveWorktreePath`. |
@@ -27,8 +29,8 @@ From `db.js`:
 From `session-cache.js`:
 
 - `init(ctx)` — wire main process → cache (mainWindow ref for IPC events)
-- `refreshFolder(folder, opts)` — opts `{files: Set<string>}` for targeted refresh (watcher payload). Defaults to full folder walk.
-- `populateCacheFromFilesystem()` / `populateCacheViaWorker()` — initial scan / re-scan. The worker (`workers/scan-projects.js`) streams one `{type:'folder', result, current, total}` message per on-disk folder (plus a final `{type:'done'}`) instead of buffering the whole tree, so each folder is written to the DB and pushed to the renderer as soon as it's read — a large history no longer leaves the sidebar empty for the entire scan.
+- `refreshFolder(folder, opts)` — opts `{files: Set<string>}` for targeted refresh (watcher payload). Returns a Promise in production; defaults to a full folder refresh in the worker. The synchronous adapter is retained for fixture oracles.
+- `populateCacheViaWorker()` — initial scan / re-scan. Production uses `workers/index-sessions.js`, which publishes bounded batches with acknowledgement and per-folder progress. `workers/scan-projects.js` remains the legacy scanner/oracle. Folders appear progressively instead of waiting for the whole history.
 - `buildProjectsFromCache(showArchived)` — produces the sidebar payload (sorted, grouped by project, missing flag computed here). It also injects every live plain-terminal PTY from `activeSessions` as a synthetic row, so a terminal sorts among the cached sessions even though it has no JSONL; the row's `summary` is the hard-coded string `Terminal`, which is what the sidebar displays — the renderer's own session object is never the one shown. A panel shell is a plain terminal too and is excluded here by `isPanelShellSession` (`panel-terminal-target.js`); see `.ai/contexts/panel-terminal.md` for the full list of places that have to skip one.
 - `notifyRendererProjectsChanged()` — throttled (~1.5s leading-edge) push to renderer
 - `sendIndexingProgress()` (internal) — emits the `indexing-progress` IPC event, gated on `coldStart` (captured once at the top of `populateCacheViaWorker()` via `!isInitialScanComplete()`) and throttled to ~4 events/s (the first event and every `done:true` always pass). Feeds the renderer's first-run banner; see `.ai/contexts/ipc-bridge.md`. A `done:true` payload carrying `error` keeps the banner visible with the failure message instead of hiding it.
@@ -60,6 +62,92 @@ in guarded, yielding batches; unchanged files are not re-indexed. See
 [viewer-panel.md](viewer-panel.md#file-list-workers) for the path-policy,
 incremental indexing and test contracts. `getKnownProjectPaths` remains on
 main for explicit guarded panel reads/saves; neither list handler calls it.
+
+## Startup indexing worker
+
+Issue #616 slice 3 uses `workers/index-sessions.js` and
+`indexing-worker-client.js` for production cache population, watcher refresh,
+remote full/subset scans, folder deletion and entrypoint/title backfills.
+`session-cache.init` opts into this lane when its DB adapter supplies `DB_PATH`
+and `getProjectsRevision`; adapters without a database path keep the synchronous
+helpers as the fixture equivalence oracle. Main is the only SQLite writer.
+
+The worker opens a readonly WAL connection, snapshots each folder's rows, user
+metadata, search identifiers and settings, and reuses the existing parsing,
+bridge merging, refresh and full/partial write helpers with an effects adapter.
+Metadata for a session not yet in session_cache is looked up on the worker too,
+so a preserved Switchboard rename still supplies its FTS title on a rebuild.
+Remote subsets reuse the original full-file subset parser in scan-projects.js;
+they retain complete FTS bodies and metrics instead of becoming display-header
+refreshes. Successful remote rebuilds still clear their bridge repair key.
+
+Effects are sent in ordered batches of at most 50 operations and 128 KiB of
+serialized effect data. Main yields with setImmediate before each apply,
+validates the SQLite/live-session revision, applies one transaction, then
+acknowledges the resulting revision. The worker waits for that acknowledgement
+before sending the next batch. Folder deletes are expanded into row/FTS deletes;
+metrics are cleared and appended in bounded pieces. Large continuation indexes,
+cached text fields, names and search fields are appended in UTF-16-safe chunks,
+preserving the original strings, including a large unterminated JSONL tail.
+The byte limit covers transported effects, not SQLite's internal work on a
+growing field or a large FTS entry.
+
+A version conflict retries the folder up to three times. For acknowledged
+self-writes that still match SQLite, the worker reuses the original cache
+baseline while re-reading current files and metadata. This prevents partially
+upserted new files from hitting the mtime fast path before their FTS/metrics have
+been applied; externally changed rows retain their current cache state.
+`indexing_incomplete_folders` is persisted before a folder's writes and cleared
+only at their end. A later request or startup repairs an interrupted folder with
+a full scan, including after an apply error, timeout, worker exit or restart.
+Remote repairs wait until that alias's root is declared. Partial folder contents
+can be visible while a scan fills progressively, as before.
+
+There is one active mutation job. Pending refreshes for the same folder coalesce
+their file paths; a full-folder refresh wins over subsets. Refresh callers have
+a fixed 30-second deadline from registration. Their queued mutations survive
+caller expiry, so a long startup scan cannot discard a watcher change. Scans,
+repairs and backfills have a ten-minute dispatch ceiling, matching the existing
+subset scanner, and a ten-minute-plus-30-second caller ceiling including queue
+time. Apply errors terminate that worker and reject the job; later jobs restart
+it. Shutdown rejects callers and terminates both indexing and query workers.
+
+An independent readonly query client uses the same worker entrypoint for
+statistics, cached folder keys, remote mirror directory inventories and the
+pre-spawn parent filename snapshot. These reads never wait behind full startup
+indexing. Project queries remain on their existing worker and startup restore
+never awaits the full scan. Reconciliation progress also uses
+`index-effect-batches.js`: effects are split off main and applied in order with
+an event-loop yield between messages. The indexing lane's ten-minute ceiling does not
+replace the Projects client's existing five-minute reconcile ceiling.
+
+`workers/session-transitions-query.js` collects parent filenames, subagent
+stats/metadata, new-file signals and bounded continuation indexes. Watcher,
+recheck and settle paths replay those observations on main; owner verification,
+PTY re-keying and IPC events stay on main. Replies are rejected if the projected
+session identity/liveness, known filenames, subagent state or continuation cursor
+changed. The synchronous detector remains an oracle for its existing tests.
+
+Main enables `SWITCHBOARD_DEFER_CACHE_REPAIRS` only while requiring db.js.
+Bookkeeping and bridge UUID data repairs then read their candidate rows on the
+worker and apply bounded effects on main. The bridge folder repair list is saved
+before invalidation and the version marker after success. Standalone DB callers
+retain the legacy synchronous repair contract. Schema DDL, old cache-clearing
+migrations and historical VACUUM remain synchronous schema bootstrap.
+
+Debug mode records `indexing.start`, `indexing.apply` and `indexing.job` with a
+stable jobId, job kind, cold-start flag, effect count/bytes, apply duration and
+total duration/error. Existing per-second `main.loop` p99/max samples can be
+read over that interval. Live typing/navigation, p99 under 30 ms and input-hold
+acceptance still require a packaged-app trace; fixture equivalence does not
+measure them. SSH mirror transfer/manifest housekeeping remains separate from
+the indexing lane and retains its original filesystem implementation.
+
+Tests cover readonly real-WAL equivalence for cache/FTS/metrics, remote full and
+subset scans with bridge/subagent deletion and retained renames, large pending
+tails, partial-batch conflicts/errors, startup repair, deadlines, coalescing,
+shutdown, asynchronous remote inventories and transition observation replay.
+The Node 22 runner launches Electron in Node mode for native SQLite ABI tests.
 
 ## Invariants
 

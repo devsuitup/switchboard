@@ -152,20 +152,22 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
     }
   });
 }
+process.env.SWITCHBOARD_DEFER_CACHE_REPAIRS = '1';
 const {
   getMeta, getAllMeta, toggleStar, setName, setArchived,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions, setCachedContinuationIndex,
   deleteCachedSession, deleteCachedFolder, replaceSessionMetrics, touchCachedModified,
+  appendSessionMetrics, deleteFolderMeta, deleteSearchEntry, withIndexTransaction, appendCachedField, appendSessionName, appendSearchField,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   getSearchFileIds, applySearchFileBatch,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting, listSettingKeys,
   isInitialScanComplete, setInitialScanComplete, getCachedMissingEntrypoint, setCachedEntrypoints, setCachedCustomTitles, getCachedMissingCustomTitle,
-  getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
   closeDb,
   DB_PATH, getProjectsRevision,
 } = require('./db');
+delete process.env.SWITCHBOARD_DEFER_CACHE_REPAIRS;
 
 // see docs/changelog.md ("What's new in the app")
 const INSTALL_PREDATES_LAUNCH = getSetting('global') !== null || isInitialScanComplete();
@@ -492,7 +494,10 @@ sessionCache.init({
   getLocalJobs: () => bgAgents.getCachedJobs(),
   getMainWindow: () => mainWindow,
   log,
+  trace: (event, data) => { if (TRACE.on) trace(event, null, data); },
   db: {
+    DB_PATH, getProjectsRevision,
+    appendSessionMetrics, deleteFolderMeta, deleteSearchEntry, withIndexTransaction, appendCachedField, appendSessionName, appendSearchField,
     deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, replaceSessionMetrics, touchCachedModified,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
     setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName,
@@ -523,6 +528,7 @@ function projectsSnapshot() {
   return { ...state, liveVersion, version: getProjectsRevision() + liveVersion };
 }
 const projectsClient = createProjectsWorkerClient({
+  yieldProgress: true,
   workerFactory: () => new Worker(path.join(__dirname, 'workers', 'projects-query.js'), { workerData: { dbPath: DB_PATH, projectsDir: PROJECTS_DIR } }),
   snapshot: projectsSnapshot,
   apply: result => {
@@ -551,15 +557,9 @@ const remoteIndexer = createRemoteIndexer({
   dataDir: path.dirname(DB_PATH),
   transport: remoteTransport,
   scanFolders: scanFoldersViaWorker,
-  listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
-  dropFolder: (folderKey) => {
-    deleteCachedFolder(folderKey);
-    deleteSearchFolder(folderKey);
-    const pending = getSetting('bridge_uuid_reindex_folders');
-    if (Array.isArray(pending) && pending.includes(folderKey)) {
-      setSetting('bridge_uuid_reindex_folders', pending.filter(key => key !== folderKey));
-    }
-  },
+  listIndexedFolderKeys: () => sessionCache.queryCache({ kind: 'folder-keys' }),
+  listMirrorFolders: projectsDir => sessionCache.queryCache({ kind: 'mirror-folders', projectsDir }),
+  dropFolder: folderKey => sessionCache.dropFolderViaWorker(folderKey),
   setRemoteRoots,
   notify: notifyRendererProjectsChanged,
   log,
@@ -803,13 +803,13 @@ ipcMain.handle('archive-project-settings', (_event, projectPath, folderKey) => {
   }
 });
 
-ipcMain.handle('unarchive-project', (_event, entry) => {
+ipcMain.handle('unarchive-project', async (_event, entry) => {
   try {
     const global = getSetting('global') || {};
     if (!(global.hiddenProjects || []).includes(entry)) return { error: 'Project is not archived' };
     const { alias, folder: projectPath } = parseFolderKey(entry);
     const folder = alias === null ? encodeProjectPath(projectPath) : joinFolderKey(alias, encodeProjectPath(projectPath));
-    refreshFolder(folder);
+    await refreshFolder(folder);
     const { [entry]: kind, ...kinds } = global.hiddenProjectKinds || {};
     if (alias === null && kind === undefined && isDirectory(projectPath)) scheduleProjects().add(projectPath);
     if (alias === null) skipMissedScheduleRuns(unarchivedScheduleProjects(projectPath));
@@ -825,7 +825,7 @@ ipcMain.handle('unarchive-project', (_event, entry) => {
 });
 
 // --- IPC: add-project ---
-ipcMain.handle('add-project', (_event, projectPath) => {
+ipcMain.handle('add-project', async (_event, projectPath) => {
   try {
     // Validate the path exists and is a directory
     const stat = fs.statSync(projectPath);
@@ -857,7 +857,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     }
 
     // Immediately index the new folder so it's in cache before frontend renders
-    refreshFolder(folder);
+    await refreshFolder(folder);
     notifyRendererProjectsChanged();
     scheduleProjects().add(projectPath);
 
@@ -936,7 +936,7 @@ ipcMain.handle('dismiss-schedule-reenable-offer', (_event, projectPath, folderKe
 
 // --- IPC: remap-project ---
 
-ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
+ipcMain.handle('remap-project', async (_event, oldPath, newPath) => {
   try {
     // Validate oldPath/newPath are strings (basic sanitisation)
     if (typeof oldPath !== 'string' || typeof newPath !== 'string') {
@@ -976,7 +976,7 @@ ipcMain.handle('remap-project', (_event, oldPath, newPath) => {
     remapProjectTranscripts({ folder, folderPath, oldPath, newPath, getSetting, setSetting });
 
     // Refresh the folder cache so the new path takes effect in the UI
-    refreshFolder(folder);
+    await refreshFolder(folder);
     notifyRendererProjectsChanged();
     return { ok: true };
   } catch (err) {
@@ -1310,9 +1310,9 @@ ipcMain.handle('get-stats', () => {
 // Builds a stats object from session_cache so the heatmap reflects real usage
 // including subagent sessions (which claude /stats silently ignores) and
 // periods where Claude already rotated the parent JSONL files off disk.
-ipcMain.handle('get-stats-from-db', () => {
+ipcMain.handle('get-stats-from-db', async () => {
   try {
-    return buildStatsFromDb();
+    return await buildStatsFromDb();
   } catch (err) {
     log.error('Error building stats from DB:', err);
     return null;
@@ -1324,20 +1324,7 @@ ipcMain.handle('get-stats-from-db', () => {
 // by message timestamp) so tokens, tool calls, and per-model usage are all real
 // data — not the hardcoded {} the heatmap-only path used to return.
 function buildStatsFromDb() {
-  const daily = getDailyMetrics();       // [{date, messageCount, toolCallCount, tokens, sessionCount}]
-  const totals = getTotalCounts();
-  const lastComputedDate = new Date().toISOString().slice(0, 10);
-  return {
-    dailyActivity: daily,
-    dailyModelTokens: getDailyModelTokens(),
-    modelUsage: getModelUsage(),
-    totalMessages: totals.totalMessages,
-    totalSessions: totals.totalSessions,
-    totalToolCalls: totals.totalToolCalls,
-    totalTokens: totals.totalTokens,
-    firstSessionDate: daily[0]?.date || lastComputedDate,
-    lastComputedDate,
-  };
+  return sessionCache.queryCache({ kind: 'stats' });
 }
 
 // --- IPC: refresh-stats (fetch /usage + build stats from DB; /stats PTY removed) ---
@@ -1351,7 +1338,7 @@ ipcMain.handle('refresh-stats', async () => {
     // at once and the renderer can update heatmap + usage in a single round-trip.
     let stats = null;
     try {
-      stats = buildStatsFromDb();
+      stats = await buildStatsFromDb();
     } catch (dbErr) {
       log.error('Error building stats from DB in refresh-stats:', dbErr);
     }
@@ -2712,13 +2699,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     // Snapshot existing .jsonl files before spawning (for new session + fork detection)
     projectFolder = encodeProjectPath(spawnCwd);
     const claudeProjectDir = path.join(PROJECTS_DIR, projectFolder);
-    if (fs.existsSync(claudeProjectDir)) {
-      try {
-        knownJsonlFiles = new Set(
-          fs.readdirSync(claudeProjectDir).filter(f => f.endsWith('.jsonl'))
-        );
-      } catch {}
-    }
+    try { knownJsonlFiles = new Set(await sessionCache.queryCache({ kind: 'parent-files', projectsDir: claudeProjectDir })); }
+    catch (error) { log.warn(`[session-transitions] initial inventory failed: ${error.message}`); }
   }
 
   let ptyProcess;
@@ -3168,12 +3150,32 @@ ipcMain.handle('get-task-snapshots', async () => {
   return taskRecords.snapshots();
 });
 const sessionTransitions = require('./session-transitions');
+const { createIndexingWorkerClient } = require('./indexing-worker-client');
+const transitionsClient = createIndexingWorkerClient({
+  workerFactory: () => new Worker(path.join(__dirname, 'workers', 'session-transitions-query.js')),
+  snapshot: () => ({}), apply: () => {},
+});
+function transitionSessions(folder) {
+  return [...activeSessions].filter(([, s]) => !s.exited && !s.isPlainTerminal && s.projectFolder === folder)
+    .map(([id, s]) => ({ id, realSessionId: s.realSessionId, knownJsonlFiles: [...(s.knownJsonlFiles || [])],
+      knownSubagents: [...(s.knownSubagents || [])].map(([key, value]) => [key, {
+        completed: value.completed, _recheckStart: value._recheckStart,
+      }]), continuationIndex: s._continuation?.index }));
+}
+async function scanSessionTransitions(folder) {
+  const sessions = transitionSessions(folder);
+  if (!sessions.length) return;
+  const result = await transitionsClient.request({ kind: 'transitions', projectsDir: PROJECTS_DIR, folder, sessions });
+  if (JSON.stringify(transitionSessions(folder)) !== JSON.stringify(sessions)) return;
+  sessionTransitions.detectSessionTransitions(folder, result.observations);
+}
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   hasTaskRecord: (id, agentId) => taskRecords.hasRecord(id, agentId),
   rekeyActivity: (fromId, toId, kind) => { activityReporter.rekey(fromId, toId); taskRecords.rekey(fromId, toId, { continued: kind === 'continuation' }); },
   clearOwner: (sessionId, ptyPid, options) => cliSessionState.clearOwner(sessionId, ptyPid, options),
   getDescriptorIdentity: snapshot => cliSessionState.getDescriptorIdentity(snapshot),
+  scanTransitions: folder => scanSessionTransitions(folder).catch(error => log.warn(`[session-transitions] ${error.message}`)),
 });
 const { detectSessionTransitions } = sessionTransitions;
 
@@ -3295,25 +3297,22 @@ function startProjectsWatcher() {
   const pendingChanges = new Map();
   let debounceTimer = null;
 
-  function flushChanges() {
+  async function flushChanges() {
     debounceTimer = null;
-    // Drain pendingChanges into a local copy so events arriving during the
-    // synchronous flush land in a fresh batch for the next tick.
     const work = new Map(pendingChanges);
     pendingChanges.clear();
 
     let changed = false;
     for (const [folder, scope] of work) {
-      const folderPath = path.join(PROJECTS_DIR, folder);
-      if (fs.existsSync(folderPath)) {
-        detectSessionTransitions(folder);
+      try {
+        await detectSessionTransitions(folder);
         if (scope === true) {
-          refreshFolder(folder);
+          await refreshFolder(folder);
         } else {
-          refreshFolder(folder, { files: scope });
+          await refreshFolder(folder, { files: scope });
         }
-      } else {
-        sessionCache.dropFolderRows(folder);
+      } catch (error) {
+        log.warn(`[session-cache] watcher refresh failed: ${error.message}`);
       }
       changed = true;
     }
@@ -3618,6 +3617,8 @@ app.on('before-quit', (event) => {
   }
   activityReporter.stop();
   mainLoopMonitor.stop();
+  sessionCache.shutdownIndexing();
+  transitionsClient.shutdown();
   if (TRACE.on) trace('app.quit', null, {});
   activityTrace.close();
 

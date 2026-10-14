@@ -10,8 +10,11 @@ const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
  * Call init(ctx) once with shared context.
  */
 let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, getDescriptorIdentity, setTimeoutFn, hasTaskRecord;
+let scanTransitions;
+let observations = null;
 
 function init(ctx) {
+  scanTransitions = ctx.scanTransitions;
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   activeSessions = ctx.activeSessions;
   getMainWindow = ctx.getMainWindow;
@@ -138,6 +141,7 @@ function runSubagentSettleTick() {
  *  Mutates session.knownSubagents (Map<agentId, { mtimeMs, completed }>).
  *  Emits IPC 'subagent-spawned' and 'subagent-completed' via mainWindow. */
 function detectSubagentTransitions(sessionId, session, folderPath) {
+  if (scanTransitions && !observations) return scanTransitions(session.projectFolder);
   const subagentsDir = path.join(folderPath, sessionId, 'subagents');
 
   // --- Hot-path cache: avoid readdirSync + N×statSync when dir is quiet ---
@@ -151,7 +155,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
   //   _subFileList   — .jsonl file list from that scan
   let dirMtime;
   try {
-    dirMtime = fs.statSync(subagentsDir).mtimeMs;
+    dirMtime = transitionStat(subagentsDir).mtimeMs;
   } catch {
     return; // directory doesn't exist yet — normal
   }
@@ -171,7 +175,8 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
   let files;
   if (dirChanged) {
     try {
-      files = fs.readdirSync(subagentsDir).filter(f => f.endsWith('.jsonl'));
+      files = observations ? observations.directories.get(subagentsDir) : fs.readdirSync(subagentsDir).filter(f => f.endsWith('.jsonl'));
+      if (!files) return;
     } catch {
       return;
     }
@@ -230,7 +235,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
     if (!known && !dirChanged) continue;
 
     let stat;
-    try { stat = fs.statSync(filePath); } catch { continue; }
+    try { stat = transitionStat(filePath); } catch { continue; }
     const mtimeMs = stat.mtimeMs;
 
     if (!known) {
@@ -262,7 +267,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
       }
 
       // First sighting of a live file — always post-bootstrap, so a genuine spawn.
-      const meta = readSubagentMeta(filePath) || {};
+      const meta = transitionMeta(filePath) || {};
       session.knownSubagents.set(agentId, {
         mtimeMs,
         completed: false,
@@ -285,7 +290,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
       // Inside the recheck window of an assumed-finished entry. A file that
       // grows is alive: undo the assumption and emit the withheld spawn.
       if (mtimeMs !== known.mtimeMs) {
-        const meta = readSubagentMeta(filePath) || {};
+        const meta = transitionMeta(filePath) || {};
         if (TRACE) trace('subagent.rehabilitated', sessionId, { agentId, withheldForMs: now - known._recheckStart, subagentType: meta.agentType || null, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
         known.mtimeMs = mtimeMs;
         known.completed = false;
@@ -378,6 +383,7 @@ const signalsCache = new Map();
 const SIGNALS_CACHE_MAX = 256;
 
 function readNewSessionSignals(filePath) {
+  if (observations) return observations.signals.get(filePath) || { hasTurn: false };
   let stat;
   try { stat = fs.statSync(filePath); } catch { stat = null; }
   const cached = stat && signalsCache.get(filePath);
@@ -432,7 +438,18 @@ const CLEAR_OWNER_WAIT_MS = 60000;
 const STALE_EMPTY_MS = 3600000;
 
 function ageMs(filePath) {
-  try { return Date.now() - fs.statSync(filePath).mtimeMs; } catch { return Infinity; }
+  try { return Date.now() - transitionStat(filePath).mtimeMs; } catch { return Infinity; }
+}
+
+function transitionStat(filePath) {
+  if (!observations) return fs.statSync(filePath);
+  const stat = observations.stats.get(filePath);
+  if (!stat) throw new Error('missing transition observation');
+  return stat;
+}
+
+function transitionMeta(filePath) {
+  return observations ? observations.meta.get(filePath) : readSubagentMeta(filePath);
 }
 
 function isFresh(filePath) {
@@ -468,7 +485,7 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
   if (!cached || cached.sourceId !== sourceId) cached = session._continuation = { sourceId, index: null, other: new Map() };
   let index;
   try {
-    cached.index = scanContinuationIndex(sourceFile, sourceId, cached.index);
+    cached.index = observations ? observations.continuations.get(sourceId) : scanContinuationIndex(sourceFile, sourceId, cached.index);
     index = JSON.parse(cached.index);
   } catch { return false; }
   if (!index.complete && (index.bytes < index.size || isFresh(sourceFile))) scheduleRecheck(session.projectFolder);
@@ -479,7 +496,7 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
     if (newId === sourceId || !currentFiles.includes(newId + '.jsonl') || isLive(newId)) continue;
     const file = path.join(folderPath, newId + '.jsonl');
     let mtimeMs;
-    try { mtimeMs = fs.statSync(file).mtimeMs; } catch { continue; }
+    try { mtimeMs = transitionStat(file).mtimeMs; } catch { continue; }
     try { identity ??= descriptorIdentity(); } catch { continue; }
     const previous = cached.other.get(newId);
     if (identity != null && previous && previous.mtimeMs === mtimeMs && previous.identity === identity) continue;
@@ -498,11 +515,20 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
 }
 
 /** Detect fork and /clear transitions for active PTY sessions in a folder */
-function detectSessionTransitions(folder) {
+function detectSessionTransitions(folder, supplied) {
+  if (scanTransitions && !supplied) return scanTransitions(folder);
+  if (supplied && !supplied.available) return;
+  const previous = observations;
+  observations = supplied || null;
+  try { return detectSessionTransitionsNow(folder); }
+  finally { observations = previous; }
+}
+
+function detectSessionTransitionsNow(folder) {
   const folderPath = path.join(PROJECTS_DIR, folder);
   let currentFiles;
   try {
-    currentFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
+    currentFiles = observations ? observations.files : fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
   } catch { return; }
   let descriptorIdentity;
   const descriptorSnapshot = {};
@@ -617,4 +643,4 @@ function detectSessionTransitions(folder) {
 }
 
 
-module.exports = { init, detectSessionTransitions, detectSubagentTransitions, currentSessionId, isClearCommand, normalizeSessionId };
+module.exports = { init, detectSessionTransitions, detectSubagentTransitions, readNewSessionSignals, currentSessionId, isClearCommand, normalizeSessionId };

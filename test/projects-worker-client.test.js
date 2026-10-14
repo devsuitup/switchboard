@@ -4,6 +4,20 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 
+test('production progress messages yield and apply in order before the terminal reply', async () => {
+  const f = fixture({ yieldProgress: true });
+  try {
+    const pending = f.client.request({ reconcile: true });
+    f.worker.emit('message', { id: 1, progress: { effects: [{ name: 'one' }], keptLiveRows: [] } });
+    f.worker.emit('message', { id: 1, progress: { effects: [{ name: 'two' }], keptLiveRows: [] } });
+    f.reply(0, { effects: [], keptLiveRows: [], reconciled: true });
+    assert.equal(f.applied.length, 0, 'main must yield before processing reconcile effects');
+    await pending;
+    assert.deepEqual(f.applied.slice(0, 2).map(result => result.effects[0].name), ['one', 'two']);
+    assert.equal(f.applied.at(-1).reconciled, true);
+  } finally { f.client.shutdown(); }
+});
+
 function fixture(options = {}) {
   const { createProjectsWorkerClient } = require('../projects-worker-client');
   const worker = new EventEmitter();

@@ -55,11 +55,11 @@ function sessionIdFromRel(rel, parentSessionId) {
 
 // File-subset scan for the remote path -- see .ai/contexts/session-cache.md
 // ("Remote hosts file-level rescan").
-function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
-  const folderPath = path.join(PROJECTS_DIR, folder);
-  const projectPath = deriveProjectPath(folderPath, folder, { remote: FOLDER_PREFIX !== '' });
+function readFolderFileSubsetFromFilesystem(folder, files, existingRows, { projectsDir = PROJECTS_DIR, folderPrefix = FOLDER_PREFIX } = {}) {
+  const folderPath = path.join(projectsDir, folder);
+  const projectPath = deriveProjectPath(folderPath, folder, { remote: folderPrefix !== '' });
   if (!projectPath) return null;
-  const key = FOLDER_PREFIX + folder;
+  const key = folderPrefix + folder;
   const indexMtimeMs = getFolderIndexMtimeMs(folderPath);
 
   const freshRows = [];
@@ -108,7 +108,7 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
 // (session-cache.js) had nothing to write to the DB or push to the renderer
 // \u2014 the sidebar showed a bare "Loading\u2026" the whole time. Streaming lets the
 // caller write + notify after every folder instead.
-try {
+if (require.main === module) try {
   // workerData.folders restricts the sweep to a subset; absent, walk the root.
   const folders = Array.isArray(workerData.folders)
     ? workerData.folders.filter(f => typeof f === 'string' && f && f !== '.git' && f !== '.' && f !== '..' && !/[\\/]/.test(f))
@@ -146,3 +146,5 @@ function stripBridgeEvidence(result) {
     delete row.messageSignatures;
   }
 }
+
+module.exports = { readFolderFileSubsetFromFilesystem };

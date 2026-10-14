@@ -262,7 +262,7 @@ test('a failed repair write releases its gate so watcher and reconcile discover 
   assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
 });
 
-test('pruning an undeclared host clears its pending repair through the main dropFolder callback', { timeout: 9000 }, async t => {
+test('pruning an undeclared host routes removal through the main worker callback', { timeout: 9000 }, async t => {
   const f = fixture(t);
   const key = 'gone::-srv-old';
   f.rows.set('remote', { sessionId: 'remote', folder: key });
@@ -270,19 +270,18 @@ test('pruning an undeclared host clears its pending repair through the main drop
   f.meta.set(key, {});
   f.settings.set('bridge_uuid_reindex_folders', [key, f.folder, 'vps::-srv-demo']);
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  const body = source.match(/dropFolder: \(folderKey\) => \{([\s\S]*?)\n?\s*\},/)[1];
-  const drop = new Function('deleteCachedFolder', 'deleteSearchFolder', 'getSetting', 'setSetting', 'folderKey', body);
+  const body = source.match(/dropFolder: folderKey => ([^\n]+),/)[1];
+  const drop = new Function('sessionCache', 'folderKey', `return ${body};`);
+  const routed = [];
   const indexer = createRemoteIndexer({
     getHosts: () => [{ alias: 'vps' }], dataDir: f.root, transport: {},
     sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
     listIndexedFolderKeys: () => [...f.meta.keys()],
-    dropFolder: folder => drop(f.db.deleteCachedFolder, f.db.deleteSearchFolder, f.db.getSetting, f.db.setSetting, folder),
+    dropFolder: folder => drop({ dropFolderViaWorker: async key => { routed.push(key); } }, folder),
   });
   t.after(() => indexer.dispose());
   await indexer.refreshNow();
-  assert.ok(!f.rows.has('remote'));
-  assert.ok(!f.search.has('remote'));
-  assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), [f.folder, 'vps::-srv-demo']);
+  assert.deepEqual(routed, [key]);
 });
 
 test('a UUID-complete bridge row gets signatures by re-reading instead of retaining original lines', { timeout: 9000 }, t => {

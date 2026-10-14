@@ -27,8 +27,21 @@ let getLocalDescriptors = () => [];
 let getLocalJobs = () => new Map();
 let setCachedCustomTitles, getCachedMissingCustomTitle;
 let customTitleBackfill = null;
+let indexingClient = null;
+let indexingProgress = () => {};
+let dataRepairPromise = null;
+let incompleteRepairPromise = null;
+let cacheQueryClient = null;
+let workerDb;
 
 function init(ctx) {
+  workerDb = ctx.db;
+  indexingClient?.shutdown();
+  cacheQueryClient?.shutdown();
+  indexingClient = null;
+  cacheQueryClient = null;
+  dataRepairPromise = null;
+  incompleteRepairPromise = null;
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   activeSessions = ctx.activeSessions;
   getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
@@ -66,13 +79,65 @@ function init(ctx) {
   setCachedEntrypoints = ctx.db.setCachedEntrypoints;
   entrypointBackfill = null;
   lastReconcileAt = 0;
-  reindexRepairedFolders();
+  if (ctx.db.DB_PATH) {
+    const { createIndexingWorkerClient } = require('./indexing-worker-client');
+    indexingClient = createIndexingWorkerClient({
+      workerFactory: () => new Worker(path.join(__dirname, 'workers', 'index-sessions.js'), {
+        workerData: { dbPath: ctx.db.DB_PATH, projectsDir: PROJECTS_DIR },
+      }),
+      snapshot: () => {
+        const state = { activeSessions: [...activeSessions].map(([id, s]) => [id, {
+          exited: !!s.exited, isPlainTerminal: !!s.isPlainTerminal,
+        }]), remoteRoots: [...remoteRoots] };
+        return { ...state, version: ctx.db.getProjectsRevision() + JSON.stringify(state) };
+      },
+      apply: message => {
+        const write = () => { for (const effect of message.effects) ctx.db[effect.name](...effect.args); };
+        if (ctx.db.withIndexTransaction) ctx.db.withIndexTransaction(write);
+        else write();
+        for (const [id, folder] of message.keptLiveRows) keptLiveRows.set(id, folder);
+      },
+      progress: message => indexingProgress(message),
+      trace: ctx.trace || (() => {}),
+    });
+    cacheQueryClient = createIndexingWorkerClient({
+      workerFactory: () => new Worker(path.join(__dirname, 'workers', 'index-sessions.js'), {
+        workerData: { dbPath: ctx.db.DB_PATH, projectsDir: PROJECTS_DIR },
+      }), snapshot: () => ({}), apply: () => {},
+    });
+  }
+  if (!ctx.skipRepair) {
+    if (indexingClient && (getSetting('bridge_uuid_index_version') !== 1 || getSetting('bookkeeping_repair_pending') === true)) {
+      dataRepairPromise = indexingClient.request({ kind: 'repair' }).then(() => reindexRepairedFolders())
+        .catch(error => { log?.warn(`Cache repair failed: ${error.message}`); return { ok: false, error: error.message }; });
+    } else reindexRepairedFolders();
+    repairIncompleteFolders();
+  }
+}
+
+function shutdownIndexing() { indexingClient?.shutdown(); cacheQueryClient?.shutdown(); }
+function queryCache(options) { return cacheQueryClient.request(options); }
+function dropFolderViaWorker(folder) { return indexingClient.request({ kind: 'drop', folders: [folder] }); }
+function prepareIndexing() { return Promise.all([dataRepairPromise, incompleteRepairPromise]); }
+
+function repairIncompleteFolders() {
+  if (!indexingClient || incompleteRepairPromise) return;
+  const pending = getSetting('indexing_incomplete_folders');
+  const folders = Array.isArray(pending) ? pending.filter(key => {
+    const { alias } = parseFolderKey(key);
+    return alias === null || remoteRoots.has(alias);
+  }) : [];
+  if (!folders.length) return;
+  incompleteRepairPromise = indexingClient.request({ kind: 'scan', folders })
+    .catch(error => log?.warn(`Incomplete index repair failed: ${error.message}`))
+    .finally(() => { incompleteRepairPromise = null; notifyRendererProjectsChanged(); });
 }
 
 // alias -> that host's mirrored projects root; empty unless one is declared.
 let remoteRoots = new Map();
 function setRemoteRoots(roots) {
   remoteRoots = roots instanceof Map ? new Map(roots) : new Map();
+  repairIncompleteFolders();
 }
 function getRemoteRoots() {
   return new Map(remoteRoots);
@@ -107,8 +172,13 @@ function getProjectsWorkerRetainedRows() { return [...keptLiveRows]; }
 function applyProjectsWorkerEffects(result) {
   const writers = { upsertCachedSessions, deleteCachedSession, deleteCachedFolder,
     touchCachedModified, setFolderMeta, setName, replaceSessionMetrics,
-    deleteSearchFolder, deleteSearchSession, upsertSearchEntries };
-  for (const { name, args } of result.effects) writers[name](...args);
+    deleteSearchFolder, deleteSearchSession, upsertSearchEntries, setSetting,
+    appendSessionMetrics: workerDb.appendSessionMetrics, deleteFolderMeta: workerDb.deleteFolderMeta,
+    deleteSearchEntry: workerDb.deleteSearchEntry, appendCachedField: workerDb.appendCachedField,
+    appendSessionName: workerDb.appendSessionName, appendSearchField: workerDb.appendSearchField };
+  const write = () => { for (const { name, args } of result.effects) writers[name](...args); };
+  if (workerDb.withIndexTransaction) workerDb.withIndexTransaction(write);
+  else write();
   for (const [id, folder] of result.keptLiveRows) keptLiveRows.set(id, folder);
 }
 
@@ -141,7 +211,8 @@ function releaseLiveSession(sessionId) {
   const folder = keptLiveRows.get(sessionId);
   if (folder === undefined || isRunningSession(sessionId)) return false;
   keptLiveRows.delete(sessionId);
-  refreshFolder(folder);
+  const refresh = refreshFolder(folder);
+  if (refresh?.then) refresh.then(() => notifyRendererProjectsChanged()).catch(error => log?.warn(error.message));
   return true;
 }
 
@@ -192,6 +263,8 @@ function readFolderFromFilesystem(folder) {
  *   folder (used for bootstrap and folder-level events).
  */
 function refreshFolder(folder, opts = {}) {
+  if (indexingClient) return indexingClient.request({ kind: 'refresh', folders: [folder],
+    fileSubsets: opts.files ? [[folder, [...opts.files]]] : undefined });
   if (pendingRepairFolders().includes(folder)) return;
   // null when the key names a host no longer declared — treated as vanished.
   const folderPath = resolveFolderDir(folder);
@@ -485,9 +558,15 @@ function reconcileCacheFromFilesystem({ onFolder, throttle = true } = {}) {
     for (const folder of folders) {
       const meta = metaMap.get(folder);
       const folderPath = path.join(PROJECTS_DIR, folder);
-      if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)
+      const incomplete = getSetting('indexing_incomplete_folders');
+      if (!meta || (Array.isArray(incomplete) && incomplete.includes(folder)) || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)
         || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder))) {
-        if (!pendingRepairFolders().includes(folder)) refreshFolder(folder);
+        if (!pendingRepairFolders().includes(folder)) {
+          if (Array.isArray(incomplete) && incomplete.includes(folder)) {
+            const result = readFolderFromFilesystem(folder);
+            writeScannedFolder(result.projectPath ? { ...result, folder, indexMtimeMs: getFolderIndexMtimeMs(folderPath) } : null, folder);
+          } else refreshFolder(folder);
+        }
       }
       if (onFolder) onFolder(folder);
     }
@@ -508,6 +587,11 @@ const ENTRYPOINT_BACKFILL_BATCH = 200;
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
 function backfillEntrypoints() {
   if (entrypointBackfill) return entrypointBackfill;
+  if (indexingClient) {
+    entrypointBackfill = indexingClient.request({ kind: 'entrypoints' })
+      .then(() => notifyRendererProjectsChanged()).catch(err => { entrypointBackfill = null; log?.warn(err.message); });
+    return entrypointBackfill;
+  }
   entrypointBackfill = new Promise((resolve) => {
     const rows = getCachedMissingEntrypoint ? getCachedMissingEntrypoint() : [];
     let next = 0;
@@ -540,6 +624,11 @@ function backfillEntrypoints() {
 // see .ai/contexts/session-cache.md ("Local background sidebar rows")
 function backfillCustomTitles() {
   if (customTitleBackfill) return customTitleBackfill;
+  if (indexingClient) {
+    customTitleBackfill = indexingClient.request({ kind: 'titles' })
+      .then(() => notifyRendererProjectsChanged()).catch(err => { customTitleBackfill = null; log?.warn(err.message); });
+    return customTitleBackfill;
+  }
   if (!setCachedCustomTitles || !getCachedMissingCustomTitle) return (customTitleBackfill = Promise.resolve());
   const rows = getCachedMissingCustomTitle().filter(row => validId(row.sessionId) && parseFolderKey(row.folder).alias === null);
   if (!rows.length) return (customTitleBackfill = Promise.resolve());
@@ -999,6 +1088,10 @@ function reindexRepairedFolders() {
  *  restricts named folders to just those files -- see
  *  .ai/contexts/session-cache.md ("Remote hosts file-level rescan"). */
 function scanFoldersViaWorker({ projectsDir, folderPrefix, folders, fileSubsets }) {
+  if (indexingClient) return indexingClient.request({ kind: 'scan', projectsDir, folderPrefix,
+    folders: folders || (fileSubsets ? [...fileSubsets.keys()] : []),
+    fileSubsets: fileSubsets ? [...fileSubsets].map(([key, files]) => [key, [...files]]) : undefined })
+    .then(result => ({ ok: true, ...result }), error => ({ ok: false, error: error.message }));
   return new Promise((resolve) => {
     const hasFolders = Array.isArray(folders) && folders.length > 0;
     const subsets = fileSubsets instanceof Map ? fileSubsets : null;
@@ -1073,6 +1166,38 @@ let populatePromise = null;
 
 function populateCacheViaWorker() {
   if (populatePromise) return populatePromise;
+  if (indexingClient) {
+    const coldStart = !isInitialScanComplete();
+    indexingFinished = false;
+    let latest = { current: 0, total: 0, sessions: 0 };
+    let lastProgress = 0;
+    sendStatus('Scanning projects…', 'active');
+    indexingProgress = message => {
+      latest = message;
+      const now = Date.now();
+      if (now - lastProgress >= 250) {
+        if (coldStart) sendIndexingProgress({ coldStart, current: message.current, total: message.total,
+          sessionsSoFar: message.sessions, done: false });
+        sendStatus(`Scanning projects (${message.current}/${message.total})…`, 'active');
+        lastProgress = now;
+      }
+      notifyRendererProjectsChanged();
+    };
+    populatePromise = indexingClient.request({ kind: 'scan', coldStart }).then(result => {
+      setInitialScanComplete?.();
+      sendStatus(`Indexed ${result.sessions} sessions across ${result.folders} projects`, 'done');
+      if (coldStart) sendIndexingProgress({ coldStart, current: result.folders, total: result.folders,
+        sessionsSoFar: result.sessions, done: true });
+      sendIndexingFinished();
+      notifyRendererProjectsChanged();
+    }).catch(error => {
+      sendStatus('Scan failed: ' + error.message, 'error');
+      if (coldStart) sendIndexingProgress({ coldStart, current: latest.current, total: latest.total,
+        sessionsSoFar: latest.sessions, done: true, error: error.message });
+      sendIndexingFinished();
+    }).finally(() => { populatePromise = null; indexingProgress = () => {}; });
+    return populatePromise;
+  }
 
   // Captured once, up front. Keyed on the persistent completeness marker, not
   // on isCachePopulated(): the worker streams per-folder writes, so a scan
@@ -1244,6 +1369,12 @@ module.exports = {
   readSessionFile,
   readFolderFromFilesystem,
   refreshFolder,
+  writeScannedFolder,
+  writeScannedFolderPartial,
+  shutdownIndexing,
+  prepareIndexing,
+  queryCache,
+  dropFolderViaWorker,
   dropFolderRows,
   releaseLiveSession,
   reconcileCacheFromFilesystem,
