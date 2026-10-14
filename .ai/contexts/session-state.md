@@ -621,7 +621,7 @@ spinner and timer frames, resize repaints, attach/history replays and input
 echo cannot advance the written watermark.
 
 The written-output digest extends the tail backwards to a complete record
-boundary when its first record exceeds 256 KiB. Complete large tool results
+boundary only when the bounded tail has no complete output record. Complete large tool results
 therefore contribute their content digest, while partial writes, large
 metadata and child records retain the usual filtering. This can read more
 than 256 KiB for a single oversized record. Turn classification and timestamp
@@ -639,9 +639,10 @@ digest arriving during a write waits for its callback. Scroll, focus,
 visibility, reveal and grid intersection events recheck those conditions.
 A single terminal must be active; a grid card must be at least 99% within the
 viewport. Scrolling above the latest output preserves unread. Transcript
-reads capture the watermark before IPC; their main viewer records subsequent
-digest watermarks and consumes them only after rendering at the bottom of a
-visible page. Empty reads and nested child transcripts cannot consume them.
+reads capture the watermark before IPC; their static main viewer consumes
+only that captured watermark after rendering at the bottom of a visible page.
+Later digests cannot advance the viewer's watermark without another read.
+Empty reads and nested child transcripts cannot consume them.
 The existing explicit clear consumes its capture without a visibility
 requirement. Single-view and grid selection instead pass watermark zero:
 they clear notifications, while output is consumed by the visibility check

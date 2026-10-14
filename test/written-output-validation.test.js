@@ -5,7 +5,37 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const { createTaskRecordsClient } = require('../task-records-client');
+
+test('a complete output record in the tail avoids reading backwards through an 8 MB image', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-tail-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  const tailBytes = 256 * 1024;
+  let bytesRead = 0;
+  const trackedFs = { ...fs, readSync(...args) {
+    const count = fs.readSync(...args);
+    bytesRead += count;
+    return count;
+  } };
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../transcript-turn.js'), 'utf8'), {
+    module, Buffer, require: name => name === 'fs' ? trackedFs : require(name),
+  });
+  const reader = module.exports.createTranscriptTurnReader({ tailBytes });
+  fs.writeFileSync(file, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'image', source: { data: 'x'.repeat(8 * 1024 * 1024) } }] } }) + '\n');
+  let previous;
+  for (const text of ['first answer', 'second answer']) {
+    fs.appendFileSync(file, JSON.stringify({ type: 'assistant', message: { content: text } }) + '\n');
+    bytesRead = 0;
+    const output = reader.read(file).writtenOutput;
+    assert.equal(bytesRead, tailBytes);
+    assert.notEqual(output, previous);
+    assert.match(output, /^[a-f0-9]{64}$/);
+    previous = output;
+  }
+});
 
 test('the worker advances written output for a tool result larger than the transcript tail', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-large-'));

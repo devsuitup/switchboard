@@ -162,8 +162,10 @@ function readTail(filePath, size, tailBytes, includeWritten) {
   const start = Math.max(0, size - tailBytes);
   const length = size - start;
   const chunks = [readRange(filePath, start, length)];
+  const text = chunks[0].toString('utf8');
+  const extendWritten = includeWritten && start > 0 && !latestWrittenOutput(text);
   let offset = start;
-  while (includeWritten && offset > 0) {
+  while (extendWritten && offset > 0) {
     const count = Math.min(tailBytes, offset);
     const chunk = readRange(filePath, offset - count, count);
     const newline = chunk.lastIndexOf(10);
@@ -171,7 +173,7 @@ function readTail(filePath, size, tailBytes, includeWritten) {
     if (newline >= 0) break;
     offset -= count;
   }
-  return { text: chunks[chunks.length - 1].toString('utf8'), writtenText: Buffer.concat(chunks).toString('utf8') };
+  return { text, writtenText: Buffer.concat(chunks).toString('utf8') };
 }
 
 function readRange(filePath, start, length, expectedStat) {

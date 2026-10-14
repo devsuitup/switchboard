@@ -386,7 +386,7 @@ for (const view of ['single', 'grid']) test(`${view} selection cannot consume a 
   assert.equal(h.unseen(), false);
 });
 
-for (const order of ['render-first', 'digest-first', 'scrolled-up', 'hidden']) test(`transcript ${order}: a late digest respects the rendered viewer position`, async t => {
+for (const order of ['render-first', 'digest-first', 'scrolled-up', 'hidden']) test(`transcript ${order}: a new digest cannot consume output absent from the static viewer`, async t => {
   const h = setup(t);
   h.ctx.evalPublic('jsonl-viewer.js');
   for (const name of ['terminalArea', 'jsonlViewer', 'jsonlViewerTitle', 'jsonlViewerSessionId', 'jsonlViewerBody']) {
@@ -402,22 +402,28 @@ for (const order of ['render-first', 'digest-first', 'scrolled-up', 'hidden']) t
   h.ctx.window.requestAnimationFrame = callback => { frame = callback; return 1; };
   const head = (revision, writtenOutput) => h.ctx.window.applyHeadTurnSnapshot({ sessionId: 's', state: 'open', revision, writtenOutput });
   head(1, 'baseline');
+  const captured = h.written();
   await h.ctx.window.showJsonlViewer(h.row);
+  const rendered = body.innerHTML;
   body.scrollTop = 200;
   if (order === 'digest-first') {
     head(2, 'answer digest');
     assert.equal(h.blue(), true);
     frame();
-    assert.equal(h.blue(), false);
+    assert.equal(h.blue(), true);
   } else {
     frame();
+    assert.equal(h.blue(), false);
     if (order === 'scrolled-up') body.scrollTop = 0;
     if (order === 'hidden') h.ctx.window.jsonlViewer.style.display = 'none';
     head(2, 'answer digest');
-    assert.equal(h.blue(), order !== 'render-first');
-    body.onscroll();
-    assert.equal(h.blue(), order !== 'render-first');
+    assert.equal(h.blue(), true);
   }
+  assert.equal(body.innerHTML, rendered);
+  assert.equal(body.writtenActivity.watermark, captured);
+  body.onscroll();
+  h.ctx.window.dispatchEvent(new h.ctx.window.Event('focus'));
+  assert.equal(h.blue(), true);
 });
 
 test('an empty transcript read cannot consume written output that it did not display', async t => {

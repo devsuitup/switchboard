@@ -54,10 +54,6 @@ function applyHeadTurnSnapshot(turn) {
       entry.digestWrittenWatermark = watermark;
       markTerminalOutputSeen(entry);
     }
-    if (typeof jsonlViewerBody !== 'undefined' && jsonlViewerBody.writtenActivity?.sessionId === turn.sessionId) {
-      jsonlViewerBody.writtenActivity.watermark = watermark;
-      jsonlViewerBody.onscroll?.();
-    }
   }
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
   const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
