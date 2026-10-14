@@ -209,6 +209,8 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
   // parent PTY died first, the renderer TTL prunes it — both under 60s of
   // silence, so the orphan behavior is unchanged.
   const HEARTBEAT_MS = 20000;
+  let historyCount, newestAgeMs;
+  if (TRACE.on && isBootstrap) { historyCount = 0; newestAgeMs = null; }
 
   for (const file of files) {
     // agent-<agentId>.jsonl
@@ -260,7 +262,17 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
           _lastHeartbeatAt: now,
           _recheckStart: recheck ? now : null,
         });
-        if (TRACE.on) trace('subagent.assumed-finished', sessionId, { agentId, ageMs: now - mtimeMs, bootstrap: isBootstrap, recheck });
+        if (TRACE.on) {
+          const ageMs = now - mtimeMs;
+          if (isBootstrap && !recheck) {
+            historyCount++;
+            newestAgeMs = newestAgeMs === null ? ageMs : Math.min(newestAgeMs, ageMs);
+          } else if (isBootstrap) {
+            trace('subagent.bootstrap-candidate', sessionId, { agentId, ageMs, recheck, source: 'transcript-mtime', confidence: 'inferred' });
+          } else {
+            trace('subagent.assumed-finished', sessionId, { agentId, ageMs, bootstrap: false, recheck, source: 'transcript-mtime', confidence: 'inferred' });
+          }
+        }
         continue;
       }
 
@@ -275,7 +287,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
         _lastHeartbeatAt: now,
       });
       log.info(`[subagent-spawn] parent=${sessionId} agentId=${agentId} type=${meta.agentType || 'unknown'}`);
-      if (TRACE.on) trace('subagent.spawned', sessionId, { agentId, kind: 'spawn', subagentType: meta.agentType || null, ageMs: now - mtimeMs, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+      if (TRACE.on) trace('subagent.spawned', sessionId, { agentId, kind: 'spawn', subagentType: meta.agentType || null, ageMs: now - mtimeMs, source: 'transcript-mtime', confidence: 'inferred', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('subagent-spawned', {
           parentSessionId: sessionId,
@@ -289,7 +301,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
       // grows is alive: undo the assumption and emit the withheld spawn.
       if (mtimeMs !== known.mtimeMs) {
         const meta = readSubagentMeta(filePath) || {};
-        if (TRACE.on) trace('subagent.rehabilitated', sessionId, { agentId, withheldForMs: now - known._recheckStart, subagentType: meta.agentType || null, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+        if (TRACE.on) trace('subagent.rehabilitated', sessionId, { agentId, withheldForMs: now - known._recheckStart, subagentType: meta.agentType || null, source: 'transcript-mtime', confidence: 'inferred', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
         known.mtimeMs = mtimeMs;
         known.completed = false;
         known._completedAt = null;
@@ -325,7 +337,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
           // see .ai/contexts/subagent-observability.md
           const stale = unseenForMs >= SUBAGENT_LIVE_TTL_MS;
           known._lastHeartbeatAt = now;
-          if (TRACE.on) trace('subagent.spawned', sessionId, { agentId, kind: stale ? 'reannounce' : 'heartbeat', subagentType: known.subagentType || null, sent: true });
+          if (TRACE.on) trace('subagent.spawned', sessionId, { agentId, kind: stale ? 'reannounce' : 'heartbeat', subagentType: known.subagentType || null, source: 'transcript-mtime', confidence: 'inferred', sent: true });
           mainWindow.webContents.send('subagent-spawned', {
             parentSessionId: sessionId,
             agentId,
@@ -344,7 +356,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
           known._recheckStart = now;
           known._recheckMs = LIVE_RECHECK_MS;
           log.info(`[subagent-complete] parent=${sessionId} agentId=${agentId}`);
-          if (TRACE.on) trace('subagent.completed', sessionId, { agentId, stableForMs: now - known._stableStart, reason: 'mtime-stable', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
+          if (TRACE.on) trace('subagent.completed', sessionId, { agentId, stableForMs: now - known._stableStart, reason: 'mtime-stable', source: 'transcript-mtime', confidence: 'inferred', sent: !!(mainWindow && !mainWindow.isDestroyed()) });
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('subagent-completed', {
               parentSessionId: sessionId,
@@ -369,6 +381,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
     }
   }
 
+  if (TRACE.on && isBootstrap) trace('subagent.history-summary', sessionId, { historyCount, newestAgeMs, source: 'transcript-mtime', confidence: 'historical' });
   armSubagentSettleTick(session);
 }
 
