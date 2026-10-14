@@ -27,6 +27,7 @@ const abs = (n) => (n < 0n ? -n : n);
 let dir = DEFAULT_DIR;
 let activeSessions = null;
 let onIdle = null;
+let onOwnerExit = null;
 let log = null;
 let isProcessAlive = defaultIsProcessAlive;
 let readProcStart = defaultReadProcStart;
@@ -58,6 +59,7 @@ const MAX_DESCRIPTOR_SCAN = 1000;
 // Listeners told "the directory changed" after each flushed batch -- see .ai/contexts/bg-agents.md
 const descriptorListeners = new Set();
 const statusListeners = new Set();
+const pendingOwnerDeaths = new Map();
 const scheduledRuns = new Map();
 
 function trackScheduleRun(sessionId, child, cwd) {
@@ -297,6 +299,7 @@ function init(ctx) {
   dir = ctx.dir || DEFAULT_DIR;
   activeSessions = ctx.activeSessions;
   onIdle = ctx.onIdle;
+  onOwnerExit = ctx.onOwnerExit || null;
   log = ctx.log || { info() {}, debug() {}, warn() {}, error() {} };
   isProcessAlive = ctx.isProcessAlive || defaultIsProcessAlive;
   readProcStart = ctx.readProcStart || defaultReadProcStart;
@@ -402,6 +405,22 @@ function notifyStatusesChanged() {
   }
 }
 
+function notifyOwnerExit(sessionId, pid) {
+  if (!onOwnerExit) return;
+  const key = statusKey(sessionId);
+  if (pendingOwnerDeaths.has(key)) return;
+  const callback = onOwnerExit;
+  pendingOwnerDeaths.set(key, pid);
+  queueMicrotask(() => {
+    if (!pendingOwnerDeaths.has(key)) return;
+    pendingOwnerDeaths.delete(key);
+    const current = statusBySession.get(key);
+    if (current && isProcessAlive(current.pid)) return;
+    if ([...known.values()].some(entry => statusKey(entry.sessionId) === key && isProcessAlive(entry.pid))) return;
+    try { callback(key); } catch (err) { log.warn(`[cli-state] owner-exit callback failed: ${err.message}`); }
+  });
+}
+
 function findSession(sessionId) {
   if (!activeSessions) return null;
   for (const [key, session] of activeSessions) {
@@ -416,6 +435,7 @@ function retainAfterMiss(name, deleted) {
   const stale = known.get(name);
   if (!stale) return;
   if (deleted && !isProcessAlive(stale.pid)) {
+    notifyOwnerExit(stale.sessionId, stale.pid);
     forgetSession(stale.sessionId);
     known.delete(name);
     return;
@@ -444,6 +464,7 @@ function handleFile(name) {
   if (isProcessAlive(state.pid)) {
     statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
   } else {
+    notifyOwnerExit(state.sessionId, state.pid);
     forgetSession(state.sessionId);
   }
 
@@ -501,6 +522,7 @@ function armLivenessProbe() {
     }
     for (const [id, entry] of statusBySession) {
       if (!isProcessAlive(entry.pid)) {
+        notifyOwnerExit(id, entry.pid);
         forgetSession(id);
       }
     }
@@ -529,6 +551,8 @@ function seed() {
       known.set(name, { pid: state.pid, procStart: state.procStart, status: state.status, sessionId: state.sessionId });
       if (isProcessAlive(state.pid)) {
         statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
+      } else {
+        notifyOwnerExit(state.sessionId, state.pid);
       }
     }
   }
@@ -571,6 +595,7 @@ function ensureWatching() {
 }
 
 function stop() {
+  pendingOwnerDeaths.clear();
   const hadStatus = statusBySession.size > 0;
   if (watcher) {
     try { watcher.close(); } catch {}
@@ -606,6 +631,7 @@ function getStatus(sessionId) {
   if (t - last >= GET_STATUS_PROBE_THROTTLE_MS) {
     lastProbeAt.set(key, t);
     if (!isProcessAlive(entry.pid)) {
+      notifyOwnerExit(sessionId, entry.pid);
       forgetSession(sessionId);
       notifyDescriptorsChanged();
       notifyStatusesChanged();

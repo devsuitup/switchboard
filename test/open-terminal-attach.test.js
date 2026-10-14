@@ -59,6 +59,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
     mainWindow: { on: (_name, callback) => { closed = callback; } },
     activeSessions: new Map(), changesWatchers: { closeAll() {} }, closeAllFileWatchers() {},
     subagentWatchers: new Map(), unsubscribeBgAgents: () => { unsubscribed++; },
+    unsubscribeTaskJobs() {}, taskRecords: { dispose() {} },
     bgAgents: { stop: () => { stopped++; } },
     app: { on: (_name, callback) => { beforeQuit = callback; } },
     unsavedGuard: { beforeQuit: () => false }, activityFlushedForQuit: false,

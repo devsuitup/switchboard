@@ -1,0 +1,285 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { createTaskRegistry } = require('../public/task-registry');
+const { createTaskRecordsClient } = require('../task-records-client');
+const { createTaskTranscriptReader } = require('../task-transcript-reader');
+const fixture = require('./fixtures/cli-tasks-2.1.296.json');
+const id = fixture.parentSessionId;
+const agent = fixture.agentId;
+const launch = r => { r.ingest(id, fixture.use); r.ingest(id, fixture.launch); };
+const resume = (at = '2026-10-14T00:12:00Z', uuid = 'resume') => ({
+  type: 'assistant', timestamp: at, uuid,
+  message: { role: 'assistant', content: [{ type: 'tool_use', id: uuid, name: 'SendMessage', input: { to: agent, message: 'Continue' } }] },
+});
+
+for (const variant of ['completedNoTool', 'failedNoTool', 'killed', 'stoppedNoOutput']) {
+  test(`authenticated ${variant} ends a known agent through the worker snapshot path`, async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-review-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+    const file = path.join(dir, id + '.jsonl');
+    const renderer = createTaskRegistry();
+    const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s) });
+    t.after(() => client.dispose());
+    fs.writeFileSync(file, [fixture.use, fixture.launch].map(e => JSON.stringify(e)).join('\n') + '\n');
+    await client.read(file, id);
+    assert.equal(renderer.agents(id).length, 1);
+    fs.appendFileSync(file, JSON.stringify(fixture[variant]) + '\n');
+    await client.read(file, id);
+    assert.equal(renderer.agents(id).length, 0, `${variant} must close the running agent`);
+  });
+}
+
+test('monitor events, unmarked notifications and unknown task ids cannot end an agent', () => {
+  const r = createTaskRegistry();
+  launch(r);
+  for (const e of [fixture.monitorEvent, fixture.withoutOrigin, { ...fixture.completedNoTool, uuid: 'unknown', message: { role: 'user', content: fixture.completedNoTool.message.content.replaceAll(agent, 'unknown') } }]) {
+    r.ingest(id, e);
+    assert.equal(r.agents(id).length, 1);
+  }
+  assert.equal(r.notification(fixture.monitorEvent), null);
+  assert.equal(r.notification(fixture.withoutOrigin), null);
+});
+
+test('a notification with duplicate tool ids cannot take the no-tool-id correlation path', () => {
+  const r = createTaskRegistry();
+  launch(r);
+  const entry = structuredClone(fixture.notification);
+  entry.uuid = 'duplicate-tool';
+  entry.message.content = entry.message.content.replace('<tool-use-id>toolu_111</tool-use-id>', '<tool-use-id>toolu_111</tool-use-id><tool-use-id>toolu_other</tool-use-id>');
+  r.ingest(id, entry);
+  assert.equal(r.agents(id).length, 1);
+});
+
+test('SendMessage reopens a completed known agent until its next terminal notification', () => {
+  const r = createTaskRegistry();
+  launch(r);
+  r.ingest(id, fixture.notification);
+  assert.equal(r.agents(id).length, 0);
+  r.ingest(id, resume());
+  assert.equal(r.primary(id, agent), true, 'SendMessage must reopen primary work');
+  r.ingest(id, { ...fixture.completedNoTool, uuid: 'completion-2', timestamp: '2026-10-14T00:13:00Z' });
+  assert.equal(r.agents(id).length, 0);
+  r.ingest(id, { ...resume(), uuid: 'wrong', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'SendMessage', id: 'wrong', input: { to: 'unknown' } }] } });
+  assert.equal(r.agents(id).length, 0);
+});
+
+test('aggregate stopped notification ends every listed known agent through worker snapshots', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-aggregate-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+  const file = path.join(dir, id + '.jsonl');
+  const renderer = createTaskRegistry();
+  const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s) });
+  t.after(() => client.dispose());
+  const second = e => ({ ...JSON.parse(JSON.stringify(e).replaceAll(agent, 'a2222222222222222').replaceAll('toolu_111', 'toolu_222')), uuid: `${e.uuid}-second` });
+  fs.writeFileSync(file, [fixture.use, fixture.launch, second(fixture.use), second(fixture.launch)].map(e => JSON.stringify(e)).join('\n') + '\n');
+  await client.read(file, id);
+  assert.equal(renderer.agents(id).length, 2);
+  fs.appendFileSync(file, JSON.stringify(fixture.aggregateStopped) + '\n');
+  await client.read(file, id);
+  assert.equal(renderer.agents(id).length, 0, 'aggregate must end both agents');
+  assert.equal(renderer.background(id), false);
+});
+
+test('aggregate stopped notifications ignore unknown ids and non-agent tasks and require origin', () => {
+  const r = createTaskRegistry();
+  launch(r);
+  r.note(id, 'a2222222222222222', 'local-ipc', { kind: 'monitor' });
+  const entry = structuredClone(fixture.aggregateStopped);
+  entry.message.content = entry.message.content.replace('<status>', '<task-id>__orphan_summary__:shell</task-id><status>');
+  r.ingest(id, { ...entry, uuid: 'no-origin', origin: undefined });
+  assert.equal(r.agents(id).length, 1);
+  r.ingest(id, entry);
+  assert.equal(r.agents(id).length, 0);
+  assert.deepEqual(r.list(id).map(t => t.id), ['a2222222222222222']);
+  assert.equal(r.snapshot(id).tasks.some(t => t.id === '__orphan_summary__:shell'), false);
+});
+
+const sendResult = (toolUseId, isError, timestamp = '2026-10-14T00:12:01Z') => ({
+  type: 'user', uuid: `result-${toolUseId}`, timestamp,
+  message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, is_error: isError, content: 'Synthetic SendMessage result' }] },
+});
+
+for (const [firstError, secondError, running] of [[true, true, 0], [true, false, 1], [false, true, 1]]) {
+  for (const reverse of [false, true]) {
+    test(`overlapping SendMessages through worker snapshots: errors ${firstError}/${secondError}, ${reverse ? 'reversed' : 'ordered'} results leave ${running} running`, async t => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-send-overlap-'));
+      const file = path.join(dir, id + '.jsonl');
+      const renderer = createTaskRegistry();
+      const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s) });
+      t.after(async () => {
+        await client.dispose();
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      });
+      fs.writeFileSync(file, [fixture.use, fixture.launch, fixture.notification,
+        resume('2026-10-14T00:12:00Z', 'send-first'), resume('2026-10-14T00:12:01Z', 'send-second'),
+      ].map(e => JSON.stringify(e)).join('\n') + '\n');
+      await client.read(file, id);
+      assert.equal(renderer.agents(id).length, 1);
+      const results = [sendResult('send-first', firstError, '2026-10-14T00:12:02Z'), sendResult('send-second', secondError, '2026-10-14T00:12:03Z')];
+      if (reverse) results.reverse();
+      fs.appendFileSync(file, JSON.stringify(results[0]) + '\n');
+      await client.read(file, id);
+      assert.equal(renderer.agents(id).length, 1, 'a pending send keeps the reopened agent running');
+      fs.appendFileSync(file, JSON.stringify(results[1]) + '\n');
+      await client.read(file, id);
+      assert.equal(renderer.agents(id).length, running, 'all failed reopeners roll back; any success keeps the agent running');
+      assert.equal(renderer.background(id), running > 0);
+      assert.equal(renderer.snapshot(id).tasks.find(t => t.id === agent).terminal, running === 0);
+    });
+  }
+}
+
+test('failed SendMessage restores the terminal agent through worker snapshots', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-send-error-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+  const file = path.join(dir, id + '.jsonl');
+  const renderer = createTaskRegistry();
+  const client = createTaskRecordsClient({ onSnapshot: s => renderer.applySnapshot(s) });
+  t.after(() => client.dispose());
+  fs.writeFileSync(file, [fixture.use, fixture.launch, fixture.notification, resume()].map(e => JSON.stringify(e)).join('\n') + '\n');
+  await client.read(file, id);
+  assert.equal(renderer.agents(id).length, 1);
+  fs.appendFileSync(file, JSON.stringify(sendResult('resume', true)) + '\n');
+  await client.read(file, id);
+  assert.equal(renderer.agents(id).length, 0, 'failed send must undo its reopen');
+  assert.equal(renderer.snapshot(id).tasks.find(t => t.id === agent).terminal, true);
+  assert.equal(renderer.background(id), false);
+});
+
+test('successful SendMessage and failed sends to already running agents keep them running', () => {
+  for (const completed of [false, true]) {
+    const r = createTaskRegistry();
+    launch(r);
+    if (completed) r.ingest(id, fixture.notification);
+    r.ingest(id, resume());
+    r.ingest(id, sendResult('resume', !completed));
+    assert.equal(r.primary(id, agent), true);
+  }
+});
+
+test('an old failed SendMessage cannot undo a newer reopen', () => {
+  const r = createTaskRegistry();
+  launch(r);
+  r.ingest(id, fixture.notification);
+  r.ingest(id, resume());
+  r.ingest(id, { ...fixture.completedNoTool, uuid: 'done-again', timestamp: '2026-10-14T00:13:00Z' });
+  r.ingest(id, resume('2026-10-14T00:14:00Z', 'resume-new'));
+  r.ingest(id, sendResult('resume', true, '2026-10-14T00:15:00Z'));
+  assert.equal(r.primary(id, agent), true);
+});
+
+for (const kind of ['clear', 'fork']) {
+  test(`${kind} moves tasks without redirecting old notes or old owner death`, async t => {
+    const r = createTaskRegistry();
+    launch(r);
+    r.rekey(id, 'new');
+    assert.equal(r.agents('new').length, 1);
+    r.note(id, 'old-only', 'local-transcript');
+    assert.deepEqual(r.agents(id).map(t => t.id), ['old-only']);
+    assert.deepEqual(r.agents('new').map(t => t.id), [agent]);
+    r.ownerDied(id);
+    assert.equal(r.agents('new').length, 1, 'the old owner cannot end moved tasks');
+    const client = createTaskRecordsClient();
+    t.after(() => client.dispose());
+    await client.job(id, { valid: true, at: 10, tasks: [{ id: agent, kind: 'agent', startedAt: 1, doneAt: null }], inFlight: 0 });
+    await client.rekey(id, 'new');
+    assert.equal(client.hasRecord(id, agent), false, 'client has no permanent old-id alias');
+    assert.equal(client.hasRecord('new', agent), true);
+    await client.ownerDied(id);
+    assert.equal(client.snapshots().find(s => s.parentSessionId === 'new').tasks[0].terminal, false);
+  });
+}
+
+test('repeated ownerAlive observations leave the revision and liveness timestamp unchanged', () => {
+  let at = 100;
+  const r = createTaskRegistry({ now: () => at });
+  r.ownerAlive(id);
+  const before = r.snapshot(id);
+  at = 200;
+  r.ownerAlive(id);
+  assert.deepEqual(r.snapshot(id), before);
+  r.ownerDied(id);
+  at = 300;
+  r.ownerAlive(id);
+  assert.equal(r.snapshot(id).ownerAliveAt, 300);
+});
+
+test('bounded pending notifications drop oldest unrelated Bash and Monitor records', () => {
+  const r = createTaskRegistry({ maxEntries: 3 });
+  r.ingest(id, fixture.notification);
+  for (let i = 0; i < 3; i++) {
+    const e = structuredClone(fixture.notification);
+    e.uuid = `bash-${i}`;
+    e.message.content = e.message.content.replaceAll(agent, `b${i}`).replaceAll('toolu_111', `toolu_b${i}`);
+    r.ingest(id, e);
+  }
+  launch(r);
+  assert.equal(r.agents(id).length, 1, 'the oldest pending completion was evicted');
+});
+
+test('seen record ids and continuation redirects retain only their bounded newest entries', () => {
+  const r = createTaskRegistry({ maxEntries: 3 });
+  launch(r);
+  r.ingest(id, fixture.notification);
+  r.ingest(id, resume());
+  r.ingest(id, { ...fixture.completedNoTool, timestamp: '2026-10-14T00:13:00Z', uuid: 'done-2' });
+  r.ingest(id, resume('2026-10-14T00:14:00Z', 'resume-2'));
+  r.ingest(id, { ...fixture.completedNoTool, timestamp: '2026-10-14T00:15:00Z', uuid: 'done-3' });
+  r.ingest(id, { ...resume('2026-10-14T00:16:00Z'), uuid: 'resume' });
+  assert.equal(r.primary(id, agent), true, 'the evicted record id is accepted again');
+  for (let i = 0; i < 4; i++) {
+    const oldId = `${i}1111111-1111-4111-8111-111111111111`;
+    r.ingest(oldId, { type: 'continued-in', sessionId: oldId, continuedInSessionId: '22222222-2222-4222-8222-222222222222', timestamp: fixture.notification.timestamp });
+  }
+  assert.equal(r.resolve('01111111-1111-4111-8111-111111111111'), '01111111-1111-4111-8111-111111111111');
+  assert.equal(r.resolve('31111111-1111-4111-8111-111111111111'), '22222222-2222-4222-8222-222222222222');
+});
+
+test('the client bounds continuation aliases while retaining its newest worker redirects', async t => {
+  const { EventEmitter } = require('node:events');
+  const worker = new EventEmitter();
+  worker.postMessage = message => queueMicrotask(() => worker.emit('message', { requestId: message.requestId }));
+  worker.terminate = async () => {};
+  const client = createTaskRecordsClient({ maxEntries: 3, workerFactory: () => worker });
+  t.after(() => client.dispose());
+  await client.ownerAlive('new');
+  worker.emit('message', { snapshot: { parentSessionId: 'new', tasks: [{ id: agent }] } });
+  for (let i = 0; i < 4; i++) worker.emit('message', { rekey: { oldId: `old-${i}`, newId: 'new', continued: true } });
+  assert.equal(client.hasRecord('old-0', agent), false);
+  assert.equal(client.hasRecord('old-3', agent), true);
+});
+
+test('unchanged same-size transcript with newer mtime reads only the 128-byte boundary', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-task-boundary-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
+  const file = path.join(dir, 'parent.jsonl');
+  fs.writeFileSync(file, [fixture.use, fixture.launch].map(e => JSON.stringify(e)).join('\n') + '\n');
+  let bytes = 0, ingested = 0;
+  const real = require('node:fs/promises');
+  const reader = createTaskTranscriptReader({ registry: { ingest() { ingested++; } }, files: {
+    stat: real.stat,
+    async open(...args) {
+      const handle = await real.open(...args);
+      return { stat: () => handle.stat(), close: () => handle.close(), async read(...args) { const result = await handle.read(...args); bytes += result.bytesRead; return result; } };
+    },
+  } });
+  t.after(() => reader.dispose());
+  await reader.read(file, id);
+  bytes = 0;
+  fs.utimesSync(file, 2000000000, 2000000000);
+  await reader.read(file, id);
+  assert.equal(bytes, 128, 'a metadata-only change must not replay the transcript');
+  assert.equal(ingested, 2);
+  bytes = 0;
+  await reader.read(file, id);
+  assert.equal(bytes, 0, 'the validated mtime is saved');
+  fs.utimesSync(file, 1900000000, 1900000000);
+  await reader.read(file, id);
+  assert.equal(bytes, 128, 'a backwards metadata-only mtime also retains the validated boundary');
+  assert.equal(ingested, 2);
+});

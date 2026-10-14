@@ -1,6 +1,7 @@
 // bg-agents-roster.js — see .ai/contexts/bg-agents.md
 'use strict';
 const { bridgeSessionKey } = require('./bridge-session-id');
+const { normalizeTaskEvidence } = require('./task-records');
 
 const JOB_STATES = new Set(['working', 'blocked', 'done', 'stopped', 'failed']);
 const SESSION_STATUSES = new Set(['busy', 'idle', 'waiting', 'shell']);
@@ -57,6 +58,7 @@ function parseJobState(text) {
     sessionId: sessionIdFromLinkScanPath(raw.linkScanPath) || sessionIdField(raw.sessionId) || sessionIdField(raw.resumeSessionId),
     transcriptPath: str(raw.linkScanPath),
     bridgeSessionId: str(raw.bridgeSessionId),
+    taskEvidence: normalizeTaskEvidence(raw),
   };
 }
 
@@ -145,6 +147,7 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
       sessionId: job.sessionId, name: job.name, state: job.state, agent: job.agent, model: job.model,
       detail: job.detail, tempo: job.tempo, tokens: job.tokens, fan: job.fan, children: job.children, result: job.result,
       transcriptPath: job.transcriptPath, bridgeSessionId: job.bridgeSessionId,
+      taskEvidence: job.taskEvidence,
     });
   }
   if (cliEntry) {

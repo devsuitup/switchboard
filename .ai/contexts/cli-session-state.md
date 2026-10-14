@@ -562,6 +562,19 @@ real transcript on disk.
 
 ## Canary tests
 
+Task lifecycle records are parsed off main by `workers/task-records.js` and
+projected through the shared renderer registry. See
+[subagent-observability.md](subagent-observability.md), "CLI task lifecycle and
+shared registry". Descriptor presence is not task completion, and disappearance
+alone is not confirmed owner death. Owned PTY exits, confirmed descriptor PID death and validated terminal job
+evidence reconcile task completion; attach exits retain unresolved tasks.
+Owner-death callbacks run in a microtask after the full descriptor batch and
+check for a live replacement PID before terminating a conversation's tasks.
+Versioned offline task fixtures always run. The live notification canary and
+extended job-state canary alarm on changed consumed ids, kinds, timestamps,
+wrappers and terminal status values; explicitly skipped live samples remain
+unverified.
+
 `test/canary-*.test.js` is a convention this module introduces. A canary
 asserts nothing about our code: it pins an assumption we make about something we
 do not own, and **skips itself wherever that thing is absent** so CI and

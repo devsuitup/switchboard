@@ -153,6 +153,7 @@ function setupDom({ readSubagentJsonlResult = { entries: SAMPLE_ENTRIES }, readS
   for (const file of ['session-state.js', 'session-activity-dom.js', 'session-activity.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'task-registry.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
   // jsonl-viewer.js defines showSubagentTranscript — eval'd here so the real
   // implementation is available when tests exercise it directly. For routing

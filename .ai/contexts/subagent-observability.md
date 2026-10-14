@@ -117,30 +117,105 @@ are byte-identical by construction. `test/dom-sidebar-subagent-running.test.js`
 already pinned this for the local IPC path with no rebuild; the actual gap
 was purely the missing feed, not the lookup.
 
-One landmine found while wiring this: `reflectSubagentRunningState` also
-repaints the **parent's** icon slot via `paintSessionIcon`, which paints from
-the local-pty adapter's snapshot (`snapshotForLocal` auto-vivifies a
-`localPtyState` entry). Calling it for a remote/local-transcript parent would
-have overwritten the icon the remote-ssh/local-transcript adapter's own
-`projectRemoteState`/`projectLocalTranscriptState` had just painted, with an
-empty local-pty snapshot.
+Parent icon repaint now uses the shared `paintSessionIcon` projection. That
+projection chooses the owning local PTY, remote SSH or local transcript adapter
+and incorporates the shared task registry. `reflectSubagentRunningState` calls
+it for every parent; the former local-PTY guard is no longer used. Attached
+remote rows keep their local PTY ownership and external rows keep their own
+adapter state through the projection.
 
-**Corrected in review**: the first pass skipped that repaint whenever
-`remoteSessionStates.has(parentSessionId)` was true — wrong, because
-`setRemoteAttached` never deletes the entry, so it stays true for the rest of
-the row's life whether or not a tab is currently attached. An **attached**
-remote row is owned by the local-pty path (#273: OSC busy/idle governs it,
-exactly like an ordinary local row), so it still needs this repaint — with
-the old check it never got one on a live subagent toggle, leaving
-`has-busy-agents` set on the row while the icon itself stayed
-`session-icon--idle` until the next full rebuild. The guard is now
-`isRemoteRowOwned(parentSessionId)` (`remote-activity-ui.js`) — remote state
-exists **and** is not attached — matching the exact ownership test #273
-already established (`projectRemoteState`, `markRemoteBusy`,
-`decayRemoteBusy` all gate on `snapshot().attached` the same way).
-`localTranscriptStates` needs no equivalent check: there is no "attached"
-state for that kind — `localTranscriptPtyTakeover` deletes the entry outright
-once a PTY takes the row over, so `.has()` alone stays correct.
+## CLI task lifecycle and shared registry (issue #624)
+
+`public/task-registry.js` supplies the keyed task model used by the task-record
+worker and its renderer snapshot. Sidebar child rows, adapter projection and
+grid pills read that renderer registry; the grid no longer owns another map or
+TTL timer. Its agent view is a derived compatibility view, not another store.
+Validated child `.meta.json` toolUseId links a synchronous call to its concrete
+agent before the result; this avoids duplicate provisional/concrete pills.
+Snapshots retain terminal ids so delayed transcript growth and IPC heartbeats
+cannot revive completed tasks. A later assistant SendMessage tool-use addressed
+to a known agent explicitly reopens it until its next terminal notification.
+Overlapping SendMessages share a reopen group until all their results arrive.
+The agent rolls back only if every result has is_error=true; any successful
+send keeps it running. A terminal notification clears that group, so a failed
+older send cannot undo a newer reopen. Sends to already running agents do not
+acquire rollback ownership.
+The snapshot carries separate agent entries and
+a background-work boolean, including validated in-flight Bash, Monitor and
+cron evidence; those tasks do not increase the subagent count.
+
+An assistant `Agent` tool-use opens a provisional task. A correlated structured
+`async_launched` result replaces its provisional id with `agentId` and does not
+end it. A synchronous Agent ends on its matching result. An anchored user
+`<task-notification>` envelope requires origin.kind=task-notification, exactly
+one task-id, a recognized terminal status (completed, failed, stopped or killed)
+and a matching task output filename when present. A stopped notification may
+omit the output filename. With a tool-use-id it must correlate with the launch;
+without one it must identify a known agent. Aggregate stopped envelopes without
+tool-use-id or output-file end every listed known agent; unknown ids and other
+task kinds are ignored. The canary verifies extraction of every aggregate id.
+Monitor event envelopes without a terminal status are ignored.
+Assistant text, tool output, quoted XML, partial envelopes, unrelated
+ids and unknown terminal statuses do not complete tasks. The records are an
+undocumented CLI interface, not cryptographic authentication of user content.
+
+`task-records-client.js` sends coalesced transcript invalidations to
+`workers/task-records.js`. `task-transcript-reader.js` reads bounded asynchronous
+chunks, retains incomplete JSONL and UTF-8, deduplicates replay and resets the
+cursor on replacement/truncation. A same-size mtime update retains the cursor
+when its 128-byte boundary still matches; the validated mtime is saved.
+Parsing and historical replay stay off the
+Electron main thread. Verified top-level watcher events enqueue these reads
+even when a PTY owns the session. Renderer bootstrap seeds indexed parent
+transcripts and cached child metadata for positively live local owners off main,
+recovering old explicitly open tasks without a fresh write. Historical owners
+and remote mirrors are excluded from that bootstrap. Remote activity continues
+as fallback evidence in the same renderer registry; there is no remote primary
+lifecycle feed in this change. Continuation files receive their own cursor;
+explicit continued-in records rekey the task/tool correlation and subsequent
+old-id completions route to the current identity. Ordinary /clear and fork
+re-keys move tasks without redirecting future notes or owner death from the old
+id. Redirects, pending results/notifications and seen record ids drop their
+oldest entries beyond 2048; pending and seen are also cleared on owner death.
+The client caps its continuation redirects at the same bound.
+
+`bg-agents-roster.js` normalizes task evidence through `task-records.js`, retaining
+the roster's existing short-job-id to session-UUID mapping. Valid job fan entries
+and in-flight evidence feed the same worker; missing/invalid evidence preserves
+unresolved tasks. A validated terminal job state or owned PTY exit ends its
+tasks. Confirmed cached descriptor PID death also feeds the worker; death
+callbacks run after the descriptor batch so a live replacement owner wins.
+Status updates send ownerAlive only when the observed PID/descriptor-start-time
+identity changes or reappears. Repeated live observations leave registry
+revisions unchanged. Positive resumed-owner evidence re-enables new fallback
+ids while retaining
+terminal tombstones. Attach transport loss is not owner death. Missing
+descriptors and unavailable files do not prove death. Worker failure preserves
+the last snapshots and settles subsequent reads as unavailable, rather than
+publishing an authoritative empty task set; restarting the app restores the
+worker feed.
+
+The 30s/120s/300s main-process stability ladder and 60s renderer expiry apply
+only to fallback evidence. `cli-task` contributions have no silence deadline,
+and a primary record suppresses the file-stability verdict. Source releases
+remain independent, preserving #623 detach/cleanup behavior. An explicit
+primary completion clears overlapping fallback contributions immediately.
+
+`test/fixtures/cli-tasks-2.1.296.json` sanitizes observed launch, notification and
+job and child toolUseId formats. Its synchronous result is explicitly a contract fixture, because
+no live synchronous sample was found. Mandatory format tests exercise changed
+consumed fields; live job and notification canaries sample read-only CLI files.
+The notification
+canary selects the newest 200 transcripts across all project folders and scans
+the entire selected sample, including both no-tool-id terminal variants and
+ignoring monitor events and ambiguous aggregate stops; it never launches the
+CLI. Notification tool ids are opaque correlation strings, including Monitor
+inner ids, rather than restricted to an Agent toolu prefix. Canaries
+explicitly skip when no suitable sample exists. A skip is not validation.
+`test/task-lifecycle.test.js` tests replay, worker delivery, source overlap,
+out-of-order records, jobs, rotation and owner death; renderer and settle-tick
+regressions cover ten-minute silence and immediate completion. No Electron
+instance or CLI session is launched by these suites.
 
 ## Attribution across sources (issue #247)
 
@@ -169,8 +244,8 @@ verification bounds and write-metadata evidence limits.
 `noteSubagentActivity` records independent timestamps for `local-ipc`,
 `attached-ipc`, `local-transcript`, `remote-watch`, and any future job source for each agent.
 An agent remains tracked while at least one contribution exists. The existing
-60s TTL expires each source separately; the timer targets the earliest source
-deadline. IPC from a daemon attach is tagged `attached-ipc` at ingestion;
+60s TTL expires each fallback source separately; `cli-task` has no silence
+deadline. The shared timer targets the earliest fallback source deadline. IPC from a daemon attach is tagged `attached-ipc` at ingestion;
 ordinary owned PTY IPC is `local-ipc`. Both IPC sources belong to the same
 main-process watcher: heartbeats refresh whichever IPC contributions already
 exist, even if the open entry has changed to an attach or disappeared, and
@@ -189,9 +264,9 @@ or not-yet-rendered rows receive it. Row ownership uses the existing
 then purges only its adapter state. For a daemon attach (`openSessions.attach`),
 the transport ending does not clear `attached-ipc` agents, even after terminal
 teardown has removed the open entry. After the attach tab closes, these agents
-stay visible for up to a minute, bounded by the last IPC sighting's 60s TTL;
-no ongoing job-lifecycle source owns them yet. The job-lifecycle source planned
-in #624 (D4, CLI task records) will own that evidence. SSH detach retains the remote
+stay visible through their explicit CLI task lifecycle when correlated records
+exist. Without those records, the last IPC sighting is bounded by the 60s
+fallback TTL. SSH detach retains the remote
 adapter's existing handoff. A confirmed remote stop still uses the explicit
 all-source `clearActiveSubagentsFor` path. Purge repaints from surviving
 transcript/remote state and task evidence, without deleting another adapter's
@@ -582,10 +657,10 @@ what the eight standing warnings on `shortcuts.js` are.
 
 `pruneStaleGridSubagents()` was called only from `wrapInGridCard()` and
 `pruneStaleSubagents()` only from `renderProjects()` — both render-driven, so a
-stale entry survived exactly in the idle case the TTL exists to cover. Each view
-now arms its own one-shot timer (`scheduleGridSubagentTtlTick` /
-`scheduleSubagentTtlTick`, names kept distinct per the shadowing rule above),
-scheduled **at the oldest entry's deadline** rather than on a polling interval:
+stale entry survived exactly in the idle case the TTL exists to cover. Since
+#624, `scheduleSubagentTtlTick` arms one shared one-shot timer for fallback
+contributions; `scheduleGridSubagentTtlTick` delegates to it. It is scheduled
+**at the oldest fallback contribution's deadline** rather than on a polling interval:
 one wakeup per TTL period while agents are tracked, none at all when the map is
 empty, and a targeted refresh (`updateGridSubagentPills` /
 `reflectSubagentRunningState`) only for the entries the prune actually removed.
@@ -607,14 +682,13 @@ repaired they should almost never fire. `test/subagent-settle-tick.test.js` and
 `window.setTimeout` so the tick is driven by its own condition, never by a wall
 clock wait (see `docs/activity-trace.md`, "Testing the async prune path").
 
-### Still open
+### Shared model after #624
 
-The grid was reported showing two live pills while the sidebar showed one, at a
-moment when the log says one of the two had already been (falsely) completed.
-`onSubagentCompleted` removes the grid entry and calls
-`updateGridSubagentPills`, which is a no-op when `gridCards` has no card for
-that parent id — a plausible explanation, **not verified**: it needs the live
-DOM, which was not available.
+The historical report of two grid pills beside one sidebar agent was not
+reproduced against a live Electron instance. The former independent grid map
+and expiry clock have now been removed. Renderer integration tests confirm
+that both views derive their agent set from the same registry and that primary
+completion removes overlapping fallback evidence on both surfaces.
 
 ## Subagent children inside a slug group (issue #128 ask 4, rehab-plan.md A3)
 

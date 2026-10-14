@@ -241,6 +241,10 @@ const rendererCrossFileGlobals = {
   parentHasActiveSubagent: 'readonly',
   // public/sidebar.js — see .ai/contexts/subagent-observability.md
   noteSubagentActivity: 'readonly',
+  taskActivitySnapshot: 'readonly',
+  updateGridSubagentPills: 'readonly',
+  reflectSubagentRunningState: 'readonly',
+  scheduleSubagentTtlTick: 'readonly',
 
   // Third-party renderer libs loaded as <script>
   morphdom: 'readonly',
@@ -402,6 +406,7 @@ const rendererCrossFileGlobals = {
 };
 
 module.exports = [
+  { files: ['public/task-registry.js'], languageOptions: { globals: { module: 'writable' } } },
   // Ignore generated/vendored bundles and binaries
   {
     ignores: [

@@ -1,3 +1,9 @@
+function taskActivitySnapshot(sessionId, snapshot) {
+  if (!window.taskRegistry) return snapshot;
+  const agentsBusy = window.taskRegistry.agents(sessionId).length > 0;
+  return { ...snapshot, agentsBusy: agentsBusy || (!window.taskRegistry.known(sessionId) && !!snapshot?.agentsBusy), backgroundWork: window.taskRegistry.background(sessionId) };
+}
+
 // DOM projection for session activity, sole writer of the activity classes — see .ai/contexts/session-state.md
 
 function rowSessionIds(session) {
@@ -56,12 +62,12 @@ function localSessionForStatus(sessionId, session) {
 
 function storedActivitySnapshot(sessionId, session) {
   const local = snapshotForLocal(sessionId, session);
-  if (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)) return localPtyStates.get(sessionId)?.snapshot();
+  if (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)) return taskActivitySnapshot(sessionId, localPtyStates.get(sessionId)?.snapshot());
   const remote = typeof remoteSessionStates !== 'undefined' && remoteSessionStates.get(sessionId)?.snapshot();
-  if (remote && !remote.attached) return remote;
+  if (remote && !remote.attached) return taskActivitySnapshot(sessionId, remote);
   if (typeof localTranscriptStates !== 'undefined' && localTranscriptStates.has(sessionId)) seedLocalTranscriptDescriptor(sessionId, session);
   const transcript = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.get(sessionId)?.snapshot();
-  return transcript || local;
+  return taskActivitySnapshot(sessionId, transcript || local);
 }
 
 function mergedRowSnapshot(ids, sessionId, snapshot) {
@@ -107,6 +113,7 @@ function applyStateClasses(sessionId, snapshot) {
   const item = sessionItemEl(sessionId);
   if (!item) return;
   const ids = [item.dataset.sessionId, ...(item.dataset.mergedMemberIds?.split(' ') || [])];
+  snapshot = taskActivitySnapshot(sessionId, snapshot);
   snapshot = mergedRowSnapshot(ids, sessionId, snapshot);
   const icon = renderSessionIcon(snapshot);
   // Row classes read snapshot fields directly, not icon.classes — see .ai/contexts/session-state.md ("The local-pty adapter")

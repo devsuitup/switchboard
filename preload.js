@@ -142,6 +142,17 @@ contextBridge.exposeInMainWorld('api', {
   onSessionForked: (callback) => {
     ipcRenderer.on('session-forked', (_event, oldId, newId, kind) => callback(oldId, newId, kind));
   },
+  getTaskSnapshots: () => ipcRenderer.invoke('get-task-snapshots'),
+  onTaskRekey: cb => {
+    const listener = (_event, payload) => cb(payload);
+    ipcRenderer.on('task-rekey', listener);
+    return () => ipcRenderer.removeListener('task-rekey', listener);
+  },
+  onTaskSnapshot: (cb) => {
+    const listener = (_event, snapshot) => cb(snapshot);
+    ipcRenderer.on('task-snapshot', listener);
+    return () => ipcRenderer.removeListener('task-snapshot', listener);
+  },
   onSubagentSpawned: (cb) => ipcRenderer.on('subagent-spawned', (_e, payload) => cb(payload)),
   onSubagentCompleted: (cb) => ipcRenderer.on('subagent-completed', (_e, payload) => cb(payload)),
   onSubagentWatchEvent: (cb) => ipcRenderer.on('subagent-watch-event', (_e, payload) => cb(payload)),

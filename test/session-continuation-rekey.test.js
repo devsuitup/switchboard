@@ -101,7 +101,7 @@ test('continued-in: a trigger for B reaches the PTY opened as A after a proven r
   assert.equal(transitions.currentSessionId('A'), 'B');
   assert.deepEqual(f.events, [['session-forked', 'A', 'B', 'continuation']]);
   assert.deepEqual(f.rekeys, [['A', 'B']]);
-  assert.deepEqual(f.activity, [['A', 'B']]);
+  assert.deepEqual(f.activity, [['A', 'B', 'continuation']]);
 });
 
 test('continued-in: pending ownership rechecks through the existing timer then re-keys', t => {

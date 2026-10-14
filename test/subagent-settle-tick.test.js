@@ -60,7 +60,7 @@ function setup(activeSessions = new Map()) {
 }
 
 /** Re-init with PROJECTS_DIR pointing at tmp so the tick can resolve folders. */
-function setupWithProjectsDir(tmp, activeSessions) {
+function setupWithProjectsDir(tmp, activeSessions, opts = {}) {
   const events = [];
   init({
     PROJECTS_DIR: tmp,
@@ -71,11 +71,35 @@ function setupWithProjectsDir(tmp, activeSessions) {
     }),
     log: { info: () => {}, debug: () => {}, warn: () => {}, error: () => {} },
     rekeyMcpServer: () => {},
+    ...opts,
   });
   fireTimers();
   scheduled.length = 0;
   return events;
 }
+
+test('a CLI-backed agent in a ten-minute silent Bash cannot be completed by the stability ladder', t => {
+  const tmp = mkTmp();
+  const activeSessions = new Map();
+  const primary = new Set();
+  try {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    const events = setupWithProjectsDir(tmp, activeSessions, { hasTaskRecord: (_parent, agent) => primary.has(agent) });
+    const session = { projectFolder: '.' };
+    activeSessions.set('parent', session);
+    fs.mkdirSync(path.join(tmp, 'parent', 'subagents'), { recursive: true });
+    detectSubagentTransitions('parent', session, tmp);
+    seedLiveAgent(tmp, 'parent', 'long-bash');
+    detectSubagentTransitions('parent', session, tmp);
+    primary.add('long-bash');
+    for (let i = 0; i < 121; i++) { t.mock.timers.tick(SETTLE_TICK_MS); fireTimers(); }
+    assert.equal(events.filter(e => e.channel === 'subagent-completed').length, 0);
+    assert.equal(scheduled.length, 0, 'primary evidence does not require a silence polling timer');
+  } finally {
+    t.mock.timers.reset();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 function seedLiveAgent(tmp, sessionId, agentId) {
   const subDir = path.join(tmp, sessionId, 'subagents');

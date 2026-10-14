@@ -62,7 +62,7 @@ function setupGridDom() {
   loadAppFunctions(ctx, {
     functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
   });
-  for (const file of ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'grid-view.js']) {
+  for (const file of ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'task-registry.js', 'grid-view.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, file), 'utf8'), ctx, { filename: file });
   }
 
