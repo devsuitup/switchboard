@@ -10,3 +10,4 @@ Format: lightweight — Status, Context, Decision, Consequences. No fixed templa
 - [0002 — Steady-state indicator animations must be discrete (`steps()`), never smooth 60fps](0002-discrete-steps-sidebar-animations.md)
 - [0003 — Deliver triggers under one tab lock and a per-write ownership check](0003-trigger-delivery-per-tab.md)
 - [0004 — Update the session index incrementally through one writer and bind the display with deltas](0004-session-index-single-writer.md)
+  - [Supporting study — session index reads, writes and display refreshes](0004-session-index-study.md)
