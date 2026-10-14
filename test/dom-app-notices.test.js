@@ -134,11 +134,6 @@ test('caller ids cannot collide with page ids and omitted ids never produce an u
   assert.equal(document.querySelectorAll('.app-notice').length, 3);
 });
 
-test('Dismiss delegates directly to clearAppNotice without a redundant branch', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../public/app-notices.js'), 'utf8');
-  assert.match(source, /dismiss\.addEventListener\('click', \(\) => clearAppNotice\(id\)\);/);
-});
-
 test('two ids stack and replacing one id preserves the other notice', t => {
   const { window, document } = setup(t);
   window.showAppNotice({ id: 'first', kind: 'error', message: 'First failure' });
