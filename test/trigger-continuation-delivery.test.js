@@ -115,6 +115,68 @@ test('ADR continuation cache: an unfinished line resumes from the retained seria
   assert.ok(bytes <= Buffer.byteLength(append) + 256, `unfinished line read ${bytes} bytes`);
 });
 
+for (const change of ['dev', 'rounded inode collision', 'birth time', 'nanosecond mtime']) {
+  test(`#652 continuation cache: ${change} invalidates equal-size, equal-millisecond evidence`, t => {
+    const f = fixture(t, { a: ['b'], b: [], c: [] });
+    const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
+    const content = '{}\n'.repeat(32) + fs.readFileSync(file, 'utf8') + '{}\n'.repeat(32);
+    fs.writeFileSync(file, content);
+    const inode = 2n ** 53n;
+    assert.equal(Number(inode), Number(inode + 1n));
+    const stat = fs.statSync;
+    let replaced = false;
+    t.mock.method(fs, 'statSync', (name, options) => {
+      const result = stat(name, options);
+      if (name !== file) return result;
+      const dev = 1n + (replaced && change === 'dev' ? 1n : 0n);
+      const ino = inode + (replaced && change === 'rounded inode collision' ? 1n : 0n);
+      const birthtimeNs = 1_000_000_000n + (replaced && change === 'birth time' ? 1n : 0n);
+      const mtimeNs = 2_000_000_000n + (replaced && change === 'nanosecond mtime' ? 1n : 0n);
+      return Object.assign(result, options?.bigint
+        ? { dev, ino, birthtimeNs, mtimeNs }
+        : { dev: Number(dev), ino: Number(ino), birthtimeMs: 1000, mtimeMs: 2000, mtime: new Date(2000) });
+    });
+    const ctx = deliveryContext(f, 'b');
+    const written = [];
+    t.mock.method(ctx.getPtyForSession('a').ptyProcess, 'write', data => written.push(data));
+    const write = () => {
+      const pinned = ctx.pinDelivery('a', ctx.getPtyForSession('a'), false);
+      pinned.binding.beginStep('prompt');
+      pinned.handle.write('prompt');
+    };
+    write();
+    assert.deepEqual(written, ['prompt']);
+    fs.renameSync(file, file + '.previous');
+    fs.writeFileSync(file, content.replace('"b"', '"c"'));
+    replaced = true;
+    assert.throws(write, /ownership writer/, 'the replaced transcript must revoke the old continuation');
+    assert.deepEqual(written, ['prompt'], 'no bytes may reach the old continuation after replacement');
+  });
+}
+
+for (const change of ['dev', 'ino', 'birthtimeNs', 'mtimeNs']) {
+  test(`#652 continuation scan: changed ${change} in the final stat leaves ownership unknown`, t => {
+    const f = fixture(t, { a: ['b'], b: [] });
+    const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
+    const stat = fs.statSync;
+    let calls = 0;
+    t.mock.method(fs, 'statSync', (name, options) => {
+      const result = stat(name, options);
+      if (name === file && ++calls >= 3 && options?.bigint) result[change] += 1n;
+      return result;
+    });
+    const ctx = deliveryContext(f, 'b');
+    const entry = ctx.getPtyForSession('a');
+    entry.keyKind = 'historical';
+    const written = [];
+    t.mock.method(entry.ptyProcess, 'write', data => written.push(data));
+    const pinned = ctx.pinDelivery('a', entry, false);
+    pinned.binding.beginStep('prompt');
+    assert.throws(() => pinned.handle.write('prompt'), /ownership.*unknown/);
+    assert.deepEqual(written, []);
+  });
+}
+
 for (const change of ['truncate', 'replace', 'different head']) {
   test(`ADR continuation cache ${change}: changed evidence rescans from byte zero`, async t => {
     const f = fixture(t, { a: ['b'], b: [], c: [] });
@@ -172,7 +234,7 @@ test('ADR continuation size cap: over 512 MiB is unresolved and refuses an alias
   const stat = fs.statSync;
   t.mock.method(fs, 'statSync', (...args) => {
     const result = stat(...args);
-    if (args[0] === file) result.size = 512 * 1024 * 1024 + 1;
+    if (args[0] === file) result.size = args[1]?.bigint ? 512n * 1024n * 1024n + 1n : 512 * 1024 * 1024 + 1;
     return result;
   });
   const graphs = [];
