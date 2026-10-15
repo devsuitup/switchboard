@@ -9,7 +9,7 @@ const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-p
 const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
-const { scanContinuationIndex, resolveContinuations, validId } = require('./session-continuations');
+const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp } = require('./session-continuations');
 const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
 
 /**
@@ -57,9 +57,10 @@ function scanCachedContinuation(file, id, previous, maxBytes, stat = fs.statSync
   const head = continuationHead(file, stat.size, Math.max(0, maxBytes - 1));
   const reuse = cached?.serialized === previous && sameContinuationFile(cached, stat)
     && (sameContinuationStamp(cached, stat) || (stat.size > cached.size && head.startsWith(cached.head)));
-  const serialized = scanContinuationIndex(file, id, reuse ? previous : undefined, maxBytes - head.length / 2);
+  let serialized = scanContinuationIndex(file, id, reuse ? previous : undefined, maxBytes - head.length / 2);
   const after = fs.statSync(file, { bigint: true });
   if (!sameContinuationStamp(stat, after)) { continuationFiles.delete(file); return null; }
+  serialized = JSON.stringify({ ...JSON.parse(serialized), stamp: continuationStamp(stat) });
   rememberContinuation(file, stat, head, serialized);
   return serialized;
 }
@@ -344,7 +345,7 @@ function refreshFolder(folder, opts = {}) {
     let stat, fileMtime;
     try {
       stat = fs.statSync(filePath, { bigint: true });
-      fileMtime = new Date(Math.round(Number(stat.mtimeNs) / 1000000)).toISOString();
+      fileMtime = new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString();
     } catch { continue; }
 
     const cachedDbId = filePathToDbId.get(filePath) || null;
@@ -359,7 +360,12 @@ function refreshFolder(folder, opts = {}) {
     // `modified` here would miss on nearly every row and re-read every dirty
     // file on every watcher flush.
     const snapshot = continuationFiles.get(filePath);
-    const changedIndex = snapshot && !sameContinuationStamp(snapshot, stat);
+    let persistedStamp;
+    if (!snapshot) {
+      try { persistedStamp = JSON.parse(cachedEntry?.continuationIndex)?.stamp; } catch {}
+    }
+    const changedIndex = snapshot ? !sameContinuationStamp(snapshot, stat)
+      : persistedStamp && !matchesContinuationStamp(persistedStamp, stat);
     if (cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
       && (!cachedEntry.continuationIndex || !changedIndex || parentSessionId || cachedEntry.parentSessionId)) {
       continue; // unchanged, skip
@@ -1302,7 +1308,8 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     try { index = JSON.parse(serialized); } catch {}
     const cached = continuationFiles.get(file);
     if (index?.format !== 3 || !index.complete || index.bytes !== Number(stat.size)
-      || cached?.serialized !== serialized || !sameContinuationStamp(cached, stat)) {
+      || !(matchesContinuationStamp(index.stamp, stat)
+        || (cached?.serialized === serialized && sameContinuationStamp(cached, stat)))) {
       let grew;
       do {
         serialized = scanCachedContinuation(file, id, serialized, chunkBytes);

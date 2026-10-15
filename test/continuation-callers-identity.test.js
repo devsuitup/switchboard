@@ -275,3 +275,137 @@ test('#656b refresh: unchanged files avoid a duplicate ISO mtime stat', t => {
   assert.equal(calls[0].arguments[1]?.bigint, true);
   assert.equal(h.rows.get('old').fileMtime, expectedMtime);
 });
+
+test('#656c refresh: exact nanosecond rounding agrees with Node at a millisecond boundary', t => {
+  const h = fixture(t);
+  fs.utimesSync(h.file, 1791593318.8294998, 1791593318.8294998);
+  const stat = fs.statSync;
+  t.mock.method(fs, 'statSync', (name, options) => {
+    const result = stat(name, options);
+    if (name === h.file && options?.bigint) result.mtimeNs = 1791593318829499800n;
+    return result;
+  });
+  assert.equal(stat(h.file).mtime.toISOString(), '2026-10-10T00:48:38.829Z');
+  h.init();
+  cache.refreshFolder(h.folder);
+  fs.appendFileSync(h.file, '{}\n');
+  fs.utimesSync(h.file, 1791593318.8294998, 1791593318.8294998);
+  cache.refreshFolder(h.folder, { files: new Set(['old.jsonl']) });
+  const row = h.rows.get('old');
+  assert.equal(row.fileMtime, '2026-10-10T00:48:38.829Z');
+  assert.equal(JSON.parse(row.continuationIndex).mtime, row.fileMtime);
+});
+
+function expectedStamp(file) {
+  const stat = fs.statSync(file, { bigint: true });
+  return Object.fromEntries(['dev', 'ino', 'birthtimeNs', 'mtimeNs', 'size'].map(field => [field, stat[field].toString()]));
+}
+
+test('#656c cold resolve: a matching persisted stamp resolves with zero bytes read', async t => {
+  const h = fixture(t);
+  h.init();
+  cache.refreshFolder(h.folder);
+  for (const row of h.rows.values()) {
+    const index = JSON.parse(row.continuationIndex);
+    index.stamp = expectedStamp(path.join(h.root, h.folder, row.sessionId + '.jsonl'));
+    row.continuationIndex = JSON.stringify(index);
+  }
+  h.init();
+  const read = t.mock.method(fs, 'readSync');
+  const fullRead = t.mock.method(fs, 'readFileSync');
+  const stat = t.mock.method(fs, 'statSync');
+  const result = await cache.resolveSessionContinuations('old');
+  assert.equal(result.unresolved, false);
+  assert.deepEqual(result.candidates.map(row => row.sessionId), ['aaa']);
+  assert.equal(read.mock.callCount(), 0, 'even the head and tail must not be read');
+  assert.equal(fullRead.mock.callCount(), 0);
+  assert.equal(stat.mock.callCount(), 2, 'one BigInt stat for each visited node');
+  assert.ok(stat.mock.calls.every(call => call.arguments[1]?.bigint));
+  assert.doesNotThrow(() => JSON.stringify([...h.rows.values()]));
+});
+
+for (const change of ['colliding inode', 'birthtime', 'sub-ms mtime']) {
+  test(`#656c cold resolve: persisted ${change} mismatch rescans an equal-size replacement`, async t => {
+    const h = fixture(t);
+    const changed = stamp(t, h.file, change);
+    h.init();
+    cache.refreshFolder(h.folder);
+    const index = JSON.parse(h.rows.get('old').continuationIndex);
+    assert.deepEqual(index.stamp, expectedStamp(h.file));
+    const replacement = h.text('bbb');
+    assert.equal(Buffer.byteLength(replacement), fs.statSync(h.file).size);
+    assert.equal(replacement.slice(-64), h.text('aaa').slice(-64));
+    fs.renameSync(h.file, h.file + '.previous');
+    fs.writeFileSync(h.file, replacement);
+    changed();
+    h.init();
+    const result = await cache.resolveSessionContinuations('old');
+    assert.equal(result.unresolved, false);
+    assert.deepEqual(result.candidates.map(row => row.sessionId), ['bbb']);
+    assert.deepEqual(JSON.parse(h.rows.get('old').continuationIndex).stamp, expectedStamp(h.file));
+    assert.doesNotThrow(() => JSON.stringify([...h.rows.values()]));
+  });
+}
+
+test('#656c cold resolve: a legacy index rescans once, persists the stamp and survives another restart', async t => {
+  const h = fixture(t);
+  h.init();
+  cache.refreshFolder(h.folder);
+  for (const row of h.rows.values()) {
+    const index = JSON.parse(row.continuationIndex);
+    delete index.stamp;
+    row.continuationIndex = JSON.stringify(index);
+  }
+  h.init();
+  const read = t.mock.method(fs, 'readSync');
+  assert.deepEqual((await cache.resolveSessionContinuations('old')).candidates.map(row => row.sessionId), ['aaa']);
+  assert.ok(read.mock.callCount() > 0);
+  assert.deepEqual(JSON.parse(h.rows.get('old').continuationIndex).stamp, expectedStamp(h.file));
+  h.init();
+  read.mock.resetCalls();
+  assert.deepEqual((await cache.resolveSessionContinuations('old')).candidates.map(row => row.sessionId), ['aaa']);
+  assert.equal(read.mock.callCount(), 0);
+  assert.doesNotThrow(() => JSON.stringify([...h.rows.values()]));
+});
+
+for (const field of ['dev', 'ino', 'birthtimeNs', 'mtimeNs', 'size']) {
+  test(`#656c full scan: a ${field} change during the read cannot persist a trusted stamp`, t => {
+    const h = fixture(t);
+    const stat = fs.statSync, readFile = fs.readFileSync;
+    let read = false;
+    t.mock.method(fs, 'readFileSync', (name, ...args) => {
+      const result = readFile(name, ...args);
+      if (name === h.file) read = true;
+      return result;
+    });
+    t.mock.method(fs, 'statSync', (name, options) => {
+      const result = stat(name, options);
+      if (name === h.file && options?.bigint && read) result[field] += 1n;
+      return result;
+    });
+    const row = cache.readSessionFile(h.file, h.folder, h.root);
+    assert.ok(row);
+    assert.equal(row.continuationIndex, null);
+    assert.doesNotThrow(() => JSON.stringify(row));
+  });
+}
+
+test('#656c worker population: persisted complete indexes carry exact stamps and resolve cold without reads', async t => {
+  const h = fixture(t);
+  h.db.isInitialScanComplete = () => true;
+  h.db.setInitialScanComplete = () => {};
+  h.init();
+  await cache.populateCacheViaWorker();
+  assert.equal(h.rows.size, 3);
+  for (const row of h.rows.values()) {
+    assert.deepEqual(JSON.parse(row.continuationIndex).stamp,
+      expectedStamp(path.join(h.root, h.folder, row.sessionId + '.jsonl')));
+  }
+  assert.doesNotThrow(() => JSON.stringify([...h.rows.values()]));
+  h.init();
+  const read = t.mock.method(fs, 'readSync');
+  const result = await cache.resolveSessionContinuations('old');
+  assert.equal(result.unresolved, false);
+  assert.deepEqual(result.candidates.map(row => row.sessionId), ['aaa']);
+  assert.equal(read.mock.callCount(), 0);
+});
