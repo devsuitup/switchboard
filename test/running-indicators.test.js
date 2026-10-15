@@ -3,8 +3,7 @@
 // updateRunningIndicators is extracted from the real public/app.js
 // (test/app-source.js) and runs in the jsdom window of dom-setup.js, next to
 // the real session-activity.js / sidebar.js / remote-activity-ui.js it calls
-// into. Only the grid card map, which grid-view.js owns, is supplied by the
-// test.
+// into, together with the real grid-view.js.
 //
 //   a) When activePtyIds is unchanged between calls, the two sidebar
 //      querySelectorAll scans are skipped entirely.
@@ -42,7 +41,9 @@ function addSlugGroup(ctx) {
 function withIndicators(fn) {
   const ctx = setupSidebarDom();
   try {
-    ctx.window.gridCards = new Map();
+    ctx.evalPublic('shortcuts.js');
+    ctx.evalPublic('grid-view.js');
+    ctx.window.gridCards = ctx.read('gridCards');
     ctx.window.renderDefaultStatus = () => {};
     const { updateRunningIndicators } = loadAppFunctions(ctx.context, {
       declarations: ['_lastPtySignature'],
@@ -141,25 +142,25 @@ test('updateRunningIndicators: gridCards loop runs on every call, not gated by p
       <div class="grid-card-footer"><span>Stopped</span></div>
       <button class="grid-card-stop-btn" style="display:none"></button>
     `;
-    ctx.window.gridCards = new Map([['s1', card]]);
+    ctx.window.gridCards.set('s1', card);
     ctx.window.activePtyIds = new Set(['s1']);
     ctx.sessionBusyState.set('s1', false);
 
     update();
-    assert.equal(card.querySelector('.grid-card-dot').className, 'grid-card-dot running', 'grid card dot is running');
+    assert.ok(card.querySelector('.grid-card-dot').classList.contains('session-icon--waiting'), 'unknown live head waits for evidence');
     assert.equal(card.querySelector('.grid-card-footer').children[0].textContent, 'Running', 'grid card footer shows Running');
     assert.equal(card.querySelector('.grid-card-stop-btn').style.display, '', 'stop button visible');
 
     ctx.sessionBusyState.set('s1', true);
     ctx.emitHeadTurn('s1', 'open');
     update();
-    assert.equal(card.querySelector('.grid-card-dot').className, 'grid-card-dot busy',
+    assert.ok(card.querySelector('.grid-card-dot').classList.contains('session-icon--busy'),
       'grid card dot updated to busy on second call even though pty-set unchanged');
 
     ctx.window.activePtyIds = new Set();
     ctx.sessionBusyState.set('s1', false);
     update();
-    assert.equal(card.querySelector('.grid-card-dot').className, 'grid-card-dot stopped');
+    assert.ok(card.querySelector('.grid-card-dot').classList.contains('session-icon--idle'));
     assert.equal(card.querySelector('.grid-card-stop-btn').style.display, 'none', 'stop button hidden once stopped');
   });
 });

@@ -14,51 +14,6 @@ let gridFocusedSessionId = null;
 // Grouping is the historical layout, so an unset preference means "grouped".
 let gridGroupByProject = localStorage.getItem('gridGroupByProject') !== '0';
 
-// Wire IPC listeners (guarded — bindings may not exist yet)
-(function initSubagentListeners() {
-  if (typeof window.api === 'undefined') return;
-
-  // preload.js hands these callbacks the payload as their only argument.
-  if (typeof window.api.onSubagentSpawned === 'function') {
-    window.api.onSubagentSpawned((data) => {
-      const { parentSessionId, agentId, subagentType, _heartbeat } = data || {};
-      if (!parentSessionId || !agentId || !window.taskRegistry) return;
-      const map = window.taskRegistry.agentView.get(parentSessionId);
-      const sources = _heartbeat
-        ? ['local-ipc', 'attached-ipc'].filter(source => map?.get(agentId)?.has(source))
-        : [openSessions.get(parentSessionId)?.attach ? 'attached-ipc' : 'local-ipc'];
-      for (const source of sources) window.taskRegistry.note(parentSessionId, agentId, source, { subagentType });
-      scheduleGridSubagentTtlTick();
-      updateGridSubagentPills(parentSessionId);
-    });
-  }
-
-  if (typeof window.api.onSubagentCompleted === 'function') {
-    window.api.onSubagentCompleted((data) => {
-      const { parentSessionId, agentId } = data || {};
-      if (!parentSessionId || !agentId || !window.taskRegistry) return;
-      window.taskRegistry.release(parentSessionId, agentId, 'local-ipc');
-      window.taskRegistry.release(parentSessionId, agentId, 'attached-ipc');
-      updateGridSubagentPills(parentSessionId);
-    });
-  }
-})();
-
-// Prune subagents that have been running for more than 60 s without a completion event.
-// see .ai/contexts/subagent-observability.md
-function pruneStaleGridSubagents() {
-  window.taskRegistry?.prune(SUBAGENT_LIVE_TTL_MS);
-}
-
-function scheduleGridSubagentTtlTick() {
-  if (typeof scheduleSubagentTtlTick === 'function') scheduleSubagentTtlTick();
-}
-
-function runGridSubagentTtlTick() {
-  pruneStaleGridSubagents();
-  updateGridSubagentPills();
-}
-
 function updateGridSubagentPills(parentSessionId) {
   for (const [sessionId, card] of gridCards) {
     const openedSession = openSessions.get(sessionId)?.session;
@@ -74,6 +29,9 @@ function updateGridSubagentPills(parentSessionId) {
       ...(openedSession?.mergedMemberIds || []),
     ] }).filter(Boolean))];
     if (parentSessionId && !ids.some(id => window.taskRegistry?.resolve(id) === window.taskRegistry?.resolve(parentSessionId))) continue;
+    const row = { ...session, ...mergedRow, headSessionId: item?.dataset.headSessionId || mergedRow?.headSessionId || session.headSessionId,
+      mergedMemberIds: ids };
+    updateGridCardActivity(sessionId, card, row);
     const count = window.taskRegistry?.runningAgentCount(ids) || 0;
     let text = card.querySelector('.grid-subagent-count');
     if (!count) {
@@ -90,6 +48,19 @@ function updateGridSubagentPills(parentSessionId) {
     text.textContent = `${count} subagent${count === 1 ? '' : 's'} running`;
     text.setAttribute('aria-label', text.textContent);
   }
+}
+
+function updateGridCardActivity(sessionId, card, row) {
+  const snapshot = mergedRowSnapshot(rowSessionIds(row), sessionId, storedActivitySnapshot(sessionId), row);
+  writeIconSlot(card.querySelector('.grid-card-dot'), renderSessionIcon(snapshot));
+  setNeedsAttention(card, snapshot.attention);
+  setUnseenWrittenActivity(card, snapshot.unseenWrittenActivity);
+  const running = activePtyIds.has(sessionId);
+  const footer = card.querySelector('.grid-card-footer');
+  if (footer?.children[0]) footer.children[0].textContent = running ? 'Running' : snapshot.liveness === 'alive' ? 'Running elsewhere'
+    : snapshot.liveness === 'dead' ? 'Stopped' : 'Liveness unknown';
+  const stopBtn = card.querySelector('.grid-card-stop-btn');
+  if (stopBtn) stopBtn.style.display = (running || isSessionAlive(sessionId)) ? '' : 'none';
 }
 
 function wrapInGridCard(sessionId) {
@@ -115,7 +86,7 @@ function wrapInGridCard(sessionId) {
   const header = document.createElement('div');
   header.className = 'grid-card-header';
   const dot = document.createElement('span');
-  dot.className = 'grid-card-dot';
+  dot.className = 'grid-card-dot session-icon';
   header.appendChild(dot);
   const name = document.createElement('span');
   name.className = 'grid-card-name';
@@ -222,7 +193,6 @@ function wrapInGridCard(sessionId) {
   // Set initial status from the single source of truth
   updateRunningIndicators();
 
-  pruneStaleGridSubagents();
   updateGridSubagentPills(sessionId);
 }
 

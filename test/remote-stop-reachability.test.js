@@ -3,7 +3,7 @@
 // snapshot.liveness === 'alive' is a fact independent of attach state. See
 // .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop").
 //
-// Three layers are covered:
+// Four layers are covered:
 //   1. The CSS "show rule" itself (public/style.css) — a real cascade test,
 //      not a source-grep, so a selector typo would also be caught.
 //   2. The class writer (public/session-activity-dom.js's applyStateClasses),
@@ -12,9 +12,7 @@
 //   3. The sidebar's initial paint (public/sidebar.js's buildSessionItem),
 //      via the real dom-setup.js harness, so a first render (before any
 //      live event fires) is covered too.
-//   4. Source pins for grid-view.js / app.js, which cannot be eval'd in
-//      jsdom (see test/running-indicators.test.js's file header) — same
-//      pin technique used there.
+//   4. The shipped grid and app projection functions, loaded into jsdom.
 
 'use strict';
 const test = require('node:test');
@@ -24,10 +22,9 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
+const { loadAppFunctions } = require('./app-source');
 
 const STYLE_PATH = path.join(__dirname, '..', 'public', 'style.css');
-const APP_SRC = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-const GRID_SRC = fs.readFileSync(path.join(__dirname, '..', 'public', 'grid-view.js'), 'utf8');
 
 // --- 1. The CSS show rule, real cascade -------------------------------------
 
@@ -174,17 +171,38 @@ test('buildSessionItem: a plain local session is never painted is-alive by this 
   } finally { ctx.destroy(); }
 });
 
-// --- 4. grid-view.js / app.js source pins (cannot be eval'd in jsdom — see
-// test/running-indicators.test.js's file header for why) --------------------
+function gridContext(t) {
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  const session = { sessionId: 'remote-alive', remoteAlias: 'planificator', remoteDescriptorSeen: true,
+    status: 'idle', modified: new Date().toISOString() };
+  ctx.window.sessionMap.set(session.sessionId, session);
+  ctx.sidebar.renderProjects([remoteProject(session)], true);
+  Object.assign(ctx.window, { terminalsEl: ctx.document.getElementById('terminals'), gridViewActive: false,
+    replayHiddenBuffer() {}, renderDefaultStatus() {} });
+  ctx.evalPublic('shortcuts.js');
+  ctx.evalPublic('grid-view.js');
+  loadAppFunctions(ctx.context, { functions: ['updateRunningIndicators'], declarations: ['_lastPtySignature'] });
+  ctx.window.openSessions.set(session.sessionId, { session, element: ctx.document.createElement('div') });
+  ctx.window.wrapInGridCard(session.sessionId);
+  return { ctx, button: ctx.document.querySelector('.grid-card-stop-btn') };
+}
 
-test('public/grid-view.js: the stop button visibility check also honors isSessionAlive (mutation target: reverting to activePtyIds alone)', () => {
-  const marker = "stopBtn.style.display = (activePtyIds.has(sessionId) || isSessionAlive(sessionId)) ? '' : 'none';";
-  assert.ok(GRID_SRC.includes(marker),
-    'wrapInGridCard must show the stop button for an alive-but-unattached remote row too');
+test('wrapInGridCard shows Stop for a live unattached remote process', t => {
+  const { ctx, button } = gridContext(t);
+  assert.equal(ctx.window.activePtyIds.size, 0);
+  assert.equal(button.style.display, '');
 });
 
-test('public/app.js: updateRunningIndicators\' grid-card stop button also honors isSessionAlive (mutation target: reverting to running alone)', () => {
-  const marker = "if (stopBtn) stopBtn.style.display = (running || isSessionAlive(sid)) ? '' : 'none';";
-  assert.ok(APP_SRC.includes(marker),
-    'the periodic grid-card refresh must not un-hide the stop button only for running local sessions');
+test('updateRunningIndicators preserves remote Stop reachability through unrelated PTY changes and a confirmed stop', t => {
+  const { ctx, button } = gridContext(t);
+  ctx.window.activePtyIds.add('unrelated');
+  ctx.window.updateRunningIndicators();
+  assert.equal(button.style.display, '');
+  ctx.window.activePtyIds.clear();
+  ctx.window.updateRunningIndicators();
+  assert.equal(button.style.display, '');
+  ctx.window.applyRemoteStopped('remote-alive');
+  ctx.window.updateRunningIndicators();
+  assert.equal(button.style.display, 'none');
 });

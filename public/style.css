@@ -1914,19 +1914,11 @@ body { display: flex; flex-direction: column; }
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
+  margin-top: 0;
 }
 
-.grid-card-dot.running {
-  background: #3ecf5a;
-  box-shadow: 0 0 6px rgba(62,207,90,0.5);
-}
-
-.grid-card-dot.stopped { background: #6a6a80; }
-
-.grid-card-dot.busy {
-  background: #3ecf5a;
-  /* steps() — see docs/decisions/0002 */
-  animation: pulse-dot 1.5s steps(4) infinite;
+.grid-card.unseen-written-activity:not(.needs-attention) .grid-card-name {
+  color: #4fc3f7;
 }
 
 @keyframes pulse-dot {

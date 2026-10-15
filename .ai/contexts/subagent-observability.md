@@ -102,14 +102,14 @@ retain their state checks and assert the new presentation.
   structurally always false for it. The real liveness signal is the
   `subagent-spawned` / `subagent-completed` IPC pair emitted by
   `session-transitions.js:detectSubagentTransitions()` (also consumed by
-  `grid-view.js` and `jsonl-viewer.js`).
+  `jsonl-viewer.js`). The grid only projects the canonical registry.
 - **State**: `activeSubagentsByParent` in `public/sidebar.js` —
   `parentSessionId → Map<agentId, Map<source, lastSeenAt(ms)>>` of live source contributions
   subagents. Registry activity survives a full sidebar rebuild and selects
   active children for the capped preview. `reflectSubagentRunningState`
   refreshes the parent's count and status glyph; child rows and carets carry
   no liveness class.
-- **Why a TTL** (`SUBAGENT_LIVE_TTL_MS` = 60s, shared with grid-view — see
+- **Why a TTL** (`SUBAGENT_LIVE_TTL_MS` = 60s, owned by the sidebar — see
   "One TTL, one definition" below):
   `detectSubagentTransitions()` only polls subagents of `!exited` sessions —
   if the parent's PTY dies before a subagent goes 30s quiet, the matching
@@ -126,14 +126,14 @@ retain their state checks and assert the new presentation.
 - **`subagentDomId()`** mirrors `subagentSessionId()` in
   `read-session-file.js` — that file is main-process and not `require()`-able
   from the renderer (sidebar.js loads as a plain script), hence the local copy.
-- **Grid view shares the registry** and reads its authoritative count.
-  `pruneStaleGridSubagents()` expires fallback evidence only. Renderer files are
-  plain non-module `<script>`s
-  sharing one global scope and `sidebar.js` loads *after* `grid-view.js`
-  (`index.html:135` then `:139`), so a top-level function declared under the
-  same name in both is silently shadowed — that is what froze the grid's TTL
-  prune until PR #137. Keep cross-file names distinct;
-  `test/dom-grid-sidebar-prune-collision.test.js` pins the pair.
+- **Grid view shares the registry** and reads its authoritative count and
+  selected-head activity snapshot. Its IPC lifecycle listeners,
+  `pruneStaleGridSubagents`, `scheduleGridSubagentTtlTick` and
+  `runGridSubagentTtlTick` were removed in #629. Creating or repainting a card
+  cannot change task state. Sidebar fallback expiration remains the sole TTL
+  owner; recorded primary tasks survive silence.
+  `test/dom-grid-sidebar-prune-collision.test.js` pins that ownership and checks
+  that loading the grid does not shadow the sidebar prune function.
 
 ## Child registry activity, for every source (issue #285)
 
@@ -577,8 +577,8 @@ oscillating on a clock.
 
 Renderer side, `subagent-spawned` doubles as the still-alive heartbeat
 (`payload._heartbeat`). **A heartbeat refreshes an agent already tracked; it
-never creates an entry** — in `public/sidebar.js` and `public/grid-view.js`
-alike. Without that, a stray heartbeat could revive an agent that had completed,
+never creates an entry** — in `public/sidebar.js`, the shared IPC owner.
+Without that, a stray heartbeat could revive an agent that had completed,
 been TTL-pruned, or been dropped by `clearActiveSubagentsFor()`.
 
 A fork/resume re-key (`detectSessionTransitions`) switches `realSessionId`, and
@@ -714,10 +714,10 @@ contexts, all of which have to keep working:
   global *lexical* scope, not on `window`: sibling scripts resolve the bare
   identifier, but `window.SUBAGENT_LIVE_TTL_MS` is `undefined`. Don't "verify"
   the wiring by reading it off `window`.
-- **jsdom harness** — every harness that evaluates `sidebar.js` or
-  `grid-view.js` must evaluate `subagent-timing.js` first or they die on
-  `no-undef`/ReferenceError. Seven of them do (`test/dom-setup.js` plus six
-  test files with their own file lists); a new harness has to remember.
+- **jsdom harness** — a harness evaluating `sidebar.js` must evaluate
+  `subagent-timing.js` first. The grid projects shared state and no longer
+  reads those timing constants directly (#629). Grid harnesses load the
+  shipped session state and activity projection scripts before painting cards.
 
 `eslint.config.js` carries the constant in `rendererCrossFileGlobals` for the
 consumers, and gives the *producing* file its own block that switches that
@@ -974,7 +974,7 @@ invariant enforced anywhere.
 - `test/dom-sidebar-search-subagent-hits.test.js` — pins the search-only-hits-a-subagent case and the showStarredOnly regression, one test per guard clause
 - `test/session-transitions.test.js` — spawn/complete/heartbeat lifecycle plus
   the resurrection guards above
-- `test/dom-grid-subagent-pills.test.js` — pins the grid-view IPC handler arity
+- `test/dom-grid-subagent-pills.test.js` — pins the canonical IPC handler arity
   (`preload.js` passes the payload as the callback's only argument)
 - `public/sidebar.js:1082` (the routing branch) — the one-line decision that makes the whole feature work
 - IPC handler security: `read-subagent-jsonl` MUST validate that `agentId` and `parentSessionId` are filename-safe (see `resolveJsonlPath` calls in main.js — fixed in PR #8 hardening)

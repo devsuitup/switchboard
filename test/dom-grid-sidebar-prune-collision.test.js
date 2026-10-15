@@ -1,165 +1,35 @@
-// see .ai/contexts/subagent-observability.md
+'use strict';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-const { loadAppFunctions } = require('./app-source');
-const { JSDOM } = require('jsdom');
+const { setupSidebarDom } = require('./dom-setup');
 
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-
-function evalInWindow(dom, file) {
-  const src = fs.readFileSync(file, 'utf8');
-  vm.runInContext(src, dom.getInternalVMContext(), { filename: file });
-}
-
-function setupCombinedDom() {
-  const dom = new JSDOM(
-    '<!DOCTYPE html><html><body><div id="sidebar-content"></div><div id="stats-content"></div>' +
-    '<div id="memory-content"></div><div id="placeholder"></div><div id="terminals"></div></body></html>',
-    { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true }
-  );
-  const { window } = dom;
-
-  const spawnedCbs = [];
-  const completedCbs = [];
-  const apiTarget = {
-    platform: 'linux',
-    onSubagentSpawned: (cb) => { spawnedCbs.push(cb); },
-    onSubagentCompleted: (cb) => { completedCbs.push(cb); },
-  };
-  window.api = new Proxy(apiTarget, {
-    get(target, prop) {
-      if (prop in target) return target[prop];
-      return () => Promise.resolve({ ok: true });
-    },
-  });
-
-  const stubGlobals = {
-    openSessions: new Map(),
-    activeSessionId: null,
-    sessionMap: new Map(),
-    activePtyIds: new Set(),
-    sortedOrder: [],
-    cachedProjects: [],
-    confirmAndStopSession: () => {},
-    showSession: () => {},
-
-    sidebarContent: window.document.getElementById('sidebar-content'),
-    terminalsEl: window.document.getElementById('terminals'),
-    gridViewActive: false,
-    isMac: false,
-    replayHiddenBuffer: () => {},
-    updateRunningIndicators: () => {},
-    fitAndScroll: () => {},
-    refreshRemoteTerminalOnReturn: () => {},
-
-    statsContent: window.document.getElementById('stats-content'),
-    memoryContent: window.document.getElementById('memory-content'),
-    pendingSessions: new Map(),
-    lastActivityTime: new Map(),
-    searchMatchIds: null,
-    searchMatchProjectPaths: null,
-    showStarredOnly: false,
-    showRunningOnly: false,
-    showTodayOnly: false,
-    visibleSessionCount: 10,
-    sessionMaxAgeDays: 3650,
-    attentionSessions: new Set(),
-    responseReadySessions: new Set(),
-    sessionBusyState: new Map(),
-    cachedAllProjects: [],
-    // public/session-activity-dom.js is not loaded in this minimal harness
-    // (see .ai/contexts/session-state.md) — sidebar.js calls these directly.
-    setNeedsAttention: (el, on) => { if (el) el.classList.toggle('needs-attention', !!on); },
-    setResponseReady: (el, on) => { if (el) el.classList.toggle('response-ready', !!on); },
-    setCliBusy: (el, on) => { if (el) el.classList.toggle('cli-busy', !!on); },
-    setHasBusyAgents: (el, on) => { if (el) el.classList.toggle('has-busy-agents', !!on); },
-    setIsAlive: (el, on) => { if (el) el.classList.toggle('is-alive', !!on); },
-    isSessionAlive: () => false,
-    // issue #246 step 3b — sidebar.js calls this to paint the .session-icon
-    // slot; a no-op here is fine, this harness doesn't assert on it.
-    paintSessionIcon: () => {},
-    pollActiveSessions: () => {},
-    showNewSessionPopover: () => {},
-    openSettingsViewer: () => {},
-    showResumeSessionDialog: () => {},
-    showJsonlViewer: () => {},
-    forkSession: () => {},
-    openSession: () => {},
-    loadProjects: () => {},
-    launchScheduleCreator: () => {},
-    getExpandedSlugs: () => new Set(),
-    saveExpandedSlugs: () => {},
-  };
-
-  for (const [k, v] of Object.entries(stubGlobals)) {
-    Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
-  }
-
-  const MORPHDOM_PATH = path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js');
-  vm.runInContext(fs.readFileSync(MORPHDOM_PATH, 'utf8'), dom.getInternalVMContext(), { filename: 'morphdom-umd.js' });
-
-  loadAppFunctions(dom.getInternalVMContext(), {
-    functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
-  });
-  for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'task-registry.js', 'grid-view.js', 'bridge-url.js', 'worktree-nesting.js', 'sidebar.js']) {
-    evalInWindow(dom, path.join(PUBLIC_DIR, file));
-  }
-
-  return {
-    window,
-    document: window.document,
-    emitSubagentSpawned(payload) { for (const cb of spawnedCbs) cb(payload); },
-    emitSubagentCompleted(payload) { for (const cb of completedCbs) cb(payload); },
-    destroy() { window.close(); },
-  };
-}
-
-function openSession(ctx, sessionId) {
-  const element = ctx.document.createElement('div');
-  ctx.window.openSessions.set(sessionId, { closed: false, element, terminal: { focus: () => {} } });
-  ctx.window.sessionMap.set(sessionId, {
-    sessionId,
-    name: 'parent session',
-    projectPath: '/home/dev/proj',
-    modified: '2026-05-22T10:00:00.000Z',
-  });
-}
-
-test('grid-view.js and sidebar.js declare no colliding top-level prune name', () => {
-  const gridSrc = fs.readFileSync(path.join(PUBLIC_DIR, 'grid-view.js'), 'utf8');
-  const sidebarSrc = fs.readFileSync(path.join(PUBLIC_DIR, 'sidebar.js'), 'utf8');
-  const declared = (src) => [...src.matchAll(/^function\s+([A-Za-z0-9_$]+)\s*\(/gm)].map((m) => m[1]);
-  const shared = declared(gridSrc).filter((name) => declared(sidebarSrc).includes(name));
-  assert.deepEqual(shared, [], 'renderer files share one global scope; sidebar.js loads last and would shadow these');
+test('grid loading leaves the sidebar as the sole IPC lifecycle and fallback TTL owner', t => {
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  ctx.evalPublic('shortcuts.js');
+  ctx.evalPublic('grid-view.js');
+  const card = ctx.document.createElement('div');
+  card.innerHTML = '<div class="grid-card-dot"></div>';
+  ctx.read('gridCards').set('parent-1', card);
+  ctx.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1' });
+  assert.equal(ctx.window.taskRegistry.agents('parent-1').length, 1);
+  assert.equal(card.querySelector('.grid-card-dot').title, 'Background work running');
+  const now = ctx.window.Date.now();
+  ctx.window.Date.now = () => now + 61000;
+  ctx.window.updateGridSubagentPills();
+  assert.equal(ctx.window.taskRegistry.agents('parent-1').length, 1, 'painting a grid never expires canonical evidence');
+  ctx.window.runSubagentTtlTick();
+  assert.equal(ctx.window.taskRegistry.agents('parent-1').length, 0, 'shared fallback owner expires it');
+  assert.equal(card.querySelector('.grid-card-dot').title, 'Idle');
+  assert.equal(card.querySelector('.grid-subagent-count'), null);
 });
 
-test('a stale grid subagent is pruned by TTL when grid-view.js and sidebar.js load in index.html order', () => {
-  const ctx = setupCombinedDom();
-  try {
-    openSession(ctx, 'parent-1');
-    ctx.window.wrapInGridCard('parent-1');
-    ctx.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', subagentType: 'explore' });
-
-    const cardsBefore = ctx.document.querySelectorAll('.grid-card[data-session-id="parent-1"]');
-    assert.equal(cardsBefore[cardsBefore.length - 1].querySelector('.grid-subagent-count'), null,
-      'fallback activity has no trustworthy count');
-    assert.equal(ctx.window.taskRegistry.agents('parent-1').length, 1);
-
-    const t0 = ctx.window.Date.now();
-    ctx.window.Date.now = () => t0 + 61000;
-
-    ctx.window.wrapInGridCard('parent-1');
-
-    const cardsAfter = ctx.document.querySelectorAll('.grid-card[data-session-id="parent-1"]');
-    const latestCard = cardsAfter[cardsAfter.length - 1];
-    assert.equal(latestCard.querySelector('.grid-subagent-count'), null);
-    assert.equal(ctx.window.taskRegistry.agents('parent-1').length, 0,
-      'stale fallback must be pruned from the shared registry');
-  } finally {
-    ctx.destroy();
-  }
+test('loading grid-view does not shadow the sidebar fallback prune function', t => {
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  const prune = ctx.window.pruneStaleSubagents;
+  ctx.evalPublic('shortcuts.js');
+  ctx.evalPublic('grid-view.js');
+  assert.equal(ctx.window.pruneStaleSubagents, prune);
 });

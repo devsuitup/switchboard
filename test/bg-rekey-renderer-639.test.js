@@ -16,7 +16,6 @@ function fixture(t) {
   w.loadProjects = () => Promise.resolve();
   w.pollActiveSessions = () => {};
   w.schedulePersistWorkingSet = () => {};
-  w.rekeyActivityState = () => {};
   w.showRestoreNotice = () => {};
   w.setActiveSession = id => { w.activeSessionId = id; };
   w.terminalHeaderId = w.document.createElement('span');
@@ -82,7 +81,7 @@ test('the preserved grid card sends Stop to the new background UUID', t => {
 
 test('a merged background rekey keeps sidebar, grid and Agents on the migrated conversation head', t => {
   const h = fixture(t);
-  for (const file of ['session-state.js', 'session-activity-dom.js', 'session-activity.js', 'agents-view.js']) {
+  for (const file of ['agents-view.js']) {
     h.inCtx(fs.readFileSync(path.join(__dirname, '../public', file), 'utf8'));
   }
   h.w.activeSessionId = 'other';
@@ -100,7 +99,7 @@ test('a merged background rekey keeps sidebar, grid and Agents on the migrated c
   const card = h.inCtx("gridCards.get('bg')");
   assert.equal(h.w.sessionMap.get('bg').headSessionId, 'bg');
   assert.equal(h.w.document.querySelector('[data-session-id="bg"] .session-icon').dataset.glyph, '⠋');
-  assert.equal(card.querySelector('.grid-card-dot').classList.contains('busy'), true);
+  assert.equal(card.querySelector('.grid-card-dot').classList.contains('session-icon--busy'), true);
   const entry = { kind: 'background', sessionId: 'bg', state: 'working', name: 'original (1)', nameSource: 'collision' };
   assert.equal(h.w.agentDisplayName(entry), 'original');
   assert.equal(h.w.agentRowIcon(entry).glyph, '⠋');
@@ -108,7 +107,8 @@ test('a merged background rekey keeps sidebar, grid and Agents on the migrated c
   assert.equal(h.w.document.querySelector('[data-session-id="bg"] .session-icon').dataset.glyph, '●');
   assert.equal(h.w.agentRowIcon(entry).glyph, '●');
   h.w.updateRunningIndicators();
-  assert.equal(card.querySelector('.grid-card-dot').classList.contains('busy'), false);
+  assert.equal(card.querySelector('.grid-card-dot').classList.contains('session-icon--busy'), false);
+  assert.equal(card.querySelector('.grid-card-dot').dataset.glyph, '●');
 });
 
 test('a buffered terminal write survives the background rekey', t => {

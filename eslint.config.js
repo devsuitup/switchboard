@@ -214,6 +214,7 @@ const rendererCrossFileGlobals = {
   // public/session-state.js (pure domain, see .ai/contexts/session-state.md)
   createSessionState: 'readonly',
   renderSessionIcon: 'readonly',
+  writeIconSlot: 'readonly',
   // public/session-activity-dom.js — the only file allowed to write
   // .cli-busy/.needs-attention/.response-ready/.has-busy-agents, and the only
   // file allowed to write the .session-icon slot (issue #246, step 3b).
