@@ -203,6 +203,44 @@ test('truncation, replacement and deletion rebaseline quietly, then accept new g
   }
 });
 
+test('replacement with colliding numeric file IDs rebaselines quietly', async t => {
+  for (const [content, mtime] of [
+    ['old history\n', 100], ['old history\n', 200],
+    ['replacement history\n', 100], ['replacement history\n', 200],
+  ]) {
+    let identity = 2n ** 60n;
+    const originalIdentity = identity;
+    const stamp = (stat, id, options) => Object.assign(stat, {
+      ino: options?.bigint ? id : Number(id),
+      birthtimeMs: options?.bigint ? 1000n : 1000,
+      birthtimeNs: 1_000_000_000n,
+    });
+    const f = fixture(t, { fs: { ...fs.promises,
+      open: async (...args) => {
+        const handle = await fs.promises.open(...args);
+        const openedIdentity = identity;
+        return {
+          stat: async options => stamp(await handle.stat(options), openedIdentity, options),
+          close: () => handle.close(),
+        };
+      },
+      stat: async (file, options) => stamp(await fs.promises.stat(file, options), identity, options),
+    } });
+    f.write(parent, 'old history\n');
+    await f.tracker.record(parent);
+    fs.renameSync(f.file(parent), f.file(parent) + '.old');
+    identity++;
+    assert.notEqual(identity, originalIdentity);
+    assert.equal(Number(identity), Number(originalIdentity));
+    f.write(parent, content, mtime);
+    assert.equal(await f.tracker.record(parent), null, 'a distinct file ID must invalidate even when Numbers collide');
+    assert.deepEqual(f.events, []);
+    fs.appendFileSync(f.file(parent), 'new\n');
+    assert.ok(await f.tracker.record(parent), 'growth after replacement remains detectable');
+    assert.equal(f.events.length, 1);
+  }
+});
+
 test('read failure invalidates the baseline without emitting or claiming completion', async t => {
   let deny = false;
   const f = fixture(t, { fs: { ...fs.promises, open: (...args) => {
@@ -238,12 +276,12 @@ test('a final changed event inside the existing throttle window is eventually em
 test('an append racing path verification preserves the final throttled delivery', async t => {
   let injectWrite = false;
   let f;
-  f = timedFixture(t, { fs: { ...fs.promises, stat: async file => {
+  f = timedFixture(t, { fs: { ...fs.promises, stat: async (file, options) => {
     if (injectWrite) {
       injectWrite = false;
       fs.appendFileSync(file, 'racing append\n');
     }
-    return fs.promises.stat(file);
+    return fs.promises.stat(file, options);
   } } });
   f.write(parent, 'old\n');
   await f.tracker.record(parent);
@@ -264,12 +302,12 @@ test('an append racing path verification preserves the final throttled delivery'
 
 test('a racing first write retries without requiring another watch notification', async t => {
   let injectWrite = false;
-  const f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+  const f = fixture(t, { fs: { ...fs.promises, stat: async (file, options) => {
     if (injectWrite) {
       injectWrite = false;
       fs.appendFileSync(file, 'racing append\n');
     }
-    return fs.promises.stat(file);
+    return fs.promises.stat(file, options);
   } } });
   f.write(parent, 'old\n');
   await f.tracker.record(parent);
@@ -302,7 +340,7 @@ test('metadata verification does not read transcript content', async t => {
   const f = fixture(t, { fs: { ...fs.promises, open: async (...args) => {
     const handle = await fs.promises.open(...args);
     return {
-      stat: () => handle.stat(), close: () => handle.close(),
+      stat: options => handle.stat(options), close: () => handle.close(),
       read: (...readArgs) => { lengths.push(readArgs[2]); return handle.read(...readArgs); },
     };
   } } });
@@ -319,13 +357,13 @@ test('metadata verification does not read transcript content', async t => {
 test('replacement during path verification rejects stale evidence and recovers quietly', async t => {
   let replace = false;
   let f;
-  f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+  f = fixture(t, { fs: { ...fs.promises, stat: async (file, options) => {
     if (replace) {
       replace = false;
       fs.renameSync(file, file + '.old');
       f.write(parent, 'replacement\n', 300);
     }
-    return fs.promises.stat(file);
+    return fs.promises.stat(file, options);
   } } });
   f.write(parent, 'old\n');
   await f.tracker.record(parent);
@@ -366,13 +404,13 @@ test('dispose cancels trailing work and prevents late asynchronous delivery', as
 test('shrink and stat failures invalidate verification without activity', async t => {
   for (const mode of ['shrink', 'error']) {
     let fail = false;
-    const f = fixture(t, { fs: { ...fs.promises, stat: async file => {
+    const f = fixture(t, { fs: { ...fs.promises, stat: async (file, options) => {
       if (fail && mode === 'error') throw Object.assign(new Error('stat failed'), { code: 'EIO' });
       if (fail) {
         fs.truncateSync(file, 1);
         fs.utimesSync(file, 300, 300);
       }
-      return fs.promises.stat(file);
+      return fs.promises.stat(file, options);
     } } });
     f.write(parent, 'old\n');
     await f.tracker.record(parent);
@@ -391,8 +429,8 @@ test('dispose during a stat prevents in-flight activity from escaping', async t 
   let release;
   let reached;
   const entered = new Promise(resolve => { reached = resolve; });
-  const f = fixture(t, { fs: { ...fs.promises, stat: async file => {
-    const result = await fs.promises.stat(file);
+  const f = fixture(t, { fs: { ...fs.promises, stat: async (file, options) => {
+    const result = await fs.promises.stat(file, options);
     if (hold) {
       reached();
       await new Promise(resolve => { release = resolve; });
@@ -503,14 +541,14 @@ test('two or three racing appends deliver once after a deferred recheck with no 
     let racing = 0;
     let calls = 0;
     let f;
-    f = timedFixture(t, { fs: { ...fs.promises, stat: async file => {
+    f = timedFixture(t, { fs: { ...fs.promises, stat: async (file, options) => {
       calls++;
       if (racing > 0) {
         racing--;
         fs.appendFileSync(file, 'racing append\n');
         f.tracker.record(child);
       }
-      return fs.promises.stat(file);
+      return fs.promises.stat(file, options);
     } } });
     f.write(child, 'old\n');
     await f.tracker.record(child);
@@ -573,13 +611,13 @@ test('continuous racing appends keep one deferred recheck and dispose cancels it
   let racing = false;
   let calls = 0;
   let f;
-  f = timedFixture(t, { fs: { ...fs.promises, stat: async file => {
+  f = timedFixture(t, { fs: { ...fs.promises, stat: async (file, options) => {
     if (racing) {
       calls++;
       fs.appendFileSync(file, 'racing append\n');
       f.tracker.record(parent);
     }
-    return fs.promises.stat(file);
+    return fs.promises.stat(file, options);
   } } });
   f.write(parent, 'old\n');
   await f.tracker.record(parent);
@@ -623,13 +661,13 @@ test('forgotten recent files do not replay unchanged writes but accept a fresh w
 test('two racing appends during trailing reverification still deliver exactly two activities', async t => {
   let racing = 0;
   let f;
-  f = timedFixture(t, { fs: { ...fs.promises, stat: async file => {
+  f = timedFixture(t, { fs: { ...fs.promises, stat: async (file, options) => {
     if (racing > 0) {
       racing--;
       fs.appendFileSync(file, 'racing append\n');
       f.tracker.record(child);
     }
-    return fs.promises.stat(file);
+    return fs.promises.stat(file, options);
   } } });
   f.write(child, 'old\n');
   await f.tracker.record(child);

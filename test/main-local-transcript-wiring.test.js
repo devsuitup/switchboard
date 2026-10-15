@@ -102,13 +102,13 @@ test('injected projects-watch notifications verify real files while indexing sta
     tracker = createLocalTranscriptTracker({ ...opts, projectsDir: root, now: () => at,
       setTimeout: (fn, ms) => { const timer = { fn, at: at + ms }; activityTimers.add(timer); return timer; },
       clearTimeout: timer => activityTimers.delete(timer),
-      fs: { ...fs.promises, stat: async transcript => {
+      fs: { ...fs.promises, stat: async (transcript, options) => {
         if (racing > 0 && transcript === childFile) {
           racing--;
           fs.appendFileSync(transcript, 'racing child append\n');
           callback('change', childName);
         }
-        return fs.promises.stat(transcript);
+        return fs.promises.stat(transcript, options);
       } },
     });
     return tracker;

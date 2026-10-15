@@ -767,7 +767,11 @@ gone. The pre-fix sequence is reasoned from the code, not reproduced live;
 the callback delivers both immediate and trailing activity. A named watch
 notification invalidates indexing independently, but cannot itself light a
 row. The tracker asynchronously opens only that transcript, keeping its
-device/inode/birth-time identity and size/write-mtime watermark. On first
+device/inode/birth-time identity and size/write-mtime watermark. Both handle
+and path stats use BigInt identities and nanosecond timestamps (#648): NTFS
+file IDs can exceed Number's exact range, and replacements created within
+one clock tick can share a birth time. Rounded IDs must not authorize
+activity for a different file. On first
 sight, a nonempty file whose write mtime is at or after tracker creation
 minus `FIRST_WRITE_MTIME_ALLOWANCE_MS` (2 s for clock/filesystem resolution)
 supplies activity; older files establish a quiet baseline. The cutoff stays
