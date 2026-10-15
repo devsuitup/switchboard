@@ -83,26 +83,131 @@ for (const [state, kind, head, slot, label] of [
   }
 }
 
-for (const own of [false, true]) {
-  test(`[628b] a finished job cannot override a resumed local PTY (own descriptor: ${own})`, async t => {
-    const entries = mergeRoster({ cli: null, jobs: new Map([['aaaaaaaa', parseJobState(JSON.stringify({
-      state: 'done', sessionId: SID, updatedAt: new Date(AT).toISOString(), fan: [],
-      inFlight: { tasks: 0, kinds: [] },
-    }))]]), descriptors: own ? [{ kind: 'interactive', sessionId: SID, pid: 42, status: 'busy' }] : [],
-    isOwnPid: pid => pid === 42 });
-    if (own) assert.equal(entries[0].conversationOwn, true);
-    const h = await setup(t, entries, true);
-    h.emitHeadTurn(SID, 'open');
+for (const state of ['done', 'stopped', 'failed']) {
+  for (const surface of ['sidebar', 'Agents']) {
+    for (const own of [false, true]) {
+      test(`[654] attached tab survives ${state} with the final job state in ${surface} (own descriptor: ${own})`, async t => {
+        const entries = roster('working', null);
+        entries[0].attachedHere = true;
+        const h = await setup(t, entries, true);
+        h.window.openSessions.set(SID, { session: { sessionId: SID }, attach: true });
+        h.window.sessionMap.get(SID).statusUpdatedAt = Date.now() - 3_600_000;
+        h.emitHeadTurn(SID, 'closed');
+        const finished = roster(state, null);
+        Object.assign(finished[0], { attachedHere: true, conversationOwn: own,
+          status: 'busy', statusUpdatedAt: Date.now() - 3_600_000 });
+        h.push({ roster: finished, daemonReachable: true });
+        const check = () => {
+          const row = surface === 'sidebar' ? h.document.querySelector('.session-item') : h.document.createElement('div');
+          if (surface === 'Agents') row.innerHTML = h.window.renderAgentRow(finished[0]);
+          const status = row.querySelector(surface === 'sidebar' ? '.session-status' : '.agents-row-state');
+          if (surface === 'sidebar') assert.equal(status.textContent, `Job ${state}`);
+          assert.doesNotMatch(status.textContent, /busy|idle|ago|\d+\s*[smhd]/i);
+          assert.doesNotMatch(status.title, /ago|\d+\s*[smhd]\b/i);
+          assert.equal(row.querySelectorAll('.session-icon').length, 1);
+          assert.ok(row.querySelector('.session-icon--stale'), row.innerHTML);
+          assert.equal(row.querySelector('.session-icon--waiting'), null);
+          assert.ok(h.window.activePtyIds.has(SID));
+          if (surface === 'Agents') {
+            assert.match(status.textContent, new RegExp(state));
+            assert.equal(row.querySelector('.agents-row-age').textContent, '');
+          }
+        };
+        check();
+        h.emitHeadTurn(SID, 'closed', { revision: 2 });
+        check();
+        h.window.refreshSidebar();
+        check();
+      });
+    }
+  }
+}
+
+for (const active of [false, true]) {
+  test(`[654] background identity without a roster never displays descriptor status or age (PTY: ${active})`, async t => {
+    const h = await setup(t, [], active);
+    h.window.sessionMap.get(SID).statusUpdatedAt = Date.now() - 3_600_000;
     h.window.refreshSidebar();
-    const row = h.document.querySelector('.session-item');
-    assert.ok(row.querySelector('.session-icon--busy'), row.innerHTML);
-    assert.ok(row.classList.contains('is-alive'));
-    assert.match(row.querySelector('.session-status').textContent, /^busy/);
-    assert.doesNotMatch(row.querySelector('.session-status').textContent, /job|unavailable/i);
-    const agentIcon = h.window.agentRowIcon(entries[0]);
-    assert.equal(agentIcon.slotClass, 'session-icon--busy');
-    assert.equal(agentIcon.live, true);
+    const check = () => {
+      const status = h.document.querySelector('.session-status');
+      assert.equal(status.textContent, 'Activity unavailable');
+      assert.equal(status.title, 'Job activity unavailable');
+    };
+    check();
+    h.emitHeadTurn(SID, 'open');
+    check();
+    h.window.refreshSidebar();
+    check();
   });
+}
+
+test('[654] a merged background row without a roster ignores its head descriptor on incremental updates', async t => {
+  const h = await setup(t, [], true);
+  const session = h.window.sessionMap.get(SID);
+  const head = 'bbbbbbbb-1234-4321-abcd-123456789abc';
+  Object.assign(session, { headSessionId: head, mergedMemberIds: [head],
+    mergedMemberStatuses: { [head]: { status: 'busy', statusUpdatedAt: Date.now() - 3_600_000 } } });
+  h.window.activePtyIds.add(head);
+  h.window.refreshSidebar();
+  const check = () => {
+    const status = h.document.querySelector('.session-status');
+    assert.equal(status.textContent, 'Activity unavailable');
+    assert.equal(status.title, 'Job activity unavailable');
+  };
+  check();
+  h.emitHeadTurn(head, 'open');
+  check();
+  h.window.refreshSidebar();
+  check();
+});
+
+test('[654] foreground activity ignores a retained background descriptor even with roster-only identity', async t => {
+  const entries = roster('done');
+  entries[0].conversationOwn = true;
+  const h = await setup(t, entries, true);
+  const session = h.window.sessionMap.get(SID);
+  delete session.bgJobId;
+  session.status = 'idle';
+  session.statusUpdatedAt = Date.now() - 3_600_000;
+  h.emitHeadTurn(SID, 'open');
+  const check = () => {
+    const row = h.document.querySelector('.session-item');
+    assert.ok(row.querySelector('.session-icon--busy'));
+    assert.equal(row.querySelector('.session-status').textContent, 'Working');
+    assert.equal(row.querySelector('.session-status').title, '');
+  };
+  check();
+  h.window.refreshSidebar();
+  check();
+});
+
+for (const state of ['done', 'stopped', 'failed']) {
+  for (const own of [false, true]) {
+    test(`[628b] a ${state} job cannot override a resumed local PTY (own descriptor: ${own})`, async t => {
+      const entries = mergeRoster({ cli: null, jobs: new Map([['aaaaaaaa', parseJobState(JSON.stringify({
+        state, sessionId: SID, updatedAt: new Date(AT).toISOString(), fan: [],
+        inFlight: { tasks: 0, kinds: [] },
+      }))]]), descriptors: own ? [{ kind: 'interactive', sessionId: SID, pid: 42, status: 'busy' }] : [],
+      isOwnPid: pid => pid === 42 });
+      if (own) assert.equal(entries[0].conversationOwn, true);
+      const h = await setup(t, entries, true);
+      h.window.openSessions.set(SID, { session: { sessionId: SID }, attach: false });
+      h.emitHeadTurn(SID, 'closed');
+      assert.equal(h.document.querySelector('.session-status').textContent, 'Waiting for input');
+      assert.ok(h.document.querySelector('.session-icon--waiting'));
+      assert.equal(h.window.agentRowIcon(entries[0]).slotClass, 'session-icon--waiting');
+      h.emitHeadTurn(SID, 'open', { revision: 2 });
+      h.window.refreshSidebar();
+      const row = h.document.querySelector('.session-item');
+      assert.ok(row.querySelector('.session-icon--busy'), row.innerHTML);
+      assert.ok(row.classList.contains('is-alive'));
+      assert.equal(row.querySelector('.session-status').textContent, 'Working');
+      assert.doesNotMatch(row.querySelector('.session-status').textContent, /job|unavailable/i);
+      const agentIcon = h.window.agentRowIcon(entries[0]);
+      assert.equal(agentIcon.slotClass, 'session-icon--busy');
+      assert.equal(agentIcon.live, true);
+    });
+  }
 }
 
 test('[628b] a finished job held by our process leaves the conversation projection unchanged without a PTY id', async t => {
@@ -112,8 +217,8 @@ test('[628b] a finished job held by our process leaves the conversation projecti
   h.emitHeadTurn(SID, 'open');
   const snapshot = { headTurn: 'open', liveness: 'alive', busy: true };
   assert.deepEqual(h.window.backgroundActivitySnapshot(SID, snapshot), snapshot);
-  assert.equal(h.window.backgroundActivityLabel(SID, snapshot), null);
-  assert.match(h.document.querySelector('.session-status').textContent, /^busy/);
+  assert.equal(h.window.backgroundActivityLabel(SID, snapshot).text, 'Working');
+  assert.equal(h.document.querySelector('.session-status').textContent, 'Working');
   const agentIcon = h.window.agentRowIcon(entries[0]);
   assert.equal(agentIcon.slotClass, 'session-icon--busy');
   assert.equal(agentIcon.live, true);
@@ -127,7 +232,7 @@ test('[628b] resuming a finished conversation restores its status on an incremen
   const row = h.document.querySelector('.session-item');
   assert.ok(row.querySelector('.session-icon--busy'));
   assert.ok(row.classList.contains('is-alive'));
-  assert.match(row.querySelector('.session-status').textContent, /^busy/);
+  assert.equal(row.querySelector('.session-status').textContent, 'Working');
   assert.equal(row.querySelector('.session-status').title, '');
 });
 

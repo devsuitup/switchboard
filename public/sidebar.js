@@ -1879,11 +1879,11 @@ function buildSessionItem(session) {
   // see .ai/contexts/session-state.md ("Surfacing status on the session object")
   const statusEl = document.createElement('span');
   statusEl.className = 'session-status';
-  const bgActivity = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(session), snapshot);
+  const bgActivity = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(session), snapshot, session);
   if (bgActivity) {
     statusEl.textContent = bgActivity.text;
     statusEl.title = bgActivity.title;
-  } else if (session.bgJobId && !(typeof backgroundActivityIsForeground === 'function' && backgroundActivityIsForeground(rowHeadId(session)))) {
+  } else if (session.bgJobId) {
     statusEl.textContent = 'Activity unavailable';
     statusEl.title = 'Job activity unavailable';
   } else if (session.status) {
