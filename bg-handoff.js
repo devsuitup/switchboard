@@ -1,6 +1,7 @@
 'use strict';
 
 const { stripVTControlCharacters } = require('node:util');
+const fs = require('node:fs');
 const { scanContinuationIndex } = require('./session-continuations');
 const { isComposerEmpty, noteUserInput } = require('./composer-state');
 const { JOB_ID_RE } = require('./bg-agents-roster');
@@ -27,17 +28,34 @@ function backgroundRefusal(session, status) {
 }
 
 function createContinuationReader(file, id) {
-  let serialized;
+  let serialized, previous;
+  const sameFile = (a, b) => a?.dev === b.dev && a.ino === b.ino && a.birthtimeNs === b.birthtimeNs;
+  const unchanged = (a, b) => sameFile(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs;
   return async () => {
     try {
       let index;
       do {
+        const stat = fs.statSync(file, { bigint: true });
+        const fd = fs.openSync(file, 'r');
+        const buffer = Buffer.alloc(Math.min(64, Number(stat.size)));
+        let head;
+        try { head = buffer.toString('hex', 0, fs.readSync(fd, buffer, 0, buffer.length, 0)); }
+        finally { fs.closeSync(fd); }
+        if (!sameFile(previous, stat) || (!unchanged(previous, stat)
+          && !(stat.size > previous.size && head.startsWith(previous.head)))) serialized = undefined;
         serialized = scanContinuationIndex(file, id, serialized);
+        const after = fs.statSync(file, { bigint: true });
+        previous = { dev: stat.dev, ino: stat.ino, birthtimeNs: stat.birthtimeNs,
+          size: stat.size, mtimeNs: stat.mtimeNs, head };
+        if (!unchanged(stat, after)) {
+          if (!sameFile(stat, after) || after.size <= stat.size) serialized = previous = undefined;
+          return null;
+        }
         index = JSON.parse(serialized);
         if (index.bytes < index.size) await new Promise(resolve => setImmediate(resolve));
       } while (index.bytes < index.size);
       return index.complete && !index.unresolved ? index.ids : null;
-    } catch { return null; }
+    } catch { serialized = previous = undefined; return null; }
   };
 }
 

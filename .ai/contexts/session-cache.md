@@ -1919,7 +1919,9 @@ settings(key PK, value JSON)
 ## Continuation index (#518B)
 
 `session_cache.continuationIndex` is nullable JSON with `format:3`, `ids`,
-`bytes`, `complete`, `mtime` and `unresolved`. Schema reconciliation adds the
+`bytes`, `complete`, `mtime` and `unresolved`, plus an additive `stamp` object
+whose `dev`, `ino`, `birthtimeNs`, `mtimeNs` and `size` are decimal strings from
+the BigInt stat around the scan (#656). Schema reconciliation adds the
 column without wiping old rows. Full transcript scans collect links while
 already parsing the file, including worker scans. Missing or older-format
 indexes are rebuilt lazily, including format-2 indexes that marked a mere
@@ -1927,15 +1929,46 @@ indexes are rebuilt lazily, including format-2 indexes that marked a mere
 
 Header-only refresh skips subagent continuation indexes and shares a 1 MiB
 synchronous continuation budget across all changed parent files in that refresh.
-Other files retain their stale index until a later refresh or resume lookup.
+An unchanged file keeps its persisted index without an upsert even when its
+caller-local snapshot is absent after restart, worker population or eviction.
+After the scan budget is spent, an index is cleared only when an existing
+snapshot or persisted stamp proves a change; otherwise it stays available until lazy
+revalidation on resume. Issue #656 compares BigInt dev/ino/birthtime and
+nanosecond mtime, following the NTFS identity/tunnelling rationale in
+[session-state.md (#648)](session-state.md). These snapshots cap at 128 entries
+and retain BigInts only inside the module; persisted stamps contain strings,
+so DB rows and IPC remain JSON-safe. Full scans in `readSessionFile`, including
+`workers/scan-projects.js` through `populateCacheViaWorker`, compare the exact
+stamp before and after reading and attach it to the index only when unchanged;
+otherwise the index is null. Incremental refresh and resolve scans also attach
+the verified stamp. Refresh derives its ISO mtime from the same BigInt stat as
+`new Date(Number((stat.mtimeNs + 500000n) / 1000000n))`: rounding in BigInt
+before conversion matches Node's Number-stat date at millisecond boundaries.
+Converting nanoseconds to Number before rounding loses precision (#656).
 Existing display-header and SDK-entrypoint reads keep their own budgets.
 
-`resolveSessionContinuations` verifies format, size and mtime before trusting
-an index. A complete fresh index requires only stat. A legacy, incomplete or
-stale index is read in 1 MiB chunks, yielding with `setImmediate` between chunks,
-with no total scan cap. Tests can inject smaller `chunkBytes`. Persistence uses
+`resolveSessionContinuations` trusts a complete format-3 index after stat only
+when its persisted stamp matches one BigInt stat, or when the exact serialized
+index has a matching in-memory identity, size and nanosecond mtime snapshot.
+A cold caller with a matching persisted stamp reads zero transcript bytes.
+An index without a stamp remains readable, but cold resolution rescans it once
+and persists a stamp: matching size and ISO mtime alone cannot rule out a
+replacement under #656. A legacy, incomplete or stale index is read in 1 MiB chunks, yielding
+with `setImmediate` between chunks, with no total scan cap. Identity and stamps
+are checked before/after each synchronous scan and after every yield.
+Identity changes and non-growth changes during a yield remain unresolved;
+same-identity growth continues scanning, including after a previously final
+chunk, and reuses the cursor only with a matching head and tail. Equal-size
+changes restart from zero on the next lookup. Tests can inject smaller
+`chunkBytes`. Persistence uses
 `setCachedContinuationIndex`, which updates only that column, preserving display
 fields written by a concurrent refresh; it does not upsert an old row snapshot.
+
+The local-background sidebar still validates persisted indexes by ISO mtime.
+Its DB rows have no current filesystem stamp to compare, and acquiring one
+would add a synchronous stat per local parent row on every graph build. It
+therefore ignores the additive stamp; refresh and resolve validate it where a
+current stat is already available (#656).
 
 When a target has no cache row, resolution lazily inventories transcript filenames
 recursively under the source session's projects root (or that host's mirror root).

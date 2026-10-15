@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { StringDecoder } = require('string_decoder');
-const { continuationId } = require('./session-continuations');
+const { continuationId, continuationStamp, matchesContinuationStamp } = require('./session-continuations');
 
 /** Subagent transcripts land under <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl.
  *  We surface them as first-class rows with a synthetic sessionId so they're addressable
@@ -199,6 +199,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   const excludedMessageUuids = opts.excludedMessageUuids;
   const excludedMessageSignatures = opts.excludedMessageSignatures;
   try {
+    const stamp = isSubagent ? null : continuationStamp(fs.statSync(filePath, { bigint: true }));
     const stat = fs.statSync(filePath);
     const fileBytes = fs.readFileSync(filePath);
     const content = fileBytes.toString('utf8');
@@ -363,13 +364,14 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime: stat.mtime.toISOString(),
       messageCount, textContent, slug, scheduleSlug, customTitle, aiTitle,
-      continuationIndex: JSON.stringify({ format: 3, version: 3, ids: [...continuationIds],
+      continuationIndex: matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }))
+        ? JSON.stringify({ format: 3, version: 3, ids: [...continuationIds], stamp,
         sealedIds: sealedContinuationIds ?? [...continuationIds], bytes: fileBytes.length,
         complete: fileBytes.length === stat.size && (!incompleteTail || skipLine), size: fileBytes.length,
         mtime: stat.mtime.toISOString(), unresolved: continuationUnresolved,
         invalid: sealedContinuationIds === null ? continuationUnresolved : continuationInvalid,
         skipLine, pending: skipLine ? '' : pending.toString('base64'),
-        tail: fileBytes.subarray(Math.max(0, fileBytes.length - 64)).toString('hex') }),
+        tail: fileBytes.subarray(Math.max(0, fileBytes.length - 64)).toString('hex') }) : null,
       bridgeSessionId,
       ...(bridgeSessionId ? { messageUuids, messageUuidsComplete } : {}),
       entrypoint: typedInTerminal ? 'cli' : (entrypoint ?? ''),

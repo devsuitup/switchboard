@@ -9,7 +9,7 @@ const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-p
 const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
-const { scanContinuationIndex, resolveContinuations, validId } = require('./session-continuations');
+const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp } = require('./session-continuations');
 const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
 
 /**
@@ -27,8 +27,46 @@ let getLocalDescriptors = () => [];
 let getLocalJobs = () => new Map();
 let setCachedCustomTitles, getCachedMissingCustomTitle;
 let customTitleBackfill = null;
+const continuationFiles = new Map();
+
+function sameContinuationFile(a, b) {
+  return a?.dev === b.dev && a.ino === b.ino && a.birthtimeNs === b.birthtimeNs;
+}
+
+function sameContinuationStamp(a, b) {
+  return sameContinuationFile(a, b) && a.size === b.size && a.mtimeNs === b.mtimeNs;
+}
+
+function continuationHead(file, size, maxBytes = 64) {
+  const fd = fs.openSync(file, 'r');
+  const buffer = Buffer.alloc(Math.min(64, Number(size), maxBytes));
+  try { return buffer.toString('hex', 0, fs.readSync(fd, buffer, 0, buffer.length, 0)); }
+  finally { fs.closeSync(fd); }
+}
+
+function rememberContinuation(file, stat, head, serialized) {
+  continuationFiles.delete(file);
+  continuationFiles.set(file, { dev: stat.dev, ino: stat.ino, birthtimeNs: stat.birthtimeNs,
+    size: stat.size, mtimeNs: stat.mtimeNs, head, serialized });
+  while (continuationFiles.size > 128) continuationFiles.delete(continuationFiles.keys().next().value);
+}
+
+// see .ai/contexts/session-cache.md ("Continuation index")
+function scanCachedContinuation(file, id, previous, maxBytes, stat = fs.statSync(file, { bigint: true })) {
+  const cached = continuationFiles.get(file);
+  const head = continuationHead(file, stat.size, Math.max(0, maxBytes - 1));
+  const reuse = cached?.serialized === previous && sameContinuationFile(cached, stat)
+    && (sameContinuationStamp(cached, stat) || (stat.size > cached.size && head.startsWith(cached.head)));
+  let serialized = scanContinuationIndex(file, id, reuse ? previous : undefined, maxBytes - head.length / 2);
+  const after = fs.statSync(file, { bigint: true });
+  if (!sameContinuationStamp(stat, after)) { continuationFiles.delete(file); return null; }
+  serialized = JSON.stringify({ ...JSON.parse(serialized), stamp: continuationStamp(stat) });
+  rememberContinuation(file, stat, head, serialized);
+  return serialized;
+}
 
 function init(ctx) {
+  continuationFiles.clear();
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   activeSessions = ctx.activeSessions;
   getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
@@ -304,9 +342,11 @@ function refreshFolder(folder, opts = {}) {
   //     mtime-only DB touch so the sidebar still reflects activity.
 
   for (const { filePath, parentSessionId } of filesToScan) {
-    let stat;
-    try { stat = fs.statSync(filePath); } catch { continue; }
-    const fileMtime = stat.mtime.toISOString();
+    let stat, fileMtime;
+    try {
+      stat = fs.statSync(filePath, { bigint: true });
+      fileMtime = new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString();
+    } catch { continue; }
 
     const cachedDbId = filePathToDbId.get(filePath) || null;
     const cachedEntry = cachedDbId ? cachedMap.get(cachedDbId) : null;
@@ -319,20 +359,30 @@ function refreshFolder(folder, opts = {}) {
     // file's mtime and can't serve as the change-detection key. Comparing
     // `modified` here would miss on nearly every row and re-read every dirty
     // file on every watcher flush.
-    if (cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath) {
+    const snapshot = continuationFiles.get(filePath);
+    let persistedStamp;
+    if (!snapshot) {
+      try { persistedStamp = JSON.parse(cachedEntry?.continuationIndex)?.stamp; } catch {}
+    }
+    const changedIndex = snapshot ? !sameContinuationStamp(snapshot, stat)
+      : persistedStamp && !matchesContinuationStamp(persistedStamp, stat);
+    if (cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
+      && (!cachedEntry.continuationIndex || !changedIndex || parentSessionId || cachedEntry.parentSessionId)) {
       continue; // unchanged, skip
     }
 
     if (cachedEntry) {
+      let continuationIndex = cachedEntry.continuationIndex;
+      if (parentSessionId || cachedEntry.parentSessionId) continuationIndex = null;
+      else if (continuationBytesLeft) {
+        continuationIndex = scanCachedContinuation(filePath, cachedEntry.sessionId, continuationIndex, continuationBytesLeft, stat);
+        continuationBytesLeft = 0;
+      } else if (changedIndex) continuationIndex = null;
+      if (cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
+        && continuationIndex === cachedEntry.continuationIndex) continue;
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId });
       if (h) {
-        let continuationIndex = cachedEntry.continuationIndex;
-        if (parentSessionId || cachedEntry.parentSessionId) continuationIndex = null;
-        else if (continuationBytesLeft) {
-          continuationIndex = scanContinuationIndex(filePath, cachedEntry.sessionId, continuationIndex, continuationBytesLeft);
-          continuationBytesLeft = 0;
-        }
         // Merge: keep cached body/messageCount/created, overlay fresh display fields.
         const merged = {
           ...cachedEntry,
@@ -368,7 +418,9 @@ function refreshFolder(folder, opts = {}) {
         // Header read couldn't extract signal -- just bump mtime so sort order
         // stays current. fileMtime has to move too, otherwise this file stays
         // permanently "dirty" and gets re-read on every watcher flush.
-        touchCachedModified(cachedDbId, fileMtime);
+        if (continuationIndex !== cachedEntry.continuationIndex) {
+          sessionsToUpsert.push({ ...cachedEntry, continuationIndex, modified: fileMtime, fileMtime });
+        } else touchCachedModified(cachedDbId, fileMtime);
         cachedEntry.modified = fileMtime;
         cachedEntry.fileMtime = fileMtime;
       }
@@ -382,6 +434,12 @@ function refreshFolder(folder, opts = {}) {
     // may still be replaced by a cutoff-filtered re-derivation, or dropped).
     const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
     if (s) {
+      if (!parentSessionId && s.continuationIndex) {
+        const head = continuationHead(filePath, stat.size);
+        const after = fs.statSync(filePath, { bigint: true });
+        if (sameContinuationStamp(stat, after)) rememberContinuation(filePath, stat, head, s.continuationIndex);
+        else s.continuationIndex = null;
+      }
       currentIds.add(s.sessionId);
       newFileReads.push(s);
     }
@@ -1245,15 +1303,27 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     }
     if (row.parentSessionId) return null;
     const file = resolveJsonlPath(resolveFolderDir(row.folder), { ...row, folder: '.' });
-    const stat = fs.statSync(file);
+    const stat = fs.statSync(file, { bigint: true });
     let serialized = row.continuationIndex, index;
     try { index = JSON.parse(serialized); } catch {}
-    if (index?.format !== 3 || !index.complete || index.bytes !== stat.size || index.mtime !== stat.mtime.toISOString()) {
+    const cached = continuationFiles.get(file);
+    if (index?.format !== 3 || !index.complete || index.bytes !== Number(stat.size)
+      || !(matchesContinuationStamp(index.stamp, stat)
+        || (cached?.serialized === serialized && sameContinuationStamp(cached, stat)))) {
+      let grew;
       do {
-        serialized = scanContinuationIndex(file, id, serialized, chunkBytes);
+        serialized = scanCachedContinuation(file, id, serialized, chunkBytes);
+        if (serialized === null) return null;
         index = JSON.parse(serialized);
+        const scanned = continuationFiles.get(file);
         await new Promise(resolve => setImmediate(resolve));
-      } while (!index.complete && index.bytes < index.size);
+        const after = fs.statSync(file, { bigint: true });
+        grew = sameContinuationFile(scanned, after) && after.size > scanned.size;
+        if (!sameContinuationStamp(scanned, after) && !grew) {
+          continuationFiles.delete(file);
+          return null;
+        }
+      } while (grew || (!index.complete && index.bytes < index.size));
       await writer.setCachedContinuationIndex(id, serialized);
     }
     return { index, modified: getCachedSession(id)?.modified || row.modified };

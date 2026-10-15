@@ -2,6 +2,17 @@ const fs = require('fs');
 
 const validId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(id);
 
+function continuationStamp(stat) {
+  return { dev: stat.dev.toString(), ino: stat.ino.toString(), birthtimeNs: stat.birthtimeNs.toString(),
+    mtimeNs: stat.mtimeNs.toString(), size: stat.size.toString() };
+}
+
+function matchesContinuationStamp(stamp, stat) {
+  return !!stamp && stamp.dev === stat.dev.toString() && stamp.ino === stat.ino.toString()
+    && stamp.birthtimeNs === stat.birthtimeNs.toString() && stamp.mtimeNs === stat.mtimeNs.toString()
+    && stamp.size === stat.size.toString();
+}
+
 function continuationId(entry, sessionId) {
   return entry?.type === 'continued-in' && typeof entry.sessionId === 'string' && typeof sessionId === 'string'
     && entry.sessionId.toLowerCase() === sessionId.toLowerCase() && validId(entry.continuedInSessionId)
@@ -140,4 +151,5 @@ function resolveContinuationsSync(sessionId, getNode, options) {
   return step.value;
 }
 
-module.exports = { continuationId, scanContinuationIndex, resolveContinuations, resolveContinuationsSync, validId };
+module.exports = { continuationId, continuationStamp, matchesContinuationStamp,
+  scanContinuationIndex, resolveContinuations, resolveContinuationsSync, validId };
