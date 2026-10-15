@@ -1918,6 +1918,8 @@ settings(key PK, value JSON)
 
 ## Continuation index (#518B)
 
+Issue #656 guards refresh and resume continuation indexes with caller-local BigInt dev/ino/birthtime and nanosecond mtime before/after each scan (and after asynchronous yields), restarts equal-size changes from zero, and resumes only verified growth with a matching head, following the NTFS identity/tunnelling rationale in [session-state.md (#648)](session-state.md); these bounded in-memory snapshots never enter serialized indexes, DB rows or IPC, and a cold caller revalidates persisted indexes.
+
 `session_cache.continuationIndex` is nullable JSON with `format:3`, `ids`,
 `bytes`, `complete`, `mtime` and `unresolved`. Schema reconciliation adds the
 column without wiping old rows. Full transcript scans collect links while

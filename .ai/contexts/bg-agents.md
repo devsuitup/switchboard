@@ -608,6 +608,8 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 
 ## Send to background
 
+Issue #656 guards the handoff continuation reader with BigInt dev/ino/birthtime and nanosecond mtime before/after each scan, restarts equal-size changes from zero, and resumes only verified growth with a matching head, following the NTFS identity/tunnelling rationale in [session-state.md (#648)](session-state.md), while keeping BigInt entirely inside the reader.
+
 The session header and sidebar context menu call `send-session-to-background`
 for one running local Claude tab. Main refuses plain terminals, attach tabs,
 remote tabs, sandboxed and pre-launch-command sessions, duplicate handoffs,
