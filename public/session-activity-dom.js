@@ -74,18 +74,22 @@ function headActivitySnapshot(sessionId, snapshot) {
   const s = snapshot || {};
   const turn = headTurns.get(sessionId);
   const alive = s.liveness === 'alive' || (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId));
-  const idleNewer = Number.isFinite(s.idleHintAt) && Number.isFinite(turn?.lastEntryAt) && s.idleHintAt > turn.lastEntryAt
+  const background = typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId)
+    || s.backgroundJob;
+  const promptHint = s.promptHint && (!background || Number.isFinite(s.promptHintAt));
+  const idleNewer = !background && Number.isFinite(s.idleHintAt) && Number.isFinite(turn?.lastEntryAt) && s.idleHintAt > turn.lastEntryAt
     || turn?.state === 'open' && Number.isFinite(s.promptHintAt) && Number.isFinite(turn?.observedAt) && s.promptHintAt > turn.observedAt;
-  const headTurn = idleNewer || (s.promptHint && (!turn || turn.state === 'unknown')) ? 'closed' : turn?.state || 'unknown';
+  const headTurn = idleNewer || (promptHint && (!turn || turn.state === 'unknown')) ? 'closed' : turn?.state || 'unknown';
   return { ...s, ...writtenActivitySnapshot(sessionId), headTurn, busy: alive && headTurn === 'open',
     responseReady: !s.attention && !!turn?.ready, waitingForInput: alive && headTurn !== 'open',
     liveness: alive ? 'alive' : s.liveness };
 }
 
 function taskActivitySnapshot(sessionId, snapshot) {
-  if (!window.taskRegistry) return headActivitySnapshot(sessionId, snapshot);
-  const agentsBusy = window.taskRegistry.agents(sessionId).length > 0;
-  return headActivitySnapshot(sessionId, { ...snapshot, agentsBusy, backgroundWork: window.taskRegistry.background(sessionId) });
+  const tasks = window.taskRegistry;
+  const result = headActivitySnapshot(sessionId, tasks ? { ...snapshot,
+    agentsBusy: tasks.agents(sessionId).length > 0, backgroundWork: tasks.background(sessionId) } : snapshot);
+  return typeof backgroundActivitySnapshot === 'function' ? backgroundActivitySnapshot(sessionId, result) : result;
 }
 
 // DOM projection for session activity, sole writer of the activity classes — see .ai/contexts/session-state.md
@@ -147,12 +151,12 @@ function localSessionForStatus(sessionId, session) {
 
 function storedActivitySnapshot(sessionId, session) {
   const local = snapshotForLocal(sessionId, session);
-  if (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)) return taskActivitySnapshot(sessionId, localPtyStates.get(sessionId)?.snapshot());
+  if (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)) return taskActivitySnapshot(sessionId, local);
   const remote = typeof remoteSessionStates !== 'undefined' && remoteSessionStates.get(sessionId)?.snapshot();
   if (remote && !remote.attached) return taskActivitySnapshot(sessionId, remote);
   if (typeof localTranscriptStates !== 'undefined' && localTranscriptStates.has(sessionId)) seedLocalTranscriptDescriptor(sessionId, session);
   const transcript = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.get(sessionId)?.snapshot();
-  return taskActivitySnapshot(sessionId, transcript || local);
+  return taskActivitySnapshot(sessionId, transcript ? (local.backgroundJob ? { ...transcript, backgroundJob: true } : transcript) : local);
 }
 
 function mergedRowSnapshot(ids, sessionId, snapshot, row) {
@@ -228,6 +232,12 @@ function applyStateClasses(sessionId, snapshot) {
   setIsAlive(item, alive);
   setUnseenWrittenActivity(item, snapshot?.unseenWrittenActivity);
   writeIconSlot(item.querySelector('.session-icon'), icon);
+  const label = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(item.dataset.headSessionId || item.dataset.sessionId, snapshot);
+  const status = item.querySelector('.session-status');
+  if (label && status) {
+    status.textContent = label.text;
+    status.title = label.title;
+  }
   if (typeof updateGridSubagentPills === 'function') updateGridSubagentPills(sessionId);
   if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'needs-attention': attention, 'response-ready': ready, 'cli-busy': busy, 'has-busy-agents': agentsBusy, 'is-alive': alive, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });
 }
@@ -249,17 +259,18 @@ function writeIconSlot(el, icon) {
 function snapshotForLocal(sessionId, session) {
   let state = localPtyState(sessionId);
   const sess = localSessionForStatus(sessionId, session);
+  const background = sess?.bgJobId || typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId);
   if (sess && sess.status !== undefined) {
     // session.status present is itself the liveness signal — see .ai/contexts/cli-session-state.md
     state.apply({ type: 'liveness', value: 'alive' });
-    state.apply({ type: 'descriptorStatus', status: sess.status, at: sess.statusUpdatedAt });
+    if (!background) state.apply({ type: 'descriptorStatus', status: sess.status, at: sess.statusUpdatedAt });
   } else if (!sess?.remoteAlias && state.snapshot().liveness === 'alive'
     && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId))) {
     localPtyStates.delete(sessionId);
     state = localPtyState(sessionId);
     state.apply({ type: 'liveness', value: 'unknown' });
   }
-  return state.snapshot();
+  return background ? { ...state.snapshot(), backgroundJob: true } : state.snapshot();
 }
 
 // Paints an icon slot from a snapshot held by another adapter — see .ai/contexts/session-state.md ("Descriptor-owned attention")

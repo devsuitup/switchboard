@@ -170,6 +170,7 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     e.startedAt = e.startedAt ?? descriptor.startedAt;
   }
   if (job?.nameSource === 'collision' || descriptor?.nameSource === 'collision') e.name = null;
+  e.status = null;
   return e;
 }
 

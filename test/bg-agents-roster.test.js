@@ -118,7 +118,7 @@ test('mergeRoster: the CLI list decides which jobs exist; the job file state, be
   assert.deepEqual(ids, ['aaaaaaaa', 'bbbbbbbb', 's-ext']);
   const a = roster[0];
   assert.equal(a.state, 'done', 'the live state.json wins over the cached CLI state');
-  assert.equal(a.status, 'busy', 'the descriptor status wins over the CLI snapshot');
+  assert.equal(a.status, null, 'background activity never inherits coarse descriptor or CLI status');
   assert.equal(a.detail, 'stale detail');
   assert.equal(a.tokens, 5);
   assert.equal(a.agent, 'fleet:em');
@@ -139,6 +139,20 @@ test('mergeRoster without the CLI lists the jobs on disk instead', () => {
   assert.equal(a.state, 'done', 'file state stands when the CLI is unreachable');
   assert.equal(a.sessionId, 's-a', 'the descriptor supplies the session id');
   assert.equal(a.pid, 10);
+});
+
+test('[628] normalized job evidence wins over an old busy descriptor without losing identity', () => {
+  const f = fixture();
+  for (const state of ['working', 'blocked', 'done', 'stopped', 'failed', 'future']) {
+    f.jobs.set('aaaaaaaa', parseJobState(JSON.stringify({ state, updatedAt: '2026-10-15T12:00:00Z',
+      inFlight: { tasks: 0, kinds: [] }, fan: [{ id: 'cron-1', kind: 'cron', startedAt: 1 }] })));
+    const row = mergeRoster(f)[0];
+    assert.equal(row.status, null);
+    assert.equal(row.pid, 10);
+    assert.equal(row.cwd, '/a');
+    assert.equal(row.taskEvidence.valid, state !== 'future');
+    assert.equal(row.taskEvidence.at, state === 'future' ? null : Date.parse('2026-10-15T12:00:00Z'));
+  }
 });
 
 test('dispatchArgs builds the argv in a fixed order and omits empty options', () => {

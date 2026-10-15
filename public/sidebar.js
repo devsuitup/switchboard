@@ -1841,7 +1841,14 @@ function buildSessionItem(session) {
   // see .ai/contexts/session-state.md ("Surfacing status on the session object")
   const statusEl = document.createElement('span');
   statusEl.className = 'session-status';
-  if (session.status) {
+  const bgActivity = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(session), snapshot);
+  if (bgActivity) {
+    statusEl.textContent = bgActivity.text;
+    statusEl.title = bgActivity.title;
+  } else if (session.bgJobId) {
+    statusEl.textContent = 'Activity unavailable';
+    statusEl.title = 'Job activity unavailable';
+  } else if (session.status) {
     const age = formatStatusAge(session.statusUpdatedAt);
     const why = session.status === 'waiting' && session.waitingFor ? ' · ' + session.waitingFor : '';
     statusEl.textContent = session.status + why + (age ? ' · ' + age : '');

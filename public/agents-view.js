@@ -2,6 +2,9 @@
 
 const AGENTS_RECONCILE_MS = 30000;
 const bgAgentSessionIds = new Set();
+const bgActivityEntries = new Map();
+const bgActivityUpdatedAt = new Map();
+let agentsSnapshotRevision = 0;
 let agentsViewActive = false;
 let agentsRoster = [];
 let agentsDaemonReachable = true;
@@ -151,24 +154,49 @@ function agentRowIcon(entry) {
   const ports = {
     ...stored,
     liveness: live ? 'alive' : 'dead',
-    attention: live && entry.status === 'waiting',
+    attention: entry.kind === 'interactive' ? live && entry.status === 'waiting' : stored.attention,
     waitingForInput: live,
     stale: !live,
-    promptHint: entry.status === 'idle' || stored.promptHint,
-    idleHintAt: entry.status === 'idle' && Number.isFinite(entry.statusUpdatedAt)
+    promptHint: entry.kind === 'interactive' && entry.status === 'idle' || stored.promptHint,
+    idleHintAt: entry.kind === 'interactive' && entry.status === 'idle' && Number.isFinite(entry.statusUpdatedAt)
       ? Math.max(stored.idleHintAt ?? -Infinity, entry.statusUpdatedAt) : stored.idleHintAt,
   };
-  const snapshot = typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, ports) : { ...ports, headTurn: 'unknown' };
-  if (live && entry.state === 'blocked') {
-    snapshot.busy = false;
-    snapshot.agentsBusy = false;
-    snapshot.backgroundWork = false;
-    snapshot.responseReady = false;
-    snapshot.waitingForInput = true;
-    snapshot.headTurn = 'closed';
-  }
+  let snapshot = typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, ports) : { ...ports, headTurn: 'unknown' };
+  if (entry.kind === 'background') snapshot = projectBackgroundActivity(entry, snapshot);
   const icon = renderSessionIcon(snapshot);
   return { slotClass: icon.slotClasses[0], live, glyph: icon.glyph, title: icon.title };
+}
+
+function backgroundActivityEntry(sessionId) {
+  return bgActivityEntries.get(String(sessionId).toLowerCase());
+}
+
+function projectBackgroundActivity(entry, snapshot) {
+  const live = agentJobIsLive(entry);
+  const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
+  const blocked = live && entry.state === 'blocked';
+  const headTurn = terminal || blocked ? 'closed' : snapshot.headTurn;
+  return { ...snapshot, headTurn, liveness: live ? 'alive' : 'dead', stale: !live,
+    attention: blocked || live && snapshot.attention, busy: live && !blocked && headTurn === 'open',
+    responseReady: live && !blocked && snapshot.responseReady,
+    agentsBusy: live && !blocked && snapshot.agentsBusy,
+    backgroundWork: live && !blocked && snapshot.backgroundWork,
+    waitingForInput: live && headTurn !== 'open' };
+}
+
+function backgroundActivitySnapshot(sessionId, snapshot) {
+  const entry = backgroundActivityEntry(sessionId);
+  return entry ? projectBackgroundActivity(entry, snapshot) : snapshot;
+}
+
+function backgroundActivityLabel(sessionId, snapshot) {
+  const entry = backgroundActivityEntry(sessionId);
+  if (!entry) return null;
+  const valid = entry.taskEvidence?.valid === true;
+  const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
+  const label = terminal ? entry.state : !valid ? 'Activity unavailable' : renderSessionIcon(snapshot).title;
+  const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toISOString()} (job metadata)` : 'Job activity unavailable';
+  return { text: `${label} · job ${entry.state || 'unknown'}`, title: source };
 }
 
 function agentVerbAvailability(entry, daemonReachable) {
@@ -207,22 +235,39 @@ function agentsSelectedEntry() {
 }
 
 function applyAgentsSnapshot(snapshot) {
+  agentsSnapshotRevision++;
+  const previous = JSON.stringify([...bgActivityEntries]);
   agentsRoster = Array.isArray(snapshot && snapshot.roster) ? snapshot.roster : [];
   agentsDaemonReachable = !snapshot || snapshot.daemonReachable !== false;
+  bgActivityEntries.clear();
+  for (const entry of agentsRoster) {
+    if (entry.kind !== 'background' || !entry.sessionId) continue;
+    const id = String(entry.sessionId).toLowerCase();
+    const at = bgActivityUpdatedAt.get(id);
+    if (entry.taskEvidence?.valid && Number.isFinite(at) && entry.taskEvidence.at < at) {
+      entry.taskEvidence = { ...entry.taskEvidence, valid: false };
+    }
+    if (entry.taskEvidence?.valid) bgActivityUpdatedAt.set(id, entry.taskEvidence.at);
+    bgActivityEntries.set(id, entry);
+  }
+  for (const id of bgActivityUpdatedAt.keys()) if (!bgActivityEntries.has(id)) bgActivityUpdatedAt.delete(id);
+  for (const [id, entry] of bgActivityEntries) window.taskRegistry?.applyJob(id, entry.taskEvidence);
   const next = new Set(agentsRoster.filter(e => agentJobIsLive(e) && e.sessionId).map(e => String(e.sessionId).toLowerCase()));
   let changed = next.size !== bgAgentSessionIds.size;
   if (!changed) for (const id of next) if (!bgAgentSessionIds.has(id)) { changed = true; break; }
   if (changed) {
     bgAgentSessionIds.clear();
     for (const id of next) bgAgentSessionIds.add(id);
-    if (typeof refreshSidebar === 'function') refreshSidebar();
   }
+  if ((changed || previous !== JSON.stringify([...bgActivityEntries])) && typeof refreshSidebar === 'function') refreshSidebar();
   if (agentsViewActive) renderAgentsView();
 }
 
 async function refreshAgentsRoster() {
+  const revision = ++agentsSnapshotRevision;
   try {
-    applyAgentsSnapshot(await window.api.getBgAgents());
+    const snapshot = await window.api.getBgAgents();
+    if (revision === agentsSnapshotRevision) applyAgentsSnapshot(snapshot);
   } catch (err) {
     console.warn('[agents-view] roster refresh failed', err);
   }
@@ -238,7 +283,7 @@ function renderAgentRow(entry, nested = false) {
   const icon = agentRowIcon(entry);
   const state = entry.kind === 'interactive' ? 'external' : (entry.state || '?');
   const stateEmoji = agentStateMeta(entry).emoji;
-  const status = entry.status ? ' · ' + entry.status : '';
+  const status = entry.kind === 'interactive' && entry.status ? ' · ' + entry.status : '';
   const classes = ['agents-row'];
   if (nested) classes.push('agents-row--nested');
   if (key === agentsSelectedKey) classes.push('selected');
@@ -599,6 +644,7 @@ function initAgentsView() {
     });
   }
   window.api.onBgAgentsChanged((snapshot) => applyAgentsSnapshot(snapshot));
+  void refreshAgentsRoster();
 }
 
 if (typeof module !== 'undefined' && module.exports) {

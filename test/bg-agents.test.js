@@ -254,6 +254,27 @@ test('an empty state.json (mid-rewrite) keeps the previous value', async () => {
   } finally { rmTmp(dir); }
 });
 
+for (const failure of ['corrupt', 'missing']) {
+  test(`[628] ${failure} primary data degrades activity while retaining lifecycle guards`, async () => {
+    const dir = mkTmp();
+    try {
+      writeJob(dir, 'aaaaaaaa', { state: 'working', updatedAt: new Date().toISOString(), fan: [], inFlight: { tasks: 0, kinds: [] } });
+      boot(dir, { cli: fakeCli({ fail: true }) });
+      bgAgents.onChange(() => {});
+      bgAgents.start();
+      await bgAgents.reconcile();
+      assert.equal(bgAgents.getSnapshot().roster[0].taskEvidence.valid, true);
+      const file = path.join(dir, 'aaaaaaaa', 'state.json');
+      if (failure === 'corrupt') fs.writeFileSync(file, '{');
+      else fs.unlinkSync(file);
+      await waitFor(() => bgAgents.getSnapshot().roster[0]?.taskEvidence.valid === false);
+      assert.equal(bgAgents.getSnapshot().roster[0].state, 'working');
+      assert.equal(bgAgents.getSnapshot().daemonReachable, false);
+      for (const verb of ['stop', 'rm', 'respawn']) assert.equal((await bgAgents.runVerb(verb, 'aaaaaaaa')).ok, false);
+    } finally { rmTmp(dir); }
+  });
+}
+
 test('a descriptor change rebuilds the roster from readAllDescriptors', async () => {
   const dir = mkTmp();
   try {

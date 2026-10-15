@@ -176,10 +176,14 @@ function scheduleRebuild() {
 
 function readJob(id) {
   let text;
-  try { text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8'); } catch { return; }
+  try { text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8'); } catch {}
   const job = parseJobState(text);
   if (job) { jobs.set(id, job); scheduleJobsChanged(); }
-  else log.debug(`[bg-agents] ${id}/state.json unreadable, keeping the previous value`);
+  else {
+    const previous = jobs.get(id);
+    if (previous) jobs.set(id, { ...previous, taskEvidence: { valid: false, at: null, tasks: [], inFlight: null, terminal: false } });
+    log.debug(`[bg-agents] ${id}/state.json unreadable, retaining lifecycle with degraded activity`);
+  }
 }
 
 function watchJob(id) {
