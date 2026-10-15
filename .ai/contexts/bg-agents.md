@@ -123,8 +123,11 @@ share the static background glyph. Only agent tasks contribute to #627's count.
 A blocked job takes attention priority; done/stopped/failed suppress head busy,
 background work and response-ready, while retaining unseen written output.
 An attached terminal's explicit attention notification still takes priority.
-Sessions with a live PTY here, and finished entries with `conversationOwn`,
-keep the conversation's own activity and status instead of the job projection.
+Sessions with a live PTY here keep the conversation's own activity and status
+only when their matching entry is not a live job. Attaching to a working or
+blocked job keeps the job projection, including blocked attention and labels
+without descriptor status or age. Finished entries with `conversationOwn`
+also keep the conversation's own activity and status.
 Sidebar rebuilds compare session membership, state, normalized task evidence
 and conversation ownership; tokens, tempo, detail and display-only fan changes
 do not rebuild it.

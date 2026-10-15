@@ -40,6 +40,49 @@ async function setup(t, entries = roster(), active = false) {
   return { ...h, push: s => push(s), subscriptions: () => subscriptions, sidebarRenders: () => sidebarRenders };
 }
 
+for (const [state, kind, head, slot, label] of [
+  ['working', null, 'closed', 'waiting', 'Waiting for input'],
+  ['blocked', null, 'closed', 'attention', 'Needs your attention'],
+  ['working', 'agent', 'closed', 'agents-busy', 'Background work running'],
+  ['working', 'agent', 'open', 'busy', 'Working'],
+]) {
+  for (const surface of ['sidebar', 'Agents']) {
+    test(`[628c] attached ${state} job with ${kind || 'no task'} and ${head} head keeps job activity in ${surface}`, async t => {
+      const entries = roster(state, kind);
+      const oldStatusAt = Date.now() - 3_600_000;
+      Object.assign(entries[0], { attachedHere: true, status: 'busy', statusUpdatedAt: oldStatusAt });
+      const h = await setup(t, entries, true);
+      h.window.sessionMap.get(SID).statusUpdatedAt = oldStatusAt;
+      h.emitHeadTurn(SID, head);
+      if (surface === 'sidebar') {
+        const check = () => {
+          const row = h.document.querySelector('.session-item');
+          assert.equal(row.querySelectorAll('.session-icon').length, 1);
+          assert.ok(row.querySelector(`.session-icon--${slot}`), row.innerHTML);
+          const status = row.querySelector('.session-status');
+          assert.equal(status.textContent, `${label} · job ${state}`);
+          assert.doesNotMatch(status.textContent, /busy|idle|ago|\d+[smhd]/i);
+          assert.equal(status.title, `Job updated ${new Date(AT).toLocaleString()} (job metadata)`);
+        };
+        check();
+        h.window.refreshSidebar();
+        check();
+      } else {
+        const row = h.document.createElement('div');
+        row.innerHTML = h.window.renderAgentRow(entries[0]);
+        assert.equal(row.querySelectorAll('.session-icon').length, 1);
+        const icon = row.querySelector(`.session-icon--${slot}`);
+        assert.ok(icon, row.innerHTML);
+        assert.equal(icon.title, label);
+        if (state === 'blocked') assert.equal(icon.dataset.glyph, '!');
+        const status = row.querySelector('.agents-row-state');
+        assert.match(status.textContent, new RegExp(state));
+        assert.doesNotMatch(status.textContent, /busy|idle|ago|\d+[smhd]/i);
+      }
+    });
+  }
+}
+
 for (const own of [false, true]) {
   test(`[628b] a finished job cannot override a resumed local PTY (own descriptor: ${own})`, async t => {
     const entries = mergeRoster({ cli: null, jobs: new Map([['aaaaaaaa', parseJobState(JSON.stringify({
