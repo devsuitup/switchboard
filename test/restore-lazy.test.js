@@ -714,16 +714,17 @@ test('lazy: a saved session with no transcript yet is neither started nor kept d
   } finally { h.destroy(); }
 });
 
-function setupMerged({ saved = ['B', 'x'], members = ['B'], slug = false, ...opts } = {}) {
+function setupMerged({ saved = ['B', 'x'], members = ['B'], slug = false, head, ...opts } = {}) {
   const savedSet = saved.map((sessionId) => ({ sessionId, projectPath: PROJECT, active: sessionId === 'x' }));
   const h = setup({ savedSet, ...opts });
   const project = h.window.cachedProjects[0];
   const rowIds = new Set(['A', ...members]);
+  const headField = head ? { headSessionId: head } : {};
   project.sessions = project.sessions.filter((s) => !rowIds.has(s.sessionId));
-  project.sessions.push({ sessionId: 'A', name: 'web', modified: OLD, messageCount: 1, mergedMemberIds: members, ...(slug ? { slug: 'sl' } : {}) });
+  project.sessions.push({ sessionId: 'A', name: 'web', modified: OLD, messageCount: 1, mergedMemberIds: members, ...headField, ...(slug ? { slug: 'sl' } : {}) });
   if (slug) project.sessions.push({ sessionId: 'z', name: 'z', slug: 'sl', modified: OLD, messageCount: 1 });
   h.indexMerged = () => {
-    h.window.sessionMap.set('A', { sessionId: 'A', projectPath: PROJECT, mergedMemberIds: members });
+    h.window.sessionMap.set('A', { sessionId: 'A', projectPath: PROJECT, mergedMemberIds: members, ...headField });
     h.window.sessionMap.set('x', { sessionId: 'x', projectPath: PROJECT });
     h.window.indexLocalMergedMemberRows([{ sessions: [h.window.sessionMap.get('A')] }]);
   };
@@ -1039,6 +1040,64 @@ test('lazy merged row: a click on the row during a member\'s reattach-only open 
     assert.equal(h.openTerminalOptions[1].reattachOnly, undefined, 'the click resumes it');
     assert.equal(h.window.openSessions.has('B'), true);
     assert.deepEqual(h.dormantIds(), ['x']);
+  } finally { h.destroy(); }
+});
+
+test('lazy merged row: a running member whose reattach waited for the head\'s open is marked when that open fails, and the user\'s open stays active', async () => {
+  for (const ok of [false, true]) {
+    const label = ok ? 'B opens' : 'B fails';
+    let finishOpen;
+    const h = setupMerged({
+      saved: ['B', 'C', 'x'], members: ['B', 'C'], head: 'B',
+      openResult: (_id, options) => (options.reattachOnly ? { ok: true, reattached: true } : new Promise((resolve) => { finishOpen = resolve; })),
+    });
+    try {
+      h.indexMerged();
+      h.window.renderProjects(h.window.cachedProjects, true);
+      h.window.createTerminalEntry({ sessionId: 'n1', projectPath: PROJECT });
+      h.run('activeSessionId = "n1"');
+      let clicked = false;
+      h.window.api.getActiveSessions = async () => {
+        if (clicked) return [];
+        clicked = true;
+        h.row('A').click();
+        for (let j = 0; j < 10; j++) await settle();
+        return [{ sessionId: 'C', busy: false }];
+      };
+      const ticking = h.fns.tickRestorePlanner();
+      for (let j = 0; j < 10; j++) await settle();
+      assert.deepEqual(h.openTerminalCalls, ['B'], `${label}: the reattach of C waits for the head's open`);
+      finishOpen(ok ? { ok: true } : { ok: false, error: 'boom' });
+      await ticking;
+      for (let j = 0; j < 5; j++) await settle();
+      await h.fns.persistWorkingSet();
+      assert.deepEqual(h.dormantIds(), ok ? ['x'] : ['B', 'C', 'x'], label);
+      assert.deepEqual(h.savedIds().filter((id) => id !== 'n1'), ok ? ['B', 'x'] : ['B', 'C', 'x'], label);
+      assert.equal(h.row('A').classList.contains('dormant'), !ok, label);
+      assert.equal(h.run('activeSessionId'), 'B', `${label}: the session the user opened stays active`);
+    } finally { h.destroy(); }
+  }
+});
+
+test('lazy: a session the user opens during the marking stays active after the tick reattaches another one', async () => {
+  const h = setup();
+  try {
+    h.index(['a', 'x', 'b']);
+    h.window.createTerminalEntry({ sessionId: 'n1', projectPath: PROJECT });
+    h.run('activeSessionId = "n1"');
+    let clicked = false;
+    h.window.api.getActiveSessions = async () => {
+      if (clicked) return [];
+      clicked = true;
+      h.open('a');
+      for (let j = 0; j < 10; j++) await settle();
+      return [{ sessionId: 'b', busy: false }];
+    };
+    await h.fns.tickRestorePlanner();
+    assert.deepEqual(h.openTerminalCalls, ['a', 'b']);
+    assert.equal(h.openTerminalOptions[1].reattachOnly, true);
+    assert.deepEqual(h.dormantIds(), ['x']);
+    assert.equal(h.run('activeSessionId'), 'a');
   } finally { h.destroy(); }
 });
 
