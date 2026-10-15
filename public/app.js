@@ -474,7 +474,6 @@ async function tickRestorePlanner() {
 
   if (restoreMode === 'lazy') {
     for (const item of candidates) restoreInFlight.set(item.sessionId, item);
-    const shown = activeSessionId;
     try {
       const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
       for (const [position, item] of candidates.entries()) {
@@ -482,7 +481,8 @@ async function tickRestorePlanner() {
         const indexed = indexedSessionById(item.sessionId);
         if (item.fresh && !indexed) continue;
         const reattached = live.has(item.sessionId) && indexed
-          && await openSession(indexed, undefined, { automatic: true, reattachOnly: true, continuationResolved: true }) !== false;
+          && await openSession(indexed, undefined, { automatic: true, reattachOnly: true, continuationResolved: true, activate: false }) !== false
+          && openSessions.has(item.sessionId) && !openSessions.get(item.sessionId).closed;
         const open = !openingSessions.has(item.sessionId) && openSessions.get(item.sessionId);
         const row = indexedRowOf(item.sessionId);
         const rowOpen = row && rowSessionIds(row).some(id => !openingSessions.has(id) && openSessions.has(id) && !openSessions.get(id).closed);
@@ -498,7 +498,6 @@ async function tickRestorePlanner() {
     } finally {
       for (const item of candidates) restoreInFlight.delete(item.sessionId);
     }
-    if (shown && activeSessionId !== shown && openSessions.has(shown)) showSession(shown);
     refreshSidebar();
     revealDormantSessions();
     return;
@@ -1796,6 +1795,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
+  const mayShow = () => activate && (activeFrom === undefined || activeSessionId === activeFrom);
   const currentOpenId = () => (customOptions?.type === 'attach'
     ? (openSessions.has(session.sessionId) && !openSessions.get(session.sessionId).closed ? session.sessionId : null)
     : rowOpenId(session));
@@ -1814,7 +1814,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
   if (openId) {
     if (clearDormantRow(openId)) schedulePersistWorkingSet();
-    showSession(openId);
+    if (mayShow()) showSession(openId);
     return;
   }
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
@@ -1858,7 +1858,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
       destroySession(sessionId);
     } else {
       if (clearDormantRow(sessionId)) schedulePersistWorkingSet();
-      showSession(sessionId);
+      if (mayShow()) showSession(sessionId);
       return;
     }
   }
@@ -1896,7 +1896,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.openError = result.error;
     entry.closed = true;
-    if (activate && (activeFrom === undefined || activeSessionId === activeFrom)) showSession(sessionId);
+    if (mayShow()) showSession(sessionId);
     return;
   }
   if (result.reattached) entry.attach = !!result.attach;
@@ -1913,7 +1913,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 
-  if (activate && (activeFrom === undefined || activeSessionId === activeFrom)) showSession(sessionId);
+  if (mayShow()) showSession(sessionId);
   schedulePersistWorkingSet();
   pollActiveSessions();
 }

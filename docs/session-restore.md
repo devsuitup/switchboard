@@ -190,7 +190,10 @@ is selected, the last active one included.
   set: the row is open.
 - Reloading the window starts nothing. A saved session whose process is still
   running is reattached, the selected one included; the others are marked. A
-  process that ends during the reload is not started again.
+  process that ends during the reload is not started again. Reattaching never
+  changes the selected session, so a session you open meanwhile stays shown.
+  A running member of a merged row whose reattach waited for another member you
+  opened meanwhile is marked if that open fails.
 
 Within one run of the app, going back to a session whose process still runs is
 a reattach: the terminal replays its buffered output onto the same process.
