@@ -143,30 +143,33 @@ function createTriggerContext(deps) {
         if (!names.length) return { missing: true };
         const file = path.join(folder, names[0]);
         try {
-          const stat = fs.statSync(file);
-          if (stat.size > remainingBytes) return null;
-          remainingBytes -= stat.size;
+          const stat = fs.statSync(file, { bigint: true });
+          const size = Number(stat.size);
+          if (size > remainingBytes) return null;
+          remainingBytes -= size;
           const cached = indexes.get(file);
-          const sameFile = cached?.dev === stat.dev && cached.ino === stat.ino;
-          let index = sameFile && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs ? cached.index : null;
+          const sameFile = cached?.dev === stat.dev && cached.ino === stat.ino && cached.birthtimeNs === stat.birthtimeNs;
+          let index = sameFile && cached.size === stat.size && cached.mtimeNs === stat.mtimeNs ? cached.index : null;
           if (!index) {
             const fd = fs.openSync(file, 'r');
-            const buffer = Buffer.alloc(Math.min(64, stat.size));
+            const buffer = Buffer.alloc(Math.min(64, size));
             let head;
             try { head = buffer.toString('hex', 0, fs.readSync(fd, buffer, 0, buffer.length, 0)); }
             finally { fs.closeSync(fd); }
-            let serialized = sameFile && head.startsWith(cached.head) ? cached.serialized : undefined;
+            let serialized = sameFile && stat.size > cached.size && head.startsWith(cached.head) ? cached.serialized : undefined;
             do {
               serialized = scanContinuationIndex(file, names[0].slice(0, -6), serialized, 1024 * 1024);
               index = JSON.parse(serialized);
             } while (!index.complete && index.bytes < index.size);
-            const after = fs.statSync(file);
-            if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) return null;
+            const after = fs.statSync(file, { bigint: true });
+            if (after.dev !== stat.dev || after.ino !== stat.ino || after.birthtimeNs !== stat.birthtimeNs
+              || after.size !== stat.size || after.mtimeNs !== stat.mtimeNs) return null;
             delete index.pending;
             indexBytes -= indexes.get(file)?.bytes || 0;
             indexes.delete(file);
             const bytes = Buffer.byteLength(serialized);
-            indexes.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, dev: stat.dev, ino: stat.ino, head, index, serialized, bytes });
+            indexes.set(file, { size: stat.size, mtimeNs: stat.mtimeNs, dev: stat.dev, ino: stat.ino,
+              birthtimeNs: stat.birthtimeNs, head, index, serialized, bytes });
             indexBytes += bytes;
             while (indexes.size > 128 || indexBytes > 32 * 1024 * 1024) {
               const oldest = indexes.keys().next().value;
