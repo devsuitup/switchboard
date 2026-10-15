@@ -1220,7 +1220,7 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
 // populateCacheViaWorker's internal Promise.
 ipcMain.handle('rebuild-cache', async () => {
   try {
-    await populateCacheViaWorker();
+    await populateCacheViaWorker({ force: true });
     return { ok: true };
   } catch (err) {
     console.error('Error rebuilding cache:', err);
@@ -3422,7 +3422,12 @@ ipcMain.handle('updater-install', async () => {
   if (mainWindow && !await unsavedGuard.confirmQuit(mainWindow)) return;
   await drainForUpdate();
   updateInstalling = true;
-  try { autoUpdater.quitAndInstall(); stopNonDatabaseResources(true); }
+  try {
+    if (autoUpdater.quitAndInstall() === false) {
+      updateInstalling = false;
+      activityFlushedForQuit = false;
+    }
+  }
   catch (error) {
     updateInstalling = false;
     activityFlushedForQuit = false;

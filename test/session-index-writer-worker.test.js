@@ -191,7 +191,7 @@ test('update install waits for the reversible drain before invoking the updater'
   assert.deepEqual(calls, ['drain']);
   release();
   await installing;
-  assert.deepEqual(calls, ['drain', 'drained', 'install', 'cleanup']);
+  assert.deepEqual(calls, ['drain', 'drained', 'install']);
 });
 
 test('exhausting the restart circuit also fails close explicitly', async () => {

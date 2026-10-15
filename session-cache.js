@@ -1178,9 +1178,10 @@ let populatePromise = null;
 let populateRetry = null;
 let populateNow = Date.now;
 
-function populateCacheViaWorker() {
+function populateCacheViaWorker({ force = false } = {}) {
   if (stopping) return Promise.resolve();
   if (populatePromise) return populatePromise;
+  if (force) populateRetry = null;
   if (populateRetry && populateNow() < populateRetry.at) return Promise.resolve();
   const retryFolders = populateRetry?.folders;
   const retryAttempt = populateRetry?.attempt || 0;

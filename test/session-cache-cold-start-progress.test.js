@@ -26,6 +26,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { Worker } = require('node:worker_threads');
+const vm = require('node:vm');
 
 const sessionCache = require('../session-cache');
 const { encodeProjectPath } = require('../encode-project-path');
@@ -77,6 +78,59 @@ function initCache(projectsDir, db, extra = {}) {
     log: { info: () => {}, debug: () => {}, warn: () => {}, error: () => {} },
     db,
     ...extra,
+  });
+}
+
+for (const exhausted of [false, true]) {
+  test(`Rebuild forces a full shared scan during ${exhausted ? 'exhausted retries' : 'retry backoff'}`, async () => {
+    const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-force-'));
+    let now = 0, fail = true;
+    const attempts = [];
+    try {
+      writeSession(projectsDir, 'good');
+      writeSession(projectsDir, 'bad');
+      const db = makeFakeDb({ initialScanComplete: false });
+      initCache(projectsDir, db, { now: () => now, writer: {
+        writeScannedFolder(result) {
+          const name = path.basename(result.projectPath);
+          attempts.push(name);
+          if (fail && name === 'bad') throw new Error('injected write failure');
+          return result.sessions.length;
+        },
+        setInitialScanComplete: db.setInitialScanComplete,
+      } });
+      await sessionCache.populateCacheViaWorker();
+      if (exhausted) {
+        for (const delay of [30000, 120000, 600000]) {
+          now += delay;
+          await sessionCache.populateCacheViaWorker();
+        }
+      }
+      const before = attempts.length;
+      await sessionCache.populateCacheViaWorker();
+      assert.equal(attempts.length, before);
+      fail = false;
+      let rebuild;
+      const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+      const start = source.indexOf("ipcMain.handle('rebuild-cache'");
+      const end = source.indexOf('\n});', start) + 4;
+      vm.runInNewContext(source.slice(start, end), {
+        ipcMain: { handle: (_name, handler) => { rebuild = handler; } },
+        populateCacheViaWorker: sessionCache.populateCacheViaWorker,
+        console,
+      });
+      const rebuilding = rebuild();
+      const scan = sessionCache.populateCacheViaWorker();
+      assert.equal((await rebuilding).ok, true);
+      await scan;
+      assert.deepEqual(attempts.slice(before).sort(), ['bad', 'good'], 'Rebuild must scan every folder');
+      assert.equal(db.calls.setInitialScanComplete, 1);
+      const forced = sessionCache.populateCacheViaWorker({ force: true });
+      assert.equal(sessionCache.populateCacheViaWorker({ force: true }), forced, 'forced callers share one scan');
+      assert.equal(sessionCache.populateCacheViaWorker(), forced);
+      await forced;
+      assert.deepEqual(attempts.slice(before + 2).sort(), ['bad', 'good']);
+    } finally { fs.rmSync(projectsDir, { recursive: true, force: true }); }
   });
 }
 

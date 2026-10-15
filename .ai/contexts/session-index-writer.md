@@ -132,7 +132,8 @@ Update installation drains watcher/bounds/metadata/activity and the accepted wri
 commands without closing the database, stopping producers or killing PTYs. At the
 same 1.5-second deadline it calls quitAndInstall even if draining rejects or stalls.
 The install flag bypasses another before-quit hold and resets on thrown or emitted
-updater errors, leaving a failed install usable. After invoking the installer,
+updater errors or an explicit false return, leaving a failed install usable. Only
+when the installer actually reaches before-quit,
 idempotent non-database cleanup stops schedulers, observers, MCP servers and SSH
 children and closes the trace. Each disposer has isolated error handling;
 asynchronous cleanup is not awaited and adds no second installation hold.

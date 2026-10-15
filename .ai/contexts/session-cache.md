@@ -2,6 +2,11 @@
 
 **Purpose**: index every Claude session JSONL on disk into a queryable SQLite cache so the sidebar renders without re-scanning `~/.claude/projects/` and so search is full-text. Watches the projects directory for changes and refreshes incrementally.
 
+Manual `rebuild-cache` calls `populateCacheViaWorker({ force: true })`. A forced
+scan clears failed-folder retry scope and backoff, including an exhausted retry
+budget, and scans all projects. Concurrent callers still share the in-flight
+scan; automatic `get-projects` calls retain the failed-folder retry policy.
+
 ## Key files
 
 | File | LOC | Role |
