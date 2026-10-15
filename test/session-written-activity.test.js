@@ -4,7 +4,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const { createSessionState } = require('../public/session-state');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { setupTerminalDom } = require('./terminal-manager-harness');
@@ -110,8 +109,6 @@ test('head identity excludes older members and head rekey preserves both seen an
 function terminal(t) {
   const h = setupTerminalDom();
   t.after(h.destroy);
-  const ctx = h.context;
-  for (const file of ['session-state.js', 'session-activity-dom.js', 'session-activity.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../public', file), 'utf8'), ctx);
   const entry = h.window.createTerminalEntry({ sessionId: 's' });
   h.window.activeSessionId = 's';
   h.window.activePtyIds.add('s');

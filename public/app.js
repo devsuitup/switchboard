@@ -1357,22 +1357,7 @@ function updateRunningIndicators() {
     renderDefaultStatus();
   }
 
-  // Update grid card dots and status text — always run because sessionBusyState
-  // (CLI-busy indicator) can change without affecting activePtyIds.
-  // The gridCards map is bounded (visible grid sessions only) so this is cheap.
-  for (const [sid, card] of gridCards) {
-    const running = activePtyIds.has(sid);
-    const row = sessionMap.get(sid) || { sessionId: sid };
-    const snapshot = mergedRowSnapshot(rowSessionIds(row), sid, storedActivitySnapshot(sid), row);
-    const busy = snapshot.busy === true;
-    const dot = card.querySelector('.grid-card-dot');
-    if (dot) dot.className = 'grid-card-dot ' + (busy ? 'busy' : (running ? 'running' : 'stopped'));
-    const footer = card.querySelector('.grid-card-footer');
-    if (footer) footer.children[0].textContent = running ? 'Running' : 'Stopped';
-    const stopBtn = card.querySelector('.grid-card-stop-btn');
-    // is-alive: process alive on its host though unattached — see .ai/contexts/session-state.md
-    if (stopBtn) stopBtn.style.display = (running || isSessionAlive(sid)) ? '' : 'none';
-  }
+  if (typeof updateGridSubagentPills === 'function') updateGridSubagentPills();
 }
 
 function updateTerminalHeader() {

@@ -9,72 +9,71 @@
 // Depends on: cleanDisplayName, formatDate (utils.js), fitAndScroll, showSession (terminal-manager.js)
 
 let gridCards = new Map(); // sessionId → card wrapper element
+const gridCardsByMember = new Map();
+const gridCardMemberKeys = new Map();
 let gridFocusedSessionId = null;
 
 // Grouping is the historical layout, so an unset preference means "grouped".
 let gridGroupByProject = localStorage.getItem('gridGroupByProject') !== '0';
 
-// Wire IPC listeners (guarded — bindings may not exist yet)
-(function initSubagentListeners() {
-  if (typeof window.api === 'undefined') return;
-
-  // preload.js hands these callbacks the payload as their only argument.
-  if (typeof window.api.onSubagentSpawned === 'function') {
-    window.api.onSubagentSpawned((data) => {
-      const { parentSessionId, agentId, subagentType, _heartbeat } = data || {};
-      if (!parentSessionId || !agentId || !window.taskRegistry) return;
-      const map = window.taskRegistry.agentView.get(parentSessionId);
-      const sources = _heartbeat
-        ? ['local-ipc', 'attached-ipc'].filter(source => map?.get(agentId)?.has(source))
-        : [openSessions.get(parentSessionId)?.attach ? 'attached-ipc' : 'local-ipc'];
-      for (const source of sources) window.taskRegistry.note(parentSessionId, agentId, source, { subagentType });
-      scheduleGridSubagentTtlTick();
-      updateGridSubagentPills(parentSessionId);
-    });
+function forgetGridCardMembers(sessionId) {
+  for (const id of gridCardMemberKeys.get(sessionId) || []) {
+    const cards = gridCardsByMember.get(id);
+    cards?.delete(sessionId);
+    if (!cards?.size) gridCardsByMember.delete(id);
   }
-
-  if (typeof window.api.onSubagentCompleted === 'function') {
-    window.api.onSubagentCompleted((data) => {
-      const { parentSessionId, agentId } = data || {};
-      if (!parentSessionId || !agentId || !window.taskRegistry) return;
-      window.taskRegistry.release(parentSessionId, agentId, 'local-ipc');
-      window.taskRegistry.release(parentSessionId, agentId, 'attached-ipc');
-      updateGridSubagentPills(parentSessionId);
-    });
-  }
-})();
-
-// Prune subagents that have been running for more than 60 s without a completion event.
-// see .ai/contexts/subagent-observability.md
-function pruneStaleGridSubagents() {
-  window.taskRegistry?.prune(SUBAGENT_LIVE_TTL_MS);
+  gridCardMemberKeys.delete(sessionId);
 }
 
-function scheduleGridSubagentTtlTick() {
-  if (typeof scheduleSubagentTtlTick === 'function') scheduleSubagentTtlTick();
+function gridCardRow(sessionId) {
+  const openedSession = openSessions.get(sessionId)?.session;
+  const session = sessionMap.get(sessionId) || openedSession || { sessionId };
+  const item = sessionItemEl(sessionId);
+  const mergedRow = typeof localMergedMemberRows !== 'undefined' && localMergedMemberRows.get(sessionId);
+  const ids = [...new Set(rowSessionIds({ sessionId, mergedMemberIds: [
+    item?.dataset.sessionId,
+    mergedRow?.sessionId,
+    ...(item?.dataset.mergedMemberIds?.split(' ') || []),
+    ...(mergedRow?.mergedMemberIds || []),
+    ...(session.mergedMemberIds || []),
+    ...(openedSession?.mergedMemberIds || []),
+  ] }).filter(Boolean))];
+  const status = mergedRow ? mergedRow.mergedMemberStatuses?.[sessionId] : session;
+  return { ...session, ...mergedRow, sessionId, status: status?.status, statusUpdatedAt: status?.statusUpdatedAt,
+    headSessionId: item?.dataset.headSessionId || mergedRow?.headSessionId || session.headSessionId,
+    mergedMemberIds: ids.filter(id => id !== sessionId) };
 }
 
-function runGridSubagentTtlTick() {
-  pruneStaleGridSubagents();
-  updateGridSubagentPills();
+function indexGridCardMembers(sessionId, row) {
+  forgetGridCardMembers(sessionId);
+  const keys = new Set(rowSessionIds(row).flatMap(id => [id, window.taskRegistry?.resolve(id) || id]));
+  gridCardMemberKeys.set(sessionId, keys);
+  for (const id of keys) {
+    if (!gridCardsByMember.has(id)) gridCardsByMember.set(id, new Set());
+    gridCardsByMember.get(id).add(sessionId);
+  }
+}
+
+function registerGridCard(sessionId, card) {
+  gridCards.set(sessionId, card);
+  indexGridCardMembers(sessionId, gridCardRow(sessionId));
+}
+
+function refreshGridCardMembers() {
+  for (const sessionId of gridCards.keys()) indexGridCardMembers(sessionId, gridCardRow(sessionId));
 }
 
 function updateGridSubagentPills(parentSessionId) {
-  for (const [sessionId, card] of gridCards) {
-    const openedSession = openSessions.get(sessionId)?.session;
-    const session = sessionMap.get(sessionId) || openedSession || { sessionId };
-    const item = sessionItemEl(sessionId);
-    const mergedRow = typeof localMergedMemberRows !== 'undefined' && localMergedMemberRows.get(sessionId);
-    const ids = [...new Set(rowSessionIds({ sessionId, mergedMemberIds: [
-      item?.dataset.sessionId,
-      mergedRow?.sessionId,
-      ...(item?.dataset.mergedMemberIds?.split(' ') || []),
-      ...(mergedRow?.mergedMemberIds || []),
-      ...(session.mergedMemberIds || []),
-      ...(openedSession?.mergedMemberIds || []),
-    ] }).filter(Boolean))];
-    if (parentSessionId && !ids.some(id => window.taskRegistry?.resolve(id) === window.taskRegistry?.resolve(parentSessionId))) continue;
-    const count = window.taskRegistry?.runningAgentCount(ids) || 0;
+  const sessionIds = parentSessionId
+    ? new Set([...(gridCardsByMember.get(parentSessionId) || []),
+      ...(gridCardsByMember.get(window.taskRegistry?.resolve(parentSessionId)) || [])])
+    : gridCards.keys();
+  for (const sessionId of sessionIds) {
+    const card = gridCards.get(sessionId);
+    const row = gridCardRow(sessionId);
+    indexGridCardMembers(sessionId, row);
+    updateGridCardActivity(sessionId, card, row);
+    const count = window.taskRegistry?.runningAgentCount(rowSessionIds(row)) || 0;
     let text = card.querySelector('.grid-subagent-count');
     if (!count) {
       text?.remove();
@@ -90,6 +89,21 @@ function updateGridSubagentPills(parentSessionId) {
     text.textContent = `${count} subagent${count === 1 ? '' : 's'} running`;
     text.setAttribute('aria-label', text.textContent);
   }
+}
+
+function updateGridCardActivity(sessionId, card, row) {
+  const snapshot = mergedRowSnapshot(rowSessionIds(row), sessionId, storedActivitySnapshot(sessionId, row), row);
+  paintSessionIconFromSnapshot(card.querySelector('.grid-card-dot'), snapshot);
+  setHasBusyAgents(card, snapshot.agentsBusy);
+  setNeedsAttention(card, snapshot.attention);
+  setUnseenWrittenActivity(card, snapshot.unseenWrittenActivity);
+  const running = activePtyIds.has(sessionId);
+  const exit = !running && snapshot.liveness !== 'alive' && lastSessionExit(sessionId);
+  const footer = card.querySelector('.grid-card-footer');
+  if (footer?.children[0]) footer.children[0].textContent = running ? 'Running' : snapshot.liveness === 'alive' ? 'Running elsewhere'
+    : exit ? processExitLabel(exit) : snapshot.liveness === 'dead' ? 'Stopped' : 'Liveness unknown';
+  const stopBtn = card.querySelector('.grid-card-stop-btn');
+  if (stopBtn) stopBtn.style.display = (running || isSessionAlive(sessionId)) ? '' : 'none';
 }
 
 function wrapInGridCard(sessionId) {
@@ -115,7 +129,7 @@ function wrapInGridCard(sessionId) {
   const header = document.createElement('div');
   header.className = 'grid-card-header';
   const dot = document.createElement('span');
-  dot.className = 'grid-card-dot';
+  dot.className = 'grid-card-dot session-icon';
   header.appendChild(dot);
   const name = document.createElement('span');
   name.className = 'grid-card-name';
@@ -217,12 +231,11 @@ function wrapInGridCard(sessionId) {
     }
   });
 
-  gridCards.set(sessionId, card);
+  registerGridCard(sessionId, card);
   if (gridCardObserver) gridCardObserver.observe(card);
   // Set initial status from the single source of truth
   updateRunningIndicators();
 
-  pruneStaleGridSubagents();
   updateGridSubagentPills(sessionId);
 }
 
@@ -238,6 +251,8 @@ function unwrapGridCards() {
     card.remove();
   }
   gridCards.clear();
+  gridCardsByMember.clear();
+  gridCardMemberKeys.clear();
   // Remove project headings inserted by showGridView
   terminalsEl.querySelectorAll('.grid-project-heading').forEach(el => el.remove());
 }
@@ -245,9 +260,10 @@ function unwrapGridCards() {
 function rekeyGridCard(oldId, newId) {
   const card = gridCards.get(oldId);
   if (card) {
+    forgetGridCardMembers(oldId);
     gridCards.delete(oldId);
-    gridCards.set(newId, card);
     card.rekeySessionId(newId);
+    registerGridCard(newId, card);
   }
   if (gridFocusedSessionId === oldId) gridFocusedSessionId = newId;
 }
@@ -423,6 +439,7 @@ function destroyGridCard(sessionId) {
   if (!card) return false;
   if (gridCardObserver) gridCardObserver.unobserve(card);
   card.remove();
+  forgetGridCardMembers(sessionId);
   gridCards.delete(sessionId);
   if (typeof syncToolBar === 'function') syncToolBar();
   return true;

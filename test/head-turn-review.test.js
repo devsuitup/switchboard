@@ -130,17 +130,19 @@ test('static spinner explicitly cancels animation on its element and pseudo-elem
 });
 test('grid dots use head evidence, ignore OSC progress and show static background work', t => {
   const { ctx, turn } = sidebar(t);
+  ctx.evalPublic('shortcuts.js');
+  ctx.evalPublic('grid-view.js');
   const card = ctx.document.createElement('div');
   card.innerHTML = '<span class="grid-card-dot"></span>';
-  ctx.window.gridCards = new Map([['root', card]]);
+  ctx.window.registerGridCard('root', card);
   ctx.read('globalThis._lastPtySignature = ""');
   ctx.window.renderDefaultStatus = () => {};
   loadAppFunctions(ctx.context, { functions: ['updateRunningIndicators'], installSpies: false });
   ctx.window.activePtyIds.add('root');
   turn('open'); ctx.window.updateRunningIndicators();
-  assert.ok(card.querySelector('.grid-card-dot').classList.contains('busy'));
+  assert.ok(card.querySelector('.grid-card-dot').classList.contains('session-icon--busy'));
   turn('closed'); ctx.setActivity('root', true, 'onCliBusyState'); ctx.window.updateRunningIndicators();
-  assert.ok(!card.querySelector('.grid-card-dot').classList.contains('busy'));
+  assert.ok(!card.querySelector('.grid-card-dot').classList.contains('session-icon--busy'));
 });
 test('real worker and DOM sequence: prompt, silent tool, closed background shell, later prompt', async t => {
   const { ctx, icon } = sidebar(t);

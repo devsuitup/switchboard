@@ -195,7 +195,6 @@ function setupTerminalDom(opts = {}) {
     hideAllViewers: () => {},
     showTerminalHeader: () => {},
     updateRunningIndicators: () => {},
-    // public/session-activity-dom.js is not loaded in this harness — grid-view.js calls this directly.
     isSessionAlive: () => false,
     placeholder: window.document.createElement('div'),
     terminalHeader: window.document.createElement('div'),
@@ -231,7 +230,9 @@ function setupTerminalDom(opts = {}) {
   });
   const files = ['utils.js', 'subagent-timing.js', 'task-registry.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-replay-queries.js', 'terminal-manager.js'];
   if (!opts.dom) {
+    if (!opts.filePanel) files.unshift('process-exit.js');
     files.splice(1, 0, 'shortcuts.js');
+    files.unshift('session-state.js', 'session-activity-dom.js', 'session-activity.js');
     files.push('grid-view.js');
   }
   // Same order as index.html: header-controls.js, process-exit.js and file-panel.js first, the panel-shell pair last.

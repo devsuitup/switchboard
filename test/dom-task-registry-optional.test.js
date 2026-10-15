@@ -11,6 +11,6 @@ test('sidebar and grid load and render safely when a minimal harness has no task
   h.sidebar.renderProjects([makeSampleProject()], true);
   h.evalPublic('shortcuts.js');
   h.evalPublic('grid-view.js');
-  h.window.pruneStaleGridSubagents();
+  h.window.updateGridSubagentPills();
   assert.equal(h.window.parentHasActiveSubagent('missing'), false);
 });

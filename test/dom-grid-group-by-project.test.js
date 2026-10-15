@@ -109,7 +109,6 @@ function setupGridDom({ stored = null } = {}) {
     lruTouch: noop,
     updateRunningIndicators: noop,
     confirmAndStopSession: noop,
-    // public/session-activity-dom.js is not loaded in this minimal harness — grid-view.js calls this directly.
     isSessionAlive: () => false,
     suspendTerminalWebgl: noop,
     restoreTerminalWebgl: noop,
@@ -123,7 +122,7 @@ function setupGridDom({ stored = null } = {}) {
   loadAppFunctions(ctx, {
     functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
   });
-  for (const file of ['utils.js', 'shortcuts.js', 'subagent-timing.js', 'task-registry.js', 'grid-view.js']) {
+  for (const file of ['utils.js', 'shortcuts.js', 'session-state.js', 'process-exit.js', 'session-activity-dom.js', 'session-activity.js', 'subagent-timing.js', 'task-registry.js', 'grid-view.js']) {
     // The absolute path is what lets c8 attribute coverage to the real file.
     const full = path.join(PUBLIC_DIR, file);
     vm.runInContext(fs.readFileSync(full, 'utf8'), ctx, { filename: full });

@@ -19,14 +19,21 @@ remembered (`localStorage.gridGroupByProject`).
 
 ## A card
 
-- **Header**: a status dot (green: running; grey: stopped; pulsing: Claude is
-  working), the session's name, its project, and a stop button while the
-  process is alive.
+- **Header**: the same activity glyph and label as the sidebar: an animated
+  spinner during a head turn, a static spinner for background work, and
+  attention or response-ready indicators. A busy head with running agents
+  uses violet. The session's name turns blue while written output is unseen.
+  Its project and a stop button while the process is alive follow the name.
 - **Body**: the session's terminal, live.
 - **Running subagents**, beneath the header: `1 subagent running` or
   `N subagents running`, counting distinct active agent tasks. No line appears
-  when the count is zero or unknown. Remote sessions have no count.
-- **Footer**: Running or Stopped, and the time of the last modification.
+  when the count is zero or unknown. Local, remote and background sessions use
+  the same task snapshots as the sidebar.
+- **Footer**: `Running` for a local PTY, `Running elsewhere` for an unattached
+  live process, an exit label (`Exited (code 1)`, `Killed (SIGTERM)`, or
+  `Stopped`) when recorded, `Stopped` for known dead liveness, or
+  `Liveness unknown` when neither liveness nor an exit is known. The time of
+  the last modification follows it.
 
 ## Using it
 

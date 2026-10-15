@@ -121,6 +121,7 @@ function indexLocalMergedMemberRows(projects) {
       for (const id of row.mergedMemberIds || []) localMergedMemberRows.set(id, row);
     }
   }
+  if (typeof refreshGridCardMembers === 'function') refreshGridCardMembers();
 }
 
 function localSessionForStatus(sessionId, session) {
@@ -206,7 +207,10 @@ function isSessionAlive(sessionId) {
 function applyStateClasses(sessionId, snapshot) {
   if (snapshot?.attention && typeof clearHeadUnread === 'function') clearHeadUnread(sessionId);
   const item = sessionItemEl(sessionId);
-  if (!item) return;
+  if (!item) {
+    if (typeof updateGridSubagentPills === 'function') updateGridSubagentPills(sessionId);
+    return;
+  }
   const ids = [item.dataset.sessionId, ...(item.dataset.mergedMemberIds?.split(' ') || [])];
   snapshot = taskActivitySnapshot(sessionId, snapshot);
   snapshot = mergedRowSnapshot(ids, sessionId, snapshot);
@@ -224,6 +228,7 @@ function applyStateClasses(sessionId, snapshot) {
   setIsAlive(item, alive);
   setUnseenWrittenActivity(item, snapshot?.unseenWrittenActivity);
   writeIconSlot(item.querySelector('.session-icon'), icon);
+  if (typeof updateGridSubagentPills === 'function') updateGridSubagentPills(sessionId);
   if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'needs-attention': attention, 'response-ready': ready, 'cli-busy': busy, 'has-busy-agents': agentsBusy, 'is-alive': alive, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });
 }
 

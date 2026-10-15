@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { createTaskRegistry } = require('../public/task-registry');
+const { loadAppFunctions } = require('./app-source');
 
 const PARENT = 'parent-627';
 const AT = Date.parse('2026-10-14T10:00:00Z');
@@ -180,7 +181,7 @@ for (const visible of [true, false]) {
     const card = ctx.document.createElement('div');
     card.innerHTML = '<div class="grid-card-header"></div>';
     ctx.window.testCountCard = card;
-    ctx.read(`gridCards.set('${head}', window.testCountCard)`);
+    ctx.read(`registerGridCard('${head}', window.testCountCard)`);
     snapshot(registry, sibling, [{ id: 'sibling-agent' }]);
     assert.equal(card.querySelector('.grid-subagent-count')?.textContent, '1 subagent running');
     if (visible) label(ctx.document.getElementById('si-' + PARENT), '1 subagent running');
@@ -211,7 +212,7 @@ for (const visible of [true, false]) {
     const card = ctx.document.createElement('div');
     card.innerHTML = '<div class="grid-card-header"></div>';
     ctx.window.testCountCard = card;
-    ctx.read(`gridCards.set('${head}', window.testCountCard)`);
+    ctx.read(`registerGridCard('${head}', window.testCountCard)`);
     snapshot(registry, PARENT, [{ id: 'root-agent' }], 2);
     if (visible) label(row, '1 subagent running');
     assert.equal(card.querySelector('.grid-subagent-count')?.textContent, '1 subagent running');
@@ -232,7 +233,7 @@ test('#627 grid unions sidebar, indexed, mapped and opened members', t => {
   const card = ctx.document.createElement('div');
   card.innerHTML = '<div class="grid-card-header"></div>';
   ctx.window.testCountCard = card;
-  ctx.read(`gridCards.set('${head}', window.testCountCard)`);
+  ctx.read(`registerGridCard('${head}', window.testCountCard)`);
   const ids = [PARENT, head, 'sidebar-member', 'indexed-member', 'mapped-member', 'opened-member'];
   for (const [i, id] of ids.entries()) {
     snapshot(registry, id, [{ id: 'agent-' + id }]);
@@ -252,7 +253,7 @@ test('#641 background re-key retains the sidebar and grid count through rebuild 
   card.innerHTML = '<div class="grid-card-header"></div>';
   card.rekeySessionId = id => { card.dataset.sessionId = id; };
   ctx.window.testCountCard = card;
-  ctx.read(`gridCards.set('${PARENT}', window.testCountCard)`);
+  ctx.read(`registerGridCard('${PARENT}', window.testCountCard)`);
   snapshot(registry, PARENT, [{ id: 'A' }]);
   label(ctx.document.getElementById('si-' + PARENT), '1 subagent running');
   assert.equal(card.querySelector('.grid-subagent-count')?.textContent, '1 subagent running');
@@ -272,16 +273,18 @@ test('#641 background re-key retains the sidebar and grid count through rebuild 
   assert.equal(card.querySelector('.grid-subagent-count'), null);
 });
 
-test('#627 TTL refresh visits each grid card once', t => {
+test('#627 periodic running-indicator refresh visits each grid card once', t => {
   const { ctx, registry } = setup(t);
   ctx.evalPublic('shortcuts.js');
   ctx.evalPublic('grid-view.js');
+  ctx.window.renderDefaultStatus = () => {};
+  loadAppFunctions(ctx.context, { functions: ['updateRunningIndicators'], declarations: ['_lastPtySignature'] });
   const reads = [];
   for (const id of [PARENT, 'another-627', 'third-627']) {
     const card = ctx.document.createElement('div');
     card.innerHTML = '<div class="grid-card-header"></div>';
     ctx.window.testCountCard = card;
-    ctx.read(`gridCards.set('${id}', window.testCountCard)`);
+    ctx.read(`registerGridCard('${id}', window.testCountCard)`);
     snapshot(registry, id, [{ id: 'agent-' + id }]);
     const query = card.querySelector.bind(card);
     card.querySelector = selector => {
@@ -295,7 +298,7 @@ test('#627 TTL refresh visits each grid card once', t => {
     lookups.push(id);
     return getSession(id);
   };
-  ctx.window.runGridSubagentTtlTick();
+  ctx.window.updateRunningIndicators();
   assert.deepEqual(reads, [PARENT, 'another-627', 'third-627']);
   assert.deepEqual(lookups, [PARENT, 'another-627', 'third-627']);
 });
@@ -307,7 +310,7 @@ test('#627 grid replaces pills with a pluralized count under its header and foll
   const card = ctx.document.createElement('div');
   card.innerHTML = '<div class="grid-card-header"><span class="grid-card-dot"></span><span class="grid-card-name">Counted conversation</span></div><div class="grid-card-footer"></div>';
   ctx.window.testCountCard = card;
-  ctx.read(`gridCards.set('${PARENT}', window.testCountCard)`);
+  ctx.read(`registerGridCard('${PARENT}', window.testCountCard)`);
   snapshot(registry, PARENT, [{ id: 'A' }]);
   snapshot(registry, 'continued-627', [{ id: 'A' }, { id: 'B' }, { id: 'shell', kind: 'bash' }]);
   const count = card.querySelector('.grid-subagent-count');

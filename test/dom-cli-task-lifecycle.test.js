@@ -91,7 +91,7 @@ test('primary snapshots keep the adapter glyph and sidebar/grid counts consisten
   const card = h.document.createElement('div');
   h.document.body.appendChild(card);
   h.window.__taskCard = card;
-  h.read("gridCards.set('parent-1', __taskCard)");
+  h.read("registerGridCard('parent-1', __taskCard)");
   h.emitSessionTranscriptActivity({ sessionId: 'parent-1', at: Date.now() });
   h.window.decayLocalTranscriptBusy('parent-1');
   h.window.taskRegistry.applySnapshot({ parentSessionId: 'parent-1', revision: 1, known: true, tasks: [{ id: 'agent-1', kind: 'agent', terminal: false, at: 1 }] });

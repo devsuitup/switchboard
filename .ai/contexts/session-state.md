@@ -85,7 +85,33 @@ unknown without completing tasks; a failed host snapshot retains the previous
 freshness contract. Remote turn precision is limited by mirror refresh: about
 15 seconds with the host watch, otherwise the configured pull interval
 (default 5 minutes). Worker turn retention is capped at 2048, oldest first.
-Grid card animation uses the same merged-head projection as the sidebar.
+Grid cards use the same `storedActivitySnapshot` / `mergedRowSnapshot`,
+`paintSessionIconFromSnapshot` as the sidebar (#629). Their single
+`.grid-card-dot.session-icon` carries the animated head turn, static background
+work, attention or response-ready glyph and the same accessible tooltip.
+`updateGridSubagentPills` retains its registry callback name and now paints
+both activity and the authoritative agent count. `applyStateClasses` refreshes
+matching cards after projecting a row, including when the sidebar row is absent;
+`updateRunningIndicators` also calls it on every pass, outside the PTY-set gate.
+The member-to-card index selects only matching cards for an individual update.
+Card registration, re-key, removal and unwrapping maintain it; merged-row
+indexing and sidebar rebuilds refresh membership. The periodic indicator refresh
+visits each card once, with one session-map lookup per unmerged card.
+Head selection uses the sidebar row or indexed merged row with the union of
+rendered, indexed, mapped and opened conversation members. Written output
+colours the card title blue under the same unseen/attention rule as the row;
+existing terminal visibility and watermark checks consume it.
+
+Footer liveness is separate: `Running` means a PTY here, `Running elsewhere`
+means a live process without that PTY. Without a PTY or alive evidence,
+`lastSessionExit` supplies the recorded `processExitLabel`; otherwise dead
+evidence gives `Stopped` and absent evidence gives `Liveness unknown`.
+Stop visibility and dispatch retain their existing PTY/live-row rule.
+The snapshot also sets `has-busy-agents` on the card so the shared CSS rule
+tints a busy head violet while agents run. The grid performs no lifecycle
+ingestion or fallback expiration.
+Coverage: `test/dom-grid-shared-activity-629.test.js` loads shipped app and
+renderer functions for all four activity sources and their incremental updates.
 
 A background continuation re-key moves the stored head-turn evidence to the
 new UUID, retaining its revision, observation time and unread closure. A newer
@@ -517,14 +543,9 @@ same file red.
 **`setActivity()` is still called for remote ids in parallel**
 (`markRemoteBusy`/`decayRemoteBusy` call both, when not attached) — see "The
 local-pty adapter" below for what `setActivity` now writes underneath
-`sessionBusyState`/`responseReadySessions`. `app.js`'s grid-card busy dot
-(`updateRunningIndicators`'s `gridCards` loop) still reads `sessionBusyState`
-directly, so removing the dual-feed would regress it. `buildSessionItem`
-now reads the selected adapter snapshot at initial paint.
-
-The grid view is driven by the same `active`/`armReady` inputs as the adapter;
-the dual-feed is a known,
-temporary duplication, not a race.
+`sessionBusyState`/`responseReadySessions`. The grid and `buildSessionItem`
+read the selected adapter snapshot; the grid no longer relies on this legacy
+dual-feed for its activity glyph.
 
 ### The local-pty adapter
 
@@ -579,7 +600,7 @@ Inputs:
   `seedLocalTranscriptDescriptor` make for the other two kinds.
 
 **Some readers still use the local-pty views** — see "Row ownership" above:
-`buildSubagentItem`'s row classes and `app.js`'s grid-card busy dot read
+`buildSubagentItem`'s row classes read
 `sessionBusyState`/`responseReadySessions`/`attentionSessions` directly.
 `buildSessionItem` uses `storedActivitySnapshot` and `mergedRowSnapshot`
 for its activity classes and icon; subagent attribution still supplies its
@@ -997,8 +1018,8 @@ The Agents view uses the same slot classes and now includes the domain glyph
 in its row markup (`agentRowIcon` / `renderAgentRow`, `public/agents-view.js`).
 `agentRowIcon` also adds `.running` when its existing `live` boolean is true.
 The sidebar never produces stale or archived; inactive rows fall back to idle.
-Grid cards use `.grid-card-dot` instead, so this change does not alter their
-Running/Stopped indicators.
+Grid cards use the same slot classes on `.grid-card-dot.session-icon`; their
+footer separately describes liveness and attachment (#629).
 
 `session-activity-dom.js` is the only file that writes the sidebar slot:
 
