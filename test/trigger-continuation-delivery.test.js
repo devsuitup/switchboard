@@ -115,7 +115,7 @@ test('ADR continuation cache: an unfinished line resumes from the retained seria
   assert.ok(bytes <= Buffer.byteLength(append) + 256, `unfinished line read ${bytes} bytes`);
 });
 
-for (const change of ['rounded inode collision', 'birth time', 'nanosecond mtime']) {
+for (const change of ['dev', 'rounded inode collision', 'birth time', 'nanosecond mtime']) {
   test(`#652 continuation cache: ${change} invalidates equal-size, equal-millisecond evidence`, t => {
     const f = fixture(t, { a: ['b'], b: [], c: [] });
     const file = path.join(f.projectsDir, 'proj', 'a.jsonl');
@@ -128,12 +128,13 @@ for (const change of ['rounded inode collision', 'birth time', 'nanosecond mtime
     t.mock.method(fs, 'statSync', (name, options) => {
       const result = stat(name, options);
       if (name !== file) return result;
+      const dev = 1n + (replaced && change === 'dev' ? 1n : 0n);
       const ino = inode + (replaced && change === 'rounded inode collision' ? 1n : 0n);
       const birthtimeNs = 1_000_000_000n + (replaced && change === 'birth time' ? 1n : 0n);
       const mtimeNs = 2_000_000_000n + (replaced && change === 'nanosecond mtime' ? 1n : 0n);
       return Object.assign(result, options?.bigint
-        ? { dev: 1n, ino, birthtimeNs, mtimeNs }
-        : { dev: 1, ino: Number(ino), birthtimeMs: 1000, mtimeMs: 2000, mtime: new Date(2000) });
+        ? { dev, ino, birthtimeNs, mtimeNs }
+        : { dev: Number(dev), ino: Number(ino), birthtimeMs: 1000, mtimeMs: 2000, mtime: new Date(2000) });
     });
     const ctx = deliveryContext(f, 'b');
     const written = [];
@@ -153,7 +154,7 @@ for (const change of ['rounded inode collision', 'birth time', 'nanosecond mtime
   });
 }
 
-for (const change of ['ino', 'birthtimeNs', 'mtimeNs']) {
+for (const change of ['dev', 'ino', 'birthtimeNs', 'mtimeNs']) {
   test(`#652 continuation scan: changed ${change} in the final stat leaves ownership unknown`, t => {
     const f = fixture(t, { a: ['b'], b: [] });
     const file = path.join(f.projectsDir, 'proj', 'a.jsonl');

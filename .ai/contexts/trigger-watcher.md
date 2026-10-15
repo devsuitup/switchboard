@@ -96,7 +96,9 @@ indexed byte offset after checking file identity and matching the first and last
 truncate, replacement, different head/tail or same-size mtime change rescans from
 byte zero. These boundary checks cannot detect arbitrary edits in the middle
 of a file that also grows while retaining its indexed head and tail.
-The continuation cache uses BigInt device/inode/birth-time identity and nanosecond mtime before and after scanning (#652), for the NTFS rationale in [session-state.md](session-state.md) (#648).
+The continuation cache uses BigInt device/inode/birth-time identity and nanosecond
+mtime before and after scanning (#652), for the NTFS rationale in
+[session-state.md](session-state.md) (#648).
 
 Descriptor-less CLI ancestors are recognized by the native Claude executable
 name or Node's first non-option script argument. The script may name the scoped
