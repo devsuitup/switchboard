@@ -45,7 +45,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         const result = cache[name](...args);
         const revision = recorder.revision();
         const effects = recorder.finish();
-        try { await client.request('effects', effects, revision); return result; }
+        try { if (effects.length) await client.request('effects', effects, revision); return result; }
         catch (error) { if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects') throw error; }
       }
     });
@@ -194,6 +194,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       })();
       return closing;
     },
+    async drain() {
+      await ready;
+      await Promise.allSettled([...pending]);
+      await client.request('drain');
+    },
     measurements: () => request('measurements'),
   };
   for (const name of ['setSetting', 'deleteSetting', 'toggleStar', 'setArchived', 'deleteCachedSession',
@@ -202,7 +207,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     'clearArchivedEntry', 'hideProject', 'unhideProject', 'revealAddedProject', 'dropRemoteFolder',
     'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries', 'setName']) writer[name] = (...args) => request(name, ...args);
   for (const [name, fn] of Object.entries(writer)) {
-    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'scheduleRegistry', 'createWhatsNew', 'closeDb'].includes(name)) continue;
+    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain'].includes(name)) continue;
     writer[name] = (...args) => admit(() => fn(...args));
   }
   return writer;

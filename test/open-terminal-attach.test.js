@@ -57,7 +57,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
   let closed, _beforeQuit, unsubscribed = 0, stopped = 0;
   const context = {
     mainWindow: { on: (_name, callback) => { closed = callback; } },
-    activeSessions: new Map(), changesWatchers: { closeAll() {} }, closeAllFileWatchers() {},
+    activeSessions: new Map(), closedSessions: new Map(), changesWatchers: { closeAll() {} }, closeAllFileWatchers() {},
     subagentWatchers: new Map(), unsubscribeBgAgents: () => { unsubscribed++; },
     unsubscribeTaskJobs() {}, taskRecords: { dispose() {} },
     bgAgents: { stop: () => { stopped++; } },

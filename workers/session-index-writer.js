@@ -22,7 +22,12 @@ const backgroundCommands = new Set(['effects', 'upsertCachedSessions', 'replaceS
 async function transaction(fn) {
   const backoff = [20, 50, 100];
   for (let attempt = 0; ; attempt++) {
-    try { return db.transact(() => { const result = fn(); db.setSetting('_writer_revision', (db.getSetting('_writer_revision') || 0) + 1); return result; }); }
+    try { return db.transact(() => {
+      const before = db.changeCount();
+      const result = fn();
+      if (db.changeCount() !== before) db.setSetting('_writer_revision', (db.getSetting('_writer_revision') || 0) + 1);
+      return result;
+    }); }
     catch (error) {
       if (!/^SQLITE_BUSY/.test(error.code || '') || attempt === backoff.length) throw error;
       await delay(backoff[attempt]);
@@ -41,16 +46,9 @@ function* units(name, args) {
   } else if (['upsertCachedSessions', 'setCachedEntrypoints', 'setCachedCustomTitles'].includes(name)) {
     for (const row of args[0]) yield () => db[name]([row]);
   } else if (name === 'replaceSessionMetrics') {
-    const [id, rows] = args;
-    const generation = require('node:crypto').randomUUID();
-    for (const row of rows || []) yield () => db.stageMetricRow(id, generation, row);
-    yield () => db.publishMetrics(id, generation);
-    let removed;
-    do { yield () => { removed = db.collectMetrics(id); }; } while (removed);
+    yield () => db.replaceSessionMetrics(...args);
   } else if (name === 'deleteCachedSession') {
     yield () => db.deleteCachedSession(args[0]);
-    let removed;
-    do { yield () => { removed = db.collectMetrics(args[0]); }; } while (removed);
   } else if (name === 'upsertSearchEntries') {
     for (const entry of args[0]) {
       const token = require('node:crypto').randomUUID();
@@ -86,6 +84,7 @@ function* units(name, args) {
 
 function* commandUnits(message) {
   if (message.command === 'close') { yield () => { db.closeDb(); }; return; }
+  if (message.command === 'drain') { yield () => {}; return; }
   if (message.command === 'measurements') { yield () => db.measurements(); return; }
   if (message.command === 'dropRemoteFolder') {
     yield* units('deleteCachedFolder', message.args);
@@ -100,19 +99,39 @@ async function drain() {
   if (running) return;
   running = true;
   while (queue.length) {
-    const interactive = queue.findIndex(job => !backgroundCommands.has(job.command) && job.command !== 'close');
+    const interactive = queue.findIndex(job => !backgroundCommands.has(job.command) && !['close', 'drain'].includes(job.command));
     const background = queue.findIndex(job => backgroundCommands.has(job.command));
     const index = interactive >= 0 && (interactiveBurst < 4 || background < 0) ? interactive : background >= 0 ? background : 0;
     const message = queue.splice(index, 1)[0];
     if (backgroundCommands.has(message.command)) interactiveBurst = 0;
     else interactiveBurst++;
     try {
+      if (!message.started) { message.started = true; parentPort.postMessage({ id: message.id, started: true }); }
       message.iterator ||= commandUnits(message);
-      const unit = message.iterator.next();
+      const unit = message.deferred || message.iterator.next();
+      message.deferred = null;
       if (unit.done) {
-        parentPort.postMessage({ id: message.id, result: message.result, settings: message.command === 'close' ? [] : settings() });
+        parentPort.postMessage({ id: message.id, result: message.result, ...(message.mutated ? { settings: settings() } : {}) });
       } else {
-        message.result = message.command === 'close' || message.command === 'measurements' ? unit.value() : await transaction(unit.value);
+        if (['close', 'drain', 'measurements'].includes(message.command)) message.result = unit.value();
+        else if (message.command === 'beginOffer') {
+          message.result = unit.value();
+        } else {
+          const before = db.getSetting('_writer_revision') || 0;
+          message.result = await transaction(() => {
+            let next = unit, result, count = 0;
+            while (!next.done) {
+              const applied = db.chunkUnit(next.value, count);
+              if (applied.deferred) { message.deferred = next; break; }
+              result = applied.result;
+              count++;
+              if (count >= db.nextChunkSize()) break;
+              next = message.iterator.next();
+            }
+            return result;
+          });
+          message.mutated ||= (db.getSetting('_writer_revision') || 0) !== before;
+        }
         if (backgroundCommands.has(message.command)) queue.unshift(message);
         else queue.push(message);
       }
@@ -124,5 +143,7 @@ async function drain() {
   running = false;
 }
 
+const heartbeat = setInterval(() => parentPort.postMessage({ heartbeat: true }), 1000);
+heartbeat.unref();
 parentPort.on('message', message => { queue.push(message); void drain(); });
 parentPort.postMessage({ ready: true, settings: settings(), searchFtsRecreated: db.searchFtsRecreated });

@@ -26,50 +26,54 @@ the normal dependency packaging. No native rebuild is introduced.
 
 Requests are {id,command,args}; replies are {id,result,settings} or
 {id,error:{message,code},settings}. Bootstrap sends {ready,settings,searchFtsRecreated}.
-An ACK follows the command's last transaction. The complete settings snapshot on
-every reply replaces main's initialized mirror, including deleted keys; mutations
-therefore never update the mirror before commit. _writer_revision is advanced in
-each ordinary transaction and is included in these snapshots.
+An ACK follows the command's last transaction. Mutating replies carry a complete
+settings snapshot which replaces main's initialized mirror, including deleted keys.
+Read-only replies omit settings and preserve the mirror. _writer_revision advances
+only when a transaction changes data. A registry list can initialize or normalize
+the registry once; subsequent unchanged ticks do not advance the revision.
 
 Up to 32 commands are in flight on the client. The worker keeps one background
 command at the front and yields at each transaction boundary. Interactive commands
 can run between units, with at most four interactive service turns before serving
 pending background work. No filesystem I/O or await runs inside an ordinary
 transaction. Cache computations retain their synchronous algorithms against
-cache-effects.js: one short readonly snapshot, local read-your-writes overlay,
+cache-effects.js: lazy reads of affected rows, local read-your-writes overlay,
 then one acknowledged effects command. Worker admission checks its current revision
 against that snapshot. A rejected main-cache computation may recompute at most
 three times; stale Projects effects reject for the readonly relay to rebuild.
 Search publication reads the current name and cached summary on the writer.
 
-Each BEGIN IMMEDIATE transaction measures bound-input bytes, SQLite total_changes
-(including FTS shadow changes), statement duration and elapsed duration. A unit
-rolls back above 32 changes, 65536 bound-input bytes or 10 ms before commit.
-Commit duration is measured too: an over-budget commit is reported explicitly as
-WRITER_CAP_COMMITTED, with the mutation already committed; remaining units stop.
-Synchronous SQLite cannot be preempted. WRITER_CAP_EXCEEDED is an explicit stopped
-unit, not proof that an arbitrarily large individual setting/cache value can be
-written. Batch admission uses one cache row/title pair per unit, metrics rows
-individually and old-metric garbage collection in groups of 24. Oversized settings
-or a cache field that cannot fit one unit fail explicitly; no main fallback exists.
+BEGIN IMMEDIATE chunks target 32 SQLite changes and 65536 bound-input bytes.
+Per-unit savepoints defer a unit to the next transaction when adding it would cross
+the target; revision overhead is reserved. An indivisible oversized unit occupies
+its own transaction and is accepted. Targets never reject a command. The clock is
+injected in the store; the 10 ms target sums statement execution durations, excluding
+queue time, BEGIN lock acquisition, JS preparation and commit. Exceeding it only
+reduces the next chunk's unit count. Synchronous SQLite cannot be preempted.
 
-Metrics use session_metrics_data generations and session_metrics_heads. A replacement
-stages rows then flips one head atomically; session_metrics remains a view with the
-previous read shape. Legacy rows migrate in a startup transaction; view triggers
-preserve the legacy insert/delete SQL contract. Old generations are collected in
-bounded units; abandoned data is collected at startup. FTS bodies stage in
+Metrics retain the existing session_metrics table, its index and legacy SQL contract.
+A per-session replacement is one atomic delete/insert transaction. Such a publication
+is an indivisible unit; large replacements can exceed the change target. No view,
+generation tables or durable staging schema is added. FTS bodies stage in a temporary
+table, in
 8192-character fragments, retaining the 32768-character body limit. A final
 transaction replaces map/content/FTS from staged content; rename uses SQL SELECT
 from stored content instead of binding the full body twice. Startup clears orphan
 FTS staging. Folder commands retain the existing per-row/per-table publication,
-not a new whole-folder snapshot protocol.
+not a new whole-folder snapshot protocol. A failed folder ACK keeps the initial
+scan completeness marker unset so the next scan idempotently rebuilds the folder.
 
 SQLITE_BUSY/extended BUSY retries use 20/50/100 ms asynchronous backoff, four attempts
 total; other errors propagate. The 100 ms lock wait is excluded from the 10 ms SQL
-execution ceiling. Bootstrap and command deadlines are 30 s. Crash/error/timeout
-reject every in-flight request with its id and outcome unknown. They are never
-replayed automatically. Only after awaited termination may a replacement writer
-open; at most three replacements are allowed before the circuit stays open.
+execution target. Bootstrap and execution deadlines are 30 s. The worker sends a
+started message on first execution, so time spent queued does not start the command
+deadline. A command timeout reports its id and unknown outcome but keeps a responsive
+worker alive; a late ACK still updates committed settings. Heartbeats distinguish
+an unresponsive worker and permit termination. Crashes reject in-flight requests
+with unknown outcomes; they are never replayed automatically. Only after awaited
+termination may a replacement writer open, after 100/500/1000 ms backoff. At most
+three restarts are admitted in a sliding 60-second window. A quiet window restores
+the budget, including recovery from an open circuit on a later request.
 Unsent requests remain queued for the replacement. A lost ACK can mean committed
 work; the before/after-commit crash tests establish that distinction. Durable
 receipts and status/replay recovery are deliberately not added in step 1.
@@ -110,24 +114,33 @@ main checks the old map entry, source identity, target liveness, stop request an
 background job proof again. Rejection or a changed proof keeps the old identity.
 Synchronous non-background detection retains its existing behavior.
 
-Both updater-install and before-quit call the same idempotent shutdownForExit.
-The unsaved guard completes the renderer's exit flush first. Shutdown stops
-scheduler/watchers, kills the app's PTYs, awaits their exit cleanup (20 s ceiling,
-explicit failure keeps the database open), serializes the final watcher flush,
+Both exit routes use boundedShutdown with one 1.5-second deadline after the unsaved
+guard. Normal quit uses the idempotent shutdownForExit: it stops
+scheduler/watchers, kills the app's PTYs, awaits their exit cleanup, serializes the final watcher flush,
 saves bounds, terminates/drains parser producers and pending metadata, flushes
 activity, awaits reader-worker termination, drains complete accepted facade
 workflows, closes main's reader, and awaits the writer's TRUNCATE checkpoint and
-close ACK. Electron quit is reissued only after completion; an async will-quit
-listener is no longer relied on. A close rejects new external admission while
+close ACK. A closed window retains its session ids and exit-drain promises until
+shutdown can await and release them. Success, rejection and deadline all end in
+app.exit; subsequent quit events cannot get stuck behind a rejected promise.
+A close rejects new external admission while
 AsyncLocalStorage preserves accepted workflows through nested completion commands.
-Failure is logged and prevents normal quit/install completion. OS forced exits and
-unresponsive renderer exit-flush bounds retain their existing limitations.
+Update installation drains watcher/bounds/metadata/activity and the accepted writer
+commands without closing the database, stopping producers or killing PTYs. At the
+same 1.5-second deadline it calls quitAndInstall even if draining rejects or stalls.
+The install flag bypasses another before-quit hold and resets on thrown or emitted
+updater errors, leaving a failed install usable. OS forced exits and unresponsive
+renderer exit-flush bounds retain their existing limitations. Bootstrap failure
+logs and displays a native error before exiting; second-instance ignores a destroyed
+window.
 
 ## Qualification
 
 Source tests and Electron-as-Node integration cover real SQLite readonly failure,
 crash before commit, lost ACK after commit, lock exhaustion/release, queued close,
-remap completion during close, metric generation visibility and FTS input bounds.
+remap completion during close, atomic metric visibility, old-build reopening,
+oversized archive/continuation values and complete FTS batches. Injected clocks cover
+chunk adaptation, execution deadlines, heartbeats, restart windows and bounded exit.
 Tests use temporary isolated data dirs. No live application process or packaged
-build is used by these tests. The report in .work-files/codex-report-6166b.md records
-the final executed file census, measured caps and packaged qualification checklist.
+build is used by these tests. The report in .work-files/codex-report-6166c.md records
+the final executed file census and packaged qualification checklist.

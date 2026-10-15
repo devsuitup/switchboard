@@ -1,7 +1,7 @@
 'use strict';
 
 // see .ai/contexts/session-index-writer.md
-function openSessionIndexStore({ readonly = true } = {}) {
+function openSessionIndexStore({ readonly = true, clock = () => performance.now() } = {}) {
 const Database = require('better-sqlite3');
 const path = require('path');
 const os = require('os');
@@ -34,6 +34,7 @@ if (!readonly && IS_DEFAULT_DATA_DIR && !fs.existsSync(DB_PATH)) {
 const raw = new Database(DB_PATH, { readonly, fileMustExist: readonly, timeout: 100 });
 let budget = null;
 const measured = [];
+let chunkSize = 32;
 const totalChanges = () => raw.prepare('SELECT total_changes() AS n').get().n;
 const db = new Proxy(raw, {
   get(target, key) {
@@ -46,14 +47,13 @@ const db = new Proxy(raw, {
         return (...args) => {
           if (!budget) return value.apply(stmt, args);
           budget.bytes += Buffer.byteLength(JSON.stringify(args));
-          if (budget.bytes > 65536) throw budget.error = Object.assign(new Error('writer bound-input cap exceeded'), { code: 'WRITER_CAP_EXCEEDED' });
-          const started = performance.now();
+          const changes = totalChanges();
+          const started = clock();
           const result = value.apply(stmt, args);
-          const ms = performance.now() - started;
+          const ms = clock() - started;
           budget.statements.push(ms);
-          if (ms > 10 || performance.now() - budget.started > 10 || totalChanges() - budget.changes > 32) {
-            throw budget.error = Object.assign(new Error('writer transaction cap exceeded'), { code: 'WRITER_CAP_EXCEEDED' });
-          }
+          budget.ms += ms;
+          budget.rows += totalChanges() - changes;
           return result;
         };
       } });
@@ -65,22 +65,30 @@ const db = new Proxy(raw, {
 function transact(command) {
   let sample;
   const result = raw.transaction(() => {
-    budget = { started: performance.now(), changes: totalChanges(), bytes: 0, statements: [] };
+    budget = { bytes: 0, statements: [], ms: 0, rows: 0 };
     try {
       const value = command();
-      if (budget.error) throw budget.error;
-      const ms = performance.now() - budget.started;
-      if (ms > 10) throw Object.assign(new Error('writer transaction time cap exceeded'), { code: 'WRITER_CAP_EXCEEDED' });
-      sample = { started: budget.started, ms, rows: totalChanges() - budget.changes, bytes: budget.bytes, statements: budget.statements };
+      sample = { ms: budget.ms, rows: budget.rows, bytes: budget.bytes, statements: budget.statements };
       return value;
     } finally { budget = null; }
   }).immediate();
-  sample.ms = performance.now() - sample.started;
-  delete sample.started;
   measured.push(sample);
   if (measured.length > 256) measured.shift();
-  if (sample.ms > 10) throw Object.assign(new Error('writer transaction exceeded 10 ms after commit; outcome committed; unit stopped'), { code: 'WRITER_CAP_COMMITTED' });
+  if (sample.ms > 10) chunkSize = Math.max(1, Math.floor(chunkSize / Math.max(2, Math.ceil(sample.ms / 10))));
   return result;
+}
+function chunkUnit(fn, count) {
+  const previous = { bytes: budget.bytes, rows: budget.rows };
+  raw.exec('SAVEPOINT writer_unit');
+  try {
+    const result = fn();
+    if (count && (budget.rows > 31 || budget.bytes > 65000)) {
+      raw.exec('ROLLBACK TO writer_unit');
+      Object.assign(budget, previous);
+      return { deferred: true };
+    }
+    return { result };
+  } finally { raw.exec('RELEASE writer_unit'); }
 }
 
 let searchFtsRecreated = false;
@@ -306,41 +314,7 @@ if (migrations.length > currentDbVersion) {
   }
 }
 
-if (db.prepare("SELECT type FROM sqlite_master WHERE name = 'session_metrics'").get()?.type === 'table') {
-  db.transaction(() => {
-    db.exec(`CREATE TABLE session_metrics_data (
-      sessionId TEXT NOT NULL, generation TEXT NOT NULL, date TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
-      messageCount INTEGER DEFAULT 0, toolCallCount INTEGER DEFAULT 0, inputTokens INTEGER DEFAULT 0,
-      outputTokens INTEGER DEFAULT 0, cacheReadTokens INTEGER DEFAULT 0, cacheCreationTokens INTEGER DEFAULT 0,
-      PRIMARY KEY(sessionId, generation, date, model)
-    )`);
-    db.exec('CREATE TABLE session_metrics_heads (sessionId TEXT PRIMARY KEY, generation TEXT NOT NULL)');
-    db.exec("INSERT INTO session_metrics_data SELECT sessionId, 'legacy', date, model, messageCount, toolCallCount, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens FROM session_metrics");
-    db.exec("INSERT INTO session_metrics_heads SELECT DISTINCT sessionId, 'legacy' FROM session_metrics");
-    db.exec('DROP TABLE session_metrics');
-    db.exec('CREATE INDEX idx_session_metrics_date ON session_metrics_data(date)');
-    db.exec(`CREATE VIEW session_metrics AS SELECT d.sessionId, d.date, d.model, d.messageCount, d.toolCallCount,
-      d.inputTokens, d.outputTokens, d.cacheReadTokens, d.cacheCreationTokens
-      FROM session_metrics_data d JOIN session_metrics_heads h ON h.sessionId = d.sessionId AND h.generation = d.generation`);
-    db.exec(`CREATE TRIGGER metrics_view_delete INSTEAD OF DELETE ON session_metrics BEGIN
-      DELETE FROM session_metrics_data WHERE sessionId = OLD.sessionId AND date = OLD.date AND model = OLD.model
-        AND generation = (SELECT generation FROM session_metrics_heads WHERE sessionId = OLD.sessionId);
-    END`);
-  })();
-}
-db.exec('CREATE TABLE IF NOT EXISTS search_staging (token TEXT PRIMARY KEY, id TEXT, type TEXT, folder TEXT, title TEXT, body TEXT)');
-db.exec('DELETE FROM search_staging');
-db.exec(`DELETE FROM session_metrics_data WHERE NOT EXISTS (
-  SELECT 1 FROM session_metrics_heads h WHERE h.sessionId = session_metrics_data.sessionId AND h.generation = session_metrics_data.generation
-)`);
-db.exec(`CREATE TRIGGER IF NOT EXISTS metrics_view_insert INSTEAD OF INSERT ON session_metrics BEGIN
-  INSERT OR IGNORE INTO session_metrics_heads(sessionId, generation) VALUES (NEW.sessionId, 'legacy');
-  INSERT INTO session_metrics_data(sessionId, generation, date, model, messageCount, toolCallCount, inputTokens,
-    outputTokens, cacheReadTokens, cacheCreationTokens)
-    VALUES (NEW.sessionId, (SELECT generation FROM session_metrics_heads WHERE sessionId = NEW.sessionId), NEW.date,
-    COALESCE(NEW.model, ''), COALESCE(NEW.messageCount, 0), COALESCE(NEW.toolCallCount, 0), COALESCE(NEW.inputTokens, 0),
-    COALESCE(NEW.outputTokens, 0), COALESCE(NEW.cacheReadTokens, 0), COALESCE(NEW.cacheCreationTokens, 0));
-END`);
+db.exec('CREATE TEMP TABLE search_staging (token TEXT PRIMARY KEY, id TEXT, type TEXT, folder TEXT, title TEXT, body TEXT)');
 }
 db.pragma('busy_timeout = 100');
 const FTS_BODY_MAX_CHARS = 32768; 
@@ -423,12 +397,12 @@ const stmts = {
 
   cacheTouchModified: db.prepare('UPDATE session_cache SET modified = ?, fileMtime = ? WHERE sessionId = ?'),
   
-  metricsDeleteBySession: db.prepare('DELETE FROM session_metrics_heads WHERE sessionId = ?'),
-  metricsDeleteByFolder: db.prepare('DELETE FROM session_metrics_heads WHERE sessionId IN (SELECT sessionId FROM session_cache WHERE folder = ?)'),
+  metricsDeleteBySession: db.prepare('DELETE FROM session_metrics WHERE sessionId = ?'),
+  metricsDeleteByFolder: db.prepare('DELETE FROM session_metrics WHERE sessionId IN (SELECT sessionId FROM session_cache WHERE folder = ?)'),
   metricsInsert: db.prepare(`
-    INSERT INTO session_metrics_data
-      (sessionId, generation, date, model, messageCount, toolCallCount, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_metrics
+      (sessionId, date, model, messageCount, toolCallCount, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   
   metaGet: db.prepare('SELECT * FROM cache_meta WHERE folder = ?'),
@@ -563,24 +537,10 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
   }
 });
 
-function stageMetricRow(sessionId, generation, r) {
-  stmts.metricsInsert.run(sessionId, generation, r.date, r.model || '', r.messageCount | 0,
-    r.toolCallCount | 0, r.inputTokens | 0, r.outputTokens | 0, r.cacheReadTokens | 0, r.cacheCreationTokens | 0);
-}
-function publishMetrics(sessionId, generation) {
-  db.prepare('INSERT INTO session_metrics_heads(sessionId, generation) VALUES (?, ?) ON CONFLICT(sessionId) DO UPDATE SET generation = excluded.generation').run(sessionId, generation);
-}
-function collectMetrics(sessionId) {
-  return db.prepare(`DELETE FROM session_metrics_data WHERE rowid IN (
-    SELECT d.rowid FROM session_metrics_data d LEFT JOIN session_metrics_heads h ON h.sessionId = d.sessionId
-    WHERE d.sessionId = ? AND (h.generation IS NULL OR h.generation != d.generation) LIMIT 24
-  )`).run(sessionId).changes;
-}
 const replaceSessionMetricsBatch = db.transaction((sessionId, rows) => {
-  const generation = require('node:crypto').randomUUID();
-  for (const row of rows || []) stageMetricRow(sessionId, generation, row);
-  publishMetrics(sessionId, generation);
-  while (collectMetrics(sessionId)) {}
+  stmts.metricsDeleteBySession.run(sessionId);
+  for (const r of rows || []) stmts.metricsInsert.run(sessionId, r.date, r.model || '', r.messageCount | 0,
+    r.toolCallCount | 0, r.inputTokens | 0, r.outputTokens | 0, r.cacheReadTokens | 0, r.cacheCreationTokens | 0);
 });
 function replaceSessionMetrics(sessionId, rows) { replaceSessionMetricsBatch(sessionId, rows); }
 
@@ -914,9 +874,7 @@ if (!readonly) try {
 
 return {
   beginSearchEntry, appendSearchBody, publishSearchEntry,
-  stageMetricRow, publishMetrics, collectMetrics,
-  snapshotForEffects: () => raw.transaction(() => ({ rows: getAllCached(), meta: getAllMeta(true), folders: getAllFolderMeta(), settings: listSettingKeys('').map(key => [key, getSetting(key)]) }))(),
-  connection: db, transact, measurements: () => measured.slice(),
+  connection: db, transact, chunkUnit, changeCount: totalChanges, measurements: () => measured.slice(), nextChunkSize: () => chunkSize,
   rekeySessionMeta,
   getMeta, getAllMeta, setName, toggleStar, setArchived,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,

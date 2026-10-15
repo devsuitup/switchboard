@@ -146,6 +146,7 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   autoUpdater.on('error', (err) => {
     log.error('[updater] Error:', err?.message || String(err));
     activityFlushedForQuit = false; // see .ai/contexts/activitywatch.md ("Quitting")
+    updateInstalling = false;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('updater-event', 'error', { message: err?.message || String(err) });
     }
@@ -153,10 +154,25 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
 }
 let mainWindow = null;
 let activityFlushedForQuit = false;
+let updateInstalling = false;
 async function startApplication() {
 if (!app.requestSingleInstanceLock()) { app.quit(); return; }
 const writer = require('./session-index-writer').createSessionIndexWriter();
-const holdBootstrapQuit = event => { event.preventDefault(); writer.ready.then(() => app.quit()).catch(() => app.exit(1)); };
+let bootstrapQuit;
+const holdBootstrapQuit = event => {
+  event.preventDefault();
+  bootstrapQuit ||= boundedBootstrapQuit();
+};
+async function boundedBootstrapQuit() {
+  let timer;
+  try {
+    await Promise.race([writer.ready, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('writer bootstrap quit timed out')), 1500);
+    })]);
+    app.quit();
+  } catch (error) { log.error('[startup]', error); app.exit(1); }
+  finally { clearTimeout(timer); }
+}
 app.on('before-quit', holdBootstrapQuit);
 await writer.ready;
 const {
@@ -247,6 +263,7 @@ const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 
 // Active PTY sessions
 const activeSessions = new Map();
+const closedSessions = new Map();
 // see .ai/contexts/touched-files.md ("One route into Touched")
 const exitedRemoteSessionIds = new Set();
 let stopScheduler;
@@ -445,6 +462,7 @@ function createWindow() {
     // Kill all running PTY processes so orphaned `claude` processes don't
     // accumulate in the background with no way for the user to interact.
     for (const [id, session] of activeSessions) {
+      closedSessions.set(id, session);
       if (!session.exited) killPty(session, id);
       activeSessions.delete(id);
     }
@@ -3402,8 +3420,15 @@ ipcMain.handle('updater-download', () => {
 ipcMain.handle('updater-install', async () => {
   if (!autoUpdater) return;
   if (mainWindow && !await unsavedGuard.confirmQuit(mainWindow)) return;
-  await shutdownForExit();
-  autoUpdater.quitAndInstall();
+  await drainForUpdate();
+  updateInstalling = true;
+  try { autoUpdater.quitAndInstall(); }
+  catch (error) {
+    updateInstalling = false;
+    activityFlushedForQuit = false;
+    log.error('[updater] install failed:', error);
+    throw error;
+  }
 });
 
 // --- App lifecycle ---
@@ -3422,7 +3447,7 @@ if (!app.isPackaged) {
 {
   // Focus the existing window when a second launch is attempted.
   app.on('second-instance', () => {
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
@@ -3622,9 +3647,24 @@ let appQuitting = false;
 // see .ai/contexts/session-index-writer.md
 let shutdownPromise;
 let shutdownComplete = false;
+async function boundedShutdown(drain) {
+  let timer;
+  try {
+    await Promise.race([Promise.resolve().then(drain), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('shutdown drain timed out')), 1500);
+    })]);
+  } catch (error) { log.error('[shutdown] drain failed:', error); }
+  finally { clearTimeout(timer); }
+}
+function drainForUpdate() {
+  return boundedShutdown(async () => {
+    await Promise.all([flushProjectsBeforeExit(), flushWindowBounds(), sessionTransitions.drainMetadataWrites(), activityReporter.flush()]);
+    await writer.drain();
+  });
+}
 function shutdownForExit() {
   if (shutdownPromise) return shutdownPromise;
-  shutdownPromise = (async () => {
+  shutdownPromise = boundedShutdown(async () => {
     appQuitting = true;
     stopScheduler?.();
     mainLoopMonitor.stop();
@@ -3645,39 +3685,39 @@ function shutdownForExit() {
     remoteWatcher.stopAll();
     remoteActivityTracker.dispose();
 
-    const exitDrains = [...activeSessions.values()].map(session => session.exitDrain).filter(Boolean);
-    for (const [id, session] of activeSessions) {
+    const sessions = new Map([...closedSessions, ...activeSessions]);
+    const exitDrains = [...sessions.values()].map(session => session.exitDrain).filter(Boolean);
+    for (const [id, session] of sessions) {
       if (!session.exited) killPty(session, id);
     }
-    let exitTimer;
-    try {
-      await Promise.race([Promise.all(exitDrains), new Promise((_, reject) => {
-        exitTimer = setTimeout(() => reject(new Error('PTY exit drain timed out; database remains open')), 20000);
-      })]);
-    } finally { clearTimeout(exitTimer); }
+    await Promise.all(exitDrains);
     await flushProjectsBeforeExit();
     await flushWindowBounds();
     await sessionCache.shutdownProducers();
     await sessionTransitions.drainMetadataWrites();
-    for (const [id] of activeSessions) await writer.releaseLiveSession(id);
+    for (const [id] of sessions) await writer.releaseLiveSession(id);
+    closedSessions.clear();
     if (!activityFlushedForQuit || activityReporter.hasPendingWork) await activityReporter.flush();
     activityReporter.stop();
     activityFlushedForQuit = true;
     await Promise.all([projectsClient.shutdown(), fileListsClient.shutdown(), searchClient.shutdown()]);
     await closeDb();
     activityTrace.close();
-    shutdownComplete = true;
-  })();
+  }).finally(() => { shutdownComplete = true; });
   return shutdownPromise;
 }
 
 app.removeListener('before-quit', holdBootstrapQuit);
 app.on('before-quit', event => {
-  if (shutdownComplete) return;
+  if (shutdownComplete || updateInstalling) return;
   if (unsavedGuard.beforeQuit(event, mainWindow)) return;
   event.preventDefault();
-  shutdownForExit().then(() => app.quit()).catch(error => log.error('[shutdown] drain failed:', error));
+  shutdownForExit().finally(() => app.exit());
 });
 }
 
-startApplication().catch(error => { log.error('[startup]', error); app.exit(1); });
+startApplication().catch(error => {
+  log.error('[startup]', error);
+  dialog.showErrorBox('Switchboard could not start', error.message || String(error));
+  app.exit(1);
+});

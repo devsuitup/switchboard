@@ -828,7 +828,7 @@ function buildProjectsFromCache(showArchived) {
         if (!projectPath) {
           if (scanComplete) {
             projectPath = deriveFolderProjectPath(path.join(dir, d.name), folderKey);
-            if (projectPath && alias === null && !writer.readonlyQueries) setFolderMeta(folderKey, projectPath, 0);
+            if (projectPath && alias === null) setFolderMeta(folderKey, projectPath, 0);
           } else {
             projectPath = decodeProjectFolderBestEffort(d.name);
             placeholder = true;
@@ -1193,6 +1193,7 @@ function populateCacheViaWorker() {
   let totalFolders = 0;
   let sessionCount = 0;
   let indexedProjects = 0;
+  let writeError = null;
 
   // ~4 events/s: one IPC message per folder is wasteful on a large tree (the
   // comparable notifyRendererProjectsChanged is throttled too). The FIRST
@@ -1248,7 +1249,7 @@ function populateCacheViaWorker() {
           let written = 0;
           try {
             written = await writer.writeScannedFolder(msg.result, msg.unverifiedLocalFolder);
-          } catch (err) { log && log.error('[session-cache] folder write failed:', err.message); }
+          } catch (err) { writeError = err.message; log && log.error('[session-cache] folder write failed:', err.message); }
           if (written > 0) {
             sessionCount += written;
             indexedProjects++;
@@ -1261,10 +1262,11 @@ function populateCacheViaWorker() {
         }
 
         // msg.type === 'done'
-        if (!msg.ok) {
-          console.error('Worker scan error:', msg.error);
-          sendStatus('Scan failed: ' + msg.error, 'error');
-          reportProgress(true, msg.error);
+        if (!msg.ok || writeError) {
+          const error = writeError || msg.error;
+          console.error('Worker scan error:', error);
+          sendStatus('Scan failed: ' + error, 'error');
+          reportProgress(true, error);
           settle();
           return;
         }

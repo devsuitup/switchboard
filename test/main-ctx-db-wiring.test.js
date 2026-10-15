@@ -9,6 +9,7 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 test('cache dependency writes are recorded without writing through the main reader', () => {
   const forbidden = () => assert.fail('main connection write');
   const backend = { getAllCached: () => [], getAllMeta: () => new Map(), getAllFolderMeta: () => new Map(),
+    getSetting: () => null, getCachedSession: () => null, getMeta: () => null,
     listSettingKeys: () => [], replaceSessionMetrics: forbidden, touchCachedModified: forbidden };
   const effects = createCacheEffects(backend);
   effects.begin();
@@ -22,6 +23,7 @@ test('cache dependency writes are recorded without writing through the main read
 
 test('cache computation reads its own changes without persisting them on main', () => {
   const effects = createCacheEffects({ getAllCached: () => [], getAllMeta: () => new Map(),
+    getSetting: () => null, getCachedSession: () => null, getMeta: () => null,
     getAllFolderMeta: () => new Map(), listSettingKeys: () => [] });
   effects.begin();
   effects.adapter.upsertCachedSessions([{ sessionId: 'id', folder: 'folder' }]);
