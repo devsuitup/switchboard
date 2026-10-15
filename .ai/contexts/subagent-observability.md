@@ -208,6 +208,8 @@ undocumented CLI interface, not cryptographic authentication of user content.
 chunks, retains incomplete JSONL and UTF-8, deduplicates replay and resets the
 cursor on replacement/truncation. A same-size mtime update retains the cursor
 when its 128-byte boundary still matches; the validated mtime is saved.
+Replacement is recognised by BigInt device/inode/birth-time identity and a
+nanosecond mtime, for the NTFS reasons given in session-state.md (#648, #650).
 Parsing and historical replay stay off the
 Electron main thread. Verified top-level watcher events enqueue these reads
 even when a PTY owns the session. Renderer bootstrap seeds indexed parent
