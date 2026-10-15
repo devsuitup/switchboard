@@ -174,6 +174,7 @@ function backgroundActivityEntry(sessionId) {
 }
 
 function backgroundActivityIsForeground(sessionId, entry = backgroundActivityEntry(sessionId)) {
+  if (typeof openSessions !== 'undefined' && openSessions.get(sessionId)?.attach) return false;
   return typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId) && (!entry || !agentJobIsLive(entry))
     || entry?.conversationOwn && ['done', 'stopped', 'failed'].includes(entry.state);
 }
