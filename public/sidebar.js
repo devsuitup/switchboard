@@ -1139,6 +1139,7 @@ function renderProjects(projects, resort) {
   sortedOrder = newSortedOrder;
 
   rebindSidebarEvents(projects);
+  if (typeof refreshGridCardMembers === 'function') refreshGridCardMembers();
 
   // Restore terminal focus after morphdom DOM updates, but not if the user is
   // interacting with an input/textarea (search box, rename input, dialogs, etc.)

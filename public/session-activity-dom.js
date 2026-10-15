@@ -121,6 +121,7 @@ function indexLocalMergedMemberRows(projects) {
       for (const id of row.mergedMemberIds || []) localMergedMemberRows.set(id, row);
     }
   }
+  if (typeof refreshGridCardMembers === 'function') refreshGridCardMembers();
 }
 
 function localSessionForStatus(sessionId, session) {

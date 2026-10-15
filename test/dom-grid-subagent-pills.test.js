@@ -11,7 +11,7 @@ function setup(t) {
   ctx.evalPublic('shortcuts.js');
   ctx.evalPublic('grid-view.js');
   const card = ctx.document.createElement('div');
-  ctx.read('gridCards').set('parent-1', card);
+  ctx.window.registerGridCard('parent-1', card);
   const spawn = payload => ctx.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1', ...payload });
   const agents = () => ctx.window.taskRegistry.agents('parent-1');
   return { ctx, card, spawn, agents };

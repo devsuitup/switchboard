@@ -11,7 +11,7 @@ test('grid loading leaves the sidebar as the sole IPC lifecycle and fallback TTL
   ctx.evalPublic('grid-view.js');
   const card = ctx.document.createElement('div');
   card.innerHTML = '<div class="grid-card-dot"></div>';
-  ctx.read('gridCards').set('parent-1', card);
+  ctx.window.registerGridCard('parent-1', card);
   ctx.emitSubagentSpawned({ parentSessionId: 'parent-1', agentId: 'agent-1' });
   assert.equal(ctx.window.taskRegistry.agents('parent-1').length, 1);
   assert.equal(card.querySelector('.grid-card-dot').title, 'Background work running');

@@ -230,6 +230,7 @@ function setupTerminalDom(opts = {}) {
   });
   const files = ['utils.js', 'subagent-timing.js', 'task-registry.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-replay-queries.js', 'terminal-manager.js'];
   if (!opts.dom) {
+    if (!opts.filePanel) files.unshift('process-exit.js');
     files.splice(1, 0, 'shortcuts.js');
     files.unshift('session-state.js', 'session-activity-dom.js', 'session-activity.js');
     files.push('grid-view.js');

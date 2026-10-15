@@ -84,7 +84,7 @@ function setupCombinedDom() {
 
   const MORPHDOM_PATH = path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js');
   vm.runInContext(fs.readFileSync(MORPHDOM_PATH, 'utf8'), dom.getInternalVMContext(), { filename: 'morphdom-umd.js' });
-  for (const file of ['session-state.js', 'session-activity-dom.js', 'session-activity.js']) {
+  for (const file of ['session-state.js', 'process-exit.js', 'session-activity-dom.js', 'session-activity.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
   for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'task-registry.js', 'grid-view.js', 'bridge-url.js', 'worktree-nesting.js', 'sidebar.js']) {

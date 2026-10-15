@@ -34,6 +34,138 @@ function setup(t, kind = 'local-pty', overrides = {}) {
   return { ctx, session, render, create, turn, tasks };
 }
 
+test('#629 process exit preserves the local exit reason after its descriptor disappears', t => {
+  const { ctx, session, create } = setup(t);
+  const card = create();
+  delete session.status;
+  ctx.window.schedulePersistWorkingSet = () => {};
+  loadAppFunctions(ctx.context, { functions: ['applyProcessExit'] });
+  ctx.window.applyProcessExit(session.sessionId, 1, null, false);
+  assert.equal(card.querySelector('.grid-card-footer').firstChild.textContent, 'Exited (code 1)');
+  assert.equal(card.querySelector('.grid-card-stop-btn').style.display, 'none');
+});
+
+for (const kind of ['local-pty', 'local-transcript', 'remote', 'background']) {
+  test(`#629 ${kind}: footer separates attachment, liveness and remembered exit information`, t => {
+    const { ctx, session, create, render } = setup(t, kind);
+    const card = create();
+    const footer = () => card.querySelector('.grid-card-footer').firstChild.textContent;
+    assert.equal(footer(), kind === 'local-pty' ? 'Running' : 'Running elsewhere');
+    ctx.window.noteSessionExit(session.sessionId, 1, null, false);
+    ctx.window.updateRunningIndicators();
+    assert.equal(footer(), kind === 'local-pty' ? 'Running' : 'Running elsewhere', 'live process wins over an old exit');
+    ctx.window.activePtyIds.delete(session.sessionId);
+    delete session.status;
+    session.remoteDescriptorSeen = false;
+    ctx.window.dropLocalPtySession(session.sessionId, 'process-exited');
+    render();
+    ctx.window.updateRunningIndicators();
+    assert.equal(footer(), 'Exited (code 1)');
+    ctx.window.noteSessionExit(session.sessionId, null, 'SIGTERM', false);
+    ctx.window.updateRunningIndicators();
+    assert.equal(footer(), 'Killed (SIGTERM)');
+    ctx.window.noteSessionExit(session.sessionId, 1, null, true);
+    ctx.window.updateRunningIndicators();
+    assert.equal(footer(), 'Stopped');
+    ctx.window.forgetSessionExit(session.sessionId);
+    ctx.window.updateRunningIndicators();
+    assert.equal(footer(), 'Liveness unknown');
+    const state = kind === 'remote' ? ctx.remoteSessionStates.get(session.sessionId) : ctx.window.localPtyState(session.sessionId);
+    state.apply({ type: 'liveness', value: 'dead' });
+    ctx.window.updateRunningIndicators();
+    assert.equal(footer(), 'Stopped');
+  });
+}
+
+test('#629 one head update looks up and paints only its indexed card', t => {
+  const { ctx, create, turn } = setup(t);
+  const card = create();
+  for (const id of ['unrelated-1', 'unrelated-2']) {
+    const session = { sessionId: id, modified: new Date().toISOString() };
+    ctx.window.sessionMap.set(id, session);
+    ctx.window.openSessions.set(id, { session, element: ctx.document.createElement('div') });
+    ctx.window.wrapInGridCard(id);
+  }
+  const lookups = [];
+  const get = ctx.window.sessionMap.get.bind(ctx.window.sessionMap);
+  ctx.window.sessionMap.get = id => { lookups.push(id); return get(id); };
+  const paints = [];
+  for (const el of ctx.document.querySelectorAll('.grid-card')) {
+    const query = el.querySelector.bind(el);
+    el.querySelector = selector => { if (selector === '.grid-card-dot') paints.push(el.dataset.sessionId); return query(selector); };
+  }
+  turn('open');
+  assert.deepEqual(paints, ['head-629']);
+  assert.equal(card.querySelector('.grid-card-dot').title, 'Working');
+  assert.deepEqual(lookups, ['head-629', 'head-629', 'head-629']);
+});
+
+test('#629 busy head with running agents shares the sidebar violet tint', t => {
+  const { ctx, create, turn, tasks } = setup(t);
+  const card = create();
+  turn('open');
+  tasks([{ id: 'A' }]);
+  parity(ctx, card, 'Working');
+  assert.equal(card.classList.contains('has-busy-agents'), true);
+  const css = require('node:fs').readFileSync(require('node:path').join(__dirname, '../public/style.css'), 'utf8');
+  assert.match(css, /\.grid-card\.has-busy-agents\s+\.session-icon--busy::before[^{}]*\{\s*color:\s*(?:#8088ff|var\(--accent\))/);
+  tasks([]);
+  assert.equal(card.classList.contains('has-busy-agents'), false);
+});
+
+test('#629 indexed membership follows hidden merged-row changes, aliases, re-key and removal', t => {
+  const { ctx, session, create, render } = setup(t, 'local-transcript', { mergedMemberIds: ['old-member'] });
+  const card = create();
+  session.mergedMemberIds = ['new-member'];
+  render();
+  ctx.document.getElementById('si-' + session.sessionId).remove();
+  ctx.window.indexLocalMergedMemberRows([makeSampleProject({ sessions: [session] })]);
+  const paints = [];
+  const query = card.querySelector.bind(card);
+  card.querySelector = selector => { if (selector === '.grid-card-dot') paints.push(card.dataset.sessionId); return query(selector); };
+  ctx.window.applyStateClasses('old-member', {});
+  assert.deepEqual(paints, [], 'removed member no longer visits the card');
+  ctx.window.taskRegistry.applySnapshot({ parentSessionId: 'new-member', revision: 1, known: true,
+    tasks: [{ id: 'A', kind: 'agent', terminal: false, at: Date.now() }] });
+  assert.equal(card.querySelector('.grid-subagent-count').textContent, '1 subagent running');
+  ctx.window.taskRegistry.rekey('new-member', 'aliased-member', { continued: true });
+  ctx.window.taskRegistry.end('aliased-member', 'A');
+  assert.equal(card.querySelector('.grid-subagent-count'), null, 'canonical member updates still reach the card');
+  const next = { ...session, sessionId: 'rekeyed-card' };
+  const entry = ctx.window.openSessions.get(session.sessionId);
+  ctx.window.openSessions.delete(session.sessionId);
+  ctx.window.openSessions.set(next.sessionId, { ...entry, session: next });
+  ctx.window.sessionMap.delete(session.sessionId);
+  ctx.window.sessionMap.set(next.sessionId, next);
+  ctx.window.rekeyGridCard(session.sessionId, next.sessionId);
+  paints.length = 0;
+  ctx.window.applyStateClasses(next.sessionId, {});
+  assert.deepEqual(paints, [next.sessionId]);
+  ctx.window.destroyGridCard(next.sessionId);
+  paints.length = 0;
+  ctx.window.applyStateClasses('aliased-member', {});
+  assert.deepEqual(paints, [], 'destroyed card leaves no indexed references');
+  assert.equal(ctx.read('gridCardsByMember.size'), 0);
+  assert.equal(ctx.read('gridCardMemberKeys.size'), 0);
+});
+
+test('#629 a shared member updates both matching cards and unwrapping clears the index', t => {
+  const { ctx, session, create } = setup(t, 'local-transcript', { mergedMemberIds: ['shared-member'] });
+  create();
+  const sibling = { ...session, sessionId: 'sibling-card' };
+  ctx.window.sessionMap.set(sibling.sessionId, sibling);
+  ctx.window.openSessions.set(sibling.sessionId, { session: sibling, element: ctx.document.createElement('div') });
+  ctx.window.wrapInGridCard(sibling.sessionId);
+  ctx.window.taskRegistry.applySnapshot({ parentSessionId: 'shared-member', revision: 1, known: true,
+    tasks: [{ id: 'A', kind: 'agent', terminal: false, at: Date.now() }] });
+  for (const card of ctx.document.querySelectorAll('.grid-card')) {
+    assert.equal(card.querySelector('.grid-subagent-count').textContent, '1 subagent running');
+  }
+  ctx.window.unwrapGridCards();
+  assert.equal(ctx.read('gridCardsByMember.size'), 0);
+  assert.equal(ctx.read('gridCardMemberKeys.size'), 0);
+});
+
 function parity(ctx, card, expected) {
   const sidebar = ctx.window.sessionItemEl(card.dataset.sessionId);
   const icon = sidebar.querySelector('.session-icon');
@@ -55,6 +187,9 @@ for (const kind of ['local-pty', 'local-transcript', 'remote', 'background']) {
     const card = create();
     turn('open');
     parity(ctx, card, 'Working');
+    ctx.window.noteWrittenActivity('head-629');
+    parity(ctx, card, 'Working');
+    assert.equal(card.classList.contains('unseen-written-activity'), true);
     turn('closed');
     parity(ctx, card, 'Waiting for input');
     tasks([{ id: 'A' }]);

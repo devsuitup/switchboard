@@ -9,30 +9,71 @@
 // Depends on: cleanDisplayName, formatDate (utils.js), fitAndScroll, showSession (terminal-manager.js)
 
 let gridCards = new Map(); // sessionId → card wrapper element
+const gridCardsByMember = new Map();
+const gridCardMemberKeys = new Map();
 let gridFocusedSessionId = null;
 
 // Grouping is the historical layout, so an unset preference means "grouped".
 let gridGroupByProject = localStorage.getItem('gridGroupByProject') !== '0';
 
+function forgetGridCardMembers(sessionId) {
+  for (const id of gridCardMemberKeys.get(sessionId) || []) {
+    const cards = gridCardsByMember.get(id);
+    cards?.delete(sessionId);
+    if (!cards?.size) gridCardsByMember.delete(id);
+  }
+  gridCardMemberKeys.delete(sessionId);
+}
+
+function gridCardRow(sessionId) {
+  const openedSession = openSessions.get(sessionId)?.session;
+  const session = sessionMap.get(sessionId) || openedSession || { sessionId };
+  const item = sessionItemEl(sessionId);
+  const mergedRow = typeof localMergedMemberRows !== 'undefined' && localMergedMemberRows.get(sessionId);
+  const ids = [...new Set(rowSessionIds({ sessionId, mergedMemberIds: [
+    item?.dataset.sessionId,
+    mergedRow?.sessionId,
+    ...(item?.dataset.mergedMemberIds?.split(' ') || []),
+    ...(mergedRow?.mergedMemberIds || []),
+    ...(session.mergedMemberIds || []),
+    ...(openedSession?.mergedMemberIds || []),
+  ] }).filter(Boolean))];
+  const status = mergedRow ? mergedRow.mergedMemberStatuses?.[sessionId] : session;
+  return { ...session, ...mergedRow, sessionId, status: status?.status, statusUpdatedAt: status?.statusUpdatedAt,
+    headSessionId: item?.dataset.headSessionId || mergedRow?.headSessionId || session.headSessionId,
+    mergedMemberIds: ids.filter(id => id !== sessionId) };
+}
+
+function indexGridCardMembers(sessionId, row) {
+  forgetGridCardMembers(sessionId);
+  const keys = new Set(rowSessionIds(row).flatMap(id => [id, window.taskRegistry?.resolve(id) || id]));
+  gridCardMemberKeys.set(sessionId, keys);
+  for (const id of keys) {
+    if (!gridCardsByMember.has(id)) gridCardsByMember.set(id, new Set());
+    gridCardsByMember.get(id).add(sessionId);
+  }
+}
+
+function registerGridCard(sessionId, card) {
+  gridCards.set(sessionId, card);
+  indexGridCardMembers(sessionId, gridCardRow(sessionId));
+}
+
+function refreshGridCardMembers() {
+  for (const sessionId of gridCards.keys()) indexGridCardMembers(sessionId, gridCardRow(sessionId));
+}
+
 function updateGridSubagentPills(parentSessionId) {
-  for (const [sessionId, card] of gridCards) {
-    const openedSession = openSessions.get(sessionId)?.session;
-    const session = sessionMap.get(sessionId) || openedSession || { sessionId };
-    const item = sessionItemEl(sessionId);
-    const mergedRow = typeof localMergedMemberRows !== 'undefined' && localMergedMemberRows.get(sessionId);
-    const ids = [...new Set(rowSessionIds({ sessionId, mergedMemberIds: [
-      item?.dataset.sessionId,
-      mergedRow?.sessionId,
-      ...(item?.dataset.mergedMemberIds?.split(' ') || []),
-      ...(mergedRow?.mergedMemberIds || []),
-      ...(session.mergedMemberIds || []),
-      ...(openedSession?.mergedMemberIds || []),
-    ] }).filter(Boolean))];
-    if (parentSessionId && !ids.some(id => window.taskRegistry?.resolve(id) === window.taskRegistry?.resolve(parentSessionId))) continue;
-    const row = { ...session, ...mergedRow, headSessionId: item?.dataset.headSessionId || mergedRow?.headSessionId || session.headSessionId,
-      mergedMemberIds: ids };
+  const sessionIds = parentSessionId
+    ? new Set([...(gridCardsByMember.get(parentSessionId) || []),
+      ...(gridCardsByMember.get(window.taskRegistry?.resolve(parentSessionId)) || [])])
+    : gridCards.keys();
+  for (const sessionId of sessionIds) {
+    const card = gridCards.get(sessionId);
+    const row = gridCardRow(sessionId);
+    indexGridCardMembers(sessionId, row);
     updateGridCardActivity(sessionId, card, row);
-    const count = window.taskRegistry?.runningAgentCount(ids) || 0;
+    const count = window.taskRegistry?.runningAgentCount(rowSessionIds(row)) || 0;
     let text = card.querySelector('.grid-subagent-count');
     if (!count) {
       text?.remove();
@@ -51,14 +92,16 @@ function updateGridSubagentPills(parentSessionId) {
 }
 
 function updateGridCardActivity(sessionId, card, row) {
-  const snapshot = mergedRowSnapshot(rowSessionIds(row), sessionId, storedActivitySnapshot(sessionId), row);
-  writeIconSlot(card.querySelector('.grid-card-dot'), renderSessionIcon(snapshot));
+  const snapshot = mergedRowSnapshot(rowSessionIds(row), sessionId, storedActivitySnapshot(sessionId, row), row);
+  paintSessionIconFromSnapshot(card.querySelector('.grid-card-dot'), snapshot);
+  setHasBusyAgents(card, snapshot.agentsBusy);
   setNeedsAttention(card, snapshot.attention);
   setUnseenWrittenActivity(card, snapshot.unseenWrittenActivity);
   const running = activePtyIds.has(sessionId);
+  const exit = !running && snapshot.liveness !== 'alive' && lastSessionExit(sessionId);
   const footer = card.querySelector('.grid-card-footer');
   if (footer?.children[0]) footer.children[0].textContent = running ? 'Running' : snapshot.liveness === 'alive' ? 'Running elsewhere'
-    : snapshot.liveness === 'dead' ? 'Stopped' : 'Liveness unknown';
+    : exit ? processExitLabel(exit) : snapshot.liveness === 'dead' ? 'Stopped' : 'Liveness unknown';
   const stopBtn = card.querySelector('.grid-card-stop-btn');
   if (stopBtn) stopBtn.style.display = (running || isSessionAlive(sessionId)) ? '' : 'none';
 }
@@ -188,7 +231,7 @@ function wrapInGridCard(sessionId) {
     }
   });
 
-  gridCards.set(sessionId, card);
+  registerGridCard(sessionId, card);
   if (gridCardObserver) gridCardObserver.observe(card);
   // Set initial status from the single source of truth
   updateRunningIndicators();
@@ -208,6 +251,8 @@ function unwrapGridCards() {
     card.remove();
   }
   gridCards.clear();
+  gridCardsByMember.clear();
+  gridCardMemberKeys.clear();
   // Remove project headings inserted by showGridView
   terminalsEl.querySelectorAll('.grid-project-heading').forEach(el => el.remove());
 }
@@ -215,9 +260,10 @@ function unwrapGridCards() {
 function rekeyGridCard(oldId, newId) {
   const card = gridCards.get(oldId);
   if (card) {
+    forgetGridCardMembers(oldId);
     gridCards.delete(oldId);
-    gridCards.set(newId, card);
     card.rekeySessionId(newId);
+    registerGridCard(newId, card);
   }
   if (gridFocusedSessionId === oldId) gridFocusedSessionId = newId;
 }
@@ -393,6 +439,7 @@ function destroyGridCard(sessionId) {
   if (!card) return false;
   if (gridCardObserver) gridCardObserver.unobserve(card);
   card.remove();
+  forgetGridCardMembers(sessionId);
   gridCards.delete(sessionId);
   if (typeof syncToolBar === 'function') syncToolBar();
   return true;

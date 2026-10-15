@@ -134,7 +134,7 @@ test('grid dots use head evidence, ignore OSC progress and show static backgroun
   ctx.evalPublic('grid-view.js');
   const card = ctx.document.createElement('div');
   card.innerHTML = '<span class="grid-card-dot"></span>';
-  ctx.read('gridCards').set('root', card);
+  ctx.window.registerGridCard('root', card);
   ctx.read('globalThis._lastPtySignature = ""');
   ctx.window.renderDefaultStatus = () => {};
   loadAppFunctions(ctx.context, { functions: ['updateRunningIndicators'], installSpies: false });

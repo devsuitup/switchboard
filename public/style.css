@@ -1166,6 +1166,7 @@ body { display: flex; flex-direction: column; }
 
 /* Busy session WITH live subagents: the same spinner, same cadence, violet
    hue — see .ai/contexts/session-state.md. See docs/subagents.md "Live status". */
+.grid-card.has-busy-agents .session-icon--busy::before,
 .session-item.has-busy-agents .session-icon--busy::before {
   color: var(--accent);
 }

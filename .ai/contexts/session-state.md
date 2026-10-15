@@ -86,23 +86,30 @@ freshness contract. Remote turn precision is limited by mirror refresh: about
 15 seconds with the host watch, otherwise the configured pull interval
 (default 5 minutes). Worker turn retention is capped at 2048, oldest first.
 Grid cards use the same `storedActivitySnapshot` / `mergedRowSnapshot`,
-`renderSessionIcon` and `writeIconSlot` as the sidebar (#629). Their single
+`paintSessionIconFromSnapshot` as the sidebar (#629). Their single
 `.grid-card-dot.session-icon` carries the animated head turn, static background
 work, attention or response-ready glyph and the same accessible tooltip.
 `updateGridSubagentPills` retains its registry callback name and now paints
 both activity and the authoritative agent count. `applyStateClasses` refreshes
 matching cards after projecting a row, including when the sidebar row is absent;
 `updateRunningIndicators` also calls it on every pass, outside the PTY-set gate.
+The member-to-card index selects only matching cards for an individual update.
+Card registration, re-key, removal and unwrapping maintain it; merged-row
+indexing and sidebar rebuilds refresh membership. The periodic indicator refresh
+visits each card once, with one session-map lookup per unmerged card.
 Head selection uses the sidebar row or indexed merged row with the union of
 rendered, indexed, mapped and opened conversation members. Written output
 colours the card title blue under the same unseen/attention rule as the row;
 existing terminal visibility and watermark checks consume it.
 
 Footer liveness is separate: `Running` means a PTY here, `Running elsewhere`
-means a live process without that PTY, `Stopped` requires dead evidence, and
-`Liveness unknown` means there is no liveness evidence. Stop visibility and
-dispatch retain their existing PTY/live-row rule. Terminal exit information
-is unchanged. The grid performs no lifecycle ingestion or fallback expiration.
+means a live process without that PTY. Without a PTY or alive evidence,
+`lastSessionExit` supplies the recorded `processExitLabel`; otherwise dead
+evidence gives `Stopped` and absent evidence gives `Liveness unknown`.
+Stop visibility and dispatch retain their existing PTY/live-row rule.
+The snapshot also sets `has-busy-agents` on the card so the shared CSS rule
+tints a busy head violet while agents run. The grid performs no lifecycle
+ingestion or fallback expiration.
 Coverage: `test/dom-grid-shared-activity-629.test.js` loads shipped app and
 renderer functions for all four activity sources and their incremental updates.
 
