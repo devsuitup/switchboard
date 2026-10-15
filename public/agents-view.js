@@ -149,9 +149,11 @@ function groupAgentEntries(entries, mode, opts = {}) {
 }
 
 function agentRowIcon(entry) {
-  const live = agentIsLive(entry);
   const stored = typeof storedActivitySnapshot === 'function' ? storedActivitySnapshot(entry.sessionId) : {};
-  const ports = {
+  const foreground = entry.kind === 'background' && backgroundActivityIsForeground(entry.sessionId, entry);
+  const live = foreground ? stored.liveness === 'alive'
+    || typeof activePtyIds !== 'undefined' && activePtyIds.has(entry.sessionId) : agentIsLive(entry);
+  const ports = foreground ? stored : {
     ...stored,
     liveness: live ? 'alive' : 'dead',
     attention: entry.kind === 'interactive' ? live && entry.status === 'waiting' : stored.attention,
@@ -162,13 +164,18 @@ function agentRowIcon(entry) {
       ? Math.max(stored.idleHintAt ?? -Infinity, entry.statusUpdatedAt) : stored.idleHintAt,
   };
   let snapshot = typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, ports) : { ...ports, headTurn: 'unknown' };
-  if (entry.kind === 'background') snapshot = projectBackgroundActivity(entry, snapshot);
+  if (entry.kind === 'background' && !foreground) snapshot = projectBackgroundActivity(entry, snapshot);
   const icon = renderSessionIcon(snapshot);
   return { slotClass: icon.slotClasses[0], live, glyph: icon.glyph, title: icon.title };
 }
 
 function backgroundActivityEntry(sessionId) {
   return bgActivityEntries.get(String(sessionId).toLowerCase());
+}
+
+function backgroundActivityIsForeground(sessionId, entry = backgroundActivityEntry(sessionId)) {
+  return typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)
+    || entry?.conversationOwn && ['done', 'stopped', 'failed'].includes(entry.state);
 }
 
 function projectBackgroundActivity(entry, snapshot) {
@@ -186,17 +193,17 @@ function projectBackgroundActivity(entry, snapshot) {
 
 function backgroundActivitySnapshot(sessionId, snapshot) {
   const entry = backgroundActivityEntry(sessionId);
-  return entry ? projectBackgroundActivity(entry, snapshot) : snapshot;
+  return entry && !backgroundActivityIsForeground(sessionId) ? projectBackgroundActivity(entry, snapshot) : snapshot;
 }
 
 function backgroundActivityLabel(sessionId, snapshot) {
   const entry = backgroundActivityEntry(sessionId);
-  if (!entry) return null;
+  if (!entry || backgroundActivityIsForeground(sessionId)) return null;
   const valid = entry.taskEvidence?.valid === true;
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const label = terminal ? entry.state : !valid ? 'Activity unavailable' : renderSessionIcon(snapshot).title;
-  const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toISOString()} (job metadata)` : 'Job activity unavailable';
-  return { text: `${label} · job ${entry.state || 'unknown'}`, title: source };
+  const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toLocaleString()} (job metadata)` : 'Job activity unavailable';
+  return { text: terminal ? `Job ${label}` : `${label} · job ${entry.state || 'unknown'}`, title: source };
 }
 
 function agentVerbAvailability(entry, daemonReachable) {
@@ -236,7 +243,9 @@ function agentsSelectedEntry() {
 
 function applyAgentsSnapshot(snapshot) {
   agentsSnapshotRevision++;
-  const previous = JSON.stringify([...bgActivityEntries]);
+  const activityFields = entries => JSON.stringify([...entries].map(([id, entry]) =>
+    [id, entry.state, entry.taskEvidence, entry.conversationOwn]).sort(([a], [b]) => a.localeCompare(b)));
+  const previous = activityFields(bgActivityEntries);
   agentsRoster = Array.isArray(snapshot && snapshot.roster) ? snapshot.roster : [];
   agentsDaemonReachable = !snapshot || snapshot.daemonReachable !== false;
   bgActivityEntries.clear();
@@ -259,7 +268,7 @@ function applyAgentsSnapshot(snapshot) {
     bgAgentSessionIds.clear();
     for (const id of next) bgAgentSessionIds.add(id);
   }
-  if ((changed || previous !== JSON.stringify([...bgActivityEntries])) && typeof refreshSidebar === 'function') refreshSidebar();
+  if ((changed || previous !== activityFields(bgActivityEntries)) && typeof refreshSidebar === 'function') refreshSidebar();
   if (agentsViewActive) renderAgentsView();
 }
 

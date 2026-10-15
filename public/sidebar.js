@@ -1845,7 +1845,7 @@ function buildSessionItem(session) {
   if (bgActivity) {
     statusEl.textContent = bgActivity.text;
     statusEl.title = bgActivity.title;
-  } else if (session.bgJobId) {
+  } else if (session.bgJobId && !(typeof backgroundActivityIsForeground === 'function' && backgroundActivityIsForeground(rowHeadId(session)))) {
     statusEl.textContent = 'Activity unavailable';
     statusEl.title = 'Job activity unavailable';
   } else if (session.status) {

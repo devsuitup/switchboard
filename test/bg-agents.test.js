@@ -254,23 +254,41 @@ test('an empty state.json (mid-rewrite) keeps the previous value', async () => {
   } finally { rmTmp(dir); }
 });
 
-for (const failure of ['corrupt', 'missing']) {
-  test(`[628] ${failure} primary data degrades activity while retaining lifecycle guards`, async () => {
+for (const state of ['working', 'done']) for (const failure of ['corrupt', 'missing']) {
+  test(`[628] ${failure} ${state} primary data degrades activity while retaining lifecycle guards`, async () => {
     const dir = mkTmp();
     try {
-      writeJob(dir, 'aaaaaaaa', { state: 'working', updatedAt: new Date().toISOString(), fan: [], inFlight: { tasks: 0, kinds: [] } });
-      boot(dir, { cli: fakeCli({ fail: true }) });
-      bgAgents.onChange(() => {});
-      bgAgents.start();
-      await bgAgents.reconcile();
+      writeJob(dir, 'aaaaaaaa', { state, sessionId: '11111111-1111-4111-8111-111111111111',
+        updatedAt: new Date().toISOString(), fan: [], inFlight: { tasks: 0, kinds: [] } });
+      const { cli } = boot(dir, { cli: fakeCli({ list: [{ ...CLI_LIST[0], state }] }) });
+      const handlers = new Map();
+      const close = require('../bg-agents-ipc').init({
+        ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents,
+        getMainWindow: () => null, log: silentLog,
+      });
+      await handlers.get('get-bg-agents')({});
+      const { agentVerbAvailability } = require('../public/agents-view');
+      const before = agentVerbAvailability(bgAgents.getSnapshot().roster[0], true);
       assert.equal(bgAgents.getSnapshot().roster[0].taskEvidence.valid, true);
       const file = path.join(dir, 'aaaaaaaa', 'state.json');
       if (failure === 'corrupt') fs.writeFileSync(file, '{');
       else fs.unlinkSync(file);
       await waitFor(() => bgAgents.getSnapshot().roster[0]?.taskEvidence.valid === false);
-      assert.equal(bgAgents.getSnapshot().roster[0].state, 'working');
-      assert.equal(bgAgents.getSnapshot().daemonReachable, false);
-      for (const verb of ['stop', 'rm', 'respawn']) assert.equal((await bgAgents.runVerb(verb, 'aaaaaaaa')).ok, false);
+      const snapshot = bgAgents.getSnapshot();
+      assert.equal(snapshot.roster[0].state, state);
+      assert.equal(snapshot.daemonReachable, true);
+      assert.deepEqual(agentVerbAvailability(snapshot.roster[0], true), before);
+      assert.equal(before.stop, state === 'working');
+      assert.equal(agentVerbAvailability(snapshot.roster[0], false).stop, false);
+      assert.equal(agentVerbAvailability(snapshot.roster[0], false).rm, false);
+      assert.equal(agentVerbAvailability(snapshot.roster[0], false).respawn, false);
+      for (const verb of ['rm', 'respawn']) {
+        const result = await handlers.get('bg-agent-verb')({}, verb, 'aaaaaaaa');
+        assert.equal(result.ok, false);
+        assert.match(result.error, /cannot tell whether this conversation is running/);
+      }
+      assert.equal(cli.calls.filter(c => c.argv[0] !== 'agents').length, 0);
+      close();
     } finally { rmTmp(dir); }
   });
 }

@@ -18,11 +18,13 @@ restarts.
 
 ## The list
 
-One row per session: a state glyph (the same rungs as the sidebar: spinner
-while busy, an orange hollow ring while waiting, a green filled dot when idle,
-a dim grey dot when finished), its
-name, its `--agent`, its state emoji then `state · status` (see the table
-below), its directory, and its age. Working
+One row per session: an activity glyph shared with the sidebar — an animated
+spinner during a turn, a static spinner for background tasks at the prompt,
+an orange hollow ring while waiting, `!` for Needs your attention (including
+blocked jobs), a green filled dot for a response ready, or a dim grey dot when
+finished — its name, its `--agent`, its state emoji and job state (see the
+table below), its directory, and its age. Background rows omit `· busy` and
+`· idle`; external interactive rows also show their session status. Working
 and blocked sessions and external interactive sessions come first, newest
 first. **Finished** shows or hides `done`, `stopped` and `failed` sessions;
 the choice is remembered. The header counts `running` and `finished` background

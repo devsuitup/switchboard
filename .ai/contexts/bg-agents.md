@@ -108,7 +108,9 @@ status glyph policy from the indicators audit.
 `initAgentsView` installs the existing `bg-agents-changed` listener and fetches
 the roster at renderer bootstrap, even when Agents stays closed. This shares
 the jobs/descriptor service already used by #620; it adds no watcher or IPC
-channel. A newer push or request invalidates an older pending response.
+channel. Every window load runs `claude agents --json --all` once through
+`get-bg-agents` → `reconcile`, including when Agents stays closed. A newer
+push or request invalidates an older pending response.
 Membership still comes from #620's projects payload, with the roster set as
 fallback. Lifecycle/group/header predicates and all verb guards are unchanged.
 
@@ -121,12 +123,18 @@ share the static background glyph. Only agent tasks contribute to #627's count.
 A blocked job takes attention priority; done/stopped/failed suppress head busy,
 background work and response-ready, while retaining unseen written output.
 An attached terminal's explicit attention notification still takes priority.
+Sessions with a live PTY here, and finished entries with `conversationOwn`,
+keep the conversation's own activity and status instead of the job projection.
+Sidebar rebuilds compare session membership, state, normalized task evidence
+and conversation ownership; tokens, tempo, detail and display-only fan changes
+do not rebuild it.
 
 Both local adapters omit background descriptor status so even a newer frozen
 idle timestamp cannot close a validated head turn. The sidebar status line
-uses the shared activity label plus the separate job lifecycle label, and
+uses the shared activity label plus the separate job lifecycle label (just
+`Job done`, `Job stopped` or `Job failed` for finished jobs), and
 updates on head pushes as well as roster changes. Its tooltip identifies a
-valid `updatedAt` as **job metadata**, never last head output; the ordinary
+valid `updatedAt` in local time as **job metadata**, never last head output; the ordinary
 Agents age column still measures `startedAt`. No descriptor status age is
 shown for background activity.
 
@@ -248,7 +256,7 @@ is finished without a list to keep in sync.
 
 The UI disables the buttons (`agentVerbAvailability`); `runVerb` refuses
 `respawn`/`rm` on a live roster entry with the same rule, so a stale renderer
-cannot bypass it. A blocked row draws as waiting (orange), not as a spinner.
+cannot bypass it. A blocked row draws the attention `!` (Needs your attention).
 The shipped IPC adds invariant 10's fresh conversation check; the roster
 state alone cannot authorize a destructive verb. A finished job that matches
 a live interactive descriptor by case-insensitive `sessionId` or by the same

@@ -237,6 +237,13 @@ function applyStateClasses(sessionId, snapshot) {
   if (label && status) {
     status.textContent = label.text;
     status.title = label.title;
+  } else if (status && typeof backgroundActivityIsForeground === 'function'
+    && backgroundActivityIsForeground(item.dataset.headSessionId || item.dataset.sessionId)) {
+    const session = localSessionForStatus(item.dataset.headSessionId || item.dataset.sessionId);
+    const age = formatStatusAge(session?.statusUpdatedAt);
+    const why = session?.status === 'waiting' && session.waitingFor ? ' · ' + session.waitingFor : '';
+    status.textContent = session?.status ? session.status + why + (age ? ' · ' + age : '') : '';
+    status.title = '';
   }
   if (typeof updateGridSubagentPills === 'function') updateGridSubagentPills(sessionId);
   if (window.ATRACE) window.atrace('class.apply', sessionId, { el: item.id || null, 'needs-attention': attention, 'response-ready': ready, 'cli-busy': busy, 'has-busy-agents': agentsBusy, 'is-alive': alive, fn: 'applyStateClasses', kind: snapshot && snapshot.kind });

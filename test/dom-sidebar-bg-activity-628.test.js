@@ -16,7 +16,7 @@ function roster(state = 'working', kind = 'agent', extra = {}) {
       status: 'busy', statusUpdatedAt: 1, cwd: '/repo', pid: 10 }] });
 }
 
-async function setup(t, entries = roster()) {
+async function setup(t, entries = roster(), active = false) {
   const h = setupSidebarDom();
   t.after(() => h.destroy());
   let push;
@@ -27,14 +27,88 @@ async function setup(t, entries = roster()) {
   const session = { sessionId: SID, bgJobId: 'aaaaaaaa', status: 'busy', statusUpdatedAt: 1,
     modified: new Date().toISOString(), summary: 'Background conversation' };
   h.window.sessionMap.set(SID, session);
+  if (active) h.window.activePtyIds.add(SID);
+  let sidebarRenders = 0;
   h.window.refreshSidebar = () => {
+    sidebarRenders++;
     h.document.getElementById('sidebar-content').replaceChildren(h.sidebar.buildSessionItem(session));
   };
   h.window.initAgentsView();
   await Promise.resolve();
   await Promise.resolve();
   h.window.refreshSidebar();
-  return { ...h, push: s => push(s), subscriptions: () => subscriptions };
+  return { ...h, push: s => push(s), subscriptions: () => subscriptions, sidebarRenders: () => sidebarRenders };
+}
+
+for (const own of [false, true]) {
+  test(`[628b] a finished job cannot override a resumed local PTY (own descriptor: ${own})`, async t => {
+    const entries = mergeRoster({ cli: null, jobs: new Map([['aaaaaaaa', parseJobState(JSON.stringify({
+      state: 'done', sessionId: SID, updatedAt: new Date(AT).toISOString(), fan: [],
+      inFlight: { tasks: 0, kinds: [] },
+    }))]]), descriptors: own ? [{ kind: 'interactive', sessionId: SID, pid: 42, status: 'busy' }] : [],
+    isOwnPid: pid => pid === 42 });
+    if (own) assert.equal(entries[0].conversationOwn, true);
+    const h = await setup(t, entries, true);
+    h.emitHeadTurn(SID, 'open');
+    h.window.refreshSidebar();
+    const row = h.document.querySelector('.session-item');
+    assert.ok(row.querySelector('.session-icon--busy'), row.innerHTML);
+    assert.ok(row.classList.contains('is-alive'));
+    assert.match(row.querySelector('.session-status').textContent, /^busy/);
+    assert.doesNotMatch(row.querySelector('.session-status').textContent, /job|unavailable/i);
+    const agentIcon = h.window.agentRowIcon(entries[0]);
+    assert.equal(agentIcon.slotClass, 'session-icon--busy');
+    assert.equal(agentIcon.live, true);
+  });
+}
+
+test('[628b] a finished job held by our process leaves the conversation projection unchanged without a PTY id', async t => {
+  const entries = roster('done');
+  entries[0].conversationOwn = true;
+  const h = await setup(t, entries);
+  h.emitHeadTurn(SID, 'open');
+  const snapshot = { headTurn: 'open', liveness: 'alive', busy: true };
+  assert.deepEqual(h.window.backgroundActivitySnapshot(SID, snapshot), snapshot);
+  assert.equal(h.window.backgroundActivityLabel(SID, snapshot), null);
+  assert.match(h.document.querySelector('.session-status').textContent, /^busy/);
+  const agentIcon = h.window.agentRowIcon(entries[0]);
+  assert.equal(agentIcon.slotClass, 'session-icon--busy');
+  assert.equal(agentIcon.live, true);
+});
+
+test('[628b] resuming a finished conversation restores its status on an incremental head update', async t => {
+  const h = await setup(t, roster('done'));
+  assert.equal(h.document.querySelector('.session-status').textContent, 'Job done');
+  h.window.activePtyIds.add(SID);
+  h.emitHeadTurn(SID, 'open');
+  const row = h.document.querySelector('.session-item');
+  assert.ok(row.querySelector('.session-icon--busy'));
+  assert.ok(row.classList.contains('is-alive'));
+  assert.match(row.querySelector('.session-status').textContent, /^busy/);
+  assert.equal(row.querySelector('.session-status').title, '');
+});
+
+test('[628b] metadata-only pushes avoid sidebar rebuilds while activity changes still repaint', async t => {
+  const h = await setup(t);
+  const before = h.sidebarRenders();
+  const entries = roster();
+  Object.assign(entries[0], { tokens: 500, tempo: 'fast', detail: 'updated', fan: [{ id: 'display-only' }] });
+  h.push({ roster: entries, daemonReachable: true });
+  assert.equal(h.sidebarRenders(), before);
+  h.push({ roster: roster('blocked'), daemonReachable: true });
+  assert.equal(h.sidebarRenders(), before + 1);
+  assert.ok(h.document.querySelector('.session-icon--attention'));
+  h.push({ roster: [], daemonReachable: true });
+  assert.equal(h.sidebarRenders(), before + 2);
+});
+
+for (const state of ['done', 'stopped', 'failed']) {
+  test(`[628b] ${state} labels name the lifecycle once and show local job time`, async t => {
+    const h = await setup(t, roster(state));
+    const secondary = h.document.querySelector('.session-status');
+    assert.equal(secondary.textContent, `Job ${state}`);
+    assert.equal(secondary.title, `Job updated ${new Date(AT).toLocaleString()} (job metadata)`);
+  });
 }
 
 for (const [state, kind, head, slot, count] of [
