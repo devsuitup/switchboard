@@ -55,7 +55,7 @@ function createLocalTranscriptTracker(opts = {}) {
     const previous = baselines.get(file);
     if (previous) {
       forgotten.delete(file);
-      forgotten.set(file, { mtimeMs: previous.mtimeMs, floor: now() - FIRST_WRITE_MTIME_ALLOWANCE_MS });
+      forgotten.set(file, { mtimeNs: previous.mtimeNs, floor: now() - FIRST_WRITE_MTIME_ALLOWANCE_MS });
       while (forgotten.size > maxFiles) forgotten.delete(forgotten.keys().next().value);
     }
     cancelPending(file);
@@ -112,7 +112,7 @@ function createLocalTranscriptTracker(opts = {}) {
   }
 
   function sameIdentity(a, b) {
-    return a.dev === b.dev && a.ino === b.ino && a.birthtimeMs === b.birthtimeMs;
+    return a.dev === b.dev && a.ino === b.ino && a.birthtimeNs === b.birthtimeNs;
   }
 
   async function verify(file, work) {
@@ -121,27 +121,28 @@ function createLocalTranscriptTracker(opts = {}) {
     let handle;
     try {
       handle = await files.open(file, 'r');
-      const stat = await handle.stat();
+      const stat = await handle.stat({ bigint: true });
       if (!stat.isFile()) throw new Error('not a transcript file');
-      const current = await files.stat(file);
-      if (!sameIdentity(stat, current) || current.size < stat.size || current.mtimeMs < stat.mtimeMs) {
+      const current = await files.stat(file, { bigint: true });
+      if (!sameIdentity(stat, current) || current.size < stat.size || current.mtimeNs < stat.mtimeNs) {
         throw new Error('transcript invalidated during verification');
       }
       if (disposed) return false;
-      if (current.size > stat.size || current.mtimeMs > stat.mtimeMs) {
+      if (current.size > stat.size || current.mtimeNs > stat.mtimeNs) {
         work.dirty = true;
         return false;
       }
       if (opts.onTranscript && work.sessionId) opts.onTranscript(file, work.sessionId, work.agentId);
-      saveBaseline(file, { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs,
-        size: stat.size, mtimeMs: stat.mtimeMs, key: work.key, seenAt: now() });
-      if (!previous) return stat.size > 0 && stat.mtimeMs >= firstWriteFloor &&
-        (!tombstone || (stat.mtimeMs > tombstone.mtimeMs && stat.mtimeMs >= tombstone.floor));
-      if (!sameIdentity(previous, stat) || stat.size < previous.size || stat.mtimeMs < previous.mtimeMs) {
+      saveBaseline(file, { dev: stat.dev, ino: stat.ino, birthtimeNs: stat.birthtimeNs,
+        size: stat.size, mtimeNs: stat.mtimeNs, key: work.key, seenAt: now() });
+      const mtimeMs = Number(stat.mtimeNs / 1_000_000n) + Number(stat.mtimeNs % 1_000_000n) / 1e6;
+      if (!previous) return stat.size > 0n && mtimeMs >= firstWriteFloor &&
+        (!tombstone || (stat.mtimeNs > tombstone.mtimeNs && mtimeMs >= tombstone.floor));
+      if (!sameIdentity(previous, stat) || stat.size < previous.size || stat.mtimeNs < previous.mtimeNs) {
         cancelPending(file);
         return false;
       }
-      return stat.size > 0 && (stat.size > previous.size || stat.mtimeMs > previous.mtimeMs);
+      return stat.size > 0n && (stat.size > previous.size || stat.mtimeNs > previous.mtimeNs);
     } catch {
       forgetFile(file);
       return false;
