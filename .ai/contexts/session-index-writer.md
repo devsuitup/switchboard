@@ -48,8 +48,11 @@ Per-unit savepoints defer a unit to the next transaction when adding it would cr
 the target; revision overhead is reserved. An indivisible oversized unit occupies
 its own transaction and is accepted. Targets never reject a command. The clock is
 injected in the store; the 10 ms target sums statement execution durations, excluding
-queue time, BEGIN lock acquisition, JS preparation and commit. Exceeding it only
-reduces the next chunk's unit count. Synchronous SQLite cannot be preempted.
+queue time, BEGIN lock acquisition, JS preparation and commit. Exceeding it
+reduces the next chunk's unit count. Transactions below 5 ms and within the row
+and byte targets grow it by one, up to 32 units. Synchronous SQLite cannot be
+preempted. A chunk buffers each consumed iterator unit so a BUSY rollback replays
+the same units, including any savepoint-deferred unit, before advancing further.
 
 Metrics retain the existing session_metrics table, its index and legacy SQL contract.
 A per-session replacement is one atomic delete/insert transaction. Such a publication
@@ -129,7 +132,11 @@ Update installation drains watcher/bounds/metadata/activity and the accepted wri
 commands without closing the database, stopping producers or killing PTYs. At the
 same 1.5-second deadline it calls quitAndInstall even if draining rejects or stalls.
 The install flag bypasses another before-quit hold and resets on thrown or emitted
-updater errors, leaving a failed install usable. OS forced exits and unresponsive
+updater errors, leaving a failed install usable. After invoking the installer,
+idempotent non-database cleanup stops schedulers, observers, MCP servers and SSH
+children and closes the trace. Each disposer has isolated error handling;
+asynchronous cleanup is not awaited and adds no second installation hold.
+OS forced exits and unresponsive
 renderer exit-flush bounds retain their existing limitations. Bootstrap failure
 logs and displays a native error before exiting; second-instance ignores a destroyed
 window.

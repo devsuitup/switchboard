@@ -63,6 +63,16 @@ main for explicit guarded panel reads/saves; neither list handler calls it.
 
 ## Invariants
 
+Cold population shares one in-flight promise through scan-worker termination.
+Folder read errors are reported individually and do not stop other folders.
+If scanning or writing a folder fails, the completeness marker stays unset and
+subsequent population requests retry only failed folders after 30 seconds,
+2 minutes and 10 minutes. Further requests do not retry until the next startup.
+An enumeration failure or worker crash with unknown remaining folders retries
+the previous scope under the same backoff. A successful subset retry marks the
+whole initial scan complete because earlier successful folders remain committed.
+The retry clock is injectable through `init({now})`; retry state resets at startup.
+
 - **`modified` is always ISO8601 string** (`2026-05-22T20:59:33.000Z`). `substr(modified, 1, 10)` is the canonical "day" derivation. Don't switch to epoch ms without migrating.
 - **`session_cache.folder` is the encoded form** (`-home-jean-baptiste-workspace`). Use `encodeProjectPath()` to derive it from an absolute path.
 - **WAL mode is enabled on SQLite open** — multiple readers OK; serialise writes. Concurrent writers will fail with `SQLITE_BUSY`.

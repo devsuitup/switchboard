@@ -109,6 +109,31 @@ databaseScenario('the injected execution clock adapts without rejecting a commit
   } finally { store.closeDb(); }
 `);
 
+databaseScenario('fast transactions restore chunk capacity after a slow transaction', `
+  const { openSessionIndexStore } = require('./session-index-store');
+  let time = 0, step = 20;
+  const store = openSessionIndexStore({ readonly: false, clock: () => { time += step; return time; } });
+  try {
+    store.transact(() => store.setSetting('slow', true));
+    const reduced = store.nextChunkSize();
+    step = 0.1;
+    for (let i = 0; i < 64; i++) store.transact(() => store.setSetting('fast', i));
+    assert.ok(store.nextChunkSize() > reduced, 'fast work restores capacity');
+    assert.ok(store.nextChunkSize() <= 32, 'unit target stays bounded');
+  } finally { store.closeDb(); }
+`);
+
+databaseScenario('BUSY after three chunk units rolls back and commits every unit exactly once', `
+  const { createWriterWorkerClient } = require('./session-index-writer-client');
+  const client = createWriterWorkerClient({ workerFactory: () => new (require('node:worker_threads').Worker)(path.resolve('test/fixtures/writer-busy-mid-chunk.cjs')) });
+  try {
+    await client.ready;
+    const effects = Array.from({ length: 12 }, (_, i) => ({ name: 'toggleStar', args: ['busy-' + i] }));
+    await client.request('effects', effects, db.getSetting('_writer_revision') || 0);
+    assert.deepEqual(effects.map((_, i) => db.getMeta('busy-' + i)?.starred), Array(12).fill(1));
+  } finally { await client.close(); }
+`);
+
 test('20k-row fixture reads only the affected folder and session while computing effects', () => {
   const fixture = Array.from({ length: 20000 }, (_, i) => ({ sessionId: String(i), folder: i === 0 ? 'touched' : 'other' }));
   let readRows = 0;
@@ -292,6 +317,31 @@ test('a throwing update installer preserves database and PTYs and a later quit s
   f.context.quit({ preventDefault() {} });
   await turn();
   assert.ok(f.calls.includes('exit'));
+});
+
+test('update before-quit tears down non-database resources once without holding installation', async () => {
+  const calls = [];
+  const f = lifecycleFixture({
+    shutdownAllMcp: () => { calls.push('mcp'); throw new Error('cleanup failed'); },
+    remoteIndexer: { dispose: () => calls.push('remote') },
+    activityTrace: { close: () => calls.push('trace') },
+    autoUpdater: { quitAndInstall() {
+      calls.push('install');
+      f.context.quit({ preventDefault() { assert.fail('install must not be held again'); } });
+    } },
+  });
+  await f.context.install();
+  assert.deepEqual(calls, ['install', 'mcp', 'remote', 'trace']);
+  f.context.quit({ preventDefault() { assert.fail('install must not be held again'); } });
+  assert.deepEqual(calls, ['install', 'mcp', 'remote', 'trace']);
+  assert.equal(f.calls.includes('kill'), false);
+});
+
+test('an unresolved asynchronous cleanup adds no installation hold', async () => {
+  const f = lifecycleFixture({ remoteIndexer: { dispose: () => new Promise(() => {}) } });
+  await f.context.install();
+  assert.ok(f.calls.includes('install'));
+  assert.deepEqual(f.clock.delays(), []);
 });
 
 test('quit has one 1500 ms deadline across a stalled producer and writer', async () => {

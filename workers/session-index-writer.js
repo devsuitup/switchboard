@@ -118,18 +118,22 @@ async function drain() {
           message.result = unit.value();
         } else {
           const before = db.getSetting('_writer_revision') || 0;
+          const buffered = [unit];
+          let deferred;
           message.result = await transaction(() => {
+            deferred = null;
             let next = unit, result, count = 0;
             while (!next.done) {
               const applied = db.chunkUnit(next.value, count);
-              if (applied.deferred) { message.deferred = next; break; }
+              if (applied.deferred) { deferred = next; break; }
               result = applied.result;
               count++;
               if (count >= db.nextChunkSize()) break;
-              next = message.iterator.next();
+              next = buffered[count] ||= message.iterator.next();
             }
             return result;
           });
+          message.deferred = deferred;
           message.mutated ||= (db.getSetting('_writer_revision') || 0) !== before;
         }
         if (backgroundCommands.has(message.command)) queue.unshift(message);

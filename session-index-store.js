@@ -75,6 +75,7 @@ function transact(command) {
   measured.push(sample);
   if (measured.length > 256) measured.shift();
   if (sample.ms > 10) chunkSize = Math.max(1, Math.floor(chunkSize / Math.max(2, Math.ceil(sample.ms / 10))));
+  else if (sample.ms < 5 && sample.rows <= 32 && sample.bytes <= 65536) chunkSize = Math.min(32, chunkSize + 1);
   return result;
 }
 function chunkUnit(fn, count) {

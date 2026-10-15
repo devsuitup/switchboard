@@ -214,13 +214,17 @@ work: a span still open, or a running event written and not yet acknowledged.
 With reporting off, or nothing pending, the quit is not delayed at all. An app
 that is killed rather than quit writes nothing after its last checkpoint.
 
-**An update install is never held.** `updater-install` sets the flag the hold
-checks before calling `quitAndInstall`, and the updater's `error` handler clears
-it: an install that fails does not quit, and a flag left set would skip the
-flush on every later quit. On Linux, the AppImage updater starts
-the new binary before the old process quits; the new one loses the
-single-instance lock to the old and exits, so any extra time the old one spends
-quitting is time the user can be left with no app at all.
+**An update install drains for up to 1.5 s before `quitAndInstall`.** The
+shared deadline covers pending settings, index and activity writes. Rejection
+or timeout still proceeds with installation. Only then does `updater-install`
+set the flag that bypasses another `before-quit` hold. A thrown install error
+or the updater's `error` event clears the flag so a later ordinary quit can flush.
+On Linux, the AppImage updater starts the new binary before the old process
+quits. Draining before invoking it is safe because the new process has not
+started yet; once it starts, no further quit hold prolongs the old process's
+single-instance lock. Non-database cleanup, including MCP locks, SSH children
+and trace closure, runs without awaiting asynchronous disposers after the
+installer is invoked.
 
 The flush starts the attention beat and every span write together rather than
 in turn: awaiting the beat first left the spans unstarted when the 1.5 s bound

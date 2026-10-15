@@ -184,13 +184,14 @@ test('update install waits for the reversible drain before invoking the updater'
     mainWindow: null, unsavedGuard: {}, activityFlushedForQuit: false, updateInstalling: false,
     drainForUpdate: async () => { calls.push('drain'); await drained; calls.push('drained'); },
     autoUpdater: { quitAndInstall: () => calls.push('install') },
+    stopNonDatabaseResources: () => calls.push('cleanup'),
   });
   const installing = invoke();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(calls, ['drain']);
   release();
   await installing;
-  assert.deepEqual(calls, ['drain', 'drained', 'install']);
+  assert.deepEqual(calls, ['drain', 'drained', 'install', 'cleanup']);
 });
 
 test('exhausting the restart circuit also fails close explicitly', async () => {

@@ -3422,7 +3422,7 @@ ipcMain.handle('updater-install', async () => {
   if (mainWindow && !await unsavedGuard.confirmQuit(mainWindow)) return;
   await drainForUpdate();
   updateInstalling = true;
-  try { autoUpdater.quitAndInstall(); }
+  try { autoUpdater.quitAndInstall(); stopNonDatabaseResources(true); }
   catch (error) {
     updateInstalling = false;
     activityFlushedForQuit = false;
@@ -3647,6 +3647,23 @@ let appQuitting = false;
 // see .ai/contexts/session-index-writer.md
 let shutdownPromise;
 let shutdownComplete = false;
+let nonDatabaseResourcesStopped = false;
+function stopNonDatabaseResources(closeTrace = false) {
+  if (nonDatabaseResourcesStopped) return;
+  nonDatabaseResourcesStopped = true;
+  const cleanup = [
+    () => stopScheduler?.(), () => mainLoopMonitor.stop(), () => shutdownAllMcp(),
+    () => localTranscriptTracker.dispose(), () => unsubscribeTaskJobs(), () => taskRecords.dispose(),
+    () => { if (projectsWatcher) { projectsWatcher.close(); projectsWatcher = null; } },
+    () => cliSessionState.stop(), () => bgAgents.stop(), () => remoteIndexer.dispose(),
+    () => remoteWatcher.stopAll(), () => remoteActivityTracker.dispose(),
+    ...(closeTrace ? [() => activityTrace.close()] : []),
+  ];
+  for (const dispose of cleanup) {
+    try { Promise.resolve(dispose()).catch(error => log.error('[shutdown] cleanup failed:', error)); }
+    catch (error) { log.error('[shutdown] cleanup failed:', error); }
+  }
+}
 async function boundedShutdown(drain) {
   let timer;
   try {
@@ -3666,24 +3683,8 @@ function shutdownForExit() {
   if (shutdownPromise) return shutdownPromise;
   shutdownPromise = boundedShutdown(async () => {
     appQuitting = true;
-    stopScheduler?.();
-    mainLoopMonitor.stop();
     if (TRACE.on) trace('app.quit', null, {});
-
-    shutdownAllMcp();
-
-    localTranscriptTracker.dispose();
-    unsubscribeTaskJobs();
-    taskRecords.dispose();
-    if (projectsWatcher) {
-      projectsWatcher.close();
-      projectsWatcher = null;
-    }
-    cliSessionState.stop();
-    bgAgents.stop();
-    remoteIndexer.dispose();
-    remoteWatcher.stopAll();
-    remoteActivityTracker.dispose();
+    stopNonDatabaseResources();
 
     const sessions = new Map([...closedSessions, ...activeSessions]);
     const exitDrains = [...sessions.values()].map(session => session.exitDrain).filter(Boolean);
@@ -3709,7 +3710,8 @@ function shutdownForExit() {
 
 app.removeListener('before-quit', holdBootstrapQuit);
 app.on('before-quit', event => {
-  if (shutdownComplete || updateInstalling) return;
+  if (updateInstalling) { stopNonDatabaseResources(true); return; }
+  if (shutdownComplete) return;
   if (unsavedGuard.beforeQuit(event, mainWindow)) return;
   event.preventDefault();
   shutdownForExit().finally(() => app.exit());

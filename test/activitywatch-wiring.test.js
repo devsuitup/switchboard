@@ -57,7 +57,8 @@ test('focus from the renderer is bounded before it is forwarded', () => {
 // and quit again, forever.
 test('quit waits for the shared shutdown and exits immediately only after completion', () => {
   const quit = block(MAIN, "app.on('before-quit', event =>");
-  assert.ok(quit.includes('if (shutdownComplete || updateInstalling) return;'));
+  assert.ok(quit.includes('if (shutdownComplete) return;'));
+  assert.ok(quit.includes('if (updateInstalling) { stopNonDatabaseResources(true); return; }'));
   assert.ok(quit.includes('event.preventDefault();'));
   assert.ok(quit.includes('shutdownForExit().finally(() => app.exit())'));
 });
