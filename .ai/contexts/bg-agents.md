@@ -123,11 +123,22 @@ share the static background glyph. Only agent tasks contribute to #627's count.
 A blocked job takes attention priority; done/stopped/failed suppress head busy,
 background work and response-ready, while retaining unseen written output.
 An attached terminal's explicit attention notification still takes priority.
-Sessions with a live PTY here keep the conversation's own activity and status
+Sessions with a live PTY here keep the conversation's own activity
 only when their matching entry is not a live job. Attaching to a working or
 blocked job keeps the job projection, including blocked attention and labels
 without descriptor status or age. Finished entries with `conversationOwn`
-also keep the conversation's own activity and status.
+also keep the conversation's own activity. When that foreground projection is
+used, the sidebar status line takes its text from the current activity icon
+(for example, `Working`), without descriptor status or age (#654). A row with
+`bgJobId` but no matching roster entry says `Activity unavailable`, including
+when its PTY is still open. This applies to initial rendering, incremental head
+updates and sidebar rebuilds. Both sidebar paths pass the representative row
+to the label function so a merged member cannot lose its row's `bgJobId` when
+the roster is absent. A retained attach tab cannot restore frozen descriptor
+text after a job finishes. The foreground predicate and activity
+icons are unchanged. Whether the real CLI retains that tab and descriptor
+after job completion has not been verified; #654 implements the maintainer's
+display rule without requiring that observation.
 Sidebar rebuilds compare session membership, state, normalized task evidence
 and conversation ownership; tokens, tempo, detail and display-only fan changes
 do not rebuild it.

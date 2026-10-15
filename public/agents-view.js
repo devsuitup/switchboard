@@ -196,9 +196,13 @@ function backgroundActivitySnapshot(sessionId, snapshot) {
   return entry && !backgroundActivityIsForeground(sessionId) ? projectBackgroundActivity(entry, snapshot) : snapshot;
 }
 
-function backgroundActivityLabel(sessionId, snapshot) {
+function backgroundActivityLabel(sessionId, snapshot, row) {
   const entry = backgroundActivityEntry(sessionId);
-  if (!entry || backgroundActivityIsForeground(sessionId)) return null;
+  if (!entry) {
+    const background = row?.bgJobId || typeof localSessionForStatus === 'function' && localSessionForStatus(sessionId)?.bgJobId;
+    return background ? { text: 'Activity unavailable', title: 'Job activity unavailable' } : null;
+  }
+  if (backgroundActivityIsForeground(sessionId)) return { text: renderSessionIcon(snapshot).title, title: '' };
   const valid = entry.taskEvidence?.valid === true;
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const label = terminal ? entry.state : !valid ? 'Activity unavailable' : renderSessionIcon(snapshot).title;

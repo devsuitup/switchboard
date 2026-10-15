@@ -232,7 +232,9 @@ function applyStateClasses(sessionId, snapshot) {
   setIsAlive(item, alive);
   setUnseenWrittenActivity(item, snapshot?.unseenWrittenActivity);
   writeIconSlot(item.querySelector('.session-icon'), icon);
-  const label = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(item.dataset.headSessionId || item.dataset.sessionId, snapshot);
+  const label = typeof backgroundActivityLabel === 'function'
+    && backgroundActivityLabel(item.dataset.headSessionId || item.dataset.sessionId, snapshot,
+      typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId));
   const status = item.querySelector('.session-status');
   if (label && status) {
     status.textContent = label.text;
