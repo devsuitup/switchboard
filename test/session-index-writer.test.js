@@ -6,37 +6,6 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { createSessionIndexWriter } = require('../session-index-writer');
-
-test('cache initialization exposes only its explicit backend dependencies', () => {
-  let injected;
-  const read = () => 'read';
-  const write = () => 'write';
-  const backend = { getSetting: read, setSetting: write, newWriter() {}, prepare() {}, toggleStar() {} };
-  const writer = createSessionIndexWriter(backend, { init: ctx => { injected = ctx; } });
-  writer.initializeCache({ PROJECTS_DIR: 'fixture' });
-  assert.notEqual(injected.db, backend);
-  assert.equal(injected.db.getSetting, read);
-  assert.equal(injected.db.setSetting, write);
-  assert.equal(injected.db.newWriter, undefined);
-  assert.equal(injected.db.prepare, undefined);
-  assert.equal(injected.db.toggleStar, undefined);
-  assert.equal(injected.writer, writer);
-});
-
-test('compound commands finish their reads and writes before yielding, and failures reject', async () => {
-  const values = { global: { openWorkingSet: ['kept'] } };
-  const writer = createSessionIndexWriter({
-    getSetting: key => structuredClone(values[key]),
-    setSetting: (key, value) => { values[key] = value; },
-    toggleStar: () => { throw new Error('sqlite failure'); },
-  });
-  const first = writer.patchGlobal({ windowBounds: { x: 1 } });
-  const second = writer.patchGlobal({ activityTrace: true });
-  assert.deepEqual(values.global, { openWorkingSet: ['kept'], windowBounds: { x: 1 }, activityTrace: true });
-  await Promise.all([first, second]);
-  await assert.rejects(writer.toggleStar('id'), /sqlite failure/);
-});
 
 test('facade preserves real SQLite scan, title/body, metrics, file FTS and cleanup results', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-index-writer-6165-'));
@@ -45,12 +14,13 @@ test('facade preserves real SQLite scan, title/body, metrics, file FTS and clean
       const assert = require('node:assert/strict');
       const fs = require('node:fs');
       const path = require('node:path');
-      const db = require('./db');
       const cache = require('./session-cache');
       const { createSessionIndexWriter } = require('./session-index-writer');
       const { encodeProjectPath } = require('./encode-project-path');
-      const writer = createSessionIndexWriter(db, cache);
+      const writer = createSessionIndexWriter({}, cache);
       (async () => {
+        await writer.ready;
+        const db = require('./db');
         const root = process.env.SWITCHBOARD_DATA_DIR;
         const projects = path.join(root, 'projects');
         const folder = encodeProjectPath(root);

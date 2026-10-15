@@ -269,7 +269,7 @@ test('pruning an undeclared host clears its pending repair through the main drop
   f.search.set('remote', { id: 'remote', folder: key });
   f.meta.set(key, {});
   f.settings.set('bridge_uuid_reindex_folders', [key, f.folder, 'vps::-srv-demo']);
-  const writer = require('../session-index-writer').createSessionIndexWriter(f.db);
+  const writer = require('./fixtures/writer-memory.cjs').memoryWriter(f.db);
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   assert.match(source, /dropFolder: async folderKey => await writer\.dropRemoteFolder\(folderKey\)/);
   const indexer = createRemoteIndexer({

@@ -55,18 +55,17 @@ test('focus from the renderer is bounded before it is forwarded', () => {
 
 // Without the flag the second app.quit() would be held again, flushed again,
 // and quit again, forever.
-test('the quit is held at most once', () => {
-  const quit = block(MAIN, "app.on('before-quit'");
-  assert.match(quit, /if \(!activityFlushedForQuit && activityReporter\.hasPendingWork\) \{/);
-  assert.ok(quit.indexOf('activityFlushedForQuit = true') < quit.indexOf('app.quit()'),
-    'the flag is set before the quit is re-issued');
-  assert.match(quit, /setTimeout\(resolve, 1500\)/, 'and the hold is bounded');
+test('quit waits for the shared shutdown and exits immediately only after completion', () => {
+  const quit = block(MAIN, "app.on('before-quit', event =>");
+  assert.ok(quit.includes('if (shutdownComplete) return;'));
+  assert.ok(quit.includes('event.preventDefault();'));
+  assert.ok(quit.includes('shutdownForExit().then(() => app.quit())'));
 });
 
-test('an update install is never held', () => {
+test('update install awaits the same drain as normal quit', () => {
   const install = block(MAIN, "ipcMain.handle('updater-install'");
-  assert.ok(install.indexOf('activityFlushedForQuit = true') !== -1
-    && install.indexOf('activityFlushedForQuit = true') < install.indexOf('quitAndInstall'));
+  assert.ok(install.indexOf('await shutdownForExit()') >= 0);
+  assert.ok(install.indexOf('await shutdownForExit()') < install.indexOf('quitAndInstall'));
 });
 
 test('idle time comes from the system, and cannot throw into the keepalive', () => {

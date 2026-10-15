@@ -45,9 +45,8 @@ test('remove-project: writes an alias-qualified hidden entry for a remote group'
   assert.match(body, /const hiddenEntry = alias === null \? projectPath : joinFolderKey\(alias, projectPath\);/,
     'a remote group must be hidden under its alias-qualified entry, a local one under the bare path');
   assert.match(body, /await writer\.hideProject\(hiddenEntry, 'delete'\)/);
-  const facade = fs.readFileSync(path.join(ROOT, 'session-index-writer.js'), 'utf8');
-  assert.match(facade, /hidden\.includes\(entry\)/);
-  assert.match(facade, /hidden\.push\(entry\)/);
+  const commands = fs.readFileSync(path.join(ROOT, 'session-index-commands.js'), 'utf8');
+  assert.ok(commands.includes('hiddenProjects: [...new Set([...(global.hiddenProjects || []), entry])]'));
 });
 
 test('preload: deleteProject forwards the folder key to the main process', () => {

@@ -10,7 +10,7 @@ const { encodeProjectPath } = require('../../encode-project-path');
 
 async function run() {
   assert.ok(process.env.SWITCHBOARD_DATA_DIR);
-  const db = require('../../db');
+  const db = require('./writer-store.cjs');
   const inspect = new Database(db.DB_PATH, { fileMustExist: true });
   const project = path.join(process.env.SWITCHBOARD_DATA_DIR, 'repo');
   const claudeDir = path.join(process.env.SWITCHBOARD_DATA_DIR, 'claude');

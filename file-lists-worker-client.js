@@ -3,6 +3,7 @@
 // see .ai/contexts/viewer-panel.md (File list workers)
 function createFileListsWorkerClient({ workerFactory, snapshot, apply, onError = () => {}, getVersion = () => snapshot().version, timeoutMs = 30000, hardTimeoutMs = 5 * 60 * 1000, maxDiscards = 3 }) {
   let worker = null;
+  const terminations = new Set();
   let stopped = false;
   let active = null;
   let pending = null;
@@ -24,7 +25,11 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, onError =
     const old = worker;
     worker = null;
     active = null;
-    if (old) Promise.resolve(old.terminate()).catch(() => {});
+    if (old) {
+      const terminated = Promise.resolve(old.terminate()).catch(() => {});
+      terminations.add(terminated);
+      terminated.finally(() => terminations.delete(terminated));
+    }
   }
 
   function fail(error, report = true) {
@@ -149,9 +154,10 @@ function createFileListsWorkerClient({ workerFactory, snapshot, apply, onError =
     });
   }
 
-  function shutdown() {
+  async function shutdown() {
     stopped = true;
     fail(new Error('file list worker shut down'), false);
+    await Promise.all([...terminations]);
   }
 
   return { request, shutdown };

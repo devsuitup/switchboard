@@ -1,6 +1,22 @@
 const path = require('path');
 const fs = require('fs');
-const { Worker } = require('worker_threads');
+const { Worker: NativeWorker } = require('worker_threads');
+const scanWorkers = new Set();
+const subsetScans = new Set();
+let stopping = false;
+class Worker extends NativeWorker {
+  constructor(...args) {
+    super(...args);
+    scanWorkers.add(this);
+    this.once('exit', () => scanWorkers.delete(this));
+  }
+}
+async function shutdownProducers() {
+  stopping = true;
+  await Promise.all([...scanWorkers].map(worker => worker.terminate()));
+  await Promise.allSettled([...subsetScans, populatePromise, entrypointBackfill, customTitleBackfill, repairPromise].filter(Boolean));
+}
+
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { setRemappedProjectReader } = require('./encode-project-path');
 const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
@@ -67,6 +83,7 @@ function scanCachedContinuation(file, id, previous, maxBytes, stat = fs.statSync
 
 function init(ctx) {
   continuationFiles.clear();
+  stopping = false;
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   activeSessions = ctx.activeSessions;
   getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
@@ -576,6 +593,7 @@ const ENTRYPOINT_BACKFILL_BATCH = 200;
 
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
 function backfillEntrypoints() {
+  if (stopping) return Promise.resolve();
   if (entrypointBackfill) return entrypointBackfill;
   entrypointBackfill = new Promise((resolve, reject) => {
     const rows = getCachedMissingEntrypoint ? getCachedMissingEntrypoint() : [];
@@ -608,6 +626,7 @@ function backfillEntrypoints() {
 
 // see .ai/contexts/session-cache.md ("Local background sidebar rows")
 function backfillCustomTitles() {
+  if (stopping) return Promise.resolve();
   if (customTitleBackfill) return customTitleBackfill;
   if (!setCachedCustomTitles || !getCachedMissingCustomTitle) return (customTitleBackfill = Promise.resolve());
   const rows = getCachedMissingCustomTitle().filter(row => validId(row.sessionId) && parseFolderKey(row.folder).alias === null);
@@ -809,7 +828,7 @@ function buildProjectsFromCache(showArchived) {
         if (!projectPath) {
           if (scanComplete) {
             projectPath = deriveFolderProjectPath(path.join(dir, d.name), folderKey);
-            if (projectPath && alias === null) setFolderMeta(folderKey, projectPath, 0);
+            if (projectPath && alias === null && !writer.readonlyQueries) setFolderMeta(folderKey, projectPath, 0);
           } else {
             projectPath = decodeProjectFolderBestEffort(d.name);
             placeholder = true;
@@ -1058,7 +1077,8 @@ function reindexRepairedFolders() {
     log?.warn(`Bridge repair re-index failed: ${err.message}`);
     return { ok: false, error: err.message };
   }).finally(async () => {
-    await writer.setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => !folders.includes(key)));
+    if (writer.completeRepairFolders) await writer.completeRepairFolders(folders);
+    else await writer.setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => !folders.includes(key)));
     repairPromise = null;
   });
   return repairPromise;
@@ -1070,7 +1090,14 @@ function reindexRepairedFolders() {
  *  `fileSubsets` (optional Map<folder, Set<relPathWithinFolder>>) additively
  *  restricts named folders to just those files -- see
  *  .ai/contexts/session-cache.md ("Remote hosts file-level rescan"). */
-function scanFoldersViaWorker({ projectsDir, folderPrefix, folders, fileSubsets }) {
+function scanFoldersViaWorker(options) {
+  if (stopping) return Promise.resolve({ ok: false, error: 'indexer shutting down' });
+  const promise = scanFoldersViaWorkerInternal(options);
+  subsetScans.add(promise);
+  promise.finally(() => subsetScans.delete(promise)).catch(() => {});
+  return promise;
+}
+function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets }) {
   return new Promise((resolve) => {
     const hasFolders = Array.isArray(folders) && folders.length > 0;
     const subsets = fileSubsets instanceof Map ? fileSubsets : null;
@@ -1148,6 +1175,7 @@ function scanFoldersViaWorker({ projectsDir, folderPrefix, folders, fileSubsets 
 let populatePromise = null;
 
 function populateCacheViaWorker() {
+  if (stopping) return Promise.resolve();
   if (populatePromise) return populatePromise;
 
   // Captured once, up front. Keyed on the persistent completeness marker, not
@@ -1330,7 +1358,7 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
   });
 }
 
-module.exports = {
+module.exports = { shutdownProducers,
   writeScannedFolder, writeScannedFolderPartial,
   resolveSessionContinuations,
   applyProjectsWorkerEffects,

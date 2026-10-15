@@ -5,6 +5,7 @@ const RECONCILE_TIMEOUT_MS = 5 * 60 * 1000;
 
 function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3 }) {
   let worker = null;
+  const terminations = new Set();
   let stopped = false;
   let active = null;
   let pending = null;
@@ -25,7 +26,11 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
     const old = worker;
     worker = null;
     active = null;
-    if (old) Promise.resolve(old.terminate()).catch(() => {});
+    if (old) {
+      const terminated = Promise.resolve(old.terminate()).catch(() => {});
+      terminations.add(terminated);
+      terminated.finally(() => terminations.delete(terminated));
+    }
   }
 
   function fail(error) {
@@ -125,9 +130,10 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
     });
   }
 
-  function shutdown() {
+  async function shutdown() {
     stopped = true;
     fail(new Error('projects worker shut down'));
+    await Promise.all([...terminations, receiving?.catch(() => {})].filter(Boolean));
   }
 
   return { request, shutdown };

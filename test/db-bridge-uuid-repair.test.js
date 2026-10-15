@@ -19,7 +19,7 @@ test('UUID repair removes only bridged cache, metrics, FTS and affected folder g
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-bridge-repair-'));
   try {
     const seed = runInElectronNode(`
-      const api = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
+      const api = require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))});
       api.deleteSetting('bridge_uuid_index_version');
       api.setSetting('global', { test: 'kept' });
       api.upsertCachedSessions([
@@ -39,7 +39,7 @@ test('UUID repair removes only bridged cache, metrics, FTS and affected folder g
     assert.equal(seed.status, 0, seed.stderr);
     const inspect = () => {
       const r = runInElectronNode(`
-        const api = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
+        const api = require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))});
         const sql = new (require('better-sqlite3'))(api.DB_PATH);
         console.log(JSON.stringify({
           rows: api.getAllCached().map(r => r.sessionId).sort(),
@@ -69,7 +69,7 @@ test('UUID repair removes only bridged cache, metrics, FTS and affected folder g
     assert.equal(repaired.version, 1);
     assert.deepEqual(repaired.pending.sort(), ['local', 'vps::remote']);
     const restore = runInElectronNode(`
-      const api = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
+      const api = require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))});
       api.upsertCachedSessions([{ sessionId: 'bridge', folder: 'local', summary: 'reindexed', bridgeSessionId: 'cse_one' }]);
       api.setFolderMeta('local', '/fixture', 456); api.closeDb();
     `, dir);
@@ -85,7 +85,7 @@ test('UUID repair failure rolls back invalidation and retries on next database o
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-bridge-retry-'));
   try {
     const seed = runInElectronNode(`
-      const api = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
+      const api = require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))});
       api.deleteSetting('bridge_uuid_index_version');
       api.upsertCachedSessions([{ sessionId: 'failure', folder: 'failure-folder', bridgeSessionId: 'cse_fail', summary: 'synthetic' }]);
       api.setFolderMeta('failure-folder', '/fixture', 789);
@@ -95,7 +95,7 @@ test('UUID repair failure rolls back invalidation and retries on next database o
     `, dir);
     assert.equal(seed.status, 0, seed.stderr);
     const failed = runInElectronNode(`
-      const api = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
+      const api = require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))});
       console.log(JSON.stringify({ row: !!api.getCachedSession('failure'), folder: !!api.getFolderMeta('failure-folder'), version: api.getSetting('bridge_uuid_index_version') }));
       api.closeDb();
     `, dir);
@@ -108,7 +108,7 @@ test('UUID repair failure rolls back invalidation and retries on next database o
     `, dir);
     assert.equal(unblock.status, 0, unblock.stderr);
     const retried = runInElectronNode(`
-      const api = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
+      const api = require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))});
       console.log(JSON.stringify({ row: !!api.getCachedSession('failure'), version: api.getSetting('bridge_uuid_index_version') })); api.closeDb();
     `, dir);
     assert.equal(retried.status, 0, retried.stderr);

@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const dbSrc = fs.readFileSync(path.join(root, 'db.js'), 'utf8');
+const dbSrc = fs.readFileSync(path.join(root, 'session-index-store.js'), 'utf8');
 const workerSrc = fs.readFileSync(path.join(root, 'workers', 'search-query.js'), 'utf8');
 
 // The cap + MATCH construction live in fts-match.js, shared by both query

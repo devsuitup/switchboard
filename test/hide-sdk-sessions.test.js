@@ -340,7 +340,7 @@ test('adding the entrypoint column keeps the cached sessions', () => {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: dir },
     encoding: 'utf8',
   });
-  const loadDb = `require(${JSON.stringify(path.join(appDir, 'db.js'))})`;
+  const loadDb = `require(${JSON.stringify(path.join(appDir, 'test/fixtures/writer-store.cjs'))})`;
   try {
     assert.equal(run(loadDb).status, 0);
     const seed = run(`

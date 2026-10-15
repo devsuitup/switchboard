@@ -70,7 +70,10 @@ function makeHandler(mocks) {
     { request: options => {
       if (options.reconcile) mocks.reconcileCacheFromFilesystem();
       return Promise.resolve({ defaultProjects: mocks.buildProjectsFromCache(), allProjects: [], rows: 0 });
-    } }, { on: false }, 0, { applyAndPersistArchived }
+    } }, { on: false }, 0, { applyAndPersistArchived, completeRepairFolders: async folders => {
+      const current = mocks.getSetting('bridge_uuid_reindex_folders');
+      mocks.setSetting('bridge_uuid_reindex_folders', current.filter(key => !folders.includes(key)));
+    } }
   );
 }
 

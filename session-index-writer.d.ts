@@ -1,4 +1,4 @@
-type Backend = typeof import('./db');
+type Backend = ReturnType<typeof import('./session-index-store').openSessionIndexStore>;
 type Cache = typeof import('./session-cache');
 type EffectName = 'upsertCachedSessions' | 'deleteCachedSession' | 'deleteCachedFolder'
   | 'touchCachedModified' | 'setFolderMeta' | 'setName' | 'replaceSessionMetrics'
@@ -27,6 +27,11 @@ type Logger = { warn(...args: unknown[]): void };
 type OfferRuntime = { notify(): void };
 
 export interface SessionIndexWriter {
+  readonly ready: Promise<void>;
+  rekeySessionMeta(fromId: string, toId: string): Promise<void>;
+  completeRepairFolders(folders: string[]): Promise<void>;
+  withCache(cache: Cache): SessionIndexWriter;
+  measurements(): Promise<Array<{ rows: number; bytes: number; ms: number; statements: number[] }>>;
   initializeCache(ctx: Omit<Parameters<Cache['init']>[0], 'db' | 'writer'>): void;
   setSetting(key: string, value: unknown): Promise<void>;
   deleteSetting(key: string): Promise<void>;
@@ -71,4 +76,4 @@ export interface SessionIndexWriter {
   closeDb(): Promise<void>;
 }
 
-export function createSessionIndexWriter(backend?: Backend, cache?: Cache): SessionIndexWriter;
+export function createSessionIndexWriter(options?: { workerFactory?: () => import('node:worker_threads').Worker; client?: unknown; readonlyBackend?: Backend; clientOptions?: { timeoutMs?: number; maxRestarts?: number } }, cache?: Cache): SessionIndexWriter;

@@ -10,7 +10,7 @@ const reads = new Set(['getMeta', 'getAllMeta', 'isCachePopulated', 'getAllCache
   'getCachedByParent', 'getCachedFolder', 'getCachedSession', 'getCachedMissingEntrypoint', 'getCachedMissingCustomTitle',
   'getFolderMeta', 'getAllFolderMeta', 'getSearchFileIds', 'searchByType', 'isSearchIndexPopulated',
   'searchFtsRecreated', 'getSetting', 'listSettingKeys', 'isInitialScanComplete', 'getDailyActivity',
-  'getDailyMetrics', 'getDailyModelTokens', 'getModelUsage', 'getTotalCounts', 'DB_PATH', 'getProjectsRevision']);
+  'getDailyMetrics', 'getDailyModelTokens', 'getModelUsage', 'getTotalCounts', 'DB_PATH', 'getProjectsRevision', 'applySettingsAcknowledgment', 'closeDb']);
 
 const cacheWriters = new Set(['deleteCachedFolder', 'upsertCachedSessions', 'deleteCachedSession',
   'replaceSessionMetrics', 'touchCachedModified', 'deleteSearchFolder', 'deleteSearchSession',
@@ -52,6 +52,10 @@ function violations(source, file = '') {
       const property = node.callee.computed ? node.callee.property.value : node.callee.property.name;
       if (!property || cacheCommands.has(property)) found.push(`direct cache writer ${property || 'dynamic'}`);
     }
+    if (file === 'session-index-writer.js' && node.type === 'CallExpression' && node.callee.type === 'MemberExpression'
+      && node.callee.object.name === 'backend' && !reads.has(node.callee.property.name ?? node.callee.property.value)) {
+      found.push('write through main readonly backend');
+    }
     if (file === 'session-cache.js' && node.type === 'CallExpression'
       && node.callee.type === 'Identifier' && (cacheWriters.has(node.callee.name) || cacheCommands.has(node.callee.name))
       && !cacheWriteOwners.has(owner)) {
@@ -72,6 +76,19 @@ function violations(source, file = '') {
       && /(?:^|\/)db(?:\.js)?$/.test(node.callee.object.arguments[0]?.value || '')
       && !reads.has(node.callee.property.name ?? node.callee.property.value)) {
       found.push(`inline raw DB writer ${node.callee.property.name ?? node.callee.property.value}`);
+    }
+    if (node.type === 'NewExpression' && node.callee.name === 'Database'
+      && !node.arguments[1]?.properties?.some(p => p.key.name === 'readonly' && p.value.value === true)) found.push('writable SQLite connection outside writer');
+    if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression'
+      && node.callee.property.name === 'pragma' && !/^busy_timeout\s*=/i.test(node.arguments[0]?.value || '') && /(?:=|wal_checkpoint|vacuum)/i.test(node.arguments[0]?.value || '')) found.push('SQLite mutation pragma');
+    if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression'
+      && node.callee.property.name === 'openSessionIndexStore'
+      && !node.arguments[0]?.properties?.some(p => p.key.name === 'readonly' && p.value.value === true)) {
+      found.push('writable store outside writer worker');
+    }
+    if (node.type === 'CallExpression' && node.callee.name === 'require'
+      && /(?:^|\/)session-index-store(?:\.js)?$/.test(node.arguments[0]?.value || '') && file !== 'db.js') {
+      found.push('unrestricted store import');
     }
     if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression'
       && ['prepare', 'exec'].includes(node.callee.property.name ?? node.callee.property.value)
@@ -142,7 +159,7 @@ test('the guard rejects aliases of injected cache writers', () => {
   assert.ok(violations("function revealIfSdkSession(id) { const w = setSetting; w('probe', 1); }", 'session-cache.js').length);
 });
 
-test('production SQL and raw DB writers stay inside the backend and facade except the recorded continuation callback', () => {
+test('production mutations and writable store stay inside the writer worker boundary', () => {
   const root = path.join(__dirname, '..');
   const excluded = new Set(['node_modules', '.git', '.work-files', '.agents', '.codex', 'test', 'e2e', 'dist', 'build']);
   function sources(dir = '') {
@@ -154,7 +171,15 @@ test('production SQL and raw DB writers stay inside the backend and facade excep
     });
   }
   const files = sources();
-  const found = files.filter(file => !['db.js', 'session-index-writer.js'].includes(file))
+  const found = files.filter(file => !['session-index-store.js', 'workers/session-index-writer.js'].includes(file))
     .flatMap(file => violations(fs.readFileSync(path.join(root, file), 'utf8'), file).map(problem => `${file}: ${problem}`));
-  assert.deepEqual(found, ['main.js: inline raw DB writer rekeySessionMeta']);
+  assert.deepEqual(found, []);
+});
+
+test('guard rejects writable main connections and direct connection write access', () => {
+  assert.ok(violations("backend.setSetting('global', {});", 'session-index-writer.js').length);
+  assert.ok(violations("require('./session-index-store').openSessionIndexStore({ readonly: false });", 'main.js').length);
+  assert.ok(violations("new Database(path);", 'main.js').length);
+  assert.ok(violations("db.pragma('user_version = 1');", 'main.js').length);
+  assert.ok(violations("require('./db').connection.prepare('UPDATE settings SET value = 1').run();", 'main.js').length);
 });

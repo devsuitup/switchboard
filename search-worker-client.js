@@ -147,19 +147,21 @@ function createSearchWorkerClient(deps) {
    * Suppresses the restart logic so the exit handler does not try to respawn
    * after the DB connection has already been closed.
    */
-  function shutdown() {
+  async function shutdown() {
+    let terminating;
     shuttingDown = true;
     clearTimeout(restartTimer);
     restartTimer = null;
     if (worker) {
       worker.removeAllListeners('exit'); // suppress backoff / restart
-      worker.terminate();
+      terminating = worker.terminate();
       worker = null;
     }
     workerReady = false;
     // The suppressed exit handler would normally drain — do it here so an
     // in-flight search never leaves the renderer awaiting a dead promise.
     drainPending();
+    await terminating;
   }
 
   return { startWorker, searchViaWorker, drainPending, shutdown };

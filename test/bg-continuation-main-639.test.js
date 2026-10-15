@@ -44,7 +44,7 @@ for (const proof of ['descriptor', 'job']) {
       log: { info() {}, debug() {} }, rekeyMcpServer() {},
       activityReporter: { rekey() {} }, taskRecords: { rekey() {}, hasRecord: () => false },
       cliSessionState: cli, bgAgents: bg, getCachedSession: () => ({ customTitle: 'original title' }),
-      require: name => { assert.equal(name, './db'); return { rekeySessionMeta: (...args) => metadata.push(args) }; },
+      writer: { rekeySessionMeta: async (...args) => { metadata.push(args); } },
     });
     t.after(() => { transitions.init({ activeSessions: new Map() }); cli.stop(); bg.stop(); fs.rmSync(root, { recursive: true, force: true }); });
     transitions.detectSessionTransitions('project');
@@ -54,8 +54,9 @@ for (const proof of ['descriptor', 'job']) {
       assert.equal(metadata.length, 0);
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('Late background job was not re-keyed')), 5000);
-        const unsubscribe = bg.onJobsChanged(() => {
+        const unsubscribe = bg.onJobsChanged(async () => {
           transitions.detectPendingBackgroundContinuations();
+          await transitions.drainMetadataWrites();
           if (!activeSessions.has(HEAD)) return;
           clearTimeout(timer);
           resolve();
@@ -65,8 +66,9 @@ for (const proof of ['descriptor', 'job']) {
         fs.writeFileSync(path.join(jobs, '1234abcd', 'state.json'), JSON.stringify({ sessionId: HEAD, state: 'working' }));
       });
     }
+    await transitions.drainMetadataWrites();
     assert.equal(activeSessions.get(HEAD), entry);
-    assert.deepEqual(metadata, [[OLD, HEAD, 'original title']]);
+    assert.deepEqual(metadata, [[OLD, HEAD]]);
     assert.equal(events.length, 1);
     assert.deepEqual(events[0].slice(0, 4), ['session-forked', OLD, HEAD, 'background']);
     assert.equal(events[0][4].jobId, '1234abcd');

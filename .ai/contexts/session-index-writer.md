@@ -1,154 +1,133 @@
-# Session index write facade (ADR 0004, slice 1a)
+# Session index writer — ADR 0004 slice 1b, step 1
 
-Baseline: `5b1d638`, branch `refactor/616-write-facade`. The connection,
-bootstrap, SQL, main-side reads, whole-folder replacements and Projects reloads
-remain unchanged. `createSessionIndexWriter` owns the production backend
-injection. Main imports only read functions from `db.js`, with the explicitly
-deferred continuation-metadata exception below.
+Scope: one writable WAL connection in a Node worker; one main-side readonly
+connection remains for the existing synchronous reads. Independent read workers,
+removal of main's connection, durable receipts and outcome recovery belong to step 2.
 
-The API consists of named asynchronous commands with explicit arguments and
-Promise results, declared in `session-index-writer.d.ts`. Commands execute their synchronous backend before returning
-their Promise. There is no deferred command queue. A cache/archives command
-runs the existing synchronous algorithm with the synchronous backend; wrapping
-each individual injected SQL function in an async function would introduce
-suspensions inside algorithms that currently read their own writes.
+## Ownership and startup
 
-`initializeCache` configures the cache; it is not a mutation command. It alone
-injects an explicit list of the cache's synchronous backend dependencies,
-retaining the previous reads and writers without exposing additional DB exports.
-It also
-injects the facade for asynchronous producers. The Projects worker still uses
-an in-memory effect adapter and never opens a writable SQLite connection.
-Tests may initialize cache with an isolated stub/fixture backend directly.
+main.js acquires the single-instance lock before starting the writer. It awaits
+writer.ready before requiring db.js, initializing settings consumers or opening
+the window. An early quit is held until bootstrap completes. db.js opens
+openSessionIndexStore({readonly:true}); attempted mutations throw SQLITE_READONLY.
+The store prepares the same API for the two modes, but only the writer runs schema
+creation, legacy-file relocation, numbered migrations, schema reconciliation,
+bridge repair, maintenance and writable pragmas. Connection opening and busy_timeout
+both use 100 ms. The writer sets WAL and synchronous=NORMAL.
 
-## Writer -> command -> production callers
+session-index-writer.js owns the transport and main-side filesystem orchestration.
+session-index-writer-client.js follows the house Worker factory/event pattern.
+workers/session-index-writer.js opens the writable store inside its thread.
+The worker path uses path.join(__dirname,'workers',...). package.json already ships
+root *.js and workers/**/* and unpacks better-sqlite3 and node-pty through
+the normal dependency packaging. No native rebuild is introduced.
 
-| Backend writer / algorithm | Facade command | Caller / trigger |
-| --- | --- | --- |
-| `db.js` schema, numbered migrations, schema reconciliation, bridge UUID repair, migration VACUUM | Existing synchronous connection bootstrap, loaded first by the facade factory's default backend | Module startup; no async bootstrap/ownership cutover in 1a |
-| `deleteSearchType` | `deleteSearchType(type)` | Main's legacy `plan` cleanup; readiness awaited before creating the window |
-| `setSetting`, `deleteSetting` | `setSetting(key,value)`, `deleteSetting(key)` | General settings IPC, bridge-repair gates, diagnostics/reporting preferences |
-| `setSetting('global')` field merges | `patchGlobal(fields)` | Debounced and final window-bounds persistence; preserves working set and other keys |
-| `toggleStar`, `setArchived` | `toggleStar(id)`, `setArchived(id,value)` | Session action IPC; return values unchanged |
-| `setName`, cache-summary read, `updateSearchTitle` | `renameSession(id,name)` | Rename IPC; returns `{name}`; FTS body unchanged |
-| `deleteCachedSession` (including metrics), `deleteSearchSession` | Corresponding named commands | Explicit session deletion, including merged members; original separate error catches retained |
-| `deleteCachedFolder`, `deleteSearchFolder`, `deleteSetting` | Corresponding named commands | Explicit project removal; filesystem and schedule actions retain their order |
-| Folder cache/metrics/FTS deletion, bridge-repair setting patch | `dropRemoteFolder(folderKey)` | Remote host removal / vanished mirrored folders |
-| Cache, metrics, names, FTS, folder metadata, repair-gate writes in full scan | `writeScannedFolder(result,unverifiedLocalFolder)` | Startup/manual/subset/repair worker message producers |
-| Cache, metrics, names, FTS, folder metadata in partial scan | `writeScannedFolderPartial(result)` | Remote file-subset scans |
-| `upsertCachedSessions`, `touchCachedModified`, `replaceSessionMetrics`, `setName(...,'transcript')`, `deleteCachedSession`, FTS writers, `setFolderMeta` | `refreshFolder(folder,opts)` | Watcher, add/unarchive/remap; existing header-only/body/metrics rules retained |
-| Running-row retention and cache/metrics/optional FTS deletion | `dropFolderRows(folder,opts)`, `releaseLiveSession(id)` | Vanished folder and PTY exit; release refresh remains inside the command |
-| Injected `upsertCachedSessions`, `deleteCachedSession`, `deleteCachedFolder`, `touchCachedModified`, `setFolderMeta`, `setName`, `replaceSessionMetrics`, `deleteSearchFolder`, `deleteSearchSession`, `upsertSearchEntries` | `applyProjectsWorkerEffects(result)` | Projects relay; ordered effects and retained rows, awaited before publishing / updating version |
-| Folder metadata backfill while building empty projects | `buildProjectsFromCache(showArchived)`; archive command's synchronous backend build | Main archive planner/backend; readonly Projects worker records effects |
-| `setCachedEntrypoints(pairs)` | `setCachedEntrypoints(pairs)` | Entry-point backfill's 200-row ticks |
-| `setCachedCustomTitles(pairs)` with mtime guard | `setCachedCustomTitles(pairs)` | Title worker messages; completion waits for accepted batches |
-| `setCachedContinuationIndex(id,index)` | `setCachedContinuationIndex(id,index)` | On-demand continuation scanner |
-| `setInitialScanComplete` | `setInitialScanComplete()` | Successful population `done`, after folder commands finish |
-| `applySearchFileBatch(type,deletes,entries)` | `applySearchFileBatch(type,deletes,entries)` | Memory and Work Files; original 50-entry/128 KiB framing and yields retained |
-| Global hidden/archive-kind changes | `hideProject(entry,kind)`, `unhideProject(entry,alias,path)`, `revealAddedProject(path)` | Settings archive / remove / unarchive / add |
-| Worktree row selection, session/metrics/search deletion, hidden-kind cleanup, archive retirement, folder deletion | `cleanupWorktree(path,log)` | After successful git worktree removal; original best-effort catches and count retained |
-| Archive/offer/visibility reads and setting changes, cache refresh/build | `archiveProjectFolders(groups,opts,deps)` | Archive-project IPC; existing synchronous archive/schedule orchestration stays on main |
-| Global visibility read, archive reappearance and offer creation | `applyAndPersistArchived(projects,showArchived)` | Projects reply assembly, default view before archived view |
-| Archive retirement, offer merging | `clearArchivedEntry(alias,path)`; also internal to unhide/add/worktree commands | Add / unarchive / worktree cleanup |
-| Offer read, schedule reenable result, offer patch/delete | `reenableOfferedSchedules(path,folderKey,deps)`, `dismissReenableOffer(path,folderKey,deps)` | Schedule-offer IPC; existing notify and failure payloads retained |
-| `projectRemaps` read/merge/write followed by atomic JSONL replacements | `remapProjectTranscripts(args)` | Remap IPC; cache refresh follows acknowledgment |
-| Schedule registry bootstrap/normalization, add/remove read/modify/write | `scheduleRegistry(seed).list/add/remove` | Scheduler project supplier, launch registration, project add/remove/unarchive and archive planning |
-| `global.lastSeenVersion` read/modify/write | `createWhatsNew(options).startup/dismissed` | What's-new IPC; menu read remains synchronous |
-| WAL TRUNCATE checkpoint and connection close | `closeDb()` | `will-quit`; backend still closes synchronously before the returned Promise settles |
+## Wire contract and failure
 
-Scanned-folder arguments retain the existing `{folder,projectPath,sessions,
-indexMtimeMs}` payload, optional `partial`/`toDelete`, and unverified-folder
-handling. Search entries retain `{id,type,folder,title,body}`; effect commands
-retain `{effects:[{name,args}],keptLiveRows}`. No transport, receipt, schema or
-title-precedence protocol is introduced in this slice.
+Requests are {id,command,args}; replies are {id,result,settings} or
+{id,error:{message,code},settings}. Bootstrap sends {ready,settings,searchFtsRecreated}.
+An ACK follows the command's last transaction. The complete settings snapshot on
+every reply replaces main's initialized mirror, including deleted keys; mutations
+therefore never update the mirror before commit. _writer_revision is advanced in
+each ordinary transaction and is included in these snapshots.
 
-## Read-then-write boundaries
+Up to 32 commands are in flight on the client. The worker keeps one background
+command at the front and yields at each transaction boundary. Interactive commands
+can run between units, with at most four interactive service turns before serving
+pending background work. No filesystem I/O or await runs inside an ordinary
+transaction. Cache computations retain their synchronous algorithms against
+cache-effects.js: one short readonly snapshot, local read-your-writes overlay,
+then one acknowledged effects command. Worker admission checks its current revision
+against that snapshot. A rejected main-cache computation may recompute at most
+three times; stale Projects effects reject for the readonly relay to rebuild.
+Search publication reads the current name and cached summary on the writer.
 
-* Rename stores the name, reads the current cached summary and patches FTS
-  inside one synchronous command body. Clearing the name and missing rows keep
-  their existing semantics.
-* Worktree cleanup selects current rows and performs all best-effort stages in
-  one command after filesystem removal. It reads current `global`, changes only
-  the matching hidden entries/kinds, retires archive state into current offers,
-  then clears the encoded folder. Original errors remain swallowed/logged at
-  the same stages; successful session removals retain their original count.
-* Archive application, clear, offer dismissal and reenabling each run their
-  existing visibility/archive/offer reads and writes without an `await` inside
-  the command. Archive creation also retains the original before/after schedule
-  writes and failure results. Filesystem actions are synchronous as before.
-* Hide/unhide/add, schedule registry, remap, What's-new and window field patches
-  read current settings inside their command rather than accepting stale whole
-  settings snapshots across awaits.
+Each BEGIN IMMEDIATE transaction measures bound-input bytes, SQLite total_changes
+(including FTS shadow changes), statement duration and elapsed duration. A unit
+rolls back above 32 changes, 65536 bound-input bytes or 10 ms before commit.
+Commit duration is measured too: an over-budget commit is reported explicitly as
+WRITER_CAP_COMMITTED, with the mutation already committed; remaining units stop.
+Synchronous SQLite cannot be preempted. WRITER_CAP_EXCEEDED is an explicit stopped
+unit, not proof that an arbitrarily large individual setting/cache value can be
+written. Batch admission uses one cache row/title pair per unit, metrics rows
+individually and old-metric garbage collection in groups of 24. Oversized settings
+or a cache field that cannot fit one unit fail explicitly; no main fallback exists.
 
-Here atomic means the existing uninterrupted main-thread read/write sequence:
-there is no suspension between those operations. No new rollback transaction
-is added: doing so would change existing partial-error behavior, particularly
-worktree cleanup and archive schedule failures. In 1b the durable portions must
-become writer transactions, with filesystem/schedule effects outside them and
-explicit completion commands. The injected runtime dependencies of the archive
-commands are temporary main-backend configuration, not a worker wire format.
+Metrics use session_metrics_data generations and session_metrics_heads. A replacement
+stages rows then flips one head atomically; session_metrics remains a view with the
+previous read shape. Legacy rows migrate in a startup transaction; view triggers
+preserve the legacy insert/delete SQL contract. Old generations are collected in
+bounded units; abandoned data is collected at startup. FTS bodies stage in
+8192-character fragments, retaining the 32768-character body limit. A final
+transaction replaces map/content/FTS from staged content; rename uses SQL SELECT
+from stored content instead of binding the full body twice. Startup clears orphan
+FTS staging. Folder commands retain the existing per-row/per-table publication,
+not a new whole-folder snapshot protocol.
 
-## Writer deliberately left direct
+SQLITE_BUSY/extended BUSY retries use 20/50/100 ms asynchronous backoff, four attempts
+total; other errors propagate. The 100 ms lock wait is excluded from the 10 ms SQL
+execution ceiling. Bootstrap and command deadlines are 30 s. Crash/error/timeout
+reject every in-flight request with its id and outcome unknown. They are never
+replayed automatically. Only after awaited termination may a replacement writer
+open; at most three replacements are allowed before the circuit stays open.
+Unsent requests remain queued for the replacement. A lost ACK can mean committed
+work; the before/after-commit crash tests establish that distinction. Durable
+receipts and status/replay recovery are deliberately not added in step 1.
 
-`main.js`'s `rekeyMetadata` callback still calls `db.rekeySessionMeta` for a
-proven **background** continuation. `session-transitions.js` synchronously
-proves ownership, calls this callback, and rekeys the PTY/maps/MCP/activity before
-publishing. It is also entered by its own recheck timers, background roster
-callbacks and exit-hold path. Simply making the callback async either ignores
-its rejection or lets live rekey publication overtake persistence; awaiting it
-requires changing the synchronous proof/lifecycle protocol. The brief permits
-leaving a writer direct when routing requires a behavior change. This boundary
-is deferred explicitly, rather than adding an unawaited facade call. The guard
-allows exactly this one inline call and rejects additional raw imports/calls.
+## Read-then-write commands
 
-## Accepted deviations and failure boundaries
+| Command | Writer-owned current-state work |
+| --- | --- |
+| patchGlobal | Merge only supplied fields into current global |
+| toggleStar / setArchived / setName | Current metadata and per-field provenance in one transaction |
+| renameSession | Name, current cached summary and FTS title in one transaction |
+| rekeySessionMeta | Current predecessor/head values and per-field revision precedence |
+| hideProject | Current visibility/kinds, deduplicated entry |
+| unhideProject / revealAddedProject / clearArchivedEntry | Current visibility/archive state and offer retirement |
+| applyAndPersistArchived | Current hidden/archive/offer state and reappearance retirement; schedule names read outside SQL |
+| beginArchive / completeArchive | Current archive/offer merge, then guarded completion after schedule file effects; conflicts report partial effects |
+| beginOffer / completeOffer / dismissReenableOffer | Current offer selection; completion compares the selected offer before changing it and reports conflicts explicitly |
+| cleanupWorktree | Worker selects current matching rows, deletes in bounded units, then merges visibility/archive cleanup |
+| dropRemoteFolder / completeRepairFolders | Bounded folder/cache/metrics/FTS deletion and current repair-list subtraction |
+| scheduleRegistry(list/add/remove) | Bootstrap/normalization and current registry merge in one transaction |
+| recordRemap / completeRemap | Merge folder remap, external atomic JSONL rewrite, explicit completion ACK |
+| whatsNewStartup / patchGlobal(lastSeenVersion) | Current last-seen decision and field merge; changelog read outside SQL |
+| effects | Revision-checked computed cache effects; each mutation runs in the worker |
+| staged metrics / FTS publication | Current generation/head or name/summary resolved in the publication transaction |
 
-* The scheduler removes a failed launch from `runningTasks` so later checks can
-  retry it; the old launch-error path left that task registered as running.
-* Scheduler `check` failures are logged instead of escaping from the async
-  timer callback. Both scheduler error-path deviations are accepted for 1a.
-* Initial population keeps the baseline best-effort folder-write semantics
-  described below; this reverses the facade revision's worker termination on a
-  rejected folder command. Completeness still means that the worker finished
-  its scan, rather than that every folder write succeeded.
-* Bounds timers, window close and the projects-watch timer catch and log their
-  async failures through the main logger.
+Settings setSetting is an explicit replacement of the supplied key; patchGlobal is
+the field-merge API. Main's own bounds and diagnostics toggles use field patches.
+The repair completion command subtracts completed folders from current state.
+Readonly Projects may compute effects in its overlay; only named writer commands
+can persist them. Main reads remain readonly, including the existing search
+fallback. No readonly reader can open a writable store through the guarded paths.
 
-The guard rejects direct cache commands in main, raw cache writers outside the
-recorded synchronous write owners, dynamic DB imports and non-literal SQL
-passed to `prepare` or `exec`. Scope-resolved, unreassigned RegExp receivers
-are excluded from SQL checks. Direct calls to cache commands from non-command
-cache functions are rejected, as are simple aliases of `sessionCache` in main
-and injected raw writers in session-cache. Its only non-literal require
-exception is `path.join(..., 'node_modules',
-'electron')` for the existing isolated PR launcher; other dynamic paths are
-rejected conservatively. Fixture source strings exercise the reviewer
-bypasses without injecting probes into production files.
+## Continuations and shutdown
 
-`reconcileCacheFromFilesystem` is a synchronous algorithm used by the readonly
-Projects worker with its in-memory effect adapter; those effects reach SQLite
-through `applyProjectsWorkerEffects`. The guard records it as a write owner and
-rejects direct main calls just like the facade commands. Alias checks cover
-simple identifier declarations, not arbitrary assignment/destructuring/data flow.
+Background re-key awaits metadata persistence before publishing the PTY/map/MCP/
+activity identity. A pending command suppresses duplicate persistence. After ACK,
+main checks the old map entry, source identity, target liveness, stop request and
+background job proof again. Rejection or a changed proof keeps the old identity.
+Synchronous non-background detection retains its existing behavior.
 
-`start()` retains baseline alias pruning: zero hosts return before pruning,
-including at launch and after removing every host. Removing one of two hosts
-prunes its folders immediately, including during an in-flight refresh. Prune
-failures are logged.
+Both updater-install and before-quit call the same idempotent shutdownForExit.
+The unsaved guard completes the renderer's exit flush first. Shutdown stops
+scheduler/watchers, kills the app's PTYs, awaits their exit cleanup (20 s ceiling,
+explicit failure keeps the database open), serializes the final watcher flush,
+saves bounds, terminates/drains parser producers and pending metadata, flushes
+activity, awaits reader-worker termination, drains complete accepted facade
+workflows, closes main's reader, and awaits the writer's TRUNCATE checkpoint and
+close ACK. Electron quit is reissued only after completion; an async will-quit
+listener is no longer relied on. A close rejects new external admission while
+AsyncLocalStorage preserves accepted workflows through nested completion commands.
+Failure is logged and prevents normal quit/install completion. OS forced exits and
+unresponsive renderer exit-flush bounds retain their existing limitations.
 
-## Ordering and validation
+## Qualification
 
-Population/subset/title workers serialize message writes and drain them before
-resolving their completion. Initial population retains best-effort folder writes:
-a rejected folder command is logged through the main logger, later messages
-continue, and a successful worker `done` still records the completeness marker.
-A worker scan/error/abnormal-exit failure retains the existing failed-scan path.
-Remote subset scans retain their separate failed-write result contract. Projects effects are awaited and incoming replies
-are serialized while an apply is pending. File-list manifests advance after
-their FTS acknowledgment. Scheduler project suppliers and explicit schedule
-launch IPC accept the new Promise boundary. Full Projects reloads remain.
-
-Characterization evidence and the complete final per-file test census are in
-`.work-files/codex-report-6165.md`. This is an internal refactor: use the
-`no-changelog` PR label. No worker cutover, incremental indexing, display delta,
-renderer-store or typing-latency acceptance is claimed.
+Source tests and Electron-as-Node integration cover real SQLite readonly failure,
+crash before commit, lost ACK after commit, lock exhaustion/release, queued close,
+remap completion during close, metric generation visibility and FTS input bounds.
+Tests use temporary isolated data dirs. No live application process or packaged
+build is used by these tests. The report in .work-files/codex-report-6166b.md records
+the final executed file census, measured caps and packaged qualification checklist.

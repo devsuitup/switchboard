@@ -563,6 +563,7 @@ async function runExitHandler({ releaseLiveSession }) {
   const activeSessions = new Map([['real', session], ['orig', session]]);
   let handler = null;
   const ctx = vm.createContext({
+    resolveExitDrain: () => { calls.exitDrained = true; },
     ptyProcess: { onExit: (cb) => { handler = cb; } },
     session,
     holdBackgroundExit: require('../bg-handoff').holdBackgroundExit,
@@ -596,6 +597,7 @@ test('the PTY exit handler releases both ids after dropping the session, and ref
   assert.equal(calls.deletedBeforeRelease, true);
   assert.deepEqual(calls.released, ['real', 'orig']);
   assert.equal(calls.notified, 1);
+  assert.equal(calls.exitDrained, true);
 });
 
 test('the PTY exit handler survives a release that throws on a closed database', async () => {
@@ -603,4 +605,5 @@ test('the PTY exit handler survives a release that throws on a closed database',
   assert.equal(calls.notified, 0);
   assert.equal(calls.warned.length, 1);
   assert.match(calls.warned[0], /database connection is not open/);
+  assert.equal(calls.exitDrained, true);
 });

@@ -13,7 +13,7 @@ const { parseJobState, mergeRoster } = require('../bg-agents-roster');
 const OLD = '11111111-1111-4111-8111-111111111111';
 const HEAD = '22222222-2222-4222-8222-222222222222';
 
-function fixture(t, { exited = false, transcript = true, ambiguous = false } = {}) {
+function fixture(t, { persist, exited = false, transcript = true, ambiguous = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-639-'));
   t.after(() => { transitions.init({ activeSessions: new Map() }); fs.rmSync(root, { recursive: true, force: true }); });
   const folder = 'project';
@@ -32,7 +32,7 @@ function fixture(t, { exited = false, transcript = true, ambiguous = false } = {
     log: { info() {}, debug() {} }, rekeyMcpServer() {}, clearOwner: () => 'other',
     getBackgroundTarget: id => id === HEAD ? proof : null,
     backgroundJobExists: () => true,
-    rekeyMetadata: (...args) => migrated.push(args), setTimeout: (fn, ms) => { timers.push({ fn, ms }); return { unref() {} }; },
+    rekeyMetadata: (...args) => persist ? persist(...args) : migrated.push(args), setTimeout: (fn, ms) => { timers.push({ fn, ms }); return { unref() {} }; },
   });
   return { root, folder, entry, activeSessions, events, migrated, timers, setProof: value => { proof = value; } };
 }
@@ -159,7 +159,7 @@ test('SQLite copies original metadata atomically without persisting a title fall
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
     const assert = require('node:assert/strict');
-    const db = require('./db');
+    const db = require('./test/fixtures/writer-store.cjs');
     db.setName('${OLD}', 'JB rename'); db.toggleStar('${OLD}'); db.setArchived('${OLD}', true);
     db.setName('${HEAD}', 'daemon (2)');
     assert.equal(typeof db.rekeySessionMeta, 'function');
@@ -178,7 +178,7 @@ test('a daemon collision custom-title refresh cannot overwrite the migrated Swit
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
     const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
-    const db = require('./db'), cache = require('./session-cache');
+    const db = require('./test/fixtures/writer-store.cjs'), cache = require('./session-cache');
     const root = process.env.SWITCHBOARD_DATA_DIR, folder = require('./encode-project-path').encodeProjectPath(root), projects = path.join(root, 'projects');
     fs.mkdirSync(path.join(projects, folder), { recursive: true });
     db.setFolderMeta(folder, root, 0);
@@ -198,3 +198,22 @@ test('a daemon collision custom-title refresh cannot overwrite the migrated Swit
   `], { cwd: path.join(__dirname, '..'), encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: root } });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
+
+for (const outcome of ['ack', 'failure', 'identity-change']) {
+  test('background identity publication waits for metadata: ' + outcome, async t => {
+    let resolve, reject;
+    const acknowledgment = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const h = fixture(t, { persist: () => acknowledgment });
+    transitions.detectSessionTransitions(h.folder);
+    assert.equal(h.activeSessions.get(OLD), h.entry);
+    assert.equal(h.events.length, 0);
+    if (outcome === 'failure') reject(new Error('metadata failed'));
+    else {
+      if (outcome === 'identity-change') h.setProof(null);
+      resolve();
+    }
+    await transitions.drainMetadataWrites();
+    assert.equal(h.activeSessions.get(outcome === 'ack' ? HEAD : OLD), h.entry);
+    assert.equal(h.events.length, outcome === 'ack' ? 1 : 0);
+  });
+}

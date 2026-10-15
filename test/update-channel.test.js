@@ -15,7 +15,8 @@ const updaterIndex = ast.body.findIndex(node => node.type === 'VariableDeclarati
   node.declarations.some(declaration => declaration.id.name === 'autoUpdater'));
 assert.ok(updaterIndex >= 0);
 const updaterInit = source.slice(ast.body[updaterIndex].range[0], ast.body[updaterIndex + 1].range[1]);
-const settingsHandler = ast.body.find(node => node.type === 'ExpressionStatement' &&
+const startup = ast.body.find(node => node.type === 'FunctionDeclaration' && node.id.name === 'startApplication');
+const settingsHandler = startup.body.body.find(node => node.type === 'ExpressionStatement' &&
   node.expression.callee?.object?.name === 'ipcMain' && node.expression.arguments[0]?.value === 'set-setting');
 assert.ok(settingsHandler);
 

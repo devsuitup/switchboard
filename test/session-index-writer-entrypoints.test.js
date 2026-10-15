@@ -34,6 +34,7 @@ for (const entry of ['move', 'close']) {
     let timer;
     const handlers = new Map(), errors = [];
     const context = vm.createContext({
+      appQuitting: false,
       mainWindow: {
         on: (name, fn) => handlers.set(name, fn), isDestroyed: () => false, isMinimized: () => false,
         getBounds: () => { throw new Error('bounds failed'); },
