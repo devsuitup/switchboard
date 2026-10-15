@@ -44,9 +44,10 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
    reconciles still return a fresh roster. Closing the view retains its push
    subscription; closing the window releases it. Jobs and the projects listener
    survive macOS window close/activate and are released on app quit.
-5. `jobs/` and the `kind: "bg"` descriptor are undocumented. Failure is
-   silence: an unreadable `state.json` keeps the previous value; a CLI that
-   fails leaves a file-only roster with `daemonReachable: false`. Canaries:
+5. `jobs/` and the `kind: "bg"` descriptor are undocumented. An unreadable
+   `state.json` keeps previous lifecycle metadata; a CLI that
+   fails leaves a file-only roster with `daemonReachable: false`. Unreadable
+   rewrites retain lifecycle metadata but mark task evidence invalid. Canaries:
    `test/canary-bg-agents-files.test.js`, `test/canary-cli-session-state.test.js`.
 6. A verb's id is validated against `JOB_ID_RE` before any spawn; a prompt
    starting with `-` is refused by `dispatchArgs`.
@@ -101,6 +102,56 @@ continuation can therefore badge its conversation row before a new turn is
 indexed. See `session-cache.md`, "Local background sidebar rows", for identity
 and registry-name precedence. This changes the membership marker, not the
 status glyph policy from the indicators audit.
+
+### Job activity (#628)
+
+`initAgentsView` installs the existing `bg-agents-changed` listener and fetches
+the roster at renderer bootstrap, even when Agents stays closed. This shares
+the jobs/descriptor service already used by #620; it adds no watcher or IPC
+channel. Every window load runs `claude agents --json --all` once through
+`get-bg-agents` → `reconcile`, including when Agents stays closed. A newer
+push or request invalidates an older pending response.
+Membership still comes from #620's projects payload, with the roster set as
+fallback. Lifecycle/group/header predicates and all verb guards are unchanged.
+
+Background roster entries retain descriptor identity, pid, cwd and agent, but
+their `status` is null: neither descriptor nor CLI coarse status is activity
+evidence. Normalized `taskEvidence` feeds the existing task registry. The shared
+background projection reads #638's head-turn and #626's unseen-output state:
+only an open head turn animates; agents, shells, monitors and cron at the prompt
+share the static background glyph. Only agent tasks contribute to #627's count.
+A blocked job takes attention priority; done/stopped/failed suppress head busy,
+background work and response-ready, while retaining unseen written output.
+An attached terminal's explicit attention notification still takes priority.
+Sessions with a live PTY here keep the conversation's own activity and status
+only when their matching entry is not a live job. Attaching to a working or
+blocked job keeps the job projection, including blocked attention and labels
+without descriptor status or age. Finished entries with `conversationOwn`
+also keep the conversation's own activity and status.
+Sidebar rebuilds compare session membership, state, normalized task evidence
+and conversation ownership; tokens, tempo, detail and display-only fan changes
+do not rebuild it.
+
+Both local adapters omit background descriptor status so even a newer frozen
+idle timestamp cannot close a validated head turn. The sidebar status line
+uses the shared activity label plus the separate job lifecycle label (just
+`Job done`, `Job stopped` or `Job failed` for finished jobs), and
+updates on head pushes as well as roster changes. Its tooltip identifies a
+valid `updatedAt` in local time as **job metadata**, never last head output; the ordinary
+Agents age column still measures `startedAt`. No descriptor status age is
+shown for background activity.
+
+Unknown job formats, invalid normalized evidence, backwards job timestamps,
+missing files and corrupt rewrites expose unavailable/degraded job activity.
+The last validated registry/head evidence remains usable as fallback. An
+unreadable rewrite retains cached identity/lifecycle metadata for the existing
+guards but invalidates task evidence until a valid read. A silent job is not
+expired by elapsed time: `updatedAt` orders job evidence and has no head-output
+freshness meaning. Degradation grants no additional destructive verbs.
+
+Coverage: `test/dom-sidebar-bg-activity-628.test.js`, the #628 roster and real
+job-file tests in `test/bg-agents-roster.test.js` and `test/bg-agents.test.js`,
+plus the existing Agents DOM and #522 guard/attach suites.
 
 ### Background continuations (#639)
 
@@ -208,7 +259,7 @@ is finished without a list to keep in sync.
 
 The UI disables the buttons (`agentVerbAvailability`); `runVerb` refuses
 `respawn`/`rm` on a live roster entry with the same rule, so a stale renderer
-cannot bypass it. A blocked row draws as waiting (orange), not as a spinner.
+cannot bypass it. A blocked row draws the attention `!` (Needs your attention).
 The shipped IPC adds invariant 10's fresh conversation check; the roster
 state alone cannot authorize a destructive verb. A finished job that matches
 a live interactive descriptor by case-insensitive `sessionId` or by the same
@@ -255,10 +306,12 @@ IPC and renderer functions against disposable job/descriptor/transcript files.
 (through `cli-session-state`'s flush) both call `scheduleRebuild()`,
 coalesced at `FLUSH_MS` (250 ms). `rebuild()` = `mergeRoster(cli, jobs,
 readAllDescriptors())`. The CLI list is the authority for which jobs exist
-and their `state`; the file supplies `detail`, `tokens`, `fan`, `children`,
-`result`, `--agent`/`--model`/`--name`; the descriptor supplies `status`,
-`pid`, `agent`. `reconcile()` runs on every `get-bg-agents` (the renderer
-calls it on open and every 30 s while visible) and after every verb and
+and the fallback lifecycle state; a readable job file's state takes precedence.
+The file supplies normalized task evidence, `detail`, `tokens`, `fan`, `children`,
+`result`, `--agent`/`--model`/`--name`; the descriptor supplies identity,
+`pid`, `agent` and interactive-only status. `reconcile()` runs on every
+`get-bg-agents` (the renderer calls it at bootstrap, on open and every 30 s
+while visible) and after every verb and
 dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
 
 ### Lifecycle
@@ -508,13 +561,14 @@ branch and the fallback keep the cwd's spelling.
 
 `bgAgentSessionIds` (a `Set` of the `sessionId` of every live background job,
 `agentJobIsLive`: `working` or `blocked`) is rebuilt by `applyAgentsSnapshot`,
-which refreshes the sidebar only when the set changed. `sidebar.js` prefixes a
-`bg` badge ("click to attach") to a session row whose id is in it. Two
+which refreshes the sidebar when membership or job activity changes.
+`sidebar.js` prefixes a `bg` badge ("click to attach") to a session row with
+#620's project membership or a matching roster id. Two
 consequences:
 
-- The set is empty until the first `get-bg-agents` — the badge needs the view
-  to have been opened once in this window (`refreshAgentsRoster()` runs at
-  open; the push keeps it current afterwards).
+- The roster set is fetched at renderer bootstrap, then refreshed on open
+  and retained through the existing push while Agents is closed. #620's
+  projects membership can badge a row before this first fetch completes.
 - A finished job loses its badge at the next snapshot. Clicking its row
   resumes normally: the attach decision is made by `guardResume` from a live
   descriptor, not from the badge.

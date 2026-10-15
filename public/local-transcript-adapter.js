@@ -56,7 +56,8 @@ function seedLocalTranscriptDescriptor(sessionId, session) {
   const state = localTranscriptState(sessionId);
   state.apply({ type: 'liveness', value: 'alive' });
   localTranscriptDescriptorLosses.delete(sessionId);
-  state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt });
+  const background = session.bgJobId || typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId);
+  if (!background) state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt });
 }
 
 // silence means stopped writing, not response ready — see .ai/contexts/session-state.md

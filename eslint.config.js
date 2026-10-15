@@ -405,6 +405,11 @@ const rendererCrossFileGlobals = {
   // Agents view (public/agents-view.js) — see .ai/contexts/bg-agents.md
   agentsViewActive: 'writable',
   bgAgentSessionIds: 'readonly',
+  backgroundActivityEntry: 'readonly',
+  backgroundActivityIsForeground: 'readonly',
+  backgroundActivitySnapshot: 'readonly',
+  backgroundActivityLabel: 'readonly',
+  formatStatusAge: 'readonly',
   initAgentsView: 'readonly',
   showAgentsView: 'readonly',
   hideAgentsView: 'readonly',

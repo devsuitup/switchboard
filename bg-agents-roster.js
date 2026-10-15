@@ -156,7 +156,6 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     e.name = cliEntry.name || e.name;
     e.cwd = cliEntry.cwd || e.cwd;
     e.state = (job && job.state) || cliEntry.state || e.state;
-    e.status = cliEntry.status || e.status;
     e.pid = cliEntry.pid || e.pid;
     e.startedAt = cliEntry.startedAt ?? e.startedAt;
   }
@@ -165,7 +164,6 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     e.name = e.name || descriptor.name;
     e.cwd = e.cwd || descriptor.cwd;
     e.agent = e.agent || descriptor.agent;
-    e.status = descriptor.status || e.status;
     e.pid = descriptor.pid || e.pid;
     e.startedAt = e.startedAt ?? descriptor.startedAt;
   }

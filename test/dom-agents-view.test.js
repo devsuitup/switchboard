@@ -282,11 +282,11 @@ test('a roster push puts only the live jobs in bgAgentSessionIds and refreshes t
   assert.equal(ctx.calls.sidebarRefreshes, 3);
 });
 
-test('no roster fetch before the view is first opened; opening it fetches', async (t) => {
+test('bootstrap fetches the shared roster before the view opens; opening reconciles it', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
-  assert.equal(ctx.calls.fetches, 0);
-  await ctx.window.showAgentsView();
   assert.equal(ctx.calls.fetches, 1);
+  await ctx.window.showAgentsView();
+  assert.equal(ctx.calls.fetches, 2);
 });
 
 test('attach from the view while the grid is shown closes the view onto the grid', async (t) => {
@@ -631,7 +631,7 @@ test('every row starts its state column with its state emoji in every grouping m
   const odd = { ...ROSTER[1], id: 'eeeeeeee', sessionId: 's-e', name: 'odd', state: null };
   ctx.setSnapshot({ roster: [...ROSTER, failed, odd], daemonReachable: true });
   await ctx.window.showAgentsView();
-  const expected = { 'em-platform': '⚙️ working · idle', spike: '✅ done', 'lvds-1b': '🖥️ external · busy', broke: '❌ failed', odd: '❓ ?' };
+  const expected = { 'em-platform': '⚙️ working', spike: '✅ done', 'lvds-1b': '🖥️ external · busy', broke: '❌ failed', odd: '❓ ?' };
   for (const mode of ['none', 'state', 'project']) {
     chooseGroupBy(ctx, mode);
     const got = Object.fromEntries([...ctx.document.querySelectorAll('.agents-row')].map(r =>
@@ -772,7 +772,7 @@ test('a view closed at the last run stays closed after the startup restore', asy
   const ctx = setup(); t.after(() => ctx.destroy());
   await ctx.window.restoreAgentsViewAtStartup();
   assert.equal(ctx.read('agentsViewActive'), false);
-  assert.equal(ctx.calls.fetches, 0);
+  assert.equal(ctx.calls.fetches, 1);
 });
 
 test('opening a memory file closes the agents view', async (t) => {
