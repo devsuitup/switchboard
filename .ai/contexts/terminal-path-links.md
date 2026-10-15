@@ -7,6 +7,14 @@ link.
 
 ## Key files
 
+The editor does not require Git or transcript membership (#658). The existing
+link resolver and the panel's read guards still decide openability. Once
+opened, an ordinary non-repository file has a byte-version token and uses the
+same conflict detection and encoding/EOL-preserving save as a repository
+file, in the plain editor without Git diff controls. Absolute `watch-file`
+refreshes work outside git too; dirty buffers compare the byte versions.
+Remote links remain refused, and remote Touched files remain read-only.
+
 | File | Role |
 |---|---|
 | `public/terminal-path-links.js` | The matcher, the per-path cache, and the xterm link provider. Dual-mode: a classic `<script>` in the renderer, `require()`-d by `test/terminal-path-links.test.js`. |

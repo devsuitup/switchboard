@@ -77,6 +77,24 @@ async function resolveRepoDirs(cwd, deps) {
   return { root, gitDirs };
 }
 
+async function resolveFileRoot(cwd, deps = {}) {
+  let probe;
+  const runGit = deps.runGit || defaultRunGit;
+  const repo = await resolveRepoDirs(cwd, { ...deps, runGit: async (args, options) => {
+    probe = await runGit(args, options);
+    return probe;
+  } });
+  if (repo) return { ok: true, repo, git: true };
+  if (hasGitSegment(cwd) || hasGitSegment(resolveTouchedOnDisk(cwd, deps) || cwd)) {
+    return { ok: false, error: 'the git directory is not editable', reason: 'git-dir' };
+  }
+  if (probe?.code !== GIT_RUN_FAILED_CODE
+    && !(probe?.code === NOT_IN_TREE_EXIT_CODE && /not a git repository/i.test(probe.stderr || ''))) {
+    return { ok: false, error: probe?.stderr || 'could not locate the repository', reason: 'repo' };
+  }
+  return { ok: true, repo: cwd, git: false };
+}
+
 function hasGitSegment(relativePath) {
   return relativePath.split(/[/\\]/).some((segment) => segment.toLowerCase() === '.git');
 }
@@ -182,10 +200,9 @@ async function readChangesFile({ cwd, relPath, staged, maxBytes }, deps = {}) {
   const fs = deps.fs || realFs;
   if (!isSafeRevPathOperand(relPath)) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
 
-  const repo = await resolveRepoDirs(cwd, deps);
-  if (!repo) return { ok: false, error: 'not a git repository', reason: 'repo' };
-
-  const target = resolveTargetInsideRepo(repo, relPath, deps);
+  const root = await resolveFileRoot(cwd, deps);
+  if (!root.ok) return root;
+  const target = resolveTargetInsideRepo(root.repo, relPath, deps);
   if (!target.ok) return target;
 
   if (target.size > maxBytes) return { ok: false, error: 'file too large to edit', reason: 'too-large' };
@@ -197,6 +214,11 @@ async function readChangesFile({ cwd, relPath, staged, maxBytes }, deps = {}) {
   const currentText = stripBom(decoded);
   if (soleEol(currentText) === null) {
     return { ok: false, error: 'file mixes line endings', reason: 'mixed-eol' };
+  }
+
+  if (!root.git) {
+    const current = toLf(currentText);
+    return { ok: true, git: false, original: current, current, version: versionOf(buf), binary: false, truncated: false };
   }
 
   const runGit = deps.runGit || defaultRunGit;
@@ -229,25 +251,32 @@ async function readChangesFile({ cwd, relPath, staged, maxBytes }, deps = {}) {
   };
 }
 
-async function writeChangesFile({ cwd, relPath, content, version, maxBytes }, deps = {}) {
-  const fs = deps.fs || realFs;
+function validateWrite({ content, version, maxBytes }) {
   if (typeof content !== 'string') return { ok: false, error: 'invalid content', reason: 'invalid-content' };
   if (typeof version !== 'string' || !version) return { ok: false, error: 'missing version token', reason: 'invalid-version' };
-  if (!isSafeRepoRelativePath(relPath)) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
   if (Buffer.byteLength(content, 'utf8') > maxBytes) return { ok: false, error: 'content too large to save', reason: 'too-large' };
+  return null;
+}
 
-  const repo = await resolveRepoDirs(cwd, deps);
-  if (!repo) return { ok: false, error: 'not a git repository', reason: 'repo' };
+async function writeChangesFile({ cwd, relPath, content, version, maxBytes }, deps = {}) {
+  const refused = validateWrite({ content, version, maxBytes });
+  if (refused) return refused;
+  if (!isSafeRepoRelativePath(relPath)) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
 
-  const target = resolveTargetInsideRepo(repo, relPath, deps);
+  const root = await resolveFileRoot(cwd, deps);
+  if (!root.ok) return root;
+  const target = resolveTargetInsideRepo(root.repo, relPath, deps);
   if (!target.ok) return target;
+  return writeResolvedFile(target, { content, version, maxBytes }, deps);
+}
 
+function writeResolvedFile(target, { content, version, maxBytes }, deps) {
+  const fs = deps.fs || realFs;
   const onDisk = fs.readFileSync(target.path);
   if (versionOf(onDisk) !== version) {
     return { ok: false, error: 'this file changed on disk since it was opened', reason: 'stale' };
   }
 
-  // The bytes the token was taken from decide how this file is written back.
   const decoded = decodeUtf8(onDisk);
   if (decoded === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
   if (hasLoneSurrogate(content)) return { ok: false, error: 'content is not valid UTF-8', reason: 'encoding' };
@@ -315,14 +344,16 @@ async function resolveTouchedRepo(absolutePath, deps) {
     return { ok: false, error: 'path resolves outside the repository', reason: 'outside' };
   }
   const relPath = path.relative(canonicalRoot, canonicalPath).split(path.sep).join('/');
-  return { ok: true, git: true, cwd: realRoot, relPath };
+  return { ok: true, git: true, cwd: realRoot, relPath, repo };
 }
 
 async function readTouchedChangesFile({ absolutePath, maxBytes }, deps = {}) {
   const target = await resolveTouchedRepo(absolutePath, deps);
-  if (!target.ok || !target.git) return target;
+  if (!target.ok || target.readOnly) return target;
   const runGit = deps.runGit || defaultRunGit;
-  const pair = await readChangesFile({ cwd: target.cwd, relPath: target.relPath, staged: true, maxBytes }, {
+  const cwd = target.git ? target.cwd : path.dirname(absolutePath);
+  const relPath = target.git ? target.relPath : path.basename(absolutePath);
+  const pair = await readChangesFile({ cwd, relPath, staged: true, maxBytes }, {
     ...deps,
     runGit: async (args, options) => {
       try { return await runGit(args, options); }
@@ -330,15 +361,20 @@ async function readTouchedChangesFile({ absolutePath, maxBytes }, deps = {}) {
     },
   });
   if (!pair.ok && TOUCHED_PLAIN_REASONS.has(pair.reason)) return { ok: true, git: false };
-  return { ...pair, git: true };
+  return { ...pair, git: target.git && pair.git !== false };
 }
 
 async function writeTouchedChangesFile({ absolutePath, content, version, maxBytes }, deps = {}) {
   const target = await resolveTouchedRepo(absolutePath, deps);
   if (!target.ok) return target;
   if (target.readOnly) return { ok: false, error: 'symbolic links are read-only', reason: 'symlink' };
-  if (!target.git) return { ok: false, error: 'not a git repository', reason: 'repo' };
-  return writeChangesFile({ cwd: target.cwd, relPath: target.relPath, content, version, maxBytes }, deps);
+  const refused = validateWrite({ content, version, maxBytes });
+  if (refused) return refused;
+  const repo = target.git ? target.repo : path.dirname(absolutePath);
+  const relPath = target.git ? target.relPath : path.basename(absolutePath);
+  const resolved = resolveTargetInsideRepo(repo, relPath, deps);
+  if (!resolved.ok) return resolved;
+  return writeResolvedFile(resolved, { content, version, maxBytes }, deps);
 }
 
 module.exports = {
@@ -354,6 +390,7 @@ module.exports = {
   buildBlobRev,
   versionOf,
   resolveRepoDirs,
+  resolveFileRoot,
   lineEndingsOf,
   soleEol,
   decodeUtf8,

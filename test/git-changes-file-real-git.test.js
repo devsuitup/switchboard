@@ -345,16 +345,27 @@ test('real git: a directory is refused rather than read', async () => {
   } finally { cleanup(tmp); }
 });
 
-test('real git: a directory that is not a repository is refused', async () => {
+test('real git: a directory that is not a repository opens as a versioned plain file', async () => {
   const tmp = mkTmp();
   try {
     const plainDir = path.join(tmp, 'plain');
     fs.mkdirSync(plainDir);
     fs.writeFileSync(path.join(plainDir, 'f.txt'), 'x\n');
 
-    const result = await read(plainDir, 'f.txt', false);
-    assert.equal(result.ok, false);
-    assert.equal(result.reason, 'repo');
+    const result = await readChangesFile({ cwd: plainDir, relPath: 'f.txt', maxBytes: MAX_BYTES }, {
+      runGit: async (args, options) => {
+        const { runToExit } = require('../run-to-exit');
+        const reply = await runToExit('git', args, { ...options, env: {
+          ...scratchGitEnv(), GIT_CEILING_DIRECTORIES: fs.realpathSync.native(os.tmpdir()),
+        } });
+        return { ...reply, tooLarge: reply.overflow };
+      },
+    });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.git, false);
+    assert.equal(result.current, 'x\n');
+    assert.equal(result.original, result.current);
+    assert.equal(result.version, versionOf(Buffer.from('x\n')));
   } finally { cleanup(tmp); }
 });
 

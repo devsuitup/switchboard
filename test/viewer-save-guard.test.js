@@ -82,7 +82,7 @@ test('main registers the module handlers for both channels, and writes no panel 
   const src = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8').replace(/^[ \t]*\/\/.*$/gm, '');
   assert.match(src, /const panelSaves = createMainPanelSaves\(/);
   assert.match(src, /ipcMain\.handle\('save-file-for-panel', async \(_event, filePath, content, expected, opts\) =>/);
-  assert.match(src, /if \(!opts\?\.git\) return panelSaves\.saveFileForPanel\(filePath, content, expected\)/);
+  assert.match(src, /if \(!opts\?\.git && opts\?\.version === undefined\) return panelSaves\.saveFileForPanel\(filePath, content, expected\)/);
   assert.match(src, /gitChangesFile\.writeTouchedChangesFile\(/);
   assert.match(src, /ipcMain\.handle\('save-memory', \(_event, filePath, content, expected\) => panelSaves\.saveMemory\(filePath, content, expected\)\)/);
   const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');

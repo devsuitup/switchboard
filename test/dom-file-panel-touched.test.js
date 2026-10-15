@@ -17,6 +17,66 @@ const { registerPanelTerminals } = require('./terminal-manager-harness');
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const NODE_MODULES = path.join(__dirname, '..', 'node_modules');
 
+test('658: a non-touched terminal file outside git renders the plain editor with a byte version', async t => {
+  const os = require('node:os');
+  const files = require('../git-changes-file');
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-658-dom-')));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const target = path.join(dir, 'untouched.txt');
+  fs.writeFileSync(target, 'outside\n');
+  const { runToExit } = require('../run-to-exit');
+  const runGit = async (args, options) => {
+    const response = await runToExit('git', args, { ...options, env: { ...process.env,
+      GIT_CEILING_DIRECTORIES: fs.realpathSync.native(os.tmpdir()), GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: path.join(os.tmpdir(), 'sb-658-no-config'), LC_ALL: 'C', LANGUAGE: 'C' } });
+    return { ...response, tooLarge: response.overflow };
+  };
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const start = main.indexOf("ipcMain.handle('read-file-for-panel'");
+  const end = main.indexOf('\n});', start) + 4;
+  let read;
+  vm.runInNewContext(main.slice(start, end), {
+    ipcMain: { handle: (_channel, handler) => { read = handler; } },
+    fs, path, PANEL_FILE_MAX_BYTES: 1024,
+    isSensitivePath: require('../ipc-path-validator').isSensitivePath,
+    gitChangesFile: { ...files, readTouchedChangesFile: args => files.readTouchedChangesFile(args, { runGit }) },
+  }, { filename: 'main.js' });
+  const ctx = setupDom({ touchedImpl: () => result({ files: [] }),
+    readImpl: () => read(null, target, { editor: true }) });
+  try {
+    await openTab(ctx);
+    await ctx.window.openFileInPanel('s1', target);
+    await flush();
+    const tab = ctx.stateOf('s1').currentTab;
+    assert.equal(tab.absolutePath, target, tab.openError);
+    assert.equal(tab.current, 'outside\n');
+    assert.equal(tab.version, files.versionOf(fs.readFileSync(target)));
+    assert.equal(ctx.editors.at(-1).mode, 'plain');
+    assert.doesNotMatch(ctx.document.body.textContent, /This directory is not a git repository/);
+    ctx.editors.at(-1).setText('edited\n');
+    assert.equal(ctx.document.getElementById('changes-diff-save-btn').disabled, false);
+    await ctx.evalSource("handleChangesSave('s1')");
+    await flush();
+    assert.equal(ctx.calls.save[0].options.version, files.versionOf(Buffer.from('outside\n')));
+  } finally { ctx.destroy(); }
+});
+
+test('658: a plain editor detects an external byte-version change while retaining dirty text', async () => {
+  let version = 'bytes1';
+  const ctx = setupDom({ readImpl: () => ({ ok: true, git: false, original: 'same\n', current: 'same\n', version }) });
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    ctx.editors.at(-1).setText('typing');
+    version = 'bytes2';
+    ctx.changed('/work/a.txt');
+    await flush();
+    assert.equal(ctx.stateOf('s1').currentTab.externalChange, true);
+    assert.equal(ctx.editors.at(-1).current, 'typing');
+  } finally { ctx.destroy(); }
+});
+
 const INDEX_HTML = `<!DOCTYPE html>
 <html>
   <body>

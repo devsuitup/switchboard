@@ -1245,6 +1245,7 @@ function applyChangesPair(tab, pair) {
   tab.current = pair.current;
   tab.savedContent = pair.current;
   tab.version = pair.version;
+  tab.noDiff = pair.git === false;
   if (tab.absolutePath) {
     tab.gitFile = pair.git;
     tab.noDiff = !pair.git || pair.original === pair.current;
@@ -1315,7 +1316,7 @@ async function syncOpenChangesFile(sessionId, tab) {
   tab.fileError = null;
 
   if (isChangesBufferDirty(tab)) {
-    tab.externalChange = tab.absolutePath && !tab.gitFile
+    tab.externalChange = tab.absolutePath && !tab.version
       ? result.current !== tab.savedContent
       : result.version !== tab.version;
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);

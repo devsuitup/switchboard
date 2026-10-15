@@ -295,6 +295,21 @@ symlink. No real host, SSH client or Electron process is launched.
 
 ## Shared editor (#450)
 
+For ordinary non-repository files (#658), `readTouchedChangesFile` now returns
+the complete plain pair with `versionOf` over the original bytes. Saving a
+pair with a version uses `writeTouchedChangesFile` even with `git: false`,
+preserving UTF-8/BOM/EOL and rejecting concurrent byte changes (including an
+EOL-only change). Dirty-editor watch refreshes compare versions when present;
+older unversioned plain pairs retain their text comparison. Plain fallbacks
+for Git operand/line-ending failures also get a byte version from the panel
+read. Absolute saves reuse the resolved-file writer without a Git operand;
+names such as `-notes.txt` are saved with the same guards. Mixed-EOL content
+remains readable but the shared EOL save guard refuses rewriting it.
+Final-file symlinks remain read-only. The transcript list is discovery,
+not authorization: a terminal or MCP open can use the same editor for a file
+absent from that list, inside or outside git. The terminal openability and
+remote read-only checks remain unchanged.
+
 `openTouchedEditor` in `public/file-panel.js` creates the same Changes tab
 state and uses `renderChangesDiff`, `ensureChangesEditor`, the existing
 `#changes-diff-view` toolbar and `#changes-diff-host`. It retains the Touched

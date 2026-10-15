@@ -963,6 +963,28 @@ parallel.
 
 ## Opening the shared editor from Touched (#450)
 
+### Files outside git (#658)
+
+`readChangesFile`, `writeChangesFile` and `git-changes-watch` use
+`resolveFileRoot`: a working tree uses the discovered repository root and
+git-directory exclusions; a genuine not-a-repository diagnostic uses the
+session cwd as the containment root. Missing git can also use this guarded
+plain mode. Other git failures remain errors, and a `.git` cwd is refused.
+The same relative-path, realpath containment, sensitive-path, symlink and
+hardlink guards run before file I/O or watch registration. Outside git a read
+returns `git: false`, identical original/current text, and the byte-version
+token. There is no HEAD/index lookup or staged comparison. The renderer hides
+the diff toggle and uses its plain editor. Status/list generation remains a
+git operation, so an empty Changes list can still explain that no repository
+exists without preventing a separately opened file from being edited.
+
+Absolute Touched and terminal opens use the same byte-version save contract
+outside git, including BOM, UTF-8, size and EOL preservation. The ordinary
+ViewerPanel's text-baseline API remains compatible. Absolute file watches
+already used `watch-file` independently of git; relative watches now support
+the same non-repository case. Regression evidence is in
+`test/editor-outside-git.test.js` and both file-panel DOM suites.
+
 Touched uses the same `createChangesTab`, diff chrome, editor factories,
 dirty-buffer checks and save/reload flow as Changes. Its editor tab carries
 `absolutePath` and `returnList`; it renders only the shared editor and routes
