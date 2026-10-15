@@ -32,7 +32,7 @@ function fixture(t) {
     deleteCachedFolder() {}, deleteCachedSession() {}, deleteSearchFolder() {}, deleteSearchSession() {},
   };
   const init = () => cache.init({ PROJECTS_DIR: root, db, activeSessions: new Map(), getMainWindow: () => null, log: console });
-  return { file, folder, rows, text, init };
+  return { file, folder, rows, text, init, root, db };
 }
 
 function stamp(t, file, change) {
@@ -189,3 +189,89 @@ for (const caller of ['resolve', 'background']) {
     assert.equal(positions[0], start);
   });
 }
+
+for (const [name, count, restart] of [['restart', 4, true], ['snapshot eviction', 140, false]]) {
+  test(`#656b refresh: ${name} preserves all unchanged persisted indexes without upserts`, t => {
+    const h = fixture(t);
+    for (let i = 3; i < count; i++) fs.writeFileSync(path.join(h.root, h.folder, `session-${i}.jsonl`), h.text(null));
+    const upsert = t.mock.method(h.db, 'upsertCachedSessions');
+    h.init();
+    cache.refreshFolder(h.folder);
+    assert.equal(h.rows.size, count);
+    const indexes = [...h.rows].map(([id, row]) => [id, row.continuationIndex]);
+    assert.ok(indexes.every(([, index]) => index !== null));
+    if (restart) h.init();
+    upsert.mock.resetCalls();
+    cache.refreshFolder(h.folder);
+    assert.deepEqual([...h.rows].map(([id, row]) => [id, row.continuationIndex]), indexes);
+    assert.equal(upsert.mock.callCount(), 0, 'unchanged rows require no upsert');
+  });
+}
+
+for (const finalYield of [false, true]) {
+  test(`#656b resolve: append during ${finalYield ? 'final' : 'chunk'} yield resolves the current graph incrementally`, async t => {
+    const h = fixture(t);
+    if (!finalYield) fs.appendFileSync(h.file, '{}\n'.repeat(400000));
+    h.init();
+    cache.refreshFolder(h.folder);
+    h.rows.get('old').continuationIndex = null;
+    const read = fs.readSync, positions = [];
+    let appended = false, scheduled = false;
+    t.mock.method(fs, 'readSync', (...args) => {
+      const n = read(...args);
+      if (appended && args[3] > 64) positions.push(args[4]);
+      if (!scheduled) {
+        scheduled = true;
+        setImmediate(() => {
+          fs.appendFileSync(h.file, finalYield
+            ? JSON.stringify({ type: 'continued-in', sessionId: 'old', continuedInSessionId: 'bbb' }) + '\n'
+            : '{"type":"progress"}\n');
+          appended = true;
+        });
+      }
+      return n;
+    });
+    const result = await cache.resolveSessionContinuations('old', { chunkBytes: 256 * 1024 });
+    assert.equal(appended, true);
+    assert.equal(result.unresolved, false, 'plain growth must not hold a conversation unresolved');
+    assert.deepEqual(result.candidates.map(row => row.sessionId), finalYield ? ['aaa', 'bbb'] : ['aaa']);
+    const index = JSON.parse(h.rows.get('old').continuationIndex);
+    assert.equal(index.bytes, fs.statSync(h.file).size, 'the appended bytes must be indexed before publishing');
+    assert.ok(positions[0] > 0, 'growth resumes the prior cursor');
+  });
+}
+
+test('#656b background: growth during a synchronous chunk keeps its cursor for the next poll', async t => {
+  const h = fixture(t);
+  fs.appendFileSync(h.file, '{}\n'.repeat(400000));
+  const read = createContinuationReader(h.file, 'old');
+  const readSync = fs.readSync, positions = [];
+  let appended = false, nextPoll = false;
+  t.mock.method(fs, 'readSync', (...args) => {
+    const n = readSync(...args);
+    if (nextPoll && args[3] > 64) positions.push(args[4]);
+    if (!appended && args[3] > 64) {
+      fs.appendFileSync(h.file, '{"type":"progress"}\n');
+      appended = true;
+    }
+    return n;
+  });
+  assert.equal(await read(), null, 'the changing chunk is not published');
+  nextPoll = true;
+  assert.deepEqual(await read(), ['aaa']);
+  assert.ok(positions[0] > 0, 'the next poll must resume instead of rereading from zero');
+});
+
+test('#656b refresh: unchanged files avoid a duplicate ISO mtime stat', t => {
+  const h = fixture(t);
+  fs.utimesSync(h.file, 1792042103.8329908, 1792042103.8329908);
+  h.init();
+  cache.refreshFolder(h.folder);
+  const expectedMtime = fs.statSync(h.file).mtime.toISOString();
+  const stat = t.mock.method(fs, 'statSync');
+  cache.refreshFolder(h.folder);
+  const calls = stat.mock.calls.filter(call => call.arguments[0] === h.file);
+  assert.equal(calls.length, 2, 'one invalidation stat plus the existing folder-index stat');
+  assert.equal(calls[0].arguments[1]?.bigint, true);
+  assert.equal(h.rows.get('old').fileMtime, expectedMtime);
+});

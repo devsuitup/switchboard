@@ -344,7 +344,7 @@ function refreshFolder(folder, opts = {}) {
     let stat, fileMtime;
     try {
       stat = fs.statSync(filePath, { bigint: true });
-      fileMtime = fs.statSync(filePath).mtime.toISOString();
+      fileMtime = new Date(Math.round(Number(stat.mtimeNs) / 1000000)).toISOString();
     } catch { continue; }
 
     const cachedDbId = filePathToDbId.get(filePath) || null;
@@ -359,9 +359,9 @@ function refreshFolder(folder, opts = {}) {
     // `modified` here would miss on nearly every row and re-read every dirty
     // file on every watcher flush.
     const snapshot = continuationFiles.get(filePath);
-    const unchangedIndex = snapshot?.serialized === cachedEntry?.continuationIndex && sameContinuationStamp(snapshot, stat);
+    const changedIndex = snapshot && !sameContinuationStamp(snapshot, stat);
     if (cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
-      && (!cachedEntry.continuationIndex || unchangedIndex || parentSessionId || cachedEntry.parentSessionId)) {
+      && (!cachedEntry.continuationIndex || !changedIndex || parentSessionId || cachedEntry.parentSessionId)) {
       continue; // unchanged, skip
     }
 
@@ -371,7 +371,7 @@ function refreshFolder(folder, opts = {}) {
       else if (continuationBytesLeft) {
         continuationIndex = scanCachedContinuation(filePath, cachedEntry.sessionId, continuationIndex, continuationBytesLeft, stat);
         continuationBytesLeft = 0;
-      } else if (!unchangedIndex) continuationIndex = null;
+      } else if (changedIndex) continuationIndex = null;
       if (cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
         && continuationIndex === cachedEntry.continuationIndex) continue;
       // EXISTING -- header-only refresh.
@@ -1303,16 +1303,20 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     const cached = continuationFiles.get(file);
     if (index?.format !== 3 || !index.complete || index.bytes !== Number(stat.size)
       || cached?.serialized !== serialized || !sameContinuationStamp(cached, stat)) {
+      let grew;
       do {
         serialized = scanCachedContinuation(file, id, serialized, chunkBytes);
         if (serialized === null) return null;
         index = JSON.parse(serialized);
+        const scanned = continuationFiles.get(file);
         await new Promise(resolve => setImmediate(resolve));
-        if (!sameContinuationStamp(continuationFiles.get(file), fs.statSync(file, { bigint: true }))) {
+        const after = fs.statSync(file, { bigint: true });
+        grew = sameContinuationFile(scanned, after) && after.size > scanned.size;
+        if (!sameContinuationStamp(scanned, after) && !grew) {
           continuationFiles.delete(file);
           return null;
         }
-      } while (!index.complete && index.bytes < index.size);
+      } while (grew || (!index.complete && index.bytes < index.size));
       await writer.setCachedContinuationIndex(id, serialized);
     }
     return { index, modified: getCachedSession(id)?.modified || row.modified };

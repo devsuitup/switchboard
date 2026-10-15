@@ -45,9 +45,12 @@ function createContinuationReader(file, id) {
           && !(stat.size > previous.size && head.startsWith(previous.head)))) serialized = undefined;
         serialized = scanContinuationIndex(file, id, serialized);
         const after = fs.statSync(file, { bigint: true });
-        if (!unchanged(stat, after)) { serialized = previous = undefined; return null; }
         previous = { dev: stat.dev, ino: stat.ino, birthtimeNs: stat.birthtimeNs,
           size: stat.size, mtimeNs: stat.mtimeNs, head };
+        if (!unchanged(stat, after)) {
+          if (!sameFile(stat, after) || after.size <= stat.size) serialized = previous = undefined;
+          return null;
+        }
         index = JSON.parse(serialized);
         if (index.bytes < index.size) await new Promise(resolve => setImmediate(resolve));
       } while (index.bytes < index.size);

@@ -1918,8 +1918,6 @@ settings(key PK, value JSON)
 
 ## Continuation index (#518B)
 
-Issue #656 guards refresh and resume continuation indexes with caller-local BigInt dev/ino/birthtime and nanosecond mtime before/after each scan (and after asynchronous yields), restarts equal-size changes from zero, and resumes only verified growth with a matching head, following the NTFS identity/tunnelling rationale in [session-state.md (#648)](session-state.md); these bounded in-memory snapshots never enter serialized indexes, DB rows or IPC, and a cold caller revalidates persisted indexes.
-
 `session_cache.continuationIndex` is nullable JSON with `format:3`, `ids`,
 `bytes`, `complete`, `mtime` and `unresolved`. Schema reconciliation adds the
 column without wiping old rows. Full transcript scans collect links while
@@ -1929,13 +1927,31 @@ indexes are rebuilt lazily, including format-2 indexes that marked a mere
 
 Header-only refresh skips subagent continuation indexes and shares a 1 MiB
 synchronous continuation budget across all changed parent files in that refresh.
-Other files retain their stale index until a later refresh or resume lookup.
+An unchanged file keeps its persisted index without an upsert even when its
+caller-local snapshot is absent after restart, worker population or eviction.
+After the scan budget is spent, an index is cleared only when an existing
+snapshot proves a changed stamp; otherwise it stays available until lazy
+revalidation on resume. Issue #656 compares BigInt dev/ino/birthtime and
+nanosecond mtime, following the NTFS identity/tunnelling rationale in
+[session-state.md (#648)](session-state.md). These snapshots cap at 128 entries
+and never enter serialized indexes, DB rows or IPC. Refresh derives its ISO
+mtime from the same BigInt stat, rounding milliseconds to match the Number-stat
+dates already stored by full scans; integer truncation would cause spurious
+refreshes on Windows.
 Existing display-header and SDK-entrypoint reads keep their own budgets.
 
-`resolveSessionContinuations` verifies format, size and mtime before trusting
-an index. A complete fresh index requires only stat. A legacy, incomplete or
-stale index is read in 1 MiB chunks, yielding with `setImmediate` between chunks,
-with no total scan cap. Tests can inject smaller `chunkBytes`. Persistence uses
+`resolveSessionContinuations` trusts a complete format-3 index after stat only
+when the exact serialized index has a matching in-memory identity, size and
+nanosecond mtime snapshot. A cold caller revalidates persisted indexes by
+scanning from zero: matching size and ISO mtime cannot rule out a replacement
+under #656. A legacy, incomplete or stale index is read in 1 MiB chunks, yielding
+with `setImmediate` between chunks, with no total scan cap. Identity and stamps
+are checked before/after each synchronous scan and after every yield.
+Identity changes and non-growth changes during a yield remain unresolved;
+same-identity growth continues scanning, including after a previously final
+chunk, and reuses the cursor only with a matching head and tail. Equal-size
+changes restart from zero on the next lookup. Tests can inject smaller
+`chunkBytes`. Persistence uses
 `setCachedContinuationIndex`, which updates only that column, preserving display
 fields written by a concurrent refresh; it does not upsert an old row snapshot.
 
