@@ -61,7 +61,7 @@ function setup() {
   vm.runInContext(PLAN_SRC, ctx.context);
   const fns = loadAppFunctions(ctx.context, {
     functions: ['dedup', 'loadProjects', 'persistWorkingSet', 'pendingRestoreEntries', 'runRestore'],
-    declarations: ['_persistChain', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restorePlanner', 'exitingApp', 'persistSkippedWhileExiting', 'restoreIndexingDone', 'continuationRetryCancelled'],
+    declarations: ['_persistChain', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restorePlanner', 'exitingApp', 'persistSkippedWhileExiting', 'restoreIndexingDone', 'continuationRetryCancelled', 'dormantWorkingSet'],
   });
   const open = (sessionId, { pending, remoteAlias } = {}) => {
     const session = { sessionId, projectPath: '/srv/app', summary: 'Earlier work', ...(remoteAlias ? { remoteAlias } : {}) };
@@ -275,7 +275,7 @@ test('a session started as a fork or in a new worktree is not saved as fresh', a
       vm.runInContext(PLAN_SRC, ctx.context);
       const fns = loadAppFunctions(ctx.context, {
         functions: ['launchNewSession', 'persistWorkingSet', 'pendingRestoreEntries'],
-        declarations: ['_persistChain', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restorePlanner', 'exitingApp', 'persistSkippedWhileExiting'],
+        declarations: ['_persistChain', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restorePlanner', 'exitingApp', 'persistSkippedWhileExiting', 'dormantWorkingSet'],
       });
       await fns.launchNewSession({ projectPath: '/srv/app' }, options);
       await fns.persistWorkingSet();

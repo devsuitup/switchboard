@@ -46,9 +46,9 @@ function setup(t, { session = row, live = {}, candidates = [], confirm = false }
     openTerminal: async id => { spawned.push(id); return { ok: true }; },
   });
   const app = loadAppFunctions(ctx.context, {
-    functions: ['openSession', 'openSessionNow', 'beginPtyOpen', 'settlePtyOpen'],
+    functions: ['openSession', 'openSessionNow', 'beginPtyOpen', 'settlePtyOpen', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
     declarations: ['openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex',
-      'continuationRetryCancelled', 'ptyGenerations', 'pendingOpens'],
+      'continuationRetryCancelled', 'ptyGenerations', 'pendingOpens', 'dormantWorkingSet', 'restoreMode', 'restoreInFlight'],
   });
   ctx.window.sessionMap.set(session.sessionId, session);
   ctx.sidebar.renderProjects([makeSampleProject({ projectPath: session.projectPath, remoteAlias: session.remoteAlias, sessions: [session] })], true);

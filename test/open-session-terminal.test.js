@@ -24,6 +24,7 @@ async function withHarness(setup, fn) {
       sessionOpenedOutsideRestore: false,
       openSessions: new Map(),
       skippedWorkingSetEntries: new Set(),
+      dormantWorkingSet: new Map(),
       destroySession: (id) => calls.destroyed.push(id),
       showSession: (id) => calls.shown.push(id),
       guardResume: async () => true,
@@ -51,7 +52,7 @@ async function withHarness(setup, fn) {
     setup(window, calls);
     const { openSession } = loadAppFunctions(ctx.context, {
       declarations: ['ptyGenerations', 'pendingOpens', 'continuationRetryCancelled', 'openingSessions'],
-      functions: ['beginPtyOpen', 'settlePtyOpen', 'openSession', 'openSessionNow'],
+      functions: ['beginPtyOpen', 'settlePtyOpen', 'openSession', 'openSessionNow', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
     });
     await fn({ openSession, window, calls });
   } finally {

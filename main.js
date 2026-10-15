@@ -2549,6 +2549,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     }
   }
 
+  // see .ai/contexts/session-cache.md ("Restore on click")
+  if (sessionOptions?.reattachOnly) return { ok: false, notLive: true };
+
   // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
   if (!isNew) {
     let cachedFolder = null;

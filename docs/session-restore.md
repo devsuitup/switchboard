@@ -11,6 +11,7 @@ closed.
 |---|---|
 | **Don't restore** | Nothing is reopened |
 | **Ask on startup** (default) | A bar asks *Restore N session(s) from last time?*, with **Restore** and **Dismiss** |
+| **Restore on click** | Nothing is started; the sessions are marked in the sidebar, and each is resumed when you click it — see [Restore on click](#restore-on-click) |
 | **Restore automatically** | The sessions are reopened without asking |
 
 The setting is read at launch; a change applies from the next start.
@@ -35,7 +36,9 @@ creates a worktree, since the saved project path already is the folder to
 start in. Once its first prompt makes it a real session, the set is saved
 again with it as an ordinary entry. A session without a transcript is still
 left out when it runs on a remote host, or was started as a fork or in a new
-worktree: starting it anew would not give back the same thing.
+worktree: starting it anew would not give back the same thing. In **Restore on
+click** mode a fresh entry not in the index is dropped instead, since that
+mode starts nothing by itself and the entry has no row to click.
 
 ## Closing the app
 
@@ -143,6 +146,54 @@ A live continuation remains a candidate even before its first transcript record
 exists. A live background continuation uses the existing attach path and its final id
 is saved with `bg: true`, so every later restore reattaches it while the job is
 live. A saved entry without that mark still skips a session live elsewhere.
+
+## Restore on click
+
+No `claude` process is started at launch. Each saved session that is in the
+index gets an outlined dot in the sidebar and stays visible there whatever the
+visible-session count and age limit say. The grid starts empty, and no session
+is selected, the last active one included.
+
+- Clicking a marked session resumes it, like any other click. It stays marked
+  until it is open: if it is live in another process and you decline to resume
+  it, or its terminal fails to start, it is still marked and still saved. One
+  whose conversation continued under another id is resumed there, and the new
+  id takes its place in the saved set; if that continuation is already open,
+  it is shown and the marked session is simply dropped from the saved set. A
+  continuation declined or failing to start stays marked and saved under the
+  new id, also when you open it before the marking has reached it. A saved
+  session you click while the marking is still running is marked too until it
+  is open, so it stays saved if it fails to start.
+- **Don't restore**, in a marked session's right-click menu, removes it from
+  the saved set without starting it. So does deleting the session.
+- A marked session never clicked stays in the saved set, so the next start
+  marks it again. A saved session not yet marked, because indexing has not
+  reached it, is kept too when the set is saved before then.
+- Opening another session does not stop the marking, which goes on until
+  indexing is over.
+- A project folded because its sessions are old opens when it holds a marked
+  session.
+- The previous/next session keys stop on marked sessions too, and resume the
+  one they land on. Holding a key down skips them: the repeats cycle through
+  the open sessions only, so they never resume a row of marked sessions one
+  after another. The grid has no card for a marked session, so in the grid
+  they skip it.
+- A saved session that is a member of a merged web-session row marks that
+  row. Clicking the row resumes its newest marked member, or shows the member
+  already open; either way the row is open, so every member of it is dropped
+  from the marked and saved sessions. A second click, or the session keys,
+  while a member is still starting wait for that start: if it fails, the row's
+  marked members stay marked and saved. **Don't restore** and deleting the row drop every
+  marked member of it, and the session keys resume a marked member under its
+  own id, or show the member already open. After a reload, a member whose row
+  already has a running member is not marked, whatever its place in the saved
+  set: the row is open.
+- Reloading the window starts nothing. A saved session whose process is still
+  running is reattached, the selected one included; the others are marked. A
+  process that ends during the reload is not started again. Reattaching never
+  changes the selected session, so a session you open meanwhile stays shown.
+  A running member of a merged row whose reattach waited for another member you
+  opened meanwhile is marked if that open fails.
 
 Within one run of the app, going back to a session whose process still runs is
 a reattach: the terminal replays its buffered output onto the same process.

@@ -81,7 +81,7 @@ test('scheduled persistence cannot overwrite the saved working set before startu
   h.window.pendingRestoreEntries = () => [];
   loadAppFunctions(h.context, {
     functions: ['persistWorkingSet', 'schedulePersistWorkingSet'],
-    declarations: ['savedWorkingSetRead', 'persistWorkingSetTimer', 'restoringWorkingSet', 'exitingApp', 'persistSkippedWhileExiting', 'skippedWorkingSetEntries'],
+    declarations: ['savedWorkingSetRead', 'persistWorkingSetTimer', 'restoringWorkingSet', 'exitingApp', 'persistSkippedWhileExiting', 'skippedWorkingSetEntries', 'dormantWorkingSet'],
   });
   try {
     h.window.schedulePersistWorkingSet();
