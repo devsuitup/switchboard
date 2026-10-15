@@ -769,8 +769,9 @@ notification invalidates indexing independently, but cannot itself light a
 row. The tracker asynchronously opens only that transcript, keeping its
 device/inode/birth-time identity and size/write-mtime watermark. Both handle
 and path stats use BigInt identities and nanosecond timestamps (#648): NTFS
-file IDs can exceed Number's exact range, and replacements created within
-one clock tick can share a birth time. Rounded IDs must not authorize
+file IDs can exceed Number's exact range, and NTFS tunnelling gives a file
+recreated under a just-renamed name the old creation time, so birth time
+does not tell a replacement apart on Windows. Rounded IDs must not authorize
 activity for a different file. On first
 sight, a nonempty file whose write mtime is at or after tracker creation
 minus `FIRST_WRITE_MTIME_ALLOWANCE_MS` (2 s for clock/filesystem resolution)
