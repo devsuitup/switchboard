@@ -1116,9 +1116,9 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath, opts) => {
     if (content === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
     if (opts?.editor) {
       const pair = await gitChangesFile.readTouchedChangesFile({ absolutePath: resolved, maxBytes: PANEL_FILE_MAX_BYTES });
-      if (!pair.ok || pair.git) return pair;
+      if (!pair.ok || pair.git || pair.version) return pair;
       const current = gitChangesFile.toLf(content);
-      return { ok: true, git: false, original: current, current, readOnly: !!pair.readOnly };
+      return { ok: true, git: false, original: current, current, version: pair.readOnly ? undefined : gitChangesFile.versionOf(buf), readOnly: !!pair.readOnly };
     }
     return { ok: true, content };
   } catch (err) {
@@ -1146,7 +1146,7 @@ ipcMain.handle('save-file-for-panel', async (_event, filePath, content, expected
     if (fs.lstatSync(filePath).isSymbolicLink()) return { ok: false, error: 'symbolic links are read-only', reason: 'symlink' };
     if (isSensitivePath(path.resolve(filePath))) return { ok: false, error: 'access to sensitive path denied' };
     if (gitChangesFile.decodeUtf8(fs.readFileSync(filePath)) === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
-    if (!opts?.git) return panelSaves.saveFileForPanel(filePath, content, expected);
+    if (!opts?.git && opts?.version === undefined) return panelSaves.saveFileForPanel(filePath, content, expected);
     const result = await gitChangesFile.writeTouchedChangesFile({ absolutePath: filePath, content, version: opts.version, maxBytes: PANEL_FILE_MAX_BYTES });
     if (!result.ok) return result;
     if (/[\\/]\.work-files[\\/]/.test(result.savedPath)) invalidateFtsSignature('work-file', result.savedPath);
@@ -1962,13 +1962,13 @@ ipcMain.handle('resolve-terminal-paths', async (_event, sessionId, texts) => {
 });
 
 ipcMain.handle('git-changes-watch', async (_event, sessionId, filePath) => {
-  if (typeof filePath !== 'string' || !filePath) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
+  if (!gitChangesFile.isSafeRepoRelativePath(filePath)) return { ok: false, error: 'invalid path', reason: 'invalid-path' };
   const target = gitChangesFile.requireLocalTarget(resolveGitChangesTarget(sessionId));
   if (!target.ok) return target;
 
-  const repo = await gitChangesFile.resolveRepoDirs(target.cwd, {});
-  if (!repo) return { ok: false, error: 'not a git repository', reason: 'repo' };
-  const resolved = gitChangesFile.resolveTargetInsideRepo(repo, filePath, {});
+  const root = await gitChangesFile.resolveFileRoot(target.cwd);
+  if (!root.ok) return root;
+  const resolved = gitChangesFile.resolveTargetInsideRepo(root.repo, filePath, {});
   if (!resolved.ok) return resolved;
 
   return changesWatchers.watch(sessionId, filePath, resolved.path);

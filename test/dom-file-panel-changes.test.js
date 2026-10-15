@@ -54,6 +54,20 @@ function makeStatusResult(overrides = {}) {
 
 const DEFAULT_PAIR = { ok: true, original: 'old\n', current: 'new\n', version: 'v1', binary: false, truncated: false };
 
+test('658: a file pair without git uses the plain editor and hides the git diff toggle', async () => {
+  const ctx = setupFilePanelDom({ fileImpl: () => ({ ok: true, git: false, original: 'plain\n', current: 'plain\n', version: 'bytes' }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await ctx.window.openChangesTab('s1');
+    await ctx.window.openChangesDiff('s1', { path: 'notes.txt' });
+    await flush();
+    assert.equal(ctx.editors.at(-1).box.mode, 'plain');
+    assert.equal(ctx.document.getElementById('changes-diff-mode-btn').style.display, 'none');
+    assert.equal(ctx.calls.diff.length, 0);
+    assert.doesNotMatch(ctx.document.body.textContent, /This directory is not a git repository/);
+  } finally { ctx.destroy(); }
+});
+
 test('Changes snapshots scroll before opening the diff and restores it without a status request', async () => {
   const ctx = setupFilePanelDom();
   try {
