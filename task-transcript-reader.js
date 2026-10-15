@@ -18,24 +18,25 @@ function createTaskTranscriptReader({ registry, files = fs, chunkBytes = 64 * 10
         let handle;
         try {
           handle = await files.open(file, 'r');
-          const stat = await handle.stat();
+          const stat = await handle.stat({ bigint: true });
+          const size = Number(stat.size);
           let c = cursors.get(file);
           let boundaryChanged = false;
-          if (c?.boundary.length && (stat.mtimeMs !== c.mtimeMs || stat.size !== c.offset)) {
+          if (c?.boundary.length && (stat.mtimeNs !== c.mtimeNs || stat.size !== BigInt(c.offset))) {
             const boundary = Buffer.alloc(c.boundary.length);
             const read = await handle.read(boundary, 0, boundary.length, c.offset - boundary.length);
             boundaryChanged = read.bytesRead !== boundary.length || !boundary.equals(c.boundary);
           }
-          if (!c || c.dev !== stat.dev || c.ino !== stat.ino || c.birthtimeMs !== stat.birthtimeMs || stat.size < c.offset || boundaryChanged) {
-            c = { dev: stat.dev, ino: stat.ino, birthtimeMs: stat.birthtimeMs, offset: 0, pending: '', decoder: new StringDecoder('utf8'), mtimeMs: stat.mtimeMs, boundary: Buffer.alloc(0) };
+          if (!c || c.dev !== stat.dev || c.ino !== stat.ino || c.birthtimeNs !== stat.birthtimeNs || stat.size < BigInt(c.offset) || boundaryChanged) {
+            c = { dev: stat.dev, ino: stat.ino, birthtimeNs: stat.birthtimeNs, offset: 0, pending: '', decoder: new StringDecoder('utf8'), mtimeNs: stat.mtimeNs, boundary: Buffer.alloc(0) };
             cursors.set(file, c);
           }
-          while (!disposed && c.offset < stat.size) {
-            const buffer = Buffer.alloc(Math.min(chunkBytes, stat.size - c.offset));
+          while (!disposed && c.offset < size) {
+            const buffer = Buffer.alloc(Math.min(chunkBytes, size - c.offset));
             const { bytesRead } = await handle.read(buffer, 0, buffer.length, c.offset);
             if (!bytesRead) break;
-            const current = await files.stat(file);
-            if (current.dev !== c.dev || current.ino !== c.ino || current.birthtimeMs !== c.birthtimeMs || current.size < stat.size) {
+            const current = await files.stat(file, { bigint: true });
+            if (current.dev !== c.dev || current.ino !== c.ino || current.birthtimeNs !== c.birthtimeNs || current.size < stat.size) {
               cursors.delete(file);
               work.dirty = true;
               break;
@@ -50,10 +51,10 @@ function createTaskTranscriptReader({ registry, files = fs, chunkBytes = 64 * 10
               try { entry = JSON.parse(line); } catch { continue; }
               registry.ingest(parentSessionId, entry);
             }
-            c.mtimeMs = stat.mtimeMs;
+            c.mtimeNs = stat.mtimeNs;
             await yieldRead();
           }
-          c.mtimeMs = stat.mtimeMs;
+          c.mtimeNs = stat.mtimeNs;
         } catch {}
         finally { if (handle) await handle.close().catch(() => {}); }
       } while (!disposed && work.dirty);

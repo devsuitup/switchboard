@@ -265,7 +265,7 @@ test('unchanged same-size transcript with newer mtime reads only the 128-byte bo
     stat: real.stat,
     async open(...args) {
       const handle = await real.open(...args);
-      return { stat: () => handle.stat(), close: () => handle.close(), async read(...args) { const result = await handle.read(...args); bytes += result.bytesRead; return result; } };
+      return { stat: options => handle.stat(options), close: () => handle.close(), async read(...args) { const result = await handle.read(...args); bytes += result.bytesRead; return result; } };
     },
   } });
   t.after(() => reader.dispose());
