@@ -154,7 +154,8 @@ test('openSession runs the guard before it asks main for a PTY', () => {
 test('the reload path resumes the remembered session as an automatic resume', async () => {
   const calls = [];
   const ctx = vm.createContext({
-    window: {},
+    window: { api: { getSetting: async () => null } },
+    SETTING_DEFAULTS: { restoreOnStartup: 'ask' },
     localStorage: { getItem: () => null },
     activeSessionId: SESSION.sessionId,
     openSessions: new Map(),
@@ -165,7 +166,7 @@ test('the reload path resumes the remembered session as an automatic resume', as
     restoreWorkingSet: async () => { calls.push('working set'); },
     restoreAgentsViewAtStartup() {},
   });
-  const { restoreStartupSessions } = loadAppFunctions(ctx, { functions: ['restoreStartupSessions'] });
+  const { restoreStartupSessions } = loadAppFunctions(ctx, { functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'] });
   await restoreStartupSessions();
   assert.deepEqual(calls, [
     { session: SESSION, options: undefined, automatic: true },

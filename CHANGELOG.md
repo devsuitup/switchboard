@@ -6,6 +6,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### New
 - **Send to background**, in a running session's header and right-click menu, moves it to the Claude daemon and keeps it open as an attached tab, reattached after each restart. Remote, sandboxed and pre-launch-command sessions cannot move, and a busy session must be idle first; running subagents require confirmation because Claude may stop them. (#546)
+- **Restore Sessions on Startup** has a new **Restore on click** option: the sessions open when Switchboard last closed are marked in the sidebar with an outlined dot, and each one is resumed only when you open it, by a click or with the previous/next session keys, instead of starting a `claude` process for every one at launch. **Don't restore** in a marked session's right-click menu removes it without starting it. (#441)
 
 ### Changed
 - Conversations now show the number of running subagents below their title, even when their child list is collapsed or filtered, replacing the green dots on child rows and collapsed carets. The grid shows the same count in place of coloured pills; no count appears when none are running or activity is unknown. (#627)
