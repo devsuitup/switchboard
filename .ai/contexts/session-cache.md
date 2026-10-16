@@ -261,10 +261,12 @@ schema reconciliation for local top-level rows only, preserving remote/subagent
 titles and baselines, session rows and user names. It resets local user title
 baselines to unknown so the repair backfill can hydrate them without treating
 an old first-title correction as a new CLI rename. A local cache upsert
-establishes a missing baseline only from a
-title already known in the cache before that upsert, never from the incoming
-title. When both the baseline and cached title are NULL, a newly observed CLI
-title may replace the user name. The upsert hydration is shared in
+establishes a missing baseline from the incoming transcript title, including
+full scans that delete the previous cached row before inserting it again.
+While the baseline is NULL (after an upgrade, before the backfill has run, or
+when it skipped a live file), the first CLI `/rename` observed becomes the
+baseline and preserves the Switchboard user name. The next distinct `/rename`
+can replace it. The upsert hydration is shared in
 `session-name.js`. Remote/subagent NULL baselines left by earlier
 migrations do not absorb their next `/rename`. New metadata fields receive the
 next revision, including legacy metadata re-keying.

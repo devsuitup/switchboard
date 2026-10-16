@@ -544,7 +544,7 @@ function getProjectsRevision() {
 const upsertCachedSessionsBatch = db.transaction((sessions) => {
   for (const s of sessions) {
     const previous = getMeta(s.sessionId, true);
-    const next = establishTranscriptBaseline(previous, stmts.cacheGetSession.get(s.sessionId));
+    const next = establishTranscriptBaseline(previous, s);
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,

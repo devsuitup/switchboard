@@ -42,7 +42,7 @@ function build(message) {
       for (const row of sessions) {
         const cachedEntry = rows.get(row.sessionId);
         const previous = meta.get(row.sessionId);
-        const next = establishTranscriptBaseline(previous, cachedEntry);
+        const next = establishTranscriptBaseline(previous, row);
         rows.set(row.sessionId, { ...cachedEntry, ...row });
         if (next !== previous) meta.set(row.sessionId, next);
       }

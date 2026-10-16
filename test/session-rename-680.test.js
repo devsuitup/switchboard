@@ -107,7 +107,7 @@ for (const [first, next] of [['X (3)', 'X'], ['X', 'X (3)']]) {
 }
 
 for (const adapter of ['SQLite', 'recorder']) {
-  test(`a NULL baseline does not swallow a subsequent transcript rename through ${adapter} refresh`, t => {
+  test(`a NULL baseline adopts the first CLI title and accepts the next distinct rename through ${adapter} refresh`, t => {
     run(temp(t), fixture + `
       refresh();
       const Database = require('better-sqlite3');
@@ -120,9 +120,44 @@ for (const adapter of ['SQLite', 'recorder']) {
       if (recorder) { init({ db: recorder.adapter }); recorder.begin(); }
       fs.appendFileSync(file, title('Z'));
       refresh();
-      assert.equal(displayed(), 'Z', 'refresh must not absorb a newly observed CLI rename as its baseline');
+      assert.equal(displayed(), 'Y', 'the first observed title establishes the missing baseline');
+      fs.appendFileSync(file, title('W'));
+      refresh();
+      assert.equal(displayed(), 'W', 'the next distinct CLI rename replaces the user name');
       if (recorder) for (const effect of recorder.finish()) db[effect.name](...effect.args);
-      assert.equal(db.getMeta(id, true).nameTranscriptTitle, 'Z');
+      assert.equal(db.getMeta(id, true).nameTranscriptTitle, 'W');
+      assert.equal(db.getMeta(id).name, 'W');
+      sql.close();
+      db.closeDb();
+    `);
+  });
+}
+
+for (const method of ['writeScannedFolder', 'recorder', 'refreshFolder']) {
+  test(`a NULL baseline and cached title preserve the user name through ${method}`, t => {
+    run(temp(t), fixture + `
+      refresh();
+      commands.renameSession(id, 'Y');
+      const Database = require('better-sqlite3');
+      const sql = new Database(db.DB_PATH);
+      sql.prepare('UPDATE session_cache SET customTitle = NULL WHERE sessionId = ?').run(id);
+      sql.prepare('UPDATE session_meta_fields SET transcriptTitle = NULL WHERE sessionId = ?').run(id);
+      assert.equal(db.getMeta(id, true).nameTranscriptTitle, null);
+      assert.equal(db.getCachedSession(id).customTitle, null);
+      const recorder = '${method}' === 'recorder' ? require('./cache-effects').createCacheEffects(db) : null;
+      if (recorder) { init({ db: recorder.adapter }); recorder.begin(); }
+      if ('${method}' === 'refreshFolder') refresh();
+      else cache.writeScannedFolder({ folder, projectPath: root,
+        sessions: [cache.readSessionFile(file, folder, root)], indexMtimeMs: 0 });
+      assert.equal(displayed(), 'Y', 'an unchanged transcript title cannot replace the user name after migration');
+      if (recorder) {
+        const effects = recorder.finish();
+        assert.equal(effects.find(effect => effect.name === 'upsertSearchEntries').args[0][0].title, 'Y fixture prompt');
+        for (const effect of effects) db[effect.name](...effect.args);
+      }
+      assert.equal(db.getMeta(id).name, 'Y');
+      assert.equal(db.getMeta(id, true).nameTranscriptTitle, 'X');
+      assert.equal(db.getCachedSession(id).customTitle, 'X');
       sql.close();
       db.closeDb();
     `);
@@ -260,7 +295,7 @@ test('full scans and direct transcript writes preserve the rename baseline acros
 });
 
 for (const method of ['backfill', 'refresh']) {
-  test(`legacy unknown titles are repaired by ${method} ${method === 'backfill' ? 'without clobbering a user name' : 'without absorbing the observed title'}`, t => {
+  test(`legacy unknown titles are repaired by ${method} without clobbering a user name`, t => {
     const root = temp(t);
     run(root, fixture + `
       refresh();
@@ -293,8 +328,7 @@ for (const method of ['backfill', 'refresh']) {
           cache.refreshFolder(folder);
         }
         assert.equal(db.getCachedSession(id).customTitle, 'X', 'repair the old first title without reindex');
-        assert.equal(db.getMeta(id).name, '${method}' === 'backfill' ? 'Y' : 'X',
-          'only backfill may establish a baseline from a newly discovered title');
+        assert.equal(db.getMeta(id).name, 'Y', 'repair establishes a baseline from the incoming title');
         fs.appendFileSync(file, JSON.stringify({ type: 'custom-title', customTitle: 'Z' }) + '\\n');
         fs.utimesSync(file, new Date(1900000200000), new Date(1900000200000));
         cache.refreshFolder(folder);
@@ -402,7 +436,7 @@ test('backfill repairs a legacy transcript-owned displayed name as well as its c
   `);
 });
 
-test('the projects worker accepts a newly observed title with a NULL baseline and cached title', t => {
+test('the projects worker preserves a user name when the first title establishes a NULL baseline', t => {
   run(temp(t), fixture + `
     const { Worker } = require('node:worker_threads');
     refresh();
@@ -428,10 +462,11 @@ test('the projects worker accepts a newly observed title with a NULL baseline an
           worker.postMessage({ id: 1, reconcile: true, activeSessions: [], remoteRoots: [] });
         });
         for (const view of [result.defaultProjects, result.allProjects]) {
-          assert.equal(view.flatMap(p => p.sessions).find(s => s.sessionId === id).name, 'Z');
+          assert.equal(view.flatMap(p => p.sessions).find(s => s.sessionId === id).name, 'Y');
         }
         for (const effect of result.effects) db[effect.name](...effect.args);
-        assert.equal(db.getMeta(id).name, 'Z');
+        assert.equal(db.getMeta(id).name, 'Y');
+        assert.equal(db.getMeta(id, true).nameTranscriptTitle, 'Z');
       } finally { await worker.terminate(); db.closeDb(); }
     })().catch(err => { console.error(err); process.exitCode = 1; });
   `);
