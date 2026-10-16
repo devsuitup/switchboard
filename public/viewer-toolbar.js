@@ -308,7 +308,8 @@ function renderMarkdownDiagrams(el, state) {
       const renderDocument = mermaidDocuments.get(mermaid) || document;
       const container = renderDocument.createElement('div');
       container.className = 'mermaid-render-scratch';
-      container.style.width = el.clientWidth + 'px';
+      const width = el.clientWidth;
+      if (width > 0) container.style.width = width + 'px';
       container.setAttribute('aria-hidden', 'true');
       try {
         const markup = source.replace(/<<[^<>\n]+>>/g, annotation => annotation.includes('=') ? annotation : '');
@@ -337,7 +338,7 @@ function renderMarkdownDiagrams(el, state) {
         diagram.className = 'mermaid-diagram';
         diagram.dataset.previewMermaid = block.dataset.previewMermaid;
         diagram.appendChild(sanitizeMarkdownDiagram(svg, renderId));
-        state.diagrams.set(Number(block.dataset.previewMermaid), { source, theme, diagram: diagram.cloneNode(true) });
+        if (width > 0) state.diagrams.set(Number(block.dataset.previewMermaid), { source, theme, diagram: diagram.cloneNode(true) });
         const { scrollTop, scrollLeft } = el;
         block.replaceWith(diagram);
         el.scrollTop = scrollTop;

@@ -18,6 +18,7 @@ function setup(t, render) {
   }
   const el = ctx.document.createElement('div');
   el.className = 'markdown-preview';
+  Object.defineProperty(el, 'clientWidth', { configurable: true, get: () => el.style.display === 'none' ? 0 : 720 });
   ctx.document.body.appendChild(el);
   const realLoader = ctx.window.loadMermaidBundle;
   const calls = [], configs = [];
@@ -115,6 +116,29 @@ test('render scratch follows the preview width at each render, including after w
   assert.equal(document.querySelector('.mermaid-render-scratch'), null);
   assert.ok(ctx.el.querySelector('svg'));
   assert.ok(next.querySelector('svg'));
+});
+
+test('a hidden preview does not force a zero-width scratch', async t => {
+  const ctx = setup(t);
+  ctx.el.style.display = 'none';
+  await ctx.render(fence('gantt\ndateFormat YYYY-MM-DD\nsection Work\nBuild :2026-01-01, 2d'));
+  assert.equal(ctx.calls.length, 1);
+  assert.equal(ctx.calls[0].container.style.width, '');
+  assert.ok(ctx.el.querySelector('svg'));
+});
+
+test('a Gantt rendered while hidden is rendered again when visible, then cached', async t => {
+  const ctx = setup(t);
+  const source = fence('gantt\ndateFormat YYYY-MM-DD\nsection Work\nBuild :2026-01-01, 2d');
+  ctx.el.style.display = 'none';
+  await ctx.render(source);
+  ctx.el.style.display = 'block';
+  await ctx.render(source);
+  assert.equal(ctx.calls.length, 2, 'a hidden render must not become the final cached diagram');
+  assert.equal(ctx.calls[1].container.style.width, '720px');
+  await ctx.render(source);
+  assert.equal(ctx.calls.length, 2, 'the visible render remains reusable');
+  assert.ok(ctx.el.querySelector('svg'));
 });
 
 test('real Mermaid rendering preserves host lookups and application notifications throughout async work', async t => {

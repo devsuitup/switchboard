@@ -82,15 +82,37 @@ test('Markdown Mermaid loads once under Electron CSP, isolates details and fits 
     expect(await page.evaluate(() => window.mermaidCspViolations)).toEqual([]);
   });
 
-  await test.step('details cannot expose an existing main-page element', async () => {
+  await test.step('the preview pre-check refuses details referencing a main-page element', async () => {
     await expect(page.locator('#' + DETAILS_ID)).toContainText(PRIVATE_LABEL);
     await openMarkdown('details.md');
     await expect(preview.locator('.mermaid-diagram')).toHaveCount(1);
-    expect(await preview.locator('.mermaid-diagram > svg, .mermaid-error').count()).toBe(1);
+    await expect(preview.locator('.mermaid-error')).toHaveCount(1);
+    await expect(preview.locator('.mermaid-diagram > svg')).toHaveCount(0);
     await expect(preview).not.toContainText(PRIVATE_LABEL);
     expect(await preview.innerHTML()).not.toContain(PRIVATE_URL);
     await expect(preview.locator('[id*="_popup"], .actorPopupMenu, .actorPopupMenuPanel, foreignObject')).toHaveCount(0);
     await expect(frame).toHaveCount(1);
+  });
+
+  await test.step('the scoped renderer isolates details when the pre-check is bypassed', async () => {
+    const svg = await page.evaluate(async id => {
+      const renderDocument = document.querySelector('iframe.mermaid-render-frame').contentDocument;
+      const privateElement = renderDocument.importNode(document.getElementById(id), true);
+      const scratch = renderDocument.createElement('div');
+      renderDocument.body.append(privateElement, scratch);
+      try {
+        const source = 'sequenceDiagram\n  participant Alice\n  participant Bob\n  details Alice: ' + id + '\n  Alice->>Bob: Hello';
+        const { svg } = await window.renderScopedMarkdownDiagram(window.previewMermaid, 'preview-mermaid-dom-guard', source, scratch);
+        return svg;
+      } finally {
+        scratch.remove();
+        privateElement.remove();
+      }
+    }, DETAILS_ID);
+    expect(svg).toContain('<svg');
+    expect(svg).toContain('Hello');
+    expect(svg).not.toContain(PRIVATE_LABEL);
+    expect(svg).not.toContain(PRIVATE_URL);
   });
 
   await test.step('a newly rendered Gantt fits after narrowing the panel', async () => {
