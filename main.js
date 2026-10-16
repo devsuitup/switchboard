@@ -3423,10 +3423,7 @@ ipcMain.handle('updater-install', async () => {
   await drainForUpdate();
   updateInstalling = true;
   try {
-    if (autoUpdater.quitAndInstall() === false) {
-      updateInstalling = false;
-      activityFlushedForQuit = false;
-    }
+    autoUpdater.quitAndInstall();
   }
   catch (error) {
     updateInstalling = false;

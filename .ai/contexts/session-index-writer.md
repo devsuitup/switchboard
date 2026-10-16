@@ -40,7 +40,12 @@ transaction. Cache computations retain their synchronous algorithms against
 cache-effects.js: lazy reads of affected rows, local read-your-writes overlay,
 then one acknowledged effects command. Worker admission checks its current revision
 against that snapshot. A rejected main-cache computation may recompute at most
-three times; stale Projects effects reject for the readonly relay to rebuild.
+three times; stale Projects effects report WRITER_STALE for the readonly relay
+to rebuild. Replies with no effects or retained live rows bypass the cache
+computation queue, so a scan's outstanding folder ACK cannot delay first paint.
+The Projects relay handles conflicts both before queue execution and at writer
+admission: progress conflicts invalidate the job, and final conflicts use its
+existing three-snapshot budget before publishing rows without remaining effects.
 Search publication reads the current name and cached summary on the writer.
 
 BEGIN IMMEDIATE chunks target 32 SQLite changes and 65536 bound-input bytes.

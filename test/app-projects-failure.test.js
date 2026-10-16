@@ -32,6 +32,7 @@ test('startup retries a failed project load and restores even when both attempts
       return { defaultProjects: [], allProjects: [] };
     };
     h.window.restoreStartupSessions = async () => { restores++; };
+    h.window.setTimeout = () => 1;
     const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
     if (source.includes('async function loadStartupProjects(')) loadAppFunctions(h.context, { functions: ['loadStartupProjects'] });
     const start = source.indexOf('\n}', source.indexOf('async function restoreStartupSessions(')) + 2;
@@ -42,6 +43,52 @@ test('startup retries a failed project load and restores even when both attempts
       assert.equal(restores, 1, 'saved working-set restore must run after failed loads');
     } finally { h.destroy(); }
   }
+});
+
+test('startup recovers cached rows after two failures without a filesystem event', async () => {
+  const h = setup();
+  const timers = [];
+  let calls = 0, restores = 0, refreshed;
+  const painted = new Promise(resolve => { refreshed = resolve; });
+  h.window.cachedProjects = [];
+  h.window.cachedAllProjects = [];
+  h.window.setTimeout = callback => { timers.push(callback); return timers.length; };
+  h.window.api.getProjects = async () => {
+    if (++calls <= 2) throw new Error('temporary IPC failure');
+    return { defaultProjects: [{ projectPath: '/cached', sessions: [] }], allProjects: [] };
+  };
+  h.window.restoreStartupSessions = async () => { restores++; };
+  h.window.refreshSidebar = () => refreshed();
+  loadAppFunctions(h.context, { functions: ['loadStartupProjects', 'reloadProjects'] });
+  try {
+    await h.window.loadStartupProjects();
+    assert.equal(restores, 1, 'restore must not wait for the delayed retry');
+    assert.equal(timers.length, 1, 'startup must schedule recovery after both immediate attempts fail');
+    timers.shift()();
+    await painted;
+    assert.equal(calls, 3);
+    assert.equal(h.window.cachedProjects[0].projectPath, '/cached');
+    assert.equal(timers.length, 0, 'a successful retry must stop the retry chain');
+  } finally { h.destroy(); }
+});
+
+test('startup recovery stops after its bounded retry budget', async () => {
+  const h = setup();
+  const timers = [];
+  let calls = 0;
+  h.window.setTimeout = callback => { timers.push(callback); return timers.length; };
+  h.window.api.getProjects = async () => { calls++; throw new Error('persistent IPC failure'); };
+  h.window.restoreStartupSessions = async () => {};
+  loadAppFunctions(h.context, { functions: ['loadStartupProjects', 'reloadProjects'] });
+  try {
+    await h.window.loadStartupProjects();
+    for (let i = 0; i < 3; i++) {
+      assert.equal(timers.length, 1);
+      await timers.shift()();
+    }
+    assert.equal(calls, 5);
+    assert.equal(timers.length, 0);
+  } finally { h.destroy(); }
 });
 
 test('a failed event reload keeps both previous lists and settles without rejection', async () => {

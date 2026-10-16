@@ -57,7 +57,10 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
         const finish = acknowledgment => {
           if (active === job) active.version = acknowledgment?.version ?? snapshot().version;
         };
-        if (applied?.then) return applied.then(finish).catch(fail);
+        if (applied?.then) return applied.then(finish).catch(error => {
+          if (error.code === 'WRITER_STALE') { if (active === job) job.stale = true; }
+          else fail(error);
+        });
         return finish();
       }
       const job = active;
@@ -80,7 +83,13 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
         dispatchPending();
       };
       const applied = !stale && apply(result);
-      if (applied?.then) return applied.then(finish).catch(fail);
+      if (applied?.then) return applied.then(finish).catch(error => {
+        if (error.code === 'WRITER_STALE' && active === job) {
+          job.stale = true;
+          return receive(message);
+        }
+        fail(error);
+      });
       finish();
     } catch (error) { fail(error); }
   }

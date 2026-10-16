@@ -54,11 +54,10 @@ function setup(behavior) {
   } };
 }
 
-for (const failure of ['error event', 'false return', 'throw']) {
+for (const failure of ['error event', 'throw']) {
   test(`failed update (${failure}) keeps services running and a later quit uses normal shutdown`, async () => {
     const ctx = setup(updater => {
       if (failure === 'throw') throw new Error('installer failed');
-      if (failure === 'false return') return false;
       updater.emit('error', new Error('installer failed'));
       return undefined;
     });

@@ -40,7 +40,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     const work = cacheTail.then(async () => {
       await ready;
       for (let attempt = 0; ; attempt++) {
-        if (name === 'applyProjectsWorkerEffects' && backend.getProjectsRevision() !== sourceVersion) throw new Error('Projects effect snapshot changed while queued');
+        if (name === 'applyProjectsWorkerEffects' && backend.getProjectsRevision() !== sourceVersion) throw Object.assign(new Error('Projects effect snapshot changed while queued'), { code: 'WRITER_STALE' });
         recorder.begin();
         const result = cache[name](...args);
         const revision = recorder.revision();
@@ -75,7 +75,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     async releaseLiveSession(id) { return compute('releaseLiveSession', id); },
     async writeScannedFolder(result, unverified) { return compute('writeScannedFolder', result, unverified); },
     async writeScannedFolderPartial(result) { return compute('writeScannedFolderPartial', result); },
-    async applyProjectsWorkerEffects(result) { return compute('applyProjectsWorkerEffects', result); },
+    async applyProjectsWorkerEffects(result) {
+      if (result.effects?.length === 0 && result.keptLiveRows?.length === 0) return;
+      return compute('applyProjectsWorkerEffects', result);
+    },
     async archiveProjectFolders(groups, opts, deps) {
       await ready;
       if (!backend.isInitialScanComplete()) return { error: 'indexing' };

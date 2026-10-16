@@ -60,6 +60,46 @@ test('a rejected async effect acknowledgment rejects the original request', asyn
   } finally { f.client.shutdown(); }
 });
 
+for (const progress of [false, true]) {
+  test(`a stale ${progress ? 'progress' : 'final'} effect ACK rebuilds instead of rejecting the project view`, async () => {
+    let calls = 0;
+    const f = fixture({ apply: async () => {
+      if (++calls === 1) throw Object.assign(new Error('snapshot changed'), { code: 'WRITER_STALE' });
+    } });
+    try {
+      const request = f.client.request();
+      request.catch(() => {});
+      if (progress) f.worker.emit('message', { id: f.messages[0].id, progress: { effects: [{ name: 'setName' }] } });
+      else f.reply(0, { effects: [{ name: 'setName' }], keptLiveRows: [], value: 'old' });
+      await new Promise(resolve => setImmediate(resolve));
+      if (progress) {
+        f.reply(0, { effects: [], keptLiveRows: [], value: 'old' });
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      assert.equal(f.messages.length, 2, 'a stale ACK must cause a fresh worker snapshot');
+      f.reply(1, { effects: [], keptLiveRows: [], value: 'current' });
+      assert.equal((await request).value, 'current');
+    } finally { await f.client.shutdown(); }
+  });
+}
+
+test('repeated stale effect ACKs publish rows within the existing conflict budget', async () => {
+  const f = fixture({ apply: async () => { throw Object.assign(new Error('snapshot changed'), { code: 'WRITER_STALE' }); } });
+  try {
+    const request = f.client.request();
+    request.catch(() => {});
+    for (let i = 0; i < 3; i++) {
+      assert.equal(f.messages.length, i + 1);
+      f.reply(i, { effects: [{ name: 'setName' }], keptLiveRows: [], value: 'cached' });
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    const result = await request;
+    assert.equal(result.value, 'cached');
+    assert.deepEqual(result.effects, []);
+    assert.equal(result.stale, true);
+  } finally { await f.client.shutdown(); }
+});
+
 test('a dispatch resolves its own callers while later callers coalesce into the pending job', async () => {
   const f = fixture();
   try {
