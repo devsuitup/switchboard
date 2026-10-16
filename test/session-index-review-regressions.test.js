@@ -260,7 +260,7 @@ function lifecycleFixture(extra = {}) {
   const nativeUpdater = new EventEmitter();
   const noop = () => {};
   const context = vm.createContext({
-    ...clock, console, Promise, appQuitting: false, activityFlushedForQuit: false, updateInstalling: false,
+    ...clock, console, Promise, process: { pid: 6166, kill: (pid, signal) => calls.push(`kill:${pid}:${signal}`) }, appQuitting: false, activityFlushedForQuit: false, updateInstalling: false,
     app: { removeListener: noop, on: (_name, fn) => { context.quit = fn; }, exit: () => calls.push('exit'), quit: () => calls.push('quit') },
     mainWindow: null, holdBootstrapQuit: noop, unsavedGuard: { beforeQuit: () => false },
     log: { error: (...args) => calls.push(args.join(' ')), warn: noop },
@@ -326,23 +326,74 @@ test('a throwing update installer preserves database and PTYs and a later quit s
   assert.ok(f.calls.includes('exit'));
 });
 
-test('update before-quit tears down non-database resources once without holding installation', async () => {
+test('update before-quit stops workers once after the installer starts and takes the single normal exit', async () => {
   const calls = [];
   const f = lifecycleFixture({
     shutdownAllMcp: () => { calls.push('mcp'); throw new Error('cleanup failed'); },
     remoteIndexer: { dispose: () => calls.push('remote') },
     activityTrace: { close: () => calls.push('trace') },
+    closeDb: async () => {},
+    writer: { terminate: () => calls.push('writer'), releaseLiveSession() {}, drain() {} },
+    projectsClient: { shutdown: () => calls.push('projects') },
+    fileListsClient: { shutdown: () => calls.push('files') },
+    searchClient: { shutdown: () => calls.push('search') },
+    sessionCache: { shutdownProducers: () => calls.push('producers') },
     autoUpdater: { quitAndInstall() {
       calls.push('install');
       f.nativeUpdater.emit('before-quit-for-update');
-      f.context.quit({ preventDefault() { assert.fail('install must not be held again'); } });
+      f.context.quit({ preventDefault() { calls.push('held'); } });
     } },
   });
   await f.context.install();
-  assert.deepEqual(calls, ['install', 'mcp', 'remote', 'trace']);
+  await turn();
+  assert.equal(calls[0], 'install');
+  for (const worker of ['writer', 'projects', 'files', 'search', 'producers']) assert.ok(calls.includes(worker), worker);
+  assert.ok(f.calls.includes('exit'));
   f.context.quit({ preventDefault() { assert.fail('install must not be held again'); } });
-  assert.deepEqual(calls, ['install', 'mcp', 'remote', 'trace']);
-  assert.equal(f.calls.includes('kill'), false);
+  assert.equal(calls.filter(call => call === 'mcp').length, 1);
+});
+
+for (const update of [false, true]) for (const blocked of ['writer', 'projects', 'files', 'search', 'producers', 'tasks']) {
+  test(`${update ? 'update' : 'normal'} quit self-kills only its PID after 250 ms with blocked ${blocked}`, async () => {
+    const stopped = () => new Promise(() => {});
+    const f = lifecycleFixture({ closeDb: async () => {} });
+    if (blocked === 'writer') f.context.writer.terminate = stopped;
+    if (blocked === 'projects') f.context.projectsClient.shutdown = stopped;
+    if (blocked === 'files') f.context.fileListsClient.shutdown = stopped;
+    if (blocked === 'search') f.context.searchClient.shutdown = stopped;
+    if (blocked === 'producers') f.context.sessionCache.shutdownProducers = stopped;
+    if (blocked === 'tasks') f.context.taskRecords.dispose = stopped;
+    if (update) f.nativeUpdater.emit('before-quit-for-update');
+    f.context.quit({ preventDefault() {} });
+    await turn();
+    if (f.clock.delays().includes(1500)) {
+      f.clock.advance(1500);
+      await turn();
+    }
+    assert.equal(f.calls.includes('exit'), false, 'never enter worker-joining app.exit');
+    f.clock.advance(249);
+    await turn();
+    assert.equal(f.calls.some(call => call.startsWith('kill:')), false);
+    f.clock.advance(1);
+    await turn();
+    assert.equal(f.calls.filter(call => call === 'kill:6166:SIGKILL').length, 1);
+    assert.ok(f.calls.some(call => call.includes('workers did not exit')));
+    assert.equal(f.calls.includes('exit'), false);
+  });
+}
+
+test('a clean drain ignores slow watchdog startup and exits normally once every worker has exited', async () => {
+  const f = lifecycleFixture({ closeDb: async () => {} });
+  f.context.require = name => {
+    assert.equal(name, './shutdown-exit');
+    return { exitWithWatchdog: () => f.clock.setTimeout(() => f.context.process.kill(6166, 'SIGKILL'), 1000) };
+  };
+  f.context.quit({ preventDefault() {} });
+  await turn();
+  assert.equal(f.calls.filter(call => call === 'exit').length, 1);
+  f.clock.advance(2000);
+  await turn();
+  assert.equal(f.calls.some(call => call.startsWith('kill:')), false);
 });
 
 test('an unresolved asynchronous cleanup adds no installation hold', async () => {

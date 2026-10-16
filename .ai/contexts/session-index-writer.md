@@ -131,22 +131,25 @@ saves bounds, terminates/drains parser producers and pending metadata, flushes
 activity, awaits reader-worker termination, drains complete accepted facade
 workflows, closes main's reader, and awaits the writer's TRUNCATE checkpoint and
 close ACK. A closed window retains its session ids and exit-drain promises until
-shutdown can await and release them. Success, rejection and deadline all end in
-app.exit; subsequent quit events cannot get stuck behind a rejected promise. After the
+shutdown can await and release them. PTY exit callbacks may release retained live rows
+from their spawn-time async context after external admission closes; this exception
+ends when closeDb starts or the writer is terminated. Other external writes stay refused.
+After the
 drain settles or expires, shutdown always requests writer, reader and parser worker
 termination, rejecting unfinished writer callers with unknown outcomes and disabling
-writer restarts. Termination has an additional 250 ms grace period, never an unbounded
-await. An idempotent exitOnce calls shutdown-exit.js, which starts a hidden, detached
-Electron-as-Node watchdog with an IPC connection to this process, waits for its armed
-ACK with a one-second startup deadline, then calls app.exit once. The watchdog exits
-when that connection disconnects. If the parent still holds
-the connection one second later, it kills only the captured parent PID. This external
-deadline is needed because Node process teardown can wait for a worker in native
-SQLite even after worker.terminate(); a main-thread timer cannot fire during that wait.
-If starting the watchdog fails, shutdown logs the error and force-exits its own PID.
-The effective exit budget is 1.5 s drain + 250 ms worker grace + watchdog startup +
-1 s watchdog grace, subject to OS scheduling. A drain timeout logs an explicit exit
-line. Normal exit still checkpoints and closes the writer before termination. A forced
+writer restarts. The task-records worker's disposal promise is retained as part of
+the exit barrier. Repeated reader shutdown calls retain pending termination, and
+writer/Projects/file-list termination failures remain failures for later callers.
+Termination has an additional 250 ms grace period, never an unbounded await.
+Only confirmation from every worker permits the idempotent exitOnce to call app.exit.
+Otherwise the grace timer logs one line and calls process.kill(process.pid, 'SIGKILL').
+This also terminates the current PID under Windows, as exercised by the Electron-as-Node
+native SQLite regression. No watchdog process or RunAsNode fuse is needed for shutdown.
+The main-thread timer remains runnable while worker.terminate is pending; entering
+app.exit before the worker exits would instead block in Node's worker join.
+The effective exit budget is 1.5 s drain + 250 ms worker grace, subject to OS scheduling.
+A drain timeout logs an explicit exit line. Normal exit still checkpoints and closes
+the writer before termination. A forced
 exit can lose uncommitted transactions and commands without ACKs; chunks already
 committed remain recoverable from WAL even without a TRUNCATE checkpoint. A missing
 ACK has unknown outcome and is not evidence of rollback. synchronous=NORMAL retains
@@ -158,10 +161,16 @@ commands without closing the database, stopping producers or killing PTYs. At th
 same 1.5-second deadline it calls quitAndInstall even if draining rejects or stalls.
 The install flag bypasses another before-quit hold and resets on thrown or emitted
 updater errors or an explicit false return, leaving a failed install usable. Only
-when the installer actually reaches before-quit,
-idempotent non-database cleanup stops schedulers, observers, MCP servers and SSH
-children and closes the trace. Each disposer has isolated error handling;
-asynchronous cleanup is not awaited and adds no second installation hold.
+when the installer actually reaches before-quit, the shared shutdownForExit holds
+the quit and applies the same drain, worker stop, grace and single-exit barrier as
+normal quit, bypassing the already accepted unsaved guard. This starts after
+electron-updater/out/BaseUpdater.js has invoked install and its setImmediate emits
+before-quit-for-update then calls app.quit. No second quitAndInstall is invoked.
+Idempotent cleanup stops schedulers, observers, MCP servers and SSH children and
+closes the trace. Each disposer has isolated error handling; unrelated asynchronous
+disposers add no hold, while the task-records worker must confirm exit.
+Tests execute the installed BaseUpdater.quitAndInstall source with its installation
+boundary substituted; no actual installer or windowed Electron is launched.
 OS forced exits and unresponsive
 renderer exit-flush bounds retain their existing limitations. Bootstrap failure
 logs and displays a native error before exiting; second-instance ignores a destroyed

@@ -3651,17 +3651,19 @@ let shutdownPromise;
 let shutdownComplete = false;
 let exitRequested = false;
 function exitOnce() {
-  if (exitRequested) return;
+  if (exitRequested || !shutdownComplete) return;
   exitRequested = true;
-  require('./shutdown-exit').exitWithWatchdog(app, log);
+  app.exit();
 }
 let nonDatabaseResourcesStopped = false;
+let taskRecordsStopped;
 function stopNonDatabaseResources(closeTrace = false) {
   if (nonDatabaseResourcesStopped) return;
   nonDatabaseResourcesStopped = true;
   const cleanup = [
     () => stopScheduler?.(), () => mainLoopMonitor.stop(), () => shutdownAllMcp(),
-    () => localTranscriptTracker.dispose(), () => unsubscribeTaskJobs(), () => taskRecords.dispose(),
+    () => localTranscriptTracker.dispose(), () => unsubscribeTaskJobs(),
+    () => { taskRecordsStopped = Promise.resolve().then(() => taskRecords.dispose()); return taskRecordsStopped; },
     () => { if (projectsWatcher) { projectsWatcher.close(); projectsWatcher = null; } },
     () => cliSessionState.stop(), () => bgAgents.stop(), () => remoteIndexer.dispose(),
     () => remoteWatcher.stopAll(), () => remoteActivityTracker.dispose(),
@@ -3671,6 +3673,26 @@ function stopNonDatabaseResources(closeTrace = false) {
     try { Promise.resolve(dispose()).catch(error => log.error('[shutdown] cleanup failed:', error)); }
     catch (error) { log.error('[shutdown] cleanup failed:', error); }
   }
+}
+async function stopWorkersForExit() {
+  let timer;
+  const stop = [() => writer.terminate(), () => projectsClient.shutdown(),
+    () => fileListsClient.shutdown(), () => searchClient.shutdown(),
+    () => sessionCache.shutdownProducers(), () => taskRecordsStopped];
+  const stopped = Promise.all(stop.map(fn => Promise.resolve().then(fn))).then(() => true, error => {
+    log.error('[shutdown] worker termination failed:', error);
+    return new Promise(() => {});
+  });
+  try {
+    return await Promise.race([stopped, new Promise(resolve => {
+      timer = setTimeout(() => {
+        exitRequested = true;
+        log.error('[shutdown] workers did not exit within 250 ms; force-killing own PID');
+        process.kill(process.pid, 'SIGKILL');
+        resolve(false);
+      }, 250);
+    })]);
+  } finally { clearTimeout(timer); }
 }
 async function boundedShutdown(drain) {
   let timer;
@@ -3693,7 +3715,7 @@ function shutdownForExit() {
   shutdownPromise = boundedShutdown(() => writer.beginShutdown(async () => {
     appQuitting = true;
     if (TRACE.on) trace('app.quit', null, {});
-    stopNonDatabaseResources();
+    stopNonDatabaseResources(updateInstalling);
 
     const sessions = new Map([...closedSessions, ...activeSessions]);
     const exitDrains = [...sessions.values()].map(session => session.exitDrain).filter(Boolean);
@@ -3714,26 +3736,16 @@ function shutdownForExit() {
     await closeDb();
     activityTrace.close();
   })).then(async error => {
-    let timer;
-    const stop = [() => writer.terminate(), () => projectsClient.shutdown(),
-      () => fileListsClient.shutdown(), () => searchClient.shutdown(), () => sessionCache.shutdownProducers()];
-    const stopping = Promise.allSettled(stop.map(fn => Promise.resolve().then(fn)));
-    try {
-      await Promise.race([stopping, new Promise(resolve => { timer = setTimeout(resolve, 250); })]);
-    } finally {
-      clearTimeout(timer);
-      shutdownComplete = true;
-      if (error?.message === 'shutdown drain timed out') log.error('[shutdown] exiting after shutdown drain timed out; unfinished writes may be lost');
-    }
+    if (error?.message === 'shutdown drain timed out') log.error('[shutdown] exiting after shutdown drain timed out; unfinished writes may be lost');
+    shutdownComplete = await stopWorkersForExit();
   });
   return shutdownPromise;
 }
 
 app.removeListener('before-quit', holdBootstrapQuit);
 app.on('before-quit', event => {
-  if (updateInstalling) { stopNonDatabaseResources(true); return; }
   if (shutdownComplete) return;
-  if (unsavedGuard.beforeQuit(event, mainWindow)) return;
+  if (!updateInstalling && unsavedGuard.beforeQuit(event, mainWindow)) return;
   event.preventDefault();
   shutdownForExit().finally(exitOnce);
 });

@@ -36,7 +36,11 @@ function setup(behavior) {
     shutdownComplete: false, nonDatabaseResourcesStopped: false,
     unsavedGuard: { beforeQuit: () => { calls.push('guard'); return false; } },
     drainForUpdate: async () => { calls.push('drain'); context.activityFlushedForQuit = true; },
-    shutdownForExit: async () => { calls.push('shutdown'); },
+    shutdownForExit: async () => {
+      calls.push('shutdown');
+      if (context.updateInstalling) context.stopNonDatabaseResources(true);
+      context.shutdownComplete = true;
+    },
     exitOnce: () => calls.push('exit'),
     stopScheduler: () => calls.push('scheduler'), mainLoopMonitor: { stop: () => calls.push('monitor') },
     shutdownAllMcp: () => calls.push('mcp'), localTranscriptTracker: { dispose() {} },
@@ -96,8 +100,9 @@ test('successful install stops services only on before-quit, once', async () => 
   assert.deepEqual(ctx.calls, ['drain', 'install']);
   ctx.nativeUpdater.emit('before-quit-for-update');
   ctx.quit();
-  assert.deepEqual(ctx.calls, ['drain', 'install', 'scheduler', 'monitor', 'mcp', 'watcher', 'indexer', 'trace']);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(ctx.calls, ['drain', 'install', 'prevent', 'shutdown', 'scheduler', 'monitor', 'mcp', 'watcher', 'indexer', 'trace', 'exit']);
   ctx.quit();
   assert.equal(ctx.calls.filter(call => call === 'mcp').length, 1);
-  assert.ok(!ctx.calls.includes('shutdown'));
+  assert.equal(ctx.calls.filter(call => call === 'shutdown').length, 1);
 });

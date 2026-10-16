@@ -27,9 +27,9 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
     worker = null;
     active = null;
     if (old) {
-      const terminated = Promise.resolve(old.terminate()).catch(() => {});
+      const terminated = Promise.resolve().then(() => old.terminate());
       terminations.add(terminated);
-      terminated.finally(() => terminations.delete(terminated));
+      terminated.then(() => terminations.delete(terminated), () => {});
     }
   }
 

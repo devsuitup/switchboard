@@ -10,7 +10,8 @@ const { Worker } = require('node:worker_threads');
 const { createSessionIndexWriter } = require('../../session-index-writer');
 
 async function run() {
-  const mode = process.argv[2];
+  const updating = process.argv[2].startsWith('update-');
+  const mode = process.argv[2].replace(/^update-/, '');
   let worker, started, terminationRequested = false;
   const nativeStarted = new Promise(resolve => { started = resolve; });
   const writer = createSessionIndexWriter({ workerFactory: () => {
@@ -51,19 +52,31 @@ async function run() {
   }
   const app = new EventEmitter();
   let exits = 0;
+  const quitStarted = performance.now();
   app.exit = () => {
     console.log('app.exit reached');
     assert.equal(++exits, 1);
     assert.ok(terminationRequested, 'request writer termination even after a drain timeout');
     assert.ok(readersStopped >= 3, 'stop all reader workers even after a drain timeout');
-    if (mode !== 'native') assert.equal(worker.threadId, -1, 'responsive writer terminated before app.exit');
+    assert.equal(worker.threadId, -1, 'responsive writer terminated before app.exit');
     process.exit(0);
   };
   let readersStopped = 0;
   const reader = { shutdown: async () => { readersStopped++; } };
   const context = vm.createContext({
-    require: name => name === './shutdown-exit' ? require('../../shutdown-exit') : require(name),
-    console, process, Promise, setTimeout, clearTimeout, app, writer,
+    require: name => name === './shutdown-exit'
+      ? { exitWithWatchdog: () => setTimeout(() => process.kill(process.pid, 'SIGKILL'), 1100) } : require(name),
+    console, process: { pid: process.pid, kill(pid, signal) {
+      assert.equal(pid, process.pid);
+      assert.equal(signal, 'SIGKILL');
+      assert.equal(exits, 0, 'must not enter synchronous worker joining');
+      assert.ok(terminationRequested);
+      assert.ok(readersStopped >= 3);
+      const elapsed = performance.now() - quitStarted;
+      assert.ok(elapsed >= 1700 && elapsed < 3000, `self-kill at ${elapsed}ms`);
+      console.log('self-kill reached', Math.round(elapsed));
+      process.kill(pid, signal);
+    } }, Promise, setTimeout, clearTimeout, app, writer,
     log: { error: (...args) => console.log(...args), warn: (...args) => console.log(...args) },
     appQuitting: false, TRACE: { on: false }, trace() {},
     stopScheduler() {}, mainLoopMonitor: { stop() {} }, shutdownAllMcp() {},
@@ -72,9 +85,9 @@ async function run() {
     remoteIndexer: { dispose() {} }, remoteWatcher: { stopAll() {} }, remoteActivityTracker: { dispose() {} },
     activityTrace: { close() {} }, activeSessions: new Map(), closedSessions: new Map(), killPty() {},
     flushProjectsBeforeExit: async () => {
-      if (mode !== 'stream') return new Promise(() => {});
+      if (mode !== 'stream' && mode !== 'slow-arm') return new Promise(() => {});
       await assert.rejects(external.runInAsyncScope(() => writer.setSetting('late', true)), /clos|shut/i);
-      await rejected;
+      if (mode === 'stream') await rejected;
       await Promise.allSettled(accepted);
     },
     flushWindowBounds: () => writer.patchGlobal({ finalBounds: true }),
@@ -89,8 +102,22 @@ async function run() {
   const start = source.indexOf('let shutdownPromise;');
   const end = source.indexOf('\n});', source.indexOf("app.on('before-quit', event =>", start)) + 4;
   vm.runInContext(source.slice(start, end), context);
-  app.emit('before-quit', { preventDefault() {} });
-  app.emit('before-quit', { preventDefault() {} });
+  app.quit = () => {
+    app.emit('before-quit', { preventDefault() {} });
+    app.emit('before-quit', { preventDefault() {} });
+  };
+  if (updating) {
+    const nativeUpdater = new EventEmitter();
+    nativeUpdater.on('before-quit-for-update', () => { context.updateInstalling = true; });
+    const exports = {};
+    vm.runInNewContext(fs.readFileSync(require.resolve('electron-updater/out/BaseUpdater'), 'utf8'), {
+      exports, setImmediate, require: name => name === './AppUpdater' ? { AppUpdater: class {} }
+        : name === 'electron' ? { autoUpdater: nativeUpdater } : require(name),
+    });
+    exports.BaseUpdater.prototype.quitAndInstall.call({
+      _logger: { info() {} }, install() { console.log('installer reached before quit'); return true; }, app,
+    });
+  } else app.quit();
   if (mode === 'stream') {
     await context.shutdownForExit();
     assert.ok(readersStopped >= 3);

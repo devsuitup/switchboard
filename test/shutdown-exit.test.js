@@ -6,45 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { EventEmitter } = require('node:events');
-const vm = require('node:vm');
-
-function watchdog() {
-  const child = new EventEmitter();
-  child.unref = () => {};
-  child.channel = { unref() {} };
-  const calls = [], timers = new Set();
-  const context = {
-    require: () => ({ spawn: () => child }), module: { exports: {} },
-    process: { execPath: 'electron', pid: 12345, env: {}, kill: (pid, signal) => calls.push([pid, signal]) },
-    setTimeout: fn => { timers.add(fn); return fn; }, clearTimeout: fn => timers.delete(fn),
-  };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../shutdown-exit.js'), 'utf8'), context);
-  context.module.exports.exitWithWatchdog({ exit: () => calls.push('app.exit') }, { error() {} });
-  return { child, calls, timers };
-}
-
-test('exit waits until its independent watchdog has armed its deadline', () => {
-  const t = watchdog();
-  t.child.emit('spawn');
-  assert.deepEqual(t.calls, []);
-  t.child.emit('message', 'armed');
-  t.child.emit('message', 'armed');
-  assert.deepEqual(t.calls, ['app.exit']);
-  assert.equal(t.timers.size, 0);
-});
-
-for (const failure of ['exit', 'error', 'startup timeout']) {
-  test(`watchdog ${failure} force-exits only its own parent PID`, () => {
-    const t = watchdog();
-    if (failure === 'startup timeout') for (const fn of t.timers) fn();
-    else t.child.emit(failure, new Error('watchdog startup failed'));
-    assert.deepEqual(t.calls, [[12345, 'SIGKILL']]);
-    assert.equal(t.timers.size, 0);
-  });
-}
-
-for (const mode of ['stream', 'held-drain', 'native']) {
+for (const mode of ['stream', 'slow-arm', 'held-drain', 'native', 'update-stream', 'update-native']) {
   test(`quit exits within a bound with ${mode} writer work and preserves committed WAL data`, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shutdown-exit-6166h-'));
     try {
@@ -53,17 +15,21 @@ for (const mode of ['stream', 'held-drain', 'native']) {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: dir },
       });
       assert.equal(result.error, undefined, `process must exit within 6s: ${result.stdout} ${result.stderr}`);
-      assert.equal((result.stdout.match(/app.exit reached/g) || []).length, 1, result.stdout + result.stderr);
-      if (mode !== 'native') assert.equal(result.status, 0, result.stdout + result.stderr);
-      if (mode !== 'stream') assert.match(result.stdout, /exiting after shutdown drain timed out/);
+      const native = mode.endsWith('native');
+      assert.equal((result.stdout.match(/app.exit reached/g) || []).length, native ? 0 : 1, result.stdout + result.stderr);
+      assert.equal((result.stdout.match(/self-kill reached/g) || []).length, native ? 1 : 0, result.stdout + result.stderr);
+      if (!native) assert.equal(result.status, 0, result.stdout + result.stderr);
+      else assert.notEqual(result.status, 0, result.stdout + result.stderr);
+      if (mode === 'held-drain' || native) assert.match(result.stdout, /exiting after shutdown drain timed out/);
       else assert.doesNotMatch(result.stdout, /drain failed/);
+      if (mode.startsWith('update-')) assert.match(result.stdout, /installer reached before quit/);
       const recovery = spawnSync(require('electron'), ['-e', `
         const assert = require('node:assert/strict');
         const path = require('node:path');
         const db = new (require('better-sqlite3'))(path.join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'));
         assert.equal(db.pragma('integrity_check', { simple: true }), 'ok');
         assert.equal(JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'committed'").get().value), 'kept');
-        if (${JSON.stringify(mode)} === 'stream') {
+        if (${JSON.stringify(mode)}.endsWith('stream') || ${JSON.stringify(mode)} === 'slow-arm') {
           const global = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'global'").get().value);
           assert.equal(global.finalBounds, true);
           for (let i = 0; i < 64; i++) assert.equal(global['stream:' + i], i);

@@ -15,9 +15,9 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, timeou
   function terminateWorker(current) {
     clearTimeout(current.bootTimer);
     clearTimeout(current.heartbeatTimer);
-    const terminated = Promise.resolve(current.terminate()).catch(() => {});
+    const terminated = Promise.resolve().then(() => current.terminate());
     terminations.add(terminated);
-    terminated.finally(() => terminations.delete(terminated));
+    terminated.then(() => terminations.delete(terminated), () => {});
     return terminated;
   }
 
@@ -65,7 +65,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, timeou
     worker = null;
     for (const job of active.values()) settle(job, new Error(`writer outcome unknown for request ${job.id}: ${error.message}`));
     active.clear();
-    await terminateWorker(current);
+    await terminateWorker(current).catch(() => {});
     if (stopped) return;
     restart(error);
   }

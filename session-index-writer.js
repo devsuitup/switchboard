@@ -72,7 +72,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     async buildProjectsFromCache(showArchived) { return compute('buildProjectsFromCache', showArchived); },
     async refreshFolder(folder, opts) { return compute('refreshFolder', folder, opts); },
     async dropFolderRows(folder, opts) { return compute('dropFolderRows', folder, opts); },
-    async releaseLiveSession(id) { return compute('releaseLiveSession', id); },
+    async releaseLiveSession(id) {
+      if (terminated || closing) throw new Error('writer is closing');
+      return commandScope.run(owner, () => admit(() => compute('releaseLiveSession', id)));
+    },
     async writeScannedFolder(result, unverified) { return compute('writeScannedFolder', result, unverified); },
     async writeScannedFolderPartial(result) { return compute('writeScannedFolderPartial', result); },
     async applyProjectsWorkerEffects(result) {
@@ -220,7 +223,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     'clearArchivedEntry', 'hideProject', 'unhideProject', 'revealAddedProject', 'dropRemoteFolder',
     'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries', 'setName']) writer[name] = (...args) => request(name, ...args);
   for (const [name, fn] of Object.entries(writer)) {
-    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate'].includes(name)) continue;
+    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate', 'releaseLiveSession'].includes(name)) continue;
     writer[name] = (...args) => admit(() => fn(...args));
   }
   return writer;

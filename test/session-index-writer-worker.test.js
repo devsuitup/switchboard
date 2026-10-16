@@ -163,6 +163,28 @@ scenario('shutdown rejects new admission while preserving accepted nested workfl
   db.close();
 `);
 
+scenario('PTY exit cleanup in its spawn context releases retained rows after shutdown admission closes', `
+  const { AsyncResource } = require('node:async_hooks');
+  const cache = require('./session-cache');
+  const writer = createSessionIndexWriter({}, cache);
+  await writer.ready;
+  const root = process.env.SWITCHBOARD_DATA_DIR;
+  const projects = path.join(root, 'projects');
+  fs.mkdirSync(projects);
+  writer.initializeCache({ PROJECTS_DIR: projects, activeSessions: new Map(), getMainWindow: () => null, log: { warn() {} } });
+  await writer.upsertCachedSessions([{ sessionId: 'pty-head', folder: 'missing', summary: 'retained' }]);
+  await writer.applyProjectsWorkerEffects({ effects: [], keptLiveRows: [['pty-head', 'missing']] });
+  const pty = new AsyncResource('pty-spawn');
+  try {
+    await writer.beginShutdown(async () => {
+      assert.equal(await pty.runInAsyncScope(() => writer.releaseLiveSession('pty-head')), true);
+      await assert.rejects(pty.runInAsyncScope(() => writer.patchGlobal({ late: true })), /closing/);
+      assert.equal(require('./db').getCachedSession('pty-head'), null);
+    });
+  } finally { await writer.closeDb(); }
+  await assert.rejects(writer.releaseLiveSession('pty-head'), /closing/);
+`);
+
 scenario('an offer changed before completion reports the conflict without consuming newer state', `
   let complete, entered;
   const waiting = new Promise(resolve => { entered = resolve; });

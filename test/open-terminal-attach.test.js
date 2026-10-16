@@ -67,7 +67,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
     TRACE: { on: false }, activityTrace: { close() {} }, shutdownAllMcp() {},
     localTranscriptTracker: { dispose() {} }, remoteActivityTracker: { dispose() {} }, projectsWatcher: null,
     cliSessionState: { stop() {} }, remoteIndexer: { dispose() {} }, remoteWatcher: { stopAll() {} },
-    appQuitting: false,
+    appQuitting: false, updateInstalling: false,
   };
   vm.runInNewContext(MAIN.slice(idx, end), context);
   closed();
