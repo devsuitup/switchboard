@@ -343,7 +343,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         firstPrompt: summary,
         created: stat.birthtime.toISOString(),
         modified: stat.mtime.toISOString(),
-        messageCount, textContent, slug, customTitle, aiTitle,
+        messageCount, textContent, slug, customTitle: customTitle || '', aiTitle,
         parentSessionId: opts.parentSessionId,
         agentId,
         subagentType,
@@ -363,7 +363,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       created: firstTimestamp || stat.birthtime.toISOString(),
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime: stat.mtime.toISOString(),
-      messageCount, textContent, slug, scheduleSlug, customTitle, aiTitle,
+      messageCount, textContent, slug, scheduleSlug, customTitle: customTitle || '', aiTitle,
       continuationIndex: matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }))
         ? JSON.stringify({ format: 3, version: 3, ids: [...continuationIds], stamp,
         sealedIds: sealedContinuationIds ?? [...continuationIds], bytes: fileBytes.length,
@@ -574,17 +574,7 @@ function enumerateSessionFiles(folderPath) {
   return out;
 }
 
-/** Lightweight refresh path. Reads only the first ~256 KB / 500 lines of a
- *  jsonl file to extract display-level metadata (summary, slug, titles,
- *  agentId). Does NOT compute textContent or messageCount — the caller is
- *  expected to merge with the cached row for unchanged fields. Designed so
- *  the fs.watch flush can update a live 200+ MB host-session JSONL in ~ms
- *  instead of seconds.
- *
- *  Returns the same shape as the display subset of readSessionFile() so it
- *  can be merged into a cached row before upsert. Returns null if the chunk
- *  doesn't yet contain a usable first-user-message.
- */
+// see .ai/contexts/session-cache.md ("Session names and transcript refreshes")
 function readSessionDisplayHeader(filePath, opts = {}) {
   const fileBase = path.basename(filePath, '.jsonl');
   const isSubagent = Boolean(opts.parentSessionId);
@@ -595,8 +585,15 @@ function readSessionDisplayHeader(filePath, opts = {}) {
     const readLen = Math.min(MAX_BYTES, stat.size);
     const fd = fs.openSync(filePath, 'r');
     const buf = Buffer.alloc(readLen);
-    const n = fs.readSync(fd, buf, 0, readLen, 0);
-    fs.closeSync(fd);
+    let n, tail;
+    try {
+      n = fs.readSync(fd, buf, 0, readLen, 0);
+      if (stat.size > readLen) {
+        tail = readTextRange(fd, stat.size - MAX_BYTES, MAX_BYTES);
+        const boundary = tail.indexOf('\n');
+        tail = boundary < 0 ? '' : tail.slice(boundary + 1);
+      } else tail = buf.toString('utf8', 0, n);
+    } finally { fs.closeSync(fd); }
     const text = buf.toString('utf8', 0, n);
     const lines = text.split('\n');
     // Drop the potentially-partial last line unless we read the whole file
@@ -628,7 +625,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
       if (entry.type === 'assistant' || (entry.type === 'message' && entry.role === 'assistant')) {
         assistantSeen = true;
       }
-      if (entry.type === 'custom-title' && entry.customTitle && !customTitle) customTitle = entry.customTitle;
+      if (entry.type === 'custom-title' && entry.customTitle) customTitle = entry.customTitle;
       if (entry.type === 'ai-title' && entry.aiTitle && !aiTitle) aiTitle = entry.aiTitle;
       const msg = entry.message;
       const txt = typeof msg === 'string' ? msg :
@@ -639,6 +636,13 @@ function readSessionDisplayHeader(filePath, opts = {}) {
         if (cand.kind === 'prompt') summary = cand.text;
         else if (cand.kind === 'command' && !commandSummary) commandSummary = cand.text;
       }
+    }
+
+    for (const line of tail.split('\n')) {
+      if (!line.includes('custom-title')) continue;
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (entry.type === 'custom-title' && entry.customTitle) customTitle = entry.customTitle;
     }
 
     if (!summary && assistantSeen) summary = commandSummary;

@@ -9,7 +9,7 @@ db.pragma('busy_timeout = 5000');
 
 const readSnapshot = db.transaction(() => ({
   rows: db.prepare('SELECT * FROM session_cache').all(),
-  meta: db.prepare(`SELECT m.*, f.source AS nameSource, f.revision AS nameRevision FROM session_meta m
+  meta: db.prepare(`SELECT m.*, f.source AS nameSource, f.revision AS nameRevision, f.transcriptTitle AS nameTranscriptTitle FROM session_meta m
     LEFT JOIN session_meta_fields f ON f.sessionId = m.sessionId AND f.field = 'name'`).all(),
   folders: db.prepare('SELECT * FROM cache_meta').all(),
   settings: db.prepare('SELECT key, value FROM settings').all(),
@@ -37,12 +37,29 @@ function build(message) {
     isInitialScanComplete: () => settings.get('initial_scan_complete') === true,
   };
   const writers = {
-    upsertCachedSessions: sessions => { for (const row of sessions) rows.set(row.sessionId, { ...rows.get(row.sessionId), ...row }); },
+    upsertCachedSessions: sessions => {
+      for (const row of sessions) {
+        rows.set(row.sessionId, { ...rows.get(row.sessionId), ...row });
+        const previous = meta.get(row.sessionId);
+        if (row.customTitle === '' && previous?.name && (!previous.nameSource || previous.nameSource === 'user') && previous.nameTranscriptTitle == null) {
+          Object.assign(previous, { nameSource: 'user', nameTranscriptTitle: '' });
+        }
+      }
+    },
     deleteCachedSession: id => rows.delete(id),
     deleteCachedFolder: folder => { for (const row of rows.values()) if (row.folder === folder) rows.delete(row.sessionId); },
     touchCachedModified: (id, modified) => { const row = rows.get(id); if (row) Object.assign(row, { modified, fileMtime: modified }); },
     setFolderMeta: (folder, projectPath, indexMtimeMs) => folders.set(folder, { folder, projectPath, indexMtimeMs }),
-    setName: (id, name, source = 'user') => meta.set(id, { ...meta.get(id), sessionId: id, name, nameSource: source }),
+    setName: (id, name, source = 'user') => {
+      const previous = meta.get(id);
+      const userOwned = previous?.nameSource ? previous.nameSource === 'user' : !!previous?.name;
+      if (source === 'transcript' && userOwned && (previous.nameTranscriptTitle == null || previous.nameTranscriptTitle === name)) {
+        if (previous.nameTranscriptTitle == null) previous.nameTranscriptTitle = name;
+        return;
+      }
+      meta.set(id, { ...previous, sessionId: id, name, nameSource: source,
+        nameTranscriptTitle: source === 'user' ? rows.get(id)?.customTitle ?? null : name });
+    },
     replaceSessionMetrics: () => {},
     deleteSearchFolder: () => {},
     deleteSearchSession: () => {},

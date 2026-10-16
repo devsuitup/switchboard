@@ -114,6 +114,9 @@ db.exec(`CREATE TABLE IF NOT EXISTS session_meta_fields (
   PRIMARY KEY (sessionId, field)
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_session_meta_fields_revision ON session_meta_fields(revision)');
+if (!db.prepare('PRAGMA table_info(session_meta_fields)').all().some(c => c.name === 'transcriptTitle')) {
+  db.exec('ALTER TABLE session_meta_fields ADD COLUMN transcriptTitle TEXT');
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS session_cache (
@@ -287,6 +290,13 @@ if (migrations.length > currentDbVersion) {
   if (!cols.has('scheduleSlug')) db.exec('ALTER TABLE session_cache ADD COLUMN scheduleSlug TEXT');
   if (!cols.has('continuationIndex')) db.exec('ALTER TABLE session_cache ADD COLUMN continuationIndex TEXT');
   if (!cols.has('customTitle')) db.exec('ALTER TABLE session_cache ADD COLUMN customTitle TEXT');
+  if (db.prepare("SELECT value FROM settings WHERE key = 'custom_title_backfill_version'").get()?.value !== '2') {
+    db.transaction(() => {
+      db.exec('UPDATE session_cache SET customTitle = NULL');
+      db.exec("UPDATE session_meta_fields SET transcriptTitle = NULL WHERE field = 'name' AND source = 'user'");
+      db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('custom_title_backfill_version', '2')").run();
+    })();
+  }
   db.exec('CREATE INDEX IF NOT EXISTS idx_session_cache_parent ON session_cache(parentSessionId)');
 
   db.exec(`CREATE TABLE IF NOT EXISTS session_metrics (
@@ -457,10 +467,10 @@ const stmts = {
   `),
 };
 
-const metaFieldGet = db.prepare('SELECT revision, source FROM session_meta_fields WHERE sessionId = ? AND field = ?');
+const metaFieldGet = db.prepare('SELECT revision, source, transcriptTitle FROM session_meta_fields WHERE sessionId = ? AND field = ?');
 const metaFieldNext = db.prepare('SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM session_meta_fields');
-const metaFieldSet = db.prepare(`INSERT INTO session_meta_fields (sessionId, field, revision, source) VALUES (?, ?, ?, ?)
-  ON CONFLICT(sessionId, field) DO UPDATE SET revision = excluded.revision, source = excluded.source`);
+const metaFieldSet = db.prepare(`INSERT INTO session_meta_fields (sessionId, field, revision, source, transcriptTitle) VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(sessionId, field) DO UPDATE SET revision = excluded.revision, source = excluded.source, transcriptTitle = excluded.transcriptTitle`);
 
 const rekeySessionMeta = db.transaction((oldId, newId, title) => {
   if (oldId === newId) return;
@@ -474,7 +484,7 @@ const rekeySessionMeta = db.transaction((oldId, newId, title) => {
     const keepTarget = field !== 'name' || (to ? to.source === 'user' : target?.name !== stmts.cacheGetSession.get(newId)?.customTitle);
     const useOriginal = copy && (!target || !keepTarget || (from?.revision || 0) > (to?.revision || 0));
     values[field] = useOriginal ? original[field] : (keepTarget ? target?.[field] : null) ?? (field === 'name' ? null : 0);
-    if (useOriginal) metaFieldSet.run(newId, field, from?.revision || 0, from?.source || 'user');
+    if (useOriginal) metaFieldSet.run(newId, field, from?.revision || 0, from?.source || 'user', from?.transcriptTitle ?? null);
   }
   db.prepare(`INSERT INTO session_meta (sessionId, name, starred, archived) VALUES (?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET name = excluded.name, starred = excluded.starred, archived = excluded.archived`)
@@ -486,7 +496,7 @@ function getMeta(sessionId) {
 }
 
 function getAllMeta(withNameSource = false) {
-  const rows = withNameSource ? db.prepare(`SELECT m.*, f.source AS nameSource, f.revision AS nameRevision FROM session_meta m
+  const rows = withNameSource ? db.prepare(`SELECT m.*, f.source AS nameSource, f.revision AS nameRevision, f.transcriptTitle AS nameTranscriptTitle FROM session_meta m
     LEFT JOIN session_meta_fields f ON f.sessionId = m.sessionId AND f.field = 'name'`).all() : stmts.getAll.all();
   const map = new Map();
   for (const row of rows) map.set(row.sessionId, row);
@@ -494,20 +504,29 @@ function getAllMeta(withNameSource = false) {
 }
 
 const setName = db.transaction((sessionId, name, source = 'user') => {
+  const field = metaFieldGet.get(sessionId, 'name');
+  const userOwned = field ? field.source === 'user' : !!getMeta(sessionId)?.name;
+  if (source === 'transcript' && userOwned && (field?.transcriptTitle == null || field.transcriptTitle === name)) {
+    if (field?.transcriptTitle == null) {
+      metaFieldSet.run(sessionId, 'name', field?.revision || 0, 'user', name);
+    }
+    return;
+  }
   stmts.upsertName.run(sessionId, name);
-  metaFieldSet.run(sessionId, 'name', metaFieldNext.get().revision, source);
+  metaFieldSet.run(sessionId, 'name', metaFieldNext.get().revision, source,
+    source === 'user' ? stmts.cacheGetSession.get(sessionId)?.customTitle ?? null : name);
 });
 
 const toggleStar = db.transaction(sessionId => {
   stmts.upsertStar.run(sessionId);
-  metaFieldSet.run(sessionId, 'starred', metaFieldNext.get().revision, 'user');
+  metaFieldSet.run(sessionId, 'starred', metaFieldNext.get().revision, 'user', null);
   const row = stmts.get.get(sessionId);
   return row.starred;
 });
 
 const setArchived = db.transaction((sessionId, archived) => {
   stmts.upsertArchived.run(sessionId, archived ? 1 : 0);
-  metaFieldSet.run(sessionId, 'archived', metaFieldNext.get().revision, 'user');
+  metaFieldSet.run(sessionId, 'archived', metaFieldNext.get().revision, 'user', null);
 });
 
 function isCachePopulated() {
@@ -535,6 +554,12 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       typeof s.entrypoint === 'string' ? s.entrypoint : null,
       s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null
     );
+    if (s.customTitle === '') {
+      const field = metaFieldGet.get(s.sessionId, 'name');
+      if ((!field || field.source === 'user') && field?.transcriptTitle == null && getMeta(s.sessionId)?.name) {
+        metaFieldSet.run(s.sessionId, 'name', field?.revision || 0, 'user', '');
+      }
+    }
   }
 });
 
@@ -554,8 +579,13 @@ function upsertCachedSessions(sessions) {
 }
 
 const setCachedCustomTitles = db.transaction((pairs) => {
-  for (const { sessionId, customTitle, fileMtime } of pairs) {
-    stmts.cacheSetCustomTitle.run(customTitle || '', sessionId, fileMtime || null);
+  for (const { sessionId, customTitle, fileMtime, promoteName = false } of pairs) {
+    const changed = stmts.cacheSetCustomTitle.run(customTitle || '', sessionId, fileMtime || null).changes;
+    const field = metaFieldGet.get(sessionId, 'name');
+    if (changed && (!field || field.source === 'user') && field?.transcriptTitle == null && getMeta(sessionId)?.name) {
+      metaFieldSet.run(sessionId, 'name', field?.revision || 0, 'user', customTitle || '');
+    }
+    if (changed && promoteName && customTitle && field?.source === 'transcript') setName(sessionId, customTitle, 'transcript');
   }
 });
 
