@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, JOB_ID_RE, stripShellNoise,
-  dispatchRefusal, isLiveJobState,
+  dispatchRefusal, isHostedJob,
 } = require('../bg-agents-roster');
 
 const STATE = JSON.stringify({
@@ -184,8 +184,8 @@ test('dispatchRefusal refuses a sandboxed project and one with a pre-launch comm
   assert.equal(dispatchRefusal(), null);
 });
 
-test('isLiveJobState: working and blocked are live, the finished states are not', () => {
-  assert.deepEqual(['working', 'blocked', 'done', 'stopped', 'failed', null].map(isLiveJobState), [true, true, false, false, false, false]);
+test('hosting without descriptors follows working and blocked turn states', () => {
+  assert.deepEqual(['working', 'blocked', 'done', 'stopped', 'failed', null].map(state => isHostedJob({ state })), [true, true, false, false, false, false]);
 });
 
 test('parseDispatchOutput finds an eight-hex id anywhere in the output, or returns null', () => {

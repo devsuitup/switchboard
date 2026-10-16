@@ -13,7 +13,7 @@ scan; automatic `get-projects` calls retain the failed-folder retry policy.
 |---|---|---|
 | `db.js` | ~895 | SQLite (better-sqlite3) schema + prepared statements. Owns `session_cache`, `session_meta`, `cache_meta`, `settings`, `search_fts` (FTS5 + trigram tokenizer). |
 | `session-cache.js` | ~690 | Indexer + watcher. Reads `~/.claude/projects/<folder>/*.jsonl` (+ subagents subdir), populates rows, emits projects-changed events. |
-| `read-session-file.js` | ~420 | Streaming JSONL reader. `readSessionFile()` (full) + `readSessionDisplayHeader()` (256 KB / 500 lines — cheap header for huge files). |
+| `read-session-file.js` | ~420 | Streaming JSONL reader. `readSessionFile()` (full) + `readSessionDisplayHeader()` (256 KB / 500 lines of head plus a 256 KB tail for titles). |
 | `encode-project-path.js` | 28 | `/path/to/project` → `-path-to-project` folder name. Mirrors Claude CLI's encoding. |
 | `derive-project-path.js` | ~155 | Inverse: read `cwd` field from JSONL, derive original projectPath. **Collapses worktrees back to parent repo** via `resolveWorktreePath`. |
 
@@ -222,18 +222,68 @@ idle callbacks and the background activity indicator policy remain separate:
 the historical frozen bg descriptor in `audit-indicators.md` is not treated
 as reliable turn evidence by this display projection.
 
+### Session names and transcript refreshes
+
 `session_cache.customTitle` retains the parsed title separately from the editable
-`session_meta.name`. Schema reconciliation adds the nullable column without
-clearing existing rows or metadata. Existing local rows with an unknown title
+`session_meta.name`. The full reader retains the last `custom-title` and records
+an empty string for a known absence. The refresh reader scans at most 256 KB /
+500 lines of the head for display fields, then at most 256 KB of the tail for
+titles, plus one preceding byte to check the line boundary. A complete first
+line is retained; a partial one is dropped. It returns `headTitle` and `tailTitle`
+separately (and `customTitle` as a compatibility fallback). Refreshes choose
+`tailTitle || cached.customTitle || headTitle`: an old head-only title cannot
+replace a known cached title after a long title-free gap.
+Malformed trailing records are ignored. Small files reuse the head buffer,
+scanning all its lines for titles. The hot path never scans the omitted middle,
+so a title appearing only there cannot be discovered without a full scan.
+A CLI `/rename` followed by more than 256 KB of output before the next refresh
+is missed until the CLI writes the title again.
+
+`session_meta_fields.transcriptTitle` stores the transcript title observed when
+Switchboard saves a user rename. Transcript writes cannot replace that name
+while their title still matches this baseline. Titles differing only by a terminal
+numeric deduplication suffix (`X (3)` and `X`, in either direction) also match:
+a CLI `/rename` differing from the baseline only by a ` (n)` suffix cannot
+override a Switchboard rename. A name typed in Switchboard is never affected
+by this suffix rule. A different title, such as `/rename Z`, can replace it.
+A NULL baseline matches no title. `session-name.js`
+provides the pure precedence function shared by the SQLite writer, Projects
+worker and cache-effects recorder, including full scans, direct writes and
+restart recovery. The recorder reads name provenance and the baseline with
+`getMeta(id, true)` so search-index titles agree with the stored user name.
+Re-keying user metadata carries the baseline with it. Updating only a baseline
+preserves the name field's existing revision, so it cannot outrank a newer user
+rename during a re-key. A field without a revision receives the next one.
+Collision-named jobs and descriptors still suppress transcript name promotion.
+
+The version-2 title backfill invalidates old cached titles once on writable
+schema reconciliation for local top-level rows only, preserving remote/subagent
+titles and baselines, session rows and user names. It resets local user title
+baselines to unknown so the repair backfill can hydrate them without treating
+an old first-title correction as a new CLI rename. A local cache upsert
+establishes a missing baseline from the incoming transcript title, including
+full scans that delete the previous cached row before inserting it again.
+While the baseline is NULL (after an upgrade, before the backfill has run, or
+when it skipped a live file), the first CLI `/rename` observed becomes the
+baseline and preserves the Switchboard user name. The next distinct `/rename`
+can replace it. The upsert hydration is shared in
+`session-name.js`. Remote/subagent NULL baselines left by earlier
+migrations do not absorb their next `/rename`. New metadata fields receive the
+next revision, including legacy metadata re-keying.
+Existing local rows with an unknown title
 are selected through `getCachedMissingCustomTitle`: only session id, folder and
 file mtime for rows with `customTitle IS NULL AND parentSessionId IS NULL`.
 They are backfilled once by `workers/scan-session-titles.js`, using the existing
-bounded header reader off the main thread. The backfill writes only that column
-when the row's file mtime still matches and its title remains unknown, so a
-concurrent refresh or Switchboard rename is preserved. An empty string means a
+bounded head/tail reader off the main thread. It handles unknown titles only
+and chooses `tailTitle || headTitle` (or an empty string if neither exists);
+its input rows have no cached title. The backfill writes the title
+when the row's file mtime still matches and its title remains unknown. It also
+establishes missing user baselines and repairs transcript-owned names when no
+collision job/descriptor suppresses promotion. A concurrent refresh or
+Switchboard rename is preserved. An empty string means a
 known absence of a title; `NULL` means it has not been backfilled yet. Cache
 upserts bind omitted titles as `NULL` and preserve a known title on conflict
-when the incoming title is unknown, including header-only refreshes.
+when the incoming title is unknown, including header-only refreshes with no visible title.
 
 The projects request snapshots cached sidebar descriptors and job state/name,
 plus the attach PTY's UUID, job id, cwd and host. These projections participate
@@ -1983,6 +2033,8 @@ indexes are rebuilt lazily, including format-2 indexes that marked a mere
 
 Header-only refresh skips subagent continuation indexes and shares a 1 MiB
 synchronous continuation budget across all changed parent files in that refresh.
+Each changed file also has the separate bounded 256 KiB head and 256 KiB tail
+display read; subagents receive only these display reads.
 An unchanged file keeps its persisted index without an upsert even when its
 caller-local snapshot is absent after restart, worker population or eviction.
 After the scan budget is spent, an index is cleared only when an existing

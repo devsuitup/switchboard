@@ -82,7 +82,7 @@ const { normalizePtySize } = require('./pty-size');
 const { makeDeleteSessionGuard } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
 const { setPtyOpLogger, guardPtyInputErrors, killPty, detachPty, writePty, ptyExitSignalName } = require('./pty-ops');
-const { JOB_ID_RE } = require('./bg-agents-roster');
+const { JOB_ID_RE, isHostedJob } = require('./bg-agents-roster');
 const { createTerminalResizeHandler } = require('./terminal-resize');
 const { createComposerState } = require('./composer-state');
 const { handleTerminalInput } = require('./terminal-input');
@@ -3156,11 +3156,12 @@ async function refreshRemoteHeadTurns(folderPrefix) {
 }
 ipcMain.handle('get-task-snapshots', async () => {
   const live = new Set(cliSessionState.getSidebarDescriptors().map(d => d.sessionId));
+  const descriptors = cliSessionState.readAllDescriptors();
   for (const [key, session] of activeSessions) {
     if (!session.exited && !session.isPlainTerminal) live.add(session.realSessionId || key);
   }
   for (const job of bgAgents.getSnapshot().roster) {
-    if (job.sessionId && ['working', 'blocked'].includes(job.state)) live.add(job.sessionId);
+    if (job.sessionId && isHostedJob(job, descriptors)) live.add(job.sessionId);
   }
   await refreshRemoteHeadTurns();
   for (const row of getAllCached()) {
@@ -3180,7 +3181,10 @@ const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   hasTaskRecord: (id, agentId) => taskRecords.hasRecord(id, agentId),
-  backgroundJobExists: jobId => ['working', 'blocked'].includes(bgAgents.getCachedJobs().get(jobId)?.state),
+  backgroundJobExists: jobId => {
+    const job = bgAgents.getCachedJobs().get(jobId);
+    return !!job && isHostedJob({ ...job, id: jobId }, cliSessionState.readAllDescriptors());
+  },
   rekeyActivity: (fromId, toId, kind) => { activityReporter.rekey(fromId, toId); taskRecords.rekey(fromId, toId, { continued: kind === 'continuation' || kind === 'background' }); },
   rekeyMetadata: (fromId, toId, kind) => kind === 'background' ? writer.rekeySessionMeta(fromId, toId) : undefined,
   getBackgroundTarget: id => {
@@ -3190,8 +3194,9 @@ sessionTransitions.init({
       if (jobs.size !== 1 || descriptors.some(d => d.kind !== 'bg')) return null;
       return descriptors[0];
     }
-    const jobs = [...bgAgents.getCachedJobs()].filter(([, job]) => job.sessionId?.toLowerCase() === id.toLowerCase()
-      && ['working', 'blocked'].includes(job.state));
+    const liveDescriptors = cliSessionState.readAllDescriptors();
+    const jobs = [...bgAgents.getCachedJobs()].filter(([jobId, job]) => job.sessionId?.toLowerCase() === id.toLowerCase()
+      && isHostedJob({ ...job, id: jobId }, liveDescriptors));
     return jobs.length === 1 ? { kind: 'bg', jobId: jobs[0][0], sessionId: id } : null;
   },
   clearOwner: (sessionId, ptyPid, options) => cliSessionState.clearOwner(sessionId, ptyPid, options),
@@ -3242,7 +3247,7 @@ const localTranscriptTracker = createLocalTranscriptTracker({
   hasPty: sessionHasPty,
   projectsDir: PROJECTS_DIR,
   onTranscript: (file, id, agentId) => {
-    if (sessionHasPty(id) || cliSessionState.getStatus(id) || bgAgents.getSnapshot().roster.some(job => job.sessionId === id && ['working', 'blocked'].includes(job.state))) {
+    if (sessionHasPty(id) || cliSessionState.getStatus(id) || bgAgents.getSnapshot().roster.some(job => job.sessionId === id && isHostedJob(job, cliSessionState.readAllDescriptors()))) {
       if (agentId) {
         const folder = path.relative(PROJECTS_DIR, file).split(path.sep)[0];
         taskRecords.read(path.join(PROJECTS_DIR, folder, id + '.jsonl'), id).then(() => taskRecords.child(file, id, agentId));

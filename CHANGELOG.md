@@ -22,6 +22,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - A background session that watches an artifact shows its activity instead of "Activity unavailable"; an activity Switchboard does not know yet is named as unknown in the activity tooltip. (#684)
+- A background session waiting for your next message keeps its bg badge and can still be attached or stopped from the Agents view. (#682)
+- Renaming a session no longer reverts to an earlier name such as "name (3)" when its transcript refreshes. A later rename in the session itself can still update the displayed name. (#680)
 - Starting Switchboard from a terminal inside Claude Code no longer makes its tabs take that session's name or write metadata into its transcript. Scheduled runs and background launches also start with their own session identity. (#670)
 - In builds from main, completed subagents no longer remain in the running count, and subagent activity no longer causes continuous high CPU use and delayed terminal updates. (#667)
 - Reopening or revealing a terminal no longer sends delayed terminal identification, status or colour replies into the conversation prompt. (#668)

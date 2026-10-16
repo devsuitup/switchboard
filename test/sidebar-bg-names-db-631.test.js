@@ -137,7 +137,7 @@ test('an empty custom-title backfill is memoized without rescanning cached rows 
   `, root);
 });
 
-test('header-only upserts leave unknown titles eligible for backfill and preserve existing titles', t => {
+test('header-only upserts preserve unknown titles until a header supplies one and preserve existing titles', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-name-refresh-631-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   run(fixture + `
@@ -149,7 +149,7 @@ test('header-only upserts leave unknown titles eligible for backfill and preserv
     assert.equal(db.getCachedSession(id).customTitle, null, 'header refresh does not mark a legacy title absent');
     fs.utimesSync(file, new Date('2026-10-14T01:00:00.000Z'), new Date('2026-10-14T01:00:00.000Z'));
     cache.refreshFolder(folder);
-    assert.equal(db.getCachedSession(id).customTitle, null, 'the public header refresh preserves unknown titles');
+    assert.equal(db.getCachedSession(id).customTitle, 'launch (3)', 'the public header refresh records the observed title');
     (async () => {
       await cache.backfillCustomTitles();
       assert.equal(db.getCachedSession(id).customTitle, 'launch (3)');
@@ -229,8 +229,16 @@ test('the readonly projects worker applies live background state to both views a
         db.setName(id, 'Switchboard rename');
         result = await request();
         assert.equal(result.defaultProjects.flatMap(project => project.sessions).find(row => row.sessionId === id).name, 'Switchboard rename');
-        jobs.get('aaaaaaaa').state = 'completed';
-        jobs.get('bbbbbbbb').state = 'completed';
+        jobs.get('aaaaaaaa').state = 'done';
+        jobs.get('bbbbbbbb').state = 'done';
+        result = await request();
+        for (const view of [result.defaultProjects, result.allProjects]) {
+          const rows = view.flatMap(project => project.sessions);
+          assert.equal(rows.find(row => row.sessionId === id).bgJobId, 'aaaaaaaa');
+          assert.equal(rows.find(row => row.sessionId === pendingId).descriptorOnly, true);
+        }
+        jobs.get('aaaaaaaa').state = 'stopped';
+        jobs.get('bbbbbbbb').state = 'stopped';
         result = await request();
         const finished = result.defaultProjects.flatMap(project => project.sessions);
         assert.equal(finished.find(row => row.sessionId === id).bgJobId, undefined);
@@ -238,6 +246,9 @@ test('the readonly projects worker applies live background state to both views a
         jobs.get('bbbbbbbb').state = 'working';
         result = await request([], [['attach-tab', { isAttach: true, attachJobId: 'bbbbbbbb', realSessionId: pendingId, cwd: root }]]);
         assert.equal(result.defaultProjects.flatMap(project => project.sessions).find(row => row.sessionId === pendingId).bgJobId, 'bbbbbbbb');
+        jobs.get('bbbbbbbb').state = 'done';
+        result = await request([], [['attach-tab', { isAttach: true, attachJobId: 'bbbbbbbb', realSessionId: pendingId, cwd: root }]]);
+        assert.ok(!result.defaultProjects.flatMap(project => project.sessions).some(row => row.sessionId === pendingId));
         db.setArchived(id, true);
         result = await request();
         assert.ok(!result.defaultProjects.flatMap(project => project.sessions).some(row => row.sessionId === id));

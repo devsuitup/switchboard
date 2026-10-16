@@ -100,7 +100,7 @@ test('a merged background rekey keeps sidebar, grid and Agents on the migrated c
   assert.equal(h.w.sessionMap.get('bg').headSessionId, 'bg');
   assert.equal(h.w.document.querySelector('[data-session-id="bg"] .session-icon').dataset.glyph, '⠋');
   assert.equal(card.querySelector('.grid-card-dot').classList.contains('session-icon--busy'), true);
-  const entry = { kind: 'background', sessionId: 'bg', state: 'working', name: 'original (1)', nameSource: 'collision' };
+  const entry = { kind: 'background', sessionId: 'bg', state: 'working', hosted: true, name: 'original (1)', nameSource: 'collision' };
   assert.equal(h.w.agentDisplayName(entry), 'original');
   assert.equal(h.w.agentRowIcon(entry).glyph, '⠋');
   h.w.applyHeadTurnSnapshot({ sessionId: 'bg', state: 'closed', revision: 2 });

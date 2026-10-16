@@ -254,7 +254,7 @@ test('#667 unchanged Agents polling avoids rebuilds, while a new metadata time s
   h.evalPublic('agents-view.js');
   let renders = 0;
   h.window.refreshSidebar = () => { renders++; };
-  const entry = { kind: 'background', id: 'job-667', sessionId: id, state: 'working', taskEvidence: normalizeTaskEvidence(fixture.job) };
+  const entry = { kind: 'background', id: 'job-667', sessionId: id, state: 'working', hosted: true, taskEvidence: normalizeTaskEvidence(fixture.job) };
   h.window.applyAgentsSnapshot({ roster: [structuredClone(entry)] });
   const revision = h.window.taskRegistry.snapshot(id).revision;
   h.window.applyAgentsSnapshot({ roster: [structuredClone(entry)] });
@@ -264,7 +264,7 @@ test('#667 unchanged Agents polling avoids rebuilds, while a new metadata time s
   h.window.applyAgentsSnapshot({ roster: [newer] });
   assert.equal(renders, 2);
   assert.equal(h.window.taskRegistry.snapshot(id).revision, revision);
-  h.window.applyAgentsSnapshot({ roster: [{ ...entry, state: 'done', taskEvidence: normalizeTaskEvidence(fixture.terminalJob) }] });
+  h.window.applyAgentsSnapshot({ roster: [{ ...entry, state: 'done', hosted: false, taskEvidence: normalizeTaskEvidence(fixture.terminalJob) }] });
   assert.equal(renders, 3);
   assert.equal(h.window.taskRegistry.background(id), false);
 });
