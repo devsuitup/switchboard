@@ -11,7 +11,8 @@ function setup(t, render) {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   for (const file of ['node_modules/marked/lib/marked.umd.js', 'node_modules/dompurify/dist/purify.min.js', 'public/viewer-toolbar.js', 'public/viewer-panel.js']) {
-    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), ctx.context, { filename: file });
+    const filename = path.join(__dirname, '..', file);
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
   }
   const el = ctx.document.createElement('div');
   el.className = 'markdown-preview';
@@ -199,6 +200,7 @@ test('safe Mermaid styles with child selectors survive sanitization and wide SVG
 test('two diagrams namespace every SVG ID and preserve marker, label and style references', async t => {
   const ctx = setup(t, async id => ({ svg: '<svg id="' + id + '" aria-labelledby="label"><style>#' + id + ' #node {fill:red}</style><title id="label">diagram</title><defs><marker id="arrow"/></defs><path id="node" marker-end="url(#arrow)"/><a href="#node"><text>link</text></a></svg>' }));
   await ctx.render(fence('graph TD; A-->B') + '\n\n' + fence('graph TD; A-->B'));
+  assert.equal(ctx.el.querySelectorAll('svg').length, 2);
   const ids = [...ctx.el.querySelectorAll('[id]')].map(node => node.id);
   assert.equal(new Set(ids).size, ids.length);
   for (const svg of ctx.el.querySelectorAll('svg')) {
@@ -209,4 +211,87 @@ test('two diagrams namespace every SVG ID and preserve marker, label and style r
     assert.equal(svg.getAttribute('aria-labelledby'), svg.querySelector('title').id);
     assert.ok(svg.querySelector('style').textContent.includes('#' + node));
   }
+});
+
+for (const source of [
+  'classDiagram\nclass Shape\n<<interface>> Shape',
+  'classDiagram\nclass Shape\n<<abstract>> Shape',
+  'stateDiagram-v2\nstate split <<fork>>',
+  'stateDiagram-v2\nstate merge <<join>>',
+  'stateDiagram-v2\nstate decide <<choice>>',
+  'graph TD; A[See details below]',
+  'graph TD; A["C:\\Serveur"]',
+  'graph TD; A["x<y"]',
+]) {
+  test('harmless Mermaid source renders: ' + source, async t => {
+    const ctx = setup(t);
+    await ctx.render(fence(source));
+    assert.equal(ctx.calls.length, 1);
+    assert.equal(ctx.el.querySelectorAll('svg').length, 1);
+    assert.equal(ctx.el.querySelector('.mermaid-error'), null);
+  });
+}
+
+for (const html of ['<div data-preview-mermaid>keep block</div>', 'Text <span data-preview-mermaid>keep inline</span>.']) {
+  test('valueless placeholder attributes in raw HTML preserve content: ' + html, async t => {
+    const ctx = setup(t);
+    await ctx.render(fence('graph TD; A-->B') + '\n\n' + html);
+    assert.equal(ctx.calls.length, 1);
+    assert.equal(ctx.el.querySelectorAll('svg').length, 1);
+    assert.match(ctx.el.textContent, /keep (?:block|inline)/);
+    assert.equal(ctx.el.querySelectorAll('[data-preview-mermaid]').length, 1);
+  });
+}
+
+test('unchanged diagrams are restored synchronously on prose refresh without another render or source flash', async t => {
+  const ctx = setup(t);
+  const diagram = fence('graph TD; A-->B');
+  await ctx.render('# Before\n\n' + diagram);
+  const svg = ctx.el.querySelector('svg').outerHTML;
+  ctx.el.scrollTop = 123;
+  ctx.el.scrollLeft = 17;
+  const refreshed = ctx.render('# After\n\n' + diagram);
+  assert.equal(ctx.el.querySelector('pre code'), null);
+  assert.equal(ctx.el.querySelector('svg')?.outerHTML, svg);
+  assert.equal(ctx.el.scrollTop, 123);
+  assert.equal(ctx.el.scrollLeft, 17);
+  await refreshed;
+  assert.equal(ctx.calls.length, 1);
+  assert.equal(ctx.loads(), 1);
+  assert.equal(ctx.el.querySelector('h1').textContent, 'After');
+});
+
+test('cache keys include source, theme and position and disappear with removed diagrams', async t => {
+  const ctx = setup(t);
+  const a = fence('graph TD; A-->B'), b = fence('graph TD; C-->D');
+  await ctx.render(a + '\n\n' + b);
+  await ctx.render(a + '\n\n' + fence('graph TD; E-->F'));
+  assert.equal(ctx.calls.length, 3);
+  await ctx.render(b + '\n\n' + a);
+  assert.equal(ctx.calls.length, 5);
+  ctx.document.documentElement.dataset.theme = 'light';
+  await tick(); await tick();
+  assert.equal(ctx.calls.length, 7);
+  await ctx.render(b + '\n\n' + a);
+  assert.equal(ctx.calls.length, 7);
+  await ctx.render('No diagrams');
+  await ctx.render(b);
+  assert.equal(ctx.calls.length, 8);
+});
+
+
+test('a loaded bundle without its export is removed and the next load can recover', async t => {
+  const ctx = setup(t);
+  ctx.window.loadMermaidBundle = ctx.realLoader;
+  const library = ctx.window.previewMermaid;
+  delete ctx.window.previewMermaid;
+  const first = ctx.window.loadMermaidBundle();
+  const script = ctx.document.querySelector('script[src="mermaid-bundle.js"]');
+  script.dispatchEvent(new ctx.window.Event('load'));
+  await assert.rejects(first, /unavailable/);
+  assert.equal(script.isConnected, false);
+  const retry = ctx.window.loadMermaidBundle();
+  ctx.window.previewMermaid = library;
+  ctx.document.querySelector('script[src="mermaid-bundle.js"]').dispatchEvent(new ctx.window.Event('load'));
+  assert.equal(await retry, library);
 });

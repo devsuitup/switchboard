@@ -157,6 +157,9 @@ function watchMarkdownDiagramTheme() {
 
 function setMarkdownPreview(el, header, body) {
   const sources = [];
+  const previous = mermaidPreviewStates.get(el);
+  const theme = markdownDiagramTheme();
+  const diagrams = new Map();
   const renderer = {
     code(token) {
       if (token.lang !== 'mermaid') return window.marked.Renderer.prototype.code.call(this, token);
@@ -164,11 +167,23 @@ function setMarkdownPreview(el, header, body) {
       return '<pre data-preview-mermaid="' + (sources.length - 1) + '"><code class="language-mermaid">' + escapeHtml(token.text + '\n') + '</code></pre>\n';
     },
     html(token) {
-      return token.text.replace(/\sdata-preview-mermaid\s*=/gi, ' data-untrusted-mermaid=');
+      return token.text.replace(/\sdata-preview-mermaid\b/gi, ' data-untrusted-mermaid');
     },
   };
-  el.innerHTML = DOMPurify.sanitize(header + window.marked.parse(body, { renderer: Object.assign(new window.marked.Renderer(), renderer) }));
-  const state = { sources, generation: 0 };
+  const fragment = DOMPurify.sanitize(header + window.marked.parse(body, { renderer: Object.assign(new window.marked.Renderer(), renderer) }), { RETURN_DOM_FRAGMENT: true });
+  for (const block of fragment.querySelectorAll('[data-preview-mermaid]')) {
+    const index = Number(block.dataset.previewMermaid);
+    const cached = previous?.diagrams.get(index);
+    if (cached?.source === sources[index] && cached.theme === theme) {
+      block.replaceWith(cached.diagram.cloneNode(true));
+      diagrams.set(index, cached);
+    }
+  }
+  const { scrollTop, scrollLeft } = el;
+  el.replaceChildren(fragment);
+  el.scrollTop = scrollTop;
+  el.scrollLeft = scrollLeft;
+  const state = { sources, diagrams, generation: 0 };
   mermaidPreviewStates.set(el, state);
   if (!sources.length) return Promise.resolve();
   watchMarkdownDiagramTheme();
@@ -231,7 +246,11 @@ function renderMarkdownDiagrams(el, state) {
   const generation = ++state.generation;
   const theme = markdownDiagramTheme();
   const current = () => mermaidPreviewStates.get(el) === state && state.generation === generation;
-  const blocks = [...el.querySelectorAll('[data-preview-mermaid]')];
+  const blocks = [...el.querySelectorAll('[data-preview-mermaid]')].filter(block => {
+    const cached = state.diagrams.get(Number(block.dataset.previewMermaid));
+    return cached?.source !== state.sources[Number(block.dataset.previewMermaid)] || cached.theme !== theme;
+  });
+  if (!blocks.length) return Promise.resolve();
   const pending = mermaidRenderQueue.then(async () => {
     if (!current()) return;
     let mermaid;
@@ -248,7 +267,7 @@ function renderMarkdownDiagrams(el, state) {
       container.className = 'mermaid-render-scratch';
       container.setAttribute('aria-hidden', 'true');
       try {
-        if (/<\s*[a-z!/?]|&(?:#|lt;)|\b(?:img|icon)["']?\s*:|\bdetails\s+|@import|(?:url|image-set)\s*\(|\\(?!n)/i.test(source)) throw new Error('Unsupported diagram resources');
+        if (/<\s*(?:[a-z][\w:-]*(?=[\s/>])|[!/?])|&(?:#|lt;)|\b(?:img|icon)["']?\s*:|^\s*details\s+\S+\s*:|@import|(?:url|image-set)\s*\(/im.test(source.replace(/<<\w+>>/g, ''))) throw new Error('Unsupported diagram resources');
         const defaults = mermaid.mermaidAPI.defaultConfig;
         mermaid.initialize({
           startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true,
@@ -263,7 +282,11 @@ function renderMarkdownDiagrams(el, state) {
         diagram.className = 'mermaid-diagram';
         diagram.dataset.previewMermaid = block.dataset.previewMermaid;
         diagram.appendChild(sanitizeMarkdownDiagram(svg, renderId));
+        state.diagrams.set(Number(block.dataset.previewMermaid), { source, theme, diagram: diagram.cloneNode(true) });
+        const { scrollTop, scrollLeft } = el;
         block.replaceWith(diagram);
+        el.scrollTop = scrollTop;
+        el.scrollLeft = scrollLeft;
       } catch {
         if (current() && el.contains(block)) showMarkdownDiagramError(block, source);
       } finally {

@@ -465,8 +465,11 @@ Test-pr skips Mermaid for older PRs without the bundle script.
 A global serial queue keeps Mermaid configuration and temporary DOM exclusive.
 Each render initializes strict mode, disables HTML labels and automatic scanning,
 and locks every default config key against document frontmatter/directives.
-Source containing HTML tags, angle/numeric entities, image/icon properties, DOM details lookups, resource URLs,
-CSS imports or CSS escapes is refused before temporary DOM attaches. Unsupported
+Source containing HTML-style tag openers (after stripping `<<word>>` annotations),
+numeric/angle entities, `img:`/`icon:` properties, line-start sequence details
+statements, `@import`, `url(` or `image-set(` is refused before temporary DOM attaches.
+Ordinary details text, backslashes in paths and bare comparison `<` are allowed;
+CSS escapes are rejected in the output pass. Unsupported
 HTML/resource features show source plus a short error, like invalid syntax. This
 deliberate subset prevents pre-sanitization loads. No bindFunctions callback runs.
 
@@ -476,6 +479,12 @@ attributes and CSS containing imports, external URLs or escapes. Local markers
 and safe generated styles survive. All IDs and their CSS/marker/ARIA/link references
 are namespaced per render. Temporary containers are removed in finally. WeakMap
 state and generation checks discard late results when content changes.
+Each preview retains sanitized diagram clones only for its current source, theme
+and fence index. Refresh builds the new document off-DOM and inserts unchanged
+diagrams synchronously, without source flashes or another bundle/render call.
+Changed source, palette or index invalidates the entry; removed diagrams are
+evicted on the next preview. Both synchronous document replacement and async
+diagram replacement preserve the preview scroll offsets.
 
 The app currently has a fixed dark palette without a global light/dark selector.
 Diagrams derive their palette from `--surface-sunken`, or explicit html/body
