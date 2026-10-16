@@ -58,7 +58,8 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
           if (active === job) active.version = acknowledgment?.version ?? snapshot().version;
         };
         if (applied?.then) return applied.then(finish).catch(error => {
-          if (error.code === 'WRITER_STALE') { if (active === job) job.stale = true; }
+          if (active !== job) return;
+          if (error.code === 'WRITER_STALE') job.stale = true;
           else fail(error);
         });
         return finish();
@@ -84,7 +85,8 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
       };
       const applied = !stale && apply(result);
       if (applied?.then) return applied.then(finish).catch(error => {
-        if (error.code === 'WRITER_STALE' && active === job) {
+        if (active !== job) return;
+        if (error.code === 'WRITER_STALE') {
           job.stale = true;
           return receive(message);
         }

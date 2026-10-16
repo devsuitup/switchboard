@@ -22,13 +22,14 @@ const quit = startup.body.body.findLast(node => node.expression?.callee?.object?
 
 function setup(behavior) {
   const updater = new EventEmitter();
+  const nativeUpdater = new EventEmitter();
   const calls = [];
   const handlers = new Map();
   const context = vm.createContext({
     app: { isPackaged: true, on: (name, handler) => handlers.set(name, handler), exit: () => calls.push('exit') },
     process: { env: {} },
     SETTING_DEFAULTS,
-    require: () => ({ autoUpdater: updater }),
+    require: name => ({ autoUpdater: name === 'electron' ? nativeUpdater : updater }),
     log: { info() {}, error() {} },
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     mainWindow: null, activityFlushedForQuit: false, updateInstalling: false,
@@ -49,10 +50,26 @@ function setup(behavior) {
   vm.runInContext(extractFunction(source, 'stopNonDatabaseResources'), context);
   vm.runInContext(source.slice(...install.range), context);
   vm.runInContext(source.slice(...quit.range), context);
-  return { calls, context, install: () => handlers.get('updater-install')(), quit: () => {
+  return { calls, context, nativeUpdater, install: () => handlers.get('updater-install')(), quit: () => {
     handlers.get('before-quit')({ preventDefault: () => calls.push('prevent') });
   } };
 }
+
+test('a silent second install after an asynchronous failure keeps normal quit draining writes', async () => {
+  let attempts = 0;
+  const ctx = setup(updater => {
+    if (++attempts === 1) setImmediate(() => updater.emit('error', new Error('installer spawn failed')));
+  });
+  await ctx.install();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ctx.context.updateInstalling, false);
+  await ctx.install();
+  assert.deepEqual(ctx.calls, ['drain', 'install', 'drain', 'install']);
+  assert.equal(ctx.context.updateInstalling, false);
+  ctx.quit();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(ctx.calls, ['drain', 'install', 'drain', 'install', 'guard', 'prevent', 'shutdown', 'exit']);
+});
 
 for (const failure of ['error event', 'throw']) {
   test(`failed update (${failure}) keeps services running and a later quit uses normal shutdown`, async () => {
@@ -76,6 +93,7 @@ test('successful install stops services only on before-quit, once', async () => 
   const ctx = setup(() => undefined);
   await ctx.install();
   assert.deepEqual(ctx.calls, ['drain', 'install']);
+  ctx.nativeUpdater.emit('before-quit-for-update');
   ctx.quit();
   assert.deepEqual(ctx.calls, ['drain', 'install', 'scheduler', 'monitor', 'mcp', 'watcher', 'indexer', 'trace']);
   ctx.quit();

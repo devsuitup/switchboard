@@ -7,8 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-for (const mode of ['held', 'queued', 'effects']) {
-  test(`cold get-projects serves SQLite rows during ${mode} scan writes`, () => {
+for (const mode of ['held', 'queued', 'effects', 'abandoned', 'warm-held', 'warm-effects']) {
+  test(`${mode.startsWith('warm-') ? 'warm' : 'cold'} get-projects serves SQLite rows during ${mode} scan writes`, () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'projects-scan-6166f-'));
     try {
       const result = spawnSync(require('electron'), [path.join(__dirname, 'fixtures/get-projects-during-scan.cjs'), mode], {

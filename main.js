@@ -143,6 +143,7 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   autoUpdater.on('update-not-available', (info) => sendUpdaterEvent('update-not-available', info));
   autoUpdater.on('download-progress', (progress) => sendUpdaterEvent('download-progress', progress));
   autoUpdater.on('update-downloaded', (info) => sendUpdaterEvent('update-downloaded', info));
+  require('electron').autoUpdater.on('before-quit-for-update', () => { updateInstalling = true; });
   autoUpdater.on('error', (err) => {
     log.error('[updater] Error:', err?.message || String(err));
     activityFlushedForQuit = false; // see .ai/contexts/activitywatch.md ("Quitting")
@@ -3421,7 +3422,6 @@ ipcMain.handle('updater-install', async () => {
   if (!autoUpdater) return;
   if (mainWindow && !await unsavedGuard.confirmQuit(mainWindow)) return;
   await drainForUpdate();
-  updateInstalling = true;
   try {
     autoUpdater.quitAndInstall();
   }

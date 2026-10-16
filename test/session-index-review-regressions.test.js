@@ -257,6 +257,7 @@ test('the restart window counts actual launches and an open circuit waits for ca
 function lifecycleFixture(extra = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8').replaceAll('\r\n', '\n');
   const clock = virtualClock(), calls = [];
+  const nativeUpdater = new EventEmitter();
   const noop = () => {};
   const context = vm.createContext({
     ...clock, console, Promise, appQuitting: false, activityFlushedForQuit: false, updateInstalling: false,
@@ -274,7 +275,11 @@ function lifecycleFixture(extra = {}) {
     projectsClient: { shutdown: noop }, fileListsClient: { shutdown: noop }, searchClient: { shutdown: noop },
     closeDb: async () => { throw new Error('client.close rejected'); }, activityTrace: { close: noop },
     autoUpdater: { quitAndInstall: () => calls.push('install') }, ...extra,
+    require: () => ({ autoUpdater: nativeUpdater }),
   });
+  const updateListener = source.split('\n').find(line => line.includes(".autoUpdater.on('before-quit-for-update'"));
+  assert.ok(updateListener);
+  vm.runInContext(updateListener, context);
   const start = source.indexOf('let shutdownPromise;');
   const end = source.indexOf('\n}\n\nstartApplication().catch', start);
   vm.runInContext(source.slice(start, end), context);
@@ -282,7 +287,7 @@ function lifecycleFixture(extra = {}) {
   const installEnd = source.indexOf('\n});', installStart) + 4;
   context.ipcMain = { handle: (_name, fn) => { context.install = fn; } };
   vm.runInContext(source.slice(installStart, installEnd), context);
-  return { context, clock, calls };
+  return { context, clock, calls, nativeUpdater };
 }
 
 test('quit exits even when the writer close rejects and a later quit is never trapped', async () => {
@@ -327,6 +332,7 @@ test('update before-quit tears down non-database resources once without holding 
     activityTrace: { close: () => calls.push('trace') },
     autoUpdater: { quitAndInstall() {
       calls.push('install');
+      f.nativeUpdater.emit('before-quit-for-update');
       f.context.quit({ preventDefault() { assert.fail('install must not be held again'); } });
     } },
   });

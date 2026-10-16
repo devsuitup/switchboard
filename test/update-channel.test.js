@@ -54,6 +54,7 @@ function setup(stored, { packaged = true, defaults = SETTING_DEFAULTS } = {}) {
     app: { isPackaged: packaged },
     process: { env: {} },
     require: name => {
+      if (name === 'electron') return { autoUpdater: { on() {} } };
       assert.equal(name, 'electron-updater');
       return { autoUpdater: updater };
     },

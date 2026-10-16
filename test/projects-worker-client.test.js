@@ -22,6 +22,48 @@ function fixture(options = {}) {
   return { client, worker, messages, applied, reply, change: () => { version++; } };
 }
 
+for (const progress of [false, true]) {
+  for (const code of ['WRITER_STALE', 'WRITE_FAILED']) {
+    test(`an abandoned ${progress ? 'progress' : 'final'} ${code} apply cannot reject the next worker request`, async t => {
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      let rejectApply;
+      const applying = new Promise((_resolve, reject) => { rejectApply = reject; });
+      const workers = [];
+      const messages = [];
+      const f = fixture({
+        timeoutMs: 30,
+        workerFactory: () => {
+          const worker = new EventEmitter();
+          worker.postMessage = message => messages.push(message);
+          worker.terminate = async () => { worker.terminated = true; };
+          workers.push(worker);
+          return worker;
+        },
+        apply: result => result.effects.length ? applying : undefined,
+      });
+      try {
+        const first = f.client.request();
+        const timedOut = assert.rejects(first, /projects worker timed out/);
+        workers[0].emit('message', { id: messages[0].id,
+          [progress ? 'progress' : 'result']: { effects: [{ name: 'setFolderMeta' }], keptLiveRows: [] } });
+        t.mock.timers.tick(30);
+        await timedOut;
+        const second = f.client.request();
+        second.catch(() => {});
+        assert.equal(workers.length, 2);
+        const result = { effects: [], keptLiveRows: [], reconciled: false, value: 'cached B' };
+        workers[1].emit('message', { id: messages[1].id, result });
+        rejectApply(Object.assign(new Error('Projects effect snapshot changed while queued'), { code }));
+        assert.deepEqual(await second, result);
+        assert.equal(workers[1].terminated, undefined);
+      } finally {
+        rejectApply(new Error('cleanup'));
+        await f.client.shutdown();
+      }
+    });
+  }
+}
+
 test('async effect acknowledgments complete before publication and cannot absorb a later external write', async () => {
   let release;
   const pendingApply = new Promise(resolve => { release = resolve; });
