@@ -8,6 +8,7 @@ const {
   defaultRunRemoteCommand,
 } = require('./remote-attach');
 const { isValidAlias } = require('./remote-hosts');
+const { remoteHostLabel } = require('./public/utils');
 
 const DEFAULT_LAUNCH_TIMEOUT_MS = 20000;
 const NO_DIR_EXIT_CODE = 9;
@@ -93,11 +94,12 @@ function createRemoteLaunchAdapter(opts = {}) {
       return { ok: false, error: `launch failed: ${err.message}` };
     }
     if (!result) return { ok: false, error: 'launch failed: no response' };
-    if (result.timedOut) return { ok: false, error: `launch timed out on ${alias} — the session may have started` };
-    if (result.code === NO_DIR_EXIT_CODE) return { ok: false, error: `directory ${request.cwd} does not exist on ${alias}` };
-    if (result.code === NO_TMUX_EXIT_CODE) return { ok: false, error: `tmux is not installed on ${alias}` };
+    const label = remoteHostLabel(alias, opts.getHosts?.());
+    if (result.timedOut) return { ok: false, error: `launch timed out on ${label} — the session may have started` };
+    if (result.code === NO_DIR_EXIT_CODE) return { ok: false, error: `directory ${request.cwd} does not exist on ${label}` };
+    if (result.code === NO_TMUX_EXIT_CODE) return { ok: false, error: `tmux is not installed on ${label}` };
     if (result.code === NO_CLAUDE_EXIT_CODE) {
-      return { ok: false, error: `claude was not found on the PATH of an ssh command on ${alias}` };
+      return { ok: false, error: `claude was not found on the PATH of an ssh command on ${label}` };
     }
     if (result.code !== 0) {
       const reason = (result.stderr || '').trim() || 'no stderr';
@@ -105,7 +107,7 @@ function createRemoteLaunchAdapter(opts = {}) {
     }
     const parsed = parseLaunchOutput(result.stdout);
     if (!parsed) {
-      return { ok: false, error: `launch ran on ${alias} but its tmux target could not be read (session ${tmuxSessionName(request.sessionId)})` };
+      return { ok: false, error: `launch ran on ${label} but its tmux target could not be read (session ${tmuxSessionName(request.sessionId)})` };
     }
     log.info(`[remote-launch:${alias}] started ${parsed.tmux} (pid ${parsed.pid}) in ${request.cwd}`);
     return { ok: true, descriptor: { sessionId: request.sessionId.toLowerCase(), pid: parsed.pid, tmux: parsed.tmux, cwd: request.cwd } };
@@ -138,7 +140,7 @@ async function handleLaunchRequest(payload, deps) {
   const attachResult = await deps.attach(alias, launched.descriptor, normalizeSize(payload.initialSize));
   if (!attachResult || !attachResult.ok) {
     const why = (attachResult && attachResult.error) || 'no response';
-    return { ok: false, error: `the session was started on ${alias} as ${launched.descriptor.tmux} but attaching failed: ${why}` };
+    return { ok: false, error: `the session was started on ${remoteHostLabel(alias, deps.getHosts?.())} as ${launched.descriptor.tmux} but attaching failed: ${why}` };
   }
   return { ok: true, descriptor: launched.descriptor, attachResult };
 }

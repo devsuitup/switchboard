@@ -47,7 +47,7 @@ function renderEnrolChecklist(containerEl, result) {
   }
 }
 
-function wireRemoteEnrolControls(buttonEl, containerEl, getAlias) {
+function wireRemoteEnrolControls(buttonEl, containerEl, getAlias, getLabel = getAlias) {
   if (!buttonEl) return;
   buttonEl.addEventListener('click', async () => {
     const alias = String(getAlias() || '').trim();
@@ -57,7 +57,7 @@ function wireRemoteEnrolControls(buttonEl, containerEl, getAlias) {
     }
     buttonEl.disabled = true;
     containerEl.textContent = '';
-    containerEl.appendChild(enrolEl('div', 'enrol-pending settings-description', `Checking ${alias}…`));
+    containerEl.appendChild(enrolEl('div', 'enrol-pending settings-description', `Checking ${String(getLabel() || '').trim() || alias}…`));
     try {
       renderEnrolChecklist(containerEl, await window.api.remoteHostEnrolCheck(alias));
     } catch (err) {

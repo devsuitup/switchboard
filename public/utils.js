@@ -1,5 +1,16 @@
 // --- Utility functions (shared across renderer modules) ---
 
+let remoteDisplayHosts = [];
+
+function setRemoteHostLabels(hosts) {
+  remoteDisplayHosts = Array.isArray(hosts) ? hosts : [];
+}
+
+function remoteHostLabel(alias, hosts = remoteDisplayHosts) {
+  const host = Array.isArray(hosts) && hosts.find(h => h && typeof h.alias === 'string' && h.alias.trim() === alias);
+  return typeof host?.label === 'string' && host.label.trim() ? host.label.trim().slice(0, 64) : alias;
+}
+
 /**
  * Shorten a project path for display: its last two segments.
  *
@@ -95,4 +106,8 @@ function escapeHtml(str) {
 
 function shellEscape(path) {
   return "'" + path.replace(/'/g, "'\\''") + "'";
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { remoteHostLabel };
 }

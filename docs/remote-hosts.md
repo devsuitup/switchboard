@@ -15,7 +15,7 @@ has:
 |---|---|
 | Toggle | Whether the host is observed |
 | ssh alias | A host name or `Host` alias that `ssh` resolves — typically from `~/.ssh/config` |
-| label (optional) | A label stored with the host, defaulting to the alias; the sidebar shows the alias |
+| label (optional) | The name shown for the host throughout the interface, defaulting to the alias |
 | Remove | Deletes the row |
 
 An alias may only contain letters, digits, dot, dash and underscore (1 to 63
@@ -139,8 +139,13 @@ growing delay when it fails.
 
 ## In the sidebar
 
-A remote host's projects are listed like local ones, with the alias as a badge
-on each session. Their `+` starts a new session on the host when it has
+A remote host's project headers show its label before the project path, and
+each session carries the label as a badge. The same name appears in action
+tooltips, dialogs, notices and the archived-project list in Settings. Saving a
+new label updates the sidebar immediately. An empty label, or a host removed
+from Settings, falls back to its SSH alias; a disabled host retains its label.
+The SSH alias still identifies the host in commands and saved project keys.
+Their `+` starts a new session on the host when it has
 `tmux` (see [Launch a session](#launch-a-session)); without it the button is
 disabled and its tooltip says the host needs tmux.
 
@@ -214,7 +219,7 @@ answered. A session open in a tab keeps the terminal's own signals.
 
 - A **live session in tmux** — its descriptor names a tmux pane and its pid is a
   running `claude` — opens in a terminal attached to that tmux pane over
-  `ssh -tt` (badge tooltip: *Live session on &lt;alias&gt; — click to attach*).
+  `ssh -tt` (badge tooltip: *Live session on &lt;label&gt; — click to attach*).
   Switchboard finds the tmux socket from the process's own `TMUX` variable.
   When no other client is attached, it hides tmux's status bar, turns the mouse
   on and follows the window's size. Every attach carries a tag identifying its
@@ -280,7 +285,7 @@ Refresh only redraws the local buffer; it never resizes the ssh PTY.
 
 ## Stop, archive, delete
 
-- **Stop** asks *Stop this session on &lt;alias&gt;?*, then ends the process on
+- **Stop** asks *Stop this session on &lt;label&gt;?*, then ends the process on
   the host: after checking that the pid is still a `claude` process, it kills
   the session's tmux pane (or window), or sends `SIGTERM` and, 3 seconds later,
   `SIGKILL`.

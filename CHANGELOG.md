@@ -10,6 +10,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - **Restore Sessions on Startup** has a new **Restore on click** option: the sessions open when Switchboard last closed are marked in the sidebar with an outlined dot, and each one is resumed only when you open it, by a click or with the previous/next session keys, instead of starting a `claude` process for every one at launch. **Don't restore** in a marked session's right-click menu removes it without starting it. (#441)
 
 ### Changed
+- Remote hosts now use the label you choose in Settings in project headers, session badges, dialogs and messages. Hosts without a label show their SSH alias. (#677)
 - Quitting Switchboard or installing an update gives pending settings and index changes up to 1.5 seconds to finish saving. A failed save cannot block quitting, and a failed update install keeps the app usable. (#616)
 - Conversations now show the number of running subagents below their title, even when their child list is collapsed or filtered, replacing the green dots on child rows and collapsed carets. The grid shows the same count in place of coloured pills; no count appears when none are running or activity is unknown. (#627)
 - The notice saying an archived remote session could not be stopped now stays until you dismiss it. Notices that close on their own wait while you point at or tab into them. (#566)

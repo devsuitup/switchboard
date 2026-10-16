@@ -4,7 +4,8 @@
 function resolveSessionStop(session, { attach = false } = {}) {
   const alias = session && session.remoteAlias;
   if (alias) {
-    return { remote: true, alias, attach: false, confirmText: `Stop this session on ${alias}?` };
+    const label = typeof remoteHostLabel === 'function' ? remoteHostLabel(alias) : alias;
+    return { remote: true, alias, attach: false, confirmText: `Stop this session on ${label}?` };
   }
   if (attach) {
     return { remote: false, alias: null, attach: true, confirmText: 'Detach from this background session? It keeps running; the Agents view can stop it.' };

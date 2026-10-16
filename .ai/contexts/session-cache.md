@@ -342,6 +342,36 @@ for that lazy fallback. Evidence is deleted before persistence or worker message
 
 ## Remote SSH hosts (issue #201)
 
+### Host display names (issue #677)
+
+`public/utils.js` owns `remoteHostLabel(alias, hosts)` and the renderer's
+display-only host list, updated by `setRemoteHostLabels`. `app.js` seeds it
+from the existing `getSetting('global')` call in `loadProjects` before rendering;
+Settings updates it after a successful global save, before refreshing the sidebar.
+The lookup trims labels, keeps the normalizer's 64-character limit, includes
+disabled hosts and falls back to the alias for blank labels or removed hosts.
+Settings passes its working host list when showing archived rows and a pending
+Check host, so an edited label can be previewed without changing the saved list.
+
+Project headers, session badges, reconnect/launch tooltips, launch/send/stop
+dialogs and action notices use this lookup. HTML templates escape the result;
+other surfaces use `textContent`. The helper is also exported for main-process
+archive errors and `remote-launch.js` / `remote-enrol.js` errors. Those adapters
+receive a `getHosts` callback from main and resolve the current label only for
+display text. Raw SSH diagnostics and example SSH commands retain their alias.
+
+No `remoteLabel` is added to cached project or session payloads. `remoteAlias`,
+`alias::folder`, archived/hidden keys, notice IDs, IPC arguments, SSH arguments,
+logs and traces remain keyed by alias. The Agents roster currently has no remote
+host name field or host-name display. The strip and terminal header show session
+names and paths, without a host name; context-menu action labels are generic.
+
+`test/dom-remote-host-labels.test.js` loads shipped renderer functions with the
+jsdom harness and `loadAppFunctions`, checks real DOM text and clicks through
+the alias-bearing IPC boundary. Backend error tests cover launch refusals,
+attach failures and concurrent checks; `remote-stop-cold-cache.test.js` covers
+the archive refusal through the main handler and sidebar notice.
+
 A declared SSH host's `~/.claude/projects` is mirrored into
 `<dataDir>/remote/<alias>/projects/` and indexed as a **second projects root**.
 Observation only: a remote session is read, searched and counted, never resumed

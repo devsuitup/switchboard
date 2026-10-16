@@ -24,6 +24,8 @@ const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .c
 // public/sidebar.js (and equivalents). Kept readonly so reassignment
 // from another file gets flagged.
 const rendererCrossFileGlobals = {
+  remoteHostLabel: 'readonly',
+  setRemoteHostLabels: 'readonly',
   writtenActivitySnapshot: 'readonly',
   noteWrittenActivity: 'readonly',
   markWrittenActivitySeen: 'readonly',
@@ -436,7 +438,7 @@ const rendererCrossFileGlobals = {
 };
 
 module.exports = [
-  { files: ['public/task-registry.js'], languageOptions: { globals: { module: 'writable' } } },
+  { files: ['public/task-registry.js', 'public/utils.js'], languageOptions: { globals: { module: 'writable' } } },
   { files: ['public/grid-view.js'], languageOptions: { globals: { localMergedMemberRows: 'readonly' } } },
   // Ignore generated/vendored bundles and binaries
   {
