@@ -14,7 +14,7 @@ const os = require('os');
 const path = require('path');
 
 const { JOB_STATES } = require('../bg-agents-roster');
-const { normalizeTaskEvidence } = require('../task-records');
+const { normalizeTaskEvidence, IN_FLIGHT_KINDS } = require('../task-records');
 
 const JOBS_DIR = path.join(os.homedir(), '.claude', 'jobs');
 
@@ -42,6 +42,15 @@ test('CANARY: the Claude CLI daemon still writes jobs/<id>/state.json in the sha
     if (raw.inFlight !== undefined || raw.fan !== undefined || ['done', 'stopped', 'failed'].includes(raw.state)) {
       assert.equal(normalizeTaskEvidence(raw).valid, true,
         `PINNED ASSUMPTION BROKEN: consumed fan ids/kinds/times, inFlight kinds/count, updatedAt or terminal state ${seen}`);
+    }
+    for (const field of ['queued', 'drainableMonitors']) {
+      const value = raw.inFlight?.[field];
+      assert.ok(value === undefined || Number.isSafeInteger(value) && value >= 0,
+        `PINNED ASSUMPTION BROKEN: inFlight.${field} used to be a nonnegative safe integer ${seen}`);
+    }
+    for (const kind of raw.inFlight?.kinds || []) {
+      assert.ok(IN_FLIGHT_KINDS.has(kind),
+        `PINNED ASSUMPTION BROKEN: unknown inFlight kind "${kind}" (known: ${[...IN_FLIGHT_KINDS].join(', ')}) ${seen}`);
     }
     if (!JOB_STATES.has(raw.state)) {
       t.diagnostic(`unknown job state "${raw.state}" (known: ${[...JOB_STATES].join(', ')}) ${seen}; the view shows it as Unknown`);

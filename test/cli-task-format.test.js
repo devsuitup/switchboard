@@ -42,7 +42,7 @@ test('format alarms detect changed ids, timestamps, kinds, wrappers and terminal
     e => { e.fan[0].startedAt = 'yesterday'; },
     e => { e.fan[0].doneAt = 'tomorrow'; },
     e => { e.updatedAt = 123; },
-    e => { e.inFlight.kinds = ['future_kind']; },
+    e => { e.inFlight.kinds = [123]; },
     e => { e.state = 'future_state'; },
   ]) {
     const e = structuredClone(fixture.job);

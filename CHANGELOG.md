@@ -21,6 +21,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Closing the window (the close button, `Alt`+`F4`) asks for confirmation first, with Cancel selected; a window that is busy at that moment asks once it is free. Quitting from the ☰ menu (Quit, or Exit on Windows) does not ask again, and a quit from outside (a logout, an update install) is not stopped by the question. On macOS it asks "Close the window?": Switchboard stays in the Dock, but its sessions stop. If the window has stopped responding, a single close waits, and closing it again a few seconds later ends it; never while one of its own confirmation boxes waits for an answer. A window closed while it is still starting asks once it has loaded. (#478)
 
 ### Fixed
+- A background session that watches an artifact shows its activity instead of "Activity unavailable"; an activity Switchboard does not know yet is named as unknown in the activity tooltip. (#684)
 - A background session waiting for your next message keeps its bg badge and can still be attached or stopped from the Agents view. (#682)
 - Renaming a session no longer reverts to an earlier name such as "name (3)" when its transcript refreshes. A later rename in the session itself can still update the displayed name. (#680)
 - Starting Switchboard from a terminal inside Claude Code no longer makes its tabs take that session's name or write metadata into its transcript. Scheduled runs and background launches also start with their own session identity. (#670)

@@ -210,7 +210,8 @@ function backgroundActivityLabel(sessionId, snapshot, row) {
   const valid = entry.taskEvidence?.valid === true;
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const label = terminal ? entry.state : !valid ? 'Activity unavailable' : renderSessionIcon(snapshot).title;
-  const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toLocaleString()} (job metadata)` : 'Job activity unavailable';
+  const kinds = valid ? (entry.taskEvidence.inFlightKinds || []).map(k => k.label).join(', ') : '';
+  const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toLocaleString()} (job metadata)${kinds ? ` · ${kinds}` : ''}` : 'Job activity unavailable';
   if (entry.state === 'done' && agentJobIsLive(entry)) return { text: 'Idle', title: source };
   return { text: terminal ? `Job ${label}` : `${label} · job ${entry.state || 'unknown'}`, title: source };
 }
