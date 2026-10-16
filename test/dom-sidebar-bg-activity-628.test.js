@@ -390,14 +390,14 @@ test('hosted done with conversation ownership cannot revive foreground head acti
 });
 
 for (const hosted of [true, false]) {
-  test(`done hosted=${hosted} shows ${hosted ? 'Idle' : 'Done'} in sidebar and Agents`, async t => {
+  test(`done hosted=${hosted} shows ${hosted ? 'Idle' : 'done'} in sidebar and Agents`, async t => {
     const entries = roster('done', null);
     entries[0].hosted = hosted;
     const h = await setup(t, entries);
     assert.equal(h.document.querySelector('.session-status').textContent, hosted ? 'Idle' : 'Job done');
     const row = h.document.createElement('div');
     row.innerHTML = h.window.renderAgentRow(entries[0]);
-    assert.equal(row.querySelector('.agents-row-state').textContent.trim().split(/\s+/).at(-1), hosted ? 'Idle' : 'Done');
+    assert.equal(row.querySelector('.agents-row-state').textContent.trim().split(/\s+/).at(-1), hosted ? 'Idle' : 'done');
   });
 }
 

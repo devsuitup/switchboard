@@ -59,7 +59,7 @@ function boot(dir, activeSessions, opts = {}) {
     log: silentLog,
     isProcessAlive: opts.isProcessAlive || (() => true),
     now: opts.now,
-    readProcStart: opts.readProcStart,
+    readProcStart: opts.readProcStart || (() => '111'),
     readParentPid: opts.readParentPid,
     ownPid: opts.ownPid,
     platform: opts.platform,
@@ -548,6 +548,7 @@ test('clearOwner: walks the state file pid up to the PTY pid', () => {
     cliSessionState.init({
       dir, activeSessions: new Map(), log: silentLog,
       isProcessAlive: (pid) => pid !== 500,
+      readProcStart: () => '111',
       readParentPid: (pid) => parents[pid] ?? null,
     });
     writeState(dir, 300, { sessionId: 'cleared', status: 'idle' });

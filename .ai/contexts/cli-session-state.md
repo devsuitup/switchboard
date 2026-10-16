@@ -196,7 +196,9 @@ and leave the renderer uninformed.
 `main.js` subscribes `notifyRendererProjectsChanged` to
 `onStatusesChanged`. Only session appearance/disappearance, PID changes or
 status changes notify this subscriber; timestamp-only descriptor flushes
-and process-table refreshes do not. `onDescriptorsChanged` remains the
+do not. A process-table refresh also notifies when its stale-identity exclusions
+change the sidebar descriptor set; an unchanged refresh does not.
+`onDescriptorsChanged` remains the
 separate directory/ownership feed for background agents. Detected PID deaths
 and watcher `stop()` clearing a populated status map enter the same leading/trailing
 1.5s notification throttle as other project changes; the renderer retains

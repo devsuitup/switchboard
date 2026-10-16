@@ -53,6 +53,7 @@ const known = new Map();
 const lastRescanAt = new Map();
 // sessionId -> { status, statusUpdatedAt, pid } for live pids only -- see .ai/contexts/cli-session-state.md
 const statusBySession = new Map();
+let staleSidebarIdentity = '[]';
 const lastProbeAt = new Map();
 const statusKey = (sessionId) => String(sessionId).toLowerCase();
 const MAX_DESCRIPTOR_SCAN = 1000;
@@ -170,6 +171,11 @@ function refreshProcessTable() {
     if (epoch === processTableEpoch) {
       processTable = { at: now(), observedAt, map };
       processTableInFlight = null;
+      const stale = JSON.stringify([...statusBySession].filter(([id, entry]) => sidebarDescriptorIsStale(id, entry))
+        .map(([id, entry]) => [id, entry.pid]).sort());
+      const sidebarChanged = stale !== staleSidebarIdentity;
+      staleSidebarIdentity = stale;
+      if (sidebarChanged) notifyStatusesChanged();
       if (map) notifyDescriptorsChanged();
     }
     return map;
@@ -317,6 +323,7 @@ function init(ctx) {
   readProcessTable = ctx.readProcessTable || defaultReadProcessTable;
   processTableEpoch++;
   processTable = null;
+  staleSidebarIdentity = '[]';
   processTableInFlight = null;
   stop();
 }
@@ -623,6 +630,7 @@ function stop() {
   pending.clear();
   known.clear();
   statusBySession.clear();
+  staleSidebarIdentity = '[]';
   lastRescanAt.clear();
   lastProbeAt.clear();
   if (hadStatus) {
@@ -660,10 +668,14 @@ function getSidebarDescriptors() {
   startProcessTableRefresh();
   const descriptors = [];
   for (const [id, entry] of statusBySession) {
-    const writer = [...known.values()].find(s => s.pid === entry.pid && statusKey(s.sessionId) === id);
-    if (getStatus(id) && (!writer || deliveryProcessIdentity(writer) !== 'stale')) descriptors.push({ ...entry });
+    if (getStatus(id) && !sidebarDescriptorIsStale(id, entry)) descriptors.push({ ...entry });
   }
   return descriptors;
+}
+
+function sidebarDescriptorIsStale(id, entry) {
+  const writer = [...known.values()].find(s => s.pid === entry.pid && statusKey(s.sessionId) === id);
+  return !!writer && deliveryProcessIdentity(writer) === 'stale';
 }
 
 function canCompareProcStart(raw) {

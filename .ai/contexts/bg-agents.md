@@ -270,13 +270,13 @@ Windows uses the existing asynchronously refreshed process table and descriptor
 mtime ordering. Unknown identity, including missing `procStart`, retains the
 pid-only behaviour; old status timestamps do not expire a living pid.
 The cached sidebar descriptor projection applies the same identity check.
-`isLiveJobState` has been removed; turn activity and attention still read their
-specific turn states, while hosting consumers use `isHostedJob`.
+Turn activity and attention read their specific turn states; hosting consumers
+use `isHostedJob`.
 
 Main annotates every roster entry with `hosted`; renderer `agentJobIsLive`
 consumes that field for badges, row liveness, ordering, counts, the Finished
 filter and verbs. A hosted idle row retains the `done` turn state and shows `Idle`
-in the sidebar status and Agents row label (a finished Agents row keeps `Done`).
+in the sidebar status and Agents row label (a finished Agents row shows `done`).
 It shows the waiting glyph and counts as running. Done without a live descriptor
 is finished. Busy/head-turn and blocked attention still follow turn evidence.
 `runVerb`, the fresh conversation check and `liveJobCheck` use the same hosting
@@ -284,7 +284,7 @@ rule, including descriptors that changed after the last snapshot.
 
 | Display / verb | Hosted (including idle done) | Finished |
 |---|---|---|
-| State label after turn ends | Idle | Done |
+| State label after turn ends | Idle | done |
 | Attach | allowed | disabled (a finished session resumes like any other) |
 | Stop | allowed | disabled |
 | Respawn | refused | allowed |
@@ -315,7 +315,9 @@ without opening Agents or scanning job files on project loads. A done job with
 a live bg descriptor retains the roster's sidebar bg marker. The local projects
 projection also uses `isHostedJob`, preserving descriptor-only rows and proven
 continuation heads, merged members and registry renames across working/done
-turn transitions. The attach-tab fallback supplies a synthetic descriptor only
+turn transitions. A live bg descriptor also supplies a descriptor-only row when
+its job metadata is absent, before the job watcher fills or beyond `MAX_JOBS`.
+The attach-tab fallback supplies a synthetic descriptor only
 when the cached job is hosted without descriptor evidence (working/blocked).
 An attach PTY
 alone does not prove hosting.
@@ -489,7 +491,8 @@ that throws still lets the choice apply for the session. The `<select>` in
   start of each row's `.agents-row-state` (in every mode). `agentStateMeta`
   (entry → `{ key, emoji, label }`) is the only lookup: interactive entries
   are `external` whatever their state; a background entry whose state is
-  `null` or not a key is `unknown`. Order: Working, Blocked, Done, Stopped,
+  `null` or not a key is `unknown`. Hosted `done` uses the `idle` key and
+  `💤 Idle` header and row label. Order: Working, Blocked, Idle, Done, Stopped,
   Failed, External, Unknown. "Blocked" matches the row's own state word.
   Emojis are literals from the map, never data, and sit in their own
   `aria-hidden` span (`.agents-group-emoji`, `.agents-state-emoji`) so the

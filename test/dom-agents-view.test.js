@@ -107,6 +107,21 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
+test('default state grouping puts hosted done under Idle with its waiting emoji', async () => {
+  const h = setup({ storage: {} });
+  try {
+    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], id: 'cccccccc', sessionId: 's-c', hosted: true }, ROSTER[1]] });
+    await h.window.showAgentsView();
+    const idle = h.document.querySelector('[data-collapse="state:idle"]');
+    assert.ok(idle);
+    assert.match(idle.textContent, /💤 Idle/);
+    assert.match(idle.nextElementSibling.querySelector('.agents-row-state').textContent, /💤 Idle/);
+    const done = h.document.querySelector('[data-collapse="state:done"]');
+    assert.ok(done);
+    assert.equal(done.nextElementSibling.querySelector('.agents-row-state').textContent.trim(), '✅ done');
+  } finally { h.destroy(); }
+});
+
 test('hosted done job keeps badge, live row, filter visibility and Attach/Stop only', async () => {
   const h = setup({ storage: { agentsGroupBy: 'none', agentsShowFinished: '0' } });
   try {
@@ -657,7 +672,7 @@ test('every row starts its state column with its state emoji in every grouping m
   const odd = { ...ROSTER[1], id: 'eeeeeeee', sessionId: 's-e', name: 'odd', state: null };
   ctx.setSnapshot({ roster: [...ROSTER, failed, odd], daemonReachable: true });
   await ctx.window.showAgentsView();
-  const expected = { 'em-platform': '⚙️ working', spike: '✅ Done', 'lvds-1b': '🖥️ external · busy', broke: '❌ failed', odd: '❓ ?' };
+  const expected = { 'em-platform': '⚙️ working', spike: '✅ done', 'lvds-1b': '🖥️ external · busy', broke: '❌ failed', odd: '❓ ?' };
   for (const mode of ['none', 'state', 'project']) {
     chooseGroupBy(ctx, mode);
     const got = Object.fromEntries([...ctx.document.querySelectorAll('.agents-row')].map(r =>

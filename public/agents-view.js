@@ -57,6 +57,7 @@ const AGENTS_GROUP_MODES = ['none', 'state', 'project'];
 const AGENT_STATE_META = {
   working: { emoji: '⚙️', label: 'Working' },
   blocked: { emoji: '✋', label: 'Blocked' },
+  idle: { emoji: '💤', label: 'Idle' },
   done: { emoji: '✅', label: 'Done' },
   stopped: { emoji: '⏹️', label: 'Stopped' },
   failed: { emoji: '❌', label: 'Failed' },
@@ -70,6 +71,7 @@ function normalizeAgentsGroupBy(value) {
 
 function agentStateGroupKey(entry) {
   if (entry.kind === 'interactive') return 'external';
+  if (entry.state === 'done' && agentJobIsLive(entry)) return 'idle';
   const known = entry.state && entry.state !== 'external' && entry.state !== 'unknown' && Object.hasOwn(AGENT_STATE_META, entry.state);
   return known ? entry.state : 'unknown';
 }
@@ -298,7 +300,7 @@ function renderAgentRow(entry, nested = false) {
   const key = agentsEntryKey(entry);
   const icon = agentRowIcon(entry);
   const state = entry.kind === 'interactive' ? 'external'
-    : entry.state === 'done' ? agentJobIsLive(entry) ? 'Idle' : 'Done' : (entry.state || '?');
+    : entry.state === 'done' && agentJobIsLive(entry) ? 'Idle' : (entry.state || '?');
   const stateEmoji = agentStateMeta(entry).emoji;
   const status = entry.kind === 'interactive' && entry.status ? ' · ' + entry.status : '';
   const classes = ['agents-row'];

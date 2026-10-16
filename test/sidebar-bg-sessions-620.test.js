@@ -57,7 +57,7 @@ function setup(t, { graph = {}, indexedHead = false, source = 'user', hidden = f
   let alive = true;
   let clock = Date.now();
   const activeSessions = new Map();
-  cli.init({ dir, activeSessions, onIdle() {}, isProcessAlive: () => alive, readParentPid: () => null, now: () => clock });
+  cli.init({ dir, activeSessions, onIdle() {}, isProcessAlive: () => alive, readProcStart: () => '111', readParentPid: () => null, now: () => clock });
   assert.equal(cli.ensureWatching(), true);
   bgAgents.init({ jobsDir, cliSessionState: cli, resolveProjectRoots: async cwd => ({ projectRoot: cwd, worktreeRoot: cwd }) });
   bgAgents.start();
@@ -104,6 +104,24 @@ test('a done hosted bg UUID keeps its descriptor-only sidebar row', t => {
   assert.equal(sessions[0].bgJobId, '33333333');
   assert.equal(h.render().querySelector('.bg-badge')?.textContent, 'bg');
 });
+
+for (const reason of ['before the job watcher fills', 'beyond MAX_JOBS']) {
+  test(`a live bg descriptor keeps its sidebar row without cached job metadata ${reason}`, t => {
+    const h = setup(t);
+    const { mergeLocalBackgroundSessions } = require('../sidebar-bg-sessions');
+    const jobs = reason === 'beyond MAX_JOBS' ? new Map([['other-job', { state: 'working' }]]) : new Map();
+    const projects = [];
+    mergeLocalBackgroundSessions(projects, [], cli.getSidebarDescriptors(), {
+      jobs, metaMap: new Map(), hiddenProjects: new Set(), showArchived: false,
+    });
+    assert.equal(jobs.has('33333333'), false);
+    const rows = projects.flatMap(project => project.sessions);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].descriptorOnly, true);
+    assert.equal(rows[0].sessionId, HEAD);
+    assert.equal(rows[0].bgJobId, h.descriptor.jobId);
+  });
+}
 
 test('a done hosted continuation keeps its head, merged members and registry rename', t => {
   const h = setup(t, { state: 'done', graph: { [OLD]: [MID], [MID]: [HEAD] }, indexedHead: true });

@@ -9,10 +9,10 @@ const cli = require('../cli-session-state');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { loadAppFunctions, extractFunction } = require('./app-source');
 
-function bootMain(t, opts = {}) {
+function bootMain(t, { descriptor = {}, ...opts } = {}) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-576-')));
   fs.writeFileSync(path.join(dir, '4242.json'), JSON.stringify({
-    pid: 4242, sessionId: 'A', cwd: dir, procStart: '111', status: 'idle', statusUpdatedAt: 10000,
+    pid: 4242, sessionId: 'A', cwd: dir, procStart: '111', status: 'idle', statusUpdatedAt: 10000, ...descriptor,
   }));
   let alive = true;
   const sent = [];
@@ -24,7 +24,7 @@ function bootMain(t, opts = {}) {
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: channel => sent.push(channel) } }),
     setTimeout: fn => { timers.push(fn); return timers.length; },
     require: () => ({
-      init: ctx => cli.init({ ...ctx, dir, isProcessAlive: () => alive, readParentPid: () => null, ...opts }),
+      init: ctx => cli.init({ ...ctx, dir, isProcessAlive: () => alive, readProcStart: () => '111', readParentPid: () => null, ...opts }),
       onDescriptorsChanged: fn => { unsubscribe = cli.onDescriptorsChanged(fn); return unsubscribe; },
       onStatusesChanged: fn => { unsubscribe = cli.onStatusesChanged(fn); return unsubscribe; },
     }),
@@ -224,6 +224,39 @@ test('576r2 minor 1: an unchanged Windows process-table refresh never pushes pro
   await cli.refreshProcessTable();
   assert.deepEqual(h.sent, [], 'ownership-only process table refresh must not rebuild the sidebar');
   assert.equal(cli.getStatus('A').status, 'idle');
+});
+
+test('a Windows table refresh that rejects a reused sidebar PID pushes projects-changed', async t => {
+  let clock = Date.now() + 10000;
+  let created = '134000000000000000';
+  const h = bootMain(t, {
+    descriptor: { procStart: created, pidDomain: 'win32:anchor', kind: 'bg', jobId: 'aaaaaaaa' },
+    platform: 'win32', readParentPid: undefined, now: () => clock,
+    readProcessTable: async () => new Map([[4242, { ppid: 1, created }]]),
+  });
+  let statusChanges = 0;
+  t.after(cli.onStatusesChanged(() => { statusChanges++; }));
+  assert.equal(cli.getSidebarDescriptors().length, 1);
+  await cli.refreshProcessTable();
+  assert.equal(cli.getSidebarDescriptors().length, 1);
+  assert.deepEqual(h.sent, []);
+  clock += 3001;
+  created = '134000000001000000';
+  await cli.refreshProcessTable();
+  assert.equal(cli.getSidebarDescriptors().length, 0);
+  assert.deepEqual(h.sent, ['projects-changed']);
+  assert.equal(statusChanges, 1);
+  clock += 3001;
+  await cli.refreshProcessTable();
+  assert.equal(h.sent.length, 1);
+  assert.equal(statusChanges, 1);
+  clock += 3001;
+  created = '134000000000000000';
+  await cli.refreshProcessTable();
+  assert.equal(cli.getSidebarDescriptors().length, 1);
+  assert.equal(statusChanges, 2);
+  h.timers.shift()();
+  assert.deepEqual(h.sent, ['projects-changed', 'projects-changed']);
 });
 
 test('576r2 minor 1: unchanged descriptor writes do not push but status changes and new sessions do', { timeout: 8000 }, async t => {

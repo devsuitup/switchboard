@@ -82,15 +82,15 @@ test('group mode: none, state and project are kept; anything else (unset include
 
 test('state meta: one emoji and label per state group, in the group order', () => {
   assert.deepEqual(Object.entries(AGENT_STATE_META).map(([k, m]) => [k, m.emoji, m.label]), [
-    ['working', '⚙️', 'Working'], ['blocked', '✋', 'Blocked'], ['done', '✅', 'Done'], ['stopped', '⏹️', 'Stopped'],
+    ['working', '⚙️', 'Working'], ['blocked', '✋', 'Blocked'], ['idle', '💤', 'Idle'], ['done', '✅', 'Done'], ['stopped', '⏹️', 'Stopped'],
     ['failed', '❌', 'Failed'], ['external', '🖥️', 'External'], ['unknown', '❓', 'Unknown'],
   ]);
-  const every = Object.keys(AGENT_STATE_META).map((k) => (k === 'external' ? ext({ sessionId: k }) : bg({ id: k, state: k === 'unknown' ? null : k })));
+  const every = Object.keys(AGENT_STATE_META).map((k) => (k === 'external' ? ext({ sessionId: k }) : bg({ id: k, state: k === 'unknown' ? null : k, hosted: k !== 'done' })));
   for (const g of groupAgentEntries(every, 'state')) {
     assert.ok(AGENT_STATE_META[g.key], `meta for ${g.key}`);
     assert.equal(g.label, AGENT_STATE_META[g.key].label);
   }
-  assert.equal(groupAgentEntries(every, 'state').length, 7);
+  assert.equal(groupAgentEntries(every, 'state').length, 8);
 });
 
 test('state meta lookup: by state, null or unlisted is unknown, interactive is external', () => {

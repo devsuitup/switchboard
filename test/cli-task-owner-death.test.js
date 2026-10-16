@@ -19,7 +19,7 @@ test('a confirmed external owner PID death ends primary tasks while descriptor u
   registry.ingest(id, fixture.use);
   registry.ingest(id, fixture.launch);
   fs.writeFileSync(file, JSON.stringify({ pid: 4242, procStart: '111', sessionId: id, cwd: dir, version: '2.1.296', status: 'idle', updatedAt: at, statusUpdatedAt: at }));
-  cli.init({ dir, activeSessions: new Map(), isProcessAlive: () => alive, now: () => at, onIdle() {},
+  cli.init({ dir, activeSessions: new Map(), isProcessAlive: () => alive, readProcStart: () => '111', now: () => at, onIdle() {},
     onOwnerExit: sessionId => registry.ownerDied(sessionId), log: { info() {}, warn() {}, debug() {}, error() {} } });
   t.after(() => { cli.stop(); assert.equal(path.dirname(fs.realpathSync.native(dir)), fs.realpathSync.native(os.tmpdir())); fs.rmSync(dir, { recursive: true, force: true }); assert.equal(fs.existsSync(dir), false); });
   cli.ensureWatching();
