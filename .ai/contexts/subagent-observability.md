@@ -191,7 +191,10 @@ cron evidence; those tasks do not increase the subagent count.
 An assistant `Agent` tool-use opens a provisional task. A correlated structured
 `async_launched` result replaces its provisional id with `agentId` and does not
 end it. A synchronous Agent ends on its matching result. An anchored user
-`<task-notification>` envelope requires origin.kind=task-notification, exactly
+`<task-notification>` envelope requires origin.kind=task-notification. The CLI
+also records the envelope as an `attachment` with type `queued_command` and
+string `prompt`; its attachment origin must be absent (older CLIs) or have
+kind `task-notification`. Both forms use the same strict anchored parser, exactly
 one task-id, a recognized terminal status (completed, failed, stopped or killed)
 and a matching task output filename when present. A stopped notification may
 omit the output filename. With a tool-use-id it must correlate with the launch;
@@ -224,6 +227,21 @@ re-keys move tasks without redirecting future notes or owner death from the old
 id. Redirects, pending results/notifications and seen record ids drop their
 oldest entries beyond 2048; pending and seen are also cleared on owner death.
 The client caps its continuation redirects at the same bound.
+
+Snapshot application emits one change after all tasks and owner fields have
+been applied, including snapshots containing many terminal tasks. Ending an
+already terminal task at the same or an earlier timestamp is a no-op. Each
+renderer change reflects the parent once, updating its count, busy-agents
+tint, status icon and local PTY agents-busy flag together; grid and Agents
+projections still refresh from that change. Child rows have no liveness
+classes to update individually. Repeated activity notes refresh source TTLs
+without a revision unless a source or subagent type changes. Job polling
+retains its freshness watermark but emits only when the projected registry
+changes. The Agents sidebar comparison already skips identical evidence;
+new metadata timestamps still refresh its job-update tooltip. Terminal owner
+cutoffs remain authoritative and are still propagated when advanced.
+`test/task-registry-storm-667.test.js` covers these notification shapes,
+worker-to-renderer completion, parent projection and polling idempotence.
 
 `bg-agents-roster.js` normalizes task evidence through `task-records.js`, retaining
 the roster's existing short-job-id to session-UUID mapping. Valid job fan entries
