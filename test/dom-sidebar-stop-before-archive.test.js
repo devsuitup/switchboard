@@ -382,7 +382,7 @@ test('stopBeforeArchive: an unreachable host is reported as not stopped, once pe
   } finally { ctx.destroy(); }
 });
 
-test('slug-group archive: sessions on an unreachable host are archived and each notice names the host and session', async () => {
+test('slug-group archive: sessions on an unreachable host are archived with one notice per host listing sessions', async () => {
   const ctx = setupSidebarDom();
   try {
     const r1 = remoteSession('r1', 'vps', true, { slug: 'grp' });
@@ -398,7 +398,9 @@ test('slug-group archive: sessions on an unreachable host are archived and each 
     await done;
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]).sort(), ['r1', 'r2']);
     const notices = ctx.document.querySelectorAll('#app-notices [role="alert"]');
-    assert.equal(notices.length, 2);
+    assert.equal(notices.length, 1);
+    assert.match(notices[0].textContent, /r1.*r2/);
+    assert.doesNotMatch(notices[0].textContent, /Archive failed/);
     assert.match(notices[0].textContent, /vps did not answer/);
     assert.equal(button.disabled, false);
   } finally { ctx.destroy(); }
@@ -474,7 +476,7 @@ test('a re-render keeps the slug-group and folder Archive buttons disabled while
   } finally { ctx.destroy(); }
 });
 
-test('folder archive asks an offline host once for all its rows, not once per row', async () => {
+test('folder archive asks an offline host once and shows one notice per host listing all rows', async () => {
   const ctx = setupSidebarDom();
   try {
     const rows = ['r1', 'r2', 'r3'].map(id => remoteSession(id, 'vps', true));
@@ -488,7 +490,9 @@ test('folder archive asks an offline host once for all its rows, not once per ro
     await done;
     assert.equal(calls.filter(c => c.method === 'remoteStopSession').length, 1);
     assert.equal(calls.filter(c => c.method === 'archiveSession').length, 3);
-    assert.equal(ctx.document.querySelectorAll('#app-notices [role="alert"]').length, 3);
+    const notices = ctx.document.querySelectorAll('#app-notices [role="alert"]');
+    assert.equal(notices.length, 1);
+    assert.match(notices[0].textContent, /r1.*r2.*r3/);
   } finally { ctx.destroy(); }
 });
 

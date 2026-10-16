@@ -116,7 +116,11 @@ for (const location of ['same folder', 'other folder', 'nested folder']) {
     assert.deepEqual(h.spawned, []);
     assert.deepEqual(h.prompts, []);
     assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
-    assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /waiting for indexing/i);
+    const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:pending"][role="status"]');
+    assert.ok(notice);
+    assert.match(notice.textContent, /waiting for indexing/i);
+    assert.doesNotMatch(notice.textContent, /failed/i);
+    assert.equal(h.dom.window.document.querySelector('#app-notices [role="alert"]'), null);
   });
 }
 

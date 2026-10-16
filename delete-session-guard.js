@@ -7,7 +7,7 @@ async function deleteSessionRefusal(sessionId, { activeSessions, liveJobCheck, l
   const same = (v) => typeof v === 'string' && v.toLowerCase() === key;
   for (const [sid, session] of activeSessions || []) {
     if (!session || session.exited) continue;
-    if (same(sid) || same(session.realSessionId)) return 'session is still running — return to its own terminal and end it there, then retry Delete';
+    if (same(sid) || same(session.realSessionId)) return 'session is still running in this window — use Stop on its row in the sidebar, then retry Delete';
   }
   const job = liveJobCheck(id);
   if (!job || !job.known) return `cannot tell whether a background job is still running this session (${(job && job.reason) || 'unknown'}) — not deleted`;

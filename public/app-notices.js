@@ -5,20 +5,36 @@ function sessionActionNoticeId(operation, session) {
   return `${operation}:${session?.remoteAlias || 'local'}:${session?.sessionId || session?.projectPath || 'unknown'}`;
 }
 
-function showSessionActionFailure(operation, session, error, recovery, onRetry) {
-  const name = session?.name || session?.aiTitle || session?.summary || session?.sessionId || session?.projectPath || 'unknown session';
-  const location = [session?.remoteAlias, session?.projectPath].filter(Boolean).join(':') || 'this window';
+function sessionActionDescription(session) {
+  const rawName = session?.name || session?.aiTitle || session?.summary;
+  const name = typeof cleanDisplayName === 'function' ? cleanDisplayName(rawName) : rawName;
+  const identity = name ? `"${name}"${session?.sessionId ? ` (${session.sessionId})` : ''}`
+    : session?.sessionId ? `"${session.sessionId}"` : 'folder';
+  const location = [session?.remoteAlias, session?.projectPath || session?.cwd].filter(Boolean).join(':') || 'location unavailable';
+  return `${identity} at ${location}`;
+}
+
+function showSessionActionFailure(operation, session, error, recovery, onRetry, { headline = `${operation} failed`, kind = 'error' } = {}) {
   const reason = error?.message || error || 'The backend is unavailable or returned no result';
   showAppNotice({
-    id: sessionActionNoticeId(operation, session), kind: 'error',
-    message: `${operation} failed for "${name}" (${session?.sessionId || location}) at ${location}: ${reason}. ${recovery}`,
+    id: sessionActionNoticeId(operation, session), kind,
+    message: `${headline} for ${sessionActionDescription(session)}: ${reason}.${recovery ? ' ' + recovery : ''}`,
     actionLabel: onRetry ? 'Retry' : undefined, onAction: onRetry, dismissOnAction: false,
   });
 }
 
 function clearAppNotice(id) {
   const entry = appNoticeEntries.get(id);
-  if (!entry) return;
+  if (!entry) {
+    for (const [groupId, group] of appNoticeEntries) {
+      if (!group.options.members?.some(member => member.id === id)) continue;
+      const members = group.options.members.filter(member => member.id !== id);
+      if (members.length) showAppNotice({ ...group.options, members });
+      else clearAppNotice(groupId);
+      return;
+    }
+    return;
+  }
   clearTimeout(entry.timer);
   const restoreFocus = entry.notice.contains(document.activeElement);
   entry.notice.remove();
@@ -26,7 +42,8 @@ function clearAppNotice(id) {
   if (restoreFocus && entry.returnFocus?.isConnected) entry.returnFocus.focus();
 }
 
-function showAppNotice({ id, kind = 'info', message, actionLabel, onAction, dismissOnAction = true }) {
+function showAppNotice(options) {
+  const { id, kind = 'info', message, members, actionLabel, onAction, dismissOnAction = true } = options;
   clearAppNotice(id);
   const container = document.getElementById('app-notices');
   const notice = document.createElement('div');
@@ -35,7 +52,7 @@ function showAppNotice({ id, kind = 'info', message, actionLabel, onAction, dism
   notice.setAttribute('role', kind === 'error' ? 'alert' : 'status');
   const text = document.createElement('span');
   text.className = 'app-notice-message';
-  text.textContent = message;
+  text.textContent = typeof message === 'function' ? message(members) : message;
   notice.append(text);
   if (actionLabel && typeof onAction === 'function') {
     const action = document.createElement('button');
@@ -59,7 +76,7 @@ function showAppNotice({ id, kind = 'info', message, actionLabel, onAction, dism
     if (event.target.closest('button')) event.preventDefault();
   });
   container.append(notice);
-  const entry = { notice, timer: null, returnFocus: document.activeElement };
+  const entry = { notice, timer: null, returnFocus: document.activeElement, options };
   appNoticeEntries.set(id, entry);
   if (kind !== 'error') {
     let remaining = kind === 'undo' ? 10_000 : 15_000;

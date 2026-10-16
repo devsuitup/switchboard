@@ -243,6 +243,10 @@ test('Archive refuses, as before, when the first sync fails for a local reason r
   assert.deepEqual(ctx.calls, []);
   assert.match(ctx.document.querySelector('[role="alert"]').textContent, /disk full/);
   assert.equal(ctx.notices.length, 1, 'persistent failure notice');
+  const notice = ctx.document.querySelector('[data-notice-id="Archive:host:A"]');
+  assert.ok(notice, 'Archive notice for this row');
+  assert.match(notice.textContent, /^Archive failed.*A.*host:\/project/);
+  assert.match(notice.textContent, /disk full/);
 });
 
 test('Archive refuses, as before, when the mirror write fails locally during the first sync', async t => {
@@ -251,6 +255,10 @@ test('Archive refuses, as before, when the mirror write fails locally during the
   assert.deepEqual(ctx.calls, []);
   assert.match(ctx.document.querySelector('[role="alert"]').textContent, /EACCES/);
   assert.equal(ctx.notices.length, 1, 'persistent failure notice');
+  const notice = ctx.document.querySelector('[data-notice-id="Archive:host:A"]');
+  assert.ok(notice, 'Archive notice for this row');
+  assert.match(notice.textContent, /^Archive failed.*A.*host:\/project/);
+  assert.match(notice.textContent, /EACCES/);
 });
 
 test('Archive asks a host in backoff even when a global poll is busy elsewhere', async t => {
@@ -275,6 +283,10 @@ test('Archive refuses when ssh answers with a plain non-zero exit, because the h
   assert.match(ctx.document.querySelector('[role="alert"]').textContent, /exit 1/);
   assert.match(ctx.document.querySelector('[role="alert"]').textContent, /remove the host/);
   assert.equal(ctx.notices.length, 1, 'persistent failure notice');
+  const notice = ctx.document.querySelector('[data-notice-id="Archive:host:A"]');
+  assert.ok(notice, 'Archive notice for this row');
+  assert.match(notice.textContent, /^Archive failed.*A.*host:\/project/);
+  assert.match(notice.textContent, /exit 1/);
 });
 
 test('Archive refuses when the inventory is over the size cap, and says what to do', async t => {
@@ -284,6 +296,10 @@ test('Archive refuses when the inventory is over the size cap, and says what to 
   assert.match(ctx.document.querySelector('[role="alert"]').textContent, /size cap/);
   assert.match(ctx.document.querySelector('[role="alert"]').textContent, /remove the host/);
   assert.equal(ctx.notices.length, 1, 'persistent failure notice');
+  const notice = ctx.document.querySelector('[data-notice-id="Archive:host:A"]');
+  assert.ok(notice, 'Archive notice for this row');
+  assert.match(notice.textContent, /^Archive failed.*A.*host:\/project/);
+  assert.match(notice.textContent, /size cap/);
 });
 
 test('Archive archives with a notice when ssh itself fails to connect (exit 255)', async t => {

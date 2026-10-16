@@ -121,6 +121,8 @@ test('an unreachable host archives the row and leaves an alert saying it was not
   assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['archive', 'A', 1]]);
   const notice = ctx.document.querySelector('[role="alert"]');
   assert.ok(notice, 'the archived-but-not-stopped failure must be visible');
-  assert.match(notice.querySelector('.app-notice-message').textContent, /A.*host:\/project.*Archived, but not stopped: host did not answer \(SSH timed out\).*unarchive/);
+  assert.equal(notice.dataset.noticeId, 'Archive:host:not-stopped');
+  assert.match(notice.querySelector('.app-notice-message').textContent, /^Archived, but not stopped: host did not answer \(SSH timed out\).*A.*host:\/project.*unarchive/);
+  assert.doesNotMatch(notice.textContent, /Archive failed/);
   assert.deepEqual(errors, []);
 });

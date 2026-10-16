@@ -218,13 +218,21 @@ focus) with a form body.
 - **Used.** `announceNotStopped` in `public/sidebar.js` reports an archived
   remote session that could not be stopped as a persistent error (#604/#566).
 - **Action failures (#566).** `showSessionActionFailure(operation, session,
-  error, recovery, onRetry)` includes the object/location, reason and available
+  error, recovery, onRetry, { headline, kind })` includes the object/location, reason and available
   next step. `sessionActionNoticeId` keys Stop/Detach, Delete, Archive, folder
   Archive, background handoff/attachment and Restore independently. A successful
   retry clears only that operation's notice. External-session recovery names
   its own terminal/location, without an unsupported Stop/Close instruction.
-- **Remaining separate.** `.restore-toast` retains restore consent, indexing
-  progress and informational handoff success; `#update-toast` is unchanged.
+- **Partial results and groups.** Archived, but not stopped groups affected
+  sessions once per host. Restore refusals and missing transcripts group once
+  per batch. Group callers provide `members: [{ id, text }]` and a `message`
+  function of the current members; clearing a member's operation id retains
+  the other members. Folder partial success says Archive folder partly done
+  and names Agent Files for schedule-*.md. Waiting for indexing and a handoff
+  in progress use informational status, without a failure headline; indexing
+  completion clears its pending notice.
+- **Remaining separate.** `.restore-toast` retains restore consent, cold-cache
+  indexing progress and informational handoff success; `#update-toast` is unchanged.
   Agents/settings failures and remaining information dialogs are later slices.
   Archive and Detach Undo wiring
   belongs to their own slices; S3 provides the shared variant.

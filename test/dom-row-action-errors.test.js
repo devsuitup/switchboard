@@ -31,7 +31,8 @@ function setup(t, extra = {}) {
     assert.match(el.textContent, /Work|s1|\/project/);
     assert.match(el.textContent, /\/project/);
     assert.ok(el.querySelector('.app-notice-dismiss'));
-    assert.match(el.textContent, /retry|try again|own terminal|Settings|sidebar/i);
+    assert.match(el.textContent, /retry (?:Stop|Detach|Delete|Unarchive|Archive(?: folder)?)|try again (?:once|when)|own terminal|open (?:it|the (?:session|conversation)) from the sidebar|Agent Files|Reindex all sessions/i);
+    assert.doesNotMatch(el.textContent, /schedules in Settings|reload the sidebar|eligible/i);
     assert.equal(h.document.activeElement, expectedFocus);
     el.dispatchEvent(new h.window.MouseEvent('mouseleave'));
     render();
@@ -261,7 +262,7 @@ test('background terminal confirmation is information while handoff is pending',
   h.document.body.append(button);
   let notify;
   h.window.api.onBgHandoffNotice = callback => { notify = callback; };
-  const { initTerminalBackgroundControl } = loadAppFunctions(h.context, { functions: ['initTerminalBackgroundControl'] });
+  const { initTerminalBackgroundControl } = loadAppFunctions(h.context, { functions: ['initTerminalBackgroundControl', 'showRestoreNotice'] });
   initTerminalBackgroundControl();
   notify('s1', 'Claude asks you to confirm in the terminal (Background / Stay).');
   const notice = h.document.querySelector('#app-notices [role="status"]');
@@ -275,4 +276,131 @@ test('a failed Unarchive names that action and preserves its archived state', as
   await h.click('.session-archive-btn');
   h.notice('database locked', 'Unarchive');
   assert.equal(h.session.archived, 1);
+});
+
+test('folder partial success names Agent Files and uses a partial headline with one path', async t => {
+  const h = setup(t);
+  h.window.api.getProjectArchivePlan = async () => ({ schedules: [] });
+  h.window.api.archiveProject = async () => ({ ok: true, failed: [{ name: 'nightly', error: 'EACCES' }] });
+  const pending = h.click('.project-archive-btn');
+  await answerChoiceDialog(h, { confirm: true });
+  await pending;
+  const el = h.document.querySelector('[role="alert"]');
+  assert.match(el.textContent, /^Archive folder partly done/);
+  assert.match(el.textContent, /schedule-.*\.md.*Agent Files/);
+  assert.doesNotMatch(el.textContent, /schedules in Settings|Archive folder failed/);
+  assert.equal(el.textContent.split('/project').length - 1, 1);
+});
+
+test('an Archive database failure after Stop says the process stopped and the row is not archived', async t => {
+  const h = setup(t);
+  h.window.activePtyIds.add('s1');
+  h.window.api.stopSession = async () => ({ ok: true });
+  h.window.api.archiveSession = async () => ({ ok: false, error: 'database locked' });
+  await h.click('.session-archive-btn');
+  const el = h.notice('database locked', 'Archive');
+  assert.match(el.textContent, /process was stopped.*(?:row|session) is not archived/);
+  assert.equal(h.session.archived, 0);
+});
+
+test('Unarchive clears its host partial Archive notice and preserves another operation', async t => {
+  const h = setup(t, { remoteAlias: 'vps', remoteDescriptorSeen: true });
+  h.window.api.remoteStopSession = async () => ({ ok: false, hostUnreachable: true, error: 'offline' });
+  await h.click('.session-archive-btn');
+  const el = h.notice('offline', 'Archive');
+  assert.match(el.textContent, /^Archived, but not stopped/);
+  assert.doesNotMatch(el.textContent, /Archive failed/);
+  h.window.showAppNotice({ id: 'other', kind: 'error', message: 'Other operation failed' });
+  h.render();
+  h.window.api.archiveSession = async () => ({ ok: true });
+  await h.click('.session-archive-btn');
+  assert.equal(el.isConnected, false);
+  assert.ok(h.document.querySelector('[data-notice-id="other"]'));
+});
+
+test('waiting for indexing is pending status and disappears when indexing finishes', async t => {
+  const h = setup(t);
+  h.window.restorePlanner = null;
+  h.window.skippedWorkingSetEntries = new Map();
+  const app = loadAppFunctions(h.context, { functions: ['showLiveElsewhereNotice', 'showRestoreNotice', 'markRestoreIndexingDone'] });
+  app.showLiveElsewhereNotice([{ session: h.session, waitingForIndex: true, retryAfterIndexing: true }]);
+  const el = h.document.querySelector('#app-notices [role="status"]');
+  assert.ok(el, 'indexing progress is informational');
+  assert.match(el.textContent, /Waiting for indexing/);
+  assert.doesNotMatch(el.textContent, /failed/i);
+  assert.equal(h.document.querySelector('[role="alert"]'), null);
+  await app.markRestoreIndexingDone();
+  assert.equal(el.isConnected, false);
+});
+
+test('Restore batch lists cleaned names and actual live locations in one notice', t => {
+  const h = setup(t);
+  const app = loadAppFunctions(h.context, { functions: ['showLiveElsewhereNotice', 'showRestoreNotice'] });
+  app.showLiveElsewhereNotice([
+    { session: { sessionId: 'member', name: '<command>Member</command>' }, live: { pid: 42, cwd: '/real/member' } },
+    { session: { sessionId: 'second', name: 'Second', projectPath: '/second' }, live: { pid: 43, cwd: '/real/second' } },
+  ]);
+  const els = h.document.querySelectorAll('#app-notices [role="alert"]');
+  assert.equal(els.length, 1);
+  assert.match(els[0].textContent, /Member.*member.*\/real\/member.*42.*Second.*\/real\/second.*43/);
+  assert.doesNotMatch(els[0].textContent, /<command>|at this window/);
+});
+
+for (const type of ['remote', 'sandboxed', 'terminal', 'pending']) {
+  test(`background ${type} refusal has accurate eligibility or progress copy`, async t => {
+    const h = setup(t, type === 'remote' ? { remoteAlias: 'vps' } : type === 'terminal' ? { type: 'terminal' } : {});
+    h.window.openSessions.set('s1', { session: h.session, closed: false, backgrounding: type === 'pending' });
+    h.window.activePtyIds.add('s1');
+    h.window.sandboxedSessions = new Map(type === 'sandboxed' ? [['s1', true]] : []);
+    const { sendSessionToBackground, backgroundActionReason } = loadAppFunctions(h.context, { functions: ['sendSessionToBackground', 'backgroundActionReason'] });
+    h.window.backgroundActionReason = backgroundActionReason;
+    await sendSessionToBackground('s1');
+    const el = h.document.querySelector('#app-notices .app-notice');
+    assert.ok(el);
+    assert.doesNotMatch(el.textContent, /eligible/);
+    if (type === 'pending') {
+      assert.equal(el.getAttribute('role'), 'status');
+      assert.match(el.textContent, /Moving to the background/);
+      assert.doesNotMatch(el.textContent, /failed/i);
+    } else {
+      assert.equal(el.getAttribute('role'), 'alert');
+      assert.match(el.textContent, /cannot be sent to the background/i);
+      assert.match(el.textContent, type === 'remote' ? /remote/i : type === 'sandboxed' ? /sandbox/i : /plain terminal/i);
+    }
+  });
+}
+
+test('Delete guard recovery is used once without an extra terminal instruction', async t => {
+  const h = setup(t);
+  h.window.showDeleteSessionDialog = async () => true;
+  h.window.api.deleteSession = async () => ({ ok: false, error: 'session is still running in this window — use Stop on its row in the sidebar, then retry Delete' });
+  await h.click('.session-delete-btn');
+  const el = h.notice('running in this window', 'Delete');
+  assert.match(el.textContent, /use Stop on its row/);
+  assert.equal((el.textContent.match(/retry Delete/g) || []).length, 1);
+  assert.doesNotMatch(el.textContent, /own terminal/);
+});
+
+test('missing transcripts share one Restore batch notice and a successful member keeps the others visible', t => {
+  const h = setup(t);
+  const { showNotRestoredNotice } = loadAppFunctions(h.context, { functions: ['showNotRestoredNotice', 'showRestoreNotice'] });
+  showNotRestoredNotice([{ sessionId: 's1', projectPath: '/project' }, { sessionId: 's2', projectPath: '/other' }]);
+  assert.equal(h.document.querySelectorAll('#app-notices [role="alert"]').length, 1);
+  h.window.clearAppNotice(h.window.sessionActionNoticeId('Restore', h.session));
+  const el = h.document.querySelector('#app-notices [role="alert"]');
+  assert.ok(el);
+  assert.doesNotMatch(el.textContent, /s1/);
+  assert.match(el.textContent, /s2.*Reindex all sessions/);
+});
+
+test('Unarchive removes only its member from the host notice', async t => {
+  const h = setup(t, { archived: 1, remoteAlias: 'vps' });
+  const second = { ...h.session, sessionId: 's2', name: 'Second' };
+  h.window.announceNotStopped([{ alias: 'vps', error: 'offline', session: h.session }, { alias: 'vps', error: 'offline', session: second }]);
+  h.window.api.archiveSession = async () => ({ ok: true });
+  await h.click('.session-archive-btn');
+  const el = h.document.querySelector('#app-notices [role="alert"]');
+  assert.ok(el);
+  assert.doesNotMatch(el.textContent, /s1/);
+  assert.match(el.textContent, /s2/);
 });

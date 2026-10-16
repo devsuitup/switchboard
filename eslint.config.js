@@ -147,6 +147,7 @@ const rendererCrossFileGlobals = {
   showAppNotice: 'readonly',
   clearAppNotice: 'readonly',
   sessionActionNoticeId: 'readonly',
+  sessionActionDescription: 'readonly',
   showSessionActionFailure: 'readonly',
   SIDEBAR_WORKTREE_RE: 'readonly',
   worktreeParentPath: 'readonly',

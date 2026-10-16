@@ -95,8 +95,11 @@ test('R4 R2 an unindexed target notice says waiting for indexing', { timeout: 90
   const h = setup(t, { old: ['new'], new: [] });
   h.rows.delete('new');
   await h.restore();
-  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /waiting for indexing/i);
-  assert.doesNotMatch(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /choose/i);
+  const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:pending"][role="status"]');
+  assert.ok(notice);
+  assert.match(notice.textContent, /waiting for indexing/i);
+  assert.doesNotMatch(notice.textContent, /choose|failed/i);
+  assert.equal(h.dom.window.document.querySelector('#app-notices [role="alert"]'), null);
 });
 
 test('R4 R2 indexing completion during a continuation lookup still retries', { timeout: 9000 }, async t => {

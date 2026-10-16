@@ -113,7 +113,7 @@ test('ask mode: a saved session never indexed -> after indexing the toast is gon
 
   assert.equal(h.doc.getElementById('restore-cold-toast'), null, 'the waiting toast is cleared');
   assert.ok(h.doc.getElementById('restore-toast'), 'the normal session is still offered');
-  const notice = h.doc.querySelector('[data-notice-id="Restore:local:ghost"]');
+  const notice = h.doc.querySelector('[data-notice-id="Restore:unavailable"]');
   assert.ok(notice, 'the missing session is reported');
   assert.match(notice.textContent, /name-ghost|ghost/);
   h.dom.window.close();
@@ -126,7 +126,7 @@ test('auto mode: a saved session never indexed -> the normal one restores, the o
 
   vm.runInContext('restoreIndexingDone = true;', h.ctx);
   await vm.runInContext('tickRestorePlanner()', h.ctx);
-  assert.match(h.doc.querySelector('[data-notice-id="Restore:local:ghost"]').textContent, /ghost/);
+  assert.match(h.doc.querySelector('[data-notice-id="Restore:unavailable"]').textContent, /ghost/);
   h.dom.window.close();
 });
 
@@ -135,7 +135,7 @@ test('a saved session that is indexed after all is restored, not reported', asyn
   vm.runInContext('restoreIndexingDone = true;', h.ctx);
   await vm.runInContext('tickRestorePlanner()', h.ctx);
   assert.deepEqual([...vm.runInContext('restored', h.ctx)].sort(), ['ghost', 'ok']);
-  assert.equal(h.doc.querySelector('[data-notice-id="Restore:local:ghost"]'), null);
+  assert.equal(h.doc.querySelector('[data-notice-id="Restore:unavailable"]'), null);
   h.dom.window.close();
 });
 
@@ -143,7 +143,7 @@ test('indexing ends with a session only in the last batch: it is reloaded and re
   const h = setupTick({ mode: 'auto', indexed: ['ok'], late: ['ghost'] });
   await vm.runInContext('markRestoreIndexingDone()', h.ctx);
   assert.deepEqual([...vm.runInContext('restored', h.ctx)].sort(), ['ghost', 'ok']);
-  assert.equal(h.doc.querySelector('[data-notice-id="Restore:local:ghost"]'), null);
+  assert.equal(h.doc.querySelector('[data-notice-id="Restore:unavailable"]'), null);
   h.dom.window.close();
 });
 
@@ -165,12 +165,12 @@ test('a reload that keeps failing leaves the sessions unreported and the planner
   vm.runInContext('var loads = 0; loadProjects = async () => { loads++; throw new Error("ipc"); };', h.ctx);
   await vm.runInContext('markRestoreIndexingDone()', h.ctx);
   assert.equal(vm.runInContext('loads', h.ctx), 2, 'retried once');
-  assert.equal(h.doc.querySelector('[data-notice-id="Restore:local:ghost"]'), null);
+  assert.equal(h.doc.querySelector('[data-notice-id="Restore:unavailable"]'), null);
   assert.equal(vm.runInContext('restorePlanner.isSettled()', h.ctx), false);
 
   vm.runInContext('loadProjects = async () => {};', h.ctx);
   await vm.runInContext('markRestoreIndexingDone()', h.ctx);
-  assert.ok(h.doc.querySelector('[data-notice-id="Restore:local:ghost"]'), 'the next event settles it');
+  assert.ok(h.doc.querySelector('[data-notice-id="Restore:unavailable"]'), 'the next event settles it');
   h.dom.window.close();
 });
 
@@ -179,7 +179,7 @@ test('indexing already finished when the planner starts (event missed): restore 
   await vm.runInContext('restoreWorkingSet()', h.ctx);
   assert.equal(h.doc.getElementById('restore-cold-toast'), null);
   assert.ok(h.doc.getElementById('restore-toast'));
-  assert.match(h.doc.querySelector('[data-notice-id="Restore:local:ghost"]').textContent, /ghost/);
+  assert.match(h.doc.querySelector('[data-notice-id="Restore:unavailable"]').textContent, /ghost/);
   h.dom.window.close();
 });
 
@@ -194,7 +194,7 @@ test('notice says the session is not in the index', async () => {
   const h = setupTick({ mode: 'auto', indexed: ['ok'] });
   vm.runInContext('restoreIndexingDone = true;', h.ctx);
   await vm.runInContext('tickRestorePlanner()', h.ctx);
-  assert.match(h.doc.querySelector('[data-notice-id="Restore:local:ghost"]').textContent, /not in the index/);
+  assert.match(h.doc.querySelector('[data-notice-id="Restore:unavailable"]').textContent, /not in the index/);
   h.dom.window.close();
 });
 
