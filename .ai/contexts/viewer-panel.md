@@ -468,6 +468,11 @@ Test-pr skips Mermaid for older PRs without the bundle script.
 
 A global serial queue keeps Mermaid configuration and temporary DOM exclusive,
 including overlapping previews and previews scheduled from a running render.
+Each scratch takes the preview's current `clientWidth` in pixels when its queued
+render starts. Gantt measures its SVG parent's `offsetWidth`, so the scratch must
+not inherit the renderer iframe's initial viewport width after the panel narrows.
+Timeline and journey lay out their content bounds; XY charts use their configured
+chart width. Those intrinsic widths keep the existing horizontal scrolling behavior.
 `renderScopedMarkdownDiagram` installs a scratch-only `document.getElementById`
 on the scratch's owner document for the entire awaited render. It compares exact IDs among scratch descendants,
 without consulting the original page lookup or interpolating IDs into selectors.

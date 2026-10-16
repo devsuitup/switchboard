@@ -80,6 +80,43 @@ async function loadRealMermaid(ctx) {
   return { mermaid, document: rendererWindow.document };
 }
 
+test('render scratch follows the preview width at each render, including after waiting in the queue', async t => {
+  const ctx = setup(t);
+  const { mermaid, document } = await loadRealMermaid(ctx);
+  let width = 840;
+  Object.defineProperty(ctx.el, 'clientWidth', { get: () => width });
+  const next = ctx.document.createElement('div');
+  next.className = 'markdown-preview';
+  ctx.document.body.appendChild(next);
+  let nextWidth = 600;
+  Object.defineProperty(next, 'clientWidth', { get: () => nextWidth });
+  const widths = [];
+  let release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  mermaid.render = async (id, source, container) => {
+    widths.push(container.style.width);
+    if (widths.length === 1) {
+      entered();
+      await new Promise(resolve => { release = resolve; });
+    }
+    return { svg: '<svg id="' + id + '"><text>diagram</text></svg>' };
+  };
+  const first = ctx.render(fence('graph TD; A-->B'));
+  await Promise.race([started, first]);
+  assert.equal(typeof release, 'function');
+  const queued = ctx.window.renderMarkdownPreview(next, fence('graph TD; B-->C'));
+  nextWidth = 299;
+  release();
+  await Promise.all([first, queued]);
+  width = 420;
+  await ctx.render(fence('graph TD; C-->D'));
+  assert.deepEqual(widths, ['840px', '299px', '420px']);
+  assert.equal(ctx.document.querySelectorAll('.mermaid-render-frame').length, 1);
+  assert.equal(document.querySelector('.mermaid-render-scratch'), null);
+  assert.ok(ctx.el.querySelector('svg'));
+  assert.ok(next.querySelector('svg'));
+});
+
 test('real Mermaid rendering preserves host lookups and application notifications throughout async work', async t => {
   const ctx = setup(t);
   const { mermaid, document } = await loadRealMermaid(ctx);
@@ -125,6 +162,18 @@ for (const [name, source] of [
     const baseline = setup(t);
     const { mermaid, document } = await loadRealMermaid(guarded);
     const { mermaid: raw, document: baselineDocument } = await loadRealMermaid(baseline);
+    const width = 720;
+    Object.defineProperty(guarded.el, 'clientWidth', { value: width });
+    for (const doc of [document, baselineDocument]) {
+      Object.defineProperty(doc.defaultView.HTMLElement.prototype, 'offsetWidth', {
+        get() {
+          for (let node = this; node; node = node.parentElement) {
+            if (/^\d+px$/.test(node.style.width)) return parseInt(node.style.width, 10);
+          }
+          return doc.defaultView.innerWidth;
+        },
+      });
+    }
     const initialize = mermaid.initialize;
     let config;
     mermaid.initialize = options => {
@@ -150,6 +199,7 @@ for (const [name, source] of [
     raw.initialize(config);
     const container = baselineDocument.createElement('div');
     container.className = 'mermaid-render-scratch';
+    container.style.width = width + 'px';
     container.setAttribute('aria-hidden', 'true');
     baselineDocument.body.appendChild(container);
     const expected = await raw.render('preview-mermaid-1', source + '\n', container);

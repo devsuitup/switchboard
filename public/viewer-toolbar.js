@@ -308,6 +308,7 @@ function renderMarkdownDiagrams(el, state) {
       const renderDocument = mermaidDocuments.get(mermaid) || document;
       const container = renderDocument.createElement('div');
       container.className = 'mermaid-render-scratch';
+      container.style.width = el.clientWidth + 'px';
       container.setAttribute('aria-hidden', 'true');
       try {
         const markup = source.replace(/<<[^<>\n]+>>/g, annotation => annotation.includes('=') ? annotation : '');
