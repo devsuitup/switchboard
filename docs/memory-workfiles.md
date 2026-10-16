@@ -37,8 +37,13 @@ The editor offers:
 Markdown previews render fenced `mermaid` blocks as diagrams, including in the
 Touched/Changes editor. Invalid diagrams keep their source visible with an inline
 error. The source filter refuses HTML-style tag openers, numeric/angle entities
-(`&#…` or `&lt;`), `img:`/`icon:` properties, sequence `details` statements
-at a line start or after `;` (including participant names with spaces), `@import`,
+(`&#…` or `&lt;`), `img:`/`icon:` properties, and any case-insensitive
+`\bdetails[ \t]+[^\n:;]+:` match anywhere in a sequence diagram (including
+participant names with spaces). Sequence detection strips frontmatter and
+directives first, following Mermaid 12.1.0's directive matching. The `details`
+check inspects both the original and stripped text, including keywords split by directives.
+This deliberately also refuses sequence labels such as
+“See details X:”. The filter also refuses `@import`,
 `url(…)` and `image-set(…)`. Paired `<<…>>` annotations containing no angle
 brackets, newline or `=` are exempt from the tag-opener check; spaces and hyphens
 are allowed, but `<<img src=x>>` is refused. Entity and resource checks still

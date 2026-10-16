@@ -261,6 +261,60 @@ for (const source of [
   });
 }
 
+for (const source of [
+  'sequenceDiagram details Alice: secretjson',
+  '---\ntitle: Sequence\n---\nsequenceDiagram details Alice: secretjson',
+  'sequenceDiagram\n%%{init: {}}%% details Alice: secretjson',
+  'sequenceDiagram\naccDescr { x }details Alice: secretjson',
+  'sequenceDiagram\nloop Example\nAlice->>Bob: Hello\nend details Alice: secretjson',
+  'sequenceDiagram\nde%%{init: {}}%%tails Alice: secretjson',
+  'sequenceDiagram\ndetails%%{init: {}}%% Alice: secretjson',
+  'sequence%%{init: {}}%%Diagram details Alice: secretjson',
+  'sequenceDiagram\n%%{init: {a: 0\u2028details Alice: secretjson\n%% ignore}%%',
+  '%%{init: {a: 0\u2028sequenceDiagram\ndetails Alice: secretjson\n%% ignore}%%',
+]) {
+  test('sequence details bypass is refused without a real Mermaid DOM lookup: ' + source, async t => {
+    const ctx = setup(t);
+    const filename = path.join(__dirname, '..', 'node_modules/mermaid/dist/mermaid.js');
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+    ctx.window.previewMermaid = ctx.window.mermaid;
+    const privateData = ctx.document.createElement('div');
+    privateData.id = 'secretjson';
+    privateData.textContent = '{"links":{"private text":"https://private.test"}}';
+    ctx.document.body.appendChild(privateData);
+    let lookups = 0;
+    const getElementById = ctx.document.getElementById.bind(ctx.document);
+    ctx.document.getElementById = id => {
+      if (id === 'secretjson') lookups++;
+      return getElementById(id);
+    };
+    await ctx.render(fence(source));
+    assert.equal(lookups, 0, 'Mermaid must not read the private page element');
+    assert.equal(ctx.document.querySelector('.mermaid-render-scratch'), null);
+    assert.equal(ctx.el.querySelectorAll('svg').length, 0);
+    assert.equal(ctx.el.querySelector('pre code')?.textContent, source + '\n');
+    assert.ok(ctx.el.querySelector('.mermaid-error'));
+    assert.doesNotMatch(ctx.el.textContent, /private text/);
+  });
+}
+
+test('sequence labels with a details participant colon shape are deliberately refused', async t => {
+  const ctx = setup(t);
+  await ctx.render(fence('%%{init: {}}%% sequenceDiagram\nAlice->>Bob: See details X:'));
+  assert.equal(ctx.calls.length, 0);
+  assert.ok(ctx.el.querySelector('.mermaid-error'));
+});
+
+for (const source of ['sequenceDiagram\nAlice->>Bob: See details below', 'graph TD; A[See details X:]']) {
+  test('details text outside the refused sequence shape remains renderable: ' + source, async t => {
+    const ctx = setup(t);
+    await ctx.render(fence(source));
+    assert.equal(ctx.calls.length, 1);
+    assert.ok(ctx.el.querySelector('svg'));
+    assert.equal(ctx.el.querySelector('.mermaid-error'), null);
+  });
+}
+
 for (const statement of ['links Alice: {"Docs":"#private-data"}', 'link Alice: Docs @ #private-data']) {
   test('sequence links without a DOM lookup remain renderable: ' + statement, async t => {
     const ctx = setup(t);

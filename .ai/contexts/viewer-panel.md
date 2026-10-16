@@ -466,9 +466,16 @@ A global serial queue keeps Mermaid configuration and temporary DOM exclusive.
 Each render initializes strict mode, disables HTML labels and automatic scanning,
 and locks every default config key against document frontmatter/directives.
 Source containing HTML-style tag openers, numeric/angle entities (`&#…` or
-`&lt;`), `img:`/`icon:` properties, sequence `details` statements at a line start
-or after `;` (including participant names with spaces), `@import`, `url(` or
-`image-set(` is refused before temporary DOM attaches. The tag-opener check
+`&lt;`), `img:`/`icon:` properties, `@import`, `url(` or `image-set(` is refused
+before temporary DOM attaches. After stripping leading frontmatter and directives
+(using Mermaid 12.1.0's `directiveRegex` from `chunk-VPRB5NB3.mjs`),
+`/^\s*sequenceDiagram\b/im` identifies sequence sources. In those sources, any
+case-insensitive `\bdetails[ \t]+[^\n:;]+:` match anywhere in the original or stripped source
+is refused, without modelling statement boundaries; participant names with spaces
+are covered, including keywords split by directives that Mermaid removes before
+parsing. Directive matching preserves text following Unicode line separators
+when Mermaid does. This deliberately also refuses sequence labels such as “See details X:”.
+The tag-opener check
 ignores paired `<<…>>` annotations containing no angle brackets, newline or
 `=`; this accepts `<<value-object>>` and `<<Service Provider>>` while keeping
 `<<img src=x>>` subject to the HTML check. Entity and resource checks inspect
@@ -479,8 +486,8 @@ HTML/resource features show source plus a short error, like invalid syntax. This
 deliberate subset prevents pre-sanitization loads. No bindFunctions callback runs.
 
 Mermaid 12.1.0's sequence `addDetails` reads `document.getElementById(text.text)`
-and parses that page element's HTML as JSON properties/links, so all matching
-`details` statements are refused. `addLinks` and `addALink` parse the supplied
+and parses that page element's HTML as JSON properties/links, so the conservative
+source pattern above blocks that feature before rendering. `addLinks` and `addALink` parse the supplied
 text directly without a DOM lookup; `link`/`links` remain allowed. Other bundled
 `getElementById` calls use internal element maps, generated render/marker IDs,
 the fixed layout container `cy`, or generated popup code. The popup callback
