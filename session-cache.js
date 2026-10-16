@@ -132,10 +132,13 @@ function init(ctx) {
   reindexRepairedFolders();
 }
 
-function setTranscriptName(id, name) {
-  const collision = getLocalDescriptors().some(d => d.sessionId?.toLowerCase() === id.toLowerCase() && d.nameSource === 'collision')
+function hasCollisionName(id) {
+  return getLocalDescriptors().some(d => d.sessionId?.toLowerCase() === id.toLowerCase() && d.nameSource === 'collision')
     || [...getLocalJobs().values()].some(job => job.sessionId?.toLowerCase() === id.toLowerCase() && job.nameSource === 'collision');
-  if (!collision) setName(id, name, 'transcript');
+}
+
+function setTranscriptName(id, name) {
+  if (!hasCollisionName(id)) setName(id, name, 'transcript');
 }
 
 // alias -> that host's mirrored projects root; empty unless one is declared.
@@ -421,6 +424,7 @@ function refreshFolder(folder, opts = {}) {
           slug: h.slug || cachedEntry.slug,
           scheduleSlug: h.scheduleSlugComplete ? h.scheduleSlug : h.scheduleSlug || cachedEntry.scheduleSlug,
           aiTitle: h.aiTitle || cachedEntry.aiTitle,
+          customTitle: h.tailTitle || cachedEntry.customTitle || h.headTitle,
           parentSessionId: h.parentSessionId || cachedEntry.parentSessionId,
           agentId: h.agentId || cachedEntry.agentId,
           subagentType: h.subagentType || cachedEntry.subagentType,
@@ -431,8 +435,8 @@ function refreshFolder(folder, opts = {}) {
           merged.entrypoint = readSessionEntrypoint(filePath) ?? cachedEntry.entrypoint;
         }
         sessionsToUpsert.push(merged);
-        if (h.customTitle && h.customTitle !== cachedEntry.customTitle) {
-          namesToSet.push({ id: merged.sessionId, name: h.customTitle });
+        if (merged.customTitle && merged.customTitle !== cachedEntry.customTitle) {
+          namesToSet.push({ id: merged.sessionId, name: merged.customTitle });
         }
       } else {
         // Header read couldn't extract signal -- just bump mtime so sort order
@@ -657,7 +661,7 @@ function backfillCustomTitles() {
       writes = writes.then(async () => {
         if (settled) return;
         try {
-          await writer.setCachedCustomTitles(pairs);
+          await writer.setCachedCustomTitles(pairs.map(pair => ({ ...pair, promoteName: !hasCollisionName(pair.sessionId) })));
           if (pairs.length) notifyRendererProjectsChanged();
         } catch (err) {
           log.warn(`Title backfill failed: ${err.message}`);

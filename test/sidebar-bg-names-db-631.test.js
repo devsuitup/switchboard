@@ -137,7 +137,7 @@ test('an empty custom-title backfill is memoized without rescanning cached rows 
   `, root);
 });
 
-test('header-only upserts leave unknown titles eligible for backfill and preserve existing titles', t => {
+test('header-only upserts preserve unknown titles until a header supplies one and preserve existing titles', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-name-refresh-631-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   run(fixture + `
@@ -149,7 +149,7 @@ test('header-only upserts leave unknown titles eligible for backfill and preserv
     assert.equal(db.getCachedSession(id).customTitle, null, 'header refresh does not mark a legacy title absent');
     fs.utimesSync(file, new Date('2026-10-14T01:00:00.000Z'), new Date('2026-10-14T01:00:00.000Z'));
     cache.refreshFolder(folder);
-    assert.equal(db.getCachedSession(id).customTitle, null, 'the public header refresh preserves unknown titles');
+    assert.equal(db.getCachedSession(id).customTitle, 'launch (3)', 'the public header refresh records the observed title');
     (async () => {
       await cache.backfillCustomTitles();
       assert.equal(db.getCachedSession(id).customTitle, 'launch (3)');
