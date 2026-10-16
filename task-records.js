@@ -15,16 +15,15 @@ function normalizeTaskEvidence(raw) {
     TASK_KINDS.has(f.kind) && Number.isFinite(f.startedAt) && (f.doneAt === undefined || Number.isFinite(f.doneAt)));
   const flight = raw?.inFlight;
   const validFlight = terminal && flight === undefined || flight && typeof flight === 'object' && !Array.isArray(flight) &&
-    validCount(flight.tasks) && (flight.queued === undefined || validCount(flight.queued)) &&
-    (flight.drainableMonitors === undefined || validCount(flight.drainableMonitors)) && Array.isArray(flight.kinds) &&
+    validCount(flight.tasks) && Array.isArray(flight.kinds) &&
     flight.kinds.every(k => typeof k === 'string' && k.trim().length > 0);
   if (!Number.isFinite(at) || !validFan || !validFlight || !['working', 'blocked', 'done', 'stopped', 'failed'].includes(raw.state)) {
     return { valid: false, at: null, tasks: [], inFlight: null, terminal: false };
   }
   return { valid: true, at, tasks: (raw.fan || []).map(f => ({ id: f.id, kind: TASK_KINDS.get(f.kind), startedAt: f.startedAt, doneAt: f.doneAt ?? null })),
-    fanKnown: Array.isArray(raw.fan), inFlight: flight?.tasks ?? 0, queued: flight?.queued ?? 0,
-    drainableMonitors: flight?.drainableMonitors ?? 0,
-    inFlightKinds: (flight?.kinds || []).map(kind => ({ kind, label: IN_FLIGHT_LABELS.get(kind) || `Unknown activity (${kind})`, known: IN_FLIGHT_KINDS.has(kind) })), terminal };
+    fanKnown: Array.isArray(raw.fan), inFlight: flight?.tasks ?? 0, queued: validCount(flight?.queued) ? flight.queued : 0,
+    drainableMonitors: validCount(flight?.drainableMonitors) ? flight.drainableMonitors : 0,
+    inFlightKinds: (flight?.kinds || []).map(kind => ({ kind, label: IN_FLIGHT_LABELS.get(kind) || `Unknown activity (${kind.length > 40 ? kind.slice(0, 40) + '…' : kind})`, known: IN_FLIGHT_KINDS.has(kind) })), terminal };
 }
 
 module.exports = { normalizeTaskEvidence, TASK_KINDS, IN_FLIGHT_KINDS };

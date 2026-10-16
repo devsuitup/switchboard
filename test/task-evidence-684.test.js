@@ -51,10 +51,35 @@ test('optional counts default to zero and terminal jobs may omit in-flight evide
   assert.equal(normalizeTaskEvidence({ ...raw, state: 'done', inFlight: undefined }).valid, true);
 });
 
+for (const field of ['queued', 'drainableMonitors']) {
+  test(`invalid optional ${field} defaults to zero without invalidating activity`, () => {
+    for (const value of [null, '2', -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, {}, []]) {
+      const raw = job();
+      raw.inFlight[field] = value;
+      const evidence = normalizeTaskEvidence(raw);
+      assert.equal(evidence.valid, true, `${field}: ${JSON.stringify(value)}`);
+      assert.equal(evidence[field], 0);
+      assert.equal(evidence.inFlight, 2);
+      assert.equal(evidence.inFlightKinds[0].label, 'Artifact watch');
+    }
+  });
+}
+
+test('unknown kind labels keep 40 characters and append an ellipsis only when truncated', () => {
+  const boundary = 'x'.repeat(40);
+  const longKind = boundary + 'hidden-suffix';
+  const evidence = normalizeTaskEvidence(job([boundary, longKind]));
+  assert.equal(evidence.valid, true);
+  assert.deepEqual(evidence.inFlightKinds, [
+    { kind: boundary, label: `Unknown activity (${boundary})`, known: false },
+    { kind: longKind, label: `Unknown activity (${boundary}…)`, known: false },
+  ]);
+});
+
 test('malformed in-flight evidence remains invalid for working and terminal jobs', () => {
   const malformed = [null, [], 'activity', {}, { tasks: 2, kinds: null }, { tasks: 2, kinds: 'monitor' },
     ...[null, 1, {}, [], ''].map(kind => ({ tasks: 2, kinds: [kind] }))];
-  for (const field of ['tasks', 'queued', 'drainableMonitors']) {
+  for (const field of ['tasks']) {
     for (const value of [-1, 0.5, '2', null, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
       malformed.push({ ...job(['monitor']).inFlight, [field]: value });
     }
@@ -66,16 +91,21 @@ test('malformed in-flight evidence remains invalid for working and terminal jobs
   }
 });
 
-for (const [kinds, labels] of [
-  [['artifact_watch'], ['Artifact watch']],
-  [['monitor', 'future_kind'], ['Monitor', 'Unknown activity (future_kind)']],
+for (const [kinds, labels, optionalCounts] of [
+  [['artifact_watch'], ['Artifact watch'], {}],
+  [['monitor', 'future_kind'], ['Monitor', 'Unknown activity (future_kind)'], {}],
+  [['artifact_watch'], ['Artifact watch'], { queued: null }],
+  [['artifact_watch'], ['Artifact watch'], { drainableMonitors: '2' }],
+  [['x'.repeat(40) + 'hidden-suffix'], [`Unknown activity (${'x'.repeat(40)}…)`], {}],
 ]) {
-  test(`roster to renderer shows background activity and labels for ${kinds.join(', ')}`, t => {
+  test(`roster to renderer shows background activity and labels for ${kinds.join(', ')} ${JSON.stringify(optionalCounts)}`, t => {
     const h = setupSidebarDom();
     t.after(() => h.destroy());
     const filename = path.join(__dirname, '..', 'public', 'agents-view.js');
     vm.runInContext(fs.readFileSync(filename, 'utf8'), h.context, { filename });
-    const parsed = parseJobState(JSON.stringify(job(kinds)));
+    const raw = job(kinds);
+    Object.assign(raw.inFlight, optionalCounts);
+    const parsed = parseJobState(JSON.stringify(raw));
     const roster = mergeRoster({ jobs: new Map([['abcdef12', parsed]]), descriptors: [], cli: null });
     h.window.applyAgentsSnapshot({ roster });
     h.emitHeadTurn(SID, 'closed');
@@ -85,13 +115,19 @@ for (const [kinds, labels] of [
     const status = element.querySelector('.session-status');
     assert.match(status.textContent, /Background work running/);
     assert.doesNotMatch(status.textContent, /Activity unavailable/);
+    assert.ok(!status.title.includes('hidden-suffix'), status.title);
     for (const label of labels) assert.ok(status.title.includes(label), status.title);
     assert.ok(element.querySelector('.session-icon--agents-busy'));
   });
 }
 
-for (const [kinds, status] of [[['artifact_watch'], 0], [['monitor', 'future_kind'], 1]]) {
-  test(`canary ${status ? 'flags unknown' : 'accepts known'} kinds: ${kinds.join(', ')}`, t => {
+for (const [kinds, optionalCounts, status, diagnostic] of [
+  [['artifact_watch'], {}, 0, null],
+  [['monitor', 'future_kind'], {}, 1, /PINNED ASSUMPTION BROKEN: unknown inFlight kind.*future_kind/],
+  [['artifact_watch'], { queued: null }, 1, /PINNED ASSUMPTION BROKEN:.*queued/],
+  [['artifact_watch'], { drainableMonitors: '2' }, 1, /PINNED ASSUMPTION BROKEN:.*drainableMonitors/],
+]) {
+  test(`canary ${status ? 'flags drift' : 'accepts known'} kinds: ${kinds.join(', ')} ${JSON.stringify(optionalCounts)}`, t => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-canary-684-')));
     t.after(() => {
       assert.equal(path.dirname(root), fs.realpathSync.native(os.tmpdir()));
@@ -99,7 +135,9 @@ for (const [kinds, status] of [[['artifact_watch'], 0], [['monitor', 'future_kin
     });
     const dir = path.join(root, '.claude', 'jobs', 'abcdef12');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(job(kinds)));
+    const raw = job(kinds);
+    Object.assign(raw.inFlight, optionalCounts);
+    fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify(raw));
     const env = { ...process.env, HOME: root, USERPROFILE: root };
     delete env.NODE_TEST_CONTEXT;
     const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1',
@@ -109,6 +147,6 @@ for (const [kinds, status] of [[['artifact_watch'], 0], [['monitor', 'future_kin
     assert.ifError(result.error);
     assert.equal(result.status, status, result.stdout + result.stderr);
     assert.match(result.stdout, /# skipped 0/);
-    if (status) assert.match(result.stdout, /PINNED ASSUMPTION BROKEN: unknown inFlight kind.*future_kind/);
+    if (diagnostic) assert.match(result.stdout, diagnostic);
   });
 }

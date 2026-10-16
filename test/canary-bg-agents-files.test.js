@@ -43,6 +43,11 @@ test('CANARY: the Claude CLI daemon still writes jobs/<id>/state.json in the sha
       assert.equal(normalizeTaskEvidence(raw).valid, true,
         `PINNED ASSUMPTION BROKEN: consumed fan ids/kinds/times, inFlight kinds/count, updatedAt or terminal state ${seen}`);
     }
+    for (const field of ['queued', 'drainableMonitors']) {
+      const value = raw.inFlight?.[field];
+      assert.ok(value === undefined || Number.isSafeInteger(value) && value >= 0,
+        `PINNED ASSUMPTION BROKEN: inFlight.${field} used to be a nonnegative safe integer ${seen}`);
+    }
     for (const kind of raw.inFlight?.kinds || []) {
       assert.ok(IN_FLIGHT_KINDS.has(kind),
         `PINNED ASSUMPTION BROKEN: unknown inFlight kind "${kind}" (known: ${[...IN_FLIGHT_KINDS].join(', ')}) ${seen}`);
