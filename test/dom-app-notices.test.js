@@ -17,6 +17,57 @@ function setup(t) {
   return ctx;
 }
 
+for (const direct of [false, true]) {
+  test(`clearing a member removes it from every group${direct ? ' and its direct notice' : ''}`, t => {
+    const { window, document } = setup(t);
+    if (direct) window.showAppNotice({ id: 'member', kind: 'error', message: 'Direct failure' });
+    for (const id of ['first', 'second', 'empty']) {
+      window.showAppNotice({ id, kind: 'error', members: [{ id: 'member', text: 'Remove me' }, ...(id === 'empty' ? [] : [{ id: `${id}-other`, text: 'Keep me' }])], message: members => members.map(member => member.text).join('; ') });
+    }
+    window.clearAppNotice('member');
+    assert.equal(document.querySelector('[data-notice-id="member"]'), null);
+    assert.equal(document.querySelector('[data-notice-id="empty"]'), null);
+    assert.equal(document.querySelectorAll('.app-notice').length, 2);
+    for (const notice of document.querySelectorAll('.app-notice')) {
+      assert.match(notice.textContent, /Keep me/);
+      assert.doesNotMatch(notice.textContent, /Remove me/);
+    }
+  });
+}
+
+test('rebuilding a group preserves its stack position and original return focus', t => {
+  const { window, document } = setup(t);
+  const original = document.createElement('button');
+  const later = document.createElement('button');
+  document.body.append(original, later);
+  original.focus();
+  window.showAppNotice({ id: 'group', kind: 'error', members: [{ id: 'a', text: 'A' }, { id: 'b', text: 'B' }], message: members => members.map(member => member.text).join('; ') });
+  window.showAppNotice({ id: 'later', kind: 'error', message: 'Later' });
+  later.focus();
+  window.clearAppNotice('a');
+  assert.deepEqual([...document.querySelectorAll('#app-notices > .app-notice')].map(el => el.dataset.noticeId), ['group', 'later']);
+  const dismiss = document.querySelector('[data-notice-id="group"] .app-notice-dismiss');
+  dismiss.focus();
+  dismiss.click();
+  assert.equal(document.activeElement, original);
+});
+
+test('updating a group does not recapture return focus from another control', t => {
+  const { window, document } = setup(t);
+  const original = document.createElement('button');
+  const later = document.createElement('button');
+  document.body.append(original, later);
+  original.focus();
+  const options = { id: 'group', kind: 'error', members: [{ id: 'a', text: 'A' }, { id: 'b', text: 'B' }], message: members => members.map(member => member.text).join('; ') };
+  window.showAppNotice(options);
+  later.focus();
+  window.clearAppNotice('a');
+  const dismiss = document.querySelector('[data-notice-id="group"] .app-notice-dismiss');
+  dismiss.focus();
+  dismiss.click();
+  assert.equal(document.activeElement, original);
+});
+
 test('error notices stay after 20 seconds, announce as alerts and dismiss on request', t => {
   const { window, document } = setup(t);
   window.showAppNotice({ id: 'failure', kind: 'error', message: 'Could not stop the session.' });

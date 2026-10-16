@@ -25,26 +25,29 @@ function showSessionActionFailure(operation, session, error, recovery, onRetry, 
 
 function clearAppNotice(id) {
   const entry = appNoticeEntries.get(id);
-  if (!entry) {
-    for (const [groupId, group] of appNoticeEntries) {
-      if (!group.options.members?.some(member => member.id === id)) continue;
-      const members = group.options.members.filter(member => member.id !== id);
-      if (members.length) showAppNotice({ ...group.options, members });
-      else clearAppNotice(groupId);
-      return;
-    }
-    return;
+  if (entry) {
+    clearTimeout(entry.timer);
+    const restoreFocus = entry.notice.contains(document.activeElement);
+    entry.notice.remove();
+    appNoticeEntries.delete(id);
+    if (restoreFocus && entry.returnFocus?.isConnected) entry.returnFocus.focus();
   }
-  clearTimeout(entry.timer);
-  const restoreFocus = entry.notice.contains(document.activeElement);
-  entry.notice.remove();
-  appNoticeEntries.delete(id);
-  if (restoreFocus && entry.returnFocus?.isConnected) entry.returnFocus.focus();
+  for (const [groupId, group] of [...appNoticeEntries]) {
+    if (!group.options.members?.some(member => member.id === id)) continue;
+    const members = group.options.members.filter(member => member.id !== id);
+    if (members.length) showAppNotice({ ...group.options, members, mergeMembers: false });
+    else clearAppNotice(groupId);
+  }
 }
 
 function showAppNotice(options) {
+  const previous = appNoticeEntries.get(options.id);
+  if (options.mergeMembers) {
+    options = { ...options, members: [...new Map([...(previous?.options.members || []), ...options.members].map(member => [member.id, member])).values()] };
+  }
   const { id, kind = 'info', message, members, actionLabel, onAction, dismissOnAction = true } = options;
-  clearAppNotice(id);
+  clearTimeout(previous?.timer);
+  const focusedButton = previous?.notice.contains(document.activeElement) ? document.activeElement.className : null;
   const container = document.getElementById('app-notices');
   const notice = document.createElement('div');
   if (id !== undefined) notice.dataset.noticeId = id;
@@ -75,8 +78,9 @@ function showAppNotice(options) {
   notice.addEventListener('mousedown', event => {
     if (event.target.closest('button')) event.preventDefault();
   });
-  container.append(notice);
-  const entry = { notice, timer: null, returnFocus: document.activeElement, options };
+  const entry = { notice, timer: null, returnFocus: previous ? previous.returnFocus : document.activeElement, options };
+  if (previous) previous.notice.replaceWith(notice);
+  else container.append(notice);
   appNoticeEntries.set(id, entry);
   if (kind !== 'error') {
     let remaining = kind === 'undo' ? 10_000 : 15_000;
@@ -104,4 +108,5 @@ function showAppNotice(options) {
     notice.addEventListener('mouseleave', () => { hovered = false; resume(); });
     resume();
   }
+  if (focusedButton) [...notice.querySelectorAll('button')].find(button => button.className === focusedButton)?.focus();
 }

@@ -582,17 +582,18 @@ function showNotRestoredNotice(unavailable) {
   });
   if (!members.length) return;
   showAppNotice({
-    id: 'Restore:unavailable', kind: 'error', members,
+    id: 'Restore:unavailable', kind: 'error', members, mergeMembers: true,
     message: current => `Restore failed for ${current.map(member => member.text).join('; ')}: The transcript is not in the index. Check the transcript in the project folder (restore it from backup if missing), then use Reindex all sessions and open the session from the sidebar to retry.`,
   });
 }
 
 function showLiveElsewhereNotice(skipped) {
-  for (const waiting of [true, false]) {
-    const items = skipped.filter(item => !!item.waitingForIndex === waiting);
+  for (const pending of [true, false]) {
+    const items = skipped.filter(item => !!(item.waitingForIndex && item.retryAfterIndexing) === pending);
     if (!items.length) continue;
     const members = items.map(item => {
       const session = { ...item.session, projectPath: item.live?.cwd || item.session?.projectPath };
+      const waiting = !!item.waitingForIndex;
       const reason = waiting ? 'Waiting for indexing'
         : item.continuation ? 'A continuation choice is needed'
           : 'The session is live outside this window in pid ' + (item.live?.pid || '?');
@@ -602,8 +603,8 @@ function showLiveElsewhereNotice(skipped) {
       return { id: sessionActionNoticeId('Restore', session), text: `${sessionActionDescription(session)}: ${reason}. ${recovery}` };
     });
     showAppNotice({
-      id: waiting ? 'Restore:pending' : 'Restore:batch', kind: waiting ? 'info' : 'error', members,
-      message: current => `${waiting ? 'Restore pending' : 'Restore failed'} for ${current.map(member => member.text).join('; ')}`,
+      id: pending ? 'Restore:pending' : 'Restore:batch', kind: pending ? 'info' : 'error', members, mergeMembers: true,
+      message: current => `${pending ? 'Restore pending' : 'Restore failed'} for ${current.map(member => member.text).join('; ')}`,
     });
   }
 }
@@ -1943,10 +1944,12 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
       const index = restoreSavedIndex.get(sessionId) ?? [...openSessions.keys()].indexOf(sessionId);
       onOpenError?.(result.error);
       destroySession(sessionId);
-      skippedWorkingSetEntries.set(sessionId, {
-        item: { sessionId, projectPath, ...(entry.attach ? { bg: true } : {}), ...held?.item },
-        index: held?.index ?? index,
-      });
+      if (automatic || held) {
+        skippedWorkingSetEntries.set(sessionId, {
+          item: { sessionId, projectPath, ...(entry.attach ? { bg: true } : {}), ...held?.item },
+          index: held?.index ?? index,
+        });
+      }
       schedulePersistWorkingSet();
       return false;
     }

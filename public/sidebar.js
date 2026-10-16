@@ -50,11 +50,11 @@ function announceNotStopped(entries) {
     hosts.get(entry.alias).push(entry);
   }
   for (const [alias, rows] of hosts) {
-    const members = [...new Map(rows.map(({ session }) => [sessionActionNoticeId('Archive', session),
-      { id: sessionActionNoticeId('Archive', session), text: sessionActionDescription(session) }])).values()];
+    const members = [...new Map(rows.map(({ session, error }) => [sessionActionNoticeId('Archive', session),
+      { id: sessionActionNoticeId('Archive', session), text: sessionActionDescription(session), error }])).values()];
     showAppNotice({
-      id: `Archive:${alias}:not-stopped`, kind: 'error', members,
-      message: current => `Archived, but not stopped: ${alias} did not answer (${rows[0].error}). ${current.map(member => member.text).join('; ')}. The sessions may still be running there; unarchive them to try again once the host is back.`,
+      id: `Archive:${alias}:not-stopped`, kind: 'error', members, mergeMembers: true,
+      message: current => `Archived, but not stopped: ${alias} did not answer (${[...new Set(current.map(member => member.error))].join('; ')}). ${current.map(member => member.text).join('; ')}. The sessions may still be running there; unarchive them to try again once the host is back.`,
     });
   }
 }

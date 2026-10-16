@@ -847,7 +847,9 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 The session header's background handoff, continuation attachment and startup
 restore failures use `public/app-notices.js`, keyed separately as
 `Send to background`, `Attach background` and `Restore`. Restore refusals and
-missing transcripts are grouped per batch, with each affected session listed.
+missing transcripts use restore groups, with each affected session listed. Later
+batches merge by member operation id and update repeated members' text; they retain
+earlier failures until those members succeed or the group is dismissed.
 Both refused results and rejected IPC promises produce a persistent alert with
 Dismiss, session id/name/location, reason and recovery through the sidebar,
 Agents view (for a background job) or the session's own terminal. Plain resume
@@ -859,8 +861,10 @@ and name Reindex all sessions. Display names pass through cleanDisplayName.
 
 An automatic restore or background attachment whose open-terminal IPC rejects
 or returns a failure removes the failed terminal entry and returns false. The
-restore batch continues; skippedWorkingSetEntries retains its saved slot for
-later persistence and manual retry. A successful open consumes the held entry;
+restore batch continues. Automatic restore failures and retries of an already
+held entry retain that saved slot in skippedWorkingSetEntries for later
+persistence and manual retry. A failed manual attachment without a held entry
+does not add a session to the saved working set. A successful open consumes the held entry;
 closing it afterwards removes it from the next saved working set. A plain manual
 resume keeps its existing rejection behaviour.
 The handoff caller receives the original attachment error through onOpenError
@@ -870,9 +874,11 @@ tab is removed.
 A confirmed handoff clears the source handoff error while a failed destination
 attachment retains its own error. Successful attachments and restores clear
 only their matching notices (a member's success retains other members in a
-group). Waiting-for-indexing uses a transient status, cleared explicitly when
-indexing finishes; a mixed batch keeps that progress separate from its single
-failure notice. A handoff already in progress is also informational. Remote,
+group). Waiting-for-indexing uses a transient status only for entries that will
+retry automatically, cleared explicitly when indexing finishes. An indexing hold
+requiring the user to choose from the sidebar remains in the persistent failure
+group; a mixed batch keeps automatic progress separate. Group updates retain
+their stack position and original return focus. A handoff already in progress is also informational. Remote,
 sandboxed and plain-terminal refusals explain why background handoff is not
 available and offer continued use of the terminal. Informational handoff success
 and restore consent keep their existing transient/question behaviour. The

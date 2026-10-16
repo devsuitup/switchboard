@@ -192,9 +192,10 @@ focus) with a form body.
 
 - **Job.** Tell the user something happened that is not tied to a control.
 - **Exists.** `public/app-notices.js`, loaded before `sidebar.js`.
-  `showAppNotice({ id, kind, message, actionLabel, onAction, dismissOnAction })` adds a notice;
+  `showAppNotice({ id, kind, message, actionLabel, onAction, dismissOnAction, members, mergeMembers })` adds a notice;
   `clearAppNotice(id)` removes it and cancels its timeout. Reusing an id
-  replaces only that notice and cancels its previous timeout.
+  updates only that notice in its existing stack position, retains its original
+  return focus and cancels its previous timeout.
 - **Anatomy.** Plain-text message, optional text action button, and `Dismiss`.
   A fixed `#app-notices` container stacks notices at the bottom right with
   wrapping text and scrolls when they exceed the available height.
@@ -225,12 +226,15 @@ focus) with a form body.
   its own terminal/location, without an unsupported Stop/Close instruction.
 - **Partial results and groups.** Archived, but not stopped groups affected
   sessions once per host. Restore refusals and missing transcripts group once
-  per batch. Group callers provide `members: [{ id, text }]` and a `message`
-  function of the current members; clearing a member's operation id retains
-  the other members. Folder partial success says Archive folder partly done
+  per restore group. Group callers provide `members: [{ id, text }]`,
+  `mergeMembers: true` and a `message` function of the current members. Later
+  batches merge by member id, updating repeated members. Clearing a member's
+  operation id removes its direct notice and its membership in every group,
+  retaining other members and removing empty groups. Folder partial success says Archive folder partly done
   and names Agent Files for schedule-*.md. Waiting for indexing and a handoff
-  in progress use informational status, without a failure headline; indexing
-  completion clears its pending notice.
+  in progress use informational status, without a failure headline; only
+  automatic indexing retries enter the pending group, which indexing completion
+  clears. Holds requiring a sidebar choice remain persistent errors.
 - **Remaining separate.** `.restore-toast` retains restore consent, cold-cache
   indexing progress and informational handoff success; `#update-toast` is unchanged.
   Agents/settings failures and remaining information dialogs are later slices.

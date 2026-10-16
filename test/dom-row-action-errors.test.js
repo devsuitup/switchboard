@@ -43,6 +43,78 @@ function setup(t, extra = {}) {
   return { ...h, session, project, render, click, notice, focus, timers };
 }
 
+test('successive not-stopped batches merge by host and refresh a repeated member reason', t => {
+  const h = setup(t, { remoteAlias: 'vps' });
+  const second = { ...h.session, sessionId: 's2', name: 'Second' };
+  h.window.announceNotStopped([{ alias: 'vps', error: 'first timeout', session: h.session }]);
+  h.window.announceNotStopped([{ alias: 'vps', error: 'second timeout', session: second }]);
+  let el = h.document.querySelector('[data-notice-id="Archive:vps:not-stopped"]');
+  assert.match(el.textContent, /s1.*s2/);
+  assert.match(el.textContent, /first timeout/);
+  assert.match(el.textContent, /second timeout/);
+  h.window.announceNotStopped([{ alias: 'vps', error: 'new refusal', session: { ...h.session, name: 'Updated' } }]);
+  el = h.document.querySelector('[data-notice-id="Archive:vps:not-stopped"]');
+  assert.match(el.textContent, /Updated.*s1.*s2/);
+  assert.match(el.textContent, /new refusal/);
+  assert.doesNotMatch(el.textContent, /first timeout/);
+  assert.equal((el.textContent.match(/s1/g) || []).length, 1);
+  h.window.clearAppNotice(h.window.sessionActionNoticeId('Archive', h.session));
+  el = h.document.querySelector('[data-notice-id="Archive:vps:not-stopped"]');
+  assert.doesNotMatch(el.textContent, /s1/);
+  assert.match(el.textContent, /s2/);
+  h.window.clearAppNotice(h.window.sessionActionNoticeId('Archive', second));
+  assert.equal(h.document.querySelector('[data-notice-id="Archive:vps:not-stopped"]'), null);
+});
+
+for (const group of ['live', 'unavailable', 'pending']) {
+  test(`successive ${group} restore batches keep both members and update repeated text`, t => {
+    const h = setup(t);
+    const app = loadAppFunctions(h.context, { functions: ['showLiveElsewhereNotice', 'showNotRestoredNotice', 'showRestoreNotice'] });
+    const second = { sessionId: 's2', name: 'Second', projectPath: '/second' };
+    const announce = session => group === 'unavailable' ? app.showNotRestoredNotice([session])
+      : app.showLiveElsewhereNotice([{ session, live: { pid: session.sessionId === 's1' ? 42 : 43 }, ...(group === 'pending' ? { waitingForIndex: true, retryAfterIndexing: true } : {}) }]);
+    announce(h.session);
+    announce(second);
+    const id = group === 'unavailable' ? 'Restore:unavailable' : group === 'pending' ? 'Restore:pending' : 'Restore:batch';
+    let el = h.document.querySelector(`[data-notice-id="${id}"]`);
+    assert.match(el.textContent, /s1.*s2/);
+    h.session.name = 'Updated';
+    announce(h.session);
+    el = h.document.querySelector(`[data-notice-id="${id}"]`);
+    assert.match(el.textContent, /Updated.*s1.*s2/);
+    assert.equal((el.textContent.match(/s1/g) || []).length, 1);
+    h.window.clearAppNotice(h.window.sessionActionNoticeId('Restore', h.session));
+    el = h.document.querySelector(`[data-notice-id="${id}"]`);
+    assert.doesNotMatch(el.textContent, /s1/);
+    assert.match(el.textContent, /s2/);
+    h.window.clearAppNotice(h.window.sessionActionNoticeId('Restore', second));
+    assert.equal(h.document.querySelector(`[data-notice-id="${id}"]`), null);
+  });
+}
+
+test('an indexing hold needing user action is persistent while automatic retries alone are pending', async t => {
+  const h = setup(t);
+  h.window.restorePlanner = null;
+  h.window.skippedWorkingSetEntries = new Map();
+  const app = loadAppFunctions(h.context, { functions: ['showLiveElsewhereNotice', 'showRestoreNotice', 'markRestoreIndexingDone'] });
+  app.showLiveElsewhereNotice([
+    { session: h.session, waitingForIndex: true, retryAfterIndexing: false },
+    { session: { sessionId: 'auto', projectPath: '/auto' }, waitingForIndex: true, retryAfterIndexing: true },
+  ]);
+  const manual = h.document.querySelector('[data-notice-id="Restore:batch"]');
+  const pending = h.document.querySelector('[data-notice-id="Restore:pending"]');
+  assert.ok(manual);
+  assert.equal(manual.getAttribute('role'), 'alert');
+  assert.match(manual.textContent, /s1.*Open it from the sidebar to choose and retry restoring/);
+  assert.doesNotMatch(manual.textContent, /auto/);
+  assert.equal(pending.getAttribute('role'), 'status');
+  assert.match(pending.textContent, /auto.*will retry/);
+  assert.doesNotMatch(pending.textContent, /s1/);
+  await app.markRestoreIndexingDone();
+  assert.ok(manual.isConnected);
+  assert.equal(pending.isConnected, false);
+});
+
 for (const failure of ['rejected', 'refused', 'unavailable']) {
   test(`Stop ${failure} preserves terminal state and persistent recovery`, async t => {
     const h = setup(t, { remoteAlias: 'vps' });

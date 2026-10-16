@@ -337,7 +337,9 @@ return `{ok:false, hostUnreachable:true, error}`; Archive is reversible, so
 `showAppNotice({ id: 'Archive:<alias>:not-stopped', kind: 'error', members, message })`
 in `public/app-notices.js` (#566/S3). Its `Archived, but not stopped` wording
 is unchanged. It uses `role="alert"` and remains until Dismiss or
-`clearAppNotice`; a new batch replaces that host's notice, without a console error or
+`clearAppNotice`; a new batch merges into that host's notice by member operation id,
+updating a repeated member's name and reason. A successful retry removes only its
+member, and an empty group disappears, without a console error or
 the old 15 s `showRestoreNotice` timeout. The shared brick also provides
 15 s info and 10 s Undo notices; Archive/Detach undo actions are wired in
 their own slices (see `docs/product/BUILDING-BLOCKS.md`, B8).
