@@ -60,7 +60,7 @@ test('quit waits for the shared shutdown and exits immediately only after comple
   assert.ok(quit.includes('if (shutdownComplete) return;'));
   assert.ok(quit.includes('if (updateInstalling) { stopNonDatabaseResources(true); return; }'));
   assert.ok(quit.includes('event.preventDefault();'));
-  assert.ok(quit.includes('shutdownForExit().finally(() => app.exit())'));
+  assert.ok(quit.includes('shutdownForExit().finally(exitOnce)'));
 });
 
 test('update install awaits the bounded reversible drain', () => {

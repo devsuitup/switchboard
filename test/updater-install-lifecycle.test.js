@@ -37,6 +37,7 @@ function setup(behavior) {
     unsavedGuard: { beforeQuit: () => { calls.push('guard'); return false; } },
     drainForUpdate: async () => { calls.push('drain'); context.activityFlushedForQuit = true; },
     shutdownForExit: async () => { calls.push('shutdown'); },
+    exitOnce: () => calls.push('exit'),
     stopScheduler: () => calls.push('scheduler'), mainLoopMonitor: { stop: () => calls.push('monitor') },
     shutdownAllMcp: () => calls.push('mcp'), localTranscriptTracker: { dispose() {} },
     unsubscribeTaskJobs() {}, taskRecords: { dispose() {} },

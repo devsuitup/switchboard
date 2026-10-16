@@ -3,13 +3,37 @@
 // see .ai/contexts/session-index-writer.md
 function createWriterWorkerClient({ workerFactory, onSettings = () => {}, timeoutMs = 30000, maxRestarts = 3,
   now = () => Date.now(), setTimeout = global.setTimeout, clearTimeout = global.clearTimeout, heartbeatMs = 30000 }) {
-  let worker, closing, stopped = false, nextId = 0, restartTimer;
+  let worker, closing, stopped = false, terminated = false, nextId = 0, restartTimer;
   const restarts = [];
   const queue = [];
   const active = new Map();
+  const terminations = new Set();
   let bootResolve, bootReject;
   const ready = new Promise((resolve, reject) => { bootResolve = resolve; bootReject = reject; });
   ready.catch(() => {});
+
+  function terminateWorker(current) {
+    clearTimeout(current.bootTimer);
+    clearTimeout(current.heartbeatTimer);
+    const terminated = Promise.resolve(current.terminate()).catch(() => {});
+    terminations.add(terminated);
+    terminated.finally(() => terminations.delete(terminated));
+    return terminated;
+  }
+
+  function terminate() {
+    terminated = true;
+    stopped = true;
+    clearTimeout(restartTimer);
+    const error = new Error('writer shut down; unfinished request outcome unknown');
+    bootReject(error);
+    for (const job of [...queue.splice(0), ...active.values()]) settle(job, error);
+    active.clear();
+    const current = worker;
+    worker = null;
+    if (current) terminateWorker(current);
+    return Promise.all([...terminations]);
+  }
 
   function settle(job, error, value) {
     clearTimeout(job.timer);
@@ -39,11 +63,9 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, timeou
   async function fail(current, error) {
     if (worker !== current) return;
     worker = null;
-    clearTimeout(current.bootTimer);
-    clearTimeout(current.heartbeatTimer);
     for (const job of active.values()) settle(job, new Error(`writer outcome unknown for request ${job.id}: ${error.message}`));
     active.clear();
-    await current.terminate().catch(() => {});
+    await terminateWorker(current);
     if (stopped) return;
     restart(error);
   }
@@ -99,7 +121,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, timeou
   }
 
   function request(command, ...args) {
-    if (stopped && !closing && restarts.length) {
+    if (stopped && !terminated && !closing && restarts.length) {
       pruneRestarts();
       if (restarts.length < maxRestarts) { stopped = false; restart(new Error('writer circuit recovery')); }
     }
@@ -123,18 +145,14 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, timeou
         await enqueue('close', []);
       }
       finally {
-        stopped = true;
-        clearTimeout(restartTimer);
-        const current = worker;
-        worker = null;
-        if (current) { clearTimeout(current.bootTimer); clearTimeout(current.heartbeatTimer); await current.terminate(); }
+        await terminate();
       }
     })();
     return closing;
   }
 
   start();
-  return { ready, request, close };
+  return { ready, request, close, terminate };
 }
 
 module.exports = { createWriterWorkerClient };

@@ -122,15 +122,35 @@ main checks the old map entry, source identity, target liveness, stop request an
 background job proof again. Rejection or a changed proof keeps the old identity.
 Synchronous non-background detection retains its existing behavior.
 
-Both exit routes use boundedShutdown with one 1.5-second deadline after the unsaved
-guard. Normal quit uses the idempotent shutdownForExit: it stops
+Both exit routes use boundedShutdown with one 1.5-second drain deadline after the unsaved
+guard. Normal quit uses the idempotent shutdownForExit: beginShutdown closes external
+writer admission immediately, retaining the AsyncLocalStorage scope for already accepted
+workflows and the final cleanup writes. It stops
 scheduler/watchers, kills the app's PTYs, awaits their exit cleanup, serializes the final watcher flush,
 saves bounds, terminates/drains parser producers and pending metadata, flushes
 activity, awaits reader-worker termination, drains complete accepted facade
 workflows, closes main's reader, and awaits the writer's TRUNCATE checkpoint and
 close ACK. A closed window retains its session ids and exit-drain promises until
 shutdown can await and release them. Success, rejection and deadline all end in
-app.exit; subsequent quit events cannot get stuck behind a rejected promise.
+app.exit; subsequent quit events cannot get stuck behind a rejected promise. After the
+drain settles or expires, shutdown always requests writer, reader and parser worker
+termination, rejecting unfinished writer callers with unknown outcomes and disabling
+writer restarts. Termination has an additional 250 ms grace period, never an unbounded
+await. An idempotent exitOnce calls shutdown-exit.js, which starts a hidden, detached
+Electron-as-Node watchdog with an IPC connection to this process, waits for its armed
+ACK with a one-second startup deadline, then calls app.exit once. The watchdog exits
+when that connection disconnects. If the parent still holds
+the connection one second later, it kills only the captured parent PID. This external
+deadline is needed because Node process teardown can wait for a worker in native
+SQLite even after worker.terminate(); a main-thread timer cannot fire during that wait.
+If starting the watchdog fails, shutdown logs the error and force-exits its own PID.
+The effective exit budget is 1.5 s drain + 250 ms worker grace + watchdog startup +
+1 s watchdog grace, subject to OS scheduling. A drain timeout logs an explicit exit
+line. Normal exit still checkpoints and closes the writer before termination. A forced
+exit can lose uncommitted transactions and commands without ACKs; chunks already
+committed remain recoverable from WAL even without a TRUNCATE checkpoint. A missing
+ACK has unknown outcome and is not evidence of rollback. synchronous=NORMAL retains
+its existing power-loss limitation.
 A close rejects new external admission while
 AsyncLocalStorage preserves accepted workflows through nested completion commands.
 Update installation drains watcher/bounds/metadata/activity and the accepted writer

@@ -141,6 +141,28 @@ scenario('quit lets an accepted remap reach its completion command before closin
   db.close();
 `);
 
+scenario('shutdown rejects new admission while preserving accepted nested workflow completions and final bounds', `
+  const fs = require('node:fs');
+  const writer = createSessionIndexWriter();
+  await writer.ready;
+  const root = process.env.SWITCHBOARD_DATA_DIR;
+  const dir = path.join(root, 'transcripts');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'session.jsonl'), JSON.stringify({ cwd: '/old' }) + '\\n');
+  const remapping = writer.remapProjectTranscripts({ folder: 'folder', folderPath: dir, oldPath: '/old', newPath: root });
+  const closing = writer.beginShutdown(async () => {
+    await writer.patchGlobal({ finalBounds: true });
+    await writer.closeDb();
+  });
+  await assert.rejects(writer.setSetting('late', 1), /closing/);
+  await Promise.all([remapping, closing]);
+  const db = new Database(path.join(root, 'switchboard.db'), { readonly: true });
+  assert.equal(JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'projectRemaps'").get().value).folder, root);
+  assert.equal(JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'global'").get().value).finalBounds, true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'session.jsonl'), 'utf8')).cwd, root);
+  db.close();
+`);
+
 scenario('an offer changed before completion reports the conflict without consuming newer state', `
   let complete, entered;
   const waiting = new Promise(resolve => { entered = resolve; });
@@ -209,4 +231,45 @@ test('exhausting the restart circuit also fails close explicitly', async () => {
   await assert.rejects(client.request('setSetting', 'late', 1), /exited|shut/);
   await assert.rejects(client.close(), /circuit is open/);
   assert.equal(starts, 3);
+});
+
+test('forced writer termination rejects queued work and never recovers its restart circuit', async () => {
+  let current, starts = 0;
+  const client = createWriterWorkerClient({ workerFactory: () => {
+    starts++;
+    current = new EventEmitter();
+    current.terminate = () => Promise.resolve();
+    current.postMessage = () => {};
+    queueMicrotask(() => current.emit('message', { ready: true, settings: [] }));
+    return current;
+  } });
+  await client.ready;
+  const crashed = client.request('setSetting', 'crashed', 1);
+  current.emit('exit', 17);
+  await assert.rejects(crashed, /unknown/);
+  const jobs = Array.from({ length: 40 }, (_, i) => client.request('setSetting', 'pending:' + i, i));
+  const rejections = Promise.all(jobs.map(job => assert.rejects(job, /shut down.*unknown/)));
+  const stopped = client.terminate();
+  await rejections;
+  await assert.rejects(client.request('setSetting', 'late', 1), /shut down/);
+  await stopped;
+  assert.equal(starts, 1, 'termination clears the scheduled restart');
+});
+
+test('forced termination rejects bootstrap and queued callers before a stuck worker terminates', async () => {
+  let release, terminated = 0;
+  const terminating = new Promise(resolve => { release = resolve; });
+  const client = createWriterWorkerClient({ workerFactory: () => {
+    const worker = new EventEmitter();
+    worker.postMessage = () => {};
+    worker.terminate = () => { terminated++; return terminating; };
+    return worker;
+  } });
+  const waiting = assert.rejects(client.ready, /shut down.*unknown/);
+  const jobs = Array.from({ length: 40 }, (_, i) => assert.rejects(client.request('setSetting', 'pending:' + i, i), /shut down.*unknown/));
+  const stopped = client.terminate();
+  await Promise.all([waiting, ...jobs]);
+  assert.equal(terminated, 1);
+  release();
+  await stopped;
 });

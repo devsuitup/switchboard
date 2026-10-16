@@ -275,8 +275,10 @@ function lifecycleFixture(extra = {}) {
     projectsClient: { shutdown: noop }, fileListsClient: { shutdown: noop }, searchClient: { shutdown: noop },
     closeDb: async () => { throw new Error('client.close rejected'); }, activityTrace: { close: noop },
     autoUpdater: { quitAndInstall: () => calls.push('install') }, ...extra,
-    require: () => ({ autoUpdater: nativeUpdater }),
+    require: name => name === './shutdown-exit'
+      ? { exitWithWatchdog: app => app.exit() } : { autoUpdater: nativeUpdater },
   });
+  context.writer = { beginShutdown: drain => drain(), terminate: noop, ...context.writer };
   const updateListener = source.split('\n').find(line => line.includes(".autoUpdater.on('before-quit-for-update'"));
   assert.ok(updateListener);
   vm.runInContext(updateListener, context);

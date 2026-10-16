@@ -20,11 +20,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     onSettings: entries => { mirror.clear(); for (const [key, value] of entries) mirror.set(key, value); if (backend) backend.applySettingsAcknowledgment(entries); },
     ...options.clientOptions,
   });
-  let backend, recorder, cacheTail = Promise.resolve(), closing = false;
+  let backend, recorder, cacheTail = Promise.resolve(), closing, accepting = true, terminated = false;
   const pending = new Set();
   const commandScope = new AsyncLocalStorage();
   const owner = {};
-  const admitted = () => !closing || commandScope.getStore() === owner;
+  const admitted = () => !terminated && (accepting || commandScope.getStore() === owner);
   const track = promise => { pending.add(promise); promise.finally(() => pending.delete(promise)).catch(() => {}); return promise; };
   const ready = client.ready.then(bootstrap => {
     backend = options.readonlyBackend || require('./db');
@@ -189,6 +189,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     },
     async closeDb() {
       if (closing) return closing;
+      accepting = false;
       closing = (async () => {
         await ready;
         while (pending.size) await Promise.allSettled([...pending]);
@@ -196,6 +197,15 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         await client.close();
       })();
       return closing;
+    },
+    beginShutdown(drain) {
+      accepting = false;
+      return commandScope.run(owner, () => Promise.resolve().then(drain));
+    },
+    terminate() {
+      accepting = false;
+      terminated = true;
+      return client.terminate();
     },
     async drain() {
       await ready;
@@ -210,7 +220,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     'clearArchivedEntry', 'hideProject', 'unhideProject', 'revealAddedProject', 'dropRemoteFolder',
     'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries', 'setName']) writer[name] = (...args) => request(name, ...args);
   for (const [name, fn] of Object.entries(writer)) {
-    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain'].includes(name)) continue;
+    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate'].includes(name)) continue;
     writer[name] = (...args) => admit(() => fn(...args));
   }
   return writer;

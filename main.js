@@ -3649,6 +3649,12 @@ let appQuitting = false;
 // see .ai/contexts/session-index-writer.md
 let shutdownPromise;
 let shutdownComplete = false;
+let exitRequested = false;
+function exitOnce() {
+  if (exitRequested) return;
+  exitRequested = true;
+  require('./shutdown-exit').exitWithWatchdog(app, log);
+}
 let nonDatabaseResourcesStopped = false;
 function stopNonDatabaseResources(closeTrace = false) {
   if (nonDatabaseResourcesStopped) return;
@@ -3672,7 +3678,8 @@ async function boundedShutdown(drain) {
     await Promise.race([Promise.resolve().then(drain), new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error('shutdown drain timed out')), 1500);
     })]);
-  } catch (error) { log.error('[shutdown] drain failed:', error); }
+    return null;
+  } catch (error) { log.error('[shutdown] drain failed:', error); return error; }
   finally { clearTimeout(timer); }
 }
 function drainForUpdate() {
@@ -3683,7 +3690,7 @@ function drainForUpdate() {
 }
 function shutdownForExit() {
   if (shutdownPromise) return shutdownPromise;
-  shutdownPromise = boundedShutdown(async () => {
+  shutdownPromise = boundedShutdown(() => writer.beginShutdown(async () => {
     appQuitting = true;
     if (TRACE.on) trace('app.quit', null, {});
     stopNonDatabaseResources();
@@ -3706,7 +3713,19 @@ function shutdownForExit() {
     await Promise.all([projectsClient.shutdown(), fileListsClient.shutdown(), searchClient.shutdown()]);
     await closeDb();
     activityTrace.close();
-  }).finally(() => { shutdownComplete = true; });
+  })).then(async error => {
+    let timer;
+    const stop = [() => writer.terminate(), () => projectsClient.shutdown(),
+      () => fileListsClient.shutdown(), () => searchClient.shutdown(), () => sessionCache.shutdownProducers()];
+    const stopping = Promise.allSettled(stop.map(fn => Promise.resolve().then(fn)));
+    try {
+      await Promise.race([stopping, new Promise(resolve => { timer = setTimeout(resolve, 250); })]);
+    } finally {
+      clearTimeout(timer);
+      shutdownComplete = true;
+      if (error?.message === 'shutdown drain timed out') log.error('[shutdown] exiting after shutdown drain timed out; unfinished writes may be lost');
+    }
+  });
   return shutdownPromise;
 }
 
@@ -3716,7 +3735,7 @@ app.on('before-quit', event => {
   if (shutdownComplete) return;
   if (unsavedGuard.beforeQuit(event, mainWindow)) return;
   event.preventDefault();
-  shutdownForExit().finally(() => app.exit());
+  shutdownForExit().finally(exitOnce);
 });
 }
 

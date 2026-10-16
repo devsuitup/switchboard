@@ -80,6 +80,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
   context.activityReporter.flush = async () => {};
   context.projectsClient = context.fileListsClient = context.searchClient = { shutdown: async () => {} };
   context.closeDb = async () => {};
+  context.writer = { beginShutdown: drain => drain(), terminate: async () => {} };
   context.Promise = Promise;
   context.setTimeout = setTimeout;
   context.clearTimeout = clearTimeout;
