@@ -841,3 +841,23 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 - `.ai/contexts/ipc-bridge.md` (the three handlers, the event)
 - `.ai/contexts/cli-session-state.md` (the descriptor hooks)
 - `docs/background-agents.md`, `docs/keyboard-shortcuts.md`
+# Persistent handoff and restore errors (#566)
+
+The session header's background handoff, continuation attachment and startup
+restore failures use `public/app-notices.js`, keyed separately as
+`Send to background`, `Attach background` and `Restore` for each session.
+Both refused results and rejected IPC promises produce a persistent alert with
+Dismiss, session id/name/location, reason and recovery through the sidebar,
+Agents view or the session's own terminal. External-process restore refusals
+name their pid and own terminal; they do not promise unavailable Stop/Close
+controls. Missing-index notices explain how to check/restore the transcript.
+
+A confirmed handoff clears the source handoff error while a failed destination
+attachment retains its own error. Successful attachments and restores clear
+only their matching notices. Informational handoff success, restore consent
+and indexing progress keep their existing transient/question behaviour. The
+Agents view's own error handling belongs to a later #566 slice.
+
+Evidence: `test/dom-row-action-errors.test.js`,
+`test/send-to-background-renderer.test.js`,
+`test/restore-live-elsewhere.test.js`, `test/restore-unavailable.test.js`.

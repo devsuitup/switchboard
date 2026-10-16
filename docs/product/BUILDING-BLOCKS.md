@@ -128,9 +128,9 @@ name/state/project part.
   | `.restore-toast-btn` | toasts (`app.js:421-422, 466`) | no CSS rule of its own |
 - **Availability.** Hidden in hover bars and headers; disabled in the Agents
   panel and tool bar, with or without a reason (UI-PATTERNS §2.4).
-- **Failure feedback.** `flashButtonText` replaces the label or flashes green
-  (`viewer-toolbar.js:28-39`); `surfaceStopFailure` adds a 3 s `title`
-  (`sidebar.js:21-28`).
+- **Failure feedback.** Row Stop/Detach, Delete and Archive use persistent B8
+  notices through `showSessionActionFailure`; pointer leave and sidebar refresh
+  retain the error. `flashButtonText` remains available for other callers.
 
 **Proposed convergence.** One button brick, variants `icon`, `text`,
 `primary`, `danger`, `toggle` (B13); every icon button has `aria-label`; a
@@ -192,7 +192,7 @@ focus) with a form body.
 
 - **Job.** Tell the user something happened that is not tied to a control.
 - **Exists.** `public/app-notices.js`, loaded before `sidebar.js`.
-  `showAppNotice({ id, kind, message, actionLabel, onAction })` adds a notice;
+  `showAppNotice({ id, kind, message, actionLabel, onAction, dismissOnAction })` adds a notice;
   `clearAppNotice(id)` removes it and cancels its timeout. Reusing an id
   replaces only that notice and cancels its previous timeout.
 - **Anatomy.** Plain-text message, optional text action button, and `Dismiss`.
@@ -206,8 +206,10 @@ focus) with a form body.
   10 s; the caller supplies `actionLabel: 'Undo'`, `onAction` and a message
   explaining what happened, so the button is not the only cue.
 - **Behaviour.** Buttons are native keyboard-reachable buttons with the
-  shared focus ring; showing a notice does not move focus. An action removes
-  its notice and invokes its callback once. The caller owns asynchronous
+  shared focus ring; showing a notice does not move focus. An action normally
+  removes its notice and invokes its callback once. With `dismissOnAction: false`,
+  a Retry retains the error through a cancelled confirmation; the successful
+  operation clears it. The caller owns asynchronous
   action results and can report a failure with a new error notice.
   Info and Undo timeouts pause while hovered or focused and resume with the
   remaining time after both leave. Pointer presses preserve existing focus;
@@ -215,9 +217,16 @@ focus) with a form body.
   if it is still connected.
 - **Used.** `announceNotStopped` in `public/sidebar.js` reports an archived
   remote session that could not be stopped as a persistent error (#604/#566).
-- **Remaining separate.** `.restore-toast` and `#update-toast` retain their
-  existing behaviour; their migration waits for #441. Other failure flashes
-  and information dialogs are future callers. Archive and Detach Undo wiring
+- **Action failures (#566).** `showSessionActionFailure(operation, session,
+  error, recovery, onRetry)` includes the object/location, reason and available
+  next step. `sessionActionNoticeId` keys Stop/Detach, Delete, Archive, folder
+  Archive, background handoff/attachment and Restore independently. A successful
+  retry clears only that operation's notice. External-session recovery names
+  its own terminal/location, without an unsupported Stop/Close instruction.
+- **Remaining separate.** `.restore-toast` retains restore consent, indexing
+  progress and informational handoff success; `#update-toast` is unchanged.
+  Agents/settings failures and remaining information dialogs are later slices.
+  Archive and Detach Undo wiring
   belongs to their own slices; S3 provides the shared variant.
 
 ## B9. Inline error

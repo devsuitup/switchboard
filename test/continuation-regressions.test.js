@@ -80,8 +80,8 @@ for (const [name, graph] of [
     await h.restore();
     assert.deepEqual(h.prompts, []);
     assert.deepEqual(h.spawned.map(call => call.id), ['other']);
-    assert.match(h.dom.window.notice, /old/);
-    assert.match(h.dom.window.notice, /sidebar.*choose/i);
+    assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
+    assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /sidebar.*choose/i);
     assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId), ['old', 'other']);
   });
 }
@@ -92,7 +92,7 @@ test('R2 automatic failed continuation lookup holds the entry without confirm', 
   await h.restore();
   assert.deepEqual(h.prompts, []);
   assert.deepEqual(h.spawned, []);
-  assert.match(h.dom.window.notice, /old/);
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
 });
 
 test('R2 a missing continuation API cannot silently bypass the resume guard', { timeout: 9000 }, async t => {
@@ -101,7 +101,7 @@ test('R2 a missing continuation API cannot silently bypass the resume guard', { 
   await h.restore();
   assert.deepEqual(h.spawned, []);
   assert.deepEqual(h.prompts, []);
-  assert.match(h.dom.window.notice, /old/);
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
 });
 
 for (const graph of [{ old: ['a', 'b'], a: [], b: [] }, { old: ['missing'] }]) {
@@ -206,5 +206,22 @@ test('R2 restore checks final liveness automatically before spawning', { timeout
   await h.restore();
   assert.deepEqual(h.spawned, []);
   assert.deepEqual(h.prompts, []);
-  assert.match(h.dom.window.notice, /pid 7/);
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /pid 7/);
+});
+test('choosing a continuation clears the original Restore refusal only after successful open', async t => {
+  const h = setup(t, { old: ['new'], new: [] }, { answer: true });
+  h.app.showLiveElsewhereNotice([{ session: h.ctx.sessionMap.get('old'), continuation: true }]);
+  h.dom.window.showAppNotice({ id: 'other-error', kind: 'error', message: 'Unrelated failure' });
+  assert.ok(h.dom.window.document.querySelector('[data-notice-id="Restore:local:old"]'));
+  await h.click();
+  assert.ok(h.ctx.openSessions.has('new'));
+  assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:local:old"]'), null);
+  assert.ok(h.dom.window.document.querySelector('[data-notice-id="other-error"]'));
+});
+test('automatic continuation retry clears its original waiting Restore notice after open', async t => {
+  const h = setup(t, { old: ['new'], new: [] });
+  h.app.showLiveElsewhereNotice([{ session: h.ctx.sessionMap.get('old'), continuation: true, waitingForIndex: true, retryAfterIndexing: true }]);
+  await h.restore();
+  assert.ok(h.ctx.openSessions.has('new'));
+  assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:local:old"]'), null);
 });

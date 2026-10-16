@@ -60,6 +60,10 @@ function setup(t, { sandbox = false } = {}) {
 
   const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
   const ctx = dom.getInternalVMContext();
+  const notices = dom.window.document.createElement('div');
+  notices.id = 'app-notices';
+  dom.window.document.body.append(notices);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'public', 'app-notices.js'), 'utf8'), ctx);
   const openTerminalCalls = [];
   const messages = [];
   const confirmations = [];

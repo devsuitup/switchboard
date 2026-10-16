@@ -79,8 +79,8 @@ async function stopBeforeArchive(session, { unreachable } = {}) {
     const open = typeof openSessions !== 'undefined' && openSessions.get(id);
     if (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(id)) && !(open && !open.closed)) continue;
     const result = await window.api.stopSession(id);
-    if (result && result.ok === false && result.error !== 'not running') {
-      return { ok: false, error: result.error || 'unknown error' };
+    if (!result || (result.ok === false && result.error !== 'not running')) {
+      return { ok: false, error: result?.error || 'The stop backend is unavailable or returned no result' };
     }
     if (typeof activePtyIds !== 'undefined') activePtyIds.delete(id);
   }

@@ -232,17 +232,16 @@ test('archive folder: a refused stop in a worktree archives nothing, and the fol
   } finally { ctx.destroy(); }
 });
 
-test('archive folder: while indexing, an alert and nothing else', async () => {
+test('archive folder: while indexing, a persistent notice and no mutation', async () => {
   const ctx = setupSidebarDom();
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     const calls = installApi(ctx, { getProjectArchivePlan: () => Promise.resolve({ indexing: true }) });
-    let alerted = null;
-    ctx.window.appAlert = async ({ message: m }) => { alerted = m; };
+    ctx.window.appAlert = async () => { assert.fail('an Archive failure must be a notice, not a dialog'); };
     render(ctx, [project]);
     await clickArchive(ctx, '/p');
 
-    assert.match(alerted || '', /still indexing/);
+    assert.match(ctx.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /still indexing/);
     assert.equal(ctx.document.querySelector('.modal-overlay'), null);
     assert.deepEqual(calls.map(c => c.method), ['getProjectArchivePlan']);
   } finally { ctx.destroy(); }
@@ -316,13 +315,12 @@ test('archive folder: an archive that failed after disabling schedules names the
   const ctx = setupSidebarDom();
   try {
     installApi(ctx, { archiveProject: () => Promise.resolve({ error: 'SQLITE_BUSY', disabled: ['nightly'] }) });
-    let alerted = null;
-    ctx.window.appAlert = async ({ message: m }) => { alerted = m; };
+    ctx.window.appAlert = async () => { assert.fail('an Archive failure must be a notice, not a dialog'); };
     render(ctx, [{ projectPath: '/p', folder: '-p', sessions: [session('s1')] }]);
     await clickArchive(ctx, '/p', { confirm: true });
 
-    assert.match(alerted || '', /could not be archived: SQLITE_BUSY/);
-    assert.match(alerted || '', /turned off: nightly/);
+    assert.match(ctx.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /could not be archived: SQLITE_BUSY/);
+    assert.match(ctx.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /turned off: nightly/);
   } finally { ctx.destroy(); }
 });
 
@@ -382,12 +380,11 @@ test('archive folder: a schedule that could not be disabled is reported', async 
       getProjectArchivePlan: () => Promise.resolve({ schedules: [{ name: 'a', filePath: SCHEDULE_A, disableable: true }] }),
       archiveProject: () => Promise.resolve({ ok: true, disabled: [], failed: [{ name: 'a', error: 'EACCES' }] }),
     });
-    let alerted = null;
-    ctx.window.appAlert = async ({ message: m }) => { alerted = m; };
+    ctx.window.appAlert = async () => { assert.fail('an Archive failure must be a notice, not a dialog'); };
     render(ctx, [project]);
     await clickArchive(ctx, '/p', { confirm: true });
 
-    assert.match(alerted || '', /a: EACCES/);
+    assert.match(ctx.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /a: EACCES/);
   } finally { ctx.destroy(); }
 });
 
@@ -396,12 +393,11 @@ test('archive folder: an archive refused for indexing is reported', async () => 
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     installApi(ctx, { archiveProject: () => Promise.resolve({ error: 'indexing' }) });
-    let alerted = null;
-    ctx.window.appAlert = async ({ message: m }) => { alerted = m; };
+    ctx.window.appAlert = async () => { assert.fail('an Archive failure must be a notice, not a dialog'); };
     render(ctx, [project]);
     await clickArchive(ctx, '/p', { confirm: true });
 
-    assert.match(alerted || '', /still indexing/);
+    assert.match(ctx.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /still indexing/);
   } finally { ctx.destroy(); }
 });
 
@@ -410,12 +406,11 @@ test('archive folder: an archive that failed in the main process is reported', a
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     installApi(ctx, { archiveProject: () => Promise.resolve({ error: 'SQLITE_BUSY' }) });
-    let alerted = null;
-    ctx.window.appAlert = async ({ message: m }) => { alerted = m; };
+    ctx.window.appAlert = async () => { assert.fail('an Archive failure must be a notice, not a dialog'); };
     render(ctx, [project]);
     await clickArchive(ctx, '/p', { confirm: true });
 
-    assert.match(alerted || '', /could not be archived: SQLITE_BUSY/);
+    assert.match(ctx.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /could not be archived: SQLITE_BUSY/);
   } finally { ctx.destroy(); }
 });
 

@@ -145,7 +145,7 @@ test('saved merged member B live elsewhere is skipped, checked by B and kept', a
   assert.deepEqual(h.spawned, []);
   assert.deepEqual(h.liveQueries, [['B']], 'liveness must be checked for member B');
   assert.deepEqual(await h.persist(), [{ ...h.saved[0], active: false }], 'the skipped member stays saved like any live-elsewhere session');
-  assert.match(h.document.getElementById('restore-live-elsewhere-toast')?.textContent || '', /live in pid 4242/);
+  assert.match(h.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /live outside this window in pid 4242/);
   assert.equal(h.document.getElementById('restore-unavailable-toast'), null);
 });
 
@@ -153,7 +153,7 @@ test('saved primary A with head B live elsewhere is skipped with a notice naming
   const h = setup(t, { id: 'A', headSessionId: 'B', live: true, liveId: 'B' });
   await h.restoreWorkingSet();
   assert.deepEqual(h.spawned, [], 'restore must not resume a conversation whose head is live elsewhere');
-  assert.match(h.document.getElementById('restore-live-elsewhere-toast')?.textContent || '', /Not reopened: B is live in pid 4242/);
+  assert.match(h.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /B.*live outside this window in pid 4242/);
   assert.deepEqual(await h.persist(), [{ ...h.saved[0], active: false }], 'the skipped primary stays saved');
   assert.equal(h.document.getElementById('restore-unavailable-toast'), null);
 });

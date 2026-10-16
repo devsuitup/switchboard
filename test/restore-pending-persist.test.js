@@ -20,6 +20,10 @@ const SAVED = [
 function setup() {
   const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
   const ctx = dom.getInternalVMContext();
+  const notices = dom.window.document.createElement('div');
+  notices.id = 'app-notices';
+  dom.window.document.body.append(notices);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/app-notices.js'), 'utf8'), ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx);
   const settings = { global: { openWorkingSet: SAVED } };
   dom.window.api = {

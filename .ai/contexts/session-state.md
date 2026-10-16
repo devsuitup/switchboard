@@ -1,5 +1,31 @@
 # Session state — one domain module, one icon slot
 
+## Persistent row action failures (#566)
+
+Stop/Detach, Delete and Archive use `showSessionActionFailure` in
+`public/app-notices.js`. The key includes the operation, host and session id
+(folder Archive uses the project path). Errors have `role="alert"`, Dismiss,
+the affected session/location, the backend reason and a recovery step. They
+schedule no expiry and survive sidebar replacement and pointer leave. Stop's
+Retry repeats its confirmation and retains the error if cancelled; successful
+actions clear only their own key. No focus is moved by showing a notice.
+
+Delete refusals for live merged members or external processes direct the user
+to the session's own terminal at its project location. Remote Delete never
+stops a process before the read-only refusal. Confirmations remain questions.
+Rejected IPC promises, unavailable operations and absent acknowledgements are
+failures; Stop leaves local liveness/view state unchanged on failure. Archive
+changes a row only after its persistence IPC succeeds. Folder stop refusals
+still prevent all archives; persistence failures retain successful row archives
+and keep the folder. Slug batches continue with other rows after a refusal.
+An unreachable remote host retains the established archive-without-stop policy,
+with a persistent warning per affected row and an Unarchive recovery step.
+
+Evidence: `test/dom-row-action-errors.test.js`,
+`test/confirm-and-stop-session.test.js`,
+`test/dom-sidebar-stop-before-archive.test.js`,
+`test/dom-project-archive-folder.test.js`.
+
 ## Conversation head turn and the single spinner (#625)
 
 The row's animation is selected from its `headSessionId || sessionId`, with

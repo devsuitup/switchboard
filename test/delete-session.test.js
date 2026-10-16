@@ -68,7 +68,7 @@ test('delete button: rendered on session cards and confirms before deleting', ()
   assert.match(handler, /window\.api\.deleteSession/);
   assert.doesNotMatch(handler, /window\.alert\(/,
     'alert() is modal and hard to dismiss — a failure must not block the renderer');
-  assert.match(handler, /flashButtonText\(deleteBtn, 'Failed'/, 'a refusal must still surface on the button');
+  assert.match(handler, /surfaceStopFailure\(deleteBtn,.*'Delete'\)/, 'a refusal must surface through the persistent notice adapter');
   assert.match(handler, /pendingSessions\.delete\(session\.sessionId\)/,
     'the sidebar re-injects transcript-less sessions, so the pending entry must be forgotten too');
 

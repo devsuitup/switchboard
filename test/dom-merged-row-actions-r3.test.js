@@ -115,9 +115,9 @@ test('Archive still refuses a genuine remote stop failure', async t => {
   const calls = recordingApi(ctx);
   ctx.read("remoteState('B').apply({ type: 'liveness', value: 'alive' })");
   ctx.window.api.remoteStopSession = async (alias, id) => { calls.push(['remoteStop', alias, id]); return { ok: false, error: 'host unreachable' }; };
-  const button = await click(ctx, 'A', 'archive');
+  await click(ctx, 'A', 'archive');
   assert.deepEqual(calls, [['remoteStop', 'host', 'B']]);
-  assert.match(button.title, /host unreachable/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /host unreachable/);
 });
 
 test('Delete stops then deletes a merged row when only its representative tab runs', async t => {
@@ -138,9 +138,9 @@ for (const state of ['live', 'open']) {
     if (state === 'live') ctx.window.activePtyIds.add('B');
     else open(ctx, 'B');
     ctx.window.showDeleteSessionDialog = async () => { assert.fail('Delete confirmation must not open'); };
-    const button = await click(ctx, 'A', 'delete');
+    await click(ctx, 'A', 'delete');
     assert.deepEqual(calls, []);
-    assert.match(button.title, /session is still running/);
+    assert.match(ctx.document.querySelector('[role="alert"]').textContent, /merged member is still running/);
   });
 }
 

@@ -98,6 +98,10 @@ function setup() {
     },
   };
   const ctx = dom.getInternalVMContext();
+  const notices = dom.window.document.createElement('div');
+  notices.id = 'app-notices';
+  dom.window.document.body.append(notices);
+  vm.runInContext(fs.readFileSync(path.join(ROOT, 'public', 'app-notices.js'), 'utf8'), ctx);
   const run = (src, filename) => vm.runInContext(src, ctx, { filename });
   run(PRELUDE, 'prelude.js');
   loadAppFunctions(ctx, {

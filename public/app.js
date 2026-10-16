@@ -388,6 +388,9 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         else if (live) skippedNow.push({ session: s, live });
         continue;
       }
+      if (openSessions.has(s.sessionId) && !openSessions.get(s.sessionId).closed) {
+        clearAppNotice(sessionActionNoticeId('Restore', originalSession));
+      }
       if (s.sessionId !== originalId && openSessions.get(s.sessionId)?.attach) {
         skippedWorkingSetEntries.set(s.sessionId, { item, index: restoreSavedIndex.get(s.sessionId), keepAttached: true });
       }
@@ -573,29 +576,23 @@ function showRestoreNotice(id, text) {
 }
 
 function showNotRestoredNotice(unavailable) {
-  const label = (item) => {
-    const s = sessionMap.get(item.sessionId);
-    return (s && cleanDisplayName(s.name || s.aiTitle || s.summary)) || item.sessionId;
-  };
-  const text = unavailable.length === 1
-    ? `Not restored: ${label(unavailable[0])} is not in the index`
-    : `Not restored: ${unavailable.length} sessions are not in the index (${unavailable.map(label).join(', ')})`;
-  showRestoreNotice('restore-unavailable-toast', text);
+  for (const item of unavailable) {
+    const session = { ...item, ...sessionMap.get(item.sessionId) };
+    showSessionActionFailure('Restore', session, 'The transcript is not in the index',
+      'Check the transcript in the project folder (restore it from backup if missing), then reload the sidebar and open the session to retry.');
+  }
 }
 
 function showLiveElsewhereNotice(skipped) {
-  const live = skipped.filter(item => !item.continuation);
-  const held = skipped.filter(item => item.continuation && !item.waitingForIndex);
-  const waiting = skipped.filter(item => item.waitingForIndex);
-  const label = ({ session }) => cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId;
-  const parts = [];
-  if (live.length === 1) parts.push('Not reopened: ' + label(live[0]) + ' is live in pid ' + (live[0].live?.pid || '?'));
-  else if (live.length) parts.push('Not reopened: ' + live.length + ' sessions live in pids ' + live.map(item => item.live?.pid || '?').join(', '));
-  if (waiting.length) parts.push('Not reopened: ' + waiting.map(label).join(', ') + ' is waiting for indexing. '
-    + (waiting.some(item => item.retryAfterIndexing) ? 'Restore will retry when indexing finishes' : 'Open it from the sidebar to retry'));
-  if (held.length) parts.push('Not reopened: ' + held.map(item => label(item) + ' (' + item.session.sessionId + ')').join(', ')
-    + ' needs a continuation choice. Open it from the sidebar to choose.');
-  showRestoreNotice('restore-live-elsewhere-toast', parts.join('. '));
+  for (const item of skipped) {
+    const reason = item.waitingForIndex ? 'Waiting for indexing'
+      : item.continuation ? 'A continuation choice is needed'
+        : 'The session is live outside this window in pid ' + (item.live?.pid || '?');
+    const recovery = item.waitingForIndex && item.retryAfterIndexing ? 'Restore will retry when indexing finishes. Open it from the sidebar to check.'
+      : item.continuation ? 'Open it from the sidebar to choose and retry restoring.'
+        : 'Return to its own terminal at the location above to continue working or end it there, then open it from the sidebar to retry restoring.';
+    showSessionActionFailure('Restore', item.session, reason, recovery);
+  }
 }
 
 async function markRestoreIndexingDone() {
@@ -617,7 +614,6 @@ async function markRestoreIndexingDone() {
     entry.retryContinuation = false;
     window._startupResumeResolutions?.delete(entry.item.sessionId);
   }
-  document.getElementById('restore-live-elsewhere-toast')?.remove();
   restoringWorkingSet = true;
   try {
     await runRestore(retry.map(entry => entry.item), { retryAfterIndexing: false });
@@ -1168,21 +1164,22 @@ async function confirmAndStopSession(sessionId, btn, rowSession) {
   const openEntry = openSessions.get(sessionId);
   const plan = resolveSessionStop(sessionMap.get(sessionId) || openEntry?.session || rowSession, { attach: !!(openEntry && openEntry.attach) });
   if (!await appConfirm({ title: plan.attach ? 'Detach session?' : 'Stop session?', message: plan.confirmText, confirmLabel: plan.attach ? 'Detach' : 'Stop', danger: true })) return;
-  const result = plan.remote
-    ? await window.api.remoteStopSession(plan.alias, sessionId)
-    : await window.api.stopSession(sessionId);
-  if (result && result.ok === false) {
-    const message = result.error || 'unknown error';
-    console.error('[stop-session]', message);
-    // leave activePtyIds/the open view untouched on failure
-    if (btn) {
-      if (typeof window.flashButtonText === 'function') window.flashButtonText(btn, 'Failed', 1500);
-      const originalTitle = btn.title;
-      btn.title = message;
-      setTimeout(() => { btn.title = originalTitle; }, 3000);
-    }
+  const session = sessionMap.get(sessionId) || openEntry?.session || rowSession || { sessionId };
+  const operation = plan.attach ? 'Detach' : 'Stop';
+  try {
+    const backend = plan.remote ? window.api.remoteStopSession : window.api.stopSession;
+    if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
+    const result = plan.remote ? await backend(plan.alias, sessionId) : await backend(sessionId);
+    if (!result || result.ok === false) throw new Error(result?.error || 'The stop backend is unavailable or returned no result');
+  } catch (error) {
+    showSessionActionFailure(operation, session, error,
+      plan.remote ? 'Check the connection to the host, then retry Stop from the sidebar.'
+        : plan.attach ? 'Check the background session in the Agents view, then retry Detach.'
+          : 'Check the session in its own terminal, then retry Stop from the sidebar.',
+      () => confirmAndStopSession(sessionId, btn, rowSession));
     return;
   }
+  clearAppNotice(sessionActionNoticeId(operation, session));
   if (plan.remote && typeof applyRemoteStopped === 'function') {
     applyRemoteStopped(sessionId);
   }
@@ -1251,14 +1248,18 @@ async function attachBackgroundContinuation(entry, background) {
     entry.closed = !result?.ok;
     entry.openError = result?.ok ? null : result?.error || 'the attach tab did not open';
     settlePtyOpen(sessionId, result);
-    if (result?.ok) syncPtySizeAfterOpen(entry, result);
-    else showRestoreNotice([], `The conversation now runs in the background, but attaching failed: ${entry.openError}. Open it from the sidebar.`);
+    if (result?.ok) {
+      clearAppNotice(sessionActionNoticeId('Attach background', entry.session));
+      syncPtySizeAfterOpen(entry, result);
+    } else showSessionActionFailure('Attach background', entry.session, entry.openError,
+      'The conversation now runs in the background. Open it from the sidebar to retry attaching.');
   } catch (err) {
     if (openSessions.get(sessionId) !== entry) return;
     settlePtyOpen(sessionId, null);
     entry.closed = true;
     entry.openError = err.message;
-    showRestoreNotice([], `The conversation now runs in the background, but attaching failed: ${err.message}. Open it from the sidebar.`);
+    showSessionActionFailure('Attach background', entry.session, err,
+      'The conversation now runs in the background. Open it from the sidebar to retry attaching.');
   } finally {
     schedulePersistWorkingSet();
     pollActiveSessions();
@@ -1267,27 +1268,37 @@ async function attachBackgroundContinuation(entry, background) {
 
 async function sendSessionToBackground(sessionId) {
   const reason = backgroundActionReason(sessionId);
-  if (reason) { showRestoreNotice([], 'Not sent to the background: ' + reason); return; }
+  const source = openSessions.get(sessionId)?.session || sessionMap.get(sessionId) || { sessionId };
+  if (reason) {
+    showSessionActionFailure('Send to background', source, reason, 'Check the session in its own terminal or open it from the sidebar, then try again when it is eligible.');
+    return;
+  }
   const oldEntry = openSessions.get(sessionId);
   const index = [...openSessions.keys()].indexOf(sessionId);
   oldEntry.backgrounding = true;
   updateTerminalHeader();
+  let destination;
   try {
     const count = activeSubagentsByParent.get(sessionId)?.size || 0;
     if (count && !await appConfirm({ title: 'Send to background?', message: `${count} subagent${count === 1 ? '' : 's'} are running in this session. Claude may stop them when the session moves to the background. Send it anyway?`, confirmLabel: 'Send to background', cancelLabel: 'Cancel' })) return;
     if (openSessions.get(sessionId) !== oldEntry) return;
     const result = await window.api.sendSessionToBackground(sessionId);
-    if (!result?.ok) { showRestoreNotice([], 'Not sent to the background: ' + (result?.error || 'The handoff could not be confirmed. Check the terminal and try again.')); return; }
+    if (!result?.ok) throw new Error(result?.error || 'The handoff backend is unavailable or returned no result');
+    destination = { ...source, sessionId: result.sessionId };
+    clearAppNotice(sessionActionNoticeId('Send to background', source));
     const name = cleanDisplayName(oldEntry.session.name || oldEntry.session.aiTitle || oldEntry.session.summary) || sessionId;
     if (openSessions.get(result.sessionId) === oldEntry && oldEntry.backgroundAttach) {
       await oldEntry.backgroundAttach;
-      showRestoreNotice([], oldEntry.closed
-        ? `${name} now runs in the background, but attaching failed: ${oldEntry.openError}. Open it from the sidebar.`
-        : `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`);
+      if (oldEntry.closed) showSessionActionFailure('Attach background', destination, oldEntry.openError,
+        'The conversation now runs in the background. Open it from the sidebar to retry attaching.');
+      else {
+        clearAppNotice(sessionActionNoticeId('Attach background', destination));
+        showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`);
+      }
       return;
     }
     if (openSessions.get(sessionId) !== oldEntry || oldEntry.closed) {
-      showRestoreNotice([], `${name} now runs in the background. Open it from the sidebar to attach.`);
+      showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Open it from the sidebar to attach.`);
       return;
     }
     const active = activeSessionId === sessionId;
@@ -1318,11 +1329,14 @@ async function sendSessionToBackground(sessionId) {
     }
     schedulePersistWorkingSet();
     refreshSidebar();
-    showRestoreNotice([], entry && !entry.closed
-      ? `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`
-      : `${name} now runs in the background, but attaching failed: ${entry?.openError || 'the attach tab did not open'}. Open it from the sidebar.`);
+    if (entry && !entry.closed) {
+      clearAppNotice(sessionActionNoticeId('Attach background', destination));
+      showRestoreNotice('background-info:' + result.sessionId, `${name} now runs in the background. Closing this tab detaches it; the session keeps running.`);
+    } else showSessionActionFailure('Attach background', destination, entry?.openError || 'the attach tab did not open',
+      'The conversation now runs in the background. Open it from the sidebar to retry attaching.');
   } catch (err) {
-    showRestoreNotice([], 'The background handoff or attachment failed: ' + err.message + '. Open the conversation from the sidebar to check where it is running.');
+    showSessionActionFailure(destination ? 'Attach background' : 'Send to background', destination || source, err,
+      'Open the conversation from the sidebar to check where it is running, then retry the action.');
   } finally {
     oldEntry.backgrounding = false;
     updateTerminalHeader();
@@ -1332,7 +1346,9 @@ async function sendSessionToBackground(sessionId) {
 function initTerminalBackgroundControl() {
   const button = document.getElementById('terminal-bg-btn');
   button.addEventListener('click', () => { if (activeSessionId) sendSessionToBackground(activeSessionId); });
-  if (window.api.onBgHandoffNotice) window.api.onBgHandoffNotice((_id, message) => showRestoreNotice([], message));
+  if (window.api.onBgHandoffNotice) window.api.onBgHandoffNotice((id, message) => {
+    showAppNotice({ id: 'background-progress:' + id, kind: 'info', message });
+  });
 }
 initTerminalBackgroundControl();
 
@@ -1792,6 +1808,7 @@ function settleContinuedInFlight(item) {
 }
 
 async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, reattachOnly = false } = {}, open = null) {
+  const restoreNoticeSessions = [session];
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
@@ -1813,6 +1830,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     openId = settled;
   }
   if (openId) {
+    for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
     if (clearDormantRow(openId)) schedulePersistWorkingSet();
     if (mayShow()) showSession(openId);
     return;
@@ -1821,6 +1839,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     const originalId = session.sessionId;
     session = await resolveResumeSession(session, { automatic, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), resolutions: window._startupResumeResolutions });
     if (!session) return false;
+    restoreNoticeSessions.push(session);
     if (session.sessionId !== originalId) {
       live = undefined;
       allowBgAttach = true;
@@ -1857,6 +1876,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     if (entry.closed) {
       destroySession(sessionId);
     } else {
+      for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
       if (clearDormantRow(sessionId)) schedulePersistWorkingSet();
       if (mayShow()) showSession(sessionId);
       return;
@@ -1885,20 +1905,30 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize);
   } catch (err) {
     settlePtyOpen(sessionId, null);
-    throw err;
+    if (!automatic && !entry.attach) throw err;
+    entry.closed = true;
+    entry.openError = err.message;
+    showSessionActionFailure(automatic ? 'Restore' : 'Attach background', session, err,
+      'Check the session in the Agents view or its own terminal, then open it from the sidebar to retry attaching.');
+    return false;
   }
   settlePtyOpen(sessionId, result);
+  result ||= { ok: false, error: 'The terminal backend is unavailable or returned no result' };
   if (result.notLive) {
     destroySession(sessionId);
     return false;
   }
   if (!result.ok) {
+    if (automatic || entry.attach) showSessionActionFailure(automatic ? 'Restore' : 'Attach background', session, result.error,
+      'Check the session in the Agents view or its own terminal, then open it from the sidebar to retry attaching.');
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.openError = result.error;
     entry.closed = true;
     if (mayShow()) showSession(sessionId);
     return;
   }
+  for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
+  if (entry.attach) clearAppNotice(sessionActionNoticeId('Attach background', session));
   if (result.reattached) entry.attach = !!result.attach;
   skippedWorkingSetEntries.delete(sessionId);
   if (allowBgAttach && entry.attach) {

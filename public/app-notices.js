@@ -1,6 +1,21 @@
 // see docs/product/BUILDING-BLOCKS.md (B8)
 const appNoticeEntries = new Map();
 
+function sessionActionNoticeId(operation, session) {
+  return `${operation}:${session?.remoteAlias || 'local'}:${session?.sessionId || session?.projectPath || 'unknown'}`;
+}
+
+function showSessionActionFailure(operation, session, error, recovery, onRetry) {
+  const name = session?.name || session?.aiTitle || session?.summary || session?.sessionId || session?.projectPath || 'unknown session';
+  const location = [session?.remoteAlias, session?.projectPath].filter(Boolean).join(':') || 'this window';
+  const reason = error?.message || error || 'The backend is unavailable or returned no result';
+  showAppNotice({
+    id: sessionActionNoticeId(operation, session), kind: 'error',
+    message: `${operation} failed for "${name}" (${session?.sessionId || location}) at ${location}: ${reason}. ${recovery}`,
+    actionLabel: onRetry ? 'Retry' : undefined, onAction: onRetry, dismissOnAction: false,
+  });
+}
+
 function clearAppNotice(id) {
   const entry = appNoticeEntries.get(id);
   if (!entry) return;
@@ -11,7 +26,7 @@ function clearAppNotice(id) {
   if (restoreFocus && entry.returnFocus?.isConnected) entry.returnFocus.focus();
 }
 
-function showAppNotice({ id, kind = 'info', message, actionLabel, onAction }) {
+function showAppNotice({ id, kind = 'info', message, actionLabel, onAction, dismissOnAction = true }) {
   clearAppNotice(id);
   const container = document.getElementById('app-notices');
   const notice = document.createElement('div');
@@ -29,7 +44,7 @@ function showAppNotice({ id, kind = 'info', message, actionLabel, onAction }) {
     action.textContent = actionLabel;
     action.addEventListener('click', () => {
       if (appNoticeEntries.get(id)?.notice !== notice) return;
-      clearAppNotice(id);
+      if (dismissOnAction) clearAppNotice(id);
       onAction();
     });
     notice.append(action);

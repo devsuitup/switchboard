@@ -44,27 +44,39 @@ async function stopForArchive(session, unreachable) {
 }
 
 function announceNotStopped(entries) {
-  if (!entries.length) return;
-  const byAlias = new Map();
-  for (const e of entries) if (!byAlias.has(e.alias)) byAlias.set(e.alias, e.error);
-  const text = 'Archived, but not stopped: '
-    + [...byAlias].map(([alias, error]) => `${alias} did not answer (${error})`).join('; ')
-    + '. The session may still be running there; unarchive it to try again once the host is back.';
-  showAppNotice({ id: 'archive-not-stopped-toast', kind: 'error', message: text });
+  for (const { alias, error, session } of entries) {
+    showSessionActionFailure('Archive', session || { remoteAlias: alias },
+      'Archived, but not stopped: ' + alias + ' did not answer (' + error + ')',
+      'The session may still be running there; unarchive it to try again once the host is back.');
+  }
+}
+
+async function persistSessionArchive(session, value) {
+  const operation = value ? 'Archive' : 'Unarchive';
+  try {
+    if (typeof window.api.archiveSession !== 'function') throw new Error('The archive backend is unavailable');
+    const result = await window.api.archiveSession(session.sessionId, value);
+    if (!result || result.ok === false || result.error) throw new Error(result?.error || 'The archive backend returned no result');
+    session.archived = value;
+    clearAppNotice(sessionActionNoticeId(operation, session));
+    return true;
+  } catch (error) {
+    showSessionActionFailure(operation, session, error, 'Check the session location and connection, then retry ' + operation + ' from the sidebar.');
+    return false;
+  }
 }
 
 function folderId(projectPath) {
   return 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-// Surfaces a stopBeforeArchive() failure on the button — see .ai/contexts/session-state.md ("The two lifecycle verbs").
-function surfaceStopFailure(btn, message) {
-  console.error('[stop-before-archive]', message);
-  if (!btn) return;
-  if (typeof window.flashButtonText === 'function') window.flashButtonText(btn, 'Failed', 1500);
-  const originalTitle = btn.title;
-  btn.title = message;
-  setTimeout(() => { btn.title = originalTitle; }, 3000);
+function surfaceStopFailure(btn, message, session, operation = 'Archive') {
+  session ||= sessionMap.get(btn?.closest('.session-item')?.dataset.sessionId);
+  const recovery = operation === 'Delete' && session?.remoteAlias
+    ? 'Remote transcripts are read-only here. Use Archive in the sidebar to hide this session, or manage the transcript in its own terminal at the location above.'
+    : 'Check the transcript and connection at the location above. If the session is running elsewhere, return to its own terminal and end it there. Then retry ' + operation + ' from the sidebar.';
+  showSessionActionFailure(operation, session, message,
+    recovery);
 }
 
 // see .ai/contexts/session-cache.md ("Remote hosts — freshness contract") and
@@ -1190,120 +1202,131 @@ const ARCHIVE_INDEXING_MESSAGE = 'Switchboard is still indexing sessions. Archiv
 
 // see .ai/contexts/session-cache.md ("Archived projects")
 async function archiveProjectFolder(project, button) {
-  const counted = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-  const alias = project.remoteAlias || null;
-  const parent = cachedAllProjects.find(p => (p.remoteAlias || null) === alias && p.projectPath === project.projectPath);
-  if (!parent) {
-    Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
-    return;
-  }
-  const children = cachedAllProjects.filter(p => (p.remoteAlias || null) === alias && worktreeParentPath(p.projectPath) === parent.projectPath);
-  const groups = [parent, ...children];
-  const groupsArg = groups.map(g => ({ projectPath: g.projectPath, folderKey: g.folder }));
-  const sessions = groups.flatMap(g => g.sessions.filter(s => !s.parentSessionId && !s.archived));
-
-  const refuseWhileBusy = () => {
-    if (!sessions.some(s => archivingSessionIds.has(s.sessionId))) return false;
-    surfaceStopFailure(button, `An archive is still in progress for ${shortProjectPath(parent.projectPath)}; try again when it finishes`);
-    return true;
-  };
-  if (refuseWhileBusy()) return;
-
-  const plan = await window.api.getProjectArchivePlan(groupsArg);
-  if (!plan || plan.indexing) {
-    await appAlert({ title: 'Switchboard', message: ARCHIVE_INDEXING_MESSAGE });
-    return;
-  }
-  const schedules = plan.schedules || [];
-  const disableable = schedules.filter(s => s.disableable);
-
-  const message = ['The folder is hidden from the sidebar until it is added again or a new session starts in it.'];
-  for (const s of schedules) {
-    if (!s.disableable) message.push(`${s.name} stays enabled: ${s.reason}`);
-  }
-  if (children.length > 0) {
-    message.push(`Its ${counted(children.length, 'worktree')} ${children.length === 1 ? 'is' : 'are'} archived with it.`);
-  }
-  const choices = [];
-  if (sessions.length > 0) {
-    // issue #271 / .ai/contexts/session-state.md: archive is stop-then-archive.
-    const aliasesToStop = [...new Set(
-      sessions.filter(s => s.remoteAlias && isRemoteSessionAlive(s)).map(s => s.remoteAlias)
-    )];
-    let label = `Archive the ${counted(sessions.length, 'session')}`;
-    if (aliasesToStop.length > 0) label += ` — running ones are stopped first (on ${aliasesToStop.join(', ')})`;
-    choices.push({ id: 'archiveSessions', label, checked: true, rememberKey: 'archiveFolder.archiveSessions' });
-  }
-  if (disableable.length > 0) {
-    choices.push({
-      id: 'disableSchedules',
-      label: `Disable the ${disableable.length} enabled schedule${disableable.length === 1 ? '' : 's'}: ${disableable.map(s => s.name).join(', ')}`,
-      checked: true,
-      rememberKey: 'archiveFolder.disableSchedules',
-    });
-  }
-
-  const result = await showChoiceDialog({
-    title: `Archive ${shortProjectPath(parent.projectPath)}?`,
-    message,
-    choices,
-    confirmLabel: 'Archive folder',
-    initialFocus: 'confirm',
-    returnFocus: button,
-  });
-  if (!result) return;
-  if (refuseWhileBusy()) return;
-
-  if (result.archiveSessions) {
-    let refused = false;
-    const notStopped = [];
-    const groupKey = 'ph-' + folderId(project.projectPath);
-    const own = sessions.filter(s => !archivingSessionIds.has(s.sessionId));
-    setGroupArchiveBusy(groupKey, true);
-    for (const s of own) setArchiveBusy(s.sessionId, true);
-    const unreachable = new Map();
-    try {
-      for (const s of own) {
-        let stopResult;
-        try { stopResult = await stopForArchive(s, unreachable); } finally { setArchiveBusy(s.sessionId, false); }
-        if (!stopResult.ok) {
-          refused = true;
-          const item = document.getElementById('si-' + s.sessionId);
-          surfaceStopFailure(item && item.querySelector('.session-archive-btn'), stopResult.error);
-        } else {
-          notStopped.push(...(stopResult.notStopped || []));
-        }
-      }
-    } finally {
-      for (const s of own) if (archivingSessionIds.has(s.sessionId)) setArchiveBusy(s.sessionId, false);
-      setGroupArchiveBusy(groupKey, false);
-    }
-    announceNotStopped(notStopped);
-    if (refused) {
-      pollActiveSessions();
+  try {
+    const counted = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    const alias = project.remoteAlias || null;
+    const parent = cachedAllProjects.find(p => (p.remoteAlias || null) === alias && p.projectPath === project.projectPath);
+    if (!parent) {
+      showSessionActionFailure('Archive folder', project, 'The folder is no longer in the index', 'Reload the sidebar, then retry Archive folder.');
       Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
       return;
     }
-    for (const s of own) {
-      await window.api.archiveSession(s.sessionId, 1);
-      s.archived = 1;
-    }
-  }
+    const children = cachedAllProjects.filter(p => (p.remoteAlias || null) === alias && worktreeParentPath(p.projectPath) === parent.projectPath);
+    const groups = [parent, ...children];
+    const groupsArg = groups.map(g => ({ projectPath: g.projectPath, folderKey: g.folder }));
+    const sessions = groups.flatMap(g => g.sessions.filter(s => !s.parentSessionId && !s.archived));
 
-  const res = await window.api.archiveProject(groupsArg, {
-    disableSchedules: result.disableSchedules ? disableable.map(s => s.filePath) : [],
-  });
-  if (res && res.error === 'indexing') {
-    await appAlert({ title: 'Switchboard', message: ARCHIVE_INDEXING_MESSAGE });
-  } else if (res && res.error) {
-    await appAlert({ title: 'Switchboard', message: 'The folder could not be archived: ' + res.error
-      + (Array.isArray(res.disabled) && res.disabled.length > 0 ? `. These schedules were turned off: ${res.disabled.join(', ')}` : '') });
-  } else if (res && Array.isArray(res.failed) && res.failed.length > 0) {
-    await appAlert({ title: 'Switchboard', message: 'The folder is archived, but these schedules could not be disabled:\n'
-      + res.failed.map(f => `${f.name}: ${f.error}`).join('\n') });
+    const refuseWhileBusy = () => {
+      if (!sessions.some(s => archivingSessionIds.has(s.sessionId))) return false;
+      showSessionActionFailure('Archive folder', project, 'An archive is still in progress', 'Try again when it finishes.');
+      return true;
+    };
+    if (refuseWhileBusy()) return;
+
+    const plan = await window.api.getProjectArchivePlan(groupsArg);
+    if (!plan || plan.indexing) {
+      showSessionActionFailure('Archive folder', project, ARCHIVE_INDEXING_MESSAGE, 'Try again when indexing finishes.');
+      return;
+    }
+    const schedules = plan.schedules || [];
+    const disableable = schedules.filter(s => s.disableable);
+
+    const message = ['The folder is hidden from the sidebar until it is added again or a new session starts in it.'];
+    for (const s of schedules) {
+      if (!s.disableable) message.push(`${s.name} stays enabled: ${s.reason}`);
+    }
+    if (children.length > 0) {
+      message.push(`Its ${counted(children.length, 'worktree')} ${children.length === 1 ? 'is' : 'are'} archived with it.`);
+    }
+    const choices = [];
+    if (sessions.length > 0) {
+      // issue #271 / .ai/contexts/session-state.md: archive is stop-then-archive.
+      const aliasesToStop = [...new Set(
+        sessions.filter(s => s.remoteAlias && isRemoteSessionAlive(s)).map(s => s.remoteAlias)
+      )];
+      let label = `Archive the ${counted(sessions.length, 'session')}`;
+      if (aliasesToStop.length > 0) label += ` — running ones are stopped first (on ${aliasesToStop.join(', ')})`;
+      choices.push({ id: 'archiveSessions', label, checked: true, rememberKey: 'archiveFolder.archiveSessions' });
+    }
+    if (disableable.length > 0) {
+      choices.push({
+        id: 'disableSchedules',
+        label: `Disable the ${disableable.length} enabled schedule${disableable.length === 1 ? '' : 's'}: ${disableable.map(s => s.name).join(', ')}`,
+        checked: true,
+        rememberKey: 'archiveFolder.disableSchedules',
+      });
+    }
+
+    const result = await showChoiceDialog({
+      title: `Archive ${shortProjectPath(parent.projectPath)}?`,
+      message,
+      choices,
+      confirmLabel: 'Archive folder',
+      initialFocus: 'confirm',
+      returnFocus: button,
+    });
+    if (!result) return;
+    if (refuseWhileBusy()) return;
+
+    if (result.archiveSessions) {
+      let refused = false;
+      const notStopped = [];
+      const groupKey = 'ph-' + folderId(project.projectPath);
+      const own = sessions.filter(s => !archivingSessionIds.has(s.sessionId));
+      setGroupArchiveBusy(groupKey, true);
+      for (const s of own) setArchiveBusy(s.sessionId, true);
+      const unreachable = new Map();
+      try {
+        for (const s of own) {
+          let stopResult;
+          try { stopResult = await stopForArchive(s, unreachable); } finally { setArchiveBusy(s.sessionId, false); }
+          if (!stopResult.ok) {
+            refused = true;
+            const item = document.getElementById('si-' + s.sessionId);
+            surfaceStopFailure(item && item.querySelector('.session-archive-btn'), stopResult.error, s);
+          } else {
+            notStopped.push(...(stopResult.notStopped || []).map(entry => ({ ...entry, session: s })));
+          }
+        }
+      } finally {
+        for (const s of own) if (archivingSessionIds.has(s.sessionId)) setArchiveBusy(s.sessionId, false);
+        setGroupArchiveBusy(groupKey, false);
+      }
+      if (refused) {
+        pollActiveSessions();
+        Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+        return;
+      }
+      for (const s of own) {
+        if (!await persistSessionArchive(s, 1)) refused = true;
+      }
+      announceNotStopped(notStopped.filter(entry => entry.session.archived));
+      if (refused) {
+        showSessionActionFailure('Archive folder', project, 'Some sessions could not be archived; the folder was kept', 'Successful session archives were kept. Retry Archive folder after resolving the session errors.');
+        pollActiveSessions();
+        Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+        return;
+      }
+    }
+
+    const res = await window.api.archiveProject(groupsArg, {
+      disableSchedules: result.disableSchedules ? disableable.map(s => s.filePath) : [],
+    });
+    if (!res || res.ok === false || res.error) {
+      const reason = res?.error === 'indexing' ? ARCHIVE_INDEXING_MESSAGE : 'The folder could not be archived: ' + (res?.error || 'The backend returned no result');
+      const disabled = res?.disabled?.length ? '. These schedules were turned off: ' + res.disabled.join(', ') : '';
+      showSessionActionFailure('Archive folder', project, reason + disabled, 'Check the folder and its schedules in Settings, then retry Archive folder.');
+    } else if (res.failed?.length) {
+      showSessionActionFailure('Archive folder', project, 'The folder is archived, but these schedules could not be disabled: ' + res.failed.map(f => f.name + ': ' + f.error).join('; '),
+        'Review these schedules in Settings. Restore the folder from Settings → Archived projects if you need to retry Archive folder.');
+    } else {
+      clearAppNotice(sessionActionNoticeId('Archive folder', project));
+    }
+    pollActiveSessions();
+    Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+  } catch (error) {
+    showSessionActionFailure('Archive folder', project, error, 'Check the folder location and connection, then retry Archive folder from the sidebar.');
   }
-  pollActiveSessions();
-  Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
 }
 
 function rebindSidebarEvents(projects) {
@@ -1460,12 +1483,12 @@ function rebindSidebarEvents(projects) {
             let stopResult;
             try { stopResult = await stopForArchive(session, unreachable); } finally { setArchiveBusy(sid, false); }
             if (!stopResult.ok) {
-              surfaceStopFailure(item.querySelector('.session-archive-btn'), stopResult.error);
+              surfaceStopFailure(item.querySelector('.session-archive-btn'), stopResult.error, session);
               continue;
             }
-            notStopped.push(...(stopResult.notStopped || []));
-            await window.api.archiveSession(sid, 1);
-            session.archived = 1;
+            if (await persistSessionArchive(session, 1)) {
+              notStopped.push(...(stopResult.notStopped || []).map(entry => ({ ...entry, session })));
+            }
           }
         } finally {
           for (const { sid } of todo) if (archivingSessionIds.has(sid)) setArchiveBusy(sid, false);
@@ -1628,45 +1651,40 @@ function rebindSidebarEvents(projects) {
     if (deleteBtn) {
       deleteBtn.onclick = async (e) => {
         e.stopPropagation();
-        if (session.mergedMemberIds?.some(id =>
-          activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)
-          || storedActivitySnapshot(id)?.liveness === 'alive')) {
-          surfaceStopFailure(deleteBtn, 'session is still running — close it first');
-          return;
-        }
-        const ok = await showDeleteSessionDialog(session);
-        if (!ok) return;
-        // issue #271: delete is refused server-side for remote — see .ai/contexts/session-state.md.
-        if (!resolveSessionStop(session).remote) {
-          const stopResult = await stopBeforeArchive(session);
-          if (!stopResult.ok) {
-            surfaceStopFailure(deleteBtn, stopResult.error);
+        try {
+          if (session.mergedMemberIds?.some(id =>
+            activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)
+            || storedActivitySnapshot(id)?.liveness === 'alive')) {
+            surfaceStopFailure(deleteBtn, 'A merged member is still running', session, 'Delete');
             return;
           }
-          pollActiveSessions();
-        }
-        const res = await window.api.deleteSession(session.sessionId);
-        if (!res || !res.ok) {
-          // Not a modal: an alert() here is hard to dismiss and blocks the
-          // renderer. Flash the button and log the reason instead.
-          console.error('[delete-session]', (res && res.error) || 'unknown error');
-          if (typeof window.flashButtonText === 'function') {
-            window.flashButtonText(deleteBtn, 'Failed', 1500);
+          const ok = await showDeleteSessionDialog(session);
+          if (!ok) return;
+          if (!resolveSessionStop(session).remote) {
+            const stopResult = await stopBeforeArchive(session);
+            if (!stopResult.ok) {
+              surfaceStopFailure(deleteBtn, stopResult.error, session, 'Delete');
+              return;
+            }
+            pollActiveSessions();
           }
-          return;
+          const res = await window.api.deleteSession(session.sessionId);
+          if (!res || !res.ok) {
+            surfaceStopFailure(deleteBtn, res?.error || 'The delete backend is unavailable or returned no result', session, 'Delete');
+            return;
+          }
+          clearAppNotice(sessionActionNoticeId('Delete', session));
+          if (typeof pendingSessions !== 'undefined') pendingSessions.delete(session.sessionId);
+          if (typeof dismissDormantSession === 'function') rowSessionIds(session).forEach(dismissDormantSession);
+          if (typeof sessionMap !== 'undefined') sessionMap.delete(session.sessionId);
+          if (typeof destroySession === 'function' && typeof openSessions !== 'undefined'
+              && openSessions.has(session.sessionId)) {
+            destroySession(session.sessionId);
+          }
+          Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+        } catch (error) {
+          surfaceStopFailure(deleteBtn, error, session, 'Delete');
         }
-        // The sidebar re-injects transcript-less sessions from pendingSessions on
-        // every load, so forget it here or a deleted placeholder card comes back.
-        if (typeof pendingSessions !== 'undefined') pendingSessions.delete(session.sessionId);
-        if (typeof dismissDormantSession === 'function') rowSessionIds(session).forEach(dismissDormantSession);
-        if (typeof sessionMap !== 'undefined') sessionMap.delete(session.sessionId);
-        // Close the tab too — otherwise it stays open pointing at a transcript
-        // that no longer exists for the rest of this run.
-        if (typeof destroySession === 'function' && typeof openSessions !== 'undefined'
-            && openSessions.has(session.sessionId)) {
-          destroySession(session.sessionId);
-        }
-        Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
       };
     }
 
@@ -1686,15 +1704,14 @@ function rebindSidebarEvents(projects) {
             setArchiveBusy(session.sessionId, false);
           }
           if (!stopResult.ok) {
-            surfaceStopFailure(sessionItemEl(session.sessionId, sidebarContent)?.querySelector('.session-archive-btn') || archiveBtn, stopResult.error);
+            surfaceStopFailure(sessionItemEl(session.sessionId, sidebarContent)?.querySelector('.session-archive-btn') || archiveBtn, stopResult.error, session);
             return;
           }
           notStoppedToAnnounce = stopResult.notStopped || [];
           pollActiveSessions();
         }
-        await window.api.archiveSession(session.sessionId, newVal);
-        session.archived = newVal;
-        announceNotStopped(notStoppedToAnnounce);
+        if (!await persistSessionArchive(session, newVal)) return;
+        announceNotStopped(notStoppedToAnnounce.map(entry => ({ ...entry, session })));
         Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
       };
     }

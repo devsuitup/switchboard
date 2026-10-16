@@ -73,7 +73,7 @@ test('R2: refusal keeps the old tab and shows the error', async t => {
   await h.app.sendSessionToBackground('old');
   assert.deepEqual(h.destroyed, []);
   assert.deepEqual(h.spawned, []);
-  assert.match(h.notices[0], /not sent/i);
+  assert.match(h.dom.window.document.querySelector('[role="alert"]').textContent, /Send to background.*have not sent/i);
 });
 
 test('R3: running subagents confirm before IPC; cancel sends nothing', async t => {
@@ -111,7 +111,7 @@ test('R6: attach failure explains that the job runs and where to retry', async t
   const h = handoff(t);
   h.dom.window.api.openTerminal = async () => ({ ok: false, error: 'attach failed' });
   await h.app.sendSessionToBackground('old');
-  assert.match(h.notices[0], /background.*attaching failed.*sidebar/i);
+  assert.match(h.dom.window.document.querySelector('[role="alert"]').textContent, /Attach background.*attach failed.*sidebar/i);
   await h.app.persistWorkingSet();
   assert.equal(h.settings().openWorkingSet.find(row => row.sessionId === 'new')?.bg, true);
 });

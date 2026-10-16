@@ -186,8 +186,6 @@ test('project archive-all: a stop refusal is surfaced, every other session is st
       remoteStopSession: () => Promise.resolve({ ok: false, error: 'pid now belongs to a non-claude process' }),
     });
     ctx.window.cachedAllProjects = [project];
-    let flashed = null;
-    ctx.window.flashButtonText = (btn, text) => { flashed = { btn, text }; };
 
     ctx.sidebar.renderProjects([project], true);
     const done = headerFor(ctx, project).querySelector('.project-archive-btn').onclick(new ctx.window.MouseEvent('click'));
@@ -199,10 +197,7 @@ test('project archive-all: a stop refusal is surfaced, every other session is st
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession'), [],
       'one refused stop must leave every session unarchived');
     assert.deepEqual(calls.filter(c => c.method === 'archiveProject'), [], 'nor archive the folder');
-    assert.ok(flashed, 'the failure must flash a button');
-    assert.equal(flashed.text, 'Failed');
-    const failedBtn = ctx.document.getElementById('si-r1').querySelector('.session-archive-btn');
-    assert.match(failedBtn.title, /non-claude/, 'the error must be surfaced on the button title');
+    assert.match(ctx.document.querySelector('[data-notice-id="Archive:vps:r1"]').textContent, /non-claude/);
   } finally { ctx.destroy(); }
 });
 
@@ -222,8 +217,6 @@ test('slug-group archive: a stop refusal on one remote session skips it, the oth
     const calls = installRecordingApi(ctx, {
       remoteStopSession: () => Promise.resolve({ ok: false, error: 'ssh: connection refused' }),
     });
-    let flashed = null;
-    ctx.window.flashButtonText = (btn, text) => { flashed = { btn, text }; };
 
     ctx.sidebar.renderProjects([project], true);
     const group = ctx.document.getElementById('slug-grp');
@@ -234,7 +227,7 @@ test('slug-group archive: a stop refusal on one remote session skips it, the oth
     assert.deepEqual(calls.filter(c => c.method === 'stopSession').map(c => c.args[0]), ['s2']);
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]), ['s2'],
       'the refused remote session must not be archived; the local one still proceeds');
-    assert.ok(flashed && flashed.text === 'Failed', 'the refusal must flash a button');
+    assert.match(ctx.document.querySelector('[data-notice-id="Archive:vps:r1"]').textContent, /ssh: connection refused/);
   } finally { ctx.destroy(); }
 });
 
@@ -310,7 +303,7 @@ test('per-session archive toggle: local session with an active PTY is stopped, t
   } finally { ctx.destroy(); }
 });
 
-test('per-session archive toggle: a failed remote stop blocks the archive and flashes the button', async () => {
+test('per-session archive toggle: a failed remote stop blocks the archive with a persistent notice', async () => {
   const ctx = setupSidebarDom();
   try {
     const r1 = remoteSession('r1', 'vps', true);
@@ -318,16 +311,13 @@ test('per-session archive toggle: a failed remote stop blocks the archive and fl
     const calls = installRecordingApi(ctx, {
       remoteStopSession: () => Promise.resolve({ ok: false, error: 'pid now belongs to a non-claude process' }),
     });
-    let flashed = null;
-    ctx.window.flashButtonText = (btn, text) => { flashed = { btn, text }; };
 
     ctx.sidebar.renderProjects([{ projectPath: '/home/dev/proj', sessions: [r1] }], true);
     const archiveBtn = ctx.document.getElementById('si-r1').querySelector('.session-archive-btn');
     await archiveBtn.onclick(new ctx.window.MouseEvent('click'));
 
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession'), [], 'a refused stop must not archive');
-    assert.ok(flashed && flashed.text === 'Failed');
-    assert.match(archiveBtn.title, /non-claude/, 'the error must be surfaced on the button title');
+    assert.match(ctx.document.querySelector('[data-notice-id="Archive:vps:r1"]').textContent, /non-claude/);
     assert.equal(r1.archived, 0, 'the session object itself must stay unarchived');
   } finally { ctx.destroy(); }
 });
@@ -372,8 +362,7 @@ test('project archive-all: a session a live background job runs keeps the whole 
     await done;
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession'), [], 'no session is archived');
     assert.deepEqual(calls.filter(c => c.method === 'archiveProject'), [], 'nor the folder');
-    const failedBtn = ctx.document.getElementById('si-bg1').querySelector('.session-archive-btn');
-    assert.match(failedBtn.title, /background job aaaaaaaa/);
+    assert.match(ctx.document.querySelector('[data-notice-id="Archive:local:bg1"]').textContent, /background job aaaaaaaa/);
   } finally { ctx.destroy(); }
 });
 
@@ -393,7 +382,7 @@ test('stopBeforeArchive: an unreachable host is reported as not stopped, once pe
   } finally { ctx.destroy(); }
 });
 
-test('slug-group archive: sessions on an unreachable host are archived and one notice names the host', async () => {
+test('slug-group archive: sessions on an unreachable host are archived and each notice names the host and session', async () => {
   const ctx = setupSidebarDom();
   try {
     const r1 = remoteSession('r1', 'vps', true, { slug: 'grp' });
@@ -409,7 +398,7 @@ test('slug-group archive: sessions on an unreachable host are archived and one n
     await done;
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]).sort(), ['r1', 'r2']);
     const notices = ctx.document.querySelectorAll('#app-notices [role="alert"]');
-    assert.equal(notices.length, 1);
+    assert.equal(notices.length, 2);
     assert.match(notices[0].textContent, /vps did not answer/);
     assert.equal(button.disabled, false);
   } finally { ctx.destroy(); }
@@ -452,7 +441,7 @@ test('folder archive is refused up front while a row of the folder is still chec
     await new Promise(r => setTimeout(r, 0));
     const folderBtn = headerFor(ctx, project).querySelector('.project-archive-btn');
     await folderBtn.onclick(new ctx.window.MouseEvent('click'));
-    assert.match(folderBtn.title, /An archive is still in progress for .*proj; try again when it finishes/);
+    assert.match(ctx.document.querySelector('[role="alert"]').textContent, /archive is still in progress.*Try again when it finishes/);
     assert.equal(calls.filter(c => c.method === 'archiveProject').length, 0);
     assert.equal(calls.filter(c => c.method === 'remoteStopSession').length, 1);
     assert.equal(ctx.document.querySelector('#si-r1 .session-archive-btn').disabled, true);
@@ -499,7 +488,7 @@ test('folder archive asks an offline host once for all its rows, not once per ro
     await done;
     assert.equal(calls.filter(c => c.method === 'remoteStopSession').length, 1);
     assert.equal(calls.filter(c => c.method === 'archiveSession').length, 3);
-    assert.equal(ctx.document.querySelectorAll('#app-notices [role="alert"]').length, 1);
+    assert.equal(ctx.document.querySelectorAll('#app-notices [role="alert"]').length, 3);
   } finally { ctx.destroy(); }
 });
 
