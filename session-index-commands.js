@@ -1,6 +1,7 @@
 'use strict';
 
 const archive = require('./archived-projects');
+const { parseFolderKey } = require('./remote-hosts');
 const { scheduleRegistry } = require('./schedule-runner');
 const { whatsNewOnStartup } = require('./changelog');
 
@@ -63,7 +64,15 @@ function createWriterCommands(db) {
       }
       archive.clearArchivedEntry(db.getSetting, db.setSetting, null, projectPath);
     },
-    applyAndPersistArchived: (projects, showArchived) => archive.applyAndPersistArchived(projects, showArchived, settings),
+    retireArchivedEntries(entries, revision) {
+      if ((db.getSetting('_writer_revision') || 0) !== revision) {
+        throw Object.assign(new Error('archive snapshot changed before writer admission'), { code: 'WRITER_STALE' });
+      }
+      for (const entry of entries) {
+        const { alias, folder } = parseFolderKey(entry);
+        archive.clearArchivedEntry(db.getSetting, db.setSetting, alias, folder);
+      }
+    },
     dismissReenableOffer: (projectPath, folderKey) => archive.dismissReenableOffer(projectPath, folderKey, { ...settings, notify() {} }),
     beginOffer(entry) { return (db.getSetting('scheduleReenableOffers') || {})[entry] || null; },
     completeOffer(entry, original, result) {

@@ -96,7 +96,7 @@ receipts and status/replay recovery are deliberately not added in step 1.
 | rekeySessionMeta | Current predecessor/head values and per-field revision precedence |
 | hideProject | Current visibility/kinds, deduplicated entry |
 | unhideProject / revealAddedProject / clearArchivedEntry | Current visibility/archive state and offer retirement |
-| applyAndPersistArchived | Current hidden/archive/offer state and reappearance retirement; schedule names read outside SQL |
+| retireArchivedEntries | Revision-checked archive-key retirement and current offer merge; filtering and schedule names stay on main |
 | beginArchive / completeArchive | Current archive/offer merge, then guarded completion after schedule file effects; conflicts report partial effects |
 | beginOffer / completeOffer / dismissReenableOffer | Current offer selection; completion compares the selected offer before changing it and reports conflicts explicitly |
 | cleanupWorktree | Worker selects current matching rows, deletes in bounded units, then merges visibility/archive cleanup |
@@ -113,6 +113,25 @@ The repair completion command subtracts completed folders from current state.
 Readonly Projects may compute effects in its overlay; only named writer commands
 can persist them. Main reads remain readonly, including the existing search
 fallback. No readonly reader can open a writable store through the guarded paths.
+
+`get-projects` applies `archived-projects.applyAndPersistArchived` on main from
+the acknowledged settings mirror. A local settings overlay captures the helper's
+writes; project and session objects are shallow-copied before annotations so the
+two views retain separate objects without cloning their full payloads. With no
+retirement, the facade posts no writer command, including for the two builds in
+`get-projects('both')`. Project rows never travel through the writer transport.
+
+When reappearance clears archives, main sends only the retired archive keys and
+the mirror's `_writer_revision` in `retireArchivedEntries`. Inside the queued
+transaction the writer compares that revision before reading current archives
+and offers, then retires the selected keys through `clearArchivedEntry`. Archive
+removal and offer creation commit together; unrelated entries survive. A queued
+write that invalidates the snapshot returns `WRITER_STALE` with current settings.
+Main recomputes from that acknowledgment, with at most three admission attempts;
+the third conflict propagates without stale persistence. This also covers
+visibility and worktree archive changes, not just changes to selected keys.
+Schedule names are still read on main after the write acknowledgment. Effect-free
+reads use the acknowledged mirror without waiting for pending writes.
 
 ## Continuations and shutdown
 

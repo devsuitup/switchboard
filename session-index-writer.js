@@ -134,7 +134,31 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       } catch (error) { return { error: error.message, disabled }; }
     },
     async applyAndPersistArchived(projects, showArchived) {
-      const kept = await request('applyAndPersistArchived', projects, showArchived);
+      await ready;
+      let kept;
+      for (let attempt = 0; ; attempt++) {
+        const revision = backend.getSetting('_writer_revision') || 0;
+        const archived = backend.getSetting('archivedProjects') || {};
+        const updates = new Map();
+        const copies = projects.map(project => {
+          const copy = { ...project };
+          if (project.sessions) copy.sessions = project.sessions.map(session => ({ ...session }));
+          return copy;
+        });
+        kept = archive.applyAndPersistArchived(copies, showArchived, {
+          getSetting: key => updates.has(key) ? updates.get(key) : backend.getSetting(key),
+          setSetting: (key, value) => updates.set(key, value),
+          scheduleName: () => null,
+        });
+        if (!updates.has('archivedProjects')) break;
+        const entries = Object.keys(archived).filter(entry => !Object.hasOwn(updates.get('archivedProjects'), entry));
+        try {
+          await request('retireArchivedEntries', entries, revision);
+          break;
+        } catch (error) {
+          if (error.code !== 'WRITER_STALE' || attempt === 2) throw error;
+        }
+      }
       const offers = backend.getSetting('scheduleReenableOffers') || {};
       for (const project of kept) {
         const offer = offers[archive.archivedEntry(project.remoteAlias || null, project.projectPath)];
