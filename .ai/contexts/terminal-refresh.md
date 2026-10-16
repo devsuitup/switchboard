@@ -213,18 +213,51 @@ These observations require a live Windows app; the tests do not establish them.
 
 The shared `public/terminal-replay-queries.js` matcher serves hidden renderer
 accumulation/reveal and main's reattach buffer (`output-buffer.js`).
-`removeCursorPositionQueries` removes DSR cursor position (`ESC[6n`), private
-DECXCPR (`ESC[?6n`) and primary device attributes (`ESC[c` / `ESC[0c`) in one
-pass. The CLI was observed polling DECXCPR and DA1; replaying them made xterm
-send `ESC[?73;3R` and `ESC[?1;2c` roughly 60 seconds late. Hidden accumulation
-and reattach accumulation also remove each query completed across chunk
-boundaries, including one-byte chunks, and the reveal filter covers pending
-live-buffer drains. Reattach matching checks the last four code units across
-buffer entries and updates size accounting when removing a split prefix.
+`removeCursorPositionQueries` removes these complete requests in one pass:
+
+- CPR (`ESC[6n`), DECXCPR (`ESC[?6n`) and DSR status (`ESC[5n`).
+- DA1 (`ESC[c` / `ESC[0c`), DA2 (`ESC[>c` / `ESC[>0c`) and XTVERSION
+  (`ESC[>q` / `ESC[>0q`).
+- ANSI/DEC mode requests (`ESC[...$p` / `ESC[?...$p`), with numeric parameters.
+- OSC 4 indexed-colour queries (`ESC]4;1;?`, including repeated index/query
+  pairs) and OSC 10/11/12 colour queries (`ESC]10;?`, etc.), including stacked
+  query-only slots (`ESC]10;?;?`). Both accept BEL or `ESC` + backslash
+  terminators. Colour setters and their replies remain untouched. A sequence
+  that mixes set and query slots (`ESC]4;1;?;2;#112233`, `ESC]10;#112233;?`)
+  is kept whole to preserve the set, so xterm still answers its query slots
+  on replay; so do trailing-parameter forms (`ESC]4;1;?;2`, `ESC]10;?;`).
+- Only 7-bit introducers and terminators are matched. C1 forms (`0x9b`,
+  `0x90`, `0x9c`), which xterm also answers, are not filtered.
+- DECRQSS (`ESC P $ q` + selector + `ESC` + backslash), including unknown
+  selectors, because xterm answers those with a negative status reply.
+
+The CLI was observed polling DECXCPR and DA1; replaying them made xterm send
+`ESC[?73;3R` and `ESC[?1;2c` roughly 60 seconds late. Issue #668 also observed
+the DA2 answer `ESC[>0;276;0c` in the prompt. The other additions above are
+verified xterm.js 6.0.0 capabilities, not a capture of every query emitted by
+Claude Code. XTVERSION is included as requested by #668 although this xterm
+version does not answer it. Kitty keyboard detection (`ESC[?u`) is unhandled
+by this version and is preserved.
+
+Hidden and reattach accumulation also remove each query completed across
+chunk boundaries, including one-byte chunks and splits inside string
+terminators. The reveal filter covers pending live-buffer drains. The shared
+split matcher accepts either the renderer string or main's buffer entries;
+it searches at most 256 UTF-16 code units back to the last escape (and the
+preceding escape when a string terminator is pending). Each buffer entry is
+sliced to the remaining search budget before searching, so an old escape
+followed by escape-free logs cannot make every append scan the retained
+256 KB main buffer or 2 MB hidden accumulator. A split query whose prefix
+exceeds 256 code units (for example a long run of OSC 4 `;N;?` pairs) is
+deliberately left unfiltered; complete queries in
+one chunk still use the full matcher. It returns the exact suffix/prefix
+lengths to remove, preserving main's size accounting.
 
 Live output keeps queries so the current requester can receive a timely reply.
-Responses, cursor movement, status requests and other escape sequences remain
-unchanged; no additional polled query was established by this diagnosis.
+Responses, cursor movement, mode changes, colour setters, incomplete requests
+and unrelated escape sequences remain unchanged. The filter targets the forms
+listed above; mixed colour setter/query lists and other query families are
+outside this list.
 Removal is non-recursive: bytes that form a new query only after another query
 is removed are left alone in that pass, preserving the existing replay rule.
 
@@ -244,6 +277,12 @@ is removed are left alone in that pass, preserving the existing replay rule.
   capability results and preload/main resize round trip.
 - `test/terminal-hidden-suspend.test.js`: shipped query filter, split DECXCPR
   and DA1 queries, live-buffer drain and preservation of live queries.
+- `test/terminal-replay-queries.test.js`: real installed xterm parser and colour
+  service, raw capability controls, no `onData` event on hidden/reattach replay
+  at every split and one byte at a time; pending live-buffer drain, live replies,
+  indexed/stacked colour queries with BEL/ST, XTVERSION removal, kitty non-support
+  and exact preservation of non-queries; deterministic scanned-length bound
+  for large escape-free accumulators and the 256-code-unit split boundary.
 - `test/output-buffer.test.js`: reattach DSR, DECXCPR and DA1 filtering at every
   split and one byte at a time, preserved queries/responses, size accounting,
   coalescing and non-recursive removal.

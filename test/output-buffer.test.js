@@ -266,9 +266,9 @@ test('GIVEN a cursor-position query split across two chunks WHEN both are append
 
 test('GIVEN other sequences that look like the query WHEN appended THEN they are kept byte for byte', () => {
   const state = makeState();
-  appendToOutputBuffer(state, '\x1b[16n\x1b[>c\x1b[10c\x1b[?1;2c\x1b[?73;3R\x1b[6;1H\x1b[', MAX);
+  appendToOutputBuffer(state, '\x1b[16n\x1b[>1c\x1b[10c\x1b[?1;2c\x1b[?73;3R\x1b[6;1H\x1b[?', MAX);
   appendToOutputBuffer(state, '5n', MAX);
-  assert.equal(joined(state), '\x1b[16n\x1b[>c\x1b[10c\x1b[?1;2c\x1b[?73;3R\x1b[6;1H\x1b[5n');
+  assert.equal(joined(state), '\x1b[16n\x1b[>1c\x1b[10c\x1b[?1;2c\x1b[?73;3R\x1b[6;1H\x1b[?5n');
 });
 
 test('GIVEN a chunk that is only a query WHEN appended THEN no empty entry is pushed', () => {
@@ -324,7 +324,7 @@ for (const query of ['\x1b[6n', '\x1b[?6n', '\x1b[c', '\x1b[0c']) {
 }
 
 test('reattach replay preserves other queries and responses at every split and one byte at a time', () => {
-  for (const sequence of ['\x1b[>c', '\x1b[10c', '\x1b[?1;2c', '\x1b[?73;3R']) {
+  for (const sequence of ['\x1b[>1c', '\x1b[10c', '\x1b[?1;2c', '\x1b[?73;3R']) {
     for (let split = 1; split < sequence.length; split++) {
       const state = makeState();
       appendToOutputBuffer(state, sequence.slice(0, split), MAX);

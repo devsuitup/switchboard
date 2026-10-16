@@ -777,10 +777,10 @@ test('GIVEN a hidden session WHEN it receives other escape sequences THEN they a
     window.activeSessionId = 'active';
     window.gridViewActive = false;
 
-    window.handleTerminalData('hidden', '\x1b[16n\x1b[6;1H\x1b[5n\x1b[>c\x1b[10c\x1b[?1;2c\x1b[?73;3R');
+    window.handleTerminalData('hidden', '\x1b[16n\x1b[6;1H\x1b[?5n\x1b[>1c\x1b[10c\x1b[?1;2c\x1b[?73;3R');
     window.showSession('hidden');
 
-    assert.strictEqual(spies.writes[0], '\x1b[16n\x1b[6;1H\x1b[5n\x1b[>c\x1b[10c\x1b[?1;2c\x1b[?73;3R');
+    assert.strictEqual(spies.writes[0], '\x1b[16n\x1b[6;1H\x1b[?5n\x1b[>1c\x1b[10c\x1b[?1;2c\x1b[?73;3R');
   } finally {
     destroy();
   }

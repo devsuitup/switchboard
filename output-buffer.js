@@ -65,19 +65,7 @@
 const COALESCE_THRESHOLD = 64;
 const MAX_BUFFER_SIZE = 256 * 1024;
 
-const { removeCursorPositionQueries, splitReplayQuery, maxPrefixLength } = require('./public/terminal-replay-queries');
-
-// The last n code units of the buffer, across entries.
-function bufferTail(state, n) {
-  const parts = [];
-  let size = 0;
-  for (let i = state.outputBuffer.length - 1; i >= 0 && size < n; i--) {
-    const part = state.outputBuffer[i].slice(-(n - size));
-    parts.unshift(part);
-    size += part.length;
-  }
-  return parts.join('');
-}
+const { removeCursorPositionQueries, splitReplayQuery } = require('./public/terminal-replay-queries');
 
 function dropBufferEnd(state, count) {
   let left = count;
@@ -98,7 +86,7 @@ function dropBufferEnd(state, count) {
 
 // see .ai/contexts/terminal-refresh.md
 function dropSplitQuery(state, chunk) {
-  const split = splitReplayQuery(bufferTail(state, maxPrefixLength), chunk);
+  const split = splitReplayQuery(state.outputBuffer, chunk);
   if (!split) return chunk;
   dropBufferEnd(state, split.prefix);
   return chunk.slice(split.remainder);
