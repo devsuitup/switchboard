@@ -238,6 +238,11 @@ for (const source of [
   'sequenceDiagram\nparticipant Alice; details Alice: private-data',
   'sequenceDiagram\nparticipant Alice Smith\ndetails Alice Smith: private-data',
   'sequenceDiagram; participant Alice Smith; DeTaIlS\tAlice Smith: private-data',
+  'graph TD; A[sequenceDiagram]; B[See details X:]',
+  '%%{init: {"label": "sequenceDiagram"}}%%\ngraph TD; A[de%%{init: {}}%%tails X:]',
+  'sequence%%{init: {}}%%Diagram\n%%{x details Alice: private-data',
+  '---\ntitle: sequence%%{init: {}}%%Diagram\n---\ngraph TD; A[details X:]',
+  '\uFEFF---\ntitle: "%%{x"\n---\nsequence%%{init: {}}%%Diagram\nde%%{init: {}}%%tails Alice: private-data',
   'classDiagram\nclass Shape\n<<img src=x>> Shape',
   'classDiagram\nclass Shape\n<<img src=https://evil.test/x>> Shape',
   'classDiagram\nclass Shape\n<<&lt;img&gt;>> Shape',
@@ -272,6 +277,8 @@ for (const source of [
   'sequence%%{init: {}}%%Diagram details Alice: secretjson',
   'sequenceDiagram\n%%{init: {a: 0\u2028details Alice: secretjson\n%% ignore}%%',
   '%%{init: {a: 0\u2028sequenceDiagram\ndetails Alice: secretjson\n%% ignore}%%',
+  '---   \ntitle: "%%{x"\n---\nsequenceDiagram\nparticipant Alice\ndetails Alice: secretjson',
+  '  ---\ntitle: "%%{x"\n  ---\nsequenceDiagram\nparticipant Alice\ndetails Alice: secretjson',
 ]) {
   test('sequence details bypass is refused without a real Mermaid DOM lookup: ' + source, async t => {
     const ctx = setup(t);
@@ -297,6 +304,45 @@ for (const source of [
     assert.doesNotMatch(ctx.el.textContent, /private text/);
   });
 }
+
+test('frontmatter variants cannot hide directive-split sequence details from the source filter', async t => {
+  const ctx = setup(t);
+  const filename = path.join(__dirname, '..', 'node_modules/mermaid/dist/mermaid.js');
+  vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+  ctx.window.previewMermaid = ctx.window.mermaid;
+  const privateData = ctx.document.createElement('div');
+  privateData.id = 'secretjson';
+  privateData.textContent = '{"links":{"private text":"https://private.test"}}';
+  ctx.document.body.appendChild(privateData);
+  const lookups = [];
+  const getElementById = ctx.document.getElementById.bind(ctx.document);
+  ctx.document.getElementById = id => {
+    if (id === 'secretjson') lookups.push(id);
+    return getElementById(id);
+  };
+  for (const body of [
+    'sequenceDiagram\nparticipant Alice\ndetails Alice: secretjson',
+    'sequenceDiagram\nparticipant Alice\nde%%{init: {}}%%tails Alice: secretjson',
+    'sequenceDiagram\nparticipant Alice\ndetails%%{init: {}}%% Alice: secretjson',
+    'sequence%%{init: {}}%%Diagram\nparticipant Alice\ndetails Alice: secretjson',
+    'sequence%%{init: {}}%%Diagram\nparticipant Alice\nde%%{init: {}}%%tails Alice: secretjson',
+  ]) {
+    for (const indent of ['', ' ', '  ', '\t', '\uFEFF']) {
+      for (const suffix of ['', ' ', '   ', '\t']) {
+        for (const eol of ['\n', '\r\n', '\r']) {
+          const source = indent + '---' + suffix + eol + 'title: "%%{x"' + eol + indent + '---' + suffix + eol + body.replace(/\n/g, eol);
+          await ctx.render(fence(source));
+          assert.equal(lookups.length, 0, 'Mermaid must not read the private page element: ' + JSON.stringify(source));
+          assert.equal(ctx.document.querySelector('.mermaid-render-scratch'), null);
+          assert.equal(ctx.el.querySelectorAll('svg').length, 0);
+          assert.equal(ctx.el.querySelector('pre code')?.textContent, source.replace(/\r\n?/g, '\n') + '\n');
+          assert.ok(ctx.el.querySelector('.mermaid-error'));
+          assert.doesNotMatch(ctx.el.textContent, /private text/);
+        }
+      }
+    }
+  }
+});
 
 test('sequence labels with a details participant colon shape are deliberately refused', async t => {
   const ctx = setup(t);

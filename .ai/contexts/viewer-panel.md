@@ -467,14 +467,22 @@ Each render initializes strict mode, disables HTML labels and automatic scanning
 and locks every default config key against document frontmatter/directives.
 Source containing HTML-style tag openers, numeric/angle entities (`&#…` or
 `&lt;`), `img:`/`icon:` properties, `@import`, `url(` or `image-set(` is refused
-before temporary DOM attaches. After stripping leading frontmatter and directives
-(using Mermaid 12.1.0's `directiveRegex` from `chunk-VPRB5NB3.mjs`),
-`/^\s*sequenceDiagram\b/im` identifies sequence sources. In those sources, any
-case-insensitive `\bdetails[ \t]+[^\n:;]+:` match anywhere in the original or stripped source
-is refused, without modelling statement boundaries; participant names with spaces
-are covered, including keywords split by directives that Mermaid removes before
-parsing. Directive matching preserves text following Unicode line separators
-when Mermaid does. This deliberately also refuses sequence labels such as “See details X:”.
+before temporary DOM attaches. The `details` refusal checks a union of source
+forms: the raw source; the raw source with directives removed; and the source
+with `/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/` frontmatter stripped before
+removing directives. Directive removal uses Mermaid 12.1.0's `directiveRegex`
+from `chunk-VPRB5NB3.mjs`, preserving Unicode line separators as Mermaid does.
+A fourth form normalizes CR/CRLF to LF, strips frontmatter with
+`/^([^\S\n]*)---[^\S\n]*\n[\s\S]*?\n\1---[^\S\n]*(?:\n|$)/`, then removes
+directives. It covers trailing fence whitespace, matching indentation and BOM
+indentation: otherwise an unterminated directive in that metadata could hide
+directive-split keywords in the body from all three earlier forms.
+A case-insensitive `/sequenceDiagram/i` match in any form and a
+case-insensitive `\bdetails[ \t]+[^\n:;]+:` match in any form refuse the source.
+The predicates may be satisfied by different forms, without modelling statement
+boundaries; participant names with spaces are covered. This deliberately also refuses
+sequence labels such as “See details X:” and non-sequence diagrams mentioning
+“sequenceDiagram” and containing “details X:”.
 The tag-opener check
 ignores paired `<<…>>` annotations containing no angle brackets, newline or
 `=`; this accepts `<<value-object>>` and `<<Service Provider>>` while keeping

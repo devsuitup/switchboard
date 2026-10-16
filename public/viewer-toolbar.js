@@ -268,11 +268,17 @@ function renderMarkdownDiagrams(el, state) {
       container.setAttribute('aria-hidden', 'true');
       try {
         const markup = source.replace(/<<[^<>\n]+>>/g, annotation => annotation.includes('=') ? annotation : '');
-        const diagramSource = source.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '')
-          .replace(/%{2}{\s*(?:(\w+)\s*:|(\w+))\s*(?:(\w+)|((?:(?!}%{2}).|\r?\n)*))?\s*(?:}%{2})?/gi, '');
+        const withoutDirectives = text => text.replace(/%{2}{\s*(?:(\w+)\s*:|(\w+))\s*(?:(\w+)|((?:(?!}%{2}).|\r?\n)*))?\s*(?:}%{2})?/gi, '');
+        const normalizedSource = source.replace(/\r\n?/g, '\n');
+        const sourceForms = [
+          source,
+          withoutDirectives(source),
+          withoutDirectives(source.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '')),
+          withoutDirectives(normalizedSource.replace(/^([^\S\n]*)---[^\S\n]*\n[\s\S]*?\n\1---[^\S\n]*(?:\n|$)/, '')),
+        ];
         if (/<\s*(?:[a-z][\w:-]*(?=[\s/>])|[!/?])/i.test(markup)
           || /&(?:#|lt;)|\b(?:img|icon)["']?\s*:|@import|(?:url|image-set)\s*\(/im.test(source)
-          || (/^\s*sequenceDiagram\b/im.test(diagramSource) && /\bdetails[ \t]+[^\n:;]+:/i.test(source + '\n' + diagramSource))) throw new Error('Unsupported diagram resources');
+          || (sourceForms.some(text => /sequenceDiagram/i.test(text)) && sourceForms.some(text => /\bdetails[ \t]+[^\n:;]+:/i.test(text)))) throw new Error('Unsupported diagram resources');
         const defaults = mermaid.mermaidAPI.defaultConfig;
         mermaid.initialize({
           startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true,

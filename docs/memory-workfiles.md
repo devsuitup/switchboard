@@ -38,12 +38,18 @@ Markdown previews render fenced `mermaid` blocks as diagrams, including in the
 Touched/Changes editor. Invalid diagrams keep their source visible with an inline
 error. The source filter refuses HTML-style tag openers, numeric/angle entities
 (`&#…` or `&lt;`), `img:`/`icon:` properties, and any case-insensitive
-`\bdetails[ \t]+[^\n:;]+:` match anywhere in a sequence diagram (including
-participant names with spaces). Sequence detection strips frontmatter and
-directives first, following Mermaid 12.1.0's directive matching. The `details`
-check inspects both the original and stripped text, including keywords split by directives.
-This deliberately also refuses sequence labels such as
-“See details X:”. The filter also refuses `@import`,
+`\bdetails[ \t]+[^\n:;]+:` match in any checked source form when any checked
+form also matches `/sequenceDiagram/i` (including participant names with
+spaces). The forms are the raw source, the raw source with Mermaid 12.1.0's
+directive pattern removed, and the source with leading frontmatter stripped
+by `/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/` before removing directives.
+An additional form normalizes CR/CRLF to LF and strips frontmatter with
+`/^([^\S\n]*)---[^\S\n]*\n[\s\S]*?\n\1---[^\S\n]*(?:\n|$)/` before removing
+directives, covering indented fences, trailing whitespace and BOM indentation.
+The two matches may come from different forms; no statement boundaries are modelled.
+This deliberately also refuses sequence labels such as “See details X:” and
+non-sequence diagrams mentioning “sequenceDiagram” and containing “details X:”.
+The filter also refuses `@import`,
 `url(…)` and `image-set(…)`. Paired `<<…>>` annotations containing no angle
 brackets, newline or `=` are exempt from the tag-opener check; spaces and hyphens
 are allowed, but `<<img src=x>>` is refused. Entity and resource checks still
