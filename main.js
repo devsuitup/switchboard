@@ -42,7 +42,8 @@ const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
 const { createUnsavedGuard } = require('./unsaved-guard');
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: () => app.quit() });
-const { cleanEnv } = require('./clean-env');
+const { cleanEnv, scrubSessionEnv } = require('./clean-env');
+scrubSessionEnv(process.env);
 const { normalizeProjectPath: normalizeArchivedProjectPath } = require('./normalize-project-path');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};

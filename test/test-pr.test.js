@@ -95,11 +95,11 @@ test('the tasks delegate launch and cleanup to the cross-platform script', () =>
   assert.doesNotMatch(taskfile, /origin\/main\.\.\./);
 });
 
-test('default launch preserves inherited environment and existing data locations', (t) => {
+test('default launch preserves user environment and data locations while dropping the parent IDE link', (t) => {
   const home = temp(t);
   const env = { HOME: home, USERPROFILE: home, PATH: 'original', CLAUDE_CODE_SSE_PORT: '123', GIT_DIR: 'inherited' };
   const launch = tooling().buildLaunch({ pr: '122', home, env });
-  assert.deepEqual(launch.env, { ...env,
+  assert.deepEqual(launch.env, { HOME: home, USERPROFILE: home, PATH: 'original', GIT_DIR: 'inherited',
     SWITCHBOARD_DATA_DIR: path.join(home, '.switchboard-dev-pr122'),
     SWITCHBOARD_TRIGGERS_DIR: path.join(home, '.switchboard-dev-pr122', 'triggers'),
   });

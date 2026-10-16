@@ -18,6 +18,15 @@ const SESSION_MARKERS = [
   'CLAUDE_CODE_BRIDGE_SESSION_ID',
   'CLAUDE_CODE_EXECPATH',
   'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_JOB_DIR',
+  'AI_AGENT',
+  'CLAUDE_EFFORT',
+  'CLAUDE_ENV_FILE',
+  'CLAUDE_PROJECT_DIR',
+  'CLAUDE_CODE_REMOTE',
+  'CLAUDE_CODE_REMOTE_SESSION_ID',
+  'TRACEPARENT',
+  'TRACESTATE',
 ];
 
 const KEPT = [
@@ -26,6 +35,11 @@ const KEPT = [
   'ANTHROPIC_BASE_URL',
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS',
+  'CLAUDE_CODE_EFFORT_LEVEL',
+  'CLAUDE_CODE_TASK_LIST_ID',
+  'DISABLE_TELEMETRY',
+  'HTTPS_PROXY',
   'PATH',
 ];
 
@@ -40,6 +54,12 @@ for (const name of SESSION_MARKERS) {
 test('GIVEN user configuration WHEN the env is cleaned THEN it survives', () => {
   const env = Object.fromEntries(KEPT.map((k) => [k, `v-${k}`]));
   assert.deepStrictEqual(cleanEnv(env), env);
+});
+
+test('GIVEN mixed-case session markers WHEN cleaned THEN Windows cannot inherit an alias', () => {
+  const env = { Claude_Code_Session_Id: 'parent', claude_job_dir: 'parent-job', TraceParent: 'parent-trace', tracestate: 'parent-state', Path: '/bin' };
+  assert.deepStrictEqual(cleanEnv(env), { Path: '/bin' });
+  assert.strictEqual(env.Claude_Code_Session_Id, 'parent');
 });
 
 test('GIVEN Electron internals WHEN the env is cleaned THEN they are still stripped', () => {
