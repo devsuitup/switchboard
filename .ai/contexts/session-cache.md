@@ -1794,6 +1794,13 @@ worktree folders, until a session it did not hold at archive time appears in
 it. The state is the `archivedProjects` settings row:
 `{ [entry]: { archivedAt, knownSessionIds } }`.
 
+`get-projects` filters these groups on main using the acknowledged settings
+mirror. Unchanged archive state does not enter the writer queue. Reappearance
+sends only archive keys and a revision to the writer, which atomically validates
+the snapshot, removes those entries and merges schedule re-enable offers.
+Conflicts refresh the mirror and recompute, with three attempts maximum; project
+lists never cross the writer transport. See `session-index-writer.md` for ordering.
+
 - **Entry.** `archivedEntry(alias, projectPath)` in `archived-projects.js`:
   `path.resolve(projectPath)` for a local group,
   `<alias>::<posix-normalised path without trailing slash>` for a remote one.

@@ -63,7 +63,15 @@ function createWriterCommands(db) {
       }
       archive.clearArchivedEntry(db.getSetting, db.setSetting, null, projectPath);
     },
-    applyAndPersistArchived: (projects, showArchived) => archive.applyAndPersistArchived(projects, showArchived, settings),
+    retireArchivedEntries(entries, snapshot) {
+      const current = db.getSetting('archivedProjects') || {};
+      const state = { archivedProjects: current, hiddenProjects: (db.getSetting('global') || {}).hiddenProjects || [],
+        scheduleReenableOffers: db.getSetting('scheduleReenableOffers') || {} };
+      if (JSON.stringify(state) !== JSON.stringify(snapshot)) {
+        throw Object.assign(new Error('archive snapshot changed before writer admission'), { code: 'WRITER_STALE' });
+      }
+      archive.retireArchivedEntries(db.getSetting, db.setSetting, current, entries.filter(entry => Object.hasOwn(current, entry)));
+    },
     dismissReenableOffer: (projectPath, folderKey) => archive.dismissReenableOffer(projectPath, folderKey, { ...settings, notify() {} }),
     beginOffer(entry) { return (db.getSetting('scheduleReenableOffers') || {})[entry] || null; },
     completeOffer(entry, original, result) {

@@ -311,6 +311,6 @@ function dismissReenableOffer(projectPath, folderKey, { getSetting, setSetting, 
 
 module.exports = {
   archivedEntry, knownIdsForGroup, applyArchivedProjects, applyAndPersistArchived,
-  clearArchivedEntry, archivePlanForGroups, reenableScheduleFiles,
+  clearArchivedEntry, retireArchivedEntries, archivePlanForGroups, reenableScheduleFiles,
   validArchiveGroups, archiveProjectFolders, reenableOfferedSchedules, dismissReenableOffer,
 };
