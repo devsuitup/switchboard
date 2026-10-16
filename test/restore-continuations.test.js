@@ -28,7 +28,7 @@ test('B2 a saved entry without the background mark is not attached automatically
   h.saved[0].projectPath = h.root;
   await h.restore();
   assert.deepEqual(h.spawned, []);
-  assert.match(h.dom.window.notice, /Not reopened/);
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /Restore failed/);
 });
 
 test('B3 a continuation attached at restore is saved with the background mark', { timeout: 9000 }, async t => {
@@ -116,7 +116,11 @@ for (const location of ['same folder', 'other folder', 'nested folder']) {
     assert.deepEqual(h.spawned, []);
     assert.deepEqual(h.prompts, []);
     assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
-    assert.match(h.dom.window.notice, /waiting for indexing/);
+    const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:pending"][role="status"]');
+    assert.ok(notice);
+    assert.match(notice.textContent, /waiting for indexing/i);
+    assert.doesNotMatch(notice.textContent, /failed/i);
+    assert.equal(h.dom.window.document.querySelector('#app-notices [role="alert"]'), null);
   });
 }
 
@@ -133,7 +137,7 @@ for (const graph of [
     assert.deepEqual(h.spawned, []);
     assert.deepEqual(h.prompts, []);
     assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
-    assert.match(h.dom.window.notice, /sidebar/);
+    assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /sidebar/);
   });
 }
 
@@ -172,10 +176,10 @@ for (const [name, graph] of [
     await h.restore();
     assert.deepEqual(h.spawned, []);
     assert.equal(h.prompts.length, 0);
-    assert.match(h.dom.window.notice, /sidebar/);
+    assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /sidebar/);
     assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
     if (name === 'two terminal continuations') {
-      assert.match(h.dom.window.notice, /old/);
+      assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
     }
   });
 }
@@ -212,7 +216,7 @@ test('a malformed continuation target holds rather than resuming the old id', { 
   await h.restore();
   assert.deepEqual(h.spawned, []);
   assert.equal(h.prompts.length, 0);
-  assert.match(h.dom.window.notice, /sidebar/);
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /sidebar/);
 });
 
 test('restore attaches to the continued background job', { timeout: 9000 }, async t => {
@@ -278,7 +282,7 @@ test('depth limit holds without resuming the original id', { timeout: 9000 }, as
   await h.restore();
   assert.deepEqual(h.spawned, []);
   assert.equal(h.prompts.length, 0);
-  assert.match(h.dom.window.notice, /sidebar/);
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /sidebar/);
 });
 
 test('refresh indexes a continuation appended beyond the display header', { timeout: 9000 }, async t => {

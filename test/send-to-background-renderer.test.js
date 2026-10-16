@@ -7,6 +7,38 @@ const { setup } = require('./continuations-harness');
 const { loadAppFunctions } = require('./app-source');
 const { setupSidebarDom } = require('./dom-setup');
 
+for (const failure of ['refusal', 'rejection', 'missing result']) {
+  test(`failed manual background attach ${failure} leaves the saved working set unchanged`, async t => {
+    const h = setup(t, { a: [], z: [] }, { savedEntries: [{ sessionId: 'a', projectPath: '/a', active: true }] });
+    await h.restore();
+    const before = h.settings().openWorkingSet;
+    h.dom.window.api.openTerminal = async () => {
+      if (failure === 'rejection') throw new Error('attach unavailable');
+      return failure === 'missing result' ? undefined : { ok: false, error: 'attach unavailable' };
+    };
+    assert.equal(await h.app.openSession(h.rows.get('z'), { type: 'attach', jobId: 'job-z' }), false);
+    await h.app.persistWorkingSet();
+    assert.deepEqual(h.settings().openWorkingSet, before);
+    assert.equal(h.ctx.openSessions.has('z'), false);
+    assert.ok(h.dom.window.document.querySelector('[data-notice-id="Attach background:local:z"]'));
+  });
+}
+
+test('failed automatic background restore and failed manual retry retain the saved slot', async t => {
+  const saved = [
+    { sessionId: 'a', projectPath: '/a', active: true },
+    { sessionId: 'z', projectPath: '/z', active: false, bg: true },
+  ];
+  const h = setup(t, { a: [], z: [] }, { savedEntries: saved, live: { z: { kind: 'bg', jobId: 'job-z' } } });
+  const open = h.dom.window.api.openTerminal;
+  h.dom.window.api.openTerminal = async (...args) => args[0] === 'z' ? { ok: false, error: 'attach unavailable' } : open(...args);
+  await h.restore();
+  assert.deepEqual(h.settings().openWorkingSet, saved);
+  await h.app.openSession(h.rows.get('z'), { type: 'attach', jobId: 'job-z' });
+  await h.app.persistWorkingSet();
+  assert.deepEqual(h.settings().openWorkingSet, saved);
+});
+
 function handoff(t, { result = { ok: true, sessionId: 'new', jobId: '1234abcd', cwd: '/bg' }, answer = true, agents = 0, existing = false } = {}) {
   const h = setup(t, { old: [], new: [] });
   const calls = [], destroyed = [], notices = [], confirmations = [];
@@ -73,7 +105,7 @@ test('R2: refusal keeps the old tab and shows the error', async t => {
   await h.app.sendSessionToBackground('old');
   assert.deepEqual(h.destroyed, []);
   assert.deepEqual(h.spawned, []);
-  assert.match(h.notices[0], /not sent/i);
+  assert.match(h.dom.window.document.querySelector('[role="alert"]').textContent, /Send to background.*have not sent/i);
 });
 
 test('R3: running subagents confirm before IPC; cancel sends nothing', async t => {
@@ -111,7 +143,7 @@ test('R6: attach failure explains that the job runs and where to retry', async t
   const h = handoff(t);
   h.dom.window.api.openTerminal = async () => ({ ok: false, error: 'attach failed' });
   await h.app.sendSessionToBackground('old');
-  assert.match(h.notices[0], /background.*attaching failed.*sidebar/i);
+  assert.match(h.dom.window.document.querySelector('[role="alert"]').textContent, /Attach background.*attach failed.*sidebar/i);
   await h.app.persistWorkingSet();
   assert.equal(h.settings().openWorkingSet.find(row => row.sessionId === 'new')?.bg, true);
 });

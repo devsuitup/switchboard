@@ -95,8 +95,11 @@ test('R4 R2 an unindexed target notice says waiting for indexing', { timeout: 90
   const h = setup(t, { old: ['new'], new: [] });
   h.rows.delete('new');
   await h.restore();
-  assert.match(h.dom.window.notice, /waiting for indexing/i);
-  assert.doesNotMatch(h.dom.window.notice, /choose/i);
+  const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:pending"][role="status"]');
+  assert.ok(notice);
+  assert.match(notice.textContent, /waiting for indexing/i);
+  assert.doesNotMatch(notice.textContent, /choose|failed/i);
+  assert.equal(h.dom.window.document.querySelector('#app-notices [role="alert"]'), null);
 });
 
 test('R4 R2 indexing completion during a continuation lookup still retries', { timeout: 9000 }, async t => {
@@ -134,8 +137,8 @@ test('R4 R2 ambiguous continuations still ask for a sidebar choice after indexin
   await app.markRestoreIndexingDone();
   assert.deepEqual(h.spawned, []);
   assert.deepEqual(h.prompts, []);
-  assert.match(h.dom.window.notice, /sidebar.*choose/i);
-  assert.doesNotMatch(h.dom.window.notice, /waiting for indexing/i);
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /sidebar.*choose/i);
+  assert.doesNotMatch(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /waiting for indexing/i);
 });
 
 test('R4 R2 a manual open cancels automatic continuation retry', { timeout: 9000 }, async t => {
@@ -231,7 +234,7 @@ for (const kind of ['bg', 'interactive', 'schedule']) {
     await h.restore();
     assert.deepEqual(h.spawned.map(call => call.id), kind === 'bg' ? ['fresh'] : []);
     if (kind === 'bg') assert.equal(h.spawned[0].options.type, 'attach');
-    else assert.match(h.dom.window.notice, /pid 7/);
+    else assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /pid 7/);
     assert.deepEqual(h.prompts, []);
     assert.equal(h.settings().openWorkingSet[0].sessionId, 'fresh');
   });

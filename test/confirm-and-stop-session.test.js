@@ -1,20 +1,10 @@
-// Tests for app.js's confirmAndStopSession — a failed stop must not touch
-// local state (activePtyIds, the open terminal view) and must surface the
-// failure on the clicked button instead of alert(). See
-// .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop").
-//
-// confirmAndStopSession is extracted from the real public/app.js
-// (test/app-source.js) and runs in the jsdom window of dom-setup.js, next to
-// the real resolveSessionStop of stop-session-ui.js. Only its outside edges
-// (confirm, the IPC bridge, timers, the terminal view) are stubbed.
-
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setupSidebarDom } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
 
-function withHarness(overrides, fn) {
+async function withHarness(overrides, fn) {
   const ctx = setupSidebarDom();
   try {
     const { window, document } = ctx;
@@ -38,7 +28,7 @@ function withHarness(overrides, fn) {
     };
     Object.assign(window, overrides(calls, window));
     const { confirmAndStopSession } = loadAppFunctions(ctx.context, { functions: ['confirmAndStopSession'] });
-    return fn({ confirmAndStopSession, window, calls });
+    return await fn({ confirmAndStopSession, window, calls });
   } finally {
     ctx.destroy();
   }
@@ -75,21 +65,18 @@ test('a failed remote stop must not delete the pty id (mutation target: uncondit
   });
 });
 
-test('a failed stop flashes the clicked button and sets its title to the error, restoring it after', async () => {
-  const titles = [];
-  const failing = () => ({
-    api: { remoteStopSession: async () => ({ ok: false, error: 'ssh: connection refused' }) },
-  });
-  await withHarness(failing, async ({ confirmAndStopSession, window, calls }) => {
-    const btn = { title: 'Stop session' };
-    window.setTimeout = (cb) => { titles.push(btn.title); cb(); };
-
-    await confirmAndStopSession('s1', btn);
-
-    assert.equal(calls.flashed.length, 1, 'flashButtonText must be called on failure');
-    assert.equal(calls.flashed[0].text, 'Failed');
-    assert.deepEqual(titles, ['ssh: connection refused'], 'the error text is the button title until the timer fires');
-    assert.equal(btn.title, 'Stop session', 'the original title is restored after the flash window');
+test('a failed stop retains a persistent actionable alert without an expiry timer', async () => {
+  const failing = () => ({ api: { remoteStopSession: async () => ({ ok: false, error: 'ssh: connection refused' }) } });
+  await withHarness(failing, async ({ confirmAndStopSession, window }) => {
+    const timers = [];
+    window.setTimeout = (_cb, ms) => { timers.push(ms); };
+    await confirmAndStopSession('s1', null);
+    const notice = window.document.querySelector('#app-notices [role="alert"]');
+    assert.ok(notice, 'stop failure must be visible outside the hover-only button');
+    assert.match(notice.textContent, /s1.*vps.*ssh: connection refused/);
+    assert.match(notice.textContent, /retry|try again/i);
+    assert.equal(notice.querySelector('.app-notice-dismiss').textContent, 'Dismiss');
+    assert.deepEqual(timers, []);
   });
 });
 

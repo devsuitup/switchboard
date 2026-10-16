@@ -65,7 +65,7 @@ test('nothing live and neither directory present: the delete may go ahead', asyn
 
 test('deleting a merged representative refuses its member live in an open terminal', async () => {
   setup({ jobsDir: path.join(root, 'jobs'), descriptorsDir: path.join(root, 'sessions') });
-  assert.equal(await mergedRefusal('representative', new Map([[SID, { exited: false }]])), 'session is still running — close it first');
+  assert.equal(await mergedRefusal('representative', new Map([[SID, { exited: false }]])), 'session is still running in this window — use Stop on its row in the sidebar, then retry Delete');
   assert.equal(await mergedRefusal('representative', new Map([[SID, { exited: true }]])), null);
 });
 
@@ -80,7 +80,7 @@ test('the main-process delete guard reads merged member ids from the current cac
     bgAgents, cliSessionState, sessionHasPty: () => false, ptyPids: () => [], getAllCached: () => rows,
   });
   const guard = vm.runInContext(source.slice(start, end) + '\ndeleteSessionGuard;', context);
-  assert.equal(await guard('REPRESENTATIVE'), 'session is still running — close it first');
+  assert.equal(await guard('REPRESENTATIVE'), 'session is still running in this window — use Stop on its row in the sidebar, then retry Delete');
   rows[0].mergedIntoSessionId = 'another representative';
   assert.equal(await guard('representative'), null);
 });
@@ -150,8 +150,8 @@ test('a session live in another process refuses the delete whatever the case of 
 
 test('an open terminal holds the session under any case, by its id or its real id', async () => {
   setup({ jobsDir: path.join(root, 'jobs'), descriptorsDir: path.join(root, 'sessions') });
-  assert.match(await refusal(UPPER, new Map([[SID, { exited: false }]])), /close it first/);
-  assert.match(await refusal(UPPER, new Map([['tmp-1', { exited: false, realSessionId: SID }]])), /close it first/);
+  assert.match(await refusal(UPPER, new Map([[SID, { exited: false }]])), /Stop on its row in the sidebar/);
+  assert.match(await refusal(UPPER, new Map([['tmp-1', { exited: false, realSessionId: SID }]])), /Stop on its row in the sidebar/);
   assert.equal(await refusal(UPPER, new Map([[SID, { exited: true }]])), null);
 });
 

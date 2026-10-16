@@ -1,5 +1,42 @@
 # Session state — one domain module, one icon slot
 
+## Persistent row action failures (#566)
+
+Stop/Detach, Delete and Archive use `showSessionActionFailure` in
+`public/app-notices.js`. The key includes the operation, host and session id
+(folder Archive uses the project path). Errors have `role="alert"`, Dismiss,
+the affected session/location, the backend reason and a recovery step. They
+schedule no expiry and survive sidebar replacement and pointer leave. Stop's
+Retry repeats its confirmation and retains the error if cancelled; successful
+actions clear only their own key. No focus is moved by showing a notice.
+
+Delete refusals for external processes direct the user to the session's own
+terminal at its project location. A backend refusal for a session running in
+this window names Stop on its sidebar row. A guard's existing recovery is not
+followed by a second recovery instruction. Remote Delete never stops a process
+before the read-only refusal (#271: remote Delete). Confirmations remain questions.
+After successful Delete, pendingSessions is cleared before reloading so its
+temporary row cannot be reinjected. An open tab is destroyed so it cannot remain
+selectable after its transcript and sidebar row are removed.
+Rejected IPC promises, unavailable operations and absent acknowledgements are
+failures; Stop leaves local liveness/view state unchanged on failure. Archive
+changes a row only after its persistence IPC succeeds. Folder stop refusals
+still prevent all archives; persistence failures retain successful row archives
+and keep the folder. Slug batches continue with other rows after a refusal.
+An unreachable remote host retains the established archive-without-stop policy,
+with one persistent warning per host listing affected sessions and an Unarchive
+recovery step. The headline is Archived, but not stopped; Unarchive clears only
+its member from that host's notice. A single-row Archive persistence failure
+after a successful Stop explicitly says the process stopped but the row is not
+archived. Folder partial success uses Archive folder partly done, refers to
+schedule-*.md in Agent Files, and names Settings → Archived projects for restoring
+the folder. Folder descriptions include the project path once.
+
+Evidence: `test/dom-row-action-errors.test.js`,
+`test/confirm-and-stop-session.test.js`,
+`test/dom-sidebar-stop-before-archive.test.js`,
+`test/dom-project-archive-folder.test.js`.
+
 ## Conversation head turn and the single spinner (#625)
 
 The row's animation is selected from its `headSessionId || sessionId`, with
@@ -297,10 +334,12 @@ return `{ok:false, hostUnreachable:true, error}`; Archive is reversible, so
 `stopBeforeArchive` turns that into `{ok:true, notStopped:[{alias,error}]}`
 (asking the same host only once per row) and the caller archives anyway, then
 `announceNotStopped` shows a notice naming the host through
-`showAppNotice({ id: 'archive-not-stopped-toast', kind: 'error', message })`
+`showAppNotice({ id: 'Archive:<alias>:not-stopped', kind: 'error', members, message })`
 in `public/app-notices.js` (#566/S3). Its `Archived, but not stopped` wording
 is unchanged. It uses `role="alert"` and remains until Dismiss or
-`clearAppNotice`; a new failure replaces that id, without a console error or
+`clearAppNotice`; a new batch merges into that host's notice by member operation id,
+updating a repeated member's name and reason. A successful retry removes only its
+member, and an empty group disappears, without a console error or
 the old 15 s `showRestoreNotice` timeout. The shared brick also provides
 15 s info and 10 s Undo notices; Archive/Detach undo actions are wired in
 their own slices (see `docs/product/BUILDING-BLOCKS.md`, B8).

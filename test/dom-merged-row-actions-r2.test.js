@@ -125,7 +125,7 @@ test('a merged member stop failure blocks Archive and surfaces the existing fail
   assert.deepEqual(calls, [['stop', 'B']]);
   assert.equal(ctx.window.activePtyIds.has('B'), true);
   assert.equal(ctx.window.sessionMap.get('A').archived || 0, 0);
-  assert.match(button.title, /stop refused/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /stop refused/);
 });
 
 test('Archive checks all member background jobs before stopping any member', async t => {
@@ -136,7 +136,7 @@ test('Archive checks all member background jobs before stopping any member', asy
   const button = ctx.document.querySelector('#si-A .session-archive-btn');
   await button.onclick({ stopPropagation() {} });
   assert.deepEqual(calls, []);
-  assert.match(button.title, /background job job-C/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /background job job-C/);
   assert.ok(ctx.window.activePtyIds.has('B'));
 });
 
@@ -158,7 +158,7 @@ test('Delete refuses a live merged member without stopping or deleting anything'
   const button = ctx.document.querySelector('#si-A .session-delete-btn');
   await button.onclick({ stopPropagation() {} });
   assert.deepEqual(calls, []);
-  assert.match(button.title, /session is still running/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /merged member is still running/);
 });
 
 test('Delete refuses an open merged member even before the running poll catches up', async t => {
@@ -169,7 +169,7 @@ test('Delete refuses an open merged member even before the running poll catches 
   const button = ctx.document.querySelector('#si-A .session-delete-btn');
   await button.onclick({ stopPropagation() {} });
   assert.deepEqual(calls, []);
-  assert.match(button.title, /session is still running/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /merged member is still running/);
 });
 
 for (const ownOpen of [false, true]) {

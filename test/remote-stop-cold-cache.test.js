@@ -128,9 +128,9 @@ test('Archive waits for a first poll already in flight and stops the session onc
 
 test('Archive preserves its attach and row if stopping after the first poll fails', async t => {
   const ctx = setup(t, { stopError: 'stop refused' });
-  const button = await archive(ctx);
+  await archive(ctx);
   assert.deepEqual(ctx.calls, [['stop', 'host', 'A']]);
-  assert.match(button.title, /stop refused/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /stop refused/);
   assert.equal(ctx.isLive(), true);
   assert.equal(ctx.attached.exited, false);
 });
@@ -216,10 +216,10 @@ test('Archive busy state follows the live button when a re-render replaces it', 
 test('Archive reports a stop that throws instead of leaving the click unhandled', async t => {
   const ctx = setup(t);
   ctx.window.api.remoteStopSession = async () => { throw new Error('ipc broke'); };
-  const button = await archive(ctx);
+  await archive(ctx);
   assert.deepEqual(ctx.calls, []);
-  assert.match(button.title, /ipc broke/);
-  assert.equal(button.disabled, false);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /ipc broke/);
+  assert.equal(ctx.document.querySelector('#si-A .session-archive-btn').disabled, false);
 });
 
 test('Archive does not take a stale error from an earlier attempt as the answer of the poll in flight', async t => {
@@ -239,18 +239,26 @@ test('Archive does not take a stale error from an earlier attempt as the answer 
 
 test('Archive refuses, as before, when the first sync fails for a local reason rather than the connection', async t => {
   const ctx = setup(t, { localFailure: true });
-  const button = await archive(ctx);
+  await archive(ctx);
   assert.deepEqual(ctx.calls, []);
-  assert.match(button.title, /disk full/);
-  assert.deepEqual(ctx.notices, []);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /disk full/);
+  assert.equal(ctx.notices.length, 1, 'persistent failure notice');
+  const notice = ctx.document.querySelector('[data-notice-id="Archive:host:A"]');
+  assert.ok(notice, 'Archive notice for this row');
+  assert.match(notice.textContent, /^Archive failed.*A.*host:\/project/);
+  assert.match(notice.textContent, /disk full/);
 });
 
 test('Archive refuses, as before, when the mirror write fails locally during the first sync', async t => {
   const ctx = setup(t, { pollLocalError: 'EACCES: mirror write' });
-  const button = await archive(ctx);
+  await archive(ctx);
   assert.deepEqual(ctx.calls, []);
-  assert.match(button.title, /EACCES/);
-  assert.deepEqual(ctx.notices, []);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /EACCES/);
+  assert.equal(ctx.notices.length, 1, 'persistent failure notice');
+  const notice = ctx.document.querySelector('[data-notice-id="Archive:host:A"]');
+  assert.ok(notice, 'Archive notice for this row');
+  assert.match(notice.textContent, /^Archive failed.*A.*host:\/project/);
+  assert.match(notice.textContent, /EACCES/);
 });
 
 test('Archive asks a host in backoff even when a global poll is busy elsewhere', async t => {
@@ -270,20 +278,28 @@ test('Archive asks a host in backoff even when a global poll is busy elsewhere',
 
 test('Archive refuses when ssh answers with a plain non-zero exit, because the host did answer', async t => {
   const ctx = setup(t, { sshChild: child => { child.stderr.push('find: permission denied'); child.stderr.push(null); child.emit('close', 1); } });
-  const button = await archive(ctx);
+  await archive(ctx);
   assert.deepEqual(ctx.calls, []);
-  assert.match(button.title, /exit 1/);
-  assert.match(button.title, /remove the host/);
-  assert.deepEqual(ctx.notices, []);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /exit 1/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /remove the host/);
+  assert.equal(ctx.notices.length, 1, 'persistent failure notice');
+  const notice = ctx.document.querySelector('[data-notice-id="Archive:host:A"]');
+  assert.ok(notice, 'Archive notice for this row');
+  assert.match(notice.textContent, /^Archive failed.*A.*host:\/project/);
+  assert.match(notice.textContent, /exit 1/);
 });
 
 test('Archive refuses when the inventory is over the size cap, and says what to do', async t => {
   const ctx = setup(t, { sshChild: child => { child.stdout.push('x'.repeat(8 * 1024 * 1024 + 16)); } });
-  const button = await archive(ctx);
+  await archive(ctx);
   assert.deepEqual(ctx.calls, []);
-  assert.match(button.title, /size cap/);
-  assert.match(button.title, /remove the host/);
-  assert.deepEqual(ctx.notices, []);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /size cap/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /remove the host/);
+  assert.equal(ctx.notices.length, 1, 'persistent failure notice');
+  const notice = ctx.document.querySelector('[data-notice-id="Archive:host:A"]');
+  assert.ok(notice, 'Archive notice for this row');
+  assert.match(notice.textContent, /^Archive failed.*A.*host:\/project/);
+  assert.match(notice.textContent, /size cap/);
 });
 
 test('Archive archives with a notice when ssh itself fails to connect (exit 255)', async t => {

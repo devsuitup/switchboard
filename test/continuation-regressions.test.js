@@ -80,8 +80,8 @@ for (const [name, graph] of [
     await h.restore();
     assert.deepEqual(h.prompts, []);
     assert.deepEqual(h.spawned.map(call => call.id), ['other']);
-    assert.match(h.dom.window.notice, /old/);
-    assert.match(h.dom.window.notice, /sidebar.*choose/i);
+    assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
+    assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /sidebar.*choose/i);
     assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId), ['old', 'other']);
   });
 }
@@ -92,7 +92,7 @@ test('R2 automatic failed continuation lookup holds the entry without confirm', 
   await h.restore();
   assert.deepEqual(h.prompts, []);
   assert.deepEqual(h.spawned, []);
-  assert.match(h.dom.window.notice, /old/);
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
 });
 
 test('R2 a missing continuation API cannot silently bypass the resume guard', { timeout: 9000 }, async t => {
@@ -101,7 +101,7 @@ test('R2 a missing continuation API cannot silently bypass the resume guard', { 
   await h.restore();
   assert.deepEqual(h.spawned, []);
   assert.deepEqual(h.prompts, []);
-  assert.match(h.dom.window.notice, /old/);
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
 });
 
 for (const graph of [{ old: ['a', 'b'], a: [], b: [] }, { old: ['missing'] }]) {
@@ -206,5 +206,53 @@ test('R2 restore checks final liveness automatically before spawning', { timeout
   await h.restore();
   assert.deepEqual(h.spawned, []);
   assert.deepEqual(h.prompts, []);
-  assert.match(h.dom.window.notice, /pid 7/);
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /pid 7/);
 });
+test('choosing a continuation clears the original Restore refusal only after successful open', async t => {
+  const h = setup(t, { old: ['new'], new: [] }, { answer: true });
+  h.app.showLiveElsewhereNotice([{ session: h.ctx.sessionMap.get('old'), continuation: true }]);
+  h.dom.window.showAppNotice({ id: 'other-error', kind: 'error', message: 'Unrelated failure' });
+  assert.ok(h.dom.window.document.querySelector('[data-notice-id="Restore:batch"]'));
+  await h.click();
+  assert.ok(h.ctx.openSessions.has('new'));
+  assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:batch"]'), null);
+  assert.ok(h.dom.window.document.querySelector('[data-notice-id="other-error"]'));
+});
+test('automatic continuation retry clears its original waiting Restore notice after open', async t => {
+  const h = setup(t, { old: ['new'], new: [] });
+  h.app.showLiveElsewhereNotice([{ session: h.ctx.sessionMap.get('old'), continuation: true, waitingForIndex: true, retryAfterIndexing: true }]);
+  assert.ok(h.dom.window.document.querySelector('[data-notice-id="Restore:pending"][role="status"]'));
+  await h.restore();
+  assert.ok(h.ctx.openSessions.has('new'));
+  assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:pending"]'), null);
+});
+
+for (const failure of ['refusal', 'rejection']) {
+  test(`restore ${failure} preserves a real saved working set across failure, retry and close`, async t => {
+    const h = setup(t, { old: [], next: [] }, { savedEntries: [
+      { sessionId: 'old', projectPath: '/saved', active: true },
+      { sessionId: 'next', projectPath: '/saved', active: false },
+    ] });
+    const openTerminal = h.dom.window.api.openTerminal;
+    h.dom.window.api.openTerminal = async (...args) => {
+      if (args[0] !== 'old') return openTerminal(...args);
+      if (failure === 'rejection') throw new Error('resume disconnected');
+      return { ok: false, error: 'resume disconnected' };
+    };
+    await h.restore();
+    assert.equal(h.ctx.openSessions.has('old'), false);
+    assert.deepEqual(h.spawned.map(call => call.id), ['next']);
+    assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId), ['old', 'next']);
+    await h.app.persistWorkingSet();
+    assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId), ['old', 'next']);
+    const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:local:old"]');
+    assert.match(notice.textContent, /resume disconnected/);
+    assert.doesNotMatch(notice.textContent, /Agents|attaching/);
+    h.dom.window.api.openTerminal = openTerminal;
+    await h.click();
+    assert.equal(notice.isConnected, false);
+    h.ctx.openSessions.get('old').closed = true;
+    await h.app.persistWorkingSet();
+    assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId), ['next']);
+  });
+}

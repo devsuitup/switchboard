@@ -43,6 +43,10 @@ const LIVE = { pid: 4242, cwd: '/elsewhere', startedAt: 1 };
 function setup({ savedSet, liveIds, batchFails = false }) {
   const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
   const ctx = dom.getInternalVMContext();
+  const notices = dom.window.document.createElement('div');
+  notices.id = 'app-notices';
+  dom.window.document.body.append(notices);
+  vm.runInContext(read('app-notices.js'), ctx);
   const settings = { global: { restoreOnStartup: 'auto', openWorkingSet: savedSet } };
   const openTerminalCalls = [];
   const liveQueries = { single: [], batch: [] };
@@ -148,11 +152,11 @@ test('a session live elsewhere is not resumed, and survives in the persisted wor
 test('the skipped session is named in a one-line notice with its pid', async () => {
   const h = setup({ savedSet: SAVED, liveIds: ['x'] });
   await h.restore();
-  const toast = h.dom.window.document.getElementById('restore-live-elsewhere-toast');
+  const toast = h.dom.window.document.querySelector('[data-notice-id="Restore:batch"]');
   assert.ok(toast, 'a notice is shown');
-  assert.equal(toast.querySelector('.restore-toast-msg').textContent, 'Not reopened: name-x is live in pid 4242');
-  toast.querySelector('.restore-toast-dismiss').click();
-  assert.equal(h.dom.window.document.getElementById('restore-live-elsewhere-toast'), null);
+  assert.match(toast.querySelector('.app-notice-message').textContent, /name-x.*\/elsewhere.*live outside this window in pid 4242.*own terminal/);
+  toast.querySelector('.app-notice-dismiss').click();
+  assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:batch"]'), null);
   h.dom.window.close();
 });
 
@@ -168,7 +172,7 @@ test('a failed batch check fails open: every session is resumed, nothing is skip
   const h = setup({ savedSet: SAVED, liveIds: ['x'], batchFails: true });
   await h.restore();
   assert.deepEqual(h.openTerminalCalls, ['a', 'x', 'b']);
-  assert.equal(h.dom.window.document.getElementById('restore-live-elsewhere-toast'), null);
+  assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:batch"]'), null);
   h.dom.window.close();
 });
 
@@ -178,8 +182,62 @@ test('once the user opens the skipped session and closes it, it leaves the worki
   h.dom.window.appConfirm = async () => true;
   await vm.runInContext('openSession(sessionMap.get("x"))', h.ctx);
   assert.deepEqual(h.openTerminalCalls, ['a', 'b', 'x']);
+  assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:batch"]'), null, 'successful manual retry clears its Restore notice');
   vm.runInContext('openSessions.get("x").closed = true;', h.ctx);
   await h.persist();
   assert.deepEqual(h.settings.global.openWorkingSet.map((i) => i.sessionId), ['a', 'b']);
   h.dom.window.close();
 });
+
+for (const failure of ['refusal', 'rejection', 'missing result']) {
+  test(`background restore ${failure} keeps an actionable alert`, async () => {
+    const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true }], liveIds: [] });
+    h.dom.window.api.openTerminal = async () => {
+      if (failure === 'rejection') throw new Error('background attach unavailable');
+      if (failure === 'missing result') return undefined;
+      return { ok: false, error: 'background attach unavailable' };
+    };
+    h.dom.window.api.getSessionsLiveElsewhere = async () => ({ x: { ...LIVE, kind: 'bg', jobId: '1234abcd' } });
+    await h.restore();
+    const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:local:x"]');
+    assert.ok(notice, 'background restore failure persists');
+    assert.equal(notice.getAttribute('role'), 'alert');
+    assert.match(notice.textContent, /name-x.*\/px.*(?:background attach unavailable|no result).*sidebar/);
+    assert.ok(notice.querySelector('.app-notice-dismiss'));
+    assert.match(notice.textContent, /Agents view.*retry attaching/);
+    assert.equal(vm.runInContext('openSessions.has("x")', h.ctx), false);
+    await h.persist();
+    assert.deepEqual(h.settings.global.openWorkingSet.map(i => i.sessionId), ['x']);
+    h.dom.window.close();
+  });
+}
+
+for (const failure of ['refusal', 'rejection', 'missing result']) {
+  test(`plain resume restore ${failure} removes its closed entry, persists its place and continues the batch`, async t => {
+    const h = setup({ savedSet: SAVED, liveIds: [] });
+    t.after(() => h.dom.window.close());
+    const openTerminal = h.dom.window.api.openTerminal;
+    h.dom.window.api.openTerminal = async id => {
+      if (id !== 'x') return openTerminal(id);
+      if (failure === 'rejection') throw new Error('resume unavailable');
+      return failure === 'missing result' ? undefined : { ok: false, error: 'resume unavailable' };
+    };
+    await h.restore();
+    assert.deepEqual(h.openTerminalCalls, ['a', 'b']);
+    assert.equal(vm.runInContext('openSessions.has("x")', h.ctx), false);
+    const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:local:x"]');
+    assert.ok(notice);
+    assert.match(notice.textContent, /open (?:it|the session) from the sidebar.*retry/i);
+    assert.doesNotMatch(notice.textContent, /Agents|attaching/);
+    await h.persist();
+    assert.deepEqual(h.settings.global.openWorkingSet.map(i => i.sessionId), ['a', 'x', 'b']);
+    await h.persist();
+    assert.deepEqual(h.settings.global.openWorkingSet.map(i => i.sessionId), ['a', 'x', 'b']);
+    h.dom.window.api.openTerminal = openTerminal;
+    await vm.runInContext('openSession(sessionMap.get("x"))', h.ctx);
+    assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:local:x"]'), null);
+    vm.runInContext('openSessions.get("x").closed = true;', h.ctx);
+    await h.persist();
+    assert.deepEqual(h.settings.global.openWorkingSet.map(i => i.sessionId), ['a', 'b']);
+  });
+}

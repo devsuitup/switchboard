@@ -33,9 +33,10 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   };
   cache.init({ PROJECTS_DIR: root, db, activeSessions: new Map(), getMainWindow: () => null, log: console });
   cache.refreshFolder(folder);
-  const dom = new JSDOM('<body></body>', { runScripts: 'outside-only', url: 'http://localhost' });
+  const dom = new JSDOM('<body><div id="app-notices"></div></body>', { runScripts: 'outside-only', url: 'http://localhost' });
   t.after(() => dom.window.close());
   const ctx = dom.getInternalVMContext();
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/app-notices.js'), 'utf8'), ctx);
   const settingsFile = path.join(root, 'settings.json');
   const saved = savedEntries || [{ sessionId: 'old', projectPath: root, active: true }];
   fs.writeFileSync(settingsFile, JSON.stringify({ openWorkingSet: saved }));
