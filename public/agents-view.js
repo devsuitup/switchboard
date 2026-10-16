@@ -36,7 +36,7 @@ function agentDisplayName(entry) {
 }
 
 function agentJobIsLive(entry) {
-  return entry.kind === 'background' && (entry.state === 'working' || entry.state === 'blocked');
+  return entry.kind === 'background' && entry.hosted === true;
 }
 
 function agentIsLive(entry) {
@@ -176,19 +176,20 @@ function backgroundActivityEntry(sessionId) {
 function backgroundActivityIsForeground(sessionId, entry = backgroundActivityEntry(sessionId)) {
   if (typeof openSessions !== 'undefined' && openSessions.get(sessionId)?.attach) return false;
   return typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId) && (!entry || !agentJobIsLive(entry))
-    || entry?.conversationOwn && ['done', 'stopped', 'failed'].includes(entry.state);
+    || entry?.conversationOwn && !agentJobIsLive(entry) && ['done', 'stopped', 'failed'].includes(entry.state);
 }
 
 function projectBackgroundActivity(entry, snapshot) {
   const live = agentJobIsLive(entry);
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const blocked = live && entry.state === 'blocked';
+  const turnActive = live && !terminal && !blocked;
   const headTurn = terminal || blocked ? 'closed' : snapshot.headTurn;
   return { ...snapshot, headTurn, liveness: live ? 'alive' : 'dead', stale: !live,
-    attention: blocked || live && snapshot.attention, busy: live && !blocked && headTurn === 'open',
-    responseReady: live && !blocked && snapshot.responseReady,
-    agentsBusy: live && !blocked && snapshot.agentsBusy,
-    backgroundWork: live && !blocked && snapshot.backgroundWork,
+    attention: blocked || turnActive && snapshot.attention, busy: turnActive && headTurn === 'open',
+    responseReady: turnActive && snapshot.responseReady,
+    agentsBusy: turnActive && snapshot.agentsBusy,
+    backgroundWork: turnActive && snapshot.backgroundWork,
     waitingForInput: live && headTurn !== 'open' };
 }
 

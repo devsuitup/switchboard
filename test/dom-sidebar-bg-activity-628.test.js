@@ -12,7 +12,7 @@ function roster(state = 'working', kind = 'agent', extra = {}) {
     inFlight: { tasks: 0, kinds: [] }, sessionId: SID,
     fan: kind ? [{ id: 'task-1', kind, startedAt: AT - 1000 }] : [], ...extra }));
   return mergeRoster({ cli: [{ id: 'aaaaaaaa', kind: 'background', sessionId: SID, state: 'working', status: 'busy' }],
-    jobs: new Map([['aaaaaaaa', job]]), descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID,
+    jobs: new Map([['aaaaaaaa', job]]), descriptors: state === 'done' ? [] : [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID,
       status: 'busy', statusUpdatedAt: 1, cwd: '/repo', pid: 10 }] });
 }
 

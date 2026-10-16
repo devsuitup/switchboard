@@ -216,7 +216,10 @@ function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
       status: d.status, pid: d.pid, startedAt: d.startedAt,
     });
   }
-  for (const e of roster) e.attachedHere = e.kind === 'background' && !!attached(e.id);
+  for (const e of roster) {
+    e.hosted = isHostedJob(e, descriptors);
+    e.attachedHere = e.kind === 'background' && !!attached(e.id);
+  }
   return roster;
 }
 
@@ -247,6 +250,12 @@ function isLiveJobState(state) {
   return state === 'working' || state === 'blocked';
 }
 
+function isHostedJob(job, descriptors = []) {
+  if (!job || job.kind && job.kind !== 'background' || job.state === 'stopped' || job.state === 'failed') return false;
+  return isLiveJobState(job.state) || (descriptors || []).some(d => d?.kind === 'bg'
+    && (job.id && d.jobId === job.id || job.sessionId && d.sessionId?.toLowerCase() === job.sessionId.toLowerCase()));
+}
+
 function dispatchRefusal({ sandbox, preLaunchCmd } = {}) {
   if (sandbox) return 'this project runs its sessions sandboxed, and a background agent runs under the claude daemon, outside the sandbox: start it as a session instead';
   if (typeof preLaunchCmd === 'string' && preLaunchCmd.trim()) return 'this project has a pre-launch command, and the claude daemon does not run it for a background agent: start it as a session instead';
@@ -259,6 +268,6 @@ function parseDispatchOutput(stdout) {
 }
 
 module.exports = {
-  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, dispatchRefusal, isLiveJobState,
+  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, dispatchRefusal, isLiveJobState, isHostedJob,
   sessionIdFromLinkScanPath, stripShellNoise, JOB_ID_RE, JOB_STATES,
 };

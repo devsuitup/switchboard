@@ -102,10 +102,36 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
 }
 
 const ROSTER = [
-  { id: 'aaaaaaaa', sessionId: 's-a', name: 'em-platform', cwd: '/w/em', kind: 'background', state: 'working', status: 'idle', pid: 10, startedAt: Date.now() - 60_000, agent: 'fleet:em', model: 'sonnet', detail: 'awaiting !196', tempo: 'idle', tokens: 173000, fan: [{ id: 'f', kind: 'agent', label: 'Spawn developer', startedAt: 1, doneAt: 27_000 }], children: [{ id: '195', href: 'https://gitlab.example/mr/195', kind: 'mr' }], result: 'no action', attachedHere: false },
-  { id: 'bbbbbbbb', sessionId: 's-b', name: 'spike', cwd: '/w/f', kind: 'background', state: 'done', status: null, pid: null, startedAt: Date.now() - 3_600_000, agent: null, model: null, detail: null, tempo: null, tokens: 274, fan: [], children: [], result: null, attachedHere: false },
+  { id: 'aaaaaaaa', sessionId: 's-a', name: 'em-platform', cwd: '/w/em', kind: 'background', state: 'working', hosted: true, status: 'idle', pid: 10, startedAt: Date.now() - 60_000, agent: 'fleet:em', model: 'sonnet', detail: 'awaiting !196', tempo: 'idle', tokens: 173000, fan: [{ id: 'f', kind: 'agent', label: 'Spawn developer', startedAt: 1, doneAt: 27_000 }], children: [{ id: '195', href: 'https://gitlab.example/mr/195', kind: 'mr' }], result: 'no action', attachedHere: false },
+  { id: 'bbbbbbbb', sessionId: 's-b', name: 'spike', cwd: '/w/f', kind: 'background', state: 'done', hosted: false, status: null, pid: null, startedAt: Date.now() - 3_600_000, agent: null, model: null, detail: null, tempo: null, tokens: 274, fan: [], children: [], result: null, attachedHere: false },
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
+
+test('hosted done job keeps badge, live row, filter visibility and Attach/Stop only', async () => {
+  const h = setup({ storage: { agentsGroupBy: 'none', agentsShowFinished: '0' } });
+  try {
+    h.window.taskActivitySnapshot = (_id, ports) => ({ ...ports, headTurn: 'open', attention: true,
+      agentsBusy: true, backgroundWork: true, responseReady: true });
+    const entry = { ...ROSTER[1], hosted: true };
+    h.emitChanged({ daemonReachable: true, roster: [entry] });
+    assert.equal(h.read('agentsViewActive'), false);
+    assert.equal(h.read("bgAgentSessionIds.has('s-b')"), true);
+    await h.window.showAgentsView();
+    const row = h.document.querySelector('.agents-row');
+    assert.ok(row);
+    assert.ok(row.querySelector('.session-icon--waiting'));
+    assert.match(row.textContent, /done/);
+    assert.match(h.document.getElementById('agents-viewer-count').textContent, /1 running · 0 finished/);
+    row.click();
+    for (const verb of ['attach', 'stop']) assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, false);
+    for (const verb of ['rm', 'respawn']) assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, true);
+    h.document.querySelector('[data-verb="attach"]').click();
+    assert.equal(h.calls.opened[0][1].type, 'attach');
+    h.emitChanged({ daemonReachable: true, roster: [{ ...entry, hosted: false }] });
+    assert.equal(h.read("bgAgentSessionIds.has('s-b')"), false);
+    assert.equal(h.document.querySelector('.agents-row'), null);
+  } finally { h.destroy(); }
+});
 
 test('Agents row and detail retain the original conversation name over a collision title', async () => {
   const h = setup();
@@ -123,9 +149,9 @@ test('Agents rows supply attention, unknown-live and finished glyphs to the shar
   const { window, document, setSnapshot, destroy } = setup();
   try {
     setSnapshot({ daemonReachable: true, roster: [
-      { id: 'waiting', kind: 'background', state: 'blocked', status: 'waiting' },
-      { id: 'idle', kind: 'background', state: 'working', status: 'idle' },
-      { id: 'finished', kind: 'background', state: 'done', status: 'idle' },
+      { id: 'waiting', kind: 'background', state: 'blocked', hosted: true, status: 'waiting' },
+      { id: 'idle', kind: 'background', state: 'working', hosted: true, status: 'idle' },
+      { id: 'finished', kind: 'background', state: 'done', hosted: false, status: 'idle' },
     ] });
     await window.showAgentsView();
     const { renderSessionIcon } = require('../public/session-state');
@@ -143,13 +169,13 @@ test('Agents rows mark only live jobs as running', { timeout: 1000 }, async () =
   const { window, document, setSnapshot, destroy } = setup();
   try {
     const roster = [
-      { id: 'busy', kind: 'background', state: 'working', status: 'busy' },
-      { id: 'waiting', kind: 'background', state: 'blocked', status: 'waiting' },
-      { id: 'idle', kind: 'background', state: 'working', status: 'idle' },
+      { id: 'busy', kind: 'background', state: 'working', hosted: true, status: 'busy' },
+      { id: 'waiting', kind: 'background', state: 'blocked', hosted: true, status: 'waiting' },
+      { id: 'idle', kind: 'background', state: 'working', hosted: true, status: 'idle' },
       { sessionId: 'external', kind: 'interactive', status: 'idle' },
-      { id: 'done', kind: 'background', state: 'done', status: 'idle' },
-      { id: 'stopped', kind: 'background', state: 'stopped', status: 'idle' },
-      { id: 'failed', kind: 'background', state: 'failed', status: 'busy' },
+      { id: 'done', kind: 'background', state: 'done', hosted: false, status: 'idle' },
+      { id: 'stopped', kind: 'background', state: 'stopped', hosted: false, status: 'idle' },
+      { id: 'failed', kind: 'background', state: 'failed', hosted: false, status: 'busy' },
     ];
     setSnapshot({ daemonReachable: true, roster });
     await window.showAgentsView();
@@ -274,10 +300,10 @@ test('a roster push puts only the live jobs in bgAgentSessionIds and refreshes t
   assert.equal(ctx.calls.sidebarRefreshes, 1);
   ctx.emitChanged({ roster: ROSTER, daemonReachable: true });
   assert.equal(ctx.calls.sidebarRefreshes, 1);
-  ctx.emitChanged({ roster: [ROSTER[0], { ...ROSTER[1], state: 'blocked' }, ROSTER[2]], daemonReachable: true });
+  ctx.emitChanged({ roster: [ROSTER[0], { ...ROSTER[1], state: 'blocked', hosted: true }, ROSTER[2]], daemonReachable: true });
   assert.deepEqual([...ctx.read('bgAgentSessionIds')].sort(), ['s-a', 's-b']);
   assert.equal(ctx.calls.sidebarRefreshes, 2);
-  ctx.emitChanged({ roster: [{ ...ROSTER[0], state: 'done' }, ROSTER[1], ROSTER[2]], daemonReachable: true });
+  ctx.emitChanged({ roster: [{ ...ROSTER[0], state: 'done', hosted: false }, ROSTER[1], ROSTER[2]], daemonReachable: true });
   assert.deepEqual([...ctx.read('bgAgentSessionIds')], []);
   assert.equal(ctx.calls.sidebarRefreshes, 3);
 });
@@ -302,7 +328,7 @@ test('attach from the view while the grid is shown closes the view onto the grid
 
 test('a blocked job counts as running, sorts with the live rows and keeps only the live verbs', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
-  const blocked = { ...ROSTER[0], id: 'cccccccc', sessionId: 's-c', name: 'asks', state: 'blocked', status: 'waiting', startedAt: Date.now() - 5_000 };
+  const blocked = { ...ROSTER[0], id: 'cccccccc', sessionId: 's-c', name: 'asks', state: 'blocked', hosted: true, status: 'waiting', startedAt: Date.now() - 5_000 };
   ctx.setSnapshot({ roster: [...ROSTER, blocked], daemonReachable: true });
   await ctx.window.showAgentsView();
   assert.deepEqual([...ctx.document.querySelectorAll('.agents-row-name')].map(el => el.textContent), ['asks', 'lvds-1b', 'em-platform', 'spike']);
@@ -322,7 +348,7 @@ test('a blocked job counts as running, sorts with the live rows and keeps only t
 
 test('a failed job reads "failed", counts as finished and is hidden by the Finished filter', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
-  const failed = { ...ROSTER[1], id: 'ffffffff', sessionId: 's-f', name: 'broke', state: 'failed' };
+  const failed = { ...ROSTER[1], id: 'ffffffff', sessionId: 's-f', name: 'broke', state: 'failed', hosted: false };
   ctx.setSnapshot({ roster: [...ROSTER, failed], daemonReachable: true });
   await ctx.window.showAgentsView();
   const row = ctx.document.querySelector('.agents-row[data-key="bg:ffffffff"]');
@@ -358,7 +384,7 @@ function listLayout(ctx) {
 
 test('group by state: a header per non-empty group with its count, each row once, no header without the mode', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
-  const failed = { ...ROSTER[1], id: 'ffffffff', sessionId: 's-f', name: 'broke', state: 'failed' };
+  const failed = { ...ROSTER[1], id: 'ffffffff', sessionId: 's-f', name: 'broke', state: 'failed', hosted: false };
   ctx.setSnapshot({ roster: [...ROSTER, failed], daemonReachable: true });
   await ctx.window.showAgentsView();
   assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, 0);
@@ -372,7 +398,7 @@ test('group by state: a header per non-empty group with its count, each row once
 
 test('group by project: headers labelled by the last segment with the full path as title, live groups first', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
-  const second = { ...ROSTER[0], id: 'cccccccc', sessionId: 's-c', name: 'em-two', state: 'done', startedAt: Date.now() - 120_000 };
+  const second = { ...ROSTER[0], id: 'cccccccc', sessionId: 's-c', name: 'em-two', state: 'done', hosted: false, startedAt: Date.now() - 120_000 };
   const homeless = { ...ROSTER[1], id: 'dddddddd', sessionId: 's-d', name: 'nowhere', cwd: null };
   ctx.setSnapshot({ roster: [...ROSTER, second, homeless], daemonReachable: true });
   await ctx.window.showAgentsView();
@@ -598,8 +624,8 @@ test('quotes and attribute payloads in a cwd used as a project group title canno
 
 test('with nothing stored the list is grouped by state, headers carrying emoji, label and count', async (t) => {
   const ctx = setup({ storage: {} }); t.after(() => ctx.destroy());
-  const blocked = { ...ROSTER[0], id: 'cccccccc', sessionId: 's-c', name: 'asks', state: 'blocked', startedAt: Date.now() - 5_000 };
-  const stopped = { ...ROSTER[1], id: 'dddddddd', sessionId: 's-d', name: 'halted', state: 'stopped' };
+  const blocked = { ...ROSTER[0], id: 'cccccccc', sessionId: 's-c', name: 'asks', state: 'blocked', hosted: true, startedAt: Date.now() - 5_000 };
+  const stopped = { ...ROSTER[1], id: 'dddddddd', sessionId: 's-d', name: 'halted', state: 'stopped', hosted: false };
   const odd = { ...ROSTER[1], id: 'eeeeeeee', sessionId: 's-e', name: 'odd', state: null };
   ctx.setSnapshot({ roster: [...ROSTER, blocked, stopped, odd], daemonReachable: true });
   await ctx.window.showAgentsView();
@@ -627,7 +653,7 @@ test('a stored none or project is respected over the state default', async (t) =
 
 test('every row starts its state column with its state emoji in every grouping mode', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
-  const failed = { ...ROSTER[1], id: 'ffffffff', sessionId: 's-f', name: 'broke', state: 'failed' };
+  const failed = { ...ROSTER[1], id: 'ffffffff', sessionId: 's-f', name: 'broke', state: 'failed', hosted: false };
   const odd = { ...ROSTER[1], id: 'eeeeeeee', sessionId: 's-e', name: 'odd', state: null };
   ctx.setSnapshot({ roster: [...ROSTER, failed, odd], daemonReachable: true });
   await ctx.window.showAgentsView();
@@ -865,7 +891,7 @@ const dblclick = (ctx, el) => el.dispatchEvent(new ctx.window.MouseEvent('dblcli
 
 test('a double click on a working or blocked row attaches, with the same options as the Attach button', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
-  const blocked = { ...ROSTER[0], id: 'dddddddd', sessionId: 's-d', name: 'waits', state: 'blocked', cwd: '/w/d' };
+  const blocked = { ...ROSTER[0], id: 'dddddddd', sessionId: 's-d', name: 'waits', state: 'blocked', hosted: true, cwd: '/w/d' };
   ctx.setSnapshot({ roster: [...ROSTER, blocked], daemonReachable: true });
   await ctx.window.showAgentsView();
   dblclick(ctx, ctx.document.querySelector('.agents-row[data-key="bg:aaaaaaaa"]'));

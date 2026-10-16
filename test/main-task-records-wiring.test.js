@@ -27,7 +27,7 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
       if (channel === 'task-rekey') renderer.rekey(payload.oldId, payload.newId, { continued: payload.continued });
     } } }, log: { warn(message) { throw new Error(message); } },
     ipcMain: { handle: (_channel, callback) => { handler = callback; } },
-    cliSessionState: { getSidebarDescriptors: () => [{ sessionId: id }, { sessionId: remote }] },
+    cliSessionState: { getSidebarDescriptors: () => [{ sessionId: id }, { sessionId: remote }], readAllDescriptors: () => [] },
     activeSessions: new Map(), bgAgents: { getSnapshot: () => ({ roster: [] }) },
     getAllCached: () => [{ sessionId: id }, { sessionId: dead }, { sessionId: remote, remoteAlias: 'host' }],
     remoteIndexer: { getRemoteSessions: () => ({ sessions: [{ sessionId: remote }] }) },

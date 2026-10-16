@@ -44,6 +44,7 @@ for (const proof of ['descriptor', 'job']) {
       log: { info() {}, debug() {} }, rekeyMcpServer() {},
       activityReporter: { rekey() {} }, taskRecords: { rekey() {}, hasRecord: () => false },
       cliSessionState: cli, bgAgents: bg, getCachedSession: () => ({ customTitle: 'original title' }),
+      isHostedJob: require('../bg-agents-roster').isHostedJob,
       writer: { rekeySessionMeta: async (...args) => { metadata.push(args); } },
     });
     t.after(() => { transitions.init({ activeSessions: new Map() }); cli.stop(); bg.stop(); fs.rmSync(root, { recursive: true, force: true }); });
