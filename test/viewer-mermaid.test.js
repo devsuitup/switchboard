@@ -216,6 +216,8 @@ test('two diagrams namespace every SVG ID and preserve marker, label and style r
 for (const source of [
   'classDiagram\nclass Shape\n<<interface>> Shape',
   'classDiagram\nclass Shape\n<<abstract>> Shape',
+  'classDiagram\nclass Shape\n<<value-object>> Shape',
+  'classDiagram\nclass Shape\n<<Service Provider>> Shape',
   'stateDiagram-v2\nstate split <<fork>>',
   'stateDiagram-v2\nstate merge <<join>>',
   'stateDiagram-v2\nstate decide <<choice>>',
@@ -226,6 +228,43 @@ for (const source of [
   test('harmless Mermaid source renders: ' + source, async t => {
     const ctx = setup(t);
     await ctx.render(fence(source));
+    assert.equal(ctx.calls.length, 1);
+    assert.equal(ctx.el.querySelectorAll('svg').length, 1);
+    assert.equal(ctx.el.querySelector('.mermaid-error'), null);
+  });
+}
+
+for (const source of [
+  'sequenceDiagram\nparticipant Alice; details Alice: private-data',
+  'sequenceDiagram\nparticipant Alice Smith\ndetails Alice Smith: private-data',
+  'sequenceDiagram; participant Alice Smith; DeTaIlS\tAlice Smith: private-data',
+  'classDiagram\nclass Shape\n<<img src=x>> Shape',
+  'classDiagram\nclass Shape\n<<img src=https://evil.test/x>> Shape',
+  'classDiagram\nclass Shape\n<<&lt;img&gt;>> Shape',
+  'classDiagram\nclass Shape\n<<img: https://evil.test/x>> Shape',
+  'classDiagram\nclass Shape\n<<url(https://evil.test/x)>> Shape',
+]) {
+  test('unsafe Mermaid source is refused before rendering: ' + source, async t => {
+    const ctx = setup(t);
+    const privateData = ctx.document.createElement('div');
+    privateData.id = 'private-data';
+    privateData.textContent = '{"links":{"private text":"https://private.test"}}';
+    ctx.document.body.appendChild(privateData);
+    await ctx.render(fence(source));
+    assert.equal(ctx.calls.length, 0);
+    assert.equal(ctx.configs.length, 0);
+    assert.equal(ctx.document.querySelector('.mermaid-render-scratch'), null);
+    assert.equal(ctx.el.querySelectorAll('svg').length, 0);
+    assert.equal(ctx.el.querySelector('pre code')?.textContent, source + '\n');
+    assert.ok(ctx.el.querySelector('.mermaid-error'));
+    assert.doesNotMatch(ctx.el.textContent, /private text/);
+  });
+}
+
+for (const statement of ['links Alice: {"Docs":"#private-data"}', 'link Alice: Docs @ #private-data']) {
+  test('sequence links without a DOM lookup remain renderable: ' + statement, async t => {
+    const ctx = setup(t);
+    await ctx.render(fence('sequenceDiagram\nparticipant Alice; ' + statement));
     assert.equal(ctx.calls.length, 1);
     assert.equal(ctx.el.querySelectorAll('svg').length, 1);
     assert.equal(ctx.el.querySelector('.mermaid-error'), null);

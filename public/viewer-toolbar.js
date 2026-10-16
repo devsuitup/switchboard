@@ -267,7 +267,9 @@ function renderMarkdownDiagrams(el, state) {
       container.className = 'mermaid-render-scratch';
       container.setAttribute('aria-hidden', 'true');
       try {
-        if (/<\s*(?:[a-z][\w:-]*(?=[\s/>])|[!/?])|&(?:#|lt;)|\b(?:img|icon)["']?\s*:|^\s*details\s+\S+\s*:|@import|(?:url|image-set)\s*\(/im.test(source.replace(/<<\w+>>/g, ''))) throw new Error('Unsupported diagram resources');
+        const markup = source.replace(/<<[^<>\n]+>>/g, annotation => annotation.includes('=') ? annotation : '');
+        if (/<\s*(?:[a-z][\w:-]*(?=[\s/>])|[!/?])/i.test(markup)
+          || /&(?:#|lt;)|\b(?:img|icon)["']?\s*:|(?:^|;)\s*details[ \t]+[^\n:;]+:|@import|(?:url|image-set)\s*\(/im.test(source)) throw new Error('Unsupported diagram resources');
         const defaults = mermaid.mermaidAPI.defaultConfig;
         mermaid.initialize({
           startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true,

@@ -36,13 +36,17 @@ The editor offers:
 
 Markdown previews render fenced `mermaid` blocks as diagrams, including in the
 Touched/Changes editor. Invalid diagrams keep their source visible with an inline
-error. The source filter refuses HTML-style tag openers (except Mermaid
-`<<word>>` annotations), numeric/angle entities (`&#…` or `&lt;`), `img:`/`icon:`
-properties, sequence details statements (`details participant: …`), `@import`,
-`url(…)` and `image-set(…)`. Ordinary details text, Windows paths and `x<y` labels
-are allowed. SVG output also drops scripts, event handlers, embedded HTML,
-images, animations, non-fragment links, resource attributes and CSS containing
-external resources or escapes.
+error. The source filter refuses HTML-style tag openers, numeric/angle entities
+(`&#…` or `&lt;`), `img:`/`icon:` properties, sequence `details` statements
+at a line start or after `;` (including participant names with spaces), `@import`,
+`url(…)` and `image-set(…)`. Paired `<<…>>` annotations containing no angle
+brackets, newline or `=` are exempt from the tag-opener check; spaces and hyphens
+are allowed, but `<<img src=x>>` is refused. Entity and resource checks still
+inspect the original source, including annotation contents. Ordinary “See details
+below” text, Windows paths and `x<y` labels are allowed. Sequence `link`/`links`
+statements do not read page elements and remain allowed. SVG output also drops
+scripts, event handlers, embedded HTML, images, animations, non-fragment links,
+resource attributes and CSS containing external resources or escapes.
 
 ## Work Files
 

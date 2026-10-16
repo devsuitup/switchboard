@@ -465,13 +465,26 @@ Test-pr skips Mermaid for older PRs without the bundle script.
 A global serial queue keeps Mermaid configuration and temporary DOM exclusive.
 Each render initializes strict mode, disables HTML labels and automatic scanning,
 and locks every default config key against document frontmatter/directives.
-Source containing HTML-style tag openers (after stripping `<<word>>` annotations),
-numeric/angle entities, `img:`/`icon:` properties, line-start sequence details
-statements, `@import`, `url(` or `image-set(` is refused before temporary DOM attaches.
-Ordinary details text, backslashes in paths and bare comparison `<` are allowed;
-CSS escapes are rejected in the output pass. Unsupported
+Source containing HTML-style tag openers, numeric/angle entities (`&#…` or
+`&lt;`), `img:`/`icon:` properties, sequence `details` statements at a line start
+or after `;` (including participant names with spaces), `@import`, `url(` or
+`image-set(` is refused before temporary DOM attaches. The tag-opener check
+ignores paired `<<…>>` annotations containing no angle brackets, newline or
+`=`; this accepts `<<value-object>>` and `<<Service Provider>>` while keeping
+`<<img src=x>>` subject to the HTML check. Entity and resource checks inspect
+the original source, including annotations. Ordinary “See details below” text,
+backslashes in paths and bare comparison `<` are allowed; CSS escapes are
+rejected in the output pass. Unsupported
 HTML/resource features show source plus a short error, like invalid syntax. This
 deliberate subset prevents pre-sanitization loads. No bindFunctions callback runs.
+
+Mermaid 12.1.0's sequence `addDetails` reads `document.getElementById(text.text)`
+and parses that page element's HTML as JSON properties/links, so all matching
+`details` statements are refused. `addLinks` and `addALink` parse the supplied
+text directly without a DOM lookup; `link`/`links` remain allowed. Other bundled
+`getElementById` calls use internal element maps, generated render/marker IDs,
+the fixed layout container `cy`, or generated popup code. The popup callback
+is never bound and SVG event handlers are sanitized away.
 
 DOMPurify SVG + SVG-filter profiles sanitize output before insertion. A second
 pass removes image/foreignObject/animation elements, non-fragment hrefs, resource
