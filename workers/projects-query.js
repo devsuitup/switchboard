@@ -4,12 +4,13 @@
 const { parentPort, workerData } = require('node:worker_threads');
 const Database = require('better-sqlite3');
 const cache = require('../session-cache');
+const { applySessionName, establishTranscriptBaseline } = require('../session-name');
 const db = new Database(workerData.dbPath, { readonly: true, fileMustExist: true });
 db.pragma('busy_timeout = 5000');
 
 const readSnapshot = db.transaction(() => ({
   rows: db.prepare('SELECT * FROM session_cache').all(),
-  meta: db.prepare(`SELECT m.*, f.source AS nameSource, f.revision AS nameRevision FROM session_meta m
+  meta: db.prepare(`SELECT m.*, f.source AS nameSource, f.revision AS nameRevision, f.transcriptTitle AS nameTranscriptTitle FROM session_meta m
     LEFT JOIN session_meta_fields f ON f.sessionId = m.sessionId AND f.field = 'name'`).all(),
   folders: db.prepare('SELECT * FROM cache_meta').all(),
   settings: db.prepare('SELECT key, value FROM settings').all(),
@@ -37,12 +38,23 @@ function build(message) {
     isInitialScanComplete: () => settings.get('initial_scan_complete') === true,
   };
   const writers = {
-    upsertCachedSessions: sessions => { for (const row of sessions) rows.set(row.sessionId, { ...rows.get(row.sessionId), ...row }); },
+    upsertCachedSessions: sessions => {
+      for (const row of sessions) {
+        const cachedEntry = rows.get(row.sessionId);
+        const previous = meta.get(row.sessionId);
+        const next = establishTranscriptBaseline(previous, row);
+        rows.set(row.sessionId, { ...cachedEntry, ...row });
+        if (next !== previous) meta.set(row.sessionId, next);
+      }
+    },
     deleteCachedSession: id => rows.delete(id),
     deleteCachedFolder: folder => { for (const row of rows.values()) if (row.folder === folder) rows.delete(row.sessionId); },
     touchCachedModified: (id, modified) => { const row = rows.get(id); if (row) Object.assign(row, { modified, fileMtime: modified }); },
     setFolderMeta: (folder, projectPath, indexMtimeMs) => folders.set(folder, { folder, projectPath, indexMtimeMs }),
-    setName: (id, name, source = 'user') => meta.set(id, { ...meta.get(id), sessionId: id, name, nameSource: source }),
+    setName: (id, name, source = 'user') => {
+      const previous = meta.get(id);
+      meta.set(id, applySessionName(previous, id, name, source, rows.get(id)?.customTitle ?? null));
+    },
     replaceSessionMetrics: () => {},
     deleteSearchFolder: () => {},
     deleteSearchSession: () => {},

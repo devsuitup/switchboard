@@ -133,8 +133,8 @@ test('R2 header refresh skips subagents and bounds synchronous continuation read
     return n;
   });
   cache.refreshFolder(h.folder, { files: new Set([path.join('old', 'subagents', 'agent-a.jsonl'), 'old.jsonl']) });
-  assert.ok(bytes.get(file) <= 1024 * 1024 + 256 * 1024 + 128, 'top-level header plus at most 1 MiB continuation work');
-  assert.ok(bytes.get(subfile) <= 256 * 1024, 'subagents receive only the display-header read');
+  assert.ok(bytes.get(file) <= 1024 * 1024 + 512 * 1024 + 128 + 1, 'top-level head/tail and one alignment byte plus at most 1 MiB continuation work');
+  assert.ok(bytes.get(subfile) <= 512 * 1024 + 1, 'subagents receive only the bounded display head/tail and one alignment byte');
 });
 
 test('R2 one refresh shares a 1 MiB continuation budget across changed parents', { timeout: 9000 }, t => {
@@ -147,7 +147,7 @@ test('R2 one refresh shares a 1 MiB continuation budget across changed parents',
   const read = t.mock.method(fs, 'readSync');
   cache.refreshFolder(h.folder, { files: new Set(['old.jsonl', 'other.jsonl']) });
   const bytes = read.mock.calls.reduce((sum, call) => sum + call.result, 0);
-  assert.ok(bytes <= 1024 * 1024 + 2 * 256 * 1024 + 128, 'one continuation pacing budget per refresh');
+  assert.ok(bytes <= 1024 * 1024 + 2 * (512 * 1024 + 1) + 128, 'one continuation pacing budget plus two bounded display head/tail reads with alignment bytes');
 });
 
 test('R2 yielded continuation indexing preserves fresher display fields', { timeout: 9000 }, async t => {
