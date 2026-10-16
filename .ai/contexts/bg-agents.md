@@ -116,8 +116,26 @@ fallback. Lifecycle/group/header predicates and all verb guards are unchanged.
 
 Background roster entries retain descriptor identity, pid, cwd and agent, but
 their `status` is null: neither descriptor nor CLI coarse status is activity
-evidence. Normalized `taskEvidence` feeds the existing task registry. The shared
-background projection reads #638's head-turn and #626's unseen-output state:
+evidence. Normalized `taskEvidence` feeds the existing task registry.
+`task-records.js` keeps `IN_FLIGHT_KINDS` for the CLI format canary, including
+`artifact_watch`. Runtime validation accepts future nonempty string kinds:
+`inFlightKinds` retains every kind with its label and `known` flag; unknown
+kinds use `Unknown activity (<kind>)`. The sidebar job-update tooltip lists
+these labels, including `Artifact watch`, while activity still uses the task
+registry and the static background glyph. The canary separately rejects an
+unknown kind so CLI drift remains visible without making runtime evidence
+unavailable (#684).
+
+`inFlight.tasks` remains the registry's numeric `inFlight` count. Optional
+`inFlight.queued` and `inFlight.drainableMonitors` become `queued` and
+`drainableMonitors`, defaulting to zero when absent. Drainable monitors are
+metadata within the reported activity, not an additional count or a reason to
+subtract from `tasks`; neither optional count changes registry activity.
+Every supplied count must be a nonnegative safe integer. Wrong types, empty
+kind strings and malformed fan evidence still invalidate the snapshot;
+terminal jobs alone may omit `inFlight` entirely.
+
+The shared background projection reads #638's head-turn and #626's unseen-output state:
 only an open head turn animates; agents, shells, monitors and cron at the prompt
 share the static background glyph. Only agent tasks contribute to #627's count.
 A blocked job takes attention priority; done/stopped/failed suppress head busy,
