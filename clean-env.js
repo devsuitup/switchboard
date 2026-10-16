@@ -13,19 +13,32 @@ const SESSION_MARKERS = new Set([
   'CLAUDE_CODE_BRIDGE_SESSION_ID',
   'CLAUDE_CODE_EXECPATH',
   'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_JOB_DIR',
+  'AI_AGENT',
+  'CLAUDE_EFFORT',
+  'CLAUDE_ENV_FILE',
+  'CLAUDE_PROJECT_DIR',
+  'CLAUDE_CODE_REMOTE',
+  'CLAUDE_CODE_REMOTE_SESSION_ID',
 ]);
+
+function scrubSessionEnv(env) {
+  for (const key of Object.keys(env)) {
+    if (SESSION_MARKERS.has(key.toUpperCase())) delete env[key];
+  }
+  return env;
+}
 
 function cleanEnv(env) {
   return Object.fromEntries(
-    Object.entries(env).filter(([k]) =>
+    Object.entries(scrubSessionEnv({ ...env })).filter(([k]) =>
       !k.startsWith('ELECTRON_') &&
       !k.startsWith('GOOGLE_API_KEY') &&
       k !== 'NODE_OPTIONS' &&
       k !== 'ORIGINAL_XDG_CURRENT_DESKTOP' &&
-      k !== 'WT_SESSION' &&
-      !SESSION_MARKERS.has(k)
+      k !== 'WT_SESSION'
     )
   );
 }
 
-module.exports = { cleanEnv, SESSION_MARKERS };
+module.exports = { cleanEnv, scrubSessionEnv, SESSION_MARKERS };

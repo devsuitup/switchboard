@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 const { isDeepStrictEqual } = require('node:util');
+const { scrubSessionEnv } = require('../clean-env');
 
 function validatePr(pr) {
   if (!/^\d+$/.test(String(pr ?? ''))) throw new Error('PR must be numeric: task test-pr PR=<number>');
@@ -38,6 +39,7 @@ function hasProxyCredentials(value) {
 function buildLaunch({ pr, home = process.env.HOME || os.homedir(), env = process.env,
   isolated = false, allowClaude = false, tempHome, port = 9223, platform = process.platform, entry = '.' }) {
   validatePr(pr);
+  env = scrubSessionEnv({ ...env });
   const pathKeys = Object.keys(env).filter(key => key.toUpperCase() === 'PATH').sort();
   if (platform === 'win32' && pathKeys.length) {
     const originalPath = env[pathKeys[0]];

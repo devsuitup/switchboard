@@ -612,9 +612,11 @@ off.
 
 ## Clean child environment
 
-`cleanEnv()` (`clean-env.js`) builds `cleanPtyEnv` in `main.js`, the base of the environment of every PTY and child Switchboard spawns. It drops Electron internals (`ELECTRON_*`, `NODE_OPTIONS`, `GOOGLE_API_KEY*`, `ORIGINAL_XDG_CURRENT_DESKTOP`, `WT_SESSION`) and the Claude CLI's own session markers, which a Switchboard started from inside a Claude Code session (`task dev`, a test instance an agent launched) would otherwise hand to every session it opens: a session started from Switchboard is a top-level session.
+`scrubSessionEnv()` (`clean-env.js`) removes inherited Claude session markers from `process.env` in `main.js` before the reloader, updater and services start. This also covers children with no explicit `env`: SSH/scp and any ProxyCommand they launch, Git hooks, shell discovery and electron-updater's installer/elevation/relaunch paths. It changes only session markers; Electron's own process still needs its runtime variables. The standalone `scripts/postinstall.js` applies the same scrub before its build-tool shells, and `scripts/test-pr.js` scrubs a copy of its launch environment.
 
-The marker list is explicit, not a `CLAUDE_*` prefix: the prefix would also remove user configuration the session needs.
+`cleanEnv()` calls the same helper on a copy to build `cleanPtyEnv`, the base for local Claude PTYs (new, resume, fork, sandbox, background attach), plain terminals, panel shells, the remote attach PTY, scheduled runs and background CLI commands (dispatch, respawn and management). It additionally drops Electron internals (`ELECTRON_*`, `NODE_OPTIONS`, `GOOGLE_API_KEY*`, `ORIGINAL_XDG_CURRENT_DESKTOP`, `WT_SESSION`).
+
+The deny rule is exact membership in `SESSION_MARKERS`, compared case-insensitively to cover Windows environment aliases. There is no `CLAUDE_*` or `CLAUDE_CODE_*` prefix deny rule and no configuration allowlist: every name outside that set survives the session scrub. `cleanEnv()` does not mutate its input; the startup scrub deliberately removes only the inherited markers from the app's own environment.
 
 | Stripped | Why |
 |---|---|
@@ -625,10 +627,15 @@ The marker list is explicit, not a `CLAUDE_*` prefix: the prefix would also remo
 | `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN` | the parent's messaging channel |
 | `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_SESSION_ATTENDED` | the parent's bridge session and attended state |
 | `CLAUDE_CODE_EXECPATH` | the parent CLI's own executable path |
+| `CLAUDE_JOB_DIR`, `AI_AGENT`, `CLAUDE_EFFORT` | the launching background job's directory, agent identity and inherited effort marker; the brief explicitly requires removing these |
+| `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_REMOTE_SESSION_ID` | the launching cloud session's runtime context and transcript identity |
+| `CLAUDE_ENV_FILE`, `CLAUDE_PROJECT_DIR` | the launching session's persisted shell environment and hook project context |
 
-Kept: `CLAUDE_CONFIG_DIR`, `ANTHROPIC_*`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_EFFORT` (may be user configuration) and every other variable the user set.
+Kept: `CLAUDE_CONFIG_DIR`, `ANTHROPIC_*` authentication/base URLs, `CLAUDE_CODE_USE_*`, `DISABLE_*`, proxy variables, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_CODE_EFFORT_LEVEL` (the documented user setting, distinct from `CLAUDE_EFFORT`), `CLAUDE_CODE_TASK_LIST_ID` (an explicitly shared task list) and every other non-denied configuration variable. The [official CLI environment reference](https://code.claude.com/docs/en/env-vars), checked for #670, documents the bridge/cloud IDs, child marker, job directory, PID and persisted environment file; private markers are also retained in the explicit deny set from the observed incident.
 
 What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1` (`open-terminal`, `isPlainTerminal` branch, present since the project's first commit, not tied to the `claude` shim) and `CLAUDE_CODE_SSE_PORT` of a session with IDE Emulation. A new marker the CLI starts setting is added to `SESSION_MARKERS`; `test/clean-pty-env.test.js` lists them one by one.
+
+`test/child-session-env.test.js` sets markers in real `process.env`, evaluates the shipped main-process startup and launch handlers with the process/PTY boundary intercepted, and inspects each resulting child environment. A real Node child verifies implicit inheritance without launching Electron, Claude or an installer. The script launchers are exercised without starting their external tools. This tests the spawn boundary; it does not qualify CLI metadata writes or remote host startup files. A user shell profile that explicitly exports session markers again after startup is outside this inherited-environment fix.
 
 ## If you change this, also check
 
