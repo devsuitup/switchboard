@@ -637,7 +637,7 @@ function backfillCustomTitles() {
   if (!setCachedCustomTitles || !getCachedMissingCustomTitle) return (customTitleBackfill = Promise.resolve());
   const rows = getCachedMissingCustomTitle().filter(row => validId(row.sessionId) && parseFolderKey(row.folder).alias === null);
   if (!rows.length) return (customTitleBackfill = Promise.resolve());
-  const files = rows.map(row => ({ sessionId: row.sessionId, fileMtime: row.fileMtime, customTitle: row.customTitle,
+  const files = rows.map(row => ({ sessionId: row.sessionId, fileMtime: row.fileMtime,
     file: resolveJsonlPath(resolveFolderDir(row.folder), { ...row, folder: '.' }) }));
   customTitleBackfill = new Promise(resolve => {
     let worker, settled = false;

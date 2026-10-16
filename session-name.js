@@ -11,11 +11,11 @@ function applySessionName(previous, sessionId, name, source = 'user', cachedTitl
     nameTranscriptTitle: source === 'user' ? cachedTitle : name };
 }
 
-function establishTranscriptBaseline(previous, row) {
+function establishTranscriptBaseline(previous, cachedEntry) {
   const userOwned = previous?.nameSource ? previous.nameSource === 'user' : !!previous?.name;
-  if (userOwned && previous.nameTranscriptTitle == null && row.customTitle != null &&
-    !row.parentSessionId && row.folder && !row.folder.includes('::')) {
-    return { ...previous, nameSource: 'user', nameTranscriptTitle: row.customTitle };
+  if (userOwned && previous.nameTranscriptTitle == null && cachedEntry?.customTitle != null &&
+    !cachedEntry.parentSessionId && cachedEntry.folder && !cachedEntry.folder.includes('::')) {
+    return { ...previous, nameSource: 'user', nameTranscriptTitle: cachedEntry.customTitle };
   }
   return previous;
 }

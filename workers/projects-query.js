@@ -40,9 +40,10 @@ function build(message) {
   const writers = {
     upsertCachedSessions: sessions => {
       for (const row of sessions) {
-        rows.set(row.sessionId, { ...rows.get(row.sessionId), ...row });
+        const cachedEntry = rows.get(row.sessionId);
         const previous = meta.get(row.sessionId);
-        const next = establishTranscriptBaseline(previous, row);
+        const next = establishTranscriptBaseline(previous, cachedEntry);
+        rows.set(row.sessionId, { ...cachedEntry, ...row });
         if (next !== previous) meta.set(row.sessionId, next);
       }
     },

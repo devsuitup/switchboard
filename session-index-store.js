@@ -543,6 +543,8 @@ function getProjectsRevision() {
 
 const upsertCachedSessionsBatch = db.transaction((sessions) => {
   for (const s of sessions) {
+    const previous = getMeta(s.sessionId, true);
+    const next = establishTranscriptBaseline(previous, stmts.cacheGetSession.get(s.sessionId));
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
@@ -553,9 +555,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       typeof s.entrypoint === 'string' ? s.entrypoint : null,
       s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null
     );
-    const previous = getMeta(s.sessionId, true);
-    const next = establishTranscriptBaseline(previous, s);
-    if (next !== previous) metaFieldSet.run(s.sessionId, 'name', metaFieldNext.get().revision, 'user', next.nameTranscriptTitle);
+    if (next !== previous) metaFieldSet.run(s.sessionId, 'name', previous.nameRevision ?? metaFieldNext.get().revision, 'user', next.nameTranscriptTitle);
   }
 });
 
@@ -579,7 +579,7 @@ const setCachedCustomTitles = db.transaction((pairs) => {
     const changed = stmts.cacheSetCustomTitle.run(customTitle || '', sessionId, fileMtime || null).changes;
     const field = metaFieldGet.get(sessionId, 'name');
     if (changed && (!field || field.source === 'user') && field?.transcriptTitle == null && getMeta(sessionId)?.name) {
-      metaFieldSet.run(sessionId, 'name', metaFieldNext.get().revision, 'user', customTitle || '');
+      metaFieldSet.run(sessionId, 'name', field?.revision ?? metaFieldNext.get().revision, 'user', customTitle || '');
     }
     if (changed && promoteName && customTitle && field?.source === 'transcript') setName(sessionId, customTitle, 'transcript');
   }

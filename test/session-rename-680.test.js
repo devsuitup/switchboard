@@ -106,14 +106,68 @@ for (const [first, next] of [['X (3)', 'X'], ['X', 'X (3)']]) {
   });
 }
 
-test('a NULL baseline does not swallow a subsequent transcript rename', t => {
+for (const adapter of ['SQLite', 'recorder']) {
+  test(`a NULL baseline does not swallow a subsequent transcript rename through ${adapter} refresh`, t => {
+    run(temp(t), fixture + `
+      refresh();
+      const Database = require('better-sqlite3');
+      const sql = new Database(db.DB_PATH);
+      sql.prepare('UPDATE session_cache SET customTitle = NULL WHERE sessionId = ?').run(id);
+      commands.renameSession(id, 'Y');
+      assert.equal(db.getMeta(id, true).nameTranscriptTitle, null);
+      assert.equal(db.getCachedSession(id).customTitle, null);
+      const recorder = '${adapter}' === 'recorder' ? require('./cache-effects').createCacheEffects(db) : null;
+      if (recorder) { init({ db: recorder.adapter }); recorder.begin(); }
+      fs.appendFileSync(file, title('Z'));
+      refresh();
+      assert.equal(displayed(), 'Z', 'refresh must not absorb a newly observed CLI rename as its baseline');
+      if (recorder) for (const effect of recorder.finish()) db[effect.name](...effect.args);
+      assert.equal(db.getMeta(id, true).nameTranscriptTitle, 'Z');
+      sql.close();
+      db.closeDb();
+    `);
+  });
+}
+
+test('refresh hydrates a NULL baseline from an already cached title and keeps the user name', t => {
   run(temp(t), fixture + `
+    refresh();
     commands.renameSession(id, 'Y');
-    db.setName(id, 'Z', 'transcript');
-    assert.equal(db.getMeta(id).name, 'Z');
+    const Database = require('better-sqlite3');
+    const sql = new Database(db.DB_PATH);
+    sql.prepare('UPDATE session_meta_fields SET transcriptTitle = NULL WHERE sessionId = ?').run(id);
+    refresh();
+    assert.equal(displayed(), 'Y');
+    assert.equal(db.getMeta(id, true).nameTranscriptTitle, 'X');
+    sql.close();
     db.closeDb();
   `);
 });
+
+for (const method of ['refresh', 'backfill']) {
+  test(`baseline-only ${method} hydration cannot outrank a newer user name during rekey`, t => {
+    run(temp(t), fixture + `
+      refresh();
+      const Database = require('better-sqlite3');
+      const sql = new Database(db.DB_PATH);
+      if ('${method}' === 'backfill') sql.prepare('UPDATE session_cache SET customTitle = NULL WHERE sessionId = ?').run(id);
+      commands.renameSession(id, 'Y');
+      sql.prepare('UPDATE session_meta_fields SET transcriptTitle = NULL WHERE sessionId = ?').run(id);
+      const revision = db.getMeta(id, true).nameRevision;
+      const next = '22222222-2222-4222-8222-222222222222';
+      commands.renameSession(next, 'newer user name');
+      if ('${method}' === 'backfill') {
+        db.setCachedCustomTitles([{ sessionId: id, customTitle: 'X', fileMtime: db.getCachedSession(id).fileMtime }]);
+      } else refresh();
+      assert.equal(db.getMeta(id, true).nameTranscriptTitle, 'X');
+      assert.equal(db.getMeta(id, true).nameRevision, revision, 'baseline hydration must preserve the name revision');
+      db.rekeySessionMeta(id, next, 'X');
+      assert.equal(db.getMeta(next).name, 'newer user name');
+      sql.close();
+      db.closeDb();
+    `);
+  });
+}
 
 for (const row of [{ folder: 'host::-fixture' }, { folder: '-fixture', parentSessionId: 'parent' }]) {
   test(`migration preserves ${row.parentSessionId ? 'subagent' : 'remote'} titles and NULL baselines accept /rename`, t => {
@@ -206,7 +260,7 @@ test('full scans and direct transcript writes preserve the rename baseline acros
 });
 
 for (const method of ['backfill', 'refresh']) {
-  test(`legacy wrong cached titles are repaired by ${method} without clobbering a saved user name`, t => {
+  test(`legacy unknown titles are repaired by ${method} ${method === 'backfill' ? 'without clobbering a user name' : 'without absorbing the observed title'}`, t => {
     const root = temp(t);
     run(root, fixture + `
       refresh();
@@ -239,7 +293,8 @@ for (const method of ['backfill', 'refresh']) {
           cache.refreshFolder(folder);
         }
         assert.equal(db.getCachedSession(id).customTitle, 'X', 'repair the old first title without reindex');
-        assert.equal(db.getMeta(id).name, 'Y', 'repair is not a new CLI rename');
+        assert.equal(db.getMeta(id).name, '${method}' === 'backfill' ? 'Y' : 'X',
+          'only backfill may establish a baseline from a newly discovered title');
         fs.appendFileSync(file, JSON.stringify({ type: 'custom-title', customTitle: 'Z' }) + '\\n');
         fs.utimesSync(file, new Date(1900000200000), new Date(1900000200000));
         cache.refreshFolder(folder);
@@ -347,6 +402,41 @@ test('backfill repairs a legacy transcript-owned displayed name as well as its c
   `);
 });
 
+test('the projects worker accepts a newly observed title with a NULL baseline and cached title', t => {
+  run(temp(t), fixture + `
+    const { Worker } = require('node:worker_threads');
+    refresh();
+    const Database = require('better-sqlite3');
+    const sql = new Database(db.DB_PATH);
+    sql.prepare('UPDATE session_cache SET customTitle = NULL WHERE sessionId = ?').run(id);
+    commands.renameSession(id, 'Y');
+    sql.close();
+    db.setInitialScanComplete();
+    fs.appendFileSync(file, title('Z'));
+    fs.utimesSync(file, new Date(1900000100000), new Date(1900000100000));
+    const worker = new Worker(path.join(process.cwd(), 'workers/projects-query.js'), { workerData: { dbPath: db.DB_PATH, projectsDir } });
+    (async () => {
+      try {
+        const result = await new Promise((resolve, reject) => {
+          const effects = [];
+          worker.on('error', reject);
+          worker.on('message', message => {
+            if (message.error) { reject(new Error(message.error)); return; }
+            if (message.progress) effects.push(...message.progress.effects);
+            if (message.result) resolve({ ...message.result, effects: [...effects, ...message.result.effects] });
+          });
+          worker.postMessage({ id: 1, reconcile: true, activeSessions: [], remoteRoots: [] });
+        });
+        for (const view of [result.defaultProjects, result.allProjects]) {
+          assert.equal(view.flatMap(p => p.sessions).find(s => s.sessionId === id).name, 'Z');
+        }
+        for (const effect of result.effects) db[effect.name](...effect.args);
+        assert.equal(db.getMeta(id).name, 'Z');
+      } finally { await worker.terminate(); db.closeDb(); }
+    })().catch(err => { console.error(err); process.exitCode = 1; });
+  `);
+});
+
 test('the projects worker keeps user precedence in both views while reconciling title changes', t => {
   run(temp(t), fixture + `
     const { Worker } = require('node:worker_threads');
@@ -383,22 +473,5 @@ test('the projects worker keeps user precedence in both views while reconciling 
         }
       } finally { await worker.terminate(); db.closeDb(); }
     })().catch(err => { console.error(err); process.exitCode = 1; });
-  `);
-});
-
-test('the title scan worker prefers a known cached title over a head-only title', t => {
-  run(temp(t), fixture + `
-    const { Worker } = require('node:worker_threads');
-    fs.appendFileSync(file, ' '.repeat(300000) + '\\n');
-    const worker = new Worker(path.join(process.cwd(), 'workers/scan-session-titles.js'), {
-      workerData: { files: [{ sessionId: id, file, customTitle: 'X' }] }
-    });
-    const pairs = [];
-    worker.on('message', batch => pairs.push(...batch));
-    worker.on('exit', code => {
-      assert.equal(code, 0);
-      assert.equal(pairs[0].customTitle, 'X');
-      db.closeDb();
-    });
   `);
 });

@@ -44,9 +44,10 @@ function createCacheEffects(read) {
   const writes = {
     upsertCachedSessions: sessions => {
       for (const row of sessions) {
-        rows.set(row.sessionId, { ...rowFor(row.sessionId), ...row });
+        const cachedEntry = rowFor(row.sessionId);
         const previous = metaFor(row.sessionId);
-        const next = establishTranscriptBaseline(previous, row);
+        const next = establishTranscriptBaseline(previous, cachedEntry);
+        rows.set(row.sessionId, { ...cachedEntry, ...row });
         if (next !== previous) meta.set(row.sessionId, next);
       }
     },
