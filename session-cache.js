@@ -423,7 +423,7 @@ function refreshFolder(folder, opts = {}) {
           slug: h.slug || cachedEntry.slug,
           scheduleSlug: h.scheduleSlugComplete ? h.scheduleSlug : h.scheduleSlug || cachedEntry.scheduleSlug,
           aiTitle: h.aiTitle || cachedEntry.aiTitle,
-          customTitle: h.customTitle || cachedEntry.customTitle,
+          customTitle: h.tailTitle || cachedEntry.customTitle || h.headTitle,
           parentSessionId: h.parentSessionId || cachedEntry.parentSessionId,
           agentId: h.agentId || cachedEntry.agentId,
           subagentType: h.subagentType || cachedEntry.subagentType,
@@ -434,8 +434,8 @@ function refreshFolder(folder, opts = {}) {
           merged.entrypoint = readSessionEntrypoint(filePath) ?? cachedEntry.entrypoint;
         }
         sessionsToUpsert.push(merged);
-        if (h.customTitle && h.customTitle !== cachedEntry.customTitle) {
-          namesToSet.push({ id: merged.sessionId, name: h.customTitle });
+        if (merged.customTitle && merged.customTitle !== cachedEntry.customTitle) {
+          namesToSet.push({ id: merged.sessionId, name: merged.customTitle });
         }
       } else {
         // Header read couldn't extract signal -- just bump mtime so sort order
@@ -637,7 +637,7 @@ function backfillCustomTitles() {
   if (!setCachedCustomTitles || !getCachedMissingCustomTitle) return (customTitleBackfill = Promise.resolve());
   const rows = getCachedMissingCustomTitle().filter(row => validId(row.sessionId) && parseFolderKey(row.folder).alias === null);
   if (!rows.length) return (customTitleBackfill = Promise.resolve());
-  const files = rows.map(row => ({ sessionId: row.sessionId, fileMtime: row.fileMtime,
+  const files = rows.map(row => ({ sessionId: row.sessionId, fileMtime: row.fileMtime, customTitle: row.customTitle,
     file: resolveJsonlPath(resolveFolderDir(row.folder), { ...row, folder: '.' }) }));
   customTitleBackfill = new Promise(resolve => {
     let worker, settled = false;

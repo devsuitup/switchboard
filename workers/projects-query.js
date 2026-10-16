@@ -4,6 +4,7 @@
 const { parentPort, workerData } = require('node:worker_threads');
 const Database = require('better-sqlite3');
 const cache = require('../session-cache');
+const { applySessionName, establishTranscriptBaseline } = require('../session-name');
 const db = new Database(workerData.dbPath, { readonly: true, fileMustExist: true });
 db.pragma('busy_timeout = 5000');
 
@@ -41,9 +42,8 @@ function build(message) {
       for (const row of sessions) {
         rows.set(row.sessionId, { ...rows.get(row.sessionId), ...row });
         const previous = meta.get(row.sessionId);
-        if (row.customTitle === '' && previous?.name && (!previous.nameSource || previous.nameSource === 'user') && previous.nameTranscriptTitle == null) {
-          Object.assign(previous, { nameSource: 'user', nameTranscriptTitle: '' });
-        }
+        const next = establishTranscriptBaseline(previous, row);
+        if (next !== previous) meta.set(row.sessionId, next);
       }
     },
     deleteCachedSession: id => rows.delete(id),
@@ -52,13 +52,7 @@ function build(message) {
     setFolderMeta: (folder, projectPath, indexMtimeMs) => folders.set(folder, { folder, projectPath, indexMtimeMs }),
     setName: (id, name, source = 'user') => {
       const previous = meta.get(id);
-      const userOwned = previous?.nameSource ? previous.nameSource === 'user' : !!previous?.name;
-      if (source === 'transcript' && userOwned && (previous.nameTranscriptTitle == null || previous.nameTranscriptTitle === name)) {
-        if (previous.nameTranscriptTitle == null) previous.nameTranscriptTitle = name;
-        return;
-      }
-      meta.set(id, { ...previous, sessionId: id, name, nameSource: source,
-        nameTranscriptTitle: source === 'user' ? rows.get(id)?.customTitle ?? null : name });
+      meta.set(id, applySessionName(previous, id, name, source, rows.get(id)?.customTitle ?? null));
     },
     replaceSessionMetrics: () => {},
     deleteSearchFolder: () => {},

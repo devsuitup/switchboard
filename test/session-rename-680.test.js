@@ -50,7 +50,7 @@ function run(root, code) {
   assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
-test('bounded header prefers the last tail title and falls back to the last head title', t => {
+test('bounded header reports head and tail titles separately without inventing a tail fallback', t => {
   const file = path.join(temp(t), 'session.jsonl');
   const title = customTitle => JSON.stringify({ type: 'custom-title', customTitle }) + '\n';
   const prompt = JSON.stringify({ type: 'user', message: { content: 'prompt' } }) + '\n';
@@ -59,12 +59,113 @@ test('bounded header prefers the last tail title and falls back to the last head
   let bytes = 0;
   fs.readSync = function(...args) { const n = original.apply(this, args); bytes += n; return n; };
   try {
-    assert.equal(readSessionDisplayHeader(file).customTitle, 'X');
-    assert.ok(bytes <= 512 * 1024, `bounded reads: ${bytes}`);
+    const header = readSessionDisplayHeader(file);
+    assert.equal(header.tailTitle, 'X');
+    assert.equal(header.headTitle, 'head');
+    assert.ok(bytes <= 512 * 1024 + 1, `bounded reads: ${bytes}`);
   } finally { fs.readSync = original; }
   fs.writeFileSync(file, title('X (3)') + prompt + title('head') + ' '.repeat(600000) + '\n');
-  assert.equal(readSessionDisplayHeader(file).customTitle, 'head');
+  assert.equal(readSessionDisplayHeader(file).headTitle, 'head');
+  assert.equal(readSessionDisplayHeader(file).tailTitle, null);
 });
+
+test('a tail window exactly at a line start retains its complete first title', t => {
+  const file = path.join(temp(t), 'session.jsonl');
+  const title = JSON.stringify({ type: 'custom-title', customTitle: 'boundary' }) + '\n';
+  const head = JSON.stringify({ type: 'user', message: { content: 'prompt' } }) + '\n';
+  fs.writeFileSync(file, head + ' '.repeat(300000) + '\n' + title + ' '.repeat(256 * 1024 - Buffer.byteLength(title)));
+  assert.equal(readSessionDisplayHeader(file).customTitle, 'boundary');
+});
+
+test('a title-free gap larger than the tail keeps the cached title and user rename', t => {
+  run(temp(t), fixture + `
+    refresh();
+    commands.renameSession(id, 'Y');
+    fs.appendFileSync(file, ' '.repeat(300000) + '\\n');
+    refresh();
+    assert.equal(displayed(), 'Y', 'the old head title cannot undo a user rename');
+    assert.equal(db.getCachedSession(id).customTitle, 'X');
+    db.closeDb();
+  `);
+});
+
+for (const [first, next] of [['X (3)', 'X'], ['X', 'X (3)']]) {
+  test(`CLI deduplication ${first} to ${next} keeps a user rename until /rename Z`, t => {
+    run(temp(t), fixture + `
+      fs.writeFileSync(file, title('${first}') + JSON.stringify({ type: 'user', cwd: root, message: { content: 'prompt' } }) + '\\n');
+      refresh();
+      commands.renameSession(id, 'Y');
+      fs.appendFileSync(file, title('${next}'));
+      refresh();
+      assert.equal(displayed(), 'Y', 'deduplication is not a user rename');
+      fs.appendFileSync(file, title('Z'));
+      refresh();
+      assert.equal(displayed(), 'Z');
+      db.closeDb();
+    `);
+  });
+}
+
+test('a NULL baseline does not swallow a subsequent transcript rename', t => {
+  run(temp(t), fixture + `
+    commands.renameSession(id, 'Y');
+    db.setName(id, 'Z', 'transcript');
+    assert.equal(db.getMeta(id).name, 'Z');
+    db.closeDb();
+  `);
+});
+
+for (const row of [{ folder: 'host::-fixture' }, { folder: '-fixture', parentSessionId: 'parent' }]) {
+  test(`migration preserves ${row.parentSessionId ? 'subagent' : 'remote'} titles and NULL baselines accept /rename`, t => {
+    const root = temp(t);
+    run(root, fixture + `
+      db.upsertCachedSessions([{ sessionId: id, ...${JSON.stringify(row)}, customTitle: 'X' }]);
+      commands.renameSession(id, 'Y');
+      const Database = require('better-sqlite3');
+      const sql = new Database(db.DB_PATH);
+      sql.prepare("DELETE FROM settings WHERE key = 'custom_title_backfill_version'").run();
+      sql.close();
+      db.closeDb();
+    `);
+    run(root, `
+      const assert = require('node:assert/strict');
+      const db = require('./test/fixtures/writer-store.cjs');
+      const id = '11111111-1111-4111-8111-111111111111';
+      assert.equal(db.getCachedSession(id).customTitle, 'X');
+      assert.equal(db.getMeta(id, true).nameTranscriptTitle, 'X');
+      const Database = require('better-sqlite3');
+      const sql = new Database(db.DB_PATH);
+      sql.prepare("UPDATE session_meta_fields SET transcriptTitle = NULL WHERE sessionId = ?").run(id);
+      sql.prepare("UPDATE session_cache SET customTitle = NULL WHERE sessionId = ?").run(id);
+      sql.close();
+      db.upsertCachedSessions([{ ...db.getCachedSession(id), customTitle: 'Z' }]);
+      db.setName(id, 'Z', 'transcript');
+      assert.equal(db.getMeta(id).name, 'Z');
+      db.closeDb();
+    `);
+  });
+}
+
+for (const method of ['writeScannedFolder', 'writeScannedFolderPartial']) {
+  test(`${method} recorder keeps the search title consistent with the user name`, t => {
+    run(temp(t), fixture + `
+      const { createCacheEffects } = require('./cache-effects');
+      refresh();
+      commands.renameSession(id, 'Y');
+      const recorder = createCacheEffects(db);
+      cache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(), getMainWindow: () => null,
+        log: console, db: recorder.adapter });
+      recorder.begin();
+      cache.${method}({ folder, projectPath: root, sessions: [cache.readSessionFile(file, folder, root)], indexMtimeMs: 0 });
+      const effects = recorder.finish();
+      const entries = effects.find(effect => effect.name === 'upsertSearchEntries').args[0];
+      assert.equal(entries[0].title, 'Y fixture prompt');
+      for (const effect of effects) db[effect.name](...effect.args);
+      assert.equal(db.getMeta(id).name, 'Y');
+      db.closeDb();
+    `);
+  });
+}
 
 test('refresh keeps a Switchboard rename through transcript echoes and accepts a subsequent /rename', t => {
   run(temp(t), fixture + `
@@ -202,6 +303,22 @@ test('re-keying a user name carries its transcript baseline to the continued ses
   `);
 });
 
+test('re-keying legacy metadata assigns new fields a positive revision', t => {
+  run(temp(t), fixture + `
+    refresh();
+    commands.renameSession(id, 'Y');
+    const Database = require('better-sqlite3');
+    const sql = new Database(db.DB_PATH);
+    sql.prepare('DELETE FROM session_meta_fields WHERE sessionId = ?').run(id);
+    sql.close();
+    const next = '22222222-2222-4222-8222-222222222222';
+    db.rekeySessionMeta(id, next, 'X');
+    assert.ok(db.getMeta(next, true).nameRevision > 0);
+    assert.equal(db.getMeta(next).name, 'Y');
+    db.closeDb();
+  `);
+});
+
 test('backfill repairs a legacy transcript-owned displayed name as well as its cached title', t => {
   const root = temp(t);
   run(root, fixture + `
@@ -233,6 +350,7 @@ test('backfill repairs a legacy transcript-owned displayed name as well as its c
 test('the projects worker keeps user precedence in both views while reconciling title changes', t => {
   run(temp(t), fixture + `
     const { Worker } = require('node:worker_threads');
+    fs.writeFileSync(file, title('X (3)') + JSON.stringify({ type: 'user', cwd: root, message: { content: 'fixture prompt' } }) + '\\n');
     refresh();
     commands.renameSession(id, 'Y');
     db.setInitialScanComplete();
@@ -252,8 +370,8 @@ test('the projects worker keeps user precedence in both views while reconciling 
     });
     (async () => {
       try {
-        for (const [append, expected] of [['X', 'Y'], ['Z', 'Z']]) {
-          fs.appendFileSync(file, title(append));
+        for (const [append, expected] of [['X', 'Y'], [null, 'Y'], ['X (3)', 'Y'], ['Z', 'Z']]) {
+          fs.appendFileSync(file, append ? title(append) : ' '.repeat(300000) + '\\n');
           fs.utimesSync(file, new Date(1900000000000 + ++tick * 1000), new Date(1900000000000 + tick * 1000));
           const result = await request();
           for (const view of [result.defaultProjects, result.allProjects]) {
@@ -261,8 +379,26 @@ test('the projects worker keeps user precedence in both views while reconciling 
           }
           for (const effect of result.effects) db[effect.name](...effect.args);
           assert.equal(db.getMeta(id).name, expected);
+          if (append === null) assert.equal(db.getCachedSession(id).customTitle, 'X');
         }
       } finally { await worker.terminate(); db.closeDb(); }
     })().catch(err => { console.error(err); process.exitCode = 1; });
+  `);
+});
+
+test('the title scan worker prefers a known cached title over a head-only title', t => {
+  run(temp(t), fixture + `
+    const { Worker } = require('node:worker_threads');
+    fs.appendFileSync(file, ' '.repeat(300000) + '\\n');
+    const worker = new Worker(path.join(process.cwd(), 'workers/scan-session-titles.js'), {
+      workerData: { files: [{ sessionId: id, file, customTitle: 'X' }] }
+    });
+    const pairs = [];
+    worker.on('message', batch => pairs.push(...batch));
+    worker.on('exit', code => {
+      assert.equal(code, 0);
+      assert.equal(pairs[0].customTitle, 'X');
+      db.closeDb();
+    });
   `);
 });

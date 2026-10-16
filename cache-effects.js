@@ -1,4 +1,5 @@
 'use strict';
+const { applySessionName, establishTranscriptBaseline } = require('./session-name');
 
 // see .ai/contexts/session-index-writer.md
 function createCacheEffects(read) {
@@ -16,7 +17,7 @@ function createCacheEffects(read) {
     return rows.get(id);
   };
   const metaFor = id => {
-    if (!meta.has(id)) meta.set(id, structuredClone(read.getMeta(id)));
+    if (!meta.has(id)) meta.set(id, structuredClone(read.getMeta(id, true)));
     return meta.get(id);
   };
   function mergedRows(source) {
@@ -41,12 +42,19 @@ function createCacheEffects(read) {
     isInitialScanComplete: () => adapter.getSetting('initial_scan_complete') === true,
   };
   const writes = {
-    upsertCachedSessions: sessions => { for (const row of sessions) rows.set(row.sessionId, { ...rowFor(row.sessionId), ...row }); },
+    upsertCachedSessions: sessions => {
+      for (const row of sessions) {
+        rows.set(row.sessionId, { ...rowFor(row.sessionId), ...row });
+        const previous = metaFor(row.sessionId);
+        const next = establishTranscriptBaseline(previous, row);
+        if (next !== previous) meta.set(row.sessionId, next);
+      }
+    },
     deleteCachedSession: id => rows.set(id, null),
     deleteCachedFolder: folder => { for (const row of adapter.getCachedByFolder(folder)) rows.set(row.sessionId, null); folders.set(folder, null); },
     touchCachedModified: (id, modified) => { const row = rowFor(id); if (row) Object.assign(row, { modified, fileMtime: modified }); },
     setFolderMeta: (folder, projectPath, indexMtimeMs) => folders.set(folder, { folder, projectPath, indexMtimeMs }),
-    setName: (id, name, source = 'user') => meta.set(id, { ...metaFor(id), sessionId: id, name, nameSource: source }),
+    setName: (id, name, source = 'user') => meta.set(id, applySessionName(metaFor(id), id, name, source, rowFor(id)?.customTitle ?? null)),
     setSetting: (key, value) => settings.set(key, value),
     replaceSessionMetrics() {}, deleteSearchFolder() {}, deleteSearchSession() {}, upsertSearchEntries() {},
     setCachedEntrypoints() {}, setCachedCustomTitles() {}, setCachedContinuationIndex() {},

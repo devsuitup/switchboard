@@ -589,9 +589,13 @@ function readSessionDisplayHeader(filePath, opts = {}) {
     try {
       n = fs.readSync(fd, buf, 0, readLen, 0);
       if (stat.size > readLen) {
-        tail = readTextRange(fd, stat.size - MAX_BYTES, MAX_BYTES);
-        const boundary = tail.indexOf('\n');
-        tail = boundary < 0 ? '' : tail.slice(boundary + 1);
+        const window = Buffer.alloc(MAX_BYTES + 1);
+        const count = fs.readSync(fd, window, 0, window.length, stat.size - MAX_BYTES - 1);
+        tail = window.toString('utf8', 1, count);
+        if (window[0] !== 10) {
+          const boundary = tail.indexOf('\n');
+          tail = boundary < 0 ? '' : tail.slice(boundary + 1);
+        }
       } else tail = buf.toString('utf8', 0, n);
     } finally { fs.closeSync(fd); }
     const text = buf.toString('utf8', 0, n);
@@ -602,7 +606,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
     let summary = '';
     let commandSummary = '';
     let assistantSeen = false;
-    let slug = null, customTitle = null, aiTitle = null, agentId = null;
+    let slug = null, headTitle = null, tailTitle = null, aiTitle = null, agentId = null;
     let scheduleSlug = null;
     let scheduleSlugComplete = n === stat.size;
     let sidechainSeen = false;
@@ -625,7 +629,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
       if (entry.type === 'assistant' || (entry.type === 'message' && entry.role === 'assistant')) {
         assistantSeen = true;
       }
-      if (entry.type === 'custom-title' && entry.customTitle) customTitle = entry.customTitle;
+      if (entry.type === 'custom-title' && entry.customTitle) headTitle = entry.customTitle;
       if (entry.type === 'ai-title' && entry.aiTitle && !aiTitle) aiTitle = entry.aiTitle;
       const msg = entry.message;
       const txt = typeof msg === 'string' ? msg :
@@ -642,8 +646,9 @@ function readSessionDisplayHeader(filePath, opts = {}) {
       if (!line.includes('custom-title')) continue;
       let entry;
       try { entry = JSON.parse(line); } catch { continue; }
-      if (entry.type === 'custom-title' && entry.customTitle) customTitle = entry.customTitle;
+      if (entry.type === 'custom-title' && entry.customTitle) tailTitle = entry.customTitle;
     }
+    const customTitle = tailTitle || headTitle;
 
     if (!summary && assistantSeen) summary = commandSummary;
     if (!summary) return null;
@@ -661,7 +666,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
         summary: meta.description || summary,
         firstPrompt: summary,
         modified: stat.mtime.toISOString(),
-        slug, customTitle, aiTitle,
+        slug, customTitle, headTitle, tailTitle, aiTitle,
         parentSessionId: opts.parentSessionId,
         agentId,
         subagentType: meta.agentType || null,
@@ -673,7 +678,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
       sessionId: fileBase,
       summary, firstPrompt: summary,
       modified: stat.mtime.toISOString(),
-      slug, scheduleSlug, scheduleSlugComplete, customTitle, aiTitle,
+      slug, scheduleSlug, scheduleSlugComplete, customTitle, headTitle, tailTitle, aiTitle,
     };
   } catch {
     return null;

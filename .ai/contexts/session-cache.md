@@ -228,26 +228,38 @@ as reliable turn evidence by this display projection.
 `session_meta.name`. The full reader retains the last `custom-title` and records
 an empty string for a known absence. The refresh reader scans at most 256 KB /
 500 lines of the head for display fields, then at most 256 KB of the tail for
-titles, dropping the tail's potentially partial first line. Its last valid
-`custom-title` wins over the head's last title; malformed trailing records are
-ignored. Small files reuse the head buffer, scanning all its lines for titles.
-If neither bounded region contains a later title, the head title is the fallback;
-the hot path never scans the omitted middle. Header refreshes persist the observed
-title as well as the display name.
+titles, plus one preceding byte to check the line boundary. A complete first
+line is retained; a partial one is dropped. It returns `headTitle` and `tailTitle`
+separately (and `customTitle` as a compatibility fallback). Refreshes and the
+title-scan worker choose `tailTitle || cached.customTitle || headTitle`: an old
+head-only title cannot replace a known cached title after a long title-free gap.
+Malformed trailing records are ignored. Small files reuse the head buffer,
+scanning all its lines for titles. The hot path never scans the omitted middle,
+so a title appearing only there cannot be discovered without a full scan.
 
 `session_meta_fields.transcriptTitle` stores the transcript title observed when
 Switchboard saves a user rename. Transcript writes cannot replace that name
-while their title still matches this baseline. A changed title, such as a later
-CLI `/rename`, can replace it. The SQLite writer and the Projects worker apply
-the same precedence, including full scans, direct writes and restart recovery.
+while their title still matches this baseline. Titles differing only by a terminal
+numeric deduplication suffix (`X (3)` and `X`, in either direction) also match;
+CLI collision cleanup cannot replace a user rename. A different title, such as
+`/rename Z`, can replace it. A NULL baseline matches no title. `session-name.js`
+provides the pure precedence function shared by the SQLite writer, Projects
+worker and cache-effects recorder, including full scans, direct writes and
+restart recovery. The recorder reads name provenance and the baseline with
+`getMeta(id, true)` so search-index titles agree with the stored user name.
 Re-keying user metadata carries the baseline with it. Collision-named jobs and
 descriptors still suppress transcript name promotion.
 
 The version-2 title backfill invalidates old cached titles once on writable
-schema reconciliation, preserving session rows and user names. It resets user
-title baselines to unknown so repairing an old first title is not interpreted as
-a new CLI rename. The first refreshed/backfilled title establishes that baseline
-without replacing the user name; subsequent changes may win. Existing local rows with an unknown title
+schema reconciliation for local top-level rows only, preserving remote/subagent
+titles and baselines, session rows and user names. It resets local user title
+baselines to unknown so repairing an old first title is not interpreted as a new
+CLI rename. The first local cache upsert/backfill establishes that baseline
+without replacing the user name; subsequent changes may win. This hydration is
+also shared in `session-name.js`. Remote/subagent NULL baselines left by earlier
+migrations do not absorb their next `/rename`. New metadata fields receive the
+next revision, including baseline hydration and legacy metadata re-keying.
+Existing local rows with an unknown title
 are selected through `getCachedMissingCustomTitle`: only session id, folder and
 file mtime for rows with `customTitle IS NULL AND parentSessionId IS NULL`.
 They are backfilled once by `workers/scan-session-titles.js`, using the existing
