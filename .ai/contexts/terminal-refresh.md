@@ -222,7 +222,12 @@ accumulation/reveal and main's reattach buffer (`output-buffer.js`).
 - OSC 4 indexed-colour queries (`ESC]4;1;?`, including repeated index/query
   pairs) and OSC 10/11/12 colour queries (`ESC]10;?`, etc.), including stacked
   query-only slots (`ESC]10;?;?`). Both accept BEL or `ESC` + backslash
-  terminators. Colour setters and their replies remain untouched.
+  terminators. Colour setters and their replies remain untouched. A sequence
+  that mixes set and query slots (`ESC]4;1;?;2;#112233`, `ESC]10;#112233;?`)
+  is kept whole to preserve the set, so xterm still answers its query slots
+  on replay; so do trailing-parameter forms (`ESC]4;1;?;2`, `ESC]10;?;`).
+- Only 7-bit introducers and terminators are matched. C1 forms (`0x9b`,
+  `0x90`, `0x9c`), which xterm also answers, are not filtered.
 - DECRQSS (`ESC P $ q` + selector + `ESC` + backslash), including unknown
   selectors, because xterm answers those with a negative status reply.
 
@@ -243,7 +248,8 @@ preceding escape when a string terminator is pending). Each buffer entry is
 sliced to the remaining search budget before searching, so an old escape
 followed by escape-free logs cannot make every append scan the retained
 256 KB main buffer or 2 MB hidden accumulator. A split query whose prefix
-exceeds 256 code units is deliberately left unfiltered; complete queries in
+exceeds 256 code units (for example a long run of OSC 4 `;N;?` pairs) is
+deliberately left unfiltered; complete queries in
 one chunk still use the full matcher. It returns the exact suffix/prefix
 lengths to remove, preserving main's size accounting.
 
