@@ -40,6 +40,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
   }
   function note(id, taskId, source = 'local-ipc', info = {}) {
     id = resolve(id);
+    const previousSnapshot = source === 'cli-task' && info.toolUseId ? JSON.stringify(snapshot(id)) : null;
     const previous = parents.get(id)?.tasks.get(taskId);
     const hadSource = previous?.sources.has(source);
     const previousType = previous?.subagentType;
@@ -52,7 +53,8 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     t.sources.set(source, now());
     if (info.subagentType) t.subagentType = info.subagentType;
     if (source === 'cli-task') parent(id).known = true;
-    if (!hadSource || previousType !== t.subagentType) changed(id);
+    if (!hadSource || previousType !== t.subagentType ||
+        (previousSnapshot !== null && previousSnapshot !== JSON.stringify(snapshot(id)))) changed(id);
     return true;
   }
   function release(id, taskId, source) {
@@ -110,7 +112,8 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     let content;
     if (entry.type === 'user' && entry.message?.role === 'user' && entry.origin?.kind === 'task-notification') content = entry.message.content;
     else if (entry.type === 'attachment' && entry.attachment?.type === 'queued_command' &&
-        (entry.attachment.origin === undefined || entry.attachment.origin?.kind === 'task-notification')) content = entry.attachment.prompt;
+        ((entry.attachment.origin === undefined && entry.attachment.commandMode === 'task-notification') ||
+        entry.attachment.origin?.kind === 'task-notification')) content = entry.attachment.prompt;
     if (typeof content !== 'string') return null;
     const text = content.trim();
     if (!/^<task-notification>\s*[\s\S]*\s*<\/task-notification>$/.test(text)) return null;

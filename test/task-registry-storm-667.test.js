@@ -19,7 +19,7 @@ function launch(r) {
 
 function completion(origin) {
   return { type: 'attachment', uuid: 'attachment-completion', timestamp: fixture.notification.timestamp,
-    attachment: { type: 'queued_command', prompt: fixture.notification.message.content, ...(origin ? { origin } : {}) } };
+    attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: fixture.notification.message.content, ...(origin ? { origin } : {}) } };
 }
 
 for (const origin of [undefined, { kind: 'task-notification' }, { kind: 'task-notification', producer: 'session-task' }]) {
@@ -30,6 +30,27 @@ for (const origin of [undefined, { kind: 'task-notification' }, { kind: 'task-no
     assert.equal(r.runningAgentCount([id]), 0);
   });
 }
+
+test('#667 no-origin queued commands without task-notification mode end nothing', () => {
+  for (const mode of [undefined, 'normal']) {
+    const r = createTaskRegistry();
+    launch(r);
+    const entry = completion();
+    if (mode === undefined) delete entry.attachment.commandMode;
+    else entry.attachment.commandMode = mode;
+    r.ingest(id, entry);
+    assert.equal(r.runningAgentCount([id]), 1);
+  }
+});
+
+test('#667 explicit task-notification origin does not require commandMode', () => {
+  const r = createTaskRegistry();
+  launch(r);
+  const entry = completion({ kind: 'task-notification' });
+  delete entry.attachment.commandMode;
+  r.ingest(id, entry);
+  assert.equal(r.runningAgentCount([id]), 0);
+});
 
 test('#667 SendMessage reopen ends on its next attachment-only completion', () => {
   const r = createTaskRegistry();
@@ -117,6 +138,58 @@ test('#667 repeated cli-task notes bump revision once, source and type changes s
   assert.equal(r.snapshot(id).revision, 3);
   r.note(id, agent, 'cli-task', { subagentType: 'explore' });
   assert.equal(r.snapshot(id).revision, 3);
+});
+
+test('#667 correlating an existing job agent publishes the removed provisional task', () => {
+  const events = [];
+  const r = createTaskRegistry({ onChange: s => events.push(s) });
+  const renderer = createTaskRegistry();
+  const use = structuredClone(fixture.use);
+  use.message.content[0].id = 'toolu_1';
+  r.ingest(id, use);
+  r.applyJob(id, { valid: true, at: Date.parse(fixture.job.updatedAt), inFlight: 0, fanKnown: true,
+    tasks: [{ id: 'aagent1', kind: 'agent', startedAt: Date.parse(use.timestamp), doneAt: null }] });
+  const before = r.snapshot(id);
+  assert.deepEqual(before.tasks.map(t => t.id), ['tool:toolu_1', 'aagent1']);
+  renderer.applySnapshot(before);
+  assert.equal(renderer.runningAgentCount([id]), 2);
+  assert.equal(r.note(id, 'aagent1', 'cli-task', { toolUseId: 'toolu_1' }), true);
+  const after = r.snapshot(id);
+  assert.deepEqual(after.tasks.map(t => t.id), ['aagent1']);
+  assert.equal(after.revision, before.revision + 1);
+  assert.equal(events.length, 3);
+  renderer.applySnapshot(after);
+  assert.equal(renderer.runningAgentCount([id]), 1);
+  r.note(id, 'aagent1', 'cli-task', { toolUseId: 'toolu_1' });
+  assert.equal(r.snapshot(id).revision, after.revision);
+  assert.equal(events.length, 3);
+});
+
+test('#667 worker child correlation updates the rendered count after job evidence', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-667b-'));
+  t.after(() => { assert.equal(path.dirname(fs.realpathSync.native(root)), fs.realpathSync.native(os.tmpdir())); fs.rmSync(root, { recursive: true, force: true }); });
+  const file = path.join(root, `${id}.jsonl`);
+  const child = path.join(root, 'agent-aagent1.jsonl');
+  const use = structuredClone(fixture.use);
+  use.message.content[0].id = 'toolu_1';
+  fs.writeFileSync(file, JSON.stringify(use) + '\n');
+  fs.writeFileSync(child.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ toolUseId: 'toolu_1' }));
+  const h = setupSidebarDom();
+  t.after(() => h.destroy());
+  const session = { sessionId: id, summary: 'Placeholder', modified: use.timestamp };
+  h.window.sessionMap.set(id, session);
+  h.sidebar.renderProjects([makeSampleProject({ sessions: [session] })], true);
+  const row = h.document.getElementById('si-' + id);
+  const errors = [];
+  const client = createTaskRecordsClient({ onSnapshot: s => h.window.taskRegistry.applySnapshot(s), onError: e => errors.push(e) });
+  t.after(() => client.dispose());
+  await client.read(file, id);
+  await client.job(id, { valid: true, at: Date.parse(fixture.job.updatedAt), inFlight: 0, fanKnown: true,
+    tasks: [{ id: 'aagent1', kind: 'agent', startedAt: Date.parse(use.timestamp), doneAt: null }] });
+  assert.equal(row.querySelector('.session-subagent-count').textContent, '2 subagents running');
+  await client.child(child, id, 'aagent1');
+  assert.deepEqual(errors, []);
+  assert.equal(row.querySelector('.session-subagent-count').textContent, '1 subagent running');
 });
 
 test('#667 fallback heartbeat refreshes TTL without emitting a visible change', () => {
