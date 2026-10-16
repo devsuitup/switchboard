@@ -219,8 +219,10 @@ accumulation/reveal and main's reattach buffer (`output-buffer.js`).
 - DA1 (`ESC[c` / `ESC[0c`), DA2 (`ESC[>c` / `ESC[>0c`) and XTVERSION
   (`ESC[>q` / `ESC[>0q`).
 - ANSI/DEC mode requests (`ESC[...$p` / `ESC[?...$p`), with numeric parameters.
-- OSC 10/11/12 single-colour queries (`ESC]10;?`, etc.), terminated by BEL
-  or `ESC` + backslash. Colour setters and their replies remain untouched.
+- OSC 4 indexed-colour queries (`ESC]4;1;?`, including repeated index/query
+  pairs) and OSC 10/11/12 colour queries (`ESC]10;?`, etc.), including stacked
+  query-only slots (`ESC]10;?;?`). Both accept BEL or `ESC` + backslash
+  terminators. Colour setters and their replies remain untouched.
 - DECRQSS (`ESC P $ q` + selector + `ESC` + backslash), including unknown
   selectors, because xterm answers those with a negative status reply.
 
@@ -236,10 +238,14 @@ Hidden and reattach accumulation also remove each query completed across
 chunk boundaries, including one-byte chunks and splits inside string
 terminators. The reveal filter covers pending live-buffer drains. The shared
 split matcher accepts either the renderer string or main's buffer entries;
-it searches back to the last escape (and the preceding escape when a string
-terminator is pending), so numeric mode identifiers and DECRQSS selectors
-are not limited by the former four-code-unit tail. It returns the exact
-suffix/prefix lengths to remove, preserving main's size accounting.
+it searches at most 256 UTF-16 code units back to the last escape (and the
+preceding escape when a string terminator is pending). Each buffer entry is
+sliced to the remaining search budget before searching, so an old escape
+followed by escape-free logs cannot make every append scan the retained
+256 KB main buffer or 2 MB hidden accumulator. A split query whose prefix
+exceeds 256 code units is deliberately left unfiltered; complete queries in
+one chunk still use the full matcher. It returns the exact suffix/prefix
+lengths to remove, preserving main's size accounting.
 
 Live output keeps queries so the current requester can receive a timely reply.
 Responses, cursor movement, mode changes, colour setters, incomplete requests
@@ -268,7 +274,9 @@ is removed are left alone in that pass, preserving the existing replay rule.
 - `test/terminal-replay-queries.test.js`: real installed xterm parser and colour
   service, raw capability controls, no `onData` event on hidden/reattach replay
   at every split and one byte at a time; pending live-buffer drain, live replies,
-  XTVERSION removal, kitty non-support and exact preservation of non-queries.
+  indexed/stacked colour queries with BEL/ST, XTVERSION removal, kitty non-support
+  and exact preservation of non-queries; deterministic scanned-length bound
+  for large escape-free accumulators and the 256-code-unit split boundary.
 - `test/output-buffer.test.js`: reattach DSR, DECXCPR and DA1 filtering at every
   split and one byte at a time, preserved queries/responses, size accounting,
   coalescing and non-recursive removal.

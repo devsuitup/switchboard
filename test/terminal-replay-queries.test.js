@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const { createCanvas } = require('@napi-rs/canvas');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 const { appendToOutputBuffer, MAX_BUFFER_SIZE } = require('../output-buffer');
-const { removeCursorPositionQueries } = require('../public/terminal-replay-queries');
+const { removeCursorPositionQueries, splitReplayQuery } = require('../public/terminal-replay-queries');
 
 const queries = [
   ['CPR', '\x1b[6n', true],
@@ -26,10 +26,47 @@ const queries = [
     [`OSC ${code} BEL`, `\x1b]${code};?\x07`, true],
     [`OSC ${code} ST`, `\x1b]${code};?\x1b\\`, true],
   ]),
+  ...['4;1;?', '4;1;?;255;?', '10;?;?', '10;?;?;?', '11;?;?'].flatMap(params => [
+    [`OSC ${params} BEL`, `\x1b]${params}\x07`, true],
+    [`OSC ${params} ST`, `\x1b]${params}\x1b\\`, true],
+  ]),
   ...['m', 'r', ' q', '"q', '"p', 'unknown'].map(selector => [
     `DECRQSS ${selector}`, `\x1bP$q${selector}\x1b\\`, true,
   ]),
 ];
+
+test('split replay search scans at most 256 code units of accumulated output per append', t => {
+  const lastIndexOf = String.prototype.lastIndexOf;
+  let scanned = 0;
+  const spy = t.mock.method(String.prototype, 'lastIndexOf', function (...args) {
+    scanned += this.length;
+    return lastIndexOf.apply(this, args);
+  });
+  try {
+    for (const previous of [
+      '\x1b[0m' + 'x'.repeat(2 * 1024 * 1024),
+      ['\x1b[0m' + 'x'.repeat(MAX_BUFFER_SIZE)],
+      ['\x1b[0m', ...Array(64).fill('x'.repeat(80))],
+    ]) {
+      scanned = 0;
+      assert.equal(splitReplayQuery(previous, 'x'.repeat(80)), null);
+      assert.ok(scanned <= 256, `backward search scanned ${scanned} code units`);
+    }
+  } finally { spy.mock.restore(); }
+});
+
+test('split replay queries at the 256-unit boundary are filtered and longer prefixes are retained', () => {
+  for (const prefix of ['\x1b[?' + '1'.repeat(252) + '$', '\x1bP$q' + 'm'.repeat(251) + '\x1b']) {
+    const next = prefix.startsWith('\x1b[') ? 'p' : '\\';
+    for (const previous of [prefix, [...prefix]]) {
+      assert.deepEqual(splitReplayQuery(previous, next), { prefix: 256, remainder: 1 });
+    }
+    const longer = prefix.slice(0, 4) + '1' + prefix.slice(4);
+    for (const previous of [longer, [...longer]]) {
+      assert.equal(splitReplayQuery(previous, next), null);
+    }
+  }
+});
 
 function realTerminal() {
   const ctx = setupTerminalDom();
@@ -126,6 +163,8 @@ test('replay keeps non-query sequences, responses, colour setters and unhandled 
     '\x1b[6;1H', '\x1b[?2026h', '\x1b[?2026;1$y', '\x1b[?1;2c', '\x1b[>0;276;0c',
     '\x1b[?73;3R', '\x1b]10;rgb:ffff/ffff/ffff\x07', '\x1b]11;#112233\x1b\\',
     '\x1b]12;#abcdef\x07', '\x1b]0;title?\x07', '\x1bP1$rm\x1b\\',
+    '\x1b]4;1;#112233\x07', '\x1b]4;1;rgb:ffff/ffff/ffff\x1b\\',
+    '\x1b]10;#112233;?\x07', '\x1b]4;1;?;2;#112233\x1b\\',
     '\x1b[?2026$', '\x1b]10;?', '\x1bP$qm',
   ].join('');
   assert.equal(removeCursorPositionQueries(data), data);
