@@ -27,6 +27,7 @@ const { isPanelShellSession } = require('./panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp } = require('./session-continuations');
 const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
+const { isHostedJob } = require('./bg-agents-roster');
 
 /**
  * Session cache module.
@@ -888,17 +889,19 @@ function buildProjectsFromCache(showArchived) {
   }
 
   const localDescriptors = [...getLocalDescriptors()];
+  const localJobs = getLocalJobs();
   const descriptorIds = new Set(localDescriptors.map(descriptor => descriptor.sessionId.toLowerCase()));
   for (const [id, session] of activeSessions) {
     if (session.exited || !session.isAttach || session.host || !session.attachJobId) continue;
     const sessionId = session.realSessionId || id;
     if (descriptorIds.has(sessionId.toLowerCase())) continue;
+    if (!isHostedJob({ ...localJobs.get(session.attachJobId), id: session.attachJobId })) continue;
     localDescriptors.push({ sessionId, kind: 'bg', jobId: session.attachJobId,
       cwd: session.cwd || session.projectPath, startedAt: session._openedAt });
     descriptorIds.add(sessionId.toLowerCase());
   }
   const projects = mergeLocalBackgroundSessions([...projectMap.values()], cachedRows, localDescriptors, {
-    hiddenProjects, metaMap, showArchived, jobs: getLocalJobs(),
+    hiddenProjects, metaMap, showArchived, jobs: localJobs,
   });
   for (const proj of projects) {
     proj.sessions.sort((a, b) => new Date(b.modified) - new Date(a.modified));

@@ -57,7 +57,7 @@ function setup(t, { graph = {}, indexedHead = false, source = 'user', hidden = f
   let alive = true;
   let clock = Date.now();
   const activeSessions = new Map();
-  cli.init({ dir, activeSessions, onIdle() {}, isProcessAlive: () => alive, readParentPid: () => null, now: () => clock });
+  cli.init({ dir, activeSessions, onIdle() {}, isProcessAlive: () => alive, readProcStart: () => '111', readParentPid: () => null, now: () => clock });
   assert.equal(cli.ensureWatching(), true);
   bgAgents.init({ jobsDir, cliSessionState: cli, resolveProjectRoots: async cwd => ({ projectRoot: cwd, worktreeRoot: cwd }) });
   bgAgents.start();
@@ -95,6 +95,55 @@ async function afterEvent(subscribe, action) {
     });
   } finally { unsubscribe?.(); clearTimeout(timeout); }
 }
+
+test('a done hosted bg UUID keeps its descriptor-only sidebar row', t => {
+  const h = setup(t, { state: 'done' });
+  const sessions = h.projects().flatMap(p => p.sessions);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].descriptorOnly, true);
+  assert.equal(sessions[0].bgJobId, '33333333');
+  assert.equal(h.render().querySelector('.bg-badge')?.textContent, 'bg');
+});
+
+for (const reason of ['before the job watcher fills', 'beyond MAX_JOBS']) {
+  test(`a live bg descriptor keeps its sidebar row without cached job metadata ${reason}`, t => {
+    const h = setup(t);
+    const { mergeLocalBackgroundSessions } = require('../sidebar-bg-sessions');
+    const jobs = reason === 'beyond MAX_JOBS' ? new Map([['other-job', { state: 'working' }]]) : new Map();
+    const projects = [];
+    mergeLocalBackgroundSessions(projects, [], cli.getSidebarDescriptors(), {
+      jobs, metaMap: new Map(), hiddenProjects: new Set(), showArchived: false,
+    });
+    assert.equal(jobs.has('33333333'), false);
+    const rows = projects.flatMap(project => project.sessions);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].descriptorOnly, true);
+    assert.equal(rows[0].sessionId, HEAD);
+    assert.equal(rows[0].bgJobId, h.descriptor.jobId);
+  });
+}
+
+test('a done hosted continuation keeps its head, merged members and registry rename', t => {
+  const h = setup(t, { state: 'done', graph: { [OLD]: [MID], [MID]: [HEAD] }, indexedHead: true });
+  const sessions = h.projects().flatMap(p => p.sessions);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].sessionId, HEAD);
+  assert.deepEqual(sessions[0].mergedMemberIds.slice().sort(), [OLD, MID].sort());
+  assert.equal(sessions[0].name, 'fixture renamed');
+  assert.equal(sessions[0].bgJobId, '33333333');
+});
+
+test('hosted sidebar membership and continuation identity do not flip across turn boundaries', async t => {
+  const h = setup(t, { graph: { [OLD]: [MID], [MID]: [HEAD] }, indexedHead: true });
+  const baseline = h.projects();
+  for (const state of ['done', 'working']) {
+    await afterEvent(bgAgents.onJobsChanged, () => {
+      fs.writeFileSync(h.jobFile, JSON.stringify({ state, sessionId: HEAD, respawnFlags: ['--name', 'fixture launch'] }));
+    });
+    assert.deepEqual(h.projects(), baseline);
+    assert.equal(h.render().querySelector('.bg-badge')?.textContent, 'bg');
+  }
+});
 
 test('an attached live bg UUID has a sidebar row before its first indexed turn and before opening Agents', t => {
   const h = setup(t);
@@ -244,7 +293,7 @@ test('an attach tab remains listed and marked open when no registry descriptor i
 });
 
 test('a live PID with a finished job supplies neither a synthetic row nor an indexed bg badge', t => {
-  const h = setup(t, { state: 'done' });
+  const h = setup(t, { state: 'stopped' });
   assert.equal(cli.getSidebarDescriptors().length, 1, 'the descriptor PID is still live');
   assert.equal(h.projects().flatMap(p => p.sessions).length, 0);
   h.firstTurn();
@@ -262,16 +311,18 @@ test('an open attach PTY cannot keep a finished job descriptor-only row alive', 
   assert.equal(h.projects().flatMap(p => p.sessions).length, 0);
 });
 
-test('job watcher completion removes the badge and splits the live continuation display merge', async t => {
+test('job watcher completion preserves the hosted badge and continuation display merge', async t => {
   const h = setup(t, { graph: { [OLD]: [HEAD] }, indexedHead: true });
   assert.equal(h.projects().flatMap(p => p.sessions).length, 1);
   await afterEvent(bgAgents.onChange, () => {
     fs.writeFileSync(h.jobFile, JSON.stringify({ state: 'done', sessionId: HEAD }));
   });
   const sessions = h.projects().flatMap(p => p.sessions);
-  assert.equal(sessions.length, 2);
-  assert.ok(sessions.every(row => !row.bgJobId));
-  assert.equal(h.render().querySelector('.bg-badge'), null);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].bgJobId, '33333333');
+  assert.equal(sessions[0].sessionId, HEAD);
+  assert.ok(sessions[0].mergedMemberIds.includes(OLD));
+  assert.equal(h.render().querySelector('.bg-badge')?.textContent, 'bg');
 });
 
 test('working and blocked cached jobs retain the badge', t => {

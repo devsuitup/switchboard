@@ -22,7 +22,7 @@ test('a roster snapshot badges only the live jobs: working and blocked, not done
   const apply = ctx.read('applyAgentsSnapshot');
   const project = makeSampleProject();
   const ids = ['s-top-1', 's-top-2'];
-  const job = (id, sessionId, state) => ({ id, sessionId, kind: 'background', state });
+  const job = (id, sessionId, state) => ({ id, sessionId, kind: 'background', state, hosted: state === 'working' || state === 'blocked' });
   apply({ roster: [job('aaaaaaaa', ids[0], 'working'), job('bbbbbbbb', ids[1], 'done')], daemonReachable: true });
   ctx.sidebar.renderProjects([project], false);
   assert.ok(ctx.document.querySelector(`[data-session-id="${ids[0]}"] .bg-badge`), 'a working job is badged');
@@ -45,7 +45,7 @@ test('a roster job badges its session whatever the case of either id', (t) => {
   t.after(() => ctx.destroy());
   ctx.evalPublic('agents-view.js');
   const project = makeSampleProject();
-  ctx.read('applyAgentsSnapshot')({ roster: [{ id: 'aaaaaaaa', sessionId: 'S-TOP-1', kind: 'background', state: 'working' }], daemonReachable: true });
+  ctx.read('applyAgentsSnapshot')({ roster: [{ id: 'aaaaaaaa', sessionId: 'S-TOP-1', kind: 'background', state: 'working', hosted: true }], daemonReachable: true });
   ctx.sidebar.renderProjects([project], false);
   assert.ok(ctx.document.querySelector('[data-session-id="s-top-1"] .bg-badge'));
 });

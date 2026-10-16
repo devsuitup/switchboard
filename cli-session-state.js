@@ -53,6 +53,7 @@ const known = new Map();
 const lastRescanAt = new Map();
 // sessionId -> { status, statusUpdatedAt, pid } for live pids only -- see .ai/contexts/cli-session-state.md
 const statusBySession = new Map();
+let staleSidebarIdentity = '[]';
 const lastProbeAt = new Map();
 const statusKey = (sessionId) => String(sessionId).toLowerCase();
 const MAX_DESCRIPTOR_SCAN = 1000;
@@ -170,6 +171,11 @@ function refreshProcessTable() {
     if (epoch === processTableEpoch) {
       processTable = { at: now(), observedAt, map };
       processTableInFlight = null;
+      const stale = JSON.stringify([...statusBySession].filter(([id, entry]) => sidebarDescriptorIsStale(id, entry))
+        .map(([id, entry]) => [id, entry.pid]).sort());
+      const sidebarChanged = stale !== staleSidebarIdentity;
+      staleSidebarIdentity = stale;
+      if (sidebarChanged) notifyStatusesChanged();
       if (map) notifyDescriptorsChanged();
     }
     return map;
@@ -317,6 +323,7 @@ function init(ctx) {
   readProcessTable = ctx.readProcessTable || defaultReadProcessTable;
   processTableEpoch++;
   processTable = null;
+  staleSidebarIdentity = '[]';
   processTableInFlight = null;
   stop();
 }
@@ -361,6 +368,7 @@ function parseDescriptor(text) {
 }
 
 function readAllDescriptors() {
+  startProcessTableRefresh();
   let names;
   try { names = fs.readdirSync(dir); } catch { return []; }
   const out = [];
@@ -371,7 +379,13 @@ function readAllDescriptors() {
     let text;
     try { text = fs.readFileSync(path.join(dir, name), 'utf8'); } catch { continue; }
     const d = parseDescriptor(text);
-    if (d && isProcessAlive(d.pid)) out.push(d);
+    if (!d || !isProcessAlive(d.pid)) continue;
+    let raw;
+    try {
+      raw = JSON.parse(text);
+      raw.descriptorMtimeMs = fs.statSync(path.join(dir, name)).mtimeMs;
+    } catch { continue; }
+    if (deliveryProcessIdentity(raw) !== 'stale') out.push(d);
   }
   return out;
 }
@@ -460,7 +474,9 @@ function handleFile(name) {
 
   const prev = known.get(name);
   if (prev && prev.sessionId && statusKey(prev.sessionId) !== statusKey(state.sessionId)) forgetSession(prev.sessionId);
-  known.set(name, { pid: state.pid, procStart: state.procStart, status: state.status, sessionId: state.sessionId });
+  const identity = { ...state, pidDomain: JSON.parse(text).pidDomain };
+  try { identity.descriptorMtimeMs = fs.statSync(path.join(dir, name)).mtimeMs; } catch {}
+  known.set(name, identity);
   if (isProcessAlive(state.pid)) {
     statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
   } else {
@@ -548,7 +564,9 @@ function seed() {
     try { text = fs.readFileSync(path.join(dir, name), 'utf8'); } catch { continue; }
     const state = parseState(text);
     if (state) {
-      known.set(name, { pid: state.pid, procStart: state.procStart, status: state.status, sessionId: state.sessionId });
+      const identity = { ...state, pidDomain: JSON.parse(text).pidDomain };
+      try { identity.descriptorMtimeMs = fs.statSync(path.join(dir, name)).mtimeMs; } catch {}
+      known.set(name, identity);
       if (isProcessAlive(state.pid)) {
         statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
       } else {
@@ -612,6 +630,7 @@ function stop() {
   pending.clear();
   known.clear();
   statusBySession.clear();
+  staleSidebarIdentity = '[]';
   lastRescanAt.clear();
   lastProbeAt.clear();
   if (hadStatus) {
@@ -646,11 +665,17 @@ function sidebarStateChanged(previous, entry) {
 }
 
 function getSidebarDescriptors() {
+  startProcessTableRefresh();
   const descriptors = [];
   for (const [id, entry] of statusBySession) {
-    if (getStatus(id)) descriptors.push({ ...entry });
+    if (getStatus(id) && !sidebarDescriptorIsStale(id, entry)) descriptors.push({ ...entry });
   }
   return descriptors;
+}
+
+function sidebarDescriptorIsStale(id, entry) {
+  const writer = [...known.values()].find(s => s.pid === entry.pid && statusKey(s.sessionId) === id);
+  return !!writer && deliveryProcessIdentity(writer) === 'stale';
 }
 
 function canCompareProcStart(raw) {

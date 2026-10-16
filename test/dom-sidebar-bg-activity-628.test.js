@@ -12,7 +12,7 @@ function roster(state = 'working', kind = 'agent', extra = {}) {
     inFlight: { tasks: 0, kinds: [] }, sessionId: SID,
     fan: kind ? [{ id: 'task-1', kind, startedAt: AT - 1000 }] : [], ...extra }));
   return mergeRoster({ cli: [{ id: 'aaaaaaaa', kind: 'background', sessionId: SID, state: 'working', status: 'busy' }],
-    jobs: new Map([['aaaaaaaa', job]]), descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID,
+    jobs: new Map([['aaaaaaaa', job]]), descriptors: state === 'done' ? [] : [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID,
       status: 'busy', statusUpdatedAt: 1, cwd: '/repo', pid: 10 }] });
 }
 
@@ -109,7 +109,7 @@ for (const state of ['done', 'stopped', 'failed']) {
           assert.equal(row.querySelector('.session-icon--waiting'), null);
           assert.ok(h.window.activePtyIds.has(SID));
           if (surface === 'Agents') {
-            assert.match(status.textContent, new RegExp(state));
+            assert.match(status.textContent, new RegExp(state, 'i'));
             assert.equal(row.querySelector('.agents-row-age').textContent, '');
           }
         };
@@ -375,6 +375,31 @@ test('[628] learning background identity discards previously seeded descriptor i
   assert.ok(h.document.querySelector('.session-icon--busy'));
   assert.equal(h.window.agentRowIcon(roster('working', null)[0]).slotClass, 'session-icon--busy');
 });
+
+test('hosted done with conversation ownership cannot revive foreground head activity', async t => {
+  const entries = roster('done', null);
+  Object.assign(entries[0], { hosted: true, conversationOwn: true });
+  const h = await setup(t, entries);
+  h.emitHeadTurn(SID, 'open');
+  assert.equal(h.window.backgroundActivityIsForeground(SID), false);
+  const snapshot = h.window.backgroundActivitySnapshot(SID, { headTurn: 'open', liveness: 'alive', busy: true });
+  assert.equal(snapshot.headTurn, 'closed');
+  assert.equal(snapshot.busy, false);
+  assert.ok(h.document.querySelector('.session-icon--waiting'));
+  assert.equal(h.window.agentRowIcon(entries[0]).slotClass, 'session-icon--waiting');
+});
+
+for (const hosted of [true, false]) {
+  test(`done hosted=${hosted} shows ${hosted ? 'Idle' : 'done'} in sidebar and Agents`, async t => {
+    const entries = roster('done', null);
+    entries[0].hosted = hosted;
+    const h = await setup(t, entries);
+    assert.equal(h.document.querySelector('.session-status').textContent, hosted ? 'Idle' : 'Job done');
+    const row = h.document.createElement('div');
+    row.innerHTML = h.window.renderAgentRow(entries[0]);
+    assert.equal(row.querySelector('.agents-row-state').textContent.trim().split(/\s+/).at(-1), hosted ? 'Idle' : 'done');
+  });
+}
 
 test('[628] an in-flight cron without a fan id stays static without counting an agent', async t => {
   const h = await setup(t, roster('working', null, { inFlight: { tasks: 1, kinds: ['session_cron'] } }));

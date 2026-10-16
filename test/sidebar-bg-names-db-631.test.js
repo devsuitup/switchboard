@@ -229,8 +229,16 @@ test('the readonly projects worker applies live background state to both views a
         db.setName(id, 'Switchboard rename');
         result = await request();
         assert.equal(result.defaultProjects.flatMap(project => project.sessions).find(row => row.sessionId === id).name, 'Switchboard rename');
-        jobs.get('aaaaaaaa').state = 'completed';
-        jobs.get('bbbbbbbb').state = 'completed';
+        jobs.get('aaaaaaaa').state = 'done';
+        jobs.get('bbbbbbbb').state = 'done';
+        result = await request();
+        for (const view of [result.defaultProjects, result.allProjects]) {
+          const rows = view.flatMap(project => project.sessions);
+          assert.equal(rows.find(row => row.sessionId === id).bgJobId, 'aaaaaaaa');
+          assert.equal(rows.find(row => row.sessionId === pendingId).descriptorOnly, true);
+        }
+        jobs.get('aaaaaaaa').state = 'stopped';
+        jobs.get('bbbbbbbb').state = 'stopped';
         result = await request();
         const finished = result.defaultProjects.flatMap(project => project.sessions);
         assert.equal(finished.find(row => row.sessionId === id).bgJobId, undefined);
@@ -238,6 +246,9 @@ test('the readonly projects worker applies live background state to both views a
         jobs.get('bbbbbbbb').state = 'working';
         result = await request([], [['attach-tab', { isAttach: true, attachJobId: 'bbbbbbbb', realSessionId: pendingId, cwd: root }]]);
         assert.equal(result.defaultProjects.flatMap(project => project.sessions).find(row => row.sessionId === pendingId).bgJobId, 'bbbbbbbb');
+        jobs.get('bbbbbbbb').state = 'done';
+        result = await request([], [['attach-tab', { isAttach: true, attachJobId: 'bbbbbbbb', realSessionId: pendingId, cwd: root }]]);
+        assert.ok(!result.defaultProjects.flatMap(project => project.sessions).some(row => row.sessionId === pendingId));
         db.setArchived(id, true);
         result = await request();
         assert.ok(!result.defaultProjects.flatMap(project => project.sessions).some(row => row.sessionId === id));

@@ -2,7 +2,6 @@
 'use strict';
 
 const { deleteSessionRefusal } = require('./delete-session-guard');
-const { isLiveJobState } = require('./bg-agents-roster');
 
 function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessionState, sessionHasPty, ptyPids }) {
   const push = (snapshot) => {
@@ -30,9 +29,9 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       let check;
       try {
         check = bgAgents.conversationCheck(id);
-        if (verb === 'stop' && (!check.known || isLiveJobState(check.state))) return bgAgents.runVerb(verb, id);
+        if (verb === 'stop' && (!check.known || check.hosted)) return bgAgents.runVerb(verb, id);
         if (!check.known) return { ok: false, error: `cannot tell whether this conversation is running (${check.reason}) — ${declined}` };
-        if (isLiveJobState(check.state)) {
+        if (check.hosted) {
           return { ok: false, error: `cannot ${action} a ${check.state} session; stop it first` };
         }
         for (const sessionId of check.sessionIds) {

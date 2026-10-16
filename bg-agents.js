@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, stripShellNoise, JOB_ID_RE,
-  dispatchRefusal, isLiveJobState,
+  dispatchRefusal, isHostedJob,
 } = require('./bg-agents-roster');
 const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('./project-root');
 
@@ -101,6 +101,10 @@ function getSnapshot() {
 
 function getCachedJobs() {
   return new Map(jobs);
+}
+
+function liveDescriptors() {
+  return cliSessionState ? cliSessionState.readAllDescriptors() : [];
 }
 
 function emit() {
@@ -311,7 +315,8 @@ function conversationCheck(id) {
   const sessionIds = [...new Set([job.sessionId, job.bridgeSessionId, entry && entry.sessionId]
     .filter(Boolean))];
   if (!sessionIds.length) return { known: false, reason: `job ${id} does not name its conversation` };
-  return { known: true, sessionIds, state: job.state };
+  return { known: true, sessionIds, state: job.state,
+    hosted: isHostedJob({ ...job, id, sessionId: job.sessionId || entry?.sessionId }, liveDescriptors()) };
 }
 
 async function runVerb(verb, id) {
@@ -324,8 +329,11 @@ async function runVerb(verb, id) {
       : { ok: false, error: 'transcript does not exist or is not available yet' };
   }
   const live = roster.find(e => e.kind === 'background' && e.id === id);
-  if (verb !== 'stop' && live && isLiveJobState(live.state)) {
-    return { ok: false, error: `cannot ${verb === 'rm' ? 'delete' : verb} a ${live.state} session; stop it first` };
+  let fresh;
+  try { fresh = parseJobState(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch {}
+  if (verb !== 'stop' && isHostedJob({ ...live, ...fresh, id, state: fresh?.state || live?.state,
+    sessionId: fresh?.sessionId || live?.sessionId }, liveDescriptors())) {
+    return { ok: false, error: `cannot ${verb === 'rm' ? 'delete' : verb} a ${fresh?.state || live?.state || 'hosted'} session; stop it first` };
   }
   const result = await run([verb, id], { cwd: verb === 'rm' ? homeDir : cwdFor(id), timeout: VERB_TIMEOUT_MS });
   const ok = result.code === 0;
@@ -359,10 +367,11 @@ function liveJobCheck(sessionId) {
   if (!key) return { known: true, job: null };
   const sameSession = (sid) => typeof sid === 'string' && sid.toLowerCase() === key;
   const listed = (id) => roster.find(e => e.kind === 'background' && e.id === id) || null;
+  const descriptors = liveDescriptors();
   let names;
   try { names = fs.readdirSync(jobsDir); } catch (err) {
     if (!(err && err.code === 'ENOENT')) return { known: false, reason: `cannot read ${jobsDir}: ${err && err.message}` };
-    const cached = roster.find(e => e.kind === 'background' && isLiveJobState(e.state) && sameSession(e.sessionId));
+    const cached = roster.find(e => isHostedJob(e, descriptors) && sameSession(e.sessionId));
     return { known: true, job: cached ? { id: cached.id, state: cached.state } : null };
   }
   let unknown = null;
@@ -377,12 +386,12 @@ function liveJobCheck(sessionId) {
     read.add(id);
     if (!parsed) { unknown = unknown || `job ${id} has an unreadable state`; continue; }
     if (!parsed.state) { unknown = unknown || `job ${id} is in a state this version does not know`; continue; }
-    if (!isLiveJobState(parsed.state)) continue;
     const sid = parsed.sessionId || (listed(id) && listed(id).sessionId);
+    if (!isHostedJob({ ...parsed, id, sessionId: sid }, descriptors)) continue;
     if (!sid) { unknown = unknown || `live job ${id} does not name its session`; continue; }
     if (sameSession(sid)) return { known: true, job: { id, state: parsed.state } };
   }
-  const cached = roster.find(e => e.kind === 'background' && !read.has(e.id) && isLiveJobState(e.state) && sameSession(e.sessionId));
+  const cached = roster.find(e => !read.has(e.id) && isHostedJob(e, descriptors) && sameSession(e.sessionId));
   if (cached) return { known: true, job: { id: cached.id, state: cached.state } };
   return unknown ? { known: false, reason: unknown } : { known: true, job: null };
 }

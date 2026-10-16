@@ -5,7 +5,7 @@ const { encodeProjectPath } = require('./encode-project-path');
 const { resolveWorktreePath } = require('./derive-project-path');
 const { parseFolderKey } = require('./remote-hosts');
 const { validId } = require('./session-continuations');
-const { isLiveJobState } = require('./bg-agents-roster');
+const { isHostedJob } = require('./bg-agents-roster');
 
 const key = id => String(id).toLowerCase();
 
@@ -63,7 +63,7 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
   const findVisible = id => visibleRows.get(key(id));
   const validDescriptors = descriptors.filter(descriptor => validId(descriptor.sessionId));
   const backgrounds = validDescriptors.filter(descriptor => descriptor.kind === 'bg' && descriptor.jobId
-    && isLiveJobState(jobs.get(descriptor.jobId)?.state));
+    && isHostedJob({ ...jobs.get(descriptor.jobId), id: descriptor.jobId, sessionId: descriptor.sessionId }, [descriptor]));
   const graph = backgrounds.length ? continuationGraph(localRows) : null;
   const suppressedNames = new Set();
   for (const descriptor of backgrounds) {

@@ -216,7 +216,10 @@ function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
       status: d.status, pid: d.pid, startedAt: d.startedAt,
     });
   }
-  for (const e of roster) e.attachedHere = e.kind === 'background' && !!attached(e.id);
+  for (const e of roster) {
+    e.hosted = isHostedJob(e, descriptors);
+    e.attachedHere = e.kind === 'background' && !!attached(e.id);
+  }
   return roster;
 }
 
@@ -243,8 +246,10 @@ function dispatchArgs(fields) {
   return { ok: true, args, cwd: f.cwd };
 }
 
-function isLiveJobState(state) {
-  return state === 'working' || state === 'blocked';
+function isHostedJob(job, descriptors = []) {
+  if (!job || job.kind && job.kind !== 'background' || job.state === 'stopped' || job.state === 'failed') return false;
+  return job.state === 'working' || job.state === 'blocked' || (descriptors || []).some(d => d?.kind === 'bg'
+    && (d.jobId ? d.jobId === job.id : job.sessionId && d.sessionId?.toLowerCase() === job.sessionId.toLowerCase()));
 }
 
 function dispatchRefusal({ sandbox, preLaunchCmd } = {}) {
@@ -259,6 +264,6 @@ function parseDispatchOutput(stdout) {
 }
 
 module.exports = {
-  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, dispatchRefusal, isLiveJobState,
+  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, dispatchRefusal, isHostedJob,
   sessionIdFromLinkScanPath, stripShellNoise, JOB_ID_RE, JOB_STATES,
 };

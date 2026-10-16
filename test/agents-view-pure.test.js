@@ -7,11 +7,11 @@ global.renderSessionIcon = renderSessionIcon;
 const { sortAgentEntries, agentRowIcon, agentVerbAvailability, formatTokens, formatAgentAge, agentsEntryKey, groupAgentEntries, normalizeAgentsGroupBy, AGENT_STATE_META, agentStateMeta,
   agentsCollapseKey, parseCollapsedGroups, serializeCollapsedGroups, AGENTS_COLLAPSE_MAX } = require('../public/agents-view');
 
-const bg = (over) => ({ id: 'aaaaaaaa', sessionId: 's', kind: 'background', state: 'working', status: 'idle', startedAt: 100, ...over });
+const bg = (over) => ({ id: 'aaaaaaaa', sessionId: 's', kind: 'background', state: 'working', hosted: true, status: 'idle', startedAt: 100, ...over });
 
 test('sort: working and external-interactive first, then newest first, unknown start last', () => {
   const sorted = sortAgentEntries([
-    bg({ id: 'd1', state: 'done', startedAt: 500 }),
+    bg({ id: 'd1', state: 'done', hosted: false, startedAt: 500 }),
     bg({ id: 'w1', startedAt: 100 }),
     { kind: 'interactive', sessionId: 'i1', state: null, status: 'busy', startedAt: 300 },
     bg({ id: 'w2', startedAt: null }),
@@ -22,10 +22,10 @@ test('sort: working and external-interactive first, then newest first, unknown s
 
 test('sort: a blocked job is live and ranks with the working ones', () => {
   const sorted = sortAgentEntries([
-    bg({ id: 's1', state: 'stopped', startedAt: 900 }),
-    bg({ id: 'b1', state: 'blocked', startedAt: 150 }),
+    bg({ id: 's1', state: 'stopped', hosted: false, startedAt: 900 }),
+    bg({ id: 'b1', state: 'blocked', hosted: true, startedAt: 150 }),
     bg({ id: 'w1', startedAt: 100 }),
-    bg({ id: 'd1', state: 'done', startedAt: 800 }),
+    bg({ id: 'd1', state: 'done', hosted: false, startedAt: 800 }),
   ]);
   assert.deepEqual(sorted.map(e => e.id), ['b1', 'w1', 's1', 'd1']);
 });
@@ -34,38 +34,38 @@ test('row icon: coarse background hints stay static and finished jobs stay stale
   assert.equal(agentRowIcon(bg({ status: 'busy' })).slotClass, 'session-icon--waiting');
   assert.equal(agentRowIcon(bg({ status: 'waiting' })).slotClass, 'session-icon--waiting');
   assert.equal(agentRowIcon(bg({ status: 'idle' })).slotClass, 'session-icon--waiting');
-  assert.equal(agentRowIcon(bg({ state: 'done', status: 'busy' })).slotClass, 'session-icon--stale');
-  assert.equal(agentRowIcon(bg({ state: 'stopped', status: 'idle' })).slotClass, 'session-icon--stale');
+  assert.equal(agentRowIcon(bg({ state: 'done', hosted: false, status: 'busy' })).slotClass, 'session-icon--stale');
+  assert.equal(agentRowIcon(bg({ state: 'stopped', hosted: false, status: 'idle' })).slotClass, 'session-icon--stale');
   assert.equal(agentRowIcon({ kind: 'interactive', status: 'busy' }).slotClass, 'session-icon--waiting');
 });
 
 test('row icon: a blocked job needs attention whatever its descriptor status', t => {
   global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn: 'open', busy: true, waitingForInput: false });
   t.after(() => { delete global.taskActivitySnapshot; });
-  assert.equal(agentRowIcon(bg({ state: 'blocked', status: 'idle' })).slotClass, 'session-icon--attention');
-  assert.equal(agentRowIcon(bg({ state: 'blocked', status: null })).slotClass, 'session-icon--attention');
-  assert.equal(agentRowIcon(bg({ state: 'blocked', status: 'busy' })).slotClass, 'session-icon--attention');
+  assert.equal(agentRowIcon(bg({ state: 'blocked', hosted: true, status: 'idle' })).slotClass, 'session-icon--attention');
+  assert.equal(agentRowIcon(bg({ state: 'blocked', hosted: true, status: null })).slotClass, 'session-icon--attention');
+  assert.equal(agentRowIcon(bg({ state: 'blocked', hosted: true, status: 'busy' })).slotClass, 'session-icon--attention');
 });
 
 test('verb availability follows the state, the kind and the daemon', () => {
   assert.deepEqual(agentVerbAvailability(bg(), true), { transcript: true, attach: true, stop: true, respawn: false, rm: false });
-  assert.deepEqual(agentVerbAvailability(bg({ state: 'done' }), true), { transcript: true, attach: false, stop: false, respawn: true, rm: true });
-  assert.deepEqual(agentVerbAvailability(bg({ state: 'stopped' }), true), { transcript: true, attach: false, stop: false, respawn: true, rm: true });
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'done', hosted: false }), true), { transcript: true, attach: false, stop: false, respawn: true, rm: true });
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'stopped', hosted: false }), true), { transcript: true, attach: false, stop: false, respawn: true, rm: true });
   assert.deepEqual(agentVerbAvailability(bg(), false), { transcript: true, attach: false, stop: false, respawn: false, rm: false });
   assert.deepEqual(agentVerbAvailability({ kind: 'interactive', sessionId: 'i' }, true), { transcript: true, attach: false, stop: false, respawn: false, rm: false });
-  assert.equal(agentVerbAvailability(bg({ sessionId: null, state: 'done' }), true).transcript, false);
+  assert.equal(agentVerbAvailability(bg({ sessionId: null, state: 'done', hosted: false }), true).transcript, false);
 });
 
 test('verb availability: a blocked job is live like a working one', () => {
-  assert.deepEqual(agentVerbAvailability(bg({ state: 'blocked' }), true), { transcript: true, attach: true, stop: true, respawn: false, rm: false });
-  assert.deepEqual(agentVerbAvailability(bg({ state: 'blocked' }), false), { transcript: true, attach: false, stop: false, respawn: false, rm: false });
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'blocked', hosted: true }), true), { transcript: true, attach: true, stop: true, respawn: false, rm: false });
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'blocked', hosted: true }), false), { transcript: true, attach: false, stop: false, respawn: false, rm: false });
 });
 
 test('a failed job is finished: sorts after the live rows, stale icon, Delete and Respawn allowed', () => {
-  const sorted = sortAgentEntries([bg({ id: 'f1', state: 'failed', startedAt: 900 }), bg({ id: 'w1', startedAt: 100 })]);
+  const sorted = sortAgentEntries([bg({ id: 'f1', state: 'failed', hosted: false, startedAt: 900 }), bg({ id: 'w1', startedAt: 100 })]);
   assert.deepEqual(sorted.map(e => e.id), ['w1', 'f1']);
-  assert.equal(agentRowIcon(bg({ state: 'failed', status: 'busy' })).slotClass, 'session-icon--stale');
-  assert.deepEqual(agentVerbAvailability(bg({ state: 'failed' }), true), { transcript: true, attach: false, stop: false, respawn: true, rm: true });
+  assert.equal(agentRowIcon(bg({ state: 'failed', hosted: false, status: 'busy' })).slotClass, 'session-icon--stale');
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'failed', hosted: false }), true), { transcript: true, attach: false, stop: false, respawn: true, rm: true });
 });
 
 const ext = (over) => ({ id: null, sessionId: 'i', kind: 'interactive', state: null, status: 'busy', startedAt: 100, ...over });
@@ -82,28 +82,28 @@ test('group mode: none, state and project are kept; anything else (unset include
 
 test('state meta: one emoji and label per state group, in the group order', () => {
   assert.deepEqual(Object.entries(AGENT_STATE_META).map(([k, m]) => [k, m.emoji, m.label]), [
-    ['working', '⚙️', 'Working'], ['blocked', '✋', 'Blocked'], ['done', '✅', 'Done'], ['stopped', '⏹️', 'Stopped'],
+    ['working', '⚙️', 'Working'], ['blocked', '✋', 'Blocked'], ['idle', '💤', 'Idle'], ['done', '✅', 'Done'], ['stopped', '⏹️', 'Stopped'],
     ['failed', '❌', 'Failed'], ['external', '🖥️', 'External'], ['unknown', '❓', 'Unknown'],
   ]);
-  const every = Object.keys(AGENT_STATE_META).map((k) => (k === 'external' ? ext({ sessionId: k }) : bg({ id: k, state: k === 'unknown' ? null : k })));
+  const every = Object.keys(AGENT_STATE_META).map((k) => (k === 'external' ? ext({ sessionId: k }) : bg({ id: k, state: k === 'unknown' ? null : k, hosted: k !== 'done' })));
   for (const g of groupAgentEntries(every, 'state')) {
     assert.ok(AGENT_STATE_META[g.key], `meta for ${g.key}`);
     assert.equal(g.label, AGENT_STATE_META[g.key].label);
   }
-  assert.equal(groupAgentEntries(every, 'state').length, 7);
+  assert.equal(groupAgentEntries(every, 'state').length, 8);
 });
 
 test('state meta lookup: by state, null or unlisted is unknown, interactive is external', () => {
   assert.equal(agentStateMeta(bg()).emoji, '⚙️');
-  assert.equal(agentStateMeta(bg({ state: 'failed' })).emoji, '❌');
+  assert.equal(agentStateMeta(bg({ state: 'failed', hosted: false })).emoji, '❌');
   assert.equal(agentStateMeta(bg({ state: null })).emoji, '❓');
   assert.equal(agentStateMeta(bg({ state: 'weird' })).label, 'Unknown');
-  assert.equal(agentStateMeta(ext({ state: 'working' })).emoji, '🖥️');
+  assert.equal(agentStateMeta(ext({ state: 'working', hosted: true })).emoji, '🖥️');
   assert.equal(agentStateMeta(ext()).key, 'external');
 });
 
 test('group none: one unlabelled group holding every entry in order', () => {
-  const entries = [bg({ id: 'w1' }), bg({ id: 'd1', state: 'done' })];
+  const entries = [bg({ id: 'w1' }), bg({ id: 'd1', state: 'done', hosted: false })];
   const groups = groupAgentEntries(entries, 'none');
   assert.equal(groups.length, 1);
   assert.equal(groups[0].label, '');
@@ -116,29 +116,29 @@ test('group none: one unlabelled group holding every entry in order', () => {
 test('group by state: fixed order, external and unknown last, empty groups dropped, entry order kept', () => {
   const groups = groupAgentEntries([
     ext({ sessionId: 'i1' }),
-    bg({ id: 'f1', state: 'failed' }),
+    bg({ id: 'f1', state: 'failed', hosted: false }),
     bg({ id: 'w1' }),
     bg({ id: 'u1', state: null }),
-    bg({ id: 'd1', state: 'done' }),
+    bg({ id: 'd1', state: 'done', hosted: false }),
     bg({ id: 'w2' }),
-    bg({ id: 'b1', state: 'blocked' }),
-    bg({ id: 's1', state: 'stopped' }),
+    bg({ id: 'b1', state: 'blocked', hosted: true }),
+    bg({ id: 's1', state: 'stopped', hosted: false }),
   ], 'state');
   assert.deepEqual(ids(groups), [
     ['Working', ['w1', 'w2']], ['Blocked', ['b1']], ['Done', ['d1']], ['Stopped', ['s1']],
     ['Failed', ['f1']], ['External', ['i1']], ['Unknown', ['u1']],
   ]);
   assert.deepEqual(groups.map(g => g.key), ['working', 'blocked', 'done', 'stopped', 'failed', 'external', 'unknown']);
-  assert.deepEqual(ids(groupAgentEntries([bg({ id: 'd1', state: 'done' })], 'state')), [['Done', ['d1']]]);
+  assert.deepEqual(ids(groupAgentEntries([bg({ id: 'd1', state: 'done', hosted: false })], 'state')), [['Done', ['d1']]]);
 });
 
 test('group by project: last path segment, full path as title, live groups first then alphabetical, no project last', () => {
   const groups = groupAgentEntries([
-    bg({ id: 'd1', state: 'done', cwd: '/w/alpha' }),
+    bg({ id: 'd1', state: 'done', hosted: false, cwd: '/w/alpha' }),
     bg({ id: 'w1', cwd: '/w/zeta' }),
-    bg({ id: 'd2', state: 'done', cwd: '/w/Beta/' }),
-    bg({ id: 'n1', state: 'done', cwd: null }),
-    bg({ id: 'd3', state: 'done', cwd: '/w/alpha' }),
+    bg({ id: 'd2', state: 'done', hosted: false, cwd: '/w/Beta/' }),
+    bg({ id: 'n1', state: 'done', hosted: false, cwd: null }),
+    bg({ id: 'd3', state: 'done', hosted: false, cwd: '/w/alpha' }),
     ext({ sessionId: 'i1', cwd: '/w/mid' }),
   ], 'project');
   assert.deepEqual(ids(groups), [
@@ -151,30 +151,30 @@ test('group by project: last path segment, full path as title, live groups first
 
 test('group by project: two cwds with the same last segment stay separate, labelled with their parent', () => {
   const groups = groupAgentEntries([
-    bg({ id: 'a', state: 'done', cwd: '/home/x/app' }),
-    bg({ id: 'b', state: 'done', cwd: '/srv/y/app' }),
-    bg({ id: 'c', state: 'done', cwd: 'C:\\code\\z\\app' }),
-    bg({ id: 'd', state: 'done', cwd: '/other' }),
+    bg({ id: 'a', state: 'done', hosted: false, cwd: '/home/x/app' }),
+    bg({ id: 'b', state: 'done', hosted: false, cwd: '/srv/y/app' }),
+    bg({ id: 'c', state: 'done', hosted: false, cwd: 'C:\\code\\z\\app' }),
+    bg({ id: 'd', state: 'done', hosted: false, cwd: '/other' }),
   ], 'project');
   assert.deepEqual(ids(groups), [['app (x)', ['a']], ['app (y)', ['b']], ['app (z)', ['c']], ['other', ['d']]]);
 });
 
 test('group by project: same last segment and same parent fall back to the full path', () => {
   const groups = groupAgentEntries([
-    bg({ id: 'a', state: 'done', cwd: '/a/p/app' }),
-    bg({ id: 'b', state: 'done', cwd: '/b/p/app' }),
+    bg({ id: 'a', state: 'done', hosted: false, cwd: '/a/p/app' }),
+    bg({ id: 'b', state: 'done', hosted: false, cwd: '/b/p/app' }),
   ], 'project');
   assert.deepEqual(ids(groups), [['/a/p/app', ['a']], ['/b/p/app', ['b']]]);
 });
 
 test('group by project: keyed by projectRoot, so the worktrees of one git project share a group; unrelated repos stay apart', () => {
   const groups = groupAgentEntries([
-    bg({ id: 'a', state: 'done', cwd: '/w/app', projectRoot: '/w/app', worktreeRoot: '/w/app' }),
-    bg({ id: 'b', state: 'done', cwd: '/w/app/.claude/worktrees/x', projectRoot: '/w/app', worktreeRoot: '/w/app/.claude/worktrees/x' }),
-    bg({ id: 'c', state: 'done', cwd: '/elsewhere/wt-y/src', projectRoot: '/w/app', worktreeRoot: '/elsewhere/wt-y' }),
-    bg({ id: 'd', state: 'done', cwd: '/w/other', projectRoot: '/w/other', worktreeRoot: '/w/other' }),
-    bg({ id: 'e', state: 'done', cwd: '/w/legacy' }),
-    bg({ id: 'n', state: 'done', cwd: null, projectRoot: null }),
+    bg({ id: 'a', state: 'done', hosted: false, cwd: '/w/app', projectRoot: '/w/app', worktreeRoot: '/w/app' }),
+    bg({ id: 'b', state: 'done', hosted: false, cwd: '/w/app/.claude/worktrees/x', projectRoot: '/w/app', worktreeRoot: '/w/app/.claude/worktrees/x' }),
+    bg({ id: 'c', state: 'done', hosted: false, cwd: '/elsewhere/wt-y/src', projectRoot: '/w/app', worktreeRoot: '/elsewhere/wt-y' }),
+    bg({ id: 'd', state: 'done', hosted: false, cwd: '/w/other', projectRoot: '/w/other', worktreeRoot: '/w/other' }),
+    bg({ id: 'e', state: 'done', hosted: false, cwd: '/w/legacy' }),
+    bg({ id: 'n', state: 'done', hosted: false, cwd: null, projectRoot: null }),
   ], 'project');
   assert.deepEqual(ids(groups), [['app', ['a', 'b', 'c']], ['legacy', ['e']], ['other', ['d']], ['No project', ['n']]]);
   assert.equal(groups[0].key, '/w/app');
@@ -182,7 +182,7 @@ test('group by project: keyed by projectRoot, so the worktrees of one git projec
   assert.equal(groups[0].children, undefined, 'no sub-groups without the option');
 });
 
-const wt = (id, worktreeRoot, over) => bg({ id, state: 'done', cwd: worktreeRoot, projectRoot: '/w/app', worktreeRoot, ...over });
+const wt = (id, worktreeRoot, over) => bg({ id, state: 'done', hosted: false, cwd: worktreeRoot, projectRoot: '/w/app', worktreeRoot, ...over });
 const sub = (groups) => groups.map(g => [g.label, g.entries.length, g.children ? g.children.map(c => [c.label, c.entries.map(e => e.id)]) : null]);
 
 test('worktree sub-groups: one per worktree, main first, live first, then alphabetical; the project keeps its total', () => {
@@ -190,7 +190,7 @@ test('worktree sub-groups: one per worktree, main first, live first, then alphab
     wt('z1', '/w/app/.claude/worktrees/zeta'),
     wt('m1', '/w/app', { cwd: '/w/app/src' }),
     wt('a1', '/w/app/.claude/worktrees/alpha', { cwd: '/w/app/.claude/worktrees/alpha/deep/er' }),
-    wt('l1', '/w/app/.claude/worktrees/live', { state: 'working' }),
+    wt('l1', '/w/app/.claude/worktrees/live', { state: 'working', hosted: true }),
     wt('m2', '/w/app'),
     wt('a2', '/w/app/.claude/worktrees/alpha'),
   ], 'project', { worktrees: true });
@@ -205,7 +205,7 @@ test('worktree sub-groups: a project in a single worktree stays flat, even a lin
   const groups = groupAgentEntries([
     wt('a', '/w/app/.claude/worktrees/x'),
     wt('b', '/w/app/.claude/worktrees/x', { cwd: '/w/app/.claude/worktrees/x/sub' }),
-    bg({ id: 'o', state: 'done', cwd: '/w/other', projectRoot: '/w/other', worktreeRoot: '/w/other' }),
+    bg({ id: 'o', state: 'done', hosted: false, cwd: '/w/other', projectRoot: '/w/other', worktreeRoot: '/w/other' }),
   ], 'project', { worktrees: true });
   assert.deepEqual(sub(groups), [['app', 2, null], ['other', 1, null]]);
 });

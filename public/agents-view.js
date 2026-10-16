@@ -36,7 +36,7 @@ function agentDisplayName(entry) {
 }
 
 function agentJobIsLive(entry) {
-  return entry.kind === 'background' && (entry.state === 'working' || entry.state === 'blocked');
+  return entry.kind === 'background' && entry.hosted === true;
 }
 
 function agentIsLive(entry) {
@@ -57,6 +57,7 @@ const AGENTS_GROUP_MODES = ['none', 'state', 'project'];
 const AGENT_STATE_META = {
   working: { emoji: '⚙️', label: 'Working' },
   blocked: { emoji: '✋', label: 'Blocked' },
+  idle: { emoji: '💤', label: 'Idle' },
   done: { emoji: '✅', label: 'Done' },
   stopped: { emoji: '⏹️', label: 'Stopped' },
   failed: { emoji: '❌', label: 'Failed' },
@@ -70,6 +71,7 @@ function normalizeAgentsGroupBy(value) {
 
 function agentStateGroupKey(entry) {
   if (entry.kind === 'interactive') return 'external';
+  if (entry.state === 'done' && agentJobIsLive(entry)) return 'idle';
   const known = entry.state && entry.state !== 'external' && entry.state !== 'unknown' && Object.hasOwn(AGENT_STATE_META, entry.state);
   return known ? entry.state : 'unknown';
 }
@@ -176,19 +178,20 @@ function backgroundActivityEntry(sessionId) {
 function backgroundActivityIsForeground(sessionId, entry = backgroundActivityEntry(sessionId)) {
   if (typeof openSessions !== 'undefined' && openSessions.get(sessionId)?.attach) return false;
   return typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId) && (!entry || !agentJobIsLive(entry))
-    || entry?.conversationOwn && ['done', 'stopped', 'failed'].includes(entry.state);
+    || entry?.conversationOwn && !agentJobIsLive(entry) && ['done', 'stopped', 'failed'].includes(entry.state);
 }
 
 function projectBackgroundActivity(entry, snapshot) {
   const live = agentJobIsLive(entry);
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const blocked = live && entry.state === 'blocked';
+  const turnActive = live && !terminal && !blocked;
   const headTurn = terminal || blocked ? 'closed' : snapshot.headTurn;
   return { ...snapshot, headTurn, liveness: live ? 'alive' : 'dead', stale: !live,
-    attention: blocked || live && snapshot.attention, busy: live && !blocked && headTurn === 'open',
-    responseReady: live && !blocked && snapshot.responseReady,
-    agentsBusy: live && !blocked && snapshot.agentsBusy,
-    backgroundWork: live && !blocked && snapshot.backgroundWork,
+    attention: blocked || turnActive && snapshot.attention, busy: turnActive && headTurn === 'open',
+    responseReady: turnActive && snapshot.responseReady,
+    agentsBusy: turnActive && snapshot.agentsBusy,
+    backgroundWork: turnActive && snapshot.backgroundWork,
     waitingForInput: live && headTurn !== 'open' };
 }
 
@@ -208,6 +211,7 @@ function backgroundActivityLabel(sessionId, snapshot, row) {
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const label = terminal ? entry.state : !valid ? 'Activity unavailable' : renderSessionIcon(snapshot).title;
   const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toLocaleString()} (job metadata)` : 'Job activity unavailable';
+  if (entry.state === 'done' && agentJobIsLive(entry)) return { text: 'Idle', title: source };
   return { text: terminal ? `Job ${label}` : `${label} · job ${entry.state || 'unknown'}`, title: source };
 }
 
@@ -295,7 +299,8 @@ function selectAgentsRow(id) {
 function renderAgentRow(entry, nested = false) {
   const key = agentsEntryKey(entry);
   const icon = agentRowIcon(entry);
-  const state = entry.kind === 'interactive' ? 'external' : (entry.state || '?');
+  const state = entry.kind === 'interactive' ? 'external'
+    : entry.state === 'done' && agentJobIsLive(entry) ? 'Idle' : (entry.state || '?');
   const stateEmoji = agentStateMeta(entry).emoji;
   const status = entry.kind === 'interactive' && entry.status ? ' · ' + entry.status : '';
   const classes = ['agents-row'];

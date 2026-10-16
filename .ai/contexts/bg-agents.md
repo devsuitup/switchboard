@@ -9,7 +9,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 
 | File | Role |
 |---|---|
-| `bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `dispatchRefusal`, `isLiveJobState`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
+| `bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `dispatchRefusal`, `isHostedJob`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
 | `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobCheck`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
 | `project-root.js` | `resolveProjectRoots(cwd)`: the `.claude/worktrees` pattern, else one `git rev-parse`; never throws |
 | `delete-session-guard.js` | `deleteSessionRefusal`: the fail-closed liveness check `delete-session` runs first |
@@ -26,8 +26,8 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 
 ## Invariants
 
-1. Never `--resume` or `--fork-session` a live job. A job is live when its
-   state is `working` or `blocked` (see "Job states"). `claude attach` is the
+1. Never `--resume` or `--fork-session` a hosted job. Hosting follows
+   `isHostedJob` (see "Job states"). `claude attach` is the
    only path to a live job (`guardResume` turns a `bg` verdict into attach
    options; `open-terminal` builds `claude attach`). Nothing ever resumes one.
 2. Every call to the CLI goes through the login shell with an argv quoted by
@@ -86,7 +86,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
     this instance's processes for these verbs: being owned here makes a resume
     a re-attach but does not make a destructive operation safe. Open terminals,
     live jobs, live descriptor pids and unknown liveness all refuse. The
-    refusal for a descriptor names its pid. `stop` on a working/blocked job
+    refusal for a descriptor names its pid. `stop` on a hosted job
     remains the daemon's stop operation, including missing or unknown job files.
     The check and CLI invocation are separate: a process can start after the
     check but before the CLI runs. This reduces stale-roster mistakes; it is
@@ -136,13 +136,12 @@ when its PTY is still open. This applies to initial rendering, incremental head
 updates and sidebar rebuilds. Both sidebar paths pass the representative row
 to the label function so a merged member cannot lose its row's `bgJobId` when
 the roster is absent. A retained attach tab keeps the job projection after
-done/stopped/failed: the sidebar says `Job done`, `Job stopped` or `Job failed`,
-and both sidebar and Agents show the finished/stale glyph instead of the
-waiting ring, even if `conversationOwn` is true. A resumed non-attach
-conversation retains its own activity and glyph. Whether the real CLI retains
-that tab and descriptor
-after job completion has not been verified; #654 implements the maintainer's
-display rule without requiring that observation.
+done/stopped/failed: the sidebar says `Idle` for hosted done, otherwise `Job done`, `Job stopped` or `Job failed`.
+An unhosted row shows the finished/stale glyph, even if `conversationOwn` is
+true; a done row with a live bg descriptor keeps the waiting ring. A resumed
+non-attach conversation retains its own activity and glyph. The done/idle
+descriptor with a living CLI pid was measured on JB's machine on 2026-10-16
+(#682); the regression tests use disposable fixtures.
 Sidebar rebuilds compare session membership, state, normalized task evidence
 and conversation ownership; tokens, tempo, detail and display-only fan changes
 do not rebuild it.
@@ -171,7 +170,7 @@ plus the existing Agents DOM and #522 guard/attach suites.
 ### Background continuations (#639)
 
 A complete, unambiguous new `continued-in` record in the interactive conversation
-plus a working/blocked cached job identifies a background continuation; any
+plus a hosted cached job identifies a background continuation; any
 descriptor for the target must agree on a single `kind: bg` job. Before
 spawning, the tab snapshots continuation ids
 and the transcript byte offset. Snapshots before spawn yield between
@@ -231,7 +230,7 @@ validates the matching job id before doing so, and spawns `claude attach`.
 The button confirms/re-keys before releasing a held physical exit. A submitted
 `/bg` (with optional arguments) and one fresh continuation retain a just-exited
 source for at most 15 seconds, even before the jobs watcher sees the daemon.
-The re-key requires both a background target and a working/blocked cached job.
+The re-key requires both a background target and a hosted cached job.
 Job and descriptor notifications reconsider the held source. Partial tails
 retry once a second; expiry releases the ordinary exit. An old link without
 this tab's command never delays `process-exited`, task owner death or activity end.
@@ -254,19 +253,38 @@ absent at zero, so a roster without external sessions reads as before.
 
 ## Job states
 
-`JOB_STATES` in `bg-agents-roster.js` is `working`, `blocked`, `done`,
-`stopped`, `failed`. `blocked` is a live job waiting on input (observed on CLI
-2.1.285, 2026-09-30; the first design listed three states). `failed` is a job
-that ended in error (observed on CLI 2.1.285, 2026-10-01, two jobs); before it
-was in the set such a job parsed as `null` and its row read `?`. `failed` is
-finished, like `done` and `stopped`: not live, hidden by the Finished filter,
-counted as finished, Respawn and Delete enabled. `agentJobIsLive`
-(`public/agents-view.js`) — `working` or `blocked` on a background entry — is
-the single live predicate in the renderer, so every state outside those two
-is finished without a list to keep in sync.
+`JOB_STATES` is `working`, `blocked`, `done`, `stopped`, `failed`. These are
+turn states: `done` means the turn ended, while the daemon may still host the
+session between messages. `working` means an active turn; `blocked` needs
+attention. `stopped` and `failed` are finished even with a leftover descriptor.
 
-| Verb | Live job | Not live |
+`isHostedJob(job, descriptors)` in `bg-agents-roster.js` is the single hosting
+rule: a background job is hosted if working/blocked, or if a live `kind: bg`
+descriptor matches its job id. Only a descriptor without a job id may match
+its case-insensitive session id; two jobs can share a resumed conversation.
+Stopped/failed override that evidence. Descriptors come from `cli-session-state.readAllDescriptors`:
+it parses the descriptor and checks `isProcessAlive(pid)`. Dead pids are excluded.
+It also reuses `deliveryProcessIdentity` to exclude confirmed stale process
+identities, comparing `procStart` and `pidDomain` with the process start evidence.
+Windows uses the existing asynchronously refreshed process table and descriptor
+mtime ordering. Unknown identity, including missing `procStart`, retains the
+pid-only behaviour; old status timestamps do not expire a living pid.
+The cached sidebar descriptor projection applies the same identity check.
+Turn activity and attention read their specific turn states; hosting consumers
+use `isHostedJob`.
+
+Main annotates every roster entry with `hosted`; renderer `agentJobIsLive`
+consumes that field for badges, row liveness, ordering, counts, the Finished
+filter and verbs. A hosted idle row retains the `done` turn state and shows `Idle`
+in the sidebar status and Agents row label (a finished Agents row shows `done`).
+It shows the waiting glyph and counts as running. Done without a live descriptor
+is finished. Busy/head-turn and blocked attention still follow turn evidence.
+`runVerb`, the fresh conversation check and `liveJobCheck` use the same hosting
+rule, including descriptors that changed after the last snapshot.
+
+| Display / verb | Hosted (including idle done) | Finished |
 |---|---|---|
+| State label after turn ends | Idle | done |
 | Attach | allowed | disabled (a finished session resumes like any other) |
 | Stop | allowed | disabled |
 | Respawn | refused | allowed |
@@ -293,8 +311,16 @@ when its kind is `bg` and the job file already says finished. Such a row keeps
 its job state but cannot offer destructive verbs while that pid is live.
 
 The job watcher starts with the app so the sidebar can read `getCachedJobs`
-without opening Agents or scanning job files on project loads. A finished job
-with a live descriptor or attach PTY gets no sidebar bg marker or synthetic row.
+without opening Agents or scanning job files on project loads. A done job with
+a live bg descriptor retains the roster's sidebar bg marker. The local projects
+projection also uses `isHostedJob`, preserving descriptor-only rows and proven
+continuation heads, merged members and registry renames across working/done
+turn transitions. A live bg descriptor also supplies a descriptor-only row when
+its job metadata is absent, before the job watcher fills or beyond `MAX_JOBS`.
+The attach-tab fallback supplies a synthetic descriptor only
+when the cached job is hosted without descriptor evidence (working/blocked).
+An attach PTY
+alone does not prove hosting.
 Sidebar registry names replace launch titles only; a Switchboard rename wins.
 
 `parseDescriptor` retains `bridgeSessionId`. `bridge-session-id.js` strips only
@@ -328,6 +354,10 @@ The file supplies normalized task evidence, `detail`, `tokens`, `fan`, `children
 `get-bg-agents` (the renderer calls it at bootstrap, on open and every 30 s
 while visible) and after every verb and
 dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
+Descriptor appearance/disappearance schedules a rebuild through the existing
+subscription. Bootstrap installs the IPC push subscriber with Agents closed;
+main also subscribes for task records and starts the service at app startup.
+The changed `hosted` field makes the snapshot differ and updates badge membership.
 
 ### Lifecycle
 
@@ -461,7 +491,8 @@ that throws still lets the choice apply for the session. The `<select>` in
   start of each row's `.agents-row-state` (in every mode). `agentStateMeta`
   (entry → `{ key, emoji, label }`) is the only lookup: interactive entries
   are `external` whatever their state; a background entry whose state is
-  `null` or not a key is `unknown`. Order: Working, Blocked, Done, Stopped,
+  `null` or not a key is `unknown`. Hosted `done` uses the `idle` key and
+  `💤 Idle` header and row label. Order: Working, Blocked, Idle, Done, Stopped,
   Failed, External, Unknown. "Blocked" matches the row's own state word.
   Emojis are literals from the map, never data, and sit in their own
   `aria-hidden` span (`.agents-group-emoji`, `.agents-state-emoji`) so the
@@ -781,9 +812,10 @@ the client is killed. The call resolves on `close` so stdout is drained, or
   starts a new session, it never resumes the job.
 - A global WSL shell profile runs `claude` inside WSL, whose daemon and
   `~/.claude/jobs` can differ from the ones the Windows roster reads.
-- `runVerb`'s live-guard looks the job up in the roster. When the roster does
-  not have it — before the first reconcile, or a job beyond `MAX_JOBS` — the
-  guard passes `rm` and `respawn` through and the CLI is left to refuse.
+- `runVerb` re-reads job state and live descriptors, falling back to roster
+  identity/state when the file is missing. Without any of that evidence its
+  direct guard can still pass `rm`/`respawn` through to the CLI. The shipped
+  IPC's fresh conversation check refuses unknown liveness before calling it.
 - `MAX_JOBS` (200) truncates the watched job directories by sorted id, not by
   recency; with the daemon answering, the roster still comes from the CLI list.
 - The jobs-directory watcher's `error` handler only logs; it does not re-arm
@@ -795,8 +827,9 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 - `parseDispatchOutput` was checked against one measured output (see
   "Measured facts"); a CLI that changes that line may make `dispatch` return
   `id: null`, which only costs the row selection.
-- Liveness of interactive descriptors is pid-only (`isProcessAlive`): a
-  reused pid shows an external session that is gone.
+- Descriptor liveness retains pid-only behaviour when process identity is
+  unknown; a reused pid can still show an external session until the existing
+  identity check has enough evidence to reject it.
 - An interactive descriptor is External unless `ownProcessFilter` claims its pid:
   a PTY pid of this instance, or a descendant of one or of the main process (the
   roster's broad visibility rule; the resume and delete guards use a narrower one,
