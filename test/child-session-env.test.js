@@ -29,7 +29,7 @@ test('GIVEN main-process startup WHEN children can start THEN session scrubbing 
   assert.ok(scrub >= 0, 'startup must scrub process.env');
   assert.ok(reloader > scrub, 'startup must scrub before electron-reloader');
   assert.ok(cleanPtyEnv > reloader, 'electron-reloader must precede cleanPtyEnv');
-  assert.doesNotMatch(MAIN.slice(0, scrub), /\b(?:spawn|fork|execFile)\s*\(|\bnew\s+Worker\s*\(|\butilityProcess\b/);
+  assert.doesNotMatch(MAIN.slice(0, scrub), /\b(?:spawn\w*|fork|exec\w*)\s*\(|\bnew\s+Worker\s*\(|\butilityProcess\b/);
 });
 
 function contaminate(t) {
