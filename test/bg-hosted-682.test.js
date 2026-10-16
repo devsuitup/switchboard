@@ -65,10 +65,56 @@ for (const options of [
   });
 }
 
-test('matching bg session id hosts a done job without a matching job id; old metadata does not expire a living pid', async t => {
+test('a different explicit job id cannot host a done job with the same session id', async t => {
   const f = fixture(t, { jobId: 'bbbbbbbb', sessionId: SID.toUpperCase() });
   await f.handlers.get('get-bg-agents')();
+  assert.equal(bg.getSnapshot().roster.find(e => e.id === JOB).hosted, false);
+});
+
+test('only the named job is hosted when two done jobs share their resumed session', () => {
+  const roster = mergeRoster({ jobs: new Map([JOB, 'bbbbbbbb'].map(id => [id, { state: 'done', sessionId: SID }])),
+    descriptors: [{ kind: 'bg', jobId: 'bbbbbbbb', sessionId: SID }] });
+  assert.equal(roster.find(e => e.id === JOB).hosted, false);
+  assert.equal(roster.find(e => e.id === 'bbbbbbbb').hosted, true);
+});
+
+test('a descriptor without a job id hosts a matching case-insensitive session', async t => {
+  const f = fixture(t, { jobId: null, sessionId: SID.toUpperCase() });
+  await f.handlers.get('get-bg-agents')();
   assert.equal(bg.getSnapshot().roster[0].hosted, true);
+});
+
+for (const platform of ['win32', 'linux']) {
+  test(`a live reused pid is excluded from hosting on ${platform}`, async t => {
+    const f = fixture(t);
+    cli.stop();
+    const sessions = path.dirname(f.descriptor);
+    fs.writeFileSync(f.descriptor, JSON.stringify({ pid: 77, kind: 'bg', jobId: JOB, sessionId: SID,
+      procStart: '134000000000000000', pidDomain: platform === 'win32' ? 'win32:anchor' : undefined, status: 'idle' }));
+    cli.init({ dir: sessions, platform, activeSessions: new Map(), onIdle() {}, now: () => Date.now() + 10000, isProcessAlive: () => true,
+      readProcStart: () => '134000000000100000',
+      readProcessTable: async () => new Map([[77, { ppid: 1, created: '134000000000100000' }]]) });
+    await cli.refreshProcessTable();
+    assert.equal(cli.ensureWatching(), true);
+    await f.handlers.get('get-bg-agents')();
+    assert.deepEqual(cli.readAllDescriptors(), []);
+    assert.deepEqual(cli.getSidebarDescriptors(), []);
+    assert.equal(bg.getSnapshot().roster.find(e => e.id === JOB).hosted, false);
+    assert.equal(bg.liveJobCheck(SID).job, null);
+  });
+}
+
+test('runVerb reads working state written after a finished roster snapshot', async t => {
+  const f = fixture(t, { alive: false });
+  await f.handlers.get('get-bg-agents')();
+  assert.equal(bg.getSnapshot().roster[0].hosted, false);
+  fs.writeFileSync(f.jobFile, JSON.stringify({ state: 'working', sessionId: SID }));
+  for (const verb of ['rm', 'respawn']) {
+    const result = await bg.runVerb(verb, JOB);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /working.*stop it first/);
+  }
+  assert.equal(f.calls.some(args => ['rm', 'respawn'].includes(args[0])), false);
 });
 
 test('matching bg job id hosts a done job even when its descriptor names another session id', async t => {

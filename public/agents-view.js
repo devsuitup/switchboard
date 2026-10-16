@@ -209,6 +209,7 @@ function backgroundActivityLabel(sessionId, snapshot, row) {
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const label = terminal ? entry.state : !valid ? 'Activity unavailable' : renderSessionIcon(snapshot).title;
   const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toLocaleString()} (job metadata)` : 'Job activity unavailable';
+  if (entry.state === 'done' && agentJobIsLive(entry)) return { text: 'Idle', title: source };
   return { text: terminal ? `Job ${label}` : `${label} · job ${entry.state || 'unknown'}`, title: source };
 }
 
@@ -296,7 +297,8 @@ function selectAgentsRow(id) {
 function renderAgentRow(entry, nested = false) {
   const key = agentsEntryKey(entry);
   const icon = agentRowIcon(entry);
-  const state = entry.kind === 'interactive' ? 'external' : (entry.state || '?');
+  const state = entry.kind === 'interactive' ? 'external'
+    : entry.state === 'done' ? agentJobIsLive(entry) ? 'Idle' : 'Done' : (entry.state || '?');
   const stateEmoji = agentStateMeta(entry).emoji;
   const status = entry.kind === 'interactive' && entry.status ? ' · ' + entry.status : '';
   const classes = ['agents-row'];

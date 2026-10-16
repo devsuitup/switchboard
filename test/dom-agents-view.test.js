@@ -120,7 +120,7 @@ test('hosted done job keeps badge, live row, filter visibility and Attach/Stop o
     const row = h.document.querySelector('.agents-row');
     assert.ok(row);
     assert.ok(row.querySelector('.session-icon--waiting'));
-    assert.match(row.textContent, /done/);
+    assert.match(row.querySelector('.agents-row-state').textContent, /Idle/);
     assert.match(h.document.getElementById('agents-viewer-count').textContent, /1 running · 0 finished/);
     row.click();
     for (const verb of ['attach', 'stop']) assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, false);
@@ -657,7 +657,7 @@ test('every row starts its state column with its state emoji in every grouping m
   const odd = { ...ROSTER[1], id: 'eeeeeeee', sessionId: 's-e', name: 'odd', state: null };
   ctx.setSnapshot({ roster: [...ROSTER, failed, odd], daemonReachable: true });
   await ctx.window.showAgentsView();
-  const expected = { 'em-platform': '⚙️ working', spike: '✅ done', 'lvds-1b': '🖥️ external · busy', broke: '❌ failed', odd: '❓ ?' };
+  const expected = { 'em-platform': '⚙️ working', spike: '✅ Done', 'lvds-1b': '🖥️ external · busy', broke: '❌ failed', odd: '❓ ?' };
   for (const mode of ['none', 'state', 'project']) {
     chooseGroupBy(ctx, mode);
     const got = Object.fromEntries([...ctx.document.querySelectorAll('.agents-row')].map(r =>

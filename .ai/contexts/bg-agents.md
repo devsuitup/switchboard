@@ -9,7 +9,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 
 | File | Role |
 |---|---|
-| `bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `dispatchRefusal`, `isLiveJobState`, `isHostedJob`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
+| `bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `dispatchRefusal`, `isHostedJob`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
 | `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobCheck`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
 | `project-root.js` | `resolveProjectRoots(cwd)`: the `.claude/worktrees` pattern, else one `git rev-parse`; never throws |
 | `delete-session-guard.js` | `deleteSessionRefusal`: the fail-closed liveness check `delete-session` runs first |
@@ -136,7 +136,7 @@ when its PTY is still open. This applies to initial rendering, incremental head
 updates and sidebar rebuilds. Both sidebar paths pass the representative row
 to the label function so a merged member cannot lose its row's `bgJobId` when
 the roster is absent. A retained attach tab keeps the job projection after
-done/stopped/failed: the sidebar says `Job done`, `Job stopped` or `Job failed`.
+done/stopped/failed: the sidebar says `Idle` for hosted done, otherwise `Job done`, `Job stopped` or `Job failed`.
 An unhosted row shows the finished/stale glyph, even if `conversationOwn` is
 true; a done row with a live bg descriptor keeps the waiting ring. A resumed
 non-attach conversation retains its own activity and glyph. The done/idle
@@ -260,22 +260,31 @@ attention. `stopped` and `failed` are finished even with a leftover descriptor.
 
 `isHostedJob(job, descriptors)` in `bg-agents-roster.js` is the single hosting
 rule: a background job is hosted if working/blocked, or if a live `kind: bg`
-descriptor matches its job id or its case-insensitive session id. Stopped/failed
-override that evidence. Descriptors come from `cli-session-state.readAllDescriptors`:
-it parses the descriptor and checks `isProcessAlive(pid)`. Dead pids are excluded;
-old timestamps do not expire a living pid. No second pid or freshness rule is
-introduced. Pid reuse remains the existing descriptor reader's limitation.
+descriptor matches its job id. Only a descriptor without a job id may match
+its case-insensitive session id; two jobs can share a resumed conversation.
+Stopped/failed override that evidence. Descriptors come from `cli-session-state.readAllDescriptors`:
+it parses the descriptor and checks `isProcessAlive(pid)`. Dead pids are excluded.
+It also reuses `deliveryProcessIdentity` to exclude confirmed stale process
+identities, comparing `procStart` and `pidDomain` with the process start evidence.
+Windows uses the existing asynchronously refreshed process table and descriptor
+mtime ordering. Unknown identity, including missing `procStart`, retains the
+pid-only behaviour; old status timestamps do not expire a living pid.
+The cached sidebar descriptor projection applies the same identity check.
+`isLiveJobState` has been removed; turn activity and attention still read their
+specific turn states, while hosting consumers use `isHostedJob`.
 
 Main annotates every roster entry with `hosted`; renderer `agentJobIsLive`
 consumes that field for badges, row liveness, ordering, counts, the Finished
-filter and verbs. A hosted idle row retains the `done` / Done state label,
-shows the waiting glyph and counts as running. Done without a live descriptor
+filter and verbs. A hosted idle row retains the `done` turn state and shows `Idle`
+in the sidebar status and Agents row label (a finished Agents row keeps `Done`).
+It shows the waiting glyph and counts as running. Done without a live descriptor
 is finished. Busy/head-turn and blocked attention still follow turn evidence.
 `runVerb`, the fresh conversation check and `liveJobCheck` use the same hosting
 rule, including descriptors that changed after the last snapshot.
 
-| Verb | Hosted (including idle done) | Finished |
+| Display / verb | Hosted (including idle done) | Finished |
 |---|---|---|
+| State label after turn ends | Idle | Done |
 | Attach | allowed | disabled (a finished session resumes like any other) |
 | Stop | allowed | disabled |
 | Respawn | refused | allowed |
@@ -303,7 +312,12 @@ its job state but cannot offer destructive verbs while that pid is live.
 
 The job watcher starts with the app so the sidebar can read `getCachedJobs`
 without opening Agents or scanning job files on project loads. A done job with
-a live bg descriptor retains the roster's sidebar bg marker. An attach PTY
+a live bg descriptor retains the roster's sidebar bg marker. The local projects
+projection also uses `isHostedJob`, preserving descriptor-only rows and proven
+continuation heads, merged members and registry renames across working/done
+turn transitions. The attach-tab fallback supplies a synthetic descriptor only
+when the cached job is hosted without descriptor evidence (working/blocked).
+An attach PTY
 alone does not prove hosting.
 Sidebar registry names replace launch titles only; a Switchboard rename wins.
 
@@ -810,8 +824,9 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 - `parseDispatchOutput` was checked against one measured output (see
   "Measured facts"); a CLI that changes that line may make `dispatch` return
   `id: null`, which only costs the row selection.
-- Liveness of interactive descriptors is pid-only (`isProcessAlive`): a
-  reused pid shows an external session that is gone.
+- Descriptor liveness retains pid-only behaviour when process identity is
+  unknown; a reused pid can still show an external session until the existing
+  identity check has enough evidence to reject it.
 - An interactive descriptor is External unless `ownProcessFilter` claims its pid:
   a PTY pid of this instance, or a descendant of one or of the main process (the
   roster's broad visibility rule; the resume and delete guards use a narrower one,
