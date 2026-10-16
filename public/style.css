@@ -5670,3 +5670,8 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
   border-radius: 50%;
   background: var(--accent);
 }
+
+.mermaid-diagram { max-width: 100%; overflow-x: auto; margin: 1em 0; }
+.mermaid-diagram > svg { display: block; max-width: none !important; }
+.mermaid-error { color: var(--text-muted); font-size: 12px; }
+.mermaid-render-scratch { position: fixed; left: -100000px; top: 0; visibility: hidden; pointer-events: none; }

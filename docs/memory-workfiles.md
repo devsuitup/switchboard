@@ -34,6 +34,10 @@ The editor offers:
 - **Save**, or `Ctrl+S` / `Cmd+S`;
 - a reload when the file changes on disk.
 
+Markdown previews render fenced `mermaid` blocks as diagrams, including in the
+Touched/Changes editor. Invalid diagrams keep their source visible with an inline
+error; HTML labels, image/icon resources and DOM details lookups are not supported.
+
 ## Work Files
 
 The **Work Files** tab (folder icon) lists, per project, the files under

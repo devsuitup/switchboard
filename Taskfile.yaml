@@ -57,6 +57,7 @@ tasks:
     desc: Run the Playwright journeys against the real Electron app (Linux; see docs/e2e.md)
     cmds:
       - npm run bundle:codemirror
+      - npm run bundle:mermaid
       - |
         if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ] && command -v xvfb-run >/dev/null 2>&1; then
           xvfb-run -a -s "-screen 0 1920x1080x24" npm run e2e
@@ -98,14 +99,14 @@ tasks:
       - npx eslint .
 
   clean:
-    desc: Remove dist/, codemirror bundle, and local DB (asks for confirmation)
+    desc: Remove dist/, viewer bundles, and local DB (asks for confirmation)
     interactive: true
     cmds:
       - |
-        read -p "This will delete dist/, public/codemirror-bundle.js, and {{.SWITCHBOARD_DB}}. Type YES to confirm: " ans
+        read -p "This will delete dist/, public/codemirror-bundle.js, public/mermaid-bundle.js, and {{.SWITCHBOARD_DB}}. Type YES to confirm: " ans
         [ "$ans" = "YES" ]
       - rm -rf dist/
-      - rm -f public/codemirror-bundle.js
+      - rm -f public/codemirror-bundle.js public/mermaid-bundle.js
       - rm -f "{{.SWITCHBOARD_DB}}"
       - echo "Clean complete."
 

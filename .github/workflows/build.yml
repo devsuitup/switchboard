@@ -65,7 +65,7 @@ jobs:
         run: npm ci
 
       - name: Bundle CodeMirror
-        run: npm run bundle:codemirror
+        run: npm run bundle:codemirror && npm run bundle:mermaid
 
       - name: Build
         run: npx electron-builder --${{ matrix.platform }} --publish never

@@ -443,3 +443,49 @@ can also shrink with its own ellipsis. A separator-ending path displays its
 last non-empty segment as the tail; `title` retains the original path. CSS
 follows available width without measuring text or injecting path markup.
 jsdom checks structure and hover paths; visual width behavior needs a live run.
+
+
+## Mermaid diagrams (#663)
+
+All file previews use the same marked + DOMPurify pass in `renderMarkdownPreview`
+(viewer-toolbar.js), including frontmatter, ViewerPanel toggle/external refresh and
+the Touched/Changes shared editor. Only fenced code tokens with the exact info
+string `mermaid` are upgraded; other fences and raw HTML code blocks stay ordinary
+Markdown. The returned promise tracks optional diagrams; the sanitized document
+shows immediately. Source/editor content is never rewritten.
+
+`loadMermaidBundle` injects one local script, shares concurrent loads and retries
+failures. `public/mermaid-setup.js` bundles pinned Mermaid into the generated,
+ignored `public/mermaid-bundle.js`. Start/build/release, CI and test-pr build it
+alongside CodeMirror; packaging includes it in app.asar through `public/**/*`.
+Mermaid is a build dependency, like CodeMirror: its bundled code ships, while the
+large upstream source/dependency tree is excluded from production packaging.
+Test-pr skips Mermaid for older PRs without the bundle script.
+
+A global serial queue keeps Mermaid configuration and temporary DOM exclusive.
+Each render initializes strict mode, disables HTML labels and automatic scanning,
+and locks every default config key against document frontmatter/directives.
+Source containing HTML tags, angle/numeric entities, image/icon properties, DOM details lookups, resource URLs,
+CSS imports or CSS escapes is refused before temporary DOM attaches. Unsupported
+HTML/resource features show source plus a short error, like invalid syntax. This
+deliberate subset prevents pre-sanitization loads. No bindFunctions callback runs.
+
+DOMPurify SVG + SVG-filter profiles sanitize output before insertion. A second
+pass removes image/foreignObject/animation elements, non-fragment hrefs, resource
+attributes and CSS containing imports, external URLs or escapes. Local markers
+and safe generated styles survive. All IDs and their CSS/marker/ARIA/link references
+are namespaced per render. Temporary containers are removed in finally. WeakMap
+state and generation checks discard late results when content changes.
+
+The app currently has a fixed dark palette without a global light/dark selector.
+Diagrams derive their palette from `--surface-sunken`, or explicit html/body
+`data-theme=light|dark`. One observer watches root/body theme/class/style changes
+and re-renders connected previews when the effective palette changes. SVG viewBox
+width becomes intrinsic width; wide diagrams scroll inside their wrapper. The
+main.js renderer CSP is unchanged: self scripts, self/data images, self fonts,
+inline styles permitted, no eval permission.
+
+`test/viewer-mermaid.test.js` loads shipped code with real marked and DOMPurify,
+stubbing only the lazy Mermaid module edge. It covers strict config, laziness,
+frontmatter, raw-HTML lookalikes, errors, hostile SVG, ID/reference isolation,
+async replacement, cleanup, theme changes, scrolling CSS and build wiring.

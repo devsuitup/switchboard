@@ -221,13 +221,16 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
     warn(`Stop and install the reviewed dependencies in ${worktree} before launching.`);
   }
   linkNodeModules(worktree, path.join(checkout, 'node_modules'));
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(worktree, 'package.json'), 'utf8'));
-    const options = parseBundleScript(pkg.scripts?.['bundle:codemirror']);
-    run(process.execPath, ['-e', 'require(process.argv[1]).buildSync(JSON.parse(process.argv[2]))',
-      path.join(worktree, 'node_modules', 'esbuild'), JSON.stringify(options)], { cwd: worktree, stdio: 'inherit' });
-  } catch (error) {
-    throw new Error(`Failed to build CodeMirror bundle in ${worktree}: ${error.message}`);
+  const pkg = JSON.parse(fs.readFileSync(path.join(worktree, 'package.json'), 'utf8'));
+  for (const [name, label] of [['bundle:codemirror', 'CodeMirror'], ['bundle:mermaid', 'Mermaid']]) {
+    if (name === 'bundle:mermaid' && !pkg.scripts?.[name]) continue;
+    try {
+      const options = parseBundleScript(pkg.scripts?.[name]);
+      run(process.execPath, ['-e', 'require(process.argv[1]).buildSync(JSON.parse(process.argv[2]))',
+        path.join(worktree, 'node_modules', 'esbuild'), JSON.stringify(options)], { cwd: worktree, stdio: 'inherit' });
+    } catch (error) {
+      throw new Error(`Failed to build ${label} bundle in ${worktree}: ${error.message}`);
+    }
   }
   let tempHome;
   let launchCwd;
