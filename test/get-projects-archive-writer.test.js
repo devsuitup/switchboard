@@ -26,8 +26,10 @@ function scenario(name, body) {
         const otherEntry = archive.archivedEntry(null, other);
         const messages = [];
         let beforePost = () => {};
+        let onWorkerMessage = () => {};
         const writer = createSessionIndexWriter({ workerFactory: () => {
           const worker = new Worker(path.resolve('workers/session-index-writer.js'));
+          worker.on('message', message => onWorkerMessage(message));
           const post = worker.postMessage.bind(worker);
           worker.postMessage = message => {
             messages.push(structuredClone(message));
@@ -90,7 +92,8 @@ scenario('reappearing projects persist only archive keys through the writer and 
   });
   await writer.setSetting('scheduleReenableOffers', { [otherEntry]: { disabledSchedules: ['other.md'] } });
   messages.length = 0;
-  const revision = db.getSetting('_writer_revision');
+  const snapshot = { archivedProjects: db.getSetting('archivedProjects'), hiddenProjects: [],
+    scheduleReenableOffers: db.getSetting('scheduleReenableOffers') };
   const reply = await invoke(null, 'both');
   assert.deepEqual(db.getSetting('archivedProjects'), {
     [otherEntry]: { archivedAt: 13, knownSessionIds: ['other'] },
@@ -102,7 +105,7 @@ scenario('reappearing projects persist only archive keys through the writer and 
   assert.deepEqual(reply.defaultProjects[0].reenableOffer, { names: ['Restart me'] });
   assert.equal(JSON.stringify(reply.defaultProjects), JSON.stringify(reply.allProjects));
   assert.deepEqual(messages.map(({ command, args }) => ({ command, args })), [
-    { command: 'retireArchivedEntries', args: [[entry], revision] },
+    { command: 'retireArchivedEntries', args: [[entry], snapshot] },
   ]);
   assert.ok(!JSON.stringify(messages).includes('PROJECT_PAYLOAD'));
 `);
@@ -165,22 +168,88 @@ scenario('archive results retain separate session objects for later main-side an
   assert.equal(JSON.stringify(projects), before, 'session annotations must not leak into the source views');
 `);
 
-scenario('three retirement conflicts propagate without persisting a stale archive decision', `
+scenario('three retirement conflicts return projects without persisting a stale archive decision', `
   await writer.setSetting('archivedProjects', { [entry]: { archivedAt: 12, knownSessionIds: [] } });
   let conflicts = 0;
   beforePost = (message, post) => {
     if (message.command !== 'retireArchivedEntries') return;
-    post({ id: -1, command: 'patchGlobal', args: [{ conflict: ++conflicts }] });
+    post({ id: -1, command: 'setSetting', args: ['archivedProjects', {
+      [entry]: { archivedAt: 12 + ++conflicts, knownSessionIds: [] },
+    }] });
   };
   messages.length = 0;
-  const previousError = console.error;
-  console.error = () => {};
-  try { await assert.rejects(invoke(null, false), { code: 'WRITER_STALE' }); }
-  finally { console.error = previousError; }
+  const reply = await invoke(null, false);
+  assert.equal(reply.length, 1);
+  assert.equal(reply[0].projectPath, project);
   assert.equal(conflicts, 3);
   assert.equal(messages.length, 3);
-  assert.deepEqual(db.getSetting('archivedProjects'), { [entry]: { archivedAt: 12, knownSessionIds: [] } });
+  assert.deepEqual(db.getSetting('archivedProjects'), { [entry]: { archivedAt: 15, knownSessionIds: [] } });
   assert.equal(db.getSetting('scheduleReenableOffers'), null);
+  beforePost = () => {};
+  await invoke(null, false);
+  assert.deepEqual(db.getSetting('archivedProjects'), {});
+`);
+
+for (const count of [50, 200]) {
+  scenario('get-projects retires archives during a ' + count + '-entry background search write', `
+    await writer.setSetting('archivedProjects', { [entry]: { knownSessionIds: [] } });
+    let started;
+    const running = new Promise(resolve => { started = resolve; });
+    onWorkerMessage = message => { if (message.started) started(); };
+    let completed = false;
+    const background = writer.upsertSearchEntries(Array.from({ length: ${count} }, (_, i) => ({
+      id: 'background-' + i, type: 'memory', title: 'Background ' + i, body: 'x'.repeat(20000),
+    }))).then(() => { completed = true; });
+    await running;
+    beforePost = message => {
+      if (message.command === 'retireArchivedEntries') assert.equal(completed, false);
+    };
+    messages.length = 0;
+    const reply = await invoke(null, false);
+    assert.equal(reply.length, 1);
+    assert.deepEqual(db.getSetting('archivedProjects'), {});
+    assert.equal(messages.filter(m => m.command === 'retireArchivedEntries').length, 1);
+    await background;
+    assert.equal(db.searchByType('memory', 'Background', ${count}).length, ${count});
+  `);
+}
+
+scenario('unrelated global changes do not conflict with archive retirement', `
+  await writer.setSetting('archivedProjects', { [entry]: { knownSessionIds: [] } });
+  beforePost = (message, post) => {
+    if (message.command === 'retireArchivedEntries') {
+      post({ id: -1, command: 'patchGlobal', args: [{ unrelated: true }] });
+    }
+  };
+  messages.length = 0;
+  const reply = await invoke(null, false);
+  assert.equal(reply.length, 1);
+  assert.deepEqual(db.getSetting('archivedProjects'), {});
+  assert.equal(db.getSetting('global').unrelated, true);
+  assert.equal(messages.length, 1);
+`);
+
+scenario('remote root retirement preserves the exact archive key and creates its offer once', `
+  const remoteEntry = archive.archivedEntry('host', '/');
+  assert.equal(remoteEntry, 'host::');
+  const schedule = root + '/remote-schedule.md';
+  fs.writeFileSync(schedule, '---\\nname: Remote task\\n---\\n');
+  await writer.setSetting('archivedProjects', {
+    [remoteEntry]: { archivedAt: 12, knownSessionIds: [], disabledSchedules: [schedule] },
+    [otherEntry]: { knownSessionIds: ['other'] },
+  });
+  views.defaultProjects = [{ projectPath: '/', remoteAlias: 'host', sessions: [{ sessionId: 'new' }] }];
+  messages.length = 0;
+  const reply = await invoke(null, false);
+  assert.deepEqual(db.getSetting('archivedProjects'), { [otherEntry]: { knownSessionIds: ['other'] } });
+  assert.deepEqual(db.getSetting('scheduleReenableOffers'), {
+    [remoteEntry]: { archivedAt: 12, disabledSchedules: [schedule] },
+  });
+  assert.deepEqual(reply[0].reenableOffer, { names: ['Remote task'] });
+  assert.equal(messages.length, 1);
+  messages.length = 0;
+  await invoke(null, false);
+  assert.equal(messages.length, 0);
 `);
 
 for (const race of ['rearchive', 'hide', 'offer', 'worktree']) {

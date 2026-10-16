@@ -96,7 +96,7 @@ receipts and status/replay recovery are deliberately not added in step 1.
 | rekeySessionMeta | Current predecessor/head values and per-field revision precedence |
 | hideProject | Current visibility/kinds, deduplicated entry |
 | unhideProject / revealAddedProject / clearArchivedEntry | Current visibility/archive state and offer retirement |
-| retireArchivedEntries | Revision-checked archive-key retirement and current offer merge; filtering and schedule names stay on main |
+| retireArchivedEntries | Archive/hidden-project/offer snapshot check, exact archive-key retirement and current offer merge; filtering and schedule names stay on main |
 | beginArchive / completeArchive | Current archive/offer merge, then guarded completion after schedule file effects; conflicts report partial effects |
 | beginOffer / completeOffer / dismissReenableOffer | Current offer selection; completion compares the selected offer before changing it and reports conflicts explicitly |
 | cleanupWorktree | Worker selects current matching rows, deletes in bounded units, then merges visibility/archive cleanup |
@@ -121,14 +121,17 @@ two views retain separate objects without cloning their full payloads. With no
 retirement, the facade posts no writer command, including for the two builds in
 `get-projects('both')`. Project rows never travel through the writer transport.
 
-When reappearance clears archives, main sends only the retired archive keys and
-the mirror's `_writer_revision` in `retireArchivedEntries`. Inside the queued
-transaction the writer compares that revision before reading current archives
-and offers, then retires the selected keys through `clearArchivedEntry`. Archive
-removal and offer creation commit together; unrelated entries survive. A queued
-write that invalidates the snapshot returns `WRITER_STALE` with current settings.
-Main recomputes from that acknowledgment, with at most three admission attempts;
-the third conflict propagates without stale persistence. This also covers
+When reappearance clears archives, main sends the retired archive keys and the
+mirror's `archivedProjects`, `global.hiddenProjects` and `scheduleReenableOffers`
+snapshot in `retireArchivedEntries`. Inside the queued transaction the writer
+compares those values with current settings, then retires exact existing keys
+through `archived-projects.retireArchivedEntries` without parsing or re-encoding
+them. Archive removal and offer creation commit together; unrelated entries
+survive. Background cache/search transactions and unrelated global fields do not
+conflict. A changed archive, visibility or offer snapshot returns `WRITER_STALE`
+with current settings. Main recomputes from that acknowledgment, with at most
+three admission attempts; on the third conflict it returns the computed project
+list without persisting retirement. The next refresh can retry. This also covers
 visibility and worktree archive changes, not just changes to selected keys.
 Schedule names are still read on main after the write acknowledgment. Effect-free
 reads use the acknowledged mirror without waiting for pending writes.

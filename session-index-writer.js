@@ -137,8 +137,9 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       await ready;
       let kept;
       for (let attempt = 0; ; attempt++) {
-        const revision = backend.getSetting('_writer_revision') || 0;
         const archived = backend.getSetting('archivedProjects') || {};
+        const snapshot = { archivedProjects: archived, hiddenProjects: (backend.getSetting('global') || {}).hiddenProjects || [],
+          scheduleReenableOffers: backend.getSetting('scheduleReenableOffers') || {} };
         const updates = new Map();
         const copies = projects.map(project => {
           const copy = { ...project };
@@ -153,10 +154,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         if (!updates.has('archivedProjects')) break;
         const entries = Object.keys(archived).filter(entry => !Object.hasOwn(updates.get('archivedProjects'), entry));
         try {
-          await request('retireArchivedEntries', entries, revision);
+          await request('retireArchivedEntries', entries, snapshot);
           break;
         } catch (error) {
-          if (error.code !== 'WRITER_STALE' || attempt === 2) throw error;
+          if (error.code !== 'WRITER_STALE') throw error;
+          if (attempt === 2) break;
         }
       }
       const offers = backend.getSetting('scheduleReenableOffers') || {};
