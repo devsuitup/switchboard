@@ -3,10 +3,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createHash } = require('node:crypto');
 const { setupSidebarDom } = require('./dom-setup');
 
 const fence = source => '\x60\x60\x60mermaid\n' + source + '\n\x60\x60\x60';
 const tick = () => new Promise(resolve => setImmediate(resolve));
+let realMermaidBundle;
 function setup(t, render) {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
@@ -31,6 +33,300 @@ function setup(t, render) {
   ctx.window.loadMermaidBundle = async () => { loads++; return ctx.window.previewMermaid; };
   return { ...ctx, el, calls, configs, realLoader, loads: () => loads, render: text => ctx.window.renderMarkdownPreview(el, text) };
 }
+
+function useRealMermaid(ctx, window = ctx.window) {
+  const { SVGElement } = window;
+  window.structuredClone = structuredClone;
+  window.Math.random = () => 0.5;
+  window.Date.now = () => 1792108800000;
+  let uuid = 0;
+  window.crypto.randomUUID = () => '00000000-0000-4000-8000-' + String(++uuid).padStart(12, '0');
+  SVGElement.prototype.getBBox = function () {
+    return { x: 0, y: 0, width: (this.textContent || '').length * 8, height: 16 };
+  };
+  SVGElement.prototype.getComputedTextLength = function () { return this.getBBox().width; };
+  SVGElement.prototype.getScreenCTM = () => ({ inverse: () => ({}) });
+  window.HTMLCanvasElement.prototype.getContext = function () {
+    return new Proxy({
+      canvas: this,
+      measureText: text => ({ width: String(text).length * 8 }),
+      getLineDash: () => [],
+      createLinearGradient: () => ({ addColorStop() {} }),
+      createRadialGradient: () => ({ addColorStop() {} }),
+    }, { get: (target, key) => key in target ? target[key] : () => {} });
+  };
+  const filename = path.join(__dirname, '..', 'node_modules/mermaid/dist/mermaid.js');
+  if (window === ctx.window) {
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
+    window.previewMermaid = window.mermaid;
+  } else {
+    realMermaidBundle ||= require('esbuild').buildSync({
+      entryPoints: [path.join(__dirname, '../public/mermaid-setup.js')],
+      bundle: true, write: false, format: 'iife', platform: 'browser', minify: true,
+    }).outputFiles[0].text;
+    window.eval(realMermaidBundle);
+  }
+  return window.previewMermaid;
+}
+
+async function loadRealMermaid(ctx) {
+  const loaded = ctx.realLoader();
+  const frame = ctx.document.querySelector('.mermaid-render-frame');
+  const rendererWindow = frame?.contentWindow || ctx.window;
+  useRealMermaid(ctx, rendererWindow);
+  rendererWindow.document.querySelector('script[src="mermaid-bundle.js"]').dispatchEvent(new rendererWindow.Event('load'));
+  const mermaid = await loaded;
+  ctx.window.loadMermaidBundle = () => loaded;
+  return { mermaid, document: rendererWindow.document };
+}
+
+test('real Mermaid rendering preserves host lookups and application notifications throughout async work', async t => {
+  const ctx = setup(t);
+  const { mermaid, document } = await loadRealMermaid(ctx);
+  const rendererLookup = document.getElementById;
+  const original = ctx.document.getElementById;
+  const originalSelector = ctx.document.querySelector;
+  const render = mermaid.render;
+  const errors = [];
+  const unchanged = [];
+  mermaid.render = async (...args) => {
+    const pending = render(...args);
+    for (const id of ['during-render', 'after-yield']) {
+      unchanged.push(ctx.document.getElementById === original && ctx.document.querySelector === originalSelector);
+      try { ctx.window.showAppNotice({ id, kind: 'error', message: 'Stop failed' }); }
+      catch (error) { errors.push(error.message); }
+      await tick();
+    }
+    return pending;
+  };
+  await ctx.render(fence('graph TD; A-->B'));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(unchanged, [true, true]);
+  assert.equal(ctx.document.querySelectorAll('#app-notices .app-notice').length, 2);
+  assert.ok(ctx.el.querySelector('svg'));
+  assert.equal(document.getElementById, rendererLookup);
+  assert.equal(document.querySelector('.mermaid-render-scratch'), null);
+});
+
+for (const [name, source] of [
+  ['flowchart', 'graph TD; A[Start]-->B[End]'],
+  ['sequence', 'sequenceDiagram\nAlice->>Bob: Hello\nBob-->>Alice: Hi'],
+  ['class', 'classDiagram\nAnimal <|-- Duck\nAnimal : +int age'],
+  ['state', 'stateDiagram-v2\n[*] --> Still\nStill --> [*]'],
+  ['pie', 'pie title Pets\n"Dogs" : 10\n"Cats" : 20'],
+  ['gantt', 'gantt\ndateFormat YYYY-MM-DD\nsection Demo\nTask :2026-10-16, 2d'],
+  ['mindmap', 'mindmap\n  root((Root))\n    One\n    Two'],
+  ['er', 'erDiagram\nCUSTOMER ||--o{ ORDER : places'],
+  ['colored markers', 'flowchart TD\nA-->B\nlinkStyle 0 stroke:red'],
+  ['architecture', 'architecture-beta\nservice db(database)[Database]'],
+]) {
+  test('real Mermaid SVG is identical with and without the render guard: ' + name, async t => {
+    const guarded = setup(t);
+    const baseline = setup(t);
+    const { mermaid, document } = await loadRealMermaid(guarded);
+    const { mermaid: raw, document: baselineDocument } = await loadRealMermaid(baseline);
+    const initialize = mermaid.initialize;
+    let config;
+    mermaid.initialize = options => {
+      config = { ...options, handDrawnSeed: 1 };
+      initialize(config);
+    };
+    let actual;
+    const lookups = [];
+    const render = mermaid.render;
+    mermaid.render = async (...args) => {
+      const scoped = document.getElementById;
+      document.getElementById = id => {
+        lookups.push(String(id));
+        return scoped(id);
+      };
+      actual = await render(...args);
+      return actual;
+    };
+    await guarded.render(fence(source));
+    assert.ok(actual?.svg, 'guarded real renderer must succeed');
+    assert.ok(guarded.el.querySelector('svg'), 'shared preview must insert the sanitized diagram');
+    assert.equal(guarded.el.querySelector('.mermaid-error'), null);
+    raw.initialize(config);
+    const container = baselineDocument.createElement('div');
+    container.className = 'mermaid-render-scratch';
+    container.setAttribute('aria-hidden', 'true');
+    baselineDocument.body.appendChild(container);
+    const expected = await raw.render('preview-mermaid-1', source + '\n', container);
+    if (actual.svg !== expected.svg) {
+      const offset = [...actual.svg].findIndex((char, index) => char !== expected.svg[index]);
+      t.diagnostic(JSON.stringify({ offset, actual: actual.svg.slice(offset, offset + 120), expected: expected.svg.slice(offset, offset + 120) }));
+    }
+    assert.ok(actual.svg === expected.svg, 'raw SVG must be byte-identical: ' + name);
+    assert.equal(guarded.document.querySelector('.mermaid-render-scratch'), null);
+    assert.equal(document.querySelector('.mermaid-render-scratch'), null);
+    t.diagnostic(JSON.stringify({ fixture: name, bytes: Buffer.byteLength(actual.svg), sha256: createHash('sha256').update(actual.svg).digest('hex'), lookups: [...new Set(lookups)] }));
+  });
+}
+
+for (const source of [
+  'sequenceDiagram\nparticipant A#1;\ndetails A#1;: secretjson',
+  'sequenceDiagram\nparticipant Al#x;ice\ndetails Al#x;ice: secretjson',
+  'sequenceDiagram\nparticipant style@{"alias":"#"}; details Ali;ce: secretjson',
+]) {
+  test('entity preprocessing cannot expose private page JSON: ' + source, async t => {
+    const ctx = setup(t);
+    useRealMermaid(ctx);
+    const secret = ctx.document.createElement('div');
+    secret.id = 'secretjson';
+    secret.textContent = '{"links":{"private text":"https://private.test"}}';
+    ctx.document.body.appendChild(secret);
+    let lookups = 0;
+    const original = ctx.document.getElementById;
+    ctx.document.getElementById = function (id) {
+      if (id === 'secretjson') lookups++;
+      return original.call(this, id);
+    };
+    await ctx.render(fence(source));
+    assert.equal(lookups, 0, 'Mermaid must not look up private page JSON');
+    assert.doesNotMatch(ctx.el.textContent, /private text|private\.test/);
+    assert.equal(ctx.document.querySelector('.mermaid-render-scratch'), null);
+  });
+}
+
+test('the DOM guard protects real Mermaid details even when the source pre-check is bypassed', async t => {
+  const ctx = setup(t);
+  const { mermaid, document } = await loadRealMermaid(ctx);
+  const render = mermaid.render;
+  const secret = document.createElement('div');
+  secret.id = 'secretjson';
+  secret.textContent = '{"links":{"private text":"https://private.test"}}';
+  document.body.appendChild(secret);
+  let lookups = 0;
+  const original = document.getElementById;
+  document.getElementById = function (id) {
+    if (id === 'secretjson') lookups++;
+    return original.call(this, id);
+  };
+  let attempts = 0;
+  for (const attack of [
+    'sequenceDiagram\nparticipant A#1;\ndetails A#1;: secretjson',
+    'sequenceDiagram\nparticipant Al#x;ice\ndetails Al#x;ice: secretjson',
+    'sequenceDiagram\nparticipant style@{"alias":"#"}; details Ali;ce: secretjson',
+  ]) {
+    mermaid.render = (id, source, container) => {
+      attempts++;
+      return render(id, attack, container);
+    };
+    await ctx.render(fence('sequenceDiagram\nAlice->>Bob: Hello ' + attempts));
+    assert.equal(lookups, 0);
+    assert.ok(ctx.el.querySelector('svg'));
+    assert.doesNotMatch(ctx.el.textContent, /private text|private\.test/);
+  }
+  assert.equal(attempts, 3);
+});
+
+test('repeated real layout renders preserve preexisting page nodes and leave no Cytoscape styles behind', async t => {
+  const ctx = setup(t);
+  useRealMermaid(ctx);
+  ctx.document.head.insertAdjacentHTML('beforeend', '<style id="__________cytoscape_stylesheet">body { color: red }</style>');
+  ctx.document.body.insertAdjacentHTML('beforeend', '<div id="cy">private text</div>');
+  const pageStyle = ctx.document.head.lastElementChild;
+  const pageCy = ctx.document.body.lastElementChild;
+  for (const label of ['One', 'Two']) {
+    await ctx.render(fence('mindmap\n  root((Root))\n    ' + label));
+    assert.ok(ctx.el.querySelector('svg'));
+    assert.equal(ctx.document.querySelectorAll('#__________cytoscape_stylesheet').length, 1);
+    assert.equal(ctx.document.head.lastElementChild, pageStyle);
+    assert.equal(pageCy.textContent, 'private text');
+    assert.equal(pageCy.parentElement, ctx.document.body);
+    assert.doesNotMatch(ctx.el.textContent, /private text/);
+  }
+});
+
+test('the render guard resolves only its scratch including duplicate IDs and survives asynchronous work', async t => {
+  let release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const ctx = setup(t, async (id, source, container) => {
+    container.innerHTML = '<svg id="' + id + '"><defs><marker id="shared-id"/><marker id="special:#[]"/></defs></svg>';
+    assert.equal(ctx.document.getElementById('shared-id'), container.querySelector('marker'));
+    assert.equal(ctx.document.getElementById(id), container.querySelector('svg'));
+    assert.equal(ctx.document.getElementById('special:#[]'), container.querySelectorAll('marker')[1]);
+    assert.equal(ctx.document.querySelector('body'), container);
+    assert.equal(ctx.document.getElementById('secretjson'), null);
+    entered();
+    await new Promise(resolve => { release = resolve; });
+    assert.equal(ctx.document.getElementById('secretjson'), null);
+    return { svg: container.innerHTML };
+  });
+  ctx.document.body.insertAdjacentHTML('afterbegin', '<div id="shared-id"></div><div id="secretjson">private text</div>');
+  const original = ctx.document.getElementById;
+  const originalSelector = ctx.document.querySelector;
+  const originalDescriptor = Object.getOwnPropertyDescriptor(ctx.document, 'getElementById');
+  const pending = ctx.render(fence('graph TD; A-->B'));
+  await Promise.race([started, pending]);
+  assert.equal(typeof release, 'function');
+  assert.equal(ctx.document.getElementById('secretjson'), null);
+  release();
+  await pending;
+  assert.equal(ctx.document.getElementById, original);
+  assert.equal(ctx.document.querySelector, originalSelector);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(ctx.document, 'getElementById'), originalDescriptor);
+  assert.equal(ctx.document.getElementById('secretjson').textContent, 'private text');
+  assert.ok(ctx.el.querySelector('svg'));
+});
+
+for (const asynchronous of [false, true]) {
+  test('a render that ' + (asynchronous ? 'rejects' : 'throws') + ' restores the original DOM lookup and the queue recovers', async t => {
+    const ctx = setup(t);
+    const original = ctx.document.getElementById;
+    const originalSelector = ctx.document.querySelector;
+    const normalRender = ctx.window.previewMermaid.render;
+    let guarded = false;
+    ctx.window.previewMermaid.render = () => {
+      guarded = ctx.document.getElementById !== original;
+      if (asynchronous) return Promise.reject(new Error('render rejected'));
+      throw new Error('render threw');
+    };
+    await ctx.render(fence('graph TD; A-->B'));
+    assert.equal(guarded, true);
+    assert.equal(ctx.document.getElementById, original);
+    assert.equal(ctx.document.querySelector, originalSelector);
+    assert.ok(ctx.el.querySelector('.mermaid-error'));
+    ctx.window.previewMermaid.render = normalRender;
+    await ctx.render(fence('graph TD; C-->D'));
+    assert.ok(ctx.el.querySelector('svg'));
+    assert.equal(ctx.document.getElementById, original);
+  });
+}
+
+test('overlapping and re-entrant previews serialize guards and restore the DOM lookup after each render', async t => {
+  let release, entered, nested;
+  let active = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const ctx = setup(t, async (id, source) => {
+    assert.equal(++active, 1);
+    assert.equal(ctx.document.getElementById('secretjson'), null);
+    if (source.includes('first')) {
+      nested = ctx.window.renderMarkdownPreview(other, fence('nested'));
+      entered();
+      await new Promise(resolve => { release = resolve; });
+    }
+    assert.equal(ctx.document.getElementById('secretjson'), null);
+    active--;
+    return { svg: '<svg id="' + id + '"><text>' + source.trim() + '</text></svg>' };
+  });
+  const other = ctx.document.createElement('div');
+  ctx.document.body.appendChild(other);
+  ctx.document.body.insertAdjacentHTML('beforeend', '<div id="secretjson">private text</div>');
+  const original = ctx.document.getElementById;
+  const first = ctx.render(fence('first'));
+  await Promise.race([started, first]);
+  assert.equal(typeof release, 'function');
+  const overlapping = ctx.render(fence('overlapping'));
+  release();
+  await Promise.all([first, nested, overlapping]);
+  assert.equal(ctx.document.getElementById, original);
+  assert.equal(ctx.calls.length, 3);
+  assert.equal(other.querySelector('svg text').textContent, 'nested');
+  assert.equal(ctx.el.querySelector('svg text').textContent, 'overlapping');
+  assert.equal(ctx.document.querySelectorAll('.mermaid-render-scratch').length, 0);
+});
 
 test('Mermaid fences render SVG through the shared preview with frontmatter and strict locked configuration', async t => {
   const ctx = setup(t);
@@ -152,13 +448,18 @@ test('real lazy loader shares one local script and retries a failed load', async
   const first = ctx.window.loadMermaidBundle();
   const second = ctx.window.loadMermaidBundle();
   assert.equal(first, second);
-  let scripts = ctx.document.querySelectorAll('script[src="mermaid-bundle.js"]');
+  let frame = ctx.document.querySelector('.mermaid-render-frame');
+  let scripts = frame.contentDocument.querySelectorAll('script[src="mermaid-bundle.js"]');
   assert.equal(scripts.length, 1);
   scripts[0].dispatchEvent(new ctx.window.Event('error'));
   await assert.rejects(first);
+  assert.equal(frame.isConnected, false);
   const retry = ctx.window.loadMermaidBundle();
-  scripts = ctx.document.querySelectorAll('script[src="mermaid-bundle.js"]');
+  frame = ctx.document.querySelector('.mermaid-render-frame');
+  scripts = frame.contentDocument.querySelectorAll('script[src="mermaid-bundle.js"]');
   assert.equal(scripts.length, 1);
+  assert.equal(ctx.document.querySelectorAll('.mermaid-render-frame').length, 1);
+  frame.contentWindow.previewMermaid = ctx.window.previewMermaid;
   scripts[0].dispatchEvent(new ctx.window.Event('load'));
   assert.equal(await retry, ctx.window.previewMermaid);
 });
@@ -425,12 +726,15 @@ test('a loaded bundle without its export is removed and the next load can recove
   const library = ctx.window.previewMermaid;
   delete ctx.window.previewMermaid;
   const first = ctx.window.loadMermaidBundle();
-  const script = ctx.document.querySelector('script[src="mermaid-bundle.js"]');
+  const frame = ctx.document.querySelector('.mermaid-render-frame');
+  const script = frame.contentDocument.querySelector('script[src="mermaid-bundle.js"]');
   script.dispatchEvent(new ctx.window.Event('load'));
   await assert.rejects(first, /unavailable/);
-  assert.equal(script.isConnected, false);
+  assert.equal(frame.isConnected, false);
   const retry = ctx.window.loadMermaidBundle();
   ctx.window.previewMermaid = library;
-  ctx.document.querySelector('script[src="mermaid-bundle.js"]').dispatchEvent(new ctx.window.Event('load'));
+  const retryFrame = ctx.document.querySelector('.mermaid-render-frame');
+  retryFrame.contentWindow.previewMermaid = library;
+  retryFrame.contentDocument.querySelector('script[src="mermaid-bundle.js"]').dispatchEvent(new ctx.window.Event('load'));
   assert.equal(await retry, library);
 });

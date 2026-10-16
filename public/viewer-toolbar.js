@@ -103,26 +103,41 @@ let mermaidRenderQueue = Promise.resolve();
 let mermaidRenderId = 0;
 let mermaidThemeObserver = null;
 const mermaidPreviewStates = new WeakMap();
+const mermaidDocuments = new WeakMap();
 
 function loadMermaidBundle() {
   if (mermaidBundlePromise) return mermaidBundlePromise;
   mermaidBundlePromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
+    const frame = document.createElement('iframe');
+    frame.className = 'mermaid-render-frame';
+    frame.setAttribute('aria-hidden', 'true');
+    frame.tabIndex = -1;
+    frame.style.cssText = 'position:fixed;left:-100000px;top:0;visibility:hidden;pointer-events:none;border:0';
+    frame.style.width = window.innerWidth + 'px';
+    frame.style.height = window.innerHeight + 'px';
+    document.body.appendChild(frame);
+    const renderDocument = frame.contentDocument;
+    const script = renderDocument.createElement('script');
     script.src = 'mermaid-bundle.js';
     script.onload = () => {
-      if (window.previewMermaid) resolve(window.previewMermaid);
+      const mermaid = frame.contentWindow.previewMermaid;
+      if (mermaid) {
+        mermaidDocuments.set(mermaid, renderDocument);
+        window.previewMermaid = mermaid;
+        resolve(mermaid);
+      }
       else {
-        script.remove();
+        frame.remove();
         mermaidBundlePromise = null;
         reject(new Error('Mermaid bundle unavailable'));
       }
     };
     script.onerror = () => {
-      script.remove();
+      frame.remove();
       mermaidBundlePromise = null;
       reject(new Error('Mermaid bundle unavailable'));
     };
-    document.head.appendChild(script);
+    renderDocument.head.appendChild(script);
   });
   return mermaidBundlePromise;
 }
@@ -242,6 +257,33 @@ function sanitizeMarkdownDiagram(svg, renderId) {
   return clean;
 }
 
+// see .ai/contexts/viewer-panel.md ("Mermaid diagrams")
+async function renderScopedMarkdownDiagram(mermaid, renderId, source, container) {
+  const document = container.ownerDocument;
+  const lookup = Object.getOwnPropertyDescriptor(document, 'getElementById');
+  const selector = Object.getOwnPropertyDescriptor(document, 'querySelector');
+  const querySelector = document.querySelector;
+  const layoutStyles = new Set(document.head.querySelectorAll('#__________cytoscape_stylesheet'));
+  try {
+    document.getElementById = id => {
+      const value = String(id);
+      return [...container.querySelectorAll('[id]')].find(node => node.id === value) || null;
+    };
+    document.querySelector = function (value) {
+      return value === 'body' ? container : querySelector.call(this, value);
+    };
+    return await mermaid.render(renderId, source, container);
+  } finally {
+    if (lookup) Object.defineProperty(document, 'getElementById', lookup);
+    else delete document.getElementById;
+    if (selector) Object.defineProperty(document, 'querySelector', selector);
+    else delete document.querySelector;
+    for (const style of document.head.querySelectorAll('#__________cytoscape_stylesheet')) {
+      if (!layoutStyles.has(style)) style.remove();
+    }
+  }
+}
+
 function renderMarkdownDiagrams(el, state) {
   const generation = ++state.generation;
   const theme = markdownDiagramTheme();
@@ -263,7 +305,8 @@ function renderMarkdownDiagrams(el, state) {
     for (const block of blocks) {
       if (!current() || !el.contains(block)) return;
       const source = state.sources[Number(block.dataset.previewMermaid)];
-      const container = document.createElement('div');
+      const renderDocument = mermaidDocuments.get(mermaid) || document;
+      const container = renderDocument.createElement('div');
       container.className = 'mermaid-render-scratch';
       container.setAttribute('aria-hidden', 'true');
       try {
@@ -278,16 +321,16 @@ function renderMarkdownDiagrams(el, state) {
         ];
         if (/<\s*(?:[a-z][\w:-]*(?=[\s/>])|[!/?])/i.test(markup)
           || /&(?:#|lt;)|\b(?:img|icon)["']?\s*:|@import|(?:url|image-set)\s*\(/im.test(source)
-          || (sourceForms.some(text => /sequenceDiagram/i.test(text)) && sourceForms.some(text => /\bdetails[ \t]+[^\n:;]+:/i.test(text)))) throw new Error('Unsupported diagram resources');
+          || (sourceForms.some(text => /sequenceDiagram/i.test(text)) && sourceForms.some(text => /\bdetails[ \t]+[^\n:;]+[:;]/i.test(text)))) throw new Error('Unsupported diagram resources');
         const defaults = mermaid.mermaidAPI.defaultConfig;
         mermaid.initialize({
           startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true,
           htmlLabels: false, flowchart: { htmlLabels: false }, theme,
           secure: [...new Set([...Object.keys(defaults), 'secure', 'htmlLabels', 'themeCSS'])],
         });
-        document.body.appendChild(container);
+        renderDocument.body.appendChild(container);
         const renderId = 'preview-mermaid-' + ++mermaidRenderId;
-        const { svg } = await mermaid.render(renderId, source, container);
+        const { svg } = await renderScopedMarkdownDiagram(mermaid, renderId, source, container);
         if (!current() || !el.contains(block)) return;
         const diagram = document.createElement('div');
         diagram.className = 'mermaid-diagram';

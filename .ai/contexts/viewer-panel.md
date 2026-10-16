@@ -454,20 +454,41 @@ string `mermaid` are upgraded; other fences and raw HTML code blocks stay ordina
 Markdown. The returned promise tracks optional diagrams; the sanitized document
 shows immediately. Source/editor content is never rewritten.
 
-`loadMermaidBundle` injects one local script, shares concurrent loads and retries
-failures. `public/mermaid-setup.js` bundles pinned Mermaid into the generated,
+`loadMermaidBundle` injects one local script into a shared off-screen iframe,
+shares concurrent loads and retries failures by removing the failed frame.
+The frame uses the host viewport dimensions and has its own document and Mermaid
+realm. A WeakMap associates the loaded library with that document; scratch
+containers attach there, and sanitized SVG crosses back to the host preview.
+`public/mermaid-setup.js` bundles pinned Mermaid into the generated,
 ignored `public/mermaid-bundle.js`. Start/build/release, CI and test-pr build it
 alongside CodeMirror; packaging includes it in app.asar through `public/**/*`.
 Mermaid is a build dependency, like CodeMirror: its bundled code ships, while the
 large upstream source/dependency tree is excluded from production packaging.
 Test-pr skips Mermaid for older PRs without the bundle script.
 
-A global serial queue keeps Mermaid configuration and temporary DOM exclusive.
+A global serial queue keeps Mermaid configuration and temporary DOM exclusive,
+including overlapping previews and previews scheduled from a running render.
+`renderScopedMarkdownDiagram` installs a scratch-only `document.getElementById`
+on the scratch's owner document for the entire awaited render. It compares exact IDs among scratch descendants,
+without consulting the original page lookup or interpolating IDs into selectors.
+Thus sequence `addDetails` cannot read private page JSON, regardless of Mermaid's
+source preprocessing. Duplicate IDs on the page cannot shadow renderer IDs.
+The exact `document.querySelector('body')` selection also returns the scratch:
+Mermaid's mindmap/cose and architecture renderers append a `cy` layout container
+through D3 body selections, and that container must remain accessible to the
+scoped lookup. Other selectors retain their normal behavior. Both methods' own
+property descriptors (or inherited status) are restored in `finally`, on success,
+synchronous throw or asynchronous rejection. The production guard affects only
+the renderer frame; host lookups and application callbacks such as notifications
+retain normal DOM access throughout asynchronous Mermaid work.
+Cytoscape can add `__________cytoscape_stylesheet` under `head`; the scoped lookup
+deliberately hides any page copy. The guard snapshots existing copies and removes
+only newly inserted copies in `finally`, preserving preexisting page nodes.
 Each render initializes strict mode, disables HTML labels and automatic scanning,
 and locks every default config key against document frontmatter/directives.
 Source containing HTML-style tag openers, numeric/angle entities (`&#…` or
 `&lt;`), `img:`/`icon:` properties, `@import`, `url(` or `image-set(` is refused
-before temporary DOM attaches. The `details` refusal checks a union of source
+before temporary DOM attaches. A cheap `details` pre-check checks a union of source
 forms: the raw source; the raw source with directives removed; and the source
 with `/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/` frontmatter stripped before
 removing directives. Directive removal uses Mermaid 12.1.0's `directiveRegex`
@@ -478,7 +499,8 @@ directives. It covers trailing fence whitespace, matching indentation and BOM
 indentation: otherwise an unterminated directive in that metadata could hide
 directive-split keywords in the body from all three earlier forms.
 A case-insensitive `/sequenceDiagram/i` match in any form and a
-case-insensitive `\bdetails[ \t]+[^\n:;]+:` match in any form refuse the source.
+case-insensitive `\bdetails[ \t]+[^\n:;]+[:;]` match in any form refuse the source.
+The colon is not required: semicolons in participant names are refused too.
 The predicates may be satisfied by different forms, without modelling statement
 boundaries; participant names with spaces are covered. This deliberately also refuses
 sequence labels such as “See details X:” and non-sequence diagrams mentioning
@@ -494,12 +516,19 @@ HTML/resource features show source plus a short error, like invalid syntax. This
 deliberate subset prevents pre-sanitization loads. No bindFunctions callback runs.
 
 Mermaid 12.1.0's sequence `addDetails` reads `document.getElementById(text.text)`
-and parses that page element's HTML as JSON properties/links, so the conservative
-source pattern above blocks that feature before rendering. `addLinks` and `addALink` parse the supplied
+and parses that page element's HTML as JSON properties/links. The DOM guard returns
+null for page elements, which Mermaid handles in its own try/catch; the source
+pattern is only an early refusal and is not the security boundary. `addLinks` and `addALink` parse the supplied
 text directly without a DOM lookup; `link`/`links` remain allowed. Other bundled
 `getElementById` calls use internal element maps, generated render/marker IDs,
 the fixed layout container `cy`, or generated popup code. The popup callback
-is never bound and SVG event handlers are sanitized away.
+is never bound and SVG event handlers are sanitized away. Real Mermaid 12.1.0
+jsdom tests compare raw SVG byte for byte with and without the guard for the
+eight existing diagram fixtures, colored markers and architecture. Both sides
+use the production Mermaid bundle built in memory, with the unguarded baseline
+calling `mermaid.render` directly. The test-only
+SVG/canvas geometry, clock, random IDs and hand-drawn seed are deterministic;
+these checks establish output equivalence rather than browser layout accuracy.
 
 DOMPurify SVG + SVG-filter profiles sanitize output before insertion. A second
 pass removes image/foreignObject/animation elements, non-fragment hrefs, resource
