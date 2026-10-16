@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.96 — 2026-10-17
+
 ### New
 - Markdown previews now render Mermaid diagrams in Agent Files, Work Files and the file editor. Invalid diagrams keep their source visible with an inline error; unchanged diagrams stay visible while the document refreshes. Newly rendered Gantt diagrams fit the current panel width. (#663)
 - **Send to background**, in a running session's header and right-click menu, moves it to the Claude daemon and keeps it open as an attached tab, reattached after each restart. Remote, sandboxed and pre-launch-command sessions cannot move, and a busy session must be idle first; running subagents require confirmation because Claude may stop them. (#546)
