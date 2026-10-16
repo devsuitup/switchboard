@@ -1567,6 +1567,7 @@ async function loadProjects({ resort = false } = {}) {
   }
   const { defaultProjects, allProjects } = await window.api.getProjects('both');
   const globalSettings = await window.api.getSetting('global');
+  setRemoteHostLabels(globalSettings?.remoteHosts);
   cachedProjects = defaultProjects;
   cachedAllProjects = allProjects;
   loadingStatus.style.display = 'none';

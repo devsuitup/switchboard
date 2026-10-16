@@ -419,11 +419,11 @@ function showRemoteLaunchDialog(project) {
 
   const pathOptions = knownRemotePaths(alias).map(p => `<option value="${escapeHtml(p)}"></option>`).join('');
   dialog.innerHTML = `
-    <h3>New Session on ${escapeHtml(alias)}</h3>
+    <h3>New Session on ${escapeHtml(remoteHostLabel(alias))}</h3>
     <div class="new-session-body">
     <div class="settings-field settings-field-wide">
       <div class="settings-field-info">
-        <span class="settings-label">Directory on ${escapeHtml(alias)}</span>
+        <span class="settings-label">Directory on ${escapeHtml(remoteHostLabel(alias))}</span>
         <div class="settings-description">Pick a known project or type an absolute path. It must exist on the host.</div>
       </div>
       <div class="settings-field-control">
@@ -632,7 +632,7 @@ function showSendPromptDialog(session) {
   dialog.className = 'new-session-dialog';
 
   const title = document.createElement('h3');
-  title.textContent = 'Send a prompt — ' + session.remoteAlias;
+  title.textContent = 'Send a prompt — ' + remoteHostLabel(session.remoteAlias);
   const textarea = document.createElement('textarea');
   textarea.className = 'send-prompt-textarea';
   textarea.rows = 6;

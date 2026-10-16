@@ -462,7 +462,7 @@
       function renderArchived() {
         list.innerHTML = archived.length ? archived.map((entry, i) => `
           <div class="settings-field">
-            <div class="settings-field-info">${escapeHtml(entry)}</div>
+            <div class="settings-field-info">${escapeHtml(entry.includes('::') ? remoteHostLabel(entry.split('::')[0], remoteHosts) + entry.slice(entry.indexOf('::')) : entry)}</div>
             <div class="settings-field-control"><button class="settings-cancel-btn" data-archived-index="${i}">Unarchive</button></div>
           </div>`).join('') : '<div class="settings-description">No archived projects.</div>';
         list.querySelectorAll('button').forEach(button => {
@@ -483,10 +483,7 @@
         });
       }
       renderArchived();
-    }
 
-    // Remote hosts: a list the user grows and shrinks, rebuilt in place.
-    if (!isProject) {
       const listEl = settingsViewerBody.querySelector('#sv-remote-hosts');
 
       function renderRemoteHosts() {
@@ -502,10 +499,13 @@
         listEl.querySelectorAll('.remote-host-row').forEach(row => {
           const i = Number(row.dataset.i);
           row.querySelector('.rh-alias').addEventListener('input', e => { remoteHosts[i].alias = e.target.value; });
-          row.querySelector('.rh-label').addEventListener('input', e => { remoteHosts[i].label = e.target.value; });
+          row.querySelector('.rh-label').addEventListener('input', e => {
+            remoteHosts[i].label = e.target.value;
+            renderArchived();
+          });
           row.querySelector('.rh-enabled').addEventListener('change', e => { remoteHosts[i].enabled = e.target.checked; });
           if (typeof wireRemoteEnrolControls === 'function') {
-            wireRemoteEnrolControls(row.querySelector('.rh-check'), listEl.querySelector(`.remote-host-enrol[data-i="${i}"]`), () => remoteHosts[i].alias);
+            wireRemoteEnrolControls(row.querySelector('.rh-check'), listEl.querySelector(`.remote-host-enrol[data-i="${i}"]`), () => remoteHosts[i].alias, () => remoteHostLabel(remoteHosts[i].alias.trim(), remoteHosts));
           }
           row.querySelector('.rh-remove').addEventListener('click', () => {
             remoteHosts.splice(i, 1);
@@ -670,6 +670,7 @@
       }
 
       await window.api.setSetting(settingsKey, settings);
+      if (!isProject) setRemoteHostLabels(settings.remoteHosts);
 
       // Update visibleSessionCount, sessionMaxAgeDays, and theme
       if (!isProject) {

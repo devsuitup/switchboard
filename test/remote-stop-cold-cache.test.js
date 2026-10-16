@@ -44,6 +44,8 @@ function setup(t, { present = true, pollError = null, stopError = null, polling 
   const attached = { kind: 'remote-attach', exited: false };
   let handler;
   const main = vm.createContext({
+    getSetting: () => ({ remoteHosts: [{ alias: 'host', label: 'VPS' }] }),
+    remoteHostLabel: (...args) => require('../public/utils').remoteHostLabel(...args),
     ipcMain: { handle: (_name, fn) => { handler = fn; } },
     remoteIndexer: indexer,
     REMOTE_STOP_SYNC_TIMEOUT_MS: timeoutMs,
@@ -242,6 +244,7 @@ test('Archive refuses, as before, when the first sync fails for a local reason r
   await archive(ctx);
   assert.deepEqual(ctx.calls, []);
   assert.match(ctx.document.querySelector('[role="alert"]').textContent, /disk full/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /Archive cannot check this session on VPS/);
   assert.equal(ctx.notices.length, 1, 'persistent failure notice');
   const notice = ctx.document.querySelector('[data-notice-id="Archive:host:A"]');
   assert.ok(notice, 'Archive notice for this row');

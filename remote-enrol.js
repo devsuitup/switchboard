@@ -2,6 +2,7 @@
 'use strict';
 
 const { isValidAlias } = require('./remote-hosts');
+const { remoteHostLabel } = require('./public/utils');
 
 const UNKNOWN_AUTH_TEXT = 'unknown — run `claude` on the host once to log in';
 const INSPECT_FIRST_HINT = ' Inspect the script first (download it, read it, then run it) if you do not run piped installers blindly.';
@@ -79,7 +80,7 @@ async function handleEnrolRequest(payload, deps) {
   if (typeof alias !== 'string' || !isValidAlias(alias) || !deps.isDeclared(alias)) {
     return { ok: false, error: 'not a declared host — save the settings first' };
   }
-  if (running.has(alias)) return { ok: false, error: `a check of ${alias} is already running` };
+  if (running.has(alias)) return { ok: false, error: `a check of ${remoteHostLabel(alias, deps.getHosts?.())} is already running` };
   running.add(alias);
   try {
     const result = await deps.transport.checkHost(alias);

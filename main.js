@@ -557,6 +557,7 @@ const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
 const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts, normalizeHosts, normalizeRefreshMs } = require('./remote-hosts');
+const { remoteHostLabel } = require('./public/utils');
 const { handleEnrolRequest } = require('./remote-enrol');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
 const { createSshTransport } = require('./remote-transport');
@@ -642,7 +643,7 @@ const remoteStopAdapter = createRemoteStopAdapter({ log });
 const remoteSendAdapter = createRemoteSendAdapter({ log });
 
 // see .ai/contexts/session-cache.md ("Remote hosts — launching a session")
-const remoteLaunchAdapter = createRemoteLaunchAdapter({ log });
+const remoteLaunchAdapter = createRemoteLaunchAdapter({ log, getHosts: () => (getSetting('global') || {}).remoteHosts });
 
 // Joins the sidebar's remote sessions to the indexer's live descriptors so the
 // renderer can route a click without ever naming an attach mechanism itself
@@ -1618,6 +1619,7 @@ ipcMain.handle('remote-hosts-refresh', async () => {
 
 // see .ai/contexts/session-cache.md ("Remote hosts — enrolment")
 ipcMain.handle('remote-host-enrol-check', (_event, alias) => handleEnrolRequest({ alias }, {
+  getHosts: () => (getSetting('global') || {}).remoteHosts,
   isDeclared: (a) => normalizeHosts((getSetting('global') || {}).remoteHosts).some(h => h.alias === a),
   transport: remoteTransport,
 }));
@@ -1781,7 +1783,7 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
       const state = remoteIndexer.getRemoteHostState(alias);
       const newError = state.attempts > attemptsBefore && state.lastError;
       if (newError && !state.lastErrorTransport) {
-        return { ok: false, error: `${state.lastError}. Archive cannot check this session on ${alias} until that is resolved; remove the host in Settings to archive without checking.` };
+        return { ok: false, error: `${state.lastError}. Archive cannot check this session on ${remoteHostLabel(alias, (getSetting('global') || {}).remoteHosts)} until that is resolved; remove the host in Settings to archive without checking.` };
       }
       if (refreshed && refreshed.timedOut) {
         return { ok: false, hostUnreachable: true, error: `no answer within ${Math.round(REMOTE_STOP_SYNC_TIMEOUT_MS / 1000)}s` };
@@ -1816,6 +1818,7 @@ ipcMain.handle('remote-launch-session', async (_event, payload) => {
   if (sessionId && activeSessions.has(sessionId)) return { ok: false, error: 'invalid request' };
   const result = await handleLaunchRequest(payload, {
     hasHost: (alias) => enabledHosts((getSetting('global') || {}).remoteHosts).some(h => h.alias === alias),
+    getHosts: () => (getSetting('global') || {}).remoteHosts,
     launchBlockReason: (alias) => launchBlockReason(remoteIndexer.getRemoteHostProfile(alias)),
     adapter: remoteLaunchAdapter,
     attach: (alias, descriptor, size) => remoteAttachAdapter.attach(alias, descriptor, size),

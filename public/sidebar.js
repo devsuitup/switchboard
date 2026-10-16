@@ -54,7 +54,7 @@ function announceNotStopped(entries) {
       { id: sessionActionNoticeId('Archive', session), text: sessionActionDescription(session), error }])).values()];
     showAppNotice({
       id: `Archive:${alias}:not-stopped`, kind: 'error', members, mergeMembers: true,
-      message: current => `Archived, but not stopped: ${alias} did not answer (${[...new Set(current.map(member => member.error))].join('; ')}). ${current.map(member => member.text).join('; ')}. The sessions may still be running there; unarchive them to try again once the host is back.`,
+      message: current => `Archived, but not stopped: ${remoteHostLabel(alias)} did not answer (${[...new Set(current.map(member => member.error))].join('; ')}). ${current.map(member => member.text).join('; ')}. The sessions may still be running there; unarchive them to try again once the host is back.`,
     });
   }
 }
@@ -936,7 +936,7 @@ function renderProjects(projects, resort) {
     header.id = 'ph-' + fId;
     // shortProjectPath() is upstream's shared helper (utils.js); escapeHtml stays
     // because this is innerHTML — upstream's variant interpolates the raw path.
-    const shortName = shortProjectPath(project.projectPath);
+    const shortName = (project.remoteAlias ? remoteHostLabel(project.remoteAlias) + ': ' : '') + shortProjectPath(project.projectPath);
     const missingIcon = project.missing ? '<svg class="project-missing-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> ' : '';
     header.innerHTML = `<span class="arrow">&#9660;</span> ${missingIcon}<span class="project-name">${escapeHtml(shortName)}</span>`;
 
@@ -951,7 +951,7 @@ function renderProjects(projects, resort) {
       // see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
       const hostRefreshBtn = document.createElement('button');
       hostRefreshBtn.className = 'remote-host-refresh-btn';
-      hostRefreshBtn.title = 'Reconnect ' + project.remoteAlias + ' now';
+      hostRefreshBtn.title = 'Reconnect ' + remoteHostLabel(project.remoteAlias) + ' now';
       hostRefreshBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>';
       hostDot.after(hostRefreshBtn);
     }
@@ -990,12 +990,12 @@ function renderProjects(projects, resort) {
       const launch = project.remoteHostProfile && Array.isArray(project.remoteHostProfile.tiers)
         && project.remoteHostProfile.tiers.find(t => t.tier === 'launch');
       if (launch && launch.available) {
-        newBtn.title = 'New session on ' + project.remoteAlias;
+        newBtn.title = 'New session on ' + remoteHostLabel(project.remoteAlias);
       } else {
         newBtn.disabled = true;
         newBtn.title = launch && launch.reason
-          ? 'New session unavailable on ' + project.remoteAlias + ': ' + launch.reason
-          : 'Read-only mirror of ' + project.remoteAlias + ' — new sessions must be started on that host';
+          ? 'New session unavailable on ' + remoteHostLabel(project.remoteAlias) + ': ' + launch.reason
+          : 'Read-only mirror of ' + remoteHostLabel(project.remoteAlias) + ' — new sessions must be started on that host';
       }
     } else {
       newBtn.title = 'New session';
@@ -1257,7 +1257,7 @@ async function archiveProjectFolder(project, button) {
         sessions.filter(s => s.remoteAlias && isRemoteSessionAlive(s)).map(s => s.remoteAlias)
       )];
       let label = `Archive the ${counted(sessions.length, 'session')}`;
-      if (aliasesToStop.length > 0) label += ` — running ones are stopped first (on ${aliasesToStop.join(', ')})`;
+      if (aliasesToStop.length > 0) label += ` — running ones are stopped first (on ${aliasesToStop.map(alias => remoteHostLabel(alias)).join(', ')})`;
       choices.push({ id: 'archiveSessions', label, checked: true, rememberKey: 'archiveFolder.archiveSessions' });
     }
     if (disableable.length > 0) {
@@ -1930,11 +1930,11 @@ function buildSessionItem(session) {
     const badge = document.createElement('span');
     badge.className = 'remote-badge';
     badge.title = session.remoteAttachable
-      ? 'Live session on ' + session.remoteAlias + ' — click to attach'
+      ? 'Live session on ' + remoteHostLabel(session.remoteAlias) + ' — click to attach'
       : session.remoteAttachBlocked
-        ? 'Session on ' + session.remoteAlias + ' — attach unavailable: ' + session.remoteAttachBlocked + ', click to read its transcript'
-        : 'Session on ' + session.remoteAlias + ' — no live process, click to read its transcript';
-    badge.textContent = session.remoteAlias;
+        ? 'Session on ' + remoteHostLabel(session.remoteAlias) + ' — attach unavailable: ' + session.remoteAttachBlocked + ', click to read its transcript'
+        : 'Session on ' + remoteHostLabel(session.remoteAlias) + ' — no live process, click to read its transcript';
+    badge.textContent = remoteHostLabel(session.remoteAlias);
     summaryEl.prepend(badge);
   }
 

@@ -10,7 +10,7 @@ function sessionActionDescription(session) {
   const name = typeof cleanDisplayName === 'function' ? cleanDisplayName(rawName) : rawName;
   const identity = name ? `"${name}"${session?.sessionId ? ` (${session.sessionId})` : ''}`
     : session?.sessionId ? `"${session.sessionId}"` : 'folder';
-  const location = [session?.remoteAlias, session?.projectPath || session?.cwd].filter(Boolean).join(':') || 'location unavailable';
+  const location = [session?.remoteAlias && remoteHostLabel(session.remoteAlias), session?.projectPath || session?.cwd].filter(Boolean).join(':') || 'location unavailable';
   return `${identity} at ${location}`;
 }
 
