@@ -40,6 +40,10 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
   }
   function note(id, taskId, source = 'local-ipc', info = {}) {
     id = resolve(id);
+    const previousSnapshot = source === 'cli-task' && info.toolUseId ? JSON.stringify(snapshot(id)) : null;
+    const previous = parents.get(id)?.tasks.get(taskId);
+    const hadSource = previous?.sources.has(source);
+    const previousType = previous?.subagentType;
     if (source === 'cli-task' && info.toolUseId && !correlateAgent(id, taskId, info)) return false;
     const t = task(id, taskId, info.kind || 'agent');
     if (t.at <= Math.max(parent(id).diedAt || 0, parent(id).terminalJobAt || 0) &&
@@ -49,7 +53,8 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     t.sources.set(source, now());
     if (info.subagentType) t.subagentType = info.subagentType;
     if (source === 'cli-task') parent(id).known = true;
-    changed(id);
+    if (!hadSource || previousType !== t.subagentType ||
+        (previousSnapshot !== null && previousSnapshot !== JSON.stringify(snapshot(id)))) changed(id);
     return true;
   }
   function release(id, taskId, source) {
@@ -60,15 +65,15 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     else t.sources.delete(source);
     changed(id);
   }
-  function end(id, taskId, at = now()) {
+  function end(id, taskId, at = now(), notify = true) {
     id = resolve(id);
     const t = parents.get(id)?.tasks.get(taskId);
-    if (!t || at < t.at) return;
+    if (!t || at < t.at || (t.terminal && at === t.at)) return;
     t.terminal = true;
     t.at = at;
     t.sources.clear();
     delete t.reopenGroup;
-    changed(id);
+    if (notify) changed(id);
   }
   function prune(ttl) {
     for (const [id, p] of parents) for (const t of p.tasks.values()) {
@@ -104,8 +109,13 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     return t;
   }
   function notification(entry) {
-    if (entry.origin?.kind !== 'task-notification' || entry.type !== 'user' || entry.message?.role !== 'user' || typeof entry.message.content !== 'string') return null;
-    const text = entry.message.content.trim();
+    let content;
+    if (entry.type === 'user' && entry.message?.role === 'user' && entry.origin?.kind === 'task-notification') content = entry.message.content;
+    else if (entry.type === 'attachment' && entry.attachment?.type === 'queued_command' &&
+        ((entry.attachment.origin === undefined && entry.attachment.commandMode === 'task-notification') ||
+        entry.attachment.origin?.kind === 'task-notification')) content = entry.attachment.prompt;
+    if (typeof content !== 'string') return null;
+    const text = content.trim();
     if (!/^<task-notification>\s*[\s\S]*\s*<\/task-notification>$/.test(text)) return null;
     const field = name => {
       const matches = [...text.matchAll(new RegExp(`<${name}>([^<]+)</${name}>`, 'g'))];
@@ -226,14 +236,14 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
           end(id, call.id, at);
         }
       }
-      if (n) {
-        if (n.ids) {
-          for (const taskId of n.ids) if (p.tasks.get(taskId)?.kind === 'agent') end(id, taskId, at);
-        } else {
-          const call = p.calls.get(n.tool);
-          if ((n.tool && call && call.id === n.id) || (!n.tool && p.tasks.get(n.id)?.kind === 'agent')) end(id, n.id, at);
-          else if (n.tool) { p.pending.set(`notification:${n.tool}`, { ...n, at }); bound(p.pending); }
-        }
+    }
+    if (n) {
+      if (n.ids) {
+        for (const taskId of n.ids) if (p.tasks.get(taskId)?.kind === 'agent') end(id, taskId, at);
+      } else {
+        const call = p.calls.get(n.tool);
+        if ((n.tool && call && call.id === n.id) || (!n.tool && p.tasks.get(n.id)?.kind === 'agent')) end(id, n.id, at);
+        else if (n.tool) { p.pending.set(`notification:${n.tool}`, { ...n, at }); bound(p.pending); }
       }
     }
     changed(id);
@@ -243,27 +253,28 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     id = resolve(id);
     const p = parent(id);
     if (p.jobAt !== undefined && evidence.at <= p.jobAt) return;
+    const previous = JSON.stringify(snapshot(id));
     p.jobAt = evidence.at;
     p.known = true;
     p.backgroundUnknown = evidence.inFlight > 0;
     for (const f of evidence.tasks) {
       if (f.doneAt !== null) {
         open(id, f.id, f.kind, f.startedAt, { origin: 'job' });
-        end(id, f.id, f.doneAt);
+        end(id, f.id, f.doneAt, false);
       } else open(id, f.id, f.kind, f.startedAt, { origin: 'job' });
     }
     if (evidence.fanKnown && evidence.inFlight === 0) {
       const reported = new Set(evidence.tasks.map(t => t.id));
       for (const t of p.tasks.values()) {
-        if (t.origins.has('job') && !t.origins.has('transcript') && !reported.has(t.id)) end(id, t.id, evidence.at);
+        if (t.origins.has('job') && !t.origins.has('transcript') && !reported.has(t.id)) end(id, t.id, evidence.at, false);
       }
     }
     if (evidence.terminal) {
       p.terminalJobAt = evidence.at;
       p.backgroundUnknown = false;
-      for (const t of p.tasks.values()) end(id, t.id, evidence.at);
+      for (const t of p.tasks.values()) end(id, t.id, evidence.at, false);
     }
-    changed(id);
+    if (previous !== JSON.stringify(snapshot(id))) changed(id);
   }
   function ownerDied(id) {
     id = resolve(id);
@@ -305,7 +316,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
       if (t.snapshotOwners?.delete(sourceId) && !t.snapshotOwners.size) t.sources.delete('cli-task');
     }
     for (const t of s.tasks) {
-      if (t.terminal) { task(id, t.id, t.kind); end(id, t.id, t.at); }
+      if (t.terminal) { task(id, t.id, t.kind); end(id, t.id, t.at, false); }
       else {
         const active = open(id, t.id, t.kind, t.at, t);
         active.snapshotOwners ||= new Set();
@@ -373,11 +384,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
 
 if (typeof module !== 'undefined') module.exports = { createTaskRegistry };
 if (typeof window !== 'undefined') window.taskRegistry = createTaskRegistry({ onChange: snapshot => {
-  if (typeof reflectSubagentRunningState === 'function') {
-    const ids = new Set([...snapshot.tasks.map(t => t.id), ...window.taskRegistry.agents(snapshot.parentSessionId).map(t => t.id)]);
-    if (!ids.size) reflectSubagentRunningState(snapshot.parentSessionId, null);
-    for (const id of ids) reflectSubagentRunningState(snapshot.parentSessionId, id);
-  }
+  if (typeof reflectSubagentRunningState === 'function') reflectSubagentRunningState(snapshot.parentSessionId, null);
   if (typeof updateGridSubagentPills === 'function') updateGridSubagentPills(snapshot.parentSessionId);
   if (typeof agentsViewActive !== 'undefined' && agentsViewActive && typeof renderAgentsView === 'function') renderAgentsView();
 } });
