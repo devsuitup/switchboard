@@ -127,7 +127,7 @@ test('a hidden preview does not force a zero-width scratch', async t => {
   assert.ok(ctx.el.querySelector('svg'));
 });
 
-test('a Gantt rendered while hidden is rendered again when visible, then cached', async t => {
+test('a Gantt rendered while hidden is re-rendered on the next visible refresh, then cached', async t => {
   const ctx = setup(t);
   const source = fence('gantt\ndateFormat YYYY-MM-DD\nsection Work\nBuild :2026-01-01, 2d');
   ctx.el.style.display = 'none';

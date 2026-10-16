@@ -470,9 +470,11 @@ A global serial queue keeps Mermaid configuration and temporary DOM exclusive,
 including overlapping previews and previews scheduled from a running render.
 Each scratch takes the preview's current `clientWidth` in pixels when its queued
 render starts, only if that width is positive. A render started at width zero
-leaves the scratch width unset and is not cached, so the next visible preview
-refresh renders it at the measured width. Gantt measures its SVG parent's `offsetWidth`, so the scratch must
-not inherit the renderer iframe's initial viewport width after the panel narrows.
+leaves the scratch width unset and is not cached. Becoming visible keeps that
+fallback-width diagram until the next visible preview refresh re-renders it at
+the measured width, then caches it. Gantt measures its SVG parent's `offsetWidth`,
+so the scratch must not inherit the renderer iframe's initial viewport width
+after the panel narrows.
 Timeline and journey lay out their content bounds; XY charts use their configured
 chart width. Those intrinsic widths keep the existing horizontal scrolling behavior.
 `renderScopedMarkdownDiagram` installs a scratch-only `document.getElementById`

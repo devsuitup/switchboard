@@ -1,5 +1,7 @@
 'use strict';
 
+/* global mermaidRenderQueue: writable */
+
 const path = require('node:path');
 const { test, expect, makeRepo, openPlainTerminal, box } = require('./fixtures');
 
@@ -95,24 +97,35 @@ test('Markdown Mermaid loads once under Electron CSP, isolates details and fits 
   });
 
   await test.step('the scoped renderer isolates details when the pre-check is bypassed', async () => {
-    const svg = await page.evaluate(async id => {
-      const renderDocument = document.querySelector('iframe.mermaid-render-frame').contentDocument;
-      const privateElement = renderDocument.importNode(document.getElementById(id), true);
-      const scratch = renderDocument.createElement('div');
-      renderDocument.body.append(privateElement, scratch);
-      try {
-        const source = 'sequenceDiagram\n  participant Alice\n  participant Bob\n  details Alice: ' + id + '\n  Alice->>Bob: Hello';
-        const { svg } = await window.renderScopedMarkdownDiagram(window.previewMermaid, 'preview-mermaid-dom-guard', source, scratch);
-        return svg;
-      } finally {
-        scratch.remove();
-        privateElement.remove();
-      }
+    const { unguardedSvg, guardedSvg } = await page.evaluate(id => {
+      const pending = mermaidRenderQueue.then(async () => {
+        const renderDocument = document.querySelector('iframe.mermaid-render-frame').contentDocument;
+        const privateElement = renderDocument.importNode(document.getElementById(id), true);
+        const unguardedScratch = renderDocument.createElement('div');
+        const guardedScratch = renderDocument.createElement('div');
+        renderDocument.body.append(privateElement, unguardedScratch, guardedScratch);
+        try {
+          const source = 'sequenceDiagram\n  participant Alice\n  participant Bob\n  details Alice: ' + id + '\n  Alice->>Bob: Hello';
+          const { svg: unguardedSvg } = await window.previewMermaid.render('preview-mermaid-dom-control', source, unguardedScratch);
+          const { svg: guardedSvg } = await window.renderScopedMarkdownDiagram(window.previewMermaid, 'preview-mermaid-dom-guard', source, guardedScratch);
+          return { unguardedSvg, guardedSvg };
+        } finally {
+          unguardedScratch.remove();
+          guardedScratch.remove();
+          privateElement.remove();
+        }
+      });
+      mermaidRenderQueue = pending.catch(() => {});
+      return pending;
     }, DETAILS_ID);
-    expect(svg).toContain('<svg');
-    expect(svg).toContain('Hello');
-    expect(svg).not.toContain(PRIVATE_LABEL);
-    expect(svg).not.toContain(PRIVATE_URL);
+    expect(unguardedSvg).toContain('<svg');
+    expect(unguardedSvg).toContain('Hello');
+    expect(unguardedSvg).toContain(PRIVATE_LABEL);
+    expect(unguardedSvg).toContain(PRIVATE_URL);
+    expect(guardedSvg).toContain('<svg');
+    expect(guardedSvg).toContain('Hello');
+    expect(guardedSvg).not.toContain(PRIVATE_LABEL);
+    expect(guardedSvg).not.toContain(PRIVATE_URL);
   });
 
   await test.step('a newly rendered Gantt fits after narrowing the panel', async () => {
