@@ -25,6 +25,8 @@ const SESSION_MARKERS = [
   'CLAUDE_PROJECT_DIR',
   'CLAUDE_CODE_REMOTE',
   'CLAUDE_CODE_REMOTE_SESSION_ID',
+  'TRACEPARENT',
+  'TRACESTATE',
 ];
 
 const KEPT = [
@@ -55,7 +57,7 @@ test('GIVEN user configuration WHEN the env is cleaned THEN it survives', () => 
 });
 
 test('GIVEN mixed-case session markers WHEN cleaned THEN Windows cannot inherit an alias', () => {
-  const env = { Claude_Code_Session_Id: 'parent', claude_job_dir: 'parent-job', Path: '/bin' };
+  const env = { Claude_Code_Session_Id: 'parent', claude_job_dir: 'parent-job', TraceParent: 'parent-trace', tracestate: 'parent-state', Path: '/bin' };
   assert.deepStrictEqual(cleanEnv(env), { Path: '/bin' });
   assert.strictEqual(env.Claude_Code_Session_Id, 'parent');
 });

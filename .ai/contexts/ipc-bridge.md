@@ -627,11 +627,14 @@ The deny rule is exact membership in `SESSION_MARKERS`, compared case-insensitiv
 | `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN` | the parent's messaging channel |
 | `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_SESSION_ATTENDED` | the parent's bridge session and attended state |
 | `CLAUDE_CODE_EXECPATH` | the parent CLI's own executable path |
-| `CLAUDE_JOB_DIR`, `AI_AGENT`, `CLAUDE_EFFORT` | the launching background job's directory, agent identity and inherited effort marker; the brief explicitly requires removing these |
+| `CLAUDE_JOB_DIR`, `AI_AGENT`, `CLAUDE_EFFORT` | the CLI derives the session's short id from `CLAUDE_JOB_DIR`; `AI_AGENT` marks a process as run by an agent; the CLI writes `CLAUDE_EFFORT` for hooks/Bash and never reads it |
 | `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_REMOTE_SESSION_ID` | the launching cloud session's runtime context and transcript identity |
 | `CLAUDE_ENV_FILE`, `CLAUDE_PROJECT_DIR` | the launching session's persisted shell environment and hook project context |
+| `TRACEPARENT`, `TRACESTATE` | the launching session's trace context; with tracing enabled, the CLI sets `TRACEPARENT` on Bash children and a child Claude session would attach its telemetry spans to that trace |
 
 Kept: `CLAUDE_CONFIG_DIR`, `ANTHROPIC_*` authentication/base URLs, `CLAUDE_CODE_USE_*`, `DISABLE_*`, proxy variables, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_CODE_EFFORT_LEVEL` (the documented user setting, distinct from `CLAUDE_EFFORT`), `CLAUDE_CODE_TASK_LIST_ID` (an explicitly shared task list) and every other non-denied configuration variable. The [official CLI environment reference](https://code.claude.com/docs/en/env-vars), checked for #670, documents the bridge/cloud IDs, child marker, job directory, PID and persisted environment file; private markers are also retained in the explicit deny set from the observed incident.
+
+`GIT_EDITOR=true`, set by the CLI on its Bash children, is deliberately not scrubbed because a user may set it (#673).
 
 What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1` (`open-terminal`, `isPlainTerminal` branch, present since the project's first commit, not tied to the `claude` shim) and `CLAUDE_CODE_SSE_PORT` of a session with IDE Emulation. A new marker the CLI starts setting is added to `SESSION_MARKERS`; `test/clean-pty-env.test.js` lists them one by one.
 

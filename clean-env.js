@@ -20,6 +20,8 @@ const SESSION_MARKERS = new Set([
   'CLAUDE_PROJECT_DIR',
   'CLAUDE_CODE_REMOTE',
   'CLAUDE_CODE_REMOTE_SESSION_ID',
+  'TRACEPARENT',
+  'TRACESTATE',
 ]);
 
 function scrubSessionEnv(env) {

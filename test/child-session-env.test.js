@@ -19,7 +19,18 @@ const parentMarkers = [
   'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_JOB_DIR', 'CLAUDE_PID',
   'AI_AGENT', 'CLAUDE_EFFORT', 'CLAUDE_CODE_SSE_PORT', 'CLAUDE_CODE_BRIDGE_SESSION_ID',
   'CLAUDE_CODE_REMOTE', 'CLAUDE_CODE_REMOTE_SESSION_ID', 'CLAUDE_ENV_FILE', 'CLAUDE_PROJECT_DIR',
+  'TRACEPARENT', 'TRACESTATE',
 ];
+
+test('GIVEN main-process startup WHEN children can start THEN session scrubbing precedes the reloader and cleanPtyEnv', () => {
+  const scrub = MAIN.indexOf('scrubSessionEnv(process.env)');
+  const reloader = MAIN.indexOf("require('electron-reloader')");
+  const cleanPtyEnv = MAIN.indexOf('const cleanPtyEnv =');
+  assert.ok(scrub >= 0, 'startup must scrub process.env');
+  assert.ok(reloader > scrub, 'startup must scrub before electron-reloader');
+  assert.ok(cleanPtyEnv > reloader, 'electron-reloader must precede cleanPtyEnv');
+  assert.doesNotMatch(MAIN.slice(0, scrub), /\b(?:spawn|fork|execFile)\s*\(|\bnew\s+Worker\s*\(|\butilityProcess\b/);
+});
 
 function contaminate(t) {
   for (const key of [...parentMarkers, 'CLAUDE_CONFIG_DIR', 'ELECTRON_RUN_AS_NODE']) {
