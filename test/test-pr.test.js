@@ -249,6 +249,9 @@ test('invalid PR numbers and debug ports are rejected before side effects', () =
 });
 
 const bundleScript = require('../package.json').scripts['bundle:codemirror'];
+const mermaidScript = require('../package.json').scripts['bundle:mermaid'];
+const mermaidOptions = { entryPoints: ['public/mermaid-setup.js'], bundle: true,
+  outfile: 'public/mermaid-bundle.js', format: 'iife', platform: 'browser', minify: true };
 const bundleOptions = { entryPoints: ['public/codemirror-setup.js'], bundle: true,
   outfile: 'public/codemirror-bundle.js', format: 'iife', platform: 'browser', minify: true };
 
@@ -278,7 +281,7 @@ function workflow(t, script = bundleScript) {
     if (args[0] === 'show') return JSON.stringify(lock());
     if (args[0] === 'worktree' && args[1] === 'add') {
       fs.mkdirSync(args[3], { recursive: true });
-      fs.writeFileSync(path.join(args[3], 'package.json'), JSON.stringify({ scripts: { 'bundle:codemirror': script } }));
+      fs.writeFileSync(path.join(args[3], 'package.json'), JSON.stringify({ scripts: { 'bundle:codemirror': script, 'bundle:mermaid': mermaidScript } }));
     }
     return '';
   };
@@ -351,25 +354,31 @@ test('the complete default workflow retains the original HOME and adds no debug 
 });
 
 for (const isolated of ['0', '1']) {
-  test(`mode ISOLATED=${isolated} rebuilds CodeMirror before every launch, including a stale bundle`, async (t) => {
+  test(`mode ISOLATED=${isolated} rebuilds both viewer bundles before every launch, including stale bundles`, async (t) => {
     const setup = workflow(t);
     const worktree = path.join(setup.checkout, '.worktrees', 'pr-122-test');
     const bundle = path.join(worktree, 'public', 'codemirror-bundle.js');
+    const mermaidBundle = path.join(worktree, 'public', 'mermaid-bundle.js');
     const steps = [];
     const run = (file, args, options) => {
       if (file !== process.execPath) return setup.run(file, args, options);
-      evaluateBuild(file, args, worktree, options => assert.deepEqual(options, bundleOptions));
+      let output;
+      evaluateBuild(file, args, worktree, options => {
+        assert.deepEqual(options, options.outfile.includes('mermaid') ? mermaidOptions : bundleOptions);
+        output = path.join(worktree, options.outfile);
+      });
       assert.equal(options.cwd, worktree);
       assert.equal(options.stdio, 'inherit');
       assert.equal(fs.realpathSync(path.join(worktree, 'node_modules')), fs.realpathSync(path.join(setup.checkout, 'node_modules')));
-      steps.push('bundle');
+      steps.push(output.endsWith('mermaid-bundle.js') ? 'mermaid' : 'bundle');
       fs.mkdirSync(path.dirname(bundle), { recursive: true });
-      fs.writeFileSync(bundle, 'rebuilt');
+      fs.writeFileSync(output, 'rebuilt');
       return '';
     };
     const options = { ...setup, env: { ...setup.env, ISOLATED: isolated }, run, fixtures: () => {},
       launch: async () => {
         assert.equal(fs.readFileSync(bundle, 'utf8'), 'rebuilt');
+        assert.equal(fs.readFileSync(mermaidBundle, 'utf8'), 'rebuilt');
         steps.push('launch');
         return 0;
       } };
@@ -377,7 +386,7 @@ for (const isolated of ['0', '1']) {
     assert.equal(await tooling().main(options), 0);
     fs.writeFileSync(bundle, 'stale');
     assert.equal(await tooling().main(options), 0);
-    assert.deepEqual(steps, ['bundle', 'launch', 'bundle', 'launch']);
+    assert.deepEqual(steps, ['bundle', 'mermaid', 'launch', 'bundle', 'mermaid', 'launch']);
   });
 
   test(`mode ISOLATED=${isolated} aborts launch with a clear error when the CodeMirror build fails`, async (t) => {
@@ -1006,11 +1015,11 @@ for (const isolated of ['0', '1']) {
       run: (file, args, options) => {
         if (file !== process.execPath) return setup.run(file, args, options);
         evaluateBuild(file, args, worktree, options => {
-          assert.deepEqual(options, { entryPoints: ['public/other.js'], bundle: true,
+          assert.deepEqual(options, options.outfile.includes('mermaid') ? mermaidOptions : { entryPoints: ['public/other.js'], bundle: true,
             outfile: 'public/other-bundle.js', format: 'cjs', platform: 'node' });
           builds++;
         });
-      }, launch: async () => { assert.equal(builds, 1); return 0; } });
+      }, launch: async () => { assert.equal(builds, 2); return 0; } });
   });
 
   test(`mode ISOLATED=${isolated} rejects an unknown bundle flag before build or launch`, async (t) => {
@@ -1024,3 +1033,17 @@ for (const isolated of ['0', '1']) {
     /Failed to build CodeMirror bundle.*Unsupported.*--unknown/);
   });
 }
+
+
+test('a failed Mermaid bundle build prevents Electron launch', async t => {
+  const setup = workflow(t);
+  const worktree = path.join(setup.checkout, '.worktrees', 'pr-122-test');
+  await assert.rejects(tooling().main({ ...setup,
+    run: (file, args, options) => {
+      if (file !== process.execPath) return setup.run(file, args, options);
+      evaluateBuild(file, args, worktree, build => {
+        if (build.outfile.includes('mermaid')) throw Error('Mermaid build failed');
+      });
+    }, launch: async () => assert.fail('build failure must prevent launch'),
+  }), /Failed to build Mermaid bundle.*Mermaid build failed/);
+});

@@ -9,6 +9,8 @@
     "workers/**",
     "public/codemirror-bundle.js",
     "public/codemirror-setup.js",
+    "public/mermaid-bundle.js",
+    "public/mermaid-setup.js",
     "public/terminal-manager.js",
     "public/app.js",
     "main.js",

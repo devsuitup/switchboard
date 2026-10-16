@@ -443,3 +443,124 @@ can also shrink with its own ellipsis. A separator-ending path displays its
 last non-empty segment as the tail; `title` retains the original path. CSS
 follows available width without measuring text or injecting path markup.
 jsdom checks structure and hover paths; visual width behavior needs a live run.
+
+
+## Mermaid diagrams (#663)
+
+All file previews use the same marked + DOMPurify pass in `renderMarkdownPreview`
+(viewer-toolbar.js), including frontmatter, ViewerPanel toggle/external refresh and
+the Touched/Changes shared editor. Only fenced code tokens with the exact info
+string `mermaid` are upgraded; other fences and raw HTML code blocks stay ordinary
+Markdown. The returned promise tracks optional diagrams; the sanitized document
+shows immediately. Source/editor content is never rewritten.
+
+`loadMermaidBundle` injects one local script into a shared off-screen iframe,
+shares concurrent loads and retries failures by removing the failed frame.
+The frame uses the host viewport dimensions and has its own document and Mermaid
+realm. A WeakMap associates the loaded library with that document; scratch
+containers attach there, and sanitized SVG crosses back to the host preview.
+`public/mermaid-setup.js` bundles pinned Mermaid into the generated,
+ignored `public/mermaid-bundle.js`. Start/build/release, CI and test-pr build it
+alongside CodeMirror; packaging includes it in app.asar through `public/**/*`.
+Mermaid is a build dependency, like CodeMirror: its bundled code ships, while the
+large upstream source/dependency tree is excluded from production packaging.
+Test-pr skips Mermaid for older PRs without the bundle script.
+
+A global serial queue keeps Mermaid configuration and temporary DOM exclusive,
+including overlapping previews and previews scheduled from a running render.
+Each scratch takes the preview's current `clientWidth` in pixels when its queued
+render starts, only if that width is positive. A render started at width zero
+leaves the scratch width unset and is not cached. Becoming visible keeps that
+fallback-width diagram until the next visible preview refresh re-renders it at
+the measured width, then caches it. Gantt measures its SVG parent's `offsetWidth`,
+so the scratch must not inherit the renderer iframe's initial viewport width
+after the panel narrows.
+Timeline and journey lay out their content bounds; XY charts use their configured
+chart width. Those intrinsic widths keep the existing horizontal scrolling behavior.
+`renderScopedMarkdownDiagram` installs a scratch-only `document.getElementById`
+on the scratch's owner document for the entire awaited render. It compares exact IDs among scratch descendants,
+without consulting the original page lookup or interpolating IDs into selectors.
+Thus sequence `addDetails` cannot read private page JSON, regardless of Mermaid's
+source preprocessing. Duplicate IDs on the page cannot shadow renderer IDs.
+The exact `document.querySelector('body')` selection also returns the scratch:
+Mermaid's mindmap/cose and architecture renderers append a `cy` layout container
+through D3 body selections, and that container must remain accessible to the
+scoped lookup. Other selectors retain their normal behavior. Both methods' own
+property descriptors (or inherited status) are restored in `finally`, on success,
+synchronous throw or asynchronous rejection. The production guard affects only
+the renderer frame; host lookups and application callbacks such as notifications
+retain normal DOM access throughout asynchronous Mermaid work.
+Cytoscape can add `__________cytoscape_stylesheet` under `head`; the scoped lookup
+deliberately hides any page copy. The guard snapshots existing copies and removes
+only newly inserted copies in `finally`, preserving preexisting page nodes.
+Each render initializes strict mode, disables HTML labels and automatic scanning,
+and locks every default config key against document frontmatter/directives.
+Source containing HTML-style tag openers, numeric/angle entities (`&#…` or
+`&lt;`), `img:`/`icon:` properties, `@import`, `url(` or `image-set(` is refused
+before temporary DOM attaches. A cheap `details` pre-check checks a union of source
+forms: the raw source; the raw source with directives removed; and the source
+with `/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/` frontmatter stripped before
+removing directives. Directive removal uses Mermaid 12.1.0's `directiveRegex`
+from `chunk-VPRB5NB3.mjs`, preserving Unicode line separators as Mermaid does.
+A fourth form normalizes CR/CRLF to LF, strips frontmatter with
+`/^([^\S\n]*)---[^\S\n]*\n[\s\S]*?\n\1---[^\S\n]*(?:\n|$)/`, then removes
+directives. It covers trailing fence whitespace, matching indentation and BOM
+indentation: otherwise an unterminated directive in that metadata could hide
+directive-split keywords in the body from all three earlier forms.
+A case-insensitive `/sequenceDiagram/i` match in any form and a
+case-insensitive `\bdetails[ \t]+[^\n:;]+[:;]` match in any form refuse the source.
+The colon is not required: semicolons in participant names are refused too.
+The predicates may be satisfied by different forms, without modelling statement
+boundaries; participant names with spaces are covered. This deliberately also refuses
+sequence labels such as “See details X:” and non-sequence diagrams mentioning
+“sequenceDiagram” and containing “details X:”.
+The tag-opener check
+ignores paired `<<…>>` annotations containing no angle brackets, newline or
+`=`; this accepts `<<value-object>>` and `<<Service Provider>>` while keeping
+`<<img src=x>>` subject to the HTML check. Entity and resource checks inspect
+the original source, including annotations. Ordinary “See details below” text,
+backslashes in paths and bare comparison `<` are allowed; CSS escapes are
+rejected in the output pass. Unsupported
+HTML/resource features show source plus a short error, like invalid syntax. This
+deliberate subset prevents pre-sanitization loads. No bindFunctions callback runs.
+
+Mermaid 12.1.0's sequence `addDetails` reads `document.getElementById(text.text)`
+and parses that page element's HTML as JSON properties/links. The DOM guard returns
+null for page elements, which Mermaid handles in its own try/catch; the source
+pattern is only an early refusal and is not the security boundary. `addLinks` and `addALink` parse the supplied
+text directly without a DOM lookup; `link`/`links` remain allowed. Other bundled
+`getElementById` calls use internal element maps, generated render/marker IDs,
+the fixed layout container `cy`, or generated popup code. The popup callback
+is never bound and SVG event handlers are sanitized away. Real Mermaid 12.1.0
+jsdom tests compare raw SVG byte for byte with and without the guard for the
+eight existing diagram fixtures, colored markers and architecture. Both sides
+use the production Mermaid bundle built in memory, with the unguarded baseline
+calling `mermaid.render` directly. The test-only
+SVG/canvas geometry, clock, random IDs and hand-drawn seed are deterministic;
+these checks establish output equivalence rather than browser layout accuracy.
+
+DOMPurify SVG + SVG-filter profiles sanitize output before insertion. A second
+pass removes image/foreignObject/animation elements, non-fragment hrefs, resource
+attributes and CSS containing imports, external URLs or escapes. Local markers
+and safe generated styles survive. All IDs and their CSS/marker/ARIA/link references
+are namespaced per render. Temporary containers are removed in finally. WeakMap
+state and generation checks discard late results when content changes.
+Each preview retains sanitized diagram clones only for its current source, theme
+and fence index. Refresh builds the new document off-DOM and inserts unchanged
+diagrams synchronously, without source flashes or another bundle/render call.
+Changed source, palette or index invalidates the entry; removed diagrams are
+evicted on the next preview. Both synchronous document replacement and async
+diagram replacement preserve the preview scroll offsets.
+
+The app currently has a fixed dark palette without a global light/dark selector.
+Diagrams derive their palette from `--surface-sunken`, or explicit html/body
+`data-theme=light|dark`. One observer watches root/body theme/class/style changes
+and re-renders connected previews when the effective palette changes. SVG viewBox
+width becomes intrinsic width; wide diagrams scroll inside their wrapper. The
+main.js renderer CSP is unchanged: self scripts, self/data images, self fonts,
+inline styles permitted, no eval permission.
+
+`test/viewer-mermaid.test.js` loads shipped code with real marked and DOMPurify,
+stubbing only the lazy Mermaid module edge. It covers strict config, laziness,
+frontmatter, raw-HTML lookalikes, errors, hostile SVG, ID/reference isolation,
+async replacement, cleanup, theme changes, scrolling CSS and build wiring.

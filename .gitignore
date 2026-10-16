@@ -27,3 +27,5 @@ coverage/
 
 # Playwright output (docs/e2e.md)
 e2e/playwright-report/
+
+public/mermaid-bundle.js

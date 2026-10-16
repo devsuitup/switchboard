@@ -16,12 +16,14 @@
 ```bash
 task install                 # npm install; postinstall rebuilds the native modules for Electron
 npm run bundle:codemirror    # builds public/codemirror-bundle.js (generated, not committed)
+npm run bundle:mermaid       # builds the local, lazy diagram bundle (generated, not committed)
 task dev                     # runs the checkout in Electron
 ```
 
-`npm start` bundles CodeMirror and launches in one step. `task dev` and
+`npm start` bundles CodeMirror and Mermaid and launches in one step. `task dev` and
 `npm run electron` do not bundle: after a change to `public/codemirror-setup.js`,
-run `npm run bundle:codemirror` again.
+run `npm run bundle:codemirror` again. After a change to `public/mermaid-setup.js`,
+run `npm run bundle:mermaid` again.
 
 ## Commands
 
@@ -42,7 +44,7 @@ run `npm run bundle:codemirror` again.
 | `task test-pr:clean PR=<n>` | removes that PR's worktree and data directory |
 | `task db:reset:dev` | deletes `~/.switchboard-dev/switchboard.db` |
 | `task db:reset` | deletes `~/.switchboard/switchboard.db` — the **installed app's** database — without asking |
-| `task clean` | deletes `dist/`, `public/codemirror-bundle.js` and the installed app's database, after typing `YES` |
+| `task clean` | deletes `dist/`, both generated viewer bundles and the installed app's database, after typing `YES` |
 
 Other npm scripts: `npm run electron` (`electron .`), `npm run electron-dev`
 (the same with `SWITCHBOARD_DATA_DIR=~/.switchboard-dev`), `npm run build:mac`,
@@ -111,7 +113,7 @@ source maps do not trigger it. A packaged build has no reloader.
   `.node` files. A running instance that has those files `dlopen()`-loaded
   crashes at its next native call when they are rewritten in place. Build with
   the rebuild off while an instance runs:
-  `npm run bundle:codemirror && npx electron-builder --linux --config.npmRebuild=false`
+  `npm run bundle:codemirror && npm run bundle:mermaid && npx electron-builder --linux --config.npmRebuild=false`
   (electron-builder then logs `skipped dependencies rebuild`).
 - Copying a new AppImage over `~/Applications/Switchboard.AppImage` can end the
   running instance: `appimagelauncherd` watches that directory and re-runs its

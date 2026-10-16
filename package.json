@@ -9,7 +9,7 @@
     "node": ">=20 <23"
   },
   "scripts": {
-    "start": "npm run bundle:codemirror && electron .",
+    "start": "npm run bundle:codemirror && npm run bundle:mermaid && electron .",
     "lint": "eslint .",
     "pretest": "npm run lint",
     "test": "node scripts/run-tests.js",
@@ -19,14 +19,15 @@
     "electron-dev": "SWITCHBOARD_DATA_DIR=\"$HOME/.switchboard-dev\" electron .",
     "bundle:codemirror": "esbuild public/codemirror-setup.js --bundle --outfile=public/codemirror-bundle.js --format=iife --platform=browser --minify",
     "generate-icons": "node scripts/generate-icons.js && node scripts/generate-dmg-background.js",
-    "build": "npm run bundle:codemirror && electron-builder",
-    "build:mac": "npm run bundle:codemirror && electron-builder --mac && node scripts/postinstall.js",
-    "build:mac:arm64": "npm run bundle:codemirror && electron-builder --mac --arm64 && node scripts/postinstall.js",
-    "build:win": "npm run bundle:codemirror && electron-builder --win",
-    "build:linux": "npm run bundle:codemirror && electron-builder --linux",
-    "release": "npm run bundle:codemirror && electron-builder --publish always",
+    "build": "npm run bundle:codemirror && npm run bundle:mermaid && electron-builder",
+    "build:mac": "npm run bundle:codemirror && npm run bundle:mermaid && electron-builder --mac && node scripts/postinstall.js",
+    "build:mac:arm64": "npm run bundle:codemirror && npm run bundle:mermaid && electron-builder --mac --arm64 && node scripts/postinstall.js",
+    "build:win": "npm run bundle:codemirror && npm run bundle:mermaid && electron-builder --win",
+    "build:linux": "npm run bundle:codemirror && npm run bundle:mermaid && electron-builder --linux",
+    "release": "npm run bundle:codemirror && npm run bundle:mermaid && electron-builder --publish always",
     "postinstall": "node scripts/postinstall.js",
-    "prepare": "husky"
+    "prepare": "husky",
+    "bundle:mermaid": "esbuild public/mermaid-setup.js --bundle --outfile=public/mermaid-bundle.js --format=iife --platform=browser --minify"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -67,7 +68,8 @@
     "globals": "^17.6.0",
     "husky": "^9.1.7",
     "jsdom": "^29.1.1",
-    "png2icons": "^2.0.1"
+    "png2icons": "^2.0.1",
+    "mermaid": "12.1.0"
   },
   "build": {
     "appId": "ai.doctly.switchboard",

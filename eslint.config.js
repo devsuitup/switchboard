@@ -445,6 +445,7 @@ module.exports = [
       'dist/**',
       'build/**',
       'public/codemirror-bundle.js',
+      'public/mermaid-bundle.js',
       'scripts/**/*', // ad-hoc build helpers; out of lint scope for now
       '!scripts/test-pr.js',
       '.work-files/**',
@@ -729,7 +730,7 @@ module.exports = [
   // CodeMirror setup file uses ESM-style imports/closure that don't lint well
   // as a classic script — keep no-undef on but be permissive about unused.
   {
-    files: ['public/codemirror-setup.js'],
+    files: ['public/codemirror-setup.js', 'public/mermaid-setup.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',

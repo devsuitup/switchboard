@@ -19,10 +19,11 @@ fixture HOME. This contains malformed relative writes from native Windows
 spelling initialization under the Codex sandbox (#591); see [the e2e launch
 notes](e2e.md#writing-one).
 
-In both modes, `task test-pr` first rebuilds `public/codemirror-bundle.js` in the
+In both modes, `task test-pr` first rebuilds `public/codemirror-bundle.js` and, when declared,
+`public/mermaid-bundle.js` in the
 worktree using esbuild's JavaScript API, resolved from that worktree's
 `node_modules`. Build options come from the worktree's `package.json`
-`bundle:codemirror` script: entry points, `--bundle`, `--minify`, and
+`bundle:codemirror` and `bundle:mermaid` scripts: entry points, `--bundle`, `--minify`, and
 `--outfile=`, `--format=`, `--platform=` values. Unsupported arguments stop
 the launch with an error. It rebuilds even when a bundle already exists,
 so the file viewers use the PR's current inputs. A failed bundle build stops
@@ -229,7 +230,7 @@ worktree, stop it, build the bundle there, and run the task again (it reuses the
 worktree, and the bundle, being gitignored, survives the checkout):
 
 ```bash
-(cd .worktrees/pr-122-test && npm run bundle:codemirror)
+(cd .worktrees/pr-122-test && npm run bundle:codemirror && npm run bundle:mermaid)
 ```
 
 Rebuild it whenever the PR changes `public/codemirror-setup.js`.
