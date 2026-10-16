@@ -2238,12 +2238,20 @@ async function restoreStartupSessions() {
 
 // see .ai/contexts/session-cache.md ("Projects query worker")
 async function loadStartupProjects() {
+  let loaded = false;
   for (let attempt = 0; attempt < 2; attempt++) {
-    try { await loadProjects(); break; }
+    try { await loadProjects(); loaded = true; break; }
     catch (error) { console.warn('[switchboard] startup project load failed', error); }
   }
   try { await restoreStartupSessions(); }
   catch (error) { console.warn('[switchboard] startup restore failed', error); }
+  if (!loaded) {
+    const retry = async remaining => {
+      if (await reloadProjects()) return;
+      if (remaining > 1) setTimeout(() => retry(remaining - 1), 1000);
+    };
+    setTimeout(() => retry(3), 1000);
+  }
 }
 
 loadStartupProjects();

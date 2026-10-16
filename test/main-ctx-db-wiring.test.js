@@ -1,63 +1,40 @@
+'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const path = require('path');
+const fs = require('node:fs');
+const path = require('node:path');
+const { createCacheEffects } = require('../cache-effects');
+const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 
-const root = path.join(__dirname, '..');
-
-function read(f) {
-  return fs.readFileSync(path.join(root, f), 'utf8');
-}
-
-function mainCtxDbKeys() {
-  assert.match(read('main.js'), /writer\.initializeCache\(\{/);
-  const { createSessionIndexWriter } = require('../session-index-writer');
-  const source = read('db.js').split('module.exports =')[1];
-  const ast = require('espree').parse('(' + source.trim().replace(/;$/, '') + ')', { ecmaVersion: 'latest' });
-  const keys = ast.body[0].expression.properties.map(p => p.key.name);
-  const backend = Object.fromEntries(keys.map(key => [key, () => {}]));
-  let injected;
-  createSessionIndexWriter(backend, { init: ctx => { injected = ctx.db; } }).initializeCache({});
-  assert.notEqual(injected, backend);
-  for (const key of Object.keys(injected)) assert.equal(injected[key], backend[key]);
-  return new Set(Object.keys(injected));
-}
-
-// Every ctx.db.<name> that session-cache.js dereferences.
-function sessionCacheDbDeps() {
-  const src = read('session-cache.js');
-  const deps = new Set();
-  const re = /ctx\.db\.([A-Za-z_$][\w$]*)/g;
-  let m;
-  while ((m = re.exec(src))) deps.add(m[1]);
-  return deps;
-}
-
-// Pure static analysis only — does NOT require('../db'), because better-sqlite3 is
-// compiled against Electron's Node ABI and throws when loaded under plain node:test
-// (same constraint db-daily-activity.test.js documents).
-
-test('facade injects every exported backend dependency consumed by session-cache.js', () => {
-  const provided = mainCtxDbKeys();
-  const required = sessionCacheDbDeps();
-  assert.deepEqual([...provided].sort(), [...required].sort());
+test('cache dependency writes are recorded without writing through the main reader', () => {
+  const forbidden = () => assert.fail('main connection write');
+  const backend = { getAllCached: () => [], getAllMeta: () => new Map(), getAllFolderMeta: () => new Map(),
+    getSetting: () => null, getCachedSession: () => null, getMeta: () => null,
+    listSettingKeys: () => [], replaceSessionMetrics: forbidden, touchCachedModified: forbidden };
+  const effects = createCacheEffects(backend);
+  effects.begin();
+  effects.adapter.replaceSessionMetrics('id', []);
+  effects.adapter.touchCachedModified('id', 'time');
+  assert.deepEqual(effects.finish(), [
+    { name: 'replaceSessionMetrics', args: ['id', []] },
+    { name: 'touchCachedModified', args: ['id', 'time'] },
+  ]);
 });
 
-test('ctx.db forwards the two functions from the 2026-06-02 stats incident', () => {
-  const provided = mainCtxDbKeys();
-  assert.ok(provided.has('replaceSessionMetrics'), 'ctx.db must forward replaceSessionMetrics');
-  assert.ok(provided.has('touchCachedModified'), 'ctx.db must forward touchCachedModified');
+test('cache computation reads its own changes without persisting them on main', () => {
+  const effects = createCacheEffects({ getAllCached: () => [], getAllMeta: () => new Map(),
+    getSetting: () => null, getCachedSession: () => null, getMeta: () => null,
+    getAllFolderMeta: () => new Map(), listSettingKeys: () => [] });
+  effects.begin();
+  effects.adapter.upsertCachedSessions([{ sessionId: 'id', folder: 'folder' }]);
+  assert.equal(effects.adapter.getCachedSession('id').folder, 'folder');
+  effects.adapter.deleteCachedSession('id');
+  assert.equal(effects.adapter.getCachedSession('id'), null);
+  assert.equal(effects.finish().length, 2);
 });
 
-// db.js must actually export those names too (a name forwarded in main.js but not
-// exported by db.js is undefined just the same). Checked by source-grep, not require,
-// to stay native-module-free.
-test('db.js exports replaceSessionMetrics and touchCachedModified', () => {
-  const dbSrc = read('db.js');
-  for (const name of ['replaceSessionMetrics', 'touchCachedModified']) {
-    assert.ok(
-      new RegExp(`(^|[^\\w])${name}([^\\w]|$)`, 'm').test(dbSrc.split('module.exports')[1] || ''),
-      `db.js module.exports should include ${name}`
-    );
-  }
+test('main awaits writer bootstrap before opening its readonly store', () => {
+  const source = read('main.js');
+  assert.ok(source.indexOf('await writer.ready') < source.indexOf("} = require('./db');"));
+  assert.ok(read('db.js').includes('openSessionIndexStore({ readonly: true })'));
 });

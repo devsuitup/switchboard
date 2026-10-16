@@ -27,7 +27,7 @@ function runInElectronNode(code, dataDir) {
 }
 
 function loadDbModule(dataDir) {
-  return runInElectronNode(`require(${JSON.stringify(path.join(APP_DIR, 'db.js'))})`, dataDir);
+  return runInElectronNode(`require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))})`, dataDir);
 }
 
 function inspectDb(dataDir) {
@@ -154,7 +154,7 @@ test('getTotalCounts excludes a compaction mirror row from totalSessions but sti
     assert.equal(seed.status, 0, seed.stderr);
 
     const inspect = runInElectronNode(`
-      const db = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
+      const db = require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))});
       console.log(JSON.stringify(db.getTotalCounts()));
     `, dir);
     assert.equal(inspect.status, 0, inspect.stderr);

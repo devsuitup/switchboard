@@ -18,7 +18,7 @@ const fixture = `
   const assert = require('node:assert/strict');
   const fs = require('node:fs');
   const path = require('node:path');
-  const db = require('./db');
+  const db = require('./test/fixtures/writer-store.cjs');
   const cache = require('./session-cache');
   const root = process.env.SWITCHBOARD_DATA_DIR;
   const projectsDir = path.join(root, 'projects');
@@ -76,7 +76,7 @@ test('legacy SQLite title backfill preserves metadata and reads transcripts only
     const assert = require('node:assert/strict');
     const fs = require('node:fs');
     const path = require('node:path');
-    const db = require('./db');
+    const db = require('./test/fixtures/writer-store.cjs');
     const cache = require('./session-cache');
     const root = process.env.SWITCHBOARD_DATA_DIR;
     const id = '11111111-1111-4111-8111-111111111111';

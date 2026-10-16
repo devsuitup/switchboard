@@ -40,6 +40,7 @@ function createSearchWorkerClient(deps) {
   let failureWindowTimer = null;
   let restartTimer = null;
   let shuttingDown = false;
+  let termination;
 
   /**
    * Resolve all in-flight search promises with [] and clear the map.
@@ -147,19 +148,20 @@ function createSearchWorkerClient(deps) {
    * Suppresses the restart logic so the exit handler does not try to respawn
    * after the DB connection has already been closed.
    */
-  function shutdown() {
+  async function shutdown() {
     shuttingDown = true;
     clearTimeout(restartTimer);
     restartTimer = null;
     if (worker) {
       worker.removeAllListeners('exit'); // suppress backoff / restart
-      worker.terminate();
+      termination = worker.terminate();
       worker = null;
     }
     workerReady = false;
     // The suppressed exit handler would normally drain — do it here so an
     // in-flight search never leaves the renderer awaiting a dead promise.
     drainPending();
+    await termination;
   }
 
   return { startWorker, searchViaWorker, drainPending, shutdown };

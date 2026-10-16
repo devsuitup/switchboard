@@ -19,7 +19,7 @@ function runInElectronNode(code, dataDir) {
 }
 
 function loadDbModule(dataDir) {
-  return runInElectronNode(`require(${JSON.stringify(path.join(APP_DIR, 'db.js'))})`, dataDir);
+  return runInElectronNode(`require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))})`, dataDir);
 }
 
 // Migration v9 purges the rows a pre-fix parser summarised from the

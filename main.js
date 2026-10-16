@@ -143,15 +143,39 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   autoUpdater.on('update-not-available', (info) => sendUpdaterEvent('update-not-available', info));
   autoUpdater.on('download-progress', (progress) => sendUpdaterEvent('download-progress', progress));
   autoUpdater.on('update-downloaded', (info) => sendUpdaterEvent('update-downloaded', info));
+  require('electron').autoUpdater.on('before-quit-for-update', () => { updateInstalling = true; });
   autoUpdater.on('error', (err) => {
     log.error('[updater] Error:', err?.message || String(err));
     activityFlushedForQuit = false; // see .ai/contexts/activitywatch.md ("Quitting")
+    updateInstalling = false;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('updater-event', 'error', { message: err?.message || String(err) });
     }
   });
 }
+let mainWindow = null;
+let activityFlushedForQuit = false;
+let updateInstalling = false;
+async function startApplication() {
+if (!app.requestSingleInstanceLock()) { app.quit(); return; }
 const writer = require('./session-index-writer').createSessionIndexWriter();
+let bootstrapQuit;
+const holdBootstrapQuit = event => {
+  event.preventDefault();
+  bootstrapQuit ||= boundedBootstrapQuit();
+};
+async function boundedBootstrapQuit() {
+  let timer;
+  try {
+    await Promise.race([writer.ready, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('writer bootstrap quit timed out')), 1500);
+    })]);
+    app.quit();
+  } catch (error) { log.error('[startup]', error); app.exit(1); }
+  finally { clearTimeout(timer); }
+}
+app.on('before-quit', holdBootstrapQuit);
+await writer.ready;
 const {
   isCachePopulated, getAllCached, getCachedByParent, getCachedFolder, getCachedSession,
   getAllFolderMeta, getSearchFileIds,
@@ -187,7 +211,7 @@ const activityReporter = createActivityWatchReporter({
   hostname: os.hostname(),
   idleSeconds: () => { try { return powerMonitor.getSystemIdleTime(); } catch { return 0; } },
 });
-let activityFlushedForQuit = false; // see .ai/contexts/activitywatch.md ("Quitting")
+
 activityReporter.setEnabled(
   (getSetting('global') || {}).activityReporting ?? SETTING_DEFAULTS.activityReporting
 );
@@ -201,7 +225,7 @@ const legacySearchCleanup = deleteSearchType('plan').catch(() => {});
 // (e.g. a 60-char pasted URL) never blocks the Electron event loop.
 // better-sqlite3 is synchronous; on the main thread a slow query stalls ALL
 // IPC (terminal data, OSC, sidebar) → visible UI freeze. The worker opens a
-// read-only WAL connection which coexists safely with the main thread's writer.
+// read-only WAL connection which coexists with the writer worker.
 //
 // A dedicated worker is used instead of the existing scan-projects worker because
 // that worker is used for cold-start indexing and may be occupied with a long
@@ -240,9 +264,12 @@ const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 
 // Active PTY sessions
 const activeSessions = new Map();
+const closedSessions = new Map();
 // see .ai/contexts/touched-files.md ("One route into Touched")
 const exitedRemoteSessionIds = new Set();
-let mainWindow = null;
+let stopScheduler;
+let flushWindowBounds = async () => {};
+let flushProjectsBeforeExit = async () => {};
 
 // Every project root Switchboard currently knows about: live sessions plus
 // every indexed project (same enumeration as the get-memories handler).
@@ -415,10 +442,17 @@ function createWindow() {
   mainWindow.on('resize', saveBounds);
   mainWindow.on('move', saveBounds);
 
+  flushWindowBounds = async () => {
+    if (boundsTimer) clearTimeout(boundsTimer);
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
+    const b = mainWindow.getBounds();
+    await writer.patchGlobal({ windowBounds: { x: b.x, y: b.y, width: b.width, height: b.height } });
+  };
+
   // Also save immediately before close (debounce may not have flushed)
   mainWindow.on('close', () => (async () => {
     if (boundsTimer) clearTimeout(boundsTimer);
-    if (!mainWindow.isMinimized()) {
+    if (!appQuitting && !mainWindow.isMinimized()) {
       const b = mainWindow.getBounds();
       await writer.patchGlobal({ windowBounds: { x: b.x, y: b.y, width: b.width, height: b.height } });
     }
@@ -429,6 +463,7 @@ function createWindow() {
     // Kill all running PTY processes so orphaned `claude` processes don't
     // accumulate in the background with no way for the user to interact.
     for (const [id, session] of activeSessions) {
+      closedSessions.set(id, session);
       if (!session.exited) killPty(session, id);
       activeSessions.delete(id);
     }
@@ -510,9 +545,8 @@ const projectsClient = createProjectsWorkerClient({
   workerFactory: () => new Worker(path.join(__dirname, 'workers', 'projects-query.js'), { workerData: { dbPath: DB_PATH, projectsDir: PROJECTS_DIR } }),
   snapshot: projectsSnapshot,
   apply: async result => {
-    const applied = writer.applyProjectsWorkerEffects(result);
+    await writer.applyProjectsWorkerEffects(result);
     const version = projectsSnapshot().version;
-    await applied;
     if (result.reconciled) projectsReconciledAt = Date.now();
     return { version };
   },
@@ -1187,7 +1221,7 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
 // populateCacheViaWorker's internal Promise.
 ipcMain.handle('rebuild-cache', async () => {
   try {
-    await populateCacheViaWorker();
+    await populateCacheViaWorker({ force: true });
     return { ok: true };
   } catch (err) {
     console.error('Error rebuilding cache:', err);
@@ -1209,7 +1243,7 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
         if (alias === null) { repairPending = true; return true; }
         return aliases.has(alias);
       });
-      if (declared.length !== repairFolders.length) await setSetting('bridge_uuid_reindex_folders', declared);
+      if (declared.length !== repairFolders.length) await writer.completeRepairFolders(repairFolders.filter(folder => !declared.includes(folder)));
     }
     const needsPopulate = !isInitialScanComplete() || (!repairPending && (!isCachePopulated() || !isSearchIndexPopulated()));
 
@@ -1446,7 +1480,7 @@ const fileListClients = new Map(['memory', 'work-file'].map(kind => [kind, creat
 })]));
 const fileListsClient = {
   request: ({ kind }) => fileListClients.get(kind).request(),
-  shutdown: () => { for (const client of fileListClients.values()) client.shutdown(); },
+  shutdown: () => Promise.all([...fileListClients.values()].map(client => client.shutdown())),
 };
 
 // --- IPC: get-memories ---
@@ -2282,6 +2316,8 @@ let ptyGenerationCounter = 0;
 
 // see .ai/contexts/session-state.md ("A session main drops")
 function wireSessionPty(session, sessionId, ptyProcess) {
+  let resolveExitDrain;
+  session.exitDrain = new Promise(resolve => { resolveExitDrain = resolve; });
   session.generation = ++ptyGenerationCounter;
   ptyProcess.onData(data => {
     const currentId = session.realSessionId || sessionId;
@@ -2392,6 +2428,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
     const realId = session.realSessionId || sessionId;
     if (TRACE.on) trace('pty.exit', realId, { exitCode, signal: exitSignal, stopped, alsoUnder: realId !== sessionId ? sessionId : null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
     const finish = async suppress => {
+      try {
       const realId = session.realSessionId || sessionId;
       const releaseReal = !activeSessions.has(realId) || activeSessions.get(realId) === session;
       const releaseOriginal = !activeSessions.has(sessionId) || activeSessions.get(sessionId) === session;
@@ -2417,6 +2454,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
       } catch (err) {
         log.warn(`[session-cache] releasing kept row of ${realId} failed: ${err.message}`);
       }
+      } finally { resolveExitDrain(); }
     };
     if (!holdBackgroundExit(session, finish) && !sessionTransitions.holdContinuationExit(sessionId, session, finish)) await finish(false);
   });
@@ -2966,9 +3004,7 @@ ipcMain.handle('get-activity-reporting-state', () => activityReportingState());
 ipcMain.handle('set-activity-reporting-enabled', async (_event, enabled) => {
   const on = !!enabled;
   activityReporter.setEnabled(on);
-  const global = getSetting('global') || {};
-  global.activityReporting = on;
-  await setSetting('global', global);
+  await writer.patchGlobal({ activityReporting: on });
   log.info(`[activitywatch] reporting ${on ? 'enabled' : 'disabled'} from the UI`);
   return activityReportingState();
 });
@@ -3014,9 +3050,7 @@ ipcMain.handle('set-activity-trace-enabled', async (_event, enabled) => {
     });
   });
   mainLoopMonitor.sync();
-  const global = getSetting('global') || {};
-  global.activityTrace = on;
-  await setSetting('global', global);
+  await writer.patchGlobal({ activityTrace: on });
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('activity-trace-state', on);
   log.info(`[activity-trace] ${on ? 'enabled' : 'disabled'} from the UI → ${activityTrace.currentFile() || '(closed)'}`);
   return activityTraceState();
@@ -3144,11 +3178,7 @@ sessionTransitions.init({
   hasTaskRecord: (id, agentId) => taskRecords.hasRecord(id, agentId),
   backgroundJobExists: jobId => ['working', 'blocked'].includes(bgAgents.getCachedJobs().get(jobId)?.state),
   rekeyActivity: (fromId, toId, kind) => { activityReporter.rekey(fromId, toId); taskRecords.rekey(fromId, toId, { continued: kind === 'continuation' || kind === 'background' }); },
-  rekeyMetadata: (fromId, toId, kind) => {
-    if (kind !== 'background') return;
-    const row = getCachedSession(fromId);
-    require('./db').rekeySessionMeta(fromId, toId, row?.customTitle || row?.aiTitle || row?.summary);
-  },
+  rekeyMetadata: (fromId, toId, kind) => kind === 'background' ? writer.rekeySessionMeta(fromId, toId) : undefined,
   getBackgroundTarget: id => {
     const descriptors = cliSessionState.getSidebarDescriptors().filter(d => d.sessionId.toLowerCase() === id.toLowerCase());
     if (descriptors.length) {
@@ -3277,6 +3307,7 @@ const deleteSessionGuard = makeDeleteSessionGuard({
 let projectsWatcher = null;
 
 function startProjectsWatcher() {
+  let flushChain = Promise.resolve();
   if (!fs.existsSync(PROJECTS_DIR)) return;
 
   // pendingChanges: folder → Set<relativePath> | true.
@@ -3287,7 +3318,18 @@ function startProjectsWatcher() {
   const pendingChanges = new Map();
   let debounceTimer = null;
 
-  async function flushChanges() {
+  flushProjectsBeforeExit = async () => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    await flushChanges();
+  };
+
+  function flushChanges() {
+    const pending = flushChain.then(applyChanges);
+    flushChain = pending.catch(() => {});
+    return pending;
+  }
+
+  async function applyChanges() {
     debounceTimer = null;
     // Drain pendingChanges into a local copy so events arriving during the
     // synchronous flush land in a fresh batch for the next tick.
@@ -3379,8 +3421,16 @@ ipcMain.handle('updater-download', () => {
 ipcMain.handle('updater-install', async () => {
   if (!autoUpdater) return;
   if (mainWindow && !await unsavedGuard.confirmQuit(mainWindow)) return;
-  activityFlushedForQuit = true; // see .ai/contexts/activitywatch.md ("Quitting")
-  autoUpdater.quitAndInstall();
+  await drainForUpdate();
+  try {
+    autoUpdater.quitAndInstall();
+  }
+  catch (error) {
+    updateInstalling = false;
+    activityFlushedForQuit = false;
+    log.error('[updater] install failed:', error);
+    throw error;
+  }
 });
 
 // --- App lifecycle ---
@@ -3396,13 +3446,10 @@ if (!app.isPackaged) {
 // and leave the first one's node-pty sessions orphaned or killed.
 // requestSingleInstanceLock ensures only one instance runs at a time. The second
 // launch quits immediately; the first brings its window to the front.
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) {
-  app.quit();
-} else {
+{
   // Focus the existing window when a second launch is attempted.
   app.on('second-instance', () => {
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
@@ -3521,7 +3568,7 @@ if (!gotSingleInstanceLock) {
     scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath, isProjectSettingsArchived);
     // Seeded before any session can run, so a sandboxed one cannot plant into the seed.
     await scheduleProjects().list();
-    startScheduler(log, runScheduleCommand, {
+    stopScheduler = startScheduler(log, runScheduleCommand, {
       resumeSource: powerMonitor,
       stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
       projects: async () => (await scheduleProjects().list()).filter(p => !isProjectSettingsArchived(p)),
@@ -3599,54 +3646,113 @@ app.on('window-all-closed', () => {
 
 let appQuitting = false;
 
-// see .ai/contexts/activitywatch.md ("Quitting")
-app.on('before-quit', (event) => {
-  if (unsavedGuard.beforeQuit(event, mainWindow)) return;
-  if (!activityFlushedForQuit && activityReporter.hasPendingWork) {
-    event.preventDefault();
+// see .ai/contexts/session-index-writer.md
+let shutdownPromise;
+let shutdownComplete = false;
+let exitRequested = false;
+function exitOnce() {
+  if (exitRequested || !shutdownComplete) return;
+  exitRequested = true;
+  app.exit();
+}
+let nonDatabaseResourcesStopped = false;
+let taskRecordsStopped;
+function stopNonDatabaseResources(closeTrace = false) {
+  if (nonDatabaseResourcesStopped) return;
+  nonDatabaseResourcesStopped = true;
+  const cleanup = [
+    () => stopScheduler?.(), () => mainLoopMonitor.stop(), () => shutdownAllMcp(),
+    () => localTranscriptTracker.dispose(), () => unsubscribeTaskJobs(),
+    () => { taskRecordsStopped = Promise.resolve().then(() => taskRecords.dispose()); return taskRecordsStopped; },
+    () => { if (projectsWatcher) { projectsWatcher.close(); projectsWatcher = null; } },
+    () => cliSessionState.stop(), () => bgAgents.stop(), () => remoteIndexer.dispose(),
+    () => remoteWatcher.stopAll(), () => remoteActivityTracker.dispose(),
+    ...(closeTrace ? [() => activityTrace.close()] : []),
+  ];
+  for (const dispose of cleanup) {
+    try { Promise.resolve(dispose()).catch(error => log.error('[shutdown] cleanup failed:', error)); }
+    catch (error) { log.error('[shutdown] cleanup failed:', error); }
+  }
+}
+async function stopWorkersForExit() {
+  let timer;
+  const stop = [() => writer.terminate(), () => projectsClient.shutdown(),
+    () => fileListsClient.shutdown(), () => searchClient.shutdown(),
+    () => sessionCache.shutdownProducers(), () => taskRecordsStopped];
+  const stopped = Promise.all(stop.map(fn => Promise.resolve().then(fn))).then(() => true, error => {
+    log.error('[shutdown] worker termination failed:', error);
+    return new Promise(() => {});
+  });
+  try {
+    return await Promise.race([stopped, new Promise(resolve => {
+      timer = setTimeout(() => {
+        exitRequested = true;
+        log.error('[shutdown] workers did not exit within 250 ms; force-killing own PID');
+        process.kill(process.pid, 'SIGKILL');
+        resolve(false);
+      }, 250);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+async function boundedShutdown(drain) {
+  let timer;
+  try {
+    await Promise.race([Promise.resolve().then(drain), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('shutdown drain timed out')), 1500);
+    })]);
+    return null;
+  } catch (error) { log.error('[shutdown] drain failed:', error); return error; }
+  finally { clearTimeout(timer); }
+}
+function drainForUpdate() {
+  return boundedShutdown(async () => {
+    await Promise.all([flushProjectsBeforeExit(), flushWindowBounds(), sessionTransitions.drainMetadataWrites(), activityReporter.flush()]);
+    await writer.drain();
+  });
+}
+function shutdownForExit() {
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = boundedShutdown(() => writer.beginShutdown(async () => {
+    appQuitting = true;
+    if (TRACE.on) trace('app.quit', null, {});
+    stopNonDatabaseResources(updateInstalling);
+
+    const sessions = new Map([...closedSessions, ...activeSessions]);
+    const exitDrains = [...sessions.values()].map(session => session.exitDrain).filter(Boolean);
+    for (const [id, session] of sessions) {
+      if (!session.exited) killPty(session, id);
+    }
+    await Promise.all(exitDrains);
+    await flushProjectsBeforeExit();
+    await flushWindowBounds();
+    await sessionCache.shutdownProducers();
+    await sessionTransitions.drainMetadataWrites();
+    for (const [id] of sessions) await writer.releaseLiveSession(id);
+    closedSessions.clear();
+    if (!activityFlushedForQuit || activityReporter.hasPendingWork) await activityReporter.flush();
+    activityReporter.stop();
     activityFlushedForQuit = true;
-    const bound = new Promise((resolve) => setTimeout(resolve, 1500));
-    Promise.race([activityReporter.flush().catch(() => {}), bound]).finally(() => app.quit());
-    return;
-  }
-  activityReporter.stop();
-  mainLoopMonitor.stop();
-  if (TRACE.on) trace('app.quit', null, {});
-  activityTrace.close();
+    await Promise.all([projectsClient.shutdown(), fileListsClient.shutdown(), searchClient.shutdown()]);
+    await closeDb();
+    activityTrace.close();
+  })).then(async error => {
+    if (error?.message === 'shutdown drain timed out') log.error('[shutdown] exiting after shutdown drain timed out; unfinished writes may be lost');
+    shutdownComplete = await stopWorkersForExit();
+  });
+  return shutdownPromise;
+}
 
-  // Shut down all MCP servers
-  shutdownAllMcp();
-
-  // Close filesystem watcher
-  localTranscriptTracker.dispose();
-  unsubscribeTaskJobs();
-  taskRecords.dispose();
-  if (projectsWatcher) {
-    projectsWatcher.close();
-    projectsWatcher = null;
-  }
-  cliSessionState.stop();
-  bgAgents.stop();
-  // Stops the timer and SIGKILLs any ssh/scp still in flight.
-  remoteIndexer.dispose();
-  remoteWatcher.stopAll();
-  remoteActivityTracker.dispose();
-
-  // Kill all PTY processes on quit
-  // see docs/session-restore.md ("Closing the app")
-  appQuitting = true;
-  for (const [id, session] of activeSessions) {
-    if (!session.exited) killPty(session, id);
-  }
+app.removeListener('before-quit', holdBootstrapQuit);
+app.on('before-quit', event => {
+  if (shutdownComplete) return;
+  if (!updateInstalling && unsavedGuard.beforeQuit(event, mainWindow)) return;
+  event.preventDefault();
+  shutdownForExit().finally(exitOnce);
 });
+}
 
-// Close SQLite after all windows are closed to avoid "connection is not open" errors
-app.on('will-quit', async () => {
-  // Terminate the search worker gracefully before closing the DB, so the
-  // worker's read-only connection is released before the WAL checkpoint.
-  // shutdown() suppresses the restart logic before calling terminate().
-  projectsClient.shutdown();
-  fileListsClient.shutdown();
-  searchClient.shutdown();
-  await closeDb();
+startApplication().catch(error => {
+  log.error('[startup]', error);
+  dialog.showErrorBox('Switchboard could not start', error.message || String(error));
+  app.exit(1);
 });

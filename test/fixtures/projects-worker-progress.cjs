@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
-const db = require('../../db');
+const db = require('./writer-store.cjs');
 const cache = require('../../session-cache');
 const { encodeProjectPath } = require('../../encode-project-path');
 

@@ -37,8 +37,8 @@ test('main builds the What\'s new service from the running version, that signal 
   assert.match(args, /existingInstall: INSTALL_PREDATES_LAUNCH/);
   assert.match(args, /lastSeenDefault: SETTING_DEFAULTS\.lastSeenVersion/);
   const facade = fs.readFileSync(path.join(ROOT, 'session-index-writer.js'), 'utf8');
-  assert.match(facade, /getSetting: backend\.getSetting, setSetting: backend\.setSetting/);
-  assert.match(facade, /createWhatsNew\(\{ \.\.\.options, \.\.\.settings \}\)/);
+  assert.ok(facade.includes("await request('whatsNewStartup', data, text)"));
+  assert.ok(facade.includes("request('patchGlobal', { lastSeenVersion: options.currentVersion })"));
   assert.match(args, /\blog,/);
 });
 

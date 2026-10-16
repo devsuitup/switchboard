@@ -22,7 +22,7 @@ function runInElectronNode(code, dataDir) {
 // db.js opens its database at require() time, so each scenario loads it in a
 // fresh child process pointed at an isolated data dir.
 function loadDbModule(dataDir) {
-  return runInElectronNode(`require(${JSON.stringify(path.join(APP_DIR, 'db.js'))})`, dataDir);
+  return runInElectronNode(`require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))})`, dataDir);
 }
 
 function inspectDb(dataDir) {

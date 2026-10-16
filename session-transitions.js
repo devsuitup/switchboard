@@ -456,8 +456,29 @@ function isFresh(filePath) {
 }
 
 // see .ai/contexts/session-state.md ("Proven continuation re-key")
+const metadataWrites = new Set();
 function rekeySession(sessionId, newId, session, currentFiles, kind, background) {
-  rekeyMetadata(sessionId, newId, kind);
+  if (session._metadataRekey) return;
+  const acknowledgment = rekeyMetadata(sessionId, newId, kind);
+  if (acknowledgment?.then) {
+    const sourceId = session.realSessionId || sessionId;
+    const pending = Promise.resolve(acknowledgment).then(() => {
+      const target = getBackgroundTarget(newId);
+      if (activeSessions.get(sessionId) !== session || (session.realSessionId || sessionId) !== sourceId
+        || isLive(newId) || session.stopRequested || (background && (target?.jobId !== background.jobId || !backgroundJobExists(background.jobId)))) return;
+      publishRekey(sessionId, newId, session, currentFiles, kind, background);
+    }).catch(error => { log?.error?.('[session-transition] metadata re-key failed:', error.message); })
+      .finally(() => { delete session._metadataRekey; metadataWrites.delete(pending); });
+    session._metadataRekey = pending;
+    metadataWrites.add(pending);
+    return;
+  }
+  publishRekey(sessionId, newId, session, currentFiles, kind, background);
+}
+
+async function drainMetadataWrites() { await Promise.all([...metadataWrites]); }
+
+function publishRekey(sessionId, newId, session, currentFiles, kind, background) {
   log.info(`[session-transition] ${sessionId} → ${newId} (${kind})`);
   session.knownJsonlFiles = new Set(currentFiles);
   session.realSessionId = newId;
@@ -765,4 +786,4 @@ function detectPendingBackgroundContinuations() {
   }
 }
 
-module.exports = { init, detectSessionTransitions, detectSubagentTransitions, detectPendingBackgroundContinuations, snapshotContinuations, snapshotContinuationsBeforeSpawn, holdContinuationExit, currentSessionId, isClearCommand, normalizeSessionId };
+module.exports = { drainMetadataWrites, init, detectSessionTransitions, detectSubagentTransitions, detectPendingBackgroundContinuations, snapshotContinuations, snapshotContinuationsBeforeSpawn, holdContinuationExit, currentSessionId, isClearCommand, normalizeSessionId };

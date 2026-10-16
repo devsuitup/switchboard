@@ -50,33 +50,44 @@ test('stop-session detaches an attach session instead of killing it', () => {
   assert.match(body, /detached: true/);
 });
 
-test('window close releases the Agents subscriber and app quit stops the job watchers', () => {
+test('window close releases the Agents subscriber and app quit stops the job watchers', async () => {
   const idx = MAIN.indexOf("mainWindow.on('closed'");
   const end = MAIN.indexOf('\n  });', idx) + '\n  });'.length;
   const vm = require('node:vm');
-  let closed, beforeQuit, unsubscribed = 0, stopped = 0;
+  let closed, _beforeQuit, unsubscribed = 0, stopped = 0;
   const context = {
     mainWindow: { on: (_name, callback) => { closed = callback; } },
-    activeSessions: new Map(), changesWatchers: { closeAll() {} }, closeAllFileWatchers() {},
+    activeSessions: new Map(), closedSessions: new Map(), changesWatchers: { closeAll() {} }, closeAllFileWatchers() {},
     subagentWatchers: new Map(), unsubscribeBgAgents: () => { unsubscribed++; },
     unsubscribeTaskJobs() {}, taskRecords: { dispose() {} },
     bgAgents: { stop: () => { stopped++; } },
-    app: { on: (_name, callback) => { beforeQuit = callback; } },
+    app: { on: (_name, callback) => { _beforeQuit = callback; } },
     unsavedGuard: { beforeQuit: () => false }, activityFlushedForQuit: false,
     activityReporter: { hasPendingWork: false, stop() {} }, mainLoopMonitor: { stop() {} },
     TRACE: { on: false }, activityTrace: { close() {} }, shutdownAllMcp() {},
     localTranscriptTracker: { dispose() {} }, remoteActivityTracker: { dispose() {} }, projectsWatcher: null,
     cliSessionState: { stop() {} }, remoteIndexer: { dispose() {} }, remoteWatcher: { stopAll() {} },
-    appQuitting: false,
+    appQuitting: false, updateInstalling: false,
   };
   vm.runInNewContext(MAIN.slice(idx, end), context);
   closed();
   assert.equal(unsubscribed, 1);
   assert.equal(stopped, 0, 'closing the window keeps the jobs cache active');
-  const quitStart = MAIN.indexOf("app.on('before-quit'");
-  const quitEnd = MAIN.indexOf('\n});', quitStart) + '\n});'.length;
-  vm.runInNewContext(MAIN.slice(quitStart, quitEnd), context);
-  beforeQuit({});
+  context.stopScheduler = () => {};
+  context.flushProjectsBeforeExit = context.flushWindowBounds = async () => {};
+  context.sessionCache = { shutdownProducers: async () => {} };
+  context.sessionTransitions = { drainMetadataWrites: async () => {} };
+  context.activityReporter.flush = async () => {};
+  context.projectsClient = context.fileListsClient = context.searchClient = { shutdown: async () => {} };
+  context.closeDb = async () => {};
+  context.writer = { beginShutdown: drain => drain(), terminate: async () => {} };
+  context.Promise = Promise;
+  context.setTimeout = setTimeout;
+  context.clearTimeout = clearTimeout;
+  const quitStart = MAIN.indexOf('let shutdownPromise;');
+  const quitEnd = MAIN.indexOf("app.removeListener('before-quit', holdBootstrapQuit);", quitStart);
+  vm.runInNewContext(MAIN.slice(quitStart, quitEnd) + '\nshutdownForExit();', context);
+  await context.shutdownForExit();
   assert.equal(stopped, 1, 'app quit releases the job watchers');
 });
 

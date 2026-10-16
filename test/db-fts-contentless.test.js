@@ -16,7 +16,7 @@ function readSrc(file) {
   return fs.readFileSync(path.join(root, file), 'utf8');
 }
 
-const dbSrc = readSrc('db.js');
+const dbSrc = readSrc('session-index-store.js');
 
 // ---------------------------------------------------------------------------
 // 1. Schema: external-content FTS5 table
@@ -325,7 +325,7 @@ test('deleteSearchType: FTS delete issued before search_content delete', () => {
 // ---------------------------------------------------------------------------
 
 test('db.js module.exports still includes all required FTS function names', () => {
-  const exportsSrc = dbSrc.split('module.exports')[1] || '';
+  const exportsSrc = dbSrc.slice(dbSrc.lastIndexOf('return {')) || '';
   for (const name of [
     'upsertSearchEntries',
     'updateSearchTitle',

@@ -1,6 +1,22 @@
 const path = require('path');
 const fs = require('fs');
-const { Worker } = require('worker_threads');
+const { Worker: NativeWorker } = require('worker_threads');
+const scanWorkers = new Set();
+const subsetScans = new Set();
+let stopping = false;
+class Worker extends NativeWorker {
+  constructor(...args) {
+    super(...args);
+    scanWorkers.add(this);
+    this.once('exit', () => scanWorkers.delete(this));
+  }
+}
+async function shutdownProducers() {
+  stopping = true;
+  await Promise.all([...scanWorkers].map(worker => worker.terminate()));
+  await Promise.allSettled([...subsetScans, populatePromise, entrypointBackfill, customTitleBackfill, repairPromise].filter(Boolean));
+}
+
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { setRemappedProjectReader } = require('./encode-project-path');
 const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
@@ -67,6 +83,9 @@ function scanCachedContinuation(file, id, previous, maxBytes, stat = fs.statSync
 
 function init(ctx) {
   continuationFiles.clear();
+  stopping = false;
+  populateRetry = null;
+  populateNow = ctx.now || Date.now;
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   activeSessions = ctx.activeSessions;
   getLocalDescriptors = ctx.getLocalDescriptors || (() => []);
@@ -576,6 +595,7 @@ const ENTRYPOINT_BACKFILL_BATCH = 200;
 
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
 function backfillEntrypoints() {
+  if (stopping) return Promise.resolve();
   if (entrypointBackfill) return entrypointBackfill;
   entrypointBackfill = new Promise((resolve, reject) => {
     const rows = getCachedMissingEntrypoint ? getCachedMissingEntrypoint() : [];
@@ -608,6 +628,7 @@ function backfillEntrypoints() {
 
 // see .ai/contexts/session-cache.md ("Local background sidebar rows")
 function backfillCustomTitles() {
+  if (stopping) return Promise.resolve();
   if (customTitleBackfill) return customTitleBackfill;
   if (!setCachedCustomTitles || !getCachedMissingCustomTitle) return (customTitleBackfill = Promise.resolve());
   const rows = getCachedMissingCustomTitle().filter(row => validId(row.sessionId) && parseFolderKey(row.folder).alias === null);
@@ -1058,7 +1079,8 @@ function reindexRepairedFolders() {
     log?.warn(`Bridge repair re-index failed: ${err.message}`);
     return { ok: false, error: err.message };
   }).finally(async () => {
-    await writer.setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => !folders.includes(key)));
+    if (writer.completeRepairFolders) await writer.completeRepairFolders(folders);
+    else await writer.setSetting('bridge_uuid_reindex_folders', pendingRepairFolders().filter(key => !folders.includes(key)));
     repairPromise = null;
   });
   return repairPromise;
@@ -1070,7 +1092,14 @@ function reindexRepairedFolders() {
  *  `fileSubsets` (optional Map<folder, Set<relPathWithinFolder>>) additively
  *  restricts named folders to just those files -- see
  *  .ai/contexts/session-cache.md ("Remote hosts file-level rescan"). */
-function scanFoldersViaWorker({ projectsDir, folderPrefix, folders, fileSubsets }) {
+function scanFoldersViaWorker(options) {
+  if (stopping) return Promise.resolve({ ok: false, error: 'indexer shutting down' });
+  const promise = scanFoldersViaWorkerInternal(options);
+  subsetScans.add(promise);
+  promise.finally(() => subsetScans.delete(promise)).catch(() => {});
+  return promise;
+}
+function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, fileSubsets }) {
   return new Promise((resolve) => {
     const hasFolders = Array.isArray(folders) && folders.length > 0;
     const subsets = fileSubsets instanceof Map ? fileSubsets : null;
@@ -1146,9 +1175,16 @@ function scanFoldersViaWorker({ projectsDir, folderPrefix, folders, fileSubsets 
 // callers share the same Promise so the first get-projects after a migration
 // can await it instead of seeing an empty list.
 let populatePromise = null;
+let populateRetry = null;
+let populateNow = Date.now;
 
-function populateCacheViaWorker() {
+function populateCacheViaWorker({ force = false } = {}) {
+  if (stopping) return Promise.resolve();
   if (populatePromise) return populatePromise;
+  if (force) populateRetry = null;
+  if (populateRetry && populateNow() < populateRetry.at) return Promise.resolve();
+  const retryFolders = populateRetry?.folders;
+  const retryAttempt = populateRetry?.attempt || 0;
 
   // Captured once, up front. Keyed on the persistent completeness marker, not
   // on isCachePopulated(): the worker streams per-folder writes, so a scan
@@ -1165,6 +1201,10 @@ function populateCacheViaWorker() {
   let totalFolders = 0;
   let sessionCount = 0;
   let indexedProjects = 0;
+  let writeError = null;
+  const failedFolders = new Set();
+  let scanSucceeded = false;
+  let unknownFailure = false;
 
   // ~4 events/s: one IPC message per folder is wasteful on a large tree (the
   // comparable notifyRendererProjectsChanged is throttled too). The FIRST
@@ -1194,15 +1234,27 @@ function populateCacheViaWorker() {
 
   populatePromise = new Promise((resolve) => {
     let settled = false;
+    let workerExited = false;
     const settle = () => {
       if (settled) return;
       settled = true;
-      populatePromise = null;
-      resolve();
+      if (scanSucceeded) populateRetry = null;
+      else {
+        const backoff = [30000, 120000, 600000][retryAttempt];
+        populateRetry = {
+          folders: !unknownFailure && failedFolders.size ? [...failedFolders] : retryFolders || null,
+          attempt: retryAttempt + 1,
+          at: backoff === undefined ? Infinity : populateNow() + backoff,
+        };
+      }
+      Promise.resolve(workerExited ? undefined : worker.terminate()).catch(() => {}).finally(() => {
+        populatePromise = null;
+        resolve();
+      });
     };
 
     const worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-      workerData: { projectsDir: PROJECTS_DIR, remaps: remappedProjectsSetting() },
+      workerData: { projectsDir: PROJECTS_DIR, remaps: remappedProjectsSetting(), ...(retryFolders ? { folders: retryFolders } : {}) },
     });
 
     let writes = Promise.resolve();
@@ -1219,8 +1271,15 @@ function populateCacheViaWorker() {
           totalFolders = msg.total;
           let written = 0;
           try {
+            if (msg.error) throw new Error(msg.error);
             written = await writer.writeScannedFolder(msg.result, msg.unverifiedLocalFolder);
-          } catch (err) { log && log.error('[session-cache] folder write failed:', err.message); }
+          } catch (err) {
+            writeError = err.message;
+            const folder = msg.folder || msg.result?.folder || msg.unverifiedLocalFolder;
+            if (folder) failedFolders.add(folder);
+            else unknownFailure = true;
+            log && log.error('[session-cache] folder write failed:', err.message);
+          }
           if (written > 0) {
             sessionCount += written;
             indexedProjects++;
@@ -1233,15 +1292,19 @@ function populateCacheViaWorker() {
         }
 
         // msg.type === 'done'
-        if (!msg.ok) {
-          console.error('Worker scan error:', msg.error);
-          sendStatus('Scan failed: ' + msg.error, 'error');
-          reportProgress(true, msg.error);
+        if (!msg.ok || writeError) {
+          for (const folder of msg.failedFolders || []) failedFolders.add(folder);
+          if (!msg.ok && !msg.failedFolders?.length) unknownFailure = true;
+          const error = writeError || msg.error;
+          console.error('Worker scan error:', error);
+          sendStatus('Scan failed: ' + error, 'error');
+          reportProgress(true, error);
           settle();
           return;
         }
 
         if (setInitialScanComplete) await writer.setInitialScanComplete();
+        scanSucceeded = true;
         sendStatus(`Indexed ${sessionCount} sessions across ${indexedProjects} projects`, 'done');
         // Clear status after a few seconds
         setTimeout(() => sendStatus(''), 5000);
@@ -1249,7 +1312,7 @@ function populateCacheViaWorker() {
         notifyRendererProjectsChanged();
         settle();
       }).catch(err => {
-        worker.terminate();
+        unknownFailure = true;
         sendStatus('Scan failed: ' + err.message, 'error');
         reportProgress(true, err.message);
         settle();
@@ -1258,6 +1321,8 @@ function populateCacheViaWorker() {
 
     worker.on('error', (err) => {
       writes = writes.then(() => {
+        if (settled) return;
+        unknownFailure = true;
         console.error('Worker error:', err);
         sendStatus('Worker error: ' + err.message, 'error');
         reportProgress(true, err.message);
@@ -1269,8 +1334,10 @@ function populateCacheViaWorker() {
     // sending a message, neither the 'message' nor 'error' handler will fire.
     // Resolve here so awaiters aren't stuck forever and the next call can retry.
     worker.on('exit', (code) => {
+      workerExited = true;
       writes = writes.then(() => {
         if (!settled && code !== 0) {
+          unknownFailure = true;
           sendStatus('Scan worker exited unexpectedly', 'error');
           reportProgress(true, 'worker exited unexpectedly');
         }
@@ -1330,7 +1397,7 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
   });
 }
 
-module.exports = {
+module.exports = { shutdownProducers,
   writeScannedFolder, writeScannedFolderPartial,
   resolveSessionContinuations,
   applyProjectsWorkerEffects,

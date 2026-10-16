@@ -120,13 +120,19 @@ try {
   const targets = Array.isArray(workerData.targets) ? workerData.targets : [];
   const total = folders.length + targets.length;
   let current = 0;
+  const failedFolders = [];
 
   for (let i = 0; i < folders.length; i++) {
-    const result = readFolderFromFilesystem(folders[i]);
     current++;
-    stripBridgeEvidence(result);
-    parentPort.postMessage({ type: 'folder', result, current, total, rejected: result ? null : lastRejected,
-      unverifiedLocalFolder: !result && FOLDER_PREFIX === '' ? folders[i] : null });
+    try {
+      const result = readFolderFromFilesystem(folders[i]);
+      stripBridgeEvidence(result);
+      parentPort.postMessage({ type: 'folder', result, current, total, rejected: result ? null : lastRejected,
+        unverifiedLocalFolder: !result && FOLDER_PREFIX === '' ? folders[i] : null });
+    } catch (error) {
+      failedFolders.push(folders[i]);
+      parentPort.postMessage({ type: 'folder', folder: folders[i], error: error.message, current, total });
+    }
   }
   for (const t of targets) {
     const result = readFolderFileSubsetFromFilesystem(t && t.folder, t && t.files, t && t.existingRows);
@@ -134,7 +140,8 @@ try {
     stripBridgeEvidence(result);
     parentPort.postMessage({ type: 'folder', result, current, total });
   }
-  parentPort.postMessage({ type: 'done', ok: true, total });
+  parentPort.postMessage({ type: 'done', ok: failedFolders.length === 0, failedFolders, total,
+    ...(failedFolders.length ? { error: 'folder scan failed' } : {}) });
 } catch (err) {
   parentPort.postMessage({ type: 'done', ok: false, error: err.message });
 }

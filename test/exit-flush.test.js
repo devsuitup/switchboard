@@ -212,9 +212,9 @@ test('main stops reporting session exits once the quit starts killing them', () 
   const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
   const onExit = main.slice(main.indexOf('ptyProcess.onExit('), main.indexOf('\n  });', main.indexOf('ptyProcess.onExit(')));
   assert.match(onExit, /if \(!suppress && mainWindow && !mainWindow\.isDestroyed\(\) && !appQuitting\) \{\n\s*mainWindow\.webContents\.send\('process-exited'/);
-  const quitStart = main.indexOf("app.on('before-quit'");
+  const quitStart = main.indexOf("function shutdownForExit()");
   const quit = main.slice(quitStart, main.indexOf('\n});', quitStart));
   const flag = quit.indexOf('appQuitting = true;');
-  assert.notEqual(flag, -1, 'before-quit raises the flag');
+  assert.notEqual(flag, -1, 'shutdown raises the flag');
   assert.ok(flag < quit.indexOf('killPty('), 'the flag is up before the first kill');
 });

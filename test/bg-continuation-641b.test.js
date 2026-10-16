@@ -338,7 +338,7 @@ for (const version of [9, 42]) test(`metadata revision index preserves db_versio
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-641d-revisions-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
-    const assert = require('node:assert/strict'), db = require('./db');
+    const assert = require('node:assert/strict'), db = require('./test/fixtures/writer-store.cjs');
     assert.equal(db.getSetting('db_version'), 9);
     db.setName('old', 'User rename'); db.setName('head', 'Indexed title', 'transcript');
     db.upsertCachedSessions([{ sessionId: 'cached', folder: 'project', summary: 'Keep me' }]);
@@ -351,8 +351,8 @@ for (const version of [9, 42]) test(`metadata revision index preserves db_versio
     }
     sql.prepare("UPDATE settings SET value = ? WHERE key = 'db_version'").run(String(${version}));
     sql.close();
-    delete require.cache[require.resolve('./db')];
-    const reopened = require('./db');
+    delete require.cache[require.resolve('./test/fixtures/writer-store.cjs')];
+    const reopened = require('./test/fixtures/writer-store.cjs');
     assert.equal(reopened.getSetting('db_version'), ${version});
     const inspect = new (require('better-sqlite3'))(reopened.DB_PATH);
     const plan = inspect.prepare('EXPLAIN QUERY PLAN SELECT MAX(revision) FROM session_meta_fields').all();
@@ -374,7 +374,7 @@ test('SQLite continuation copies metadata, avoids title names and keeps the newe
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-641b-meta-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
-    const assert = require('node:assert/strict'), db = require('./db');
+    const assert = require('node:assert/strict'), db = require('./test/fixtures/writer-store.cjs');
     db.setName('old', 'original'); db.toggleStar('old'); db.setArchived('old', true);
     db.setName('new', 'newer'); db.setArchived('new', false);
     db.rekeySessionMeta('old', 'new', 'title');
@@ -407,7 +407,7 @@ test('a newer indexed transcript title cannot defeat a genuine Switchboard renam
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-641b-title-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
-    const assert = require('node:assert/strict'), db = require('./db');
+    const assert = require('node:assert/strict'), db = require('./test/fixtures/writer-store.cjs');
     db.setName('old', 'Switchboard rename');
     db.setName('new', 'Original (2)', 'transcript');
     db.rekeySessionMeta('old', 'new', 'Original');
@@ -421,13 +421,13 @@ test('a legacy genuine rename retains its provenance across successive backgroun
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-641b-legacy-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
-    const assert = require('node:assert/strict'), db = require('./db');
+    const assert = require('node:assert/strict'), db = require('./test/fixtures/writer-store.cjs');
     db.closeDb();
     const sql = new (require('better-sqlite3'))(require('node:path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'));
     sql.prepare('INSERT INTO session_meta(sessionId, name) VALUES (?, ?)').run('legacy', 'Legacy rename');
     sql.close();
-    delete require.cache[require.resolve('./db')];
-    const reopened = require('./db');
+    delete require.cache[require.resolve('./test/fixtures/writer-store.cjs')];
+    const reopened = require('./test/fixtures/writer-store.cjs');
     reopened.setName('next', 'Original (2)', 'transcript');
     reopened.rekeySessionMeta('legacy', 'next', 'Original');
     assert.equal(reopened.getMeta('next').name, 'Legacy rename');
@@ -442,7 +442,7 @@ test('a newer genuine head rename selected by SQLite also appears on the merged 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-641b-sidebar-meta-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
-    const assert = require('node:assert/strict'), db = require('./db');
+    const assert = require('node:assert/strict'), db = require('./test/fixtures/writer-store.cjs');
     const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
     db.setName('${OLD}', 'Older Switchboard rename');
     db.setName('${HEAD}', 'Newer Switchboard rename');
@@ -472,7 +472,7 @@ test('a newer original rename survives indexed titles and older head renames bef
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-641b-sidebar-title-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
-    const assert = require('node:assert/strict'), db = require('./db');
+    const assert = require('node:assert/strict'), db = require('./test/fixtures/writer-store.cjs');
     const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
     db.setName('${OLD}', 'Switchboard rename'); db.setName('${HEAD}', 'Original (2)', 'transcript');
     const row = { sessionId: '${OLD}', folder: 'project', name: 'Switchboard rename', customTitle: 'Original',

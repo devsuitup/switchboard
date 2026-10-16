@@ -2,6 +2,11 @@
 
 **Purpose**: index every Claude session JSONL on disk into a queryable SQLite cache so the sidebar renders without re-scanning `~/.claude/projects/` and so search is full-text. Watches the projects directory for changes and refreshes incrementally.
 
+Manual `rebuild-cache` calls `populateCacheViaWorker({ force: true })`. A forced
+scan clears failed-folder retry scope and backoff, including an exhausted retry
+budget, and scans all projects. Concurrent callers still share the in-flight
+scan; automatic `get-projects` calls retain the failed-folder retry policy.
+
 ## Key files
 
 | File | LOC | Role |
@@ -43,7 +48,7 @@ Main remains the only writer. Before applying effects without an intervening awa
 
 There is one in-flight job and at most one pending job. Each dispatch owns its callers; a valid result resolves them even when newer callers are pending. Pending options retain reconcile and byte-measurement requests with logical OR. Each caller has a fixed 30-second deadline from registration, including queue and retries. After three version conflicts, views publish with no remaining effects or retained-row updates; the next request recomputes writes. Already accepted folder batches remain valid. Errors/exits reject waiters and reset the worker. An expired build with no remaining callers resets the worker; a reconcile keeps running after caller deadlines so completed folders persist and successful completion advances main's throttle. Each reconcile dispatch also has a five-minute hard ceiling (RECONCILE_TIMEOUT_MS). At that ceiling main rejects all outstanding waiters and resets the worker; a later request starts a fresh worker. Already applied folder batches remain in SQLite. The hard timer is cleared on completion, retry, error and shutdown. There is no synchronous main-thread fallback. Quit rejects pending work and terminates the worker. Structured-clone costs and actual main-side DB writes remain. External data-directory sharing is still forbidden.
 
-getProjects(false/true) still returns its existing array. loadProjects calls getProjects('both') once per reload and receives {defaultProjects, allProjects}; the false view is assembled before the true view, preserving archive reappearance writes. The renderer samples global settings after the worker reply, preventing a pending session from reappearing when its project was archived during that fetch. Each view retains its own project/session arrays until the renderer's existing dedup joins session identities. Search, archived parents/subagents, SDK filtering, hidden repositories, remote placeholders, pending sessions and plain/panel terminals keep their policies. Worker failure rejects IPC. Event reloads catch rejection and retain the previous sidebar lists; there is no S3 persistent-notice surface in this slice, and an empty list uses the loading status for an error. Startup retries the load once and runs working-set restore even when both attempts fail. Scheduled persistence is guarded until restoreWorkingSet has read global.openWorkingSet, matching the exit-flush guard.
+getProjects(false/true) still returns its existing array. loadProjects calls getProjects('both') once per reload and receives {defaultProjects, allProjects}; the false view is assembled before the true view, preserving archive reappearance writes. The renderer samples global settings after the worker reply, preventing a pending session from reappearing when its project was archived during that fetch. Each view retains its own project/session arrays until the renderer's existing dedup joins session identities. Search, archived parents/subagents, SDK filtering, hidden repositories, remote placeholders, pending sessions and plain/panel terminals keep their policies. Worker failure rejects IPC. Event reloads catch rejection and retain the previous sidebar lists; there is no S3 persistent-notice surface in this slice, and an empty list uses the loading status for an error. Startup retries the load once and runs working-set restore even when both attempts fail. After both immediate attempts fail, three additional reloads run one second apart, stopping at the first success without waiting for a filesystem event. Scheduled persistence is guarded until restoreWorkingSet has read global.openWorkingSet, matching the exit-flush guard.
 
 Diagnostics emits main.loop once per second via perf_hooks.monitorEventLoopDelay, with maxMs and p99Ms (nanoseconds converted to milliseconds); sampling follows TRACE.on and stops on quit. ipc.get-projects carries totalMs (including queue/retries), rows (cache rows in the built snapshot) and replyBytes (UTF-8 JSON size of the worker-built view selected for the reply, before main adds placeholders or applies archive and attachability filters; not the final IPC payload or Electron wire framing). The worker measures boolean and paired views only when requested by tracing; main reads the numeric measurement without serializing the full reply.
 
@@ -62,6 +67,16 @@ incremental indexing and test contracts. `getKnownProjectPaths` remains on
 main for explicit guarded panel reads/saves; neither list handler calls it.
 
 ## Invariants
+
+Cold population shares one in-flight promise through scan-worker termination.
+Folder read errors are reported individually and do not stop other folders.
+If scanning or writing a folder fails, the completeness marker stays unset and
+subsequent population requests retry only failed folders after 30 seconds,
+2 minutes and 10 minutes. Further requests do not retry until the next startup.
+An enumeration failure or worker crash with unknown remaining folders retries
+the previous scope under the same backoff. A successful subset retry marks the
+whole initial scan complete because earlier successful folders remain committed.
+The retry clock is injectable through `init({now})`; retry state resets at startup.
 
 - **`modified` is always ISO8601 string** (`2026-05-22T20:59:33.000Z`). `substr(modified, 1, 10)` is the canonical "day" derivation. Don't switch to epoch ms without migrating.
 - **`session_cache.folder` is the encoded form** (`-home-jean-baptiste-workspace`). Use `encodeProjectPath()` to derive it from an absolute path.

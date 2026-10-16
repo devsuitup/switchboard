@@ -61,7 +61,7 @@ function setup(t, { hidden = [], cron = '* * * * *', registered = true,
     notifyRendererProjectsChanged: () => { notices++; },
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
   });
-  context.writer = require('../session-index-writer').createSessionIndexWriter({
+  context.writer = require('./fixtures/writer-memory.cjs').memoryWriter({
     getSetting, setSetting, deleteSetting,
     deleteCachedFolder: context.deleteCachedFolder, deleteSearchFolder: context.deleteSearchFolder,
   }, { refreshFolder: context.refreshFolder });

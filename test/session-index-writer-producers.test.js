@@ -51,7 +51,7 @@ test('population drains folder acknowledgments before done and exit can complete
   assert.deepEqual(calls, ['folder', 'ack', 'complete']);
 });
 
-test('a failed folder write is logged and later folder messages still complete the initial scan', async () => {
+test('a failed folder write prevents scan completeness while later folders still persist', async () => {
   let completed = false;
   const processed = [];
   const f = fixture({
@@ -69,9 +69,9 @@ test('a failed folder write is logged and later folder messages still complete t
   f.worker().emit('exit', 0);
   await populated;
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(completed, true);
+  assert.equal(completed, false);
   assert.deepEqual(processed, ['broken', 'healthy']);
   assert.equal(f.terminated(), false);
   assert.ok(f.errors.some(error => error.includes('write failed')));
-  assert.equal(f.sent.some(([channel, status]) => channel === 'status-update' && String(status).includes('Scan failed')), false);
+  assert.equal(f.sent.some(([channel, status]) => channel === 'status-update' && String(status).includes('Scan failed')), true);
 });

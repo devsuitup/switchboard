@@ -53,7 +53,7 @@ test('runner provenance survives full indexing, SQLite, header refresh and sideb
     const fs = require('node:fs');
     const path = require('node:path');
     require('node:os').homedir = () => process.env.SWITCHBOARD_TEST_HOME;
-    const db = require('./db');
+    const db = require('./test/fixtures/writer-store.cjs');
     const cache = require('./session-cache');
     const { createScheduleSession } = require('./schedule-runner');
     const { readSessionFile, readSessionDisplayHeader } = require('./read-session-file');
@@ -115,7 +115,7 @@ test('schema upgrade preserves old cached rows without guessing schedule provena
     INSERT INTO settings VALUES ('db_version', '999');
     INSERT INTO session_cache (sessionId, folder, slug, firstPrompt) VALUES ('old', 'folder', 'journal-morning', 'Scheduled Task: Write notes');\`);
     raw.close();
-    const db = require('./db');
+    const db = require('./test/fixtures/writer-store.cjs');
     console.log(JSON.stringify(db.getCachedSession('old')));
     db.closeDb();
   `);

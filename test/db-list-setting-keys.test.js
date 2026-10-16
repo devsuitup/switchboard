@@ -18,7 +18,7 @@ test('listSettingKeys returns the keys with the prefix, not those that merely co
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-setting-keys-'));
   try {
     const code = `
-      const db = require(${JSON.stringify(path.join(APP_DIR, 'db.js'))});
+      const db = require(${JSON.stringify(path.join(APP_DIR, 'test/fixtures/writer-store.cjs'))});
       for (const k of ['global', 'project:/a', 'project:/b', 'xproject:/c', 'project_/d', 'project%', 'PROJECT:/x']) db.setSetting(k, { v: 1 });
       console.log(JSON.stringify([db.listSettingKeys('project:').sort(), db.listSettingKeys('project_').sort()]));
     `;

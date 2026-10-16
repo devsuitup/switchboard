@@ -25,6 +25,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { Worker } = require('node:worker_threads');
+const vm = require('node:vm');
 
 const sessionCache = require('../session-cache');
 const { encodeProjectPath } = require('../encode-project-path');
@@ -64,7 +66,7 @@ function makeFakeDb({ initialScanComplete }) {
   };
 }
 
-function initCache(projectsDir, db) {
+function initCache(projectsDir, db, extra = {}) {
   const sentEvents = db.sentEvents;
   sessionCache.init({
     PROJECTS_DIR: projectsDir,
@@ -75,8 +77,163 @@ function initCache(projectsDir, db) {
     }),
     log: { info: () => {}, debug: () => {}, warn: () => {}, error: () => {} },
     db,
+    ...extra,
   });
 }
+
+for (const exhausted of [false, true]) {
+  test(`Rebuild forces a full shared scan during ${exhausted ? 'exhausted retries' : 'retry backoff'}`, async () => {
+    const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-force-'));
+    let now = 0, fail = true;
+    const attempts = [];
+    try {
+      writeSession(projectsDir, 'good');
+      writeSession(projectsDir, 'bad');
+      const db = makeFakeDb({ initialScanComplete: false });
+      initCache(projectsDir, db, { now: () => now, writer: {
+        writeScannedFolder(result) {
+          const name = path.basename(result.projectPath);
+          attempts.push(name);
+          if (fail && name === 'bad') throw new Error('injected write failure');
+          return result.sessions.length;
+        },
+        setInitialScanComplete: db.setInitialScanComplete,
+      } });
+      await sessionCache.populateCacheViaWorker();
+      if (exhausted) {
+        for (const delay of [30000, 120000, 600000]) {
+          now += delay;
+          await sessionCache.populateCacheViaWorker();
+        }
+      }
+      const before = attempts.length;
+      await sessionCache.populateCacheViaWorker();
+      assert.equal(attempts.length, before);
+      fail = false;
+      let rebuild;
+      const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+      const start = source.indexOf("ipcMain.handle('rebuild-cache'");
+      const end = source.indexOf('\n});', start) + 4;
+      vm.runInNewContext(source.slice(start, end), {
+        ipcMain: { handle: (_name, handler) => { rebuild = handler; } },
+        populateCacheViaWorker: sessionCache.populateCacheViaWorker,
+        console,
+      });
+      const rebuilding = rebuild();
+      const scan = sessionCache.populateCacheViaWorker();
+      assert.equal((await rebuilding).ok, true);
+      await scan;
+      assert.deepEqual(attempts.slice(before).sort(), ['bad', 'good'], 'Rebuild must scan every folder');
+      assert.equal(db.calls.setInitialScanComplete, 1);
+      const forced = sessionCache.populateCacheViaWorker({ force: true });
+      assert.equal(sessionCache.populateCacheViaWorker({ force: true }), forced, 'forced callers share one scan');
+      assert.equal(sessionCache.populateCacheViaWorker(), forced);
+      await forced;
+      assert.deepEqual(attempts.slice(before + 2).sort(), ['bad', 'good']);
+    } finally { fs.rmSync(projectsDir, { recursive: true, force: true }); }
+  });
+}
+
+test('failed folders retry alone with backoff, a shared scan and a per-start retry limit', async () => {
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-retry-'));
+  let now = 1000;
+  const attempts = [];
+  try {
+    writeSession(projectsDir, 'good');
+    writeSession(projectsDir, 'bad');
+    const db = makeFakeDb({ initialScanComplete: false });
+    const writer = {
+      writeScannedFolder(result) {
+        attempts.push(path.basename(result.projectPath));
+        if (result.projectPath.endsWith('bad')) throw new Error('injected folder write failure');
+        return result.sessions.length;
+      },
+      setInitialScanComplete: db.setInitialScanComplete,
+    };
+    initCache(projectsDir, db, { writer, now: () => now });
+    const first = sessionCache.populateCacheViaWorker();
+    assert.equal(sessionCache.populateCacheViaWorker(), first);
+    await first;
+    assert.deepEqual(attempts.sort(), ['bad', 'good']);
+    await sessionCache.populateCacheViaWorker();
+    assert.equal(attempts.length, 2, 'get-projects cannot restart before backoff');
+    for (const delay of [30000, 120000, 600000]) {
+      now += delay - 1;
+      await sessionCache.populateCacheViaWorker();
+      const before = attempts.length;
+      now++;
+      const retry = sessionCache.populateCacheViaWorker();
+      assert.equal(sessionCache.populateCacheViaWorker(), retry);
+      await retry;
+      assert.deepEqual(attempts.slice(before), ['bad'], 'only the failed folder retries');
+    }
+    now += 86400000;
+    await sessionCache.populateCacheViaWorker();
+    assert.equal(attempts.length, 5, 'no fourth retry until next start');
+    assert.equal(db.calls.setInitialScanComplete, 0);
+    initCache(projectsDir, db, { writer: { ...writer, writeScannedFolder: result => result.sessions.length }, now: () => now });
+    await sessionCache.populateCacheViaWorker();
+    assert.equal(db.calls.setInitialScanComplete, 1, 'a new start can complete the scan');
+  } finally { fs.rmSync(projectsDir, { recursive: true, force: true }); }
+});
+
+test('a successful failed-folder retry completes the initial scan without revisiting good folders', async () => {
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-retry-success-'));
+  let now = 0, fail = true;
+  const attempts = [];
+  try {
+    writeSession(projectsDir, 'good');
+    writeSession(projectsDir, 'bad');
+    const db = makeFakeDb({ initialScanComplete: false });
+    initCache(projectsDir, db, { now: () => now, writer: {
+      writeScannedFolder(result) {
+        const name = path.basename(result.projectPath);
+        attempts.push(name);
+        if (name === 'bad' && fail) throw new Error('transient write failure');
+        return result.sessions.length;
+      },
+      setInitialScanComplete: db.setInitialScanComplete,
+    } });
+    await sessionCache.populateCacheViaWorker();
+    fail = false;
+    now = 30000;
+    await sessionCache.populateCacheViaWorker();
+    assert.equal(db.calls.setInitialScanComplete, 1);
+    assert.equal(attempts.filter(name => name === 'good').length, 1);
+    assert.equal(attempts.filter(name => name === 'bad').length, 2);
+  } finally { fs.rmSync(projectsDir, { recursive: true, force: true }); }
+});
+
+test('a folder read failure reports its name and still scans the other folders', async () => {
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-read-failure-'));
+  try {
+    writeSession(projectsDir, 'bad');
+    writeSession(projectsDir, 'good');
+    const badFolder = encodeProjectPath(path.join(projectsDir, 'bad'));
+    const worker = new Worker(`
+      const { workerData } = require('node:worker_threads');
+      const state = require(workerData.statePath);
+      const read = state.getFolderIndexMtimeMs;
+      state.getFolderIndexMtimeMs = dir => {
+        if (require('node:path').basename(dir) === workerData.badFolder) throw new Error('injected folder read failure');
+        return read(dir);
+      };
+      require(workerData.scanPath);
+    `, { eval: true, workerData: { projectsDir, badFolder,
+      statePath: path.resolve(__dirname, '../folder-index-state.js'),
+      scanPath: path.resolve(__dirname, '../workers/scan-projects.js'),
+    } });
+    const messages = [];
+    await new Promise((resolve, reject) => {
+      worker.on('message', message => messages.push(message));
+      worker.on('error', reject);
+      worker.on('exit', code => code === 0 ? resolve() : reject(new Error('worker exit ' + code)));
+    });
+    assert.equal(messages.filter(message => message.result?.projectPath === path.join(projectsDir, 'good')).length, 1);
+    assert.deepEqual(messages.at(-1).failedFolders, [badFolder]);
+    assert.equal(messages.at(-1).ok, false);
+  } finally { fs.rmSync(projectsDir, { recursive: true, force: true }); }
+});
 
 test('populateCacheViaWorker writes each folder to the DB as it streams in (not batched at the end)', async () => {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-cold-'));

@@ -1,167 +1,232 @@
 'use strict';
 
+const path = require('node:path');
+const fs = require('node:fs');
+const { Worker } = require('node:worker_threads');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const archive = require('./archived-projects');
-const { scheduleRegistry } = require('./schedule-runner');
+const { encodeProjectPath } = require('./encode-project-path');
+const { parseFolderKey } = require('./remote-hosts');
 const { createWhatsNew } = require('./changelog');
 const { remapProjectTranscripts } = require('./project-remap');
-const { encodeProjectPath } = require('./encode-project-path');
+const { createWriterWorkerClient } = require('./session-index-writer-client');
+const { createCacheEffects } = require('./cache-effects');
 
 // see .ai/contexts/session-index-writer.md
-function createSessionIndexWriter(backend = require('./db'), cache = require('./session-cache')) {
-  const settings = { getSetting: backend.getSetting, setSetting: backend.setSetting };
-  const cacheDeps = () => ({
-    ...settings, getAllCached: backend.getAllCached,
-    isInitialScanComplete: backend.isInitialScanComplete,
-    resolveFolderDir: cache.resolveFolderDir, refreshFolder: cache.refreshFolder,
-    buildProjects: () => cache.buildProjectsFromCache(true),
+function createSessionIndexWriter(options = {}, cache = require('./session-cache')) {
+  const mirror = new Map();
+  const client = options.client || createWriterWorkerClient({
+    workerFactory: options.workerFactory || (() => new Worker(path.join(__dirname, 'workers', 'session-index-writer.js'))),
+    onSettings: entries => { mirror.clear(); for (const [key, value] of entries) mirror.set(key, value); if (backend) backend.applySettingsAcknowledgment(entries); },
+    ...options.clientOptions,
   });
-  return {
+  let backend, recorder, cacheTail = Promise.resolve(), closing, accepting = true, terminated = false;
+  const pending = new Set();
+  const commandScope = new AsyncLocalStorage();
+  const owner = {};
+  const admitted = () => !terminated && (accepting || commandScope.getStore() === owner);
+  const track = promise => { pending.add(promise); promise.finally(() => pending.delete(promise)).catch(() => {}); return promise; };
+  const ready = client.ready.then(bootstrap => {
+    backend = options.readonlyBackend || require('./db');
+    if (bootstrap) backend.searchFtsRecreated = bootstrap.searchFtsRecreated;
+    if (!options.client) backend.applySettingsAcknowledgment([...mirror]);
+    recorder = createCacheEffects(backend);
+  });
+  ready.catch(() => {});
+  const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(() => client.request(name, ...args)));
+  const compute = (name, ...args) => {
+    if (!admitted()) return Promise.reject(new Error('writer is closing'));
+    const sourceVersion = backend?.getProjectsRevision?.();
+    const work = cacheTail.then(async () => {
+      await ready;
+      for (let attempt = 0; ; attempt++) {
+        if (name === 'applyProjectsWorkerEffects' && backend.getProjectsRevision() !== sourceVersion) throw Object.assign(new Error('Projects effect snapshot changed while queued'), { code: 'WRITER_STALE' });
+        recorder.begin();
+        const result = cache[name](...args);
+        const revision = recorder.revision();
+        const effects = recorder.finish();
+        try { if (effects.length) await client.request('effects', effects, revision); return result; }
+        catch (error) { if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects') throw error; }
+      }
+    });
+    cacheTail = work.catch(() => {});
+    return track(work);
+  };
+  const admit = fn => {
+    if (!admitted()) return Promise.reject(new Error('writer is closing'));
+    return track(commandScope.run(owner, () => Promise.resolve().then(fn)));
+  };
+  const writer = {
+    ready,
     initializeCache(ctx) {
-      cache.init({ ...ctx, writer: this, db: {
-        deleteCachedFolder: backend.deleteCachedFolder, getCachedByFolder: backend.getCachedByFolder,
-        upsertCachedSessions: backend.upsertCachedSessions, deleteCachedSession: backend.deleteCachedSession,
-        replaceSessionMetrics: backend.replaceSessionMetrics, touchCachedModified: backend.touchCachedModified,
-        deleteSearchFolder: backend.deleteSearchFolder, deleteSearchSession: backend.deleteSearchSession,
-        upsertSearchEntries: backend.upsertSearchEntries, setFolderMeta: backend.setFolderMeta,
-        getFolderMeta: backend.getFolderMeta, getAllFolderMeta: backend.getAllFolderMeta,
-        getAllMeta: backend.getAllMeta, getAllCached: backend.getAllCached,
-        getSetting: backend.getSetting, setSetting: backend.setSetting, getMeta: backend.getMeta, setName: backend.setName,
-        isInitialScanComplete: backend.isInitialScanComplete, setInitialScanComplete: backend.setInitialScanComplete,
-        getCachedMissingEntrypoint: backend.getCachedMissingEntrypoint, setCachedEntrypoints: backend.setCachedEntrypoints,
-        getCachedSession: backend.getCachedSession, setCachedContinuationIndex: backend.setCachedContinuationIndex,
-        setCachedCustomTitles: backend.setCachedCustomTitles, getCachedMissingCustomTitle: backend.getCachedMissingCustomTitle,
-      } });
+      if (!backend) throw new Error('await writer.ready before initializeCache');
+      recorder.begin();
+      cache.init({ ...ctx, writer, db: recorder.adapter });
+      recorder.finish();
     },
-    async setSetting(key, value) { return backend.setSetting(key, value); },
-    async deleteSetting(key) { return backend.deleteSetting(key); },
-    async patchGlobal(fields) {
-      const global = backend.getSetting('global') || {};
-      backend.setSetting('global', { ...global, ...fields });
+    withCache(otherCache) { return createSessionIndexWriter({ client }, otherCache); },
+    async patchGlobal(fields) { return request('patchGlobal', fields); },
+    async renameSession(id, name) { return request('renameSession', id, name); },
+    async rekeySessionMeta(from, to) { return request('rekeySessionMeta', from, to); },
+    async completeRepairFolders(folders) { return request('completeRepairFolders', folders); },
+    async buildProjectsFromCache(showArchived) { return compute('buildProjectsFromCache', showArchived); },
+    async refreshFolder(folder, opts) { return compute('refreshFolder', folder, opts); },
+    async dropFolderRows(folder, opts) { return compute('dropFolderRows', folder, opts); },
+    async releaseLiveSession(id) {
+      if (terminated || closing) throw new Error('writer is closing');
+      return commandScope.run(owner, () => admit(() => compute('releaseLiveSession', id)));
     },
-    async toggleStar(sessionId) { return backend.toggleStar(sessionId); },
-    async setArchived(sessionId, archived) { return backend.setArchived(sessionId, archived); },
-    async renameSession(sessionId, name) {
-      backend.setName(sessionId, name || null);
-      const cached = backend.getCachedSession(sessionId);
-      backend.updateSearchTitle(sessionId, 'session', (name ? name + ' ' : '') + (cached?.summary || ''));
-      return { name: name || null };
+    async writeScannedFolder(result, unverified) { return compute('writeScannedFolder', result, unverified); },
+    async writeScannedFolderPartial(result) { return compute('writeScannedFolderPartial', result); },
+    async applyProjectsWorkerEffects(result) {
+      if (result.effects?.length === 0 && result.keptLiveRows?.length === 0) return;
+      return compute('applyProjectsWorkerEffects', result);
     },
-    async deleteCachedSession(sessionId) { return backend.deleteCachedSession(sessionId); },
-    async deleteSearchSession(sessionId) { return backend.deleteSearchSession(sessionId); },
-    async deleteCachedFolder(folder) { return backend.deleteCachedFolder(folder); },
-    async deleteSearchFolder(folder) { return backend.deleteSearchFolder(folder); },
-    async deleteSearchType(type) { return backend.deleteSearchType(type); },
-    async applySearchFileBatch(type, deletes, entries) { return backend.applySearchFileBatch(type, deletes, entries); },
-    async setCachedEntrypoints(pairs) { return backend.setCachedEntrypoints(pairs); },
-    async setCachedCustomTitles(pairs) { return backend.setCachedCustomTitles(pairs); },
-    async setCachedContinuationIndex(sessionId, index) { return backend.setCachedContinuationIndex(sessionId, index); },
-    async setInitialScanComplete() { return backend.setInitialScanComplete(); },
-    async refreshFolder(folder, opts) { return cache.refreshFolder(folder, opts); },
-    async dropFolderRows(folder, opts) { return cache.dropFolderRows(folder, opts); },
-    async releaseLiveSession(sessionId) { return cache.releaseLiveSession(sessionId); },
-    async writeScannedFolder(result, unverifiedLocalFolder) { return cache.writeScannedFolder(result, unverifiedLocalFolder); },
-    async writeScannedFolderPartial(result) { return cache.writeScannedFolderPartial(result); },
-    async applyProjectsWorkerEffects(result) { return cache.applyProjectsWorkerEffects(result); },
-    async buildProjectsFromCache(showArchived) { return cache.buildProjectsFromCache(showArchived); },
     async archiveProjectFolders(groups, opts, deps) {
-      const registry = scheduleRegistry(backend.getSetting, backend.setSetting, deps.seedProjects);
-      return archive.archiveProjectFolders(groups, opts, { ...deps, ...cacheDeps(),
-        buildProjects: () => deps.mergeProjects(cache.buildProjectsFromCache(true)),
-        plan: groups => archive.archivePlanForGroups(groups, {
-          registered: registry.list(), scan: deps.scan, realpath: deps.realpath,
-        }),
-      });
+      await ready;
+      if (!backend.isInitialScanComplete()) return { error: 'indexing' };
+      const targets = archive.validArchiveGroups(groups).map(group => ({ group, alias: parseFolderKey(group.folderKey).alias }));
+      const disabled = [], failed = [];
+      try {
+        const diskIds = [];
+        for (const { group, alias } of targets) {
+          const folders = new Set([alias ? alias + '::' + encodeProjectPath(group.projectPath) : encodeProjectPath(group.projectPath)]);
+          for (const row of backend.getAllCached()) if (row.projectPath === group.projectPath && parseFolderKey(row.folder).alias === alias) folders.add(row.folder);
+          const ids = [];
+          for (const folder of folders) {
+            const dir = cache.resolveFolderDir(folder);
+            if (!dir || !fs.existsSync(dir)) continue;
+            await writer.refreshFolder(folder);
+            for (const file of fs.readdirSync(dir)) if (file.endsWith('.jsonl')) ids.push(file.slice(0, -6));
+          }
+          diskIds.push(ids);
+        }
+        const projects = deps.mergeProjects(await writer.buildProjectsFromCache(true));
+        const now = deps.now();
+        const offers = backend.getSetting('scheduleReenableOffers') || {};
+        const entries = targets.map(({ group, alias }, i) => {
+          const entry = archive.archivedEntry(alias, group.projectPath);
+          const disabledFiles = (offers[entry]?.disabledSchedules || []).filter(file => {
+            try { return require('./schedule-runner').parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.enabled === 'false'; } catch { return false; }
+          });
+          return { entry, disabledFiles, record: { archivedAt: now,
+            knownSessionIds: archive.knownIdsForGroup({ projects, activeSessions: deps.activeSessions, diskIds: diskIds[i], alias, projectPath: group.projectPath }) } };
+        });
+        const accepted = await request('beginArchive', entries);
+        const registered = await writer.scheduleRegistry(deps.seedProjects).list();
+        const completed = {};
+        for (const { group, alias } of targets) {
+          const entry = archive.archivedEntry(alias, group.projectPath);
+          completed[entry] = [];
+          for (const schedule of archive.archivePlanForGroups([group], { registered, scan: deps.scan, realpath: deps.realpath })) {
+            if (!schedule.disableable || !opts?.disableSchedules?.includes(schedule.filePath)) continue;
+            let result;
+            try { result = deps.setEnabled(schedule.filePath, false, { projectRoot: group.projectPath }); }
+            catch (error) { result = { error: error.message }; }
+            if (result.ok) { completed[entry].push(schedule.filePath); disabled.push(schedule.name); }
+            else failed.push({ name: schedule.name, error: result.error });
+          }
+        }
+        const completedArchive = await request('completeArchive', accepted, completed);
+        deps.notify();
+        if (!completedArchive) return { error: 'archive changed before schedule completion', disabled };
+        return { ok: true, disabled, failed };
+      } catch (error) { return { error: error.message, disabled }; }
     },
     async applyAndPersistArchived(projects, showArchived) {
-      return archive.applyAndPersistArchived(projects, showArchived, settings);
-    },
-    async clearArchivedEntry(alias, projectPath) {
-      return archive.clearArchivedEntry(backend.getSetting, backend.setSetting, alias, projectPath);
+      const kept = await request('applyAndPersistArchived', projects, showArchived);
+      const offers = backend.getSetting('scheduleReenableOffers') || {};
+      for (const project of kept) {
+        const offer = offers[archive.archivedEntry(project.remoteAlias || null, project.projectPath)];
+        const names = (offer?.disabledSchedules || []).map(file => {
+          try { return require('./schedule-runner').parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.name || path.basename(file); } catch { return null; }
+        }).filter(Boolean);
+        if (names.length) project.reenableOffer = offer.failed?.length ? { names, failed: offer.failed } : { names };
+      }
+      return kept;
     },
     async reenableOfferedSchedules(projectPath, folderKey, deps) {
-      return archive.reenableOfferedSchedules(projectPath, folderKey, { ...deps, ...settings });
+      if (typeof projectPath !== 'string' || projectPath === '') return { error: 'invalid project path' };
+      const entry = archive.archivedEntry(parseFolderKey(folderKey).alias, projectPath);
+      const offer = await request('beginOffer', entry);
+      if (!offer) return { ok: true, enabled: [], failed: [] };
+      const result = (deps.reenable || archive.reenableScheduleFiles)(offer.disabledSchedules, projectPath);
+      const completed = await request('completeOffer', entry, offer, result);
+      deps.notify();
+      if (!completed) return { error: 'schedule offer changed before completion', enabled: result.enabled,
+        failed: result.failed.map(f => ({ name: f.name, error: f.error })) };
+      return { ok: true, enabled: result.enabled, failed: result.failed.map(f => ({ name: f.name, error: f.error })) };
     },
     async dismissReenableOffer(projectPath, folderKey, deps) {
-      return archive.dismissReenableOffer(projectPath, folderKey, { ...deps, ...settings });
+      const result = await request('dismissReenableOffer', projectPath, folderKey);
+      if (result.ok) deps.notify();
+      return result;
     },
-    async hideProject(entry, kind) {
-      const global = backend.getSetting('global') || {};
-      const hidden = global.hiddenProjects || [];
-      if (kind === 'archive') global.hiddenProjects = [...new Set([...hidden, entry])];
-      else { if (!hidden.includes(entry)) hidden.push(entry); global.hiddenProjects = hidden; }
-      global.hiddenProjectKinds = { ...global.hiddenProjectKinds, [entry]: kind };
-      backend.setSetting('global', global);
+    async cleanupWorktree(projectPath) { return request('cleanupWorktree', projectPath); },
+    async remapProjectTranscripts(args) {
+      await request('recordRemap', args.folder, args.newPath);
+      remapProjectTranscripts({ ...args, getSetting: () => null, setSetting() {} });
+      await request('completeRemap', args.folder, args.newPath);
     },
-    async unhideProject(entry, alias, projectPath) {
-      archive.clearArchivedEntry(backend.getSetting, backend.setSetting, alias, projectPath);
-      const global = backend.getSetting('global') || {};
-      global.hiddenProjects = (global.hiddenProjects || []).filter(p => p !== entry);
-      global.hiddenProjectKinds = { ...global.hiddenProjectKinds };
-      delete global.hiddenProjectKinds[entry];
-      backend.setSetting('global', global);
-    },
-    async revealAddedProject(projectPath) {
-      const global = backend.getSetting('global') || {};
-      if (global.hiddenProjects?.includes(projectPath)) {
-        global.hiddenProjects = global.hiddenProjects.filter(p => p !== projectPath);
-        if (global.hiddenProjectKinds) delete global.hiddenProjectKinds[projectPath];
-        backend.setSetting('global', global);
-      }
-      archive.clearArchivedEntry(backend.getSetting, backend.setSetting, null, projectPath);
-    },
-    async cleanupWorktree(normalizedPath, log) {
-      let removed = 0;
-      try {
-        for (const row of backend.getAllCached()) {
-          if (row.projectPath !== normalizedPath) continue;
-          backend.deleteCachedSession(row.sessionId);
-          backend.deleteSearchSession(row.sessionId);
-          removed++;
-        }
-      } catch (err) { log.warn('[delete-worktree] DB cleanup error:', err.message); }
-      try {
-        const global = backend.getSetting('global') || {};
-        if (Array.isArray(global.hiddenProjects) && global.hiddenProjects.includes(normalizedPath)) {
-          global.hiddenProjects = global.hiddenProjects.filter(p => p !== normalizedPath);
-          if (global.hiddenProjectKinds) delete global.hiddenProjectKinds[normalizedPath];
-          backend.setSetting('global', global);
-        }
-      } catch {}
-      try { archive.clearArchivedEntry(backend.getSetting, backend.setSetting, null, normalizedPath); } catch {}
-      try {
-        const folder = encodeProjectPath(normalizedPath);
-        backend.deleteCachedFolder(folder);
-        backend.deleteSearchFolder(folder);
-      } catch {}
-      return removed;
-    },
-    async dropRemoteFolder(folderKey) {
-      backend.deleteCachedFolder(folderKey);
-      backend.deleteSearchFolder(folderKey);
-      const pending = backend.getSetting('bridge_uuid_reindex_folders');
-      if (Array.isArray(pending) && pending.includes(folderKey)) {
-        backend.setSetting('bridge_uuid_reindex_folders', pending.filter(key => key !== folderKey));
-      }
-    },
-    async remapProjectTranscripts(args) { return remapProjectTranscripts({ ...args, ...settings }); },
     scheduleRegistry(seed) {
-      const registry = scheduleRegistry(backend.getSetting, backend.setSetting, seed);
-      return {
-        async list() { return registry.list(); },
-        async add(projectPath) { return registry.add(projectPath); },
-        async remove(projectPath) { return registry.remove(projectPath); },
+      const call = async (action, projectPath) => {
+        await ready;
+        return request('scheduleRegistry', action, backend.getSetting('scheduleProjects') == null ? seed() : [], projectPath);
       };
+      return { list: () => admit(() => call('list')), add: p => admit(() => call('add', p)), remove: p => admit(() => call('remove', p)) };
     },
     createWhatsNew(options) {
-      const whatsNew = createWhatsNew({ ...options, ...settings });
+      const menu = createWhatsNew({ ...options, getSetting: () => null, setSetting() {} });
       return {
-        async startup() { return whatsNew.startup(); },
-        async dismissed() { return whatsNew.dismissed(); },
-        forMenu: whatsNew.forMenu,
+        startup: () => admit(async () => {
+          const { readChangelog, log, ...data } = options;
+          let text;
+          try { text = readChangelog(); } catch (error) { log.warn('[whats-new] ' + error.message); return null; }
+          const result = await request('whatsNewStartup', data, text);
+          if (result.error) log.warn('[whats-new] ' + result.error);
+          return result.sections ? { version: data.currentVersion, sections: result.sections } : null;
+        }),
+        dismissed: () => admit(() => request('patchGlobal', { lastSeenVersion: options.currentVersion })),
+        forMenu: menu.forMenu,
       };
     },
-    async closeDb() { return backend.closeDb(); },
+    async closeDb() {
+      if (closing) return closing;
+      accepting = false;
+      closing = (async () => {
+        await ready;
+        while (pending.size) await Promise.allSettled([...pending]);
+        backend.closeDb();
+        await client.close();
+      })();
+      return closing;
+    },
+    beginShutdown(drain) {
+      accepting = false;
+      return commandScope.run(owner, () => Promise.resolve().then(drain));
+    },
+    terminate() {
+      accepting = false;
+      terminated = true;
+      return client.terminate();
+    },
+    async drain() {
+      await ready;
+      await Promise.allSettled([...pending]);
+      await client.request('drain');
+    },
+    measurements: () => request('measurements'),
   };
+  for (const name of ['setSetting', 'deleteSetting', 'toggleStar', 'setArchived', 'deleteCachedSession',
+    'deleteSearchSession', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'applySearchFileBatch',
+    'setCachedEntrypoints', 'setCachedCustomTitles', 'setCachedContinuationIndex', 'setInitialScanComplete',
+    'clearArchivedEntry', 'hideProject', 'unhideProject', 'revealAddedProject', 'dropRemoteFolder',
+    'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries', 'setName']) writer[name] = (...args) => request(name, ...args);
+  for (const [name, fn] of Object.entries(writer)) {
+    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate', 'releaseLiveSession'].includes(name)) continue;
+    writer[name] = (...args) => admit(() => fn(...args));
+  }
+  return writer;
 }
 
 module.exports = { createSessionIndexWriter };

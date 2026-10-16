@@ -5,6 +5,7 @@ const RECONCILE_TIMEOUT_MS = 5 * 60 * 1000;
 
 function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3 }) {
   let worker = null;
+  const terminations = new Set();
   let stopped = false;
   let active = null;
   let pending = null;
@@ -25,7 +26,11 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
     const old = worker;
     worker = null;
     active = null;
-    if (old) Promise.resolve(old.terminate()).catch(() => {});
+    if (old) {
+      const terminated = Promise.resolve().then(() => old.terminate());
+      terminations.add(terminated);
+      terminated.then(() => terminations.delete(terminated), () => {});
+    }
   }
 
   function fail(error) {
@@ -52,7 +57,11 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
         const finish = acknowledgment => {
           if (active === job) active.version = acknowledgment?.version ?? snapshot().version;
         };
-        if (applied?.then) return applied.then(finish).catch(fail);
+        if (applied?.then) return applied.then(finish).catch(error => {
+          if (active !== job) return;
+          if (error.code === 'WRITER_STALE') job.stale = true;
+          else fail(error);
+        });
         return finish();
       }
       const job = active;
@@ -75,7 +84,14 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
         dispatchPending();
       };
       const applied = !stale && apply(result);
-      if (applied?.then) return applied.then(finish).catch(fail);
+      if (applied?.then) return applied.then(finish).catch(error => {
+        if (active !== job) return;
+        if (error.code === 'WRITER_STALE') {
+          job.stale = true;
+          return receive(message);
+        }
+        fail(error);
+      });
       finish();
     } catch (error) { fail(error); }
   }
@@ -125,9 +141,10 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
     });
   }
 
-  function shutdown() {
+  async function shutdown() {
     stopped = true;
     fail(new Error('projects worker shut down'));
+    await Promise.all([...terminations, receiving?.catch(() => {})].filter(Boolean));
   }
 
   return { request, shutdown };

@@ -7,20 +7,23 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { parse } = require('espree');
 const archive = require('../archived-projects');
-const { createSessionIndexWriter } = require('../session-index-writer');
+const { memoryWriter } = require('./fixtures/writer-memory.cjs');
 const { encodeProjectPath } = require('../encode-project-path');
 
 const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
 const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'script', range: true });
 
 function handler(name, deps) {
-  const registration = ast.body.find(node => node.type === 'ExpressionStatement'
+  const nodes = [];
+  function walk(node) { if (!node || typeof node !== 'object') return; nodes.push(node); for (const value of Object.values(node)) { if (Array.isArray(value)) value.forEach(walk); else if (value && typeof value === 'object') walk(value); } }
+  walk(ast);
+  const registration = nodes.find(node => node.type === 'ExpressionStatement'
     && node.expression.callee?.object?.name === 'ipcMain'
     && node.expression.arguments[0]?.value === name);
   assert.ok(registration, name);
   const callback = registration.expression.arguments[1];
   return vm.runInNewContext(`(${source.slice(...callback.range)})`, {
-    ...deps, writer: createSessionIndexWriter(deps),
+    ...deps, writer: memoryWriter(deps),
   });
 }
 
