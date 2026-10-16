@@ -151,6 +151,25 @@ test('archive and action failure notices use labels while notice IDs keep the al
   assert.match(failure.textContent, /VPS:\/srv\/app/);
 });
 
+test('Archive folder names the host label in its running-session choice and stops with the alias', async t => {
+  const h = await setup(t);
+  const calls = [];
+  h.window.api.getProjectArchivePlan = async () => ({ schedules: [] });
+  h.window.api.remoteStopSession = async (...args) => { calls.push(args); return { ok: true }; };
+  h.window.api.archiveSession = async () => ({ archived: 1 });
+  h.window.api.archiveProject = async () => ({ ok: true, disabled: [], failed: [] });
+  const button = h.document.querySelector('.project-archive-btn');
+  const done = button.onclick(new h.window.MouseEvent('click'));
+  await settle();
+  const choice = h.document.querySelector('[data-choice-id="archiveSessions"]').closest('label');
+  assert.equal(choice.textContent, 'Archive the 1 session — running ones are stopped first (on VPS)');
+  assert.doesNotMatch(choice.textContent, /planificator/);
+  h.document.querySelector('.choice-dialog-confirm').click();
+  await done;
+  assert.deepEqual(calls, [[alias, h.session.sessionId]]);
+  assert.equal(h.project.folder, folder);
+});
+
 async function settingsPanel(h) {
   for (const id of ['settings-viewer', 'settings-viewer-title', 'settings-viewer-body', 'terminal-area',
     'terminal-header', 'stats-viewer', 'memory-viewer', 'jsonl-viewer']) {
@@ -179,6 +198,28 @@ test('Settings displays archived host labels and unarchives with the original al
   list.querySelector('button').click();
   await settle();
   assert.deepEqual(calls, ['planificator::/srv/<app>']);
+});
+
+test('Settings refreshes archived host names while editing the label and preserves the unarchive key', async t => {
+  const h = await setup(t);
+  h.settings.hiddenProjects = ['planificator::/srv/<app>'];
+  await settingsPanel(h);
+  const list = h.document.querySelector('#sv-archived-projects');
+  assert.match(list.textContent, /VPS::\/srv\/<app>/);
+  const input = h.document.querySelector('.rh-label');
+  input.value = 'Renamed VPS <img src=x>';
+  input.dispatchEvent(new h.window.Event('input', { bubbles: true }));
+  assert.match(list.textContent, /Renamed VPS <img src=x>::\/srv\/<app>/);
+  assert.equal(list.querySelector('img'), null);
+  input.value = '   ';
+  input.dispatchEvent(new h.window.Event('input', { bubbles: true }));
+  assert.match(list.textContent, /planificator::\/srv\/<app>/);
+  const calls = [];
+  h.window.api.unarchiveProject = async key => { calls.push(key); return { ok: true }; };
+  list.querySelector('button').click();
+  await settle();
+  assert.deepEqual(calls, ['planificator::/srv/<app>']);
+  assert.deepEqual(h.settings.hiddenProjects, ['planificator::/srv/<app>']);
 });
 
 test('Settings Check host uses the edited label but keeps the trimmed SSH alias for IPC', async t => {

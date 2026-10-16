@@ -1257,7 +1257,7 @@ async function archiveProjectFolder(project, button) {
         sessions.filter(s => s.remoteAlias && isRemoteSessionAlive(s)).map(s => s.remoteAlias)
       )];
       let label = `Archive the ${counted(sessions.length, 'session')}`;
-      if (aliasesToStop.length > 0) label += ` — running ones are stopped first (on ${aliasesToStop.join(', ')})`;
+      if (aliasesToStop.length > 0) label += ` — running ones are stopped first (on ${aliasesToStop.map(alias => remoteHostLabel(alias)).join(', ')})`;
       choices.push({ id: 'archiveSessions', label, checked: true, rememberKey: 'archiveFolder.archiveSessions' });
     }
     if (disableable.length > 0) {
