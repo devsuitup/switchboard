@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "450b329ec623a447c2e4c4cba45db75aa531a10a",
+  "measurements": [
+    {
+      "sequence": 1,
+      "canary": "C1",
+      "status": "FAIL",
+      "measuredAt": "2026-10-17T16:56:40.554Z",
+      "cli": {
+        "version": "2.1.301 (Claude Code)",
+        "build": "unknown",
+        "sha256": "bc1aad9982c7b59c7d889ff92595d61cf46e0a6eae074cb551d932a989bcd222"
+      },
+      "harnessRevision": "4fa030c0138bd049dbaa065b83eddd46069594320d3f99721bae5fda79ce909a",
+      "evidencePath": "docs/evidence/session-capabilities/linux-c1-450b329/0001-C1-b7920558/evidence.json",
+      "evidenceSha256": "df92764aacf31328a2989391ce6d4481719267952d5a4c78d5c1987489c536a9",
+      "capabilities": {
+        "singleTurnDelivery": false,
+        "literalTranscript": false,
+        "eligibleConfirmation": false
+      },
+      "acceptedSpecBranch": null,
+      "execution": {
+        "label": "linux-unix-pty",
+        "platform": "linux",
+        "backend": "unix-pty"
+      }
+    }
+  ]
+}
