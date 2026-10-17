@@ -247,6 +247,8 @@ test('a Windows table refresh that rejects a reused sidebar PID pushes projects-
   assert.deepEqual(h.sent, ['projects-changed']);
   assert.equal(statusChanges, 1);
   clock += 3001;
+  assert.equal(cli.getSidebarDescriptors().length, 0, 'a rejected PID stays excluded while its table refresh is pending');
+  assert.equal(statusChanges, 1, 'table expiry does not notify projects');
   await cli.refreshProcessTable();
   assert.equal(h.sent.length, 1);
   assert.equal(statusChanges, 1);
@@ -258,6 +260,52 @@ test('a Windows table refresh that rejects a reused sidebar PID pushes projects-
   h.timers.shift()();
   assert.deepEqual(h.sent, ['projects-changed', 'projects-changed']);
 });
+
+for (const failure of ['throws', 'null', 'empty']) {
+  test(`a ${failure} process-table read preserves sidebar exclusions without projects-changed`, async t => {
+    let clock = Date.now() + 10000;
+    const procStart = '134000000000000000';
+    let failed = false;
+    let created = '134000000001000000';
+    const h = bootMain(t, {
+      descriptor: { procStart, pidDomain: 'win32:anchor', kind: 'bg', jobId: 'aaaaaaaa' },
+      platform: 'win32', readParentPid: undefined, readProcStart: () => procStart, now: () => clock,
+      readProcessTable: async () => {
+        if (!failed) return new Map([[4242, { ppid: 1, created }]]);
+        if (failure === 'throws') throw new Error('process table unavailable');
+        return failure === 'null' ? null : new Map();
+      },
+    });
+    await cli.refreshProcessTable();
+    assert.equal(cli.getSidebarDescriptors().length, 0);
+    assert.deepEqual(h.sent, ['projects-changed']);
+    h.timers.shift()();
+    let statusChanges = 0;
+    t.after(cli.onStatusesChanged(() => { statusChanges++; }));
+    failed = true;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      clock += cli.PROCESS_TABLE_TTL_MS + 1;
+      await cli.refreshProcessTable();
+      assert.equal(statusChanges, 0, 'an unreadable table must not change the last stale verdict');
+      assert.equal(cli.getSidebarDescriptors().length, 0, 'the rejected row stays excluded after a failed read');
+      assert.deepEqual(h.sent, ['projects-changed']);
+      assert.equal(h.timers.length, 0, 'no extra projects reload is queued');
+      failed = false;
+      clock += cli.PROCESS_TABLE_TTL_MS + 1;
+      await cli.refreshProcessTable();
+      assert.equal(statusChanges, 0, 'recovering the same stale table does not notify projects');
+      assert.equal(cli.getSidebarDescriptors().length, 0);
+      failed = true;
+    }
+    failed = false;
+    created = procStart;
+    clock += cli.PROCESS_TABLE_TTL_MS + 1;
+    await cli.refreshProcessTable();
+    assert.equal(cli.getSidebarDescriptors().length, 1, 'a successful fresh verdict can restore the row');
+    assert.equal(statusChanges, 1);
+    assert.deepEqual(h.sent, ['projects-changed', 'projects-changed']);
+  });
+}
 
 test('576r2 minor 1: unchanged descriptor writes do not push but status changes and new sessions do', { timeout: 8000 }, async t => {
   const h = bootMain(t);
