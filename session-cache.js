@@ -13,6 +13,12 @@ class Worker extends NativeWorker {
 }
 async function shutdownProducers() {
   stopping = true;
+  clearTimeout(_activityTimer);
+  clearTimeout(_notifyTimer);
+  _activityTimer = null;
+  _notifyTimer = null;
+  _notifyCooldown = false;
+  _notifyCauses.clear();
   await Promise.all([...scanWorkers].map(worker => worker.terminate()));
   await Promise.allSettled([...subsetScans, populatePromise, entrypointBackfill, customTitleBackfill, repairPromise].filter(Boolean));
 }
@@ -28,6 +34,7 @@ const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp } = require('./session-continuations');
 const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
 const { isHostedJob } = require('./bg-agents-roster');
+const { state: TRACE, trace } = require('./activity-trace');
 
 /**
  * Session cache module.
@@ -199,14 +206,16 @@ function dropFolderRows(folder, { search = false } = {}) {
   const rows = getCachedByFolder(folder);
   const dropped = rows.filter(r => !keepIfRunning(r.sessionId, folder));
   if (dropped.length === rows.length) {
+    const hadProject = !!getFolderMeta?.(folder)?.projectPath;
     deleteCachedFolder(folder);
     if (search) deleteSearchFolder(folder);
-    return;
+    return dropped.length > 0 || hadProject;
   }
   for (const { sessionId } of dropped) {
     deleteCachedSession(sessionId);
     if (search) deleteSearchSession(sessionId);
   }
+  return dropped.length > 0;
 }
 
 function releaseLiveSession(sessionId) {
@@ -253,23 +262,39 @@ function readFolderFromFilesystem(folder) {
   return { projectPath, sessions: toUpsert };
 }
 
-/** Refresh a single folder incrementally: only re-read changed/new .jsonl files.
- *
- * @param {string} folder    folder name relative to PROJECTS_DIR
- * @param {object} [opts]
- * @param {Set<string>|null} [opts.files]  if provided, ONLY scan these on-disk
- *   relative paths within the folder instead of walking everything. Used by the
- *   fs.watch flush to avoid statSync'ing thousands of files when only a handful
- *   of subagent transcripts were appended. When null/undefined, walk the whole
- *   folder (used for bootstrap and folder-level events).
- */
+// see .ai/contexts/session-cache.md ("Watcher notification rules")
+const PROJECT_ROW_FIELDS = ['sessionId', 'folder', 'projectPath', 'summary', 'firstPrompt',
+  'created', 'slug', 'scheduleSlug', 'aiTitle', 'customTitle',
+  'parentSessionId', 'agentId', 'subagentType', 'description', 'bridgeSessionId',
+  'mergedIntoSessionId', 'entrypoint'];
+const PROJECT_META_FIELDS = ['name', 'starred', 'archived', 'nameSource', 'nameRevision'];
+const PROJECT_ACTIVITY_FIELDS = ['modified', 'fileMtime', 'messageCount'];
+
+function sidebarContinuation(row) {
+  if (row.parentSessionId || parseFolderKey(row.folder).alias !== null) return null;
+  let index;
+  try { index = JSON.parse(row.continuationIndex); } catch {}
+  if (!index) return null;
+  if (index.format !== 3 || !index.complete || index.unresolved || !Array.isArray(index.ids)
+    || index.ids.length > 1 || (row.fileMtime && index.mtime !== row.fileMtime)) return false;
+  return index.ids.map(id => String(id).toLowerCase());
+}
+
+function sidebarRowState(row) {
+  if (!row) return null;
+  const meta = getMeta(row.sessionId, true);
+  return JSON.stringify([
+    ...PROJECT_ROW_FIELDS.map(field => field === 'entrypoint' ? isSdkEntrypoint(row[field]) : row[field] || null),
+    ...PROJECT_META_FIELDS.map(field => meta?.[field] || null), sidebarContinuation(row),
+  ]);
+}
+
 function refreshFolder(folder, opts = {}) {
-  if (pendingRepairFolders().includes(folder)) return;
+  if (pendingRepairFolders().includes(folder)) return false;
   // null when the key names a host no longer declared — treated as vanished.
   const folderPath = resolveFolderDir(folder);
   if (!folderPath || !fs.existsSync(folderPath)) {
-    dropFolderRows(folder);
-    return;
+    return dropFolderRows(folder);
   }
 
   // Reuse the previously-derived projectPath when its directory still exists.
@@ -285,9 +310,9 @@ function refreshFolder(folder, opts = {}) {
   let incomplete = false;
   if (!projectPath) projectPath = deriveFolderProjectPath(folderPath, folder, () => { incomplete = true; });
   if (!projectPath) {
-    if (parseFolderKey(folder).alias === null) dropFolderRows(folder, { search: true });
+    const dropped = parseFolderKey(folder).alias === null && dropFolderRows(folder, { search: true });
     setFolderMeta(folder, null, incomplete ? 0 : getFolderIndexMtimeMs(folderPath));
-    return;
+    return !!dropped || !!knownMeta?.projectPath;
   }
 
   // Get what's currently cached for this folder.
@@ -339,7 +364,8 @@ function refreshFolder(folder, opts = {}) {
 
   let continuationBytesLeft = 1024 * 1024;
   const currentIds = new Set();
-  let changed = false;
+  let sidebarChanged = (knownMeta?.projectPath ?? null) !== projectPath;
+  let activityChanged = false;
 
   // Collect all changes first, then batch DB writes to minimize lock duration
   const sessionsToUpsert = [];
@@ -442,13 +468,11 @@ function refreshFolder(folder, opts = {}) {
         // Header read couldn't extract signal -- just bump mtime so sort order
         // stays current. fileMtime has to move too, otherwise this file stays
         // permanently "dirty" and gets re-read on every watcher flush.
+        if (cachedEntry.modified !== fileMtime || cachedEntry.fileMtime !== fileMtime) activityChanged = true;
         if (continuationIndex !== cachedEntry.continuationIndex) {
           sessionsToUpsert.push({ ...cachedEntry, continuationIndex, modified: fileMtime, fileMtime });
         } else touchCachedModified(cachedDbId, fileMtime);
-        cachedEntry.modified = fileMtime;
-        cachedEntry.fileMtime = fileMtime;
       }
-      changed = true;
       continue;
     }
 
@@ -467,7 +491,6 @@ function refreshFolder(folder, opts = {}) {
       currentIds.add(s.sessionId);
       newFileReads.push(s);
     }
-    changed = true;
   }
 
   // Remove sessions whose .jsonl files were deleted. Skip in targeted mode --
@@ -480,7 +503,6 @@ function refreshFolder(folder, opts = {}) {
     for (const sessionId of cachedMap.keys()) {
       if (!currentIds.has(sessionId) && !keepIfRunning(sessionId, folder)) {
         sessionsToDelete.push(sessionId);
-        changed = true;
       }
     }
   } else {
@@ -492,7 +514,6 @@ function refreshFolder(folder, opts = {}) {
       try { fs.statSync(filePath); } catch {
         if (keepIfRunning(dbId, folder)) continue;
         sessionsToDelete.push(dbId);
-        changed = true;
       }
     }
   }
@@ -535,6 +556,9 @@ function refreshFolder(folder, opts = {}) {
   // to close.
   sessionsToDelete.push(...mergeDeletes);
 
+  const updatedRows = new Map(sessionsToUpsert.map(row => [row.sessionId, row]));
+  const beforeRows = new Map([...updatedRows.keys()].map(id => [id, sidebarRowState(cachedMap.get(id))]));
+
   // Batch all DB writes to reduce lock contention
   if (sessionsToUpsert.length > 0) {
     stripBridgeEvidence(sessionsToUpsert);
@@ -554,12 +578,17 @@ function refreshFolder(folder, opts = {}) {
   }
   for (const sessionId of sessionsToDelete) {
     if (keepIfRunning(sessionId, folder)) continue;
+    if (cachedMap.has(sessionId)) sidebarChanged = true;
     deleteCachedSession(sessionId);
     deleteSearchSession(sessionId);
   }
 
   // Update folder mtime
   setFolderMeta(folder, projectPath, getFolderIndexMtimeMs(folderPath));
+  if (sidebarChanged || [...updatedRows].some(([id, row]) => beforeRows.get(id) !== sidebarRowState(row))) return true;
+  if (activityChanged || [...updatedRows].some(([id, row]) =>
+    PROJECT_ACTIVITY_FIELDS.some(field => row[field] !== cachedMap.get(id)?.[field]))) return 'activity';
+  return false;
 }
 
 // see .ai/contexts/session-cache.md ("Projects query worker")
@@ -623,7 +652,7 @@ function backfillEntrypoints() {
         setImmediate(() => step().catch(reject));
         return;
       }
-      if (sdkFound) notifyRendererProjectsChanged();
+      if (sdkFound) notifyRendererProjectsChanged('entrypoint-backfill');
       resolve();
     };
     step().catch(reject);
@@ -662,7 +691,7 @@ function backfillCustomTitles() {
         if (settled) return;
         try {
           await writer.setCachedCustomTitles(pairs.map(pair => ({ ...pair, promoteName: !hasCollisionName(pair.sessionId) })));
-          if (pairs.length) notifyRendererProjectsChanged();
+          if (pairs.length) notifyRendererProjectsChanged('title-backfill');
         } catch (err) {
           log.warn(`Title backfill failed: ${err.message}`);
           worker.terminate();
@@ -679,7 +708,7 @@ function backfillCustomTitles() {
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
 function revealIfSdkSession(sessionId) {
   const row = getCachedSession ? getCachedSession(sessionId) : null;
-  if (row && isSdkEntrypoint(row.entrypoint)) notifyRendererProjectsChanged();
+  if (row && isSdkEntrypoint(row.entrypoint)) notifyRendererProjectsChanged('sdk-reveal');
 }
 
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
@@ -923,27 +952,49 @@ function buildProjectsFromCache(showArchived) {
 }
 
 
-// Throttle projects-changed IPC: live sessions appending JSONL trigger a flush
-// every ~500ms; without throttling the renderer re-runs getProjects + morphdom
-// over 100+ items at that cadence, producing visible flicker. Leading-edge fire
-// + trailing flush so the first change is instant but subsequent bursts coalesce.
+// see .ai/contexts/session-cache.md ("Watcher notification rules")
 const NOTIFY_THROTTLE_MS = 1500;
+const ACTIVITY_NOTIFY_MIN_MS = 30000;
 let _notifyCooldown = false;
-let _notifyPending = false;
-function notifyRendererProjectsChanged() {
-  if (_notifyCooldown) { _notifyPending = true; return; }
+let _notifyTimer = null;
+let _activityTimer = null;
+const _notifyCauses = new Set();
+function notifyRendererProjectsChanged(cause) {
+  if (stopping) return;
+  if (cause === 'activity') {
+    if (_activityTimer === null) {
+      _activityTimer = setTimeout(() => {
+        _activityTimer = null;
+        _notifyCauses.add('activity');
+        if (!_notifyCooldown) sendProjectsChanged();
+      }, ACTIVITY_NOTIFY_MIN_MS);
+      _activityTimer.unref?.();
+    }
+    return;
+  }
+  _notifyCauses.delete('activity');
+  _notifyCauses.add(cause);
+  if (_notifyCooldown) return;
+  sendProjectsChanged();
+}
+
+function sendProjectsChanged() {
+  clearTimeout(_activityTimer);
+  _activityTimer = null;
+  const cause = [..._notifyCauses];
+  _notifyCauses.clear();
   const mainWindow = getMainWindow();
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('projects-changed');
+    mainWindow.webContents.send('projects-changed', { cause });
+    if (TRACE.on) trace('projects.changed', null, { cause });
   }
   _notifyCooldown = true;
-  setTimeout(() => {
+  _notifyTimer = setTimeout(() => {
+    _notifyTimer = null;
     _notifyCooldown = false;
-    if (_notifyPending) {
-      _notifyPending = false;
-      notifyRendererProjectsChanged();
-    }
+    if (_notifyCauses.size) sendProjectsChanged();
   }, NOTIFY_THROTTLE_MS);
+  _notifyTimer.unref?.();
 }
 
 function sendStatus(text, type) {
@@ -1080,7 +1131,7 @@ function reindexRepairedFolders() {
     if (!result.ok) {
       log?.warn(`Bridge repair re-index failed: ${result.error}`);
     }
-    if (getMainWindow()) notifyRendererProjectsChanged();
+    if (getMainWindow()) notifyRendererProjectsChanged('bridge-repair');
     return result;
   })().catch(err => {
     log?.warn(`Bridge repair re-index failed: ${err.message}`);
@@ -1294,7 +1345,7 @@ function populateCacheViaWorker({ force = false } = {}) {
 
           sendStatus(`Scanning projects (${scannedFolders}/${totalFolders})…`, 'active');
           reportProgress(false);
-          notifyRendererProjectsChanged();
+          notifyRendererProjectsChanged('scan');
           return;
         }
 
@@ -1316,7 +1367,7 @@ function populateCacheViaWorker({ force = false } = {}) {
         // Clear status after a few seconds
         setTimeout(() => sendStatus(''), 5000);
         reportProgress(true);
-        notifyRendererProjectsChanged();
+        notifyRendererProjectsChanged('scan');
         settle();
       }).catch(err => {
         unknownFailure = true;

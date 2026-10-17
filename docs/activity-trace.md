@@ -64,6 +64,34 @@ The histogram records full timer intervals, so its idle floor is at least
 it for a bounded measurement, then restart without the switch. Disabling
 tracing disables the armed histogram immediately.
 
+### Renderer long frames
+
+While tracing is on, `renderer.longframe` records frames lasting at least 50 ms.
+It uses `PerformanceObserver` with `long-animation-frame`, falling back to
+`longtask` when that entry type is unavailable. `durationMs` is the entry's
+duration; `blockingMs` is Chromium's `blockingDuration` for a long animation
+frame, or the task duration beyond 50 ms for the fallback (an estimate, not a
+frame measurement). No observer is constructed or capability queried while
+off. Disabling tracing disconnects it; enabling creates a fresh observer
+without buffered entries. There is no timer, polling or work at idle.
+
+### Projects reload causes
+
+`projects.changed` records an actual `projects-changed` emission. Its `cause`
+is an array of distinct caller labels: `watcher`, `bg-jobs`, `cli-status`,
+`remote`, `archive`, `project-added`, `project-deleted`, `project-remap`,
+`worktree-deleted`, `session-exit`, `session-attach`, `entrypoint-backfill`,
+`title-backfill`, `sdk-reveal`, `bridge-repair`, `scan`, or `activity`. Structural
+changes are sent immediately; calls within the 1.5-second throttle window are deduplicated
+into the trailing emission's array, in arrival order. The leading cause belongs
+to its own emission. The IPC carries the same array. Notification conditions
+outside the local transcript watcher are unchanged. A watcher flush changing
+only `modified`, `fileMtime`, or `messageCount` coalesces for at least 30 seconds
+before an emission with cause `activity`. Repeated activity does not restart
+that timer. A structural emission satisfies pending activity and cancels its
+timer, so it does not cause a second reload. Both timers are unref'd and cleared
+on shutdown.
+
 ### Turning it off, and on again
 
 Turning the trace off ends the write stream, which flushes what was already
@@ -150,12 +178,14 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `poll.snapshot` | `get-active-sessions` answers | `count`, `entries` |
 | `trace.prune-failed` | An old file could not be deleted | `file`, `error`, `retained` |
 | `main.loop` | Once per second while tracing is on | `lagMs`; `maxMs`, `p99Ms` only with `SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` at startup |
+| `projects.changed` | A throttled projects notification is sent | `cause` (distinct caller labels coalesced across the throttle window) |
 | `app.quit` | Last line of a clean shutdown | — |
 
 ### Renderer
 
 | `cat` | Fires when | Key fields |
 |---|---|---|
+| `renderer.longframe` | An observed frame/task lasts at least 50 ms, while tracing is on | `durationMs`, `blockingMs` |
 | `recv.*` | An IPC event arrives (`cli-busy-state`, `terminal-notification`, `session-forked`, `session-detected`, `process-exited`, `subagent-spawned`, `subagent-completed`) | per event |
 | `recv.subagent-spawned` | `noteSubagentActivity()` recorded a sighting — the single write path into `activeSubagentsByParent`. `applied` says whether it changed anything. `applied:false` with `reason:"heartbeat-for-untracked-agent"` is a heartbeat dropped before that function (traced from `onSubagentSpawned`, so without `source`) | `agentId`, `applied`, `source` (`local-ipc` / `attached-ipc` / `remote-watch` / `local-transcript`), `bootstrap`, `heartbeat` (both IPC sources only), `from` |
 | `recv.subagent-completed` | A source contribution was released from `activeSubagentsByParent`; `op:'set'` means another contribution keeps the agent tracked, and `op:'delete'` means its last contribution was removed. `via` says how: `ipc` (the `subagent-completed` event releases both `local-ipc` and `attached-ipc`), `ttl` (the 60 s sweep — the only completion `remote-watch` and `local-transcript` get), or `parent-cleared` (source-scoped PTY cleanup, or all-source cleanup on confirmed remote stop). Parent cleanup emits these releases, not a `store.mutate` with `op:'delete-parent'` | `agentId`, `source`, `op`, `from`, `to`, `via` |

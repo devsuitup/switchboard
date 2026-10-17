@@ -81,7 +81,7 @@ test('job and descriptor churn keeps the job cache current without rebuilding an
     boot(dir, { sessionState });
     require('../bg-agents-ipc').init({ ipcMain: { handle() {} }, bgAgents, getMainWindow: () => null, log: silentLog });
     const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-    const projectsListener = mainSource.match(/bgAgents\.on\w+\(notifyRendererProjectsChanged\);/);
+    const projectsListener = mainSource.match(/bgAgents\.onJobsChanged\(\(\) => notifyRendererProjectsChanged\('bg-jobs'\)\);/);
     assert.ok(projectsListener);
     require('node:vm').runInNewContext(projectsListener[0], { bgAgents, notifyRendererProjectsChanged() {} });
     bgAgents.start();

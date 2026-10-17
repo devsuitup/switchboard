@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- Typing in a terminal no longer stalls while other sessions or subagents are working: their last-activity times and message counts in the sidebar now update at most every 30 seconds, while new sessions and renames still appear right away. (#694)
+
 ## v0.0.96 — 2026-10-17
 
 ### New

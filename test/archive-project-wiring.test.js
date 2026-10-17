@@ -39,7 +39,7 @@ test('archive-project: wires the real effects into archiveProjectFolders', () =>
   const deps = functionBody(read('main.js'), 'archiveDeps');
   for (const wiring of [
     /isInitialScanComplete,/, /scan: projectPath => scanSchedules\(log, \[projectPath\]\),/, /setEnabled: setScheduleEnabled,/,
-    /mergeProjects: mergePlaceholderSessions,/, /activeSessions,/, /notify: notifyRendererProjectsChanged,/,
+    /mergeProjects: mergePlaceholderSessions,/, /activeSessions,/, /notify: \(\) => notifyRendererProjectsChanged\('archive'\),/,
   ]) assert.match(deps, wiring);
   const facade = read('session-index-writer.js');
   assert.ok(facade.includes("await request('beginArchive', entries)"));
