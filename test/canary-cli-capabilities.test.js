@@ -95,6 +95,57 @@ const mutations = {
   C3: ['remove-deny', 'writable-settings', 'fake-denial'],
   C4: ['shared-descriptors', 'parent-env', 'wrong-control-leak', 'wrong-control-hidden-leak'],
 };
+test('GIVEN CLI paste envelope WHEN C1 runs THEN unwrapped body is literal and cache metadata is redacted', t => {
+  const r = run(t, ['--canary', 'C1']);
+  const evidence = data(r);
+  assert.ok(evidence.payloads.every(x => x.literal), 'wrapper must not invalidate literal payload');
+  assert.equal(r.status, 0, r.stderr);
+  for (const p of evidence.payloads) {
+    assert.equal(p.wrapperPresent, true);
+    assert.equal(p.wrapperId, '1234');
+    assert.deepEqual(p.transformations, []);
+    assert.ok(p.pasteCache.every(x => Object.keys(x).sort().join(',') === 'bytes,sha256'));
+    if (p.bytes > 4096) {
+      assert.equal(p.linkedPaste, true);
+      assert.ok(p.pasteCache.some(x => x.bytes === p.bytes && x.sha256 === p.sha256));
+    }
+  }
+});
+
+test('GIVEN TAB expanded by CLI WHEN C1 runs THEN literal fails with exact transformation', t => {
+  const r = run(t, ['--canary', 'C1', '--mutation', 'tab-to-spaces']);
+  assert.equal(r.status, 1, r.stderr);
+  const evidence = data(r);
+  assert.ok(evidence.payloads.every(x => x.literal === false));
+  assert.ok(evidence.payloads.every(x => JSON.stringify(x.transformations) === '["tab-to-spaces"]'), 'TAB expansion must be identified');
+  assert.ok(evidence.payloads.every(x => x.eligibleConfirmation));
+  assert.equal(r.ledger.measurements[0].status, 'FAIL');
+});
+
+test('GIVEN assistant persisted only on graceful exit WHEN C1 runs THEN confirmation includes final transcript', t => {
+  const r = run(t, ['--canary', 'C1', '--mutation', 'exit-flush-assistant']);
+  const evidence = data(r);
+  assert.ok(evidence.payloads.every(x => x.eligibleConfirmation), 'exit-flushed assistant must be observed');
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(evidence.processes.every(x => x.shutdown.gracefulExit && !x.shutdown.forcedKill));
+  assert.ok(evidence.payloads.every(x => x.transcriptFinalBytes > x.transcriptConfirmedBytes));
+});
+
+for (const [label, transform, expected] of [
+  ['CRLF', s => s.replaceAll('\n', '\r\n'), ['lf-to-crlf']],
+  ['trailing whitespace', s => s.replace(/ +$/gm, ''), ['trailing-whitespace-removed']],
+  ['truncation', s => s.slice(0, -4), ['truncation']],
+  ['combined transforms', s => s.replaceAll('\t', '    ').replaceAll('\n', '\r\n').replace(/ +$/gm, ''), ['tab-to-spaces', 'lf-to-crlf', 'trailing-whitespace-removed']],
+]) {
+  test(`GIVEN ${label} WHEN comparing envelope body THEN all byte changes are recorded`, t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-storage-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const payload = 'CANARY\nTAB\ttext   \nend   ';
+    const stored = harness.received({ opts: { home: root } }, { message: { content: `<pasted_content id="5678">\n${transform(payload)}\n</pasted_content id="5678">` } }, payload);
+    assert.equal(stored.literal, false);
+    assert.deepEqual(stored.transformations, expected);
+  });
+}
 for (const [canary, cases] of Object.entries(mutations)) {
   for (const mutation of cases) {
     test(`GIVEN ${canary} mutation ${mutation} WHEN dry-run THEN that canary fails`, t => {
@@ -429,6 +480,19 @@ test('GIVEN never-ready zero pid PTY WHEN deadline expires THEN owned handle is 
   await harness.stop(ctx, ctx.processes[0]);
   assert.equal(child.killed, true);
   assert.equal(ctx.processes[0].record.cleaned, true);
+});
+
+test('GIVEN unreadable bounded transcript WHEN stopping confirmed PTY THEN owned handle still exits', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-stop-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const dir = path.join(home, '.claude/projects/fixture');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'fixture.jsonl'), Buffer.alloc(16 * 1024 * 1024 + 1));
+  const proc = { id: 'fixture', isPty: true, exited: false, record: { cleaned: false, descriptorConfirmation: {} },
+    child: { kill: () => { proc.exited = true; } } };
+  await harness.stop({ opts: { dryRun: true, home } }, proc);
+  assert.equal(proc.record.cleaned, true);
+  assert.equal(proc.record.shutdown.forcedKill, true);
 });
 
 test('GIVEN delayed PTY pid WHEN launch and stop THEN match fresh identity and kill owned handle', async t => {

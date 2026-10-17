@@ -14,8 +14,8 @@ independent comparison with §5.10 remains a first-live-run prerequisite.
   ancestor-instruction boundary; never loaded by an operator's harness command.
 - test/canary-cli-capabilities.test.js: the only test file to execute.
 - test/fixtures/session-capabilities/lint.config.cjs: isolated harness lint rules.
-- .work-files/380p0c/: implementation logs, dry-run output and handoffs. Until
-  a separately authorized live run, this evidence directory contains ONLY README.md.
+- .work-files/380p0c/ and .work-files/380p0d-*.log: implementation logs and dry-run output.
+- windows-bundled/: the operator's first live C1 result, retained unchanged.
 - <out>/ledger.json or ledger.dry-run.json: schemaVersion 1, baselineHead,
   measurements with continuing sequence numbers. Existing compatible ledgers
   can be appended using another empty prepared home.
@@ -44,11 +44,29 @@ user row. This is stricter than the specification's descriptor/OSC confirmation;
 the capability is not inferred from an idle signal alone. Evidence also records
 the post-submit descriptor status/timestamp and bounded OSC metadata when observed,
 separately from the assistant-row result. OSC payload text is never retained.
-C1 delivery/confirmation do not require literal storage. pasteRef is optional
+C1 delivery/confirmation do not require literal storage. A complete
+`<pasted_content id="NNNN">` envelope with a matching closing ID is removed
+before the byte-exact UTF-8 comparison; its separator newlines belong to the
+envelope. Evidence records wrapperPresent, wrapperId, storedBodyBytes and
+storedBodySha256. The body is never trimmed or normalized for literal equality.
+transformations identifies TAB-to-spaces (1–8 spaces), LF/CRLF conversion,
+trailing whitespace removal/addition and truncation, including combinations.
+An unmatched byte change is explicitly unclassified-byte-change. These are
+storage findings and keep literal=false. No transcript content is copied.
+pasteCache holds only byte sizes and SHA-256 hashes (at most 128 regular,
+non-linked files, each at most 65536 bytes). linkedPaste requires an actual
+row pasteRef or an envelope ID matching a cache basename (ID or ID.txt), plus
+byte equality with the payload; matching content alone is not linkage.
+Unrecognized cache naming is not guessed. pasteRef is optional
 bounded evidence, never a mandatory CLI schema. A confirmed placeholder-storage
 branch is UNVERIFIED pending its owner amendment; a missing reference object,
 corrupted literal, multiple turns or missing confirmation fails its measured
-check. C2 ready-time snapshots are timeline observations only. N8 inherited and
+check. C1 measures its final transcript after bounded quiescence and graceful
+exit, so an assistant row flushed only on exit remains eligible. Evidence keeps
+transcriptConfirmedBytes, transcriptFinalBytes and finalRowTypes with offsets,
+as well as shutdown timing, stability, gracefulExit and forcedKill observations.
+An idle descriptor alone still cannot satisfy assistant confirmation.
+C2 ready-time snapshots are timeline observations only. N8 inherited and
 post-turn titles have their OWN titleOutcome (PASS/FAIL); N8 never gates
 forkWorktree. The fake fork publishes only a snapshot until its first prompt.
 
@@ -181,13 +199,18 @@ Override independently using --c1-timeout-ms ... --c4-timeout-ms, each
 --timeout-ms (100..180000) overrides a selected fixture budget. Each readiness/
 submit poll is at most 20 seconds within its remaining canary budget; version
 probes at most 2 seconds, git/bwrap/process-start helpers at most 4 seconds.
-Cleanup adds at most 4 seconds per handle: C1 ≤4 handles, C2 ≤8, C3 ≤3,
-C4 ≤6 (caps including cleanup: 136/932/192/204 seconds with defaults).
+Cleanup adds at most 9 seconds per confirmed live handle: up to 5 seconds
+waiting for 1 second without transcript growth, up to 2 seconds for graceful
+exit, then up to 2 seconds for forced handle termination. Dry-run quiescence
+uses a 50 ms quiet period within a 500 ms cap. C1 ≤4 handles, C2 ≤8, C3 ≤3,
+C4 ≤6 (caps including cleanup: 156/972/207/234 seconds with defaults).
 
 Liveness and termination use OWNED HANDLES even when pid is still zero.
-Pipe fixtures first close their own input cooperatively; otherwise the owned
-child.kill() is used. PTYs always use child.kill(), never image names or an
-unrelated PID. SIGINT/SIGTERM interrupt bounded work and kill owned handles;
+Confirmed sessions first wait for transcript quiescence, then receive `/exit`
+and Enter through their owned input. If they do not exit within the bound,
+child.kill() terminates the owned handle. Unconfirmed sessions are killed by
+handle immediately. Image names and unrelated PIDs are never used.
+SIGINT/SIGTERM interrupt bounded work and kill owned handles;
 cleanup and ledger write finish before exit, and every handle must be exited
 before process.exit. Forced host termination cannot run JavaScript cleanup.
 
@@ -195,7 +218,9 @@ Dry-run uses pipes; the separate fake-PTY tests exercise a delayed pid and
 stale-descriptor rejection through the same launch/stop state machine. Windows
 fake descriptors carry a per-launch identity token instead of a kernel FILETIME;
 real PTY identity, permissions, native messaging, mounts and onboarding remain
-unmeasured. Fixture mutations cover corrupt/multiple/missing paste storage,
+unmeasured. The C1 fixture emits the real paste envelope; tab-to-spaces alters
+its body, and exit-flush-assistant persists its assistant row only on `/exit`.
+Fixture mutations cover corrupt/multiple/missing paste storage,
 meta rows, title/source activity, broken forks, permission/OS denials, report
 and receipt absence, wrong addresses/control leaks, shared publication,
 parent env, exits, hangs and dialogs. Read the tests for exact switch names.

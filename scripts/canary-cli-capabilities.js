@@ -25,7 +25,7 @@ const CANARY_MUTATIONS = {
   C1: MUTATIONS.slice(0, 4), C2: MUTATIONS.slice(4, 8), C3: MUTATIONS.slice(8, 11), C4: MUTATIONS.slice(11, 16),
 };
 Object.assign(CANARY_MUTATIONS, {
-  C1: [...CANARY_MUTATIONS.C1, 'meta-users', 'no-paste-ref', 'blocking-dialog', 'exit-on-submit', 'storage-only'],
+  C1: [...CANARY_MUTATIONS.C1, 'meta-users', 'no-paste-ref', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'tab-to-spaces', 'exit-flush-assistant'],
   C2: [...CANARY_MUTATIONS.C2, 'natural-source-activity'],
   C3: [...CANARY_MUTATIONS.C3, 'os-denial', 'escaped-settings', 'unknown-denial', 'sandbox-unknown-denial'],
   C4: [...CANARY_MUTATIONS.C4, 'missing-name', 'unknown-receipt', 'wrong-control-leak', 'wrong-control-hidden-leak'],
@@ -192,15 +192,57 @@ const flatText = value => typeof value === 'string' ? value : Array.isArray(valu
 const normal = value => (process.platform === 'win32' ? String(value).toLowerCase() : String(value)).replace(/\\+/g, '/');
 
 function received(ctx, row, payload) {
-  const literal = content(row) === payload;
-  const placeholder = /^\[Pasted text(?:\s|\])/.test(content(row));
+  const raw = content(row);
+  const envelope = /^<pasted_content id="(\d+)">\r?\n([\s\S]*?)\r?\n<\/pasted_content id="\1">$/.exec(raw);
+  const body = envelope ? envelope[2] : raw;
+  const literal = Buffer.from(body).equals(Buffer.from(payload));
+  const placeholder = /^\[Pasted text(?:\s|\])/.test(body);
+  const transformations = byteTransformations(payload, body);
+  const cache = path.join(ctx.opts.home, '.claude/paste-cache');
+  const pasteCache = [];
   let linked = false;
-  if (typeof row.pasteRef === 'string' && /^[a-zA-Z0-9.-]+$/.test(row.pasteRef)) {
-    const file = path.join(ctx.opts.home, '.claude/paste-cache', row.pasteRef);
-    if (fs.existsSync(file) && !fs.lstatSync(file).isSymbolicLink() && fs.statSync(file).size <= 65536) linked = fs.readFileSync(file, 'utf8') === payload;
-    return { literal, linked, exact: linked, hasReference: true, placeholder };
+  const reference = typeof row.pasteRef === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(row.pasteRef) ? row.pasteRef : null;
+  let hasReference = !!reference;
+  if (fs.existsSync(cache) && fs.lstatSync(cache).isDirectory() && !fs.lstatSync(cache).isSymbolicLink()) {
+    for (const name of fs.readdirSync(cache).slice(0, 128)) {
+      const file = path.join(cache, name), stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) continue;
+      const bytes = fs.readFileSync(file);
+      pasteCache.push({ bytes: bytes.length, sha256: hash(bytes) });
+      if (name === reference || envelope && [envelope[1], `${envelope[1]}.txt`].includes(name)) {
+        hasReference = true;
+        if (bytes.equals(Buffer.from(payload))) linked = true;
+      }
+    }
   }
-  return { literal, linked, exact: literal, hasReference: false, placeholder };
+  return { literal, linked, exact: literal || linked, hasReference, placeholder,
+    wrapperPresent: !!envelope, wrapperId: envelope?.[1] ?? null, transformations, pasteCache,
+    storedBodyBytes: Buffer.byteLength(body), storedBodySha256: hash(body) };
+}
+
+function byteTransformations(payload, body) {
+  if (payload === body) return [];
+  const operations = [
+    ...Array.from({ length: 8 }, (_, i) => ['tab-to-spaces', s => s.replaceAll('\t', ' '.repeat(i + 1))]),
+    ['lf-to-crlf', s => s.replace(/(?<!\r)\n/g, '\r\n')],
+    ['crlf-to-lf', s => s.replaceAll('\r\n', '\n')],
+    ['trailing-whitespace-removed', s => s.replace(/[ \t]+(?=\r?$)/gm, '')],
+    ['trailing-whitespace-added', s => s + (body.match(/\s+$/)?.[0] || '')],
+  ];
+  const candidates = [{ text: payload, changes: [] }];
+  for (const [name, apply] of operations) {
+    for (const candidate of [...candidates]) {
+      if (candidate.changes.includes(name)) continue;
+      const text = apply(candidate.text);
+      if (text !== candidate.text && !candidates.some(x => x.text === text)) candidates.push({ text, changes: [...candidate.changes, name] });
+    }
+  }
+  candidates.sort((a, b) => a.changes.length - b.changes.length);
+  const exact = candidates.find(x => x.text === body);
+  if (exact) return exact.changes;
+  const truncated = candidates.find(x => body.length < x.text.length && x.text.startsWith(body));
+  if (truncated) return [...truncated.changes, 'truncation'];
+  return ['unclassified-byte-change'];
 }
 
 function sandboxPlan(ctx, cwd, settings, privateSessions) {
@@ -500,11 +542,35 @@ async function submit(ctx, proc, payload) {
 async function stop(ctx, proc) {
   if (proc.record.cleaned) return;
   if (!proc.exited) {
-    if (ctx.opts.dryRun && !proc.isPty) proc.child.stdin.end(`\x1b]CANARY_EXIT;${proc.pid}\x07`);
-    else proc.child.kill();
-    try { await until({ cleanup: true, deadline: Date.now() + 2000 }, () => proc.exited, 'owned process exit', 2000); }
-    catch {
-      if (!proc.exited) proc.child.kill();
+    if (proc.id && proc.record.descriptorConfirmation) {
+      const shutdown = proc.record.shutdown = { stable: false, gracefulExit: false, forcedKill: false };
+      try {
+        const quietMs = ctx.opts.dryRun ? 50 : 1000;
+        let lastBytes = transcript(ctx, proc.id).bytes, stableSince = Date.now();
+        try {
+          await until({ cleanup: true, deadline: Date.now() + (ctx.opts.dryRun ? 500 : 5000) }, () => {
+            const bytes = transcript(ctx, proc.id).bytes;
+            if (bytes !== lastBytes) { lastBytes = bytes; stableSince = Date.now(); }
+            return proc.exited || Date.now() - stableSince >= quietMs;
+          }, 'transcript quiescence', 5000);
+          shutdown.stable = true;
+        } catch { shutdown.quiescenceTimedOut = true; }
+        shutdown.beforeExitBytes = lastBytes;
+        shutdown.exitRequestedAt = Date.now();
+        if (!proc.exited) {
+          try {
+            if (proc.isPty) proc.child.write('/exit\r');
+            else proc.child.stdin.write('/exit\r');
+            await until({ cleanup: true, deadline: Date.now() + 2000 }, () => proc.exited, 'graceful owned process exit', 2000);
+            shutdown.gracefulExit = true;
+          } catch { shutdown.gracefulExitTimedOut = true; }
+        }
+        shutdown.finalBytes = transcript(ctx, proc.id).bytes;
+      } catch { shutdown.transcriptReadFailed = true; }
+    }
+    if (!proc.exited) {
+      if (proc.record.shutdown) proc.record.shutdown.forcedKill = true;
+      proc.child.kill();
       await until({ cleanup: true, deadline: Date.now() + 2000 }, () => proc.exited, 'owned process exit', 2000);
     }
   }
@@ -524,18 +590,28 @@ async function c1(ctx) {
     const prefix = `CANARY ${nonce}\nLiteral LF\tTAB \"quotes\" 'single' café 東京\nReply only OK.\n`;
     const payload = prefix + 'x'.repeat(size - Buffer.byteLength(prefix));
     const proc = await launch(ctx);
-    const rows = await submit(ctx, proc, payload);
-    const turns = users(rows);
+    const before = transcript(ctx, proc.id).bytes;
+    await submit(ctx, proc, payload);
+    const confirmed = transcript(ctx, proc.id).bytes;
+    await stop(ctx, proc);
+    const final = transcript(ctx, proc.id);
+    const rows = final.rows.filter(r => r._offset >= before);
+    const deliveryEnd = proc.record.shutdown?.beforeExitBytes ?? confirmed;
+    const turns = users(rows.filter(r => r._offset < deliveryEnd));
     const one = turns.length === 1;
     const stored = one ? received(ctx, turns[0], payload) : { exact: false, literal: false, linked: false };
     const reaction = rows.some(r => r.type === 'assistant' && r._offset > (turns[0]?._offset ?? Infinity));
     results.push({ one, ...stored, reaction });
     ctx.evidence.payloads.push({ bytes: size, sha256: hash(payload), nonce, userTurns: turns.length,
       literal: stored.literal, linkedPaste: stored.linked, independentlyObservedReaction: reaction,
+      wrapperPresent: stored.wrapperPresent ?? false, wrapperId: stored.wrapperId ?? null,
+      transformations: stored.transformations ?? [], pasteCache: stored.pasteCache ?? [],
+      storedBodyBytes: stored.storedBodyBytes, storedBodySha256: stored.storedBodySha256,
       singleTurnDelivery: one, eligibleConfirmation: one && reaction,
       descriptorConfirmation: proc.record.descriptorConfirmation, oscObservations: proc.record.oscObservations,
-      transcriptId: proc.id, userOffsets: turns.map(r => r._offset) });
-    await stop(ctx, proc);
+      transcriptId: proc.id, userOffsets: turns.map(r => r._offset),
+      transcriptConfirmedBytes: confirmed, transcriptFinalBytes: final.bytes,
+      finalRowTypes: rows.map(r => ({ type: r.type, offset: r._offset })) });
   }
   ctx.evidence.controls.push({ name: 'short literal control', status: results[0].one && results[0].literal && results[0].reaction ? 'PASS' : 'FAIL' });
   ctx.capabilities.singleTurnDelivery = results.every(x => x.one);
@@ -868,7 +944,7 @@ async function main(argv = process.argv.slice(2)) {
       }
     }
     if (ctx.opts?.mutation) {
-      const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref'];
+      const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'exit-flush-assistant'];
       const unavailable = ['no-report', 'synthetic-receipt', 'missing-name', 'unknown-receipt', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'hang', 'wrong-recipient', 'os-denial', 'unknown-denial', 'sandbox-unknown-denial'];
       const expected = positive.includes(ctx.opts.mutation) ? 'PASS' : unavailable.includes(ctx.opts.mutation) ? 'UNVERIFIED' : 'FAIL';
       ctx.evidence.controls.push({ name: ctx.opts.mutation, status: status === expected ? 'PASS' : 'FAIL', expected, observed: status });

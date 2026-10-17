@@ -66,6 +66,12 @@ function tool(name, input, result, isError = false) {
   append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name, input }] } });
   append({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: result, is_error: isError }] } });
 }
+let pendingAssistant = false;
+function exitGracefully() {
+  if (pendingAssistant) append({ type: 'user', message: { role: 'user', content: '<command-name>/exit</command-name>' } });
+  if (pendingAssistant) append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'fixture exit-flushed reaction' }] } });
+  process.exit(0);
+}
 function handle(text) {
   if (mutation === 'hang') return;
   if (mutation === 'exit-on-submit') process.exit(0);
@@ -78,6 +84,7 @@ function handle(text) {
     return;
   }
   let stored = mutation === 'drop-byte' ? text.slice(0, -1) : text;
+  if (mutation === 'tab-to-spaces') stored = stored.replaceAll('\t', '    ');
   let pasteRef;
   if (Buffer.byteLength(text) > 4096) {
     const cache = path.join(state, 'paste-cache');
@@ -87,6 +94,7 @@ function handle(text) {
   }
   if (mutation === 'placeholder-no-confirmation' || mutation === 'storage-only') stored = '[Pasted text #1]';
   if (mutation === 'no-paste-ref') pasteRef = undefined;
+  if (text.startsWith('CANARY ') && !['placeholder-no-confirmation', 'storage-only'].includes(mutation)) stored = `<pasted_content id="1234">\n${stored}\n</pasted_content id="1234">`;
   const user = { type: 'user', message: { role: 'user', content: stored }, ...(pasteRef ? { pasteRef } : {}) };
   if (mutation === 'split-paste') {
     for (const line of text.split('\n')) append({ type: 'user', message: { role: 'user', content: line } });
@@ -130,13 +138,15 @@ function handle(text) {
     }
   }
   if (mutation === 'own-title' && args.includes('--fork-session')) append({ type: 'custom-title', customTitle: 'own-title-different-from-L' });
-  if (mutation !== 'placeholder-no-confirmation') append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'fixture reaction' }] } });
+  if (mutation === 'exit-flush-assistant') pendingAssistant = true;
+  else if (mutation !== 'placeholder-no-confirmation') append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'fixture reaction' }] } });
   describe('idle');
 }
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('end', () => process.exit(0));
 process.stdin.on('data', chunk => {
+  if (chunk === '/exit\r' || chunk === '/exit\n') exitGracefully();
   if (chunk.includes(`\x1b]CANARY_EXIT;${process.pid}\x07`)) process.exit(0);
   input += chunk;
   for (;;) {
