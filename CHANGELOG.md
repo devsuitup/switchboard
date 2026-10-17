@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- A background session's sidebar row no longer repeats its working status under its title; activity details are in the icon's tooltip. Only Needs attention (also when its activity details are unavailable), idle, blocked, finished, stopped, failed or unavailable states are written out. (#702)
+
 ### Fixed
 - Sessions on a remote host show again whether they are working or waiting for you, instead of "Turn state unavailable". (#698)
 - Typing in a terminal no longer stalls while other sessions or subagents are working: their last-activity times in the sidebar now update at most every 30 seconds, while new sessions and renames still appear right away. (#694)

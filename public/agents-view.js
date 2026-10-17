@@ -204,16 +204,19 @@ function backgroundActivityLabel(sessionId, snapshot, row) {
   const entry = backgroundActivityEntry(sessionId);
   if (!entry) {
     const background = row?.bgJobId || typeof localSessionForStatus === 'function' && localSessionForStatus(sessionId)?.bgJobId;
-    return background ? { text: 'Activity unavailable', title: 'Job activity unavailable' } : null;
+    return background ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null;
   }
   if (backgroundActivityIsForeground(sessionId)) return { text: renderSessionIcon(snapshot).title, title: '' };
   const valid = entry.taskEvidence?.valid === true;
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
-  const label = terminal ? entry.state : !valid ? 'Activity unavailable' : renderSessionIcon(snapshot).title;
   const kinds = valid ? (entry.taskEvidence.inFlightKinds || []).map(k => k.label).join(', ') : '';
   const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toLocaleString()} (job metadata)${kinds ? ` · ${kinds}` : ''}` : 'Job activity unavailable';
-  if (entry.state === 'done' && agentJobIsLive(entry)) return { text: 'Idle', title: source };
-  return { text: terminal ? `Job ${label}` : `${label} · job ${entry.state || 'unknown'}`, title: source };
+  const title = `${renderSessionIcon(snapshot).title} · job ${entry.state || 'unknown'}\n${source}`;
+  if (entry.state === 'done' && agentJobIsLive(entry)) return { text: 'Idle', title };
+  const text = entry.state === 'blocked' ? 'Blocked' : terminal ? `Job ${entry.state}`
+    : entry.state === 'working' && snapshot.attention ? 'Needs attention' : !valid ? 'Activity unavailable'
+    : entry.state === 'working' ? '' : 'Activity unavailable';
+  return { text, title };
 }
 
 function agentVerbAvailability(entry, daemonReachable) {

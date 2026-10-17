@@ -40,6 +40,124 @@ async function setup(t, entries = roster(), active = false) {
   return { ...h, push: s => push(s), subscriptions: () => subscriptions, sidebarRenders: () => sidebarRenders };
 }
 
+for (const [state, kind, head, hosted, valid, text, activity, foreground = false] of [
+  ['working', null, 'open', true, true, '', 'Working'],
+  ['working', 'agent', 'closed', true, true, '', 'Background work running'],
+  ['working', null, 'closed', true, true, '', 'Waiting for input'],
+  ['blocked', null, 'closed', true, true, 'Blocked', 'Needs your attention'],
+  ['blocked', null, 'closed', true, false, 'Blocked', 'Needs your attention'],
+  ['done', null, 'closed', true, true, 'Idle', 'Waiting for input'],
+  ['done', null, 'closed', false, true, 'Job done', 'Stale'],
+  ['stopped', null, 'closed', false, true, 'Job stopped', 'Stale'],
+  ['failed', null, 'closed', false, true, 'Job failed', 'Stale'],
+  ['working', null, 'open', true, false, 'Activity unavailable', 'Working'],
+  ['done', null, 'open', false, true, 'Working', 'Working', true],
+  ['done', null, 'closed', false, true, 'Waiting for input', 'Waiting for input', true],
+  ['failed', null, 'open', false, true, 'Working', 'Working', true],
+  ['failed', null, 'closed', false, true, 'Waiting for input', 'Waiting for input', true],
+]) {
+  test(`[702] ${state}/${activity} (valid: ${valid}, foreground: ${foreground}) keeps the same concise status and icon detail on render and live update`, async t => {
+    const entries = roster(state, kind);
+    entries[0].hosted = hosted;
+    entries[0].taskEvidence.valid = valid;
+    const h = await setup(t, entries, foreground);
+    h.emitHeadTurn(SID, head);
+    h.window.refreshSidebar();
+    const check = () => {
+      const row = h.document.querySelector('.session-item');
+      const status = row.querySelector('.session-status');
+      const icon = row.querySelector('.session-icon');
+      assert.equal(status.textContent, text);
+      assert.equal(status.title, '');
+      const source = valid ? `Job updated ${new Date(AT).toLocaleString()} (job metadata)` : 'Job activity unavailable';
+      assert.equal(icon.title, foreground ? activity : `${activity} · job ${state}\n${source}`);
+      assert.equal(icon.getAttribute('aria-label'), foreground ? activity : activity + (text ? ` · ${text}` : ''));
+    };
+    check();
+    h.window.applyStateClasses(SID, h.window.storedActivitySnapshot(SID));
+    check();
+    h.window.paintSessionIcon(h.document.querySelector('.session-icon'), SID);
+    check();
+  });
+}
+
+test('[702] live updates replace the working tooltip and clear a previous exceptional status', async t => {
+  const h = await setup(t, roster('blocked', null));
+  assert.equal(h.document.querySelector('.session-status').textContent, 'Blocked');
+  h.push({ roster: roster('working', 'agent', { updatedAt: new Date(AT + 1).toISOString() }), daemonReachable: true });
+  h.emitHeadTurn(SID, 'closed');
+  assert.equal(h.document.querySelector('.session-status').textContent, '');
+  const icon = h.document.querySelector('.session-icon');
+  assert.match(icon.title, /^Background work running · job working/);
+  h.emitHeadTurn(SID, 'open', { revision: 2 });
+  assert.match(icon.title, /^Working · job working/);
+  assert.doesNotMatch(icon.title, /Blocked|Needs your attention|Background work running/);
+  assert.equal(icon.getAttribute('aria-label'), 'Working');
+});
+
+test('[702] missing job metadata retains known head activity in the icon tooltip', async t => {
+  const h = await setup(t, []);
+  h.emitHeadTurn(SID, 'open');
+  const check = () => {
+    const icon = h.document.querySelector('.session-icon');
+    assert.equal(h.document.querySelector('.session-status').textContent, 'Activity unavailable');
+    assert.equal(icon.title, 'Working\nJob activity unavailable');
+    assert.equal(icon.getAttribute('aria-label'), 'Working · Activity unavailable');
+  };
+  check();
+  h.window.refreshSidebar();
+  check();
+  h.window.paintSessionIcon(h.document.querySelector('.session-icon'), SID);
+  check();
+});
+
+for (const valid of [true, false]) {
+  test(`[702b] a working job keeps Needs attention on render and live update until attention clears (valid: ${valid})`, async t => {
+    const entries = roster('working', null);
+    entries[0].taskEvidence.valid = valid;
+    const h = await setup(t, entries, true);
+    h.emitHeadTurn(SID, 'open');
+    h.window.setAttention(SID, true, 'onTerminalNotification');
+    const check = () => {
+      const row = h.document.querySelector('.session-item');
+      const icon = row.querySelector('.session-icon');
+      assert.equal(row.querySelector('.session-status').textContent, 'Needs attention');
+      assert.ok(icon.classList.contains('session-icon--attention'));
+      if (valid) assert.match(icon.title, /^Needs your attention · job working\nJob updated /);
+      else assert.equal(icon.title, 'Needs your attention · job working\nJob activity unavailable');
+      assert.equal(icon.getAttribute('aria-label'), 'Needs your attention · Needs attention');
+    };
+    check();
+    h.window.refreshSidebar();
+    check();
+    h.window.applyStateClasses(SID, h.window.storedActivitySnapshot(SID));
+    check();
+    h.window.paintSessionIcon(h.document.querySelector('.session-icon'), SID);
+    check();
+    h.window.setAttention(SID, false, 'onTerminalNotification');
+    assert.equal(h.document.querySelector('.session-status').textContent, valid ? '' : 'Activity unavailable');
+    assert.equal(h.document.querySelector('.session-icon').getAttribute('aria-label'), valid ? 'Working' : 'Working · Activity unavailable');
+    h.window.activeSessionId = SID;
+    h.emitHeadTurn(SID, 'closed', { revision: 2 });
+    assert.equal(h.document.querySelector('.session-status').textContent, valid ? '' : 'Activity unavailable');
+    assert.equal(h.document.querySelector('.session-icon').getAttribute('aria-label'), valid ? 'Waiting for input' : 'Waiting for input · Activity unavailable');
+  });
+}
+
+test('[702b] remote attention owns the icon title when it overrides local background activity', async t => {
+  const h = await setup(t, roster('working', null));
+  h.emitHeadTurn(SID, 'open');
+  const remote = h.window.createSessionState('remote-ssh');
+  remote.apply({ type: 'liveness', value: 'alive' });
+  remote.apply({ type: 'attention', active: true });
+  h.remoteSessionStates.set(SID, remote);
+  h.window.refreshSidebar();
+  const icon = h.document.querySelector('.session-icon');
+  assert.ok(icon.classList.contains('session-icon--attention'));
+  assert.equal(icon.title, 'Needs your attention');
+  assert.equal(icon.getAttribute('aria-label'), 'Needs your attention');
+});
+
 for (const [state, kind, head, slot, label] of [
   ['working', null, 'closed', 'waiting', 'Waiting for input'],
   ['blocked', null, 'closed', 'attention', 'Needs your attention'],
@@ -60,9 +178,11 @@ for (const [state, kind, head, slot, label] of [
           assert.equal(row.querySelectorAll('.session-icon').length, 1);
           assert.ok(row.querySelector(`.session-icon--${slot}`), row.innerHTML);
           const status = row.querySelector('.session-status');
-          assert.equal(status.textContent, `${label} · job ${state}`);
+          assert.equal(status.textContent, state === 'blocked' ? 'Blocked' : '');
           assert.doesNotMatch(status.textContent, /busy|idle|ago|\d+[smhd]/i);
-          assert.equal(status.title, `Job updated ${new Date(AT).toLocaleString()} (job metadata)`);
+          assert.equal(status.title, '');
+          assert.equal(row.querySelector('.session-icon').title,
+            `${label} · job ${state}\nJob updated ${new Date(AT).toLocaleString()} (job metadata)`);
         };
         check();
         h.window.refreshSidebar();
@@ -131,7 +251,8 @@ for (const active of [false, true]) {
     const check = () => {
       const status = h.document.querySelector('.session-status');
       assert.equal(status.textContent, 'Activity unavailable');
-      assert.equal(status.title, 'Job activity unavailable');
+      assert.equal(status.title, '');
+      assert.match(h.document.querySelector('.session-icon').title, /Job activity unavailable/);
     };
     check();
     h.emitHeadTurn(SID, 'open');
@@ -152,7 +273,8 @@ test('[654] a merged background row without a roster ignores its head descriptor
   const check = () => {
     const status = h.document.querySelector('.session-status');
     assert.equal(status.textContent, 'Activity unavailable');
-    assert.equal(status.title, 'Job activity unavailable');
+    assert.equal(status.title, '');
+    assert.match(h.document.querySelector('.session-icon').title, /Job activity unavailable/);
   };
   check();
   h.emitHeadTurn(head, 'open');
@@ -255,7 +377,9 @@ for (const state of ['done', 'stopped', 'failed']) {
     const h = await setup(t, roster(state));
     const secondary = h.document.querySelector('.session-status');
     assert.equal(secondary.textContent, `Job ${state}`);
-    assert.equal(secondary.title, `Job updated ${new Date(AT).toLocaleString()} (job metadata)`);
+    assert.equal(secondary.title, '');
+    assert.equal(h.document.querySelector('.session-icon').title,
+      `Stale · job ${state}\nJob updated ${new Date(AT).toLocaleString()} (job metadata)`);
   });
 }
 
@@ -285,7 +409,8 @@ for (const [state, kind, head, slot, count] of [
     assert.equal(!!row.querySelector('.session-subagent-count'), count > 0);
     const secondary = row.querySelector('.session-status');
     assert.doesNotMatch(secondary.textContent, /busy|\d+[smhd]/);
-    assert.match(secondary.title, /job|unavailable/i);
+    assert.equal(secondary.title, '');
+    assert.match(row.querySelector('.session-icon').title, /job|unavailable/i);
     const agent = h.window.agentRowIcon(entries[0]);
     assert.equal(agent.slotClass, `session-icon--${slot}`);
     const agentRow = h.document.createElement('div');
@@ -329,7 +454,8 @@ test('[628] secondary activity follows head pushes and attached attention withou
   const h = await setup(t);
   h.emitHeadTurn(SID, 'closed');
   h.emitHeadTurn(SID, 'open', { revision: 2 });
-  assert.match(h.document.querySelector('.session-status').textContent, /Working/);
+  assert.equal(h.document.querySelector('.session-status').textContent, '');
+  assert.match(h.document.querySelector('.session-icon').title, /Working · job working/);
   h.window.activePtyIds.add(SID);
   h.window.setAttention(SID, true, 'onTerminalNotification');
   assert.ok(h.document.querySelector('.session-icon--attention'));
