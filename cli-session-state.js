@@ -171,12 +171,14 @@ function refreshProcessTable() {
     if (epoch === processTableEpoch) {
       processTable = { at: now(), observedAt, map };
       processTableInFlight = null;
-      const stale = JSON.stringify([...statusBySession].filter(([id, entry]) => sidebarDescriptorIsStale(id, entry))
-        .map(([id, entry]) => [id, entry.pid]).sort());
-      const sidebarChanged = stale !== staleSidebarIdentity;
-      staleSidebarIdentity = stale;
-      if (sidebarChanged) notifyStatusesChanged();
-      if (map) notifyDescriptorsChanged();
+      if (map) {
+        const stale = JSON.stringify([...statusBySession].filter(([id, entry]) => sidebarDescriptorIsStale(id, entry))
+          .map(([id, entry]) => [id, entry.pid]).sort());
+        const sidebarChanged = stale !== staleSidebarIdentity;
+        staleSidebarIdentity = stale;
+        if (sidebarChanged) notifyStatusesChanged();
+        notifyDescriptorsChanged();
+      }
     }
     return map;
   })();
@@ -674,6 +676,9 @@ function getSidebarDescriptors() {
 }
 
 function sidebarDescriptorIsStale(id, entry) {
+  if (processTableEnabled && (!processTableFresh() || !processTable.map)) {
+    return JSON.parse(staleSidebarIdentity).some(([sessionId, pid]) => sessionId === id && pid === entry.pid);
+  }
   const writer = [...known.values()].find(s => s.pid === entry.pid && statusKey(s.sessionId) === id);
   return !!writer && deliveryProcessIdentity(writer) === 'stale';
 }
