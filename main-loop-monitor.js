@@ -4,7 +4,7 @@ const perf = require('node:perf_hooks');
 
 function createMainLoopMonitor({ enabled, trace, monitorEventLoopDelay = perf.monitorEventLoopDelay,
   setInterval: schedule = setInterval, clearInterval: cancel = clearInterval }) {
-  const histogram = monitorEventLoopDelay({ resolution: 20 });
+  const histogram = monitorEventLoopDelay({ resolution: 250 });
   let collecting = false;
   let stopped = false;
   function sync() {
