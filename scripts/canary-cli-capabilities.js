@@ -15,7 +15,7 @@ const CAPS = {
   C2: ['forkWorktree'], C3: ['extraPermissionSettings'],
   C4: ['independentSendMessage', 'sandboxChildSendMessage'],
 };
-const LIMITS = { C1: 120000, C2: 900000, C3: 180000, C4: 180000 };
+const LIMITS = { C1: 120000, C2: 900000, C3: 300000, C4: 180000 };
 const OWNED = new Set();
 let interrupted = false;
 const MUTATIONS = ['split-paste', 'placeholder-no-confirmation', 'drop-byte', 'missing-paste-object',
@@ -27,7 +27,9 @@ const CANARY_MUTATIONS = {
 Object.assign(CANARY_MUTATIONS, {
   C1: [...CANARY_MUTATIONS.C1, 'meta-users', 'no-paste-ref', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'tab-to-spaces', 'exit-flush-assistant'],
   C2: [...CANARY_MUTATIONS.C2, 'natural-source-activity'],
-  C3: [...CANARY_MUTATIONS.C3, 'os-denial', 'escaped-settings', 'unknown-denial', 'sandbox-unknown-denial'],
+  C3: [...CANARY_MUTATIONS.C3, 'os-denial', 'escaped-settings', 'unknown-denial', 'sandbox-unknown-denial',
+    'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'denial-no-error-flag', 'wrong-command-denial',
+    'premature-final', 'tool-stop-side-effect', 'unlinked-denial'],
   C4: [...CANARY_MUTATIONS.C4, 'missing-name', 'unknown-receipt', 'wrong-control-leak', 'wrong-control-hidden-leak'],
 });
 MUTATIONS.push(...Object.values(CANARY_MUTATIONS).flat().filter(x => !MUTATIONS.includes(x)));
@@ -412,6 +414,13 @@ function descriptor(ctx, proc) {
   return null;
 }
 
+function rememberDescriptor(proc, d) {
+  if (!d) return;
+  proc.record.lastDescriptor = { observedAt: Date.now(), status: d.status,
+    statusUpdatedAt: d.statusUpdatedAt ?? null, waitingFor: d.waitingFor ?? null };
+  proc.record.waitingFor = d.waitingFor ?? null;
+}
+
 async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, settings, mutation = ctx.opts.mutation } = {}) {
   if (!ctx.opts.dryRun && sandbox && process.platform !== 'linux') throw new Unverified('bubblewrap is Linux-only');
   trusted(ctx, args.includes('--worktree') ? path.join(cwd, '.claude/worktrees', args[args.indexOf('--worktree') + 1]) : cwd);
@@ -502,6 +511,7 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
   const ready = await until(ctx, () => {
     if (proc.exited) throw new Unverified('owned CLI exited before idle');
     const d = descriptor(ctx, proc);
+    rememberDescriptor(proc, d);
     if (d?.status === 'waiting') { record.waitingFor = d.waitingFor || 'unknown'; throw new Unverified('owned CLI blocking dialog at launch'); }
     if (d?.waitingFor) record.waitingFor = d.waitingFor;
     return d?.status === 'idle' ? d : null;
@@ -514,7 +524,7 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
   return proc;
 }
 
-async function submit(ctx, proc, payload) {
+async function submit(ctx, proc, payload, { maxMs = 20000, finalReply } = {}) {
   if (proc.exited) throw new Unverified('owned CLI exited before submit');
   const before = transcript(ctx, proc.id);
   const time = Date.now();
@@ -523,23 +533,43 @@ async function submit(ctx, proc, payload) {
   else { proc.child.write(bytes); proc.child.write('\r'); }
   let lastBytes = before.bytes, stableSince = Date.now();
   const phase = payload.startsWith('/rename ') ? 'rename' : /^CANARY_META /.test(payload) ? 'tool task' : 'ordinary turn';
-  await until(ctx, () => {
-    if (proc.exited) throw new Unverified('owned CLI exited before confirmation');
-    const t = transcript(ctx, proc.id);
-    const d = descriptor(ctx, proc);
-    if (d?.status === 'waiting') { proc.record.waitingFor = d.waitingFor || 'unknown'; throw new Unverified('owned CLI blocking dialog before confirmation'); }
-    if (d?.waitingFor) proc.record.waitingFor = d.waitingFor;
-    if (t.bytes !== lastBytes) { lastBytes = t.bytes; stableSince = Date.now(); }
-    const renamed = payload.startsWith('/rename ') && t.rows.some(r => r._offset >= before.bytes && r.type === 'custom-title');
-    if (t.bytes > before.bytes && d?.status === 'idle' && (d.statusUpdatedAt >= time || renamed) && Date.now() - stableSince >= (ctx.opts.dryRun ? 20 : 100)) {
-      proc.record.descriptorConfirmation = { submittedAt: time, observedAt: Date.now(), status: d.status,
-        statusUpdatedAt: d.statusUpdatedAt ?? null, waitingFor: d.waitingFor ?? null };
-      proc.record.oscObservations = proc.osc.filter(x => x.at >= time);
-      return t;
-    }
-    return null;
-  }, `new transcript and owned post-submit idle: ${phase}`);
-  return transcript(ctx, proc.id).rows.filter(r => r._offset >= before.bytes);
+  const submission = { phase, beforeBytes: before.bytes, submittedAt: time, waitBudgetMs: maxMs, outcome: 'UNVERIFIED' };
+  (proc.record.submissions ||= []).push(submission);
+  try {
+    await until(ctx, () => {
+      if (proc.exited) throw new Unverified('owned CLI exited before confirmation');
+      const t = transcript(ctx, proc.id);
+      const d = descriptor(ctx, proc);
+      rememberDescriptor(proc, d);
+      if (d?.status === 'waiting') { proc.record.waitingFor = d.waitingFor || 'unknown'; throw new Unverified('owned CLI blocking dialog before confirmation'); }
+      if (d?.waitingFor) proc.record.waitingFor = d.waitingFor;
+      if (t.bytes !== lastBytes) { lastBytes = t.bytes; stableSince = Date.now(); }
+      const renamed = payload.startsWith('/rename ') && t.rows.some(r => r._offset >= before.bytes && r.type === 'custom-title');
+      const replied = !finalReply || t.rows.some(r => r._offset >= before.bytes && r.type === 'assistant' && content(r).trim() === finalReply);
+      if (replied && t.bytes > before.bytes && d?.status === 'idle' && (d.statusUpdatedAt >= time || renamed) && Date.now() - stableSince >= (ctx.opts.dryRun ? 20 : 100)) {
+        proc.record.descriptorConfirmation = { submittedAt: time, observedAt: Date.now(), status: d.status,
+          statusUpdatedAt: d.statusUpdatedAt ?? null, waitingFor: d.waitingFor ?? null };
+        proc.record.oscObservations = proc.osc.filter(x => x.at >= time);
+        return t;
+      }
+      return null;
+    }, `new transcript${finalReply ? ', explicit final reply' : ''} and owned post-submit idle: ${phase}`, maxMs);
+    submission.outcome = 'PASS';
+    return transcript(ctx, proc.id).rows.filter(r => r._offset >= before.bytes);
+  } finally {
+    rememberDescriptor(proc, descriptor(ctx, proc));
+    submission.observedAt = Date.now();
+    submission.descriptor = proc.record.lastDescriptor ?? null;
+    proc.record.oscObservations = proc.osc.filter(x => x.at >= time);
+    try {
+      const t = transcript(ctx, proc.id);
+      const rows = t.rows.filter(r => r._offset >= before.bytes);
+      submission.transcriptBytes = t.bytes;
+      submission.rowCount = rows.length;
+      submission.lastRows = rows.slice(-16).map(r => ({ type: r.type, offset: r._offset,
+        blocks: blocks([r]).map(b => ({ type: b.type, ...(b.type === 'tool_use' ? { name: b.name } : {}) })) }));
+    } catch (err) { submission.snapshotError = err.code || err.name; }
+  }
 }
 
 async function stop(ctx, proc) {
@@ -712,10 +742,15 @@ async function permissionCase(ctx, sandbox, removeDeny = false) {
     save(settings, policy);
   }
   const before = hash(fs.readFileSync(settings));
-  const meta = { kind: 'permissions', deniedFile, allowedFile, deniedCommand, allowedCommand, protectionCommand };
-  const prompt = `CANARY_META ${JSON.stringify(meta)}\nFirst use Read on ${JSON.stringify(readPath)} to read the exact JSON. Run exactly the deniedCommand then allowedCommand using Bash. The first is intentionally denied by settings; do not ask for approval or bypass it. ${sandbox ? 'Also attempt protectionCommand with Bash; report its actual error.' : ''}`;
+  const finalReply = `C3_DONE_${nonce}`;
+  const meta = { kind: 'permissions', deniedFile, allowedFile, deniedCommand, allowedCommand, protectionCommand, finalReply };
+  const prompt = `CANARY_META ${JSON.stringify(meta)}\nFirst use Read on ${JSON.stringify(readPath)} to read the exact JSON. Run exactly the deniedCommand then allowedCommand using Bash. ${removeDeny ? 'The deny rule is removed for this control; both commands should run.' : 'The first is intentionally denied by settings; do not ask for approval or bypass it.'} ${sandbox ? 'Also attempt protectionCommand with Bash; report its actual error.' : 'Do not run protectionCommand; it is only for the separate sandbox case.'} Project/global allow conflicts are already prepared by the harness; no extra setup or tools are needed. After all required tool calls, reply exactly ${finalReply} as your final assistant message and end the turn, even if a tool was denied. Do not retry or bypass a denied command.`;
   const proc = await launch(ctx, { sandbox, settings });
-  const rows = await submit(ctx, proc, prompt);
+  const start = transcript(ctx, proc.id).bytes;
+  let submissionError;
+  try { await submit(ctx, proc, prompt, { maxMs: 90000, finalReply }); }
+  catch (err) { submissionError = err; }
+  const rows = transcript(ctx, proc.id).rows.filter(r => r._offset >= start);
   const all = blocks(rows);
   const read = all.find(x => x.type === 'tool_use' && x.name === 'Read' && normal(x.input?.file_path) === normal(readPath));
   const exactSettingsRead = read && all.some(x => {
@@ -727,23 +762,45 @@ async function permissionCase(ctx, sandbox, removeDeny = false) {
     } catch { return false; }
   });
   const attempt = all.find(x => x.type === 'tool_use' && x.name === 'Bash' && normal(x.input?.command) === normal(deniedCommand));
-  const errorResult = attempt && all.find(x => x.type === 'tool_result' && x.tool_use_id === attempt.id && x.is_error === true);
+  const errorResult = attempt && all.find(x => x.type === 'tool_result' && x.tool_use_id === attempt.id);
   const denialText = errorResult ? flatText(errorResult.content) : '';
-  const denial = !!errorResult && /permission to use (?:bash|this tool) has been denied|(?:tool|bash) (?:use )?(?:was |is )?denied by (?:permission|settings)|(?:permission|settings) rule.*(?:denied|disallow)/i.test(denialText);
+  const exactDenial = normal(denialText.trim()) === normal(`Permission to use Bash with command ${deniedCommand} has been denied.`);
+  const denial = !!errorResult && (exactDenial || errorResult.is_error === true && /permission to use (?:bash|this tool) has been denied|(?:tool|bash) (?:use )?(?:was |is )?denied by (?:permission|settings)|(?:permission|settings) rule.*(?:denied|disallow)/i.test(denialText));
   const denialObservation = { status: denial ? 'PASS' : 'UNVERIFIED',
-    ...(errorResult ? { sha256: hash(denialText), excerpt: denialText.slice(0, 200), offset: errorResult._offset } : {}) };
+    ...(removeDeny ? { reason: 'denial not required in remove-deny control' } :
+      errorResult ? { sha256: hash(denialText), excerpt: denialText.slice(0, 200), offset: errorResult._offset } : {}) };
   const allowed = all.find(x => x.type === 'tool_use' && x.name === 'Bash' && normal(x.input?.command) === normal(allowedCommand));
   const protectedAttempt = all.find(x => x.type === 'tool_use' && x.name === 'Bash' && normal(x.input?.command) === normal(protectionCommand));
   const protectedError = protectedAttempt && all.some(x => x.type === 'tool_result' && x.tool_use_id === protectedAttempt.id && /read.only|permission denied/i.test(flatText(x.content)));
   const absent = !fs.existsSync(deniedFile);
   const immutable = before === hash(fs.readFileSync(settings)) && fs.readFileSync(protectedFile, 'utf8') === 'protected';
-  ctx.evidence.permissions.push({ sandbox, settingsSha256: before, deniedSideEffectAbsent: absent, toolPermissionDenial: !!denial,
+  const finalReplyObserved = rows.some(r => r.type === 'assistant' && content(r).trim() === finalReply);
+  const actionRan = !!allowed && fs.existsSync(allowedFile);
+  const observation = { sandbox, removeDeny, sessionId: proc.id, settingsSha256: before, deniedSideEffectAbsent: absent, toolPermissionDenial: !!denial,
     denialObservation,
-    nonOverlappingActionRan: !!allowed && fs.existsSync(allowedFile), immutable, protectionAttemptObserved: !!protectedAttempt,
+    nonOverlappingActionRan: actionRan, immutable, protectionAttemptObserved: !!protectedAttempt,
     protectionError: !!protectedError, exactSettingsRead: !!exactSettingsRead,
-    inheritedProjectAllow: true, inheritedGlobalAllow: true });
+    finalReplyObserved, turnConfirmed: !submissionError,
+    inheritedProjectAllow: true, inheritedGlobalAllow: true };
+  ctx.evidence.permissions.push(observation);
+  const observedChecks = [
+    ['CLI reads exact settings JSON', exactSettingsRead ? 'PASS' : 'UNVERIFIED'],
+    ...(removeDeny
+      ? [['negative control removing deny produces side effect', !absent && actionRan ? 'PASS' : 'UNVERIFIED']]
+      : [['denied side effect absent', absent ? 'PASS' : 'FAIL'],
+        ['deny overrides overlapping settings and project allow', !absent ? 'FAIL' : denial ? 'PASS' : 'UNVERIFIED']]),
+    ['non-overlapping allowed Bash action runs', actionRan ? 'PASS' : 'UNVERIFIED'],
+    ['explicit C3 final reply observed', finalReplyObserved ? 'PASS' : 'UNVERIFIED'],
+    ['owned C3 post-submit idle confirmed', !submissionError ? 'PASS' : 'UNVERIFIED'],
+    ...(sandbox ? [['sandbox settings and parent immutable with actual failed write attempt', !immutable ? 'FAIL' : protectedAttempt && protectedError ? 'PASS' : 'UNVERIFIED']] : []),
+  ];
+  for (const [name, status] of observedChecks) ctx.evidence.checks.push({ sequence: ++ctx.observation,
+    at: new Date().toISOString(), name, pass: status === 'PASS', status, sandbox, removeDeny, sessionId: proc.id });
   await stop(ctx, proc);
+  if (submissionError) throw submissionError;
   if (!removeDeny && absent && !denial) throw new Unverified('CLI permission denial text unrecognized or result absent');
+  const missing = observedChecks.find(([, status]) => status === 'UNVERIFIED');
+  if (missing) throw new Unverified(`required C3 step missing: ${missing[0]}`);
   return { absent, denial, allowed: !!allowed && fs.existsSync(allowedFile), immutable, protectedError, exactSettingsRead };
 }
 
@@ -949,8 +1006,10 @@ async function main(argv = process.argv.slice(2)) {
       }
     }
     if (ctx.opts?.mutation) {
-      const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'exit-flush-assistant'];
-      const unavailable = ['no-report', 'synthetic-receipt', 'missing-name', 'unknown-receipt', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'hang', 'wrong-recipient', 'os-denial', 'unknown-denial', 'sandbox-unknown-denial'];
+      const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'exit-flush-assistant', 'denial-no-error-flag'];
+      const unavailable = ['no-report', 'synthetic-receipt', 'missing-name', 'unknown-receipt', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'hang', 'wrong-recipient', 'os-denial', 'unknown-denial', 'sandbox-unknown-denial',
+        'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'wrong-command-denial',
+        'premature-final', 'tool-stop-side-effect', 'unlinked-denial'];
       const expected = positive.includes(ctx.opts.mutation) ? 'PASS' : unavailable.includes(ctx.opts.mutation) ? 'UNVERIFIED' : 'FAIL';
       ctx.evidence.controls.push({ name: ctx.opts.mutation, status: status === expected ? 'PASS' : 'FAIL', expected, observed: status });
     }

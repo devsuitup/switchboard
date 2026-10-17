@@ -83,7 +83,7 @@ waitingFor recorded when available. Receipt evidence preserves raw row TYPES
 and byte OFFSETS, never unknown content. A SendMessage addressed to another name
 is an instruction-following miss, recorded UNVERIFIED. A wrong-control leak or
 broken permission property is FAIL. For C3, an absent denied side effect with an
-unrecognized linked is_error result is UNVERIFIED, with its flattened text's
+unrecognized linked tool_result is UNVERIFIED, with its flattened text's
 SHA-256 and an excerpt capped at 200 characters. This excerpt comes only from
 the result of the harness-generated Bash command, never unrelated transcript
 rows or arbitrary terminal output. A present denied side effect is FAIL even
@@ -91,6 +91,31 @@ if the tool reports a permission denial. An OS error such as
 bash: Permission denied is not a CLI permission denial. Tool-result content
 blocks and JSON-escaped Windows paths are decoded before comparison.
 Every capability boolean is false unless its full canary status is PASS.
+
+C3 recognizes the CLI's `Permission to use Bash with command <cmd> has been
+denied.` result only when `<cmd>` matches the exact harness denied command and
+the result's tool_use_id links to that Bash call. That explicit result does
+not require an is_error flag. Legacy generic CLI denial shapes require an
+is_error result; OS errors and text naming another command do not qualify.
+
+C3 evaluates its permission observations even when submit times out, exits or
+opens a dialog. Each attempted case retains settings-read proof, linked denial
+hash/excerpt, denied side-effect absence/presence, allowed side effect and
+sandbox write observations. The checks carry PASS/FAIL/UNVERIFIED status;
+unperformed steps remain UNVERIFIED. A timed-out turn keeps the overall canary
+UNVERIFIED and its capability false, even when individual checks passed.
+Each process retains lastDescriptor (status, statusUpdatedAt, waitingFor,
+observation time). Every submission retains its requested wait budget, byte
+boundary, observed bytes, row count and last 16 row types/offsets plus block
+types/tool names, with no transcript bodies; OSC observations survive timeout.
+
+Every C3 case requests a nonce-specific final assistant reply after its tools.
+The plain and remove-deny prompts explicitly exclude the sandbox-only write
+probe, explain that inherited allows are already installed, and distinguish
+the control where both commands should run. Completion requires both that
+final reply and a fresh owned post-submit idle descriptor. An idle descriptor
+alone cannot qualify a stopped tool turn. Missing idle or final reply is kept
+as evidence, never converted into a PASS because the files look correct.
 
 ## First live run: operator checklist
 
@@ -200,17 +225,21 @@ CLAUDE_CODE_GIT_BASH_PATH, APPDATA, LOCALAPPDATA, ProgramFiles and USERNAME.
 HOME/USERPROFILE/XDG/data/triggers point to prepared private locations.
 DISABLE_AUTOUPDATER=1; parent messaging/socket/SSE/session markers are removed.
 
-Default work budgets: C1=120000, C2=900000, C3=180000, C4=180000 ms.
+Default work budgets: C1=120000, C2=900000, C3=300000, C4=180000 ms.
 Override independently using --c1-timeout-ms ... --c4-timeout-ms, each
 100..3600000 ms. C2's 15 minutes cover four origins and four forks. Dry-run
 --timeout-ms (100..180000) overrides a selected fixture budget. Each readiness/
-submit poll is at most 20 seconds within its remaining canary budget; version
+submit poll is at most 20 seconds, except each C3 permission turn allows up to
+90 seconds, always within its remaining canary budget. C3's five minutes cover
+the plain deny case, remove-deny control and sandbox case, with more margin
+than the former three-minute cap and generic 20-second submit wait. A larger
+budget alone cannot supply a missing final reply. Version
 probes at most 2 seconds, git/bwrap/process-start helpers at most 4 seconds.
 Cleanup adds at most 9 seconds per confirmed live handle: up to 5 seconds
 waiting for 1 second without transcript growth, up to 2 seconds for graceful
 exit, then up to 2 seconds for forced handle termination. Dry-run quiescence
 uses a 50 ms quiet period within a 500 ms cap. C1 ≤4 handles, C2 ≤8, C3 ≤3,
-C4 ≤6 (caps including cleanup: 156/972/207/234 seconds with defaults).
+C4 ≤6 (caps including cleanup: 156/972/327/234 seconds with defaults).
 
 Liveness and termination use OWNED HANDLES even when pid is still zero.
 Confirmed sessions first wait for transcript quiescence, then receive `/exit`
@@ -238,6 +267,18 @@ Fixture mutations cover corrupt/multiple/missing paste storage,
 meta rows, title/source activity, broken forks, permission/OS denials, report
 and receipt absence, wrong addresses/control leaks, shared publication,
 parent env, exits, hangs and dialogs. Read the tests for exact switch names.
+C3 emits the real command-bearing denial and `(Bash completed with no output)`
+for the allowed command, inside a turn whose user prompt uses the paste
+envelope. tool-stop stops after that result with a busy descriptor;
+tool-stop-idle and tool-stop-waiting expose the same missing final reply with
+idle/waiting descriptors. missing-allowed-tool stops after the denial.
+denial-no-error-flag and wrong-command-denial exercise result recognition.
+unlinked-denial changes the result's tool_use_id; premature-final ends the
+turn before the allowed tool. Both remain UNVERIFIED. tool-stop-side-effect
+records a FAIL for the forbidden file while the incomplete turn remains
+UNVERIFIED. The remove-deny control's success receipt is not denial evidence.
+These are emulator regressions, not new live CLI evidence. The existing
+windows-bundled-c3-1ed941e evidence is preserved unchanged for comparison.
 
 Exit 0: all selected measurements PASS; 1: FAIL or UNVERIFIED; 2: refused or
 invalid setup; 130: interrupted after evidence/cleanup. qualifiesProduction

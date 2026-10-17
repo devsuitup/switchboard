@@ -476,6 +476,92 @@ test('GIVEN no explicit runtime root WHEN live setup THEN refuse before CLI or e
   assert.equal(r.ledger, undefined);
 });
 
+test('GIVEN exact live command denial WHEN C3 runs THEN linked result and explicit final reply qualify each turn', t => {
+  const r = run(t, ['--canary', 'C3']);
+  const evidence = data(r);
+  assert.ok(evidence.permissions.length > 0, JSON.stringify(evidence));
+  assert.equal(evidence.permissions[0].toolPermissionDenial, true);
+  assert.equal(r.status, 0, r.stderr + JSON.stringify(evidence));
+  assert.equal(evidence.workBudgetMs, 300000);
+  assert.ok(evidence.permissions.every(p => p.finalReplyObserved));
+  assert.ok(evidence.permissions[0].denialObservation.excerpt.includes('with command printf denied >'));
+  assert.ok(evidence.processes.every(p => p.submissions[0].waitBudgetMs === 90000));
+});
+
+test('GIVEN exact live denial without is_error WHEN C3 runs THEN linked command text still proves refusal', t => {
+  const r = run(t, ['--canary', 'C3', '--mutation', 'denial-no-error-flag', '--timeout-ms', '2500']);
+  assert.equal(r.status, 0, r.stderr + JSON.stringify(data(r)));
+  assert.equal(data(r).permissions[0].toolPermissionDenial, true);
+});
+
+for (const [mutation, descriptorStatus] of [['tool-stop', 'busy'], ['tool-stop-idle', 'idle'], ['tool-stop-waiting', 'waiting'], ['missing-allowed-tool', 'busy']]) {
+  test(`GIVEN ${mutation} after permission tools WHEN C3 stops THEN retain all supported checks and last descriptor`, t => {
+    const r = run(t, ['--canary', 'C3', '--mutation', mutation, '--timeout-ms', '2500']);
+    assert.equal(r.status, 1, r.stderr);
+    const evidence = data(r);
+    assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
+    assert.equal(evidence.permissions.length, 1, 'partial permission evidence must survive incomplete turn');
+    const permission = evidence.permissions[0];
+    assert.equal(permission.exactSettingsRead, true);
+    assert.equal(permission.toolPermissionDenial, true);
+    assert.equal(permission.deniedSideEffectAbsent, true);
+    assert.equal(permission.nonOverlappingActionRan, mutation !== 'missing-allowed-tool');
+    assert.equal(permission.finalReplyObserved, false);
+    for (const name of ['CLI reads exact settings JSON', 'deny overrides overlapping settings and project allow']) {
+      assert.equal(evidence.checks.find(x => x.name === name).status, 'PASS', name);
+    }
+    assert.equal(evidence.checks.find(x => x.name === 'non-overlapping allowed Bash action runs').status,
+      mutation === 'missing-allowed-tool' ? 'UNVERIFIED' : 'PASS');
+    assert.equal(evidence.checks.find(x => x.name === 'explicit C3 final reply observed').status, 'UNVERIFIED');
+    const proc = evidence.processes[0];
+    assert.equal(proc.cleaned, true);
+    assert.equal(proc.lastDescriptor.status, descriptorStatus);
+    assert.equal(proc.lastDescriptor.waitingFor, mutation === 'tool-stop-waiting' ? 'trust' : null);
+    const submission = proc.submissions[0];
+    assert.equal(submission.outcome, 'UNVERIFIED');
+    assert.ok(submission.lastRows.length >= 5);
+    assert.equal(submission.lastRows.at(-1).type, 'user');
+    assert.ok(submission.lastRows.at(-1).blocks.some(x => x.type === 'tool_result'));
+    assert.ok(submission.lastRows.every(x => Number.isInteger(x.offset)));
+    assert.ok(Object.values(r.ledger.measurements[0].capabilities).every(x => x === false));
+    if (mutation !== 'tool-stop-waiting') assert.match(evidence.failure, /timeout/);
+  });
+}
+
+test('GIVEN premature final reply WHEN allowed tool is missing THEN C3 stays UNVERIFIED with partial checks', t => {
+  const r = run(t, ['--canary', 'C3', '--mutation', 'premature-final']);
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
+  const evidence = data(r);
+  assert.equal(evidence.permissions[0].finalReplyObserved, true);
+  assert.equal(evidence.permissions[0].nonOverlappingActionRan, false);
+  assert.equal(evidence.checks.find(x => x.name === 'non-overlapping allowed Bash action runs').status, 'UNVERIFIED');
+});
+
+test('GIVEN forbidden side effect before timeout WHEN C3 records evidence THEN retain failed property without qualifying incomplete turn', t => {
+  const r = run(t, ['--canary', 'C3', '--mutation', 'tool-stop-side-effect', '--timeout-ms', '2500']);
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
+  const evidence = data(r);
+  assert.equal(evidence.permissions[0].deniedSideEffectAbsent, false);
+  assert.equal(evidence.permissions[0].toolPermissionDenial, true);
+  assert.equal(evidence.checks.find(x => x.name === 'denied side effect absent').status, 'FAIL');
+  assert.equal(evidence.checks.find(x => x.name === 'non-overlapping allowed Bash action runs').status, 'PASS');
+});
+
+for (const mutation of ['wrong-command-denial', 'unlinked-denial']) {
+  test(`GIVEN ${mutation} WHEN C3 runs THEN absence alone does not prove permission denial`, t => {
+    const r = run(t, ['--canary', 'C3', '--mutation', mutation, '--timeout-ms', '2500']);
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
+    const permission = data(r).permissions[0];
+    assert.ok(permission, 'mismatched or unlinked denial must still be recorded');
+    assert.equal(permission.deniedSideEffectAbsent, true);
+    assert.equal(permission.toolPermissionDenial, false);
+    assert.equal(permission.denialObservation.status, 'UNVERIFIED');
+  });
+}
+
 for (const mutation of ['unknown-denial', 'sandbox-unknown-denial', 'os-denial']) {
   test(`GIVEN ${mutation} without side effect WHEN C3 runs THEN retain bounded denial evidence as UNVERIFIED`, t => {
     const r = run(t, ['--canary', 'C3', '--mutation', mutation]);

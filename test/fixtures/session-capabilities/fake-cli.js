@@ -64,7 +64,7 @@ function append(record, file = transcript) {
 function tool(name, input, result, isError = false) {
   const toolId = crypto.randomUUID();
   append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: toolId, name, input }] } });
-  append({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: result, is_error: isError }] } });
+  append({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: mutation === 'unlinked-denial' && isError === true ? crypto.randomUUID() : toolId, content: result, ...(isError === null ? {} : { is_error: isError }) }] } });
 }
 let pendingAssistant = false;
 function exitGracefully() {
@@ -95,7 +95,7 @@ function handle(text) {
   }
   if (mutation === 'placeholder-no-confirmation' || mutation === 'storage-only') stored = '[Pasted text #1]';
   if (mutation === 'no-paste-ref') pasteRef = undefined;
-  if (text.startsWith('CANARY ') && !['placeholder-no-confirmation', 'storage-only'].includes(mutation)) stored = `\n\n<pasted_content id="e7f5">\n${stored}\n</pasted_content id="e7f5">\n`;
+  if ((text.startsWith('CANARY ') || text.startsWith('CANARY_META ')) && !['placeholder-no-confirmation', 'storage-only'].includes(mutation)) stored = `\n\n<pasted_content id="e7f5">\n${stored}\n</pasted_content id="e7f5">\n`;
   const user = { type: 'user', message: { role: 'user', content: stored }, ...(pasteRef ? { pasteRef } : {}) };
   if (mutation === 'split-paste') {
     for (const line of text.split('\n')) append({ type: 'user', message: { role: 'user', content: line } });
@@ -116,11 +116,21 @@ function handle(text) {
     const renderedSettings = mutation === 'escaped-settings' ? settingsText.split('\n').map((line, i) => `${i + 1}\t${line}`).join('\n') : settingsText;
     tool('Read', { file_path: value('--settings').replaceAll('\\', '/') }, [{ type: 'text', text: renderedSettings }]);
     const denied = settings.permissions.deny.length > 0 && mutation !== 'remove-deny';
-    if (!denied || mutation === 'fake-denial') fs.writeFileSync(meta.deniedFile, 'side effect');
+    if (!denied || ['fake-denial', 'tool-stop-side-effect'].includes(mutation)) fs.writeFileSync(meta.deniedFile, 'side effect');
     const unknownDenial = mutation === 'unknown-denial' || mutation === 'sandbox-unknown-denial' && process.env.CANARY_FIXTURE_SANDBOX;
-    tool('Bash', { command: meta.deniedCommand }, [{ type: 'text', text: denied ? unknownDenial ? 'Unrecognized fixture refusal. '.repeat(20) : mutation === 'os-denial' ? 'bash: Permission denied' : 'Permission to use Bash has been denied.' : 'ok' }], denied);
-    fs.writeFileSync(meta.allowedFile, 'allowed');
-    tool('Bash', { command: meta.allowedCommand }, 'ok');
+    const denialCommand = mutation === 'wrong-command-denial' ? meta.allowedCommand : meta.deniedCommand;
+    tool('Bash', { command: meta.deniedCommand }, [{ type: 'text', text: denied ? unknownDenial ? 'Unrecognized fixture refusal. '.repeat(20) : mutation === 'os-denial' ? 'bash: Permission denied' : `Permission to use Bash with command ${denialCommand} has been denied.` : 'ok' }], mutation === 'denial-no-error-flag' ? null : denied);
+    if (mutation === 'missing-allowed-tool') return;
+    if (mutation !== 'premature-final') {
+      fs.writeFileSync(meta.allowedFile, 'allowed');
+      tool('Bash', { command: meta.allowedCommand }, '(Bash completed with no output)');
+    }
+    if (['tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'tool-stop-side-effect'].includes(mutation)) {
+      if (mutation === 'tool-stop-idle') describe('idle');
+      if (mutation === 'tool-stop-waiting') describe('waiting');
+      return;
+    }
+    if (!text.includes('After all required tool calls, reply exactly ' + meta.finalReply)) return;
     if (process.env.CANARY_FIXTURE_SANDBOX) {
       if (mutation === 'writable-settings') fs.writeFileSync(value('--settings'), '{}');
       tool('Bash', { command: meta.protectionCommand }, mutation === 'writable-settings' ? 'ok' : 'Read-only file system', mutation !== 'writable-settings');
@@ -140,7 +150,7 @@ function handle(text) {
   }
   if (mutation === 'own-title' && args.includes('--fork-session')) append({ type: 'custom-title', customTitle: 'own-title-different-from-L' });
   if (mutation === 'exit-flush-assistant') pendingAssistant = true;
-  else if (mutation !== 'placeholder-no-confirmation') append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'fixture reaction' }] } });
+  else if (mutation !== 'placeholder-no-confirmation') append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: meta.finalReply || 'fixture reaction' }] } });
   describe('idle');
 }
 let input = '';
