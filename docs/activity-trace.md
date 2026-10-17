@@ -43,6 +43,24 @@ The main process reads the variable once (`activity-trace.js`) and tells the
 renderer, through a launch argument and then the `activity-trace-state` event,
 so the two halves cannot disagree.
 
+### Main-loop measurements
+
+With tracing on, `main.loop` reports `elu` (event-loop utilization over the
+last sampling interval, as a 0–1 fraction) and `lagMs` (lateness of the existing
+one-second timer, clamped to zero). Each callback rebases the expected tick;
+turning tracing on resets both baselines. These signals add no timer.
+`lagMs` exposes a block across a tick, but can miss a short block between ticks;
+`elu` measures occupied loop time, not a latency percentile or CPU percentage.
+
+For a fine event-loop delay measurement, start Switchboard with
+`SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` and enable tracing. This switch is read
+once at monitor startup; only the exact value `1` arms it. Armed events also
+carry `maxMs` and `p99Ms` from a 20 ms histogram, reset after each report.
+The histogram records full timer intervals, so its idle floor is at least
+20 ms. It adds roughly 50 timer wakeups per second while tracing is on; use
+it for a bounded measurement, then restart without the switch. Disabling
+tracing disables the armed histogram immediately.
+
 ### Turning it off, and on again
 
 Turning the trace off ends the write stream, which flushes what was already
@@ -128,6 +146,7 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `pty.resize` | Each guarded PTY resize attempt, including retries, ordinary fits and first-open nudges | `phase` (`fit` / `nudge` / `restore`), `cols`, `rows`, `ok` (the operation returned without throwing; not proof the CLI observed it) |
 | `poll.snapshot` | `get-active-sessions` answers | `count`, `entries` |
 | `trace.prune-failed` | An old file could not be deleted | `file`, `error`, `retained` |
+| `main.loop` | Once per second while tracing is on | `elu`, `lagMs`; `maxMs`, `p99Ms` only with `SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` at startup |
 | `app.quit` | Last line of a clean shutdown | — |
 
 ### Renderer
