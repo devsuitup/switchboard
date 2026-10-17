@@ -234,7 +234,7 @@ function applyStateClasses(sessionId, snapshot) {
   const label = typeof backgroundActivityLabel === 'function'
     && backgroundActivityLabel(item.dataset.headSessionId || item.dataset.sessionId, snapshot,
       typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId));
-  writeIconSlot(item.querySelector('.session-icon'), icon, label?.title);
+  writeIconSlot(item.querySelector('.session-icon'), icon, label?.title, label?.text);
   const status = item.querySelector('.session-status');
   if (label && status) {
     status.textContent = label.text;
@@ -252,7 +252,7 @@ function applyStateClasses(sessionId, snapshot) {
 }
 
 // One icon slot per row, written here and nowhere else — see .ai/contexts/session-state.md
-function writeIconSlot(el, icon, title) {
+function writeIconSlot(el, icon, title, text) {
   if (!el || !icon) return;
   for (const cls of Array.from(el.classList)) {
     if (cls.indexOf('session-icon--') === 0) el.classList.remove(cls);
@@ -260,7 +260,7 @@ function writeIconSlot(el, icon, title) {
   for (const cls of icon.slotClasses) el.classList.add(cls);
   el.title = title || icon.title || '';
   el.setAttribute('role', 'img');
-  el.setAttribute('aria-label', el.title || 'Idle');
+  el.setAttribute('aria-label', (icon.title || 'Idle') + (text ? ` · ${text}` : ''));
   el.dataset.glyph = icon.glyph || '';
 }
 
@@ -283,9 +283,9 @@ function snapshotForLocal(sessionId, session) {
 }
 
 // Paints an icon slot from a snapshot held by another adapter — see .ai/contexts/session-state.md ("Descriptor-owned attention")
-function paintSessionIconFromSnapshot(el, snapshot, title) {
+function paintSessionIconFromSnapshot(el, snapshot, title, text) {
   if (!el) return;
-  writeIconSlot(el, renderSessionIcon(snapshot), title);
+  writeIconSlot(el, renderSessionIcon(snapshot), title, text);
 }
 
 // see .ai/contexts/session-state.md
@@ -296,5 +296,5 @@ function paintSessionIcon(el, sessionId, session) {
   const row = session || (item && typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId)) || { sessionId };
   const projected = mergedRowSnapshot(rowSessionIds(row), sessionId, snapshot, row);
   const label = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(row), projected, row);
-  writeIconSlot(el, renderSessionIcon(projected), label?.title);
+  writeIconSlot(el, renderSessionIcon(projected), label?.title, label?.text);
 }

@@ -170,14 +170,19 @@ Both local adapters omit background descriptor status so even a newer frozen
 idle timestamp cannot close a validated head turn. While a valid job is
 `working`, the sidebar status text is empty, including the Working,
 Background work running and Waiting for input activity rungs (#702).
-`backgroundActivityLabel` is sidebar-only: it retains `Blocked` for a job
-waiting for user input, `Idle` for hosted done, `Job done`, `Job stopped`,
+`backgroundActivityLabel` is sidebar-only: a working job whose head reports
+attention keeps `Needs attention`, while Waiting for input alone stays empty.
+It retains `Blocked` for a job waiting for user input even when activity
+evidence is invalid, `Idle` for hosted done, `Job done`, `Job stopped`,
 `Job failed` for finished jobs, and `Activity unavailable` for missing or
 invalid activity evidence. A resumed foreground conversation keeps its
 existing activity text.
-The row's single `.session-icon` owns the full tooltip and accessible label:
+The row's single `.session-icon` owns the full diagnostic tooltip:
 activity label, separate job state, valid `updatedAt` in local time as
 **job metadata**, and all in-flight kind labels, or the unavailable diagnostic.
+Its accessible label is the icon's own short title plus any short status text;
+job state, timestamps and in-flight diagnostics stay in `title` only. When
+remote attention overrides the icon, its own attention title labels the slot.
 The `.session-status` has no separate tooltip. Initial sidebar builds and
 `applyStateClasses` refresh the same projection on head pushes and roster
 changes. The Agents table keeps its existing state labels, icon tooltip and

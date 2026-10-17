@@ -1887,8 +1887,8 @@ function buildSessionItem(session) {
   icon.className = 'session-icon' + (rowSessionIds(session).some(id => activePtyIds.has(id)) ? ' running' : '');
   const bgActivity = (typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(session), snapshot, session))
     || (session.bgJobId ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null);
-  paintSessionIconFromSnapshot(icon, snapshot, bgActivity?.title);
-  if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention, bgActivity?.title);
+  paintSessionIconFromSnapshot(icon, snapshot, bgActivity?.title, bgActivity?.text);
+  if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention);
 
   // Info block
   const info = document.createElement('div');

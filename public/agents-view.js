@@ -213,8 +213,8 @@ function backgroundActivityLabel(sessionId, snapshot, row) {
   const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toLocaleString()} (job metadata)${kinds ? ` · ${kinds}` : ''}` : 'Job activity unavailable';
   const title = `${renderSessionIcon(snapshot).title} · job ${entry.state || 'unknown'}\n${source}`;
   if (entry.state === 'done' && agentJobIsLive(entry)) return { text: 'Idle', title };
-  const text = terminal ? `Job ${entry.state}` : !valid ? 'Activity unavailable'
-    : entry.state === 'blocked' ? 'Blocked' : entry.state === 'working' ? '' : 'Activity unavailable';
+  const text = entry.state === 'blocked' ? 'Blocked' : terminal ? `Job ${entry.state}` : !valid ? 'Activity unavailable'
+    : entry.state === 'working' ? (snapshot.attention ? 'Needs attention' : '') : 'Activity unavailable';
   return { text, title };
 }
 

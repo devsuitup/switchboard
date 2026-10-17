@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Changed
-- A background session's sidebar row no longer repeats its working status under its title; activity details are in the icon's tooltip. Only idle, blocked, finished, stopped, failed or unavailable states are written out. (#702)
+- A background session's sidebar row no longer repeats its working status under its title; activity details are in the icon's tooltip. Only Needs attention, idle, blocked, finished, stopped, failed or unavailable states are written out. (#702)
 
 ### Fixed
 - Sessions on a remote host show again whether they are working or waiting for you, instead of "Turn state unavailable". (#698)

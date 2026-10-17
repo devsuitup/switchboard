@@ -1075,14 +1075,16 @@ footer separately describes liveness and attachment (#629).
 
 `session-activity-dom.js` is the only file that writes the sidebar slot:
 
-- `writeIconSlot(el, icon, title)` clears any previous `session-icon--*` class
+- `writeIconSlot(el, icon, title, text)` clears any previous `session-icon--*` class
   (robust to a rung's `slotClasses` shrinking or changing shape — a plain
   diff of the old vs. new class would also work but this needs no diffing),
   applies `icon.slotClasses`, and sets `el.title`/`el.dataset.glyph` from
   `icon.title`/`icon.glyph`. An optional nonempty `title` overrides the tooltip
-  and accessible label. Sidebar background rows use it for activity, job state,
+  only. The accessible label keeps the icon's own title plus optional short
+  status `text`. Sidebar background rows use the tooltip for activity, job state,
   job-update metadata and in-flight kinds; their status text is empty while
-  working, with concise labels for idle, blocked, terminal or unavailable
+  working unless the head needs attention, with concise labels for attention,
+  idle, blocked (even with invalid activity evidence), terminal or unavailable
   states (#702; see `bg-agents.md`, "Job activity"). Initial construction,
   `applyStateClasses` and `paintSessionIcon` retain that detail. Other surfaces
   keep the ordinary activity title. The `session-icon--*` namespace is deliberately
