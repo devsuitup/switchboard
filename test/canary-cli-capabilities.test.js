@@ -104,6 +104,7 @@ test('GIVEN CLI paste envelope WHEN C1 runs THEN unwrapped body is literal and c
     assert.equal(p.wrapperPresent, true);
     assert.equal(p.wrapperId, 'e7f5');
     assert.equal(p.envelopePrefix, '\\n\\n');
+    assert.equal(p.envelopeSuffix, '\\n');
     assert.equal(p.literalAfterKnownTransformations, true);
     assert.deepEqual(p.transformations, []);
     assert.equal(p.linkedPaste, false);
@@ -125,6 +126,7 @@ test('GIVEN TAB expanded by CLI WHEN C1 runs THEN literal fails with exact trans
     assert.equal(p.wrapperPresent, true);
     assert.equal(p.wrapperId, 'e7f5');
     assert.equal(p.envelopePrefix, '\\n\\n');
+    assert.equal(p.envelopeSuffix, '\\n');
     assert.equal(p.linkedPaste, false);
     assert.equal(p.storedBodyBytes, p.bytes + 3);
     const prefix = `CANARY ${p.nonce}\nLiteral LF\tTAB "quotes" 'single' café 東京\nReply only OK.\n`;
@@ -134,7 +136,7 @@ test('GIVEN TAB expanded by CLI WHEN C1 runs THEN literal fails with exact trans
     const project = path.join(r.home, '.claude/projects');
     const file = fs.readdirSync(project, { recursive: true }).find(x => path.basename(x) === `${p.transcriptId}.jsonl`);
     const rows = fs.readFileSync(path.join(project, file), 'utf8').trim().split('\n').map(x => JSON.parse(x));
-    assert.equal(rows.find(x => x.type === 'user').message.content, `\n\n<pasted_content id="e7f5">\n${body}\n</pasted_content id="e7f5">`);
+    assert.equal(rows.find(x => x.type === 'user').message.content, `\n\n<pasted_content id="e7f5">\n${body}\n</pasted_content id="e7f5">\n`);
     if (p.bytes === 180) assert.deepEqual(p.pasteCache, []);
     else assert.ok(p.pasteCache.some(x => x.bytes === p.bytes + 3 && x.sha256 === p.storedBodySha256));
   }
@@ -163,7 +165,7 @@ for (const [label, transform, expected] of [
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-storage-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const payload = 'CANARY\nTAB\ttext   \nend   ';
-    const stored = harness.received({ opts: { home: root } }, { message: { content: `<pasted_content id="5678">\n${transform(payload)}\n</pasted_content id="5678">` } }, payload);
+    const stored = harness.received({ opts: { home: root } }, { message: { content: `<pasted_content id="5678">\n${transform(payload)}\n</pasted_content id="5678">\n` } }, payload);
     assert.equal(stored.literal, false);
     assert.deepEqual(stored.transformations, expected);
     assert.equal(stored.literalAfterKnownTransformations, !expected.includes('unclassified-byte-change'));
@@ -171,19 +173,36 @@ for (const [label, transform, expected] of [
 }
 
 for (const prefix of ['', '\n\n', ' \t\r\n']) {
-  test(`GIVEN escaped prefix ${JSON.stringify(prefix)} WHEN unwrapping THEN body whitespace stays byte-exact`, t => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-envelope-'));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const payload = '\n \t"café 東京"\n  \n';
-    const stored = harness.received({ opts: { home: root } }, { message: { content: `${prefix}<pasted_content id="e7f5">\n${payload}\n</pasted_content id="e7f5">` } }, payload);
-    assert.equal(stored.wrapperPresent, true);
-    assert.equal(stored.wrapperId, 'e7f5');
-    assert.equal(stored.envelopePrefix, JSON.stringify(prefix).slice(1, -1));
-    assert.equal(stored.literal, true);
-    assert.equal(stored.literalAfterKnownTransformations, true);
-    assert.deepEqual(stored.transformations, []);
-  });
+  for (const suffix of ['\n', ' \t\r\n']) {
+    test(`GIVEN escaped prefix ${JSON.stringify(prefix)} and suffix ${JSON.stringify(suffix)} WHEN unwrapping THEN body whitespace stays byte-exact`, t => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-envelope-'));
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      const payload = '\n \t"café 東京"\n  \n';
+      const stored = harness.received({ opts: { home: root } }, { message: { content: `${prefix}<pasted_content id="e7f5">\n${payload}\n</pasted_content id="e7f5">${suffix}` } }, payload);
+      assert.equal(stored.wrapperPresent, true);
+      assert.equal(stored.wrapperId, 'e7f5');
+      assert.equal(stored.envelopePrefix, JSON.stringify(prefix).slice(1, -1));
+      assert.equal(stored.envelopeSuffix, JSON.stringify(suffix).slice(1, -1));
+      assert.equal(stored.storedBodyBytes, Buffer.byteLength(payload));
+      assert.equal(stored.storedBodySha256, crypto.createHash('sha256').update(payload).digest('hex'));
+      assert.equal(stored.literal, true);
+      assert.equal(stored.literalAfterKnownTransformations, true);
+      assert.deepEqual(stored.transformations, []);
+    });
+  }
 }
+
+test('GIVEN body ending in CR before the LF closing delimiter WHEN unwrapping THEN the CR stays in the body', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-body-cr-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const payload = '\n \t"café 東京"\n  \r';
+  const stored = harness.received({ opts: { home: root } }, { message: { content: `\n\n<pasted_content id="0152">\n${payload}\n</pasted_content id="0152">\n` } }, payload);
+  assert.equal(stored.literal, true);
+  assert.equal(stored.storedBodyBytes, Buffer.byteLength(payload));
+  assert.equal(stored.storedBodySha256, crypto.createHash('sha256').update(payload).digest('hex'));
+  assert.equal(stored.envelopeSuffix, '\\n');
+  assert.deepEqual(stored.transformations, []);
+});
 
 for (const width of [1, 2, 3, 4, 5, 6, 7, 8]) {
   test(`GIVEN TAB expanded to ${width} spaces WHEN comparing THEN expansion width is precise`, t => {
@@ -199,9 +218,10 @@ for (const width of [1, 2, 3, 4, 5, 6, 7, 8]) {
 test('GIVEN mismatched closing ID WHEN comparing THEN malformed envelope stays unclassified', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-bad-envelope-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const stored = harness.received({ opts: { home: root } }, { message: { content: '\n\n<pasted_content id="e7f5">\nbody\n</pasted_content id="8705">' } }, 'body');
+  const stored = harness.received({ opts: { home: root } }, { message: { content: '\n\n<pasted_content id="e7f5">\nbody\n</pasted_content id="8705">\n' } }, 'body');
   assert.equal(stored.wrapperPresent, false);
   assert.equal(stored.envelopePrefix, null);
+  assert.equal(stored.envelopeSuffix, null);
   assert.equal(stored.literal, false);
   assert.equal(stored.literalAfterKnownTransformations, false);
   assert.deepEqual(stored.transformations, ['unclassified-byte-change']);

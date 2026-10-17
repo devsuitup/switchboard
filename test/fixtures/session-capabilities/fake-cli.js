@@ -95,7 +95,7 @@ function handle(text) {
   }
   if (mutation === 'placeholder-no-confirmation' || mutation === 'storage-only') stored = '[Pasted text #1]';
   if (mutation === 'no-paste-ref') pasteRef = undefined;
-  if (text.startsWith('CANARY ') && !['placeholder-no-confirmation', 'storage-only'].includes(mutation)) stored = `\n\n<pasted_content id="e7f5">\n${stored}\n</pasted_content id="e7f5">`;
+  if (text.startsWith('CANARY ') && !['placeholder-no-confirmation', 'storage-only'].includes(mutation)) stored = `\n\n<pasted_content id="e7f5">\n${stored}\n</pasted_content id="e7f5">\n`;
   const user = { type: 'user', message: { role: 'user', content: stored }, ...(pasteRef ? { pasteRef } : {}) };
   if (mutation === 'split-paste') {
     for (const line of text.split('\n')) append({ type: 'user', message: { role: 'user', content: line } });
