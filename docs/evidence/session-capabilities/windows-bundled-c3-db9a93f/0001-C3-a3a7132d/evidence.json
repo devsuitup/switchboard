@@ -1,0 +1,852 @@
+{
+  "schemaVersion": 1,
+  "canary": "C3",
+  "dryRun": false,
+  "qualifiesProduction": false,
+  "platform": "win32",
+  "kernel": "10.0.26200",
+  "platformLabel": "windows-conpty-bundled",
+  "ptyBackend": "conpty-bundled",
+  "environmentKeys": [
+    "APPDATA",
+    "COLORTERM",
+    "COMSPEC",
+    "DISABLE_AUTOUPDATER",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "HOME",
+    "LANG",
+    "LOCALAPPDATA",
+    "PATH",
+    "PATHEXT",
+    "PROGRAMFILES",
+    "SWITCHBOARD_DATA_DIR",
+    "SWITCHBOARD_TRIGGERS_DIR",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "USERNAME",
+    "USERPROFILE",
+    "WINDIR",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME"
+  ],
+  "mutation": null,
+  "workBudgetMs": 300000,
+  "fixtureIdentity": "5a44636d4c90d6b5a8110c867dd0ab2bec4b300668f5f7234064c636579607a5",
+  "inventorySource": "git worktree list --porcelain",
+  "peerAliasThreat": {
+    "status": "UNVERIFIED",
+    "reason": "publication-path probe does not establish resistance to shared sessions directory aliases"
+  },
+  "checks": [
+    {
+      "sequence": 1,
+      "at": "2026-10-17T16:28:34.287Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "79562fc7-c1f1-4c13-adc7-9aa6ed1a020c"
+    },
+    {
+      "sequence": 2,
+      "at": "2026-10-17T16:28:34.288Z",
+      "name": "denied side effect absent",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "79562fc7-c1f1-4c13-adc7-9aa6ed1a020c"
+    },
+    {
+      "sequence": 3,
+      "at": "2026-10-17T16:28:34.288Z",
+      "name": "deny overrides overlapping settings and project allow",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "79562fc7-c1f1-4c13-adc7-9aa6ed1a020c"
+    },
+    {
+      "sequence": 4,
+      "at": "2026-10-17T16:28:34.288Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "79562fc7-c1f1-4c13-adc7-9aa6ed1a020c"
+    },
+    {
+      "sequence": 5,
+      "at": "2026-10-17T16:28:34.288Z",
+      "name": "explicit C3 final reply observed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "79562fc7-c1f1-4c13-adc7-9aa6ed1a020c"
+    },
+    {
+      "sequence": 6,
+      "at": "2026-10-17T16:28:34.288Z",
+      "name": "owned C3 post-submit idle confirmed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "79562fc7-c1f1-4c13-adc7-9aa6ed1a020c"
+    },
+    {
+      "sequence": 7,
+      "at": "2026-10-17T16:28:35.845Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true
+    },
+    {
+      "sequence": 8,
+      "at": "2026-10-17T16:28:35.845Z",
+      "name": "deny overrides overlapping settings and project allow",
+      "pass": true
+    },
+    {
+      "sequence": 9,
+      "at": "2026-10-17T16:28:35.845Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true
+    },
+    {
+      "sequence": 10,
+      "at": "2026-10-17T16:28:58.849Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "0e0d43a0-2f72-48b1-9de7-7b4a043516db"
+    },
+    {
+      "sequence": 11,
+      "at": "2026-10-17T16:28:58.849Z",
+      "name": "negative control removing deny produces side effect",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "0e0d43a0-2f72-48b1-9de7-7b4a043516db"
+    },
+    {
+      "sequence": 12,
+      "at": "2026-10-17T16:28:58.849Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "0e0d43a0-2f72-48b1-9de7-7b4a043516db"
+    },
+    {
+      "sequence": 13,
+      "at": "2026-10-17T16:28:58.849Z",
+      "name": "explicit C3 final reply observed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "0e0d43a0-2f72-48b1-9de7-7b4a043516db"
+    },
+    {
+      "sequence": 14,
+      "at": "2026-10-17T16:28:58.849Z",
+      "name": "owned C3 post-submit idle confirmed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "0e0d43a0-2f72-48b1-9de7-7b4a043516db"
+    },
+    {
+      "sequence": 15,
+      "at": "2026-10-17T16:29:00.605Z",
+      "name": "negative control removing deny produces side effect",
+      "pass": true
+    }
+  ],
+  "controls": [
+    {
+      "name": "remove-deny",
+      "status": "PASS"
+    }
+  ],
+  "processes": [
+    {
+      "pid": 17488,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "79562fc7-c1f1-4c13-adc7-9aa6ed1a020c",
+        "--settings",
+        "C:\\canary380-runtime\\r10\\private\\permissions-c16c924b-5abf-4144-a6b7-23a2d2d23864.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792254514266,
+        "status": "idle",
+        "statusUpdatedAt": 1792254514048,
+        "waitingFor": null
+      },
+      "sessionId": "79562fc7-c1f1-4c13-adc7-9aa6ed1a020c",
+      "cwd": "C:\\canary380-runtime\\r10\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367280933702702",
+      "writerHostPid": 17488,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 36310271996465336
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792254498719,
+          "waitBudgetMs": 90000,
+          "outcome": "PASS",
+          "observedAt": 1792254514266,
+          "descriptor": {
+            "observedAt": 1792254514266,
+            "status": "idle",
+            "statusUpdatedAt": 1792254514048,
+            "waitingFor": null
+          },
+          "transcriptBytes": 345383,
+          "rowCount": 62,
+          "lastRows": [
+            {
+              "type": "api-request",
+              "offset": 323460,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 328505,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 330557,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "attachment",
+              "offset": 331645,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 332296,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 334350,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 336068,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 336336,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 341891,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 342542,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "system",
+              "offset": 344199,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 344627,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 344997,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 345115,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 345198,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 345300,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792254498719,
+        "observedAt": 1792254514257,
+        "status": "idle",
+        "statusUpdatedAt": 1792254514048,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792254499272,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792254500336,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792254501028,
+          "code": "0",
+          "payloadSha256": "a286b0764670026d744a331a038388a101f039e24d3f6b90b10fe716f941871f"
+        },
+        {
+          "at": 1792254501295,
+          "code": "0",
+          "payloadSha256": "4a13a39e7a3d60057be69e68026bbfd3bdabaf3007bed8c617d3f5f2e9c14158"
+        },
+        {
+          "at": 1792254502256,
+          "code": "0",
+          "payloadSha256": "a286b0764670026d744a331a038388a101f039e24d3f6b90b10fe716f941871f"
+        },
+        {
+          "at": 1792254503217,
+          "code": "0",
+          "payloadSha256": "4a13a39e7a3d60057be69e68026bbfd3bdabaf3007bed8c617d3f5f2e9c14158"
+        },
+        {
+          "at": 1792254504222,
+          "code": "0",
+          "payloadSha256": "a286b0764670026d744a331a038388a101f039e24d3f6b90b10fe716f941871f"
+        },
+        {
+          "at": 1792254505185,
+          "code": "0",
+          "payloadSha256": "4a13a39e7a3d60057be69e68026bbfd3bdabaf3007bed8c617d3f5f2e9c14158"
+        },
+        {
+          "at": 1792254506140,
+          "code": "0",
+          "payloadSha256": "a286b0764670026d744a331a038388a101f039e24d3f6b90b10fe716f941871f"
+        },
+        {
+          "at": 1792254507101,
+          "code": "0",
+          "payloadSha256": "4a13a39e7a3d60057be69e68026bbfd3bdabaf3007bed8c617d3f5f2e9c14158"
+        },
+        {
+          "at": 1792254508067,
+          "code": "0",
+          "payloadSha256": "a286b0764670026d744a331a038388a101f039e24d3f6b90b10fe716f941871f"
+        },
+        {
+          "at": 1792254509024,
+          "code": "0",
+          "payloadSha256": "4a13a39e7a3d60057be69e68026bbfd3bdabaf3007bed8c617d3f5f2e9c14158"
+        },
+        {
+          "at": 1792254509983,
+          "code": "0",
+          "payloadSha256": "a286b0764670026d744a331a038388a101f039e24d3f6b90b10fe716f941871f"
+        },
+        {
+          "at": 1792254510949,
+          "code": "0",
+          "payloadSha256": "4a13a39e7a3d60057be69e68026bbfd3bdabaf3007bed8c617d3f5f2e9c14158"
+        },
+        {
+          "at": 1792254511905,
+          "code": "0",
+          "payloadSha256": "a286b0764670026d744a331a038388a101f039e24d3f6b90b10fe716f941871f"
+        },
+        {
+          "at": 1792254512878,
+          "code": "0",
+          "payloadSha256": "4a13a39e7a3d60057be69e68026bbfd3bdabaf3007bed8c617d3f5f2e9c14158"
+        },
+        {
+          "at": 1792254513827,
+          "code": "0",
+          "payloadSha256": "a286b0764670026d744a331a038388a101f039e24d3f6b90b10fe716f941871f"
+        },
+        {
+          "at": 1792254514048,
+          "code": "0",
+          "payloadSha256": "f34c58c2510fdb534c0a7eba826e00e82c73cf833979a884b4ab68629062571e"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 345383,
+        "exitRequestedAt": 1792254515301,
+        "finalBytes": 346969
+      }
+    },
+    {
+      "pid": 24528,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "0e0d43a0-2f72-48b1-9de7-7b4a043516db",
+        "--settings",
+        "C:\\canary380-runtime\\r10\\private\\permissions-4b688f19-9e17-45f1-9b13-b73ebcab74c2.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792254538815,
+        "status": "idle",
+        "statusUpdatedAt": 1792254538442,
+        "waitingFor": null
+      },
+      "sessionId": "0e0d43a0-2f72-48b1-9de7-7b4a043516db",
+      "cwd": "C:\\canary380-runtime\\r10\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367281159434167",
+      "writerHostPid": 24528,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 36310271996465336
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792254521055,
+          "waitBudgetMs": 90000,
+          "outcome": "PASS",
+          "observedAt": 1792254538815,
+          "descriptor": {
+            "observedAt": 1792254538815,
+            "status": "idle",
+            "statusUpdatedAt": 1792254538442,
+            "waitingFor": null
+          },
+          "transcriptBytes": 377605,
+          "rowCount": 56,
+          "lastRows": [
+            {
+              "type": "atis-latch",
+              "offset": 345208,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 345291,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "tool_addition"
+                },
+                {
+                  "type": "tool_addition"
+                },
+                {
+                  "type": "tool_addition"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 350188,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 354855,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 355506,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 357558,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 359071,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 359339,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 364515,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 365166,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 367220,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 368938,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 369206,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 374869,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 375520,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "system",
+              "offset": 377177,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792254521055,
+        "observedAt": 1792254538797,
+        "status": "idle",
+        "statusUpdatedAt": 1792254538442,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792254521621,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792254522339,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792254522582,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792254523543,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792254524505,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792254525465,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792254526431,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792254527388,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792254528350,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792254529326,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792254530287,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792254531247,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792254532207,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792254533168,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792254534129,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792254535109,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792254536069,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792254537038,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792254538441,
+          "code": "0",
+          "payloadSha256": "5b7de7d145a77310f0a6d98845c62c736e92dc5b3c62773c0aade5a7bf481f71"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 377605,
+        "exitRequestedAt": 1792254539868,
+        "finalBytes": 379934
+      }
+    }
+  ],
+  "payloads": [],
+  "forks": [],
+  "permissions": [
+    {
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "79562fc7-c1f1-4c13-adc7-9aa6ed1a020c",
+      "settingsSha256": "2b491252f0444c0276e7521d1ffd1d55efec1f0c06513e9d5d2b76018eaa3272",
+      "deniedSideEffectAbsent": true,
+      "toolPermissionDenial": true,
+      "denialObservation": {
+        "status": "PASS",
+        "sha256": "faf9d8525dae049f9aae7b820295a673fd81fe904b3c9c895597c656557677fc",
+        "excerpt": "Permission to use Bash with command printf denied > 'C:/canary380-runtime/r10/project/denied-c16c924b-5abf-4144-a6b7-23a2d2d23864' has been denied.",
+        "offset": 322755
+      },
+      "nonOverlappingActionRan": true,
+      "immutable": true,
+      "protectionAttemptObserved": false,
+      "protectionError": false,
+      "exactSettingsRead": true,
+      "finalReplyObserved": true,
+      "turnConfirmed": true,
+      "inheritedProjectAllow": true,
+      "inheritedGlobalAllow": true
+    },
+    {
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "0e0d43a0-2f72-48b1-9de7-7b4a043516db",
+      "settingsSha256": "147fb748c4b5f2d4c1f4f7849966b87c901487b74e09a7746a8c97a3468b1701",
+      "deniedSideEffectAbsent": false,
+      "toolPermissionDenial": false,
+      "denialObservation": {
+        "status": "UNVERIFIED",
+        "reason": "denial not required in remove-deny control"
+      },
+      "nonOverlappingActionRan": true,
+      "immutable": true,
+      "protectionAttemptObserved": false,
+      "protectionError": false,
+      "exactSettingsRead": true,
+      "finalReplyObserved": true,
+      "turnConfirmed": true,
+      "inheritedProjectAllow": true,
+      "inheritedGlobalAllow": true
+    }
+  ],
+  "reports": [],
+  "failure": "C3 requires --sandbox and Linux read-only mount proof for a complete PASS"
+}
