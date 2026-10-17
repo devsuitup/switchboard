@@ -89,12 +89,13 @@ function handle(text) {
   if (Buffer.byteLength(text) > 4096) {
     const cache = path.join(state, 'paste-cache');
     fs.mkdirSync(cache, { recursive: true });
-    pasteRef = `${crypto.randomUUID()}.txt`;
-    if (mutation !== 'missing-paste-object') fs.writeFileSync(path.join(cache, pasteRef), stored);
+    const cacheName = `${crypto.randomBytes(8).toString('hex')}.txt`;
+    if (['missing-paste-object', 'placeholder-no-confirmation', 'storage-only'].includes(mutation)) pasteRef = cacheName;
+    if (mutation !== 'missing-paste-object') fs.writeFileSync(path.join(cache, cacheName), stored);
   }
   if (mutation === 'placeholder-no-confirmation' || mutation === 'storage-only') stored = '[Pasted text #1]';
   if (mutation === 'no-paste-ref') pasteRef = undefined;
-  if (text.startsWith('CANARY ') && !['placeholder-no-confirmation', 'storage-only'].includes(mutation)) stored = `<pasted_content id="1234">\n${stored}\n</pasted_content id="1234">`;
+  if (text.startsWith('CANARY ') && !['placeholder-no-confirmation', 'storage-only'].includes(mutation)) stored = `\n\n<pasted_content id="e7f5">\n${stored}\n</pasted_content id="e7f5">`;
   const user = { type: 'user', message: { role: 'user', content: stored }, ...(pasteRef ? { pasteRef } : {}) };
   if (mutation === 'split-paste') {
     for (const line of text.split('\n')) append({ type: 'user', message: { role: 'user', content: line } });

@@ -193,8 +193,8 @@ const normal = value => (process.platform === 'win32' ? String(value).toLowerCas
 
 function received(ctx, row, payload) {
   const raw = content(row);
-  const envelope = /^<pasted_content id="(\d+)">\r?\n([\s\S]*?)\r?\n<\/pasted_content id="\1">$/.exec(raw);
-  const body = envelope ? envelope[2] : raw;
+  const envelope = /^(\s*)<pasted_content id="([a-zA-Z0-9_-]+)">\r?\n([\s\S]*?)\r?\n<\/pasted_content id="\2">$/.exec(raw);
+  const body = envelope ? envelope[3] : raw;
   const literal = Buffer.from(body).equals(Buffer.from(payload));
   const placeholder = /^\[Pasted text(?:\s|\])/.test(body);
   const transformations = byteTransformations(payload, body);
@@ -209,21 +209,23 @@ function received(ctx, row, payload) {
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) continue;
       const bytes = fs.readFileSync(file);
       pasteCache.push({ bytes: bytes.length, sha256: hash(bytes) });
-      if (name === reference || envelope && [envelope[1], `${envelope[1]}.txt`].includes(name)) {
+      if (name === reference || envelope && [envelope[2], `${envelope[2]}.txt`].includes(name)) {
         hasReference = true;
         if (bytes.equals(Buffer.from(payload))) linked = true;
       }
     }
   }
   return { literal, linked, exact: literal || linked, hasReference, placeholder,
-    wrapperPresent: !!envelope, wrapperId: envelope?.[1] ?? null, transformations, pasteCache,
+    wrapperPresent: !!envelope, wrapperId: envelope?.[2] ?? null,
+    envelopePrefix: envelope ? JSON.stringify(envelope[1]).slice(1, -1) : null,
+    literalAfterKnownTransformations: !transformations.includes('unclassified-byte-change'), transformations, pasteCache,
     storedBodyBytes: Buffer.byteLength(body), storedBodySha256: hash(body) };
 }
 
 function byteTransformations(payload, body) {
   if (payload === body) return [];
   const operations = [
-    ...Array.from({ length: 8 }, (_, i) => ['tab-to-spaces', s => s.replaceAll('\t', ' '.repeat(i + 1))]),
+    ...Array.from({ length: 8 }, (_, i) => [`tab-to-${i + 1}-spaces`, s => s.replaceAll('\t', ' '.repeat(i + 1))]),
     ['lf-to-crlf', s => s.replace(/(?<!\r)\n/g, '\r\n')],
     ['crlf-to-lf', s => s.replaceAll('\r\n', '\n')],
     ['trailing-whitespace-removed', s => s.replace(/[ \t]+(?=\r?$)/gm, '')],
@@ -605,6 +607,7 @@ async function c1(ctx) {
     ctx.evidence.payloads.push({ bytes: size, sha256: hash(payload), nonce, userTurns: turns.length,
       literal: stored.literal, linkedPaste: stored.linked, independentlyObservedReaction: reaction,
       wrapperPresent: stored.wrapperPresent ?? false, wrapperId: stored.wrapperId ?? null,
+      envelopePrefix: stored.envelopePrefix ?? null, literalAfterKnownTransformations: stored.literalAfterKnownTransformations ?? false,
       transformations: stored.transformations ?? [], pasteCache: stored.pasteCache ?? [],
       storedBodyBytes: stored.storedBodyBytes, storedBodySha256: stored.storedBodySha256,
       singleTurnDelivery: one, eligibleConfirmation: one && reaction,

@@ -102,11 +102,13 @@ test('GIVEN CLI paste envelope WHEN C1 runs THEN unwrapped body is literal and c
   assert.equal(r.status, 0, r.stderr);
   for (const p of evidence.payloads) {
     assert.equal(p.wrapperPresent, true);
-    assert.equal(p.wrapperId, '1234');
+    assert.equal(p.wrapperId, 'e7f5');
+    assert.equal(p.envelopePrefix, '\\n\\n');
+    assert.equal(p.literalAfterKnownTransformations, true);
     assert.deepEqual(p.transformations, []);
+    assert.equal(p.linkedPaste, false);
     assert.ok(p.pasteCache.every(x => Object.keys(x).sort().join(',') === 'bytes,sha256'));
     if (p.bytes > 4096) {
-      assert.equal(p.linkedPaste, true);
       assert.ok(p.pasteCache.some(x => x.bytes === p.bytes && x.sha256 === p.sha256));
     }
   }
@@ -117,7 +119,26 @@ test('GIVEN TAB expanded by CLI WHEN C1 runs THEN literal fails with exact trans
   assert.equal(r.status, 1, r.stderr);
   const evidence = data(r);
   assert.ok(evidence.payloads.every(x => x.literal === false));
-  assert.ok(evidence.payloads.every(x => JSON.stringify(x.transformations) === '["tab-to-spaces"]'), 'TAB expansion must be identified');
+  assert.ok(evidence.payloads.every(x => JSON.stringify(x.transformations) === '["tab-to-4-spaces"]'), 'TAB expansion must be identified');
+  assert.ok(evidence.payloads.every(x => x.literalAfterKnownTransformations));
+  for (const p of evidence.payloads) {
+    assert.equal(p.wrapperPresent, true);
+    assert.equal(p.wrapperId, 'e7f5');
+    assert.equal(p.envelopePrefix, '\\n\\n');
+    assert.equal(p.linkedPaste, false);
+    assert.equal(p.storedBodyBytes, p.bytes + 3);
+    const prefix = `CANARY ${p.nonce}\nLiteral LF\tTAB "quotes" 'single' café 東京\nReply only OK.\n`;
+    const payload = prefix + 'x'.repeat(p.bytes - Buffer.byteLength(prefix));
+    const body = payload.replaceAll('\t', '    ');
+    assert.equal(p.storedBodySha256, crypto.createHash('sha256').update(body).digest('hex'));
+    const project = path.join(r.home, '.claude/projects');
+    const file = fs.readdirSync(project, { recursive: true }).find(x => path.basename(x) === `${p.transcriptId}.jsonl`);
+    const rows = fs.readFileSync(path.join(project, file), 'utf8').trim().split('\n').map(x => JSON.parse(x));
+    assert.equal(rows.find(x => x.type === 'user').message.content, `\n\n<pasted_content id="e7f5">\n${body}\n</pasted_content id="e7f5">`);
+    if (p.bytes === 180) assert.deepEqual(p.pasteCache, []);
+    else assert.ok(p.pasteCache.some(x => x.bytes === p.bytes + 3 && x.sha256 === p.storedBodySha256));
+  }
+  for (const name of fs.readdirSync(path.join(r.home, '.claude/paste-cache'))) assert.match(name, /^[0-9a-f]{16}\.txt$/);
   assert.ok(evidence.payloads.every(x => x.eligibleConfirmation));
   assert.equal(r.ledger.measurements[0].status, 'FAIL');
 });
@@ -135,7 +156,8 @@ for (const [label, transform, expected] of [
   ['CRLF', s => s.replaceAll('\n', '\r\n'), ['lf-to-crlf']],
   ['trailing whitespace', s => s.replace(/ +$/gm, ''), ['trailing-whitespace-removed']],
   ['truncation', s => s.slice(0, -4), ['truncation']],
-  ['combined transforms', s => s.replaceAll('\t', '    ').replaceAll('\n', '\r\n').replace(/ +$/gm, ''), ['tab-to-spaces', 'lf-to-crlf', 'trailing-whitespace-removed']],
+  ['combined transforms', s => s.replaceAll('\t', '    ').replaceAll('\n', '\r\n').replace(/ +$/gm, ''), ['tab-to-4-spaces', 'lf-to-crlf', 'trailing-whitespace-removed']],
+  ['unknown mutation', s => s.replace('text', 'other'), ['unclassified-byte-change']],
 ]) {
   test(`GIVEN ${label} WHEN comparing envelope body THEN all byte changes are recorded`, t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-storage-'));
@@ -144,8 +166,46 @@ for (const [label, transform, expected] of [
     const stored = harness.received({ opts: { home: root } }, { message: { content: `<pasted_content id="5678">\n${transform(payload)}\n</pasted_content id="5678">` } }, payload);
     assert.equal(stored.literal, false);
     assert.deepEqual(stored.transformations, expected);
+    assert.equal(stored.literalAfterKnownTransformations, !expected.includes('unclassified-byte-change'));
   });
 }
+
+for (const prefix of ['', '\n\n', ' \t\r\n']) {
+  test(`GIVEN escaped prefix ${JSON.stringify(prefix)} WHEN unwrapping THEN body whitespace stays byte-exact`, t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-envelope-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const payload = '\n \t"café 東京"\n  \n';
+    const stored = harness.received({ opts: { home: root } }, { message: { content: `${prefix}<pasted_content id="e7f5">\n${payload}\n</pasted_content id="e7f5">` } }, payload);
+    assert.equal(stored.wrapperPresent, true);
+    assert.equal(stored.wrapperId, 'e7f5');
+    assert.equal(stored.envelopePrefix, JSON.stringify(prefix).slice(1, -1));
+    assert.equal(stored.literal, true);
+    assert.equal(stored.literalAfterKnownTransformations, true);
+    assert.deepEqual(stored.transformations, []);
+  });
+}
+
+for (const width of [1, 2, 3, 4, 5, 6, 7, 8]) {
+  test(`GIVEN TAB expanded to ${width} spaces WHEN comparing THEN expansion width is precise`, t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-tab-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const stored = harness.received({ opts: { home: root } }, { message: { content: 'a' + ' '.repeat(width) + 'b' } }, 'a\tb');
+    assert.equal(stored.literal, false);
+    assert.equal(stored.literalAfterKnownTransformations, true);
+    assert.deepEqual(stored.transformations, [`tab-to-${width}-spaces`]);
+  });
+}
+
+test('GIVEN mismatched closing ID WHEN comparing THEN malformed envelope stays unclassified', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-bad-envelope-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const stored = harness.received({ opts: { home: root } }, { message: { content: '\n\n<pasted_content id="e7f5">\nbody\n</pasted_content id="8705">' } }, 'body');
+  assert.equal(stored.wrapperPresent, false);
+  assert.equal(stored.envelopePrefix, null);
+  assert.equal(stored.literal, false);
+  assert.equal(stored.literalAfterKnownTransformations, false);
+  assert.deepEqual(stored.transformations, ['unclassified-byte-change']);
+});
 for (const [canary, cases] of Object.entries(mutations)) {
   for (const mutation of cases) {
     test(`GIVEN ${canary} mutation ${mutation} WHEN dry-run THEN that canary fails`, t => {

@@ -47,12 +47,19 @@ separately from the assistant-row result. OSC payload text is never retained.
 C1 delivery/confirmation do not require literal storage. A complete
 `<pasted_content id="NNNN">` envelope with a matching closing ID is removed
 before the byte-exact UTF-8 comparison; its separator newlines belong to the
-envelope. Evidence records wrapperPresent, wrapperId, storedBodyBytes and
+envelope. IDs may contain letters, digits, underscores and hyphens. Leading
+whitespace before the opening tag belongs to the envelope and is recorded as
+escaped envelopePrefix (for example, `"\\n\\n"`); an absent envelope records
+null. Evidence records wrapperPresent, wrapperId, storedBodyBytes and
 storedBodySha256. The body is never trimmed or normalized for literal equality.
-transformations identifies TAB-to-spaces (1–8 spaces), LF/CRLF conversion,
+transformations identifies exact TAB expansion width (`tab-to-4-spaces`, or
+the corresponding width from 1–8), LF/CRLF conversion,
 trailing whitespace removal/addition and truncation, including combinations.
 An unmatched byte change is explicitly unclassified-byte-change. These are
-storage findings and keep literal=false. No transcript content is copied.
+storage findings and keep literal=false. literalAfterKnownTransformations is
+true for an exact body or a difference fully explained by classified
+transformations; it never changes the literalTranscript capability gate.
+No transcript content is copied.
 pasteCache holds only byte sizes and SHA-256 hashes (at most 128 regular,
 non-linked files, each at most 65536 bytes). linkedPaste requires an actual
 row pasteRef or an envelope ID matching a cache basename (ID or ID.txt), plus
@@ -220,6 +227,13 @@ fake descriptors carry a per-launch identity token instead of a kernel FILETIME;
 real PTY identity, permissions, native messaging, mounts and onboarding remain
 unmeasured. The C1 fixture emits the real paste envelope; tab-to-spaces alters
 its body, and exit-flush-assistant persists its assistant row only on `/exit`.
+The fixture's C1 envelope begins with two LFs and repeats its hexadecimal ID
+in the closing tag. Its unreferenced cache names contain 16 hexadecimal
+characters. With tab-to-spaces, the single TAB in the payload builder becomes
+four spaces: the cached body has 5003/32771/49155 bytes for the three large
+payloads, with no cache for the 180-byte control. The three extra bytes are
+observed expansion in this fake, not an inferred cache format or a new live
+measurement. Quotes, LF and non-ASCII remain byte-exact in this scenario.
 Fixture mutations cover corrupt/multiple/missing paste storage,
 meta rows, title/source activity, broken forks, permission/OS denials, report
 and receipt absence, wrong addresses/control leaks, shared publication,
