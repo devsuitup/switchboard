@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
-- Typing in a terminal no longer stalls while other sessions or subagents are working: their last-activity times and message counts in the sidebar now update at most every 30 seconds, while new sessions and renames still appear right away. (#694)
+- Typing in a terminal no longer stalls while other sessions or subagents are working: their last-activity times in the sidebar now update at most every 30 seconds, while new sessions and renames still appear right away. (#694)
 - A session sent to the background no longer takes back an old name over one you gave it more recently. (#685)
 - A session whose Claude process crashed no longer reappears in the sidebar as running after Windows reuses its process number. (#687)
 

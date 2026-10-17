@@ -277,7 +277,7 @@ function sidebarContinuation(row) {
   if (!index) return null;
   if (index.format !== 3 || !index.complete || index.unresolved || !Array.isArray(index.ids)
     || index.ids.length > 1 || (row.fileMtime && index.mtime !== row.fileMtime)) return false;
-  return index.ids.map(id => String(id).toLowerCase());
+  return index.ids.length ? index.ids.map(id => String(id).toLowerCase()) : null;
 }
 
 function sidebarRowState(row) {

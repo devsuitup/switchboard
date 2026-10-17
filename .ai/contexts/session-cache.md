@@ -66,7 +66,7 @@ counts, schedule/slug and parent grouping, archive/SDK visibility, bridge heads
 and merged members. The sidebar displays those results in `buildSessionItem`,
 `buildSubagentItem` and the schedule groups. Folder `projectPath` also determines
 empty project entries. For local top-level rows, continuation comparison keeps
-only the graph's effective state (absent, unusable, or normalized successor IDs):
+only the graph's effective state (absent or empty, unusable, or normalized successor IDs):
 `format`, `complete`, `unresolved`, `ids`, and validity of `mtime` against
 `fileMtime`. Index byte offsets, stamps and tails are ignored, as are
 `textContent`, daily metrics and folder index freshness.
@@ -89,14 +89,18 @@ confirmation text. `messageCount` appears as an exact integer on session and
 subagent rows; ordinary header refreshes already preserve the cached count.
 No session `fileMtime` renderer consumer exists. These uses tolerate the 30s
 activity window; busy/attention and running-subagent counts use separate events.
+Merged compaction mirrors choose `headSessionId` from the latest `modified`;
+a head change caused only by `modified` is accepted within the same 30s activity
+window. A new mirror adds a row and remains structural.
 
 Busy and attention updates do not depend on this reload: main's OSC parser
 sends `cli-busy-state` and `terminal-notification`, the renderer calls
 `setActivity`/`setAttention` immediately, and its existing active-session poll
 calls `reconcileBusyState`. CLI/background status, remote, archive and scan
-notification conditions are unchanged. In particular, background `readJob`
-still schedules a notification on every successfully parsed job write, and
-cold population still notifies for each processed folder, even with no rows.
+notification conditions are unchanged. Background job notifications still
+depend on job additions/removals or changes to a job's `state`, `name`,
+`nameSource` or `sessionId`. Cold population still notifies for each processed
+folder, even with no rows.
 
 Every notifier caller supplies a cause; see `docs/activity-trace.md` for
 `projects.changed` and the renderer frame probe. The `activity` cause selects

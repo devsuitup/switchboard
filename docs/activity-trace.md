@@ -84,7 +84,7 @@ is an array of distinct caller labels: `watcher`, `bg-jobs`, `cli-status`,
 `remote`, `archive`, `project-added`, `project-deleted`, `project-remap`,
 `worktree-deleted`, `session-exit`, `session-attach`, `entrypoint-backfill`,
 `title-backfill`, `sdk-reveal`, `bridge-repair`, `scan`, or `activity`. Structural
-changes are sent immediately; calls within the 1.5-second throttle window are deduplicated
+changes use a 1.5-second leading/trailing throttle; calls within that window are deduplicated
 into the trailing emission's array, in arrival order. The leading cause belongs
 to its own emission. The IPC carries the same array. Notification conditions
 outside the local transcript watcher are unchanged. A watcher flush changing

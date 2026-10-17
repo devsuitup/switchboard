@@ -157,6 +157,50 @@ test('watcher coalesces repeated activity-only flushes across 30 seconds', async
   assert.deepEqual(Array.from(f.traced[0][2].cause), ['activity']);
 });
 
+for (const firstOrder of [['one', 'two'], ['two', 'one']]) {
+  test(`refreshFolder keeps two growing sessions activity-only starting with ${firstOrder.join(', ')}`, t => {
+    const f = fixture(t);
+    const files = new Map(firstOrder.map(id => [id, f.write(id)]));
+    assert.equal(f.cache.refreshFolder(f.folder), true);
+    const results = [];
+    for (let step = 0; step < 6; step++) {
+      const order = step % 2 ? [...firstOrder].reverse() : firstOrder;
+      const modified = new Date(Date.UTC(2030, 0, 2) + step * 1500);
+      for (const id of order) {
+        const file = files.get(id);
+        fs.appendFileSync(file, JSON.stringify({ type: 'assistant', message: { content: `reply ${step}` } }) + '\n');
+        fs.utimesSync(file, modified, modified);
+      }
+      results.push(f.cache.refreshFolder(f.folder, { files: new Set(order.map(id => id + '.jsonl')) }));
+      for (const id of order) assert.equal(f.rows.get(id).modified, modified.toISOString());
+    }
+    assert.deepEqual(results, Array(6).fill('activity'), 'every paired append must stay activity-only in either scan order');
+  });
+}
+
+test('refreshFolder keeps a growing session activity-only when its continuation scan returns null', t => {
+  const f = fixture(t);
+  const file = f.write('one');
+  assert.equal(f.cache.refreshFolder(f.folder), true);
+  fs.appendFileSync(file, JSON.stringify({ type: 'assistant', message: { content: 'first reply' } }) + '\n');
+  fs.utimesSync(file, new Date('2030-01-02'), new Date('2030-01-02'));
+  const statSync = fs.statSync;
+  let snapshots = 0;
+  t.mock.method(fs, 'statSync', (target, options) => {
+    if (target === file && options?.bigint && ++snapshots === 2) {
+      fs.appendFileSync(file, JSON.stringify({ type: 'assistant', message: { content: 'concurrent reply' } }) + '\n');
+      fs.utimesSync(file, new Date('2030-01-03'), new Date('2030-01-03'));
+    }
+    return statSync(target, options);
+  });
+  const duringGrowth = f.cache.refreshFolder(f.folder, { files: new Set(['one.jsonl']) });
+  assert.equal(f.rows.get('one').continuationIndex, null, 'growth during the scan discards its index');
+  const afterGrowth = f.cache.refreshFolder(f.folder, { files: new Set(['one.jsonl']) });
+  assert.equal(f.rows.get('one').modified, '2030-01-03T00:00:00.000Z');
+  assert.deepEqual(JSON.parse(f.rows.get('one').continuationIndex).ids, []);
+  assert.deepEqual([duringGrowth, afterGrowth], ['activity', 'activity'], 'discarding and rebuilding an empty index must stay activity-only');
+});
+
 test('a structural change satisfies pending activity without a second reload', async t => {
   const f = fixture(t);
   const file = f.write('one');
