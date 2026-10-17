@@ -1,0 +1,1465 @@
+{
+  "schemaVersion": 1,
+  "canary": "C2",
+  "dryRun": false,
+  "qualifiesProduction": false,
+  "platform": "win32",
+  "kernel": "10.0.26200",
+  "platformLabel": "windows-conpty-bundled",
+  "ptyBackend": "conpty-bundled",
+  "environmentKeys": [
+    "APPDATA",
+    "COLORTERM",
+    "COMSPEC",
+    "DISABLE_AUTOUPDATER",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "HOME",
+    "LANG",
+    "LOCALAPPDATA",
+    "PATH",
+    "PATHEXT",
+    "PROGRAMFILES",
+    "SWITCHBOARD_DATA_DIR",
+    "SWITCHBOARD_TRIGGERS_DIR",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "USERNAME",
+    "USERPROFILE",
+    "WINDIR",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME"
+  ],
+  "mutation": null,
+  "workBudgetMs": 900000,
+  "fixtureIdentity": "59bf9d4c896f3ef5c90964dbcbcc0971e31b37ac53b0105b890840b34f82da8f",
+  "inventorySource": "git worktree list --porcelain",
+  "peerAliasThreat": {
+    "status": "UNVERIFIED",
+    "reason": "publication-path probe does not establish resistance to shared sessions directory aliases"
+  },
+  "checks": [
+    {
+      "sequence": 1,
+      "at": "2026-10-17T16:04:02.734Z",
+      "name": "origin CLI rename is stored",
+      "pass": true
+    },
+    {
+      "sequence": 2,
+      "at": "2026-10-17T16:04:09.297Z",
+      "name": "fork has new identity",
+      "pass": true
+    },
+    {
+      "sequence": 3,
+      "at": "2026-10-17T16:04:13.654Z",
+      "name": "fork retains source sentinel before first own turn",
+      "pass": true
+    },
+    {
+      "sequence": 4,
+      "at": "2026-10-17T16:04:13.655Z",
+      "name": "fork creates new registered worktree",
+      "pass": true
+    },
+    {
+      "sequence": 5,
+      "at": "2026-10-17T16:04:13.660Z",
+      "name": "fork preserves source prefix while allowing natural appends",
+      "pass": true
+    },
+    {
+      "sequence": 6,
+      "at": "2026-10-17T16:05:22.878Z",
+      "name": "origin CLI rename is stored",
+      "pass": true
+    },
+    {
+      "sequence": 7,
+      "at": "2026-10-17T16:05:29.872Z",
+      "name": "fork has new identity",
+      "pass": true
+    },
+    {
+      "sequence": 8,
+      "at": "2026-10-17T16:05:41.483Z",
+      "name": "fork retains source sentinel before first own turn",
+      "pass": true
+    },
+    {
+      "sequence": 9,
+      "at": "2026-10-17T16:05:41.483Z",
+      "name": "fork creates new registered worktree",
+      "pass": true
+    },
+    {
+      "sequence": 10,
+      "at": "2026-10-17T16:05:41.490Z",
+      "name": "fork preserves source prefix while allowing natural appends",
+      "pass": true
+    },
+    {
+      "sequence": 11,
+      "at": "2026-10-17T16:05:56.214Z",
+      "name": "origin CLI rename is stored",
+      "pass": true
+    },
+    {
+      "sequence": 12,
+      "at": "2026-10-17T16:06:04.008Z",
+      "name": "fork has new identity",
+      "pass": true
+    },
+    {
+      "sequence": 13,
+      "at": "2026-10-17T16:06:07.528Z",
+      "name": "fork retains source sentinel before first own turn",
+      "pass": true
+    },
+    {
+      "sequence": 14,
+      "at": "2026-10-17T16:06:07.528Z",
+      "name": "fork creates new registered worktree",
+      "pass": true
+    },
+    {
+      "sequence": 15,
+      "at": "2026-10-17T16:06:07.533Z",
+      "name": "fork preserves source prefix while allowing natural appends",
+      "pass": true
+    },
+    {
+      "sequence": 16,
+      "at": "2026-10-17T16:07:05.334Z",
+      "name": "origin CLI rename is stored",
+      "pass": true
+    },
+    {
+      "sequence": 17,
+      "at": "2026-10-17T16:07:11.536Z",
+      "name": "fork has new identity",
+      "pass": true
+    },
+    {
+      "sequence": 18,
+      "at": "2026-10-17T16:07:31.261Z",
+      "name": "fork retains source sentinel before first own turn",
+      "pass": true
+    },
+    {
+      "sequence": 19,
+      "at": "2026-10-17T16:07:31.262Z",
+      "name": "fork creates new registered worktree",
+      "pass": true
+    },
+    {
+      "sequence": 20,
+      "at": "2026-10-17T16:07:31.269Z",
+      "name": "fork preserves source prefix while allowing natural appends",
+      "pass": true
+    }
+  ],
+  "controls": [
+    {
+      "name": "table mutations",
+      "status": "UNVERIFIED",
+      "reason": "run separate --dry-run --mutation invocations; no result inferred from a different run"
+    }
+  ],
+  "processes": [
+    {
+      "pid": 10348,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "b2bc62fd-4d42-4966-9aab-4289eafc07f8"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "sessionId": "b2bc62fd-4d42-4966-9aab-4289eafc07f8",
+      "cwd": "C:\\canary380-runtime\\r8\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367266307913892",
+      "writerHostPid": 10348,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 23643898044236896
+      },
+      "descriptorConfirmation": {
+        "submittedAt": 1792253042392,
+        "observedAt": 1792253042717,
+        "status": "idle",
+        "statusUpdatedAt": 1792253042509,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792253042440,
+          "code": "0",
+          "payloadSha256": "3e26a014308932195bcd24648ddfd8e42dd99d85d3d3473fab3a93ddd1a35231"
+        },
+        {
+          "at": 1792253042463,
+          "code": "0",
+          "payloadSha256": "297aac998fc670fc74b9811e66b344f9f007a4afc14dc5f3126dab2146d1bcb0"
+        },
+        {
+          "at": 1792253042514,
+          "code": "0",
+          "payloadSha256": "718cc93c7c420bb116379e0a554abb57f7467a131cb7192da23186e729b98797"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 323913,
+        "exitRequestedAt": 1792253057901,
+        "finalBytes": 325477
+      }
+    },
+    {
+      "pid": 12856,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--resume",
+        "b2bc62fd-4d42-4966-9aab-4289eafc07f8",
+        "--fork-session",
+        "--worktree",
+        "canary-root-small"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "sessionId": "2ec0f866-feb7-4f60-895a-806018be2eef",
+      "cwd": "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-small",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367266431314660",
+      "writerHostPid": 12856,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 23643898044236896
+      },
+      "descriptorConfirmation": {
+        "submittedAt": 1792253049298,
+        "observedAt": 1792253053592,
+        "status": "idle",
+        "statusUpdatedAt": 1792253053509,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792253049780,
+          "code": "0",
+          "payloadSha256": "297aac998fc670fc74b9811e66b344f9f007a4afc14dc5f3126dab2146d1bcb0"
+        },
+        {
+          "at": 1792253050741,
+          "code": "0",
+          "payloadSha256": "2b152121dd062baffdd393b3c08df84934e491a3c1edc4c77cd46600dc58e59e"
+        },
+        {
+          "at": 1792253051702,
+          "code": "0",
+          "payloadSha256": "297aac998fc670fc74b9811e66b344f9f007a4afc14dc5f3126dab2146d1bcb0"
+        },
+        {
+          "at": 1792253052663,
+          "code": "0",
+          "payloadSha256": "2b152121dd062baffdd393b3c08df84934e491a3c1edc4c77cd46600dc58e59e"
+        },
+        {
+          "at": 1792253053508,
+          "code": "0",
+          "payloadSha256": "718cc93c7c420bb116379e0a554abb57f7467a131cb7192da23186e729b98797"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": false,
+        "forcedKill": true,
+        "beforeExitBytes": 337077,
+        "exitRequestedAt": 1792253054687,
+        "gracefulExitTimedOut": true,
+        "finalBytes": 337077
+      }
+    },
+    {
+      "pid": 25504,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "75b5ef98-365a-4cde-9ad9-47d4f7d860c9"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "sessionId": "75b5ef98-365a-4cde-9ad9-47d4f7d860c9",
+      "cwd": "C:\\canary380-runtime\\r8\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367266586023265",
+      "writerHostPid": 25504,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 23643898044236896
+      },
+      "descriptorConfirmation": {
+        "submittedAt": 1792253122430,
+        "observedAt": 1792253122831,
+        "status": "idle",
+        "statusUpdatedAt": 1792253122527,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792253122481,
+          "code": "0",
+          "payloadSha256": "715c927af66c4d6fee04f33c8acfd16b82e3f20b23e7c603b4bdef17d2679a3b"
+        },
+        {
+          "at": 1792253122502,
+          "code": "0",
+          "payloadSha256": "3e6eb4524331534193da78010d01cceb98cbd737ca371c2f59b0fa582d968ab3"
+        },
+        {
+          "at": 1792253122526,
+          "code": "0",
+          "payloadSha256": "e62c2bb325a59d60be47cb216b53534f8861269ce3f6ae20682a8ef7019cc2c0"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 754246,
+        "exitRequestedAt": 1792253145721,
+        "finalBytes": 757239
+      }
+    },
+    {
+      "pid": 19084,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--resume",
+        "75b5ef98-365a-4cde-9ad9-47d4f7d860c9",
+        "--fork-session",
+        "--worktree",
+        "canary-root-large"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "sessionId": "e3d773fd-cd8c-4fea-8b31-7c37361635c7",
+      "cwd": "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-large",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367267234980888",
+      "writerHostPid": 19084,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 23643898044236896
+      },
+      "descriptorConfirmation": {
+        "submittedAt": 1792253129875,
+        "observedAt": 1792253141428,
+        "status": "idle",
+        "statusUpdatedAt": 1792253141386,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792253130585,
+          "code": "0",
+          "payloadSha256": "ebc1ba1fe002c177dcf5917024fc6d42c64baba2f2cb187b60b67cf7aabe1300"
+        },
+        {
+          "at": 1792253131563,
+          "code": "0",
+          "payloadSha256": "3e6eb4524331534193da78010d01cceb98cbd737ca371c2f59b0fa582d968ab3"
+        },
+        {
+          "at": 1792253132514,
+          "code": "0",
+          "payloadSha256": "ebc1ba1fe002c177dcf5917024fc6d42c64baba2f2cb187b60b67cf7aabe1300"
+        },
+        {
+          "at": 1792253133470,
+          "code": "0",
+          "payloadSha256": "3e6eb4524331534193da78010d01cceb98cbd737ca371c2f59b0fa582d968ab3"
+        },
+        {
+          "at": 1792253134431,
+          "code": "0",
+          "payloadSha256": "ebc1ba1fe002c177dcf5917024fc6d42c64baba2f2cb187b60b67cf7aabe1300"
+        },
+        {
+          "at": 1792253135390,
+          "code": "0",
+          "payloadSha256": "3e6eb4524331534193da78010d01cceb98cbd737ca371c2f59b0fa582d968ab3"
+        },
+        {
+          "at": 1792253136353,
+          "code": "0",
+          "payloadSha256": "ebc1ba1fe002c177dcf5917024fc6d42c64baba2f2cb187b60b67cf7aabe1300"
+        },
+        {
+          "at": 1792253137313,
+          "code": "0",
+          "payloadSha256": "3e6eb4524331534193da78010d01cceb98cbd737ca371c2f59b0fa582d968ab3"
+        },
+        {
+          "at": 1792253138292,
+          "code": "0",
+          "payloadSha256": "ebc1ba1fe002c177dcf5917024fc6d42c64baba2f2cb187b60b67cf7aabe1300"
+        },
+        {
+          "at": 1792253139235,
+          "code": "0",
+          "payloadSha256": "3e6eb4524331534193da78010d01cceb98cbd737ca371c2f59b0fa582d968ab3"
+        },
+        {
+          "at": 1792253140196,
+          "code": "0",
+          "payloadSha256": "ebc1ba1fe002c177dcf5917024fc6d42c64baba2f2cb187b60b67cf7aabe1300"
+        },
+        {
+          "at": 1792253141164,
+          "code": "0",
+          "payloadSha256": "3e6eb4524331534193da78010d01cceb98cbd737ca371c2f59b0fa582d968ab3"
+        },
+        {
+          "at": 1792253141386,
+          "code": "0",
+          "payloadSha256": "e62c2bb325a59d60be47cb216b53534f8861269ce3f6ae20682a8ef7019cc2c0"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": false,
+        "forcedKill": true,
+        "beforeExitBytes": 984273,
+        "exitRequestedAt": 1792253142527,
+        "gracefulExitTimedOut": true,
+        "finalBytes": 984273
+      }
+    },
+    {
+      "pid": 11604,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "7a68e485-dab0-47bc-8ccb-ad4f63c83d3c"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "sessionId": "7a68e485-dab0-47bc-8ccb-ad4f63c83d3c",
+      "cwd": "C:\\canary380-runtime\\r8\\W1",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367267464866290",
+      "writerHostPid": 11604,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 23643898044236896
+      },
+      "descriptorConfirmation": {
+        "submittedAt": 1792253155736,
+        "observedAt": 1792253156191,
+        "status": "idle",
+        "statusUpdatedAt": 1792253155888,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792253155811,
+          "code": "0",
+          "payloadSha256": "70dd4ff014bbc2404017ed573ace86dced0e510c736fe43abf2bb19ea5dd530a"
+        },
+        {
+          "at": 1792253155852,
+          "code": "0",
+          "payloadSha256": "316be1d97f6a7717bce62b173b1e784fffd53369f6d562ba703f42785f180574"
+        },
+        {
+          "at": 1792253155888,
+          "code": "0",
+          "payloadSha256": "548711891e6230680dd47a0f5f12ff06aa547988e9ab20c691a9062a6aa4c254"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 351261,
+        "exitRequestedAt": 1792253171814,
+        "finalBytes": 352869
+      }
+    },
+    {
+      "pid": 17720,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--resume",
+        "7a68e485-dab0-47bc-8ccb-ad4f63c83d3c",
+        "--fork-session",
+        "--worktree",
+        "canary-W1-small"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "sessionId": "031e64c6-ac99-4b78-8a7e-c79706f153ec",
+      "cwd": "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-W1-small",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367267563589717",
+      "writerHostPid": 17720,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 23643898044236896
+      },
+      "descriptorConfirmation": {
+        "submittedAt": 1792253164012,
+        "observedAt": 1792253167482,
+        "status": "idle",
+        "statusUpdatedAt": 1792253167450,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792253164545,
+          "code": "0",
+          "payloadSha256": "5a278eae779aeef2ffdcf53195e382a41bd56f7a6f8282ecb6181daa669f1ce5"
+        },
+        {
+          "at": 1792253165506,
+          "code": "0",
+          "payloadSha256": "316be1d97f6a7717bce62b173b1e784fffd53369f6d562ba703f42785f180574"
+        },
+        {
+          "at": 1792253166485,
+          "code": "0",
+          "payloadSha256": "5a278eae779aeef2ffdcf53195e382a41bd56f7a6f8282ecb6181daa669f1ce5"
+        },
+        {
+          "at": 1792253167450,
+          "code": "0",
+          "payloadSha256": "548711891e6230680dd47a0f5f12ff06aa547988e9ab20c691a9062a6aa4c254"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": false,
+        "forcedKill": true,
+        "beforeExitBytes": 363363,
+        "exitRequestedAt": 1792253168643,
+        "gracefulExitTimedOut": true,
+        "finalBytes": 363363
+      }
+    },
+    {
+      "pid": 23716,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "9d58fac1-27f9-4b91-87e8-15f852706140"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "sessionId": "9d58fac1-27f9-4b91-87e8-15f852706140",
+      "cwd": "C:\\canary380-runtime\\r8\\W1",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367267724927288",
+      "writerHostPid": 23716,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 23643898044236896
+      },
+      "descriptorConfirmation": {
+        "submittedAt": 1792253224915,
+        "observedAt": 1792253225305,
+        "status": "idle",
+        "statusUpdatedAt": 1792253225002,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792253224956,
+          "code": "0",
+          "payloadSha256": "e49a6f1f19d5a1d5846ba5ea78e09b1f38512157da09b57da824caf9aded75eb"
+        },
+        {
+          "at": 1792253224978,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253225002,
+          "code": "0",
+          "payloadSha256": "7b692bc2bcda62b534e17c2ebd76641b4edce89402f59d50a9b1c43dfc1c8ae0"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 755195,
+        "exitRequestedAt": 1792253255516,
+        "finalBytes": 758191
+      }
+    },
+    {
+      "pid": 19840,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--resume",
+        "9d58fac1-27f9-4b91-87e8-15f852706140",
+        "--fork-session",
+        "--worktree",
+        "canary-W1-large"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "sessionId": "c11e665b-a131-4dc5-91b0-c799cd03bf6e",
+      "cwd": "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-W1-large",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367268254587343",
+      "writerHostPid": 19840,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 23643898044236896
+      },
+      "descriptorConfirmation": {
+        "submittedAt": 1792253231541,
+        "observedAt": 1792253251166,
+        "status": "idle",
+        "statusUpdatedAt": 1792253251084,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792253232057,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253233025,
+          "code": "0",
+          "payloadSha256": "a75329a98615f78334e86f8e1b0b07f8a6b187bcb28677470fc24f8fb2befd1e"
+        },
+        {
+          "at": 1792253233982,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253234943,
+          "code": "0",
+          "payloadSha256": "a75329a98615f78334e86f8e1b0b07f8a6b187bcb28677470fc24f8fb2befd1e"
+        },
+        {
+          "at": 1792253235933,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253236878,
+          "code": "0",
+          "payloadSha256": "a75329a98615f78334e86f8e1b0b07f8a6b187bcb28677470fc24f8fb2befd1e"
+        },
+        {
+          "at": 1792253237853,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253238789,
+          "code": "0",
+          "payloadSha256": "a75329a98615f78334e86f8e1b0b07f8a6b187bcb28677470fc24f8fb2befd1e"
+        },
+        {
+          "at": 1792253239750,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253240722,
+          "code": "0",
+          "payloadSha256": "a75329a98615f78334e86f8e1b0b07f8a6b187bcb28677470fc24f8fb2befd1e"
+        },
+        {
+          "at": 1792253241682,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253242640,
+          "code": "0",
+          "payloadSha256": "a75329a98615f78334e86f8e1b0b07f8a6b187bcb28677470fc24f8fb2befd1e"
+        },
+        {
+          "at": 1792253243600,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253244567,
+          "code": "0",
+          "payloadSha256": "a75329a98615f78334e86f8e1b0b07f8a6b187bcb28677470fc24f8fb2befd1e"
+        },
+        {
+          "at": 1792253245517,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253246489,
+          "code": "0",
+          "payloadSha256": "a75329a98615f78334e86f8e1b0b07f8a6b187bcb28677470fc24f8fb2befd1e"
+        },
+        {
+          "at": 1792253247437,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253248399,
+          "code": "0",
+          "payloadSha256": "a75329a98615f78334e86f8e1b0b07f8a6b187bcb28677470fc24f8fb2befd1e"
+        },
+        {
+          "at": 1792253249361,
+          "code": "0",
+          "payloadSha256": "83082fc49301842f23e29fb543883fff3f23bac909508154ad1e48f2da9d367b"
+        },
+        {
+          "at": 1792253250320,
+          "code": "0",
+          "payloadSha256": "a75329a98615f78334e86f8e1b0b07f8a6b187bcb28677470fc24f8fb2befd1e"
+        },
+        {
+          "at": 1792253251085,
+          "code": "0",
+          "payloadSha256": "7b692bc2bcda62b534e17c2ebd76641b4edce89402f59d50a9b1c43dfc1c8ae0"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": false,
+        "forcedKill": true,
+        "beforeExitBytes": 983865,
+        "exitRequestedAt": 1792253252307,
+        "gracefulExitTimedOut": true,
+        "finalBytes": 983865
+      }
+    }
+  ],
+  "payloads": [],
+  "forks": [
+    {
+      "originId": "b2bc62fd-4d42-4966-9aab-4289eafc07f8",
+      "forkId": "2ec0f866-feb7-4f60-895a-806018be2eef",
+      "recordedCwd": "C:\\canary380-runtime\\r8\\project",
+      "actualCwd": "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-small",
+      "atWorktree": false,
+      "large": false,
+      "before": [
+        "C:\\canary380-runtime\\r8\\project"
+      ],
+      "after": [
+        "C:\\canary380-runtime\\r8\\project",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-small"
+      ],
+      "titles": [
+        {
+          "offset": 0,
+          "type": "custom-title",
+          "value": "S-b15d16da-99ef-4fe4-a55a-81536beadfe2",
+          "valueSha256": "0fcdc2f91ae2144a9ec3b27a7dc3a5054ba9463998d9b91acd98aa7698c5f437",
+          "beforeOwnTurn": true
+        },
+        {
+          "offset": 247,
+          "type": "agent-name",
+          "value": "S-b15d16da-99ef-4fe4-a55a-81536beadfe2",
+          "valueSha256": "0fcdc2f91ae2144a9ec3b27a7dc3a5054ba9463998d9b91acd98aa7698c5f437",
+          "beforeOwnTurn": true
+        },
+        {
+          "offset": 333676,
+          "type": "custom-title",
+          "value": "S-b15d16da-99ef-4fe4-a55a-81536beadfe2",
+          "valueSha256": "0fcdc2f91ae2144a9ec3b27a7dc3a5054ba9463998d9b91acd98aa7698c5f437",
+          "beforeOwnTurn": false
+        },
+        {
+          "offset": 333923,
+          "type": "agent-name",
+          "value": "S-b15d16da-99ef-4fe4-a55a-81536beadfe2",
+          "valueSha256": "0fcdc2f91ae2144a9ec3b27a7dc3a5054ba9463998d9b91acd98aa7698c5f437",
+          "beforeOwnTurn": false
+        }
+      ],
+      "timeline": [
+        {
+          "at": "2026-10-17T16:04:09.960Z",
+          "transcriptId": "2ec0f866-feb7-4f60-895a-806018be2eef",
+          "bytes": 1159,
+          "lines": 7,
+          "titleOffsets": [
+            0,
+            247
+          ]
+        },
+        {
+          "at": "2026-10-17T16:04:10.233Z",
+          "transcriptId": "2ec0f866-feb7-4f60-895a-806018be2eef",
+          "bytes": 333425,
+          "lines": 41,
+          "titleOffsets": [
+            0,
+            247
+          ]
+        },
+        {
+          "at": "2026-10-17T16:04:10.275Z",
+          "transcriptId": "2ec0f866-feb7-4f60-895a-806018be2eef",
+          "bytes": 334835,
+          "lines": 49,
+          "titleOffsets": [
+            0,
+            247,
+            333676,
+            333923
+          ]
+        },
+        {
+          "at": "ready-before-own-turn",
+          "bytes": 0,
+          "lines": 0
+        },
+        {
+          "at": "after-own-turn",
+          "bytes": 334835,
+          "lines": 49
+        }
+      ],
+      "sourceBeforeSha256": "c3c612a0339cabdafe45e4454aabe617f3d0c5143e5a6cdb79128260cc523cf2",
+      "sourceAfterSha256": "c3c612a0339cabdafe45e4454aabe617f3d0c5143e5a6cdb79128260cc523cf2",
+      "titleOutcome": {
+        "status": "PASS",
+        "branch": "N8; separate owner amendment"
+      },
+      "prefixWriteAtomicity": "UNVERIFIED: polling cannot establish a single write before a watcher flush"
+    },
+    {
+      "originId": "75b5ef98-365a-4cde-9ad9-47d4f7d860c9",
+      "forkId": "e3d773fd-cd8c-4fea-8b31-7c37361635c7",
+      "recordedCwd": "C:\\canary380-runtime\\r8\\project",
+      "actualCwd": "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-large",
+      "atWorktree": false,
+      "large": true,
+      "before": [
+        "C:\\canary380-runtime\\r8\\project",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-small"
+      ],
+      "after": [
+        "C:\\canary380-runtime\\r8\\project",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-large",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-small"
+      ],
+      "titles": [
+        {
+          "offset": 0,
+          "type": "custom-title",
+          "value": "B-e5d032f5-104e-4d93-ba80-2b456e5e90c0",
+          "valueSha256": "48d453ad849c4d9d4d8e61f2e7cfa2b46efbfaf726c42c08041b11ce2c37b5d7",
+          "beforeOwnTurn": true
+        },
+        {
+          "offset": 247,
+          "type": "agent-name",
+          "value": "B-e5d032f5-104e-4d93-ba80-2b456e5e90c0",
+          "valueSha256": "48d453ad849c4d9d4d8e61f2e7cfa2b46efbfaf726c42c08041b11ce2c37b5d7",
+          "beforeOwnTurn": true
+        },
+        {
+          "offset": 980907,
+          "type": "custom-title",
+          "value": "B-e5d032f5-104e-4d93-ba80-2b456e5e90c0",
+          "valueSha256": "48d453ad849c4d9d4d8e61f2e7cfa2b46efbfaf726c42c08041b11ce2c37b5d7",
+          "beforeOwnTurn": false
+        },
+        {
+          "offset": 981154,
+          "type": "agent-name",
+          "value": "B-e5d032f5-104e-4d93-ba80-2b456e5e90c0",
+          "valueSha256": "48d453ad849c4d9d4d8e61f2e7cfa2b46efbfaf726c42c08041b11ce2c37b5d7",
+          "beforeOwnTurn": false
+        }
+      ],
+      "timeline": [
+        {
+          "at": "2026-10-17T16:05:30.647Z",
+          "transcriptId": "e3d773fd-cd8c-4fea-8b31-7c37361635c7",
+          "bytes": 1159,
+          "lines": 7,
+          "titleOffsets": [
+            0,
+            247
+          ]
+        },
+        {
+          "at": "2026-10-17T16:05:30.769Z",
+          "transcriptId": "e3d773fd-cd8c-4fea-8b31-7c37361635c7",
+          "bytes": 3047,
+          "lines": 15,
+          "titleOffsets": [
+            0,
+            247
+          ]
+        },
+        {
+          "at": "2026-10-17T16:05:31.018Z",
+          "transcriptId": "e3d773fd-cd8c-4fea-8b31-7c37361635c7",
+          "bytes": 980656,
+          "lines": 86,
+          "titleOffsets": [
+            0,
+            247
+          ]
+        },
+        {
+          "at": "2026-10-17T16:05:31.061Z",
+          "transcriptId": "e3d773fd-cd8c-4fea-8b31-7c37361635c7",
+          "bytes": 982066,
+          "lines": 94,
+          "titleOffsets": [
+            0,
+            247,
+            980907,
+            981154
+          ]
+        },
+        {
+          "at": "ready-before-own-turn",
+          "bytes": 0,
+          "lines": 0
+        },
+        {
+          "at": "after-own-turn",
+          "bytes": 982066,
+          "lines": 94
+        }
+      ],
+      "sourceBeforeSha256": "2226c91cccb83005aa304e40ff0b8deb3b769a64bcd3f9db1fdb3c4f76aa1645",
+      "sourceAfterSha256": "2226c91cccb83005aa304e40ff0b8deb3b769a64bcd3f9db1fdb3c4f76aa1645",
+      "titleOutcome": {
+        "status": "PASS",
+        "branch": "N8; separate owner amendment"
+      },
+      "prefixWriteAtomicity": "UNVERIFIED: polling cannot establish a single write before a watcher flush"
+    },
+    {
+      "originId": "7a68e485-dab0-47bc-8ccb-ad4f63c83d3c",
+      "forkId": "031e64c6-ac99-4b78-8a7e-c79706f153ec",
+      "recordedCwd": "C:\\canary380-runtime\\r8\\W1",
+      "actualCwd": "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-W1-small",
+      "atWorktree": true,
+      "large": false,
+      "before": [
+        "C:\\canary380-runtime\\r8\\project",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-large",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-small",
+        "C:\\canary380-runtime\\r8\\W1"
+      ],
+      "after": [
+        "C:\\canary380-runtime\\r8\\project",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-large",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-small",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-W1-small",
+        "C:\\canary380-runtime\\r8\\W1"
+      ],
+      "titles": [
+        {
+          "offset": 0,
+          "type": "custom-title",
+          "value": "S-bc4e537c-d27b-4700-b760-17ab58270761",
+          "valueSha256": "b9818132a3473ba1165bc21e1c212d5436ba0e7f52272f30a26ce3fdb4aa2601",
+          "beforeOwnTurn": true
+        },
+        {
+          "offset": 248,
+          "type": "agent-name",
+          "value": "S-bc4e537c-d27b-4700-b760-17ab58270761",
+          "valueSha256": "b9818132a3473ba1165bc21e1c212d5436ba0e7f52272f30a26ce3fdb4aa2601",
+          "beforeOwnTurn": true
+        },
+        {
+          "offset": 359985,
+          "type": "custom-title",
+          "value": "S-bc4e537c-d27b-4700-b760-17ab58270761",
+          "valueSha256": "b9818132a3473ba1165bc21e1c212d5436ba0e7f52272f30a26ce3fdb4aa2601",
+          "beforeOwnTurn": false
+        },
+        {
+          "offset": 360233,
+          "type": "agent-name",
+          "value": "S-bc4e537c-d27b-4700-b760-17ab58270761",
+          "valueSha256": "b9818132a3473ba1165bc21e1c212d5436ba0e7f52272f30a26ce3fdb4aa2601",
+          "beforeOwnTurn": false
+        }
+      ],
+      "timeline": [
+        {
+          "at": "2026-10-17T16:06:04.605Z",
+          "transcriptId": "031e64c6-ac99-4b78-8a7e-c79706f153ec",
+          "bytes": 1144,
+          "lines": 7,
+          "titleOffsets": [
+            0,
+            248
+          ]
+        },
+        {
+          "at": "2026-10-17T16:06:04.744Z",
+          "transcriptId": "031e64c6-ac99-4b78-8a7e-c79706f153ec",
+          "bytes": 1616,
+          "lines": 9,
+          "titleOffsets": [
+            0,
+            248
+          ]
+        },
+        {
+          "at": "2026-10-17T16:06:05.161Z",
+          "transcriptId": "031e64c6-ac99-4b78-8a7e-c79706f153ec",
+          "bytes": 359734,
+          "lines": 42,
+          "titleOffsets": [
+            0,
+            248
+          ]
+        },
+        {
+          "at": "2026-10-17T16:06:05.207Z",
+          "transcriptId": "031e64c6-ac99-4b78-8a7e-c79706f153ec",
+          "bytes": 361129,
+          "lines": 50,
+          "titleOffsets": [
+            0,
+            248,
+            359985,
+            360233
+          ]
+        },
+        {
+          "at": "ready-before-own-turn",
+          "bytes": 0,
+          "lines": 0
+        },
+        {
+          "at": "after-own-turn",
+          "bytes": 361129,
+          "lines": 50
+        }
+      ],
+      "sourceBeforeSha256": "da9c05621f63136bf62b0f44ffcf60133c585228fb9d1631ffdab433a0f770c9",
+      "sourceAfterSha256": "da9c05621f63136bf62b0f44ffcf60133c585228fb9d1631ffdab433a0f770c9",
+      "titleOutcome": {
+        "status": "PASS",
+        "branch": "N8; separate owner amendment"
+      },
+      "prefixWriteAtomicity": "UNVERIFIED: polling cannot establish a single write before a watcher flush"
+    },
+    {
+      "originId": "9d58fac1-27f9-4b91-87e8-15f852706140",
+      "forkId": "c11e665b-a131-4dc5-91b0-c799cd03bf6e",
+      "recordedCwd": "C:\\canary380-runtime\\r8\\W1",
+      "actualCwd": "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-W1-large",
+      "atWorktree": true,
+      "large": true,
+      "before": [
+        "C:\\canary380-runtime\\r8\\project",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-large",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-small",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-W1-small",
+        "C:\\canary380-runtime\\r8\\W1"
+      ],
+      "after": [
+        "C:\\canary380-runtime\\r8\\project",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-large",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-root-small",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-W1-large",
+        "C:\\canary380-runtime\\r8\\project\\.claude\\worktrees\\canary-W1-small",
+        "C:\\canary380-runtime\\r8\\W1"
+      ],
+      "titles": [
+        {
+          "offset": 0,
+          "type": "custom-title",
+          "value": "B-9dc7f684-1d0b-4d70-aae8-a96dd915331b",
+          "valueSha256": "3834eedb46048f1509423ceb01bec6f22a525daf3c2574a588e30127afef3035",
+          "beforeOwnTurn": true
+        },
+        {
+          "offset": 235,
+          "type": "agent-name",
+          "value": "B-9dc7f684-1d0b-4d70-aae8-a96dd915331b",
+          "valueSha256": "3834eedb46048f1509423ceb01bec6f22a525daf3c2574a588e30127afef3035",
+          "beforeOwnTurn": true
+        },
+        {
+          "offset": 980535,
+          "type": "custom-title",
+          "value": "B-9dc7f684-1d0b-4d70-aae8-a96dd915331b",
+          "valueSha256": "3834eedb46048f1509423ceb01bec6f22a525daf3c2574a588e30127afef3035",
+          "beforeOwnTurn": false
+        },
+        {
+          "offset": 980770,
+          "type": "agent-name",
+          "value": "B-9dc7f684-1d0b-4d70-aae8-a96dd915331b",
+          "valueSha256": "3834eedb46048f1509423ceb01bec6f22a525daf3c2574a588e30127afef3035",
+          "beforeOwnTurn": false
+        }
+      ],
+      "timeline": [
+        {
+          "at": "2026-10-17T16:07:12.118Z",
+          "transcriptId": "c11e665b-a131-4dc5-91b0-c799cd03bf6e",
+          "bytes": 1131,
+          "lines": 7,
+          "titleOffsets": [
+            0,
+            235
+          ]
+        },
+        {
+          "at": "2026-10-17T16:07:12.264Z",
+          "transcriptId": "c11e665b-a131-4dc5-91b0-c799cd03bf6e",
+          "bytes": 3019,
+          "lines": 15,
+          "titleOffsets": [
+            0,
+            235
+          ]
+        },
+        {
+          "at": "2026-10-17T16:07:12.502Z",
+          "transcriptId": "c11e665b-a131-4dc5-91b0-c799cd03bf6e",
+          "bytes": 980284,
+          "lines": 86,
+          "titleOffsets": [
+            0,
+            235
+          ]
+        },
+        {
+          "at": "2026-10-17T16:07:12.517Z",
+          "transcriptId": "c11e665b-a131-4dc5-91b0-c799cd03bf6e",
+          "bytes": 981666,
+          "lines": 94,
+          "titleOffsets": [
+            0,
+            235,
+            980535,
+            980770
+          ]
+        },
+        {
+          "at": "ready-before-own-turn",
+          "bytes": 0,
+          "lines": 0
+        },
+        {
+          "at": "after-own-turn",
+          "bytes": 981666,
+          "lines": 94
+        }
+      ],
+      "sourceBeforeSha256": "96ffbe43b48506d64960a3e822f43e64a14962c9e9630eaa133f70a0a705d744",
+      "sourceAfterSha256": "96ffbe43b48506d64960a3e822f43e64a14962c9e9630eaa133f70a0a705d744",
+      "titleOutcome": {
+        "status": "PASS",
+        "branch": "N8; separate owner amendment"
+      },
+      "prefixWriteAtomicity": "UNVERIFIED: polling cannot establish a single write before a watcher flush"
+    }
+  ],
+  "permissions": [],
+  "reports": []
+}
