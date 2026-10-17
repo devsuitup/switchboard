@@ -202,11 +202,11 @@ A live session without turn evidence says **Turn state unavailable**, unless
 its descriptor already confirms the prompt. A session without a transcript
 yet (before its first prompt) is listed under its directory's name.
 
-Turn changes are read from local mirrored transcripts after indexing, so they
-can lag by about 15 seconds with the host watch, or by the configured full-pull
+Turn changes are read from local mirrored transcripts after each successful
+host refresh, even when no files changed, so they can lag by about 15 seconds
+with the host watch, or by the configured full-pull
 interval without it (default 5 minutes). Refresh pulls the mirror sooner.
-Live top-level rows are read in one worker batch; archived, absent-descriptor
-and child rows are skipped. This adds no SSH polling per row.
+This adds no SSH polling per session.
 
 A session that is not open in a tab and is waiting on a dialog on the host
 (a permission prompt or a question) shows the orange attention state, and its

@@ -179,7 +179,7 @@ app.on('before-quit', holdBootstrapQuit);
 await writer.ready;
 const {
   isCachePopulated, getAllCached, getCachedByParent, getCachedFolder, getCachedSession,
-  getAllFolderMeta, getSearchFileIds,
+  getAllFolderMeta, getAllMeta, getSearchFileIds,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, listSettingKeys, isInitialScanComplete,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
@@ -573,11 +573,8 @@ const remoteIndexer = createRemoteIndexer({
   getRefreshMs: () => (getSetting('global') || {}).remoteRefreshMs,
   dataDir: path.dirname(DB_PATH),
   transport: remoteTransport,
-  scanFolders: async options => {
-    const result = await scanFoldersViaWorker(options);
-    await refreshRemoteHeadTurns(options.folderPrefix);
-    return result;
-  },
+  scanFolders: scanFoldersViaWorker,
+  refreshHeadTurns: alias => refreshRemoteHeadTurns(alias),
   listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
   dropFolder: async folderKey => await writer.dropRemoteFolder(folderKey),
   setRemoteRoots,
@@ -3138,17 +3135,19 @@ const taskRecords = createTaskRecordsClient({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task-rekey', { oldId, newId, continued });
   },
 });
-async function refreshRemoteHeadTurns(folderPrefix) {
+async function refreshRemoteHeadTurns(hostAlias) {
   const rows = [];
   const liveByHost = new Map();
+  const meta = getAllMeta();
   for (const row of getAllCached()) {
-    if (!row.remoteAlias || row.isSidechain || row.parentSessionId || row.archived) continue;
-    const folder = getCachedFolder(row.sessionId);
-    if (!folder || (folderPrefix && !folder.startsWith(folderPrefix))) continue;
-    if (!liveByHost.has(row.remoteAlias)) {
-      liveByHost.set(row.remoteAlias, new Set(remoteIndexer.getRemoteSessions(row.remoteAlias).sessions.map(d => d.sessionId)));
+    if (row.parentSessionId || meta.get(row.sessionId)?.archived) continue;
+    const folder = row.folder;
+    const { alias } = parseFolderKey(folder);
+    if (!alias || (hostAlias && alias !== hostAlias)) continue;
+    if (!liveByHost.has(alias)) {
+      liveByHost.set(alias, new Set(remoteIndexer.getRemoteSessions(alias).sessions.map(d => d.sessionId)));
     }
-    if (!liveByHost.get(row.remoteAlias).has(row.sessionId)) continue;
+    if (!liveByHost.get(alias).has(row.sessionId)) continue;
     const dir = projectsDirForFolder(folder);
     if (dir) rows.push({ file: path.join(dir, row.sessionId + '.jsonl'), parentSessionId: row.sessionId, turnOnly: true });
   }
@@ -3165,9 +3164,9 @@ ipcMain.handle('get-task-snapshots', async () => {
   }
   await refreshRemoteHeadTurns();
   for (const row of getAllCached()) {
-    if (row.isSidechain || row.parentSessionId || row.remoteAlias || !live.has(row.sessionId)) continue;
-    const folder = getCachedFolder(row.sessionId);
-    const dir = folder && !folder.includes('::') && projectsDirForFolder(folder);
+    if (row.parentSessionId || !live.has(row.sessionId)) continue;
+    const folder = row.folder;
+    const dir = folder && !parseFolderKey(folder).alias && projectsDirForFolder(folder);
     if (dir) {
       await taskRecords.read(path.join(dir, row.sessionId + '.jsonl'), row.sessionId);
       for (const child of getCachedByParent(row.sessionId)) {

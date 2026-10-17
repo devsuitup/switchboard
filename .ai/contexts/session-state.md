@@ -113,11 +113,19 @@ other readers; they are not the sidebar's authoritative busy classification.
 
 Local bootstrap reuses #624's positively live-owner transcript reads. Verified
 local top-level watch notifications already reach the worker even when a PTY
-owns the session. Remote bootstrap and the existing mirror indexing callback
-read live, unarchived mirrored heads in one `turnOnly` worker batch, without replaying
+owns the session. Remote bootstrap and every successful host refresh, including
+cycles with no changed folders, read live, unarchived mirrored heads in one
+`turnOnly` worker batch, without replaying
 remote lifecycle records into #624's registry and without additional SSH calls
-or per-row network polling. Remote head members receive their own descriptor
-liveness. A descriptor missing from a successful host snapshot makes liveness
+or per-row network polling. Cache rows identify their host through
+`parseFolderKey(row.folder).alias` and children through `parentSessionId`;
+archive state comes from the session-id-keyed `getAllMeta()` Map, read afresh
+for each batch (#698). Host filtering compares the parsed alias exactly, so
+refreshing `dev` excludes `dev2`. The refresh callback runs after any folder
+scan, and the worker's stat cache avoids rereading unchanged transcripts.
+Worker snapshots reach the renderer through the existing `task-snapshot` push
+even when no project-change notification is needed. Remote head members receive
+their own descriptor liveness. A descriptor missing from a successful host snapshot makes liveness
 unknown without completing tasks; a failed host snapshot retains the previous
 freshness contract. Remote turn precision is limited by mirror refresh: about
 15 seconds with the host watch, otherwise the configured pull interval

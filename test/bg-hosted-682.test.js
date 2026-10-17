@@ -11,6 +11,7 @@ const bg = require('../bg-agents');
 const cli = require('../cli-session-state');
 const ipc = require('../bg-agents-ipc');
 const { mergeRoster, isHostedJob } = require('../bg-agents-roster');
+const { parseFolderKey } = require('../remote-hosts');
 
 const SID = 'aaaaaaaa-1234-4321-abcd-123456789abc';
 const JOB = 'aaaaaaaa';
@@ -148,7 +149,8 @@ test('main continuation, task snapshot and transcript consumers include hosted d
     cliSessionState: { readAllDescriptors: () => cli.readAllDescriptors(), getSidebarDescriptors: () => [], getStatus: () => null },
     bgAgents: bg, isHostedJob, path, sessionHasPty: () => false,
     taskRecords: { read: async (...args) => reads.push(args), snapshots: () => 'snapshots' },
-    getAllCached: () => [{ sessionId: SID }], getCachedFolder: () => 'folder', projectsDirForFolder: () => '/projects/folder', getCachedByParent: () => [],
+    getAllCached: () => [{ sessionId: SID, folder: 'folder' }], parseFolderKey,
+    projectsDirForFolder: () => '/projects/folder', getCachedByParent: () => [],
     refreshRemoteHeadTurns: async () => {},
     ipcMain: { handle: (_name, handler) => { snapshots = handler; } },
     createLocalTranscriptTracker: options => { tracker = options; },
