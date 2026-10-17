@@ -43,6 +43,27 @@ The main process reads the variable once (`activity-trace.js`) and tells the
 renderer, through a launch argument and then the `activity-trace-state` event,
 so the two halves cannot disagree.
 
+### Main-loop measurements
+
+With tracing on, `main.loop` reports `lagMs` (lateness of the existing
+one-second timer, clamped to zero). Each callback rebases the expected tick,
+even while tracing is off; enabling tracing preserves that baseline. This
+signal adds no timer. It exposes a block across a tick; a stall that ends
+before the next tick is not seen. It does not measure a latency percentile.
+
+Windows timer granularity makes tens of milliseconds of idle `lagMs` normal.
+Measured at idle under Node 22 on Windows: 12–20 ms, with one sample at 73 ms;
+in Electron: 12–14 ms. Treat this noise floor as context when reading stalls.
+
+For a fine event-loop delay measurement, start Switchboard with
+`SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` and enable tracing. This switch is read
+once at monitor startup; only the exact value `1` arms it. Armed events also
+carry `maxMs` and `p99Ms` from a 20 ms histogram, reset after each report.
+The histogram records full timer intervals, so its idle floor is at least
+20 ms. It adds roughly 50 timer wakeups per second while tracing is on; use
+it for a bounded measurement, then restart without the switch. Disabling
+tracing disables the armed histogram immediately.
+
 ### Turning it off, and on again
 
 Turning the trace off ends the write stream, which flushes what was already
@@ -128,6 +149,7 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `pty.resize` | Each guarded PTY resize attempt, including retries, ordinary fits and first-open nudges | `phase` (`fit` / `nudge` / `restore`), `cols`, `rows`, `ok` (the operation returned without throwing; not proof the CLI observed it) |
 | `poll.snapshot` | `get-active-sessions` answers | `count`, `entries` |
 | `trace.prune-failed` | An old file could not be deleted | `file`, `error`, `retained` |
+| `main.loop` | Once per second while tracing is on | `lagMs`; `maxMs`, `p99Ms` only with `SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` at startup |
 | `app.quit` | Last line of a clean shutdown | — |
 
 ### Renderer
