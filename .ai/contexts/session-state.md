@@ -116,7 +116,10 @@ local top-level watch notifications already reach the worker even when a PTY
 owns the session. Remote bootstrap and the existing mirror indexing callback
 read live, unarchived mirrored heads in one `turnOnly` worker batch, without replaying
 remote lifecycle records into #624's registry and without additional SSH calls
-or per-row network polling. Remote head members receive their own descriptor
+or per-row network polling. Cache rows identify their host through
+`parseFolderKey(row.folder).alias` and children through `parentSessionId`;
+archive state comes from the session-id-keyed `getAllMeta()` Map, read afresh
+for each batch (#698). Remote head members receive their own descriptor
 liveness. A descriptor missing from a successful host snapshot makes liveness
 unknown without completing tasks; a failed host snapshot retains the previous
 freshness contract. Remote turn precision is limited by mirror refresh: about

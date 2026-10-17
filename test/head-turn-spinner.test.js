@@ -197,8 +197,9 @@ test('mirror indexing feeds head turns through local reads without requesting SS
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   const reads = [];
   const context = vm.createContext({
-    path, getAllCached: () => [{ sessionId: 'remote', remoteAlias: 'host' }, { sessionId: 'local' }],
-    getCachedFolder: () => 'host::project', projectsDirForFolder: () => 'mirror/project',
+    path, getAllCached: () => [{ sessionId: 'remote', folder: 'host::project' }, { sessionId: 'local', folder: 'project' }],
+    getAllMeta: () => new Map(), parseFolderKey: require('../remote-hosts').parseFolderKey,
+    projectsDirForFolder: () => 'mirror/project',
     taskRecords: { read: async (...args) => reads.push(args) },
     createRemoteIndexer: options => ({ ...options, getRemoteSessions: () => ({ sessions: [{ sessionId: 'remote' }] }) }), scanFoldersViaWorker: async () => {},
     DB_PATH: 'data/db', remoteTransport: {}, setRemoteRoots() {}, notifyRendererProjectsChanged() {}, log: {},

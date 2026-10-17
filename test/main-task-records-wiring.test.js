@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createTaskRegistry } = require('../public/task-registry');
+const { parseFolderKey } = require('../remote-hosts');
 const fixture = require('./fixtures/cli-tasks-2.1.296.json');
 const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8').replace(/\r\n/g, '\n');
 
@@ -29,9 +30,10 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
     ipcMain: { handle: (_channel, callback) => { handler = callback; } },
     cliSessionState: { getSidebarDescriptors: () => [{ sessionId: id }, { sessionId: remote }], readAllDescriptors: () => [] },
     activeSessions: new Map(), bgAgents: { getSnapshot: () => ({ roster: [] }) },
-    getAllCached: () => [{ sessionId: id }, { sessionId: dead }, { sessionId: remote, remoteAlias: 'host' }],
+    getAllCached: () => [{ sessionId: id, folder: 'folder' }, { sessionId: dead, folder: 'folder' }, { sessionId: remote, folder: 'host::folder' }],
+    getAllMeta: () => new Map(), parseFolderKey,
     remoteIndexer: { getRemoteSessions: () => ({ sessions: [{ sessionId: remote }] }) },
-    getCachedFolder: () => 'folder', projectsDirForFolder: () => dir, getCachedByParent: () => [],
+    projectsDirForFolder: () => dir, getCachedByParent: () => [],
   });
   const start = source.indexOf("const { createTaskRecordsClient } = require('./task-records-client');");
   const end = source.indexOf('const sessionTransitions =', start);

@@ -5,11 +5,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const vm = require('node:vm');
+const { spawnSync } = require('node:child_process');
 const { classifyTranscriptTail } = require('../transcript-turn');
 const { createTaskRecordsClient } = require('../task-records-client');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
-const { loadAppFunctions, extractFunction } = require('./app-source');
+const { loadAppFunctions } = require('./app-source');
 const fixture = require('./fixtures/cli-tasks-2.1.296.json');
 const at = n => new Date(1_800_000_000_000 + n).toISOString();
 const user = (text, n = 1) => ({ type: 'user', timestamp: at(n), message: { role: 'user', content: text } });
@@ -182,17 +182,63 @@ test('worker turn retention caps at 2048, evicts oldest first and retains the la
   assert.equal(client.snapshots().find(s => s.parentSessionId === 's0').headTurn, undefined);
   assert.equal(client.snapshots().find(s => s.parentSessionId === 's2048').headTurn.lastEntryAt, 1_800_000_000_001);
 });
-test('remote heads are read in one batch and archived, dead and child rows are skipped', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  const batches = [];
-  const context = vm.createContext({ path,
-    getAllCached: () => [{ sessionId: 'a', remoteAlias: 'host' }, { sessionId: 'b', remoteAlias: 'host' }, { sessionId: 'archived', remoteAlias: 'host', archived: 1 }, { sessionId: 'dead', remoteAlias: 'host' }, { sessionId: 'child', remoteAlias: 'host', parentSessionId: 'a' }],
-    remoteIndexer: { getRemoteSessions: () => ({ sessions: [{ sessionId: 'a' }, { sessionId: 'b' }, { sessionId: 'archived' }, { sessionId: 'child' }] }) },
-    getCachedFolder: () => 'host::project', projectsDirForFolder: () => 'mirror',
-    taskRecords: { read: async () => {}, readBatch: async rows => batches.push(rows) },
+test('real cached rows batch only live remote heads, excluding local, archived, dead and child rows', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-head-698-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 }));
+  const result = spawnSync(require('electron'), ['-e', `
+    const assert = require('node:assert/strict');
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const vm = require('node:vm');
+    const { extractFunction } = require('./test/app-source');
+    const { parseFolderKey } = require('./remote-hosts');
+    const store = require('./session-index-store').openSessionIndexStore({ readonly: false });
+    const root = process.env.SWITCHBOARD_DATA_DIR;
+    const row = (sessionId, folder, extra = {}) => ({ sessionId, folder,
+      projectPath: '/p', summary: '', firstPrompt: '', created: null, modified: null, ...extra });
+    store.upsertCachedSessions([
+      row('live', 'host::-p'), row('local', '-p'),
+      row('child', 'host::-p', { parentSessionId: 'live', agentId: 'child' }),
+      row('archived', 'host::-p'), row('dead', 'host::-p'), row('other', 'other::-p'),
+    ]);
+    store.setArchived('archived', true);
+    assert.equal(store.getMeta('live'), null);
+    assert.equal(store.getAllMeta().get('archived').archived, 1);
+    const batches = [];
+    const hosts = [];
+    const context = vm.createContext({ path, ...store, parseFolderKey,
+      remoteIndexer: { getRemoteSessions: alias => {
+        hosts.push(alias);
+        return { sessions: (alias === 'host' ? ['live', 'child', 'archived', 'local'] : ['other']).map(sessionId => ({ sessionId })) };
+      } },
+      projectsDirForFolder: folder => path.join(root, 'mirror', folder),
+      taskRecords: { readBatch: async rows => batches.push(Array.from(rows, r => ({ ...r }))) },
+    });
+    const source = fs.readFileSync('./main.js', 'utf8');
+    vm.runInContext(extractFunction(source, 'refreshRemoteHeadTurns'), context);
+    (async () => {
+      try {
+        await context.refreshRemoteHeadTurns('host::');
+        assert.deepEqual(batches, [[{
+          file: path.join(root, 'mirror', 'host::-p', 'live.jsonl'),
+          parentSessionId: 'live', turnOnly: true,
+        }]], 'only the live remote head from real cache rows enters the batch');
+        assert.deepEqual(hosts, ['host']);
+        batches.length = 0;
+        await context.refreshRemoteHeadTurns();
+        assert.deepEqual(batches.map(rows => rows.map(r => r.parentSessionId).sort()), [['live', 'other']]);
+        store.setArchived('live', true);
+        batches.length = 0;
+        await context.refreshRemoteHeadTurns('host::');
+        assert.deepEqual(batches, [], 'an archive change is read from current session metadata');
+        store.setArchived('live', false);
+        await context.refreshRemoteHeadTurns('host::');
+        assert.equal(batches[0][0].parentSessionId, 'live');
+      } finally { store.closeDb(); }
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `], {
+    cwd: path.join(__dirname, '..'), encoding: 'utf8', timeout: 20000,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: root, HOME: root, USERPROFILE: root },
   });
-  vm.runInContext(extractFunction(source, 'refreshRemoteHeadTurns'), context);
-  await context.refreshRemoteHeadTurns('host::');
-  assert.equal(batches.length, 1);
-  assert.deepEqual(Array.from(batches[0], r => r.parentSessionId), ['a', 'b']);
+  assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
 });

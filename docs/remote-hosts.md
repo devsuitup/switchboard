@@ -206,7 +206,11 @@ Turn changes are read from local mirrored transcripts after indexing, so they
 can lag by about 15 seconds with the host watch, or by the configured full-pull
 interval without it (default 5 minutes). Refresh pulls the mirror sooner.
 Live top-level rows are read in one worker batch; archived, absent-descriptor
-and child rows are skipped. This adds no SSH polling per row.
+and child rows are skipped. The host comes from the cached folder key
+(`<alias>::<folder>`), archive state from session metadata, and children are
+identified by `parentSessionId`. Each refresh reads current metadata, so
+archiving or restoring a session takes effect on the next refresh. This adds
+no SSH polling per row.
 
 A session that is not open in a tab and is waiting on a dialog on the host
 (a permission prompt or a question) shows the orange attention state, and its
