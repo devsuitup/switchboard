@@ -19,6 +19,8 @@ function bootMain(t, { descriptor = {}, ...opts } = {}) {
   const timers = [];
   let unsubscribe;
   const context = vm.createContext({
+    stopping: false, clearTimeout() {},
+    TRACE: { on: false }, trace() {},
     activeSessions: new Map(), log: { info() {}, debug() {}, warn() {} },
     sessionTransitions: { detectPendingBackgroundContinuations() {} },
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: channel => sent.push(channel) } }),
@@ -30,7 +32,8 @@ function bootMain(t, { descriptor = {}, ...opts } = {}) {
     }),
   });
   const cache = fs.readFileSync(path.join(__dirname, '../session-cache.js'), 'utf8');
-  vm.runInContext(cache.slice(cache.indexOf('const NOTIFY_THROTTLE_MS'), cache.indexOf('function sendStatus')), context);
+  vm.runInContext(cache.slice(cache.indexOf('const NOTIFY_THROTTLE_MS'), cache.indexOf('function sendStatus')), context,
+    { filename: path.join(__dirname, '../session-cache.js') });
   const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   vm.runInContext(main.slice(main.indexOf("const cliSessionState = require('./cli-session-state');"), main.indexOf('const ptyPids =')), context);
   assert.ok(cli.ensureWatching());
@@ -62,7 +65,7 @@ test('576 descriptor changes share the existing leading/trailing projects-change
   fs.unlinkSync(path.join(h.dir, '4242.json'));
   await notified;
   assert.deepEqual(h.sent, ['projects-changed']);
-  vm.runInContext('notifyRendererProjectsChanged(); notifyRendererProjectsChanged();', h.context);
+  vm.runInContext("notifyRendererProjectsChanged('watcher'); notifyRendererProjectsChanged('archive');", h.context);
   assert.equal(h.sent.length, 1);
   h.timers.shift()();
   assert.equal(h.sent.length, 2, 'descriptor and other project pushes coalesce into one trailing send');

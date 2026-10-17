@@ -32,13 +32,79 @@ From `db.js`:
 From `session-cache.js`:
 
 - `init(ctx)` — wire main process → cache (mainWindow ref for IPC events)
-- `refreshFolder(folder, opts)` — opts `{files: Set<string>}` for targeted refresh (watcher payload). Defaults to full folder walk.
+- `refreshFolder(folder, opts)` — opts `{files: Set<string>}` for targeted refresh (watcher payload). Defaults to full folder walk. Returns a boolean indicating a sidebar-relevant change, after computing the cache writes; the writer facade resolves it after those writes are acknowledged.
 - `populateCacheFromFilesystem()` / `populateCacheViaWorker()` — initial scan / re-scan. The worker (`workers/scan-projects.js`) streams one `{type:'folder', result, current, total}` message per on-disk folder (plus a final `{type:'done'}`) instead of buffering the whole tree, so each folder is written to the DB and pushed to the renderer as soon as it's read — a large history no longer leaves the sidebar empty for the entire scan.
 - `buildProjectsFromCache(showArchived)` — produces the sidebar payload (sorted, grouped by project, missing flag computed here). It also injects every live plain-terminal PTY from `activeSessions` as a synthetic row, so a terminal sorts among the cached sessions even though it has no JSONL; the row's `summary` is the hard-coded string `Terminal`, which is what the sidebar displays — the renderer's own session object is never the one shown. A panel shell is a plain terminal too and is excluded here by `isPanelShellSession` (`panel-terminal-target.js`); see `.ai/contexts/panel-terminal.md` for the full list of places that have to skip one.
-- `notifyRendererProjectsChanged()` — throttled (~1.5s leading-edge) push to renderer
+- `notifyRendererProjectsChanged(cause)` — structural pushes use a 1.5s leading-edge/trailing throttle; activity-only pushes coalesce for at least 30s.
 - `sendIndexingProgress()` (internal) — emits the `indexing-progress` IPC event, gated on `coldStart` (captured once at the top of `populateCacheViaWorker()` via `!isInitialScanComplete()`) and throttled to ~4 events/s (the first event and every `done:true` always pass). Feeds the renderer's first-run banner; see `.ai/contexts/ipc-bridge.md`. A `done:true` payload carrying `error` keeps the banner visible with the failure message instead of hiding it.
 
 From `derive-project-path.js`: `deriveProjectPath(folderPath)`, `resolveWorktreePath(cwd)`.
+
+## Watcher notification rules
+
+The local projects watcher awaits `writer.refreshFolder` for existing dirty
+folders and `writer.dropFolderRows` for vanished folders. `refreshFolder`
+returns true for structural changes, `'activity'` for activity-only changes,
+and false for pending bridge repairs or unchanged rows. Every folder is
+processed even after an earlier one changed. Structural changes take priority
+over activity when a flush includes both classes. Added/deleted rows,
+changed folder project paths and removal of cached empty projects return true;
+rows retained for a running PTY are still preserved. The comparison reuses the
+refresh's existing folder rows and compares only the final upserts, avoiding
+an extra folder query or a complete projects build on each event.
+
+Compared cache fields: `sessionId`, `folder`, `projectPath`, `summary`,
+`firstPrompt`, `created`, `slug`, `scheduleSlug`,
+`aiTitle`, `customTitle`, `parentSessionId`, `agentId`, `subagentType`,
+`description`, `bridgeSessionId`, `mergedIntoSessionId`, and SDK membership
+derived from `entrypoint`. Compared metadata: `name`, `starred`, `archived`,
+`nameSource`, `nameRevision`. Empty optional values are normalized.
+
+These are the inputs to `buildProjectsFromCache` and
+`mergeLocalBackgroundSessions`: they determine names, timestamps, message
+counts, schedule/slug and parent grouping, archive/SDK visibility, bridge heads
+and merged members. The sidebar displays those results in `buildSessionItem`,
+`buildSubagentItem` and the schedule groups. Folder `projectPath` also determines
+empty project entries. For local top-level rows, continuation comparison keeps
+only the graph's effective state (absent or empty, unusable, or normalized successor IDs):
+`format`, `complete`, `unresolved`, `ids`, and validity of `mtime` against
+`fileMtime`. Index byte offsets, stamps and tails are ignored, as are
+`textContent`, daily metrics and folder index freshness.
+
+Activity fields are `modified`, `fileMtime`, and `messageCount`. Cache writes
+and freshness checks remain immediate, including the mtime-only fallback after
+a failed header read. A flush changing only these fields requests cause
+`activity`. `ACTIVITY_NOTIFY_MIN_MS = 30000`, next to
+`NOTIFY_THROTTLE_MS = 1500`, delays the first activity-only emission by 30s
+and coalesces subsequent activity without restarting the timer. Structural
+notifications retain the 1.5s leading/trailing throttle; any emission satisfies
+pending activity and clears its timer. The timers are unref'd and cleared on
+producer shutdown, which also prevents new notifications.
+
+`modified` drives sidebar recency ordering, day filters, group recency and
+subagent preview selection; sidebar/group/grid-card labels use `formatDate`
+(just now, whole minutes, hours, days, then a date). Sidebar time labels already
+tick every 30s. The resume guard also includes the cached ISO timestamp in its
+confirmation text. `messageCount` appears as an exact integer on session and
+subagent rows; ordinary header refreshes already preserve the cached count.
+No session `fileMtime` renderer consumer exists. These uses tolerate the 30s
+activity window; busy/attention and running-subagent counts use separate events.
+Merged compaction mirrors choose `headSessionId` from the latest `modified`;
+a head change caused only by `modified` is accepted within the same 30s activity
+window. A new mirror adds a row and remains structural.
+
+Busy and attention updates do not depend on this reload: main's OSC parser
+sends `cli-busy-state` and `terminal-notification`, the renderer calls
+`setActivity`/`setAttention` immediately, and its existing active-session poll
+calls `reconcileBusyState`. CLI/background status, remote, archive and scan
+notification conditions are unchanged. Background job notifications still
+depend on job additions/removals or changes to a job's `state`, `name`,
+`nameSource` or `sessionId`. Cold population still notifies for each processed
+folder, even with no rows.
+
+Every notifier caller supplies a cause; see `docs/activity-trace.md` for
+`projects.changed` and the renderer frame probe. The `activity` cause selects
+the deferred path; the other labels identify structural notification producers.
 
 ## Projects query worker
 

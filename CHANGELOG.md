@@ -5,7 +5,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- Typing in a terminal no longer stalls while other sessions or subagents are working: their last-activity times in the sidebar now update at most every 30 seconds, while new sessions and renames still appear right away. (#694)
 - A session sent to the background no longer takes back an old name over one you gave it more recently. (#685)
+- A session whose Claude process crashed no longer reappears in the sidebar as running after Windows reuses its process number. (#687)
 
 ## v0.0.96 — 2026-10-17
 
@@ -26,7 +28,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Closing the window (the close button, `Alt`+`F4`) asks for confirmation first, with Cancel selected; a window that is busy at that moment asks once it is free. Quitting from the ☰ menu (Quit, or Exit on Windows) does not ask again, and a quit from outside (a logout, an update install) is not stopped by the question. On macOS it asks "Close the window?": Switchboard stays in the Dock, but its sessions stop. If the window has stopped responding, a single close waits, and closing it again a few seconds later ends it; never while one of its own confirmation boxes waits for an answer. A window closed while it is still starting asks once it has loaded. (#478)
 
 ### Fixed
-- A session whose Claude process crashed no longer reappears in the sidebar as running after Windows reuses its process number. (#687)
 - A background session that watches an artifact shows its activity instead of "Activity unavailable"; an activity Switchboard does not know yet is named as unknown in the activity tooltip. (#684)
 - A background session waiting for your next message keeps its bg badge and can still be attached or stopped from the Agents view. (#682)
 - Renaming a session no longer reverts to an earlier name such as "name (3)" when its transcript refreshes. A later rename in the session itself can still update the displayed name. (#680)

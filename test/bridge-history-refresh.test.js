@@ -105,7 +105,7 @@ test('ordinary bridge flush uses only header reads and synchronously advances th
   try { result = cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }); }
   finally { fs.readFileSync = original; }
   assert.equal(f.rows.get('a').messageCount, 2, 'cached body counts stay unchanged on header refresh');
-  assert.equal(result, undefined, 'refreshFolder has a synchronous contract on every path');
+  assert.equal(result, 'activity', 'refreshFolder distinguishes the changed activity timestamp');
   assert.deepEqual(reads, [], 'ordinary flush must not read transcript bodies');
   assert.equal(f.rows.get('c').mergedIntoSessionId, 'a', 'unchanged members are not re-evaluated on ordinary flushes');
   assert.equal(f.rows.get('a').fileMtime, fs.statSync(path.join(f.dir, 'a.jsonl')).mtime.toISOString());
@@ -221,7 +221,7 @@ test('one-time repair indexes only repaired folders off-thread and cannot loop t
   try {
     cache.init({ PROJECTS_DIR: f.root, activeSessions: f.activeSessions, getMainWindow: () => null, log: console, db: f.db });
     const first = cache.reindexRepairedFolders?.();
-    assert.equal(cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }), undefined);
+    assert.equal(cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }), false);
     assert.deepEqual(reads, [], 'watcher flush during repair must not recreate invalidated rows on the main thread');
     assert.equal(cache.reconcileCacheFromFilesystem(), undefined);
     await first;
@@ -251,7 +251,7 @@ test('a failed repair write releases its gate so watcher and reconcile discover 
   assert.deepEqual(f.settings.get('bridge_uuid_reindex_folders'), []);
   failWrite = false;
   f.write('new', [f.msg('new-own', '02')]);
-  assert.equal(cache.refreshFolder(f.folder, { files: new Set(['new.jsonl']) }), undefined);
+  assert.equal(cache.refreshFolder(f.folder, { files: new Set(['new.jsonl']) }), true);
   assert.ok(f.rows.has('new'), 'watcher discovers a new session after repair failure');
   f.meta.get(f.folder).indexMtimeMs = 0;
   assert.equal(cache.reconcileCacheFromFilesystem(), undefined);

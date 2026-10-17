@@ -581,7 +581,7 @@ const remoteIndexer = createRemoteIndexer({
   listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
   dropFolder: async folderKey => await writer.dropRemoteFolder(folderKey),
   setRemoteRoots,
-  notify: notifyRendererProjectsChanged,
+  notify: () => notifyRendererProjectsChanged('remote'),
   log,
 });
 
@@ -813,7 +813,7 @@ ipcMain.handle('archive-project-settings', async (_event, projectPath, folderKey
     const { alias } = folderKey ? parseFolderKey(folderKey) : { alias: null };
     const entry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
     await writer.hideProject(entry, 'archive');
-    notifyRendererProjectsChanged();
+    notifyRendererProjectsChanged('archive');
     return { ok: true };
   } catch (err) {
     return { error: err.message };
@@ -831,7 +831,7 @@ ipcMain.handle('unarchive-project', async (_event, entry) => {
     if (alias === null && kind === undefined && isDirectory(projectPath)) await scheduleProjects().add(projectPath);
     if (alias === null) skipMissedScheduleRuns(await unarchivedScheduleProjects(projectPath));
     await writer.unhideProject(entry, alias, projectPath);
-    notifyRendererProjectsChanged();
+    notifyRendererProjectsChanged('archive');
     return { ok: true };
   } catch (err) {
     return { error: err.message };
@@ -866,7 +866,7 @@ ipcMain.handle('add-project', async (_event, projectPath) => {
 
     // Immediately index the new folder so it's in cache before frontend renders
     await writer.refreshFolder(folder);
-    notifyRendererProjectsChanged();
+    notifyRendererProjectsChanged('project-added');
     await scheduleProjects().add(projectPath);
 
     return { ok: true, folder, projectPath };
@@ -890,7 +890,7 @@ ipcMain.handle('remove-project', async (_event, projectPath, folderKey) => {
     await deleteSetting('project:' + projectPath);
     await scheduleProjects().remove(projectPath);
 
-    notifyRendererProjectsChanged();
+    notifyRendererProjectsChanged('project-deleted');
     return { ok: true };
   } catch (err) {
     return { error: err.message };
@@ -915,7 +915,7 @@ function archiveDeps() {
     setEnabled: setScheduleEnabled,
     mergeProjects: mergePlaceholderSessions,
     activeSessions,
-    notify: notifyRendererProjectsChanged,
+    notify: () => notifyRendererProjectsChanged('archive'),
     now: () => new Date().toISOString(),
   };
 }
@@ -981,7 +981,7 @@ ipcMain.handle('remap-project', async (_event, oldPath, newPath) => {
 
     // Refresh the folder cache so the new path takes effect in the UI
     await writer.refreshFolder(folder);
-    notifyRendererProjectsChanged();
+    notifyRendererProjectsChanged('project-remap');
     return { ok: true };
   } catch (err) {
     return { error: err.message };
@@ -1043,7 +1043,7 @@ ipcMain.handle('delete-worktree', (_event, worktreePath) => {
       const removed = await writer.cleanupWorktree(normalizedPath, log);
 
       log.info(`[delete-worktree] removed=${normalizedPath} sessions=${removed}`);
-      notifyRendererProjectsChanged();
+      notifyRendererProjectsChanged('worktree-deleted');
       resolve({ ok: true, removed });
     }
   });
@@ -1798,7 +1798,7 @@ ipcMain.handle('remote-stop-session', async (_event, payload) => {
   if (result.ok) {
     remoteIndexer.dropRemoteSession(alias, sessionId);
     // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
-    notifyRendererProjectsChanged();
+    notifyRendererProjectsChanged('remote');
     remoteIndexer.refreshHostNow(alias, { force: true }).catch(() => {});
     const attachedSession = activeSessions.get(sessionId);
     if (attachedSession && attachedSession.kind === 'remote-attach' && !attachedSession.exited) {
@@ -2454,7 +2454,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
       try {
         const releasedReal = releaseReal && await writer.releaseLiveSession(realId);
         const releasedOriginal = releaseOriginal && await writer.releaseLiveSession(sessionId);
-        if (releasedReal || releasedOriginal) notifyRendererProjectsChanged();
+        if (releasedReal || releasedOriginal) notifyRendererProjectsChanged('session-exit');
       } catch (err) {
         log.warn(`[session-cache] releasing kept row of ${realId} failed: ${err.message}`);
       }
@@ -2924,7 +2924,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   };
   activeSessions.set(sessionId, session);
   if (!isPlainTerminal) revealIfSdkSession(sessionId);
-  if (isAttach) notifyRendererProjectsChanged();
+  if (isAttach) notifyRendererProjectsChanged('session-attach');
   if (!isPlainTerminal && !panelOwnerId) activityReporter.sessionStarted({ sessionId, project: projectPath });
 
   // see .ai/contexts/cli-session-state.md
@@ -3219,7 +3219,7 @@ cliSessionState.init({
 });
 cliSessionState.onStatusesChanged(() => {
   sessionTransitions.detectPendingBackgroundContinuations();
-  notifyRendererProjectsChanged();
+  notifyRendererProjectsChanged('cli-status');
   const observed = new Set();
   for (const descriptor of cliSessionState.getSidebarDescriptors()) {
     const id = descriptor.sessionId;
@@ -3296,7 +3296,7 @@ bgAgents.init({
 });
 const unsubscribeBgAgents = require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
   activeSessions, cliSessionState, sessionHasPty, ptyPids });
-bgAgents.onJobsChanged(notifyRendererProjectsChanged);
+bgAgents.onJobsChanged(() => notifyRendererProjectsChanged('bg-jobs'));
 bgAgents.onJobsChanged(() => {
   sessionTransitions.detectPendingBackgroundContinuations();
 });
@@ -3346,23 +3346,24 @@ function startProjectsWatcher() {
     pendingChanges.clear();
 
     let changed = false;
+    let activityChanged = false;
     for (const [folder, scope] of work) {
       const folderPath = path.join(PROJECTS_DIR, folder);
+      let folderChanged;
       if (fs.existsSync(folderPath)) {
         detectSessionTransitions(folder);
-        if (scope === true) {
-          await writer.refreshFolder(folder);
-        } else {
-          await writer.refreshFolder(folder, { files: scope });
-        }
+        folderChanged = await writer.refreshFolder(folder, scope === true ? undefined : { files: scope });
       } else {
-        await writer.dropFolderRows(folder);
+        folderChanged = await writer.dropFolderRows(folder);
       }
-      changed = true;
+      changed = folderChanged === true || changed;
+      activityChanged = folderChanged === 'activity' || activityChanged;
     }
 
     if (changed) {
-      notifyRendererProjectsChanged();
+      notifyRendererProjectsChanged('watcher');
+    } else if (activityChanged) {
+      notifyRendererProjectsChanged('activity');
     }
   }
 

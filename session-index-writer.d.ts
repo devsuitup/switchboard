@@ -49,8 +49,8 @@ export interface SessionIndexWriter {
   setCachedCustomTitles(pairs: Array<{ sessionId: string; customTitle: string; fileMtime?: string | null }>): Promise<void>;
   setCachedContinuationIndex(sessionId: string, index: string): Promise<void>;
   setInitialScanComplete(): Promise<void>;
-  refreshFolder(folder: string, opts?: { files?: Set<string> | null }): Promise<void>;
-  dropFolderRows(folder: string, opts?: { search?: boolean }): Promise<void>;
+  refreshFolder(folder: string, opts?: { files?: Set<string> | null }): Promise<boolean | 'activity'>;
+  dropFolderRows(folder: string, opts?: { search?: boolean }): Promise<boolean>;
   releaseLiveSession(sessionId: string): Promise<boolean>;
   writeScannedFolder(result: ScanResult | null, unverifiedLocalFolder?: string | null): Promise<number>;
   writeScannedFolderPartial(result: ScanResult | null): Promise<number>;
