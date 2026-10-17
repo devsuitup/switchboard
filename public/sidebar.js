@@ -1885,8 +1885,10 @@ function buildSessionItem(session) {
   // One icon slot per row, painted by session-activity-dom.js — see .ai/contexts/session-state.md
   const icon = document.createElement('span');
   icon.className = 'session-icon' + (rowSessionIds(session).some(id => activePtyIds.has(id)) ? ' running' : '');
-  paintSessionIconFromSnapshot(icon, snapshot);
-  if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention);
+  const bgActivity = (typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(session), snapshot, session))
+    || (session.bgJobId ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null);
+  paintSessionIconFromSnapshot(icon, snapshot, bgActivity?.title);
+  if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention, bgActivity?.title);
 
   // Info block
   const info = document.createElement('div');
@@ -1912,13 +1914,8 @@ function buildSessionItem(session) {
   // see .ai/contexts/session-state.md ("Surfacing status on the session object")
   const statusEl = document.createElement('span');
   statusEl.className = 'session-status';
-  const bgActivity = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(session), snapshot, session);
   if (bgActivity) {
     statusEl.textContent = bgActivity.text;
-    statusEl.title = bgActivity.title;
-  } else if (session.bgJobId) {
-    statusEl.textContent = 'Activity unavailable';
-    statusEl.title = 'Job activity unavailable';
   } else if (session.status) {
     const age = formatStatusAge(session.statusUpdatedAt);
     const why = session.status === 'waiting' && session.waitingFor ? ' · ' + session.waitingFor : '';

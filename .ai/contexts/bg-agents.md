@@ -121,7 +121,7 @@ evidence. Normalized `taskEvidence` feeds the existing task registry.
 `artifact_watch`. Runtime validation accepts future nonempty string kinds:
 `inFlightKinds` retains every kind with its label and `known` flag; unknown
 kinds use `Unknown activity (<kind>)`, keeping at most 40 characters of the
-kind followed by an ellipsis when truncated. The sidebar job-update tooltip lists
+kind followed by an ellipsis when truncated. The sidebar icon tooltip lists
 these labels, including `Artifact watch`, while activity still uses the task
 registry and the static background glyph. The canary separately rejects an
 unknown kind so CLI drift remains visible without making runtime evidence
@@ -167,13 +167,21 @@ and conversation ownership; tokens, tempo, detail and display-only fan changes
 do not rebuild it.
 
 Both local adapters omit background descriptor status so even a newer frozen
-idle timestamp cannot close a validated head turn. The sidebar status line
-uses the shared activity label plus the separate job lifecycle label (just
-`Job done`, `Job stopped` or `Job failed` for finished jobs), and
-updates on head pushes as well as roster changes. Its tooltip identifies a
-valid `updatedAt` in local time as **job metadata**, never last head output; the ordinary
-Agents age column still measures `startedAt`. No descriptor status age is
-shown for background activity.
+idle timestamp cannot close a validated head turn. While a valid job is
+`working`, the sidebar status text is empty, including the Working,
+Background work running and Waiting for input activity rungs (#702).
+`backgroundActivityLabel` is sidebar-only: it retains `Blocked` for a job
+waiting for user input, `Idle` for hosted done, `Job done`, `Job stopped`,
+`Job failed` for finished jobs, and `Activity unavailable` for missing or
+invalid activity evidence. A resumed foreground conversation keeps its
+existing activity text.
+The row's single `.session-icon` owns the full tooltip and accessible label:
+activity label, separate job state, valid `updatedAt` in local time as
+**job metadata**, and all in-flight kind labels, or the unavailable diagnostic.
+The `.session-status` has no separate tooltip. Initial sidebar builds and
+`applyStateClasses` refresh the same projection on head pushes and roster
+changes. The Agents table keeps its existing state labels, icon tooltip and
+`startedAt` age column. No descriptor status age is shown for background activity.
 
 Unknown job formats, invalid normalized evidence, backwards job timestamps,
 missing files and corrupt rewrites expose unavailable/degraded job activity.
@@ -276,7 +284,9 @@ absent at zero, so a roster without external sessions reads as before.
 `JOB_STATES` is `working`, `blocked`, `done`, `stopped`, `failed`. These are
 turn states: `done` means the turn ended, while the daemon may still host the
 session between messages. `working` means an active turn; `blocked` needs
-attention. `stopped` and `failed` are finished even with a leftover descriptor.
+user input (see `docs/background-agents.md`, "The list") and projects
+attention in `projectBackgroundActivity`, so the sidebar keeps a short
+`Blocked` label (#702). `stopped` and `failed` are finished even with a leftover descriptor.
 
 `isHostedJob(job, descriptors)` in `bg-agents-roster.js` is the single hosting
 rule: a background job is hosted if working/blocked, or if a live `kind: bg`

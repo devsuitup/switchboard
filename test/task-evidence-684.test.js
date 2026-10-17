@@ -113,10 +113,12 @@ for (const [kinds, labels, optionalCounts] of [
     assert.equal(h.window.taskRegistry.agents(SID).length, 0);
     const element = h.sidebar.buildSessionItem({ sessionId: SID, bgJobId: 'abcdef12', summary: 'Watching' });
     const status = element.querySelector('.session-status');
-    assert.match(status.textContent, /Background work running/);
-    assert.doesNotMatch(status.textContent, /Activity unavailable/);
-    assert.ok(!status.title.includes('hidden-suffix'), status.title);
-    for (const label of labels) assert.ok(status.title.includes(label), status.title);
+    assert.equal(status.textContent, '');
+    assert.equal(status.title, '');
+    const title = element.querySelector('.session-icon').title;
+    assert.match(title, /Background work running · job working/);
+    assert.ok(!title.includes('hidden-suffix'), title);
+    for (const label of labels) assert.ok(title.includes(label), title);
     assert.ok(element.querySelector('.session-icon--agents-busy'));
   });
 }
