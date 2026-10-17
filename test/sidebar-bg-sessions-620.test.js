@@ -105,11 +105,11 @@ test('a done hosted bg UUID keeps its descriptor-only sidebar row', t => {
   assert.equal(h.render().querySelector('.bg-badge')?.textContent, 'bg');
 });
 
-for (const reason of ['before the job watcher fills', 'beyond MAX_JOBS']) {
+for (const reason of ['before the job watcher fills', 'when only another job is cached']) {
   test(`a live bg descriptor keeps its sidebar row without cached job metadata ${reason}`, t => {
     const h = setup(t);
     const { mergeLocalBackgroundSessions } = require('../sidebar-bg-sessions');
-    const jobs = reason === 'beyond MAX_JOBS' ? new Map([['other-job', { state: 'working' }]]) : new Map();
+    const jobs = reason === 'when only another job is cached' ? new Map([['other-job', { state: 'working' }]]) : new Map();
     const projects = [];
     mergeLocalBackgroundSessions(projects, [], cli.getSidebarDescriptors(), {
       jobs, metaMap: new Map(), hiddenProjects: new Set(), showArchived: false,

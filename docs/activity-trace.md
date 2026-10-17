@@ -51,16 +51,18 @@ even while tracing is off; enabling tracing preserves that baseline. This
 signal adds no timer. It exposes a block across a tick; a stall that ends
 before the next tick is not seen. It does not measure a latency percentile.
 
-Windows timer granularity makes tens of milliseconds of idle `lagMs` normal.
-Measured at idle under Node 22 on Windows: 12–20 ms, with one sample at 73 ms;
-in Electron: 12–14 ms. Treat this noise floor as context when reading stalls.
+Measured idle `lagMs` on Windows was 0–20 ms, with rare outliers (one at 73 ms).
+Treat this timer noise as context when reading stalls. Sleep/resume probably
+appears as one large `lagMs` sample; this has not been verified.
 
 For a fine event-loop delay measurement, start Switchboard with
 `SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` and enable tracing. This switch is read
 once at monitor startup; only the exact value `1` arms it. Armed events also
 carry `maxMs` and `p99Ms` from a 20 ms histogram, reset after each report.
 The histogram records full timer intervals, so its idle floor is at least
-20 ms. It adds roughly 50 timer wakeups per second while tracing is on; use
+20 ms; armed at 20 ms, it measured about 32 ms at idle in Electron. A 32 ms
+histogram value alone is not a stall. It adds roughly 50 timer wakeups per
+second while tracing is on; use
 it for a bounded measurement, then restart without the switch. Disabling
 tracing disables the armed histogram immediately.
 

@@ -450,6 +450,16 @@ updates still do not notify projects. `getStatus` keeps its two-field result
 and the idle/rescan callback still runs only on the original status transition.
 The sidebar projection does not use a descriptor as proof of PTY ownership.
 
+For process-table platforms, the sidebar retains the last successfully observed
+stale `(sessionId, pid)` pairs while the 3 s table cache expires, a refresh is in
+flight, or a table read fails (#687). An unreadable or empty table does not
+replace that set or notify projects. This keeps a rejected reused PID from
+reappearing during an ordinary refresh and prevents repeated read failures
+from alternating the sidebar verdict. Only a successful fresh table recomputes
+the set; an unchanged set is silent, while a newly valid writer can return and
+notify projects. The fallback is scoped to sidebar exclusion, leaving delivery
+and ownership checks to report their existing unknown result without fresh proof.
+
 The Agents view (`.ai/contexts/bg-agents.md`) reads the same
 `~/.claude/sessions/<pid>.json` files through three additions:
 
