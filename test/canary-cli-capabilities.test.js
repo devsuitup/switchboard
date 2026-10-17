@@ -476,6 +476,53 @@ test('GIVEN no explicit runtime root WHEN live setup THEN refuse before CLI or e
   assert.equal(r.ledger, undefined);
 });
 
+for (const [platform, file, expected] of [
+  ['linux', '/srv/private/permissions-nonce.json', '//srv/private/permissions-nonce.json'],
+  ['darwin', '/srv/private/permissions-nonce.json', '//srv/private/permissions-nonce.json'],
+  ['linux', '/run/switchboard/launch-settings.json', '//run/switchboard/launch-settings.json'],
+  ['win32', 'C:\\private\\permissions-nonce.json', 'C:\\private\\permissions-nonce.json'],
+  ['win32', 'C:/private/permissions-nonce.json', 'C:/private/permissions-nonce.json'],
+  ['linux', '//srv/private/permissions-nonce.json', '//srv/private/permissions-nonce.json'],
+  ['linux', 'private/permissions-nonce.json', 'private/permissions-nonce.json'],
+]) {
+  test(`GIVEN ${platform} path ${file} WHEN building a path permission THEN preserve its intended scope`, () => {
+    for (const tool of ['Read', 'Write', 'Edit']) {
+      assert.equal(harness.pathPermissionRule(tool, file, platform), `${tool}(${expected})`);
+    }
+  });
+}
+
+test('GIVEN sandbox C3 WHEN generating settings THEN allow Read of the mounted absolute path seen by the CLI', t => {
+  const r = run(t, ['--canary', 'C3']);
+  assert.equal(r.status, 0, r.stderr);
+  const evidence = data(r);
+  const proc = evidence.processes.find(p => p.sandbox);
+  const project = path.join(r.home, '.claude/projects');
+  const name = fs.readdirSync(project, { recursive: true }).find(file => path.basename(file) === `${proc.sessionId}.jsonl`);
+  const rows = fs.readFileSync(path.join(project, name), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const all = rows.flatMap(row => Array.isArray(row.message?.content) ? row.message.content : []);
+  const read = all.find(block => block.type === 'tool_use' && block.name === 'Read');
+  const result = all.find(block => block.type === 'tool_result' && block.tool_use_id === read.id);
+  const settings = JSON.parse(result.content[0].text);
+  assert.ok(settings.permissions.allow.includes('Read(//run/switchboard/launch-settings.json)'),
+    JSON.stringify(settings.permissions.allow));
+  assert.ok(!settings.permissions.allow.some(rule => /^Read\((?!\/\/run\/)/.test(rule)));
+  assert.equal(read.input.file_path, '/run/switchboard/launch-settings.json');
+});
+
+test('GIVEN a single-slash POSIX Read rule WHEN fake C3 runs THEN reproduce a permission prompt', t => {
+  const r = run(t, ['--canary', 'C3', '--mutation', 'single-slash-read-rule']);
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
+  const evidence = data(r);
+  const proc = evidence.processes.at(-1);
+  assert.equal(proc.waitingFor, 'permission');
+  assert.equal(proc.cleaned, true);
+  assert.equal(evidence.permissions.at(-1).exactSettingsRead, false);
+  assert.equal(evidence.permissions.at(-1).nonOverlappingActionRan, false);
+  assert.equal(evidence.permissions.at(-1).finalReplyObserved, false);
+});
+
 test('GIVEN exact live command denial WHEN C3 runs THEN linked result and explicit final reply qualify each turn', t => {
   const r = run(t, ['--canary', 'C3']);
   const evidence = data(r);

@@ -49,10 +49,10 @@ const sessions = process.env.CANARY_FIXTURE_SESSIONS || path.join(state, 'sessio
 fs.mkdirSync(sessions, { recursive: true });
 const descriptor = path.join(sessions, `${process.pid}.json`);
 const startedAt = Date.now();
-function describe(status) {
+function describe(status, waitingFor = 'trust') {
   fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid, sessionId: id, cwd,
     name: mutation === 'missing-name' ? undefined : `native-${id}`, status,
-    waitingFor: status === 'waiting' ? 'trust' : undefined, statusUpdatedAt: Date.now(), startedAt,
+    waitingFor: status === 'waiting' ? waitingFor : undefined, statusUpdatedAt: Date.now(), startedAt,
     procStart: process.env.CANARY_FIXTURE_PROC_START || String(startedAt), fixtureOnly: true,
     fixtureEnvKeys: Object.keys(process.env) }));
   process.stdout.write(status === 'idle' ? '\x1b]9;4;0;\x07' : '\x1b]9;4;3;\x07');
@@ -108,13 +108,16 @@ function handle(text) {
   const meta = match ? JSON.parse(match[1]) : {};
   if (meta.kind === 'permissions') {
     const settings = JSON.parse(fs.readFileSync(value('--settings'), 'utf8'));
-    if (!settings.permissions.allow.includes(`Read(${value('--settings')})`) ||
+    const readPath = process.env.CANARY_FIXTURE_SANDBOX ? '/run/switchboard/launch-settings.json' : value('--settings');
+    const rulePath = readPath.startsWith('/') ? `/${readPath}` : readPath;
+    const readRules = settings.permissions.allow.map(rule => mutation === 'single-slash-read-rule' ? rule.replace(/^Read\(\/\//, 'Read(/') : rule);
+    if (!readRules.includes(`Read(${rulePath})`) ||
         (process.env.CANARY_FIXTURE_SANDBOX && !settings.permissions.allow.includes(`Bash(${meta.protectionCommand})`))) {
-      describe('waiting'); return;
+      describe('waiting', 'permission'); return;
     }
     const settingsText = fs.readFileSync(value('--settings'), 'utf8');
     const renderedSettings = mutation === 'escaped-settings' ? settingsText.split('\n').map((line, i) => `${i + 1}\t${line}`).join('\n') : settingsText;
-    tool('Read', { file_path: value('--settings').replaceAll('\\', '/') }, [{ type: 'text', text: renderedSettings }]);
+    tool('Read', { file_path: readPath.replaceAll('\\', '/') }, [{ type: 'text', text: renderedSettings }]);
     const denied = settings.permissions.deny.length > 0 && mutation !== 'remove-deny';
     if (!denied || ['fake-denial', 'tool-stop-side-effect'].includes(mutation)) fs.writeFileSync(meta.deniedFile, 'side effect');
     const unknownDenial = mutation === 'unknown-denial' || mutation === 'sandbox-unknown-denial' && process.env.CANARY_FIXTURE_SANDBOX;

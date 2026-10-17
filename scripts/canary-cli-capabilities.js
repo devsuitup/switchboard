@@ -29,7 +29,7 @@ Object.assign(CANARY_MUTATIONS, {
   C2: [...CANARY_MUTATIONS.C2, 'natural-source-activity'],
   C3: [...CANARY_MUTATIONS.C3, 'os-denial', 'escaped-settings', 'unknown-denial', 'sandbox-unknown-denial',
     'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'denial-no-error-flag', 'wrong-command-denial',
-    'premature-final', 'tool-stop-side-effect', 'unlinked-denial'],
+    'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule'],
   C4: [...CANARY_MUTATIONS.C4, 'missing-name', 'unknown-receipt', 'wrong-control-leak', 'wrong-control-hidden-leak'],
 });
 MUTATIONS.push(...Object.values(CANARY_MUTATIONS).flat().filter(x => !MUTATIONS.includes(x)));
@@ -718,6 +718,11 @@ async function c2(ctx) {
   ctx.capabilities.forkWorktree = true;
 }
 
+function pathPermissionRule(tool, file, platform = process.platform) {
+  const rulePath = platform !== 'win32' && file.startsWith('/') && !file.startsWith('//') ? `/${file}` : file;
+  return `${tool}(${rulePath})`;
+}
+
 async function permissionCase(ctx, sandbox, removeDeny = false) {
   const nonce = crypto.randomUUID();
   const deniedFile = path.join(ctx.repo, `denied-${nonce}`);
@@ -725,9 +730,9 @@ async function permissionCase(ctx, sandbox, removeDeny = false) {
   const deniedCommand = `printf denied > '${deniedFile.replaceAll('\\', '/')}'`;
   const allowedCommand = `printf allowed > '${allowedFile.replaceAll('\\', '/')}'`;
   const settings = path.join(ctx.private, `permissions-${nonce}.json`);
-  const readPath = sandbox && !ctx.opts.dryRun ? '/run/switchboard/launch-settings.json' : settings;
+  const readPath = sandbox ? '/run/switchboard/launch-settings.json' : settings;
   const rule = `Bash(${deniedCommand})`;
-  save(settings, { permissions: { allow: [`Read(${readPath})`, rule, `Bash(${allowedCommand})`], deny: removeDeny ? [] : [rule] } });
+  save(settings, { permissions: { allow: [pathPermissionRule('Read', readPath, sandbox ? 'linux' : process.platform), rule, `Bash(${allowedCommand})`], deny: removeDeny ? [] : [rule] } });
   save(path.join(ctx.repo, '.claude/settings.json'), { permissions: { allow: [rule] } });
   const globalSettings = path.join(ctx.opts.home, '.claude/settings.json');
   if (fs.existsSync(globalSettings) && !ctx.globalSettingsOwned) throw new Unverified('C3 needs a login-only prepared home without existing global settings; no settings are overwritten');
@@ -1009,7 +1014,7 @@ async function main(argv = process.argv.slice(2)) {
       const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'exit-flush-assistant', 'denial-no-error-flag'];
       const unavailable = ['no-report', 'synthetic-receipt', 'missing-name', 'unknown-receipt', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'hang', 'wrong-recipient', 'os-denial', 'unknown-denial', 'sandbox-unknown-denial',
         'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'wrong-command-denial',
-        'premature-final', 'tool-stop-side-effect', 'unlinked-denial'];
+        'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule'];
       const expected = positive.includes(ctx.opts.mutation) ? 'PASS' : unavailable.includes(ctx.opts.mutation) ? 'UNVERIFIED' : 'FAIL';
       ctx.evidence.controls.push({ name: ctx.opts.mutation, status: status === expected ? 'PASS' : 'FAIL', expected, observed: status });
     }
@@ -1050,4 +1055,4 @@ if (require.main === module) {
     for (const proc of OWNED) if (!proc.exited) { try { proc.child.kill(); } catch {} }
   });
 }
-module.exports = { main, parse, environment, received, sandboxPlan, probeMounts, launch, stop, descriptor, submit };
+module.exports = { main, parse, environment, received, sandboxPlan, probeMounts, launch, stop, descriptor, submit, pathPermissionRule };
