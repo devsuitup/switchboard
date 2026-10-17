@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A session sent to the background no longer takes back an old name over one you gave it more recently. (#685)
+
 ## v0.0.96 — 2026-10-17
 
 ### New

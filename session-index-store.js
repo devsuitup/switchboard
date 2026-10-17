@@ -555,7 +555,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       typeof s.entrypoint === 'string' ? s.entrypoint : null,
       s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null
     );
-    if (next !== previous) metaFieldSet.run(s.sessionId, 'name', previous.nameRevision ?? metaFieldNext.get().revision, 'user', next.nameTranscriptTitle);
+    if (next !== previous) metaFieldSet.run(s.sessionId, 'name', previous.nameRevision ?? 0, 'user', next.nameTranscriptTitle);
   }
 });
 
@@ -579,7 +579,7 @@ const setCachedCustomTitles = db.transaction((pairs) => {
     const changed = stmts.cacheSetCustomTitle.run(customTitle || '', sessionId, fileMtime || null).changes;
     const field = metaFieldGet.get(sessionId, 'name');
     if (changed && (!field || field.source === 'user') && field?.transcriptTitle == null && getMeta(sessionId)?.name) {
-      metaFieldSet.run(sessionId, 'name', field?.revision ?? metaFieldNext.get().revision, 'user', customTitle || '');
+      metaFieldSet.run(sessionId, 'name', field?.revision ?? 0, 'user', customTitle || '');
     }
     if (changed && promoteName && customTitle && field?.source === 'transcript') setName(sessionId, customTitle, 'transcript');
   }

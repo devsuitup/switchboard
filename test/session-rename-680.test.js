@@ -204,6 +204,38 @@ for (const method of ['refresh', 'backfill']) {
   });
 }
 
+for (const method of ['refresh', 'backfill']) {
+  for (const newer of ['source', 'target']) {
+    test(`baseline-only ${method} hydration keeps the field-backed ${newer} name over a field-less name during rekey`, t => {
+      run(temp(t), fixture + `
+        const Database = require('better-sqlite3');
+        const sql = new Database(db.DB_PATH);
+        const next = '22222222-2222-4222-8222-222222222222';
+        const legacyId = '${newer}' === 'source' ? next : id;
+        const newerId = '${newer}' === 'source' ? id : next;
+        sql.prepare('INSERT INTO session_meta (sessionId, name) VALUES (?, ?)').run(legacyId, 'legacy old');
+        commands.renameSession(newerId, 'newer user name');
+        assert.equal(db.getMeta(legacyId, true).nameRevision, null);
+        assert.equal(db.getMeta(newerId, true).nameRevision, 1);
+        if ('${method}' === 'backfill') {
+          db.upsertCachedSessions([{ sessionId: legacyId, folder, projectPath: root, customTitle: null }]);
+          db.setCachedCustomTitles([{ sessionId: legacyId, customTitle: 'X' }]);
+        } else {
+          fs.writeFileSync(path.join(path.dirname(file), next + '.jsonl'), title('X') +
+            JSON.stringify({ type: 'user', cwd: root, message: { content: 'continued prompt' } }) + '\\n');
+          refresh();
+        }
+        db.rekeySessionMeta(id, next, 'X');
+        assert.equal(db.getMeta(next).name, 'newer user name', 'a baseline cannot make a legacy name win a rekey');
+        assert.equal(db.getMeta(legacyId, true).nameRevision, '${newer}' === 'source' ? 1 : 0);
+        assert.equal(db.getMeta(next, true).nameRevision, 1);
+        sql.close();
+        db.closeDb();
+      `);
+    });
+  }
+}
+
 for (const row of [{ folder: 'host::-fixture' }, { folder: '-fixture', parentSessionId: 'parent' }]) {
   test(`migration preserves ${row.parentSessionId ? 'subagent' : 'remote'} titles and NULL baselines accept /rename`, t => {
     const root = temp(t);
