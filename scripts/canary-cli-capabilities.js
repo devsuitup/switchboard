@@ -31,7 +31,9 @@ Object.assign(CANARY_MUTATIONS, {
     'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'denial-no-error-flag', 'wrong-command-denial',
     'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule'],
   C4: [...CANARY_MUTATIONS.C4, 'missing-name', 'unknown-receipt', 'wrong-control-leak', 'wrong-control-hidden-leak',
-    'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'send-failed', 'stale-recipient'],
+    'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'send-failed', 'stale-recipient',
+    'receipt-delayed', 'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type',
+    'receipt-teammate', 'sandbox-socket-unavailable'],
 });
 MUTATIONS.push(...Object.values(CANARY_MUTATIONS).flat().filter(x => !MUTATIONS.includes(x)));
 const hash = data => crypto.createHash('sha256').update(data).digest('hex');
@@ -525,7 +527,7 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
   return proc;
 }
 
-async function submit(ctx, proc, payload, { maxMs = 20000, finalReply } = {}) {
+async function submit(ctx, proc, payload, { maxMs = 20000, finalReply, observe } = {}) {
   if (proc.exited) throw new Unverified('owned CLI exited before submit');
   const before = transcript(ctx, proc.id);
   const time = Date.now();
@@ -542,6 +544,13 @@ async function submit(ctx, proc, payload, { maxMs = 20000, finalReply } = {}) {
       const t = transcript(ctx, proc.id);
       const d = descriptor(ctx, proc);
       rememberDescriptor(proc, d);
+      if (observe) {
+        if (observe(t.rows.filter(r => r._offset >= before.bytes))) {
+          submission.confirmation = 'observation';
+          return t;
+        }
+        return null;
+      }
       if (d?.status === 'waiting') { proc.record.waitingFor = d.waitingFor || 'unknown'; throw new Unverified('owned CLI blocking dialog before confirmation'); }
       if (d?.waitingFor) proc.record.waitingFor = d.waitingFor;
       if (t.bytes !== lastBytes) { lastBytes = t.bytes; stableSince = Date.now(); }
@@ -554,7 +563,7 @@ async function submit(ctx, proc, payload, { maxMs = 20000, finalReply } = {}) {
         return t;
       }
       return null;
-    }, `new transcript${finalReply ? ', explicit final reply' : ''} and owned post-submit idle: ${phase}`, maxMs);
+    }, observe ? 'native send result and receipt observation' : `new transcript${finalReply ? ', explicit final reply' : ''} and owned post-submit idle: ${phase}`, maxMs);
     submission.outcome = 'PASS';
     return transcript(ctx, proc.id).rows.filter(r => r._offset >= before.bytes);
   } finally {
@@ -576,7 +585,7 @@ async function submit(ctx, proc, payload, { maxMs = 20000, finalReply } = {}) {
 async function stop(ctx, proc) {
   if (proc.record.cleaned) return;
   if (!proc.exited) {
-    if (proc.id && proc.record.descriptorConfirmation) {
+    if (proc.id && (proc.record.descriptorConfirmation || proc.gracefulStop)) {
       const shutdown = proc.record.shutdown = { stable: false, gracefulExit: false, forcedKill: false };
       try {
         const quietMs = ctx.opts.dryRun ? 50 : 1000;
@@ -825,6 +834,60 @@ async function c3(ctx) {
   ctx.capabilities.extraPermissionSettings = true;
 }
 
+function nativeName(ctx, proc) {
+  const agent = transcript(ctx, proc.id).rows.filter(r => r.type === 'agent-name').at(-1);
+  return agent?.agentName || agent?.agent_name || descriptor(ctx, proc)?.name || null;
+}
+
+function nativeReceipt(row, sender, nonce) {
+  if (row.type !== 'user' || typeof sender !== 'string' || !sender.length) return null;
+  for (const element of content(row).matchAll(/<cross-session-message\b([^>]*)>([\s\S]*?)<\/cross-session-message\s*>/g)) {
+    if (element[2].replace(/^\r?\n/, '').replace(/\r?\n$/, '') !== nonce) continue;
+    const pairs = [...element[1].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(m => [m[1], m[2] ?? m[3]]);
+    if (new Set(pairs.map(([key]) => key)).size !== pairs.length) continue;
+    const attrs = Object.fromEntries(pairs);
+    if (attrs['from-name'] !== sender || !/^uds:\/tmp\/cc-socks\/[^/]+\.sock$/.test(attrs.from || '') || !attrs['from-mode']) continue;
+    return { shape: 'cross-session-message', from: { scheme: 'uds:', socketPathSha256: hash(attrs.from.slice(4)) },
+      fromName: attrs['from-name'], fromMode: attrs['from-mode'], offset: row._offset };
+  }
+  return null;
+}
+
+function sendOutcome(rows, nonce, recipient) {
+  const all = blocks(rows);
+  const sends = all.filter(x => x.type === 'tool_use' && x.name === 'SendMessage' && flatText(x.input?.message ?? x.input?.content).includes(nonce));
+  const send = sends.find(x => (x.input?.to ?? x.input?.recipient) === recipient);
+  const sendResults = sends.flatMap(call => all.filter(x => x.type === 'tool_result' && x.tool_use_id === call.id).map(result => {
+    const text = flatText(result.content);
+    let success = null, unreachableRecipient = false;
+    try {
+      const parsed = JSON.parse(text);
+      if (typeof parsed.success === 'boolean') success = parsed.success;
+      unreachableRecipient = success === false && typeof parsed.message === 'string' &&
+        parsed.message.startsWith(`No agent named '${recipient}' is reachable`);
+    } catch {}
+    return { toolUseId: call.id, offset: result._offset, success, unreachableRecipient, isError: result.is_error === true,
+      sha256: hash(text), bytes: Buffer.byteLength(text), excerpt: text.slice(0, 200) };
+  }));
+  return { sends, send, sendResults, results: sendResults.filter(x => x.toolUseId === send?.id) };
+}
+
+function socketDirectory(ctx, child) {
+  const observation = { path: '/tmp/cc-socks', visible: null, observedAt: Date.now(), source: ctx.opts.dryRun ? 'emulated child descriptor' : '/proc owned child root' };
+  if (ctx.opts.dryRun) {
+    const visible = descriptor(ctx, child)?.fixtureSocketDirectoryVisible;
+    if (typeof visible === 'boolean') observation.visible = visible;
+    else observation.failure = 'fixture visibility observation unavailable';
+  } else if (process.platform === 'linux') {
+    try { observation.visible = fs.statSync(`/proc/${child.writerPid || child.pid}/root/tmp/cc-socks`).isDirectory(); }
+    catch (err) {
+      if (err.code === 'ENOENT') observation.visible = false;
+      else observation.failure = err.code || err.name;
+    }
+  } else observation.failure = 'Linux namespace inspection unavailable';
+  return observation;
+}
+
 async function reportPair(ctx, sandbox, wrongRecipientControl = false) {
   const origin = await launch(ctx, { mutation: ['missing-name', 'stale-descriptor-name', 'descriptor-only-name'].includes(ctx.opts.mutation) ? ctx.opts.mutation : '' });
   await submit(ctx, origin, 'Wait for a native SendMessage from an independent child; reply OK. ' + crypto.randomUUID());
@@ -840,6 +903,7 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false) {
   (ctx.evidence.nativeRenames ||= []).push(renameObservation);
   const nonce = crypto.randomUUID();
   const child = await launch(ctx, { sandbox, settings: ctx.emptySettings });
+  child.gracefulStop = true;
   const originRows = transcript(ctx, origin.id).rows;
   const agent = originRows.filter(r => r.type === 'agent-name').at(-1);
   const title = originRows.filter(r => r.type === 'custom-title').at(-1);
@@ -855,33 +919,29 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false) {
   const recipient = wrongRecipientControl ? 'absent-' + crypto.randomUUID() : origin.name;
   const meta = { kind: 'report', nonce, recipient, orchestrator: origin.id, wrongRecipientControl };
   const payload = 'CANARY_META ' + JSON.stringify(meta) + '\nReport exactly ' + nonce + ' using SendMessage.\n\nSwitchboard child assignment\nOrchestrator name: ' + JSON.stringify(recipient) + '\nOrchestrator session id: ' + JSON.stringify(origin.id) + '\nWhen the assigned task is complete, use SendMessage to report to the orchestrator named above. Include the result, the checks performed, and any blocker. If you cannot proceed, report the blocker with SendMessage. Do not open another reporting transport.';
-  const rows = await submit(ctx, child, payload);
-  const all = blocks(rows);
-  const sends = all.filter(x => x.type === 'tool_use' && x.name === 'SendMessage' && flatText(x.input?.content).includes(nonce));
-  const send = sends.find(x => (x.input?.to ?? x.input?.recipient) === recipient);
-  const sendResults = sends.flatMap(call => all.filter(x => x.type === 'tool_result' && x.tool_use_id === call.id).map(result => {
-    const text = flatText(result.content);
-    let success = null;
-    try { const parsed = JSON.parse(text); if (typeof parsed.success === 'boolean') success = parsed.success; } catch {}
-    return { toolUseId: call.id, offset: result._offset, success, isError: result.is_error === true,
-      sha256: hash(text), bytes: Buffer.byteLength(text), excerpt: text.slice(0, 200) };
-  }));
-  const failedSend = sendResults.some(x => x.toolUseId === send?.id && (x.success === false || x.isError));
+  const childBefore = transcript(ctx, child.id).bytes;
   const receiptRows = () => transcript(ctx, origin.id).rows.filter(r => r._offset >= before);
   const carriesNonce = row => JSON.stringify(row).includes(nonce);
-  const recognize = r => content(r).includes(nonce) && (ctx.opts.dryRun
-    ? r.type === 'system' && r.subtype === 'native-message' && r.fixtureSender === child.id
-    : typeof child.name === 'string' && /<teammate-message\b/.test(content(r)) && content(r).includes(child.name));
-  let receipt;
-  if (send) {
-    if (wrongRecipientControl) {
-      const end = Math.min(ctx.deadline, Date.now() + (ctx.opts.dryRun ? 150 : 15000));
-      await until(ctx, () => Date.now() >= end || receiptRows().some(carriesNonce), 'wrong-recipient observation window', Math.max(100, end - Date.now() + 100));
-    } else if (!failedSend) {
-      try { receipt = await until(ctx, () => receiptRows().find(recognize), 'native receipt', ctx.opts.dryRun ? 250 : 15000); }
-      catch (err) { if (!(err instanceof Unverified)) throw err; }
-    }
-  }
+  let receipt = null, submissionError, controlObservedAt;
+  const observationMs = ctx.opts.dryRun ? 500 : 15000;
+  try {
+    await submit(ctx, child, payload, { maxMs: observationMs + (wrongRecipientControl ? observationMs : 0), observe: rows => {
+      child.name = nativeName(ctx, child);
+      receipt = receiptRows().map(r => nativeReceipt(r, child.name, nonce)).find(Boolean) || null;
+      const outcome = sendOutcome(rows, nonce, recipient);
+      if (!outcome.results.length) return outcome.sends.length > 0 && outcome.sendResults.length > 0 && !outcome.send;
+      if (wrongRecipientControl) {
+        controlObservedAt ??= Date.now();
+        return receiptRows().some(carriesNonce) || Date.now() - controlObservedAt >= (ctx.opts.dryRun ? 150 : 15000);
+      }
+      return outcome.results.some(x => x.success === false || x.isError) || receipt && outcome.results.some(x => x.success === true);
+    } });
+  } catch (err) { submissionError = err; }
+  const rows = transcript(ctx, child.id).rows.filter(r => r._offset >= childBefore);
+  const { sends, send, sendResults, results } = sendOutcome(rows, nonce, recipient);
+  const failedSend = results.some(x => x.success === false || x.isError);
+  const successfulSend = results.some(x => x.success === true && !x.isError);
+  const socketObservation = sandbox ? socketDirectory(ctx, child) : null;
   let envKeys, envStatus = 'UNVERIFIED';
   if (process.platform === 'linux') {
     try {
@@ -902,24 +962,36 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false) {
     agentNameOffset: agent?._offset ?? null, renameObservation, sendResults,
     nativeRecipientDiffersFromDisplayTitle: origin.name !== displayTitle,
     distinctProcesses: origin.pid !== child.pid, intendedToolCall: !!send, nativeReceipt: !!receipt,
-    receiptOffset: receipt?._offset ?? null, privatePublication: isolated,
+    receiptOffset: receipt?.offset ?? null, receipt, childNativeName: child.name, privatePublication: isolated,
+    socketDirectory: socketObservation,
+    queueOperations: raw.filter(r => r.type === 'queue-operation').map(r => ({ type: r.type, offset: r._offset })),
     parentEnvironment: { status: process.platform === 'win32' ? 'UNVERIFIED' : envStatus, fixtureOutcome: ctx.opts.dryRun ? envStatus : 'UNVERIFIED', source: process.platform === 'linux' ? '/proc owned child' : ctx.opts.dryRun ? 'emulated child descriptor; Windows actual environment unmeasured' : 'Windows environment inspection unavailable' },
     messagingEnvKeys: messagingKeys, rawChildRows: rows.map(r => ({ type: r.type, offset: r._offset })),
     rawReceiptRows: raw.map(r => ({ type: r.type, offset: r._offset })), unexpectedNonceInOrigin: leaked };
   ctx.evidence.reports.push(observation);
   await stop(ctx, child); await stop(ctx, origin);
-  if (!send && sends.length) throw new Unverified('SendMessage used wrong recipient');
-  if (!send) throw new Unverified('native SendMessage tool call unavailable');
-  if (wrongRecipientControl) {
-    check(ctx, 'wrong-recipient tool call observed and origin has no nonce after boundary', !leaked);
-    ctx.evidence.controls.push({ name: 'wrong-recipient', status: 'PASS' });
-    return;
+  try {
+    if (!send && sends.length) throw new Unverified('SendMessage used wrong recipient');
+    if (!send) throw new Unverified('native SendMessage tool call unavailable');
+    if (wrongRecipientControl) {
+      if (!results.some(x => x.success === false && x.unreachableRecipient)) throw new Unverified('wrong-recipient rejection result unrecognized or absent');
+      check(ctx, 'wrong-recipient tool call observed and origin has no nonce after boundary', !leaked);
+      if (submissionError) throw submissionError;
+      ctx.evidence.controls.push({ name: 'wrong-recipient', status: 'PASS' });
+      return;
+    }
+    if (failedSend) throw new Unverified('SendMessage reported failure; native receipt not established');
+    if (!successfulSend) throw new Unverified('SendMessage success result unrecognized or absent');
+    if (!receipt) throw new Unverified('native receipt unrecognized or absent');
+    if (!child.name) throw new Unverified('child native sender name unavailable');
+    if (submissionError) throw submissionError;
+    if (sandbox && envStatus !== 'PASS') throw new Unverified('child actual environment unavailable');
+    check(ctx, 'independent native SendMessage receipt and private publication', isolated && origin.pid !== child.pid && origin.id !== child.id);
+  } catch (err) {
+    observation.failure = err.message;
+    if (sandbox) observation.o1 = { status: 'STOP', reason: err.message };
+    throw err;
   }
-  if (failedSend) throw new Unverified('SendMessage reported failure; native receipt not established');
-  if (!receipt) throw new Unverified('native receipt unrecognized or absent');
-  if (!child.name) throw new Unverified('child native sender name unavailable');
-  if (sandbox && envStatus !== 'PASS') throw new Unverified('child actual environment unavailable');
-  check(ctx, 'independent native SendMessage receipt and private publication', isolated && origin.pid !== child.pid && origin.id !== child.id);
 }
 
 async function c4(ctx) {
@@ -1039,10 +1111,11 @@ async function main(argv = process.argv.slice(2)) {
     }
     if (ctx.opts?.mutation) {
       const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'exit-flush-assistant', 'denial-no-error-flag',
-        'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch'];
+        'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'receipt-delayed'];
       const unavailable = ['no-report', 'synthetic-receipt', 'missing-name', 'unknown-receipt', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'hang', 'wrong-recipient', 'os-denial', 'unknown-denial', 'sandbox-unknown-denial',
         'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'wrong-command-denial',
-        'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule', 'send-failed', 'stale-recipient'];
+        'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule', 'send-failed', 'stale-recipient',
+        'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type', 'receipt-teammate', 'sandbox-socket-unavailable'];
       const expected = positive.includes(ctx.opts.mutation) ? 'PASS' : unavailable.includes(ctx.opts.mutation) ? 'UNVERIFIED' : 'FAIL';
       ctx.evidence.controls.push({ name: ctx.opts.mutation, status: status === expected ? 'PASS' : 'FAIL', expected, observed: status });
     }

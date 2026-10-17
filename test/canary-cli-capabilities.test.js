@@ -113,7 +113,7 @@ for (const mutation of ['', 'stale-descriptor-name', 'descriptor-only-name', 're
       const result = report.sendResults[0];
       const expected = report.wrongRecipientControl
         ? JSON.stringify({ success: false, message: `No agent named '${report.addressedRecipient}' is reachable.\nUse ListAgents to see everyone you can message.` })
-        : JSON.stringify({ success: true, message: 'delivered' });
+        : JSON.stringify({ success: true, message: `“Report canary nonce to orchestrator” → ${report.addressedRecipient} (another Claude session on this machine; in that session's inbox)` });
       assert.equal(result.success, !report.wrongRecipientControl);
       assert.equal(result.sha256, crypto.createHash('sha256').update(expected).digest('hex'));
       assert.equal(result.excerpt, expected.slice(0, 200));
@@ -123,6 +123,75 @@ for (const mutation of ['', 'stale-descriptor-name', 'descriptor-only-name', 're
     }
   });
 }
+
+for (const mutation of ['', 'receipt-delayed']) {
+  test(`GIVEN live C4 receipt ${mutation} while child stays busy WHEN measuring THEN accept exact sender and body and exit gracefully`, t => {
+    const r = run(t, ['--canary', 'C4', ...(mutation ? ['--mutation', mutation] : [])]);
+    assert.equal(r.status, 0, r.stderr + JSON.stringify(data(r)));
+    const evidence = data(r);
+    for (const report of evidence.reports.filter(x => !x.wrongRecipientControl)) {
+      assert.equal(report.sendResults[0].success, true);
+      assert.equal(report.nativeReceipt, true);
+      assert.equal(report.receipt.shape, 'cross-session-message');
+      assert.equal(report.receipt.from.scheme, 'uds:');
+      const child = evidence.processes.find(x => x.sessionId === report.childId);
+      assert.equal(report.receipt.from.socketPathSha256, crypto.createHash('sha256').update(`/tmp/cc-socks/${child.pid}.sock`).digest('hex'));
+      assert.equal(report.receipt.fromName, `native-${report.childId}`);
+      assert.equal(report.receipt.fromMode, 'prompting');
+      assert.ok(report.receiptOffset >= report.before);
+      assert.equal(report.queueOperations.length, 2);
+      assert.ok(report.queueOperations.every(x => x.type === 'queue-operation' && x.offset >= report.before && x.offset < report.receiptOffset));
+      assert.equal(child.lastDescriptor.status, 'busy');
+      assert.equal(child.shutdown.gracefulExit, true);
+      assert.equal(child.shutdown.forcedKill, false);
+      assert.equal(child.submissions[0].confirmation, 'observation');
+      const origin = evidence.processes.find(x => x.sessionId === report.orchestratorId);
+      assert.equal(origin.shutdown.gracefulExit, true);
+    }
+    assert.ok(!JSON.stringify(evidence.reports).includes('/tmp/cc-socks/'));
+    const control = evidence.reports.find(x => x.wrongRecipientControl);
+    assert.equal(control.sendResults[0].success, false);
+    assert.match(control.sendResults[0].excerpt, /No agent named/);
+    assert.equal(control.unexpectedNonceInOrigin, false);
+  });
+}
+
+for (const mutation of ['receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type', 'receipt-teammate']) {
+  test(`GIVEN C4 ${mutation} WHEN measuring THEN do not qualify receipt but retain queue offsets and send result`, t => {
+    const r = run(t, ['--canary', 'C4', '--mutation', mutation]);
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
+    const report = data(r).reports[0];
+    assert.equal(report.sendResults[0].success, true);
+    assert.equal(report.nativeReceipt, false);
+    assert.equal(report.queueOperations.length, 2);
+    assert.ok(Object.values(r.ledger.measurements[0].capabilities).every(x => x === false));
+    assert.ok(data(r).processes.every(x => x.cleaned && x.shutdown.gracefulExit && !x.shutdown.forcedKill));
+  });
+}
+
+test('GIVEN private tmp hides C4 messaging socket WHEN sandbox SendMessage fails THEN retain O1 STOP evidence without socket sharing', t => {
+  const r = run(t, ['--canary', 'C4', '--mutation', 'sandbox-socket-unavailable']);
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
+  const evidence = data(r);
+  const report = evidence.reports.find(x => x.sandbox);
+  assert.ok(report, JSON.stringify(evidence));
+  assert.equal(report.socketDirectory.visible, false);
+  assert.equal(report.socketDirectory.path, '/tmp/cc-socks');
+  assert.equal(report.socketDirectory.source, 'emulated child descriptor');
+  assert.equal(report.sendResults[0].success, false);
+  assert.match(report.sendResults[0].excerpt, /connect ENOENT/);
+  assert.equal(report.nativeReceipt, false);
+  assert.equal(report.o1.status, 'STOP');
+  assert.match(report.failure, /SendMessage reported failure/);
+  const child = evidence.processes.find(x => x.sessionId === report.childId);
+  assert.equal(child.shutdown.gracefulExit, true);
+  const tmp = child.mountPlan.indexOf('--tmpfs');
+  assert.equal(child.mountPlan[tmp + 1], '/tmp');
+  assert.ok(!child.mountPlan.some(x => x.includes('cc-socks')));
+  assert.ok(Object.values(r.ledger.measurements[0].capabilities).every(x => x === false));
+});
 
 test('GIVEN C4 failed SendMessage WHEN receipt is absent THEN preserve bounded failure text separately from receipt recognition', t => {
   const r = run(t, ['--canary', 'C4', '--mutation', 'send-failed']);

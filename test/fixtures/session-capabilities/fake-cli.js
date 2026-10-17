@@ -55,6 +55,7 @@ function describe(status, waitingFor = 'trust') {
     name: mutation === 'missing-name' ? undefined : mutation === 'stale-descriptor-name' ? `native-${id}` : nativeName, status,
     waitingFor: status === 'waiting' ? waitingFor : undefined, statusUpdatedAt: Date.now(), startedAt,
     procStart: process.env.CANARY_FIXTURE_PROC_START || String(startedAt), fixtureOnly: true,
+    fixtureSocketDirectoryVisible: !(process.env.CANARY_FIXTURE_SANDBOX && mutation === 'sandbox-socket-unavailable'),
     fixtureEnvKeys: Object.keys(process.env) }));
   process.stdout.write(status === 'idle' ? '\x1b]9;4;0;\x07' : '\x1b]9;4;3;\x07');
 }
@@ -151,17 +152,35 @@ function handle(text) {
     const peerRows = dest ? fs.readFileSync(dest, 'utf8').trim().split('\n').map(x => JSON.parse(x)) : [];
     const reachable = peers.some(x => x.sessionId === meta.orchestrator &&
       (peerRows.filter(r => r.type === 'agent-name').at(-1)?.agentName || x.name) === recipient);
-    const input = { type: 'message', to: recipient, content: meta.nonce, summary: meta.nonce };
-    const result = reachable && mutation !== 'send-failed'
-      ? { success: true, message: 'delivered' }
+    tool('ToolSearch', { query: 'select:SendMessage' }, 'SendMessage');
+    const input = { to: recipient, message: meta.nonce, summary: 'Report canary nonce to orchestrator' };
+    const socketUnavailable = process.env.CANARY_FIXTURE_SANDBOX && mutation === 'sandbox-socket-unavailable';
+    const result = socketUnavailable
+      ? { success: false, message: 'connect ENOENT /tmp/cc-socks/orchestrator.sock' }
+      : reachable && mutation !== 'send-failed'
+      ? { success: true, message: `“Report canary nonce to orchestrator” → ${recipient} (another Claude session on this machine; in that session's inbox)` }
       : { success: false, message: `No agent named '${recipient}' is reachable.\nUse ListAgents to see everyone you can message.${mutation === 'send-failed' ? ' fixture detail'.repeat(40) : ''}` };
     tool('SendMessage', input, [{ type: 'text', text: JSON.stringify(result) }]);
     if ((result.success && !meta.wrongRecipientControl) || (meta.wrongRecipientControl && ['wrong-control-leak', 'wrong-control-hidden-leak'].includes(mutation))) {
-      if (dest) append({ type: mutation === 'synthetic-receipt' ? 'user' : mutation === 'unknown-receipt' ? 'unknown-message' : 'system',
-        subtype: 'native-message', fixtureSender: id,
-        ...(meta.wrongRecipientControl && mutation === 'wrong-control-hidden-leak'
-          ? { data: { receiptNonce: meta.nonce } } : { message: { role: 'user', content: meta.nonce } }) }, dest);
+      if (dest) {
+        const deliver = () => {
+          append({ type: 'queue-operation' }, dest);
+          append({ type: 'queue-operation' }, dest);
+          const sender = mutation === 'receipt-wrong-sender' ? 'another-child' : nativeName;
+          const body = mutation === 'receipt-extra-body' ? meta.nonce + ' extra' : meta.nonce;
+          const from = mutation === 'receipt-wrong-scheme' ? `tcp:/tmp/cc-socks/${process.pid}.sock` : `uds:/tmp/cc-socks/${process.pid}.sock`;
+          const envelope = mutation === 'receipt-teammate' ? `<teammate-message teammate_id="${sender}">\n${body}\n</teammate-message>`
+            : `<cross-session-message from="${from}" from-name="${sender}" from-mode="prompting">\n${body}\n</cross-session-message>`;
+          append({ type: mutation === 'receipt-wrong-type' ? 'assistant' : mutation === 'unknown-receipt' ? 'unknown-message' : 'user',
+            ...(meta.wrongRecipientControl && mutation === 'wrong-control-hidden-leak'
+              ? { data: { receiptNonce: meta.nonce } } : { message: { role: 'user', content: mutation === 'synthetic-receipt' ? meta.nonce
+                : `Another Claude session sent a message:\n${envelope}\n\nThis came from another Claude session — not typed by your user.` } }) }, dest);
+        };
+        if (mutation === 'receipt-delayed') setTimeout(deliver, 80);
+        else deliver();
+      }
     }
+    return;
   }
   if (mutation === 'own-title' && args.includes('--fork-session')) append({ type: 'custom-title', customTitle: 'own-title-different-from-L' });
   if (mutation === 'exit-flush-assistant') pendingAssistant = true;

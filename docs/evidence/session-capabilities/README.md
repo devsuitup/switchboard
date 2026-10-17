@@ -106,7 +106,8 @@ nativeRenames separately records each `/rename` observation: native name
 before/after, whether it changed, whether it equals the title, and row offset.
 An observed equality or inequality is not itself a capability gate.
 
-SendMessage recognizes the live `to` input and the older `recipient` shape.
+SendMessage recognizes the live `to` / `message` inputs and the older
+`recipient` / `content` shape.
 For every nonce-bearing SendMessage call, sendResults includes only linked
 tool_result blocks, with tool-use ID, byte offset, success (boolean or null
 when unrecognized), isError, UTF-8 byte count, full flattened-text SHA-256 and
@@ -115,6 +116,38 @@ send failure is UNVERIFIED with its own reason; successful sending with no
 recognized receipt remains separately UNVERIFIED. Failure in the deliberate
 wrong-address control is expected, but absence of any nonce in the origin
 must still be measured. Raw transcripts are not copied into evidence.
+
+The receipt shape supplied by the operator in brief-380p0j (Linux CLI
+2.1.301) is a `user` row containing a `cross-session-message` element,
+preceded by two `queue-operation` rows. Its body must equal the nonce
+exactly after removing the element's single framing newline on each side;
+`from-name` must equal the child's current native name. Evidence records
+the `uds:` scheme, SHA-256 of the socket path, `from-name`, `from-mode`,
+receipt byte offset, and queue row types/offsets after the saved boundary.
+The earlier `teammate-message` recognizer had no supporting live observation
+in these briefs and has been removed. Dry-run uses the same receipt reader.
+
+C4 polls the linked send result and origin receipt as the child runs; it
+does not wait for the child's final assistant reply or post-submit idle.
+Receipt/send observation is bounded to 15 seconds (500 ms in dry-run).
+The wrong-address control requires the observed `success:false` result
+with `No agent named '<address>' is reachable`, then watches the origin
+for its nonce for up to 15 seconds after the result (150 ms in dry-run).
+Its total send/control bound is 30 seconds. Partial reports survive these
+timeouts. Both owned processes attempt graceful `/exit` before forced
+handle cleanup, including when the child remains busy after SendMessage.
+
+The sandbox keeps `--tmpfs /tmp` unchanged. No socket bind or relay is
+added. After the send observation and before cleanup, socketDirectory
+records whether `/tmp/cc-socks` is visible through the owned child's
+`/proc/<writerHostPid>/root`, with observation time/source and any inspection
+failure. Unknown visibility stays null. The sandbox report retains linked
+send-result text metadata and any failure; a failed sandbox check records
+`o1.status: STOP`. A visible directory alone does not prove reachability.
+The positive dry-run socket is explicitly emulated; it does not prove a
+cross-namespace route. sandbox-socket-unavailable emulates the hidden
+directory and failed connection, retaining an O1 STOP without altering
+the mount graph. Only an operator live run can establish that outcome.
 
 The C4 fake now changes both descriptor name and agent-name on rename, uses
 the current native address for reachability and returns success/failure JSON.
@@ -290,7 +323,7 @@ uses a 50 ms quiet period within a 500 ms cap. C1 ≤4 handles, C2 ≤8, C3 ≤3
 C4 ≤6 (caps including cleanup: 156/972/327/234 seconds with defaults).
 
 Liveness and termination use OWNED HANDLES even when pid is still zero.
-Confirmed sessions first wait for transcript quiescence, then receive `/exit`
+Confirmed sessions and C4 children first wait for transcript quiescence, then receive `/exit`
 and Enter through their owned input. If they do not exit within the bound,
 child.kill() terminates the owned handle. Unconfirmed sessions are killed by
 handle immediately. Image names and unrelated PIDs are never used.
