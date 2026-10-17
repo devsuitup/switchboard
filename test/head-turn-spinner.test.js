@@ -193,29 +193,73 @@ test('descriptor attention consumes unread turn evidence before releasing the on
   assert.equal(ctx.document.getElementById('si-root').classList.contains('response-ready'), false);
 });
 
-test('mirror indexing feeds head turns through local reads without requesting SSH or replaying remote tasks', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  const reads = [];
-  const context = vm.createContext({
-    path, getAllCached: () => [{ sessionId: 'remote', folder: 'host::project' }, { sessionId: 'local', folder: 'project' }],
-    getAllMeta: () => new Map(), parseFolderKey: require('../remote-hosts').parseFolderKey,
-    projectsDirForFolder: () => 'mirror/project',
-    taskRecords: { read: async (...args) => reads.push(args) },
-    createRemoteIndexer: options => ({ ...options, getRemoteSessions: () => ({ sessions: [{ sessionId: 'remote' }] }) }), scanFoldersViaWorker: async () => {},
-    DB_PATH: 'data/db', remoteTransport: {}, setRemoteRoots() {}, notifyRendererProjectsChanged() {}, log: {},
-  });
-  context.taskRecords.readBatch = async rows => reads.push(...Array.from(rows, row => [row.file, row.parentSessionId, { turnOnly: row.turnOnly }]));
-  context.remoteIndexer = { getRemoteSessions: () => ({ sessions: [{ sessionId: 'remote' }] }) };
-  if (source.includes('function refreshRemoteHeadTurns(')) vm.runInContext(extractFunction(source, 'refreshRemoteHeadTurns'), context);
-  const start = source.indexOf('const remoteIndexer = createRemoteIndexer(');
-  const end = source.indexOf('\n});', start) + 4;
-  vm.runInContext(source.slice(start, end) + '\nglobalThis.indexer = remoteIndexer;', context);
-  await context.indexer.scanFolders({ folderPrefix: 'host::' });
-  assert.equal(reads.length, 1);
-  assert.equal(reads[0][0], path.join('mirror/project', 'remote.jsonl'));
-  assert.equal(reads[0][1], 'remote');
-  assert.equal(reads[0][2].turnOnly, true);
-});
+for (const method of ['refreshNow', 'refreshHostNow']) {
+  for (const changed of [false, true]) {
+    test(`${method} with ${changed ? 'changed' : 'unchanged'} mirror batches the live head and pushes its turn to the renderer`, async t => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-refresh-698b-'));
+      const dir = path.join(root, 'remote', 'host', 'projects', '-p');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'root.jsonl'), jsonl([prompt, fixture.use, fixture.launch]));
+      const { ctx, icon } = setup(t, { remote: true, status: 'busy' });
+      const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+      const batches = [];
+      const pushes = [];
+      let scans = 0;
+      const context = vm.createContext({
+        path, getAllCached: () => [{ sessionId: 'root', folder: 'host::-p' }, { sessionId: 'local', folder: '-p' }],
+        getAllMeta: () => new Map(), parseFolderKey: require('../remote-hosts').parseFolderKey,
+        projectsDirForFolder: () => dir,
+        getAllFolderMeta: () => new Map([['host::-p', {}]]),
+        getSetting: () => ({ remoteHosts: [{ alias: 'host' }] }),
+        createRemoteIndexer: options => require('../remote-index').createRemoteIndexer({
+          ...options,
+          sync: async () => ({ fetched: changed ? 1 : 0, unchanged: changed ? 0 : 1,
+            removed: 0, failed: 0, changedFolders: new Set(changed ? ['-p'] : []),
+            sessions: [{ sessionId: 'root', status: 'idle' }] }),
+        }),
+        createTaskRecordsClient: options => {
+          const client = createTaskRecordsClient(options);
+          const readBatch = client.readBatch;
+          client.readBatch = rows => {
+            batches.push(Array.from(rows, row => ({ ...row })));
+            return readBatch(rows);
+          };
+          return client;
+        },
+        scanFoldersViaWorker: async () => { scans++; },
+        DB_PATH: path.join(root, 'db'), remoteTransport: {}, setRemoteRoots() {},
+        writer: { dropRemoteFolder: async () => assert.fail('the mirrored folder must remain indexed') },
+        notifyRendererProjectsChanged() {},
+        log: { info() {}, warn: error => assert.fail(error) },
+        mainWindow: { isDestroyed: () => false, webContents: { send: (channel, snapshot) => {
+          pushes.push({ channel, snapshot });
+          if (channel === 'task-snapshot') ctx.emitTaskSnapshot(snapshot);
+        } } },
+      });
+      const evaluate = (declaration, exported) => {
+        const start = source.indexOf(`const ${declaration} = `);
+        assert.notEqual(start, -1);
+        const end = source.indexOf('\n});', start) + 4;
+        vm.runInContext(source.slice(start, end) + `\nglobalThis.${exported} = ${declaration};`, context);
+      };
+      evaluate('taskRecords', 'client');
+      t.after(async () => { await context.client.dispose(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
+      vm.runInContext(extractFunction(source, 'refreshRemoteHeadTurns'), context);
+      evaluate('remoteIndexer', 'indexer');
+      const result = await context.indexer[method](...(method === 'refreshHostNow' ? ['host'] : []));
+      assert.deepEqual(result.errors || [], []);
+      assert.equal(result.error || null, null);
+      assert.equal(scans, changed ? 1 : 0);
+      assert.deepEqual(batches, [[{ file: path.join(dir, 'root.jsonl'), parentSessionId: 'root', turnOnly: true }]],
+        'every successful refresh batches the live head exactly once, even without a scan');
+      assert.equal(pushes.length, 1);
+      assert.equal(pushes[0].channel, 'task-snapshot');
+      assert.equal(pushes[0].snapshot.headTurn.state, 'open');
+      assert.deepEqual(pushes[0].snapshot.tasks, []);
+      assert.equal(icon().title, 'Working');
+    });
+  }
+}
 
 test('real worker delivers turn evidence and task lifecycle together, including missing and empty tails', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'head-turn-625-'));

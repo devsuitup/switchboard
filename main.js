@@ -573,11 +573,8 @@ const remoteIndexer = createRemoteIndexer({
   getRefreshMs: () => (getSetting('global') || {}).remoteRefreshMs,
   dataDir: path.dirname(DB_PATH),
   transport: remoteTransport,
-  scanFolders: async options => {
-    const result = await scanFoldersViaWorker(options);
-    await refreshRemoteHeadTurns(options.folderPrefix);
-    return result;
-  },
+  scanFolders: scanFoldersViaWorker,
+  refreshHeadTurns: alias => refreshRemoteHeadTurns(alias),
   listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
   dropFolder: async folderKey => await writer.dropRemoteFolder(folderKey),
   setRemoteRoots,
@@ -3138,7 +3135,7 @@ const taskRecords = createTaskRecordsClient({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task-rekey', { oldId, newId, continued });
   },
 });
-async function refreshRemoteHeadTurns(folderPrefix) {
+async function refreshRemoteHeadTurns(hostAlias) {
   const rows = [];
   const liveByHost = new Map();
   const meta = getAllMeta();
@@ -3146,7 +3143,7 @@ async function refreshRemoteHeadTurns(folderPrefix) {
     if (row.parentSessionId || meta.get(row.sessionId)?.archived) continue;
     const folder = row.folder;
     const { alias } = parseFolderKey(folder);
-    if (!alias || (folderPrefix && !folder.startsWith(folderPrefix))) continue;
+    if (!alias || (hostAlias && alias !== hostAlias)) continue;
     if (!liveByHost.has(alias)) {
       liveByHost.set(alias, new Set(remoteIndexer.getRemoteSessions(alias).sessions.map(d => d.sessionId)));
     }

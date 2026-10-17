@@ -288,6 +288,7 @@ function createRemoteIndexer(ctx) {
       `${result.removed} removed, ${result.failed} failed, ${toScan.size} folders indexed`);
 
     const toolsChanged = await probeHostTools(host.alias);
+    if (ctx.refreshHeadTurns) await ctx.refreshHeadTurns(host.alias);
     return toScan.size > 0 || toolsChanged;
   }
 
