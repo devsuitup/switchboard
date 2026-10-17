@@ -95,6 +95,64 @@ const mutations = {
   C3: ['remove-deny', 'writable-settings', 'fake-denial'],
   C4: ['shared-descriptors', 'parent-env', 'wrong-control-leak', 'wrong-control-hidden-leak'],
 };
+
+for (const mutation of ['', 'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch']) {
+  test(`GIVEN C4 rename ${mutation} WHEN child is prompted THEN use current native name and retain linked send results`, t => {
+    const r = run(t, ['--canary', 'C4', ...(mutation ? ['--mutation', mutation] : [])]);
+    assert.equal(r.status, 0, r.stderr + JSON.stringify(data(r)));
+    for (const report of data(r).reports) {
+      assert.equal(report.nativeRecipientDiffersFromDisplayTitle, false);
+      assert.equal(report.nativeRecipient, report.displayTitle);
+      assert.match(report.displayTitle, /^UI-/);
+      if (mutation === 'rename-during-child-launch' && !report.sandbox) assert.match(report.nativeRecipient, /-latest$/);
+      assert.equal(report.recipientSource, mutation === 'descriptor-only-name' ? 'descriptor.name' : 'agent-name');
+      assert.equal(report.renameObservation.nativeNameChanged, true);
+      assert.equal(report.renameObservation.nativeNameEqualsDisplayTitle, true);
+      assert.equal(report.intendedToolCall, true);
+      assert.equal(report.sendResults.length, 1);
+      const result = report.sendResults[0];
+      const expected = report.wrongRecipientControl
+        ? JSON.stringify({ success: false, message: `No agent named '${report.addressedRecipient}' is reachable.\nUse ListAgents to see everyone you can message.` })
+        : JSON.stringify({ success: true, message: 'delivered' });
+      assert.equal(result.success, !report.wrongRecipientControl);
+      assert.equal(result.sha256, crypto.createHash('sha256').update(expected).digest('hex'));
+      assert.equal(result.excerpt, expected.slice(0, 200));
+      assert.equal(result.bytes, Buffer.byteLength(expected));
+      assert.ok(result.offset >= 0);
+      assert.ok(result.toolUseId);
+    }
+  });
+}
+
+test('GIVEN C4 failed SendMessage WHEN receipt is absent THEN preserve bounded failure text separately from receipt recognition', t => {
+  const r = run(t, ['--canary', 'C4', '--mutation', 'send-failed']);
+  assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
+  assert.ok(Object.values(r.ledger.measurements[0].capabilities).every(x => x === false));
+  assert.match(data(r).failure, /SendMessage reported failure/);
+  const report = data(r).reports[0];
+  assert.equal(report.nativeReceipt, false);
+  const expected = JSON.stringify({ success: false, message: `No agent named '${report.addressedRecipient}' is reachable.\nUse ListAgents to see everyone you can message.${' fixture detail'.repeat(40)}` });
+  const result = report.sendResults[0];
+  assert.equal(result.success, false);
+  assert.match(result.excerpt, /No agent named/);
+  assert.equal(result.excerpt.length, 200);
+  assert.equal(result.sha256, crypto.createHash('sha256').update(expected).digest('hex'));
+  assert.equal(result.bytes, Buffer.byteLength(expected));
+});
+
+test('GIVEN C4 pre-rename native recipient WHEN fake CLI sends THEN old address is unreachable and no receipt is written', t => {
+  const r = run(t, ['--canary', 'C4', '--mutation', 'stale-recipient']);
+  assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
+  assert.match(data(r).failure, /wrong recipient/);
+  const report = data(r).reports[0];
+  assert.equal(report.intendedToolCall, false);
+  assert.equal(report.nativeReceipt, false);
+  assert.equal(report.unexpectedNonceInOrigin, false);
+  const expected = JSON.stringify({ success: false, message: `No agent named 'native-${report.orchestratorId}' is reachable.\nUse ListAgents to see everyone you can message.` });
+  assert.equal(report.sendResults[0].success, false);
+  assert.equal(report.sendResults[0].sha256, crypto.createHash('sha256').update(expected).digest('hex'));
+  assert.equal(report.sendResults[0].excerpt, expected.slice(0, 200));
+});
 test('GIVEN CLI paste envelope WHEN C1 runs THEN unwrapped body is literal and cache metadata is redacted', t => {
   const r = run(t, ['--canary', 'C1']);
   const evidence = data(r);
@@ -346,7 +404,11 @@ for (const [canary, mutation, reason] of [
     assert.ok(Object.values(r.ledger.measurements[0].capabilities).every(x => x === false));
     assert.match(data(r).failure, reason);
     if (mutation === 'blocking-dialog') assert.equal(data(r).processes[0].waitingFor, 'trust');
-    if (['synthetic-receipt', 'unknown-receipt'].includes(mutation)) assert.ok(data(r).reports[0].rawReceiptRows.length > 0);
+    if (['synthetic-receipt', 'unknown-receipt'].includes(mutation)) {
+      assert.ok(data(r).reports[0].rawReceiptRows.length > 0);
+      assert.equal(data(r).reports[0].sendResults[0].success, true);
+      assert.equal(data(r).reports[0].nativeReceipt, false);
+    }
     if (mutation === 'storage-only') assert.ok(data(r).payloads.every(x => x.singleTurnDelivery && x.eligibleConfirmation));
   });
 }

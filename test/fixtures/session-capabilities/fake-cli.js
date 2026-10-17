@@ -49,9 +49,10 @@ const sessions = process.env.CANARY_FIXTURE_SESSIONS || path.join(state, 'sessio
 fs.mkdirSync(sessions, { recursive: true });
 const descriptor = path.join(sessions, `${process.pid}.json`);
 const startedAt = Date.now();
+let nativeName = `native-${id}`;
 function describe(status, waitingFor = 'trust') {
   fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid, sessionId: id, cwd,
-    name: mutation === 'missing-name' ? undefined : `native-${id}`, status,
+    name: mutation === 'missing-name' ? undefined : mutation === 'stale-descriptor-name' ? `native-${id}` : nativeName, status,
     waitingFor: status === 'waiting' ? waitingFor : undefined, statusUpdatedAt: Date.now(), startedAt,
     procStart: process.env.CANARY_FIXTURE_PROC_START || String(startedAt), fixtureOnly: true,
     fixtureEnvKeys: Object.keys(process.env) }));
@@ -80,6 +81,8 @@ function handle(text) {
   if (inherited) { fs.writeFileSync(transcript, inherited); inherited = ''; }
   if (text.startsWith('/rename ')) {
     append({ type: 'custom-title', customTitle: text.slice(8), sessionId: id });
+    nativeName = text.slice(8);
+    if (!['missing-name', 'descriptor-only-name'].includes(mutation)) append({ type: 'agent-name', agentName: nativeName });
     describe('idle');
     return;
   }
@@ -140,11 +143,20 @@ function handle(text) {
     }
   }
   if (meta.kind === 'report' && mutation !== 'no-report') {
-    const recipient = mutation === 'wrong-recipient' && !meta.wrongRecipientControl ? 'unknown-native-recipient' : meta.recipient;
-    const input = { type: 'message', recipient, content: meta.nonce, summary: meta.nonce };
-    tool('SendMessage', input, 'delivered');
-    if ((!meta.wrongRecipientControl && mutation !== 'wrong-recipient') || (meta.wrongRecipientControl && ['wrong-control-leak', 'wrong-control-hidden-leak'].includes(mutation))) {
-      const dest = findTranscript(meta.orchestrator);
+    const recipient = mutation === 'stale-recipient' ? `native-${meta.orchestrator}`
+      : mutation === 'wrong-recipient' && !meta.wrongRecipientControl ? 'unknown-native-recipient' : meta.recipient;
+    const peers = fs.readdirSync(path.join(state, 'sessions')).filter(x => x.endsWith('.json'))
+      .map(x => JSON.parse(fs.readFileSync(path.join(state, 'sessions', x), 'utf8')));
+    const dest = findTranscript(meta.orchestrator);
+    const peerRows = dest ? fs.readFileSync(dest, 'utf8').trim().split('\n').map(x => JSON.parse(x)) : [];
+    const reachable = peers.some(x => x.sessionId === meta.orchestrator &&
+      (peerRows.filter(r => r.type === 'agent-name').at(-1)?.agentName || x.name) === recipient);
+    const input = { type: 'message', to: recipient, content: meta.nonce, summary: meta.nonce };
+    const result = reachable && mutation !== 'send-failed'
+      ? { success: true, message: 'delivered' }
+      : { success: false, message: `No agent named '${recipient}' is reachable.\nUse ListAgents to see everyone you can message.${mutation === 'send-failed' ? ' fixture detail'.repeat(40) : ''}` };
+    tool('SendMessage', input, [{ type: 'text', text: JSON.stringify(result) }]);
+    if ((result.success && !meta.wrongRecipientControl) || (meta.wrongRecipientControl && ['wrong-control-leak', 'wrong-control-hidden-leak'].includes(mutation))) {
       if (dest) append({ type: mutation === 'synthetic-receipt' ? 'user' : mutation === 'unknown-receipt' ? 'unknown-message' : 'system',
         subtype: 'native-message', fixtureSender: id,
         ...(meta.wrongRecipientControl && mutation === 'wrong-control-hidden-leak'
@@ -172,5 +184,17 @@ process.stdin.on('data', chunk => {
     handle(text);
   }
 });
+if (mutation === 'rename-during-child-launch') {
+  for (const file of fs.readdirSync(path.join(state, 'sessions')).filter(x => x.endsWith('.json'))) {
+    const peerPath = path.join(state, 'sessions', file);
+    const peer = JSON.parse(fs.readFileSync(peerPath, 'utf8'));
+    if (!peer.name?.startsWith('UI-')) continue;
+    peer.name += '-latest';
+    fs.writeFileSync(peerPath, JSON.stringify(peer));
+    const dest = findTranscript(peer.sessionId);
+    append({ type: 'custom-title', customTitle: peer.name, sessionId: peer.sessionId }, dest);
+    append({ type: 'agent-name', agentName: peer.name, sessionId: peer.sessionId }, dest);
+  }
+}
 describe('idle');
 process.stdout.write('fixture ready\n');

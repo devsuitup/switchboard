@@ -77,6 +77,54 @@ C2 ready-time snapshots are timeline observations only. N8 inherited and
 post-turn titles have their OWN titleOutcome (PASS/FAIL); N8 never gates
 forkWorktree. The fake fork publishes only a snapshot until its first prompt.
 
+### C4 native recipient and specification amendment (§5.5 / C4)
+
+**CONFIRMED live, operator observation supplied in brief-380p0i:** on Linux
+CLI 2.1.301, `/rename UI-…` also changed the native messaging name. The origin
+contained both `custom-title` and `agent-name` rows with the UI title. The
+child's `SendMessage {"to":"project-5f",…}` failed with `success:false` and
+`No agent named 'project-5f' is reachable.` Its subsequent ListAgents showed
+the origin under the UI title. The origin had no receipt. This is an explicit
+failed send to a stale address, not evidence of an unsupported receipt schema.
+These live facts were supplied by the operator; this change did not rerun the
+real CLI or inspect private transcripts.
+
+The specification needs an owner amendment: remove the §5.5 / C4 assumption
+that the native messaging name differs from the UI title. A C4 PASS must
+depend on the current recipient, linked native send and receipt, distinct
+owned processes, wrong-address control and sandbox isolation; equality of
+native name and title is permitted. acceptedSpecBranch remains null.
+
+Immediately before constructing/submitting the child's prompt, after its
+launch and any orchestrator rename, the harness rereads the origin transcript
+and descriptor. The latest `agent-name` value takes precedence when present;
+otherwise it uses the current owned descriptor's `name`. No generated UI title
+is substituted for a missing native name. Evidence records displayTitle,
+nativeRecipient, addressedRecipient, recipientSource, recipientObservedAt,
+agentNameOffset and the measured nativeRecipientDiffersFromDisplayTitle.
+nativeRenames separately records each `/rename` observation: native name
+before/after, whether it changed, whether it equals the title, and row offset.
+An observed equality or inequality is not itself a capability gate.
+
+SendMessage recognizes the live `to` input and the older `recipient` shape.
+For every nonce-bearing SendMessage call, sendResults includes only linked
+tool_result blocks, with tool-use ID, byte offset, success (boolean or null
+when unrecognized), isError, UTF-8 byte count, full flattened-text SHA-256 and
+an excerpt capped at 200 characters. Unrelated results are excluded. Explicit
+send failure is UNVERIFIED with its own reason; successful sending with no
+recognized receipt remains separately UNVERIFIED. Failure in the deliberate
+wrong-address control is expected, but absence of any nonce in the origin
+must still be measured. Raw transcripts are not copied into evidence.
+
+The C4 fake now changes both descriptor name and agent-name on rename, uses
+the current native address for reachability and returns success/failure JSON.
+stale-recipient sends to the pre-rename name and receives the real failure
+shape; send-failed tests a long failure excerpt. stale-descriptor-name tests
+the agent-name fallback, descriptor-only-name tests descriptor-only discovery,
+and rename-during-child-launch tests rereading immediately before the prompt.
+These scenarios emulate the supplied observation; they do not qualify Linux
+native messaging or Windows child environment inspection.
+
 A missing native name, absent SendMessage prerequisite, unsupported receipt,
 exit before confirmation, deadline, ABI failure or dialog is UNVERIFIED, with
 waitingFor recorded when available. Receipt evidence preserves raw row TYPES
