@@ -260,7 +260,7 @@ function writeIconSlot(el, icon, title, text) {
   for (const cls of icon.slotClasses) el.classList.add(cls);
   el.title = title || icon.title || '';
   el.setAttribute('role', 'img');
-  el.setAttribute('aria-label', (icon.title || 'Idle') + (text ? ` · ${text}` : ''));
+  el.setAttribute('aria-label', (icon.title || 'Idle') + (text && text !== icon.title ? ` · ${text}` : ''));
   el.dataset.glyph = icon.glyph || '';
 }
 

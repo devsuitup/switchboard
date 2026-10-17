@@ -171,7 +171,8 @@ idle timestamp cannot close a validated head turn. While a valid job is
 `working`, the sidebar status text is empty, including the Working,
 Background work running and Waiting for input activity rungs (#702).
 `backgroundActivityLabel` is sidebar-only: a working job whose head reports
-attention keeps `Needs attention`, while Waiting for input alone stays empty.
+attention keeps `Needs attention` even with invalid activity evidence, while
+Waiting for input alone stays empty when activity evidence is valid.
 It retains `Blocked` for a job waiting for user input even when activity
 evidence is invalid, `Idle` for hosted done, `Job done`, `Job stopped`,
 `Job failed` for finished jobs, and `Activity unavailable` for missing or
@@ -180,7 +181,7 @@ existing activity text.
 The row's single `.session-icon` owns the full diagnostic tooltip:
 activity label, separate job state, valid `updatedAt` in local time as
 **job metadata**, and all in-flight kind labels, or the unavailable diagnostic.
-Its accessible label is the icon's own short title plus any short status text;
+Its accessible label is the icon's own short title plus any distinct short status text;
 job state, timestamps and in-flight diagnostics stay in `title` only. When
 remote attention overrides the icon, its own attention title labels the slot.
 The `.session-status` has no separate tooltip. Initial sidebar builds and

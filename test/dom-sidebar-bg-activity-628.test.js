@@ -40,7 +40,7 @@ async function setup(t, entries = roster(), active = false) {
   return { ...h, push: s => push(s), subscriptions: () => subscriptions, sidebarRenders: () => sidebarRenders };
 }
 
-for (const [state, kind, head, hosted, valid, text, activity] of [
+for (const [state, kind, head, hosted, valid, text, activity, foreground = false] of [
   ['working', null, 'open', true, true, '', 'Working'],
   ['working', 'agent', 'closed', true, true, '', 'Background work running'],
   ['working', null, 'closed', true, true, '', 'Waiting for input'],
@@ -51,12 +51,16 @@ for (const [state, kind, head, hosted, valid, text, activity] of [
   ['stopped', null, 'closed', false, true, 'Job stopped', 'Stale'],
   ['failed', null, 'closed', false, true, 'Job failed', 'Stale'],
   ['working', null, 'open', true, false, 'Activity unavailable', 'Working'],
+  ['done', null, 'open', false, true, 'Working', 'Working', true],
+  ['done', null, 'closed', false, true, 'Waiting for input', 'Waiting for input', true],
+  ['failed', null, 'open', false, true, 'Working', 'Working', true],
+  ['failed', null, 'closed', false, true, 'Waiting for input', 'Waiting for input', true],
 ]) {
-  test(`[702] ${state}/${activity} (valid: ${valid}) keeps the same concise status and icon detail on render and live update`, async t => {
+  test(`[702] ${state}/${activity} (valid: ${valid}, foreground: ${foreground}) keeps the same concise status and icon detail on render and live update`, async t => {
     const entries = roster(state, kind);
     entries[0].hosted = hosted;
     entries[0].taskEvidence.valid = valid;
-    const h = await setup(t, entries);
+    const h = await setup(t, entries, foreground);
     h.emitHeadTurn(SID, head);
     h.window.refreshSidebar();
     const check = () => {
@@ -66,8 +70,8 @@ for (const [state, kind, head, hosted, valid, text, activity] of [
       assert.equal(status.textContent, text);
       assert.equal(status.title, '');
       const source = valid ? `Job updated ${new Date(AT).toLocaleString()} (job metadata)` : 'Job activity unavailable';
-      assert.equal(icon.title, `${activity} · job ${state}\n${source}`);
-      assert.equal(icon.getAttribute('aria-label'), activity + (text ? ` · ${text}` : ''));
+      assert.equal(icon.title, foreground ? activity : `${activity} · job ${state}\n${source}`);
+      assert.equal(icon.getAttribute('aria-label'), foreground ? activity : activity + (text ? ` · ${text}` : ''));
     };
     check();
     h.window.applyStateClasses(SID, h.window.storedActivitySnapshot(SID));
@@ -107,33 +111,38 @@ test('[702] missing job metadata retains known head activity in the icon tooltip
   check();
 });
 
-test('[702b] a working job keeps Needs attention on render and live update until attention clears', async t => {
-  const h = await setup(t, roster('working', null), true);
-  h.emitHeadTurn(SID, 'open');
-  h.window.setAttention(SID, true, 'onTerminalNotification');
-  const check = () => {
-    const row = h.document.querySelector('.session-item');
-    const icon = row.querySelector('.session-icon');
-    assert.equal(row.querySelector('.session-status').textContent, 'Needs attention');
-    assert.ok(icon.classList.contains('session-icon--attention'));
-    assert.match(icon.title, /^Needs your attention · job working\nJob updated /);
-    assert.equal(icon.getAttribute('aria-label'), 'Needs your attention · Needs attention');
-  };
-  check();
-  h.window.refreshSidebar();
-  check();
-  h.window.applyStateClasses(SID, h.window.storedActivitySnapshot(SID));
-  check();
-  h.window.paintSessionIcon(h.document.querySelector('.session-icon'), SID);
-  check();
-  h.window.setAttention(SID, false, 'onTerminalNotification');
-  assert.equal(h.document.querySelector('.session-status').textContent, '');
-  assert.equal(h.document.querySelector('.session-icon').getAttribute('aria-label'), 'Working');
-  h.window.activeSessionId = SID;
-  h.emitHeadTurn(SID, 'closed', { revision: 2 });
-  assert.equal(h.document.querySelector('.session-status').textContent, '');
-  assert.equal(h.document.querySelector('.session-icon').getAttribute('aria-label'), 'Waiting for input');
-});
+for (const valid of [true, false]) {
+  test(`[702b] a working job keeps Needs attention on render and live update until attention clears (valid: ${valid})`, async t => {
+    const entries = roster('working', null);
+    entries[0].taskEvidence.valid = valid;
+    const h = await setup(t, entries, true);
+    h.emitHeadTurn(SID, 'open');
+    h.window.setAttention(SID, true, 'onTerminalNotification');
+    const check = () => {
+      const row = h.document.querySelector('.session-item');
+      const icon = row.querySelector('.session-icon');
+      assert.equal(row.querySelector('.session-status').textContent, 'Needs attention');
+      assert.ok(icon.classList.contains('session-icon--attention'));
+      if (valid) assert.match(icon.title, /^Needs your attention · job working\nJob updated /);
+      else assert.equal(icon.title, 'Needs your attention · job working\nJob activity unavailable');
+      assert.equal(icon.getAttribute('aria-label'), 'Needs your attention · Needs attention');
+    };
+    check();
+    h.window.refreshSidebar();
+    check();
+    h.window.applyStateClasses(SID, h.window.storedActivitySnapshot(SID));
+    check();
+    h.window.paintSessionIcon(h.document.querySelector('.session-icon'), SID);
+    check();
+    h.window.setAttention(SID, false, 'onTerminalNotification');
+    assert.equal(h.document.querySelector('.session-status').textContent, valid ? '' : 'Activity unavailable');
+    assert.equal(h.document.querySelector('.session-icon').getAttribute('aria-label'), valid ? 'Working' : 'Working · Activity unavailable');
+    h.window.activeSessionId = SID;
+    h.emitHeadTurn(SID, 'closed', { revision: 2 });
+    assert.equal(h.document.querySelector('.session-status').textContent, valid ? '' : 'Activity unavailable');
+    assert.equal(h.document.querySelector('.session-icon').getAttribute('aria-label'), valid ? 'Waiting for input' : 'Waiting for input · Activity unavailable');
+  });
+}
 
 test('[702b] remote attention owns the icon title when it overrides local background activity', async t => {
   const h = await setup(t, roster('working', null));

@@ -1081,11 +1081,12 @@ footer separately describes liveness and attachment (#629).
   applies `icon.slotClasses`, and sets `el.title`/`el.dataset.glyph` from
   `icon.title`/`icon.glyph`. An optional nonempty `title` overrides the tooltip
   only. The accessible label keeps the icon's own title plus optional short
-  status `text`. Sidebar background rows use the tooltip for activity, job state,
+  status `text` when it differs from that title. Sidebar background rows use the tooltip for activity, job state,
   job-update metadata and in-flight kinds; their status text is empty while
   working unless the head needs attention, with concise labels for attention,
-  idle, blocked (even with invalid activity evidence), terminal or unavailable
-  states (#702; see `bg-agents.md`, "Job activity"). Initial construction,
+  idle, blocked, terminal or unavailable
+  states; attention and blocked remain visible even with invalid activity evidence
+  (#702; see `bg-agents.md`, "Job activity"). Initial construction,
   `applyStateClasses` and `paintSessionIcon` retain that detail. Other surfaces
   keep the ordinary activity title. The `session-icon--*` namespace is deliberately
   distinct from the row-level `classes` (`cli-busy` etc.) both for the eslint
