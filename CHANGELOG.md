@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.97 — 2026-10-17
+
 ### Changed
 - A background session's sidebar row no longer repeats its working status under its title; activity details are in the icon's tooltip. Only Needs attention (also when its activity details are unavailable), idle, blocked, finished, stopped, failed or unavailable states are written out. (#702)
 
