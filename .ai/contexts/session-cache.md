@@ -50,7 +50,7 @@ There is one in-flight job and at most one pending job. Each dispatch owns its c
 
 getProjects(false/true) still returns its existing array. loadProjects calls getProjects('both') once per reload and receives {defaultProjects, allProjects}; the false view is assembled before the true view, preserving archive reappearance writes. The renderer samples global settings after the worker reply, preventing a pending session from reappearing when its project was archived during that fetch. Each view retains its own project/session arrays until the renderer's existing dedup joins session identities. Search, archived parents/subagents, SDK filtering, hidden repositories, remote placeholders, pending sessions and plain/panel terminals keep their policies. Worker failure rejects IPC. Event reloads catch rejection and retain the previous sidebar lists; there is no S3 persistent-notice surface in this slice, and an empty list uses the loading status for an error. Startup retries the load once and runs working-set restore even when both attempts fail. After both immediate attempts fail, three additional reloads run one second apart, stopping at the first success without waiting for a filesystem event. Scheduled persistence is guarded until restoreWorkingSet has read global.openWorkingSet, matching the exit-flush guard.
 
-Diagnostics emits main.loop once per second while TRACE.on, with lagMs (the existing one-second interval’s lateness, clamped to zero). The expected tick is rebased after every callback, even while tracing is off; enabling tracing preserves that baseline. This signal adds no timer and does not measure a latency percentile: a stall that ends before the next tick is not seen. Windows timer granularity makes tens of milliseconds of idle lagMs normal: measurements under Node 22 on Windows were 12–20 ms (one sample at 73 ms), and Electron measured 12–14 ms. Sampling stops on quit. For an explicit fine measurement, start with SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1 (read once at monitor startup) and enable tracing. Only then is monitorEventLoopDelay enabled at 20 ms, adding maxMs and p99Ms (nanoseconds converted to milliseconds) to each event. Histogram values have a floor at least equal to the 20 ms resolution, including when idle; disabling tracing disables the histogram even when armed. ipc.get-projects carries totalMs (including queue/retries), rows (cache rows in the built snapshot) and replyBytes (UTF-8 JSON size of the worker-built view selected for the reply, before main adds placeholders or applies archive and attachability filters; not the final IPC payload or Electron wire framing). The worker measures boolean and paired views only when requested by tracing; main reads the numeric measurement without serializing the full reply.
+Diagnostics emits main.loop once per second while TRACE.on, with lagMs (the existing one-second interval’s lateness, clamped to zero). The expected tick is rebased after every callback, even while tracing is off; enabling tracing preserves that baseline. This signal adds no timer and does not measure a latency percentile: a stall that ends before the next tick is not seen. Measured idle lagMs on Windows was 0–20 ms, with rare outliers (one at 73 ms). Sleep/resume probably appears as one large lagMs sample; this has not been verified. Sampling stops on quit. For an explicit fine measurement, start with SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1 (read once at monitor startup) and enable tracing. Only then is monitorEventLoopDelay enabled at 20 ms, adding maxMs and p99Ms (nanoseconds converted to milliseconds) to each event. Histogram values have a floor at least equal to the 20 ms resolution, including when idle; armed at 20 ms, the histogram measured about 32 ms at idle in Electron, so a 32 ms histogram value alone is not a stall. Disabling tracing disables the histogram even when armed. ipc.get-projects carries totalMs (including queue/retries), rows (cache rows in the built snapshot) and replyBytes (UTF-8 JSON size of the worker-built view selected for the reply, before main adds placeholders or applies archive and attachability filters; not the final IPC payload or Electron wire framing). The worker measures boolean and paired views only when requested by tracing; main reads the numeric measurement without serializing the full reply.
 
 Tests: app-projects-single-invoke, get-projects-worker-wiring, projects-worker-client, projects-worker-equivalence (real isolated WAL DB with an Electron Node-mode worker), main-loop-monitor, plus the existing cold-start and pending/archive tests. Regression coverage includes the reviewer's 51-caller arrival probe, caller deadlines across retries, three-conflict view publication, startup failure/retry and pre-read persistence. Real worker equivalence applies effects to a second unreconciled WAL DB copy and compares session_cache/cache_meta; dropping the worker upsert must fail that comparison. The test-only projects-worker-delayed.cjs wrapper intercepts the shared reconcile helper and uses Atomics.wait after folder publication, keeping the delay seam out of the shipped worker. Real-worker regressions cover recovery from a hung sweep and zero progress for unchanged folders versus one for a changed folder. No stress runs or live typing measurements.
 
@@ -246,14 +246,21 @@ numeric deduplication suffix (`X (3)` and `X`, in either direction) also match:
 a CLI `/rename` differing from the baseline only by a ` (n)` suffix cannot
 override a Switchboard rename. A name typed in Switchboard is never affected
 by this suffix rule. A different title, such as `/rename Z`, can replace it.
-A NULL baseline matches no title. `session-name.js`
+In the pure precedence function, a NULL baseline matches no title. Local cache
+upserts first establish a missing baseline from the first transcript title
+observed, preserving the user name. `session-name.js`
 provides the pure precedence function shared by the SQLite writer, Projects
 worker and cache-effects recorder, including full scans, direct writes and
 restart recovery. The recorder reads name provenance and the baseline with
 `getMeta(id, true)` so search-index titles agree with the stored user name.
 Re-keying user metadata carries the baseline with it. Updating only a baseline
 preserves the name field's existing revision, so it cannot outrank a newer user
-rename during a re-key. A field without a revision receives the next one.
+rename during a re-key. A baseline-only write for a field without a revision
+stores 0, older than any minted revision. The revision index and MAX(revision)
+allocator accept 0; actual name, star and archive edits still mint positive
+revisions. Rekey comparisons and background sidebar name selection treat a
+missing revision as 0 and prefer any positive revision; rekeying preserves an
+existing 0.
 Collision-named jobs and descriptors still suppress transcript name promotion.
 
 The version-2 title backfill invalidates old cached titles once on writable
@@ -264,12 +271,13 @@ an old first-title correction as a new CLI rename. A local cache upsert
 establishes a missing baseline from the incoming transcript title, including
 full scans that delete the previous cached row before inserting it again.
 While the baseline is NULL (after an upgrade, before the backfill has run, or
-when it skipped a live file), the first CLI `/rename` observed becomes the
+when it skipped a live file), the first transcript title observed becomes the
 baseline and preserves the Switchboard user name. The next distinct `/rename`
 can replace it. The upsert hydration is shared in
 `session-name.js`. Remote/subagent NULL baselines left by earlier
-migrations do not absorb their next `/rename`. New metadata fields receive the
-next revision, including legacy metadata re-keying.
+migrations do not absorb their next `/rename`. Actual metadata edits and
+re-keying field-less legacy metadata receive the next revision; baseline-only
+hydration is the exception above.
 Existing local rows with an unknown title
 are selected through `getCachedMissingCustomTitle`: only session id, folder and
 file mtime for rows with `customTitle IS NULL AND parentSessionId IS NULL`.
