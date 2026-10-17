@@ -45,12 +45,15 @@ so the two halves cannot disagree.
 
 ### Main-loop measurements
 
-With tracing on, `main.loop` reports `elu` (event-loop utilization over the
-last sampling interval, as a 0–1 fraction) and `lagMs` (lateness of the existing
-one-second timer, clamped to zero). Each callback rebases the expected tick;
-turning tracing on resets both baselines. These signals add no timer.
-`lagMs` exposes a block across a tick, but can miss a short block between ticks;
-`elu` measures occupied loop time, not a latency percentile or CPU percentage.
+With tracing on, `main.loop` reports `lagMs` (lateness of the existing
+one-second timer, clamped to zero). Each callback rebases the expected tick,
+even while tracing is off; enabling tracing preserves that baseline. This
+signal adds no timer. It exposes a block across a tick; a stall that ends
+before the next tick is not seen. It does not measure a latency percentile.
+
+Windows timer granularity makes tens of milliseconds of idle `lagMs` normal.
+Measured at idle under Node 22 on Windows: 12–20 ms, with one sample at 73 ms;
+in Electron: 12–14 ms. Treat this noise floor as context when reading stalls.
 
 For a fine event-loop delay measurement, start Switchboard with
 `SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` and enable tracing. This switch is read
@@ -146,7 +149,7 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `pty.resize` | Each guarded PTY resize attempt, including retries, ordinary fits and first-open nudges | `phase` (`fit` / `nudge` / `restore`), `cols`, `rows`, `ok` (the operation returned without throwing; not proof the CLI observed it) |
 | `poll.snapshot` | `get-active-sessions` answers | `count`, `entries` |
 | `trace.prune-failed` | An old file could not be deleted | `file`, `error`, `retained` |
-| `main.loop` | Once per second while tracing is on | `elu`, `lagMs`; `maxMs`, `p99Ms` only with `SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` at startup |
+| `main.loop` | Once per second while tracing is on | `lagMs`; `maxMs`, `p99Ms` only with `SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` at startup |
 | `app.quit` | Last line of a clean shutdown | — |
 
 ### Renderer

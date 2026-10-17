@@ -9,15 +9,12 @@ function createMainLoopMonitor({ enabled, trace, env = process.env, performance 
     ? monitorEventLoopDelay({ resolution: 20 }) : null;
   let collecting = false;
   let stopped = false;
-  let previous;
-  let expected;
+  let expected = performance.now() + 1000;
   function sync() {
     const on = !stopped && enabled();
     if (on === collecting) return;
     collecting = on;
     if (on) {
-      previous = performance.eventLoopUtilization();
-      expected = performance.now() + 1000;
       histogram?.reset();
       histogram?.enable();
     } else histogram?.disable();
@@ -25,15 +22,11 @@ function createMainLoopMonitor({ enabled, trace, env = process.env, performance 
   sync();
   const timer = schedule(() => {
     sync();
-    if (!collecting) return;
     const now = performance.now();
-    const current = performance.eventLoopUtilization();
-    const data = {
-      elu: performance.eventLoopUtilization(current, previous).utilization,
-      lagMs: Math.max(0, now - expected),
-    };
-    previous = current;
+    const lagMs = Math.max(0, now - expected);
     expected = now + 1000;
+    if (!collecting) return;
+    const data = { lagMs };
     if (histogram) {
       data.maxMs = histogram.max / 1e6;
       data.p99Ms = histogram.percentile(99) / 1e6;

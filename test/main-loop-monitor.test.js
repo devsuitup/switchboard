@@ -7,23 +7,13 @@ const { createMainLoopMonitor } = require('../main-loop-monitor');
 
 function clock() {
   let now = 0;
-  let active = 0;
-  let idle = 0;
   return {
-    advance(ms, busy = 0) { now += ms; active += busy; idle += ms - busy; },
-    performance: {
-      now: () => now,
-      eventLoopUtilization(current, previous) {
-        if (!current) return { active, idle, utilization: active / (active + idle) || 0 };
-        const elapsedActive = current.active - previous.active;
-        const elapsedIdle = current.idle - previous.idle;
-        return { utilization: elapsedActive / (elapsedActive + elapsedIdle) || 0 };
-      },
-    },
+    advance(ms) { now += ms; },
+    performance: { now: () => now },
   };
 }
 
-test('trace alone emits utilization deltas and tick lateness without a histogram', () => {
+test('trace alone emits tick lateness without a histogram', () => {
   const time = clock();
   const events = [];
   let tick;
@@ -37,13 +27,13 @@ test('trace alone emits utilization deltas and tick lateness without a histogram
     clearInterval() {},
   });
   try {
-    time.advance(1500, 600);
+    time.advance(1500);
     tick();
-    time.advance(1000, 100);
+    time.advance(1000);
     tick();
     assert.deepEqual(events, [
-      ['main.loop', null, { elu: 0.4, lagMs: 500 }],
-      ['main.loop', null, { elu: 0.1, lagMs: 0 }],
+      ['main.loop', null, { lagMs: 500 }],
+      ['main.loop', null, { lagMs: 0 }],
     ]);
   } finally { monitor.stop(); }
 });
@@ -73,10 +63,10 @@ test('explicit histogram arm uses 20 ms, follows trace state, resets and stops',
   assert.deepEqual(calls, []);
   on = true;
   monitor.sync();
-  time.advance(1000, 250);
+  time.advance(1000);
   tick();
   assert.deepEqual(calls, ['reset', 'enable',
-    ['main.loop', null, { elu: 0.25, lagMs: 0, maxMs: 7, p99Ms: 3 }], 'reset']);
+    ['main.loop', null, { lagMs: 0, maxMs: 7, p99Ms: 3 }], 'reset']);
   on = false;
   monitor.sync();
   tick();
@@ -93,7 +83,7 @@ test('explicit histogram arm uses 20 ms, follows trace state, resets and stops',
   assert.deepEqual(calls, stoppedCalls);
 });
 
-test('trace toggles reset utilization and lag baselines without enabling a histogram', () => {
+test('trace toggles preserve the tick baseline without enabling a histogram', () => {
   const time = clock();
   let on = false;
   let tick;
@@ -108,23 +98,23 @@ test('trace toggles reset utilization and lag baselines without enabling a histo
     setInterval: fn => { tick = fn; return { unref() {} }; },
     clearInterval: () => { cleared = true; },
   });
-  time.advance(5000, 5000);
+  time.advance(5000);
   tick();
   assert.deepEqual(events, []);
   on = true;
   monitor.sync();
   time.advance(999);
   tick();
-  assert.deepEqual(events, [{ elu: 0, lagMs: 0 }]);
+  assert.deepEqual(events, [{ lagMs: 0 }]);
   on = false;
   monitor.sync();
-  time.advance(10000, 10000);
+  time.advance(10000);
   tick();
   on = true;
   monitor.sync();
-  time.advance(1000, 200);
+  time.advance(1000);
   tick();
-  assert.deepEqual(events.at(-1), { elu: 0.2, lagMs: 0 });
+  assert.deepEqual(events.at(-1), { lagMs: 0 });
   monitor.stop();
   assert.equal(cleared, true);
   monitor.sync();
@@ -154,7 +144,36 @@ test('histogram switch is read once at monitor startup and requires exactly 1', 
   }
 });
 
-test('real loop block across a one-second tick reports at least 400 ms lateness', { timeout: 6000 }, async () => {
+test('enabling mid-interval preserves lateness when a block crosses the next tick', () => {
+  const time = clock();
+  let on = false;
+  let tick;
+  const events = [];
+  const monitor = createMainLoopMonitor({
+    enabled: () => on,
+    env: {},
+    performance: time.performance,
+    trace: (cat, sid, data) => events.push(data),
+    setInterval: fn => { tick = fn; return { unref() {} }; },
+    clearInterval() {},
+  });
+  try {
+    time.advance(1000);
+    tick();
+    time.advance(900);
+    on = true;
+    monitor.sync();
+    time.advance(600);
+    tick();
+    assert.equal(events[0].lagMs, 500);
+    time.advance(1000);
+    tick();
+    assert.equal(events[1].lagMs, 0);
+  } finally { monitor.stop(); }
+});
+
+test('enabling mid-interval before a real block reports at least 400 ms lateness', { timeout: 6000 }, async () => {
+  let on = false;
   let monitor;
   let blockTimer;
   let deadline;
@@ -162,17 +181,18 @@ test('real loop block across a one-second tick reports at least 400 ms lateness'
     const event = await new Promise((resolve, reject) => {
       deadline = setTimeout(() => reject(new Error('main.loop probe timed out')), 5000);
       monitor = createMainLoopMonitor({
-        enabled: () => true,
+        enabled: () => on,
         env: {},
         trace: (cat, sid, data) => resolve(data),
       });
       blockTimer = setTimeout(() => {
+        on = true;
+        monitor.sync();
         const until = performance.now() + 600;
         while (performance.now() < until) {}
       }, 900);
     });
     assert.ok(event.lagMs >= 400, `lagMs=${event.lagMs} must expose the blocked tick`);
-    assert.ok(event.elu >= 0 && event.elu <= 1, `elu=${event.elu} must be a fraction`);
     assert.equal(Object.hasOwn(event, 'maxMs'), false);
   } finally {
     clearTimeout(blockTimer);
