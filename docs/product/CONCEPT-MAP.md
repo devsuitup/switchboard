@@ -106,10 +106,9 @@ Plain-terminal rows show Stop only; subagent rows have no buttons
   only; an alive remote or unattached background row is filtered out
   (V, `public/sidebar.js:684`).
 - R1.8 Fork session, Resume with config and View messages target the head.
-  A remote row opened as a transcript uses the head too. Agents Transcript
-  uses the head when its session lookup returns a merged row; a transcript
-  id with no merged row keeps its own id (`public/sidebar.js`
-  `rebindSidebarEvents`, `public/agents-view.js` `runAgentVerb`).
+  A remote row opened as a transcript uses the head too
+  (`public/sidebar.js` `rebindSidebarEvents`). Agents Transcript opens the
+  job's own transcript: a job is not a sidebar row.
 
 ## 2. Merged web-session row
 

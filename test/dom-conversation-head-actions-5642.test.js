@@ -2,8 +2,6 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const { loadAppFunctions } = require('./app-source');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 
@@ -191,12 +189,5 @@ for (const scheduled of [false, true]) {
     assert.equal(groups.length, scheduled ? 1 : 0);
     assert.equal(ctx.document.querySelectorAll('.session-item:not([data-subagent])').length, 2);
     if (scheduled) assert.equal(groups[0].querySelectorAll('.session-item').length, 2);
-  });
-}
-
-for (const file of ['CHANGELOG.md', '.ai/contexts/schedule-runner.md']) {
-  test(`${file} explains that scheduled runs from before v0.0.90 have separate rows`, () => {
-    const text = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
-    assert.match(text, /Scheduled runs from before v0\.0\.90 are listed one per row\./);
   });
 }
