@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "071d1b7870d0465c00944abaf07e5a0042a81d90",
+  "measurements": [
+    {
+      "sequence": 1,
+      "canary": "C3",
+      "status": "PASS",
+      "measuredAt": "2026-10-18T10:25:03.048Z",
+      "cli": {
+        "version": "2.1.302 (Claude Code)",
+        "build": "unknown",
+        "sha256": "3ab075f78998efef8b87f491c2e4a39c309dddf44e51d0103eba4f3713d2a0ae"
+      },
+      "harnessRevision": "fcdd246671a9487f24c7040c8c382945d9e55e4f9d082102edf8164ff0502176",
+      "evidencePath": "docs/evidence/session-capabilities/win-inbox-C3-071d1b78/0001-C3-8ea7561d/evidence.json",
+      "evidenceSha256": "ee9d2ce608bb11cfb57efa555a4966d743fb2699f70ccd4863939fa31a102411",
+      "capabilities": {
+        "extraPermissionSettings": true
+      },
+      "capabilityStatus": {
+        "extraPermissionSettings": "PASS"
+      },
+      "baselineHead": "071d1b7870d0465c00944abaf07e5a0042a81d90",
+      "acceptedSpecBranch": null,
+      "execution": {
+        "label": "windows-conpty-inbox",
+        "platform": "win32",
+        "backend": "conpty-inbox"
+      }
+    }
+  ]
+}

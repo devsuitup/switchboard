@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "437e5c9e7fcb5c161c0d487b54f8a396d936a8e6",
+  "measurements": [
+    {
+      "sequence": 1,
+      "canary": "C1",
+      "status": "PASS",
+      "measuredAt": "2026-10-18T13:54:24.698Z",
+      "cli": {
+        "version": "2.1.302 (Claude Code)",
+        "build": "unknown",
+        "sha256": "3ab075f78998efef8b87f491c2e4a39c309dddf44e51d0103eba4f3713d2a0ae"
+      },
+      "harnessRevision": "2e746290a6047c8dedadfa983caec07a18ed87ffafda200697e0bc6a01b1495a",
+      "evidencePath": "docs/evidence/session-capabilities/win-inbox-C1-437e5c9e/0001-C1-05a9d0c3/evidence.json",
+      "evidenceSha256": "8d9d85e9d5cc30ae76f69ffaabc5108d32c24c4b0d28251b3f99f92f8cef7790",
+      "capabilities": {
+        "singleTurnDelivery": true,
+        "literalTranscript": true,
+        "eligibleConfirmation": true
+      },
+      "capabilityStatus": {
+        "singleTurnDelivery": "PASS",
+        "literalTranscript": "PASS",
+        "eligibleConfirmation": "PASS"
+      },
+      "baselineHead": "437e5c9e7fcb5c161c0d487b54f8a396d936a8e6",
+      "acceptedSpecBranch": null,
+      "execution": {
+        "label": "windows-conpty-inbox",
+        "platform": "win32",
+        "backend": "conpty-inbox"
+      }
+    }
+  ]
+}

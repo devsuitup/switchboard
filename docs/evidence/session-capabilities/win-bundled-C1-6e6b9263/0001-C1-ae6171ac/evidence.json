@@ -1,0 +1,14 @@
+{
+  "dryRun": false,
+  "qualifiesProduction": false,
+  "checks": [],
+  "controls": [
+    {
+      "name": "table mutations",
+      "status": "UNVERIFIED",
+      "reason": "run separate --dry-run --mutation invocations; no result inferred from a different run"
+    }
+  ],
+  "processes": [],
+  "failure": "bounded git command failed (ETIMEDOUT)"
+}

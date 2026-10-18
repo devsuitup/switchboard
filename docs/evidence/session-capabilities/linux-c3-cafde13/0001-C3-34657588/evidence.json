@@ -1,0 +1,352 @@
+{
+  "schemaVersion": 1,
+  "canary": "C3",
+  "dryRun": false,
+  "qualifiesProduction": false,
+  "platform": "linux",
+  "kernel": "7.0.0-38-generic",
+  "platformLabel": "linux-unix-pty",
+  "ptyBackend": "unix-pty",
+  "environmentKeys": [
+    "DISABLE_AUTOUPDATER",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "HOME",
+    "LANG",
+    "PATH",
+    "SWITCHBOARD_DATA_DIR",
+    "SWITCHBOARD_TRIGGERS_DIR",
+    "USERPROFILE",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME"
+  ],
+  "mutation": null,
+  "workBudgetMs": 300000,
+  "fixtureIdentity": "e5923ff5c2b32faa667e95e6a049d42d54a36107578f36ebb3af43d3757832a5",
+  "inventorySource": "git worktree list --porcelain",
+  "peerAliasThreat": {
+    "status": "UNVERIFIED",
+    "reason": "publication-path probe does not establish resistance to shared sessions directory aliases"
+  },
+  "checks": [
+    {
+      "sequence": 1,
+      "at": "2026-10-17T17:01:42.408Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": false,
+      "status": "UNVERIFIED",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "298784c4-c13a-401d-933c-8316a3b0d4ed"
+    },
+    {
+      "sequence": 2,
+      "at": "2026-10-17T17:01:42.409Z",
+      "name": "denied side effect absent",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "298784c4-c13a-401d-933c-8316a3b0d4ed"
+    },
+    {
+      "sequence": 3,
+      "at": "2026-10-17T17:01:42.409Z",
+      "name": "deny overrides overlapping settings and project allow",
+      "pass": false,
+      "status": "UNVERIFIED",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "298784c4-c13a-401d-933c-8316a3b0d4ed"
+    },
+    {
+      "sequence": 4,
+      "at": "2026-10-17T17:01:42.409Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": false,
+      "status": "UNVERIFIED",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "298784c4-c13a-401d-933c-8316a3b0d4ed"
+    },
+    {
+      "sequence": 5,
+      "at": "2026-10-17T17:01:42.409Z",
+      "name": "explicit C3 final reply observed",
+      "pass": false,
+      "status": "UNVERIFIED",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "298784c4-c13a-401d-933c-8316a3b0d4ed"
+    },
+    {
+      "sequence": 6,
+      "at": "2026-10-17T17:01:42.409Z",
+      "name": "owned C3 post-submit idle confirmed",
+      "pass": false,
+      "status": "UNVERIFIED",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "298784c4-c13a-401d-933c-8316a3b0d4ed"
+    }
+  ],
+  "controls": [
+    {
+      "name": "table mutations",
+      "status": "UNVERIFIED",
+      "reason": "run separate --dry-run --mutation invocations; no result inferred from a different run"
+    }
+  ],
+  "processes": [
+    {
+      "pid": 2929765,
+      "sandbox": false,
+      "backend": "unix-pty",
+      "cleaned": true,
+      "waitingFor": "permission prompt",
+      "argv": [
+        "--session-id",
+        "298784c4-c13a-401d-933c-8316a3b0d4ed",
+        "--settings",
+        "/srv/scratch-switchboard-test/runtime/r3/private/permissions-b4170d8a-412e-463f-a97f-e7eb1fa612f0.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "PATH",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792256502403,
+        "status": "waiting",
+        "statusUpdatedAt": 1792256502153,
+        "waitingFor": "permission prompt"
+      },
+      "sessionId": "298784c4-c13a-401d-933c-8316a3b0d4ed",
+      "cwd": "/srv/scratch-switchboard-test/runtime/r3/project",
+      "descriptorSource": "../../../../../../home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "80224774",
+      "writerHostPid": 2929765,
+      "directoryIdentity": {
+        "dev": 2049,
+        "ino": 4807061
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792256494062,
+          "waitBudgetMs": 90000,
+          "outcome": "UNVERIFIED",
+          "observedAt": 1792256502403,
+          "descriptor": {
+            "observedAt": 1792256502403,
+            "status": "waiting",
+            "statusUpdatedAt": 1792256502153,
+            "waitingFor": "permission prompt"
+          },
+          "transcriptBytes": 179123,
+          "rowCount": 32,
+          "lastRows": [
+            {
+              "type": "attachment",
+              "offset": 53162,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 55187,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 55773,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 56289,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 57640,
+              "blocks": []
+            },
+            {
+              "type": "api-request-shape",
+              "offset": 66911,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 141194,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 144528,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 168243,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 173558,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 173912,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 174034,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 174117,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 174219,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 174302,
+              "blocks": [
+                {
+                  "type": "thinking"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 177115,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Read"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "oscObservations": [
+        {
+          "at": 1792256495948,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792256496954,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792256497269,
+          "code": "0",
+          "payloadSha256": "0813c4766c5b659b5d8884f0420a9912d7b91ba6955c394bff06af690c180153"
+        },
+        {
+          "at": 1792256497906,
+          "code": "0",
+          "payloadSha256": "e52d2dc662151a31fe303e3c0fb8f7c7c7701c7f559c370b9717ef6c6a910e4e"
+        },
+        {
+          "at": 1792256498876,
+          "code": "0",
+          "payloadSha256": "0813c4766c5b659b5d8884f0420a9912d7b91ba6955c394bff06af690c180153"
+        },
+        {
+          "at": 1792256499837,
+          "code": "0",
+          "payloadSha256": "e52d2dc662151a31fe303e3c0fb8f7c7c7701c7f559c370b9717ef6c6a910e4e"
+        },
+        {
+          "at": 1792256500848,
+          "code": "0",
+          "payloadSha256": "0813c4766c5b659b5d8884f0420a9912d7b91ba6955c394bff06af690c180153"
+        },
+        {
+          "at": 1792256501757,
+          "code": "0",
+          "payloadSha256": "e52d2dc662151a31fe303e3c0fb8f7c7c7701c7f559c370b9717ef6c6a910e4e"
+        },
+        {
+          "at": 1792256502157,
+          "code": "0",
+          "payloadSha256": "5c4ecbfa207d30cd9b533c649e8527be2180de267f52da5e208cf061705954cc"
+        }
+      ]
+    }
+  ],
+  "payloads": [],
+  "forks": [],
+  "permissions": [
+    {
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "298784c4-c13a-401d-933c-8316a3b0d4ed",
+      "settingsSha256": "a0b9b2cb221a9d705ed7c7f949e86fc6ca16d3820804ed8a718d8ca35385f80f",
+      "deniedSideEffectAbsent": true,
+      "toolPermissionDenial": false,
+      "denialObservation": {
+        "status": "UNVERIFIED"
+      },
+      "nonOverlappingActionRan": false,
+      "immutable": true,
+      "protectionAttemptObserved": false,
+      "protectionError": false,
+      "exactSettingsRead": false,
+      "finalReplyObserved": false,
+      "turnConfirmed": false,
+      "inheritedProjectAllow": true,
+      "inheritedGlobalAllow": true
+    }
+  ],
+  "reports": [],
+  "failure": "owned CLI blocking dialog before confirmation"
+}

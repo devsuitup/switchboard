@@ -1,0 +1,1045 @@
+{
+  "schemaVersion": 1,
+  "canary": "C3",
+  "dryRun": false,
+  "qualifiesProduction": false,
+  "platform": "win32",
+  "kernel": "10.0.26200",
+  "platformLabel": "windows-conpty-inbox",
+  "ptyBackend": "conpty-inbox",
+  "environmentKeys": [
+    "APPDATA",
+    "COLORTERM",
+    "COMSPEC",
+    "DISABLE_AUTOUPDATER",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "HOME",
+    "LANG",
+    "LOCALAPPDATA",
+    "PATH",
+    "PATHEXT",
+    "PROGRAMFILES",
+    "SWITCHBOARD_DATA_DIR",
+    "SWITCHBOARD_TRIGGERS_DIR",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "USERNAME",
+    "USERPROFILE",
+    "WINDIR",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME"
+  ],
+  "mutation": null,
+  "workBudgetMs": 300000,
+  "fixtureIdentity": "1fa3a453c93ef4bd2d2def9cf63449e36d498eca0b154b9f4f792043be31b3c9",
+  "inventorySource": "git worktree list --porcelain",
+  "peerAliasThreat": {
+    "status": "UNVERIFIED",
+    "reason": "publication-path probe does not establish resistance to shared sessions directory aliases"
+  },
+  "checks": [
+    {
+      "sequence": 1,
+      "at": "2026-10-18T10:23:52.940Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "49e6e7a7-2bed-4fd3-a2a3-21ac6544ffcb"
+    },
+    {
+      "sequence": 2,
+      "at": "2026-10-18T10:23:52.947Z",
+      "name": "denied side effect absent",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "49e6e7a7-2bed-4fd3-a2a3-21ac6544ffcb"
+    },
+    {
+      "sequence": 3,
+      "at": "2026-10-18T10:23:52.947Z",
+      "name": "deny overrides overlapping settings and project allow",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "49e6e7a7-2bed-4fd3-a2a3-21ac6544ffcb"
+    },
+    {
+      "sequence": 4,
+      "at": "2026-10-18T10:23:52.947Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "49e6e7a7-2bed-4fd3-a2a3-21ac6544ffcb"
+    },
+    {
+      "sequence": 5,
+      "at": "2026-10-18T10:23:52.947Z",
+      "name": "explicit C3 final reply observed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "49e6e7a7-2bed-4fd3-a2a3-21ac6544ffcb"
+    },
+    {
+      "sequence": 6,
+      "at": "2026-10-18T10:23:52.947Z",
+      "name": "owned C3 post-submit idle confirmed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "49e6e7a7-2bed-4fd3-a2a3-21ac6544ffcb"
+    },
+    {
+      "sequence": 7,
+      "at": "2026-10-18T10:23:55.964Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true
+    },
+    {
+      "sequence": 8,
+      "at": "2026-10-18T10:23:55.964Z",
+      "name": "deny overrides overlapping settings and project allow",
+      "pass": true
+    },
+    {
+      "sequence": 9,
+      "at": "2026-10-18T10:23:55.964Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true
+    },
+    {
+      "sequence": 10,
+      "at": "2026-10-18T10:24:59.549Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "e97f576b-805c-4970-82fc-6ebc4abe5198"
+    },
+    {
+      "sequence": 11,
+      "at": "2026-10-18T10:24:59.549Z",
+      "name": "negative control removing deny produces side effect",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "e97f576b-805c-4970-82fc-6ebc4abe5198"
+    },
+    {
+      "sequence": 12,
+      "at": "2026-10-18T10:24:59.549Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "e97f576b-805c-4970-82fc-6ebc4abe5198"
+    },
+    {
+      "sequence": 13,
+      "at": "2026-10-18T10:24:59.549Z",
+      "name": "explicit C3 final reply observed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "e97f576b-805c-4970-82fc-6ebc4abe5198"
+    },
+    {
+      "sequence": 14,
+      "at": "2026-10-18T10:24:59.549Z",
+      "name": "owned C3 post-submit idle confirmed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "e97f576b-805c-4970-82fc-6ebc4abe5198"
+    },
+    {
+      "sequence": 15,
+      "at": "2026-10-18T10:25:02.940Z",
+      "name": "negative control removing deny produces side effect",
+      "pass": true
+    }
+  ],
+  "controls": [
+    {
+      "name": "remove-deny",
+      "status": "PASS"
+    }
+  ],
+  "processes": [
+    {
+      "pid": 20064,
+      "sandbox": false,
+      "backend": "conpty-inbox",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "49e6e7a7-2bed-4fd3-a2a3-21ac6544ffcb",
+        "--settings",
+        "C:\\canary380-runtime\\r27\\private\\permissions-704d7f00-4d52-4dbf-abef-04ccc2bdfe31.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792319032875,
+        "status": "idle",
+        "statusUpdatedAt": 1792319032116,
+        "waitingFor": null
+      },
+      "sessionId": "49e6e7a7-2bed-4fd3-a2a3-21ac6544ffcb",
+      "cwd": "C:\\canary380-runtime\\r27\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367925953399728",
+      "writerHostPid": 20064,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 14918173766592772
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792319005739,
+          "waitBudgetMs": 90000,
+          "outcome": "PASS",
+          "observedAt": 1792319032875,
+          "descriptor": {
+            "observedAt": 1792319032875,
+            "status": "idle",
+            "statusUpdatedAt": 1792319032116,
+            "waitingFor": null
+          },
+          "transcriptBytes": 343968,
+          "rowCount": 55,
+          "lastRows": [
+            {
+              "type": "api-request",
+              "offset": 316149,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 320992,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 321643,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 322096,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 322533,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 322801,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 327846,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 329898,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "attachment",
+              "offset": 330986,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 331637,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 333691,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 335409,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 335677,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 341232,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 341883,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "system",
+              "offset": 343540,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792319005739,
+        "observedAt": 1792319032838,
+        "status": "idle",
+        "statusUpdatedAt": 1792319032116,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792319008910,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792319010286,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319010675,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319011696,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319012586,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319013562,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319014793,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319015697,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319016620,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319017581,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319018611,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319019560,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319020521,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319021488,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319022442,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319023417,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319024367,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319025327,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319026293,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319027253,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319028224,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319029683,
+          "code": "0",
+          "payloadSha256": "87097c6bbe883ae136883441a6403b3ae0b1db7f99c5ad3b1ee3c96c24e4a685"
+        },
+        {
+          "at": 1792319030607,
+          "code": "0",
+          "payloadSha256": "ff5cdc1d22cfb39e9ce61cbda98bf59c3572bf770ee2c02ca2cf3acde9af58ff"
+        },
+        {
+          "at": 1792319032115,
+          "code": "0",
+          "payloadSha256": "674cc778621836c2fa5fc8788c8e33f5e164ad893d9cef385b86d0e781fe31cf"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 343968,
+        "exitRequestedAt": 1792319034017,
+        "finalBytes": 346334
+      }
+    },
+    {
+      "pid": 4360,
+      "sandbox": false,
+      "backend": "conpty-inbox",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "e97f576b-805c-4970-82fc-6ebc4abe5198",
+        "--settings",
+        "C:\\canary380-runtime\\r27\\private\\permissions-548dc4cf-649b-4bce-b9b3-a4fbca00f43d.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792319099485,
+        "status": "idle",
+        "statusUpdatedAt": 1792319098933,
+        "waitingFor": null
+      },
+      "sessionId": "e97f576b-805c-4970-82fc-6ebc4abe5198",
+      "cwd": "C:\\canary380-runtime\\r27\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134367926364131293",
+      "writerHostPid": 4360,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 14918173766592772
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792319046027,
+          "waitBudgetMs": 90000,
+          "outcome": "PASS",
+          "observedAt": 1792319099485,
+          "descriptor": {
+            "observedAt": 1792319099485,
+            "status": "idle",
+            "statusUpdatedAt": 1792319098933,
+            "waitingFor": null
+          },
+          "transcriptBytes": 395628,
+          "rowCount": 54,
+          "lastRows": [
+            {
+              "type": "atis-latch",
+              "offset": 364042,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 364125,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "tool_addition"
+                },
+                {
+                  "type": "tool_addition"
+                },
+                {
+                  "type": "tool_addition"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 369022,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 373688,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 374339,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 376391,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 377904,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 378172,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 383145,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 383796,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 385850,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 387366,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 387634,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 392892,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 393543,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "system",
+              "offset": 395200,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792319046027,
+        "observedAt": 1792319099458,
+        "status": "idle",
+        "statusUpdatedAt": 1792319098933,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792319050496,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792319050991,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319052440,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319053682,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319054518,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319055462,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319056422,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319057462,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319058912,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319059850,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319060809,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319061808,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319062743,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319063707,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319064668,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319065642,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319067480,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319068330,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319069343,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319070336,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319071389,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319072299,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319073290,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319074251,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319075182,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319076173,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319077162,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319078087,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319079047,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319080013,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319081021,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319081938,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319082911,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319083863,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319084835,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319085792,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319087009,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319087887,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319088836,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319089823,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319091093,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319091962,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319092976,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319093935,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319094875,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319095836,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319096798,
+          "code": "0",
+          "payloadSha256": "ce0daa9ebd9d126b5be9490307770838e454300a42c453c6ec72972fc4f99ef8"
+        },
+        {
+          "at": 1792319097781,
+          "code": "0",
+          "payloadSha256": "c844f52dff2f42104ca5913b4fa07817c3574bb05fa630c351ac6097aaa2ba15"
+        },
+        {
+          "at": 1792319098932,
+          "code": "0",
+          "payloadSha256": "5b7de7d145a77310f0a6d98845c62c736e92dc5b3c62773c0aade5a7bf481f71"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": false,
+        "forcedKill": true,
+        "beforeExitBytes": 395628,
+        "exitRequestedAt": 1792319100593,
+        "gracefulExitTimedOut": true,
+        "finalBytes": 397713
+      }
+    }
+  ],
+  "payloads": [],
+  "forks": [],
+  "permissions": [
+    {
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "49e6e7a7-2bed-4fd3-a2a3-21ac6544ffcb",
+      "settingsSha256": "9c1d1d91b2fb99a7cfe7aba5a394cab6b74bb7cbaa9c1a7cd7a2672c3607e9cc",
+      "deniedSideEffectAbsent": true,
+      "toolPermissionDenial": true,
+      "denialObservation": {
+        "status": "PASS",
+        "sha256": "861c9aa1872228d3bf8f2726d97b2e46b1e240e70ac8b9a52d82a5c29dfa270a",
+        "excerpt": "Permission to use Bash with command printf denied > 'C:/canary380-runtime/r27/project/denied-704d7f00-4d52-4dbf-abef-04ccc2bdfe31' has been denied.",
+        "offset": 322096
+      },
+      "nonOverlappingActionRan": true,
+      "immutable": true,
+      "protectionAttemptObserved": false,
+      "protectionError": false,
+      "exactSettingsRead": true,
+      "finalReplyObserved": true,
+      "turnConfirmed": true,
+      "inheritedProjectAllow": true,
+      "inheritedGlobalAllow": true
+    },
+    {
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "e97f576b-805c-4970-82fc-6ebc4abe5198",
+      "settingsSha256": "ed2a14a055bffaa331907246015b72aceab3463a77c6f42371384779e82fb9cd",
+      "deniedSideEffectAbsent": false,
+      "toolPermissionDenial": false,
+      "denialObservation": {
+        "status": "UNVERIFIED",
+        "reason": "denial not required in remove-deny control"
+      },
+      "nonOverlappingActionRan": true,
+      "immutable": true,
+      "protectionAttemptObserved": false,
+      "protectionError": false,
+      "exactSettingsRead": true,
+      "finalReplyObserved": true,
+      "turnConfirmed": true,
+      "inheritedProjectAllow": true,
+      "inheritedGlobalAllow": true
+    }
+  ],
+  "reports": []
+}

@@ -1,0 +1,1646 @@
+{
+  "schemaVersion": 1,
+  "canary": "C3",
+  "dryRun": false,
+  "qualifiesProduction": false,
+  "platform": "linux",
+  "platformLabel": "linux-unix-pty",
+  "ptyBackend": "unix-pty",
+  "kernel": "7.0.0-38-generic",
+  "environmentKeys": [
+    "DISABLE_AUTOUPDATER",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "HOME",
+    "LANG",
+    "PATH",
+    "SWITCHBOARD_DATA_DIR",
+    "SWITCHBOARD_TRIGGERS_DIR",
+    "USERPROFILE",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME"
+  ],
+  "mutation": null,
+  "workBudgetMs": 300000,
+  "fixtureIdentity": "2408b6bdd0933f219df72fb4824c016db65b08a208aa2a3137b16aff75add4ff",
+  "inventorySource": "git worktree list --porcelain",
+  "peerAliasThreat": {
+    "status": "UNVERIFIED",
+    "reason": "publication-path probe does not establish resistance to shared sessions directory aliases"
+  },
+  "checks": [
+    {
+      "sequence": 1,
+      "at": "2026-10-18T17:55:27.446Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "2ac8a46e-1765-4229-9f5f-f3d2e8b4eb14"
+    },
+    {
+      "sequence": 2,
+      "at": "2026-10-18T17:55:27.447Z",
+      "name": "denied side effect absent",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "2ac8a46e-1765-4229-9f5f-f3d2e8b4eb14"
+    },
+    {
+      "sequence": 3,
+      "at": "2026-10-18T17:55:27.447Z",
+      "name": "deny overrides overlapping settings and project allow",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "2ac8a46e-1765-4229-9f5f-f3d2e8b4eb14"
+    },
+    {
+      "sequence": 4,
+      "at": "2026-10-18T17:55:27.447Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "2ac8a46e-1765-4229-9f5f-f3d2e8b4eb14"
+    },
+    {
+      "sequence": 5,
+      "at": "2026-10-18T17:55:27.447Z",
+      "name": "explicit C3 final reply observed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "2ac8a46e-1765-4229-9f5f-f3d2e8b4eb14"
+    },
+    {
+      "sequence": 6,
+      "at": "2026-10-18T17:55:27.447Z",
+      "name": "owned C3 post-submit idle confirmed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "2ac8a46e-1765-4229-9f5f-f3d2e8b4eb14"
+    },
+    {
+      "sequence": 7,
+      "at": "2026-10-18T17:55:29.302Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true
+    },
+    {
+      "sequence": 8,
+      "at": "2026-10-18T17:55:29.302Z",
+      "name": "deny overrides overlapping settings and project allow",
+      "pass": true
+    },
+    {
+      "sequence": 9,
+      "at": "2026-10-18T17:55:29.302Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true
+    },
+    {
+      "sequence": 10,
+      "at": "2026-10-18T17:55:45.991Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "83bdf01e-292a-4e36-8356-353fe512b816"
+    },
+    {
+      "sequence": 11,
+      "at": "2026-10-18T17:55:45.991Z",
+      "name": "negative control removing deny produces side effect",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "83bdf01e-292a-4e36-8356-353fe512b816"
+    },
+    {
+      "sequence": 12,
+      "at": "2026-10-18T17:55:45.991Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "83bdf01e-292a-4e36-8356-353fe512b816"
+    },
+    {
+      "sequence": 13,
+      "at": "2026-10-18T17:55:45.991Z",
+      "name": "explicit C3 final reply observed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "83bdf01e-292a-4e36-8356-353fe512b816"
+    },
+    {
+      "sequence": 14,
+      "at": "2026-10-18T17:55:45.991Z",
+      "name": "owned C3 post-submit idle confirmed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "83bdf01e-292a-4e36-8356-353fe512b816"
+    },
+    {
+      "sequence": 15,
+      "at": "2026-10-18T17:55:47.786Z",
+      "name": "negative control removing deny produces side effect",
+      "pass": true
+    },
+    {
+      "sequence": 16,
+      "at": "2026-10-18T17:55:47.882Z",
+      "name": "sandbox launch settings immutable; project and own publication writable",
+      "pass": true
+    },
+    {
+      "sequence": 17,
+      "at": "2026-10-18T17:55:47.908Z",
+      "name": "second namespace writes only its publication and cannot reach first generation",
+      "pass": true
+    },
+    {
+      "sequence": 18,
+      "at": "2026-10-18T17:56:13.120Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": true,
+      "removeDeny": false,
+      "sessionId": "418cfc97-c102-48ca-8f3d-9d2b88916ca2"
+    },
+    {
+      "sequence": 19,
+      "at": "2026-10-18T17:56:13.120Z",
+      "name": "denied side effect absent",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": true,
+      "removeDeny": false,
+      "sessionId": "418cfc97-c102-48ca-8f3d-9d2b88916ca2"
+    },
+    {
+      "sequence": 20,
+      "at": "2026-10-18T17:56:13.120Z",
+      "name": "deny overrides overlapping settings and project allow",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": true,
+      "removeDeny": false,
+      "sessionId": "418cfc97-c102-48ca-8f3d-9d2b88916ca2"
+    },
+    {
+      "sequence": 21,
+      "at": "2026-10-18T17:56:13.120Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": true,
+      "removeDeny": false,
+      "sessionId": "418cfc97-c102-48ca-8f3d-9d2b88916ca2"
+    },
+    {
+      "sequence": 22,
+      "at": "2026-10-18T17:56:13.120Z",
+      "name": "explicit C3 final reply observed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": true,
+      "removeDeny": false,
+      "sessionId": "418cfc97-c102-48ca-8f3d-9d2b88916ca2"
+    },
+    {
+      "sequence": 23,
+      "at": "2026-10-18T17:56:13.120Z",
+      "name": "owned C3 post-submit idle confirmed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": true,
+      "removeDeny": false,
+      "sessionId": "418cfc97-c102-48ca-8f3d-9d2b88916ca2"
+    },
+    {
+      "sequence": 24,
+      "at": "2026-10-18T17:56:13.120Z",
+      "name": "sandbox settings and parent immutable with actual failed write attempt",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": true,
+      "removeDeny": false,
+      "sessionId": "418cfc97-c102-48ca-8f3d-9d2b88916ca2"
+    },
+    {
+      "sequence": 25,
+      "at": "2026-10-18T17:56:14.895Z",
+      "name": "sandbox reads settings and enforces deny and allowed control",
+      "pass": true
+    },
+    {
+      "sequence": 26,
+      "at": "2026-10-18T17:56:14.895Z",
+      "name": "sandbox settings and parent immutable with actual failed write attempt",
+      "pass": true
+    }
+  ],
+  "controls": [
+    {
+      "name": "remove-deny",
+      "status": "PASS"
+    }
+  ],
+  "processes": [
+    {
+      "pid": 2914419,
+      "sandbox": false,
+      "backend": "unix-pty",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "2ac8a46e-1765-4229-9f5f-f3d2e8b4eb14",
+        "--settings",
+        "/srv/scratch-switchboard-test/runtime/r16/private/permissions-a1f398b3-42de-4540-b655-b45424c95b4b.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "PATH",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792346127438,
+        "status": "idle",
+        "statusUpdatedAt": 1792346126990,
+        "waitingFor": null
+      },
+      "sessionId": "2ac8a46e-1765-4229-9f5f-f3d2e8b4eb14",
+      "cwd": "/srv/scratch-switchboard-test/runtime/r16/project",
+      "descriptorSource": "../../../../../../home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "6599335",
+      "writerHostPid": 2914419,
+      "directoryIdentity": {
+        "dev": 2049,
+        "ino": 4822039
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792346109579,
+          "waitBudgetMs": 90000,
+          "outcome": "PASS",
+          "observedAt": 1792346127438,
+          "descriptor": {
+            "observedAt": 1792346127438,
+            "status": "idle",
+            "statusUpdatedAt": 1792346126990,
+            "waitingFor": null
+          },
+          "transcriptBytes": 286313,
+          "rowCount": 55,
+          "lastRows": [
+            {
+              "type": "api-request",
+              "offset": 257480,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 262888,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 263553,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 263982,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 264436,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 264704,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 270112,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 272097,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "attachment",
+              "offset": 273233,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 273898,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 275887,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 277329,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 277597,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 283564,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 284229,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "system",
+              "offset": 285871,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792346109579,
+        "observedAt": 1792346127434,
+        "status": "idle",
+        "statusUpdatedAt": 1792346126990,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792346111287,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792346111993,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346112284,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346113243,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346114203,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346115209,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346116168,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346117126,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346118086,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346119046,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346120007,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346120967,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346121927,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346122991,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346123953,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346124911,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346125872,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346126990,
+          "code": "0",
+          "payloadSha256": "711e0a177fc482e880ea4dfcde221b70874fce5256f1a441c3abf6eb5f38f8d9"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 286313,
+        "exitRequestedAt": 1792346128495,
+        "finalBytes": 288247
+      }
+    },
+    {
+      "pid": 2915271,
+      "sandbox": false,
+      "backend": "unix-pty",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "83bdf01e-292a-4e36-8356-353fe512b816",
+        "--settings",
+        "/srv/scratch-switchboard-test/runtime/r16/private/permissions-2c109960-ad1e-4432-9644-65570ac21b33.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "PATH",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792346145984,
+        "status": "idle",
+        "statusUpdatedAt": 1792346145793,
+        "waitingFor": null
+      },
+      "sessionId": "83bdf01e-292a-4e36-8356-353fe512b816",
+      "cwd": "/srv/scratch-switchboard-test/runtime/r16/project",
+      "descriptorSource": "../../../../../../home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "6601556",
+      "writerHostPid": 2915271,
+      "directoryIdentity": {
+        "dev": 2049,
+        "ino": 4822039
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792346131493,
+          "waitBudgetMs": 90000,
+          "outcome": "PASS",
+          "observedAt": 1792346145984,
+          "descriptor": {
+            "observedAt": 1792346145984,
+            "status": "idle",
+            "statusUpdatedAt": 1792346145793,
+            "waitingFor": null
+          },
+          "transcriptBytes": 278808,
+          "rowCount": 50,
+          "lastRows": [
+            {
+              "type": "ai-title",
+              "offset": 256518,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 256629,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 256712,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 256814,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 256897,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 257165,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 262421,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 263086,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 265071,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 267060,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 268502,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 269944,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 270212,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 276059,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 276724,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "system",
+              "offset": 278366,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792346131493,
+        "observedAt": 1792346145980,
+        "status": "idle",
+        "statusUpdatedAt": 1792346145793,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792346133001,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792346133505,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346133961,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346134921,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346135883,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346136843,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346137803,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346138763,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346139725,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346140691,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346141646,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346142606,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346143566,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346144527,
+          "code": "0",
+          "payloadSha256": "2174297a590bd6dfdc490a5660e1882a77eabf2dc691a404c409d4ebbf8ab791"
+        },
+        {
+          "at": 1792346145487,
+          "code": "0",
+          "payloadSha256": "5a20c31ea3618c8192fcca6e478a3b06f05439d69f860187b6d1b5afa299aca4"
+        },
+        {
+          "at": 1792346145793,
+          "code": "0",
+          "payloadSha256": "711e0a177fc482e880ea4dfcde221b70874fce5256f1a441c3abf6eb5f38f8d9"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 278808,
+        "exitRequestedAt": 1792346147011,
+        "finalBytes": 280782
+      }
+    },
+    {
+      "pid": 2915918,
+      "sandbox": true,
+      "backend": "unix-pty",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--unshare-all",
+        "--share-net",
+        "--die-with-parent",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/var",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--ro-bind",
+        "/etc",
+        "/etc",
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/sbin",
+        "/sbin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib64",
+        "/lib64",
+        "--ro-bind",
+        "/run/systemd/resolve",
+        "/run/systemd/resolve",
+        "--ro-bind",
+        "/root/.local/share/claude/versions",
+        "/root/.local/share/claude/versions",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r16/project",
+        "/srv/scratch-switchboard-test/runtime/r16/project",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.claude",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git/config",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git/config",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git/hooks",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git/hooks",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/cache",
+        "/srv/scratch-switchboard-test/home/.claude/cache",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+        "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/paste-cache",
+        "/srv/scratch-switchboard-test/home/.claude/paste-cache",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/plugins",
+        "/srv/scratch-switchboard-test/home/.claude/plugins",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/policy-limits.json",
+        "/srv/scratch-switchboard-test/home/.claude/policy-limits.json",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/policy-limits.json.stamp.json",
+        "/srv/scratch-switchboard-test/home/.claude/policy-limits.json.stamp.json",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/remote-settings.json",
+        "/srv/scratch-switchboard-test/home/.claude/remote-settings.json",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/remote-settings.json.synced-at",
+        "/srv/scratch-switchboard-test/home/.claude/remote-settings.json.synced-at",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/settings.json",
+        "/srv/scratch-switchboard-test/home/.claude/settings.json",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/skills",
+        "/srv/scratch-switchboard-test/home/.claude/skills",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/projects",
+        "/srv/scratch-switchboard-test/home/.claude/projects",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r16-project",
+        "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r16-project",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r16/generation-6qk9rO",
+        "/srv/scratch-switchboard-test/home/.claude/sessions",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/shell-snapshots",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/session-env",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/backups",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/state",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.config/claude",
+        "/srv/scratch-switchboard-test/home/.config/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.cache/claude",
+        "/srv/scratch-switchboard-test/home/.cache/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.local/share/claude",
+        "/srv/scratch-switchboard-test/home/.local/share/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r16/private/generation-6qk9rO-claude.json",
+        "/srv/scratch-switchboard-test/home/.claude.json",
+        "--dir",
+        "/run",
+        "--perms",
+        "0555",
+        "--dir",
+        "/run/switchboard",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r16/private/permissions-335aba25-8c84-4c66-8538-109e3a066f8e.json",
+        "/run/switchboard/launch-settings.json",
+        "--chdir",
+        "/srv/scratch-switchboard-test/runtime/r16/project",
+        "--setenv",
+        "SHELL",
+        "/bin/bash",
+        "/root/.local/share/claude/versions/2.1.301",
+        "--session-id",
+        "418cfc97-c102-48ca-8f3d-9d2b88916ca2",
+        "--settings",
+        "/run/switchboard/launch-settings.json"
+      ],
+      "mountPlan": [
+        "--unshare-all",
+        "--share-net",
+        "--die-with-parent",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/var",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--ro-bind",
+        "/etc",
+        "/etc",
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/sbin",
+        "/sbin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib64",
+        "/lib64",
+        "--ro-bind",
+        "/run/systemd/resolve",
+        "/run/systemd/resolve",
+        "--ro-bind",
+        "/root/.local/share/claude/versions",
+        "/root/.local/share/claude/versions",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r16/project",
+        "/srv/scratch-switchboard-test/runtime/r16/project",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.claude",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git/config",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git/config",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git/hooks",
+        "/srv/scratch-switchboard-test/runtime/r16/project/.git/hooks",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/cache",
+        "/srv/scratch-switchboard-test/home/.claude/cache",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+        "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/paste-cache",
+        "/srv/scratch-switchboard-test/home/.claude/paste-cache",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/plugins",
+        "/srv/scratch-switchboard-test/home/.claude/plugins",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/policy-limits.json",
+        "/srv/scratch-switchboard-test/home/.claude/policy-limits.json",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/policy-limits.json.stamp.json",
+        "/srv/scratch-switchboard-test/home/.claude/policy-limits.json.stamp.json",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/remote-settings.json",
+        "/srv/scratch-switchboard-test/home/.claude/remote-settings.json",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/remote-settings.json.synced-at",
+        "/srv/scratch-switchboard-test/home/.claude/remote-settings.json.synced-at",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/settings.json",
+        "/srv/scratch-switchboard-test/home/.claude/settings.json",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/skills",
+        "/srv/scratch-switchboard-test/home/.claude/skills",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/projects",
+        "/srv/scratch-switchboard-test/home/.claude/projects",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r16-project",
+        "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r16-project",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r16/generation-6qk9rO",
+        "/srv/scratch-switchboard-test/home/.claude/sessions",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/shell-snapshots",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/session-env",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/backups",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/state",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.config/claude",
+        "/srv/scratch-switchboard-test/home/.config/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.cache/claude",
+        "/srv/scratch-switchboard-test/home/.cache/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.local/share/claude",
+        "/srv/scratch-switchboard-test/home/.local/share/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r16/private/generation-6qk9rO-claude.json",
+        "/srv/scratch-switchboard-test/home/.claude.json",
+        "--dir",
+        "/run",
+        "--perms",
+        "0555",
+        "--dir",
+        "/run/switchboard",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r16/private/permissions-335aba25-8c84-4c66-8538-109e3a066f8e.json",
+        "/run/switchboard/launch-settings.json",
+        "--chdir",
+        "/srv/scratch-switchboard-test/runtime/r16/project",
+        "--setenv",
+        "SHELL",
+        "/bin/bash"
+      ],
+      "environmentKeys": [
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "PATH",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "privateConfigSha256": "7602fb9ad50b53fa32fabe58d7770d80acd52d26f92787608de080e82f555c6a",
+      "lastDescriptor": {
+        "observedAt": 1792346173115,
+        "status": "idle",
+        "statusUpdatedAt": 1792346172887,
+        "waitingFor": null
+      },
+      "sessionId": "418cfc97-c102-48ca-8f3d-9d2b88916ca2",
+      "cwd": "/srv/scratch-switchboard-test/runtime/r16/project",
+      "descriptorSource": "../../../../../../runtime/r16/generation-6qk9rO",
+      "namespace": "pid:[4026532593]",
+      "innerPid": 2,
+      "procStart": "6603424",
+      "writerHostPid": 2915921,
+      "directoryIdentity": {
+        "dev": 2049,
+        "ino": 5315870
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792346150384,
+          "waitBudgetMs": 90000,
+          "outcome": "PASS",
+          "observedAt": 1792346173115,
+          "descriptor": {
+            "observedAt": 1792346173115,
+            "status": "idle",
+            "statusUpdatedAt": 1792346172887,
+            "waitingFor": null
+          },
+          "transcriptBytes": 284906,
+          "rowCount": 52,
+          "lastRows": [
+            {
+              "type": "api-request-blob",
+              "offset": 257339,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 257607,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 263036,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 263701,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 265686,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 266822,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 268811,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 270862,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 272304,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 274049,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                },
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                },
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 274979,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                },
+                {
+                  "type": "tool_result"
+                },
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 275869,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 276137,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 282157,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 282822,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "system",
+              "offset": 284464,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792346150384,
+        "observedAt": 1792346173104,
+        "status": "idle",
+        "statusUpdatedAt": 1792346172887,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792346151889,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792346152884,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792346153291,
+          "code": "0",
+          "payloadSha256": "9d7d49bc96f0b16a3a35a334b9e3cb66c56e4046a1da170c8c5eb2acd9bb7607"
+        },
+        {
+          "at": 1792346153842,
+          "code": "0",
+          "payloadSha256": "88f7abd3a7222f6874186e8255a00cfa6ca3ac935f2ab634eae0c988ac3f44d7"
+        },
+        {
+          "at": 1792346154802,
+          "code": "0",
+          "payloadSha256": "9d7d49bc96f0b16a3a35a334b9e3cb66c56e4046a1da170c8c5eb2acd9bb7607"
+        },
+        {
+          "at": 1792346155762,
+          "code": "0",
+          "payloadSha256": "88f7abd3a7222f6874186e8255a00cfa6ca3ac935f2ab634eae0c988ac3f44d7"
+        },
+        {
+          "at": 1792346156722,
+          "code": "0",
+          "payloadSha256": "9d7d49bc96f0b16a3a35a334b9e3cb66c56e4046a1da170c8c5eb2acd9bb7607"
+        },
+        {
+          "at": 1792346157683,
+          "code": "0",
+          "payloadSha256": "88f7abd3a7222f6874186e8255a00cfa6ca3ac935f2ab634eae0c988ac3f44d7"
+        },
+        {
+          "at": 1792346158643,
+          "code": "0",
+          "payloadSha256": "9d7d49bc96f0b16a3a35a334b9e3cb66c56e4046a1da170c8c5eb2acd9bb7607"
+        },
+        {
+          "at": 1792346159603,
+          "code": "0",
+          "payloadSha256": "88f7abd3a7222f6874186e8255a00cfa6ca3ac935f2ab634eae0c988ac3f44d7"
+        },
+        {
+          "at": 1792346160564,
+          "code": "0",
+          "payloadSha256": "9d7d49bc96f0b16a3a35a334b9e3cb66c56e4046a1da170c8c5eb2acd9bb7607"
+        },
+        {
+          "at": 1792346161988,
+          "code": "0",
+          "payloadSha256": "88f7abd3a7222f6874186e8255a00cfa6ca3ac935f2ab634eae0c988ac3f44d7"
+        },
+        {
+          "at": 1792346163693,
+          "code": "0",
+          "payloadSha256": "9d7d49bc96f0b16a3a35a334b9e3cb66c56e4046a1da170c8c5eb2acd9bb7607"
+        },
+        {
+          "at": 1792346164565,
+          "code": "0",
+          "payloadSha256": "88f7abd3a7222f6874186e8255a00cfa6ca3ac935f2ab634eae0c988ac3f44d7"
+        },
+        {
+          "at": 1792346165526,
+          "code": "0",
+          "payloadSha256": "9d7d49bc96f0b16a3a35a334b9e3cb66c56e4046a1da170c8c5eb2acd9bb7607"
+        },
+        {
+          "at": 1792346166486,
+          "code": "0",
+          "payloadSha256": "88f7abd3a7222f6874186e8255a00cfa6ca3ac935f2ab634eae0c988ac3f44d7"
+        },
+        {
+          "at": 1792346167446,
+          "code": "0",
+          "payloadSha256": "9d7d49bc96f0b16a3a35a334b9e3cb66c56e4046a1da170c8c5eb2acd9bb7607"
+        },
+        {
+          "at": 1792346168407,
+          "code": "0",
+          "payloadSha256": "88f7abd3a7222f6874186e8255a00cfa6ca3ac935f2ab634eae0c988ac3f44d7"
+        },
+        {
+          "at": 1792346169367,
+          "code": "0",
+          "payloadSha256": "9d7d49bc96f0b16a3a35a334b9e3cb66c56e4046a1da170c8c5eb2acd9bb7607"
+        },
+        {
+          "at": 1792346170327,
+          "code": "0",
+          "payloadSha256": "88f7abd3a7222f6874186e8255a00cfa6ca3ac935f2ab634eae0c988ac3f44d7"
+        },
+        {
+          "at": 1792346171393,
+          "code": "0",
+          "payloadSha256": "9d7d49bc96f0b16a3a35a334b9e3cb66c56e4046a1da170c8c5eb2acd9bb7607"
+        },
+        {
+          "at": 1792346172353,
+          "code": "0",
+          "payloadSha256": "88f7abd3a7222f6874186e8255a00cfa6ca3ac935f2ab634eae0c988ac3f44d7"
+        },
+        {
+          "at": 1792346172887,
+          "code": "0",
+          "payloadSha256": "5ca770e9386f9b4b93236a4057c6238247bdf3f05e481eb917f86273d2adcf0f"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 284906,
+        "exitRequestedAt": 1792346174138,
+        "finalBytes": 286864
+      }
+    }
+  ],
+  "payloads": [],
+  "forks": [],
+  "permissions": [
+    {
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "2ac8a46e-1765-4229-9f5f-f3d2e8b4eb14",
+      "settingsSha256": "3383d8e78cc5776f4efb7a70069c7e4125ea49d13ff977bfd035913afc6a8c4f",
+      "deniedSideEffectAbsent": true,
+      "toolPermissionDenial": true,
+      "denialObservation": {
+        "status": "PASS",
+        "sha256": "706208fba310a1c75034b7acd473fe5ea7b4e5c279f4e4e58a4876ef94caac49",
+        "excerpt": "Permission to use Bash with command printf denied > '/srv/scratch-switchboard-test/runtime/r16/project/denied-a1f398b3-42de-4540-b655-b45424c95b4b' has been denied.",
+        "offset": 263982
+      },
+      "nonOverlappingActionRan": true,
+      "immutable": true,
+      "protectionAttemptObserved": false,
+      "protectionError": false,
+      "exactSettingsRead": true,
+      "finalReplyObserved": true,
+      "turnConfirmed": true,
+      "inheritedProjectAllow": true,
+      "inheritedGlobalAllow": true
+    },
+    {
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "83bdf01e-292a-4e36-8356-353fe512b816",
+      "settingsSha256": "93f41947ab0b11da79b84adc7645144b43f8e5b37ac36abb7896f9481929e753",
+      "deniedSideEffectAbsent": false,
+      "toolPermissionDenial": false,
+      "denialObservation": {
+        "status": "UNVERIFIED",
+        "reason": "denial not required in remove-deny control"
+      },
+      "nonOverlappingActionRan": true,
+      "immutable": true,
+      "protectionAttemptObserved": false,
+      "protectionError": false,
+      "exactSettingsRead": true,
+      "finalReplyObserved": true,
+      "turnConfirmed": true,
+      "inheritedProjectAllow": true,
+      "inheritedGlobalAllow": true
+    },
+    {
+      "sandbox": true,
+      "removeDeny": false,
+      "sessionId": "418cfc97-c102-48ca-8f3d-9d2b88916ca2",
+      "settingsSha256": "1b1a0e5ea4533904d03e16436668ba3fa40ffb6fa11dd9c01733b1cfc2fa80e8",
+      "deniedSideEffectAbsent": true,
+      "toolPermissionDenial": true,
+      "denialObservation": {
+        "status": "PASS",
+        "sha256": "70df1879e42fba20942da8d7f86ca54d87c976a3905cbbed6194840e08baf9b3",
+        "excerpt": "Permission to use Bash with command printf denied > '/srv/scratch-switchboard-test/runtime/r16/project/denied-335aba25-8c84-4c66-8538-109e3a066f8e' has been denied.",
+        "offset": 265686
+      },
+      "nonOverlappingActionRan": true,
+      "immutable": true,
+      "protectionAttemptObserved": true,
+      "protectionError": true,
+      "exactSettingsRead": true,
+      "finalReplyObserved": true,
+      "turnConfirmed": true,
+      "inheritedProjectAllow": true,
+      "inheritedGlobalAllow": true
+    }
+  ],
+  "reports": [],
+  "peerMountPlans": [
+    [
+      "--unshare-all",
+      "--share-net",
+      "--die-with-parent",
+      "--dev",
+      "/dev",
+      "--proc",
+      "/proc",
+      "--tmpfs",
+      "/tmp",
+      "--dir",
+      "/var",
+      "--ro-bind",
+      "/usr",
+      "/usr",
+      "--ro-bind",
+      "/etc",
+      "/etc",
+      "--symlink",
+      "usr/bin",
+      "/bin",
+      "--symlink",
+      "usr/sbin",
+      "/sbin",
+      "--symlink",
+      "usr/lib",
+      "/lib",
+      "--symlink",
+      "usr/lib64",
+      "/lib64",
+      "--ro-bind",
+      "/run/systemd/resolve",
+      "/run/systemd/resolve",
+      "--ro-bind",
+      "/root/.local/share/claude/versions",
+      "/root/.local/share/claude/versions",
+      "--bind",
+      "/srv/scratch-switchboard-test/runtime/r16/project",
+      "/srv/scratch-switchboard-test/runtime/r16/project",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/runtime/r16/project/.claude",
+      "/srv/scratch-switchboard-test/runtime/r16/project/.claude",
+      "--bind",
+      "/srv/scratch-switchboard-test/runtime/r16/project/.git",
+      "/srv/scratch-switchboard-test/runtime/r16/project/.git",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/runtime/r16/project/.git/config",
+      "/srv/scratch-switchboard-test/runtime/r16/project/.git/config",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/runtime/r16/project/.git/hooks",
+      "/srv/scratch-switchboard-test/runtime/r16/project/.git/hooks",
+      "--tmpfs",
+      "/srv/scratch-switchboard-test/home/.claude",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/cache",
+      "/srv/scratch-switchboard-test/home/.claude/cache",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+      "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/paste-cache",
+      "/srv/scratch-switchboard-test/home/.claude/paste-cache",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/home/.claude/plugins",
+      "/srv/scratch-switchboard-test/home/.claude/plugins",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/policy-limits.json",
+      "/srv/scratch-switchboard-test/home/.claude/policy-limits.json",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/policy-limits.json.stamp.json",
+      "/srv/scratch-switchboard-test/home/.claude/policy-limits.json.stamp.json",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/home/.claude/remote-settings.json",
+      "/srv/scratch-switchboard-test/home/.claude/remote-settings.json",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/home/.claude/remote-settings.json.synced-at",
+      "/srv/scratch-switchboard-test/home/.claude/remote-settings.json.synced-at",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/home/.claude/settings.json",
+      "/srv/scratch-switchboard-test/home/.claude/settings.json",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/home/.claude/skills",
+      "/srv/scratch-switchboard-test/home/.claude/skills",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/home/.claude/projects",
+      "/srv/scratch-switchboard-test/home/.claude/projects",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r16-project",
+      "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r16-project",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/sessions/peer-3kQGxS",
+      "/srv/scratch-switchboard-test/home/.claude/sessions",
+      "--tmpfs",
+      "/srv/scratch-switchboard-test/home/.claude/shell-snapshots",
+      "--tmpfs",
+      "/srv/scratch-switchboard-test/home/.claude/session-env",
+      "--tmpfs",
+      "/srv/scratch-switchboard-test/home/.claude/backups",
+      "--tmpfs",
+      "/srv/scratch-switchboard-test/home/.claude/state",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.config/claude",
+      "/srv/scratch-switchboard-test/home/.config/claude",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.cache/claude",
+      "/srv/scratch-switchboard-test/home/.cache/claude",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.local/share/claude",
+      "/srv/scratch-switchboard-test/home/.local/share/claude",
+      "--bind",
+      "/srv/scratch-switchboard-test/runtime/r16/private/peer-3kQGxS-claude.json",
+      "/srv/scratch-switchboard-test/home/.claude.json",
+      "--dir",
+      "/run",
+      "--perms",
+      "0555",
+      "--dir",
+      "/run/switchboard",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/runtime/r16/private/permissions-335aba25-8c84-4c66-8538-109e3a066f8e.json",
+      "/run/switchboard/launch-settings.json",
+      "--chdir",
+      "/srv/scratch-switchboard-test/runtime/r16/project",
+      "--setenv",
+      "SHELL",
+      "/bin/bash"
+    ]
+  ],
+  "bwrapVersion": "bubblewrap 0.11.1"
+}

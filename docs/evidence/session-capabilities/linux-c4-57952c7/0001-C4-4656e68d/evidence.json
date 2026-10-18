@@ -1,0 +1,3107 @@
+{
+  "schemaVersion": 1,
+  "canary": "C4",
+  "dryRun": false,
+  "qualifiesProduction": false,
+  "platform": "linux",
+  "kernel": "7.0.0-38-generic",
+  "platformLabel": "linux-unix-pty",
+  "ptyBackend": "unix-pty",
+  "environmentKeys": [
+    "DISABLE_AUTOUPDATER",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "HOME",
+    "LANG",
+    "PATH",
+    "SWITCHBOARD_DATA_DIR",
+    "SWITCHBOARD_TRIGGERS_DIR",
+    "USERPROFILE",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME"
+  ],
+  "mutation": null,
+  "workBudgetMs": 180000,
+  "fixtureIdentity": "0a874bd94c16ad90e2d6bfbe6ef989935b81f98b69b525ad5307471ce57cde9f",
+  "inventorySource": "git worktree list --porcelain",
+  "peerAliasThreat": {
+    "status": "UNVERIFIED",
+    "reason": "publication-path probe does not establish resistance to shared sessions directory aliases"
+  },
+  "checks": [
+    {
+      "sequence": 1,
+      "at": "2026-10-17T17:55:58.077Z",
+      "name": "independent native SendMessage receipt and private publication",
+      "pass": true
+    },
+    {
+      "sequence": 2,
+      "at": "2026-10-17T17:56:48.951Z",
+      "name": "wrong-recipient tool call observed and origin has no nonce after boundary",
+      "pass": true
+    },
+    {
+      "sequence": 3,
+      "at": "2026-10-17T17:57:00.357Z",
+      "name": "sandbox launch settings immutable; project and own publication writable",
+      "pass": true
+    },
+    {
+      "sequence": 4,
+      "at": "2026-10-17T17:57:00.470Z",
+      "name": "second namespace writes only its publication and cannot reach first generation",
+      "pass": true
+    }
+  ],
+  "controls": [
+    {
+      "name": "wrong-recipient",
+      "status": "PASS"
+    }
+  ],
+  "processes": [
+    {
+      "pid": 3171782,
+      "sandbox": false,
+      "backend": "unix-pty",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "335fbb45-c2a0-470d-a58c-a47bc4ade94f"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "PATH",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792259738111,
+        "status": "idle",
+        "statusUpdatedAt": 1792259737871,
+        "waitingFor": null
+      },
+      "sessionId": "335fbb45-c2a0-470d-a58c-a47bc4ade94f",
+      "cwd": "/srv/scratch-switchboard-test/runtime/r7/project",
+      "descriptorSource": "../../../../../../home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "80548462",
+      "writerHostPid": 3171782,
+      "directoryIdentity": {
+        "dev": 2049,
+        "ino": 4810271
+      },
+      "submissions": [
+        {
+          "phase": "ordinary turn",
+          "beforeBytes": 0,
+          "submittedAt": 1792259730944,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792259737350,
+          "descriptor": {
+            "observedAt": 1792259737350,
+            "status": "idle",
+            "statusUpdatedAt": 1792259737265,
+            "waitingFor": null
+          },
+          "transcriptBytes": 167979,
+          "rowCount": 32,
+          "lastRows": [
+            {
+              "type": "attachment",
+              "offset": 55494,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 64765,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 64883,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 65126,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 65244,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 65327,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 65429,
+              "blocks": []
+            },
+            {
+              "type": "api-request-shape",
+              "offset": 65512,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 137548,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 139401,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 163116,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 167350,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 167593,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 167711,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 167794,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 167896,
+              "blocks": []
+            }
+          ]
+        },
+        {
+          "phase": "rename",
+          "beforeBytes": 167979,
+          "submittedAt": 1792259737354,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792259738111,
+          "descriptor": {
+            "observedAt": 1792259738111,
+            "status": "idle",
+            "statusUpdatedAt": 1792259737871,
+            "waitingFor": null
+          },
+          "transcriptBytes": 284956,
+          "rowCount": 15,
+          "lastRows": [
+            {
+              "type": "assistant",
+              "offset": 167979,
+              "blocks": [
+                {
+                  "type": "thinking"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 170800,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "attachment",
+              "offset": 172594,
+              "blocks": []
+            },
+            {
+              "type": "system",
+              "offset": 281650,
+              "blocks": []
+            },
+            {
+              "type": "custom-title",
+              "offset": 282090,
+              "blocks": []
+            },
+            {
+              "type": "agent-name",
+              "offset": 282221,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 282348,
+              "blocks": []
+            },
+            {
+              "type": "custom-title",
+              "offset": 282591,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 282722,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 282840,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 282923,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 283025,
+              "blocks": []
+            },
+            {
+              "type": "system",
+              "offset": 283108,
+              "blocks": []
+            },
+            {
+              "type": "system",
+              "offset": 283713,
+              "blocks": []
+            },
+            {
+              "type": "user",
+              "offset": 284332,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792259737354,
+        "observedAt": 1792259738107,
+        "status": "idle",
+        "statusUpdatedAt": 1792259737871,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792259737770,
+          "code": "0",
+          "payloadSha256": "9bd4347e0aed127bcd4d2c0b130a75948ad217517155689f89fba509a0b6812f"
+        },
+        {
+          "at": 1792259737871,
+          "code": "0",
+          "payloadSha256": "6062d0073ad36d7f601a559ee3639d66ae7e6322f966b7dd1a483e70e2eb7092"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 297735,
+        "exitRequestedAt": 1792259757009,
+        "finalBytes": 299550
+      }
+    },
+    {
+      "pid": 3171919,
+      "sandbox": false,
+      "backend": "unix-pty",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "29a3c730-9579-4021-9038-7dbc496e8f06",
+        "--settings",
+        "/srv/scratch-switchboard-test/runtime/r7/private/empty-settings.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "PATH",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792259753659,
+        "status": "busy",
+        "statusUpdatedAt": 1792259743144,
+        "waitingFor": null
+      },
+      "sessionId": "29a3c730-9579-4021-9038-7dbc496e8f06",
+      "cwd": "/srv/scratch-switchboard-test/runtime/r7/project",
+      "descriptorSource": "../../../../../../home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "80549439",
+      "writerHostPid": 3171919,
+      "directoryIdentity": {
+        "dev": 2049,
+        "ino": 4810271
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792259740746,
+          "waitBudgetMs": 15000,
+          "outcome": "PASS",
+          "confirmation": "observation",
+          "observedAt": 1792259753659,
+          "descriptor": {
+            "observedAt": 1792259753659,
+            "status": "busy",
+            "statusUpdatedAt": 1792259743144,
+            "waitingFor": null
+          },
+          "transcriptBytes": 409793,
+          "rowCount": 55,
+          "lastRows": [
+            {
+              "type": "mode",
+              "offset": 305083,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 305166,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 305268,
+              "blocks": []
+            },
+            {
+              "type": "api-request-shape",
+              "offset": 305351,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 388087,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                },
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 388450,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "tool_addition"
+                },
+                {
+                  "type": "tool_addition"
+                },
+                {
+                  "type": "tool_addition"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 393347,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 397693,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 398053,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 398165,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 398248,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 398350,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 398433,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 399097,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 405334,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "SendMessage"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 407542,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "oscObservations": [
+        {
+          "at": 1792259743148,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792259743662,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        },
+        {
+          "at": 1792259744453,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        },
+        {
+          "at": 1792259745218,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        },
+        {
+          "at": 1792259746180,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        },
+        {
+          "at": 1792259747140,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        },
+        {
+          "at": 1792259748753,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        },
+        {
+          "at": 1792259749618,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        },
+        {
+          "at": 1792259750578,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        },
+        {
+          "at": 1792259751539,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        },
+        {
+          "at": 1792259752555,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        },
+        {
+          "at": 1792259753562,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 415417,
+        "exitRequestedAt": 1792259754796,
+        "finalBytes": 417119
+      }
+    },
+    {
+      "pid": 3172178,
+      "sandbox": false,
+      "backend": "unix-pty",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "e7a67db9-5c26-4a4b-a478-6dfa71cc0171"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "PATH",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792259775155,
+        "status": "idle",
+        "statusUpdatedAt": 1792259775056,
+        "waitingFor": null
+      },
+      "sessionId": "e7a67db9-5c26-4a4b-a478-6dfa71cc0171",
+      "cwd": "/srv/scratch-switchboard-test/runtime/r7/project",
+      "descriptorSource": "../../../../../../home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "80551435",
+      "writerHostPid": 3172178,
+      "directoryIdentity": {
+        "dev": 2049,
+        "ino": 4810271
+      },
+      "submissions": [
+        {
+          "phase": "ordinary turn",
+          "beforeBytes": 0,
+          "submittedAt": 1792259761454,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792259774649,
+          "descriptor": {
+            "observedAt": 1792259774649,
+            "status": "idle",
+            "statusUpdatedAt": 1792259774549,
+            "waitingFor": null
+          },
+          "transcriptBytes": 179652,
+          "rowCount": 31,
+          "lastRows": [
+            {
+              "type": "attachment",
+              "offset": 54143,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 55494,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 65045,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 65288,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 65371,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 65473,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 65556,
+              "blocks": []
+            },
+            {
+              "type": "api-request-shape",
+              "offset": 65669,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 149228,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 151081,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 174796,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 179028,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 179271,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 179384,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 179467,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 179569,
+              "blocks": []
+            }
+          ]
+        },
+        {
+          "phase": "rename",
+          "beforeBytes": 179652,
+          "submittedAt": 1792259774652,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792259775155,
+          "descriptor": {
+            "observedAt": 1792259775155,
+            "status": "idle",
+            "statusUpdatedAt": 1792259775056,
+            "waitingFor": null
+          },
+          "transcriptBytes": 312200,
+          "rowCount": 13,
+          "lastRows": [
+            {
+              "type": "assistant",
+              "offset": 179652,
+              "blocks": [
+                {
+                  "type": "thinking"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 183183,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "attachment",
+              "offset": 184930,
+              "blocks": []
+            },
+            {
+              "type": "system",
+              "offset": 310620,
+              "blocks": []
+            },
+            {
+              "type": "custom-title",
+              "offset": 311060,
+              "blocks": []
+            },
+            {
+              "type": "agent-name",
+              "offset": 311191,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 311318,
+              "blocks": []
+            },
+            {
+              "type": "custom-title",
+              "offset": 311561,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 311692,
+              "blocks": []
+            },
+            {
+              "type": "agent-name",
+              "offset": 311805,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 311932,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 312015,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 312117,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792259774652,
+        "observedAt": 1792259775151,
+        "status": "idle",
+        "statusUpdatedAt": 1792259775056,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792259774867,
+          "code": "0",
+          "payloadSha256": "d472bd981a708a154e94560c77b5ba091a7bf9d9eac61fd45b7ac15f3ea65015"
+        },
+        {
+          "at": 1792259774954,
+          "code": "0",
+          "payloadSha256": "c0ae7ed7384b5c39125e6dd1c43e35dede805e40235993d8432b38cbf26e197a"
+        },
+        {
+          "at": 1792259775056,
+          "code": "0",
+          "payloadSha256": "9f8ddf13faa8ded13819a14c7585f9435966f8cd6def1adf8b3b549a53d2625d"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 314048,
+        "exitRequestedAt": 1792259808189,
+        "finalBytes": 315889
+      }
+    },
+    {
+      "pid": 3172397,
+      "sandbox": false,
+      "backend": "unix-pty",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "c5696307-3234-4285-8214-2fb14d47734a",
+        "--settings",
+        "/srv/scratch-switchboard-test/runtime/r7/private/empty-settings.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "PATH",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792259805203,
+        "status": "idle",
+        "statusUpdatedAt": 1792259796754,
+        "waitingFor": null
+      },
+      "sessionId": "c5696307-3234-4285-8214-2fb14d47734a",
+      "cwd": "/srv/scratch-switchboard-test/runtime/r7/project",
+      "descriptorSource": "../../../../../../home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "80553143",
+      "writerHostPid": 3172397,
+      "directoryIdentity": {
+        "dev": 2049,
+        "ino": 4810271
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792259778152,
+          "waitBudgetMs": 30000,
+          "outcome": "PASS",
+          "confirmation": "observation",
+          "observedAt": 1792259805203,
+          "descriptor": {
+            "observedAt": 1792259805203,
+            "status": "idle",
+            "statusUpdatedAt": 1792259796754,
+            "waitingFor": null
+          },
+          "transcriptBytes": 461469,
+          "rowCount": 77,
+          "lastRows": [
+            {
+              "type": "api-request-blob",
+              "offset": 442243,
+              "blocks": [
+                {
+                  "type": "thinking"
+                },
+                {
+                  "type": "tool_use",
+                  "name": "ListAgents"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 443448,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 443999,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 444267,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 448950,
+              "blocks": [
+                {
+                  "type": "thinking"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 451497,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "ListAgents"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 453269,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "attachment",
+              "offset": 454730,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 455394,
+              "blocks": [
+                {
+                  "type": "thinking"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 458040,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "system",
+              "offset": 460281,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 460722,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 461082,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 461201,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 461284,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 461386,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "oscObservations": [
+        {
+          "at": 1792259780168,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792259781150,
+          "code": "0",
+          "payloadSha256": "07469277a0f7c35846f104903089df2922ac01df88239cb1cbbe9bd97442caa3"
+        },
+        {
+          "at": 1792259781266,
+          "code": "0",
+          "payloadSha256": "9955d5d34b4878f8c8297c6e874127569ba1a4f8f01a1663c4fab6ac6c4052da"
+        },
+        {
+          "at": 1792259782211,
+          "code": "0",
+          "payloadSha256": "07469277a0f7c35846f104903089df2922ac01df88239cb1cbbe9bd97442caa3"
+        },
+        {
+          "at": 1792259783172,
+          "code": "0",
+          "payloadSha256": "9955d5d34b4878f8c8297c6e874127569ba1a4f8f01a1663c4fab6ac6c4052da"
+        },
+        {
+          "at": 1792259784134,
+          "code": "0",
+          "payloadSha256": "07469277a0f7c35846f104903089df2922ac01df88239cb1cbbe9bd97442caa3"
+        },
+        {
+          "at": 1792259786256,
+          "code": "0",
+          "payloadSha256": "9955d5d34b4878f8c8297c6e874127569ba1a4f8f01a1663c4fab6ac6c4052da"
+        },
+        {
+          "at": 1792259786759,
+          "code": "0",
+          "payloadSha256": "07469277a0f7c35846f104903089df2922ac01df88239cb1cbbe9bd97442caa3"
+        },
+        {
+          "at": 1792259787666,
+          "code": "0",
+          "payloadSha256": "9955d5d34b4878f8c8297c6e874127569ba1a4f8f01a1663c4fab6ac6c4052da"
+        },
+        {
+          "at": 1792259788631,
+          "code": "0",
+          "payloadSha256": "07469277a0f7c35846f104903089df2922ac01df88239cb1cbbe9bd97442caa3"
+        },
+        {
+          "at": 1792259789856,
+          "code": "0",
+          "payloadSha256": "9955d5d34b4878f8c8297c6e874127569ba1a4f8f01a1663c4fab6ac6c4052da"
+        },
+        {
+          "at": 1792259790805,
+          "code": "0",
+          "payloadSha256": "07469277a0f7c35846f104903089df2922ac01df88239cb1cbbe9bd97442caa3"
+        },
+        {
+          "at": 1792259791777,
+          "code": "0",
+          "payloadSha256": "9955d5d34b4878f8c8297c6e874127569ba1a4f8f01a1663c4fab6ac6c4052da"
+        },
+        {
+          "at": 1792259792725,
+          "code": "0",
+          "payloadSha256": "07469277a0f7c35846f104903089df2922ac01df88239cb1cbbe9bd97442caa3"
+        },
+        {
+          "at": 1792259793850,
+          "code": "0",
+          "payloadSha256": "9955d5d34b4878f8c8297c6e874127569ba1a4f8f01a1663c4fab6ac6c4052da"
+        },
+        {
+          "at": 1792259794711,
+          "code": "0",
+          "payloadSha256": "07469277a0f7c35846f104903089df2922ac01df88239cb1cbbe9bd97442caa3"
+        },
+        {
+          "at": 1792259795666,
+          "code": "0",
+          "payloadSha256": "9955d5d34b4878f8c8297c6e874127569ba1a4f8f01a1663c4fab6ac6c4052da"
+        },
+        {
+          "at": 1792259796755,
+          "code": "0",
+          "payloadSha256": "77152caefb226418e5edc7532356dbcf4575ae1eee76b903d2a654638eac7aea"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 461469,
+        "exitRequestedAt": 1792259806242,
+        "finalBytes": 463107
+      }
+    },
+    {
+      "pid": 3172777,
+      "sandbox": false,
+      "backend": "unix-pty",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "7bbfd383-c862-44fe-b3a9-acc6c04ce51d"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "PATH",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792259820048,
+        "status": "idle",
+        "statusUpdatedAt": 1792259819873,
+        "waitingFor": null
+      },
+      "sessionId": "7bbfd383-c862-44fe-b3a9-acc6c04ce51d",
+      "cwd": "/srv/scratch-switchboard-test/runtime/r7/project",
+      "descriptorSource": "../../../../../../home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "80556522",
+      "writerHostPid": 3172777,
+      "directoryIdentity": {
+        "dev": 2049,
+        "ino": 4810271
+      },
+      "submissions": [
+        {
+          "phase": "ordinary turn",
+          "beforeBytes": 0,
+          "submittedAt": 1792259811658,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792259819246,
+          "descriptor": {
+            "observedAt": 1792259819246,
+            "status": "idle",
+            "statusUpdatedAt": 1792259819076,
+            "waitingFor": null
+          },
+          "transcriptBytes": 179539,
+          "rowCount": 30,
+          "lastRows": [
+            {
+              "type": "attachment",
+              "offset": 53627,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 54143,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 55494,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 65045,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 65288,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 65371,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 65473,
+              "blocks": []
+            },
+            {
+              "type": "api-request-shape",
+              "offset": 65556,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 149115,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 150968,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 174683,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 178915,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 179158,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 179241,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 179343,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 179426,
+              "blocks": []
+            }
+          ]
+        },
+        {
+          "phase": "rename",
+          "beforeBytes": 179539,
+          "submittedAt": 1792259819250,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792259820048,
+          "descriptor": {
+            "observedAt": 1792259820048,
+            "status": "idle",
+            "statusUpdatedAt": 1792259819873,
+            "waitingFor": null
+          },
+          "transcriptBytes": 311380,
+          "rowCount": 11,
+          "lastRows": [
+            {
+              "type": "assistant",
+              "offset": 179539,
+              "blocks": [
+                {
+                  "type": "thinking"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 182646,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "attachment",
+              "offset": 184368,
+              "blocks": []
+            },
+            {
+              "type": "system",
+              "offset": 310058,
+              "blocks": []
+            },
+            {
+              "type": "custom-title",
+              "offset": 310498,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 310629,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 310872,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 310985,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 311068,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 311170,
+              "blocks": []
+            },
+            {
+              "type": "agent-name",
+              "offset": 311253,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792259819250,
+        "observedAt": 1792259820010,
+        "status": "idle",
+        "statusUpdatedAt": 1792259819873,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792259819568,
+          "code": "0",
+          "payloadSha256": "d472bd981a708a154e94560c77b5ba091a7bf9d9eac61fd45b7ac15f3ea65015"
+        },
+        {
+          "at": 1792259819669,
+          "code": "0",
+          "payloadSha256": "84d12bd8a20dd877d82a5fa10b1cba644261492cd55d94d112e46ca3c84957c0"
+        },
+        {
+          "at": 1792259819874,
+          "code": "0",
+          "payloadSha256": "8c7feec88b894fa90ff0b9fdcb358de27d4df267567ad84b4d63e830abcb3deb"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 313228,
+        "exitRequestedAt": 1792259845033,
+        "finalBytes": 315073
+      }
+    },
+    {
+      "pid": 3172954,
+      "sandbox": true,
+      "backend": "unix-pty",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--unshare-all",
+        "--share-net",
+        "--die-with-parent",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/var",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--ro-bind",
+        "/etc",
+        "/etc",
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/sbin",
+        "/sbin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib64",
+        "/lib64",
+        "--ro-bind",
+        "/run/systemd/resolve",
+        "/run/systemd/resolve",
+        "--ro-bind",
+        "/root/.local/share/claude/versions",
+        "/root/.local/share/claude/versions",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r7/project",
+        "/srv/scratch-switchboard-test/runtime/r7/project",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.claude",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git/config",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git/config",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git/hooks",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git/hooks",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/.credentials.json",
+        "/srv/scratch-switchboard-test/home/.claude/.credentials.json",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/cache",
+        "/srv/scratch-switchboard-test/home/.claude/cache",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+        "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/plugins",
+        "/srv/scratch-switchboard-test/home/.claude/plugins",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/skills",
+        "/srv/scratch-switchboard-test/home/.claude/skills",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/projects",
+        "/srv/scratch-switchboard-test/home/.claude/projects",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r7-project",
+        "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r7-project",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r7/generation-TnUhvb",
+        "/srv/scratch-switchboard-test/home/.claude/sessions",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/shell-snapshots",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/session-env",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/backups",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/state",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.config/claude",
+        "/srv/scratch-switchboard-test/home/.config/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.cache/claude",
+        "/srv/scratch-switchboard-test/home/.cache/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.local/share/claude",
+        "/srv/scratch-switchboard-test/home/.local/share/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r7/private/generation-TnUhvb-claude.json",
+        "/srv/scratch-switchboard-test/home/.claude.json",
+        "--dir",
+        "/run",
+        "--perms",
+        "0555",
+        "--dir",
+        "/run/switchboard",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r7/private/empty-settings.json",
+        "/run/switchboard/launch-settings.json",
+        "--chdir",
+        "/srv/scratch-switchboard-test/runtime/r7/project",
+        "--setenv",
+        "SHELL",
+        "/bin/bash",
+        "/root/.local/share/claude/versions/2.1.301",
+        "--session-id",
+        "a9a4665a-31c5-4880-885f-32776555066d",
+        "--settings",
+        "/run/switchboard/launch-settings.json"
+      ],
+      "mountPlan": [
+        "--unshare-all",
+        "--share-net",
+        "--die-with-parent",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/var",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--ro-bind",
+        "/etc",
+        "/etc",
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/sbin",
+        "/sbin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib64",
+        "/lib64",
+        "--ro-bind",
+        "/run/systemd/resolve",
+        "/run/systemd/resolve",
+        "--ro-bind",
+        "/root/.local/share/claude/versions",
+        "/root/.local/share/claude/versions",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r7/project",
+        "/srv/scratch-switchboard-test/runtime/r7/project",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.claude",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git/config",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git/config",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git/hooks",
+        "/srv/scratch-switchboard-test/runtime/r7/project/.git/hooks",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/.credentials.json",
+        "/srv/scratch-switchboard-test/home/.claude/.credentials.json",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/cache",
+        "/srv/scratch-switchboard-test/home/.claude/cache",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+        "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/plugins",
+        "/srv/scratch-switchboard-test/home/.claude/plugins",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/skills",
+        "/srv/scratch-switchboard-test/home/.claude/skills",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/home/.claude/projects",
+        "/srv/scratch-switchboard-test/home/.claude/projects",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r7-project",
+        "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r7-project",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r7/generation-TnUhvb",
+        "/srv/scratch-switchboard-test/home/.claude/sessions",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/shell-snapshots",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/session-env",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/backups",
+        "--tmpfs",
+        "/srv/scratch-switchboard-test/home/.claude/state",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.config/claude",
+        "/srv/scratch-switchboard-test/home/.config/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.cache/claude",
+        "/srv/scratch-switchboard-test/home/.cache/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/home/.local/share/claude",
+        "/srv/scratch-switchboard-test/home/.local/share/claude",
+        "--bind",
+        "/srv/scratch-switchboard-test/runtime/r7/private/generation-TnUhvb-claude.json",
+        "/srv/scratch-switchboard-test/home/.claude.json",
+        "--dir",
+        "/run",
+        "--perms",
+        "0555",
+        "--dir",
+        "/run/switchboard",
+        "--ro-bind",
+        "/srv/scratch-switchboard-test/runtime/r7/private/empty-settings.json",
+        "/run/switchboard/launch-settings.json",
+        "--chdir",
+        "/srv/scratch-switchboard-test/runtime/r7/project",
+        "--setenv",
+        "SHELL",
+        "/bin/bash"
+      ],
+      "environmentKeys": [
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "PATH",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "privateConfigSha256": "1fc2d4838b45341e3b4d8a91d2cd02a1039f6a464f5dbe89bf6f21da5e6fed7b",
+      "lastDescriptor": {
+        "observedAt": 1792259841958,
+        "status": "busy",
+        "statusUpdatedAt": 1792259829345,
+        "waitingFor": null
+      },
+      "sessionId": "a9a4665a-31c5-4880-885f-32776555066d",
+      "cwd": "/srv/scratch-switchboard-test/runtime/r7/project",
+      "descriptorSource": "../../../../../../runtime/r7/generation-TnUhvb",
+      "namespace": "pid:[4026532535]",
+      "innerPid": 2,
+      "procStart": "80557694",
+      "writerHostPid": 3172957,
+      "directoryIdentity": {
+        "dev": 2049,
+        "ino": 4810697
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792259827060,
+          "waitBudgetMs": 15000,
+          "outcome": "PASS",
+          "confirmation": "observation",
+          "observedAt": 1792259841958,
+          "descriptor": {
+            "observedAt": 1792259841958,
+            "status": "busy",
+            "statusUpdatedAt": 1792259829345,
+            "waitingFor": null
+          },
+          "transcriptBytes": 438040,
+          "rowCount": 57,
+          "lastRows": [
+            {
+              "type": "api-request-shape",
+              "offset": 321969,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 411288,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                },
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 411651,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "tool_addition"
+                },
+                {
+                  "type": "tool_addition"
+                },
+                {
+                  "type": "tool_addition"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 416548,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 420862,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 421222,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 421334,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 421417,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 421519,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 421602,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 422266,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 428503,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "SendMessage"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 430711,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 432447,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "SendMessage"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 432903,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 433171,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "oscObservations": [
+        {
+          "at": 1792259829349,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792259831044,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792259831753,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        },
+        {
+          "at": 1792259832046,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        },
+        {
+          "at": 1792259832717,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        },
+        {
+          "at": 1792259833681,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        },
+        {
+          "at": 1792259834646,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        },
+        {
+          "at": 1792259835944,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        },
+        {
+          "at": 1792259837246,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        },
+        {
+          "at": 1792259837930,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        },
+        {
+          "at": 1792259838890,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        },
+        {
+          "at": 1792259839875,
+          "code": "0",
+          "payloadSha256": "09e0b30430497c933ded2aaa6212c6aa595d39faacf1b51d349eaf5db4cf5c52"
+        },
+        {
+          "at": 1792259841644,
+          "code": "0",
+          "payloadSha256": "a6ab35fbd19f00038d5b909f4a69a32a94f77bf0e39bf70bd527e8b9c9a0ab77"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 438040,
+        "exitRequestedAt": 1792259843000,
+        "finalBytes": 439738
+      }
+    }
+  ],
+  "payloads": [],
+  "forks": [],
+  "permissions": [],
+  "reports": [
+    {
+      "sandbox": false,
+      "wrongRecipientControl": false,
+      "nonce": "46dfb860-ae65-4543-806b-2af990d63b9b",
+      "orchestratorId": "335fbb45-c2a0-470d-a58c-a47bc4ade94f",
+      "childId": "29a3c730-9579-4021-9038-7dbc496e8f06",
+      "before": 284956,
+      "displayTitle": "UI-6909eb1d-b8ae-4ccc-ae60-e92b3ec79bb8",
+      "nativeRecipient": "UI-6909eb1d-b8ae-4ccc-ae60-e92b3ec79bb8",
+      "addressedRecipient": "UI-6909eb1d-b8ae-4ccc-ae60-e92b3ec79bb8",
+      "recipientSource": "agent-name",
+      "recipientObservedAt": 1792259740653,
+      "agentNameOffset": 282221,
+      "renameObservation": {
+        "command": "/rename",
+        "observedAt": 1792259738118,
+        "displayTitle": "UI-6909eb1d-b8ae-4ccc-ae60-e92b3ec79bb8",
+        "nativeNameBefore": "project-c4",
+        "nativeNameAfter": "UI-6909eb1d-b8ae-4ccc-ae60-e92b3ec79bb8",
+        "nativeNameChanged": true,
+        "nativeNameEqualsDisplayTitle": true,
+        "agentNameOffset": 282221
+      },
+      "sendResults": [
+        {
+          "toolUseId": "toolu_01LVNSiaSQoV9tuvpjxv6G79",
+          "offset": 407542,
+          "success": true,
+          "unreachableRecipient": false,
+          "isError": false,
+          "sha256": "94df50957fc6c99b33e5345e28572dc7b8e78237dffbeda82401efcbe65e1ea4",
+          "bytes": 379,
+          "excerpt": "{\"success\":true,\"message\":\"“Report canary nonce to orchestrator” → UI-6909eb1d-b8ae-4ccc-ae60-e92b3ec79bb8 (another Claude session on this machine; in that session's inbox, not yet read by its Claude "
+        },
+        {
+          "toolUseId": "toolu_01LVNSiaSQoV9tuvpjxv6G79",
+          "offset": 407542,
+          "success": true,
+          "unreachableRecipient": false,
+          "isError": false,
+          "sha256": "94df50957fc6c99b33e5345e28572dc7b8e78237dffbeda82401efcbe65e1ea4",
+          "bytes": 379,
+          "excerpt": "{\"success\":true,\"message\":\"“Report canary nonce to orchestrator” → UI-6909eb1d-b8ae-4ccc-ae60-e92b3ec79bb8 (another Claude session on this machine; in that session's inbox, not yet read by its Claude "
+        }
+      ],
+      "nativeRecipientDiffersFromDisplayTitle": false,
+      "distinctProcesses": true,
+      "intendedToolCall": true,
+      "nativeReceipt": true,
+      "receiptOffset": 285423,
+      "receipt": {
+        "shape": "cross-session-message",
+        "from": {
+          "scheme": "uds:",
+          "socketPathSha256": "23c25aaedc40476e05ee43c0a6edfcd8e3af4b9208bcb003d91fda8ed4004653"
+        },
+        "fromName": "project-ad",
+        "fromMode": "prompting",
+        "offset": 285423
+      },
+      "childNativeName": "project-ad",
+      "privatePublication": true,
+      "socketDirectory": null,
+      "queueOperations": [
+        {
+          "type": "queue-operation",
+          "offset": 284956
+        },
+        {
+          "type": "queue-operation",
+          "offset": 285284
+        }
+      ],
+      "parentEnvironment": {
+        "status": "PASS",
+        "fixtureOutcome": "UNVERIFIED",
+        "source": "/proc owned child"
+      },
+      "messagingEnvKeys": [],
+      "rawChildRows": [
+        {
+          "type": "mode",
+          "offset": 0
+        },
+        {
+          "type": "permission-mode",
+          "offset": 83
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 185
+        },
+        {
+          "type": "ai-title",
+          "offset": 421
+        },
+        {
+          "type": "user",
+          "offset": 533
+        },
+        {
+          "type": "attachment",
+          "offset": 1880
+        },
+        {
+          "type": "attachment",
+          "offset": 4197
+        },
+        {
+          "type": "attachment",
+          "offset": 5041
+        },
+        {
+          "type": "attachment",
+          "offset": 6725
+        },
+        {
+          "type": "attachment",
+          "offset": 12776
+        },
+        {
+          "type": "attachment",
+          "offset": 50051
+        },
+        {
+          "type": "attachment",
+          "offset": 51128
+        },
+        {
+          "type": "last-prompt",
+          "offset": 51740
+        },
+        {
+          "type": "ai-title",
+          "offset": 52100
+        },
+        {
+          "type": "mode",
+          "offset": 52212
+        },
+        {
+          "type": "permission-mode",
+          "offset": 52295
+        },
+        {
+          "type": "atis-latch",
+          "offset": 52397
+        },
+        {
+          "type": "attachment",
+          "offset": 52480
+        },
+        {
+          "type": "attachment",
+          "offset": 54497
+        },
+        {
+          "type": "attachment",
+          "offset": 55083
+        },
+        {
+          "type": "attachment",
+          "offset": 55599
+        },
+        {
+          "type": "attachment",
+          "offset": 56950
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 66501
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 143477
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 146017
+        },
+        {
+          "type": "api-request",
+          "offset": 169732
+        },
+        {
+          "type": "last-prompt",
+          "offset": 173965
+        },
+        {
+          "type": "ai-title",
+          "offset": 174325
+        },
+        {
+          "type": "mode",
+          "offset": 174437
+        },
+        {
+          "type": "permission-mode",
+          "offset": 174520
+        },
+        {
+          "type": "atis-latch",
+          "offset": 174622
+        },
+        {
+          "type": "assistant",
+          "offset": 174705
+        },
+        {
+          "type": "assistant",
+          "offset": 177534
+        },
+        {
+          "type": "user",
+          "offset": 179404
+        },
+        {
+          "type": "attachment",
+          "offset": 180264
+        },
+        {
+          "type": "attachment",
+          "offset": 295902
+        },
+        {
+          "type": "attachment",
+          "offset": 299873
+        },
+        {
+          "type": "last-prompt",
+          "offset": 304611
+        },
+        {
+          "type": "ai-title",
+          "offset": 304971
+        },
+        {
+          "type": "mode",
+          "offset": 305083
+        },
+        {
+          "type": "permission-mode",
+          "offset": 305166
+        },
+        {
+          "type": "atis-latch",
+          "offset": 305268
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 305351
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 388087
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 388450
+        },
+        {
+          "type": "api-request",
+          "offset": 393347
+        },
+        {
+          "type": "last-prompt",
+          "offset": 397693
+        },
+        {
+          "type": "ai-title",
+          "offset": 398053
+        },
+        {
+          "type": "mode",
+          "offset": 398165
+        },
+        {
+          "type": "permission-mode",
+          "offset": 398248
+        },
+        {
+          "type": "atis-latch",
+          "offset": 398350
+        },
+        {
+          "type": "attachment",
+          "offset": 398433
+        },
+        {
+          "type": "attachment",
+          "offset": 399097
+        },
+        {
+          "type": "assistant",
+          "offset": 405334
+        },
+        {
+          "type": "user",
+          "offset": 407542
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 409793
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 410249
+        },
+        {
+          "type": "api-request",
+          "offset": 410517
+        }
+      ],
+      "rawReceiptRows": [
+        {
+          "type": "queue-operation",
+          "offset": 284956
+        },
+        {
+          "type": "queue-operation",
+          "offset": 285284
+        },
+        {
+          "type": "user",
+          "offset": 285423
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 287088
+        },
+        {
+          "type": "api-request",
+          "offset": 288591
+        }
+      ],
+      "unexpectedNonceInOrigin": true
+    },
+    {
+      "sandbox": false,
+      "wrongRecipientControl": true,
+      "nonce": "407cf1d0-c5c1-48bb-8727-899d91679c45",
+      "orchestratorId": "e7a67db9-5c26-4a4b-a478-6dfa71cc0171",
+      "childId": "c5696307-3234-4285-8214-2fb14d47734a",
+      "before": 314048,
+      "displayTitle": "UI-fab74160-0861-4d75-842c-a01b9e9553ac",
+      "nativeRecipient": "UI-fab74160-0861-4d75-842c-a01b9e9553ac",
+      "addressedRecipient": "absent-515da129-aae9-49a7-8622-216b8b36da7e",
+      "recipientSource": "agent-name",
+      "recipientObservedAt": 1792259778148,
+      "agentNameOffset": 311805,
+      "renameObservation": {
+        "command": "/rename",
+        "observedAt": 1792259775162,
+        "displayTitle": "UI-fab74160-0861-4d75-842c-a01b9e9553ac",
+        "nativeNameBefore": "project-9e",
+        "nativeNameAfter": "UI-fab74160-0861-4d75-842c-a01b9e9553ac",
+        "nativeNameChanged": true,
+        "nativeNameEqualsDisplayTitle": true,
+        "agentNameOffset": 311805
+      },
+      "sendResults": [
+        {
+          "toolUseId": "toolu_011mDG1XHVNVB7eQy4zTcScB",
+          "offset": 433550,
+          "success": false,
+          "unreachableRecipient": true,
+          "isError": false,
+          "sha256": "a8921ea6389cde350985d8205913e5a78b6e3e003dabadb00486a1b3c63700a0",
+          "bytes": 153,
+          "excerpt": "{\"success\":false,\"message\":\"No agent named 'absent-515da129-aae9-49a7-8622-216b8b36da7e' is reachable.\\nUse ListAgents to see everyone you can message.\"}"
+        },
+        {
+          "toolUseId": "toolu_011mDG1XHVNVB7eQy4zTcScB",
+          "offset": 433550,
+          "success": false,
+          "unreachableRecipient": true,
+          "isError": false,
+          "sha256": "a8921ea6389cde350985d8205913e5a78b6e3e003dabadb00486a1b3c63700a0",
+          "bytes": 153,
+          "excerpt": "{\"success\":false,\"message\":\"No agent named 'absent-515da129-aae9-49a7-8622-216b8b36da7e' is reachable.\\nUse ListAgents to see everyone you can message.\"}"
+        }
+      ],
+      "nativeRecipientDiffersFromDisplayTitle": false,
+      "distinctProcesses": true,
+      "intendedToolCall": true,
+      "nativeReceipt": false,
+      "receiptOffset": null,
+      "receipt": null,
+      "childNativeName": "project-73",
+      "privatePublication": true,
+      "socketDirectory": null,
+      "queueOperations": [],
+      "parentEnvironment": {
+        "status": "PASS",
+        "fixtureOutcome": "UNVERIFIED",
+        "source": "/proc owned child"
+      },
+      "messagingEnvKeys": [],
+      "rawChildRows": [
+        {
+          "type": "mode",
+          "offset": 0
+        },
+        {
+          "type": "permission-mode",
+          "offset": 83
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 185
+        },
+        {
+          "type": "user",
+          "offset": 421
+        },
+        {
+          "type": "attachment",
+          "offset": 1775
+        },
+        {
+          "type": "attachment",
+          "offset": 4092
+        },
+        {
+          "type": "attachment",
+          "offset": 4936
+        },
+        {
+          "type": "attachment",
+          "offset": 6620
+        },
+        {
+          "type": "attachment",
+          "offset": 12671
+        },
+        {
+          "type": "attachment",
+          "offset": 49946
+        },
+        {
+          "type": "attachment",
+          "offset": 51023
+        },
+        {
+          "type": "atis-latch",
+          "offset": 51635
+        },
+        {
+          "type": "attachment",
+          "offset": 51718
+        },
+        {
+          "type": "attachment",
+          "offset": 53735
+        },
+        {
+          "type": "attachment",
+          "offset": 54321
+        },
+        {
+          "type": "attachment",
+          "offset": 54837
+        },
+        {
+          "type": "attachment",
+          "offset": 56188
+        },
+        {
+          "type": "ai-title",
+          "offset": 65739
+        },
+        {
+          "type": "last-prompt",
+          "offset": 65858
+        },
+        {
+          "type": "ai-title",
+          "offset": 66218
+        },
+        {
+          "type": "mode",
+          "offset": 66337
+        },
+        {
+          "type": "permission-mode",
+          "offset": 66420
+        },
+        {
+          "type": "atis-latch",
+          "offset": 66522
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 66605
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 150164
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 152711
+        },
+        {
+          "type": "api-request",
+          "offset": 176426
+        },
+        {
+          "type": "last-prompt",
+          "offset": 180658
+        },
+        {
+          "type": "ai-title",
+          "offset": 181018
+        },
+        {
+          "type": "mode",
+          "offset": 181137
+        },
+        {
+          "type": "permission-mode",
+          "offset": 181220
+        },
+        {
+          "type": "atis-latch",
+          "offset": 181322
+        },
+        {
+          "type": "assistant",
+          "offset": 181405
+        },
+        {
+          "type": "assistant",
+          "offset": 184351
+        },
+        {
+          "type": "user",
+          "offset": 186218
+        },
+        {
+          "type": "attachment",
+          "offset": 187078
+        },
+        {
+          "type": "attachment",
+          "offset": 312768
+        },
+        {
+          "type": "attachment",
+          "offset": 316739
+        },
+        {
+          "type": "last-prompt",
+          "offset": 321477
+        },
+        {
+          "type": "ai-title",
+          "offset": 321837
+        },
+        {
+          "type": "mode",
+          "offset": 321956
+        },
+        {
+          "type": "permission-mode",
+          "offset": 322039
+        },
+        {
+          "type": "atis-latch",
+          "offset": 322141
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 322224
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 411543
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 411906
+        },
+        {
+          "type": "api-request",
+          "offset": 416803
+        },
+        {
+          "type": "last-prompt",
+          "offset": 420931
+        },
+        {
+          "type": "ai-title",
+          "offset": 421291
+        },
+        {
+          "type": "mode",
+          "offset": 421410
+        },
+        {
+          "type": "permission-mode",
+          "offset": 421493
+        },
+        {
+          "type": "atis-latch",
+          "offset": 421595
+        },
+        {
+          "type": "attachment",
+          "offset": 421678
+        },
+        {
+          "type": "attachment",
+          "offset": 422342
+        },
+        {
+          "type": "assistant",
+          "offset": 428579
+        },
+        {
+          "type": "assistant",
+          "offset": 431329
+        },
+        {
+          "type": "user",
+          "offset": 433550
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 435080
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 436629
+        },
+        {
+          "type": "api-request",
+          "offset": 436897
+        },
+        {
+          "type": "attachment",
+          "offset": 441579
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 442243
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 443448
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 443999
+        },
+        {
+          "type": "api-request",
+          "offset": 444267
+        },
+        {
+          "type": "assistant",
+          "offset": 448950
+        },
+        {
+          "type": "assistant",
+          "offset": 451497
+        },
+        {
+          "type": "user",
+          "offset": 453269
+        },
+        {
+          "type": "attachment",
+          "offset": 454730
+        },
+        {
+          "type": "assistant",
+          "offset": 455394
+        },
+        {
+          "type": "assistant",
+          "offset": 458040
+        },
+        {
+          "type": "system",
+          "offset": 460281
+        },
+        {
+          "type": "last-prompt",
+          "offset": 460722
+        },
+        {
+          "type": "ai-title",
+          "offset": 461082
+        },
+        {
+          "type": "mode",
+          "offset": 461201
+        },
+        {
+          "type": "permission-mode",
+          "offset": 461284
+        },
+        {
+          "type": "atis-latch",
+          "offset": 461386
+        }
+      ],
+      "rawReceiptRows": [],
+      "unexpectedNonceInOrigin": false
+    },
+    {
+      "sandbox": true,
+      "wrongRecipientControl": false,
+      "nonce": "b2d8fa51-c6be-40c1-a9c1-2383755bf456",
+      "orchestratorId": "7bbfd383-c862-44fe-b3a9-acc6c04ce51d",
+      "childId": "a9a4665a-31c5-4880-885f-32776555066d",
+      "before": 313228,
+      "displayTitle": "UI-27829a83-33e2-4fd4-8ede-7421bbb9373f",
+      "nativeRecipient": "UI-27829a83-33e2-4fd4-8ede-7421bbb9373f",
+      "addressedRecipient": "UI-27829a83-33e2-4fd4-8ede-7421bbb9373f",
+      "recipientSource": "agent-name",
+      "recipientObservedAt": 1792259827057,
+      "agentNameOffset": 311253,
+      "renameObservation": {
+        "command": "/rename",
+        "observedAt": 1792259820054,
+        "displayTitle": "UI-27829a83-33e2-4fd4-8ede-7421bbb9373f",
+        "nativeNameBefore": "project-6b",
+        "nativeNameAfter": "UI-27829a83-33e2-4fd4-8ede-7421bbb9373f",
+        "nativeNameChanged": true,
+        "nativeNameEqualsDisplayTitle": true,
+        "agentNameOffset": 311253
+      },
+      "sendResults": [
+        {
+          "toolUseId": "toolu_01Kgg47AJPrrYS5b9oAoL4Nw",
+          "offset": 430711,
+          "success": false,
+          "unreachableRecipient": true,
+          "isError": false,
+          "sha256": "b3042ab6130da1d0781e320222bb4a3bc86309e6c7ac551e7296b945d52af955",
+          "bytes": 149,
+          "excerpt": "{\"success\":false,\"message\":\"No agent named 'UI-27829a83-33e2-4fd4-8ede-7421bbb9373f' is reachable.\\nUse ListAgents to see everyone you can message.\"}"
+        },
+        {
+          "toolUseId": "toolu_01Kgg47AJPrrYS5b9oAoL4Nw",
+          "offset": 430711,
+          "success": false,
+          "unreachableRecipient": true,
+          "isError": false,
+          "sha256": "b3042ab6130da1d0781e320222bb4a3bc86309e6c7ac551e7296b945d52af955",
+          "bytes": 149,
+          "excerpt": "{\"success\":false,\"message\":\"No agent named 'UI-27829a83-33e2-4fd4-8ede-7421bbb9373f' is reachable.\\nUse ListAgents to see everyone you can message.\"}"
+        }
+      ],
+      "nativeRecipientDiffersFromDisplayTitle": false,
+      "distinctProcesses": true,
+      "intendedToolCall": true,
+      "nativeReceipt": false,
+      "receiptOffset": null,
+      "receipt": null,
+      "childNativeName": "project-57",
+      "privatePublication": true,
+      "socketDirectory": {
+        "path": "/tmp/cc-socks",
+        "visible": true,
+        "observedAt": 1792259841967,
+        "source": "/proc owned child root"
+      },
+      "queueOperations": [],
+      "parentEnvironment": {
+        "status": "PASS",
+        "fixtureOutcome": "UNVERIFIED",
+        "source": "/proc owned child"
+      },
+      "messagingEnvKeys": [],
+      "rawChildRows": [
+        {
+          "type": "mode",
+          "offset": 0
+        },
+        {
+          "type": "permission-mode",
+          "offset": 83
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 185
+        },
+        {
+          "type": "user",
+          "offset": 421
+        },
+        {
+          "type": "attachment",
+          "offset": 1768
+        },
+        {
+          "type": "attachment",
+          "offset": 4079
+        },
+        {
+          "type": "attachment",
+          "offset": 4923
+        },
+        {
+          "type": "attachment",
+          "offset": 6607
+        },
+        {
+          "type": "attachment",
+          "offset": 12658
+        },
+        {
+          "type": "attachment",
+          "offset": 49933
+        },
+        {
+          "type": "attachment",
+          "offset": 51010
+        },
+        {
+          "type": "last-prompt",
+          "offset": 51622
+        },
+        {
+          "type": "mode",
+          "offset": 51982
+        },
+        {
+          "type": "permission-mode",
+          "offset": 52065
+        },
+        {
+          "type": "atis-latch",
+          "offset": 52167
+        },
+        {
+          "type": "attachment",
+          "offset": 52250
+        },
+        {
+          "type": "attachment",
+          "offset": 54355
+        },
+        {
+          "type": "attachment",
+          "offset": 54941
+        },
+        {
+          "type": "attachment",
+          "offset": 55457
+        },
+        {
+          "type": "attachment",
+          "offset": 56808
+        },
+        {
+          "type": "ai-title",
+          "offset": 66359
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 66471
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 150030
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 152614
+        },
+        {
+          "type": "api-request",
+          "offset": 176326
+        },
+        {
+          "type": "last-prompt",
+          "offset": 180527
+        },
+        {
+          "type": "ai-title",
+          "offset": 180887
+        },
+        {
+          "type": "mode",
+          "offset": 180999
+        },
+        {
+          "type": "permission-mode",
+          "offset": 181082
+        },
+        {
+          "type": "atis-latch",
+          "offset": 181184
+        },
+        {
+          "type": "assistant",
+          "offset": 181267
+        },
+        {
+          "type": "assistant",
+          "offset": 184104
+        },
+        {
+          "type": "user",
+          "offset": 185970
+        },
+        {
+          "type": "attachment",
+          "offset": 186830
+        },
+        {
+          "type": "attachment",
+          "offset": 312520
+        },
+        {
+          "type": "attachment",
+          "offset": 316491
+        },
+        {
+          "type": "last-prompt",
+          "offset": 321229
+        },
+        {
+          "type": "ai-title",
+          "offset": 321589
+        },
+        {
+          "type": "mode",
+          "offset": 321701
+        },
+        {
+          "type": "permission-mode",
+          "offset": 321784
+        },
+        {
+          "type": "atis-latch",
+          "offset": 321886
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 321969
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 411288
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 411651
+        },
+        {
+          "type": "api-request",
+          "offset": 416548
+        },
+        {
+          "type": "last-prompt",
+          "offset": 420862
+        },
+        {
+          "type": "ai-title",
+          "offset": 421222
+        },
+        {
+          "type": "mode",
+          "offset": 421334
+        },
+        {
+          "type": "permission-mode",
+          "offset": 421417
+        },
+        {
+          "type": "atis-latch",
+          "offset": 421519
+        },
+        {
+          "type": "attachment",
+          "offset": 421602
+        },
+        {
+          "type": "attachment",
+          "offset": 422266
+        },
+        {
+          "type": "assistant",
+          "offset": 428503
+        },
+        {
+          "type": "user",
+          "offset": 430711
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 432447
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 432903
+        },
+        {
+          "type": "api-request",
+          "offset": 433171
+        }
+      ],
+      "rawReceiptRows": [],
+      "unexpectedNonceInOrigin": false,
+      "failure": "SendMessage reported failure; native receipt not established",
+      "o1": {
+        "status": "STOP",
+        "reason": "SendMessage reported failure; native receipt not established"
+      }
+    }
+  ],
+  "nativeRenames": [
+    {
+      "command": "/rename",
+      "observedAt": 1792259738118,
+      "displayTitle": "UI-6909eb1d-b8ae-4ccc-ae60-e92b3ec79bb8",
+      "nativeNameBefore": "project-c4",
+      "nativeNameAfter": "UI-6909eb1d-b8ae-4ccc-ae60-e92b3ec79bb8",
+      "nativeNameChanged": true,
+      "nativeNameEqualsDisplayTitle": true,
+      "agentNameOffset": 282221
+    },
+    {
+      "command": "/rename",
+      "observedAt": 1792259775162,
+      "displayTitle": "UI-fab74160-0861-4d75-842c-a01b9e9553ac",
+      "nativeNameBefore": "project-9e",
+      "nativeNameAfter": "UI-fab74160-0861-4d75-842c-a01b9e9553ac",
+      "nativeNameChanged": true,
+      "nativeNameEqualsDisplayTitle": true,
+      "agentNameOffset": 311805
+    },
+    {
+      "command": "/rename",
+      "observedAt": 1792259820054,
+      "displayTitle": "UI-27829a83-33e2-4fd4-8ede-7421bbb9373f",
+      "nativeNameBefore": "project-6b",
+      "nativeNameAfter": "UI-27829a83-33e2-4fd4-8ede-7421bbb9373f",
+      "nativeNameChanged": true,
+      "nativeNameEqualsDisplayTitle": true,
+      "agentNameOffset": 311253
+    }
+  ],
+  "peerMountPlans": [
+    [
+      "--unshare-all",
+      "--share-net",
+      "--die-with-parent",
+      "--dev",
+      "/dev",
+      "--proc",
+      "/proc",
+      "--tmpfs",
+      "/tmp",
+      "--dir",
+      "/var",
+      "--ro-bind",
+      "/usr",
+      "/usr",
+      "--ro-bind",
+      "/etc",
+      "/etc",
+      "--symlink",
+      "usr/bin",
+      "/bin",
+      "--symlink",
+      "usr/sbin",
+      "/sbin",
+      "--symlink",
+      "usr/lib",
+      "/lib",
+      "--symlink",
+      "usr/lib64",
+      "/lib64",
+      "--ro-bind",
+      "/run/systemd/resolve",
+      "/run/systemd/resolve",
+      "--ro-bind",
+      "/root/.local/share/claude/versions",
+      "/root/.local/share/claude/versions",
+      "--bind",
+      "/srv/scratch-switchboard-test/runtime/r7/project",
+      "/srv/scratch-switchboard-test/runtime/r7/project",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/runtime/r7/project/.claude",
+      "/srv/scratch-switchboard-test/runtime/r7/project/.claude",
+      "--bind",
+      "/srv/scratch-switchboard-test/runtime/r7/project/.git",
+      "/srv/scratch-switchboard-test/runtime/r7/project/.git",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/runtime/r7/project/.git/config",
+      "/srv/scratch-switchboard-test/runtime/r7/project/.git/config",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/runtime/r7/project/.git/hooks",
+      "/srv/scratch-switchboard-test/runtime/r7/project/.git/hooks",
+      "--tmpfs",
+      "/srv/scratch-switchboard-test/home/.claude",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/.credentials.json",
+      "/srv/scratch-switchboard-test/home/.claude/.credentials.json",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/cache",
+      "/srv/scratch-switchboard-test/home/.claude/cache",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+      "/srv/scratch-switchboard-test/home/.claude/history.jsonl",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/home/.claude/plugins",
+      "/srv/scratch-switchboard-test/home/.claude/plugins",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/home/.claude/skills",
+      "/srv/scratch-switchboard-test/home/.claude/skills",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/home/.claude/projects",
+      "/srv/scratch-switchboard-test/home/.claude/projects",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r7-project",
+      "/srv/scratch-switchboard-test/home/.claude/projects/-srv-scratch-switchboard-test-runtime-r7-project",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.claude/sessions/peer-Mr0fWE",
+      "/srv/scratch-switchboard-test/home/.claude/sessions",
+      "--tmpfs",
+      "/srv/scratch-switchboard-test/home/.claude/shell-snapshots",
+      "--tmpfs",
+      "/srv/scratch-switchboard-test/home/.claude/session-env",
+      "--tmpfs",
+      "/srv/scratch-switchboard-test/home/.claude/backups",
+      "--tmpfs",
+      "/srv/scratch-switchboard-test/home/.claude/state",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.config/claude",
+      "/srv/scratch-switchboard-test/home/.config/claude",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.cache/claude",
+      "/srv/scratch-switchboard-test/home/.cache/claude",
+      "--bind",
+      "/srv/scratch-switchboard-test/home/.local/share/claude",
+      "/srv/scratch-switchboard-test/home/.local/share/claude",
+      "--bind",
+      "/srv/scratch-switchboard-test/runtime/r7/private/peer-Mr0fWE-claude.json",
+      "/srv/scratch-switchboard-test/home/.claude.json",
+      "--dir",
+      "/run",
+      "--perms",
+      "0555",
+      "--dir",
+      "/run/switchboard",
+      "--ro-bind",
+      "/srv/scratch-switchboard-test/runtime/r7/private/empty-settings.json",
+      "/run/switchboard/launch-settings.json",
+      "--chdir",
+      "/srv/scratch-switchboard-test/runtime/r7/project",
+      "--setenv",
+      "SHELL",
+      "/bin/bash"
+    ]
+  ],
+  "bwrapVersion": "bubblewrap 0.11.1",
+  "failure": "SendMessage reported failure; native receipt not established"
+}

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "8ef498e7ba0b53518a396b8da926102e6a7c67fb",
+  "measurements": [
+    {
+      "sequence": 1,
+      "canary": "C1",
+      "status": "PASS",
+      "measuredAt": "2026-10-18T16:39:59.835Z",
+      "cli": {
+        "version": "2.1.301 (Claude Code)",
+        "build": "unknown",
+        "sha256": "bc1aad9982c7b59c7d889ff92595d61cf46e0a6eae074cb551d932a989bcd222"
+      },
+      "harnessRevision": "61dfad5609662b722a9913f4997ca40a4702b9e08e7c9f0b22823713cdf40ba3",
+      "evidencePath": "docs/evidence/session-capabilities/linux-C1-8ef498e/0001-C1-98dd9b22/evidence.json",
+      "evidenceSha256": "1539fbefcb38a713f0dbdb08c69d4413c6e2aff58d8b46ea5a76fd1290ddc322",
+      "capabilities": {
+        "singleTurnDelivery": true,
+        "literalTranscript": true,
+        "eligibleConfirmation": true
+      },
+      "capabilityStatus": {
+        "singleTurnDelivery": "PASS",
+        "literalTranscript": "PASS",
+        "eligibleConfirmation": "PASS"
+      },
+      "baselineHead": "8ef498e7ba0b53518a396b8da926102e6a7c67fb",
+      "acceptedSpecBranch": null,
+      "execution": {
+        "label": "linux-unix-pty",
+        "platform": "linux",
+        "backend": "unix-pty"
+      }
+    }
+  ]
+}
