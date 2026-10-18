@@ -220,13 +220,13 @@ function handle(text) {
               ...(meta.wrongRecipientControl && mutation === 'wrong-control-hidden-leak'
                 ? { data: { receiptNonce: meta.nonce } } : { message: { role: 'user', content: mutation === 'synthetic-receipt' ? meta.nonce
                   : `Another Claude session sent a message:\n${envelope}\n\nThis came from another Claude session — not typed by your user.` } }) };
-            if (!['receipt-empty-boundary', 'wrong-control-hidden-leak'].includes(mutation)) {
+            if (mutation !== 'wrong-control-hidden-leak') {
               receiptRow.origin = { kind: 'peer', from, fromMode: 'prompting', verifiedPeerPid: process.pid,
                 name: mutation === 'receipt-origin-name-mismatch' ? 'another-child' : sender,
                 body: mutation === 'receipt-origin-body-mismatch' ? body + 'extra' : body };
             }
             if (mutation !== 'receipt-empty-boundary') {
-              append({ type: 'queue-operation', operation: 'enqueue', content: receiptRow.message?.content }, dest);
+              append({ type: 'queue-operation', operation: 'enqueue', content: envelope }, dest);
               append({ type: 'queue-operation', operation: 'dequeue' }, dest);
             }
             if (mutation === 'receipt-extra-enqueue') append({ type: 'queue-operation', operation: 'enqueue', content: 'unrelated ' + meta.nonce }, dest);

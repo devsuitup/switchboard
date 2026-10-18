@@ -157,6 +157,7 @@ function parse(argv) {
     else throw new Error('Unknown argument or missing value');
   }
   if (opts.oauthTokenFile && opts.dryRun) throw new Error('--oauth-token-file is live-only');
+  if (!opts.dryRun && !opts.oauthTokenFile) throw new Error('Live runs require --oauth-token-file; copied credentials are forbidden');
   if (!opts.home || !opts.out || !['all', ...Object.keys(CAPS)].includes(opts.canary)) throw new Error('Required: --canary C1|C2|C3|C4|all --home DIR --out DIR [--cli FILE] [--sandbox] [--dry-run] --platform-label LABEL');
   opts.home = path.resolve(opts.home);
   let accountHome;
@@ -1043,11 +1044,12 @@ function nativeReceipt(row, sender, nonce, expectedEndpoint, childPid) {
     const attrs = Object.fromEntries(pairs);
     const from = /^([a-zA-Z][a-zA-Z0-9+.-]*:)([^\x00-\x1f]+)$/.exec(attrs.from || '');
     const endpoint = from && messagingEndpoint(from[2]);
-    if (attrs['from-name'] !== sender || !from || !attrs['from-mode'] ||
-        endpoint && (!expectedEndpoint || endpoint.pathSha256 !== expectedEndpoint.pathSha256 || endpoint.scheme !== expectedEndpoint.scheme)) continue;
+    if (attrs['from-name'] !== sender || !from || !attrs['from-mode']) continue;
+    if (endpoint ? !expectedEndpoint || endpoint.pathSha256 !== expectedEndpoint.pathSha256 || endpoint.scheme !== expectedEndpoint.scheme
+      : !Number.isSafeInteger(childPid) || childPid <= 0 || row.origin?.verifiedPeerPid !== childPid) continue;
     if (Object.hasOwn(row, 'origin') && (!row.origin || typeof row.origin !== 'object' ||
         row.origin.name !== attrs['from-name'] || row.origin.body !== body)) continue;
-    return { shape: 'cross-session-message', from: { sha256: hash(attrs.from), schemeSha256: hash(from[1]),
+    return { shape: 'cross-session-message', elementSha256: hash(element[0]), from: { sha256: hash(attrs.from), schemeSha256: hash(from[1]),
       ...(['uds:', 'pipe:', 'npipe:'].includes(from[1]) ? { scheme: from[1] } : {}), socketPathSha256: endpoint?.pathSha256 ?? null },
       fromName: attrs['from-name'], fromMode: attrs['from-mode'], offset: row._offset,
       bodyLineCount: lines.length, bodySha256: hash(body),
@@ -1057,6 +1059,18 @@ function nativeReceipt(row, sender, nonce, expectedEndpoint, childPid) {
         fromSha256: typeof row.origin.from === 'string' ? hash(row.origin.from) : null } } : {}) };
   }
   return null;
+}
+
+function unexpectedNonceInOrigin(raw, recognized, nonce) {
+  const receiptOffsets = new Set(recognized.map(r => r.offset));
+  return raw.some(r => JSON.stringify(r).includes(nonce) && !receiptOffsets.has(r._offset) &&
+    !(r.type === 'queue-operation' && r.operation === 'enqueue' && typeof r.content === 'string' &&
+      recognized.some(received => r._offset < received.offset && hash(r.content) === received.elementSha256)));
+}
+
+function findNativeReceipt(ctx, child, rows, nonce, endpoints) {
+  endpoints.child ||= messagingEndpoint(descriptor(ctx, child)?.messagingSocketPath);
+  return rows.map(r => nativeReceipt(r, child.name, nonce, endpoints.child, child.pid)).find(Boolean) || null;
 }
 
 function sendOutcome(rows, nonce, recipient) {
@@ -1144,7 +1158,7 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
       } : undefined,
       observe: rows => {
       child.name = nativeName(ctx, child);
-      receipt = receiptRows().map(r => nativeReceipt(r, child.name, nonce, messagingEndpoints.child, child.pid)).find(Boolean) || null;
+      receipt = findNativeReceipt(ctx, child, receiptRows(), nonce, messagingEndpoints);
       const outcome = sendOutcome(rows, nonce, recipient);
       if (!outcome.results.length) return outcome.sends.length > 0 && outcome.sendResults.length > 0 && !outcome.send;
       if (wrongRecipientControl || renameAfterPrompt) {
@@ -1166,7 +1180,7 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
       const d = descriptor(ctx, origin);
       rememberDescriptor(origin, d);
       child.name = nativeName(ctx, child);
-      receipt = receiptRows().map(r => nativeReceipt(r, child.name, nonce, messagingEndpoints.child, child.pid)).find(Boolean) || null;
+      receipt = findNativeReceipt(ctx, child, receiptRows(), nonce, messagingEndpoints);
       return receipt;
     };
     try {
@@ -1203,12 +1217,9 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
   const messagingKeys = (envKeys || []).filter(k => /CLAUDE.*(MESSAG|SOCKET|BRIDGE|SSE)/i.test(k));
   const isolated = !sandbox || child.sessions !== origin.sessions && !inside(ctx.repo, child.sessions) && envStatus === 'PASS' && !messagingKeys.length;
   const raw = receiptRows();
-  const recognized = wrongRecipientControl || renameAfterPrompt ? [] : raw.filter(r =>
-    nativeReceipt(r, child.name, nonce, messagingEndpoints.child, child.pid));
-  const receiptOffsets = new Set(recognized.map(r => r._offset));
-  const leaked = raw.some(r => carriesNonce(r) && !receiptOffsets.has(r._offset) &&
-    !(r.type === 'queue-operation' && r.operation === 'enqueue' && typeof r.content === 'string' &&
-      recognized.some(received => r._offset < received._offset && r.content === content(received))));
+  const recognized = wrongRecipientControl || renameAfterPrompt ? [] : raw.map(r =>
+    nativeReceipt(r, child.name, nonce, messagingEndpoints.child, child.pid)).filter(Boolean);
+  const leaked = unexpectedNonceInOrigin(raw, recognized, nonce);
   const observation = { sandbox, wrongRecipientControl, nonce, orchestratorId: origin.id, childId: child.id,
     observationBudgetMs: observationMs, childReportBudgetMs: 90000, effectiveReportBudgetMs: reportWaitMs,
     inboxObservation, submissionError: submissionError?.message ?? null,
@@ -1293,8 +1304,7 @@ async function makeContext(opts, canary, run, oauthToken) {
   const preparationStartedAt = Date.now();
   const ctx = { opts, oauthToken, run, repo, private: privateDir, runtime, env, deadline: preparationStartedAt + (opts.dryRun ? 60000 : (+opts.timeout || opts.limits[canary])),
     processes: [], watchers: [], observation: 0, capabilities: Object.fromEntries(CAPS[canary].map(k => [k, false])),
-    evidence: { schemaVersion: 1, canary, dryRun: opts.dryRun, qualifiesProduction: false,
-      platform: process.platform, kernel: os.release(), platformLabel: opts.platformLabel, ptyBackend: opts.backend,
+    evidence: { ...evidenceIdentity(opts, canary), kernel: os.release(),
       environmentKeys: Object.keys(env).sort(), mutation: opts.mutation || null,
       workBudgetMs: +opts.timeout || opts.limits[canary], fixtureIdentity: hash(repo),
       inventorySource: opts.dryRun ? 'emulated fixture manifest; no real git worktrees' : 'git worktree list --porcelain',
@@ -1351,7 +1361,8 @@ function validateLedger(ledger, root) {
   let sequence = 0, previousTime = -Infinity;
   for (const r of ledger.measurements) {
     requireValue(shape(r, ['sequence', 'canary', 'status', 'measuredAt', 'execution', 'baselineHead', 'cli',
-      'harnessRevision', 'evidencePath', 'evidenceSha256', 'capabilities', 'capabilityStatus', 'acceptedSpecBranch']));
+      'harnessRevision', 'evidencePath', 'evidenceSha256', 'capabilities', 'capabilityStatus', 'acceptedSpecBranch',
+      ...(Object.hasOwn(r, 'evidenceIdentity') ? ['evidenceIdentity'] : [])]));
     requireValue(Object.hasOwn(CAPS, r.canary) && Number.isSafeInteger(r.sequence) && r.sequence > sequence &&
       typeof r.measuredAt === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(r.measuredAt) &&
       Number.isFinite(Date.parse(r.measuredAt)) && new Date(r.measuredAt).toISOString() === r.measuredAt.replace(/Z$/, r.measuredAt.includes('.') ? 'Z' : '.000Z') && Date.parse(r.measuredAt) >= previousTime && sha(r.baselineHead, 40));
@@ -1366,7 +1377,6 @@ function validateLedger(ledger, root) {
       requireValue(['PASS', 'FAIL', 'UNVERIFIED', 'NOT_APPLICABLE'].includes(status) && typeof r.capabilities[k] === 'boolean' &&
         r.capabilities[k] === (status === 'PASS'));
       if (status === 'NOT_APPLICABLE') requireValue(k === 'sandboxChildSendMessage' && r.execution.platform === 'win32');
-      if (k === 'sandboxChildSendMessage' && r.execution.platform === 'win32') requireValue(status === 'NOT_APPLICABLE');
     }
     requireValue(r.status === aggregateStatus(Object.values(r.capabilityStatus)));
     requireValue(typeof r.evidencePath === 'string' && /^docs\/evidence\/session-capabilities\/[^/]+\/.+/.test(r.evidencePath) &&
@@ -1376,8 +1386,14 @@ function validateLedger(ledger, root) {
     const bytes = fs.readFileSync(evidenceFile);
     requireValue(hash(bytes) === r.evidenceSha256);
     const evidence = JSON.parse(bytes);
-    requireValue(evidence.dryRun === false && evidence.canary === r.canary && evidence.platform === r.execution.platform &&
-      evidence.platformLabel === r.execution.label && evidence.ptyBackend === r.execution.backend);
+    const identityKeys = ['schemaVersion', 'canary', 'platform', 'platformLabel', 'ptyBackend'];
+    const legacy = identityKeys.every(k => !Object.hasOwn(evidence, k)) && r.status === 'UNVERIFIED' &&
+      Object.values(r.capabilityStatus).every(s => s === 'UNVERIFIED');
+    requireValue(evidence.dryRun === false && (legacy || evidence.schemaVersion === 1 && evidence.canary === r.canary &&
+      evidence.platform === r.execution.platform && evidence.platformLabel === r.execution.label && evidence.ptyBackend === r.execution.backend));
+    if (Object.hasOwn(r, 'evidenceIdentity')) requireValue(legacy && r.evidenceIdentity === 'ledger-only');
+    if (legacy) r.evidenceIdentity = 'ledger-only';
+    if (!legacy && r.canary === 'C4' && r.execution.platform === 'win32') requireValue(r.capabilityStatus.sandboxChildSendMessage === 'NOT_APPLICABLE');
     if (r.acceptedSpecBranch !== null) {
       const runDir = path.join(root, ...r.evidencePath.split('/').slice(0, 4));
       requireValue(['C1', 'C2'].includes(r.canary) && typeof r.acceptedSpecBranch === 'string' &&
@@ -1413,7 +1429,7 @@ function readCapabilities(file, { root = ROOT } = {}) {
 
 function consolidate(dirs, out, { root = ROOT, baselineHead } = {}) {
   if (!Array.isArray(dirs) || !dirs.length) throw new Error('Consolidation requires per-run directories');
-  baselineHead ||= spawnSync('git', ['rev-parse', 'origin/main'], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000 }).stdout?.trim();
+  baselineHead ||= spawnSync('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000 }).stdout?.trim();
   const measurements = dirs.flatMap(dir => {
     const ledger = json(path.join(dir, 'ledger.json'));
     if (ledger.schemaVersion !== 1 || !Array.isArray(ledger.measurements)) throw new Error('Incompatible per-run ledger');
@@ -1437,6 +1453,16 @@ function consolidateArgs(argv) {
   }
   if (!out) throw new Error('Consolidation requires --out FILE');
   consolidate(dirs, out);
+}
+
+function evidenceIdentity(opts, canary) {
+  return { schemaVersion: 1, canary, dryRun: opts.dryRun, qualifiesProduction: false,
+    platform: process.platform, platformLabel: opts.platformLabel, ptyBackend: opts.backend };
+}
+
+function emptyContext(opts, canary) {
+  return { opts, processes: [], capabilities: Object.fromEntries(CAPS[canary].map(k => [k, false])),
+    evidence: { ...evidenceIdentity(opts, canary), checks: [], controls: [], processes: [] } };
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -1476,21 +1502,35 @@ async function main(argv = process.argv.slice(2)) {
   let lockHandle;
   try { lockHandle = fs.openSync(lock, 'wx', 0o600); }
   catch { output(process.stderr, 'Runtime root is already owned or has an unreviewed lock\n'); return 2; }
-  let exit = 0;
+  let exit = 0, pendingRun;
+  const persist = ({ ctx, canary, sequence, run }) => {
+    const evidenceFile = path.join(run, 'evidence.json');
+    save(evidenceFile, ctx.evidence);
+    const record = { sequence, canary, status: aggregateStatus(Object.values(ctx.capabilityStatus)), measuredAt: new Date().toISOString(),
+      cli: { version, build, sha256: cliHash }, harnessRevision: hash(fs.readFileSync(__filename)),
+      evidencePath: path.relative(ROOT, evidenceFile).replaceAll('\\', '/'), evidenceSha256: hash(fs.readFileSync(evidenceFile)),
+      capabilities: ctx.capabilities, capabilityStatus: ctx.capabilityStatus, baselineHead: baseline, acceptedSpecBranch: null,
+      execution: { label: opts.platformLabel, platform: process.platform, backend: opts.backend } };
+    ledger.measurements = ledger.measurements.filter(r => r.sequence !== sequence);
+    ledger.measurements.push(record);
+    save(ledgerFile, ledger);
+  };
   try {
   for (const canary of opts.canary === 'all' ? Object.keys(CAPS) : [opts.canary]) {
     const sequence = (ledger.measurements.at(-1)?.sequence || 0) + 1;
     const run = path.join(opts.out, `${String(sequence).padStart(4, '0')}-${canary}-${crypto.randomUUID().slice(0, 8)}`);
     fs.mkdirSync(run);
+    pendingRun = { canary, sequence, run, ctx: emptyContext(opts, canary) };
     let ctx, status = 'UNVERIFIED';
     try {
       ctx = await makeContext(opts, canary, run, oauthToken);
+      pendingRun.ctx = ctx;
       await ({ C1: c1, C2: c2, C3: c3, C4: c4 })[canary](ctx);
       status = 'PASS';
     } catch (err) {
       if (err instanceof RedactionError) throw err;
       status = err instanceof Failed ? 'FAIL' : 'UNVERIFIED';
-      if (!ctx) ctx = { processes: [], capabilities: Object.fromEntries(CAPS[canary].map(k => [k, false])), evidence: { dryRun: opts.dryRun, qualifiesProduction: false, checks: [], controls: [], processes: [] } };
+      if (!ctx) ctx = pendingRun.ctx;
       ctx.evidence.failure = err instanceof Failed || err instanceof Unverified ? err.message : `harness error: ${err.code || err.name}`;
     } finally {
       if (ctx) {
@@ -1522,20 +1562,26 @@ async function main(argv = process.argv.slice(2)) {
       ctx.evidence.controls.push({ name: ctx.opts.mutation, status: status === expected ? 'PASS' : 'FAIL', expected, observed: status });
     }
     if (!ctx.evidence.controls.length) ctx.evidence.controls.push({ name: 'table mutations', status: 'UNVERIFIED', reason: 'run separate --dry-run --mutation invocations; no result inferred from a different run' });
-    const evidenceFile = path.join(run, 'evidence.json');
-    save(evidenceFile, ctx.evidence);
-    ledger.measurements.push({ sequence, canary, status, measuredAt: new Date().toISOString(),
-      cli: { version, build, sha256: cliHash }, harnessRevision: hash(fs.readFileSync(__filename)),
-      evidencePath: path.relative(ROOT, evidenceFile).replaceAll('\\', '/'), evidenceSha256: hash(fs.readFileSync(evidenceFile)),
-      capabilities: ctx.capabilities, capabilityStatus: ctx.capabilityStatus, baselineHead: baseline, acceptedSpecBranch: null,
-      execution: { label: opts.platformLabel, platform: process.platform, backend: opts.backend } });
-    save(ledgerFile, ledger);
+    persist(pendingRun);
     output(process.stdout, `${canary} ${status}${opts.dryRun ? ' (EMULATED; not production evidence)' : ''}\n`);
     if (status !== 'PASS') exit = 1;
     if (ctx.processes.some(p => !p.exited)) throw new Unverified('owned handles remain live after ledger write');
+    pendingRun = null;
     if (interrupted) return 130;
   }
   return exit;
+  } catch (err) {
+    if (err instanceof RedactionError || !pendingRun) throw err;
+    const { ctx, canary } = pendingRun;
+    for (const proc of ctx.processes) {
+      try { await stop(ctx, proc); } catch { ctx.evidence.cleanupFailure = true; }
+    }
+    ctx.evidence.failure = `harness error: ${err.code || err.name}`;
+    for (const key of CAPS[canary]) capability(ctx, key,
+      key === 'sandboxChildSendMessage' && windowsExecution({ opts }) ? 'NOT_APPLICABLE' : 'UNVERIFIED');
+    persist(pendingRun);
+    output(process.stderr, 'Harness run aborted; UNVERIFIED evidence retained\n');
+    return 2;
   } finally {
     fs.closeSync(lockHandle);
     if (!OWNED.size) fs.unlinkSync(lock);
@@ -1558,4 +1604,4 @@ if (require.main === module) {
   });
 }
 module.exports = { main, parse, environment, received, sandboxPlan, probeMounts, launch, stop, descriptor, submit, pathPermissionRule,
-  consolidate, readCapabilities, validateDeliveryPayload, loadOAuthToken, save };
+  consolidate, readCapabilities, validateDeliveryPayload, loadOAuthToken, save, nativeReceipt, unexpectedNonceInOrigin, findNativeReceipt };

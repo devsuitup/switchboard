@@ -592,3 +592,25 @@ and HOMEDRIVE/HOMEPATH are cleared for subprocess tests. Real filesystem identit
 short paths and junctions are exercised within that boundary. Operator runs do
 not load this bootstrap: all OS/environment home sources and ancestor guards
 remain active, and inaccessible canonical locations are refused.
+
+## Test suites and live-run requirements (380p0p)
+
+The default `npm test` and `npm run coverage` suites include the fast capability
+tests in `test/canary-cli-capabilities-fast.test.js`. Fake CLI journeys live in
+`test/canary/cli-capabilities.test.js`, outside the default runner's top-level
+collection. Run them explicitly with `npm run test:canary` (about 11 minutes),
+or `node --test-timeout=120000 test/canary/cli-capabilities.test.js` on Node 22.
+The direct invocation applies the timeout per test; keep the journeys serial.
+Run the fast file directly with `node test/canary-cli-capabilities-fast.test.js`.
+Neither suite launches the real CLI. Lint the canary JavaScript with
+`node node_modules/eslint/bin/eslint.js --no-ignore --config test/fixtures/session-capabilities/lint.config.cjs scripts/canary-cli-capabilities.js test/canary-cli-capabilities-fast.test.js test/canary/cli-capabilities.test.js test/fixtures/session-capabilities/fake-cli.js`.
+
+Live capability measurements require `--oauth-token-file`; copied credentials
+are refused. Consolidation uses `git merge-base HEAD origin/main` as the root
+baseline, retains each run's own baseline, and marks historical setup failures
+without evidence identity as `evidenceIdentity: "ledger-only"` only when the
+record and all capability statuses are `UNVERIFIED`. These records cannot
+qualify a capability. The committed run evidence and its historical README
+remain unchanged; these test and consolidation instructions supersede their
+earlier equivalents.
+

@@ -8,17 +8,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync, execFile } = require('node:child_process');
 const { EventEmitter } = require('node:events');
-const harness = require('../scripts/canary-cli-capabilities');
+const harness = require('../../scripts/canary-cli-capabilities');
 
-const script = path.resolve(__dirname, '../scripts/canary-cli-capabilities.js');
-const accountFixture = path.resolve(__dirname, 'fixtures/session-capabilities/isolated-account.js');
-const keys = {
-  C1: ['singleTurnDelivery', 'literalTranscript', 'eligibleConfirmation'],
-  C2: ['forkWorktree'],
-  C3: ['extraPermissionSettings'],
-  C4: ['independentSendMessage', 'sandboxChildSendMessage'],
-};
-
+const script = path.resolve(__dirname, '../../scripts/canary-cli-capabilities.js');
+const accountFixture = path.resolve(__dirname, '../fixtures/session-capabilities/isolated-account.js');
 function oauthFixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-oauth-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -30,41 +23,13 @@ function oauthFixture(t) {
   return { root, token, opts: { home, runtimeRoot, out, oauthTokenFile } };
 }
 
-test('GIVEN OAuth token file WHEN loading THEN trim one line without mutating parent environment', t => {
-  const f = oauthFixture(t);
-  const before = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  assert.equal(harness.loadOAuthToken(f.opts), f.token);
-  assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, before);
-  assert.equal(harness.environment(f.opts.home).CLAUDE_CODE_OAUTH_TOKEN, undefined);
-});
+const keys = {
+  C1: ['singleTurnDelivery', 'literalTranscript', 'eligibleConfirmation'],
+  C2: ['forkWorktree'],
+  C3: ['extraPermissionSettings'],
+  C4: ['independentSendMessage', 'sandboxChildSendMessage'],
+};
 
-for (const defect of ['empty', 'multiline', 'leading-line', 'missing', 'relative', 'repo', 'evidence', 'runtime', 'home', 'linked', 'credentials']) {
-  test(`GIVEN OAuth ${defect} WHEN loading THEN refuse without revealing the token`, t => {
-    const f = oauthFixture(t);
-    if (defect === 'empty') fs.writeFileSync(f.opts.oauthTokenFile, '  \r\n');
-    if (defect === 'multiline') fs.writeFileSync(f.opts.oauthTokenFile, `${f.token}\nsecond\n`);
-    if (defect === 'leading-line') fs.writeFileSync(f.opts.oauthTokenFile, `\n${f.token}`);
-    if (defect === 'missing') fs.unlinkSync(f.opts.oauthTokenFile);
-    if (defect === 'relative') f.opts.oauthTokenFile = 'token.txt';
-    const locations = { repo: path.resolve(__dirname, '..'), evidence: f.opts.out, runtime: f.opts.runtimeRoot, home: f.opts.home };
-    if (locations[defect]) {
-      f.opts.oauthTokenFile = path.join(locations[defect], `${defect === 'repo' ? '..' : ''}${crypto.randomUUID()}.token`);
-      fs.writeFileSync(f.opts.oauthTokenFile, f.token);
-      t.after(() => fs.rmSync(f.opts.oauthTokenFile, { force: true }));
-    }
-    if (defect === 'linked') {
-      const alias = path.join(f.root, 'alias');
-      fs.symlinkSync(f.opts.home, alias, process.platform === 'win32' ? 'junction' : 'dir');
-      fs.writeFileSync(path.join(f.opts.home, 'token'), f.token);
-      f.opts.oauthTokenFile = path.join(alias, 'token');
-    }
-    if (defect === 'credentials') fs.writeFileSync(path.join(f.opts.home, '.claude/.credentials.json'), '{}');
-    assert.throws(() => harness.loadOAuthToken(f.opts), err => {
-      assert.ok(!err.message.includes(f.token));
-      return err.code === 'OAUTH_TOKEN_REFUSED';
-    });
-  });
-}
 
 test('GIVEN OAuth option in dry-run WHEN parsing THEN refuse the live-only option', async t => {
   const r = await run(t, ['--oauth-token-file', path.resolve(os.tmpdir(), 'unused-token')]);
@@ -72,30 +37,12 @@ test('GIVEN OAuth option in dry-run WHEN parsing THEN refuse the live-only optio
   assert.match(r.stderr, /live.only/);
 });
 
-test('GIVEN token in evidence or ledger WHEN writing THEN abort before creating or replacing the file', t => {
-  const f = oauthFixture(t);
-  const cached = require.cache[require.resolve(script)];
-  delete require.cache[require.resolve(script)];
-  const isolated = require(script);
-  require.cache[require.resolve(script)] = cached;
-  isolated.loadOAuthToken(f.opts);
-  for (const name of ['evidence.json', 'ledger.json', 'run.log']) {
-    const file = path.join(f.opts.out, name);
-    assert.throws(() => isolated.save(file, { leaked: f.token }), /redaction/i);
-    assert.equal(fs.existsSync(file), false);
-    fs.writeFileSync(file, 'previous');
-    assert.throws(() => isolated.save(file, { leaked: f.token }), /redaction/i);
-    assert.equal(fs.readFileSync(file, 'utf8'), 'previous');
-  }
-  assert.throws(() => isolated.save(path.join(f.opts.out, 'later.json'), { safe: true }), /redaction/i);
-  assert.equal(fs.existsSync(path.join(f.opts.out, 'later.json')), false);
-});
 
 test('GIVEN token reaches canary evidence WHEN running all THEN abort the run without ledger stdout leak or next canary', async t => {
   const env = {};
   let token;
   const r = await run(t, [], {
-    entrypoint: path.resolve(__dirname, 'fixtures/session-capabilities/redaction-runner.js'), env,
+    entrypoint: path.resolve(__dirname, '../fixtures/session-capabilities/redaction-runner.js'), env,
     prepare: ({ root }) => {
       token = 'fake-guard-' + crypto.randomUUID();
       env.CANARY_TEST_OAUTH_TOKEN_FILE = path.join(root, 'token.txt');
@@ -161,7 +108,7 @@ test('GIVEN successful C4 send and zero origin rows WHEN idle wait expires THEN 
 
 async function run(t, args = [], options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-380-'));
-  const evidenceRoot = path.resolve(__dirname, '../.work-files/380p0c/dry-runs');
+  const evidenceRoot = path.resolve(__dirname, '../../.work-files/380p0c/dry-runs');
   fs.mkdirSync(evidenceRoot, { recursive: true });
   const out = fs.mkdtempSync(path.join(evidenceRoot, '.dry-run-'));
   t.after(() => {
@@ -179,9 +126,11 @@ async function run(t, args = [], options = {}) {
   const realHome = path.join(root, 'fake-real-home');
   fs.mkdirSync(realHome);
   const runtime = path.join(root, 'runtime');
+  if (args.includes('--live')) fs.writeFileSync(path.join(root, 'live-token.txt'), 'fake-live-authentication');
   options.prepare?.({ root, home, realHome, runtime });
   const result = await new Promise(resolve => execFile(process.execPath, ['--require', accountFixture, options.entrypoint || script, '--dry-run', '--canary', 'all',
     '--home', home, '--out', out, '--platform-label', 'fixture-only', ...(options.noRuntime ? [] : ['--runtime-root', runtime]), ...args,
+    ...(args.includes('--live') ? ['--oauth-token-file', path.join(root, 'live-token.txt')] : []),
     ...(options.homeAlias ? ['--home', options.homeAlias({ root, home, realHome })] : []),
     ...(options.extraArgs?.({ root, home, realHome, runtime }) || [])], {
     encoding: 'utf8', timeout: 110000, windowsHide: true,
@@ -219,7 +168,7 @@ test('GIVEN fake CLI WHEN all canaries run THEN independently hashed N1 evidence
     assert.match(record.cli.sha256, /^[0-9a-f]{64}$/);
     assert.match(record.harnessRevision, /^[0-9a-f]{64}$/);
     assert.match(record.evidencePath, /^\.work-files\/380p0c\/dry-runs\//);
-    const evidence = fs.readFileSync(path.join(__dirname, '..', record.evidencePath));
+    const evidence = fs.readFileSync(path.join(__dirname, '../..', record.evidencePath));
     assert.equal(crypto.createHash('sha256').update(evidence).digest('hex'), record.evidenceSha256);
     const data = JSON.parse(evidence);
     assert.equal(data.dryRun, true);
@@ -256,13 +205,6 @@ test('GIVEN boundary LF trimmed WHEN amended C1 runs THEN supported payloads qua
   assert.deepEqual(probe.boundaryChange, { side: 'trailing', offset: 255, removedHex: '0a', removedBytes: 1 });
   assert.equal(probe.emoji.storedByteOffset, probe.emoji.inputByteOffset);
   assert.equal(probe.emoji.preserved, true);
-});
-
-test('GIVEN delivery payload with boundary whitespace WHEN validated THEN refuse before normal delivery', () => {
-  for (const text of [' leading', 'trailing\n', '\tleading', '\nbody\n', '']) {
-    assert.throws(() => harness.validateDeliveryPayload(text), /boundary whitespace|empty/);
-  }
-  assert.equal(harness.validateDeliveryPayload('body\nwith interior spaces 😀'), 'body\nwith interior spaces 😀');
 });
 
 test('GIVEN delayed native rename WHEN C2 forks THEN capture the settled name and only case-local live identities', async t => {
@@ -447,148 +389,6 @@ for (const mutation of ['ignore-fork-name', 'rename-fork-source', 'colliding-for
     assert.ok(data(r).namedForks.length > 0);
   });
 }
-
-function n1Fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-n1-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const triples = [
-    { label: 'windows-conpty-bundled', platform: 'win32', backend: 'conpty-bundled' },
-    { label: 'windows-conpty-inbox', platform: 'win32', backend: 'conpty-inbox' },
-    { label: 'linux-unix-pty', platform: 'linux', backend: 'unix-pty' },
-  ];
-  const records = [];
-  const dirs = [];
-  for (const [i, execution] of triples.entries()) {
-    const dir = path.join(root, 'docs/evidence/session-capabilities', `run-${i}`);
-    fs.mkdirSync(dir, { recursive: true });
-    dirs.push(dir);
-    const measurements = Object.keys(keys).map((canary, j) => {
-      const evidencePath = `docs/evidence/session-capabilities/run-${i}/${canary}/evidence.json`;
-      const file = path.join(root, evidencePath);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify({ dryRun: false, canary, platform: execution.platform, platformLabel: execution.label, ptyBackend: execution.backend }));
-      const capabilityStatus = Object.fromEntries(keys[canary].map(k => [k, k === 'sandboxChildSendMessage' ? i === 2 ? 'FAIL' : 'NOT_APPLICABLE' : 'PASS']));
-      return { sequence: j + 1, canary, status: Object.values(capabilityStatus).includes('FAIL') ? 'FAIL' : 'PASS',
-        measuredAt: `2026-10-17T20:00:0${j}.000Z`, execution, baselineHead: String(i + 1).repeat(40),
-        cli: { version: `2.1.${301 + i}`, build: 'fixture', sha256: 'a'.repeat(64) }, harnessRevision: 'b'.repeat(64),
-        evidencePath, evidenceSha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
-        capabilities: Object.fromEntries(Object.entries(capabilityStatus).map(([k, s]) => [k, s === 'PASS'])), capabilityStatus, acceptedSpecBranch: null };
-    });
-    records.push(...measurements);
-    fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify({ schemaVersion: 1, baselineHead: String(i + 1).repeat(40), measurements }));
-  }
-  const out = path.join(root, 'resources/session-capabilities.json');
-  const consolidate = () => harness.consolidate(dirs, out, { root, baselineHead: 'c'.repeat(40) });
-  return { root, triples, records, dirs, out, consolidate };
-}
-
-test('GIVEN N1 tied timestamps and historical FAIL WHEN consolidating THEN preserve records and baseline with stable sequence', async t => {
-  const f = n1Fixture(t);
-  const file = path.join(f.dirs[0], 'ledger.json');
-  const old = JSON.parse(fs.readFileSync(file));
-  const record = old.measurements[0];
-  delete record.capabilityStatus;
-  delete record.baselineHead;
-  record.status = 'FAIL';
-  for (const k of keys.C1) record.capabilities[k] = false;
-  fs.writeFileSync(file, JSON.stringify(old));
-  const before = fs.readFileSync(file, 'utf8');
-  f.consolidate();
-  assert.equal(fs.readFileSync(file, 'utf8'), before);
-  const ledger = JSON.parse(fs.readFileSync(f.out));
-  assert.equal(ledger.baselineHead, 'c'.repeat(40));
-  const expected = [...f.records.filter(r => r.evidencePath !== record.evidencePath), { ...record, baselineHead: old.baselineHead,
-    capabilityStatus: Object.fromEntries(keys.C1.map(k => [k, 'FAIL'])) }].sort((a, b) => a.measuredAt.localeCompare(b.measuredAt) || a.evidencePath.localeCompare(b.evidencePath));
-  assert.deepEqual(ledger.measurements, expected.map((r, i) => ({ ...r, sequence: i + 1 })));
-  const result = harness.readCapabilities(f.out, { root: f.root });
-  assert.equal(result.capabilities.singleTurnDelivery, false);
-  assert.equal(result.capabilities.independentSendMessage, true);
-  assert.equal(result.capabilities.sandboxChildSendMessage, false);
-});
-
-test('GIVEN committed Phase 0 history WHEN consolidating through CLI THEN records stay immutable and gate stays closed', async t => {
-  const root = path.resolve(__dirname, '..');
-  const base = path.join(root, 'docs/evidence/session-capabilities');
-  const dirs = fs.readdirSync(base).map(p => path.join(base, p)).filter(p => fs.existsSync(path.join(p, 'ledger.json')) &&
-    JSON.parse(fs.readFileSync(path.join(p, 'ledger.json'))).measurements.every(r => !r.capabilityStatus));
-  assert.ok(dirs.length > 0);
-  const before = dirs.map(p => fs.readFileSync(path.join(p, 'ledger.json'), 'utf8'));
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-n1-history-'));
-  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
-  const out = path.join(temp, 'session-capabilities.json');
-  const result = spawnSync(process.execPath, [script, '--consolidate', ...dirs, '--out', out], { encoding: 'utf8', timeout: 60000, windowsHide: true });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(dirs.map(p => fs.readFileSync(path.join(p, 'ledger.json'), 'utf8')), before);
-  const ledger = JSON.parse(fs.readFileSync(out));
-  assert.equal(ledger.measurements.length, before.reduce((n, text) => n + JSON.parse(text).measurements.length, 0));
-  assert.ok(Object.values(harness.readCapabilities(out).capabilities).every(v => v === false));
-});
-
-test('GIVEN N1 last per execution WHEN a new FAIL supersedes PASS THEN apply worst globally and retain other keys', async t => {
-  const f = n1Fixture(t);
-  f.consolidate();
-  const ledger = JSON.parse(fs.readFileSync(f.out));
-  const first = ledger.measurements.find(r => r.canary === 'C1' && r.execution.label === 'windows-conpty-inbox');
-  ledger.measurements.push({ ...first, sequence: 13, measuredAt: '2026-10-17T21:00:00.000Z', status: 'FAIL',
-    capabilities: { ...first.capabilities, literalTranscript: false }, capabilityStatus: { ...first.capabilityStatus, literalTranscript: 'FAIL' } });
-  fs.writeFileSync(f.out, JSON.stringify(ledger));
-  for (const running of f.triples) {
-    const result = harness.readCapabilities(f.out, { root: f.root, ...running, version: 'unmeasured' });
-    assert.equal(result.capabilityStatus.literalTranscript, 'FAIL');
-    assert.equal(result.capabilities.singleTurnDelivery, true);
-    assert.equal(result.capabilities.independentSendMessage, true);
-    assert.equal(result.selectedSequences.C1['windows-conpty-inbox'], 13);
-  }
-  ledger.measurements = ledger.measurements.filter(r => r.execution.label !== 'windows-conpty-inbox');
-  fs.writeFileSync(f.out, JSON.stringify(ledger));
-  assert.equal(harness.readCapabilities(f.out, { root: f.root }).capabilityStatus.independentSendMessage, 'UNVERIFIED');
-});
-
-for (const defect of ['boolean', 'status', 'unknown-key', 'missing-key', 'duplicate-sequence', 'unknown-execution', 'dry-run', 'hash', 'missing-evidence', 'timestamp', 'calendar-date', 'baseline', 'not-applicable', 'windows-sandbox-pass']) {
-  test(`GIVEN N1 ${defect} WHEN reading THEN reject malformed evidence`, async t => {
-    const f = n1Fixture(t);
-    f.consolidate();
-    const ledger = JSON.parse(fs.readFileSync(f.out));
-    const r = ledger.measurements[0];
-    if (defect === 'boolean') r.capabilities.singleTurnDelivery = false;
-    if (defect === 'status') r.status = 'FAIL';
-    if (defect === 'unknown-key') r.capabilityStatus.other = 'PASS';
-    if (defect === 'missing-key') delete r.capabilityStatus.literalTranscript;
-    if (defect === 'duplicate-sequence') ledger.measurements[1].sequence = r.sequence;
-    if (defect === 'unknown-execution') r.execution.backend = 'emulated-pipes';
-    if (defect === 'dry-run') {
-      const file = path.join(f.root, r.evidencePath);
-      const e = JSON.parse(fs.readFileSync(file)); e.dryRun = true;
-      fs.writeFileSync(file, JSON.stringify(e));
-      r.evidenceSha256 = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-    }
-    if (defect === 'hash') r.evidenceSha256 = '0'.repeat(64);
-    if (defect === 'missing-evidence') fs.unlinkSync(path.join(f.root, r.evidencePath));
-    if (defect === 'timestamp') r.measuredAt = 'yesterday';
-    if (defect === 'calendar-date') r.measuredAt = '2026-02-31T00:00:00.000Z';
-    if (defect === 'baseline') r.baselineHead = 'short';
-    if (defect === 'not-applicable') r.capabilityStatus.singleTurnDelivery = 'NOT_APPLICABLE';
-    if (defect === 'windows-sandbox-pass') {
-      const c4 = ledger.measurements.find(r => r.canary === 'C4' && r.execution.platform === 'win32');
-      c4.capabilityStatus.sandboxChildSendMessage = 'PASS';
-      c4.capabilities.sandboxChildSendMessage = true;
-    }
-    fs.writeFileSync(f.out, JSON.stringify(ledger));
-    assert.throws(() => harness.readCapabilities(f.out, { root: f.root }), /session capability evidence is unavailable/);
-  });
-}
-
-test('GIVEN N1 permitted C2 branch under run directory WHEN validating THEN retain explicit measured failure', async t => {
-  const f = n1Fixture(t);
-  f.consolidate();
-  const ledger = JSON.parse(fs.readFileSync(f.out));
-  const c2 = ledger.measurements.find(r => r.canary === 'C2');
-  c2.status = 'FAIL'; c2.capabilities.forkWorktree = false; c2.capabilityStatus.forkWorktree = 'FAIL';
-  c2.acceptedSpecBranch = 'docs/evidence/session-capabilities/run-0/amendment.md';
-  fs.writeFileSync(path.join(f.root, c2.acceptedSpecBranch), 'Synthetic permitted C2 fixture branch.');
-  fs.writeFileSync(f.out, JSON.stringify(ledger));
-  assert.equal(harness.readCapabilities(f.out, { root: f.root }).capabilityStatus.forkWorktree, 'FAIL');
-});
 
 for (const mutation of ['', 'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch']) {
   test(`GIVEN C4 rename ${mutation} WHEN child is prompted THEN use current native name and retain linked send results`, async t => {
@@ -806,83 +606,6 @@ test('GIVEN assistant persisted only on graceful exit WHEN C1 runs THEN confirma
   assert.ok(evidence.payloads.every(x => x.transcriptFinalBytes > x.transcriptConfirmedBytes));
 });
 
-for (const [label, transform, expected] of [
-  ['CRLF', s => s.replaceAll('\n', '\r\n'), ['lf-to-crlf']],
-  ['trailing whitespace', s => s.replace(/ +$/gm, ''), ['trailing-whitespace-removed']],
-  ['truncation', s => s.slice(0, -4), ['truncation']],
-  ['combined transforms', s => s.replaceAll('\t', '    ').replaceAll('\n', '\r\n').replace(/ +$/gm, ''), ['tab-to-4-spaces', 'lf-to-crlf', 'trailing-whitespace-removed']],
-  ['unknown mutation', s => s.replace('text', 'other'), ['unclassified-byte-change']],
-]) {
-  test(`GIVEN ${label} WHEN comparing envelope body THEN all byte changes are recorded`, async t => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-storage-'));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const payload = 'CANARY\nTAB\ttext   \nend   ';
-    const stored = harness.received({ opts: { home: root } }, { message: { content: `<pasted_content id="5678">\n${transform(payload)}\n</pasted_content id="5678">\n` } }, payload);
-    assert.equal(stored.literal, false);
-    assert.deepEqual(stored.transformations, expected);
-    assert.equal(stored.literalAfterKnownTransformations, !expected.includes('unclassified-byte-change'));
-  });
-}
-
-for (const prefix of ['', '\n\n', ' \t\r\n']) {
-  for (const suffix of ['\n', ' \t\r\n']) {
-    test(`GIVEN escaped prefix ${JSON.stringify(prefix)} and suffix ${JSON.stringify(suffix)} WHEN unwrapping THEN body whitespace stays byte-exact`, async t => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-envelope-'));
-      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-      const payload = '\n \t"café 東京"\n  \n';
-      const stored = harness.received({ opts: { home: root } }, { message: { content: `${prefix}<pasted_content id="e7f5">\n${payload}\n</pasted_content id="e7f5">${suffix}` } }, payload);
-      if (/[^\n]/.test(prefix + suffix)) {
-        assert.equal(stored.wrapperPresent, false);
-        assert.equal(stored.literal, false);
-        return;
-      }
-      assert.equal(stored.wrapperPresent, true);
-      assert.equal(stored.wrapperId, 'e7f5');
-      assert.equal(stored.envelopePrefix, JSON.stringify(prefix).slice(1, -1));
-      assert.equal(stored.envelopeSuffix, JSON.stringify(suffix).slice(1, -1));
-      assert.equal(stored.storedBodyBytes, Buffer.byteLength(payload));
-      assert.equal(stored.storedBodySha256, crypto.createHash('sha256').update(payload).digest('hex'));
-      assert.equal(stored.literal, true);
-      assert.equal(stored.literalAfterKnownTransformations, true);
-      assert.deepEqual(stored.transformations, []);
-    });
-  }
-}
-
-test('GIVEN body ending in CR before the LF closing delimiter WHEN unwrapping THEN the CR stays in the body', async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-body-cr-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const payload = '\n \t"café 東京"\n  \r';
-  const stored = harness.received({ opts: { home: root } }, { message: { content: `\n\n<pasted_content id="0152">\n${payload}\n</pasted_content id="0152">\n` } }, payload);
-  assert.equal(stored.literal, true);
-  assert.equal(stored.storedBodyBytes, Buffer.byteLength(payload));
-  assert.equal(stored.storedBodySha256, crypto.createHash('sha256').update(payload).digest('hex'));
-  assert.equal(stored.envelopeSuffix, '\\n');
-  assert.deepEqual(stored.transformations, []);
-});
-
-for (const width of [1, 2, 3, 4, 5, 6, 7, 8]) {
-  test(`GIVEN TAB expanded to ${width} spaces WHEN comparing THEN expansion width is precise`, async t => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-tab-'));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const stored = harness.received({ opts: { home: root } }, { message: { content: 'a' + ' '.repeat(width) + 'b' } }, 'a\tb');
-    assert.equal(stored.literal, false);
-    assert.equal(stored.literalAfterKnownTransformations, true);
-    assert.deepEqual(stored.transformations, [`tab-to-${width}-spaces`]);
-  });
-}
-
-test('GIVEN mismatched closing ID WHEN comparing THEN malformed envelope stays unclassified', async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-bad-envelope-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const stored = harness.received({ opts: { home: root } }, { message: { content: '\n\n<pasted_content id="e7f5">\nbody\n</pasted_content id="8705">\n' } }, 'body');
-  assert.equal(stored.wrapperPresent, false);
-  assert.equal(stored.envelopePrefix, null);
-  assert.equal(stored.envelopeSuffix, null);
-  assert.equal(stored.literal, false);
-  assert.equal(stored.literalAfterKnownTransformations, false);
-  assert.deepEqual(stored.transformations, ['unclassified-byte-change']);
-});
 for (const [canary, cases] of Object.entries(mutations)) {
   for (const mutation of cases) {
     test(`GIVEN ${canary} mutation ${mutation} WHEN dry-run THEN that canary fails`, async t => {
@@ -925,7 +648,7 @@ test('GIVEN a failing canary WHEN all are selected THEN remaining canaries still
   const startedAt = Date.now();
   const r = await run(t, ['--mutation', 'drop-byte'], { keepEvidence: true });
   assert.equal(r.status, 1);
-  const failures = r.ledger.measurements.map(x => JSON.parse(fs.readFileSync(path.join(__dirname, '..', x.evidencePath))).failure || 'none');
+  const failures = r.ledger.measurements.map(x => JSON.parse(fs.readFileSync(path.join(__dirname, '../..', x.evidencePath))).failure || 'none');
   assert.deepEqual(r.ledger.measurements.map(x => x.status), ['FAIL', 'PASS', 'PASS', 'PASS'], failures.join('; '));
   assert.ok(Date.now() - startedAt < 30000, 'dry-run continuation must finish within 30 seconds');
 });
@@ -953,7 +676,7 @@ test('GIVEN fake hangs WHEN deadline expires THEN bounded cleanup and UNVERIFIED
   const r = await run(t, ['--canary', 'C1', '--mutation', 'hang', '--timeout-ms', '2000']);
   assert.equal(r.status, 1);
   assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
-  const data = JSON.parse(fs.readFileSync(path.join(__dirname, '..', r.ledger.measurements[0].evidencePath)));
+  const data = JSON.parse(fs.readFileSync(path.join(__dirname, '../..', r.ledger.measurements[0].evidencePath)));
   assert.ok(data.processes.length > 0);
   assert.ok(data.processes.every(x => x.cleaned));
 });
@@ -974,7 +697,7 @@ test('GIVEN append to ledger WHEN another measurement runs THEN sequence keeps i
 });
 
 function data(r) {
-  return JSON.parse(fs.readFileSync(path.resolve(__dirname, '..', r.ledger.measurements[0].evidencePath)));
+  return JSON.parse(fs.readFileSync(path.resolve(__dirname, '../..', r.ledger.measurements[0].evidencePath)));
 }
 
 for (const alias of ['junction', 'case-trailing', 'short']) {
@@ -1059,21 +782,6 @@ test('GIVEN sandbox plan WHEN dry-run THEN only launch settings mount and privat
   assert.ok(evidence.processes.every(x => !x.cwd.startsWith(r.out)));
 });
 
-test('GIVEN Windows launch environment WHEN cleaned THEN required host keys and updater guard survive', () => {
-  const names = ['CLAUDE_CODE_GIT_BASH_PATH', 'APPDATA', 'LOCALAPPDATA', 'ProgramFiles', 'USERNAME', 'SystemRoot', 'PATH'];
-  const old = Object.fromEntries(names.map(k => [k, process.env[k]]));
-  try {
-    for (const name of names) process.env[name] = 'fixture';
-    const env = harness.environment(os.tmpdir());
-    for (const name of names) {
-      const key = Object.keys(env).find(k => process.platform === 'win32' ? k.toLowerCase() === name.toLowerCase() : k === name);
-      assert.equal(env[key], 'fixture', name);
-    }
-    assert.equal(env.DISABLE_AUTOUPDATER, '1');
-  } finally {
-    for (const name of names) if (old[name] === undefined) delete process.env[name]; else process.env[name] = old[name];
-  }
-});
 
 test('GIVEN sandbox C3 WHEN Read and authority probes run THEN settings explicitly allow their tools', async t => {
   const r = await run(t, ['--canary', 'C3']);
@@ -1085,7 +793,7 @@ test('GIVEN sandbox C3 WHEN Read and authority probes run THEN settings explicit
 test('GIVEN dirty checkout WHEN live setup THEN refuse before CLI version probe', async t => {
   const backend = process.platform === 'win32' ? 'windows-conpty-bundled' : 'linux-unix-pty';
   const r = await run(t, ['--live', '--canary', 'C1', '--cli', process.execPath, '--platform-label', backend,
-    '--out', path.resolve(__dirname, '../docs/evidence/session-capabilities/refused-dirty')]);
+    '--out', path.resolve(__dirname, '../../docs/evidence/session-capabilities/refused-dirty')]);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /dirty/);
 });

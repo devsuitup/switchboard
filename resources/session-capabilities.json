@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "baselineHead": "374bb89e3eb2600d456a36f5309996bd676e0e1f",
+  "baselineHead": "9790d69dda80c58f2a266c41ecc34c121cbdcf0e",
   "measurements": [
     {
       "sequence": 1,
@@ -439,6 +439,38 @@
     },
     {
       "sequence": 16,
+      "canary": "C1",
+      "status": "UNVERIFIED",
+      "measuredAt": "2026-10-18T10:18:04.971Z",
+      "cli": {
+        "version": "2.1.302 (Claude Code)",
+        "build": "unknown",
+        "sha256": "3ab075f78998efef8b87f491c2e4a39c309dddf44e51d0103eba4f3713d2a0ae"
+      },
+      "harnessRevision": "fcdd246671a9487f24c7040c8c382945d9e55e4f9d082102edf8164ff0502176",
+      "evidencePath": "docs/evidence/session-capabilities/win-bundled-C1-6e6b9263/0001-C1-ae6171ac/evidence.json",
+      "evidenceSha256": "a0af0e1df8afa01000fcca30087271da2dcdea025683bda364049e8d322b4ee1",
+      "capabilities": {
+        "singleTurnDelivery": false,
+        "literalTranscript": false,
+        "eligibleConfirmation": false
+      },
+      "capabilityStatus": {
+        "singleTurnDelivery": "UNVERIFIED",
+        "literalTranscript": "UNVERIFIED",
+        "eligibleConfirmation": "UNVERIFIED"
+      },
+      "baselineHead": "6e6b9263e1266e529cbce8abc34240a4386545ee",
+      "acceptedSpecBranch": null,
+      "execution": {
+        "label": "windows-conpty-bundled",
+        "platform": "win32",
+        "backend": "conpty-bundled"
+      },
+      "evidenceIdentity": "ledger-only"
+    },
+    {
+      "sequence": 17,
       "canary": "C2",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T10:19:25.230Z",
@@ -465,7 +497,7 @@
       }
     },
     {
-      "sequence": 17,
+      "sequence": 18,
       "canary": "C3",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T10:20:34.926Z",
@@ -492,7 +524,7 @@
       }
     },
     {
-      "sequence": 18,
+      "sequence": 19,
       "canary": "C4",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T10:21:21.063Z",
@@ -521,7 +553,7 @@
       }
     },
     {
-      "sequence": 19,
+      "sequence": 20,
       "canary": "C2",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T10:23:03.366Z",
@@ -548,7 +580,7 @@
       }
     },
     {
-      "sequence": 20,
+      "sequence": 21,
       "canary": "C3",
       "status": "PASS",
       "measuredAt": "2026-10-18T10:25:03.048Z",
@@ -575,7 +607,7 @@
       }
     },
     {
-      "sequence": 21,
+      "sequence": 22,
       "canary": "C1",
       "status": "FAIL",
       "measuredAt": "2026-10-18T12:58:17.238Z",
@@ -606,7 +638,7 @@
       }
     },
     {
-      "sequence": 22,
+      "sequence": 23,
       "canary": "C2",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T13:00:36.753Z",
@@ -633,7 +665,7 @@
       }
     },
     {
-      "sequence": 23,
+      "sequence": 24,
       "canary": "C3",
       "status": "PASS",
       "measuredAt": "2026-10-18T13:01:53.898Z",
@@ -660,7 +692,7 @@
       }
     },
     {
-      "sequence": 24,
+      "sequence": 25,
       "canary": "C4",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T13:02:35.002Z",
@@ -689,7 +721,7 @@
       }
     },
     {
-      "sequence": 25,
+      "sequence": 26,
       "canary": "C1",
       "status": "FAIL",
       "measuredAt": "2026-10-18T13:03:57.016Z",
@@ -720,7 +752,7 @@
       }
     },
     {
-      "sequence": 26,
+      "sequence": 27,
       "canary": "C2",
       "status": "FAIL",
       "measuredAt": "2026-10-18T13:09:42.364Z",
@@ -747,7 +779,7 @@
       }
     },
     {
-      "sequence": 27,
+      "sequence": 28,
       "canary": "C3",
       "status": "PASS",
       "measuredAt": "2026-10-18T13:10:47.484Z",
@@ -774,7 +806,7 @@
       }
     },
     {
-      "sequence": 28,
+      "sequence": 29,
       "canary": "C4",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T13:11:29.006Z",
@@ -803,7 +835,7 @@
       }
     },
     {
-      "sequence": 29,
+      "sequence": 30,
       "canary": "C1",
       "status": "PASS",
       "measuredAt": "2026-10-18T13:45:42.633Z",
@@ -834,7 +866,7 @@
       }
     },
     {
-      "sequence": 30,
+      "sequence": 31,
       "canary": "C2",
       "status": "PASS",
       "measuredAt": "2026-10-18T13:50:51.543Z",
@@ -861,7 +893,7 @@
       }
     },
     {
-      "sequence": 31,
+      "sequence": 32,
       "canary": "C4",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T13:52:53.003Z",
@@ -890,7 +922,7 @@
       }
     },
     {
-      "sequence": 32,
+      "sequence": 33,
       "canary": "C1",
       "status": "PASS",
       "measuredAt": "2026-10-18T13:54:24.698Z",
@@ -921,7 +953,7 @@
       }
     },
     {
-      "sequence": 33,
+      "sequence": 34,
       "canary": "C2",
       "status": "PASS",
       "measuredAt": "2026-10-18T13:58:59.833Z",
@@ -948,7 +980,7 @@
       }
     },
     {
-      "sequence": 34,
+      "sequence": 35,
       "canary": "C4",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T14:00:52.156Z",
@@ -977,7 +1009,7 @@
       }
     },
     {
-      "sequence": 35,
+      "sequence": 36,
       "canary": "C1",
       "status": "PASS",
       "measuredAt": "2026-10-18T16:39:59.835Z",
@@ -1008,7 +1040,7 @@
       }
     },
     {
-      "sequence": 36,
+      "sequence": 37,
       "canary": "C4",
       "status": "PASS",
       "measuredAt": "2026-10-18T16:40:18.923Z",
@@ -1037,7 +1069,7 @@
       }
     },
     {
-      "sequence": 37,
+      "sequence": 38,
       "canary": "C2",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T16:41:41.404Z",
@@ -1064,7 +1096,7 @@
       }
     },
     {
-      "sequence": 38,
+      "sequence": 39,
       "canary": "C4",
       "status": "PASS",
       "measuredAt": "2026-10-18T16:42:06.851Z",
@@ -1093,7 +1125,7 @@
       }
     },
     {
-      "sequence": 39,
+      "sequence": 40,
       "canary": "C4",
       "status": "UNVERIFIED",
       "measuredAt": "2026-10-18T16:43:27.288Z",
@@ -1122,7 +1154,7 @@
       }
     },
     {
-      "sequence": 40,
+      "sequence": 41,
       "canary": "C2",
       "status": "PASS",
       "measuredAt": "2026-10-18T16:48:15.992Z",
@@ -1149,7 +1181,7 @@
       }
     },
     {
-      "sequence": 41,
+      "sequence": 42,
       "canary": "C4",
       "status": "FAIL",
       "measuredAt": "2026-10-18T17:24:30.493Z",
