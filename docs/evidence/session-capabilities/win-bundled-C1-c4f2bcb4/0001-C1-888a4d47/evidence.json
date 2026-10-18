@@ -1,0 +1,2991 @@
+{
+  "schemaVersion": 1,
+  "canary": "C1",
+  "dryRun": false,
+  "qualifiesProduction": false,
+  "platform": "win32",
+  "kernel": "10.0.26200",
+  "platformLabel": "windows-conpty-bundled",
+  "ptyBackend": "conpty-bundled",
+  "environmentKeys": [
+    "APPDATA",
+    "COLORTERM",
+    "COMSPEC",
+    "DISABLE_AUTOUPDATER",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "HOME",
+    "LANG",
+    "LOCALAPPDATA",
+    "PATH",
+    "PATHEXT",
+    "PROGRAMFILES",
+    "SWITCHBOARD_DATA_DIR",
+    "SWITCHBOARD_TRIGGERS_DIR",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "USERNAME",
+    "USERPROFILE",
+    "WINDIR",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME"
+  ],
+  "mutation": null,
+  "workBudgetMs": 120000,
+  "fixtureIdentity": "052b615c26b9b4fe257cd31ae161f3469aa3fee33dbe78a306c6d80930224fba",
+  "inventorySource": "git worktree list --porcelain",
+  "peerAliasThreat": {
+    "status": "UNVERIFIED",
+    "reason": "publication-path probe does not establish resistance to shared sessions directory aliases"
+  },
+  "checks": [
+    {
+      "sequence": 1,
+      "at": "2026-10-18T12:58:17.198Z",
+      "name": "one received user turn at every size",
+      "pass": true
+    },
+    {
+      "sequence": 2,
+      "at": "2026-10-18T12:58:17.220Z",
+      "name": "eligible post-submit confirmation at every size",
+      "pass": true
+    },
+    {
+      "sequence": 3,
+      "at": "2026-10-18T12:58:17.220Z",
+      "name": "paste-cache reference (informational)",
+      "pass": true,
+      "informational": true
+    },
+    {
+      "sequence": 4,
+      "at": "2026-10-18T12:58:17.220Z",
+      "name": "literal envelope body equals delivered bytes at every size",
+      "pass": false
+    }
+  ],
+  "controls": [
+    {
+      "name": "short literal control",
+      "status": "PASS"
+    }
+  ],
+  "processes": [
+    {
+      "pid": 4256,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "63986a64-4d6f-4fb6-b245-271399f9cb0f"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792328201462,
+        "status": "idle",
+        "statusUpdatedAt": 1792328201404,
+        "waitingFor": null
+      },
+      "sessionId": "63986a64-4d6f-4fb6-b245-271399f9cb0f",
+      "cwd": "C:\\canary380-runtime\\r41\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134368017842480271",
+      "writerHostPid": 4256,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 17732923533228880
+      },
+      "submissions": [
+        {
+          "phase": "ordinary turn",
+          "beforeBytes": 0,
+          "submittedAt": 1792328194182,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792328201462,
+          "descriptor": {
+            "observedAt": 1792328201462,
+            "status": "idle",
+            "statusUpdatedAt": 1792328201404,
+            "waitingFor": null
+          },
+          "transcriptBytes": 183464,
+          "rowCount": 27,
+          "lastRows": [
+            {
+              "type": "attachment",
+              "offset": 7834,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 9505,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 10843,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 16893,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 26124,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 63386,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 64450,
+              "blocks": []
+            },
+            {
+              "type": "api-request-shape",
+              "offset": 65049,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 152980,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 154982,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 178809,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 182767,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 183089,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 183196,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 183279,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 183381,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792328194182,
+        "observedAt": 1792328201457,
+        "status": "idle",
+        "statusUpdatedAt": 1792328201404,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328195858,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328197362,
+          "code": "0",
+          "payloadSha256": "240e39b83d3d2e305f7fa14b825e1bbd8a9c490db4cb8afbfa9d32f609f50843"
+        },
+        {
+          "at": 1792328197507,
+          "code": "0",
+          "payloadSha256": "009ffca80e9f1a9eed90d4a2be19a90bc23c61f2281134c1ed7afc09207a1da2"
+        },
+        {
+          "at": 1792328198411,
+          "code": "0",
+          "payloadSha256": "240e39b83d3d2e305f7fa14b825e1bbd8a9c490db4cb8afbfa9d32f609f50843"
+        },
+        {
+          "at": 1792328199363,
+          "code": "0",
+          "payloadSha256": "009ffca80e9f1a9eed90d4a2be19a90bc23c61f2281134c1ed7afc09207a1da2"
+        },
+        {
+          "at": 1792328200324,
+          "code": "0",
+          "payloadSha256": "240e39b83d3d2e305f7fa14b825e1bbd8a9c490db4cb8afbfa9d32f609f50843"
+        },
+        {
+          "at": 1792328201286,
+          "code": "0",
+          "payloadSha256": "009ffca80e9f1a9eed90d4a2be19a90bc23c61f2281134c1ed7afc09207a1da2"
+        },
+        {
+          "at": 1792328201403,
+          "code": "0",
+          "payloadSha256": "d9e0e909fd8712515be847a01d56eedf63841ba25b78c7fdb4220716c198fffa"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 321599,
+        "exitRequestedAt": 1792328202653,
+        "finalBytes": 323169
+      }
+    },
+    {
+      "pid": 18796,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "ab33cac5-7826-4b76-b9cb-f487137dadaa"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792328232754,
+        "status": "idle",
+        "statusUpdatedAt": 1792328232596,
+        "waitingFor": null
+      },
+      "sessionId": "ab33cac5-7826-4b76-b9cb-f487137dadaa",
+      "cwd": "C:\\canary380-runtime\\r41\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134368018052633868",
+      "writerHostPid": 18796,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 17732923533228880
+      },
+      "submissions": [
+        {
+          "phase": "ordinary turn",
+          "beforeBytes": 0,
+          "submittedAt": 1792328219437,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792328232754,
+          "descriptor": {
+            "observedAt": 1792328232754,
+            "status": "idle",
+            "statusUpdatedAt": 1792328232596,
+            "waitingFor": null
+          },
+          "transcriptBytes": 359173,
+          "rowCount": 31,
+          "lastRows": [
+            {
+              "type": "attachment",
+              "offset": 145569,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 147735,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 149073,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 155123,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 164634,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 201896,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 202960,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 203559,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 203911,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 204025,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 204108,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 204210,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 204293,
+              "blocks": [
+                {
+                  "type": "thinking"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 206935,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "attachment",
+              "offset": 208559,
+              "blocks": []
+            },
+            {
+              "type": "system",
+              "offset": 358745,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792328219437,
+        "observedAt": 1792328232724,
+        "status": "idle",
+        "statusUpdatedAt": 1792328232596,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328224209,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328226581,
+          "code": "0",
+          "payloadSha256": "dbda7555c1bf48ef2a41b1e4a278f9e8c1becbda45c87c83c3bb633a9bedc7c8"
+        },
+        {
+          "at": 1792328227341,
+          "code": "0",
+          "payloadSha256": "e622b7f5aea58a1447c06652c848c5ef215b16f4a860ad65d3fd1f62cb5308d0"
+        },
+        {
+          "at": 1792328228823,
+          "code": "0",
+          "payloadSha256": "dbda7555c1bf48ef2a41b1e4a278f9e8c1becbda45c87c83c3bb633a9bedc7c8"
+        },
+        {
+          "at": 1792328229032,
+          "code": "0",
+          "payloadSha256": "e622b7f5aea58a1447c06652c848c5ef215b16f4a860ad65d3fd1f62cb5308d0"
+        },
+        {
+          "at": 1792328229848,
+          "code": "0",
+          "payloadSha256": "dbda7555c1bf48ef2a41b1e4a278f9e8c1becbda45c87c83c3bb633a9bedc7c8"
+        },
+        {
+          "at": 1792328230810,
+          "code": "0",
+          "payloadSha256": "e622b7f5aea58a1447c06652c848c5ef215b16f4a860ad65d3fd1f62cb5308d0"
+        },
+        {
+          "at": 1792328231771,
+          "code": "0",
+          "payloadSha256": "dbda7555c1bf48ef2a41b1e4a278f9e8c1becbda45c87c83c3bb633a9bedc7c8"
+        },
+        {
+          "at": 1792328232614,
+          "code": "0",
+          "payloadSha256": "5ae8b165c23cca910241e0e032f71404b3ce7fa2a0a3500567479accfe96f1c2"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 359907,
+        "exitRequestedAt": 1792328234031,
+        "finalBytes": 361521
+      }
+    },
+    {
+      "pid": 24120,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "3c324695-0e09-4068-9a81-c5f6a3eb4de5"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792328252213,
+        "status": "idle",
+        "statusUpdatedAt": 1792328252172,
+        "waitingFor": null
+      },
+      "sessionId": "3c324695-0e09-4068-9a81-c5f6a3eb4de5",
+      "cwd": "C:\\canary380-runtime\\r41\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134368018351859120",
+      "writerHostPid": 24120,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 17732923533228880
+      },
+      "submissions": [
+        {
+          "phase": "ordinary turn",
+          "beforeBytes": 0,
+          "submittedAt": 1792328241396,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792328252213,
+          "descriptor": {
+            "observedAt": 1792328252213,
+            "status": "idle",
+            "statusUpdatedAt": 1792328252172,
+            "waitingFor": null
+          },
+          "transcriptBytes": 259712,
+          "rowCount": 26,
+          "lastRows": [
+            {
+              "type": "attachment",
+              "offset": 40315,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 42481,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 43819,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 49869,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 59380,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 96642,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 97706,
+              "blocks": []
+            },
+            {
+              "type": "api-request-shape",
+              "offset": 98305,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 196136,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 230726,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 255025,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 258981,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 259333,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 259416,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 259518,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 259601,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792328241396,
+        "observedAt": 1792328252207,
+        "status": "idle",
+        "statusUpdatedAt": 1792328252172,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328244296,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328245501,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792328246036,
+          "code": "0",
+          "payloadSha256": "cdadc96e36a1b10f7ec07de50fbd2dab0d87bb7951926be9166594448e65dd7d"
+        },
+        {
+          "at": 1792328246348,
+          "code": "0",
+          "payloadSha256": "a130bc63078054866a6f7fcce2510991e0e148bf1c1830a672542931d0c3b7b0"
+        },
+        {
+          "at": 1792328247309,
+          "code": "0",
+          "payloadSha256": "cdadc96e36a1b10f7ec07de50fbd2dab0d87bb7951926be9166594448e65dd7d"
+        },
+        {
+          "at": 1792328248271,
+          "code": "0",
+          "payloadSha256": "a130bc63078054866a6f7fcce2510991e0e148bf1c1830a672542931d0c3b7b0"
+        },
+        {
+          "at": 1792328249232,
+          "code": "0",
+          "payloadSha256": "cdadc96e36a1b10f7ec07de50fbd2dab0d87bb7951926be9166594448e65dd7d"
+        },
+        {
+          "at": 1792328250193,
+          "code": "0",
+          "payloadSha256": "a130bc63078054866a6f7fcce2510991e0e148bf1c1830a672542931d0c3b7b0"
+        },
+        {
+          "at": 1792328251154,
+          "code": "0",
+          "payloadSha256": "cdadc96e36a1b10f7ec07de50fbd2dab0d87bb7951926be9166594448e65dd7d"
+        },
+        {
+          "at": 1792328252172,
+          "code": "0",
+          "payloadSha256": "a71869b028fa50ff967258d0521b334d893125f2f2ff46944821e45911d2a820"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 412677,
+        "exitRequestedAt": 1792328253433,
+        "finalBytes": 414249
+      }
+    },
+    {
+      "pid": 7936,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "897d5843-c3fe-474f-9db6-df53f8ce4f96"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792328268609,
+        "status": "idle",
+        "statusUpdatedAt": 1792328268578,
+        "waitingFor": null
+      },
+      "sessionId": "897d5843-c3fe-474f-9db6-df53f8ce4f96",
+      "cwd": "C:\\canary380-runtime\\r41\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134368018545460283",
+      "writerHostPid": 7936,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 17732923533228880
+      },
+      "submissions": [
+        {
+          "phase": "ordinary turn",
+          "beforeBytes": 0,
+          "submittedAt": 1792328260080,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792328268609,
+          "descriptor": {
+            "observedAt": 1792328268609,
+            "status": "idle",
+            "statusUpdatedAt": 1792328268578,
+            "waitingFor": null
+          },
+          "transcriptBytes": 292328,
+          "rowCount": 32,
+          "lastRows": [
+            {
+              "type": "attachment",
+              "offset": 113595,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 114194,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 114296,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 114648,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 114750,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 114833,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 114935,
+              "blocks": []
+            },
+            {
+              "type": "api-request-shape",
+              "offset": 115018,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 212849,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 263823,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 287650,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 291606,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 291958,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 292060,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 292143,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 292245,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792328260080,
+        "observedAt": 1792328268604,
+        "status": "idle",
+        "statusUpdatedAt": 1792328268578,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328262634,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328263935,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792328263938,
+          "code": "0",
+          "payloadSha256": "4e3ebad2bcb06db6ae4675ceb2a8731c8af167d79a337df291c6d5a08701cefc"
+        },
+        {
+          "at": 1792328264658,
+          "code": "0",
+          "payloadSha256": "03248290b9e79b7623e1d80b87f5390e50726466fe1abd5552e13e18e31c96d1"
+        },
+        {
+          "at": 1792328265626,
+          "code": "0",
+          "payloadSha256": "4e3ebad2bcb06db6ae4675ceb2a8731c8af167d79a337df291c6d5a08701cefc"
+        },
+        {
+          "at": 1792328266580,
+          "code": "0",
+          "payloadSha256": "03248290b9e79b7623e1d80b87f5390e50726466fe1abd5552e13e18e31c96d1"
+        },
+        {
+          "at": 1792328267541,
+          "code": "0",
+          "payloadSha256": "4e3ebad2bcb06db6ae4675ceb2a8731c8af167d79a337df291c6d5a08701cefc"
+        },
+        {
+          "at": 1792328268506,
+          "code": "0",
+          "payloadSha256": "03248290b9e79b7623e1d80b87f5390e50726466fe1abd5552e13e18e31c96d1"
+        },
+        {
+          "at": 1792328268578,
+          "code": "0",
+          "payloadSha256": "28849a8ce79ae9aa541de7fa04665025e7239610ec89c6f7eb13d6915e3bb8aa"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 445284,
+        "exitRequestedAt": 1792328269810,
+        "finalBytes": 446896
+      }
+    },
+    {
+      "pid": 3088,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "e5d185c8-72dc-4506-a879-89a322b85cae"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792328283522,
+        "status": "idle",
+        "statusUpdatedAt": 1792328283042,
+        "waitingFor": null
+      },
+      "sessionId": "e5d185c8-72dc-4506-a879-89a322b85cae",
+      "cwd": "C:\\canary380-runtime\\r41\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134368018707205354",
+      "writerHostPid": 3088,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 17732923533228880
+      },
+      "submissions": [
+        {
+          "phase": "ordinary turn",
+          "beforeBytes": 0,
+          "submittedAt": 1792328276835,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792328283522,
+          "descriptor": {
+            "observedAt": 1792328283522,
+            "status": "idle",
+            "statusUpdatedAt": 1792328283042,
+            "waitingFor": null
+          },
+          "transcriptBytes": 350934,
+          "rowCount": 39,
+          "lastRows": [
+            {
+              "type": "api-request-blob",
+              "offset": 166324,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 190623,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 194579,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 194931,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 195014,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 195116,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 195199,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 195309,
+              "blocks": [
+                {
+                  "type": "thinking"
+                }
+              ]
+            },
+            {
+              "type": "assistant",
+              "offset": 197971,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "attachment",
+              "offset": 199591,
+              "blocks": []
+            },
+            {
+              "type": "system",
+              "offset": 349777,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 350204,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 350556,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 350666,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 350749,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 350851,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792328276835,
+        "observedAt": 1792328283511,
+        "status": "idle",
+        "statusUpdatedAt": 1792328283042,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328277914,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328278875,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792328279232,
+          "code": "0",
+          "payloadSha256": "3eaeedcd5e1916f813d902c22dc1dab6c938f83ce3801608170c2e970e0a299f"
+        },
+        {
+          "at": 1792328279837,
+          "code": "0",
+          "payloadSha256": "0ff85f3459bf713bb4e0688991fc660f55eab37bb011f95eec9b06527dca5e74"
+        },
+        {
+          "at": 1792328280799,
+          "code": "0",
+          "payloadSha256": "3eaeedcd5e1916f813d902c22dc1dab6c938f83ce3801608170c2e970e0a299f"
+        },
+        {
+          "at": 1792328281760,
+          "code": "0",
+          "payloadSha256": "0ff85f3459bf713bb4e0688991fc660f55eab37bb011f95eec9b06527dca5e74"
+        },
+        {
+          "at": 1792328282720,
+          "code": "0",
+          "payloadSha256": "3eaeedcd5e1916f813d902c22dc1dab6c938f83ce3801608170c2e970e0a299f"
+        },
+        {
+          "at": 1792328283044,
+          "code": "0",
+          "payloadSha256": "239933274ab65785f0fed442f2ed07de4abbc230e4d9f477585965958693fce1"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 350934,
+        "exitRequestedAt": 1792328284601,
+        "finalBytes": 352552
+      }
+    },
+    {
+      "pid": 18188,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "819b8e0b-72bd-49d3-bc81-d832659e8b80"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792328295186,
+        "status": "idle",
+        "statusUpdatedAt": 1792328295128,
+        "waitingFor": null
+      },
+      "sessionId": "819b8e0b-72bd-49d3-bc81-d832659e8b80",
+      "cwd": "C:\\canary380-runtime\\r41\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134368018855396026",
+      "writerHostPid": 18188,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 17732923533228880
+      },
+      "submissions": [
+        {
+          "phase": "ordinary turn",
+          "beforeBytes": 0,
+          "submittedAt": 1792328291038,
+          "waitBudgetMs": 20000,
+          "outcome": "PASS",
+          "observedAt": 1792328295186,
+          "descriptor": {
+            "observedAt": 1792328295186,
+            "status": "idle",
+            "statusUpdatedAt": 1792328295128,
+            "waitingFor": null
+          },
+          "transcriptBytes": 194140,
+          "rowCount": 30,
+          "lastRows": [
+            {
+              "type": "attachment",
+              "offset": 26300,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 63562,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 64626,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 65225,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 65550,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 65633,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 65735,
+              "blocks": []
+            },
+            {
+              "type": "api-request-shape",
+              "offset": 65818,
+              "blocks": []
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 163649,
+              "blocks": [
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                },
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 165654,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 189481,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 193437,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 193762,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 193845,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 193947,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 194030,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792328291038,
+        "observedAt": 1792328295183,
+        "status": "idle",
+        "statusUpdatedAt": 1792328295128,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328291742,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328292704,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792328292978,
+          "code": "0",
+          "payloadSha256": "253cb050ff44432cab2adf8993e85085a0df637ce9998bda8d43b74d05710846"
+        },
+        {
+          "at": 1792328293666,
+          "code": "0",
+          "payloadSha256": "f16efd745b896f0d5ce79d3fde7586f6dd73cb483ad87748b51ab449ff0eeae0"
+        },
+        {
+          "at": 1792328294626,
+          "code": "0",
+          "payloadSha256": "253cb050ff44432cab2adf8993e85085a0df637ce9998bda8d43b74d05710846"
+        },
+        {
+          "at": 1792328295128,
+          "code": "0",
+          "payloadSha256": "791a02cedee957256401dba07762f2d2bb4663111f4b2113c156b4fdfbdaa40f"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 347073,
+        "exitRequestedAt": 1792328296335,
+        "finalBytes": 348659
+      }
+    }
+  ],
+  "payloads": [
+    {
+      "bytes": 180,
+      "sha256": "2c78a4331030f516b81b2dc24bbbc5a5eddf7ca2aa1c5173dc251bd2c604f6f5",
+      "nonce": "74954842-0c8f-457b-a38d-2b20b8a6f3b7",
+      "userTurns": 1,
+      "inputTabs": 1,
+      "deliveredTabs": 0,
+      "containsEmoji": true,
+      "whitespaceBoundary": false,
+      "openingTagLineEnding": "LF",
+      "literal": true,
+      "linkedPaste": false,
+      "independentlyObservedReaction": true,
+      "wrapperPresent": true,
+      "wrapperId": "84a4",
+      "envelopePrefix": "\\n\\n",
+      "literalAfterKnownTransformations": true,
+      "envelopeSuffix": "\\n",
+      "transformations": [],
+      "pasteCache": [],
+      "storedBodyBytes": 180,
+      "storedBodySha256": "2c78a4331030f516b81b2dc24bbbc5a5eddf7ca2aa1c5173dc251bd2c604f6f5",
+      "singleTurnDelivery": true,
+      "eligibleConfirmation": true,
+      "descriptorConfirmation": {
+        "submittedAt": 1792328194182,
+        "observedAt": 1792328201457,
+        "status": "idle",
+        "statusUpdatedAt": 1792328201404,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328195858,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328197362,
+          "code": "0",
+          "payloadSha256": "240e39b83d3d2e305f7fa14b825e1bbd8a9c490db4cb8afbfa9d32f609f50843"
+        },
+        {
+          "at": 1792328197507,
+          "code": "0",
+          "payloadSha256": "009ffca80e9f1a9eed90d4a2be19a90bc23c61f2281134c1ed7afc09207a1da2"
+        },
+        {
+          "at": 1792328198411,
+          "code": "0",
+          "payloadSha256": "240e39b83d3d2e305f7fa14b825e1bbd8a9c490db4cb8afbfa9d32f609f50843"
+        },
+        {
+          "at": 1792328199363,
+          "code": "0",
+          "payloadSha256": "009ffca80e9f1a9eed90d4a2be19a90bc23c61f2281134c1ed7afc09207a1da2"
+        },
+        {
+          "at": 1792328200324,
+          "code": "0",
+          "payloadSha256": "240e39b83d3d2e305f7fa14b825e1bbd8a9c490db4cb8afbfa9d32f609f50843"
+        },
+        {
+          "at": 1792328201286,
+          "code": "0",
+          "payloadSha256": "009ffca80e9f1a9eed90d4a2be19a90bc23c61f2281134c1ed7afc09207a1da2"
+        },
+        {
+          "at": 1792328201403,
+          "code": "0",
+          "payloadSha256": "d9e0e909fd8712515be847a01d56eedf63841ba25b78c7fdb4220716c198fffa"
+        }
+      ],
+      "transcriptId": "63986a64-4d6f-4fb6-b245-271399f9cb0f",
+      "userOffsets": [
+        611
+      ],
+      "transcriptConfirmedBytes": 183464,
+      "transcriptFinalBytes": 323169,
+      "finalRowTypes": [
+        {
+          "type": "mode",
+          "offset": 0
+        },
+        {
+          "type": "permission-mode",
+          "offset": 83
+        },
+        {
+          "type": "atis-latch",
+          "offset": 185
+        },
+        {
+          "type": "ai-title",
+          "offset": 268
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 375
+        },
+        {
+          "type": "user",
+          "offset": 611
+        },
+        {
+          "type": "attachment",
+          "offset": 1407
+        },
+        {
+          "type": "attachment",
+          "offset": 3411
+        },
+        {
+          "type": "attachment",
+          "offset": 5927
+        },
+        {
+          "type": "attachment",
+          "offset": 6500
+        },
+        {
+          "type": "attachment",
+          "offset": 7331
+        },
+        {
+          "type": "attachment",
+          "offset": 7834
+        },
+        {
+          "type": "attachment",
+          "offset": 9505
+        },
+        {
+          "type": "attachment",
+          "offset": 10843
+        },
+        {
+          "type": "attachment",
+          "offset": 16893
+        },
+        {
+          "type": "attachment",
+          "offset": 26124
+        },
+        {
+          "type": "attachment",
+          "offset": 63386
+        },
+        {
+          "type": "attachment",
+          "offset": 64450
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 65049
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 152980
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 154982
+        },
+        {
+          "type": "api-request",
+          "offset": 178809
+        },
+        {
+          "type": "last-prompt",
+          "offset": 182767
+        },
+        {
+          "type": "ai-title",
+          "offset": 183089
+        },
+        {
+          "type": "mode",
+          "offset": 183196
+        },
+        {
+          "type": "permission-mode",
+          "offset": 183279
+        },
+        {
+          "type": "atis-latch",
+          "offset": 183381
+        },
+        {
+          "type": "assistant",
+          "offset": 183464
+        },
+        {
+          "type": "attachment",
+          "offset": 185085
+        },
+        {
+          "type": "system",
+          "offset": 320475
+        },
+        {
+          "type": "last-prompt",
+          "offset": 320902
+        },
+        {
+          "type": "ai-title",
+          "offset": 321224
+        },
+        {
+          "type": "mode",
+          "offset": 321331
+        },
+        {
+          "type": "permission-mode",
+          "offset": 321414
+        },
+        {
+          "type": "atis-latch",
+          "offset": 321516
+        },
+        {
+          "type": "cost-state",
+          "offset": 321599
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 322266
+        },
+        {
+          "type": "cost-state",
+          "offset": 322502
+        }
+      ]
+    },
+    {
+      "bytes": 5000,
+      "sha256": "3693bcfd0326702a430347c06846cf940dab7f57a6f1ebdb10661a6b83cfdaf1",
+      "nonce": "3cac5e81-4d66-4354-b26e-2523a955149d",
+      "userTurns": 1,
+      "inputTabs": 1,
+      "deliveredTabs": 0,
+      "containsEmoji": true,
+      "whitespaceBoundary": false,
+      "openingTagLineEnding": "LF",
+      "literal": true,
+      "linkedPaste": false,
+      "independentlyObservedReaction": true,
+      "wrapperPresent": true,
+      "wrapperId": "1f69",
+      "envelopePrefix": "\\n\\n",
+      "literalAfterKnownTransformations": true,
+      "envelopeSuffix": "\\n",
+      "transformations": [],
+      "pasteCache": [
+        {
+          "bytes": 5000,
+          "sha256": "3693bcfd0326702a430347c06846cf940dab7f57a6f1ebdb10661a6b83cfdaf1"
+        }
+      ],
+      "storedBodyBytes": 5000,
+      "storedBodySha256": "3693bcfd0326702a430347c06846cf940dab7f57a6f1ebdb10661a6b83cfdaf1",
+      "singleTurnDelivery": true,
+      "eligibleConfirmation": true,
+      "descriptorConfirmation": {
+        "submittedAt": 1792328219437,
+        "observedAt": 1792328232724,
+        "status": "idle",
+        "statusUpdatedAt": 1792328232596,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328224209,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328226581,
+          "code": "0",
+          "payloadSha256": "dbda7555c1bf48ef2a41b1e4a278f9e8c1becbda45c87c83c3bb633a9bedc7c8"
+        },
+        {
+          "at": 1792328227341,
+          "code": "0",
+          "payloadSha256": "e622b7f5aea58a1447c06652c848c5ef215b16f4a860ad65d3fd1f62cb5308d0"
+        },
+        {
+          "at": 1792328228823,
+          "code": "0",
+          "payloadSha256": "dbda7555c1bf48ef2a41b1e4a278f9e8c1becbda45c87c83c3bb633a9bedc7c8"
+        },
+        {
+          "at": 1792328229032,
+          "code": "0",
+          "payloadSha256": "e622b7f5aea58a1447c06652c848c5ef215b16f4a860ad65d3fd1f62cb5308d0"
+        },
+        {
+          "at": 1792328229848,
+          "code": "0",
+          "payloadSha256": "dbda7555c1bf48ef2a41b1e4a278f9e8c1becbda45c87c83c3bb633a9bedc7c8"
+        },
+        {
+          "at": 1792328230810,
+          "code": "0",
+          "payloadSha256": "e622b7f5aea58a1447c06652c848c5ef215b16f4a860ad65d3fd1f62cb5308d0"
+        },
+        {
+          "at": 1792328231771,
+          "code": "0",
+          "payloadSha256": "dbda7555c1bf48ef2a41b1e4a278f9e8c1becbda45c87c83c3bb633a9bedc7c8"
+        },
+        {
+          "at": 1792328232614,
+          "code": "0",
+          "payloadSha256": "5ae8b165c23cca910241e0e032f71404b3ce7fa2a0a3500567479accfe96f1c2"
+        }
+      ],
+      "transcriptId": "ab33cac5-7826-4b76-b9cb-f487137dadaa",
+      "userOffsets": [
+        618
+      ],
+      "transcriptConfirmedBytes": 359907,
+      "transcriptFinalBytes": 361521,
+      "finalRowTypes": [
+        {
+          "type": "mode",
+          "offset": 0
+        },
+        {
+          "type": "permission-mode",
+          "offset": 83
+        },
+        {
+          "type": "atis-latch",
+          "offset": 185
+        },
+        {
+          "type": "ai-title",
+          "offset": 268
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 382
+        },
+        {
+          "type": "user",
+          "offset": 618
+        },
+        {
+          "type": "attachment",
+          "offset": 6234
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 8238
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 106069
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 112891
+        },
+        {
+          "type": "api-request",
+          "offset": 137190
+        },
+        {
+          "type": "attachment",
+          "offset": 141146
+        },
+        {
+          "type": "attachment",
+          "offset": 143662
+        },
+        {
+          "type": "attachment",
+          "offset": 144235
+        },
+        {
+          "type": "attachment",
+          "offset": 145066
+        },
+        {
+          "type": "attachment",
+          "offset": 145569
+        },
+        {
+          "type": "attachment",
+          "offset": 147735
+        },
+        {
+          "type": "attachment",
+          "offset": 149073
+        },
+        {
+          "type": "attachment",
+          "offset": 155123
+        },
+        {
+          "type": "attachment",
+          "offset": 164634
+        },
+        {
+          "type": "attachment",
+          "offset": 201896
+        },
+        {
+          "type": "attachment",
+          "offset": 202960
+        },
+        {
+          "type": "last-prompt",
+          "offset": 203559
+        },
+        {
+          "type": "ai-title",
+          "offset": 203911
+        },
+        {
+          "type": "mode",
+          "offset": 204025
+        },
+        {
+          "type": "permission-mode",
+          "offset": 204108
+        },
+        {
+          "type": "atis-latch",
+          "offset": 204210
+        },
+        {
+          "type": "assistant",
+          "offset": 204293
+        },
+        {
+          "type": "assistant",
+          "offset": 206935
+        },
+        {
+          "type": "attachment",
+          "offset": 208559
+        },
+        {
+          "type": "system",
+          "offset": 358745
+        },
+        {
+          "type": "last-prompt",
+          "offset": 359173
+        },
+        {
+          "type": "ai-title",
+          "offset": 359525
+        },
+        {
+          "type": "mode",
+          "offset": 359639
+        },
+        {
+          "type": "permission-mode",
+          "offset": 359722
+        },
+        {
+          "type": "atis-latch",
+          "offset": 359824
+        },
+        {
+          "type": "cost-state",
+          "offset": 359907
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 360596
+        },
+        {
+          "type": "cost-state",
+          "offset": 360832
+        }
+      ]
+    },
+    {
+      "bytes": 32768,
+      "sha256": "1f0924436455ea4de8a102407412c91c675a4b00b1d7807e3761f0cc2ad3d5c9",
+      "nonce": "9ff89c4c-9c17-47cd-a4af-fda69570ab8a",
+      "userTurns": 1,
+      "inputTabs": 1,
+      "deliveredTabs": 0,
+      "containsEmoji": true,
+      "whitespaceBoundary": false,
+      "openingTagLineEnding": "LF",
+      "literal": true,
+      "linkedPaste": false,
+      "independentlyObservedReaction": true,
+      "wrapperPresent": true,
+      "wrapperId": "5fc4",
+      "envelopePrefix": "\\n\\n",
+      "literalAfterKnownTransformations": true,
+      "envelopeSuffix": "\\n",
+      "transformations": [],
+      "pasteCache": [
+        {
+          "bytes": 32768,
+          "sha256": "1f0924436455ea4de8a102407412c91c675a4b00b1d7807e3761f0cc2ad3d5c9"
+        },
+        {
+          "bytes": 5000,
+          "sha256": "3693bcfd0326702a430347c06846cf940dab7f57a6f1ebdb10661a6b83cfdaf1"
+        }
+      ],
+      "storedBodyBytes": 32768,
+      "storedBodySha256": "1f0924436455ea4de8a102407412c91c675a4b00b1d7807e3761f0cc2ad3d5c9",
+      "singleTurnDelivery": true,
+      "eligibleConfirmation": true,
+      "descriptorConfirmation": {
+        "submittedAt": 1792328241396,
+        "observedAt": 1792328252207,
+        "status": "idle",
+        "statusUpdatedAt": 1792328252172,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328244296,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328245501,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792328246036,
+          "code": "0",
+          "payloadSha256": "cdadc96e36a1b10f7ec07de50fbd2dab0d87bb7951926be9166594448e65dd7d"
+        },
+        {
+          "at": 1792328246348,
+          "code": "0",
+          "payloadSha256": "a130bc63078054866a6f7fcce2510991e0e148bf1c1830a672542931d0c3b7b0"
+        },
+        {
+          "at": 1792328247309,
+          "code": "0",
+          "payloadSha256": "cdadc96e36a1b10f7ec07de50fbd2dab0d87bb7951926be9166594448e65dd7d"
+        },
+        {
+          "at": 1792328248271,
+          "code": "0",
+          "payloadSha256": "a130bc63078054866a6f7fcce2510991e0e148bf1c1830a672542931d0c3b7b0"
+        },
+        {
+          "at": 1792328249232,
+          "code": "0",
+          "payloadSha256": "cdadc96e36a1b10f7ec07de50fbd2dab0d87bb7951926be9166594448e65dd7d"
+        },
+        {
+          "at": 1792328250193,
+          "code": "0",
+          "payloadSha256": "a130bc63078054866a6f7fcce2510991e0e148bf1c1830a672542931d0c3b7b0"
+        },
+        {
+          "at": 1792328251154,
+          "code": "0",
+          "payloadSha256": "cdadc96e36a1b10f7ec07de50fbd2dab0d87bb7951926be9166594448e65dd7d"
+        },
+        {
+          "at": 1792328252172,
+          "code": "0",
+          "payloadSha256": "a71869b028fa50ff967258d0521b334d893125f2f2ff46944821e45911d2a820"
+        }
+      ],
+      "transcriptId": "3c324695-0e09-4068-9a81-c5f6a3eb4de5",
+      "userOffsets": [
+        504
+      ],
+      "transcriptConfirmedBytes": 259712,
+      "transcriptFinalBytes": 414249,
+      "finalRowTypes": [
+        {
+          "type": "mode",
+          "offset": 0
+        },
+        {
+          "type": "permission-mode",
+          "offset": 83
+        },
+        {
+          "type": "atis-latch",
+          "offset": 185
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 268
+        },
+        {
+          "type": "user",
+          "offset": 504
+        },
+        {
+          "type": "attachment",
+          "offset": 33888
+        },
+        {
+          "type": "attachment",
+          "offset": 35892
+        },
+        {
+          "type": "attachment",
+          "offset": 38408
+        },
+        {
+          "type": "attachment",
+          "offset": 38981
+        },
+        {
+          "type": "attachment",
+          "offset": 39812
+        },
+        {
+          "type": "attachment",
+          "offset": 40315
+        },
+        {
+          "type": "attachment",
+          "offset": 42481
+        },
+        {
+          "type": "attachment",
+          "offset": 43819
+        },
+        {
+          "type": "attachment",
+          "offset": 49869
+        },
+        {
+          "type": "attachment",
+          "offset": 59380
+        },
+        {
+          "type": "attachment",
+          "offset": 96642
+        },
+        {
+          "type": "attachment",
+          "offset": 97706
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 98305
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 196136
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 230726
+        },
+        {
+          "type": "api-request",
+          "offset": 255025
+        },
+        {
+          "type": "last-prompt",
+          "offset": 258981
+        },
+        {
+          "type": "mode",
+          "offset": 259333
+        },
+        {
+          "type": "permission-mode",
+          "offset": 259416
+        },
+        {
+          "type": "atis-latch",
+          "offset": 259518
+        },
+        {
+          "type": "ai-title",
+          "offset": 259601
+        },
+        {
+          "type": "assistant",
+          "offset": 259712
+        },
+        {
+          "type": "attachment",
+          "offset": 261333
+        },
+        {
+          "type": "system",
+          "offset": 411519
+        },
+        {
+          "type": "last-prompt",
+          "offset": 411946
+        },
+        {
+          "type": "ai-title",
+          "offset": 412298
+        },
+        {
+          "type": "mode",
+          "offset": 412409
+        },
+        {
+          "type": "permission-mode",
+          "offset": 412492
+        },
+        {
+          "type": "atis-latch",
+          "offset": 412594
+        },
+        {
+          "type": "cost-state",
+          "offset": 412677
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 413345
+        },
+        {
+          "type": "cost-state",
+          "offset": 413581
+        }
+      ]
+    },
+    {
+      "bytes": 49152,
+      "sha256": "13b7f3a1cc5694a8c47e8616bbaac297f92e1f45b6afdff0da57a1b35b8b1721",
+      "nonce": "31ad6e8e-3ffe-490e-9f94-5e5507da4230",
+      "userTurns": 1,
+      "inputTabs": 1,
+      "deliveredTabs": 0,
+      "containsEmoji": true,
+      "whitespaceBoundary": false,
+      "openingTagLineEnding": "LF",
+      "literal": true,
+      "linkedPaste": false,
+      "independentlyObservedReaction": true,
+      "wrapperPresent": true,
+      "wrapperId": "a171",
+      "envelopePrefix": "\\n\\n",
+      "literalAfterKnownTransformations": true,
+      "envelopeSuffix": "\\n",
+      "transformations": [],
+      "pasteCache": [
+        {
+          "bytes": 49152,
+          "sha256": "13b7f3a1cc5694a8c47e8616bbaac297f92e1f45b6afdff0da57a1b35b8b1721"
+        },
+        {
+          "bytes": 32768,
+          "sha256": "1f0924436455ea4de8a102407412c91c675a4b00b1d7807e3761f0cc2ad3d5c9"
+        },
+        {
+          "bytes": 5000,
+          "sha256": "3693bcfd0326702a430347c06846cf940dab7f57a6f1ebdb10661a6b83cfdaf1"
+        }
+      ],
+      "storedBodyBytes": 49152,
+      "storedBodySha256": "13b7f3a1cc5694a8c47e8616bbaac297f92e1f45b6afdff0da57a1b35b8b1721",
+      "singleTurnDelivery": true,
+      "eligibleConfirmation": true,
+      "descriptorConfirmation": {
+        "submittedAt": 1792328260080,
+        "observedAt": 1792328268604,
+        "status": "idle",
+        "statusUpdatedAt": 1792328268578,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328262634,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328263935,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792328263938,
+          "code": "0",
+          "payloadSha256": "4e3ebad2bcb06db6ae4675ceb2a8731c8af167d79a337df291c6d5a08701cefc"
+        },
+        {
+          "at": 1792328264658,
+          "code": "0",
+          "payloadSha256": "03248290b9e79b7623e1d80b87f5390e50726466fe1abd5552e13e18e31c96d1"
+        },
+        {
+          "at": 1792328265626,
+          "code": "0",
+          "payloadSha256": "4e3ebad2bcb06db6ae4675ceb2a8731c8af167d79a337df291c6d5a08701cefc"
+        },
+        {
+          "at": 1792328266580,
+          "code": "0",
+          "payloadSha256": "03248290b9e79b7623e1d80b87f5390e50726466fe1abd5552e13e18e31c96d1"
+        },
+        {
+          "at": 1792328267541,
+          "code": "0",
+          "payloadSha256": "4e3ebad2bcb06db6ae4675ceb2a8731c8af167d79a337df291c6d5a08701cefc"
+        },
+        {
+          "at": 1792328268506,
+          "code": "0",
+          "payloadSha256": "03248290b9e79b7623e1d80b87f5390e50726466fe1abd5552e13e18e31c96d1"
+        },
+        {
+          "at": 1792328268578,
+          "code": "0",
+          "payloadSha256": "28849a8ce79ae9aa541de7fa04665025e7239610ec89c6f7eb13d6915e3bb8aa"
+        }
+      ],
+      "transcriptId": "897d5843-c3fe-474f-9db6-df53f8ce4f96",
+      "userOffsets": [
+        504
+      ],
+      "transcriptConfirmedBytes": 292328,
+      "transcriptFinalBytes": 446896,
+      "finalRowTypes": [
+        {
+          "type": "mode",
+          "offset": 0
+        },
+        {
+          "type": "permission-mode",
+          "offset": 83
+        },
+        {
+          "type": "atis-latch",
+          "offset": 185
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 268
+        },
+        {
+          "type": "user",
+          "offset": 504
+        },
+        {
+          "type": "attachment",
+          "offset": 50272
+        },
+        {
+          "type": "attachment",
+          "offset": 52276
+        },
+        {
+          "type": "attachment",
+          "offset": 54792
+        },
+        {
+          "type": "attachment",
+          "offset": 55365
+        },
+        {
+          "type": "attachment",
+          "offset": 56196
+        },
+        {
+          "type": "attachment",
+          "offset": 56699
+        },
+        {
+          "type": "attachment",
+          "offset": 58370
+        },
+        {
+          "type": "attachment",
+          "offset": 59708
+        },
+        {
+          "type": "attachment",
+          "offset": 65758
+        },
+        {
+          "type": "attachment",
+          "offset": 75269
+        },
+        {
+          "type": "attachment",
+          "offset": 112531
+        },
+        {
+          "type": "attachment",
+          "offset": 113595
+        },
+        {
+          "type": "ai-title",
+          "offset": 114194
+        },
+        {
+          "type": "last-prompt",
+          "offset": 114296
+        },
+        {
+          "type": "ai-title",
+          "offset": 114648
+        },
+        {
+          "type": "mode",
+          "offset": 114750
+        },
+        {
+          "type": "permission-mode",
+          "offset": 114833
+        },
+        {
+          "type": "atis-latch",
+          "offset": 114935
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 115018
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 212849
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 263823
+        },
+        {
+          "type": "api-request",
+          "offset": 287650
+        },
+        {
+          "type": "last-prompt",
+          "offset": 291606
+        },
+        {
+          "type": "ai-title",
+          "offset": 291958
+        },
+        {
+          "type": "mode",
+          "offset": 292060
+        },
+        {
+          "type": "permission-mode",
+          "offset": 292143
+        },
+        {
+          "type": "atis-latch",
+          "offset": 292245
+        },
+        {
+          "type": "assistant",
+          "offset": 292328
+        },
+        {
+          "type": "attachment",
+          "offset": 293949
+        },
+        {
+          "type": "system",
+          "offset": 444135
+        },
+        {
+          "type": "last-prompt",
+          "offset": 444562
+        },
+        {
+          "type": "ai-title",
+          "offset": 444914
+        },
+        {
+          "type": "mode",
+          "offset": 445016
+        },
+        {
+          "type": "permission-mode",
+          "offset": 445099
+        },
+        {
+          "type": "atis-latch",
+          "offset": 445201
+        },
+        {
+          "type": "cost-state",
+          "offset": 445284
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 445972
+        },
+        {
+          "type": "cost-state",
+          "offset": 446208
+        }
+      ]
+    },
+    {
+      "bytes": 256,
+      "sha256": "82dced391b9a0a2644041a5ffa445b68e3614ec0cdf1e2cf1ed27127e50fc725",
+      "nonce": "e9c90bc8-ea86-458b-b84b-9fa1c99313ae",
+      "userTurns": 1,
+      "inputTabs": 1,
+      "deliveredTabs": 0,
+      "containsEmoji": true,
+      "whitespaceBoundary": true,
+      "openingTagLineEnding": "LF",
+      "literal": false,
+      "linkedPaste": false,
+      "independentlyObservedReaction": true,
+      "wrapperPresent": true,
+      "wrapperId": "638a",
+      "envelopePrefix": "\\n\\n",
+      "literalAfterKnownTransformations": true,
+      "envelopeSuffix": "\\n",
+      "transformations": [
+        "truncation"
+      ],
+      "pasteCache": [
+        {
+          "bytes": 49152,
+          "sha256": "13b7f3a1cc5694a8c47e8616bbaac297f92e1f45b6afdff0da57a1b35b8b1721"
+        },
+        {
+          "bytes": 32768,
+          "sha256": "1f0924436455ea4de8a102407412c91c675a4b00b1d7807e3761f0cc2ad3d5c9"
+        },
+        {
+          "bytes": 5000,
+          "sha256": "3693bcfd0326702a430347c06846cf940dab7f57a6f1ebdb10661a6b83cfdaf1"
+        }
+      ],
+      "storedBodyBytes": 255,
+      "storedBodySha256": "f053a0f1f98103dac0b0096b0b8622635751f73d06ddd3f5780868d2a59e7719",
+      "singleTurnDelivery": true,
+      "eligibleConfirmation": true,
+      "descriptorConfirmation": {
+        "submittedAt": 1792328276835,
+        "observedAt": 1792328283511,
+        "status": "idle",
+        "statusUpdatedAt": 1792328283042,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328277914,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328278875,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792328279232,
+          "code": "0",
+          "payloadSha256": "3eaeedcd5e1916f813d902c22dc1dab6c938f83ce3801608170c2e970e0a299f"
+        },
+        {
+          "at": 1792328279837,
+          "code": "0",
+          "payloadSha256": "0ff85f3459bf713bb4e0688991fc660f55eab37bb011f95eec9b06527dca5e74"
+        },
+        {
+          "at": 1792328280799,
+          "code": "0",
+          "payloadSha256": "3eaeedcd5e1916f813d902c22dc1dab6c938f83ce3801608170c2e970e0a299f"
+        },
+        {
+          "at": 1792328281760,
+          "code": "0",
+          "payloadSha256": "0ff85f3459bf713bb4e0688991fc660f55eab37bb011f95eec9b06527dca5e74"
+        },
+        {
+          "at": 1792328282720,
+          "code": "0",
+          "payloadSha256": "3eaeedcd5e1916f813d902c22dc1dab6c938f83ce3801608170c2e970e0a299f"
+        },
+        {
+          "at": 1792328283044,
+          "code": "0",
+          "payloadSha256": "239933274ab65785f0fed442f2ed07de4abbc230e4d9f477585965958693fce1"
+        }
+      ],
+      "transcriptId": "e5d185c8-72dc-4506-a879-89a322b85cae",
+      "userOffsets": [
+        504
+      ],
+      "transcriptConfirmedBytes": 350934,
+      "transcriptFinalBytes": 352552,
+      "finalRowTypes": [
+        {
+          "type": "mode",
+          "offset": 0
+        },
+        {
+          "type": "permission-mode",
+          "offset": 83
+        },
+        {
+          "type": "atis-latch",
+          "offset": 185
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 268
+        },
+        {
+          "type": "user",
+          "offset": 504
+        },
+        {
+          "type": "attachment",
+          "offset": 1377
+        },
+        {
+          "type": "attachment",
+          "offset": 3381
+        },
+        {
+          "type": "attachment",
+          "offset": 5897
+        },
+        {
+          "type": "attachment",
+          "offset": 6470
+        },
+        {
+          "type": "attachment",
+          "offset": 7301
+        },
+        {
+          "type": "attachment",
+          "offset": 7804
+        },
+        {
+          "type": "attachment",
+          "offset": 9970
+        },
+        {
+          "type": "attachment",
+          "offset": 11308
+        },
+        {
+          "type": "attachment",
+          "offset": 17358
+        },
+        {
+          "type": "attachment",
+          "offset": 26869
+        },
+        {
+          "type": "attachment",
+          "offset": 64131
+        },
+        {
+          "type": "attachment",
+          "offset": 65195
+        },
+        {
+          "type": "last-prompt",
+          "offset": 65794
+        },
+        {
+          "type": "mode",
+          "offset": 66146
+        },
+        {
+          "type": "permission-mode",
+          "offset": 66229
+        },
+        {
+          "type": "atis-latch",
+          "offset": 66331
+        },
+        {
+          "type": "api-request-shape",
+          "offset": 66414
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 164245
+        },
+        {
+          "type": "api-request-blob",
+          "offset": 166324
+        },
+        {
+          "type": "api-request",
+          "offset": 190623
+        },
+        {
+          "type": "last-prompt",
+          "offset": 194579
+        },
+        {
+          "type": "mode",
+          "offset": 194931
+        },
+        {
+          "type": "permission-mode",
+          "offset": 195014
+        },
+        {
+          "type": "atis-latch",
+          "offset": 195116
+        },
+        {
+          "type": "ai-title",
+          "offset": 195199
+        },
+        {
+          "type": "assistant",
+          "offset": 195309
+        },
+        {
+          "type": "assistant",
+          "offset": 197971
+        },
+        {
+          "type": "attachment",
+          "offset": 199591
+        },
+        {
+          "type": "system",
+          "offset": 349777
+        },
+        {
+          "type": "last-prompt",
+          "offset": 350204
+        },
+        {
+          "type": "ai-title",
+          "offset": 350556
+        },
+        {
+          "type": "mode",
+          "offset": 350666
+        },
+        {
+          "type": "permission-mode",
+          "offset": 350749
+        },
+        {
+          "type": "atis-latch",
+          "offset": 350851
+        },
+        {
+          "type": "cost-state",
+          "offset": 350934
+        },
+        {
+          "type": "file-history-snapshot",
+          "offset": 351625
+        },
+        {
+          "type": "cost-state",
+          "offset": 351861
+        }
+      ]
+    }
+  ],
+  "forks": [],
+  "permissions": [],
+  "reports": [],
+  "rawTabControl": {
+    "bytes": 180,
+    "sha256": "348e7a4fb405823bde3b13d12e55c1e9b0dc72a98ea277d91e135062cf5c0362",
+    "nonce": "91d4e54c-1769-4694-9547-7bd750a5e206",
+    "userTurns": 1,
+    "inputTabs": 1,
+    "deliveredTabs": 1,
+    "containsEmoji": true,
+    "whitespaceBoundary": false,
+    "openingTagLineEnding": "LF",
+    "literal": false,
+    "linkedPaste": false,
+    "independentlyObservedReaction": true,
+    "wrapperPresent": true,
+    "wrapperId": "760f",
+    "envelopePrefix": "\\n\\n",
+    "literalAfterKnownTransformations": true,
+    "envelopeSuffix": "\\n",
+    "transformations": [
+      "tab-to-4-spaces"
+    ],
+    "pasteCache": [
+      {
+        "bytes": 49152,
+        "sha256": "13b7f3a1cc5694a8c47e8616bbaac297f92e1f45b6afdff0da57a1b35b8b1721"
+      },
+      {
+        "bytes": 32768,
+        "sha256": "1f0924436455ea4de8a102407412c91c675a4b00b1d7807e3761f0cc2ad3d5c9"
+      },
+      {
+        "bytes": 5000,
+        "sha256": "3693bcfd0326702a430347c06846cf940dab7f57a6f1ebdb10661a6b83cfdaf1"
+      }
+    ],
+    "storedBodyBytes": 183,
+    "storedBodySha256": "eacbfd7e09c79543b6b9f5ac10763e26dd64565e5d805d1ac49bf934402e7cb6",
+    "singleTurnDelivery": true,
+    "eligibleConfirmation": true,
+    "descriptorConfirmation": {
+      "submittedAt": 1792328291038,
+      "observedAt": 1792328295183,
+      "status": "idle",
+      "statusUpdatedAt": 1792328295128,
+      "waitingFor": null
+    },
+    "oscObservations": [
+      {
+        "at": 1792328291742,
+        "code": "0",
+        "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+      },
+      {
+        "at": 1792328292704,
+        "code": "0",
+        "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+      },
+      {
+        "at": 1792328292978,
+        "code": "0",
+        "payloadSha256": "253cb050ff44432cab2adf8993e85085a0df637ce9998bda8d43b74d05710846"
+      },
+      {
+        "at": 1792328293666,
+        "code": "0",
+        "payloadSha256": "f16efd745b896f0d5ce79d3fde7586f6dd73cb483ad87748b51ab449ff0eeae0"
+      },
+      {
+        "at": 1792328294626,
+        "code": "0",
+        "payloadSha256": "253cb050ff44432cab2adf8993e85085a0df637ce9998bda8d43b74d05710846"
+      },
+      {
+        "at": 1792328295128,
+        "code": "0",
+        "payloadSha256": "791a02cedee957256401dba07762f2d2bb4663111f4b2113c156b4fdfbdaa40f"
+      }
+    ],
+    "transcriptId": "819b8e0b-72bd-49d3-bc81-d832659e8b80",
+    "userOffsets": [
+      504
+    ],
+    "transcriptConfirmedBytes": 194140,
+    "transcriptFinalBytes": 348659,
+    "finalRowTypes": [
+      {
+        "type": "mode",
+        "offset": 0
+      },
+      {
+        "type": "permission-mode",
+        "offset": 83
+      },
+      {
+        "type": "atis-latch",
+        "offset": 185
+      },
+      {
+        "type": "file-history-snapshot",
+        "offset": 268
+      },
+      {
+        "type": "user",
+        "offset": 504
+      },
+      {
+        "type": "attachment",
+        "offset": 1303
+      },
+      {
+        "type": "attachment",
+        "offset": 3307
+      },
+      {
+        "type": "attachment",
+        "offset": 5823
+      },
+      {
+        "type": "attachment",
+        "offset": 6396
+      },
+      {
+        "type": "attachment",
+        "offset": 7227
+      },
+      {
+        "type": "attachment",
+        "offset": 7730
+      },
+      {
+        "type": "attachment",
+        "offset": 9401
+      },
+      {
+        "type": "attachment",
+        "offset": 10739
+      },
+      {
+        "type": "attachment",
+        "offset": 16789
+      },
+      {
+        "type": "attachment",
+        "offset": 26300
+      },
+      {
+        "type": "attachment",
+        "offset": 63562
+      },
+      {
+        "type": "attachment",
+        "offset": 64626
+      },
+      {
+        "type": "last-prompt",
+        "offset": 65225
+      },
+      {
+        "type": "mode",
+        "offset": 65550
+      },
+      {
+        "type": "permission-mode",
+        "offset": 65633
+      },
+      {
+        "type": "atis-latch",
+        "offset": 65735
+      },
+      {
+        "type": "api-request-shape",
+        "offset": 65818
+      },
+      {
+        "type": "api-request-blob",
+        "offset": 163649
+      },
+      {
+        "type": "api-request-blob",
+        "offset": 165654
+      },
+      {
+        "type": "api-request",
+        "offset": 189481
+      },
+      {
+        "type": "last-prompt",
+        "offset": 193437
+      },
+      {
+        "type": "mode",
+        "offset": 193762
+      },
+      {
+        "type": "permission-mode",
+        "offset": 193845
+      },
+      {
+        "type": "atis-latch",
+        "offset": 193947
+      },
+      {
+        "type": "ai-title",
+        "offset": 194030
+      },
+      {
+        "type": "assistant",
+        "offset": 194140
+      },
+      {
+        "type": "attachment",
+        "offset": 195757
+      },
+      {
+        "type": "system",
+        "offset": 345943
+      },
+      {
+        "type": "last-prompt",
+        "offset": 346370
+      },
+      {
+        "type": "ai-title",
+        "offset": 346695
+      },
+      {
+        "type": "mode",
+        "offset": 346805
+      },
+      {
+        "type": "permission-mode",
+        "offset": 346888
+      },
+      {
+        "type": "atis-latch",
+        "offset": 346990
+      },
+      {
+        "type": "cost-state",
+        "offset": 347073
+      },
+      {
+        "type": "file-history-snapshot",
+        "offset": 347748
+      },
+      {
+        "type": "cost-state",
+        "offset": 347984
+      }
+    ],
+    "informational": true
+  },
+  "failure": "literal envelope body equals delivered bytes at every size"
+}
