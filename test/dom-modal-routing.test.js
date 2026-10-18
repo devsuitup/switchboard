@@ -74,6 +74,7 @@ for (const kind of ['session', 'worktree']) {
       assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
       ctx.document.querySelector('.choice-dialog-confirm').click();
       assert.equal(await first, true);
+      await Promise.resolve();
       assert.ok(ctx.document.querySelector('.new-session-overlay'));
       ctx.document.body.dispatchEvent(new ctx.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
       assert.equal(await deleting, false);

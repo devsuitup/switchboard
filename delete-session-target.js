@@ -91,6 +91,7 @@ function resolveRowDeletionTargets(projectsDir, id, memberIds, folderOf) {
   const partIds = [...new Set([id, ...memberIds])];
   const targets = new Set();
   const refused = [];
+  const partTargets = [];
   for (const partId of partIds) {
     let resolved;
     try {
@@ -104,8 +105,9 @@ function resolveRowDeletionTargets(projectsDir, id, memberIds, folderOf) {
       return { ok: false, error: `cannot resolve conversation part ${partId}: ${reason}`, targets: [], refused };
     }
     for (const target of resolved.targets) targets.add(target);
+    partTargets.push({ id: partId, targets: resolved.targets });
   }
-  return { ok: true, targets: [...targets], refused, parts: partIds.length };
+  return { ok: true, targets: [...targets], refused, parts: partIds.length, partTargets };
 }
 
 module.exports = { isValidSessionId, isInsideDir, resolveDeletionTargets, resolveRowDeletionTargets };

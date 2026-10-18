@@ -21,7 +21,7 @@ const SESSION = {
 function stubApi(window, overrides = {}) {
   const calls = { deleteSession: [], preview: [] };
   window.api = {
-    deleteSessionPreview: (id) => { calls.preview.push(id); return Promise.resolve(overrides.preview ?? { ok: true, transcripts: 2, subagents: 3, running: false }); },
+    deleteSessionPreview: (id) => { calls.preview.push(id); return Promise.resolve({ partIds: [id], ...overrides.preview ?? { ok: true, transcripts: 2, subagents: 3, running: false } }); },
     deleteSession: (id) => { calls.deleteSession.push(id); return Promise.resolve(overrides.deleteResult ?? { ok: true, removed: ['x'], subagents: 3 }); },
     stopSession: () => Promise.resolve({ ok: true }),
     archiveSession: () => Promise.resolve({ ok: true }),
@@ -49,7 +49,7 @@ test('confirming a merged row forgets every part and destroys every open part ta
   const ctx = setupSidebarDom();
   try {
     const session = { ...SESSION, mergedMemberIds: ['b', 'c'] };
-    const calls = stubApi(ctx.window, { preview: { ok: true, parts: 3, transcripts: 3, subagents: 0 } });
+    const calls = stubApi(ctx.window, { preview: { ok: true, partIds: [SESSION.sessionId, 'b', 'c'], parts: 3, transcripts: 3, subagents: 0 } });
     const destroyed = [], dismissed = [];
     ctx.window.destroySession = id => { destroyed.push(id); ctx.window.openSessions.delete(id); };
     ctx.window.dismissDormantSession = id => dismissed.push(id);
@@ -142,27 +142,24 @@ test('Escape and overlay-click both cancel, like the worktree dialog', async () 
   }
 });
 
-test('confirming resolves true and closes the dialog', async () => {
+test('confirming resolves the preview parts and closes the dialog', async () => {
   const ctx = setupSidebarDom();
   try {
     stubApi(ctx.window);
     const p = ctx.sidebar.showDeleteSessionDialog(SESSION);
     await tick();
     ctx.document.getElementById('dss-confirm').click();
-    assert.equal(await p, true);
+    assert.deepEqual(Array.from((await p).partIds), [SESSION.sessionId]);
     assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
   } finally { ctx.destroy(); }
 });
 
-test('a failed preview still shows the project rather than breaking the dialog', async () => {
+test('a failed preview rejects with its reason before showing a dialog', async () => {
   const ctx = setupSidebarDom();
   try {
     stubApi(ctx.window, { preview: { ok: false, error: 'boom' } });
-    const p = ctx.sidebar.showDeleteSessionDialog(SESSION);
-    await tick();
-    assert.match(ctx.document.getElementById('dss-status').textContent, /\/home\/u\/proj/);
-    ctx.document.getElementById('dss-cancel').click();
-    await p;
+    await assert.rejects(ctx.sidebar.showDeleteSessionDialog(SESSION), /boom/);
+    assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
   } finally { ctx.destroy(); }
 });
 
@@ -209,3 +206,69 @@ test('confirming from the card deletes and forgets the session in the renderer',
     assert.equal(ctx.window.sessionMap.has('s-top-1'), false, 'sessionMap entry must be forgotten');
   } finally { ctx.destroy(); }
 });
+
+test('the card sends exactly the parts shown in the preview through the preload bridge', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const vm = require('node:vm');
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const calls = [];
+    const preview = { ok: true, partIds: [SESSION.sessionId, 'shown-part'], parts: 2, transcripts: 2, subagents: 0 };
+    const context = vm.createContext({ process: { platform: process.platform, argv: [] }, require: id => {
+      assert.equal(id, 'electron');
+      return {
+        contextBridge: { exposeInMainWorld: (_name, api) => { ctx.window.api = api; } },
+        ipcRenderer: {
+          on() {},
+          invoke: async (name, ...args) => {
+            if (name === 'delete-session-preview') return preview;
+            if (name === 'delete-session') { calls.push(args); return { ok: true }; }
+            return {};
+          },
+        },
+        webUtils: {},
+      };
+    } });
+    const filename = path.join(__dirname, '../preload.js');
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), context, { filename });
+    const session = { ...SESSION, mergedMemberIds: ['stale-renderer-part'] };
+    ctx.window.sessionMap.set(SESSION.sessionId, session);
+    const project = makeSampleProject();
+    project.sessions = [session];
+    ctx.sidebar.renderProjects([project], true);
+    ctx.document.getElementById('si-s-top-1').querySelector('.session-delete-btn').click();
+    await tick();
+    session.mergedMemberIds = ['changed-after-preview'];
+    ctx.document.getElementById('dss-confirm').click();
+    await tick(); await tick();
+    assert.equal(calls.length, 1);
+    assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), [SESSION.sessionId, preview.partIds]);
+  } finally { ctx.destroy(); }
+});
+
+for (const failure of ['refused', 'rejected', 'unavailable']) {
+  test(`a ${failure} preview shows the failure notice before any confirmation or stop`, async () => {
+    const ctx = setupSidebarDom();
+    try {
+      const calls = stubApi(ctx.window);
+      let stopped = false;
+      ctx.window.api.stopSession = async () => { stopped = true; return { ok: true }; };
+      ctx.window.api.deleteSessionPreview = failure === 'unavailable' ? undefined : async () => {
+        if (failure === 'rejected') throw new Error('preview disconnected');
+        return { ok: false, error: 'remote transcript is read-only' };
+      };
+      ctx.window.sessionMap.set(SESSION.sessionId, SESSION);
+      ctx.sidebar.renderProjects([makeSampleProject()], true);
+      ctx.document.getElementById('si-s-top-1').querySelector('.session-delete-btn').click();
+      await tick(); await tick();
+      assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
+      const notice = ctx.document.querySelector('[role="alert"]');
+      assert.ok(notice);
+      assert.match(notice.textContent, failure === 'unavailable' ? /unavailable/i : failure === 'rejected' ? /preview disconnected/ : /remote transcript is read-only/);
+      assert.equal(stopped, false);
+      assert.deepEqual(calls.deleteSession, []);
+      assert.equal(ctx.window.sessionMap.has(SESSION.sessionId), true);
+    } finally { ctx.destroy(); }
+  });
+}

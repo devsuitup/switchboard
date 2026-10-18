@@ -744,6 +744,7 @@ for (const reason of ['quit', 'close', 'reload']) {
 test('a session deletion question waits for the unsaved guard to close', async () => {
   const ctx = setup();
   try {
+    ctx.window.api.deleteSessionPreview = async id => ({ ok: true, partIds: [id], parts: 1, transcripts: 1, subagents: 0 });
     loadAppDialogs(ctx);
     ctx.window.cleanDisplayName = value => value;
     ctx.window.escapeHtml = value => value;

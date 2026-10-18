@@ -398,12 +398,20 @@ delete that never happens, so the delete site checks
 `resolveSessionStop(session).remote` itself and skips the stop entirely for
 that kind, local sessions unaffected.
 
-**Delete covers every part of a merged conversation.** Preview, deletion and the
-main-side liveness guard share `getMergedMemberIds`. The guard runs before target
-resolution or removal. An unresolved part refuses the whole deletion with a
-reason; it never removes only the resolvable parts. Every part's transcript,
-subagent directory, cache/search entries and renderer pending/open state are
-removed together. The confirmation counts the parts when there is more than one.
+**Delete covers every part of a merged conversation.** Preview returns its exact
+part ids and confirmation sends those ids back through preload. Deletion takes
+one snapshot from `getMergedMemberIds`, checks it against the preview, passes it
+explicitly to the main-side liveness guard and refuses if membership changed
+while awaiting that guard. Target resolution and disk removal then run without
+an intervening await. An unresolved part refuses the whole deletion with a reason.
+Members are removed before the representative, with each subagent directory
+before its transcript so a failed removal leaves the representative visible.
+Cache/search/touched and subagent entries are cleared for every fully removed
+part even on failure; the failure names removed and remaining parts and offers
+Delete again. Only successful deletion clears the confirmed parts' renderer
+pending/open state. The confirmation counts transcript files separately from
+subagents, and a refused preview reaches the persistent failure notice before
+any dialog opens.
 
 **The remote stop, main-side (`remote-stop.js`).** `createRemoteStopAdapter().stop(alias, descriptor)`
 builds one non-interactive ssh command (same `buildRemoteCommandArgs` transport

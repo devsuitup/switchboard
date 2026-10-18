@@ -243,3 +243,35 @@ test('row fallback scan ignores ordinary files beside project folders and permit
     assert.deepEqual(out.targets, []);
   } finally { fs.lstatSync = lstat; r.cleanup(); }
 });
+
+test('a dangling transcript link refuses the whole conversation', () => {
+  const r = rig();
+  try {
+    fs.writeFileSync(path.join(r.folder, 'a.jsonl'), '{}\n');
+    fs.symlinkSync(path.join(r.folder, 'missing.jsonl'), path.join(r.folder, 'b.jsonl'));
+    const out = resolveRowDeletionTargets(r.projects, 'a', ['b'], () => path.basename(r.folder));
+    assert.equal(out.ok, false);
+    assert.match(out.error, /cannot resolve target/);
+    assert.deepEqual(out.targets, []);
+    assert.equal(fs.existsSync(path.join(r.folder, 'a.jsonl')), true);
+  } finally { r.cleanup(); }
+});
+
+test('a non-missing lstat failure refuses the whole conversation with its reason', () => {
+  const r = rig();
+  const lstat = fs.lstatSync;
+  try {
+    fs.writeFileSync(path.join(r.folder, 'a.jsonl'), '{}\n');
+    const blocked = path.join(r.folder, 'b.jsonl');
+    fs.writeFileSync(blocked, '{}\n');
+    fs.lstatSync = (file, ...args) => {
+      if (file === blocked) throw Object.assign(new Error('EACCES: target denied'), { code: 'EACCES' });
+      return lstat(file, ...args);
+    };
+    const out = resolveRowDeletionTargets(r.projects, 'a', ['b'], () => path.basename(r.folder));
+    assert.equal(out.ok, false);
+    assert.match(out.error, /cannot read target.*EACCES/);
+    assert.deepEqual(out.targets, []);
+    assert.equal(fs.existsSync(path.join(r.folder, 'a.jsonl')), true);
+  } finally { fs.lstatSync = lstat; r.cleanup(); }
+});

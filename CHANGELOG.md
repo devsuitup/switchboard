@@ -10,6 +10,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Deleting a compacted conversation now deletes all of its parts. Before, the newer parts stayed on disk and could reappear as a session. (#564)
+- Delete asks you to retry if the conversation's parts changed after its preview. A file removal failure keeps the conversation listed and reports which parts were deleted and which remain. (#564)
 - Run now on a schedule shows Launched! only after its shell starts. A refused launch or shell spawn failure leaves a dismissible notice saying why and how to retry; later command failures remain in the main log. (#566)
 - A restore retry cancelled during indexing, even when indexing finishes during the restore, or blocked by a failed reload, now leaves a persistent notice telling you to open the session from the sidebar to retry restoring. A failed retry lists only the sessions that are still not open, and the "waiting for indexing" notice goes away once nothing is left to retry. (#666, #566)
 

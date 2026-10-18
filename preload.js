@@ -39,7 +39,7 @@ contextBridge.exposeInMainWorld('api', {
   archiveProject: (groups, opts) => ipcRenderer.invoke('archive-project', groups, opts),
   reenableProjectSchedules: (projectPath, folderKey) => ipcRenderer.invoke('reenable-project-schedules', projectPath, folderKey),
   dismissScheduleReenableOffer: (projectPath, folderKey) => ipcRenderer.invoke('dismiss-schedule-reenable-offer', projectPath, folderKey),
-  deleteSession: (id) => ipcRenderer.invoke('delete-session', id),
+  deleteSession: (id, partIds) => ipcRenderer.invoke('delete-session', id, partIds),
   deleteSessionPreview: (id) => ipcRenderer.invoke('delete-session-preview', id),
   // initialSize: { cols, rows } measured by the renderer before the spawn, so
   // the PTY never runs against a placeholder geometry. May be null.
