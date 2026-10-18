@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "da0977dad6f0d4991ce2034953a1b6a2591da0ae",
+  "measurements": [
+    {
+      "sequence": 1,
+      "canary": "C4",
+      "status": "UNVERIFIED",
+      "measuredAt": "2026-10-18T16:43:27.288Z",
+      "cli": {
+        "version": "2.1.301 (Claude Code)",
+        "build": "unknown",
+        "sha256": "bc1aad9982c7b59c7d889ff92595d61cf46e0a6eae074cb551d932a989bcd222"
+      },
+      "harnessRevision": "61dfad5609662b722a9913f4997ca40a4702b9e08e7c9f0b22823713cdf40ba3",
+      "evidencePath": "docs/evidence/session-capabilities/linux-C4-sandbox-8ef498e/0001-C4-808253bd/evidence.json",
+      "evidenceSha256": "bf8617b1ef1647bfef34f4f2ac3789f00955216a3b4bfc4e1dcbce9a35fa17a2",
+      "capabilities": {
+        "independentSendMessage": false,
+        "sandboxChildSendMessage": false
+      },
+      "capabilityStatus": {
+        "independentSendMessage": "UNVERIFIED",
+        "sandboxChildSendMessage": "UNVERIFIED"
+      },
+      "baselineHead": "da0977dad6f0d4991ce2034953a1b6a2591da0ae",
+      "acceptedSpecBranch": null,
+      "execution": {
+        "label": "linux-unix-pty",
+        "platform": "linux",
+        "backend": "unix-pty"
+      }
+    }
+  ]
+}
