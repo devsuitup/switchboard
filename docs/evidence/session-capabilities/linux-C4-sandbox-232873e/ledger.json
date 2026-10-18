@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "232873efda673ebb1a37cb40a17cd0467166501a",
+  "measurements": [
+    {
+      "sequence": 1,
+      "canary": "C4",
+      "status": "FAIL",
+      "measuredAt": "2026-10-18T17:24:30.493Z",
+      "cli": {
+        "version": "2.1.301 (Claude Code)",
+        "build": "unknown",
+        "sha256": "bc1aad9982c7b59c7d889ff92595d61cf46e0a6eae074cb551d932a989bcd222"
+      },
+      "harnessRevision": "e29ff74117d669c40e56d7d320394c1deab9333ad55963f3cf9fe09cae7b4a93",
+      "evidencePath": "docs/evidence/session-capabilities/linux-C4-sandbox-232873e/0001-C4-38d1eccd/evidence.json",
+      "evidenceSha256": "65eff2eaae08cdb1ea0305db6a9e898d78d4172ce329d2a9546065227309d638",
+      "capabilities": {
+        "independentSendMessage": true,
+        "sandboxChildSendMessage": false
+      },
+      "capabilityStatus": {
+        "independentSendMessage": "PASS",
+        "sandboxChildSendMessage": "FAIL"
+      },
+      "baselineHead": "232873efda673ebb1a37cb40a17cd0467166501a",
+      "acceptedSpecBranch": null,
+      "execution": {
+        "label": "linux-unix-pty",
+        "platform": "linux",
+        "backend": "unix-pty"
+      }
+    }
+  ]
+}
