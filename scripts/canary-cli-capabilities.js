@@ -44,6 +44,8 @@ Object.assign(CANARY_MUTATIONS, {
   C4: [...CANARY_MUTATIONS.C4, 'missing-name', 'unknown-receipt', 'wrong-control-leak', 'wrong-control-hidden-leak',
     'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'send-failed', 'stale-recipient',
     'receipt-delayed', 'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type',
+    'receipt-report-lines', 'receipt-no-leading-lf', 'receipt-nonce-later', 'receipt-empty-body', 'receipt-double-leading-lf',
+    'receipt-origin-name-mismatch', 'receipt-origin-body-mismatch', 'receipt-duplicate', 'receipt-extra-enqueue', 'receipt-unrelated-nonce',
     'receipt-teammate', 'sandbox-socket-unavailable', 'sandbox-unreachable', 'send-observation-delayed',
     'receipt-on-turn', 'receipt-empty-boundary', 'receipt-idle-delayed', 'slow-tool-search', 'tool-search-only'],
 });
@@ -1030,10 +1032,12 @@ function messagingEndpoint(value) {
   return null;
 }
 
-function nativeReceipt(row, sender, nonce, expectedEndpoint) {
+function nativeReceipt(row, sender, nonce, expectedEndpoint, childPid) {
   if (row.type !== 'user' || typeof sender !== 'string' || !sender.length) return null;
   for (const element of content(row).matchAll(/<cross-session-message\b([^>]*)>([\s\S]*?)<\/cross-session-message\s*>/g)) {
-    if (element[2].replace(/^\r?\n/, '').replace(/\r?\n$/, '') !== nonce) continue;
+    const body = element[2].replace(/^\r?\n/, '').replace(/\r?\n$/, '');
+    const lines = body.split(/\r?\n/);
+    if (lines[0] !== nonce) continue;
     const pairs = [...element[1].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(m => [m[1], m[2] ?? m[3]]);
     if (new Set(pairs.map(([key]) => key)).size !== pairs.length) continue;
     const attrs = Object.fromEntries(pairs);
@@ -1041,9 +1045,16 @@ function nativeReceipt(row, sender, nonce, expectedEndpoint) {
     const endpoint = from && messagingEndpoint(from[2]);
     if (attrs['from-name'] !== sender || !from || !attrs['from-mode'] ||
         endpoint && (!expectedEndpoint || endpoint.pathSha256 !== expectedEndpoint.pathSha256 || endpoint.scheme !== expectedEndpoint.scheme)) continue;
+    if (Object.hasOwn(row, 'origin') && (!row.origin || typeof row.origin !== 'object' ||
+        row.origin.name !== attrs['from-name'] || row.origin.body !== body)) continue;
     return { shape: 'cross-session-message', from: { sha256: hash(attrs.from), schemeSha256: hash(from[1]),
       ...(['uds:', 'pipe:', 'npipe:'].includes(from[1]) ? { scheme: from[1] } : {}), socketPathSha256: endpoint?.pathSha256 ?? null },
-      fromName: attrs['from-name'], fromMode: attrs['from-mode'], offset: row._offset };
+      fromName: attrs['from-name'], fromMode: attrs['from-mode'], offset: row._offset,
+      bodyLineCount: lines.length, bodySha256: hash(body),
+      ...(row.origin ? { origin: { kind: typeof row.origin.kind === 'string' ? row.origin.kind : null,
+        fromMode: typeof row.origin.fromMode === 'string' ? row.origin.fromMode : null,
+        verifiedPeerPidMatchesChild: row.origin.verifiedPeerPid === childPid,
+        fromSha256: typeof row.origin.from === 'string' ? hash(row.origin.from) : null } } : {}) };
   }
   return null;
 }
@@ -1133,7 +1144,7 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
       } : undefined,
       observe: rows => {
       child.name = nativeName(ctx, child);
-      receipt = receiptRows().map(r => nativeReceipt(r, child.name, nonce, messagingEndpoints.child)).find(Boolean) || null;
+      receipt = receiptRows().map(r => nativeReceipt(r, child.name, nonce, messagingEndpoints.child, child.pid)).find(Boolean) || null;
       const outcome = sendOutcome(rows, nonce, recipient);
       if (!outcome.results.length) return outcome.sends.length > 0 && outcome.sendResults.length > 0 && !outcome.send;
       if (wrongRecipientControl || renameAfterPrompt) {
@@ -1155,7 +1166,7 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
       const d = descriptor(ctx, origin);
       rememberDescriptor(origin, d);
       child.name = nativeName(ctx, child);
-      receipt = receiptRows().map(r => nativeReceipt(r, child.name, nonce, messagingEndpoints.child)).find(Boolean) || null;
+      receipt = receiptRows().map(r => nativeReceipt(r, child.name, nonce, messagingEndpoints.child, child.pid)).find(Boolean) || null;
       return receipt;
     };
     try {
@@ -1192,7 +1203,12 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
   const messagingKeys = (envKeys || []).filter(k => /CLAUDE.*(MESSAG|SOCKET|BRIDGE|SSE)/i.test(k));
   const isolated = !sandbox || child.sessions !== origin.sessions && !inside(ctx.repo, child.sessions) && envStatus === 'PASS' && !messagingKeys.length;
   const raw = receiptRows();
-  const leaked = raw.some(carriesNonce);
+  const recognized = wrongRecipientControl || renameAfterPrompt ? [] : raw.filter(r =>
+    nativeReceipt(r, child.name, nonce, messagingEndpoints.child, child.pid));
+  const receiptOffsets = new Set(recognized.map(r => r._offset));
+  const leaked = raw.some(r => carriesNonce(r) && !receiptOffsets.has(r._offset) &&
+    !(r.type === 'queue-operation' && r.operation === 'enqueue' && typeof r.content === 'string' &&
+      recognized.some(received => r._offset < received._offset && r.content === content(received))));
   const observation = { sandbox, wrongRecipientControl, nonce, orchestratorId: origin.id, childId: child.id,
     observationBudgetMs: observationMs, childReportBudgetMs: 90000, effectiveReportBudgetMs: reportWaitMs,
     inboxObservation, submissionError: submissionError?.message ?? null,
@@ -1495,11 +1511,13 @@ async function main(argv = process.argv.slice(2)) {
     if (ctx.opts?.mutation) {
       const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'exit-flush-assistant', 'denial-no-error-flag', 'tab-to-spaces', 'raw-control-no-confirmation', 'missing-paste-object', 'send-observation-delayed',
         'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'receipt-delayed',
-        'trim-boundary-lf', 'delayed-rename-name', 'slow-c2-turn', 'receipt-on-turn', 'receipt-empty-boundary', 'receipt-idle-delayed', 'slow-tool-search', 'receipt-wrong-scheme'];
+        'trim-boundary-lf', 'delayed-rename-name', 'slow-c2-turn', 'receipt-on-turn', 'receipt-empty-boundary', 'receipt-idle-delayed', 'slow-tool-search', 'receipt-wrong-scheme',
+        'receipt-report-lines', 'receipt-no-leading-lf', 'receipt-duplicate', 'receipt-extra-enqueue', 'receipt-unrelated-nonce'];
       const unavailable = ['no-report', 'synthetic-receipt', 'missing-name', 'unknown-receipt', 'blocking-dialog', 'exit-on-submit', 'hang', 'wrong-recipient', 'os-denial', 'unknown-denial', 'sandbox-unknown-denial',
         'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'wrong-command-denial',
         'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule', 'stale-recipient',
-        'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-type', 'receipt-teammate', 'sandbox-socket-unavailable', 'tool-search-only'];
+        'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-type', 'receipt-teammate', 'sandbox-socket-unavailable', 'tool-search-only',
+        'receipt-nonce-later', 'receipt-empty-body', 'receipt-double-leading-lf', 'receipt-origin-name-mismatch', 'receipt-origin-body-mismatch'];
       const expected = positive.includes(ctx.opts.mutation) ? 'PASS' : unavailable.includes(ctx.opts.mutation) ? 'UNVERIFIED' : 'FAIL';
       ctx.evidence.controls.push({ name: ctx.opts.mutation, status: status === expected ? 'PASS' : 'FAIL', expected, observed: status });
     }

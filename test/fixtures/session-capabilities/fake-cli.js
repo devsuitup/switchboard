@@ -204,22 +204,38 @@ function handle(text) {
       if ((result.success && !meta.wrongRecipientControl) || (meta.wrongRecipientControl && ['wrong-control-leak', 'wrong-control-hidden-leak'].includes(mutation))) {
         if (dest) {
           const deliver = () => {
-            if (mutation !== 'receipt-empty-boundary') {
-              append({ type: 'queue-operation' }, dest);
-              append({ type: 'queue-operation' }, dest);
-            }
             const sender = mutation === 'receipt-wrong-sender' ? 'another-child' : nativeName;
-            const body = mutation === 'receipt-extra-body' ? meta.nonce + ' extra' : meta.nonce;
+            const body = mutation === 'receipt-extra-body' ? 'extra ' + meta.nonce
+              : mutation === 'receipt-nonce-later' ? 'Report follows\n' + meta.nonce
+              : mutation === 'receipt-empty-body' ? ''
+              : mutation === 'receipt-double-leading-lf' ? '\n' + meta.nonce
+              : mutation === 'receipt-report-lines' ? meta.nonce + '\nChecks performed: fixture only.\nBlockers: none.' : meta.nonce;
+            const elementBody = (mutation === 'receipt-no-leading-lf' ? '' : '\n') + body + '\n';
             const from = mutation === 'receipt-empty-boundary' ? `windows-inbox:${id}` : mutation === 'receipt-wrong-scheme' ? `tcp:${messagingSocketPath}`
               : `${process.env.CANARY_FIXTURE_WINDOWS_MESSAGING ? 'pipe:' : 'uds:'}${messagingSocketPath}`;
             const envelope = mutation === 'receipt-teammate' ? `<teammate-message teammate_id="${sender}">\n${body}\n</teammate-message>`
-              : `<cross-session-message from="${from}" from-name="${sender}" from-mode="prompting">\n${body}\n</cross-session-message>`;
+              : `<cross-session-message from="${from}" from-name="${sender}" from-mode="prompting">${elementBody}</cross-session-message>`;
             const receiptRow = { type: mutation === 'receipt-wrong-type' ? 'assistant' : mutation === 'unknown-receipt' ? 'unknown-message' : 'user',
+              isMeta: true, promptSource: 'system', turnOrigin: 'peer',
               ...(meta.wrongRecipientControl && mutation === 'wrong-control-hidden-leak'
                 ? { data: { receiptNonce: meta.nonce } } : { message: { role: 'user', content: mutation === 'synthetic-receipt' ? meta.nonce
                   : `Another Claude session sent a message:\n${envelope}\n\nThis came from another Claude session — not typed by your user.` } }) };
+            if (!['receipt-empty-boundary', 'wrong-control-hidden-leak'].includes(mutation)) {
+              receiptRow.origin = { kind: 'peer', from, fromMode: 'prompting', verifiedPeerPid: process.pid,
+                name: mutation === 'receipt-origin-name-mismatch' ? 'another-child' : sender,
+                body: mutation === 'receipt-origin-body-mismatch' ? body + 'extra' : body };
+            }
+            if (mutation !== 'receipt-empty-boundary') {
+              append({ type: 'queue-operation', operation: 'enqueue', content: receiptRow.message?.content }, dest);
+              append({ type: 'queue-operation', operation: 'dequeue' }, dest);
+            }
+            if (mutation === 'receipt-extra-enqueue') append({ type: 'queue-operation', operation: 'enqueue', content: 'unrelated ' + meta.nonce }, dest);
+            if (mutation === 'receipt-unrelated-nonce') append({ type: 'system', data: { nonce: meta.nonce } }, dest);
             if (['receipt-on-turn', 'receipt-empty-boundary'].includes(mutation)) fs.writeFileSync(path.join(process.env.CANARY_FIXTURE_RUNTIME, `inbox-${meta.orchestrator}.json`), JSON.stringify(receiptRow));
-            else append(receiptRow, dest);
+            else {
+              append(receiptRow, dest);
+              if (mutation === 'receipt-duplicate') append(receiptRow, dest);
+            }
           };
           if (mutation === 'receipt-delayed') setTimeout(deliver, 80);
           else if (mutation === 'receipt-idle-delayed') setTimeout(deliver, 750);
