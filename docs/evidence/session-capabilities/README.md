@@ -40,8 +40,8 @@ committed ledgers are never relabelled.
 
 | Canary | Capability keys | Measured behavior |
 | --- | --- | --- |
-| C1 | singleTurnDelivery, literalTranscript, eligibleConfirmation | TAB-expanded pastes of 180, 5000, 32768, 49152 UTF-8 bytes, plus a 256-byte leading/trailing spaces/LF case, all with quotes/non-ASCII/4-byte emoji/nonce; one complete envelope, exact body and later assistant reaction. One separate raw-TAB control is informational. isMeta, local-command caveats and tool results do not count as turns. |
-| C2 | forkWorktree | Four origins (root/W1 × small/large), sentinel, rename, resume/fork/worktree. Check inherited rows before the own turn, new session/worktree and source-prefix preservation. Two additional --name forks, without/with --worktree, must have their requested agent-name and descriptor name while the origin name stays unchanged and unique among live owned sessions. |
+| C1 | singleTurnDelivery, literalTranscript, eligibleConfirmation | TAB-expanded pastes of 180, 5000, 32768, 49152 UTF-8 bytes, with quotes/non-ASCII/4-byte emoji/nonce; one complete envelope, exact body and later assistant reaction. The 256-byte boundary-whitespace probe and separate raw-TAB control are informational. isMeta, local-command caveats and tool results do not count as turns. |
+| C2 | forkWorktree | Four origins (root/W1 × small/large), sentinel, rename, resume/fork/worktree. Check inherited rows before the own turn, new session/worktree and source-prefix preservation. Two additional --name forks, without/with --worktree, must have their requested agent-name and descriptor name while the origin name stays unchanged and unique among the two sessions alive in that case. |
 | C3 | extraPermissionSettings | Explicit Read(settings) allow; overlapping Bash allow/deny plus inherited project/global allow; linked CLI denial, absent denied effect, disjoint allowed effect and remove-deny control. Sandbox repeats permissions and attempts authority writes. |
 | C4 | independentSendMessage, sandboxChildSendMessage | Independent pair plus wrong-name control gate independentSendMessage on every execution. Linux repeats with private sandbox publication for sandboxChildSendMessage; Windows marks that key NOT_APPLICABLE. A rename after the child prompt is informational. |
 
@@ -67,6 +67,14 @@ storage findings and keep literal=false. literalAfterKnownTransformations is
 true for an exact body or a difference fully explained by classified
 transformations; it never changes the literalTranscript capability gate.
 No transcript content is copied.
+C1 follows comment 6238870479 section 1's refusal branch: the supported delivery
+class excludes leading/trailing whitespace. Validation records rejection of the
+256-byte probe; its deliberate diagnostic delivery cannot decide the capability
+verdict. Its actual literal/confirmation observations remain visible, including
+failures. The four supported sizes still gate every C1 key. boundaryChange
+records an exact leading/trailing whitespace deletion as side, zero-based UTF-8
+offset, removed hex and byte count. emoji records input/stored UTF-8 offsets,
+the four-byte encoding and whether it survived. Neither field normalizes storage.
 pasteCache holds only byte sizes and SHA-256 hashes (at most 128 regular,
 non-linked files, each at most 65536 bytes). linkedPaste requires an actual
 row pasteRef or an envelope ID matching a cache basename (ID or ID.txt), plus
@@ -74,7 +82,7 @@ byte equality with the payload; matching content alone is not linkage.
 Unrecognized cache naming is not guessed. pasteRef is optional
 bounded evidence, never a mandatory CLI schema or a gate: missing/unlinked cache
 objects cannot veto an exact envelope. A placeholder, absent/malformed envelope
-or changed body records literalTranscript FAIL. Multiple turns or missing
+or changed body in the supported payload class records literalTranscript FAIL. Multiple turns or missing
 confirmation fail their own measured keys. C1 measures its final transcript after bounded quiescence and graceful
 exit, so an assistant row flushed only on exit remains eligible. Evidence keeps
 transcriptConfirmedBytes, transcriptFinalBytes and finalRowTypes with offsets,
@@ -361,7 +369,7 @@ Use the preinstalled Node 22; do not install it if missing:
 $env:TMP = 'C:/Users/Jean-Baptiste/AppData/Local/Temp'
 $env:TEMP = $env:TMP
 $canaryNode = 'C:/Users/Jean-Baptiste/AppData/Local/Temp/node22/node_modules/node/bin/node.exe'
-& $canaryNode --test --experimental-test-isolation=none --test-concurrency=1 --test-timeout=120000 test/canary-cli-capabilities.test.js
+& $canaryNode --test-concurrency=1 --test-timeout=120000 test/canary-cli-capabilities.test.js
 & $canaryNode node_modules/eslint/bin/eslint.js --no-ignore --config test/fixtures/session-capabilities/lint.config.cjs scripts/canary-cli-capabilities.js test/canary-cli-capabilities.test.js test/fixtures/session-capabilities/fake-cli.js test/fixtures/session-capabilities/isolated-account.js
 & $canaryNode scripts/canary-cli-capabilities.js --dry-run --canary all --home C:/Temp/empty-prepared-home --runtime-root C:/Temp/canary-runtime --out .work-files/canary-dry-local --platform-label fixture-only
 $env:ELECTRON_RUN_AS_NODE = '1'
@@ -395,12 +403,18 @@ CLAUDE_CODE_GIT_BASH_PATH, APPDATA, LOCALAPPDATA, ProgramFiles and USERNAME.
 HOME/USERPROFILE/XDG/data/triggers point to prepared private locations.
 DISABLE_AUTOUPDATER=1; parent messaging/socket/SSE/session markers are removed.
 
-Default work budgets: C1=120000, C2=900000, C3=300000, C4=180000 ms.
+Default work budgets: C1=120000, C2=900000, C3=300000, C4=900000 ms.
 Override independently using --c1-timeout-ms ... --c4-timeout-ms, each
 100..3600000 ms. C2's 15 minutes cover the four legacy origins/forks and two named fork pairs. Dry-run
 --timeout-ms (100..180000) overrides a selected fixture budget. Each readiness/
-submit poll is at most 20 seconds, except each C3 permission turn allows up to
-90 seconds, always within its remaining canary budget. C3's five minutes cover
+submit poll is at most 20 seconds, except C2 ordinary turns and each C3 permission
+turn allow up to 90 seconds, always within the remaining canary budget. C2
+retains the owned PID/start/session checks and post-submit idle timestamp; a
+busy fork with copied history cannot confirm early. Named-fork origins wait for
+the requested agent-name and matching owned idle descriptor after their rename.
+The settled name and observation time are captured immediately before fork
+launch. Uniqueness counts only the live origin/fork identities in that case.
+C3's five minutes cover
 the plain deny case, remove-deny control and sandbox case, with more margin
 than the former three-minute cap and generic 20-second submit wait. A larger
 budget alone cannot supply a missing final reply. Version
@@ -410,7 +424,20 @@ waiting for 1 second without transcript growth, up to 2 seconds for graceful
 exit, then up to 2 seconds for forced handle termination. Dry-run quiescence
 uses a 10 ms quiet period within a 500 ms cap and the dry-run 10 ms poll interval
 for cleanup, including graceful exit. C1 ≤6 handles, C2 ≤12, C3 ≤3,
-C4 ≤8 (caps including cleanup: 174/1008/327/252 seconds with defaults).
+C4 ≤8 (caps including cleanup: 174/1008/327/972 seconds with defaults).
+
+C4 allows 90 seconds for each child's report turn, including ToolSearch and
+the linked SendMessage result (dry-run: 10 seconds). A successful send starts a
+separate 15-second idle inbox observation (dry-run: 1 second). If no strict
+receipt appears and the owned orchestrator is idle, the harness submits one
+neutral inbox-reading turn, with no nonce or claimed sender/endpoint, bounded
+to 60 seconds (dry-run: 5 seconds). All waits share the canary's 15-minute cap.
+Wrong-recipient/rename controls retain their absence window and never prompt
+the origin to manufacture receipt evidence. Send success alone cannot qualify
+messaging. Sender, endpoint, row type, body, recipient and boundary predicates
+are unchanged. Unknown shapes remain UNVERIFIED. Reports retain the observation
+stages, submission error, last 16 child row types/offsets and tool names, and all
+origin row types/offsets after the original pre-send boundary, including timeout.
 
 Liveness and termination use OWNED HANDLES even when pid is still zero.
 Confirmed sessions and C4 children first wait for transcript quiescence, then receive `/exit`
@@ -429,10 +456,10 @@ delay SendMessage to prove these boundaries. Positive C3/C1 configuration cases
 use adequate explicit budgets; the blocked-CLI negative control keeps 2 seconds.
 The test parent awaits subprocesses asynchronously and bounds each invocation
 to 110 seconds. Run the test file once per verification, without overlapping
-runners. On Node 22, --experimental-test-isolation=none makes
---test-timeout=120000 apply to each test rather than the entire file's worker.
+runners. Invoke the file directly on Node 22, without --test, so
+--test-timeout=120000 applies to each test rather than the entire file's worker.
 Tests remain serial; --test-concurrency=1 is retained even though Node ignores
-that switch without process isolation. A test exceeding two minutes is a defect;
+that switch without --test. A test exceeding two minutes is a defect;
 retain its timeout evidence and investigate before starting another run.
 None of these emulator
 allowances changes the live limits, receipt predicates or capability decisions.
@@ -443,7 +470,7 @@ current file. Dry-run descriptor discovery tries the owned PID filename first,
 then falls back to the other candidates. Every candidate retains the same
 pre-spawn hash, session ID, creation-time and process-identity checks. Live
 discovery and timing are unchanged. This avoids repeatedly scanning historical
-sessions while a five-second C4 observation budget is running.
+sessions while a bounded C4 observation budget is running.
 Before spawning a fake CLI, descriptor snapshots read the same bounded files
 and compute the same hashes in asynchronous batches of eight. This keeps the
 event loop available and avoids repeated serial metadata reads. The fake CLI

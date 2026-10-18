@@ -86,6 +86,11 @@ function handle(text) {
   if (mutation === 'exit-on-submit') process.exit(0);
   if (mutation === 'blocking-dialog') { describe('waiting'); return; }
   describe('busy');
+  const pendingReceipt = path.join(process.env.CANARY_FIXTURE_RUNTIME, `inbox-${id}.json`);
+  if (fs.existsSync(pendingReceipt)) {
+    append(JSON.parse(fs.readFileSync(pendingReceipt, 'utf8')));
+    fs.unlinkSync(pendingReceipt);
+  }
   if (inherited) { fs.writeFileSync(transcript, inherited); inherited = ''; }
   if (args.includes('--name') && mutation !== 'ignore-fork-name') {
     const source = args.includes('--resume') ? findTranscript(value('--resume')) : null;
@@ -99,12 +104,22 @@ function handle(text) {
   }
   if (text.startsWith('/rename ')) {
     append({ type: 'custom-title', customTitle: text.slice(8), sessionId: id });
+    if (mutation === 'delayed-rename-name') {
+      describe('idle');
+      setTimeout(() => {
+        nativeName = text.slice(8);
+        append({ type: 'agent-name', agentName: nativeName });
+        describe('idle');
+      }, 250);
+      return;
+    }
     nativeName = text.slice(8);
     if (!['missing-name', 'descriptor-only-name'].includes(mutation)) append({ type: 'agent-name', agentName: nativeName });
     describe('idle');
     return;
   }
   let stored = mutation === 'drop-byte' ? text.slice(0, -1) : text;
+  if (mutation === 'trim-boundary-lf' && /^\s/.test(text)) stored = text.slice(0, -1);
   stored = stored.replaceAll('\t', '    ');
   let pasteRef;
   if (Buffer.byteLength(text) > 4096) {
@@ -171,7 +186,6 @@ function handle(text) {
       const peerRows = dest ? fs.readFileSync(dest, 'utf8').trim().split('\n').map(x => JSON.parse(x)) : [];
       const reachable = peer?.sessionId === meta.orchestrator &&
         (peerRows.filter(r => r.type === 'agent-name').at(-1)?.agentName || peer.name) === recipient;
-      tool('ToolSearch', { query: 'select:SendMessage' }, 'SendMessage');
       const input = { to: recipient, message: meta.nonce, summary: 'Report canary nonce to orchestrator' };
       const socketUnavailable = process.env.CANARY_FIXTURE_SANDBOX && mutation === 'sandbox-socket-unavailable';
       const sandboxUnreachable = process.env.CANARY_FIXTURE_SANDBOX && mutation === 'sandbox-unreachable';
@@ -192,17 +206,23 @@ function handle(text) {
               : `${process.env.CANARY_FIXTURE_WINDOWS_MESSAGING ? 'pipe:' : 'uds:'}${messagingSocketPath}`;
             const envelope = mutation === 'receipt-teammate' ? `<teammate-message teammate_id="${sender}">\n${body}\n</teammate-message>`
               : `<cross-session-message from="${from}" from-name="${sender}" from-mode="prompting">\n${body}\n</cross-session-message>`;
-            append({ type: mutation === 'receipt-wrong-type' ? 'assistant' : mutation === 'unknown-receipt' ? 'unknown-message' : 'user',
+            const receiptRow = { type: mutation === 'receipt-wrong-type' ? 'assistant' : mutation === 'unknown-receipt' ? 'unknown-message' : 'user',
               ...(meta.wrongRecipientControl && mutation === 'wrong-control-hidden-leak'
                 ? { data: { receiptNonce: meta.nonce } } : { message: { role: 'user', content: mutation === 'synthetic-receipt' ? meta.nonce
-                  : `Another Claude session sent a message:\n${envelope}\n\nThis came from another Claude session — not typed by your user.` } }) }, dest);
+                  : `Another Claude session sent a message:\n${envelope}\n\nThis came from another Claude session — not typed by your user.` } }) };
+            if (mutation === 'receipt-on-turn') fs.writeFileSync(path.join(process.env.CANARY_FIXTURE_RUNTIME, `inbox-${meta.orchestrator}.json`), JSON.stringify(receiptRow));
+            else append(receiptRow, dest);
           };
           if (mutation === 'receipt-delayed') setTimeout(deliver, 80);
+          else if (mutation === 'receipt-idle-delayed') setTimeout(deliver, 750);
           else deliver();
         }
       }
     };
-    if (meta.renameAfterPrompt) setTimeout(sendReport, 200);
+    tool('ToolSearch', { query: 'select:SendMessage' }, 'SendMessage');
+    if (mutation === 'tool-search-only') return;
+    if (mutation === 'slow-tool-search') setTimeout(sendReport, 5500);
+    else if (meta.renameAfterPrompt) setTimeout(sendReport, 200);
     else if (mutation === 'send-observation-delayed') setTimeout(sendReport, 750);
     else sendReport();
     return;
@@ -210,7 +230,10 @@ function handle(text) {
   if (mutation === 'own-title' && args.includes('--fork-session')) append({ type: 'custom-title', customTitle: 'own-title-different-from-L' });
   if (mutation === 'exit-flush-assistant') pendingAssistant = true;
   else if (mutation !== 'placeholder-no-confirmation') append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: meta.finalReply || 'fixture reaction' }] } });
-  describe('idle');
+  if (mutation === 'slow-c2-turn' && text.startsWith('Remember this conversation-only sentinel') && !fs.existsSync(path.join(process.env.CANARY_FIXTURE_RUNTIME, 'slow-turn-seen'))) {
+    fs.writeFileSync(path.join(process.env.CANARY_FIXTURE_RUNTIME, 'slow-turn-seen'), '1');
+    setTimeout(() => describe('idle'), 21000);
+  } else describe('idle');
 }
 let input = '';
 process.stdin.setEncoding('utf8');

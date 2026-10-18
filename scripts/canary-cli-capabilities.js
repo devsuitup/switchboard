@@ -26,7 +26,7 @@ function capability(ctx, key, status) {
   (ctx.capabilityStatus ||= {})[key] = status;
   ctx.capabilities[key] = status === 'PASS';
 }
-const LIMITS = { C1: 120000, C2: 900000, C3: 300000, C4: 180000 };
+const LIMITS = { C1: 120000, C2: 900000, C3: 300000, C4: 900000 };
 const OWNED = new Set();
 let interrupted = false;
 const MUTATIONS = ['split-paste', 'placeholder-no-confirmation', 'drop-byte', 'missing-paste-object',
@@ -36,15 +36,16 @@ const CANARY_MUTATIONS = {
   C1: MUTATIONS.slice(0, 4), C2: MUTATIONS.slice(4, 8), C3: MUTATIONS.slice(8, 11), C4: MUTATIONS.slice(11, 16),
 };
 Object.assign(CANARY_MUTATIONS, {
-  C1: [...CANARY_MUTATIONS.C1, 'meta-users', 'no-paste-ref', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'tab-to-spaces', 'exit-flush-assistant', 'raw-control-no-confirmation'],
-  C2: [...CANARY_MUTATIONS.C2, 'natural-source-activity', 'ignore-fork-name', 'rename-fork-source', 'colliding-fork-name'],
+  C1: [...CANARY_MUTATIONS.C1, 'meta-users', 'no-paste-ref', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'tab-to-spaces', 'exit-flush-assistant', 'raw-control-no-confirmation', 'trim-boundary-lf'],
+  C2: [...CANARY_MUTATIONS.C2, 'natural-source-activity', 'ignore-fork-name', 'rename-fork-source', 'colliding-fork-name', 'delayed-rename-name', 'slow-c2-turn'],
   C3: [...CANARY_MUTATIONS.C3, 'os-denial', 'escaped-settings', 'unknown-denial', 'sandbox-unknown-denial',
     'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'denial-no-error-flag', 'wrong-command-denial',
     'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule'],
   C4: [...CANARY_MUTATIONS.C4, 'missing-name', 'unknown-receipt', 'wrong-control-leak', 'wrong-control-hidden-leak',
     'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'send-failed', 'stale-recipient',
     'receipt-delayed', 'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type',
-    'receipt-teammate', 'sandbox-socket-unavailable', 'sandbox-unreachable', 'send-observation-delayed'],
+    'receipt-teammate', 'sandbox-socket-unavailable', 'sandbox-unreachable', 'send-observation-delayed',
+    'receipt-on-turn', 'receipt-idle-delayed', 'slow-tool-search', 'tool-search-only'],
 });
 MUTATIONS.push(...Object.values(CANARY_MUTATIONS).flat().filter(x => !MUTATIONS.includes(x)));
 const hash = data => crypto.createHash('sha256').update(data).digest('hex');
@@ -220,6 +221,19 @@ function received(ctx, row, payload) {
   const literal = Buffer.from(body).equals(Buffer.from(payload));
   const placeholder = /^\[Pasted text(?:\s|\])/.test(body);
   const transformations = byteTransformations(payload, body);
+  const inputBytes = Buffer.from(payload), storedBytes = Buffer.from(body);
+  const emojiBytes = Buffer.from('😀');
+  const emoji = { inputByteOffset: inputBytes.indexOf(emojiBytes), storedByteOffset: storedBytes.indexOf(emojiBytes),
+    preserved: inputBytes.includes(emojiBytes) && storedBytes.includes(emojiBytes), hex: emojiBytes.toString('hex') };
+  let boundaryChange = null;
+  if (inputBytes.length > storedBytes.length) {
+    const removedBytes = inputBytes.length - storedBytes.length;
+    if (inputBytes.subarray(0, storedBytes.length).equals(storedBytes) && /^\s+$/.test(inputBytes.subarray(storedBytes.length).toString('utf8'))) {
+      boundaryChange = { side: 'trailing', offset: storedBytes.length, removedHex: inputBytes.subarray(storedBytes.length).toString('hex'), removedBytes };
+    } else if (inputBytes.subarray(removedBytes).equals(storedBytes) && /^\s+$/.test(inputBytes.subarray(0, removedBytes).toString('utf8'))) {
+      boundaryChange = { side: 'leading', offset: 0, removedHex: inputBytes.subarray(0, removedBytes).toString('hex'), removedBytes };
+    }
+  }
   const cache = path.join(ctx.opts.home, '.claude/paste-cache');
   const pasteCache = [];
   let linked = false;
@@ -243,7 +257,7 @@ function received(ctx, row, payload) {
     envelopePrefix: envelope ? JSON.stringify(envelope[1]).slice(1, -1) : null,
     envelopeSuffix: envelope ? JSON.stringify(envelope[4]).slice(1, -1) : null,
     literalAfterKnownTransformations: !transformations.includes('unclassified-byte-change'), transformations, pasteCache,
-    storedBodyBytes: Buffer.byteLength(body), storedBodySha256: hash(body) };
+    storedBodyBytes: Buffer.byteLength(body), storedBodySha256: hash(body), boundaryChange, emoji };
 }
 
 function byteTransformations(payload, body) {
@@ -564,7 +578,7 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
   return proc;
 }
 
-async function submit(ctx, proc, payload, { maxMs = 20000, finalReply, observe, onSubmitted } = {}) {
+async function submit(ctx, proc, payload, { maxMs = !payload.startsWith('/rename ') && ctx.turnBudgetMs || 20000, finalReply, observe, onSubmitted } = {}) {
   if (proc.exited) throw new Unverified('owned CLI exited before submit');
   const before = transcript(ctx, proc.id);
   const time = Date.now();
@@ -664,16 +678,29 @@ function inventory(ctx) {
   return command(ctx, 'git', ['worktree', 'list', '--porcelain']).split('\n').filter(x => x.startsWith('worktree ')).map(x => path.resolve(x.slice(9)));
 }
 
+function validateDeliveryPayload(payload) {
+  if (!payload.length) throw new Failed('empty delivery payload');
+  if (/^\s|\s$/.test(payload)) throw new Failed('delivery payload has boundary whitespace');
+  return payload;
+}
+
 async function c1(ctx) {
   const results = [];
-  for (const size of [180, 5000, 32768, 49152, 256, 180]) {
-    const rawControl = results.length === 5;
-    const whitespaceBoundary = results.length === 4;
+  for (const [index, size] of [180, 5000, 32768, 49152, 256, 180].entries()) {
+    const rawControl = index === 5;
+    const whitespaceBoundary = index === 4;
     const nonce = crypto.randomUUID();
     const prefix = `${whitespaceBoundary ? ' \n  ' : ''}CANARY ${nonce}\nLiteral LF\tTAB \"quotes\" 'single' café 東京 😀\nReply only OK.\n`;
     const expanded = rawControl ? prefix : prefix.replaceAll('\t', '    ');
     const suffix = whitespaceBoundary ? '  \n \n' : '';
     const payload = expanded + 'x'.repeat(size - Buffer.byteLength(expanded + suffix)) + suffix;
+    const validation = { accepted: true, rule: 'reject-leading-or-trailing-whitespace' };
+    try { validateDeliveryPayload(payload); }
+    catch (err) {
+      validation.accepted = false;
+      validation.reason = err.message;
+      if (!whitespaceBoundary) throw err;
+    }
     let proc;
     try {
       proc = await launch(ctx);
@@ -689,10 +716,12 @@ async function c1(ctx) {
       const stored = one ? received(ctx, turns[0], payload) : { exact: false, literal: false, linked: false };
       const reaction = rows.some(r => r.type === 'assistant' && r._offset > (turns[0]?._offset ?? Infinity));
       const result = { one, ...stored, literal: stored.wrapperPresent && stored.literal, reaction };
-      if (!rawControl) results.push(result);
+      if (!rawControl && validation.accepted) results.push(result);
       const observation = { bytes: size, sha256: hash(payload), nonce, userTurns: turns.length,
         inputTabs: (prefix.match(/\t/g) || []).length, deliveredTabs: (payload.match(/\t/g) || []).length,
-        containsEmoji: payload.includes('😀'), whitespaceBoundary, openingTagLineEnding: stored.openingTagLineEnding ?? null,
+        containsEmoji: payload.includes('😀'), whitespaceBoundary, validation,
+        ...(whitespaceBoundary ? { informational: true, branch: '6238870479 section 1: reject boundary whitespace' } : {}),
+        boundaryChange: stored.boundaryChange, emoji: stored.emoji, openingTagLineEnding: stored.openingTagLineEnding ?? null,
         literal: stored.literal, linkedPaste: stored.linked, independentlyObservedReaction: reaction,
         wrapperPresent: stored.wrapperPresent ?? false, wrapperId: stored.wrapperId ?? null,
         envelopePrefix: stored.envelopePrefix ?? null, literalAfterKnownTransformations: stored.literalAfterKnownTransformations ?? false,
@@ -708,10 +737,13 @@ async function c1(ctx) {
       else ctx.evidence.payloads.push(observation);
       if (rawControl) break;
     } catch (err) {
-      if (!rawControl) throw err;
-      ctx.evidence.rawTabControl = { informational: true, status: 'UNVERIFIED', failure: err.message };
+      if (!rawControl && !whitespaceBoundary) throw err;
+      const observation = { bytes: size, sha256: hash(payload), nonce, validation, whitespaceBoundary,
+        informational: true, status: 'UNVERIFIED', failure: err.message };
+      if (rawControl) ctx.evidence.rawTabControl = observation;
+      else ctx.evidence.payloads.push(observation);
       if (proc) await stop(ctx, proc);
-      break;
+      if (rawControl) break;
     }
   }
   ctx.evidence.controls.push({ name: 'short literal control', status: results[0].one && results[0].literal && results[0].reaction ? 'PASS' : 'FAIL' });
@@ -726,6 +758,7 @@ async function c1(ctx) {
 }
 
 async function c2(ctx) {
+  ctx.turnBudgetMs = 90000;
   for (const atWorktree of [false, true]) {
     let cwd = ctx.repo;
     if (atWorktree) {
@@ -784,23 +817,35 @@ async function c2(ctx) {
   ctx.evidence.namedForks = [];
   for (const worktree of [false, true]) {
     const origin = await launch(ctx);
-    await submit(ctx, origin, '/rename origin-' + crypto.randomUUID());
+    const requestedOriginName = 'origin-' + crypto.randomUUID();
+    const renameBoundary = transcript(ctx, origin.id).bytes;
+    await submit(ctx, origin, '/rename ' + requestedOriginName);
+    await until(ctx, () => {
+      const d = descriptor(ctx, origin);
+      rememberDescriptor(origin, d);
+      if (origin.exited) throw new Unverified('origin exited before native rename settled');
+      return d?.status === 'idle' && d.name === requestedOriginName &&
+        transcript(ctx, origin.id).rows.some(r => r._offset >= renameBoundary && r.type === 'agent-name' && (r.agentName || r.agent_name) === requestedOriginName);
+    }, 'origin native rename settled');
     const originNameBefore = nativeName(ctx, origin);
+    const originNameObservedAt = Date.now();
     const requestedName = 'side-quest-' + crypto.randomUUID();
+    const forkLaunchedAt = Date.now();
     const fork = await launch(ctx, { cwd: origin.cwd, args: ['--resume', origin.id, '--fork-session', '--name', requestedName,
       ...(worktree ? ['--worktree', 'canary-named'] : [])] });
     await submit(ctx, fork, 'Named fork own turn. Reply OK without tools.');
     const agentName = transcript(ctx, fork.id).rows.filter(r => r.type === 'agent-name').at(-1);
     const originNameAfter = nativeName(ctx, origin);
-    const liveNames = ctx.processes.filter(p => !p.exited).map(p => nativeName(ctx, p));
+    const live = [origin, fork].filter(p => !p.exited && descriptor(ctx, p));
+    const liveNames = live.map(p => nativeName(ctx, p));
     const observation = { worktree, originId: origin.id, forkId: fork.id, requestedName,
       agentName: agentName?.agentName || agentName?.agent_name || null, descriptorName: descriptor(ctx, fork)?.name ?? null,
-      originNameBefore, originNameAfter,
+      originNameBefore, originNameAfter, originNameObservedAt, forkLaunchedAt, liveSessionIds: live.map(p => p.id),
       originUniqueAmongLive: liveNames.filter(n => typeof n === 'string' && n.toLowerCase() === originNameBefore?.toLowerCase()).length === 1 };
     ctx.evidence.namedForks.push(observation);
     check(ctx, 'fork --name replaces inherited native name and preserves unique origin',
       fork.id !== origin.id && observation.agentName === requestedName && observation.descriptorName === requestedName &&
-      originNameBefore === originNameAfter && observation.originUniqueAmongLive);
+      live.length === 2 && originNameBefore === requestedOriginName && originNameBefore === originNameAfter && observation.originUniqueAmongLive);
     await stop(ctx, fork); await stop(ctx, origin);
   }
   capability(ctx, 'forkWorktree', 'PASS');
@@ -1015,11 +1060,14 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
   const carriesNonce = row => JSON.stringify(row).includes(nonce);
   let receipt = null, submissionError, controlObservedAt;
   const observationMs = ctx.opts.dryRun ? 5000 : 15000;
+  const reportWaitMs = ctx.opts.dryRun ? 10000 : 90000;
+  const inboxObservation = { idleBudgetMs: ctx.opts.dryRun ? 1000 : 15000,
+    neutralTurnBudgetMs: ctx.opts.dryRun ? 5000 : 60000, neutralTurnSent: false };
   const messagingEndpoints = { origin: messagingEndpoint(descriptor(ctx, origin)?.messagingSocketPath),
     child: messagingEndpoint(descriptor(ctx, child)?.messagingSocketPath) };
   let renamedAfterPrompt = false;
   try {
-    await submit(ctx, child, payload, { maxMs: observationMs + (wrongRecipientControl || renameAfterPrompt ? observationMs : 0),
+    await submit(ctx, child, payload, { maxMs: reportWaitMs + (wrongRecipientControl || renameAfterPrompt ? observationMs : 0),
       onSubmitted: renameAfterPrompt ? async () => {
         await submit(ctx, origin, '/rename after-prompt-' + crypto.randomUUID());
         renamedAfterPrompt = nativeName(ctx, origin) !== recipient;
@@ -1033,13 +1081,40 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
         controlObservedAt ??= Date.now();
         return receiptRows().some(carriesNonce) || Date.now() - controlObservedAt >= (ctx.opts.dryRun ? 150 : 15000);
       }
-      return outcome.results.some(x => x.success === false || x.isError) || receipt && outcome.results.some(x => x.success === true);
+      return outcome.results.some(x => typeof x.success === 'boolean' || x.isError);
     } });
   } catch (err) { submissionError = err; }
   const rows = transcript(ctx, child.id).rows.filter(r => r._offset >= childBefore);
   const { sends, send, sendResults, results } = sendOutcome(rows, nonce, recipient);
   const failedSend = results.some(x => x.success === false || x.isError);
   const successfulSend = results.some(x => x.success === true && !x.isError);
+  if (successfulSend && !failedSend && !wrongRecipientControl && !renameAfterPrompt) {
+    inboxObservation.successObservedAt = Date.now();
+    const findReceipt = () => {
+      if (origin.exited) throw new Unverified('orchestrator exited before inbox receipt');
+      const d = descriptor(ctx, origin);
+      rememberDescriptor(origin, d);
+      child.name = nativeName(ctx, child);
+      receipt = receiptRows().map(r => nativeReceipt(r, child.name, nonce, messagingEndpoints.child)).find(Boolean) || null;
+      return receipt;
+    };
+    try {
+      try {
+        await until(ctx, findReceipt, 'orchestrator idle inbox receipt', inboxObservation.idleBudgetMs);
+        inboxObservation.receivedWhileIdle = true;
+      } catch (err) {
+        inboxObservation.idleFailure = err.message;
+        if (origin.exited || Date.now() >= ctx.deadline) throw err;
+        const d = descriptor(ctx, origin);
+        if (d?.status !== 'idle') throw new Unverified('orchestrator not idle for neutral inbox turn');
+        inboxObservation.neutralTurnSent = true;
+        inboxObservation.neutralTurnAt = Date.now();
+        await submit(ctx, origin, 'Read any pending native inbox messages, then reply OK without tools.',
+          { maxMs: inboxObservation.neutralTurnBudgetMs, observe: findReceipt });
+      }
+    } catch (err) { submissionError = err; }
+    inboxObservation.finishedAt = Date.now();
+  }
   const socketObservation = sandbox ? socketDirectory(ctx, child) : null;
   let envKeys, envStatus = 'UNVERIFIED';
   if (process.platform === 'linux') {
@@ -1056,7 +1131,11 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
   const raw = receiptRows();
   const leaked = raw.some(carriesNonce);
   const observation = { sandbox, wrongRecipientControl, nonce, orchestratorId: origin.id, childId: child.id,
-    observationBudgetMs: observationMs, messagingEndpoints, ...(renameAfterPrompt ? { informational: true, renamedAfterPrompt } : {}),
+    observationBudgetMs: observationMs, childReportBudgetMs: 90000, effectiveReportBudgetMs: reportWaitMs,
+    inboxObservation, submissionError: submissionError?.message ?? null,
+    lastChildRows: rows.slice(-16).map(r => ({ type: r.type, offset: r._offset,
+      blocks: blocks([r]).map(b => ({ type: b.type, ...(b.type === 'tool_use' ? { name: b.name } : {}) })) })),
+    messagingEndpoints, ...(renameAfterPrompt ? { informational: true, renamedAfterPrompt } : {}),
     before, displayTitle, nativeRecipient: origin.name, addressedRecipient: recipient,
     recipientSource: rowName ? 'agent-name' : 'descriptor.name', recipientObservedAt,
     agentNameOffset: agent?._offset ?? null, renameObservation, sendResults,
@@ -1349,11 +1428,12 @@ async function main(argv = process.argv.slice(2)) {
     status = aggregateStatus(Object.values(ctx.capabilityStatus));
     if (ctx.opts?.mutation) {
       const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'exit-flush-assistant', 'denial-no-error-flag', 'tab-to-spaces', 'raw-control-no-confirmation', 'missing-paste-object', 'send-observation-delayed',
-        'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'receipt-delayed'];
+        'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'receipt-delayed',
+        'trim-boundary-lf', 'delayed-rename-name', 'slow-c2-turn', 'receipt-on-turn', 'receipt-idle-delayed', 'slow-tool-search'];
       const unavailable = ['no-report', 'synthetic-receipt', 'missing-name', 'unknown-receipt', 'blocking-dialog', 'exit-on-submit', 'hang', 'wrong-recipient', 'os-denial', 'unknown-denial', 'sandbox-unknown-denial',
         'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'wrong-command-denial',
         'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule', 'stale-recipient',
-        'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type', 'receipt-teammate', 'sandbox-socket-unavailable'];
+        'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type', 'receipt-teammate', 'sandbox-socket-unavailable', 'tool-search-only'];
       const expected = positive.includes(ctx.opts.mutation) ? 'PASS' : unavailable.includes(ctx.opts.mutation) ? 'UNVERIFIED' : 'FAIL';
       ctx.evidence.controls.push({ name: ctx.opts.mutation, status: status === expected ? 'PASS' : 'FAIL', expected, observed: status });
     }
@@ -1394,4 +1474,4 @@ if (require.main === module) {
   });
 }
 module.exports = { main, parse, environment, received, sandboxPlan, probeMounts, launch, stop, descriptor, submit, pathPermissionRule,
-  consolidate, readCapabilities };
+  consolidate, readCapabilities, validateDeliveryPayload };

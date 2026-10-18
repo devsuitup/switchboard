@@ -105,6 +105,79 @@ const mutations = {
   C4: ['shared-descriptors', 'parent-env', 'wrong-control-leak', 'wrong-control-hidden-leak'],
 };
 
+test('GIVEN boundary LF trimmed WHEN amended C1 runs THEN supported payloads qualify and rejected probe retains exact loss', async t => {
+  const r = await run(t, ['--canary', 'C1', '--mutation', 'trim-boundary-lf']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.ledger.measurements[0].capabilityStatus.literalTranscript, 'PASS');
+  assert.ok(data(r).controls.every(c => c.status === 'PASS'));
+  const probe = data(r).payloads.find(p => p.whitespaceBoundary);
+  assert.equal(probe.informational, true);
+  assert.equal(probe.validation.accepted, false);
+  assert.deepEqual(probe.boundaryChange, { side: 'trailing', offset: 255, removedHex: '0a', removedBytes: 1 });
+  assert.equal(probe.emoji.storedByteOffset, probe.emoji.inputByteOffset);
+  assert.equal(probe.emoji.preserved, true);
+});
+
+test('GIVEN delivery payload with boundary whitespace WHEN validated THEN refuse before normal delivery', () => {
+  for (const text of [' leading', 'trailing\n', '\tleading', '\nbody\n', '']) {
+    assert.throws(() => harness.validateDeliveryPayload(text), /boundary whitespace|empty/);
+  }
+  assert.equal(harness.validateDeliveryPayload('body\nwith interior spaces 😀'), 'body\nwith interior spaces 😀');
+});
+
+test('GIVEN delayed native rename WHEN C2 forks THEN capture the settled name and only case-local live identities', async t => {
+  const r = await run(t, ['--canary', 'C2', '--mutation', 'delayed-rename-name']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(data(r).controls.every(c => c.status === 'PASS'));
+  for (const f of data(r).namedForks) {
+    assert.match(f.originNameBefore, /^origin-/);
+    assert.equal(f.originNameAfter, f.originNameBefore);
+    assert.deepEqual(f.liveSessionIds.sort(), [f.originId, f.forkId].sort());
+    assert.ok(f.originNameObservedAt <= f.forkLaunchedAt);
+    assert.equal(f.originUniqueAmongLive, true);
+  }
+});
+
+test('GIVEN busy C2 turn lasting beyond 20 seconds WHEN identity stays owned THEN await bounded 90 second turn', async t => {
+  const r = await run(t, ['--canary', 'C2', '--mutation', 'slow-c2-turn']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(data(r).controls.every(c => c.status === 'PASS'));
+  assert.ok(data(r).processes.flatMap(p => p.submissions || []).filter(s => s.phase === 'ordinary turn').every(s => s.waitBudgetMs === 90000));
+});
+
+for (const mutation of ['receipt-on-turn', 'receipt-idle-delayed']) {
+  test(`GIVEN ${mutation} WHEN C4 send succeeds THEN observe bounded inbox delivery after the original boundary`, async t => {
+    const r = await run(t, ['--canary', 'C4', '--platform-label', 'windows-conpty-bundled', '--mutation', mutation]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(data(r).controls.every(c => c.status === 'PASS'));
+    const report = data(r).reports[0];
+    assert.equal(report.nativeReceipt, true);
+    assert.ok(report.receiptOffset >= report.before);
+    assert.equal(report.inboxObservation.neutralTurnSent, mutation === 'receipt-on-turn');
+    assert.ok(report.inboxObservation.successObservedAt <= report.inboxObservation.finishedAt);
+    assert.ok(report.rawReceiptRows.length > 0);
+  });
+}
+
+test('GIVEN child still using ToolSearch beyond old budget WHEN C4 waits THEN accept later strict native send and receipt', async t => {
+  const r = await run(t, ['--canary', 'C4', '--platform-label', 'windows-conpty-inbox', '--mutation', 'slow-tool-search']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(data(r).controls.every(c => c.status === 'PASS'));
+  assert.equal(data(r).reports[0].childReportBudgetMs, 90000);
+  assert.equal(data(r).reports[0].nativeReceipt, true);
+});
+
+test('GIVEN ToolSearch without SendMessage WHEN C4 report budget expires THEN retain last child tool rows and timeout', async t => {
+  const r = await run(t, ['--canary', 'C4', '--platform-label', 'windows-conpty-inbox', '--mutation', 'tool-search-only']);
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(r.ledger.measurements[0].capabilityStatus.independentSendMessage, 'UNVERIFIED');
+  const report = data(r).reports[0];
+  assert.match(report.submissionError, /timeout/);
+  assert.ok(data(r).controls.every(c => c.status === 'PASS'));
+  assert.ok(report.lastChildRows.some(r => r.blocks.some(b => b.name === 'ToolSearch')));
+  assert.ok(report.lastChildRows.every(r => Number.isInteger(r.offset)));
+});
+
 test('GIVEN delayed fake fixture preparation WHEN C3 work starts THEN its requested work budget remains available', async t => {
   const r = await run(t, ['--canary', 'C3', '--platform-label', 'windows-conpty-bundled', '--timeout-ms', '20000'], { env: { CANARY_TEST_SETUP_DELAY_MS: '21000' } });
   assert.equal(r.status, 0, r.stderr + (r.ledger ? JSON.stringify(data(r)) : 'no ledger'));
