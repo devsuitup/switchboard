@@ -5,10 +5,12 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Changed
+- Sessions are grouped by name only for scheduled tasks; other sessions are listed one per row. (#564)
 - Remote session rows no longer offer Delete, which could only be refused after opening its confirmation. (#566, #565)
 - Disabled Respawn and Delete buttons in Agents now tell you to use the conversation's sidebar Stop or end its other process, according to where it is running. (#566)
 
 ### Fixed
+- On a compacted conversation, Fork, Resume with config and View messages now use its latest part. (#564)
 - Deleting a compacted conversation now deletes all of its parts, so newer parts cannot reappear as sessions; Delete asks you to retry if its parts changed after the preview. If a file cannot be removed, the conversation stays listed with its remaining parts and a message reports what was deleted. (#564)
 - Run now on a schedule shows Launched! only after its shell starts. A refused launch or shell spawn failure leaves a dismissible notice saying why and how to retry; later command failures remain in the main log. (#566)
 - A restore retry cancelled during indexing, even when indexing finishes during the restore, or blocked by a failed reload, now leaves a persistent notice telling you to open the session from the sidebar to retry restoring. A failed retry lists only the sessions that are still not open, and the "waiting for indexing" notice goes away once nothing is left to retry. (#666, #566)

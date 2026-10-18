@@ -171,28 +171,31 @@ test('a catch-up run uses its schedule header despite a renamed session', () => 
   });
 });
 
-test('ordinary singleton and shared CLI slugs keep their existing grouping', () => {
+test('ordinary singleton and shared CLI slugs each stay outside groups', () => {
   render([
     session('plain-1', 'single', { firstPrompt: prompt, scheduleSlug: null }),
     session('plain-2', 'woolly-scribbling-wirth', { firstPrompt: prompt, scheduleSlug: null }),
     session('plain-3', 'woolly-scribbling-wirth', { firstPrompt: prompt, scheduleSlug: null }),
   ], ctx => {
     assert.equal(ctx.document.querySelector('[data-session-id="plain-1"]').closest('.slug-group'), null);
-    assert.deepEqual(groupNames(ctx), [prompt]);
-    assert.equal(ctx.document.querySelector('.slug-group-count').textContent, '2 sessions');
+    assert.deepEqual(groupNames(ctx), []);
+    assert.equal(ctx.document.querySelectorAll('.session-item').length, 3);
   });
 });
 
-test('ordinary slug groups and schedule groups with the same slug have distinct DOM identities', () => {
+test('interactive sessions sharing a schedule slug stay outside its group', () => {
   render([
     session('morning-1', 'journal-morning'),
     session('plain-1', 'journal-morning', { firstPrompt: prompt, scheduleSlug: null }),
     session('plain-2', 'journal-morning', { firstPrompt: prompt, scheduleSlug: null }),
   ], ctx => {
     const groups = [...ctx.document.querySelectorAll('.slug-group')];
-    assert.equal(groups.length, 2);
-    assert.equal(new Set(groups.map(group => group.id)).size, 2);
-    assert.deepEqual(groupNames(ctx).sort(), [prompt, 'journal-morning'].sort());
+    assert.equal(groups.length, 1);
+    assert.deepEqual(groupNames(ctx), ['journal-morning']);
+    assert.equal(groups[0].querySelectorAll('.session-item').length, 1);
+    for (const id of ['plain-1', 'plain-2']) {
+      assert.equal(ctx.document.querySelector(`[data-session-id="${id}"]`).closest('.slug-group'), null);
+    }
   });
 });
 

@@ -491,14 +491,16 @@ async function runAgentVerb(verb, entry) {
   if (verb === 'transcript') {
     if (!agentVerbAvailability(entry, agentsDaemonReachable).transcript) return;
     if (!entry.id) {
-      showJsonlViewer(sessionMap.get(entry.sessionId) || { sessionId: entry.sessionId, name: entry.name, projectPath: entry.cwd });
+      const session = sessionMap.get(entry.sessionId) || { sessionId: entry.sessionId, name: entry.name, projectPath: entry.cwd };
+      showJsonlViewer({ ...session, sessionId: session.headSessionId || session.sessionId });
       return;
     }
     let result;
     try { result = await window.api.bgAgentVerb(verb, entry.id); } catch (err) { result = { ok: false, error: err.message }; }
     if (result && result.ok && result.sessionId) {
       agentsVerbErrors.delete(key);
-      showJsonlViewer(sessionMap.get(result.sessionId) || { sessionId: result.sessionId, name: entry.name, projectPath: entry.cwd });
+      const session = sessionMap.get(result.sessionId) || { sessionId: result.sessionId, name: entry.name, projectPath: entry.cwd };
+      showJsonlViewer({ ...session, sessionId: session.headSessionId || session.sessionId });
     } else {
       agentsVerbErrors.set(key, (result && result.error) || 'Transcript does not exist or is not available yet');
       if (agentsViewActive) renderAgentsView();

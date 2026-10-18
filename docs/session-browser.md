@@ -117,6 +117,11 @@ from newest to oldest, then the original transcript's tab. If no part is open,
 it resumes the latest-modified part, including the original transcript if it
 was used again after compaction.
 
+On a merged conversation, **Fork session**, **Resume with config** and
+**View messages** use that latest-modified part too. View messages shows
+that part's transcript. The conversation's name, pin and archived flag
+belong to its original part.
+
 ### Names
 
 The name shown is, in order of preference: a name given in Switchboard, the
@@ -150,9 +155,10 @@ heatmap.
 
 ### Groups inside a project
 
-- Sessions whose transcripts carry the same `slug` are grouped under one row,
-  with a count and an **Archive all sessions in group** button. The runs of one
-  [schedule](automation.md#schedules) share the schedule's slug.
+- Runs of the same [schedule](automation.md#schedules) are grouped under its
+  name, with a count and an **Archive all sessions in group** button. Grouping
+  uses the recorded schedule identity (`scheduleSlug`). Other conversations
+  each have their own row, even when their CLI slugs match.
 - Subagents sit under their parent session — see [Subagents](subagents.md).
   Subagents whose parent cannot be found are listed in an **Orphan subagents**
   group at the bottom of the project, collapsed by default; those of an

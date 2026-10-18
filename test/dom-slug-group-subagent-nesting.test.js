@@ -1,23 +1,3 @@
-// Regression coverage for issue #128 (ask 4) / rehab-plan.md A3+A4 — subagent
-// children rendered inside a slug group used to vanish from the sidebar.
-//
-// buildSlugGroup() appended its sessions via the raw buildSessionItem(session),
-// never through appendSubagentChildren — only the top-level (non-grouped)
-// render path called that helper. Any session rendered inside a slug group
-// therefore lost its subagent caret/children, and — because the group element
-// itself carries no data-session-id — the orphan-subagents pass in
-// buildSessionsList() didn't recognize the grouped session as "already
-// accounted for" either, so its subagents were duplicated into the project's
-// "Orphan subagents" bucket instead.
-//
-// The fixture below reproduces the one real producer of shared slugs across
-// top-level sessions in this app: schedule-runner.js's createScheduleSession()
-// writes `slug: schedule.slug` on the JSONL's first line for every rerun of the
-// same schedule (schedule-runner.js:176). Two reruns of the same schedule share
-// a slug and land in session_cache (session-cache.js:buildProjectsFromCache)
-// with identical `slug`, distinct `sessionId`/`modified`, and no
-// `parentSessionId` — the shape asserted here.
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -37,7 +17,7 @@ function scheduleRerunProject({ subagentParentId = 'sched-run-2', ...overrides }
     sessions: [
       {
         sessionId: 'sched-run-1',
-        slug: 'hn-top-articles',
+        scheduleSlug: 'hn-top-articles',
         summary,
         firstPrompt: summary,
         modified: t(-120000), // an earlier rerun
@@ -47,7 +27,7 @@ function scheduleRerunProject({ subagentParentId = 'sched-run-2', ...overrides }
       },
       {
         sessionId: 'sched-run-2',
-        slug: 'hn-top-articles',
+        scheduleSlug: 'hn-top-articles',
         summary,
         firstPrompt: summary,
         modified: t(0), // the current (running) rerun
@@ -75,7 +55,7 @@ test('a session rendered inside a slug group still gets its subagent children at
     ctx.window.activePtyIds.add('sched-run-2');
     ctx.sidebar.renderProjects([scheduleRerunProject()], true);
 
-    const group = ctx.document.getElementById('slug-hn-top-articles');
+    const group = ctx.document.querySelector('.slug-group');
     assert.ok(group, 'the two schedule reruns must be grouped by shared slug');
     assert.ok(group.classList.contains('slug-group'), 'grouped element must carry slug-group');
 
@@ -113,7 +93,7 @@ test('the slug-group dot lights up while one of the grouped, nested sessions has
     ctx.window.activePtyIds.add('sched-run-2');
     ctx.sidebar.renderProjects([scheduleRerunProject()], true);
 
-    const dot = ctx.document.querySelector('#slug-hn-top-articles .slug-group-dot');
+    const dot = ctx.document.querySelector('.slug-group .slug-group-dot');
     assert.ok(dot, 'slug-group-dot must be rendered');
     assert.ok(dot.classList.contains('running'), 'group dot must reflect that sched-run-2 has an active PTY');
   } finally {
@@ -142,7 +122,7 @@ test('"Archive all sessions in group" only archives the two top-level reruns, no
 
     ctx.sidebar.renderProjects([scheduleRerunProject()], true);
 
-    const archiveBtn = ctx.document.querySelector('#slug-hn-top-articles .slug-group-archive-btn');
+    const archiveBtn = ctx.document.querySelector('.slug-group .slug-group-archive-btn');
     assert.ok(archiveBtn, 'slug-group-archive-btn must be rendered');
     await archiveBtn.onclick({ stopPropagation: () => {} });
 
@@ -165,11 +145,11 @@ test('a session in the "+N more" (non-promoted) part of a slug group still gets 
     ctx.window.activePtyIds.add('sched-run-2'); // only sched-run-2 is promoted; sched-run-1 lands in "rest"
     ctx.sidebar.renderProjects([scheduleRerunProject({ subagentParentId: 'sched-run-1' })], true);
 
-    const group = ctx.document.getElementById('slug-hn-top-articles');
+    const group = ctx.document.querySelector('.slug-group');
     assert.ok(group, 'the two schedule reruns must be grouped by shared slug');
     assert.ok(group.classList.contains('has-promoted'), 'sched-run-2 being active must promote it, pushing sched-run-1 into rest');
 
-    const olderDiv = ctx.document.getElementById('sgo-slug-hn-top-articles');
+    const olderDiv = ctx.document.getElementById('sgo-' + group.id);
     assert.ok(olderDiv, 'the "+N more" container must be rendered since rest.length > 0');
 
     const caret = ctx.document.getElementById('sub-caret-sched-run-1');
@@ -191,7 +171,7 @@ test('a session in a slug group with no active PTY at all still gets its subagen
     // the plain "all sessions" branch rather than the promoted/rest split.
     ctx.sidebar.renderProjects([scheduleRerunProject({ subagentParentId: 'sched-run-2' })], true);
 
-    const group = ctx.document.getElementById('slug-hn-top-articles');
+    const group = ctx.document.querySelector('.slug-group');
     assert.ok(group, 'the two schedule reruns must be grouped by shared slug');
     assert.ok(!group.classList.contains('has-promoted'), 'no session is active, so the group must not be in the promoted state');
 

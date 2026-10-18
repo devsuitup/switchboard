@@ -768,7 +768,7 @@ function renderProjects(projects, resort) {
     const ungrouped = [];
     for (const session of filtered) {
       const scheduled = typeof session.scheduleSlug === 'string' && session.scheduleSlug.length > 0;
-      const slug = scheduled ? session.scheduleSlug : session.slug;
+      const slug = scheduled ? session.scheduleSlug : null;
       if (slug) {
         const key = JSON.stringify([scheduled, slug]);
         if (!slugMap.has(key)) slugMap.set(key, { slug, scheduled, sessions: [] });
@@ -1564,7 +1564,7 @@ function rebindSidebarEvents(projects) {
       if (item.dataset.subagent && session.parentSessionId) {
         showSubagentTranscript(session);
       } else if (session.remoteAlias && !session.remoteAttachable) {
-        showJsonlViewer(session);
+        showJsonlViewer({ ...session, sessionId: rowHeadId(session) });
       } else {
         const head = session.remoteAlias ? (session.remoteAttachSessionId || rowHeadId(session)) : rowHeadId(session);
         const mergedMemberIds = [
@@ -1624,7 +1624,7 @@ function rebindSidebarEvents(projects) {
     if (launchConfigBtn) {
       launchConfigBtn.onclick = (e) => {
         e.stopPropagation();
-        showResumeSessionDialog(session);
+        showResumeSessionDialog({ ...session, sessionId: rowHeadId(session) });
       };
     }
 
@@ -1637,7 +1637,7 @@ function rebindSidebarEvents(projects) {
           p.sessions.some(s => s.sessionId === session.sessionId)
         );
         if (project) {
-          forkSession(session, project);
+          forkSession({ ...session, sessionId: rowHeadId(session) }, project);
         }
       };
     }
@@ -1655,7 +1655,7 @@ function rebindSidebarEvents(projects) {
     if (jsonlBtn) {
       jsonlBtn.onclick = (e) => {
         e.stopPropagation();
-        showJsonlViewer(session);
+        showJsonlViewer({ ...session, sessionId: rowHeadId(session) });
       };
     }
 

@@ -110,7 +110,7 @@ for (const [name, descriptors, expected] of [
     await h.click();
     assert.deepEqual(h.spawned, expected ? [expected] : []);
     assert.deepEqual(main.attached, expected ? [expected] : []);
-    assert.deepEqual(h.viewed, expected ? [] : ['A']);
+    assert.deepEqual(h.viewed, expected ? [] : ['B']);
     assert.equal(session.remoteAttachable, !!expected);
     assert.equal(session.remoteDescriptorSeen, descriptors.includes('A'));
     assert.equal(session.remoteMemberDescriptorSeen.B, descriptors.includes('B'));

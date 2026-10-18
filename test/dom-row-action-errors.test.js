@@ -277,7 +277,7 @@ test('background handoff and attach errors persist independently and attach retr
 });
 
 test('slug bulk Archive keeps partial successes and reports each refused member', async t => {
-  const h = setup(t, { slug: 'conversation' });
+  const h = setup(t, { scheduleSlug: 'conversation' });
   const second = { ...h.session, sessionId: 's2', name: 'Second' };
   h.project.sessions.push(second);
   h.render();
