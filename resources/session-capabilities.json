@@ -1208,6 +1208,33 @@
         "platform": "linux",
         "backend": "unix-pty"
       }
+    },
+    {
+      "sequence": 43,
+      "canary": "C3",
+      "status": "PASS",
+      "measuredAt": "2026-10-18T17:56:14.902Z",
+      "cli": {
+        "version": "2.1.301 (Claude Code)",
+        "build": "unknown",
+        "sha256": "bc1aad9982c7b59c7d889ff92595d61cf46e0a6eae074cb551d932a989bcd222"
+      },
+      "harnessRevision": "b1db79e95e820950b88876b88b99e73be710288a1d40ce0be810bf5df6da38d0",
+      "evidencePath": "docs/evidence/session-capabilities/linux-C3-sandbox-987eee13/0001-C3-2994bd42/evidence.json",
+      "evidenceSha256": "f84aaebd75f85cd046b28464b022d9dd77acdfd811197c91b249baab18c94624",
+      "capabilities": {
+        "extraPermissionSettings": true
+      },
+      "capabilityStatus": {
+        "extraPermissionSettings": "PASS"
+      },
+      "baselineHead": "987eee138aabb470c48584973e59055edddcb9c5",
+      "acceptedSpecBranch": null,
+      "execution": {
+        "label": "linux-unix-pty",
+        "platform": "linux",
+        "backend": "unix-pty"
+      }
     }
   ]
 }
