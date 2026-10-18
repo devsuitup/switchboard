@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "904cc8fab4eda9c1bbbb97c1bfe73870adc525b0",
+  "measurements": [
+    {
+      "sequence": 1,
+      "canary": "C4",
+      "status": "UNVERIFIED",
+      "measuredAt": "2026-10-18T14:00:52.156Z",
+      "cli": {
+        "version": "2.1.302 (Claude Code)",
+        "build": "unknown",
+        "sha256": "3ab075f78998efef8b87f491c2e4a39c309dddf44e51d0103eba4f3713d2a0ae"
+      },
+      "harnessRevision": "2e746290a6047c8dedadfa983caec07a18ed87ffafda200697e0bc6a01b1495a",
+      "evidencePath": "docs/evidence/session-capabilities/win-inbox-C4-904cc8fa/0001-C4-5b6236dc/evidence.json",
+      "evidenceSha256": "57b4810d585e06f072084a16ca1580c56a57f2fe5b18da50ab566e02543c32ab",
+      "capabilities": {
+        "independentSendMessage": false,
+        "sandboxChildSendMessage": false
+      },
+      "capabilityStatus": {
+        "sandboxChildSendMessage": "NOT_APPLICABLE",
+        "independentSendMessage": "UNVERIFIED"
+      },
+      "baselineHead": "904cc8fab4eda9c1bbbb97c1bfe73870adc525b0",
+      "acceptedSpecBranch": null,
+      "execution": {
+        "label": "windows-conpty-inbox",
+        "platform": "win32",
+        "backend": "conpty-inbox"
+      }
+    }
+  ]
+}
