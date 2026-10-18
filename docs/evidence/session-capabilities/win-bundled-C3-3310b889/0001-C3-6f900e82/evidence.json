@@ -1,0 +1,958 @@
+{
+  "schemaVersion": 1,
+  "canary": "C3",
+  "dryRun": false,
+  "qualifiesProduction": false,
+  "platform": "win32",
+  "kernel": "10.0.26200",
+  "platformLabel": "windows-conpty-bundled",
+  "ptyBackend": "conpty-bundled",
+  "environmentKeys": [
+    "APPDATA",
+    "COLORTERM",
+    "COMSPEC",
+    "DISABLE_AUTOUPDATER",
+    "GIT_AUTHOR_EMAIL",
+    "GIT_AUTHOR_NAME",
+    "GIT_COMMITTER_EMAIL",
+    "GIT_COMMITTER_NAME",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "HOME",
+    "LANG",
+    "LOCALAPPDATA",
+    "PATH",
+    "PATHEXT",
+    "PROGRAMFILES",
+    "SWITCHBOARD_DATA_DIR",
+    "SWITCHBOARD_TRIGGERS_DIR",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "USERNAME",
+    "USERPROFILE",
+    "WINDIR",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME"
+  ],
+  "mutation": null,
+  "workBudgetMs": 300000,
+  "fixtureIdentity": "d6ade9c26b9c2089b72c0527ec79be0994be777ee97f3dd7f64d906dcd48249a",
+  "inventorySource": "git worktree list --porcelain",
+  "peerAliasThreat": {
+    "status": "UNVERIFIED",
+    "reason": "publication-path probe does not establish resistance to shared sessions directory aliases"
+  },
+  "checks": [
+    {
+      "sequence": 1,
+      "at": "2026-10-18T13:01:22.316Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "46f2d2fc-797a-4074-b4b6-328e3c30752e"
+    },
+    {
+      "sequence": 2,
+      "at": "2026-10-18T13:01:22.318Z",
+      "name": "denied side effect absent",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "46f2d2fc-797a-4074-b4b6-328e3c30752e"
+    },
+    {
+      "sequence": 3,
+      "at": "2026-10-18T13:01:22.318Z",
+      "name": "deny overrides overlapping settings and project allow",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "46f2d2fc-797a-4074-b4b6-328e3c30752e"
+    },
+    {
+      "sequence": 4,
+      "at": "2026-10-18T13:01:22.318Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "46f2d2fc-797a-4074-b4b6-328e3c30752e"
+    },
+    {
+      "sequence": 5,
+      "at": "2026-10-18T13:01:22.318Z",
+      "name": "explicit C3 final reply observed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "46f2d2fc-797a-4074-b4b6-328e3c30752e"
+    },
+    {
+      "sequence": 6,
+      "at": "2026-10-18T13:01:22.318Z",
+      "name": "owned C3 post-submit idle confirmed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "46f2d2fc-797a-4074-b4b6-328e3c30752e"
+    },
+    {
+      "sequence": 7,
+      "at": "2026-10-18T13:01:23.899Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true
+    },
+    {
+      "sequence": 8,
+      "at": "2026-10-18T13:01:23.899Z",
+      "name": "deny overrides overlapping settings and project allow",
+      "pass": true
+    },
+    {
+      "sequence": 9,
+      "at": "2026-10-18T13:01:23.899Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true
+    },
+    {
+      "sequence": 10,
+      "at": "2026-10-18T13:01:52.200Z",
+      "name": "CLI reads exact settings JSON",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "9a7a3e4c-22ec-48a2-8ca5-f0b38a133807"
+    },
+    {
+      "sequence": 11,
+      "at": "2026-10-18T13:01:52.200Z",
+      "name": "negative control removing deny produces side effect",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "9a7a3e4c-22ec-48a2-8ca5-f0b38a133807"
+    },
+    {
+      "sequence": 12,
+      "at": "2026-10-18T13:01:52.200Z",
+      "name": "non-overlapping allowed Bash action runs",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "9a7a3e4c-22ec-48a2-8ca5-f0b38a133807"
+    },
+    {
+      "sequence": 13,
+      "at": "2026-10-18T13:01:52.200Z",
+      "name": "explicit C3 final reply observed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "9a7a3e4c-22ec-48a2-8ca5-f0b38a133807"
+    },
+    {
+      "sequence": 14,
+      "at": "2026-10-18T13:01:52.200Z",
+      "name": "owned C3 post-submit idle confirmed",
+      "pass": true,
+      "status": "PASS",
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "9a7a3e4c-22ec-48a2-8ca5-f0b38a133807"
+    },
+    {
+      "sequence": 15,
+      "at": "2026-10-18T13:01:53.865Z",
+      "name": "negative control removing deny produces side effect",
+      "pass": true
+    }
+  ],
+  "controls": [
+    {
+      "name": "remove-deny",
+      "status": "PASS"
+    }
+  ],
+  "processes": [
+    {
+      "pid": 18508,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "46f2d2fc-797a-4074-b4b6-328e3c30752e",
+        "--settings",
+        "C:\\canary380-runtime\\r43\\private\\permissions-3006eac5-cda7-48e5-870c-91deeb17ce7c.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792328482293,
+        "status": "idle",
+        "statusUpdatedAt": 1792328481994,
+        "waitingFor": null
+      },
+      "sessionId": "46f2d2fc-797a-4074-b4b6-328e3c30752e",
+      "cwd": "C:\\canary380-runtime\\r43\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134368020397820794",
+      "writerHostPid": 18508,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 24488322974285204
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792328446737,
+          "waitBudgetMs": 90000,
+          "outcome": "PASS",
+          "observedAt": 1792328482293,
+          "descriptor": {
+            "observedAt": 1792328482293,
+            "status": "idle",
+            "statusUpdatedAt": 1792328481994,
+            "waitingFor": null
+          },
+          "transcriptBytes": 345509,
+          "rowCount": 63,
+          "lastRows": [
+            {
+              "type": "api-request",
+              "offset": 323587,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 328632,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 330684,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "attachment",
+              "offset": 331772,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 332423,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 334477,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 336195,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 336463,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 342018,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 342669,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "system",
+              "offset": 344326,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 344754,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 345124,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 345241,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 345324,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 345426,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792328446737,
+        "observedAt": 1792328482281,
+        "status": "idle",
+        "statusUpdatedAt": 1792328481994,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328447616,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328448586,
+          "code": "0",
+          "payloadSha256": "fd442ed058b97ef007532d3b9d876efdb6fb7d692c33b9913745f763da103ee0"
+        },
+        {
+          "at": 1792328449410,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328449539,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328450501,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328451462,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328452423,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328453384,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328454344,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328455310,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328456267,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328457229,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328458190,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328459163,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328460113,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328461074,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328462036,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328463019,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328463963,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328464932,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328465884,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328466845,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328467805,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328468765,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328469726,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328470687,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328471649,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328472620,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328473570,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328474530,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328475492,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328476452,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328477414,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328478374,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328479335,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328480315,
+          "code": "0",
+          "payloadSha256": "a6449a706610204781b4d49b3aaf6793cfc83c5a754241696446981a5d734a6c"
+        },
+        {
+          "at": 1792328481276,
+          "code": "0",
+          "payloadSha256": "4cbd54e9c9a47795d0942809349026116559dcd16e75cdc3d9aac69b818409a5"
+        },
+        {
+          "at": 1792328481994,
+          "code": "0",
+          "payloadSha256": "1818f85eb47a1809cc69a857b6d3c4458d4e52240855e6731011eb949dbb3fc1"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 345509,
+        "exitRequestedAt": 1792328483352,
+        "finalBytes": 347117
+      }
+    },
+    {
+      "pid": 7308,
+      "sandbox": false,
+      "backend": "conpty-bundled",
+      "cleaned": true,
+      "waitingFor": null,
+      "argv": [
+        "--session-id",
+        "9a7a3e4c-22ec-48a2-8ca5-f0b38a133807",
+        "--settings",
+        "C:\\canary380-runtime\\r43\\private\\permissions-a5a98afd-9c3e-4ce6-bb48-b5756a142e95.json"
+      ],
+      "mountPlan": null,
+      "environmentKeys": [
+        "APPDATA",
+        "COLORTERM",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "LANG",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "PROGRAMFILES",
+        "SWITCHBOARD_DATA_DIR",
+        "SWITCHBOARD_TRIGGERS_DIR",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "USERNAME",
+        "USERPROFILE",
+        "WINDIR",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "lastDescriptor": {
+        "observedAt": 1792328512180,
+        "status": "idle",
+        "statusUpdatedAt": 1792328511873,
+        "waitingFor": null
+      },
+      "sessionId": "9a7a3e4c-22ec-48a2-8ca5-f0b38a133807",
+      "cwd": "C:\\canary380-runtime\\r43\\project",
+      "descriptorSource": "../../../../../../../../../../canary380-home/.claude/sessions",
+      "namespace": null,
+      "innerPid": null,
+      "procStart": "134368020840073309",
+      "writerHostPid": 7308,
+      "directoryIdentity": {
+        "dev": 951633116,
+        "ino": 24488322974285204
+      },
+      "submissions": [
+        {
+          "phase": "tool task",
+          "beforeBytes": 0,
+          "submittedAt": 1792328489367,
+          "waitBudgetMs": 90000,
+          "outcome": "PASS",
+          "observedAt": 1792328512180,
+          "descriptor": {
+            "observedAt": 1792328512180,
+            "status": "idle",
+            "statusUpdatedAt": 1792328511873,
+            "waitingFor": null
+          },
+          "transcriptBytes": 379638,
+          "rowCount": 58,
+          "lastRows": [
+            {
+              "type": "user",
+              "offset": 358230,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 359945,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 360213,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 365591,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 366242,
+              "blocks": [
+                {
+                  "type": "tool_use",
+                  "name": "Bash"
+                }
+              ]
+            },
+            {
+              "type": "user",
+              "offset": 368296,
+              "blocks": [
+                {
+                  "type": "tool_result"
+                }
+              ]
+            },
+            {
+              "type": "api-request-blob",
+              "offset": 370014,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "api-request",
+              "offset": 370282,
+              "blocks": []
+            },
+            {
+              "type": "attachment",
+              "offset": 376147,
+              "blocks": []
+            },
+            {
+              "type": "assistant",
+              "offset": 376798,
+              "blocks": [
+                {
+                  "type": "text"
+                }
+              ]
+            },
+            {
+              "type": "system",
+              "offset": 378455,
+              "blocks": []
+            },
+            {
+              "type": "last-prompt",
+              "offset": 378883,
+              "blocks": []
+            },
+            {
+              "type": "ai-title",
+              "offset": 379253,
+              "blocks": []
+            },
+            {
+              "type": "mode",
+              "offset": 379370,
+              "blocks": []
+            },
+            {
+              "type": "permission-mode",
+              "offset": 379453,
+              "blocks": []
+            },
+            {
+              "type": "atis-latch",
+              "offset": 379555,
+              "blocks": []
+            }
+          ]
+        }
+      ],
+      "descriptorConfirmation": {
+        "submittedAt": 1792328489367,
+        "observedAt": 1792328512168,
+        "status": "idle",
+        "statusUpdatedAt": 1792328511873,
+        "waitingFor": null
+      },
+      "oscObservations": [
+        {
+          "at": 1792328490339,
+          "code": "0",
+          "payloadSha256": "b05f3600adb445e311af40fefcb3325439129d2eaa0fb3064ff251b348e97326"
+        },
+        {
+          "at": 1792328491677,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328491707,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328492648,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328493611,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328494570,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328495531,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328496492,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328497459,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328498412,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328499375,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328500335,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328501296,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328502269,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328503222,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328504185,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328505143,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328506104,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328507065,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328508037,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328508988,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328509949,
+          "code": "0",
+          "payloadSha256": "c687ee289c0eba29939204af553f0ee4263d595a4580f6a527e4ace319667523"
+        },
+        {
+          "at": 1792328510909,
+          "code": "0",
+          "payloadSha256": "6f40c6d6e64aa570685945aff3d419c8e2d7a693f936da4c41c2ad81c59326d3"
+        },
+        {
+          "at": 1792328511873,
+          "code": "0",
+          "payloadSha256": "a923968f7c849fe781eab2739f8182f33012222daca4b4b3e8547f849e6d6ada"
+        }
+      ],
+      "shutdown": {
+        "stable": true,
+        "gracefulExit": true,
+        "forcedKill": false,
+        "beforeExitBytes": 379638,
+        "exitRequestedAt": 1792328513252,
+        "finalBytes": 381246
+      }
+    }
+  ],
+  "payloads": [],
+  "forks": [],
+  "permissions": [
+    {
+      "sandbox": false,
+      "removeDeny": false,
+      "sessionId": "46f2d2fc-797a-4074-b4b6-328e3c30752e",
+      "settingsSha256": "ddb354d6838420ada2c800f284c738aa393c6b33d31ecc3f9fd2eb270967c2fe",
+      "deniedSideEffectAbsent": true,
+      "toolPermissionDenial": true,
+      "denialObservation": {
+        "status": "PASS",
+        "sha256": "f40d2ece7cf22f63940b532d4ce56d9e10b1af97175f3f1f77a225ff535747e9",
+        "excerpt": "Permission to use Bash with command printf denied > 'C:/canary380-runtime/r43/project/denied-3006eac5-cda7-48e5-870c-91deeb17ce7c' has been denied.",
+        "offset": 322882
+      },
+      "nonOverlappingActionRan": true,
+      "immutable": true,
+      "protectionAttemptObserved": false,
+      "protectionError": false,
+      "exactSettingsRead": true,
+      "finalReplyObserved": true,
+      "turnConfirmed": true,
+      "inheritedProjectAllow": true,
+      "inheritedGlobalAllow": true
+    },
+    {
+      "sandbox": false,
+      "removeDeny": true,
+      "sessionId": "9a7a3e4c-22ec-48a2-8ca5-f0b38a133807",
+      "settingsSha256": "2154bcd3f03f52066b70a4d9ca8a7f62f06d0a20521ba6ff209e17d88f780887",
+      "deniedSideEffectAbsent": false,
+      "toolPermissionDenial": false,
+      "denialObservation": {
+        "status": "UNVERIFIED",
+        "reason": "denial not required in remove-deny control"
+      },
+      "nonOverlappingActionRan": true,
+      "immutable": true,
+      "protectionAttemptObserved": false,
+      "protectionError": false,
+      "exactSettingsRead": true,
+      "finalReplyObserved": true,
+      "turnConfirmed": true,
+      "inheritedProjectAllow": true,
+      "inheritedGlobalAllow": true
+    }
+  ],
+  "reports": []
+}
