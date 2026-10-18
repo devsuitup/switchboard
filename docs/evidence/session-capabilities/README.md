@@ -1,9 +1,10 @@
 # Phase 0 CLI capability evidence (#380)
 
 This is an evidence-only harness. It never qualifies production capabilities,
-publishes runtime resources, changes Switchboard, or answers CLI dialogs.
+changes Switchboard, or answers CLI dialogs. Explicit consolidation produces
+the release ledger without launching a CLI or changing measured values.
 The Phase 0 specification is issue #380 §9.0/§9.3, C1–C4 and the owner
-amendments. The review-fix environment could not retrieve the issue comments;
+amendments (comments 6238870479, 6238870864, 6238542195 and 6241823281);
 independent comparison with §5.10 remains a first-live-run prerequisite.
 
 ## Artifacts and ledger
@@ -25,19 +26,24 @@ independent comparison with §5.10 remains a first-live-run prerequisite.
 
 Each record retains N1 fields: sequence, canary, status, measuredAt,
 cli {version, build, sha256}, harnessRevision, evidencePath, evidenceSha256,
-capabilities and acceptedSpecBranch:null. **N1 needs an owner amendment** for
-one additional field, execution:{platform,label,backend}; no separate platform,
-platformLabel or ptyBackend record keys are added. baselineHead comes from
+capabilities, capabilityStatus, baselineHead and acceptedSpecBranch:null,
+plus execution:{platform,label,backend}. Per-record baselineHead comes from
 actual git rev-parse HEAD. harnessRevision hashes the current harness source.
 Live runs refuse any dirty/unreadable checkout before running a CLI version
 probe. Dry-run is exempt and never counts as live evidence.
 
+capabilities[k] is true exactly when capabilityStatus[k] is PASS. Overall status
+is FAIL if any key is FAIL, otherwise UNVERIFIED if any applicable key is not
+PASS, otherwise PASS. Windows sandboxChildSendMessage is NOT_APPLICABLE/false.
+Other measured PASS keys remain true when a different key fails. Existing
+committed ledgers are never relabelled.
+
 | Canary | Capability keys | Measured behavior |
 | --- | --- | --- |
-| C1 | singleTurnDelivery, literalTranscript, eligibleConfirmation | Four separate bracketed pastes: 180, 5000, 32768, 49152 UTF-8 bytes, LF/TAB/quotes/non-ASCII/nonce; one actual user turn and a later assistant reaction. isMeta, local-command caveats and tool results do not count as turns. Literal storage and optional pasteRef linkage are separate observations. |
-| C2 | forkWorktree | Four origins (root/W1 × small/large), sentinel, CLI rename, then resume/fork/worktree. Check final inherited rows BEFORE the own turn, new session/worktree and source-prefix preservation; natural source appends are allowed and before/after hashes retained. |
+| C1 | singleTurnDelivery, literalTranscript, eligibleConfirmation | TAB-expanded pastes of 180, 5000, 32768, 49152 UTF-8 bytes, plus a 256-byte leading/trailing spaces/LF case, all with quotes/non-ASCII/4-byte emoji/nonce; one complete envelope, exact body and later assistant reaction. One separate raw-TAB control is informational. isMeta, local-command caveats and tool results do not count as turns. |
+| C2 | forkWorktree | Four origins (root/W1 × small/large), sentinel, rename, resume/fork/worktree. Check inherited rows before the own turn, new session/worktree and source-prefix preservation. Two additional --name forks, without/with --worktree, must have their requested agent-name and descriptor name while the origin name stays unchanged and unique among live owned sessions. |
 | C3 | extraPermissionSettings | Explicit Read(settings) allow; overlapping Bash allow/deny plus inherited project/global allow; linked CLI denial, absent denied effect, disjoint allowed effect and remove-deny control. Sandbox repeats permissions and attempts authority writes. |
-| C4 | independentSendMessage, sandboxChildSendMessage | Two owned processes, native names, exact SendMessage call and recognized origin receipt. Wrong-name control must contain an observed wrong-name SendMessage and NO origin row with its nonce after the saved byte boundary. Repeat with private sandbox publication. |
+| C4 | independentSendMessage, sandboxChildSendMessage | Independent pair plus wrong-name control gate independentSendMessage on every execution. Linux repeats with private sandbox publication for sandboxChildSendMessage; Windows marks that key NOT_APPLICABLE. A rename after the child prompt is informational. |
 
 C1 eligibleConfirmation requires a transcript assistant row AFTER the submitted
 user row. This is stricter than the specification's descriptor/OSC confirmation;
@@ -47,10 +53,11 @@ separately from the assistant-row result. OSC payload text is never retained.
 C1 delivery/confirmation do not require literal storage. A complete
 `<pasted_content id="NNNN">` envelope with a matching closing ID is removed
 before the byte-exact UTF-8 comparison; its separator newlines belong to the
-envelope. IDs may contain letters, digits, underscores and hyphens. Leading
-whitespace before the opening tag belongs to the envelope and is recorded as
+envelope. IDs contain 1–64 letters, digits, underscores or hyphens. Only LF
+may precede/follow the envelope. Leading LF is recorded as
 escaped envelopePrefix (for example, `"\\n\\n"`); an absent envelope records
-null. Evidence records wrapperPresent, wrapperId, storedBodyBytes and
+null. openingTagLineEnding records LF versus CRLF immediately after the opening
+tag. Evidence records wrapperPresent, wrapperId, storedBodyBytes and
 storedBodySha256. The body is never trimmed or normalized for literal equality.
 transformations identifies exact TAB expansion width (`tab-to-4-spaces`, or
 the corresponding width from 1–8), LF/CRLF conversion,
@@ -65,10 +72,10 @@ non-linked files, each at most 65536 bytes). linkedPaste requires an actual
 row pasteRef or an envelope ID matching a cache basename (ID or ID.txt), plus
 byte equality with the payload; matching content alone is not linkage.
 Unrecognized cache naming is not guessed. pasteRef is optional
-bounded evidence, never a mandatory CLI schema. A confirmed placeholder-storage
-branch is UNVERIFIED pending its owner amendment; a missing reference object,
-corrupted literal, multiple turns or missing confirmation fails its measured
-check. C1 measures its final transcript after bounded quiescence and graceful
+bounded evidence, never a mandatory CLI schema or a gate: missing/unlinked cache
+objects cannot veto an exact envelope. A placeholder, absent/malformed envelope
+or changed body records literalTranscript FAIL. Multiple turns or missing
+confirmation fail their own measured keys. C1 measures its final transcript after bounded quiescence and graceful
 exit, so an assistant row flushed only on exit remains eligible. Evidence keeps
 transcriptConfirmedBytes, transcriptFinalBytes and finalRowTypes with offsets,
 as well as shutdown timing, stability, gracefulExit and forcedKill observations.
@@ -112,7 +119,8 @@ For every nonce-bearing SendMessage call, sendResults includes only linked
 tool_result blocks, with tool-use ID, byte offset, success (boolean or null
 when unrecognized), isError, UTF-8 byte count, full flattened-text SHA-256 and
 an excerpt capped at 200 characters. Unrelated results are excluded. Explicit
-send failure is UNVERIFIED with its own reason; successful sending with no
+unreachable-recipient failure is FAIL; other unrecognized send failures are
+UNVERIFIED with their own reason. Successful sending with no
 recognized receipt remains separately UNVERIFIED. Failure in the deliberate
 wrong-address control is expected, but absence of any nonce in the origin
 must still be measured. Raw transcripts are not copied into evidence.
@@ -122,14 +130,21 @@ The receipt shape supplied by the operator in brief-380p0j (Linux CLI
 preceded by two `queue-operation` rows. Its body must equal the nonce
 exactly after removing the element's single framing newline on each side;
 `from-name` must equal the child's current native name. Evidence records
-the `uds:` scheme, SHA-256 of the socket path, `from-name`, `from-mode`,
+the observed scheme, SHA-256 of the endpoint path, `from-name`, `from-mode`,
 receipt byte offset, and queue row types/offsets after the saved boundary.
+The owned descriptor's messagingSocketPath identifies the endpoint: absolute
+.sock paths use uds:, Windows `\\.\pipe\` paths use pipe: (npipe: is also
+recognized in receipts). A receipt must name the child's exact descriptor
+endpoint. The harness neither connects to it nor reads a key file. Only scheme
+and path hash survive in messagingEndpoints. Missing/unsupported endpoints stay
+UNVERIFIED. Windows behaviour remains unmeasured until the operator runs C4;
+fake pipe results prove only the descriptor/receipt reader.
 The earlier `teammate-message` recognizer had no supporting live observation
 in these briefs and has been removed. Dry-run uses the same receipt reader.
 
 C4 polls the linked send result and origin receipt as the child runs; it
 does not wait for the child's final assistant reply or post-submit idle.
-Receipt/send observation is bounded to 15 seconds (500 ms in dry-run).
+Receipt/send observation is bounded to 15 seconds (5 seconds in dry-run).
 The wrong-address control requires the observed `success:false` result
 with `No agent named '<address>' is reachable`, then watches the origin
 for its nonce for up to 15 seconds after the result (150 ms in dry-run).
@@ -171,7 +186,11 @@ rows or arbitrary terminal output. A present denied side effect is FAIL even
 if the tool reports a permission denial. An OS error such as
 bash: Permission denied is not a CLI permission denial. Tool-result content
 blocks and JSON-escaped Windows paths are decoded before comparison.
-Every capability boolean is false unless its full canary status is PASS.
+Each capability boolean follows its own capabilityStatus. C4's independent
+pair plus wrong-recipient control can PASS while the sandbox pair fails.
+sandboxChildSendMessage is evidence only under O1 and never gates children.
+An absent/failing Windows independentSendMessage measurement keeps reporting
+children unavailable everywhere under the owner's global rule.
 
 C3 recognizes the CLI's `Permission to use Bash with command <cmd> has been
 denied.` result only when `<cmd>` matches the exact harness denied command and
@@ -201,9 +220,9 @@ as evidence, never converted into a PASS because the files look correct.
 ## First live run: operator checklist
 
 1. Review the local red/green report, then independently compare the final
-   graph against issue #380 §5.10 and the production sandbox wrapper. Resolve
-   the execution field's N1 amendment and N8/storage-only branches with the
-   owner. No live run is authorized by this report.
+   graph against issue #380 §5.10 and the production sandbox wrapper. Apply
+   the N1 amendment and Q1–Q3 decisions above. No live run is authorized by
+   the implementation report.
 2. Use a clean reviewed checkout (commit outside this task). Supply the native
    CLI executable with an absolute --cli path, never a shell alias/.cmd shim.
    Record its version/hash and the actual git HEAD. Avoid live application
@@ -233,8 +252,10 @@ as evidence, never converted into a PASS because the files look correct.
    C2 also needs exact keys for C:/Temp/canary-runtime/W1 and these fork paths:
    project/.claude/worktrees/canary-root-small,
    project/.claude/worktrees/canary-root-large,
-   W1/.claude/worktrees/canary-W1-small,
-   W1/.claude/worktrees/canary-W1-large (each resolved under the runtime root).
+   project/.claude/worktrees/canary-W1-small,
+   project/.claude/worktrees/canary-W1-large,
+   project/.claude/worktrees/canary-named (each resolved under the runtime root).
+   A fork launched from W1 still creates its worktree under the repository root.
    Ancestor trust is NOT assumed: the harness checks each exact launch path;
    verify the installed CLI uses these exact keys/paths during preparation.
    A trust/onboarding dialog remains UNVERIFIED; it is never auto-accepted.
@@ -247,8 +268,9 @@ as evidence, never converted into a PASS because the files look correct.
    node-pty's non-zero pid, then match session ID (if requested), spawn-time
    freshness and actual process creation time. Windows creation time is
    (Get-Process -Id PID).StartTime.ToFileTimeUtc(), as an exact decimal string.
-   C4 live Windows remains UNVERIFIED; actual child-env inspection on Windows
-   is also UNVERIFIED, never inferred from the parent's launch env.
+   C4 runs the unsandboxed pair and wrong-recipient control on Windows, reading
+   messagingSocketPath from owned descriptors. Actual child-env inspection on
+   Windows remains UNVERIFIED; it is not an unsandboxed capability gate.
 8. Linux: check bwrap --version, namespace/AppArmor access and exact mount
    preflight. Use --sandbox --platform-label linux-unix-pty. Inspect actual
    /proc/OWNED_CHILD_PID/environ key names and namespace/procStart mapping.
@@ -266,14 +288,81 @@ The prepared HOME is never auto-deleted. Failed cleanup retains runtime state.
 
 ## Commands (operator only for live examples)
 
+### Runs still required to close Phase 0
+
+| Execution | Required new canaries | Notes |
+| --- | --- | --- |
+| windows-conpty-bundled | C1, C2, C3, C4 | C2 repeats for Q1 --name with/without --worktree. C3/C4 omit --sandbox. |
+| windows-conpty-inbox | C1, C2, C3, C4 | No previous C2/C3/C4 record; repeat the full amended cases. Omit --sandbox. |
+| linux-unix-pty | C1, C2, C4 | C2 repeats for Q1; C4 uses --sandbox, with independent and sandbox statuses recorded separately. The existing C3 PASS may be retained. |
+
+These are 11 new measurements. Use a new output directory for each invocation;
+retain all previous per-run directories. Q3 keeps reporting children unavailable
+everywhere until independentSendMessage passes on all three executions. Linux
+sandboxChildSendMessage may FAIL without blocking the gate (O1). A malformed
+ledger, missing required execution or last FAIL/UNVERIFIED cannot be replaced by
+an earlier PASS. Q2 is a production input-validation decision; this harness
+continues to generate the CLI-proven double-slash POSIX Read rules.
+
+After review/commit by the publication owner, operator commands are:
+
+```powershell
+$env:ELECTRON_RUN_AS_NODE = '1'
+& 'C:/path/to/matching/electron.exe' scripts/canary-cli-capabilities.js --live --canary all --home C:/canary380-bundled-home --runtime-root C:/canary380-bundled-runtime --cli C:/path/to/claude.exe --out docs/evidence/session-capabilities/windows-bundled-amended --platform-label windows-conpty-bundled
+& 'C:/path/to/matching/electron.exe' scripts/canary-cli-capabilities.js --live --canary all --home C:/canary380-inbox-home --runtime-root C:/canary380-inbox-runtime --cli C:/path/to/claude.exe --out docs/evidence/session-capabilities/windows-inbox-amended --platform-label windows-conpty-inbox
+```
+
+```sh
+/path/to/node scripts/canary-cli-capabilities.js --live --canary C1 --home /tmp/canary380-home-c1 --runtime-root /tmp/canary380-runtime-c1 --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-c1-amended --platform-label linux-unix-pty
+/path/to/node scripts/canary-cli-capabilities.js --live --canary C2 --home /tmp/canary380-home-c2 --runtime-root /tmp/canary380-runtime-c2 --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-c2-named --platform-label linux-unix-pty
+/path/to/node scripts/canary-cli-capabilities.js --live --canary C4 --sandbox --home /tmp/canary380-home-c4 --runtime-root /tmp/canary380-runtime-c4 --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-c4-amended --platform-label linux-unix-pty
+```
+
+Every invocation needs its own already prepared isolated HOME with empty
+.claude/projects and exact fixture trust keys; never use a production HOME or
+remove the old run's history to satisfy this check. The Linux sandbox fork
+root/W1 observation in amendment §5.1 is separate from these §4.6 gate reruns;
+this harness's C2 remains the unsandboxed worktree/name measurement.
+
+### Consolidation and validation (no CLI execution)
+
+After the live records are reviewed, include every historical and new run
+directory explicitly (PowerShell example):
+
+```powershell
+$canaryNode = 'C:/Users/Jean-Baptiste/AppData/Local/Temp/node22/node_modules/node/bin/node.exe'
+$canaryRunDirs = Get-ChildItem docs/evidence/session-capabilities -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'ledger.json') } | ForEach-Object { $_.FullName }
+& $canaryNode scripts/canary-cli-capabilities.js --consolidate @canaryRunDirs --out resources/session-capabilities.json
+& $canaryNode -e "console.log(require('./scripts/canary-cli-capabilities').readCapabilities('resources/session-capabilities.json'))"
+```
+
+The root baselineHead is the local origin/main revision at consolidation time;
+refresh that ref before the publication step. Each run's baselineHead remains on
+its records. Consolidation copies statuses and booleans verbatim, adds missing
+record baselineHead and legacy capabilityStatus[k]=record.status, and only
+renumbers sequence by measuredAt (ties by evidencePath). It never derives a
+boolean. Malformed legacy status/boolean combinations are refused, not repaired.
+Dry-run ledgers and evidence never qualify or enter the release ledger.
+
+readCapabilities validates exact record/key shapes, triples, statuses/booleans,
+UTC timestamps, SHA fields, evidence paths/hashes and non-dry-run evidence. It
+selects the last record per canary/execution by sequence and applies FAIL before
+UNVERIFIED before PASS across bundled, inbox and Linux, independently of the
+running platform/backend/version. Missing executions are UNVERIFIED. The result
+includes selectedSequences and ledgerSha256. The sandbox key uses Linux only and
+is diagnostic; production child admission must use independentSendMessage.
+This exported reader is exercised by this task's tests; production admission is
+outside this evidence-harness task. The evidence commit, including the consolidated
+ledger and all referenced files, must precede production implementation.
+
 Use the preinstalled Node 22; do not install it if missing:
 
 ```powershell
 $env:TMP = 'C:/Users/Jean-Baptiste/AppData/Local/Temp'
 $env:TEMP = $env:TMP
 $canaryNode = 'C:/Users/Jean-Baptiste/AppData/Local/Temp/node22/node_modules/node/bin/node.exe'
-& $canaryNode --test --test-concurrency=1 test/canary-cli-capabilities.test.js
-& $canaryNode node_modules/eslint/bin/eslint.js --no-ignore --config test/fixtures/session-capabilities/lint.config.cjs scripts/canary-cli-capabilities.js test/canary-cli-capabilities.test.js test/fixtures/session-capabilities/fake-cli.js test/fixtures/session-capabilities/lint.config.cjs
+& $canaryNode --test --experimental-test-isolation=none --test-concurrency=1 --test-timeout=120000 test/canary-cli-capabilities.test.js
+& $canaryNode node_modules/eslint/bin/eslint.js --no-ignore --config test/fixtures/session-capabilities/lint.config.cjs scripts/canary-cli-capabilities.js test/canary-cli-capabilities.test.js test/fixtures/session-capabilities/fake-cli.js test/fixtures/session-capabilities/isolated-account.js
 & $canaryNode scripts/canary-cli-capabilities.js --dry-run --canary all --home C:/Temp/empty-prepared-home --runtime-root C:/Temp/canary-runtime --out .work-files/canary-dry-local --platform-label fixture-only
 $env:ELECTRON_RUN_AS_NODE = '1'
 & 'C:/path/to/matching/electron.exe' scripts/canary-cli-capabilities.js --canary all --home C:/Temp/prepared-login-home --runtime-root C:/Temp/canary-runtime --cli C:/path/to/claude.exe --out docs/evidence/session-capabilities/windows-bundled --platform-label windows-conpty-bundled
@@ -308,19 +397,19 @@ DISABLE_AUTOUPDATER=1; parent messaging/socket/SSE/session markers are removed.
 
 Default work budgets: C1=120000, C2=900000, C3=300000, C4=180000 ms.
 Override independently using --c1-timeout-ms ... --c4-timeout-ms, each
-100..3600000 ms. C2's 15 minutes cover four origins and four forks. Dry-run
+100..3600000 ms. C2's 15 minutes cover the four legacy origins/forks and two named fork pairs. Dry-run
 --timeout-ms (100..180000) overrides a selected fixture budget. Each readiness/
 submit poll is at most 20 seconds, except each C3 permission turn allows up to
 90 seconds, always within its remaining canary budget. C3's five minutes cover
 the plain deny case, remove-deny control and sandbox case, with more margin
 than the former three-minute cap and generic 20-second submit wait. A larger
 budget alone cannot supply a missing final reply. Version
-probes at most 2 seconds, git/bwrap/process-start helpers at most 4 seconds.
+probes at most 2 seconds, git/bwrap/process-start helpers at most 4 seconds in live mode. Fake metadata/Git helpers use 10 seconds; consolidation also bounds its origin/main lookup to 10 seconds.
 Cleanup adds at most 9 seconds per confirmed live handle: up to 5 seconds
 waiting for 1 second without transcript growth, up to 2 seconds for graceful
 exit, then up to 2 seconds for forced handle termination. Dry-run quiescence
-uses a 50 ms quiet period within a 500 ms cap. C1 ≤4 handles, C2 ≤8, C3 ≤3,
-C4 ≤6 (caps including cleanup: 156/972/327/234 seconds with defaults).
+uses a 50 ms quiet period within a 500 ms cap. C1 ≤6 handles, C2 ≤12, C3 ≤3,
+C4 ≤8 (caps including cleanup: 174/1008/327/252 seconds with defaults).
 
 Liveness and termination use OWNED HANDLES even when pid is still zero.
 Confirmed sessions and C4 children first wait for transcript quiescence, then receive `/exit`
@@ -331,19 +420,34 @@ SIGINT/SIGTERM interrupt bounded work and kill owned handles;
 cleanup and ledger write finish before exit, and every handle must be exited
 before process.exit. Forced host termination cannot run JavaScript cleanup.
 
+The fake runner gives Git fixture preparation a separate 60-second bound, recorded
+as fixturePreparation (budgetMs/elapsedMs), before starting the requested canary
+work budget. This avoids charging cold Git setup to short negative-control turns.
+The test bootstrap can inject a bounded preparation delay and the fake CLI can
+delay SendMessage to prove these boundaries. Positive C3/C1 configuration cases
+use adequate explicit budgets; the blocked-CLI negative control keeps 2 seconds.
+The test parent awaits subprocesses asynchronously and bounds each invocation
+to 110 seconds. Run the test file once per verification, without overlapping
+runners. On Node 22, --experimental-test-isolation=none makes
+--test-timeout=120000 apply to each test rather than the entire file's worker.
+Tests remain serial; --test-concurrency=1 is retained even though Node ignores
+that switch without process isolation. A test exceeding two minutes is a defect;
+retain its timeout evidence and investigate before starting another run.
+None of these emulator
+allowances changes the live limits, receipt predicates or capability decisions.
+
 Dry-run uses pipes; the separate fake-PTY tests exercise a delayed pid and
 stale-descriptor rejection through the same launch/stop state machine. Windows
 fake descriptors carry a per-launch identity token instead of a kernel FILETIME;
 real PTY identity, permissions, native messaging, mounts and onboarding remain
-unmeasured. The C1 fixture emits the real paste envelope; tab-to-spaces alters
-its body, and exit-flush-assistant persists its assistant row only on `/exit`.
+unmeasured. The C1 fixture emits the real paste envelope and expands raw TABs;
+exit-flush-assistant persists its assistant row only on `/exit`.
 The fixture's C1 envelope begins with two LFs and repeats its hexadecimal ID
 in the closing tag. Its unreferenced cache names contain 16 hexadecimal
-characters. With tab-to-spaces, the single TAB in the payload builder becomes
-four spaces: the cached body has 5003/32771/49155 bytes for the three large
-payloads, with no cache for the 180-byte control. The three extra bytes are
-observed expansion in this fake, not an inferred cache format or a new live
-measurement. Quotes, LF and non-ASCII remain byte-exact in this scenario.
+characters. The payload builder expands TABs before padding to exact target
+sizes, so the large cached bodies have 5000/32768/49152 bytes. The separate
+raw-TAB control records the CLI's expansion without changing the capability
+verdict. Quotes, LF and non-ASCII remain byte-exact in this fake scenario.
 Fixture mutations cover corrupt/multiple/missing paste storage,
 meta rows, title/source activity, broken forks, permission/OS denials, report
 and receipt absence, wrong addresses/control leaks, shared publication,

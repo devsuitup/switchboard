@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+const { spawnSync, execFile } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const harness = require('../scripts/canary-cli-capabilities');
 
@@ -19,7 +19,7 @@ const keys = {
   C4: ['independentSendMessage', 'sandboxChildSendMessage'],
 };
 
-function run(t, args = [], options = {}) {
+async function run(t, args = [], options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-380-'));
   const evidenceRoot = path.resolve(__dirname, '../.work-files/380p0c/dry-runs');
   fs.mkdirSync(evidenceRoot, { recursive: true });
@@ -36,14 +36,15 @@ function run(t, args = [], options = {}) {
   fs.mkdirSync(realHome);
   const runtime = path.join(root, 'runtime');
   options.prepare?.({ root, home, realHome, runtime });
-  const result = spawnSync(process.execPath, ['--require', accountFixture, script, '--dry-run', '--canary', 'all',
+  const result = await new Promise(resolve => execFile(process.execPath, ['--require', accountFixture, script, '--dry-run', '--canary', 'all',
     '--home', home, '--out', out, '--platform-label', 'fixture-only', ...(options.noRuntime ? [] : ['--runtime-root', runtime]), ...args,
     ...(options.homeAlias ? ['--home', options.homeAlias({ root, home, realHome })] : []),
     ...(options.extraArgs?.({ root, home, realHome, runtime }) || [])], {
-    encoding: 'utf8', timeout: 45000, windowsHide: true,
+    encoding: 'utf8', timeout: 110000, windowsHide: true,
     env: { ...process.env, HOME: realHome, USERPROFILE: realHome, HOMEDRIVE: '', HOMEPATH: '',
       CANARY_TEST_ACCOUNT_HOME: realHome, CANARY_TEST_SECRET: 'DO_NOT_RETAIN_THIS_VALUE', ...options.env },
-  });
+  }, (error, stdout, stderr) => resolve({ status: error ? error.code : 0, stdout, stderr,
+    error: error && typeof error.code !== 'number' ? error : undefined })));
   assert.ifError(result.error);
   let ledger;
   if (fs.existsSync(path.join(out, 'ledger.dry-run.json'))) {
@@ -52,8 +53,12 @@ function run(t, args = [], options = {}) {
   return { ...result, ledger, root, home, out };
 }
 
-test('GIVEN fake CLI WHEN all canaries run THEN independently hashed N1 evidence is produced', t => {
-  const r = run(t);
+test('GIVEN fake CLI WHEN all canaries run THEN independently hashed N1 evidence is produced', async t => {
+  let eventLoopProgressed = false;
+  const pending = setImmediate(() => { eventLoopProgressed = true; });
+  t.after(() => clearImmediate(pending));
+  const r = await run(t);
+  assert.equal(eventLoopProgressed, true, 'fake CLI wait must allow per-test timeout and progress reporting');
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.ledger.schemaVersion, 1);
   assert.match(r.ledger.baselineHead, /^[0-9a-f]{40}$/);
@@ -90,16 +95,288 @@ test('GIVEN fake CLI WHEN all canaries run THEN independently hashed N1 evidence
 });
 
 const mutations = {
-  C1: ['split-paste', 'placeholder-no-confirmation', 'drop-byte', 'missing-paste-object'],
+  C1: ['split-paste', 'placeholder-no-confirmation', 'drop-byte'],
   C2: ['reuse-worktree', 'drop-sentinel', 'omit-fork'],
   C3: ['remove-deny', 'writable-settings', 'fake-denial'],
   C4: ['shared-descriptors', 'parent-env', 'wrong-control-leak', 'wrong-control-hidden-leak'],
 };
 
+test('GIVEN delayed fake fixture preparation WHEN C3 work starts THEN its requested work budget remains available', async t => {
+  const r = await run(t, ['--canary', 'C3', '--platform-label', 'windows-conpty-bundled', '--timeout-ms', '20000'], { env: { CANARY_TEST_SETUP_DELAY_MS: '21000' } });
+  assert.equal(r.status, 0, r.stderr + (r.ledger ? JSON.stringify(data(r)) : 'no ledger'));
+  assert.equal(data(r).workBudgetMs, 20000);
+  assert.ok(data(r).fixturePreparation.elapsedMs >= 21000);
+  assert.equal(data(r).fixturePreparation.budgetMs, 60000);
+});
+
+test('GIVEN delayed fake native send WHEN C4 observes THEN preserve live timing separately and accept exact receipt', async t => {
+  const r = await run(t, ['--canary', 'C4', '--platform-label', 'windows-conpty-bundled', '--mutation', 'send-observation-delayed']);
+  assert.equal(r.status, 0, r.stderr + (r.ledger ? JSON.stringify(data(r)) : 'no ledger'));
+  assert.equal(r.ledger.measurements[0].capabilityStatus.independentSendMessage, 'PASS');
+  assert.equal(data(r).reports[0].observationBudgetMs, 5000);
+});
+
+test('GIVEN amended C1 WHEN fake CLI expands TAB THEN delivered boundaries and raw control are measured separately', async t => {
+  const r = await run(t, ['--canary', 'C1', '--mutation', 'tab-to-spaces']);
+  assert.equal(r.status, 0, r.stderr);
+  const e = data(r);
+  assert.deepEqual(e.payloads.map(p => p.bytes), [180, 5000, 32768, 49152, 256]);
+  assert.ok(e.payloads.every(p => p.literal && p.wrapperPresent && p.openingTagLineEnding === 'LF'));
+  assert.ok(e.payloads.every(p => p.inputTabs > 0 && p.deliveredTabs === 0 && p.containsEmoji));
+  assert.equal(e.payloads.at(-1).whitespaceBoundary, true);
+  assert.deepEqual(e.rawTabControl.transformations, ['tab-to-4-spaces']);
+  assert.equal(e.rawTabControl.informational, true);
+  assert.deepEqual(r.ledger.measurements[0].capabilityStatus, {
+    singleTurnDelivery: 'PASS', literalTranscript: 'PASS', eligibleConfirmation: 'PASS',
+  });
+});
+
+test('GIVEN exact C1 envelope with missing cache object WHEN measuring THEN cache cannot veto literalTranscript', async t => {
+  const r = await run(t, ['--canary', 'C1', '--mutation', 'missing-paste-object']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.ledger.measurements[0].capabilityStatus, { singleTurnDelivery: 'PASS', literalTranscript: 'PASS', eligibleConfirmation: 'PASS' });
+  assert.ok(data(r).payloads.every(p => p.literal));
+});
+
+test('GIVEN C1 placeholder with assistant reaction WHEN measuring THEN only observed storage property fails', async t => {
+  const r = await run(t, ['--canary', 'C1', '--mutation', 'storage-only']);
+  assert.equal(r.ledger.measurements[0].status, 'FAIL');
+  assert.deepEqual(r.ledger.measurements[0].capabilityStatus, { singleTurnDelivery: 'PASS', literalTranscript: 'FAIL', eligibleConfirmation: 'PASS' });
+});
+
+test('GIVEN corrupt C1 body WHEN other properties pass THEN preserve their independent booleans', async t => {
+  const r = await run(t, ['--canary', 'C1', '--mutation', 'drop-byte']);
+  assert.equal(r.status, 1, r.stderr);
+  assert.deepEqual(r.ledger.measurements[0].capabilityStatus, {
+    singleTurnDelivery: 'PASS', literalTranscript: 'FAIL', eligibleConfirmation: 'PASS',
+  });
+  assert.deepEqual(r.ledger.measurements[0].capabilities, {
+    singleTurnDelivery: true, literalTranscript: false, eligibleConfirmation: true,
+  });
+});
+
+test('GIVEN informational raw-TAB control cannot confirm WHEN all expanded payloads passed THEN retain C1 PASS', async t => {
+  const r = await run(t, ['--canary', 'C1', '--mutation', 'raw-control-no-confirmation']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.ledger.measurements[0].status, 'PASS');
+  assert.equal(data(r).rawTabControl.status, 'UNVERIFIED');
+  assert.equal(data(r).rawTabControl.informational, true);
+});
+
+test('GIVEN fork launched from W1 WHEN checking prepared trust THEN use repository-root worktree location', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-trust-w1-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'project'), home = path.join(root, 'home');
+  fs.mkdirSync(home);
+  const key = path.join(repo, '.claude/worktrees/named').replaceAll('\\', '/');
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ projects: { [key]: { hasTrustDialogAccepted: true } } }));
+  const ctx = { repo, runtime: root, env: {}, opts: { home, dryRun: false },
+    ptyFactory: () => { throw new Error('trust passed; fake spawn boundary reached'); } };
+  await assert.rejects(harness.launch(ctx, { cwd: path.join(root, 'W1'), args: ['--resume', crypto.randomUUID(), '--fork-session', '--worktree', 'named'] }),
+    /trust passed; fake spawn boundary reached/);
+});
+
+for (const label of ['windows-conpty-bundled', 'windows-conpty-inbox']) {
+  test(`GIVEN ${label} WHEN C3 fake CLI runs without sandbox THEN unsandboxed cases qualify`, async t => {
+    const r = await run(t, ['--canary', 'C3', '--platform-label', label]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(data(r).permissions.map(p => p.sandbox), [false, false]);
+    assert.deepEqual(r.ledger.measurements[0].capabilityStatus, { extraPermissionSettings: 'PASS' });
+  });
+  test(`GIVEN ${label} WHEN C4 uses descriptor pipe THEN independent pair qualifies and sandbox is inapplicable`, async t => {
+    const r = await run(t, ['--canary', 'C4', '--platform-label', label]);
+    assert.equal(r.status, 0, r.stderr + (r.ledger ? JSON.stringify(data(r)) : 'no ledger'));
+    assert.deepEqual(r.ledger.measurements[0].capabilityStatus, {
+      independentSendMessage: 'PASS', sandboxChildSendMessage: 'NOT_APPLICABLE',
+    });
+    assert.deepEqual(r.ledger.measurements[0].capabilities, { independentSendMessage: true, sandboxChildSendMessage: false });
+    assert.ok(data(r).reports.every(p => !p.sandbox));
+    const p = data(r).reports[0];
+    assert.equal(p.messagingEndpoints.child.scheme, 'pipe:');
+    assert.equal(p.receipt.from.scheme, 'pipe:');
+    assert.equal(p.receipt.from.socketPathSha256, p.messagingEndpoints.child.pathSha256);
+    assert.ok(!JSON.stringify(data(r)).includes('canary-message-'));
+    const late = data(r).renameAfterPromptReports[0];
+    assert.equal(late.renamedAfterPrompt, true);
+    assert.equal(late.sendResults[0].unreachableRecipient, true);
+    assert.equal(late.unexpectedNonceInOrigin, false);
+  });
+}
+
+test('GIVEN Linux sandbox unreachable result WHEN independent pair passes THEN only sandbox capability fails', async t => {
+  const r = await run(t, ['--canary', 'C4', '--platform-label', 'linux-unix-pty', '--mutation', 'sandbox-unreachable']);
+  assert.equal(r.status, 1, r.stderr);
+  assert.deepEqual(r.ledger.measurements[0].capabilityStatus, { independentSendMessage: 'PASS', sandboxChildSendMessage: 'FAIL' });
+  assert.deepEqual(r.ledger.measurements[0].capabilities, { independentSendMessage: true, sandboxChildSendMessage: false });
+});
+
+test('GIVEN Q1 fork name WHEN launching with and without worktree THEN origin remains unchanged and unique', async t => {
+  const r = await run(t, ['--canary', 'C2']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(data(r).namedForks.map(f => f.worktree), [false, true]);
+  for (const f of data(r).namedForks) {
+    assert.equal(f.agentName, f.requestedName);
+    assert.equal(f.descriptorName, f.requestedName);
+    assert.equal(f.originNameBefore, f.originNameAfter);
+    assert.equal(f.originUniqueAmongLive, true);
+  }
+});
+
+for (const mutation of ['ignore-fork-name', 'rename-fork-source', 'colliding-fork-name']) {
+  test(`GIVEN Q1 ${mutation} WHEN named fork measured THEN name subcase fails`, async t => {
+    const r = await run(t, ['--canary', 'C2', '--mutation', mutation]);
+    assert.equal(r.status, 1, r.stderr);
+    assert.equal(r.ledger.measurements[0].capabilityStatus.forkWorktree, 'FAIL');
+    assert.ok(data(r).namedForks.length > 0);
+  });
+}
+
+function n1Fixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-n1-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const triples = [
+    { label: 'windows-conpty-bundled', platform: 'win32', backend: 'conpty-bundled' },
+    { label: 'windows-conpty-inbox', platform: 'win32', backend: 'conpty-inbox' },
+    { label: 'linux-unix-pty', platform: 'linux', backend: 'unix-pty' },
+  ];
+  const records = [];
+  const dirs = [];
+  for (const [i, execution] of triples.entries()) {
+    const dir = path.join(root, 'docs/evidence/session-capabilities', `run-${i}`);
+    fs.mkdirSync(dir, { recursive: true });
+    dirs.push(dir);
+    const measurements = Object.keys(keys).map((canary, j) => {
+      const evidencePath = `docs/evidence/session-capabilities/run-${i}/${canary}/evidence.json`;
+      const file = path.join(root, evidencePath);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({ dryRun: false, canary, platform: execution.platform, platformLabel: execution.label, ptyBackend: execution.backend }));
+      const capabilityStatus = Object.fromEntries(keys[canary].map(k => [k, k === 'sandboxChildSendMessage' ? i === 2 ? 'FAIL' : 'NOT_APPLICABLE' : 'PASS']));
+      return { sequence: j + 1, canary, status: Object.values(capabilityStatus).includes('FAIL') ? 'FAIL' : 'PASS',
+        measuredAt: `2026-10-17T20:00:0${j}.000Z`, execution, baselineHead: String(i + 1).repeat(40),
+        cli: { version: `2.1.${301 + i}`, build: 'fixture', sha256: 'a'.repeat(64) }, harnessRevision: 'b'.repeat(64),
+        evidencePath, evidenceSha256: crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+        capabilities: Object.fromEntries(Object.entries(capabilityStatus).map(([k, s]) => [k, s === 'PASS'])), capabilityStatus, acceptedSpecBranch: null };
+    });
+    records.push(...measurements);
+    fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify({ schemaVersion: 1, baselineHead: String(i + 1).repeat(40), measurements }));
+  }
+  const out = path.join(root, 'resources/session-capabilities.json');
+  const consolidate = () => harness.consolidate(dirs, out, { root, baselineHead: 'c'.repeat(40) });
+  return { root, triples, records, dirs, out, consolidate };
+}
+
+test('GIVEN N1 tied timestamps and historical FAIL WHEN consolidating THEN preserve records and baseline with stable sequence', async t => {
+  const f = n1Fixture(t);
+  const file = path.join(f.dirs[0], 'ledger.json');
+  const old = JSON.parse(fs.readFileSync(file));
+  const record = old.measurements[0];
+  delete record.capabilityStatus;
+  delete record.baselineHead;
+  record.status = 'FAIL';
+  for (const k of keys.C1) record.capabilities[k] = false;
+  fs.writeFileSync(file, JSON.stringify(old));
+  const before = fs.readFileSync(file, 'utf8');
+  f.consolidate();
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  const ledger = JSON.parse(fs.readFileSync(f.out));
+  assert.equal(ledger.baselineHead, 'c'.repeat(40));
+  const expected = [...f.records.filter(r => r.evidencePath !== record.evidencePath), { ...record, baselineHead: old.baselineHead,
+    capabilityStatus: Object.fromEntries(keys.C1.map(k => [k, 'FAIL'])) }].sort((a, b) => a.measuredAt.localeCompare(b.measuredAt) || a.evidencePath.localeCompare(b.evidencePath));
+  assert.deepEqual(ledger.measurements, expected.map((r, i) => ({ ...r, sequence: i + 1 })));
+  const result = harness.readCapabilities(f.out, { root: f.root });
+  assert.equal(result.capabilities.singleTurnDelivery, false);
+  assert.equal(result.capabilities.independentSendMessage, true);
+  assert.equal(result.capabilities.sandboxChildSendMessage, false);
+});
+
+test('GIVEN committed Phase 0 history WHEN consolidating through CLI THEN records stay immutable and gate stays closed', async t => {
+  const root = path.resolve(__dirname, '..');
+  const base = path.join(root, 'docs/evidence/session-capabilities');
+  const dirs = fs.readdirSync(base).map(p => path.join(base, p)).filter(p => fs.existsSync(path.join(p, 'ledger.json')) &&
+    JSON.parse(fs.readFileSync(path.join(p, 'ledger.json'))).measurements.every(r => !r.capabilityStatus));
+  assert.ok(dirs.length > 0);
+  const before = dirs.map(p => fs.readFileSync(path.join(p, 'ledger.json'), 'utf8'));
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-n1-history-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const out = path.join(temp, 'session-capabilities.json');
+  const result = spawnSync(process.execPath, [script, '--consolidate', ...dirs, '--out', out], { encoding: 'utf8', timeout: 60000, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(dirs.map(p => fs.readFileSync(path.join(p, 'ledger.json'), 'utf8')), before);
+  const ledger = JSON.parse(fs.readFileSync(out));
+  assert.equal(ledger.measurements.length, before.reduce((n, text) => n + JSON.parse(text).measurements.length, 0));
+  assert.ok(Object.values(harness.readCapabilities(out).capabilities).every(v => v === false));
+});
+
+test('GIVEN N1 last per execution WHEN a new FAIL supersedes PASS THEN apply worst globally and retain other keys', async t => {
+  const f = n1Fixture(t);
+  f.consolidate();
+  const ledger = JSON.parse(fs.readFileSync(f.out));
+  const first = ledger.measurements.find(r => r.canary === 'C1' && r.execution.label === 'windows-conpty-inbox');
+  ledger.measurements.push({ ...first, sequence: 13, measuredAt: '2026-10-17T21:00:00.000Z', status: 'FAIL',
+    capabilities: { ...first.capabilities, literalTranscript: false }, capabilityStatus: { ...first.capabilityStatus, literalTranscript: 'FAIL' } });
+  fs.writeFileSync(f.out, JSON.stringify(ledger));
+  for (const running of f.triples) {
+    const result = harness.readCapabilities(f.out, { root: f.root, ...running, version: 'unmeasured' });
+    assert.equal(result.capabilityStatus.literalTranscript, 'FAIL');
+    assert.equal(result.capabilities.singleTurnDelivery, true);
+    assert.equal(result.capabilities.independentSendMessage, true);
+    assert.equal(result.selectedSequences.C1['windows-conpty-inbox'], 13);
+  }
+  ledger.measurements = ledger.measurements.filter(r => r.execution.label !== 'windows-conpty-inbox');
+  fs.writeFileSync(f.out, JSON.stringify(ledger));
+  assert.equal(harness.readCapabilities(f.out, { root: f.root }).capabilityStatus.independentSendMessage, 'UNVERIFIED');
+});
+
+for (const defect of ['boolean', 'status', 'unknown-key', 'missing-key', 'duplicate-sequence', 'unknown-execution', 'dry-run', 'hash', 'missing-evidence', 'timestamp', 'calendar-date', 'baseline', 'not-applicable', 'windows-sandbox-pass']) {
+  test(`GIVEN N1 ${defect} WHEN reading THEN reject malformed evidence`, async t => {
+    const f = n1Fixture(t);
+    f.consolidate();
+    const ledger = JSON.parse(fs.readFileSync(f.out));
+    const r = ledger.measurements[0];
+    if (defect === 'boolean') r.capabilities.singleTurnDelivery = false;
+    if (defect === 'status') r.status = 'FAIL';
+    if (defect === 'unknown-key') r.capabilityStatus.other = 'PASS';
+    if (defect === 'missing-key') delete r.capabilityStatus.literalTranscript;
+    if (defect === 'duplicate-sequence') ledger.measurements[1].sequence = r.sequence;
+    if (defect === 'unknown-execution') r.execution.backend = 'emulated-pipes';
+    if (defect === 'dry-run') {
+      const file = path.join(f.root, r.evidencePath);
+      const e = JSON.parse(fs.readFileSync(file)); e.dryRun = true;
+      fs.writeFileSync(file, JSON.stringify(e));
+      r.evidenceSha256 = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    }
+    if (defect === 'hash') r.evidenceSha256 = '0'.repeat(64);
+    if (defect === 'missing-evidence') fs.unlinkSync(path.join(f.root, r.evidencePath));
+    if (defect === 'timestamp') r.measuredAt = 'yesterday';
+    if (defect === 'calendar-date') r.measuredAt = '2026-02-31T00:00:00.000Z';
+    if (defect === 'baseline') r.baselineHead = 'short';
+    if (defect === 'not-applicable') r.capabilityStatus.singleTurnDelivery = 'NOT_APPLICABLE';
+    if (defect === 'windows-sandbox-pass') {
+      const c4 = ledger.measurements.find(r => r.canary === 'C4' && r.execution.platform === 'win32');
+      c4.capabilityStatus.sandboxChildSendMessage = 'PASS';
+      c4.capabilities.sandboxChildSendMessage = true;
+    }
+    fs.writeFileSync(f.out, JSON.stringify(ledger));
+    assert.throws(() => harness.readCapabilities(f.out, { root: f.root }), /session capability evidence is unavailable/);
+  });
+}
+
+test('GIVEN N1 permitted C2 branch under run directory WHEN validating THEN retain explicit measured failure', async t => {
+  const f = n1Fixture(t);
+  f.consolidate();
+  const ledger = JSON.parse(fs.readFileSync(f.out));
+  const c2 = ledger.measurements.find(r => r.canary === 'C2');
+  c2.status = 'FAIL'; c2.capabilities.forkWorktree = false; c2.capabilityStatus.forkWorktree = 'FAIL';
+  c2.acceptedSpecBranch = 'docs/evidence/session-capabilities/run-0/amendment.md';
+  fs.writeFileSync(path.join(f.root, c2.acceptedSpecBranch), 'Synthetic permitted C2 fixture branch.');
+  fs.writeFileSync(f.out, JSON.stringify(ledger));
+  assert.equal(harness.readCapabilities(f.out, { root: f.root }).capabilityStatus.forkWorktree, 'FAIL');
+});
+
 for (const mutation of ['', 'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch']) {
-  test(`GIVEN C4 rename ${mutation} WHEN child is prompted THEN use current native name and retain linked send results`, t => {
-    const r = run(t, ['--canary', 'C4', ...(mutation ? ['--mutation', mutation] : [])]);
-    assert.equal(r.status, 0, r.stderr + JSON.stringify(data(r)));
+  test(`GIVEN C4 rename ${mutation} WHEN child is prompted THEN use current native name and retain linked send results`, async t => {
+    const r = await run(t, ['--canary', 'C4', ...(mutation ? ['--mutation', mutation] : [])]);
+    assert.equal(r.status, 0, r.stderr + (r.ledger ? JSON.stringify(data(r)) : 'no ledger'));
     for (const report of data(r).reports) {
       assert.equal(report.nativeRecipientDiffersFromDisplayTitle, false);
       assert.equal(report.nativeRecipient, report.displayTitle);
@@ -125,9 +402,9 @@ for (const mutation of ['', 'stale-descriptor-name', 'descriptor-only-name', 're
 }
 
 for (const mutation of ['', 'receipt-delayed']) {
-  test(`GIVEN live C4 receipt ${mutation} while child stays busy WHEN measuring THEN accept exact sender and body and exit gracefully`, t => {
-    const r = run(t, ['--canary', 'C4', ...(mutation ? ['--mutation', mutation] : [])]);
-    assert.equal(r.status, 0, r.stderr + JSON.stringify(data(r)));
+  test(`GIVEN live C4 receipt ${mutation} while child stays busy WHEN measuring THEN accept exact sender and body and exit gracefully`, async t => {
+    const r = await run(t, ['--canary', 'C4', ...(mutation ? ['--mutation', mutation] : [])]);
+    assert.equal(r.status, 0, r.stderr + (r.ledger ? JSON.stringify(data(r)) : 'no ledger'));
     const evidence = data(r);
     for (const report of evidence.reports.filter(x => !x.wrongRecipientControl)) {
       assert.equal(report.sendResults[0].success, true);
@@ -157,8 +434,8 @@ for (const mutation of ['', 'receipt-delayed']) {
 }
 
 for (const mutation of ['receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type', 'receipt-teammate']) {
-  test(`GIVEN C4 ${mutation} WHEN measuring THEN do not qualify receipt but retain queue offsets and send result`, t => {
-    const r = run(t, ['--canary', 'C4', '--mutation', mutation]);
+  test(`GIVEN C4 ${mutation} WHEN measuring THEN do not qualify receipt but retain queue offsets and send result`, async t => {
+    const r = await run(t, ['--canary', 'C4', '--mutation', mutation]);
     assert.equal(r.status, 1, r.stderr);
     assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
     const report = data(r).reports[0];
@@ -170,8 +447,8 @@ for (const mutation of ['receipt-wrong-sender', 'receipt-extra-body', 'receipt-w
   });
 }
 
-test('GIVEN private tmp hides C4 messaging socket WHEN sandbox SendMessage fails THEN retain O1 STOP evidence without socket sharing', t => {
-  const r = run(t, ['--canary', 'C4', '--mutation', 'sandbox-socket-unavailable']);
+test('GIVEN private tmp hides C4 messaging socket WHEN sandbox SendMessage fails THEN retain O1 STOP evidence without socket sharing', async t => {
+  const r = await run(t, ['--canary', 'C4', '--mutation', 'sandbox-socket-unavailable']);
   assert.equal(r.status, 1, r.stderr);
   assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
   const evidence = data(r);
@@ -190,12 +467,12 @@ test('GIVEN private tmp hides C4 messaging socket WHEN sandbox SendMessage fails
   const tmp = child.mountPlan.indexOf('--tmpfs');
   assert.equal(child.mountPlan[tmp + 1], '/tmp');
   assert.ok(!child.mountPlan.some(x => x.includes('cc-socks')));
-  assert.ok(Object.values(r.ledger.measurements[0].capabilities).every(x => x === false));
+  assert.deepEqual(r.ledger.measurements[0].capabilityStatus, { independentSendMessage: 'PASS', sandboxChildSendMessage: 'UNVERIFIED' });
 });
 
-test('GIVEN C4 failed SendMessage WHEN receipt is absent THEN preserve bounded failure text separately from receipt recognition', t => {
-  const r = run(t, ['--canary', 'C4', '--mutation', 'send-failed']);
-  assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
+test('GIVEN C4 failed SendMessage WHEN receipt is absent THEN preserve bounded failure text separately from receipt recognition', async t => {
+  const r = await run(t, ['--canary', 'C4', '--mutation', 'send-failed']);
+  assert.equal(r.ledger.measurements[0].status, 'FAIL');
   assert.ok(Object.values(r.ledger.measurements[0].capabilities).every(x => x === false));
   assert.match(data(r).failure, /SendMessage reported failure/);
   const report = data(r).reports[0];
@@ -209,8 +486,8 @@ test('GIVEN C4 failed SendMessage WHEN receipt is absent THEN preserve bounded f
   assert.equal(result.bytes, Buffer.byteLength(expected));
 });
 
-test('GIVEN C4 pre-rename native recipient WHEN fake CLI sends THEN old address is unreachable and no receipt is written', t => {
-  const r = run(t, ['--canary', 'C4', '--mutation', 'stale-recipient']);
+test('GIVEN C4 pre-rename native recipient WHEN fake CLI sends THEN old address is unreachable and no receipt is written', async t => {
+  const r = await run(t, ['--canary', 'C4', '--mutation', 'stale-recipient']);
   assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
   assert.match(data(r).failure, /wrong recipient/);
   const report = data(r).reports[0];
@@ -222,8 +499,8 @@ test('GIVEN C4 pre-rename native recipient WHEN fake CLI sends THEN old address 
   assert.equal(report.sendResults[0].sha256, crypto.createHash('sha256').update(expected).digest('hex'));
   assert.equal(report.sendResults[0].excerpt, expected.slice(0, 200));
 });
-test('GIVEN CLI paste envelope WHEN C1 runs THEN unwrapped body is literal and cache metadata is redacted', t => {
-  const r = run(t, ['--canary', 'C1']);
+test('GIVEN CLI paste envelope WHEN C1 runs THEN unwrapped body is literal and cache metadata is redacted', async t => {
+  const r = await run(t, ['--canary', 'C1']);
   const evidence = data(r);
   assert.ok(evidence.payloads.every(x => x.literal), 'wrapper must not invalidate literal payload');
   assert.equal(r.status, 0, r.stderr);
@@ -242,12 +519,12 @@ test('GIVEN CLI paste envelope WHEN C1 runs THEN unwrapped body is literal and c
   }
 });
 
-test('GIVEN TAB expanded by CLI WHEN C1 runs THEN literal fails with exact transformation', t => {
-  const r = run(t, ['--canary', 'C1', '--mutation', 'tab-to-spaces']);
-  assert.equal(r.status, 1, r.stderr);
+test('GIVEN TAB expanded by CLI WHEN C1 runs THEN only raw control records the transformation', async t => {
+  const r = await run(t, ['--canary', 'C1', '--mutation', 'tab-to-spaces']);
+  assert.equal(r.status, 0, r.stderr);
   const evidence = data(r);
-  assert.ok(evidence.payloads.every(x => x.literal === false));
-  assert.ok(evidence.payloads.every(x => JSON.stringify(x.transformations) === '["tab-to-4-spaces"]'), 'TAB expansion must be identified');
+  assert.ok(evidence.payloads.every(x => x.literal));
+  assert.deepEqual(evidence.rawTabControl.transformations, ['tab-to-4-spaces']);
   assert.ok(evidence.payloads.every(x => x.literalAfterKnownTransformations));
   for (const p of evidence.payloads) {
     assert.equal(p.wrapperPresent, true);
@@ -255,25 +532,23 @@ test('GIVEN TAB expanded by CLI WHEN C1 runs THEN literal fails with exact trans
     assert.equal(p.envelopePrefix, '\\n\\n');
     assert.equal(p.envelopeSuffix, '\\n');
     assert.equal(p.linkedPaste, false);
-    assert.equal(p.storedBodyBytes, p.bytes + 3);
-    const prefix = `CANARY ${p.nonce}\nLiteral LF\tTAB "quotes" 'single' café 東京\nReply only OK.\n`;
-    const payload = prefix + 'x'.repeat(p.bytes - Buffer.byteLength(prefix));
-    const body = payload.replaceAll('\t', '    ');
-    assert.equal(p.storedBodySha256, crypto.createHash('sha256').update(body).digest('hex'));
+    assert.equal(p.storedBodyBytes, p.bytes);
+    assert.equal(p.storedBodySha256, p.sha256);
     const project = path.join(r.home, '.claude/projects');
     const file = fs.readdirSync(project, { recursive: true }).find(x => path.basename(x) === `${p.transcriptId}.jsonl`);
     const rows = fs.readFileSync(path.join(project, file), 'utf8').trim().split('\n').map(x => JSON.parse(x));
-    assert.equal(rows.find(x => x.type === 'user').message.content, `\n\n<pasted_content id="e7f5">\n${body}\n</pasted_content id="e7f5">\n`);
-    if (p.bytes === 180) assert.deepEqual(p.pasteCache, []);
-    else assert.ok(p.pasteCache.some(x => x.bytes === p.bytes + 3 && x.sha256 === p.storedBodySha256));
+    const body = rows.find(x => x.type === 'user').message.content;
+    assert.ok(body.startsWith('\n\n<pasted_content id="e7f5">\n'));
+    assert.ok(!body.includes('\t'));
+    if (p.bytes > 4096) assert.ok(p.pasteCache.some(x => x.bytes === p.bytes && x.sha256 === p.storedBodySha256));
   }
   for (const name of fs.readdirSync(path.join(r.home, '.claude/paste-cache'))) assert.match(name, /^[0-9a-f]{16}\.txt$/);
   assert.ok(evidence.payloads.every(x => x.eligibleConfirmation));
-  assert.equal(r.ledger.measurements[0].status, 'FAIL');
+  assert.equal(r.ledger.measurements[0].status, 'PASS');
 });
 
-test('GIVEN assistant persisted only on graceful exit WHEN C1 runs THEN confirmation includes final transcript', t => {
-  const r = run(t, ['--canary', 'C1', '--mutation', 'exit-flush-assistant']);
+test('GIVEN assistant persisted only on graceful exit WHEN C1 runs THEN confirmation includes final transcript', async t => {
+  const r = await run(t, ['--canary', 'C1', '--mutation', 'exit-flush-assistant']);
   const evidence = data(r);
   assert.ok(evidence.payloads.every(x => x.eligibleConfirmation), 'exit-flushed assistant must be observed');
   assert.equal(r.status, 0, r.stderr);
@@ -288,7 +563,7 @@ for (const [label, transform, expected] of [
   ['combined transforms', s => s.replaceAll('\t', '    ').replaceAll('\n', '\r\n').replace(/ +$/gm, ''), ['tab-to-4-spaces', 'lf-to-crlf', 'trailing-whitespace-removed']],
   ['unknown mutation', s => s.replace('text', 'other'), ['unclassified-byte-change']],
 ]) {
-  test(`GIVEN ${label} WHEN comparing envelope body THEN all byte changes are recorded`, t => {
+  test(`GIVEN ${label} WHEN comparing envelope body THEN all byte changes are recorded`, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-storage-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const payload = 'CANARY\nTAB\ttext   \nend   ';
@@ -301,11 +576,16 @@ for (const [label, transform, expected] of [
 
 for (const prefix of ['', '\n\n', ' \t\r\n']) {
   for (const suffix of ['\n', ' \t\r\n']) {
-    test(`GIVEN escaped prefix ${JSON.stringify(prefix)} and suffix ${JSON.stringify(suffix)} WHEN unwrapping THEN body whitespace stays byte-exact`, t => {
+    test(`GIVEN escaped prefix ${JSON.stringify(prefix)} and suffix ${JSON.stringify(suffix)} WHEN unwrapping THEN body whitespace stays byte-exact`, async t => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-envelope-'));
       t.after(() => fs.rmSync(root, { recursive: true, force: true }));
       const payload = '\n \t"café 東京"\n  \n';
       const stored = harness.received({ opts: { home: root } }, { message: { content: `${prefix}<pasted_content id="e7f5">\n${payload}\n</pasted_content id="e7f5">${suffix}` } }, payload);
+      if (/[^\n]/.test(prefix + suffix)) {
+        assert.equal(stored.wrapperPresent, false);
+        assert.equal(stored.literal, false);
+        return;
+      }
       assert.equal(stored.wrapperPresent, true);
       assert.equal(stored.wrapperId, 'e7f5');
       assert.equal(stored.envelopePrefix, JSON.stringify(prefix).slice(1, -1));
@@ -319,7 +599,7 @@ for (const prefix of ['', '\n\n', ' \t\r\n']) {
   }
 }
 
-test('GIVEN body ending in CR before the LF closing delimiter WHEN unwrapping THEN the CR stays in the body', t => {
+test('GIVEN body ending in CR before the LF closing delimiter WHEN unwrapping THEN the CR stays in the body', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-body-cr-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const payload = '\n \t"café 東京"\n  \r';
@@ -332,7 +612,7 @@ test('GIVEN body ending in CR before the LF closing delimiter WHEN unwrapping TH
 });
 
 for (const width of [1, 2, 3, 4, 5, 6, 7, 8]) {
-  test(`GIVEN TAB expanded to ${width} spaces WHEN comparing THEN expansion width is precise`, t => {
+  test(`GIVEN TAB expanded to ${width} spaces WHEN comparing THEN expansion width is precise`, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-tab-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const stored = harness.received({ opts: { home: root } }, { message: { content: 'a' + ' '.repeat(width) + 'b' } }, 'a\tb');
@@ -342,7 +622,7 @@ for (const width of [1, 2, 3, 4, 5, 6, 7, 8]) {
   });
 }
 
-test('GIVEN mismatched closing ID WHEN comparing THEN malformed envelope stays unclassified', t => {
+test('GIVEN mismatched closing ID WHEN comparing THEN malformed envelope stays unclassified', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-bad-envelope-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const stored = harness.received({ opts: { home: root } }, { message: { content: '\n\n<pasted_content id="e7f5">\nbody\n</pasted_content id="8705">\n' } }, 'body');
@@ -355,8 +635,8 @@ test('GIVEN mismatched closing ID WHEN comparing THEN malformed envelope stays u
 });
 for (const [canary, cases] of Object.entries(mutations)) {
   for (const mutation of cases) {
-    test(`GIVEN ${canary} mutation ${mutation} WHEN dry-run THEN that canary fails`, t => {
-      const r = run(t, ['--canary', canary, '--mutation', mutation]);
+    test(`GIVEN ${canary} mutation ${mutation} WHEN dry-run THEN that canary fails`, async t => {
+      const r = await run(t, ['--canary', canary, '--mutation', mutation]);
       assert.equal(r.status, 1, r.stderr);
       assert.equal(r.ledger.measurements.length, 1);
       assert.equal(r.ledger.measurements[0].status, 'FAIL');
@@ -365,34 +645,34 @@ for (const [canary, cases] of Object.entries(mutations)) {
   }
 }
 
-test('GIVEN a failing canary WHEN all are selected THEN remaining canaries still run', t => {
-  const r = run(t, ['--mutation', 'drop-byte']);
+test('GIVEN a failing canary WHEN all are selected THEN remaining canaries still run', async t => {
+  const r = await run(t, ['--mutation', 'drop-byte']);
   assert.equal(r.status, 1);
   const failures = r.ledger.measurements.map(x => JSON.parse(fs.readFileSync(path.join(__dirname, '..', x.evidencePath))).failure || 'none');
   assert.deepEqual(r.ledger.measurements.map(x => x.status), ['FAIL', 'PASS', 'PASS', 'PASS'], failures.join('; '));
 });
 
-test('GIVEN fake real home WHEN starting THEN refuse before any CLI or evidence setup', t => {
-  const r = run(t, [], { homeAlias: ({ realHome }) => realHome });
+test('GIVEN fake real home WHEN starting THEN refuse before any CLI or evidence setup', async t => {
+  const r = await run(t, [], { homeAlias: ({ realHome }) => realHome });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /real user home/);
   assert.equal(r.ledger, undefined);
 });
 
-test('GIVEN no prepared .claude WHEN starting THEN refuse', t => {
-  const r = run(t, ['--home', os.tmpdir()]);
+test('GIVEN no prepared .claude WHEN starting THEN refuse', async t => {
+  const r = await run(t, ['--home', os.tmpdir()]);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /prepared.*\.claude/);
 });
 
-test('GIVEN invalid backend WHEN live starting THEN refuse without launching CLI', t => {
-  const r = run(t, ['--live', '--cli', 'never-execute-this']);
+test('GIVEN invalid backend WHEN live starting THEN refuse without launching CLI', async t => {
+  const r = await run(t, ['--live', '--cli', 'never-execute-this']);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /platform-label/);
 });
 
-test('GIVEN fake hangs WHEN deadline expires THEN bounded cleanup and UNVERIFIED evidence', t => {
-  const r = run(t, ['--canary', 'C1', '--mutation', 'hang', '--timeout-ms', '2000']);
+test('GIVEN fake hangs WHEN deadline expires THEN bounded cleanup and UNVERIFIED evidence', async t => {
+  const r = await run(t, ['--canary', 'C1', '--mutation', 'hang', '--timeout-ms', '2000']);
   assert.equal(r.status, 1);
   assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
   const data = JSON.parse(fs.readFileSync(path.join(__dirname, '..', r.ledger.measurements[0].evidencePath)));
@@ -400,13 +680,13 @@ test('GIVEN fake hangs WHEN deadline expires THEN bounded cleanup and UNVERIFIED
   assert.ok(data.processes.every(x => x.cleaned));
 });
 
-test('GIVEN append to ledger WHEN another measurement runs THEN sequence keeps increasing', t => {
-  const r = run(t, ['--canary', 'C1']);
+test('GIVEN append to ledger WHEN another measurement runs THEN sequence keeps increasing', async t => {
+  const r = await run(t, ['--canary', 'C1']);
   const nextHome = path.join(r.root, 'next-home');
   fs.mkdirSync(path.join(nextHome, '.claude'), { recursive: true });
   const next = spawnSync(process.execPath, ['--require', accountFixture, script, '--dry-run', '--canary', 'C2',
     '--home', nextHome, '--out', r.out, '--platform-label', 'fixture-only', '--runtime-root', path.join(r.root, 'runtime')], {
-    encoding: 'utf8', timeout: 45000, windowsHide: true,
+    encoding: 'utf8', timeout: 600000, windowsHide: true,
     env: { ...process.env, HOME: path.join(r.root, 'fake-real-home'), USERPROFILE: path.join(r.root, 'fake-real-home'),
       HOMEDRIVE: '', HOMEPATH: '', CANARY_TEST_ACCOUNT_HOME: path.join(r.root, 'fake-real-home') },
   });
@@ -420,8 +700,8 @@ function data(r) {
 }
 
 for (const alias of ['junction', 'case-trailing', 'short']) {
-  test(`GIVEN fake real home ${alias} alias WHEN starting THEN refuse`, { skip: process.platform !== 'win32' && alias !== 'junction' ? 'Windows path alias only' : false }, t => {
-    const r = run(t, [], { homeAlias: ({ root, realHome }) => {
+  test(`GIVEN fake real home ${alias} alias WHEN starting THEN refuse`, { skip: process.platform !== 'win32' && alias !== 'junction' ? 'Windows path alias only' : false }, async t => {
+    const r = await run(t, [], { homeAlias: ({ root, realHome }) => {
       if (alias === 'case-trailing') return realHome.toUpperCase() + path.sep;
       if (alias === 'short') {
         const output = spawnSync('cmd.exe', ['/d', '/c', `for %I in ("${realHome}") do @echo %~sI`], { encoding: 'utf8', windowsHide: true, windowsVerbatimArguments: true });
@@ -439,8 +719,8 @@ for (const alias of ['junction', 'case-trailing', 'short']) {
   });
 }
 
-test('GIVEN nonempty prepared projects WHEN starting THEN refuse without reading transcripts', t => {
-  const r = run(t, [], { prepare: ({ home }) => {
+test('GIVEN nonempty prepared projects WHEN starting THEN refuse without reading transcripts', async t => {
+  const r = await run(t, [], { prepare: ({ home }) => {
     fs.mkdirSync(path.join(home, '.claude/projects'));
     fs.writeFileSync(path.join(home, '.claude/projects/unrelated.jsonl'), 'unread');
   } });
@@ -448,10 +728,10 @@ test('GIVEN nonempty prepared projects WHEN starting THEN refuse without reading
   assert.match(r.stderr, /projects.*empty/);
 });
 
-for (const mutation of ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref']) {
+for (const mutation of ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'missing-paste-object']) {
   const canary = ['own-title', 'natural-source-activity'].includes(mutation) ? 'C2' : mutation === 'escaped-settings' ? 'C3' : 'C1';
-  test(`GIVEN ${mutation} WHEN dry-run THEN capability remains PASS`, t => {
-    const r = run(t, ['--canary', canary, '--mutation', mutation]);
+  test(`GIVEN ${mutation} WHEN dry-run THEN capability remains PASS`, async t => {
+    const r = await run(t, ['--canary', canary, '--mutation', mutation]);
     assert.equal(r.status, 0, r.stderr + JSON.stringify(r.ledger) + JSON.stringify(data(r)));
     const evidence = data(r);
     if (mutation === 'own-title') assert.ok(evidence.forks.every(x => x.titleOutcome.status === 'FAIL'));
@@ -462,15 +742,16 @@ for (const mutation of ['own-title', 'natural-source-activity', 'meta-users', 'e
 for (const [canary, mutation, reason] of [
   ['C4', 'no-report', /SendMessage/], ['C4', 'synthetic-receipt', /receipt/], ['C4', 'missing-name', /name/],
   ['C4', 'unknown-receipt', /receipt/], ['C1', 'blocking-dialog', /dialog/], ['C1', 'exit-on-submit', /exited/],
-  ['C1', 'storage-only', /storage/],
   ['C4', 'wrong-recipient', /wrong recipient/],
   ['C3', 'os-denial', /denial.*unrecognized/],
 ]) {
-  test(`GIVEN ${mutation} WHEN dry-run THEN UNVERIFIED with no true capabilities`, t => {
-    const r = run(t, ['--canary', canary, '--mutation', mutation]);
+  test(`GIVEN ${mutation} WHEN dry-run THEN retain UNVERIFIED and any independently measured keys`, async t => {
+    const r = await run(t, ['--canary', canary, '--mutation', mutation]);
     assert.equal(r.status, 1, r.stderr);
     assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
-    assert.ok(Object.values(r.ledger.measurements[0].capabilities).every(x => x === false));
+    if (mutation === 'storage-only') {
+      assert.deepEqual(r.ledger.measurements[0].capabilities, { singleTurnDelivery: true, literalTranscript: false, eligibleConfirmation: true });
+    } else assert.ok(Object.values(r.ledger.measurements[0].capabilities).every(x => x === false));
     assert.match(data(r).failure, reason);
     if (mutation === 'blocking-dialog') assert.equal(data(r).processes[0].waitingFor, 'trust');
     if (['synthetic-receipt', 'unknown-receipt'].includes(mutation)) {
@@ -482,8 +763,8 @@ for (const [canary, mutation, reason] of [
   });
 }
 
-test('GIVEN sandbox plan WHEN dry-run THEN only launch settings mount and private config copy match contract', t => {
-  const r = run(t, ['--canary', 'C3'], { prepare: ({ home }) => fs.writeFileSync(path.join(home, '.claude.json'), '{"fixtureConfig":true}') });
+test('GIVEN sandbox plan WHEN dry-run THEN only launch settings mount and private config copy match contract', async t => {
+  const r = await run(t, ['--canary', 'C3'], { prepare: ({ home }) => fs.writeFileSync(path.join(home, '.claude.json'), '{"fixtureConfig":true}') });
   assert.equal(r.status, 0, r.stderr);
   const evidence = data(r);
   const proc = evidence.processes.find(x => x.sandbox);
@@ -516,28 +797,28 @@ test('GIVEN Windows launch environment WHEN cleaned THEN required host keys and 
   }
 });
 
-test('GIVEN sandbox C3 WHEN Read and authority probes run THEN settings explicitly allow their tools', t => {
-  const r = run(t, ['--canary', 'C3']);
-  assert.equal(r.status, 0, r.stderr + JSON.stringify(data(r)));
+test('GIVEN sandbox C3 WHEN Read and authority probes run THEN settings explicitly allow their tools', async t => {
+  const r = await run(t, ['--canary', 'C3']);
+  assert.equal(r.status, 0, r.stderr + (r.ledger ? JSON.stringify(data(r)) : 'no ledger'));
   assert.ok(data(r).permissions.every(x => x.exactSettingsRead));
   assert.ok(data(r).permissions.find(x => x.sandbox).protectionAttemptObserved);
 });
 
-test('GIVEN dirty checkout WHEN live setup THEN refuse before CLI version probe', t => {
+test('GIVEN dirty checkout WHEN live setup THEN refuse before CLI version probe', async t => {
   const backend = process.platform === 'win32' ? 'windows-conpty-bundled' : 'linux-unix-pty';
-  const r = run(t, ['--live', '--canary', 'C1', '--cli', process.execPath, '--platform-label', backend,
+  const r = await run(t, ['--live', '--canary', 'C1', '--cli', process.execPath, '--platform-label', backend,
     '--out', path.resolve(__dirname, '../docs/evidence/session-capabilities/refused-dirty')]);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /dirty/);
 });
 
-test('GIVEN per-canary budgets WHEN parsing THEN live caps can be configured', t => {
-  const r = run(t, ['--canary', 'C1', '--c2-timeout-ms', '900000']);
+test('GIVEN per-canary budgets WHEN parsing THEN live caps can be configured', async t => {
+  const r = await run(t, ['--canary', 'C1', '--c2-timeout-ms', '900000']);
   assert.equal(r.status, 0, r.stderr);
 });
 
-test('GIVEN occupied runtime root WHEN starting THEN refuse and preserve operator files', t => {
-  const r = run(t, ['--canary', 'C1'], { prepare: ({ runtime }) => {
+test('GIVEN occupied runtime root WHEN starting THEN refuse and preserve operator files', async t => {
+  const r = await run(t, ['--canary', 'C1'], { prepare: ({ runtime }) => {
     fs.mkdirSync(runtime);
     fs.writeFileSync(path.join(runtime, 'operator-file'), 'preserve');
   } });
@@ -546,15 +827,15 @@ test('GIVEN occupied runtime root WHEN starting THEN refuse and preserve operato
   assert.equal(fs.readFileSync(path.join(r.root, 'runtime/operator-file'), 'utf8'), 'preserve');
 });
 
-test('GIVEN CLAUDE.md ancestor WHEN choosing runtime THEN refuse before fixture creation', t => {
-  const r = run(t, [], { prepare: ({ root }) => fs.writeFileSync(path.join(root, 'CLAUDE.md'), 'fixture instructions') });
+test('GIVEN CLAUDE.md ancestor WHEN choosing runtime THEN refuse before fixture creation', async t => {
+  const r = await run(t, [], { prepare: ({ root }) => fs.writeFileSync(path.join(root, 'CLAUDE.md'), 'fixture instructions') });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /CLAUDE.md ancestor/);
 });
 
 for (const marker of ['.claude/CLAUDE.md', 'CLAUDE.local.md', '.claude/settings.json', '.claude/settings.local.json']) {
-  test(`GIVEN ${marker} ancestor WHEN choosing runtime THEN refuse before fixture creation`, t => {
-    const r = run(t, [], { prepare: ({ root }) => {
+  test(`GIVEN ${marker} ancestor WHEN choosing runtime THEN refuse before fixture creation`, async t => {
+    const r = await run(t, [], { prepare: ({ root }) => {
       const file = path.join(root, marker);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, 'fixture instructions');
@@ -567,9 +848,9 @@ for (const marker of ['.claude/CLAUDE.md', 'CLAUDE.local.md', '.claude/settings.
 
 for (const location of ['runtime', 'home', 'project']) {
   for (const alias of ['direct', 'junction', ...(process.platform === 'win32' ? ['case-trailing', 'short'] : [])]) {
-    test(`GIVEN ${location} inside ${alias} real-home identity WHEN starting THEN refuse before writes`, t => {
+    test(`GIVEN ${location} inside ${alias} real-home identity WHEN starting THEN refuse before writes`, async t => {
       let target;
-      const r = run(t, [], { extraArgs: ({ root, realHome, runtime }) => {
+      const r = await run(t, [], { extraArgs: ({ root, realHome, runtime }) => {
         let identity = realHome;
         if (alias === 'junction') {
           identity = path.join(root, 'home-alias');
@@ -600,8 +881,8 @@ for (const location of ['runtime', 'home', 'project']) {
   }
 }
 
-test('GIVEN no explicit runtime root WHEN live setup THEN refuse before CLI or evidence writes', t => {
-  const r = run(t, ['--live'], { noRuntime: true });
+test('GIVEN no explicit runtime root WHEN live setup THEN refuse before CLI or evidence writes', async t => {
+  const r = await run(t, ['--live'], { noRuntime: true });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /explicit --runtime-root/);
   assert.equal(r.ledger, undefined);
@@ -623,8 +904,8 @@ for (const [platform, file, expected] of [
   });
 }
 
-test('GIVEN sandbox C3 WHEN generating settings THEN allow Read of the mounted absolute path seen by the CLI', t => {
-  const r = run(t, ['--canary', 'C3']);
+test('GIVEN sandbox C3 WHEN generating settings THEN allow Read of the mounted absolute path seen by the CLI', async t => {
+  const r = await run(t, ['--canary', 'C3']);
   assert.equal(r.status, 0, r.stderr);
   const evidence = data(r);
   const proc = evidence.processes.find(p => p.sandbox);
@@ -641,8 +922,8 @@ test('GIVEN sandbox C3 WHEN generating settings THEN allow Read of the mounted a
   assert.equal(read.input.file_path, '/run/switchboard/launch-settings.json');
 });
 
-test('GIVEN a single-slash POSIX Read rule WHEN fake C3 runs THEN reproduce a permission prompt', t => {
-  const r = run(t, ['--canary', 'C3', '--mutation', 'single-slash-read-rule']);
+test('GIVEN a single-slash POSIX Read rule WHEN fake C3 runs THEN reproduce a permission prompt', async t => {
+  const r = await run(t, ['--canary', 'C3', '--mutation', 'single-slash-read-rule']);
   assert.equal(r.status, 1, r.stderr);
   assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
   const evidence = data(r);
@@ -654,8 +935,8 @@ test('GIVEN a single-slash POSIX Read rule WHEN fake C3 runs THEN reproduce a pe
   assert.equal(evidence.permissions.at(-1).finalReplyObserved, false);
 });
 
-test('GIVEN exact live command denial WHEN C3 runs THEN linked result and explicit final reply qualify each turn', t => {
-  const r = run(t, ['--canary', 'C3']);
+test('GIVEN exact live command denial WHEN C3 runs THEN linked result and explicit final reply qualify each turn', async t => {
+  const r = await run(t, ['--canary', 'C3']);
   const evidence = data(r);
   assert.ok(evidence.permissions.length > 0, JSON.stringify(evidence));
   assert.equal(evidence.permissions[0].toolPermissionDenial, true);
@@ -666,15 +947,15 @@ test('GIVEN exact live command denial WHEN C3 runs THEN linked result and explic
   assert.ok(evidence.processes.every(p => p.submissions[0].waitBudgetMs === 90000));
 });
 
-test('GIVEN exact live denial without is_error WHEN C3 runs THEN linked command text still proves refusal', t => {
-  const r = run(t, ['--canary', 'C3', '--mutation', 'denial-no-error-flag', '--timeout-ms', '2500']);
-  assert.equal(r.status, 0, r.stderr + JSON.stringify(data(r)));
+test('GIVEN exact live denial without is_error WHEN C3 runs THEN linked command text still proves refusal', async t => {
+  const r = await run(t, ['--canary', 'C3', '--mutation', 'denial-no-error-flag', '--timeout-ms', '60000']);
+  assert.equal(r.status, 0, r.stderr + (r.ledger ? JSON.stringify(data(r)) : 'no ledger'));
   assert.equal(data(r).permissions[0].toolPermissionDenial, true);
 });
 
 for (const [mutation, descriptorStatus] of [['tool-stop', 'busy'], ['tool-stop-idle', 'idle'], ['tool-stop-waiting', 'waiting'], ['missing-allowed-tool', 'busy']]) {
-  test(`GIVEN ${mutation} after permission tools WHEN C3 stops THEN retain all supported checks and last descriptor`, t => {
-    const r = run(t, ['--canary', 'C3', '--mutation', mutation, '--timeout-ms', '2500']);
+  test(`GIVEN ${mutation} after permission tools WHEN C3 stops THEN retain all supported checks and last descriptor`, async t => {
+    const r = await run(t, ['--canary', 'C3', '--mutation', mutation, '--timeout-ms', '15000']);
     assert.equal(r.status, 1, r.stderr);
     const evidence = data(r);
     assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
@@ -706,8 +987,8 @@ for (const [mutation, descriptorStatus] of [['tool-stop', 'busy'], ['tool-stop-i
   });
 }
 
-test('GIVEN premature final reply WHEN allowed tool is missing THEN C3 stays UNVERIFIED with partial checks', t => {
-  const r = run(t, ['--canary', 'C3', '--mutation', 'premature-final']);
+test('GIVEN premature final reply WHEN allowed tool is missing THEN C3 stays UNVERIFIED with partial checks', async t => {
+  const r = await run(t, ['--canary', 'C3', '--mutation', 'premature-final']);
   assert.equal(r.status, 1, r.stderr);
   assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
   const evidence = data(r);
@@ -716,8 +997,8 @@ test('GIVEN premature final reply WHEN allowed tool is missing THEN C3 stays UNV
   assert.equal(evidence.checks.find(x => x.name === 'non-overlapping allowed Bash action runs').status, 'UNVERIFIED');
 });
 
-test('GIVEN forbidden side effect before timeout WHEN C3 records evidence THEN retain failed property without qualifying incomplete turn', t => {
-  const r = run(t, ['--canary', 'C3', '--mutation', 'tool-stop-side-effect', '--timeout-ms', '2500']);
+test('GIVEN forbidden side effect before timeout WHEN C3 records evidence THEN retain failed property without qualifying incomplete turn', async t => {
+  const r = await run(t, ['--canary', 'C3', '--mutation', 'tool-stop-side-effect', '--timeout-ms', '15000']);
   assert.equal(r.status, 1, r.stderr);
   assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
   const evidence = data(r);
@@ -728,8 +1009,8 @@ test('GIVEN forbidden side effect before timeout WHEN C3 records evidence THEN r
 });
 
 for (const mutation of ['wrong-command-denial', 'unlinked-denial']) {
-  test(`GIVEN ${mutation} WHEN C3 runs THEN absence alone does not prove permission denial`, t => {
-    const r = run(t, ['--canary', 'C3', '--mutation', mutation, '--timeout-ms', '2500']);
+  test(`GIVEN ${mutation} WHEN C3 runs THEN absence alone does not prove permission denial`, async t => {
+    const r = await run(t, ['--canary', 'C3', '--mutation', mutation, '--timeout-ms', '15000']);
     assert.equal(r.status, 1, r.stderr);
     assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
     const permission = data(r).permissions[0];
@@ -741,8 +1022,8 @@ for (const mutation of ['wrong-command-denial', 'unlinked-denial']) {
 }
 
 for (const mutation of ['unknown-denial', 'sandbox-unknown-denial', 'os-denial']) {
-  test(`GIVEN ${mutation} without side effect WHEN C3 runs THEN retain bounded denial evidence as UNVERIFIED`, t => {
-    const r = run(t, ['--canary', 'C3', '--mutation', mutation]);
+  test(`GIVEN ${mutation} without side effect WHEN C3 runs THEN retain bounded denial evidence as UNVERIFIED`, async t => {
+    const r = await run(t, ['--canary', 'C3', '--mutation', mutation]);
     assert.equal(r.status, 1, r.stderr);
     assert.equal(r.ledger.measurements[0].status, 'UNVERIFIED');
     const p = data(r).permissions.find(x => x.denialObservation?.status === 'UNVERIFIED' && x.denialObservation.sha256);
@@ -755,15 +1036,15 @@ for (const mutation of ['unknown-denial', 'sandbox-unknown-denial', 'os-denial']
   });
 }
 
-test('GIVEN C1 post-submit idle descriptor WHEN measuring confirmation THEN record it independently of assistant rows', t => {
-  const r = run(t, ['--canary', 'C1']);
+test('GIVEN C1 post-submit idle descriptor WHEN measuring confirmation THEN record it independently of assistant rows', async t => {
+  const r = await run(t, ['--canary', 'C1']);
   assert.equal(r.status, 0, r.stderr);
   assert.ok(data(r).payloads.every(x => x.descriptorConfirmation?.status === 'idle' &&
     x.descriptorConfirmation.statusUpdatedAt >= x.descriptorConfirmation.submittedAt));
   assert.ok(data(r).payloads.every(x => x.oscObservations?.some(y => y.code === '9;4' && y.level === '0')));
 });
 
-test('GIVEN sandbox mount probe WHEN invoking bwrap THEN both namespaces test trigger private and settings-parent write refusal', t => {
+test('GIVEN sandbox mount probe WHEN invoking bwrap THEN both namespaces test trigger private and settings-parent write refusal', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-probes-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, 'home'), repo = path.join(root, 'project'), privateDir = path.join(root, 'private');
@@ -804,10 +1085,10 @@ test('GIVEN sandbox mount probe WHEN invoking bwrap THEN both namespaces test tr
   }
 });
 
-test('GIVEN per-canary budget override WHEN C1 runs THEN evidence records configured budget', t => {
-  const r = run(t, ['--canary', 'C1', '--c1-timeout-ms', '10000']);
+test('GIVEN per-canary budget override WHEN C1 runs THEN evidence records configured budget', async t => {
+  const r = await run(t, ['--canary', 'C1', '--c1-timeout-ms', '180000']);
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(data(r).workBudgetMs, 10000);
+  assert.equal(data(r).workBudgetMs, 180000);
 });
 
 test('GIVEN never-ready zero pid PTY WHEN deadline expires THEN owned handle is killed', async t => {

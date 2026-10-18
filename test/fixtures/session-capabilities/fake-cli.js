@@ -50,8 +50,11 @@ fs.mkdirSync(sessions, { recursive: true });
 const descriptor = path.join(sessions, `${process.pid}.json`);
 const startedAt = Date.now();
 let nativeName = `native-${id}`;
+const messagingSocketPath = process.env.CANARY_FIXTURE_WINDOWS_MESSAGING
+  ? `\\\\.\\pipe\\canary-message-${process.pid}` : `/tmp/cc-socks/${process.pid}.sock`;
 function describe(status, waitingFor = 'trust') {
   fs.writeFileSync(descriptor, JSON.stringify({ pid: process.pid, sessionId: id, cwd,
+    messagingSocketPath,
     name: mutation === 'missing-name' ? undefined : mutation === 'stale-descriptor-name' ? `native-${id}` : nativeName, status,
     waitingFor: status === 'waiting' ? waitingFor : undefined, statusUpdatedAt: Date.now(), startedAt,
     procStart: process.env.CANARY_FIXTURE_PROC_START || String(startedAt), fixtureOnly: true,
@@ -75,11 +78,22 @@ function exitGracefully() {
   process.exit(0);
 }
 function handle(text) {
+  if (mutation === 'raw-control-no-confirmation' && text.includes('\t')) { describe('waiting'); return; }
   if (mutation === 'hang') return;
   if (mutation === 'exit-on-submit') process.exit(0);
   if (mutation === 'blocking-dialog') { describe('waiting'); return; }
   describe('busy');
   if (inherited) { fs.writeFileSync(transcript, inherited); inherited = ''; }
+  if (args.includes('--name') && mutation !== 'ignore-fork-name') {
+    const source = args.includes('--resume') ? findTranscript(value('--resume')) : null;
+    const rows = source ? fs.readFileSync(source, 'utf8').trim().split('\n').map(r => JSON.parse(r)) : [];
+    const inheritedName = rows.filter(r => r.type === 'agent-name').at(-1)?.agentName;
+    nativeName = mutation === 'colliding-fork-name' ? inheritedName : value('--name');
+    append({ type: 'agent-name', agentName: nativeName });
+    if (source && mutation === 'rename-fork-source') {
+      append({ type: 'agent-name', agentName: nativeName }, source);
+    }
+  }
   if (text.startsWith('/rename ')) {
     append({ type: 'custom-title', customTitle: text.slice(8), sessionId: id });
     nativeName = text.slice(8);
@@ -88,7 +102,7 @@ function handle(text) {
     return;
   }
   let stored = mutation === 'drop-byte' ? text.slice(0, -1) : text;
-  if (mutation === 'tab-to-spaces') stored = stored.replaceAll('\t', '    ');
+  stored = stored.replaceAll('\t', '    ');
   let pasteRef;
   if (Buffer.byteLength(text) > 4096) {
     const cache = path.join(state, 'paste-cache');
@@ -99,7 +113,7 @@ function handle(text) {
   }
   if (mutation === 'placeholder-no-confirmation' || mutation === 'storage-only') stored = '[Pasted text #1]';
   if (mutation === 'no-paste-ref') pasteRef = undefined;
-  if ((text.startsWith('CANARY ') || text.startsWith('CANARY_META ')) && !['placeholder-no-confirmation', 'storage-only'].includes(mutation)) stored = `\n\n<pasted_content id="e7f5">\n${stored}\n</pasted_content id="e7f5">\n`;
+  if ((text.trimStart().startsWith('CANARY ') || text.startsWith('CANARY_META ')) && !['placeholder-no-confirmation', 'storage-only'].includes(mutation)) stored = `\n\n<pasted_content id="e7f5">\n${stored}\n</pasted_content id="e7f5">\n`;
   const user = { type: 'user', message: { role: 'user', content: stored }, ...(pasteRef ? { pasteRef } : {}) };
   if (mutation === 'split-paste') {
     for (const line of text.split('\n')) append({ type: 'user', message: { role: 'user', content: line } });
@@ -144,42 +158,49 @@ function handle(text) {
     }
   }
   if (meta.kind === 'report' && mutation !== 'no-report') {
-    const recipient = mutation === 'stale-recipient' ? `native-${meta.orchestrator}`
-      : mutation === 'wrong-recipient' && !meta.wrongRecipientControl ? 'unknown-native-recipient' : meta.recipient;
-    const peers = fs.readdirSync(path.join(state, 'sessions')).filter(x => x.endsWith('.json'))
-      .map(x => JSON.parse(fs.readFileSync(path.join(state, 'sessions', x), 'utf8')));
-    const dest = findTranscript(meta.orchestrator);
-    const peerRows = dest ? fs.readFileSync(dest, 'utf8').trim().split('\n').map(x => JSON.parse(x)) : [];
-    const reachable = peers.some(x => x.sessionId === meta.orchestrator &&
-      (peerRows.filter(r => r.type === 'agent-name').at(-1)?.agentName || x.name) === recipient);
-    tool('ToolSearch', { query: 'select:SendMessage' }, 'SendMessage');
-    const input = { to: recipient, message: meta.nonce, summary: 'Report canary nonce to orchestrator' };
-    const socketUnavailable = process.env.CANARY_FIXTURE_SANDBOX && mutation === 'sandbox-socket-unavailable';
-    const result = socketUnavailable
-      ? { success: false, message: 'connect ENOENT /tmp/cc-socks/orchestrator.sock' }
-      : reachable && mutation !== 'send-failed'
-      ? { success: true, message: `“Report canary nonce to orchestrator” → ${recipient} (another Claude session on this machine; in that session's inbox)` }
-      : { success: false, message: `No agent named '${recipient}' is reachable.\nUse ListAgents to see everyone you can message.${mutation === 'send-failed' ? ' fixture detail'.repeat(40) : ''}` };
-    tool('SendMessage', input, [{ type: 'text', text: JSON.stringify(result) }]);
-    if ((result.success && !meta.wrongRecipientControl) || (meta.wrongRecipientControl && ['wrong-control-leak', 'wrong-control-hidden-leak'].includes(mutation))) {
-      if (dest) {
-        const deliver = () => {
-          append({ type: 'queue-operation' }, dest);
-          append({ type: 'queue-operation' }, dest);
-          const sender = mutation === 'receipt-wrong-sender' ? 'another-child' : nativeName;
-          const body = mutation === 'receipt-extra-body' ? meta.nonce + ' extra' : meta.nonce;
-          const from = mutation === 'receipt-wrong-scheme' ? `tcp:/tmp/cc-socks/${process.pid}.sock` : `uds:/tmp/cc-socks/${process.pid}.sock`;
-          const envelope = mutation === 'receipt-teammate' ? `<teammate-message teammate_id="${sender}">\n${body}\n</teammate-message>`
-            : `<cross-session-message from="${from}" from-name="${sender}" from-mode="prompting">\n${body}\n</cross-session-message>`;
-          append({ type: mutation === 'receipt-wrong-type' ? 'assistant' : mutation === 'unknown-receipt' ? 'unknown-message' : 'user',
-            ...(meta.wrongRecipientControl && mutation === 'wrong-control-hidden-leak'
-              ? { data: { receiptNonce: meta.nonce } } : { message: { role: 'user', content: mutation === 'synthetic-receipt' ? meta.nonce
-                : `Another Claude session sent a message:\n${envelope}\n\nThis came from another Claude session — not typed by your user.` } }) }, dest);
-        };
-        if (mutation === 'receipt-delayed') setTimeout(deliver, 80);
-        else deliver();
+    const sendReport = () => {
+      const recipient = mutation === 'stale-recipient' ? `native-${meta.orchestrator}`
+        : mutation === 'wrong-recipient' && !meta.wrongRecipientControl ? 'unknown-native-recipient' : meta.recipient;
+      const peers = fs.readdirSync(path.join(state, 'sessions')).filter(x => x.endsWith('.json'))
+        .map(x => JSON.parse(fs.readFileSync(path.join(state, 'sessions', x), 'utf8')));
+      const dest = findTranscript(meta.orchestrator);
+      const peerRows = dest ? fs.readFileSync(dest, 'utf8').trim().split('\n').map(x => JSON.parse(x)) : [];
+      const reachable = peers.some(x => x.sessionId === meta.orchestrator &&
+        (peerRows.filter(r => r.type === 'agent-name').at(-1)?.agentName || x.name) === recipient);
+      tool('ToolSearch', { query: 'select:SendMessage' }, 'SendMessage');
+      const input = { to: recipient, message: meta.nonce, summary: 'Report canary nonce to orchestrator' };
+      const socketUnavailable = process.env.CANARY_FIXTURE_SANDBOX && mutation === 'sandbox-socket-unavailable';
+      const sandboxUnreachable = process.env.CANARY_FIXTURE_SANDBOX && mutation === 'sandbox-unreachable';
+      const result = socketUnavailable
+        ? { success: false, message: 'connect ENOENT /tmp/cc-socks/orchestrator.sock' }
+        : reachable && !sandboxUnreachable && mutation !== 'send-failed'
+        ? { success: true, message: `“Report canary nonce to orchestrator” → ${recipient} (another Claude session on this machine; in that session's inbox)` }
+        : { success: false, message: `No agent named '${recipient}' is reachable.\nUse ListAgents to see everyone you can message.${mutation === 'send-failed' ? ' fixture detail'.repeat(40) : ''}` };
+      tool('SendMessage', input, [{ type: 'text', text: JSON.stringify(result) }]);
+      if ((result.success && !meta.wrongRecipientControl) || (meta.wrongRecipientControl && ['wrong-control-leak', 'wrong-control-hidden-leak'].includes(mutation))) {
+        if (dest) {
+          const deliver = () => {
+            append({ type: 'queue-operation' }, dest);
+            append({ type: 'queue-operation' }, dest);
+            const sender = mutation === 'receipt-wrong-sender' ? 'another-child' : nativeName;
+            const body = mutation === 'receipt-extra-body' ? meta.nonce + ' extra' : meta.nonce;
+            const from = mutation === 'receipt-wrong-scheme' ? `tcp:${messagingSocketPath}`
+              : `${process.env.CANARY_FIXTURE_WINDOWS_MESSAGING ? 'pipe:' : 'uds:'}${messagingSocketPath}`;
+            const envelope = mutation === 'receipt-teammate' ? `<teammate-message teammate_id="${sender}">\n${body}\n</teammate-message>`
+              : `<cross-session-message from="${from}" from-name="${sender}" from-mode="prompting">\n${body}\n</cross-session-message>`;
+            append({ type: mutation === 'receipt-wrong-type' ? 'assistant' : mutation === 'unknown-receipt' ? 'unknown-message' : 'user',
+              ...(meta.wrongRecipientControl && mutation === 'wrong-control-hidden-leak'
+                ? { data: { receiptNonce: meta.nonce } } : { message: { role: 'user', content: mutation === 'synthetic-receipt' ? meta.nonce
+                  : `Another Claude session sent a message:\n${envelope}\n\nThis came from another Claude session — not typed by your user.` } }) }, dest);
+          };
+          if (mutation === 'receipt-delayed') setTimeout(deliver, 80);
+          else deliver();
+        }
       }
-    }
+    };
+    if (meta.renameAfterPrompt) setTimeout(sendReport, 200);
+    else if (mutation === 'send-observation-delayed') setTimeout(sendReport, 750);
+    else sendReport();
     return;
   }
   if (mutation === 'own-title' && args.includes('--fork-session')) append({ type: 'custom-title', customTitle: 'own-title-different-from-L' });

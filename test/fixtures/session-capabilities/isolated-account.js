@@ -15,3 +15,15 @@ fs.existsSync = file => {
       /(?:^|[\\/])(?:CLAUDE(?:\.local)?\.md|\.claude[\\/](?:CLAUDE\.md|settings(?:\.local)?\.json))$/i.test(candidate)) return false;
   return exists(file);
 };
+
+const childProcess = require('node:child_process');
+const spawnSync = childProcess.spawnSync;
+let delayedSetup = false;
+childProcess.spawnSync = (executable, args, options) => {
+  const delay = Number(process.env.CANARY_TEST_SETUP_DELAY_MS);
+  if (!delayedSetup && executable === 'git' && args?.[0] === 'init' && delay > 0 && delay <= 30000) {
+    delayedSetup = true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+  }
+  return spawnSync(executable, args, options);
+};

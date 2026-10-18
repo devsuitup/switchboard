@@ -15,6 +15,17 @@ const CAPS = {
   C2: ['forkWorktree'], C3: ['extraPermissionSettings'],
   C4: ['independentSendMessage', 'sandboxChildSendMessage'],
 };
+const EXECUTIONS = [
+  { label: 'windows-conpty-bundled', platform: 'win32', backend: 'conpty-bundled' },
+  { label: 'windows-conpty-inbox', platform: 'win32', backend: 'conpty-inbox' },
+  { label: 'linux-unix-pty', platform: 'linux', backend: 'unix-pty' },
+];
+const windowsExecution = ctx => (ctx.opts.platformLabel || '').startsWith('windows-') || !ctx.opts.dryRun && process.platform === 'win32';
+const aggregateStatus = statuses => statuses.includes('FAIL') ? 'FAIL' : statuses.every(s => s === 'PASS' || s === 'NOT_APPLICABLE') ? 'PASS' : 'UNVERIFIED';
+function capability(ctx, key, status) {
+  (ctx.capabilityStatus ||= {})[key] = status;
+  ctx.capabilities[key] = status === 'PASS';
+}
 const LIMITS = { C1: 120000, C2: 900000, C3: 300000, C4: 180000 };
 const OWNED = new Set();
 let interrupted = false;
@@ -25,15 +36,15 @@ const CANARY_MUTATIONS = {
   C1: MUTATIONS.slice(0, 4), C2: MUTATIONS.slice(4, 8), C3: MUTATIONS.slice(8, 11), C4: MUTATIONS.slice(11, 16),
 };
 Object.assign(CANARY_MUTATIONS, {
-  C1: [...CANARY_MUTATIONS.C1, 'meta-users', 'no-paste-ref', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'tab-to-spaces', 'exit-flush-assistant'],
-  C2: [...CANARY_MUTATIONS.C2, 'natural-source-activity'],
+  C1: [...CANARY_MUTATIONS.C1, 'meta-users', 'no-paste-ref', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'tab-to-spaces', 'exit-flush-assistant', 'raw-control-no-confirmation'],
+  C2: [...CANARY_MUTATIONS.C2, 'natural-source-activity', 'ignore-fork-name', 'rename-fork-source', 'colliding-fork-name'],
   C3: [...CANARY_MUTATIONS.C3, 'os-denial', 'escaped-settings', 'unknown-denial', 'sandbox-unknown-denial',
     'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'denial-no-error-flag', 'wrong-command-denial',
     'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule'],
   C4: [...CANARY_MUTATIONS.C4, 'missing-name', 'unknown-receipt', 'wrong-control-leak', 'wrong-control-hidden-leak',
     'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'send-failed', 'stale-recipient',
     'receipt-delayed', 'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type',
-    'receipt-teammate', 'sandbox-socket-unavailable'],
+    'receipt-teammate', 'sandbox-socket-unavailable', 'sandbox-unreachable', 'send-observation-delayed'],
 });
 MUTATIONS.push(...Object.values(CANARY_MUTATIONS).flat().filter(x => !MUTATIONS.includes(x)));
 const hash = data => crypto.createHash('sha256').update(data).digest('hex');
@@ -144,7 +155,7 @@ function command(ctx, executable, args, cwd = ctx.repo) {
   const remaining = ctx.deadline - Date.now();
   if (remaining <= 0) throw new Unverified('canary deadline expired');
   const r = spawnSync(executable, args, { cwd, env: ctx.env, encoding: 'utf8', windowsHide: true,
-    timeout: Math.min(4000, remaining), maxBuffer: 1024 * 1024 });
+    timeout: Math.min(ctx.opts?.dryRun ? 10000 : 4000, remaining), maxBuffer: 1024 * 1024 });
   if (r.error || r.status !== 0) throw new Unverified(`bounded ${path.basename(executable)} command failed (${r.error?.code || r.status})`);
   return r.stdout;
 }
@@ -198,7 +209,7 @@ const normal = value => (process.platform === 'win32' ? String(value).toLowerCas
 
 function received(ctx, row, payload) {
   const raw = content(row);
-  const envelope = /^(\s*)<pasted_content id="([a-zA-Z0-9_-]+)">\r?\n([\s\S]*?)\n<\/pasted_content id="\2">(\s*)$/.exec(raw);
+  const envelope = /^(\n*)<pasted_content id="([a-zA-Z0-9_-]{1,64})">\r?\n([\s\S]*?)\n<\/pasted_content id="\2">(\n*)$/.exec(raw);
   const body = envelope ? envelope[3] : raw;
   const literal = Buffer.from(body).equals(Buffer.from(payload));
   const placeholder = /^\[Pasted text(?:\s|\])/.test(body);
@@ -222,6 +233,7 @@ function received(ctx, row, payload) {
   }
   return { literal, linked, exact: literal || linked, hasReference, placeholder,
     wrapperPresent: !!envelope, wrapperId: envelope?.[2] ?? null,
+    openingTagLineEnding: envelope ? raw.slice(envelope[1].length).startsWith(`<pasted_content id="${envelope[2]}">\r\n`) ? 'CRLF' : 'LF' : null,
     envelopePrefix: envelope ? JSON.stringify(envelope[1]).slice(1, -1) : null,
     envelopeSuffix: envelope ? JSON.stringify(envelope[4]).slice(1, -1) : null,
     literalAfterKnownTransformations: !transformations.includes('unclassified-byte-change'), transformations, pasteCache,
@@ -426,7 +438,7 @@ function rememberDescriptor(proc, d) {
 
 async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, settings, mutation = ctx.opts.mutation } = {}) {
   if (!ctx.opts.dryRun && sandbox && process.platform !== 'linux') throw new Unverified('bubblewrap is Linux-only');
-  trusted(ctx, args.includes('--worktree') ? path.join(cwd, '.claude/worktrees', args[args.indexOf('--worktree') + 1]) : cwd);
+  trusted(ctx, args.includes('--worktree') ? path.join(ctx.repo, '.claude/worktrees', args[args.indexOf('--worktree') + 1]) : cwd);
   const sid = crypto.randomUUID();
   const cliArgs = args.includes('--fork-session') ? args : ['--session-id', sid, ...args];
   const sessions = sandbox && !(ctx.opts.dryRun && mutation === 'shared-descriptors')
@@ -437,7 +449,8 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
   let exe, argv, plan = null;
   if (ctx.opts.dryRun) {
     Object.assign(env, { CANARY_FIXTURE_MUTATION: mutation || '', CANARY_FIXTURE_SESSIONS: sessions,
-      CANARY_FIXTURE_SANDBOX: sandbox ? '1' : '', CANARY_FIXTURE_PROC_START: fixtureStart, CANARY_FIXTURE_RUNTIME: ctx.runtime });
+      CANARY_FIXTURE_SANDBOX: sandbox ? '1' : '', CANARY_FIXTURE_PROC_START: fixtureStart, CANARY_FIXTURE_RUNTIME: ctx.runtime,
+      CANARY_FIXTURE_WINDOWS_MESSAGING: windowsExecution(ctx) ? '1' : '' });
     if (mutation === 'parent-env') env.CLAUDE_CODE_MESSAGING_TOKEN = 'fixture-only-not-a-real-token';
     if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
     exe = process.execPath; argv = [FIXTURE, ...cliArgs];
@@ -527,7 +540,7 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
   return proc;
 }
 
-async function submit(ctx, proc, payload, { maxMs = 20000, finalReply, observe } = {}) {
+async function submit(ctx, proc, payload, { maxMs = 20000, finalReply, observe, onSubmitted } = {}) {
   if (proc.exited) throw new Unverified('owned CLI exited before submit');
   const before = transcript(ctx, proc.id);
   const time = Date.now();
@@ -539,6 +552,7 @@ async function submit(ctx, proc, payload, { maxMs = 20000, finalReply, observe }
   const submission = { phase, beforeBytes: before.bytes, submittedAt: time, waitBudgetMs: maxMs, outcome: 'UNVERIFIED' };
   (proc.record.submissions ||= []).push(submission);
   try {
+    if (onSubmitted) await onSubmitted();
     await until(ctx, () => {
       if (proc.exited) throw new Unverified('owned CLI exited before confirmation');
       const t = transcript(ctx, proc.id);
@@ -628,45 +642,63 @@ function inventory(ctx) {
 
 async function c1(ctx) {
   const results = [];
-  for (const size of [180, 5000, 32768, 49152]) {
+  for (const size of [180, 5000, 32768, 49152, 256, 180]) {
+    const rawControl = results.length === 5;
+    const whitespaceBoundary = results.length === 4;
     const nonce = crypto.randomUUID();
-    const prefix = `CANARY ${nonce}\nLiteral LF\tTAB \"quotes\" 'single' café 東京\nReply only OK.\n`;
-    const payload = prefix + 'x'.repeat(size - Buffer.byteLength(prefix));
-    const proc = await launch(ctx);
-    const before = transcript(ctx, proc.id).bytes;
-    await submit(ctx, proc, payload);
-    const confirmed = transcript(ctx, proc.id).bytes;
-    await stop(ctx, proc);
-    const final = transcript(ctx, proc.id);
-    const rows = final.rows.filter(r => r._offset >= before);
-    const deliveryEnd = proc.record.shutdown?.beforeExitBytes ?? confirmed;
-    const turns = users(rows.filter(r => r._offset < deliveryEnd));
-    const one = turns.length === 1;
-    const stored = one ? received(ctx, turns[0], payload) : { exact: false, literal: false, linked: false };
-    const reaction = rows.some(r => r.type === 'assistant' && r._offset > (turns[0]?._offset ?? Infinity));
-    results.push({ one, ...stored, reaction });
-    ctx.evidence.payloads.push({ bytes: size, sha256: hash(payload), nonce, userTurns: turns.length,
-      literal: stored.literal, linkedPaste: stored.linked, independentlyObservedReaction: reaction,
-      wrapperPresent: stored.wrapperPresent ?? false, wrapperId: stored.wrapperId ?? null,
-      envelopePrefix: stored.envelopePrefix ?? null, literalAfterKnownTransformations: stored.literalAfterKnownTransformations ?? false,
-      envelopeSuffix: stored.envelopeSuffix ?? null,
-      transformations: stored.transformations ?? [], pasteCache: stored.pasteCache ?? [],
-      storedBodyBytes: stored.storedBodyBytes, storedBodySha256: stored.storedBodySha256,
-      singleTurnDelivery: one, eligibleConfirmation: one && reaction,
-      descriptorConfirmation: proc.record.descriptorConfirmation, oscObservations: proc.record.oscObservations,
-      transcriptId: proc.id, userOffsets: turns.map(r => r._offset),
-      transcriptConfirmedBytes: confirmed, transcriptFinalBytes: final.bytes,
-      finalRowTypes: rows.map(r => ({ type: r.type, offset: r._offset })) });
+    const prefix = `${whitespaceBoundary ? ' \n  ' : ''}CANARY ${nonce}\nLiteral LF\tTAB \"quotes\" 'single' café 東京 😀\nReply only OK.\n`;
+    const expanded = rawControl ? prefix : prefix.replaceAll('\t', '    ');
+    const suffix = whitespaceBoundary ? '  \n \n' : '';
+    const payload = expanded + 'x'.repeat(size - Buffer.byteLength(expanded + suffix)) + suffix;
+    let proc;
+    try {
+      proc = await launch(ctx);
+      const before = transcript(ctx, proc.id).bytes;
+      await submit(ctx, proc, payload);
+      const confirmed = transcript(ctx, proc.id).bytes;
+      await stop(ctx, proc);
+      const final = transcript(ctx, proc.id);
+      const rows = final.rows.filter(r => r._offset >= before);
+      const deliveryEnd = proc.record.shutdown?.beforeExitBytes ?? confirmed;
+      const turns = users(rows.filter(r => r._offset < deliveryEnd));
+      const one = turns.length === 1;
+      const stored = one ? received(ctx, turns[0], payload) : { exact: false, literal: false, linked: false };
+      const reaction = rows.some(r => r.type === 'assistant' && r._offset > (turns[0]?._offset ?? Infinity));
+      const result = { one, ...stored, literal: stored.wrapperPresent && stored.literal, reaction };
+      if (!rawControl) results.push(result);
+      const observation = { bytes: size, sha256: hash(payload), nonce, userTurns: turns.length,
+        inputTabs: (prefix.match(/\t/g) || []).length, deliveredTabs: (payload.match(/\t/g) || []).length,
+        containsEmoji: payload.includes('😀'), whitespaceBoundary, openingTagLineEnding: stored.openingTagLineEnding ?? null,
+        literal: stored.literal, linkedPaste: stored.linked, independentlyObservedReaction: reaction,
+        wrapperPresent: stored.wrapperPresent ?? false, wrapperId: stored.wrapperId ?? null,
+        envelopePrefix: stored.envelopePrefix ?? null, literalAfterKnownTransformations: stored.literalAfterKnownTransformations ?? false,
+        envelopeSuffix: stored.envelopeSuffix ?? null,
+        transformations: stored.transformations ?? [], pasteCache: stored.pasteCache ?? [],
+        storedBodyBytes: stored.storedBodyBytes, storedBodySha256: stored.storedBodySha256,
+        singleTurnDelivery: one, eligibleConfirmation: one && reaction,
+        descriptorConfirmation: proc.record.descriptorConfirmation, oscObservations: proc.record.oscObservations,
+        transcriptId: proc.id, userOffsets: turns.map(r => r._offset),
+        transcriptConfirmedBytes: confirmed, transcriptFinalBytes: final.bytes,
+        finalRowTypes: rows.map(r => ({ type: r.type, offset: r._offset })) };
+      if (rawControl) ctx.evidence.rawTabControl = { ...observation, informational: true };
+      else ctx.evidence.payloads.push(observation);
+      if (rawControl) break;
+    } catch (err) {
+      if (!rawControl) throw err;
+      ctx.evidence.rawTabControl = { informational: true, status: 'UNVERIFIED', failure: err.message };
+      if (proc) await stop(ctx, proc);
+      break;
+    }
   }
   ctx.evidence.controls.push({ name: 'short literal control', status: results[0].one && results[0].literal && results[0].reaction ? 'PASS' : 'FAIL' });
-  ctx.capabilities.singleTurnDelivery = results.every(x => x.one);
-  ctx.capabilities.literalTranscript = results.every(x => x.literal);
-  ctx.capabilities.eligibleConfirmation = results.every(x => x.one && x.reaction);
+  capability(ctx, 'singleTurnDelivery', results.every(x => x.one) ? 'PASS' : 'FAIL');
+  capability(ctx, 'literalTranscript', results.every(x => x.literal) ? 'PASS' : 'FAIL');
+  capability(ctx, 'eligibleConfirmation', results.every(x => x.one && x.reaction) ? 'PASS' : 'FAIL');
   check(ctx, 'one received user turn at every size', ctx.capabilities.singleTurnDelivery);
   check(ctx, 'eligible post-submit confirmation at every size', ctx.capabilities.eligibleConfirmation);
-  check(ctx, 'supported paste object agrees with own payload', results.every(x => !x.hasReference || x.linked));
-  if (!ctx.capabilities.literalTranscript && results.every(x => x.exact || x.placeholder)) throw new Unverified('storage-only branch needs owner amendment');
-  check(ctx, 'literal transcript at every size; storage-only branch requires owner amendment', ctx.capabilities.literalTranscript);
+  ctx.evidence.checks.push({ sequence: ++ctx.observation, at: new Date().toISOString(),
+    name: 'paste-cache reference (informational)', pass: results.every(x => !x.hasReference || x.linked), informational: true });
+  check(ctx, 'literal envelope body equals delivered bytes at every size', ctx.capabilities.literalTranscript);
 }
 
 async function c2(ctx) {
@@ -725,7 +757,29 @@ async function c2(ctx) {
       await stop(ctx, fork); await stop(ctx, origin);
     }
   }
-  ctx.capabilities.forkWorktree = true;
+  ctx.evidence.namedForks = [];
+  for (const worktree of [false, true]) {
+    const origin = await launch(ctx);
+    await submit(ctx, origin, '/rename origin-' + crypto.randomUUID());
+    const originNameBefore = nativeName(ctx, origin);
+    const requestedName = 'side-quest-' + crypto.randomUUID();
+    const fork = await launch(ctx, { cwd: origin.cwd, args: ['--resume', origin.id, '--fork-session', '--name', requestedName,
+      ...(worktree ? ['--worktree', 'canary-named'] : [])] });
+    await submit(ctx, fork, 'Named fork own turn. Reply OK without tools.');
+    const agentName = transcript(ctx, fork.id).rows.filter(r => r.type === 'agent-name').at(-1);
+    const originNameAfter = nativeName(ctx, origin);
+    const liveNames = ctx.processes.filter(p => !p.exited).map(p => nativeName(ctx, p));
+    const observation = { worktree, originId: origin.id, forkId: fork.id, requestedName,
+      agentName: agentName?.agentName || agentName?.agent_name || null, descriptorName: descriptor(ctx, fork)?.name ?? null,
+      originNameBefore, originNameAfter,
+      originUniqueAmongLive: liveNames.filter(n => typeof n === 'string' && n.toLowerCase() === originNameBefore?.toLowerCase()).length === 1 };
+    ctx.evidence.namedForks.push(observation);
+    check(ctx, 'fork --name replaces inherited native name and preserves unique origin',
+      fork.id !== origin.id && observation.agentName === requestedName && observation.descriptorName === requestedName &&
+      originNameBefore === originNameAfter && observation.originUniqueAmongLive);
+    await stop(ctx, fork); await stop(ctx, origin);
+  }
+  capability(ctx, 'forkWorktree', 'PASS');
 }
 
 function pathPermissionRule(tool, file, platform = process.platform) {
@@ -827,11 +881,13 @@ async function c3(ctx) {
   const noDeny = await permissionCase(ctx, false, true);
   check(ctx, 'negative control removing deny produces side effect', !noDeny.absent && noDeny.allowed);
   ctx.evidence.controls.push({ name: 'remove-deny', status: 'PASS' });
-  if (!ctx.opts.sandbox) throw new Unverified('C3 requires --sandbox and Linux read-only mount proof for a complete PASS');
-  const sand = await permissionCase(ctx, true);
-  check(ctx, 'sandbox reads settings and enforces deny and allowed control', sand.exactSettingsRead && sand.absent && sand.denial && sand.allowed);
-  check(ctx, 'sandbox settings and parent immutable with actual failed write attempt', sand.immutable && sand.protectedError);
-  ctx.capabilities.extraPermissionSettings = true;
+  if (!windowsExecution(ctx)) {
+    if (!ctx.opts.sandbox) throw new Unverified('C3 requires --sandbox and Linux read-only mount proof for a complete PASS');
+    const sand = await permissionCase(ctx, true);
+    check(ctx, 'sandbox reads settings and enforces deny and allowed control', sand.exactSettingsRead && sand.absent && sand.denial && sand.allowed);
+    check(ctx, 'sandbox settings and parent immutable with actual failed write attempt', sand.immutable && sand.protectedError);
+  }
+  capability(ctx, 'extraPermissionSettings', 'PASS');
 }
 
 function nativeName(ctx, proc) {
@@ -839,15 +895,26 @@ function nativeName(ctx, proc) {
   return agent?.agentName || agent?.agent_name || descriptor(ctx, proc)?.name || null;
 }
 
-function nativeReceipt(row, sender, nonce) {
+function messagingEndpoint(value) {
+  if (typeof value !== 'string') return null;
+  if (value.startsWith('\\\\.\\pipe\\') && !/[\x00-\x1f]/.test(value)) return { scheme: 'pipe:', pathSha256: hash(value) };
+  if (/^(?:\/|[A-Za-z]:[\\/])[^\x00-\x1f]*\.sock$/.test(value)) return { scheme: 'uds:', pathSha256: hash(value) };
+  return null;
+}
+
+function nativeReceipt(row, sender, nonce, expectedEndpoint) {
   if (row.type !== 'user' || typeof sender !== 'string' || !sender.length) return null;
   for (const element of content(row).matchAll(/<cross-session-message\b([^>]*)>([\s\S]*?)<\/cross-session-message\s*>/g)) {
     if (element[2].replace(/^\r?\n/, '').replace(/\r?\n$/, '') !== nonce) continue;
     const pairs = [...element[1].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(m => [m[1], m[2] ?? m[3]]);
     if (new Set(pairs.map(([key]) => key)).size !== pairs.length) continue;
     const attrs = Object.fromEntries(pairs);
-    if (attrs['from-name'] !== sender || !/^uds:\/tmp\/cc-socks\/[^/]+\.sock$/.test(attrs.from || '') || !attrs['from-mode']) continue;
-    return { shape: 'cross-session-message', from: { scheme: 'uds:', socketPathSha256: hash(attrs.from.slice(4)) },
+    const from = /^(uds:|pipe:|npipe:)(.+)$/.exec(attrs.from || '');
+    const endpoint = from && messagingEndpoint(from[2]);
+    if (attrs['from-name'] !== sender || !endpoint || !expectedEndpoint || !attrs['from-mode'] ||
+        endpoint.pathSha256 !== expectedEndpoint.pathSha256 || endpoint.scheme !== expectedEndpoint.scheme ||
+        (endpoint.scheme === 'uds:' ? from[1] !== 'uds:' : !['pipe:', 'npipe:'].includes(from[1]))) continue;
+    return { shape: 'cross-session-message', from: { scheme: from[1], socketPathSha256: endpoint.pathSha256 },
       fromName: attrs['from-name'], fromMode: attrs['from-mode'], offset: row._offset };
   }
   return null;
@@ -888,7 +955,7 @@ function socketDirectory(ctx, child) {
   return observation;
 }
 
-async function reportPair(ctx, sandbox, wrongRecipientControl = false) {
+async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAfterPrompt = false) {
   const origin = await launch(ctx, { mutation: ['missing-name', 'stale-descriptor-name', 'descriptor-only-name'].includes(ctx.opts.mutation) ? ctx.opts.mutation : '' });
   await submit(ctx, origin, 'Wait for a native SendMessage from an independent child; reply OK. ' + crypto.randomUUID());
   const nameBeforeRename = descriptor(ctx, origin)?.name ?? null;
@@ -917,20 +984,28 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false) {
   }
   const before = transcript(ctx, origin.id).bytes;
   const recipient = wrongRecipientControl ? 'absent-' + crypto.randomUUID() : origin.name;
-  const meta = { kind: 'report', nonce, recipient, orchestrator: origin.id, wrongRecipientControl };
-  const payload = 'CANARY_META ' + JSON.stringify(meta) + '\nReport exactly ' + nonce + ' using SendMessage.\n\nSwitchboard child assignment\nOrchestrator name: ' + JSON.stringify(recipient) + '\nOrchestrator session id: ' + JSON.stringify(origin.id) + '\nWhen the assigned task is complete, use SendMessage to report to the orchestrator named above. Include the result, the checks performed, and any blocker. If you cannot proceed, report the blocker with SendMessage. Do not open another reporting transport.';
+  const meta = { kind: 'report', nonce, recipient, orchestrator: origin.id, wrongRecipientControl, renameAfterPrompt };
+  const payload = 'CANARY_META ' + JSON.stringify(meta) + '\n' + (renameAfterPrompt ? 'Before SendMessage, use Bash to wait 3 seconds so the operator can rename the orchestrator. Then ' : '') + 'Report exactly ' + nonce + ' using SendMessage.\n\nSwitchboard child assignment\nOrchestrator name: ' + JSON.stringify(recipient) + '\nOrchestrator session id: ' + JSON.stringify(origin.id) + '\nWhen the assigned task is complete, use SendMessage to report to the orchestrator named above. Include the result, the checks performed, and any blocker. If you cannot proceed, report the blocker with SendMessage. Do not open another reporting transport.';
   const childBefore = transcript(ctx, child.id).bytes;
   const receiptRows = () => transcript(ctx, origin.id).rows.filter(r => r._offset >= before);
   const carriesNonce = row => JSON.stringify(row).includes(nonce);
   let receipt = null, submissionError, controlObservedAt;
-  const observationMs = ctx.opts.dryRun ? 500 : 15000;
+  const observationMs = ctx.opts.dryRun ? 5000 : 15000;
+  const messagingEndpoints = { origin: messagingEndpoint(descriptor(ctx, origin)?.messagingSocketPath),
+    child: messagingEndpoint(descriptor(ctx, child)?.messagingSocketPath) };
+  let renamedAfterPrompt = false;
   try {
-    await submit(ctx, child, payload, { maxMs: observationMs + (wrongRecipientControl ? observationMs : 0), observe: rows => {
+    await submit(ctx, child, payload, { maxMs: observationMs + (wrongRecipientControl || renameAfterPrompt ? observationMs : 0),
+      onSubmitted: renameAfterPrompt ? async () => {
+        await submit(ctx, origin, '/rename after-prompt-' + crypto.randomUUID());
+        renamedAfterPrompt = nativeName(ctx, origin) !== recipient;
+      } : undefined,
+      observe: rows => {
       child.name = nativeName(ctx, child);
-      receipt = receiptRows().map(r => nativeReceipt(r, child.name, nonce)).find(Boolean) || null;
+      receipt = receiptRows().map(r => nativeReceipt(r, child.name, nonce, messagingEndpoints.child)).find(Boolean) || null;
       const outcome = sendOutcome(rows, nonce, recipient);
       if (!outcome.results.length) return outcome.sends.length > 0 && outcome.sendResults.length > 0 && !outcome.send;
-      if (wrongRecipientControl) {
+      if (wrongRecipientControl || renameAfterPrompt) {
         controlObservedAt ??= Date.now();
         return receiptRows().some(carriesNonce) || Date.now() - controlObservedAt >= (ctx.opts.dryRun ? 150 : 15000);
       }
@@ -957,6 +1032,7 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false) {
   const raw = receiptRows();
   const leaked = raw.some(carriesNonce);
   const observation = { sandbox, wrongRecipientControl, nonce, orchestratorId: origin.id, childId: child.id,
+    observationBudgetMs: observationMs, messagingEndpoints, ...(renameAfterPrompt ? { informational: true, renamedAfterPrompt } : {}),
     before, displayTitle, nativeRecipient: origin.name, addressedRecipient: recipient,
     recipientSource: rowName ? 'agent-name' : 'descriptor.name', recipientObservedAt,
     agentNameOffset: agent?._offset ?? null, renameObservation, sendResults,
@@ -968,19 +1044,23 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false) {
     parentEnvironment: { status: process.platform === 'win32' ? 'UNVERIFIED' : envStatus, fixtureOutcome: ctx.opts.dryRun ? envStatus : 'UNVERIFIED', source: process.platform === 'linux' ? '/proc owned child' : ctx.opts.dryRun ? 'emulated child descriptor; Windows actual environment unmeasured' : 'Windows environment inspection unavailable' },
     messagingEnvKeys: messagingKeys, rawChildRows: rows.map(r => ({ type: r.type, offset: r._offset })),
     rawReceiptRows: raw.map(r => ({ type: r.type, offset: r._offset })), unexpectedNonceInOrigin: leaked };
-  ctx.evidence.reports.push(observation);
+  if (renameAfterPrompt) (ctx.evidence.renameAfterPromptReports ||= []).push(observation);
+  else ctx.evidence.reports.push(observation);
   await stop(ctx, child); await stop(ctx, origin);
   try {
     if (!send && sends.length) throw new Unverified('SendMessage used wrong recipient');
     if (!send) throw new Unverified('native SendMessage tool call unavailable');
-    if (wrongRecipientControl) {
+    if (wrongRecipientControl || renameAfterPrompt) {
       if (!results.some(x => x.success === false && x.unreachableRecipient)) throw new Unverified('wrong-recipient rejection result unrecognized or absent');
       check(ctx, 'wrong-recipient tool call observed and origin has no nonce after boundary', !leaked);
       if (submissionError) throw submissionError;
-      ctx.evidence.controls.push({ name: 'wrong-recipient', status: 'PASS' });
+      ctx.evidence.controls.push({ name: renameAfterPrompt ? 'rename-after-prompt (informational)' : 'wrong-recipient', status: 'PASS' });
       return;
     }
-    if (failedSend) throw new Unverified('SendMessage reported failure; native receipt not established');
+    if (failedSend) {
+      if (results.some(x => x.unreachableRecipient)) throw new Failed('SendMessage reported failure: recipient unreachable');
+      throw new Unverified('SendMessage reported failure; native receipt not established');
+    }
     if (!successfulSend) throw new Unverified('SendMessage success result unrecognized or absent');
     if (!receipt) throw new Unverified('native receipt unrecognized or absent');
     if (!child.name) throw new Unverified('child native sender name unavailable');
@@ -995,13 +1075,27 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false) {
 }
 
 async function c4(ctx) {
-  if (!ctx.opts.dryRun && process.platform === 'win32') throw new Unverified('C4 Linux-only namespace proof; Windows does not qualify');
-  await reportPair(ctx, false);
-  await reportPair(ctx, false, true);
-  if (!ctx.opts.sandbox) throw new Unverified('C4 requires --sandbox for private-publication child proof');
-  await reportPair(ctx, true);
-  ctx.capabilities.independentSendMessage = true;
-  ctx.capabilities.sandboxChildSendMessage = true;
+  if (windowsExecution(ctx)) capability(ctx, 'sandboxChildSendMessage', 'NOT_APPLICABLE');
+  try {
+    await reportPair(ctx, false);
+    await reportPair(ctx, false, true);
+    capability(ctx, 'independentSendMessage', 'PASS');
+  } catch (err) {
+    capability(ctx, 'independentSendMessage', err instanceof Failed ? 'FAIL' : 'UNVERIFIED');
+    throw err;
+  }
+  if (!windowsExecution(ctx)) {
+    try {
+      if (!ctx.opts.sandbox) throw new Unverified('C4 requires --sandbox for private-publication child proof');
+      await reportPair(ctx, true);
+      capability(ctx, 'sandboxChildSendMessage', 'PASS');
+    } catch (err) {
+      capability(ctx, 'sandboxChildSendMessage', err instanceof Failed ? 'FAIL' : 'UNVERIFIED');
+      ctx.evidence.failure = err.message;
+    }
+  }
+  try { await reportPair(ctx, false, false, true); }
+  catch (err) { ctx.evidence.renameAfterPromptFailure = err.message; }
 }
 
 async function makeContext(opts, canary, run) {
@@ -1014,7 +1108,8 @@ async function makeContext(opts, canary, run) {
   fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(runtime, 0o700);
   const env = environment(opts.home);
-  const ctx = { opts, run, repo, private: privateDir, runtime, env, deadline: Date.now() + (+opts.timeout || opts.limits[canary]),
+  const preparationStartedAt = Date.now();
+  const ctx = { opts, run, repo, private: privateDir, runtime, env, deadline: preparationStartedAt + (opts.dryRun ? 60000 : (+opts.timeout || opts.limits[canary])),
     processes: [], watchers: [], observation: 0, capabilities: Object.fromEntries(CAPS[canary].map(k => [k, false])),
     evidence: { schemaVersion: 1, canary, dryRun: opts.dryRun, qualifiesProduction: false,
       platform: process.platform, kernel: os.release(), platformLabel: opts.platformLabel, ptyBackend: opts.backend,
@@ -1032,6 +1127,10 @@ async function makeContext(opts, canary, run) {
     command(ctx, 'git', ['add', 'README.md']);
     command(ctx, 'git', ['commit', '-qm', 'Create disposable canary fixture']);
   } catch (err) { removeRuntime(ctx); throw err; }
+  if (opts.dryRun) {
+    ctx.evidence.fixturePreparation = { budgetMs: 60000, elapsedMs: Date.now() - preparationStartedAt };
+    ctx.deadline = Date.now() + (+opts.timeout || opts.limits[canary]);
+  }
   return ctx;
 }
 
@@ -1053,7 +1152,109 @@ function trusted(ctx, cwd) {
   }
 }
 
+function validateLedger(ledger, root) {
+  const requireValue = value => { if (!value) throw new Error('malformed ledger'); };
+  const shape = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+  const sha = (value, size) => typeof value === 'string' && new RegExp(`^[a-f0-9]{${size}}$`).test(value);
+  requireValue(shape(ledger, ['schemaVersion', 'baselineHead', 'measurements']) && ledger.schemaVersion === 1 &&
+    sha(ledger.baselineHead, 40) && Array.isArray(ledger.measurements) && ledger.measurements.length > 0);
+  let sequence = 0, previousTime = -Infinity;
+  for (const r of ledger.measurements) {
+    requireValue(shape(r, ['sequence', 'canary', 'status', 'measuredAt', 'execution', 'baselineHead', 'cli',
+      'harnessRevision', 'evidencePath', 'evidenceSha256', 'capabilities', 'capabilityStatus', 'acceptedSpecBranch']));
+    requireValue(Object.hasOwn(CAPS, r.canary) && Number.isSafeInteger(r.sequence) && r.sequence > sequence &&
+      typeof r.measuredAt === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(r.measuredAt) &&
+      Number.isFinite(Date.parse(r.measuredAt)) && new Date(r.measuredAt).toISOString() === r.measuredAt.replace(/Z$/, r.measuredAt.includes('.') ? 'Z' : '.000Z') && Date.parse(r.measuredAt) >= previousTime && sha(r.baselineHead, 40));
+    sequence = r.sequence; previousTime = Date.parse(r.measuredAt);
+    requireValue(shape(r.execution, ['label', 'platform', 'backend']) && EXECUTIONS.some(e =>
+      Object.keys(e).every(k => e[k] === r.execution[k])));
+    requireValue(shape(r.cli, ['version', 'build', 'sha256']) && ['version', 'build'].every(k => typeof r.cli[k] === 'string' && r.cli[k].length > 0) &&
+      sha(r.cli.sha256, 64) && sha(r.harnessRevision, 64) && sha(r.evidenceSha256, 64));
+    requireValue(shape(r.capabilities, CAPS[r.canary]) && shape(r.capabilityStatus, CAPS[r.canary]));
+    for (const k of CAPS[r.canary]) {
+      const status = r.capabilityStatus[k];
+      requireValue(['PASS', 'FAIL', 'UNVERIFIED', 'NOT_APPLICABLE'].includes(status) && typeof r.capabilities[k] === 'boolean' &&
+        r.capabilities[k] === (status === 'PASS'));
+      if (status === 'NOT_APPLICABLE') requireValue(k === 'sandboxChildSendMessage' && r.execution.platform === 'win32');
+      if (k === 'sandboxChildSendMessage' && r.execution.platform === 'win32') requireValue(status === 'NOT_APPLICABLE');
+    }
+    requireValue(r.status === aggregateStatus(Object.values(r.capabilityStatus)));
+    requireValue(typeof r.evidencePath === 'string' && /^docs\/evidence\/session-capabilities\/[^/]+\/.+/.test(r.evidencePath) &&
+      !r.evidencePath.includes('\\') && !r.evidencePath.split('/').some(p => ['.', '..', ''].includes(p)));
+    const evidenceFile = path.resolve(root, r.evidencePath);
+    requireValue(inside(path.join(root, 'docs/evidence/session-capabilities'), canonical(evidenceFile)));
+    const bytes = fs.readFileSync(evidenceFile);
+    requireValue(hash(bytes) === r.evidenceSha256);
+    const evidence = JSON.parse(bytes);
+    requireValue(evidence.dryRun === false && evidence.canary === r.canary && evidence.platform === r.execution.platform &&
+      evidence.platformLabel === r.execution.label && evidence.ptyBackend === r.execution.backend);
+    if (r.acceptedSpecBranch !== null) {
+      const runDir = path.join(root, ...r.evidencePath.split('/').slice(0, 4));
+      requireValue(['C1', 'C2'].includes(r.canary) && typeof r.acceptedSpecBranch === 'string' &&
+        inside(runDir, path.resolve(root, r.acceptedSpecBranch)) &&
+        inside(runDir, canonical(path.resolve(root, r.acceptedSpecBranch))));
+    }
+  }
+  return ledger;
+}
+
+function readCapabilities(file, { root = ROOT } = {}) {
+  try {
+    const bytes = fs.readFileSync(file);
+    const ledger = validateLedger(JSON.parse(bytes), root);
+    const capabilities = {}, capabilityStatus = {}, selectedSequences = {};
+    for (const [canary, keys] of Object.entries(CAPS)) {
+      selectedSequences[canary] = {};
+      const last = Object.fromEntries(EXECUTIONS.map(e => {
+        const record = ledger.measurements.filter(r => r.canary === canary && r.execution.label === e.label).at(-1);
+        selectedSequences[canary][e.label] = record?.sequence ?? null;
+        return [e.label, record];
+      }));
+      for (const key of keys) {
+        const executions = key === 'sandboxChildSendMessage' ? EXECUTIONS.filter(e => e.platform === 'linux') : EXECUTIONS;
+        const statuses = executions.map(e => last[e.label]?.capabilityStatus[key] ?? 'UNVERIFIED');
+        capabilityStatus[key] = aggregateStatus(statuses);
+        capabilities[key] = capabilityStatus[key] === 'PASS';
+      }
+    }
+    return { capabilities, capabilityStatus, selectedSequences, ledgerSha256: hash(bytes) };
+  } catch { throw new Error('session capability evidence is unavailable'); }
+}
+
+function consolidate(dirs, out, { root = ROOT, baselineHead } = {}) {
+  if (!Array.isArray(dirs) || !dirs.length) throw new Error('Consolidation requires per-run directories');
+  baselineHead ||= spawnSync('git', ['rev-parse', 'origin/main'], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 10000 }).stdout?.trim();
+  const measurements = dirs.flatMap(dir => {
+    const ledger = json(path.join(dir, 'ledger.json'));
+    if (ledger.schemaVersion !== 1 || !Array.isArray(ledger.measurements)) throw new Error('Incompatible per-run ledger');
+    return ledger.measurements.map(record => ({ ...record, baselineHead: record.baselineHead ?? ledger.baselineHead,
+      capabilityStatus: record.capabilityStatus ?? Object.fromEntries((CAPS[record.canary] || []).map(k => [k, record.status])) }));
+  }).sort((a, b) => Date.parse(a.measuredAt) - Date.parse(b.measuredAt) || String(a.evidencePath).localeCompare(String(b.evidencePath)))
+    .map((record, i) => ({ ...record, sequence: i + 1 }));
+  const ledger = validateLedger({ schemaVersion: 1, baselineHead, measurements }, root);
+  fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+  save(out, ledger);
+  return ledger;
+}
+
+function consolidateArgs(argv) {
+  const dirs = [];
+  let out;
+  for (let i = 1; i < argv.length; i++) {
+    if (argv[i] === '--out' && !out && argv[i + 1] && !argv[i + 1].startsWith('--')) out = argv[++i];
+    else if (!argv[i].startsWith('--')) dirs.push(argv[i]);
+    else throw new Error('Unknown consolidation argument');
+  }
+  if (!out) throw new Error('Consolidation requires --out FILE');
+  consolidate(dirs, out);
+}
+
 async function main(argv = process.argv.slice(2)) {
+  if (argv[0] === '--consolidate') {
+    try { consolidateArgs(argv); return 0; }
+    catch (err) { process.stderr.write('Consolidation refused: ' + err.message + '\n'); return 2; }
+  }
   let opts;
   try { opts = parse(argv); } catch (err) { process.stderr.write(err.message + '\n'); return 2; }
   if (!opts.dryRun) {
@@ -1063,7 +1264,7 @@ async function main(argv = process.argv.slice(2)) {
   fs.mkdirSync(opts.out, { recursive: true });
   if (opts.dryRun) opts.sandbox = true;
   const ledgerFile = path.join(opts.out, opts.dryRun ? 'ledger.dry-run.json' : 'ledger.json');
-  const baseline = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8', windowsHide: true, timeout: 2000 }).stdout?.trim();
+  const baseline = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8', windowsHide: true, timeout: opts.dryRun ? 10000 : 2000 }).stdout?.trim();
   if (!/^[a-f0-9]{40}$/.test(baseline || '')) { process.stderr.write('Cannot identify baseline HEAD\n'); return 2; }
   const ledger = fs.existsSync(ledgerFile) ? json(ledgerFile) : { schemaVersion: 1, baselineHead: baseline, measurements: [] };
   if (ledger.schemaVersion !== 1 || ledger.baselineHead !== baseline || !Array.isArray(ledger.measurements)) { process.stderr.write('Incompatible existing ledger\n'); return 2; }
@@ -1073,7 +1274,7 @@ async function main(argv = process.argv.slice(2)) {
   const probeEnv = environment(opts.home);
   if (opts.dryRun && process.versions.electron) probeEnv.ELECTRON_RUN_AS_NODE = '1';
   const probe = spawnSync(opts.dryRun ? process.execPath : opts.cli, opts.dryRun ? [FIXTURE, '--version'] : ['--version'],
-    { cwd: opts.out, env: probeEnv, encoding: 'utf8', timeout: 2000, maxBuffer: 4096, windowsHide: true });
+    { cwd: opts.out, env: probeEnv, encoding: 'utf8', timeout: opts.dryRun ? 10000 : 2000, maxBuffer: 4096, windowsHide: true });
   if (probe.status === 0 && /^[\w .()+:-]+\s*$/.test(probe.stdout || '')) {
     version = probe.stdout.trim(); build = /\bbuild\s+([\w.-]+)/i.exec(version)?.[1] || 'unknown';
   }
@@ -1109,24 +1310,29 @@ async function main(argv = process.argv.slice(2)) {
         if (ctx.globalSettingsOwned && ctx.processes.every(p => p.record.cleaned)) fs.unlinkSync(path.join(opts.home, '.claude/settings.json'));
       }
     }
+    for (const key of CAPS[canary]) {
+      if (key === 'sandboxChildSendMessage' && windowsExecution({ opts })) capability(ctx, key, 'NOT_APPLICABLE');
+      if (!ctx.capabilityStatus?.[key]) capability(ctx, key, ctx.capabilities[key] ? 'PASS' : status === 'FAIL' ? 'FAIL' : 'UNVERIFIED');
+      if (ctx.evidence.cleanupFailure && ctx.capabilityStatus[key] === 'PASS') capability(ctx, key, 'UNVERIFIED');
+    }
+    status = aggregateStatus(Object.values(ctx.capabilityStatus));
     if (ctx.opts?.mutation) {
-      const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'exit-flush-assistant', 'denial-no-error-flag',
+      const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'exit-flush-assistant', 'denial-no-error-flag', 'tab-to-spaces', 'raw-control-no-confirmation', 'missing-paste-object', 'send-observation-delayed',
         'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'receipt-delayed'];
-      const unavailable = ['no-report', 'synthetic-receipt', 'missing-name', 'unknown-receipt', 'blocking-dialog', 'exit-on-submit', 'storage-only', 'hang', 'wrong-recipient', 'os-denial', 'unknown-denial', 'sandbox-unknown-denial',
+      const unavailable = ['no-report', 'synthetic-receipt', 'missing-name', 'unknown-receipt', 'blocking-dialog', 'exit-on-submit', 'hang', 'wrong-recipient', 'os-denial', 'unknown-denial', 'sandbox-unknown-denial',
         'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'wrong-command-denial',
-        'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule', 'send-failed', 'stale-recipient',
+        'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule', 'stale-recipient',
         'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type', 'receipt-teammate', 'sandbox-socket-unavailable'];
       const expected = positive.includes(ctx.opts.mutation) ? 'PASS' : unavailable.includes(ctx.opts.mutation) ? 'UNVERIFIED' : 'FAIL';
       ctx.evidence.controls.push({ name: ctx.opts.mutation, status: status === expected ? 'PASS' : 'FAIL', expected, observed: status });
     }
     if (!ctx.evidence.controls.length) ctx.evidence.controls.push({ name: 'table mutations', status: 'UNVERIFIED', reason: 'run separate --dry-run --mutation invocations; no result inferred from a different run' });
-    if (status !== 'PASS') for (const key of Object.keys(ctx.capabilities)) ctx.capabilities[key] = false;
     const evidenceFile = path.join(run, 'evidence.json');
     save(evidenceFile, ctx.evidence);
     ledger.measurements.push({ sequence, canary, status, measuredAt: new Date().toISOString(),
       cli: { version, build, sha256: cliHash }, harnessRevision: hash(fs.readFileSync(__filename)),
       evidencePath: path.relative(ROOT, evidenceFile).replaceAll('\\', '/'), evidenceSha256: hash(fs.readFileSync(evidenceFile)),
-      capabilities: ctx.capabilities, acceptedSpecBranch: null,
+      capabilities: ctx.capabilities, capabilityStatus: ctx.capabilityStatus, baselineHead: baseline, acceptedSpecBranch: null,
       execution: { label: opts.platformLabel, platform: process.platform, backend: opts.backend } });
     save(ledgerFile, ledger);
     process.stdout.write(`${canary} ${status}${opts.dryRun ? ' (EMULATED; not production evidence)' : ''}\n`);
@@ -1156,4 +1362,5 @@ if (require.main === module) {
     for (const proc of OWNED) if (!proc.exited) { try { proc.child.kill(); } catch {} }
   });
 }
-module.exports = { main, parse, environment, received, sandboxPlan, probeMounts, launch, stop, descriptor, submit, pathPermissionRule };
+module.exports = { main, parse, environment, received, sandboxPlan, probeMounts, launch, stop, descriptor, submit, pathPermissionRule,
+  consolidate, readCapabilities };
