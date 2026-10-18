@@ -19,6 +19,146 @@ const keys = {
   C4: ['independentSendMessage', 'sandboxChildSendMessage'],
 };
 
+function oauthFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-oauth-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'home'), runtimeRoot = path.join(root, 'runtime'), out = path.join(root, 'evidence');
+  for (const dir of [path.join(home, '.claude'), runtimeRoot, out]) fs.mkdirSync(dir, { recursive: true });
+  const token = 'fake-oauth-' + crypto.randomUUID();
+  const oauthTokenFile = path.join(root, 'token.txt');
+  fs.writeFileSync(oauthTokenFile, `  ${token}  \r\n`);
+  return { root, token, opts: { home, runtimeRoot, out, oauthTokenFile } };
+}
+
+test('GIVEN OAuth token file WHEN loading THEN trim one line without mutating parent environment', t => {
+  const f = oauthFixture(t);
+  const before = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  assert.equal(harness.loadOAuthToken(f.opts), f.token);
+  assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, before);
+  assert.equal(harness.environment(f.opts.home).CLAUDE_CODE_OAUTH_TOKEN, undefined);
+});
+
+for (const defect of ['empty', 'multiline', 'leading-line', 'missing', 'relative', 'repo', 'evidence', 'runtime', 'home', 'linked', 'credentials']) {
+  test(`GIVEN OAuth ${defect} WHEN loading THEN refuse without revealing the token`, t => {
+    const f = oauthFixture(t);
+    if (defect === 'empty') fs.writeFileSync(f.opts.oauthTokenFile, '  \r\n');
+    if (defect === 'multiline') fs.writeFileSync(f.opts.oauthTokenFile, `${f.token}\nsecond\n`);
+    if (defect === 'leading-line') fs.writeFileSync(f.opts.oauthTokenFile, `\n${f.token}`);
+    if (defect === 'missing') fs.unlinkSync(f.opts.oauthTokenFile);
+    if (defect === 'relative') f.opts.oauthTokenFile = 'token.txt';
+    const locations = { repo: path.resolve(__dirname, '..'), evidence: f.opts.out, runtime: f.opts.runtimeRoot, home: f.opts.home };
+    if (locations[defect]) {
+      f.opts.oauthTokenFile = path.join(locations[defect], `${defect === 'repo' ? '..' : ''}${crypto.randomUUID()}.token`);
+      fs.writeFileSync(f.opts.oauthTokenFile, f.token);
+      t.after(() => fs.rmSync(f.opts.oauthTokenFile, { force: true }));
+    }
+    if (defect === 'linked') {
+      const alias = path.join(f.root, 'alias');
+      fs.symlinkSync(f.opts.home, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      fs.writeFileSync(path.join(f.opts.home, 'token'), f.token);
+      f.opts.oauthTokenFile = path.join(alias, 'token');
+    }
+    if (defect === 'credentials') fs.writeFileSync(path.join(f.opts.home, '.claude/.credentials.json'), '{}');
+    assert.throws(() => harness.loadOAuthToken(f.opts), err => {
+      assert.ok(!err.message.includes(f.token));
+      return err.code === 'OAUTH_TOKEN_REFUSED';
+    });
+  });
+}
+
+test('GIVEN OAuth option in dry-run WHEN parsing THEN refuse the live-only option', async t => {
+  const r = await run(t, ['--oauth-token-file', path.resolve(os.tmpdir(), 'unused-token')]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /live.only/);
+});
+
+test('GIVEN token in evidence or ledger WHEN writing THEN abort before creating or replacing the file', t => {
+  const f = oauthFixture(t);
+  const cached = require.cache[require.resolve(script)];
+  delete require.cache[require.resolve(script)];
+  const isolated = require(script);
+  require.cache[require.resolve(script)] = cached;
+  isolated.loadOAuthToken(f.opts);
+  for (const name of ['evidence.json', 'ledger.json', 'run.log']) {
+    const file = path.join(f.opts.out, name);
+    assert.throws(() => isolated.save(file, { leaked: f.token }), /redaction/i);
+    assert.equal(fs.existsSync(file), false);
+    fs.writeFileSync(file, 'previous');
+    assert.throws(() => isolated.save(file, { leaked: f.token }), /redaction/i);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'previous');
+  }
+  assert.throws(() => isolated.save(path.join(f.opts.out, 'later.json'), { safe: true }), /redaction/i);
+  assert.equal(fs.existsSync(path.join(f.opts.out, 'later.json')), false);
+});
+
+test('GIVEN token reaches canary evidence WHEN running all THEN abort the run without ledger stdout leak or next canary', async t => {
+  const env = {};
+  let token;
+  const r = await run(t, [], {
+    entrypoint: path.resolve(__dirname, 'fixtures/session-capabilities/redaction-runner.js'), env,
+    prepare: ({ root }) => {
+      token = 'fake-guard-' + crypto.randomUUID();
+      env.CANARY_TEST_OAUTH_TOKEN_FILE = path.join(root, 'token.txt');
+      fs.writeFileSync(env.CANARY_TEST_OAUTH_TOKEN_FILE, token);
+    },
+  });
+  assert.equal(r.status, 2, r.stderr);
+  assert.equal(r.ledger, undefined);
+  assert.ok(!r.stdout.includes(token) && !r.stderr.includes(token));
+  assert.equal(r.stdout, '');
+  const runs = fs.readdirSync(r.out);
+  assert.equal(runs.length, 1);
+  assert.match(runs[0], /^0001-C1-/);
+  assert.deepEqual(fs.readdirSync(path.join(r.out, runs[0])), []);
+  assert.deepEqual(fs.readdirSync(path.join(r.root, 'runtime')), []);
+});
+
+for (const sandbox of [false, true]) {
+  test(`GIVEN dedicated OAuth token WHEN fake CLI launches sandbox=${sandbox} THEN authenticate through child env without argv or evidence leakage`, async t => {
+    const f = oauthFixture(t);
+    const repo = path.join(f.opts.runtimeRoot, 'project'), privateDir = path.join(f.opts.runtimeRoot, 'private');
+    fs.mkdirSync(path.join(repo, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(repo, '.git/hooks'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.git/config'), '');
+    fs.mkdirSync(privateDir);
+    const emptySettings = path.join(privateDir, 'settings.json');
+    fs.writeFileSync(emptySettings, '{}');
+    const ctx = { opts: { ...f.opts, dryRun: true, backend: 'emulated-pipes', mutation: 'auth-required' },
+      oauthToken: harness.loadOAuthToken(f.opts), repo, private: privateDir, runtime: f.opts.runtimeRoot,
+      run: f.opts.out, env: harness.environment(f.opts.home), emptySettings,
+      deadline: Date.now() + 5000, processes: [], evidence: { processes: [] } };
+    t.after(async () => { for (const proc of ctx.processes) await harness.stop(ctx, proc); });
+    const proc = await harness.launch(ctx, { sandbox });
+    const descriptor = harness.descriptor(ctx, proc);
+    assert.equal(descriptor.fixtureAuthenticated, true);
+    assert.ok(descriptor.fixtureEnvKeys.includes('CLAUDE_CODE_OAUTH_TOKEN'));
+    assert.ok(!JSON.stringify(descriptor.fixtureArgv).includes(f.token));
+    assert.equal(ctx.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+    assert.ok(proc.record.environmentKeys.includes('CLAUDE_CODE_OAUTH_TOKEN'));
+    assert.ok(!JSON.stringify(proc.record).includes(f.token));
+    assert.ok(!proc.record.mountPlan?.includes('--clearenv'));
+    await harness.submit(ctx, proc, 'Reply OK');
+    await harness.stop(ctx, proc);
+    harness.save(path.join(f.opts.out, 'evidence.json'), ctx.evidence);
+    assert.ok(!fs.readFileSync(path.join(f.opts.out, 'evidence.json'), 'utf8').includes(f.token));
+    delete ctx.oauthToken;
+    await assert.rejects(harness.launch(ctx, { sandbox }), /exited before/);
+  });
+}
+
+test('GIVEN successful C4 send and zero origin rows WHEN idle wait expires THEN neutral turn drains inbox and accepts a new sender scheme', async t => {
+  const r = await run(t, ['--canary', 'C4', '--platform-label', 'windows-conpty-bundled', '--mutation', 'receipt-empty-boundary']);
+  assert.equal(r.status, 0, r.stderr);
+  const report = data(r).reports[0];
+  assert.equal(report.inboxObservation.rowsBeforeNeutralTurn, 0);
+  assert.equal(report.inboxObservation.neutralTurnSent, true);
+  assert.equal(report.nativeReceipt, true);
+  assert.ok(report.receiptOffset >= report.before);
+  assert.match(report.receipt.from.sha256, /^[a-f0-9]{64}$/);
+  assert.match(report.receipt.from.schemeSha256, /^[a-f0-9]{64}$/);
+  assert.ok(!JSON.stringify(data(r)).includes('windows-inbox:'));
+});
+
 async function run(t, args = [], options = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-380-'));
   const evidenceRoot = path.resolve(__dirname, '../.work-files/380p0c/dry-runs');
@@ -40,7 +180,7 @@ async function run(t, args = [], options = {}) {
   fs.mkdirSync(realHome);
   const runtime = path.join(root, 'runtime');
   options.prepare?.({ root, home, realHome, runtime });
-  const result = await new Promise(resolve => execFile(process.execPath, ['--require', accountFixture, script, '--dry-run', '--canary', 'all',
+  const result = await new Promise(resolve => execFile(process.execPath, ['--require', accountFixture, options.entrypoint || script, '--dry-run', '--canary', 'all',
     '--home', home, '--out', out, '--platform-label', 'fixture-only', ...(options.noRuntime ? [] : ['--runtime-root', runtime]), ...args,
     ...(options.homeAlias ? ['--home', options.homeAlias({ root, home, realHome })] : []),
     ...(options.extraArgs?.({ root, home, realHome, runtime }) || [])], {
@@ -510,7 +650,15 @@ for (const mutation of ['', 'receipt-delayed']) {
   });
 }
 
-for (const mutation of ['receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type', 'receipt-teammate']) {
+test('GIVEN C4 alternative sender scheme WHEN endpoint matches THEN accept receipt with hashed source', async t => {
+  const r = await run(t, ['--canary', 'C4', '--mutation', 'receipt-wrong-scheme']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(data(r).controls.every(c => c.status === 'PASS'));
+  assert.equal(data(r).reports[0].nativeReceipt, true);
+  assert.match(data(r).reports[0].receipt.from.schemeSha256, /^[a-f0-9]{64}$/);
+});
+
+for (const mutation of ['receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-type', 'receipt-teammate']) {
   test(`GIVEN C4 ${mutation} WHEN measuring THEN do not qualify receipt but retain queue offsets and send result`, async t => {
     const r = await run(t, ['--canary', 'C4', '--mutation', mutation]);
     assert.equal(r.status, 1, r.stderr);

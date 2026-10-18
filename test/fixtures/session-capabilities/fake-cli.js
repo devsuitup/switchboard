@@ -6,6 +6,11 @@ const crypto = require('node:crypto');
 const args = process.argv.slice(2);
 const value = name => args[args.indexOf(name) + 1];
 const mutation = process.env.CANARY_FIXTURE_MUTATION || '';
+if (mutation === 'auth-required' && !process.env.CLAUDE_CODE_OAUTH_TOKEN) process.exit(3);
+if (mutation === 'auth-required') {
+  process.stdout.write(process.env.CLAUDE_CODE_OAUTH_TOKEN);
+  process.stderr.write(process.env.CLAUDE_CODE_OAUTH_TOKEN);
+}
 if (args.includes('--version')) {
   process.stdout.write('fixture-1.0.0 build fixture-only\n');
   process.exit(0);
@@ -62,7 +67,8 @@ function describe(status, waitingFor = 'trust') {
     waitingFor: status === 'waiting' ? waitingFor : undefined, statusUpdatedAt: Date.now(), startedAt,
     procStart: process.env.CANARY_FIXTURE_PROC_START || String(startedAt), fixtureOnly: true,
     fixtureSocketDirectoryVisible: !(process.env.CANARY_FIXTURE_SANDBOX && mutation === 'sandbox-socket-unavailable'),
-    fixtureEnvKeys: Object.keys(process.env) }));
+    fixtureEnvKeys: Object.keys(process.env), fixtureArgv: process.argv.slice(2),
+    fixtureAuthenticated: !!process.env.CLAUDE_CODE_OAUTH_TOKEN }));
   process.stdout.write(status === 'idle' ? '\x1b]9;4;0;\x07' : '\x1b]9;4;3;\x07');
 }
 function append(record, file = transcript) {
@@ -198,11 +204,13 @@ function handle(text) {
       if ((result.success && !meta.wrongRecipientControl) || (meta.wrongRecipientControl && ['wrong-control-leak', 'wrong-control-hidden-leak'].includes(mutation))) {
         if (dest) {
           const deliver = () => {
-            append({ type: 'queue-operation' }, dest);
-            append({ type: 'queue-operation' }, dest);
+            if (mutation !== 'receipt-empty-boundary') {
+              append({ type: 'queue-operation' }, dest);
+              append({ type: 'queue-operation' }, dest);
+            }
             const sender = mutation === 'receipt-wrong-sender' ? 'another-child' : nativeName;
             const body = mutation === 'receipt-extra-body' ? meta.nonce + ' extra' : meta.nonce;
-            const from = mutation === 'receipt-wrong-scheme' ? `tcp:${messagingSocketPath}`
+            const from = mutation === 'receipt-empty-boundary' ? `windows-inbox:${id}` : mutation === 'receipt-wrong-scheme' ? `tcp:${messagingSocketPath}`
               : `${process.env.CANARY_FIXTURE_WINDOWS_MESSAGING ? 'pipe:' : 'uds:'}${messagingSocketPath}`;
             const envelope = mutation === 'receipt-teammate' ? `<teammate-message teammate_id="${sender}">\n${body}\n</teammate-message>`
               : `<cross-session-message from="${from}" from-name="${sender}" from-mode="prompting">\n${body}\n</cross-session-message>`;
@@ -210,7 +218,7 @@ function handle(text) {
               ...(meta.wrongRecipientControl && mutation === 'wrong-control-hidden-leak'
                 ? { data: { receiptNonce: meta.nonce } } : { message: { role: 'user', content: mutation === 'synthetic-receipt' ? meta.nonce
                   : `Another Claude session sent a message:\n${envelope}\n\nThis came from another Claude session — not typed by your user.` } }) };
-            if (mutation === 'receipt-on-turn') fs.writeFileSync(path.join(process.env.CANARY_FIXTURE_RUNTIME, `inbox-${meta.orchestrator}.json`), JSON.stringify(receiptRow));
+            if (['receipt-on-turn', 'receipt-empty-boundary'].includes(mutation)) fs.writeFileSync(path.join(process.env.CANARY_FIXTURE_RUNTIME, `inbox-${meta.orchestrator}.json`), JSON.stringify(receiptRow));
             else append(receiptRow, dest);
           };
           if (mutation === 'receipt-delayed') setTimeout(deliver, 80);

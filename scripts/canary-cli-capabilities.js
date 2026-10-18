@@ -45,15 +45,70 @@ Object.assign(CANARY_MUTATIONS, {
     'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'send-failed', 'stale-recipient',
     'receipt-delayed', 'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type',
     'receipt-teammate', 'sandbox-socket-unavailable', 'sandbox-unreachable', 'send-observation-delayed',
-    'receipt-on-turn', 'receipt-idle-delayed', 'slow-tool-search', 'tool-search-only'],
+    'receipt-on-turn', 'receipt-empty-boundary', 'receipt-idle-delayed', 'slow-tool-search', 'tool-search-only'],
 });
 MUTATIONS.push(...Object.values(CANARY_MUTATIONS).flat().filter(x => !MUTATIONS.includes(x)));
 const hash = data => crypto.createHash('sha256').update(data).digest('hex');
 const json = file => JSON.parse(fs.readFileSync(file, 'utf8'));
-const save = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n');
+const secrets = new Set();
+let redactionFailed = false;
+class RedactionError extends Error {
+  constructor() { super('OAuth redaction guard refused output; run aborted'); }
+}
+function assertRedacted(value) {
+  if (redactionFailed) throw new RedactionError();
+  const text = Buffer.isBuffer(value) ? value.toString('utf8') : String(value);
+  for (const secret of secrets) {
+    if ([secret, JSON.stringify(secret).slice(1, -1)].some(s => text.includes(s))) {
+      redactionFailed = true;
+      throw new RedactionError();
+    }
+  }
+}
+function writeSafe(file, value, options) {
+  assertRedacted(value);
+  fs.writeFileSync(file, value, options);
+}
+const save = (file, value) => writeSafe(file, JSON.stringify(value, null, 2) + '\n');
+function output(stream, value) { assertRedacted(value); stream.write(value); }
 const inside = (parent, child) => { const rel = path.relative(parent, child); return !rel.startsWith('..') && !path.isAbsolute(rel); };
 const equalPath = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 const canonical = p => fs.realpathSync.native(p);
+function canonicalLocation(location) {
+  let existing = path.resolve(location);
+  const suffix = [];
+  while (!fs.existsSync(existing)) {
+    if (existing === path.dirname(existing)) throw new Error('No accessible ancestor');
+    suffix.unshift(path.basename(existing));
+    existing = path.dirname(existing);
+  }
+  return path.join(canonical(existing), ...suffix);
+}
+function loadOAuthToken(opts) {
+  if (!opts.oauthTokenFile) return undefined;
+  const refuse = () => {
+    const err = new Error('OAuth token file refused: require one nonempty line outside repository, evidence, runtime and HOME; no copied credentials');
+    err.code = 'OAUTH_TOKEN_REFUSED';
+    return err;
+  };
+  try {
+    if (!path.isAbsolute(opts.oauthTokenFile)) throw refuse();
+    const file = canonical(opts.oauthTokenFile);
+    if ([ROOT, EVIDENCE, opts.out, opts.runtimeRoot, opts.home].some(dir => {
+      const relative = path.relative(canonicalLocation(dir), file);
+      return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep);
+    })) throw refuse();
+    try { fs.lstatSync(path.join(opts.home, '.claude/.credentials.json')); throw refuse(); }
+    catch (err) { if (err.code !== 'ENOENT') throw err; }
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size > 65536) throw refuse();
+    const raw = fs.readFileSync(file, 'utf8').replace(/\r?\n$/, '');
+    if (/[\r\n\x00]/.test(raw) || !raw.trim()) throw refuse();
+    const token = raw.trim();
+    secrets.add(token);
+    return token;
+  } catch { throw refuse(); }
+}
 function sameDirectory(a, b) {
   try {
     const x = fs.statSync(a, { bigint: true }), y = fs.statSync(b, { bigint: true });
@@ -90,7 +145,8 @@ function parse(argv) {
   const opts = { canary: 'all', dryRun: false, sandbox: false };
   const names = { '--canary': 'canary', '--home': 'home', '--cli': 'cli', '--out': 'out',
     '--platform-label': 'platformLabel', '--mutation': 'mutation', '--timeout-ms': 'timeout', '--runtime-root': 'runtimeRoot',
-    '--c1-timeout-ms': 'C1', '--c2-timeout-ms': 'C2', '--c3-timeout-ms': 'C3', '--c4-timeout-ms': 'C4' };
+    '--c1-timeout-ms': 'C1', '--c2-timeout-ms': 'C2', '--c3-timeout-ms': 'C3', '--c4-timeout-ms': 'C4',
+    '--oauth-token-file': 'oauthTokenFile' };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--dry-run') opts.dryRun = true;
     else if (argv[i] === '--live') opts.dryRun = false;
@@ -98,6 +154,7 @@ function parse(argv) {
     else if (names[argv[i]] && argv[i + 1] && !argv[i + 1].startsWith('--')) opts[names[argv[i]]] = argv[++i];
     else throw new Error('Unknown argument or missing value');
   }
+  if (opts.oauthTokenFile && opts.dryRun) throw new Error('--oauth-token-file is live-only');
   if (!opts.home || !opts.out || !['all', ...Object.keys(CAPS)].includes(opts.canary)) throw new Error('Required: --canary C1|C2|C3|C4|all --home DIR --out DIR [--cli FILE] [--sandbox] [--dry-run] --platform-label LABEL');
   opts.home = path.resolve(opts.home);
   let accountHome;
@@ -326,7 +383,7 @@ function sandboxPlan(ctx, cwd, settings, privateSessions) {
   }
   const config = path.join(ctx.private, `${path.basename(privateSessions)}-claude.json`);
   const prepared = path.join(home, '.claude.json');
-  if (!fs.existsSync(config)) fs.writeFileSync(config, fs.existsSync(prepared) ? fs.readFileSync(prepared) : '{}', { mode: 0o600 });
+  if (!fs.existsSync(config)) writeSafe(config, fs.existsSync(prepared) ? fs.readFileSync(prepared) : '{}', { mode: 0o600 });
   args.push('--bind', config, path.join(home, '.claude.json'), '--dir', '/run', '--perms', '0555', '--dir', '/run/switchboard',
     '--ro-bind', settings, '/run/switchboard/launch-settings.json', '--chdir', cwd, '--setenv', 'SHELL', '/bin/bash');
   return args;
@@ -335,7 +392,7 @@ function sandboxPlan(ctx, cwd, settings, privateSessions) {
 function probeMounts(ctx, plan, sessions, settings) {
   const peer = fs.mkdtempSync(path.join(ctx.opts.home, '.claude/sessions/peer-'));
   const peerFile = path.join(peer, 'peer-marker');
-  fs.writeFileSync(peerFile, 'peer');
+  writeSafe(peerFile, 'peer');
   const ordinary = path.join(ctx.repo, `mount-probe-${crypto.randomUUID()}`);
   const code = 'set -eu; printf own > "$1/publication-probe"; test ! -e "$2"; '
     + 'if (printf changed > "$3") 2>/dev/null; then exit 20; fi; '
@@ -491,6 +548,8 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
     }
   }
   if (settings) argv.push('--settings', sandbox && !ctx.opts.dryRun ? '/run/switchboard/launch-settings.json' : settings);
+  if (ctx.oauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = ctx.oauthToken;
+  assertRedacted(JSON.stringify([exe, argv]));
   const descriptorFiles = fs.readdirSync(sessions).filter(x => /^\d+\.json$/.test(x));
   const preexisting = new Map();
   if (ctx.opts.dryRun) {
@@ -524,7 +583,7 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
   };
   let child;
   if (ctx.ptyFactory) {
-    child = ctx.ptyFactory(exe, cliArgs, { cwd, env });
+    child = ctx.ptyFactory(exe, argv, { cwd, env });
     child.onData(observe);
   } else if (ctx.opts.dryRun) {
     child = spawn(exe, argv, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -872,7 +931,7 @@ async function permissionCase(ctx, sandbox, removeDeny = false) {
   ctx.globalSettingsOwned = true;
   save(globalSettings, { permissions: { allow: [rule] } });
   const protectedFile = path.join(ctx.private, 'protected-marker');
-  fs.writeFileSync(protectedFile, 'protected');
+  writeSafe(protectedFile, 'protected');
   const protectionCommand = `printf changed > '${readPath.replaceAll('\\', '/')}' ; printf changed > '${protectedFile.replaceAll('\\', '/')}'`;
   if (sandbox) {
     const policy = json(settings);
@@ -978,12 +1037,12 @@ function nativeReceipt(row, sender, nonce, expectedEndpoint) {
     const pairs = [...element[1].matchAll(/([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)].map(m => [m[1], m[2] ?? m[3]]);
     if (new Set(pairs.map(([key]) => key)).size !== pairs.length) continue;
     const attrs = Object.fromEntries(pairs);
-    const from = /^(uds:|pipe:|npipe:)(.+)$/.exec(attrs.from || '');
+    const from = /^([a-zA-Z][a-zA-Z0-9+.-]*:)([^\x00-\x1f]+)$/.exec(attrs.from || '');
     const endpoint = from && messagingEndpoint(from[2]);
-    if (attrs['from-name'] !== sender || !endpoint || !expectedEndpoint || !attrs['from-mode'] ||
-        endpoint.pathSha256 !== expectedEndpoint.pathSha256 || endpoint.scheme !== expectedEndpoint.scheme ||
-        (endpoint.scheme === 'uds:' ? from[1] !== 'uds:' : !['pipe:', 'npipe:'].includes(from[1]))) continue;
-    return { shape: 'cross-session-message', from: { scheme: from[1], socketPathSha256: endpoint.pathSha256 },
+    if (attrs['from-name'] !== sender || !from || !attrs['from-mode'] ||
+        endpoint && (!expectedEndpoint || endpoint.pathSha256 !== expectedEndpoint.pathSha256 || endpoint.scheme !== expectedEndpoint.scheme)) continue;
+    return { shape: 'cross-session-message', from: { sha256: hash(attrs.from), schemeSha256: hash(from[1]),
+      ...(['uds:', 'pipe:', 'npipe:'].includes(from[1]) ? { scheme: from[1] } : {}), socketPathSha256: endpoint?.pathSha256 ?? null },
       fromName: attrs['from-name'], fromMode: attrs['from-mode'], offset: row._offset };
   }
   return null;
@@ -1090,6 +1149,7 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
   const successfulSend = results.some(x => x.success === true && !x.isError);
   if (successfulSend && !failedSend && !wrongRecipientControl && !renameAfterPrompt) {
     inboxObservation.successObservedAt = Date.now();
+    inboxObservation.rowsAtSuccess = receiptRows().length;
     const findReceipt = () => {
       if (origin.exited) throw new Unverified('orchestrator exited before inbox receipt');
       const d = descriptor(ctx, origin);
@@ -1107,6 +1167,7 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
         if (origin.exited || Date.now() >= ctx.deadline) throw err;
         const d = descriptor(ctx, origin);
         if (d?.status !== 'idle') throw new Unverified('orchestrator not idle for neutral inbox turn');
+        inboxObservation.rowsBeforeNeutralTurn = receiptRows().length;
         inboxObservation.neutralTurnSent = true;
         inboxObservation.neutralTurnAt = Date.now();
         await submit(ctx, origin, 'Read any pending native inbox messages, then reply OK without tools.',
@@ -1114,6 +1175,8 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
       }
     } catch (err) { submissionError = err; }
     inboxObservation.finishedAt = Date.now();
+    inboxObservation.rowsAtEnd = receiptRows().length;
+    inboxObservation.receiptFound = !!receipt;
   }
   const socketObservation = sandbox ? socketDirectory(ctx, child) : null;
   let envKeys, envStatus = 'UNVERIFIED';
@@ -1201,7 +1264,7 @@ async function c4(ctx) {
   catch (err) { ctx.evidence.renameAfterPromptFailure = err.message; }
 }
 
-async function makeContext(opts, canary, run) {
+async function makeContext(opts, canary, run, oauthToken) {
   opts = { ...opts, mutation: opts.mutation === 'hang' || CANARY_MUTATIONS[canary].includes(opts.mutation) ? opts.mutation : undefined };
   const runtime = opts.runtimeRoot;
   const repo = path.join(runtime, 'project');
@@ -1212,7 +1275,7 @@ async function makeContext(opts, canary, run) {
   fs.chmodSync(runtime, 0o700);
   const env = environment(opts.home);
   const preparationStartedAt = Date.now();
-  const ctx = { opts, run, repo, private: privateDir, runtime, env, deadline: preparationStartedAt + (opts.dryRun ? 60000 : (+opts.timeout || opts.limits[canary])),
+  const ctx = { opts, oauthToken, run, repo, private: privateDir, runtime, env, deadline: preparationStartedAt + (opts.dryRun ? 60000 : (+opts.timeout || opts.limits[canary])),
     processes: [], watchers: [], observation: 0, capabilities: Object.fromEntries(CAPS[canary].map(k => [k, false])),
     evidence: { schemaVersion: 1, canary, dryRun: opts.dryRun, qualifiesProduction: false,
       platform: process.platform, kernel: os.release(), platformLabel: opts.platformLabel, ptyBackend: opts.backend,
@@ -1227,13 +1290,13 @@ async function makeContext(opts, canary, run) {
     if (opts.dryRun) {
       const template = path.join(privateDir, 'git-template');
       fs.mkdirSync(template);
-      fs.writeFileSync(path.join(template, 'HEAD'), 'ref: refs/heads/main\n');
+      writeSafe(path.join(template, 'HEAD'), 'ref: refs/heads/main\n');
       command(ctx, 'git', ['init', '-q', '--template=' + template]);
     } else {
       command(ctx, 'git', ['init', '-q']);
       command(ctx, 'git', ['symbolic-ref', 'HEAD', 'refs/heads/main']);
     }
-    fs.writeFileSync(path.join(repo, 'README.md'), '# Capability canary fixture\n');
+    writeSafe(path.join(repo, 'README.md'), '# Capability canary fixture\n');
     command(ctx, 'git', ['add', 'README.md']);
     command(ctx, 'git', ['commit', '-qm', 'Create disposable canary fixture']);
   } catch (err) { removeRuntime(ctx); throw err; }
@@ -1363,38 +1426,40 @@ function consolidateArgs(argv) {
 async function main(argv = process.argv.slice(2)) {
   if (argv[0] === '--consolidate') {
     try { consolidateArgs(argv); return 0; }
-    catch (err) { process.stderr.write('Consolidation refused: ' + err.message + '\n'); return 2; }
+    catch (err) { output(process.stderr, 'Consolidation refused: ' + err.message + '\n'); return 2; }
   }
-  let opts;
-  try { opts = parse(argv); } catch (err) { process.stderr.write(err.message + '\n'); return 2; }
+  let opts, oauthToken;
+  try { opts = parse(argv); oauthToken = loadOAuthToken(opts); } catch (err) { output(process.stderr, err.message + '\n'); return 2; }
   if (!opts.dryRun) {
     const status = spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: ROOT, env: environment(opts.home), encoding: 'utf8', windowsHide: true, timeout: 4000 });
-    if (status.status !== 0 || status.stdout.trim()) { process.stderr.write('Refusing live run: dirty or unreadable repository\n'); return 2; }
+    if (status.status !== 0 || status.stdout.trim()) { output(process.stderr, 'Refusing live run: dirty or unreadable repository\n'); return 2; }
   }
   fs.mkdirSync(opts.out, { recursive: true });
   if (opts.dryRun) opts.sandbox = true;
   const ledgerFile = path.join(opts.out, opts.dryRun ? 'ledger.dry-run.json' : 'ledger.json');
   const baseline = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8', windowsHide: true, timeout: opts.dryRun ? 10000 : 2000 }).stdout?.trim();
-  if (!/^[a-f0-9]{40}$/.test(baseline || '')) { process.stderr.write('Cannot identify baseline HEAD\n'); return 2; }
+  if (!/^[a-f0-9]{40}$/.test(baseline || '')) { output(process.stderr, 'Cannot identify baseline HEAD\n'); return 2; }
   const ledger = fs.existsSync(ledgerFile) ? json(ledgerFile) : { schemaVersion: 1, baselineHead: baseline, measurements: [] };
-  if (ledger.schemaVersion !== 1 || ledger.baselineHead !== baseline || !Array.isArray(ledger.measurements)) { process.stderr.write('Incompatible existing ledger\n'); return 2; }
+  if (ledger.schemaVersion !== 1 || ledger.baselineHead !== baseline || !Array.isArray(ledger.measurements)) { output(process.stderr, 'Incompatible existing ledger\n'); return 2; }
   const executable = opts.dryRun ? FIXTURE : opts.cli;
   const cliHash = hash(fs.readFileSync(executable));
   let version = 'unknown', build = 'unknown';
   const probeEnv = environment(opts.home);
+  if (oauthToken) probeEnv.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
   if (opts.dryRun && process.versions.electron) probeEnv.ELECTRON_RUN_AS_NODE = '1';
   const probe = spawnSync(opts.dryRun ? process.execPath : opts.cli, opts.dryRun ? [FIXTURE, '--version'] : ['--version'],
     { cwd: opts.out, env: probeEnv, encoding: 'utf8', timeout: opts.dryRun ? 10000 : 2000, maxBuffer: 4096, windowsHide: true });
   if (probe.status === 0 && /^[\w .()+:-]+\s*$/.test(probe.stdout || '')) {
+    assertRedacted(probe.stdout);
     version = probe.stdout.trim(); build = /\bbuild\s+([\w.-]+)/i.exec(version)?.[1] || 'unknown';
   }
   fs.mkdirSync(opts.runtimeRoot, { recursive: true, mode: 0o700 });
-  if (!equalPath(canonical(opts.runtimeRoot), opts.runtimeRoot)) { process.stderr.write('Runtime root must be canonical, without aliases\n'); return 2; }
-  if (fs.readdirSync(opts.runtimeRoot).length) { process.stderr.write('Runtime root must be empty; inspect existing files/lock\n'); return 2; }
+  if (!equalPath(canonical(opts.runtimeRoot), opts.runtimeRoot)) { output(process.stderr, 'Runtime root must be canonical, without aliases\n'); return 2; }
+  if (fs.readdirSync(opts.runtimeRoot).length) { output(process.stderr, 'Runtime root must be empty; inspect existing files/lock\n'); return 2; }
   const lock = path.join(opts.runtimeRoot, '.lock');
   let lockHandle;
   try { lockHandle = fs.openSync(lock, 'wx', 0o600); }
-  catch { process.stderr.write('Runtime root is already owned or has an unreviewed lock\n'); return 2; }
+  catch { output(process.stderr, 'Runtime root is already owned or has an unreviewed lock\n'); return 2; }
   let exit = 0;
   try {
   for (const canary of opts.canary === 'all' ? Object.keys(CAPS) : [opts.canary]) {
@@ -1403,10 +1468,11 @@ async function main(argv = process.argv.slice(2)) {
     fs.mkdirSync(run);
     let ctx, status = 'UNVERIFIED';
     try {
-      ctx = await makeContext(opts, canary, run);
+      ctx = await makeContext(opts, canary, run, oauthToken);
       await ({ C1: c1, C2: c2, C3: c3, C4: c4 })[canary](ctx);
       status = 'PASS';
     } catch (err) {
+      if (err instanceof RedactionError) throw err;
       status = err instanceof Failed ? 'FAIL' : 'UNVERIFIED';
       if (!ctx) ctx = { processes: [], capabilities: Object.fromEntries(CAPS[canary].map(k => [k, false])), evidence: { dryRun: opts.dryRun, qualifiesProduction: false, checks: [], controls: [], processes: [] } };
       ctx.evidence.failure = err instanceof Failed || err instanceof Unverified ? err.message : `harness error: ${err.code || err.name}`;
@@ -1429,11 +1495,11 @@ async function main(argv = process.argv.slice(2)) {
     if (ctx.opts?.mutation) {
       const positive = ['own-title', 'natural-source-activity', 'meta-users', 'escaped-settings', 'no-paste-ref', 'exit-flush-assistant', 'denial-no-error-flag', 'tab-to-spaces', 'raw-control-no-confirmation', 'missing-paste-object', 'send-observation-delayed',
         'stale-descriptor-name', 'descriptor-only-name', 'rename-during-child-launch', 'receipt-delayed',
-        'trim-boundary-lf', 'delayed-rename-name', 'slow-c2-turn', 'receipt-on-turn', 'receipt-idle-delayed', 'slow-tool-search'];
+        'trim-boundary-lf', 'delayed-rename-name', 'slow-c2-turn', 'receipt-on-turn', 'receipt-empty-boundary', 'receipt-idle-delayed', 'slow-tool-search', 'receipt-wrong-scheme'];
       const unavailable = ['no-report', 'synthetic-receipt', 'missing-name', 'unknown-receipt', 'blocking-dialog', 'exit-on-submit', 'hang', 'wrong-recipient', 'os-denial', 'unknown-denial', 'sandbox-unknown-denial',
         'tool-stop', 'tool-stop-idle', 'tool-stop-waiting', 'missing-allowed-tool', 'wrong-command-denial',
         'premature-final', 'tool-stop-side-effect', 'unlinked-denial', 'single-slash-read-rule', 'stale-recipient',
-        'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-scheme', 'receipt-wrong-type', 'receipt-teammate', 'sandbox-socket-unavailable', 'tool-search-only'];
+        'receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-type', 'receipt-teammate', 'sandbox-socket-unavailable', 'tool-search-only'];
       const expected = positive.includes(ctx.opts.mutation) ? 'PASS' : unavailable.includes(ctx.opts.mutation) ? 'UNVERIFIED' : 'FAIL';
       ctx.evidence.controls.push({ name: ctx.opts.mutation, status: status === expected ? 'PASS' : 'FAIL', expected, observed: status });
     }
@@ -1446,7 +1512,7 @@ async function main(argv = process.argv.slice(2)) {
       capabilities: ctx.capabilities, capabilityStatus: ctx.capabilityStatus, baselineHead: baseline, acceptedSpecBranch: null,
       execution: { label: opts.platformLabel, platform: process.platform, backend: opts.backend } });
     save(ledgerFile, ledger);
-    process.stdout.write(`${canary} ${status}${opts.dryRun ? ' (EMULATED; not production evidence)' : ''}\n`);
+    output(process.stdout, `${canary} ${status}${opts.dryRun ? ' (EMULATED; not production evidence)' : ''}\n`);
     if (status !== 'PASS') exit = 1;
     if (ctx.processes.some(p => !p.exited)) throw new Unverified('owned handles remain live after ledger write');
     if (interrupted) return 130;
@@ -1462,7 +1528,7 @@ if (require.main === module) main().then(code => {
   if (OWNED.size) throw new Error('Owned handles remain live');
   process.exit(code);
 }).catch(async () => {
-  process.stderr.write('Harness setup failed; no capability is qualified\n');
+  try { output(process.stderr, 'Harness setup failed; no capability is qualified\n'); } catch {}
   for (const proc of OWNED) { try { await stop({ opts: { dryRun: !proc.isPty } }, proc); } catch {} }
   if (!OWNED.size) process.exit(2);
   process.exitCode = 2;
@@ -1474,4 +1540,4 @@ if (require.main === module) {
   });
 }
 module.exports = { main, parse, environment, received, sandboxPlan, probeMounts, launch, stop, descriptor, submit, pathPermissionRule,
-  consolidate, readCapabilities, validateDeliveryPayload };
+  consolidate, readCapabilities, validateDeliveryPayload, loadOAuthToken, save };

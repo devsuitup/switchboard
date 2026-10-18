@@ -138,14 +138,17 @@ The receipt shape supplied by the operator in brief-380p0j (Linux CLI
 preceded by two `queue-operation` rows. Its body must equal the nonce
 exactly after removing the element's single framing newline on each side;
 `from-name` must equal the child's current native name. Evidence records
-the observed scheme, SHA-256 of the endpoint path, `from-name`, `from-mode`,
+SHA-256 of the complete from address and its scheme, SHA-256 of a recognized
+endpoint path, `from-name`, `from-mode`,
 receipt byte offset, and queue row types/offsets after the saved boundary.
 The owned descriptor's messagingSocketPath identifies the endpoint: absolute
 .sock paths use uds:, Windows `\\.\pipe\` paths use pipe: (npipe: is also
-recognized in receipts). A receipt must name the child's exact descriptor
-endpoint. The harness neither connects to it nor reads a key file. Only scheme
-and path hash survive in messagingEndpoints. Missing/unsupported endpoints stay
-UNVERIFIED. Windows behaviour remains unmeasured until the operator runs C4;
+recognized in receipts). A recognized endpoint must match the child's exact descriptor endpoint.
+Any URI scheme is accepted, including an opaque Windows inbox address, when
+the user-row envelope, exact nonce and current child from-name match. Unknown
+schemes and addresses are retained only as hashes. The harness neither connects to it nor reads a key file. Only scheme
+and path hash survive in messagingEndpoints. Missing descriptor endpoints remain visible as null; an opaque receipt source
+is identified by its hash and current child name. Windows behaviour remains unmeasured until the operator runs C4;
 fake pipe results prove only the descriptor/receipt reader.
 The earlier `teammate-message` recognizer had no supporting live observation
 in these briefs and has been removed. Dry-run uses the same receipt reader.
@@ -159,6 +162,21 @@ for its nonce for up to 15 seconds after the result (150 ms in dry-run).
 Its total send/control bound is 30 seconds. Partial reports survive these
 timeouts. Both owned processes attempt graceful `/exit` before forced
 handle cleanup, including when the child remains busy after SendMessage.
+
+After a linked successful send, C4 waits up to 15 seconds for an idle receipt,
+then submits one neutral inbox-reading turn if the owned orchestrator is idle,
+even when there are zero rows after the saved boundary. It observes that turn
+for up to 60 seconds. Dry-run uses 1 and 5 seconds respectively. Evidence keeps
+rowsAtSuccess, rowsBeforeNeutralTurn, neutralTurnSent/At, idleFailure,
+rowsAtEnd, receiptFound and finishedAt, alongside all receipt row types/offsets.
+No recognized receipt still yields UNVERIFIED.
+
+The supplied Windows bundled evidence `win-bundled-C4-2403aee8` currently
+records success:true, neutralTurnSent:true after 15008 ms, and a user row at
+328097 after boundary 327597, but nativeReceipt:false. Thus the recorded
+neutral turn already fired; it did not establish a recognized receipt. This
+differs from the brief's initial no-rows observation. The new zero-row/opaque
+scheme fixture proves that path locally; it does not relabel the live result.
 
 The sandbox keeps `--tmpfs /tmp` unchanged. No socket bind or relay is
 added. After the send observation and before cleanup, socketDirectory
@@ -225,6 +243,27 @@ final reply and a fresh owned post-submit idle descriptor. An idle descriptor
 alone cannot qualify a stopped tool turn. Missing idle or final reply is kept
 as evidence, never converted into a PASS because the files look correct.
 
+## Dedicated OAuth authentication
+
+The first line is trimmed; an empty file, additional lines, a relative path,
+missing/non-regular file, or a canonical path inside the repository, evidence,
+runtime root or prepared HOME is refused before a CLI starts. One final LF or
+CRLF is allowed. The token is never added to the harness parent environment
+or its general allowlist: clean-env.js and the allowlist run first, and the
+value is added only to each CLI launch environment (including --version).
+Git and mount probes receive the ordinary scrubbed environment.
+
+For a sandboxed CLI, bwrap inherits this launch environment. The mount plan
+has no --clearenv and never adds a token --setenv argument, file, bind or
+shell export command. This uses bubblewrap's inherited environment behavior
+([upstream environment options](https://github.com/containers/bubblewrap/blob/main/bwrap.xml)).
+Only the key name CLAUDE_CODE_OAUTH_TOKEN may appear in environmentKeys.
+Every harness file write and console output is checked for the token and its
+JSON-escaped form before writing. A match aborts the write and the run; owned
+children are cleaned up, subsequent writes are refused, and no new ledger
+entry qualifies the aborted run. This guard covers harness output, not files
+written independently by the external CLI.
+
 ## First live run: operator checklist
 
 1. Review the local red/green report, then independently compare the final
@@ -235,9 +274,16 @@ as evidence, never converted into a PASS because the files look correct.
    CLI executable with an absolute --cli path, never a shell alias/.cmd shim.
    Record its version/hash and the actual git HEAD. Avoid live application
    rebuilds, dependency changes and any production HOME.
-3. Prepare a disposable login HOME manually, outside repository, evidence and
-   every real-home identity's descendants.
-   The harness never reads or copies credentials. It refuses the OS account
+3. Prepare a disposable HOME manually, outside repository, evidence and
+   every real-home identity's descendants. Never copy .credentials.json or an
+   existing login into it: refresh-token rotation can log the owner out.
+   The owner runs `claude setup-token` separately and stores its long-lived
+   token as one line in a private file outside the repository, evidence dir,
+   runtime root and prepared HOME. Pass its absolute path using the live-only
+   `--oauth-token-file` option. Do not put the token value on a command line.
+   The harness reads this dedicated token file; it never reads or copies login
+   credentials and refuses a prepared .claude/.credentials.json when the option
+   is present. It refuses the OS account
    home and HOME/USERPROFILE/HOMEDRIVE+HOMEPATH identities, including short-name,
    junction, case and trailing-slash aliases. Its .claude must be a real
    directory and .claude/projects MUST be empty. C3 also needs no existing
@@ -316,14 +362,14 @@ After review/commit by the publication owner, operator commands are:
 
 ```powershell
 $env:ELECTRON_RUN_AS_NODE = '1'
-& 'C:/path/to/matching/electron.exe' scripts/canary-cli-capabilities.js --live --canary all --home C:/canary380-bundled-home --runtime-root C:/canary380-bundled-runtime --cli C:/path/to/claude.exe --out docs/evidence/session-capabilities/windows-bundled-amended --platform-label windows-conpty-bundled
-& 'C:/path/to/matching/electron.exe' scripts/canary-cli-capabilities.js --live --canary all --home C:/canary380-inbox-home --runtime-root C:/canary380-inbox-runtime --cli C:/path/to/claude.exe --out docs/evidence/session-capabilities/windows-inbox-amended --platform-label windows-conpty-inbox
+& 'C:/path/to/matching/electron.exe' scripts/canary-cli-capabilities.js --live --canary all --oauth-token-file C:/canary380-secrets/oauth-token.txt --home C:/canary380-bundled-home --runtime-root C:/canary380-bundled-runtime --cli C:/path/to/claude.exe --out docs/evidence/session-capabilities/windows-bundled-amended --platform-label windows-conpty-bundled
+& 'C:/path/to/matching/electron.exe' scripts/canary-cli-capabilities.js --live --canary all --oauth-token-file C:/canary380-secrets/oauth-token.txt --home C:/canary380-inbox-home --runtime-root C:/canary380-inbox-runtime --cli C:/path/to/claude.exe --out docs/evidence/session-capabilities/windows-inbox-amended --platform-label windows-conpty-inbox
 ```
 
 ```sh
-/path/to/node scripts/canary-cli-capabilities.js --live --canary C1 --home /tmp/canary380-home-c1 --runtime-root /tmp/canary380-runtime-c1 --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-c1-amended --platform-label linux-unix-pty
-/path/to/node scripts/canary-cli-capabilities.js --live --canary C2 --home /tmp/canary380-home-c2 --runtime-root /tmp/canary380-runtime-c2 --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-c2-named --platform-label linux-unix-pty
-/path/to/node scripts/canary-cli-capabilities.js --live --canary C4 --sandbox --home /tmp/canary380-home-c4 --runtime-root /tmp/canary380-runtime-c4 --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-c4-amended --platform-label linux-unix-pty
+/path/to/node scripts/canary-cli-capabilities.js --live --canary C1 --oauth-token-file /private/canary380-secrets/oauth-token.txt --home /tmp/canary380-home-c1 --runtime-root /tmp/canary380-runtime-c1 --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-c1-amended --platform-label linux-unix-pty
+/path/to/node scripts/canary-cli-capabilities.js --live --canary C2 --oauth-token-file /private/canary380-secrets/oauth-token.txt --home /tmp/canary380-home-c2 --runtime-root /tmp/canary380-runtime-c2 --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-c2-named --platform-label linux-unix-pty
+/path/to/node scripts/canary-cli-capabilities.js --live --canary C4 --sandbox --oauth-token-file /private/canary380-secrets/oauth-token.txt --home /tmp/canary380-home-c4 --runtime-root /tmp/canary380-runtime-c4 --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-c4-amended --platform-label linux-unix-pty
 ```
 
 Every invocation needs its own already prepared isolated HOME with empty
@@ -373,13 +419,13 @@ $canaryNode = 'C:/Users/Jean-Baptiste/AppData/Local/Temp/node22/node_modules/nod
 & $canaryNode node_modules/eslint/bin/eslint.js --no-ignore --config test/fixtures/session-capabilities/lint.config.cjs scripts/canary-cli-capabilities.js test/canary-cli-capabilities.test.js test/fixtures/session-capabilities/fake-cli.js test/fixtures/session-capabilities/isolated-account.js
 & $canaryNode scripts/canary-cli-capabilities.js --dry-run --canary all --home C:/Temp/empty-prepared-home --runtime-root C:/Temp/canary-runtime --out .work-files/canary-dry-local --platform-label fixture-only
 $env:ELECTRON_RUN_AS_NODE = '1'
-& 'C:/path/to/matching/electron.exe' scripts/canary-cli-capabilities.js --canary all --home C:/Temp/prepared-login-home --runtime-root C:/Temp/canary-runtime --cli C:/path/to/claude.exe --out docs/evidence/session-capabilities/windows-bundled --platform-label windows-conpty-bundled
+& 'C:/path/to/matching/electron.exe' scripts/canary-cli-capabilities.js --canary all --oauth-token-file C:/canary380-secrets/oauth-token.txt --home C:/Temp/prepared-home --runtime-root C:/Temp/canary-runtime --cli C:/path/to/claude.exe --out docs/evidence/session-capabilities/windows-bundled --platform-label windows-conpty-bundled
 ```
 
 Linux, with an already matching Node-native PTY:
 
 ```sh
-/path/to/node scripts/canary-cli-capabilities.js --canary all --sandbox --home /tmp/prepared-login-home --runtime-root /tmp/canary-runtime --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-private --platform-label linux-unix-pty
+/path/to/node scripts/canary-cli-capabilities.js --canary all --sandbox --oauth-token-file /private/canary380-secrets/oauth-token.txt --home /tmp/prepared-home --runtime-root /tmp/canary-runtime --cli /absolute/native/claude --out docs/evidence/session-capabilities/linux-private --platform-label linux-unix-pty
 ```
 
 ## Sandbox and bounds
