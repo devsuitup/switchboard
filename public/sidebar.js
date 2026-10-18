@@ -1670,8 +1670,8 @@ function rebindSidebarEvents(projects) {
             surfaceStopFailure(deleteBtn, 'A merged member is still running', session, 'Delete');
             return;
           }
-          const ok = await showDeleteSessionDialog(session);
-          if (!ok) return;
+          const confirmation = await showDeleteSessionDialog(session);
+          if (!confirmation) return;
           if (!resolveSessionStop(session).remote) {
             const stopResult = await stopBeforeArchive(session);
             if (!stopResult.ok) {
@@ -1681,20 +1681,25 @@ function rebindSidebarEvents(projects) {
             pollActiveSessions();
           }
           // see .ai/contexts/session-state.md (#271: remote Delete)
-          const res = await window.api.deleteSession(session.sessionId);
+          const res = await window.api.deleteSession(session.sessionId, confirmation.partIds);
           if (!res || !res.ok) {
             surfaceStopFailure(deleteBtn, res?.error || 'The delete backend is unavailable or returned no result', session, 'Delete');
-            return;
+          } else {
+            clearAppNotice(sessionActionNoticeId('Delete', session));
           }
-          clearAppNotice(sessionActionNoticeId('Delete', session));
-          if (typeof pendingSessions !== 'undefined') pendingSessions.delete(session.sessionId);
-          if (typeof dismissDormantSession === 'function') rowSessionIds(session).forEach(dismissDormantSession);
-          if (typeof sessionMap !== 'undefined') sessionMap.delete(session.sessionId);
-          if (typeof destroySession === 'function' && typeof openSessions !== 'undefined'
-              && openSessions.has(session.sessionId)) {
-            destroySession(session.sessionId);
+          const removedPartIds = res?.ok ? confirmation.partIds : (res?.removedPartIds || []);
+          for (const id of removedPartIds) {
+            if (typeof pendingSessions !== 'undefined') pendingSessions.delete(id);
+            if (typeof dismissDormantSession === 'function') dismissDormantSession(id);
+            if (typeof sessionMap !== 'undefined') sessionMap.delete(id);
+            if (typeof destroySession === 'function' && typeof openSessions !== 'undefined'
+                && openSessions.has(id)) {
+              destroySession(id);
+            }
           }
-          Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+          if (res?.ok || Array.isArray(res?.removedPartIds)) {
+            Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+          }
         } catch (error) {
           surfaceStopFailure(deleteBtn, error, session, 'Delete');
         }
@@ -2072,18 +2077,14 @@ function startRename(summaryEl, session) {
   });
 }
 
-// --- Delete session confirmation dialog ---
-// Returns a Promise<boolean> — true if the user confirmed deletion.
-//
-// Deliberately not window.confirm: this is the only action in the app that
-// destroys history, and a native prompt blocks the whole renderer (every other
-// live terminal with it) and cannot show what is about to be lost. Same shape as
-// showDeleteWorktreeDialog below, which is the precedent for a destructive
-// confirmation that states its consequences.
+// see .ai/contexts/session-state.md
 async function showDeleteSessionDialog(session) {
-  const previewPromise = window.api.deleteSessionPreview
-    ? window.api.deleteSessionPreview(session.sessionId)
-    : Promise.resolve(null);
+  if (!window.api.deleteSessionPreview) throw new Error('The delete preview backend is unavailable');
+  const p = await window.api.deleteSessionPreview(session.sessionId);
+  if (!p?.ok || !Array.isArray(p.partIds)) {
+    throw new Error(p?.error || 'The delete preview backend is unavailable or returned no parts');
+  }
+  const partIds = [...p.partIds];
 
   return enqueueModalQuestion(() => new Promise((resolve) => {
     const overlay = document.createElement('div');
@@ -2114,22 +2115,15 @@ async function showDeleteSessionDialog(session) {
     const statusEl = dialog.querySelector('#dss-status');
     const projectLine = `<div class="dwt-dirty-label">Project: ${escapeHtml(session.projectPath || 'unknown')}</div>`;
 
-    previewPromise.then((p) => {
-      if (!overlay.isConnected) return;
-      if (!p || !p.ok) {
-        statusEl.innerHTML = projectLine;
-        return;
-      }
-      const parts = [];
-      parts.push(p.transcripts > 0
-        ? `${p.transcripts} file${p.transcripts !== 1 ? 's' : ''} on disk`
-        : 'no transcript on disk (this session never started)');
-      if (p.subagents > 0) parts.push(`${p.subagents} subagent transcript${p.subagents !== 1 ? 's' : ''}`);
-      if (p.running) parts.push('session is still running and will be stopped first');
-      statusEl.innerHTML = projectLine + `<pre class="dwt-dirty-list">${escapeHtml(parts.join('\n'))}</pre>`;
-    }).catch(() => {
-      if (overlay.isConnected) statusEl.innerHTML = projectLine;
-    });
+    const parts = [];
+    parts.push(p.parts > 1
+      ? `${p.parts} parts of this conversation, ${p.transcripts} files on disk`
+      : p.transcripts > 0
+      ? `${p.transcripts} file${p.transcripts !== 1 ? 's' : ''} on disk`
+      : 'no transcript on disk (this session never started)');
+    if (p.subagents > 0) parts.push(`${p.subagents} subagent transcript${p.subagents !== 1 ? 's' : ''}`);
+    if (p.running) parts.push('session is still running and will be stopped first');
+    statusEl.innerHTML = projectLine + `<pre class="dwt-dirty-list">${escapeHtml(parts.join('\n'))}</pre>`;
 
     function close(confirmed) {
       overlay.remove();
@@ -2138,7 +2132,7 @@ async function showDeleteSessionDialog(session) {
     }
 
     dialog.querySelector('#dss-cancel').onclick = () => close(false);
-    dialog.querySelector('#dss-confirm').onclick = () => close(true);
+    dialog.querySelector('#dss-confirm').onclick = () => close({ partIds });
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
 
     const unregister = registerModal({ overlay, cancel: () => close(false) });

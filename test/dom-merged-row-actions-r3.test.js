@@ -125,7 +125,7 @@ test('Delete stops then deletes a merged row when only its representative tab ru
   const calls = recordingApi(ctx);
   open(ctx, 'A');
   ctx.window.activePtyIds.add('A');
-  ctx.window.showDeleteSessionDialog = async () => true;
+  ctx.window.showDeleteSessionDialog = async session => ({ partIds: [session.sessionId, ...session.mergedMemberIds] });
   await click(ctx, 'A', 'delete');
   assert.deepEqual(calls, [['stop', 'A'], ['delete', 'A']]);
 });

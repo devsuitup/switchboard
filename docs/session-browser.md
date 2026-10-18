@@ -232,18 +232,30 @@ row and grid card buttons still read **Stop session**.
 
 ## Delete
 
-The delete button **permanently removes the session's transcript from disk**,
-with every subagent transcript belonging to it and their index entries. There is
-no trash. The confirmation dialog names the project, the number of files on
-disk and the number of subagent transcripts.
+The delete button **permanently removes every part of the conversation from disk**,
+including the transcripts merged into a compacted conversation, their subagent
+directories and index entries. There is no trash or Undo, and no per-part delete.
+Delete always confirms. The dialog names the project, the number of parts for a
+merged conversation, the number of files on disk and the number of subagent transcripts.
+Subagent directories are excluded from the file count. A refused preview shows
+its reason before any confirmation opens.
+If any part's targets cannot be resolved, the whole delete is refused with a
+reason, before any files or index entries are removed.
 
 - A running local session is stopped first. If it cannot be stopped, the delete
   is refused with the reason.
+- A live merged member refuses deletion before the dialog. The backend checks
+  the exact parts confirmed in the preview and refuses if the conversation
+  changed while checking; use Delete again to review the updated conversation.
 - Remote rows and their context menu offer no Delete action: their transcript
   is a mirrored copy that the next refresh would fetch again. A direct deletion
   request is still refused by the backend.
 - A transcript that resolves outside `~/.claude/projects` (through a symbolic
   link, for instance) is refused and logged.
 - A session that never started has no transcript; deleting it removes the row.
+
+Members are deleted before the representative. If a file cannot be removed,
+the conversation stays listed for retry, fully removed parts leave the indexes,
+and the notice names the deleted and remaining parts. Use Delete again to finish.
 
 Archive a session instead to keep its file.

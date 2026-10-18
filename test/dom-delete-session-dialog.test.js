@@ -21,7 +21,7 @@ const SESSION = {
 function stubApi(window, overrides = {}) {
   const calls = { deleteSession: [], preview: [] };
   window.api = {
-    deleteSessionPreview: (id) => { calls.preview.push(id); return Promise.resolve(overrides.preview ?? { ok: true, transcripts: 2, subagents: 3, running: false }); },
+    deleteSessionPreview: (id) => { calls.preview.push(id); return Promise.resolve({ partIds: [id], ...overrides.preview ?? { ok: true, transcripts: 2, subagents: 3, running: false } }); },
     deleteSession: (id) => { calls.deleteSession.push(id); return Promise.resolve(overrides.deleteResult ?? { ok: true, removed: ['x'], subagents: 3 }); },
     stopSession: () => Promise.resolve({ ok: true }),
     archiveSession: () => Promise.resolve({ ok: true }),
@@ -31,6 +31,124 @@ function stubApi(window, overrides = {}) {
 }
 
 const tick = () => new Promise(r => setTimeout(r, 0));
+
+test('the merged conversation preview names all three parts before its file count', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    stubApi(ctx.window, { preview: { ok: true, parts: 3, transcripts: 6, subagents: 0 } });
+    const p = ctx.sidebar.showDeleteSessionDialog(SESSION);
+    await tick();
+    assert.equal(ctx.document.querySelector('h3').textContent, `Delete session "${SESSION.name}"?`);
+    assert.match(ctx.document.getElementById('dss-status').textContent, /3 parts of this conversation, 6 files on disk/);
+    ctx.document.getElementById('dss-cancel').click();
+    await p;
+  } finally { ctx.destroy(); }
+});
+
+test('confirming a merged row forgets every part and destroys every open part tab', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const session = { ...SESSION, mergedMemberIds: ['stale-renderer-part'] };
+    const calls = stubApi(ctx.window, { preview: { ok: true, partIds: [SESSION.sessionId, 'b', 'c'], parts: 3, transcripts: 3, subagents: 0 } });
+    const destroyed = [], dismissed = [];
+    ctx.window.destroySession = id => { destroyed.push(id); ctx.window.openSessions.delete(id); };
+    ctx.window.dismissDormantSession = id => dismissed.push(id);
+    for (const id of [SESSION.sessionId, 'b', 'c', 'stale-renderer-part']) {
+      ctx.window.sessionMap.set(id, session);
+      ctx.window.pendingSessions.set(id, { session });
+      ctx.window.openSessions.set(id, { closed: true });
+    }
+    const project = makeSampleProject();
+    project.sessions = [session];
+    ctx.sidebar.renderProjects([project], true);
+    ctx.document.getElementById('si-s-top-1').querySelector('.session-delete-btn').click();
+    await tick();
+    ctx.document.getElementById('dss-confirm').click();
+    await tick(); await tick();
+    assert.deepEqual(calls.deleteSession, [SESSION.sessionId]);
+    for (const id of [SESSION.sessionId, 'b', 'c']) {
+      assert.equal(ctx.window.sessionMap.has(id), false, `sessionMap ${id}`);
+      assert.equal(ctx.window.pendingSessions.has(id), false, `pendingSessions ${id}`);
+      assert.equal(ctx.window.openSessions.has(id), false, `tab ${id}`);
+    }
+    assert.deepEqual(destroyed.sort(), ['b', 'c', SESSION.sessionId].sort());
+    assert.deepEqual(dismissed.sort(), ['b', 'c', SESSION.sessionId].sort());
+    assert.equal(ctx.window.sessionMap.has('stale-renderer-part'), true);
+    assert.equal(ctx.window.pendingSessions.has('stale-renderer-part'), true);
+    assert.equal(ctx.window.openSessions.has('stale-renderer-part'), true);
+  } finally { ctx.destroy(); }
+});
+
+test('a partial delete forgets only removed parts, refreshes the row and keeps the failure notice', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const session = { ...SESSION, mergedMemberIds: ['b', 'c'] };
+    const error = 'Deleted 1 of 3 parts; EBUSY transcript. Removed: b; remaining: s-top-1, c. Try Delete again.';
+    stubApi(ctx.window, {
+      preview: { ok: true, partIds: [SESSION.sessionId, 'b', 'c'], parts: 3, transcripts: 3, subagents: 0 },
+      deleteResult: { ok: false, error, removedPartIds: ['b'] },
+    });
+    const destroyed = [], dismissed = [];
+    let refreshed = 0;
+    ctx.window.destroySession = id => { destroyed.push(id); ctx.window.openSessions.delete(id); };
+    ctx.window.dismissDormantSession = id => dismissed.push(id);
+    ctx.window.loadProjects = () => {
+      refreshed++;
+      assert.equal(ctx.window.sessionMap.has('b'), false);
+      assert.equal(ctx.window.pendingSessions.has('b'), false);
+      assert.equal(ctx.window.openSessions.has('b'), false);
+      const project = makeSampleProject();
+      project.sessions = [{ ...session, mergedMemberIds: ['c'] }];
+      ctx.sidebar.renderProjects([project], true);
+    };
+    for (const id of [SESSION.sessionId, 'b', 'c']) {
+      ctx.window.sessionMap.set(id, session);
+      ctx.window.pendingSessions.set(id, { session });
+      ctx.window.openSessions.set(id, { closed: true });
+    }
+    const project = makeSampleProject();
+    project.sessions = [session];
+    ctx.sidebar.renderProjects([project], true);
+    ctx.document.getElementById('si-s-top-1').querySelector('.session-delete-btn').click();
+    await tick();
+    ctx.document.getElementById('dss-confirm').click();
+    await tick(); await tick();
+    assert.equal(ctx.window.sessionMap.has('b'), false);
+    assert.equal(ctx.window.pendingSessions.has('b'), false);
+    assert.equal(ctx.window.openSessions.has('b'), false);
+    assert.deepEqual(destroyed, ['b']);
+    assert.deepEqual(dismissed, ['b']);
+    for (const id of [SESSION.sessionId, 'c']) {
+      assert.equal(ctx.window.sessionMap.has(id), true, id);
+      assert.equal(ctx.window.pendingSessions.has(id), true, id);
+      assert.equal(ctx.window.openSessions.has(id), true, id);
+    }
+    assert.equal(refreshed, 1);
+    assert.ok(ctx.document.getElementById('si-s-top-1'));
+    assert.ok(ctx.document.querySelector('[role="alert"]').textContent.includes(error));
+  } finally { ctx.destroy(); }
+});
+
+test('a partial delete refreshes even when only subagents were removed', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const error = 'Deleted 0 of 1 parts; EBUSY transcript. Try Delete again.';
+    stubApi(ctx.window, { deleteResult: { ok: false, error, removedPartIds: [] } });
+    let refreshed = 0;
+    ctx.window.loadProjects = () => { refreshed++; };
+    ctx.window.sessionMap.set(SESSION.sessionId, SESSION);
+    ctx.window.pendingSessions.set(SESSION.sessionId, { session: SESSION });
+    ctx.sidebar.renderProjects([makeSampleProject()], true);
+    ctx.document.getElementById('si-s-top-1').querySelector('.session-delete-btn').click();
+    await tick();
+    ctx.document.getElementById('dss-confirm').click();
+    await tick(); await tick();
+    assert.equal(refreshed, 1);
+    assert.equal(ctx.window.sessionMap.has(SESSION.sessionId), true);
+    assert.equal(ctx.window.pendingSessions.has(SESSION.sessionId), true);
+    assert.ok(ctx.document.querySelector('[role="alert"]').textContent.includes(error));
+  } finally { ctx.destroy(); }
+});
 
 test('the dialog names the session, the project, and what will be removed', async () => {
   const ctx = setupSidebarDom();
@@ -98,27 +216,24 @@ test('Escape and overlay-click both cancel, like the worktree dialog', async () 
   }
 });
 
-test('confirming resolves true and closes the dialog', async () => {
+test('confirming resolves the preview parts and closes the dialog', async () => {
   const ctx = setupSidebarDom();
   try {
     stubApi(ctx.window);
     const p = ctx.sidebar.showDeleteSessionDialog(SESSION);
     await tick();
     ctx.document.getElementById('dss-confirm').click();
-    assert.equal(await p, true);
+    assert.deepEqual(Array.from((await p).partIds), [SESSION.sessionId]);
     assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
   } finally { ctx.destroy(); }
 });
 
-test('a failed preview still shows the project rather than breaking the dialog', async () => {
+test('a failed preview rejects with its reason before showing a dialog', async () => {
   const ctx = setupSidebarDom();
   try {
     stubApi(ctx.window, { preview: { ok: false, error: 'boom' } });
-    const p = ctx.sidebar.showDeleteSessionDialog(SESSION);
-    await tick();
-    assert.match(ctx.document.getElementById('dss-status').textContent, /\/home\/u\/proj/);
-    ctx.document.getElementById('dss-cancel').click();
-    await p;
+    await assert.rejects(ctx.sidebar.showDeleteSessionDialog(SESSION), /boom/);
+    assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
   } finally { ctx.destroy(); }
 });
 
@@ -165,3 +280,69 @@ test('confirming from the card deletes and forgets the session in the renderer',
     assert.equal(ctx.window.sessionMap.has('s-top-1'), false, 'sessionMap entry must be forgotten');
   } finally { ctx.destroy(); }
 });
+
+test('the card sends exactly the parts shown in the preview through the preload bridge', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const vm = require('node:vm');
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const calls = [];
+    const preview = { ok: true, partIds: [SESSION.sessionId, 'shown-part'], parts: 2, transcripts: 2, subagents: 0 };
+    const context = vm.createContext({ process: { platform: process.platform, argv: [] }, require: id => {
+      assert.equal(id, 'electron');
+      return {
+        contextBridge: { exposeInMainWorld: (_name, api) => { ctx.window.api = api; } },
+        ipcRenderer: {
+          on() {},
+          invoke: async (name, ...args) => {
+            if (name === 'delete-session-preview') return preview;
+            if (name === 'delete-session') { calls.push(args); return { ok: true }; }
+            return {};
+          },
+        },
+        webUtils: {},
+      };
+    } });
+    const filename = path.join(__dirname, '../preload.js');
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), context, { filename });
+    const session = { ...SESSION, mergedMemberIds: ['stale-renderer-part'] };
+    ctx.window.sessionMap.set(SESSION.sessionId, session);
+    const project = makeSampleProject();
+    project.sessions = [session];
+    ctx.sidebar.renderProjects([project], true);
+    ctx.document.getElementById('si-s-top-1').querySelector('.session-delete-btn').click();
+    await tick();
+    session.mergedMemberIds = ['changed-after-preview'];
+    ctx.document.getElementById('dss-confirm').click();
+    await tick(); await tick();
+    assert.equal(calls.length, 1);
+    assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), [SESSION.sessionId, preview.partIds]);
+  } finally { ctx.destroy(); }
+});
+
+for (const failure of ['refused', 'rejected', 'unavailable']) {
+  test(`a ${failure} preview shows the failure notice before any confirmation or stop`, async () => {
+    const ctx = setupSidebarDom();
+    try {
+      const calls = stubApi(ctx.window);
+      let stopped = false;
+      ctx.window.api.stopSession = async () => { stopped = true; return { ok: true }; };
+      ctx.window.api.deleteSessionPreview = failure === 'unavailable' ? undefined : async () => {
+        if (failure === 'rejected') throw new Error('preview disconnected');
+        return { ok: false, error: 'remote transcript is read-only' };
+      };
+      ctx.window.sessionMap.set(SESSION.sessionId, SESSION);
+      ctx.sidebar.renderProjects([makeSampleProject()], true);
+      ctx.document.getElementById('si-s-top-1').querySelector('.session-delete-btn').click();
+      await tick(); await tick();
+      assert.equal(ctx.document.querySelector('.new-session-overlay'), null);
+      const notice = ctx.document.querySelector('[role="alert"]');
+      assert.ok(notice);
+      assert.match(notice.textContent, failure === 'unavailable' ? /unavailable/i : failure === 'rejected' ? /preview disconnected/ : /remote transcript is read-only/);
+      assert.equal(stopped, false);
+      assert.deepEqual(calls.deleteSession, []);
+      assert.equal(ctx.window.sessionMap.has(SESSION.sessionId), true);
+    } finally { ctx.destroy(); }
+  });
+}

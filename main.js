@@ -507,7 +507,7 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 // --- Session cache helpers ---
 
 const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
-const { resolveDeletionTargets } = require('./delete-session-target');
+const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
 const sessionCache = require('./session-cache');
@@ -2194,71 +2194,111 @@ ipcMain.handle('stop-subagent-watch', (_event, watchId) => {
 // it rather than asking the user to trust a generic warning.
 ipcMain.handle('delete-session-preview', (_event, sessionId) => {
   const id = String(sessionId || '');
-  let folder = null;
-  try { folder = getCachedFolder(id); } catch {}
-  if (isRemoteFolder(folder)) return { ok: false, error: REMOTE_READ_ONLY };
-  const resolved = resolveDeletionTargets(PROJECTS_DIR, id, folder);
+  const memberIds = [...getMergedMemberIds(id)];
+  const partIds = [...new Set([id, ...memberIds])];
+  const resolved = resolveRowDeletionTargets(PROJECTS_DIR, id, memberIds, partId => {
+    const folder = getCachedFolder(partId);
+    if (isRemoteFolder(folder)) throw new Error(REMOTE_READ_ONLY);
+    return folder;
+  });
   if (!resolved.ok) return { ok: false, error: resolved.error };
   let subagents = 0;
+  let transcripts;
   try {
-    subagents = (getCachedByParent(id) || []).filter(r => r.sessionId && r.sessionId !== id).length;
-  } catch {}
-  const running = activeSessions.has(id) && !activeSessions.get(id).exited;
-  return { ok: true, transcripts: resolved.targets.length, subagents, running };
+    transcripts = resolved.targets.filter(target => fs.statSync(target).isFile()).length;
+  } catch (err) {
+    return { ok: false, error: `cannot inspect conversation files: ${err.message}` };
+  }
+  try {
+    subagents = partIds.flatMap(partId => (getCachedByParent(partId) || [])
+      .filter(r => r.sessionId && r.sessionId !== partId)).length;
+  } catch (err) {
+    return { ok: false, error: `cannot resolve conversation subagents: ${err.message}` };
+  }
+  const running = partIds.some(partId => activeSessions.has(partId) && !activeSessions.get(partId).exited);
+  return { ok: true, parts: resolved.parts, partIds, transcripts, subagents, running };
 });
 
-ipcMain.handle('delete-session', async (_event, sessionId) => {
+ipcMain.handle('delete-session', async (_event, sessionId, previewPartIds) => {
   const id = String(sessionId || '');
-  const refusal = await deleteSessionGuard(id);
+  const memberIds = [...getMergedMemberIds(id)];
+  const partIds = [...new Set([id, ...memberIds])];
+  const changed = 'the conversation changed while checking; try Delete again';
+  const sameParts = ids => Array.isArray(ids) && new Set(ids).size === partIds.length
+    && partIds.every(partId => ids.includes(partId));
+  if (!sameParts(previewPartIds)) return { ok: false, error: changed };
+  const refusal = await deleteSessionGuard(id, partIds);
   if (refusal) return { ok: false, error: refusal };
-
-  // Validation, symlink resolution and containment live in
-  // delete-session-target.js so they can be executed by tests against real
-  // paths and symlinks. getCachedFolder makes the common case an O(1) lookup
-  // instead of a readdir of every project; fall back to the scan when the row
-  // is missing (a placeholder session that was never indexed).
-  let folder = null;
-  try { folder = getCachedFolder(id); } catch {}
-  // A mirrored transcript is a copy; the next refresh would fetch it back.
-  if (isRemoteFolder(folder)) return { ok: false, error: REMOTE_READ_ONLY };
-  const resolved = resolveDeletionTargets(PROJECTS_DIR, id, folder);
-  if (!resolved.ok) return { ok: false, error: resolved.error };
+  if (!sameParts([id, ...getMergedMemberIds(id)])) return { ok: false, error: changed };
+  const resolved = resolveRowDeletionTargets(PROJECTS_DIR, id, memberIds, partId => {
+    const folder = getCachedFolder(partId);
+    if (isRemoteFolder(folder)) throw new Error(REMOTE_READ_ONLY);
+    return folder;
+  });
   for (const r of resolved.refused) {
     log.warn(`[delete-session] refusing ${r.path} — ${r.reason} (${r.real})`);
   }
+  if (!resolved.ok) return { ok: false, error: resolved.error };
 
-  // Collect the subagents BEFORE removing anything: their transcripts sit inside
-  // the parent's directory and go with it, but they are indexed under their own
-  // composite `sub:<parent>:<agent>` ids, which nothing else here would clear.
-  // Left behind, the sidebar renders them as a phantom "Orphan subagents" group
-  // and search keeps returning hits pointing at deleted files.
-  let subagentIds = [];
+  let subagentIds;
+  const subagentsByPart = new Map();
+  const subagentTargetsByPart = new Map();
   try {
-    subagentIds = (getCachedByParent(id) || [])
-      .map(row => row.sessionId)
-      .filter(sid => sid && sid !== id);
-  } catch {}
-
-  const removed = [];
-  for (const target of resolved.targets) {
-    try {
-      fs.rmSync(target, { recursive: true, force: true });
-      removed.push(target);
-    } catch (err) {
-      log.error(`[delete-session] failed to remove ${target}: ${err.message}`);
-      return { ok: false, error: `could not delete: ${err.message}` };
+    for (const part of resolved.partTargets) {
+      subagentTargetsByPart.set(part.id, part.targets.filter(target => fs.statSync(target).isDirectory()));
     }
+  } catch (err) {
+    return { ok: false, error: `cannot inspect conversation files: ${err.message}` };
+  }
+  try {
+    for (const partId of partIds) {
+      subagentsByPart.set(partId, (getCachedByParent(partId) || [])
+        .map(row => row.sessionId).filter(sid => sid && sid !== partId));
+    }
+    subagentIds = [...subagentsByPart.values()].flat();
+  } catch (err) {
+    return { ok: false, error: `cannot resolve conversation subagents: ${err.message}` };
   }
 
-  for (const sid of [id, ...subagentIds]) {
+  const removed = [];
+  let failure;
+  const orderedParts = [...resolved.partTargets.filter(part => part.id !== id),
+    ...resolved.partTargets.filter(part => part.id === id)];
+  for (const part of orderedParts) {
+    for (const target of [...part.targets].reverse()) {
+      try {
+        fs.rmSync(target, { recursive: true, force: true });
+        removed.push(target);
+      } catch (err) {
+        log.error(`[delete-session] failed to remove ${target}: ${err.message}`);
+        failure = err.message;
+        break;
+      }
+    }
+    if (failure) break;
+  }
+
+  const isGone = target => {
+    try { fs.lstatSync(target); return false; }
+    catch (err) { return err.code === 'ENOENT' || err.code === 'ENOTDIR'; }
+  };
+  const deletedPartIds = orderedParts.filter(part => part.targets.every(isGone)).map(part => part.id);
+  const deletedSubagentIds = orderedParts.filter(part => {
+    const dirs = subagentTargetsByPart.get(part.id);
+    return deletedPartIds.includes(part.id) || (dirs.length > 0 && dirs.every(isGone));
+  }).flatMap(part => subagentsByPart.get(part.id));
+  const deletedIds = [...new Set([...deletedPartIds, ...deletedSubagentIds])];
+  for (const sid of deletedIds) {
     mainTouchedCache.dropSession(sid);
     try { await deleteCachedSession(sid); } catch {}
     try { await deleteSearchSession(sid); } catch {}
   }
 
-  // A session with no transcript on disk is not an error case: launchNewSession
-  // shows a card before claude starts, so a launch that died leaves one with
-  // nothing behind it — and those are precisely the cards a user wants gone.
+  if (failure) {
+    const remaining = partIds.filter(partId => !deletedPartIds.includes(partId));
+    return { ok: false, removedPartIds: deletedPartIds, error: `Deleted ${deletedPartIds.length} of ${partIds.length} parts; ${failure}. Removed: ${deletedPartIds.join(', ') || 'none'}; remaining: ${remaining.join(', ') || 'none'}. Try Delete again.` };
+  }
+
   if (!removed.length) {
     log.info(`[delete-session] ${id} had no transcript — cleared caches only`);
     return { ok: true, removed: [], subagents: subagentIds.length, placeholder: true };
@@ -3304,11 +3344,15 @@ const unsubscribeTaskJobs = bgAgents.onChange(({ roster }) => {
     if (job.sessionId && job.taskEvidence?.valid) taskRecords.job(job.sessionId, job.taskEvidence);
   }
 });
+function getMergedMemberIds(id) {
+  return getAllCached()
+    .filter(row => row.mergedIntoSessionId?.toLowerCase() === String(id || '').toLowerCase())
+    .map(row => row.sessionId);
+}
+
 const deleteSessionGuard = makeDeleteSessionGuard({
   activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids,
-  getMergedMemberIds: id => getAllCached()
-    .filter(row => row.mergedIntoSessionId?.toLowerCase() === String(id || '').toLowerCase())
-    .map(row => row.sessionId),
+  getMergedMemberIds,
 });
 
 // --- fs.watch on projects directory ---

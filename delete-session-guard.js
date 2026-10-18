@@ -19,8 +19,8 @@ async function deleteSessionRefusal(sessionId, { activeSessions, liveJobCheck, l
 }
 
 function makeDeleteSessionGuard({ activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids, getMergedMemberIds = () => [] }) {
-  return async (sessionId) => {
-    for (const id of [sessionId, ...getMergedMemberIds(sessionId)]) {
+  return async (sessionId, partIds = [sessionId, ...getMergedMemberIds(sessionId)]) => {
+    for (const id of partIds) {
       const refusal = await deleteSessionRefusal(id, {
         activeSessions,
         liveJobCheck: (sid) => bgAgents.liveJobCheck(sid),

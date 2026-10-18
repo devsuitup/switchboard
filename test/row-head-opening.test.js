@@ -169,7 +169,8 @@ test('end-to-end click checks the head id and opens the head through real openSe
 });
 
 test('changelog #564 explains showing the latest part tab when both parts have tabs', () => {
-  const entry = fs.readFileSync(path.join(__dirname, '../CHANGELOG.md'), 'utf8').split('\n').find(line => line.includes('(#564)'));
+  const entry = fs.readFileSync(path.join(__dirname, '../CHANGELOG.md'), 'utf8').split('\n')
+    .find(line => line.includes('(#564)') && line.includes('Opening a compacted conversation'));
   assert.match(entry, /both parts have open tabs/);
   assert.match(entry, /shows the latest part.s tab/);
 });

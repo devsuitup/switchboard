@@ -51,6 +51,7 @@ function setupSidebarDom({ loadTaskRegistry = true } = {}) {
   // that event — sidebar.js registers these listeners once at eval time via
   // an IIFE, so we must capture the callback before the module evaluates.
   const apiTarget = {
+    deleteSessionPreview: id => Promise.resolve({ ok: true, partIds: [id], parts: 1, transcripts: 1, subagents: 0, running: false }),
     onTaskSnapshot: cb => { apiTarget._taskSnapshotCb = cb; },
     getTaskSnapshots: () => Promise.resolve([]),
     onSubagentSpawned: (cb) => { apiTarget._subagentSpawnedCb = cb; },

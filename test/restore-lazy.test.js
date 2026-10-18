@@ -24,7 +24,7 @@ const SAVED = [
 function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, openResult = { ok: true }, mode = 'lazy', livePtys = [], recent = true } = {}) {
   const ctx = setupSidebarDom();
   const { window, context } = ctx;
-  const run = (code) => vm.runInContext(code, context);
+  const run = (code) => vm.runInContext(code, context, { filename: 'restore-lazy-fixture.js' });
   for (const f of ['resume-guard.js', 'restore-plan.js']) {
     vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, f), 'utf8'), context, { filename: f });
   }
@@ -84,7 +84,7 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
     showColdCacheNotice: () => {},
     showNotRestoredNotice: () => {},
     runRestore: async () => { throw new Error('lazy restore must not resume anything'); },
-    showDeleteSessionDialog: async () => true,
+    showDeleteSessionDialog: async session => ({ partIds: [session.sessionId, ...(session.mergedMemberIds || [])] }),
     stopBeforeArchive: async () => ({ ok: true }),
     loadProjects: () => {},
     focusGridCard: (id) => { gridFocused.push(id); },
@@ -102,7 +102,7 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
   vm.runInContext(['var gridViewActive = false;', 'var gridFocusedSessionId = null;',
     'var isMac = false;', 'var appShortcuts = {};', 'function matchShortcut(name, e) { return e.shortcut === name; }',
     extractFunction(gridSrc, 'getOrderedOpenSessionIds'), extractFunction(gridSrc, 'navigateSession'),
-    extractFunction(gridSrc, 'handleSessionNavKey')].join('\n'), context);
+    extractFunction(gridSrc, 'handleSessionNavKey')].join('\n'), context, { filename: 'grid-view.js' });
   context.savedSet = savedSet;
   run(`
     restoreMode = 'lazy';

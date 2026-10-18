@@ -7,6 +7,7 @@ const cache = require('../session-cache');
 const { readSessionFile, mergeBridgeGroups } = require('../read-session-file');
 const { encodeProjectPath } = require('../encode-project-path');
 const { createRemoteIndexer } = require('../remote-index');
+const { loadDeletionHandlers } = require('./delete-session-harness');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-r2-'));
@@ -40,6 +41,36 @@ function fixture(t) {
   t.after(() => cache.setRemoteRoots(new Map()));
   return { root, folder, dir, write, msg, reread, rows, meta, db, metrics, search, settings, activeSessions };
 }
+
+test('deleting a merged row removes every part before a full worker rescan', { timeout: 9000 }, async t => {
+  const f = fixture(t);
+  f.write('a', [f.msg('opening', '01'), f.msg('shared', '02')]);
+  f.write('b', [f.msg('shared', '02'), f.msg('mirror-own', '04')]);
+  await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
+  const row = cache.buildProjectsFromCache(false).flatMap(p => p.sessions).find(s => s.sessionId === 'a');
+  assert.deepEqual(row.mergedMemberIds, ['b']);
+  const dropped = [];
+  const handlers = loadDeletionHandlers({
+    PROJECTS_DIR: f.root,
+    getCachedFolder: id => f.rows.get(id)?.folder,
+    getMergedMemberIds: id => [...f.rows.values()].filter(r => r.mergedIntoSessionId === id).map(r => r.sessionId),
+    getCachedByParent: id => [...f.rows.values()].filter(r => r.parentSessionId === id),
+    deleteCachedSession: f.db.deleteCachedSession,
+    deleteSearchSession: f.db.deleteSearchSession,
+    mainTouchedCache: { dropSession: id => dropped.push(id) },
+  });
+  const preview = handlers.get('delete-session-preview')(null, 'a');
+  const result = await handlers.get('delete-session')(null, 'a', preview.partIds);
+  assert.equal(result.ok, true);
+  await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });
+  const remaining = cache.buildProjectsFromCache(false).flatMap(p => p.sessions).map(s => s.sessionId);
+  assert.deepEqual(remaining, [], 'ROWS AFTER FULL RESCAN');
+  assert.equal(fs.existsSync(path.join(f.dir, 'b.jsonl')), false, 'B ON DISK');
+  assert.equal(preview.parts, 2);
+  assert.equal(preview.transcripts, 2);
+  assert.deepEqual(dropped.sort(), ['a', 'b']);
+  assert.equal(f.search.has('b'), false);
+});
 
 test('a newer compaction mirror is the merged row head', { timeout: 9000 }, async t => {
   const f = fixture(t);

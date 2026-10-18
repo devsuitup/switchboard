@@ -26,7 +26,7 @@ function installRecordingApi(ctx, overrides = {}) {
     getProjectArchivePlan: () => Promise.resolve({ schedules: [] }),
     archiveProject: () => Promise.resolve({ ok: true, disabled: [], failed: [] }),
     deleteSession: () => Promise.resolve({ ok: true, removed: ['x'], subagents: 0 }),
-    deleteSessionPreview: () => Promise.resolve({ ok: true, transcripts: 1, subagents: 0, running: false }),
+    deleteSessionPreview: id => Promise.resolve({ ok: true, partIds: [id], transcripts: 1, subagents: 0, running: false }),
     ...overrides,
   };
   ctx.window.api = new Proxy({}, {
