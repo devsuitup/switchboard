@@ -325,6 +325,7 @@ test('a middle-part EBUSY keeps the head listed, clears completed parts and allo
   assert.equal(result.ok, false);
   assert.match(result.error, /Deleted 2 of 4 parts;.*EBUSY.*Try Delete again\./);
   assert.match(result.error, /Removed: b, c; remaining: a, d/);
+  assert.deepEqual(Array.from(result.removedPartIds), ['b', 'c']);
   assert.deepEqual(attempted, ['b.jsonl', 'c.jsonl', 'd.jsonl']);
   assert.equal(fs.existsSync(f.a), true);
   assert.equal(f.cached.has('a'), true, 'head is still listed');
@@ -390,4 +391,47 @@ test('preview reports a running member even when the head is stopped', t => {
   assert.equal(loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a').running, true);
   f.dependencies.activeSessions.get('b').exited = true;
   assert.equal(loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a').running, false);
+});
+
+test('a failed transcript removal clears subagents whose directory is confirmed gone', async t => {
+  const f = deletionFixture(t);
+  const dir = path.join(f.root, 'project', 'b', 'subagents');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'agent-y.jsonl'), '{}\n');
+  f.dependencies.fs = { ...fs, rmSync: (file, options) => {
+    if (file === f.b) throw new Error('EBUSY transcript');
+    return fs.rmSync(file, options);
+  } };
+  const result = await loadDeletionHandlers(f.dependencies).get('delete-session')(null, 'a', ['a', 'b']);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Deleted 0 of 2 parts;.*EBUSY transcript/);
+  assert.equal(fs.existsSync(dir), false);
+  assert.equal(fs.existsSync(f.b), true);
+  for (const entries of [f.cached, f.search, f.touched]) {
+    assert.equal(entries.has('sub:b:y'), false, 'deleted subagent must be forgotten');
+    for (const id of ['a', 'b', 'sub:a:x']) assert.equal(entries.has(id), true, id);
+  }
+  assert.deepEqual(Array.from(result.removedPartIds), []);
+});
+
+test('a failed subagent directory removal retains its subagent cache and search rows', async t => {
+  const f = deletionFixture(t);
+  const dir = path.join(f.root, 'project', 'b');
+  fs.mkdirSync(dir);
+  f.dependencies.fs = { ...fs, rmSync: (file, options) => {
+    if (file === dir) throw new Error('EBUSY subagent directory');
+    return fs.rmSync(file, options);
+  } };
+  const result = await loadDeletionHandlers(f.dependencies).get('delete-session')(null, 'a', ['a', 'b']);
+  assert.equal(result.ok, false);
+  assert.equal(fs.existsSync(dir), true);
+  for (const entries of [f.cached, f.search, f.touched]) assert.equal(entries.has('sub:b:y'), true);
+});
+
+test('preview labels a target stat failure as a file inspection failure', t => {
+  const f = deletionFixture(t);
+  f.dependencies.fs = { ...fs, statSync: () => { throw new Error('EACCES stat'); } };
+  const result = loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a');
+  assert.equal(result.ok, false);
+  assert.match(result.error, /cannot inspect conversation files: EACCES stat/);
 });

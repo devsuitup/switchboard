@@ -2206,6 +2206,10 @@ ipcMain.handle('delete-session-preview', (_event, sessionId) => {
   let transcripts;
   try {
     transcripts = resolved.targets.filter(target => fs.statSync(target).isFile()).length;
+  } catch (err) {
+    return { ok: false, error: `cannot inspect conversation files: ${err.message}` };
+  }
+  try {
     subagents = partIds.flatMap(partId => (getCachedByParent(partId) || [])
       .filter(r => r.sessionId && r.sessionId !== partId)).length;
   } catch (err) {
@@ -2238,6 +2242,14 @@ ipcMain.handle('delete-session', async (_event, sessionId, previewPartIds) => {
 
   let subagentIds;
   const subagentsByPart = new Map();
+  const subagentTargetsByPart = new Map();
+  try {
+    for (const part of resolved.partTargets) {
+      subagentTargetsByPart.set(part.id, part.targets.filter(target => fs.statSync(target).isDirectory()));
+    }
+  } catch (err) {
+    return { ok: false, error: `cannot inspect conversation files: ${err.message}` };
+  }
   try {
     for (const partId of partIds) {
       subagentsByPart.set(partId, (getCachedByParent(partId) || [])
@@ -2266,11 +2278,16 @@ ipcMain.handle('delete-session', async (_event, sessionId, previewPartIds) => {
     if (failure) break;
   }
 
-  const deletedPartIds = orderedParts.filter(part => part.targets.every(target => {
+  const isGone = target => {
     try { fs.lstatSync(target); return false; }
     catch (err) { return err.code === 'ENOENT' || err.code === 'ENOTDIR'; }
-  })).map(part => part.id);
-  const deletedIds = deletedPartIds.flatMap(partId => [partId, ...subagentsByPart.get(partId)]);
+  };
+  const deletedPartIds = orderedParts.filter(part => part.targets.every(isGone)).map(part => part.id);
+  const deletedSubagentIds = orderedParts.filter(part => {
+    const dirs = subagentTargetsByPart.get(part.id);
+    return deletedPartIds.includes(part.id) || (dirs.length > 0 && dirs.every(isGone));
+  }).flatMap(part => subagentsByPart.get(part.id));
+  const deletedIds = [...new Set([...deletedPartIds, ...deletedSubagentIds])];
   for (const sid of deletedIds) {
     mainTouchedCache.dropSession(sid);
     try { await deleteCachedSession(sid); } catch {}
@@ -2279,7 +2296,7 @@ ipcMain.handle('delete-session', async (_event, sessionId, previewPartIds) => {
 
   if (failure) {
     const remaining = partIds.filter(partId => !deletedPartIds.includes(partId));
-    return { ok: false, error: `Deleted ${deletedPartIds.length} of ${partIds.length} parts; ${failure}. Removed: ${deletedPartIds.join(', ') || 'none'}; remaining: ${remaining.join(', ') || 'none'}. Try Delete again.` };
+    return { ok: false, removedPartIds: deletedPartIds, error: `Deleted ${deletedPartIds.length} of ${partIds.length} parts; ${failure}. Removed: ${deletedPartIds.join(', ') || 'none'}; remaining: ${remaining.join(', ') || 'none'}. Try Delete again.` };
   }
 
   if (!removed.length) {

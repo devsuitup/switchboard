@@ -48,12 +48,12 @@ test('the merged conversation preview names all three parts before its file coun
 test('confirming a merged row forgets every part and destroys every open part tab', async () => {
   const ctx = setupSidebarDom();
   try {
-    const session = { ...SESSION, mergedMemberIds: ['b', 'c'] };
+    const session = { ...SESSION, mergedMemberIds: ['stale-renderer-part'] };
     const calls = stubApi(ctx.window, { preview: { ok: true, partIds: [SESSION.sessionId, 'b', 'c'], parts: 3, transcripts: 3, subagents: 0 } });
     const destroyed = [], dismissed = [];
     ctx.window.destroySession = id => { destroyed.push(id); ctx.window.openSessions.delete(id); };
     ctx.window.dismissDormantSession = id => dismissed.push(id);
-    for (const id of [SESSION.sessionId, 'b', 'c']) {
+    for (const id of [SESSION.sessionId, 'b', 'c', 'stale-renderer-part']) {
       ctx.window.sessionMap.set(id, session);
       ctx.window.pendingSessions.set(id, { session });
       ctx.window.openSessions.set(id, { closed: true });
@@ -73,6 +73,80 @@ test('confirming a merged row forgets every part and destroys every open part ta
     }
     assert.deepEqual(destroyed.sort(), ['b', 'c', SESSION.sessionId].sort());
     assert.deepEqual(dismissed.sort(), ['b', 'c', SESSION.sessionId].sort());
+    assert.equal(ctx.window.sessionMap.has('stale-renderer-part'), true);
+    assert.equal(ctx.window.pendingSessions.has('stale-renderer-part'), true);
+    assert.equal(ctx.window.openSessions.has('stale-renderer-part'), true);
+  } finally { ctx.destroy(); }
+});
+
+test('a partial delete forgets only removed parts, refreshes the row and keeps the failure notice', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const session = { ...SESSION, mergedMemberIds: ['b', 'c'] };
+    const error = 'Deleted 1 of 3 parts; EBUSY transcript. Removed: b; remaining: s-top-1, c. Try Delete again.';
+    stubApi(ctx.window, {
+      preview: { ok: true, partIds: [SESSION.sessionId, 'b', 'c'], parts: 3, transcripts: 3, subagents: 0 },
+      deleteResult: { ok: false, error, removedPartIds: ['b'] },
+    });
+    const destroyed = [], dismissed = [];
+    let refreshed = 0;
+    ctx.window.destroySession = id => { destroyed.push(id); ctx.window.openSessions.delete(id); };
+    ctx.window.dismissDormantSession = id => dismissed.push(id);
+    ctx.window.loadProjects = () => {
+      refreshed++;
+      assert.equal(ctx.window.sessionMap.has('b'), false);
+      assert.equal(ctx.window.pendingSessions.has('b'), false);
+      assert.equal(ctx.window.openSessions.has('b'), false);
+      const project = makeSampleProject();
+      project.sessions = [{ ...session, mergedMemberIds: ['c'] }];
+      ctx.sidebar.renderProjects([project], true);
+    };
+    for (const id of [SESSION.sessionId, 'b', 'c']) {
+      ctx.window.sessionMap.set(id, session);
+      ctx.window.pendingSessions.set(id, { session });
+      ctx.window.openSessions.set(id, { closed: true });
+    }
+    const project = makeSampleProject();
+    project.sessions = [session];
+    ctx.sidebar.renderProjects([project], true);
+    ctx.document.getElementById('si-s-top-1').querySelector('.session-delete-btn').click();
+    await tick();
+    ctx.document.getElementById('dss-confirm').click();
+    await tick(); await tick();
+    assert.equal(ctx.window.sessionMap.has('b'), false);
+    assert.equal(ctx.window.pendingSessions.has('b'), false);
+    assert.equal(ctx.window.openSessions.has('b'), false);
+    assert.deepEqual(destroyed, ['b']);
+    assert.deepEqual(dismissed, ['b']);
+    for (const id of [SESSION.sessionId, 'c']) {
+      assert.equal(ctx.window.sessionMap.has(id), true, id);
+      assert.equal(ctx.window.pendingSessions.has(id), true, id);
+      assert.equal(ctx.window.openSessions.has(id), true, id);
+    }
+    assert.equal(refreshed, 1);
+    assert.ok(ctx.document.getElementById('si-s-top-1'));
+    assert.ok(ctx.document.querySelector('[role="alert"]').textContent.includes(error));
+  } finally { ctx.destroy(); }
+});
+
+test('a partial delete refreshes even when only subagents were removed', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const error = 'Deleted 0 of 1 parts; EBUSY transcript. Try Delete again.';
+    stubApi(ctx.window, { deleteResult: { ok: false, error, removedPartIds: [] } });
+    let refreshed = 0;
+    ctx.window.loadProjects = () => { refreshed++; };
+    ctx.window.sessionMap.set(SESSION.sessionId, SESSION);
+    ctx.window.pendingSessions.set(SESSION.sessionId, { session: SESSION });
+    ctx.sidebar.renderProjects([makeSampleProject()], true);
+    ctx.document.getElementById('si-s-top-1').querySelector('.session-delete-btn').click();
+    await tick();
+    ctx.document.getElementById('dss-confirm').click();
+    await tick(); await tick();
+    assert.equal(refreshed, 1);
+    assert.equal(ctx.window.sessionMap.has(SESSION.sessionId), true);
+    assert.equal(ctx.window.pendingSessions.has(SESSION.sessionId), true);
+    assert.ok(ctx.document.querySelector('[role="alert"]').textContent.includes(error));
   } finally { ctx.destroy(); }
 });
 

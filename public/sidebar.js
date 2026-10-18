@@ -1684,10 +1684,11 @@ function rebindSidebarEvents(projects) {
           const res = await window.api.deleteSession(session.sessionId, confirmation.partIds);
           if (!res || !res.ok) {
             surfaceStopFailure(deleteBtn, res?.error || 'The delete backend is unavailable or returned no result', session, 'Delete');
-            return;
+          } else {
+            clearAppNotice(sessionActionNoticeId('Delete', session));
           }
-          clearAppNotice(sessionActionNoticeId('Delete', session));
-          for (const id of confirmation.partIds) {
+          const removedPartIds = res?.ok ? confirmation.partIds : (res?.removedPartIds || []);
+          for (const id of removedPartIds) {
             if (typeof pendingSessions !== 'undefined') pendingSessions.delete(id);
             if (typeof dismissDormantSession === 'function') dismissDormantSession(id);
             if (typeof sessionMap !== 'undefined') sessionMap.delete(id);
@@ -1696,7 +1697,9 @@ function rebindSidebarEvents(projects) {
               destroySession(id);
             }
           }
-          Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+          if (res?.ok || Array.isArray(res?.removedPartIds)) {
+            Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+          }
         } catch (error) {
           surfaceStopFailure(deleteBtn, error, session, 'Delete');
         }
