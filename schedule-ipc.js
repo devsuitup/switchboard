@@ -212,7 +212,8 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
       const { sessionId } = createScheduleSession(schedule);
       const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
-      await runCommand(claudeArgs, projectPath, `Manual run ${schedule.name}`, () => {});
+      const result = await runCommand(claudeArgs, projectPath, `Manual run ${schedule.name}`, () => {});
+      if (!result?.ok) return { ok: false, error: result?.error || 'The schedule launcher returned no result. Check the shell settings and project folder, then try Run now again.' };
 
       log.info(`[schedule] Manual run triggered: ${schedule.name} (session ${sessionId})`);
       return { ok: true, sessionId };

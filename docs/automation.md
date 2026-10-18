@@ -175,11 +175,20 @@ session.
 The **Agent Files** tab lists the schedule files with a clock icon and a **Run
 now** button, which starts a run at once. **Run now** ignores `cron` and
 `enabled`, and does not wait for a run of the same schedule that is still going.
-The button shows a check mark and **Launched!** only after the launch succeeds.
+The button shows a check mark and **Launched!** only after the configured shell
+process starts. This acknowledges the shell launch, not that Claude has started
+or that the task has completed successfully. A command failure after that point
+(including a missing `claude` command or bubblewrap failure) is recorded in the
+main log; it does not change the button or create a later failure notice.
 A refused launch, an unavailable backend or a missing reply restores the Run
 now button and leaves a notice until you dismiss it. The notice names the
 schedule and reason, and asks you to check the schedule file and try Run now
-again. A successful retry clears that schedule's error.
+again. Sandbox refusals say to use Linux with bubblewrap or disable Sandbox in
+settings; refused `add-dirs` name the paths to remove or change in the schedule.
+Shell spawn errors, including asynchronous errors before the shell starts,
+return a failure with a reminder to check shell settings and the project folder.
+A project archived before launch must be unarchived first. A successful retry
+clears that schedule's error.
 
 ## Triggers
 

@@ -9,8 +9,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Disabled Respawn and Delete buttons in Agents now tell you to use the conversation's sidebar Stop or end its other process, according to where it is running. (#566)
 
 ### Fixed
-- Run now on a schedule shows Launched! only when the launch succeeds. A failed launch leaves a dismissible notice saying why and how to retry. (#566)
-- A restore retry cancelled during indexing, or blocked by a failed reload, now leaves a persistent notice telling you to open the session from the sidebar to retry restoring. (#666, #566)
+- Run now on a schedule shows Launched! only after its shell starts. A refused launch or shell spawn failure leaves a dismissible notice saying why and how to retry; later command failures remain in the main log. (#566)
+- A restore retry cancelled during indexing, even when indexing finishes during the restore, or blocked by a failed reload, now leaves a persistent notice telling you to open the session from the sidebar to retry restoring. A failed retry names only sessions still held and not open, and the pending notice clears when no continuation is held. (#666, #566)
 
 ## v0.0.97 — 2026-10-17
 

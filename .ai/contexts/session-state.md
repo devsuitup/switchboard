@@ -45,6 +45,12 @@ thrown retry move the affected members into persistent `Restore:batch` with
 the reason and "Open it from the sidebar to retry restoring." Saved entries
 remain held. See `test/restore-pending-notice-666.test.js` (#666).
 
+If indexing finishes before an in-flight restore holds its continuation, the
+end of `runRestore` still calls `markRestoreIndexingDone`, including when a
+manual open has cancelled automatic retry. A thrown retry reports only members
+still held and absent from open tabs. When no continuation remains held, the
+pending notice clears, including after the final project reload.
+
 ## Conversation head turn and the single spinner (#625)
 
 The row's animation is selected from its `headSessionId || sessionId`, with

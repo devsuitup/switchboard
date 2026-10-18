@@ -406,7 +406,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
   if (activeId && openSessions.has(activeId)) {
     showSession(activeId);
   }
-  if (retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation) && !continuationRetryCancelled) {
+  if (retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation)) {
     await markRestoreIndexingDone();
   }
 }
@@ -620,7 +620,10 @@ async function markRestoreIndexingDone() {
     })));
     clearAppNotice('Restore:pending');
   };
-  if ((!restorePlanner || restorePlanner.isSettled()) && !held().length) return;
+  if ((!restorePlanner || restorePlanner.isSettled()) && !held().length) {
+    clearAppNotice('Restore:pending');
+    return;
+  }
   let reloaded = false;
   for (let attempt = 0; attempt < 2 && !reloaded; attempt++) {
     try {
@@ -634,7 +637,10 @@ async function markRestoreIndexingDone() {
   }
   await tickRestorePlanner();
   const retry = held();
-  if (!retry.length) return;
+  if (!retry.length) {
+    clearAppNotice('Restore:pending');
+    return;
+  }
   if (continuationRetryCancelled) {
     reportRetryFailure(retry, 'Automatic restore retry was cancelled after another session was opened');
     return;
@@ -648,7 +654,7 @@ async function markRestoreIndexingDone() {
     await runRestore(retry.map(entry => entry.item), { retryAfterIndexing: false });
     clearAppNotice('Restore:pending');
   } catch (error) {
-    reportRetryFailure(retry, `Could not retry restoring: ${error?.message || error || 'The backend is unavailable'}`);
+    reportRetryFailure(retry.filter(entry => skippedWorkingSetEntries.has(entry.item.sessionId) && !openSessions.has(entry.item.sessionId)), `Could not retry restoring: ${error?.message || error || 'The backend is unavailable'}`);
     throw error;
   } finally { restoringWorkingSet = false; }
   await persistWorkingSet();
