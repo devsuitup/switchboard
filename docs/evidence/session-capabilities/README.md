@@ -408,7 +408,8 @@ probes at most 2 seconds, git/bwrap/process-start helpers at most 4 seconds in l
 Cleanup adds at most 9 seconds per confirmed live handle: up to 5 seconds
 waiting for 1 second without transcript growth, up to 2 seconds for graceful
 exit, then up to 2 seconds for forced handle termination. Dry-run quiescence
-uses a 50 ms quiet period within a 500 ms cap. C1 ≤6 handles, C2 ≤12, C3 ≤3,
+uses a 10 ms quiet period within a 500 ms cap and the dry-run 10 ms poll interval
+for cleanup, including graceful exit. C1 ≤6 handles, C2 ≤12, C3 ≤3,
 C4 ≤8 (caps including cleanup: 174/1008/327/252 seconds with defaults).
 
 Liveness and termination use OWNED HANDLES even when pid is still zero.
@@ -435,6 +436,32 @@ that switch without process isolation. A test exceeding two minutes is a defect;
 retain its timeout evidence and investigate before starting another run.
 None of these emulator
 allowances changes the live limits, receipt predicates or capability decisions.
+
+Dry-run transcript discovery remembers only the path for each session, and
+rediscovers it if it disappears; every observation still reads and parses the
+current file. Dry-run descriptor discovery tries the owned PID filename first,
+then falls back to the other candidates. Every candidate retains the same
+pre-spawn hash, session ID, creation-time and process-identity checks. Live
+discovery and timing are unchanged. This avoids repeatedly scanning historical
+sessions while a five-second C4 observation budget is running.
+Before spawning a fake CLI, descriptor snapshots read the same bounded files
+and compute the same hashes in asynchronous batches of eight. This keeps the
+event loop available and avoids repeated serial metadata reads. The fake CLI
+indexes descriptor locations by session ID, so SendMessage reads the addressed
+peer's current descriptor instead of parsing every historical peer. Its session
+ID and current native-name reachability checks remain the same. Dry-run Git
+initialization uses a minimal template with an explicit main-branch HEAD;
+the repository and commits remain real. This works with Git 2.24 and avoids
+copying unused hook templates and spawning a separate symbolic-ref command.
+Live preparation keeps its existing command sequence.
+
+The parent-env and wrong-control-hidden-leak regressions retain their disposable
+HOME and evidence directories, printed in the test diagnostics. They seed 256
+stale descriptors and inject a bounded 12 ms read cost for those stale files in
+the test bootstrap. This reproduces polling starvation without changing CLI
+receipts or classification. The all-canary continuation regression also retains
+its evidence and requires completion within 30 seconds, below the unchanged
+110-second subprocess guard.
 
 Dry-run uses pipes; the separate fake-PTY tests exercise a delayed pid and
 stale-descriptor rejection through the same launch/stop state machine. Windows

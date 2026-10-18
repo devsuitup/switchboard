@@ -27,6 +27,10 @@ async function run(t, args = [], options = {}) {
   t.after(() => {
     assert.equal(path.dirname(root), path.resolve(os.tmpdir()));
     assert.equal(path.dirname(out), evidenceRoot);
+    if (options.keepEvidence) {
+      t.diagnostic(`Retained fake home: ${root}; evidence: ${out}`);
+      return;
+    }
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(out, { recursive: true, force: true });
   });
@@ -636,20 +640,48 @@ test('GIVEN mismatched closing ID WHEN comparing THEN malformed envelope stays u
 for (const [canary, cases] of Object.entries(mutations)) {
   for (const mutation of cases) {
     test(`GIVEN ${canary} mutation ${mutation} WHEN dry-run THEN that canary fails`, async t => {
-      const r = await run(t, ['--canary', canary, '--mutation', mutation]);
+      const r = await run(t, ['--canary', canary, '--mutation', mutation], {
+        keepEvidence: ['parent-env', 'wrong-control-hidden-leak'].includes(mutation),
+        env: ['parent-env', 'wrong-control-hidden-leak'].includes(mutation) ? { CANARY_TEST_STALE_READ_DELAY_MS: '12' } : {},
+        prepare: ({ home }) => {
+          if (!['parent-env', 'wrong-control-hidden-leak'].includes(mutation)) return;
+          const sessions = path.join(home, '.claude/sessions');
+          fs.mkdirSync(sessions);
+          for (let n = 0; n < 256; n++) fs.writeFileSync(path.join(sessions, `${1000000 + n}.json`), JSON.stringify({
+            pid: 1000000 + n, sessionId: crypto.randomUUID(), startedAt: 1, procStart: 'stale', status: 'idle',
+          }));
+        },
+      });
       assert.equal(r.status, 1, r.stderr);
       assert.equal(r.ledger.measurements.length, 1);
       assert.equal(r.ledger.measurements[0].status, 'FAIL');
       assert.ok(Object.values(r.ledger.measurements[0].capabilities).some(x => x === false));
+      if (mutation === 'parent-env') {
+        assert.deepEqual(r.ledger.measurements[0].capabilityStatus, { independentSendMessage: 'PASS', sandboxChildSendMessage: 'FAIL' });
+        const report = data(r).reports.find(x => x.sandbox);
+        assert.equal(report.nativeReceipt, true);
+        assert.equal(report.privatePublication, false);
+        assert.deepEqual(report.messagingEnvKeys, ['CLAUDE_CODE_MESSAGING_TOKEN']);
+      }
+      if (mutation === 'wrong-control-hidden-leak') {
+        const reports = data(r).reports;
+        assert.equal(reports[0].nativeReceipt, true);
+        assert.equal(reports[1].wrongRecipientControl, true);
+        assert.equal(reports[1].nativeReceipt, false);
+        assert.equal(reports[1].unexpectedNonceInOrigin, true);
+        assert.match(data(r).failure, /origin has no nonce after boundary/);
+      }
     });
   }
 }
 
 test('GIVEN a failing canary WHEN all are selected THEN remaining canaries still run', async t => {
-  const r = await run(t, ['--mutation', 'drop-byte']);
+  const startedAt = Date.now();
+  const r = await run(t, ['--mutation', 'drop-byte'], { keepEvidence: true });
   assert.equal(r.status, 1);
   const failures = r.ledger.measurements.map(x => JSON.parse(fs.readFileSync(path.join(__dirname, '..', x.evidencePath))).failure || 'none');
   assert.deepEqual(r.ledger.measurements.map(x => x.status), ['FAIL', 'PASS', 'PASS', 'PASS'], failures.join('; '));
+  assert.ok(Date.now() - startedAt < 30000, 'dry-run continuation must finish within 30 seconds');
 });
 
 test('GIVEN fake real home WHEN starting THEN refuse before any CLI or evidence setup', async t => {

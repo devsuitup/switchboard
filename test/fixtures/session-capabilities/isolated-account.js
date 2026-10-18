@@ -18,6 +18,16 @@ fs.existsSync = file => {
 
 const childProcess = require('node:child_process');
 const spawnSync = childProcess.spawnSync;
+const staleReadDelay = Number(process.env.CANARY_TEST_STALE_READ_DELAY_MS);
+if (staleReadDelay > 0 && staleReadDelay <= 20) {
+  const readFileSync = fs.readFileSync;
+  fs.readFileSync = (file, ...args) => {
+    if (/[\\/]sessions[\\/]1000\d{3}\.json$/.test(String(file))) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, staleReadDelay);
+    }
+    return readFileSync(file, ...args);
+  };
+}
 let delayedSetup = false;
 childProcess.spawnSync = (executable, args, options) => {
   const delay = Number(process.env.CANARY_TEST_SETUP_DELAY_MS);

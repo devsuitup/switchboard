@@ -48,6 +48,9 @@ if (args.includes('--fork-session') && mutation !== 'omit-fork') {
 const sessions = process.env.CANARY_FIXTURE_SESSIONS || path.join(state, 'sessions');
 fs.mkdirSync(sessions, { recursive: true });
 const descriptor = path.join(sessions, `${process.pid}.json`);
+const descriptorIndex = path.join(process.env.CANARY_FIXTURE_RUNTIME, 'descriptor-index');
+fs.mkdirSync(descriptorIndex, { recursive: true });
+fs.writeFileSync(path.join(descriptorIndex, `${id}.json`), JSON.stringify({ file: descriptor }));
 const startedAt = Date.now();
 let nativeName = `native-${id}`;
 const messagingSocketPath = process.env.CANARY_FIXTURE_WINDOWS_MESSAGING
@@ -161,12 +164,13 @@ function handle(text) {
     const sendReport = () => {
       const recipient = mutation === 'stale-recipient' ? `native-${meta.orchestrator}`
         : mutation === 'wrong-recipient' && !meta.wrongRecipientControl ? 'unknown-native-recipient' : meta.recipient;
-      const peers = fs.readdirSync(path.join(state, 'sessions')).filter(x => x.endsWith('.json'))
-        .map(x => JSON.parse(fs.readFileSync(path.join(state, 'sessions', x), 'utf8')));
+      const reference = path.join(descriptorIndex, `${meta.orchestrator}.json`);
+      const peerFile = fs.existsSync(reference) ? JSON.parse(fs.readFileSync(reference, 'utf8')).file : null;
+      const peer = peerFile && fs.existsSync(peerFile) ? JSON.parse(fs.readFileSync(peerFile, 'utf8')) : null;
       const dest = findTranscript(meta.orchestrator);
       const peerRows = dest ? fs.readFileSync(dest, 'utf8').trim().split('\n').map(x => JSON.parse(x)) : [];
-      const reachable = peers.some(x => x.sessionId === meta.orchestrator &&
-        (peerRows.filter(r => r.type === 'agent-name').at(-1)?.agentName || x.name) === recipient);
+      const reachable = peer?.sessionId === meta.orchestrator &&
+        (peerRows.filter(r => r.type === 'agent-name').at(-1)?.agentName || peer.name) === recipient;
       tool('ToolSearch', { query: 'select:SendMessage' }, 'SendMessage');
       const input = { to: recipient, message: meta.nonce, summary: 'Report canary nonce to orchestrator' };
       const socketUnavailable = process.env.CANARY_FIXTURE_SANDBOX && mutation === 'sandbox-socket-unavailable';

@@ -185,7 +185,13 @@ function entries(dir, depth = 0) {
 }
 
 function transcript(ctx, id) {
-  const file = entries(path.join(ctx.opts.home, '.claude/projects')).find(p => path.basename(p) === `${id}.jsonl`);
+  const paths = ctx.opts.dryRun ? (ctx.transcriptPaths ||= new Map()) : null;
+  let file = paths?.get(id);
+  if (!file || !fs.existsSync(file)) {
+    file = entries(path.join(ctx.opts.home, '.claude/projects')).find(p => path.basename(p) === `${id}.jsonl`);
+    if (file) paths?.set(id, file);
+    else paths?.delete(id);
+  }
   if (!file) return { file: null, rows: [], bytes: 0 };
   if (fs.statSync(file).size > 16 * 1024 * 1024) throw new Unverified('transcript exceeds bounded reader size');
   const text = fs.readFileSync(file, 'utf8');
@@ -391,7 +397,12 @@ function descriptor(ctx, proc) {
   if (!proc.pid || proc.exited) return null;
   const dir = proc.sessions;
   if (!fs.existsSync(dir)) return null;
-  for (const file of fs.readdirSync(dir).filter(x => /^\d+\.json$/.test(x))) {
+  const files = fs.readdirSync(dir).filter(x => /^\d+\.json$/.test(x));
+  if (ctx.opts.dryRun) {
+    const owned = files.indexOf(`${proc.pid}.json`);
+    if (owned > 0) files.unshift(...files.splice(owned, 1));
+  }
+  for (const file of files) {
     try {
       const descriptorFile = path.join(dir, file);
       if (fs.statSync(descriptorFile).size > 65536) continue;
@@ -466,10 +477,23 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
     }
   }
   if (settings) argv.push('--settings', sandbox && !ctx.opts.dryRun ? '/run/switchboard/launch-settings.json' : settings);
-  const preexisting = new Map(fs.readdirSync(sessions).filter(x => /^\d+\.json$/.test(x)).map(file => {
-    const p = path.join(sessions, file);
-    return [file, fs.statSync(p).size <= 65536 ? hash(fs.readFileSync(p)) : 'oversized'];
-  }));
+  const descriptorFiles = fs.readdirSync(sessions).filter(x => /^\d+\.json$/.test(x));
+  const preexisting = new Map();
+  if (ctx.opts.dryRun) {
+    for (let at = 0; at < descriptorFiles.length; at += 8) {
+      const batch = await Promise.all(descriptorFiles.slice(at, at + 8).map(async file => {
+        const p = path.join(sessions, file);
+        const stat = await fs.promises.stat(p);
+        return [file, stat.size <= 65536 ? hash(await fs.promises.readFile(p)) : 'oversized'];
+      }));
+      for (const [file, sha256] of batch) preexisting.set(file, sha256);
+    }
+  } else {
+    for (const file of descriptorFiles) {
+      const p = path.join(sessions, file);
+      preexisting.set(file, fs.statSync(p).size <= 65536 ? hash(fs.readFileSync(p)) : 'oversized');
+    }
+  }
   const spawnedAt = Date.now();
   const osc = [];
   let tail = '';
@@ -602,10 +626,10 @@ async function stop(ctx, proc) {
     if (proc.id && (proc.record.descriptorConfirmation || proc.gracefulStop)) {
       const shutdown = proc.record.shutdown = { stable: false, gracefulExit: false, forcedKill: false };
       try {
-        const quietMs = ctx.opts.dryRun ? 50 : 1000;
+        const quietMs = ctx.opts.dryRun ? 10 : 1000;
         let lastBytes = transcript(ctx, proc.id).bytes, stableSince = Date.now();
         try {
-          await until({ cleanup: true, deadline: Date.now() + (ctx.opts.dryRun ? 500 : 5000) }, () => {
+          await until({ opts: ctx.opts, cleanup: true, deadline: Date.now() + (ctx.opts.dryRun ? 500 : 5000) }, () => {
             const bytes = transcript(ctx, proc.id).bytes;
             if (bytes !== lastBytes) { lastBytes = bytes; stableSince = Date.now(); }
             return proc.exited || Date.now() - stableSince >= quietMs;
@@ -618,7 +642,7 @@ async function stop(ctx, proc) {
           try {
             if (proc.isPty) proc.child.write('/exit\r');
             else proc.child.stdin.write('/exit\r');
-            await until({ cleanup: true, deadline: Date.now() + 2000 }, () => proc.exited, 'graceful owned process exit', 2000);
+            await until({ opts: ctx.opts, cleanup: true, deadline: Date.now() + 2000 }, () => proc.exited, 'graceful owned process exit', 2000);
             shutdown.gracefulExit = true;
           } catch { shutdown.gracefulExitTimedOut = true; }
         }
@@ -628,7 +652,7 @@ async function stop(ctx, proc) {
     if (!proc.exited) {
       if (proc.record.shutdown) proc.record.shutdown.forcedKill = true;
       proc.child.kill();
-      await until({ cleanup: true, deadline: Date.now() + 2000 }, () => proc.exited, 'owned process exit', 2000);
+      await until({ opts: ctx.opts, cleanup: true, deadline: Date.now() + 2000 }, () => proc.exited, 'owned process exit', 2000);
     }
   }
   proc.record.cleaned = proc.exited;
@@ -1121,8 +1145,15 @@ async function makeContext(opts, canary, run) {
   ctx.emptySettings = path.join(privateDir, 'empty-settings.json'); save(ctx.emptySettings, {});
   if (opts.dryRun) save(path.join(runtime, 'worktree-inventory.json'), [repo]);
   try {
-    command(ctx, 'git', ['init', '-q']);
-    command(ctx, 'git', ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+    if (opts.dryRun) {
+      const template = path.join(privateDir, 'git-template');
+      fs.mkdirSync(template);
+      fs.writeFileSync(path.join(template, 'HEAD'), 'ref: refs/heads/main\n');
+      command(ctx, 'git', ['init', '-q', '--template=' + template]);
+    } else {
+      command(ctx, 'git', ['init', '-q']);
+      command(ctx, 'git', ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+    }
     fs.writeFileSync(path.join(repo, 'README.md'), '# Capability canary fixture\n');
     command(ctx, 'git', ['add', 'README.md']);
     command(ctx, 'git', ['commit', '-qm', 'Create disposable canary fixture']);
