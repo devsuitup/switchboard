@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { loadAppFunctions } = require('./app-source');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 
 function setup(t, overrides = {}) {
@@ -33,12 +36,91 @@ for (const [label, selector, verb] of [
     await ctx.document.querySelector(`#si-A ${selector}`).onclick({ stopPropagation() {} });
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0].sessionId, 'B');
+    assert.deepEqual(Array.from(calls[0][0].mergedMemberIds), ['A']);
     assert.equal(calls[0][0].summary, ctx.session.summary);
     assert.equal(calls[0][0].projectPath, ctx.session.projectPath);
     if (verb === 'forkSession') assert.equal(calls[0][1], ctx.project);
     assert.equal(ctx.window.sessionMap.get('A').sessionId, 'A');
   });
+
+  test(`${label} without headSessionId falls back to its session id`, async t => {
+    const ctx = setup(t, { headSessionId: undefined });
+    const calls = [];
+    ctx.window[verb] = target => calls.push(target);
+    await ctx.document.querySelector(`#si-A ${selector}`).onclick({ stopPropagation() {} });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].sessionId, 'A');
+    assert.deepEqual(Array.from(calls[0].mergedMemberIds), ['B']);
+  });
 }
+
+function resumeSetup(t) {
+  const ctx = setup(t);
+  ctx.evalPublic('resume-guard.js');
+  ctx.evalPublic('setting-defaults.js');
+  ctx.evalPublic('dialogs.js');
+  const checked = [], spawned = [], shown = [];
+  Object.assign(ctx.window, {
+    restoringWorkingSet: false, sessionOpenedOutsideRestore: false,
+    showSession: id => shown.push(id), schedulePersistWorkingSet() {},
+    createTerminalEntry: () => ({ initialSize: { cols: 80, rows: 24 }, terminal: { write() {} } }),
+    forgetSessionExit() {}, syncPtySizeAfterOpen() {}, setSessionSandboxed() {},
+  });
+  Object.assign(ctx.window.api, {
+    getEffectiveSettings: async () => ({}),
+    getSessionContinuations: async () => ({ candidates: [], unresolved: false }),
+    getSessionsLiveElsewhere: async ids => { checked.push(Array.from(ids)); return { A: { pid: 4242, cwd: '/elsewhere' } }; },
+    getSessionLiveElsewhere: async () => null,
+    openTerminal: async id => { spawned.push(id); return { ok: true }; },
+  });
+  loadAppFunctions(ctx.context, {
+    functions: ['openSession', 'openSessionNow', 'beginPtyOpen', 'settlePtyOpen', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
+    declarations: ['openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'continuationRetryCancelled',
+      'ptyGenerations', 'pendingOpens', 'dormantWorkingSet', 'restoreMode', 'restoreInFlight'],
+  });
+  return { ctx, checked, spawned, shown, resume: async () => {
+    ctx.document.querySelector('#si-A .session-launch-config-btn').onclick({ stopPropagation() {} });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(ctx.document.querySelector('.new-session-start-btn'));
+    ctx.document.querySelector('.new-session-start-btn').click();
+    await new Promise(resolve => setImmediate(resolve));
+  }, settled: () => Promise.all(ctx.read('[...openingSessions.values()].map(open => open.promise)')) };
+}
+
+test('Resume with config goes through the dialog and openSession and warns about the live root', async t => {
+  const h = resumeSetup(t);
+  await h.resume();
+  const warning = h.ctx.document.querySelector('.choice-dialog-overlay');
+  assert.ok(warning, 'the live root must show a warning before resuming the head');
+  assert.match(warning.textContent, /pid 4242/);
+  assert.deepEqual(h.checked, [['B', 'A']]);
+  h.ctx.document.querySelector('.choice-dialog-cancel').click();
+  await h.settled();
+  assert.deepEqual(h.spawned, []);
+});
+
+test('Resume with config reuses a non-closed root tab instead of opening a second tab', async t => {
+  const h = resumeSetup(t);
+  h.ctx.window.openSessions.set('A', { closed: false });
+  await h.resume();
+  await h.settled();
+  assert.deepEqual(h.shown, ['A']);
+  assert.deepEqual(h.spawned, []);
+  assert.deepEqual(h.checked, []);
+});
+
+test('Resume with config restores a dormant root through openSession', async t => {
+  const h = resumeSetup(t);
+  h.ctx.read("dormantWorkingSet.set('A', { item: { sessionId: 'A' }, index: 0 })");
+  const checked = [];
+  h.ctx.window.api.getSessionLiveElsewhere = async id => { checked.push(id); return null; };
+  h.ctx.window.api.getSessionsLiveElsewhere = async ids => { checked.push(...ids); return {}; };
+  await h.resume();
+  await h.settled();
+  assert.ok(checked.includes('A'));
+  assert.deepEqual(h.spawned, ['A']);
+  assert.equal(h.ctx.read("dormantWorkingSet.has('A')"), false);
+});
 
 test('a remote merged row without an attach target opens messages of its head', t => {
   const ctx = setup(t, { remoteAlias: 'host', remoteAttachable: false });
@@ -80,7 +162,7 @@ test('Archive on a merged row keeps the archived flag on its root', async t => {
 });
 
 for (const background of [false, true]) {
-  test(`Agents Transcript uses the head when its ${background ? 'daemon result' : 'interactive entry'} resolves to a merged row`, async t => {
+  test(`Agents Transcript keeps the job session when its ${background ? 'daemon result' : 'interactive entry'} resolves to a merged row`, async t => {
     const ctx = setup(t);
     ctx.evalPublic('agents-view.js');
     const viewed = [];
@@ -91,7 +173,7 @@ for (const background of [false, true]) {
       id: background ? 'job-1' : null, sessionId: 'A',
       kind: background ? 'background' : 'interactive', cwd: '/project',
     });
-    assert.deepEqual(viewed, ['B']);
+    assert.deepEqual(viewed, ['A']);
     assert.deepEqual(daemonCalls, background ? [['transcript', 'job-1']] : []);
     assert.equal(ctx.session.sessionId, 'A');
   });
@@ -109,5 +191,12 @@ for (const scheduled of [false, true]) {
     assert.equal(groups.length, scheduled ? 1 : 0);
     assert.equal(ctx.document.querySelectorAll('.session-item:not([data-subagent])').length, 2);
     if (scheduled) assert.equal(groups[0].querySelectorAll('.session-item').length, 2);
+  });
+}
+
+for (const file of ['CHANGELOG.md', '.ai/contexts/schedule-runner.md']) {
+  test(`${file} explains that scheduled runs from before v0.0.90 have separate rows`, () => {
+    const text = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+    assert.match(text, /Scheduled runs from before v0\.0\.90 are listed one per row\./);
   });
 }

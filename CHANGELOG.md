@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Changed
-- Sessions are grouped by name only for scheduled tasks; other sessions are listed one per row. (#564)
+- Sessions are grouped by name only for scheduled tasks; other sessions are listed one per row. Scheduled runs from before v0.0.90 are listed one per row. (#564)
 - Remote session rows no longer offer Delete, which could only be refused after opening its confirmation. (#566, #565)
 - Disabled Respawn and Delete buttons in Agents now tell you to use the conversation's sidebar Stop or end its other process, according to where it is running. (#566)
 
