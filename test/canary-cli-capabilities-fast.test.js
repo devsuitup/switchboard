@@ -182,6 +182,68 @@ function oauthFixture(t) {
   return { root, token, opts: { home, runtimeRoot, out, oauthTokenFile } };
 }
 
+function shortPath(dir) {
+  const result = spawnSync('cmd.exe', ['/d', '/c', `for %I in ("${dir}") do @echo %~sI`],
+    { encoding: 'utf8', windowsHide: true, windowsVerbatimArguments: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(fs.existsSync(result.stdout.trim()));
+  return result.stdout.trim();
+}
+
+test('GIVEN an 8.3 runtime root WHEN parsing THEN use its canonical spelling', { skip: process.platform !== 'win32' }, t => {
+  const f = earlyAbortFixture(t);
+  f.args[f.args.indexOf('--runtime-root') + 1] = shortPath(f.opts.runtimeRoot);
+  assert.equal(f.harness.parse(f.args).runtimeRoot, fs.realpathSync.native(f.opts.runtimeRoot));
+});
+
+test('GIVEN a runtime root under a linked ancestor WHEN starting THEN refuse the alias', async t => {
+  const f = earlyAbortFixture(t);
+  const alias = path.join(f.root, 'runtime-alias');
+  fs.symlinkSync(f.opts.runtimeRoot, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  f.args[f.args.indexOf('--runtime-root') + 1] = path.join(alias, 'not-created');
+  assert.equal(await f.harness.main(f.args), 2);
+  assert.equal(fs.existsSync(path.join(f.opts.runtimeRoot, 'not-created')), false);
+  assert.equal(fs.existsSync(path.join(f.opts.out, 'ledger.dry-run.json')), false);
+});
+
+test('GIVEN the evidence root linked outside its repository layout WHEN parsing live options THEN refuse output', t => {
+  const f = earlyAbortFixture(t);
+  const repo = path.join(f.root, 'repository');
+  const evidence = path.join(repo, 'docs/evidence/session-capabilities');
+  fs.mkdirSync(path.dirname(evidence), { recursive: true });
+  fs.symlinkSync(f.opts.out, evidence, process.platform === 'win32' ? 'junction' : 'dir');
+  const Module = require('node:module');
+  const loaded = new Module(script, module);
+  loaded.filename = script;
+  loaded.paths = module.paths;
+  loaded.testRoot = fs.realpathSync.native(repo);
+  loaded._compile(fs.readFileSync(script, 'utf8').replace("const ROOT = path.resolve(__dirname, '..');", 'const ROOT = module.testRoot;'), script);
+  assert.throws(() => loaded.exports.parse(['--live', '--canary', 'C1', '--home', f.opts.home,
+    '--out', path.join(evidence, 'new-run'), '--runtime-root', f.opts.runtimeRoot, '--cli', process.execPath,
+    '--oauth-token-file', f.opts.oauthTokenFile, '--platform-label', process.platform === 'win32' ? 'windows-conpty-bundled' : 'linux-unix-pty']), /Live --out/);
+});
+
+for (const alias of ['junction', ...(process.platform === 'win32' ? ['short'] : [])]) {
+  for (const boundary of ['out', 'runtimeRoot', 'home', 'repo']) {
+    test(`GIVEN OAuth token inside ${boundary} through a ${alias} alias WHEN loading THEN refuse both path spellings`, t => {
+      const f = oauthFixture(t);
+      const dir = boundary === 'repo' ? path.resolve(__dirname, '../.work-files') : f.opts[boundary];
+      const tokenFile = path.join(dir, `..canary-${crypto.randomUUID()}.token`);
+      fs.writeFileSync(tokenFile, f.token);
+      t.after(() => fs.rmSync(tokenFile, { force: true }));
+      let linked;
+      if (alias === 'junction') {
+        linked = path.join(f.root, 'location-alias');
+        fs.symlinkSync(dir, linked, process.platform === 'win32' ? 'junction' : 'dir');
+      } else linked = shortPath(dir);
+      for (const file of [tokenFile, path.join(linked, path.basename(tokenFile))]) {
+        const opts = { ...f.opts, oauthTokenFile: file, ...(boundary === 'repo' ? {} : { [boundary]: linked }) };
+        assert.throws(() => harness.loadOAuthToken(opts), { code: 'OAUTH_TOKEN_REFUSED' });
+      }
+    });
+  }
+}
+
 test('GIVEN OAuth token file WHEN loading THEN trim one line without mutating parent environment', t => {
   const f = oauthFixture(t);
   const before = process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -292,6 +354,103 @@ function legacyFixture(t, canary = 'C1') {
   persist();
   return { ...f, record, file, persist };
 }
+
+test('GIVEN N1 reached through a directory alias WHEN consolidating and reading THEN validate physical evidence and its branch', t => {
+  const f = n1Fixture(t);
+  const alias = path.join(f.root, 'repository-alias');
+  fs.symlinkSync(f.root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const ledger = JSON.parse(fs.readFileSync(path.join(f.dirs[0], 'ledger.json')));
+  const c2 = ledger.measurements.find(r => r.canary === 'C2');
+  c2.acceptedSpecBranch = 'docs/evidence/session-capabilities/run-0/amendment.md';
+  fs.writeFileSync(path.join(f.root, c2.acceptedSpecBranch), 'Synthetic branch.');
+  fs.writeFileSync(path.join(f.dirs[0], 'ledger.json'), JSON.stringify(ledger));
+  harness.consolidate(f.dirs, f.out, { root: alias, baselineHead: 'c'.repeat(40) });
+  const canonical = harness.readCapabilities(f.out, { root: fs.realpathSync.native(f.root) });
+  assert.deepEqual(harness.readCapabilities(f.out, { root: alias }), canonical);
+});
+
+for (const escape of ['evidence', 'branch', 'branch-spelling']) {
+  test(`GIVEN N1 ${escape} outside its permitted directory WHEN reading THEN refuse even through a link`, t => {
+    const f = n1Fixture(t);
+    f.consolidate();
+    const ledger = JSON.parse(fs.readFileSync(f.out));
+    if (escape === 'evidence') {
+      const dir = path.dirname(path.join(f.root, ledger.measurements[0].evidencePath));
+      const outside = path.join(f.root, 'outside-evidence');
+      fs.renameSync(dir, outside);
+      fs.symlinkSync(outside, dir, process.platform === 'win32' ? 'junction' : 'dir');
+    } else {
+      const run = path.join(f.root, 'docs/evidence/session-capabilities/run-0');
+      const outside = path.join(f.root, 'outside-branch');
+      const linked = path.join(run, 'linked-branch');
+      fs.mkdirSync(escape === 'branch' ? outside : linked);
+      fs.symlinkSync(escape === 'branch' ? outside : linked, escape === 'branch' ? linked : outside,
+        process.platform === 'win32' ? 'junction' : 'dir');
+      const branch = path.join(escape === 'branch' ? linked : outside, 'amendment.md');
+      fs.writeFileSync(branch, 'Synthetic branch outside its boundary.');
+      ledger.measurements.find(r => r.canary === 'C2').acceptedSpecBranch = path.relative(f.root, branch).replaceAll('\\', '/');
+    }
+    fs.writeFileSync(f.out, JSON.stringify(ledger));
+    assert.throws(() => harness.readCapabilities(f.out, { root: f.root }), /evidence is unavailable/);
+  });
+}
+
+for (const boundary of ['evidence-root', 'branch-run']) {
+  test(`GIVEN N1 ${boundary} itself linked to another directory WHEN reading THEN retain the original layout restriction`, t => {
+    const f = n1Fixture(t);
+    f.consolidate();
+    const ledger = JSON.parse(fs.readFileSync(f.out));
+    const original = path.join(f.root, 'docs/evidence/session-capabilities', ...(boundary === 'branch-run' ? ['run-0'] : []));
+    const relocated = boundary === 'branch-run' ? original + '-physical' : path.join(f.root, 'outside-evidence');
+    fs.renameSync(original, relocated);
+    fs.symlinkSync(relocated, original, process.platform === 'win32' ? 'junction' : 'dir');
+    if (boundary === 'branch-run') {
+      const c2 = ledger.measurements.find(r => r.canary === 'C2');
+      c2.acceptedSpecBranch = 'docs/evidence/session-capabilities/run-0/amendment.md';
+      fs.writeFileSync(path.join(f.root, c2.acceptedSpecBranch), 'Synthetic branch.');
+    }
+    fs.writeFileSync(f.out, JSON.stringify(ledger));
+    assert.throws(() => harness.readCapabilities(f.out, { root: f.root }), /evidence is unavailable/);
+  });
+}
+
+test('GIVEN core.autocrlf=true WHEN freshly checking out committed evidence THEN preserve every byte and validate the release ledger', t => {
+  const root = path.resolve(__dirname, '..');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-checkout-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const staging = path.join(temp, 'staging'), checkout = path.join(temp, 'checkout'), template = path.join(temp, 'template');
+  for (const dir of [staging, checkout, template]) fs.mkdirSync(dir);
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (cwd, args, input) => {
+    const result = spawnSync('git', args, { cwd, env, input, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+    assert.equal(result.status, 0, result.stderr?.toString());
+    return result.stdout;
+  };
+  const paths = git(root, ['ls-tree', '-rz', '--name-only', 'HEAD', '--', 'docs/evidence/session-capabilities', 'resources/session-capabilities.json'])
+    .toString().split('\0').filter(Boolean);
+  assert.ok(paths.includes('resources/session-capabilities.json'));
+  const blobs = git(root, ['cat-file', '--batch'], paths.map(file => `HEAD:${file}\n`).join(''));
+  let offset = 0;
+  const committed = paths.map(file => {
+    const end = blobs.indexOf(10, offset);
+    const header = blobs.subarray(offset, end).toString();
+    assert.match(header, /^[a-f0-9]+ blob \d+$/);
+    const size = Number(header.split(' ')[2]);
+    const bytes = blobs.subarray(end + 1, end + 1 + size);
+    offset = end + size + 2;
+    fs.mkdirSync(path.dirname(path.join(staging, file)), { recursive: true });
+    fs.writeFileSync(path.join(staging, file), bytes);
+    return { file, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+  });
+  const attrs = path.join(root, '.gitattributes');
+  fs.writeFileSync(path.join(staging, '.gitattributes'), fs.existsSync(attrs) ? fs.readFileSync(attrs) : '');
+  git(staging, ['init', '-q', '--template=' + template]);
+  git(staging, ['-c', 'core.autocrlf=true', '-c', 'core.safecrlf=false', 'add', '.']);
+  git(staging, ['-c', 'core.autocrlf=true', 'checkout-index', '--all', '--prefix=' + checkout + path.sep]);
+  const changed = committed.filter(({ file, sha256 }) => crypto.createHash('sha256').update(fs.readFileSync(path.join(checkout, file))).digest('hex') !== sha256);
+  assert.deepEqual(changed.map(({ file }) => file), []);
+  assert.ok(harness.readCapabilities(path.join(checkout, 'resources/session-capabilities.json'), { root: checkout }).ledgerSha256);
+});
 
 for (const canary of ['C1', 'C4']) {
   test(`GIVEN legacy ${canary} setup failure WHEN consolidating THEN retain ledger-only UNVERIFIED evidence`, t => {

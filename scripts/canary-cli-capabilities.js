@@ -73,16 +73,23 @@ function writeSafe(file, value, options) {
 }
 const save = (file, value) => writeSafe(file, JSON.stringify(value, null, 2) + '\n');
 function output(stream, value) { assertRedacted(value); stream.write(value); }
-const inside = (parent, child) => { const rel = path.relative(parent, child); return !rel.startsWith('..') && !path.isAbsolute(rel); };
+const lexicallyInside = (parent, child) => { const rel = path.relative(parent, child); return rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel); };
+const inside = (parent, child) => lexicallyInside(canonicalLocation(parent), canonicalLocation(child));
 const equalPath = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
 const canonical = p => fs.realpathSync.native(p);
-function canonicalLocation(location) {
+function canonicalLocation(location, rejectLinks = false) {
   let existing = path.resolve(location);
   const suffix = [];
   while (!fs.existsSync(existing)) {
     if (existing === path.dirname(existing)) throw new Error('No accessible ancestor');
     suffix.unshift(path.basename(existing));
     existing = path.dirname(existing);
+  }
+  if (rejectLinks) {
+    for (let dir = existing; ; dir = path.dirname(dir)) {
+      if (fs.lstatSync(dir).isSymbolicLink()) throw new Error('Runtime root must be canonical, without aliases');
+      if (dir === path.dirname(dir)) break;
+    }
   }
   return path.join(canonical(existing), ...suffix);
 }
@@ -96,10 +103,7 @@ function loadOAuthToken(opts) {
   try {
     if (!path.isAbsolute(opts.oauthTokenFile)) throw refuse();
     const file = canonical(opts.oauthTokenFile);
-    if ([ROOT, EVIDENCE, opts.out, opts.runtimeRoot, opts.home].some(dir => {
-      const relative = path.relative(canonicalLocation(dir), file);
-      return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep);
-    })) throw refuse();
+    if ([ROOT, EVIDENCE, opts.out, opts.runtimeRoot, opts.home].some(dir => inside(dir, file))) throw refuse();
     try { fs.lstatSync(path.join(opts.home, '.claude/.credentials.json')); throw refuse(); }
     catch (err) { if (err.code !== 'ENOENT') throw err; }
     const stat = fs.statSync(file);
@@ -167,6 +171,7 @@ function parse(argv) {
   if (!opts.dryRun && !opts.runtimeRoot) throw new Error('Live runs require an explicit --runtime-root');
   opts.runtimeRoot = path.resolve(opts.runtimeRoot || path.join(os.tmpdir(), 'switchboard-canary380-runtime'));
   for (const location of [opts.home, opts.runtimeRoot, path.join(opts.runtimeRoot, 'project')]) guardedLocation(location, homes);
+  opts.runtimeRoot = canonicalLocation(opts.runtimeRoot, true);
   if (!fs.existsSync(opts.home)) throw new Error('Expected a prepared home containing .claude');
   opts.home = canonical(opts.home);
   const state = path.join(opts.home, '.claude');
@@ -188,7 +193,8 @@ function parse(argv) {
     if (!labels.includes(opts.platformLabel)) throw new Error(`Live --platform-label must be one of ${labels.join(', ')}`);
     if (!opts.cli || !path.isAbsolute(opts.cli)) throw new Error('Live --cli must name an absolute executable path');
     opts.cli = fs.realpathSync(opts.cli);
-    if (!inside(EVIDENCE, opts.out)) throw new Error('Live --out must be under docs/evidence/session-capabilities');
+    if (!lexicallyInside(path.join(canonical(ROOT), 'docs/evidence/session-capabilities'), canonicalLocation(opts.out)) ||
+      !inside(EVIDENCE, opts.out)) throw new Error('Live --out must be under docs/evidence/session-capabilities');
     if (inside(EVIDENCE, opts.home)) throw new Error('Prepared credential home must be outside committed evidence');
   }
   if (opts.mutation && (!opts.dryRun || !MUTATIONS.includes(opts.mutation))) throw new Error('Known --mutation requires --dry-run');
@@ -1215,7 +1221,7 @@ async function reportPair(ctx, sandbox, wrongRecipientControl = false, renameAft
     envStatus = Array.isArray(envKeys) ? 'PASS' : 'UNVERIFIED';
   }
   const messagingKeys = (envKeys || []).filter(k => /CLAUDE.*(MESSAG|SOCKET|BRIDGE|SSE)/i.test(k));
-  const isolated = !sandbox || child.sessions !== origin.sessions && !inside(ctx.repo, child.sessions) && envStatus === 'PASS' && !messagingKeys.length;
+  const isolated = !sandbox || !sameDirectory(child.sessions, origin.sessions) && !inside(ctx.repo, child.sessions) && envStatus === 'PASS' && !messagingKeys.length;
   const raw = receiptRows();
   const recognized = wrongRecipientControl || renameAfterPrompt ? [] : raw.map(r =>
     nativeReceipt(r, child.name, nonce, messagingEndpoints.child, child.pid)).filter(Boolean);
@@ -1352,6 +1358,7 @@ function trusted(ctx, cwd) {
 }
 
 function validateLedger(ledger, root) {
+  root = canonical(root);
   const requireValue = value => { if (!value) throw new Error('malformed ledger'); };
   const shape = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
     Object.keys(value).sort().join(',') === [...keys].sort().join(',');
@@ -1381,8 +1388,9 @@ function validateLedger(ledger, root) {
     requireValue(r.status === aggregateStatus(Object.values(r.capabilityStatus)));
     requireValue(typeof r.evidencePath === 'string' && /^docs\/evidence\/session-capabilities\/[^/]+\/.+/.test(r.evidencePath) &&
       !r.evidencePath.includes('\\') && !r.evidencePath.split('/').some(p => ['.', '..', ''].includes(p)));
-    const evidenceFile = path.resolve(root, r.evidencePath);
-    requireValue(inside(path.join(root, 'docs/evidence/session-capabilities'), canonical(evidenceFile)));
+    const evidenceFile = canonical(path.resolve(root, r.evidencePath));
+    const evidenceRoot = path.join(root, 'docs/evidence/session-capabilities');
+    requireValue(lexicallyInside(evidenceRoot, evidenceFile) && inside(evidenceRoot, evidenceFile));
     const bytes = fs.readFileSync(evidenceFile);
     requireValue(hash(bytes) === r.evidenceSha256);
     const evidence = JSON.parse(bytes);
@@ -1396,7 +1404,8 @@ function validateLedger(ledger, root) {
     if (r.acceptedSpecBranch !== null) {
       const runDir = path.join(root, ...r.evidencePath.split('/').slice(0, 4));
       requireValue(['C1', 'C2'].includes(r.canary) && typeof r.acceptedSpecBranch === 'string' &&
-        inside(runDir, path.resolve(root, r.acceptedSpecBranch)) &&
+        lexicallyInside(runDir, path.resolve(root, r.acceptedSpecBranch)) &&
+        lexicallyInside(runDir, canonical(path.resolve(root, r.acceptedSpecBranch))) &&
         inside(runDir, canonical(path.resolve(root, r.acceptedSpecBranch))));
     }
   }
