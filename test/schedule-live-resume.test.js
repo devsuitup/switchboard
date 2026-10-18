@@ -36,6 +36,7 @@ function setup(t, { sandbox = false } = {}) {
       child.pid = 4242 + children.length;
       child.stderr = new EventEmitter();
       children.push(child);
+      queueMicrotask(() => child.emit('spawn'));
       return child;
     },
     getSetting: () => ({}),

@@ -29,6 +29,23 @@ From `schedule-ipc.js`:
 - `init(log, runScheduleCommand)` — wire IPC handlers (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`).
 - `ensureScheduleCreatorCommand()` — on app start, write `SCHEDULE_CREATOR_TEMPLATE` to `~/.claude/commands/create-switchboard-schedule.md` if missing.
 
+`main.js`'s shared `runScheduleCommand` returns `{ok:false, error}` when the
+project is archived, a sandbox cannot run on this platform, sandbox add-dirs
+are refused, or shell spawn fails. Each reason includes a recovery step. It
+returns `{ok:true}` only on the child's `spawn` event; synchronous throws and
+the pre-spawn `error` event are failures. `run-schedule-now` awaits and checks
+that acknowledgement, treating a missing result as failure. Cron uses the same
+launcher and retains its logging and completion callback. The safe Claude argv
+is quoted for the configured login shell so its profile can initialise PATH.
+Sandbox resolution follows global and project settings and never downgrades
+silently; schedule add-dirs supply both CLI flags and sandbox binds.
+
+This acknowledgement confirms only shell creation. Claude lookup, bubblewrap
+startup and command exit failures after `spawn` remain in the main log, without
+a later renderer notice. Tests: `test/run-schedule-now-result.test.js` loads the
+shipped launcher and IPC handler with disposable schedule files and a simulated
+child event boundary, without starting Electron or a real Claude process.
+
 ## Schedule project registry
 
 `scheduleRegistry` reads `scheduleProjects` on each `list`, `add` and `remove`.

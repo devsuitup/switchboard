@@ -322,7 +322,7 @@ function runNowHarness(h) {
     return context.module.exports;
   }
   const log = { info() {}, warn() {}, error() {} };
-  load('schedule-ipc.js').init(log, (...args) => runs.push(args), () => true, h.context.isProjectSettingsArchived);
+  load('schedule-ipc.js').init(log, (...args) => { runs.push(args); return { ok: true }; }, () => true, h.context.isProjectSettingsArchived);
   return { run: file => handlers.get('run-schedule-now')(null, file), runs };
 }
 

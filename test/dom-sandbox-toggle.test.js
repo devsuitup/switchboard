@@ -303,7 +303,7 @@ test('main.js: sandbox defaults to off and wraps the claude command with the asa
   const offLinuxStart = scheduleBody.indexOf("process.platform !== 'linux'");
   assert.ok(offLinuxStart !== -1);
   const offLinux = scheduleBody.slice(offLinuxStart, scheduleBody.indexOf('if (sandbox) {', offLinuxStart));
-  assert.match(offLinux, /log\.error[\s\S]*?return;/,
+  assert.match(offLinux, /log\.error[\s\S]*?return \{ ok: false,/,
     'off-linux must log an error and return before spawning');
 });
 

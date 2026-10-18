@@ -72,7 +72,7 @@ function mainContext() {
   const spawn = (file, args, options) => {
     calls.push({ file, args, options });
     const c = child();
-    queueMicrotask(() => c.emit('close', 0));
+    queueMicrotask(() => { c.emit('spawn'); c.emit('close', 0); });
     return c;
   };
   const context = vm.createContext({

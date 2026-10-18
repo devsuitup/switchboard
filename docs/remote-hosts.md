@@ -300,8 +300,9 @@ Refresh only redraws the local buffer; it never resizes the ssh PTY.
   disabled or removed is not asked, so its rows archive without a notice. A host
   that answers but refuses the stop still blocks the archive. A successful stop
   also closes the local attached terminal.
-- **Delete** is refused: the mirrored transcript is a copy that the next pull
-  would fetch again.
+- **Delete** is absent from remote rows and their context menu: the mirrored
+  transcript is a copy that the next pull would fetch again. The backend still
+  refuses remote deletion if it is requested directly.
 
 ## Send a prompt
 

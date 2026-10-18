@@ -406,7 +406,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
   if (activeId && openSessions.has(activeId)) {
     showSession(activeId);
   }
-  if (retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation) && !continuationRetryCancelled) {
+  if (retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation)) {
     await markRestoreIndexingDone();
   }
 }
@@ -594,12 +594,12 @@ function showLiveElsewhereNotice(skipped) {
     const members = items.map(item => {
       const session = { ...item.session, projectPath: item.live?.cwd || item.session?.projectPath };
       const waiting = !!item.waitingForIndex;
-      const reason = waiting ? 'Waiting for indexing'
+      const reason = item.reason || (waiting ? 'Waiting for indexing'
         : item.continuation ? 'A continuation choice is needed'
-          : 'The session is live outside this window in pid ' + (item.live?.pid || '?');
-      const recovery = waiting && item.retryAfterIndexing ? 'Restore will retry when indexing finishes. Open it from the sidebar to check.'
+          : 'The session is live outside this window in pid ' + (item.live?.pid || '?'));
+      const recovery = item.recovery || (waiting && item.retryAfterIndexing ? 'Restore will retry when indexing finishes. Open it from the sidebar to check.'
         : item.continuation || waiting ? 'Open it from the sidebar to choose and retry restoring.'
-          : 'Return to its own terminal at the location above to continue working or end it there, then open it from the sidebar to retry restoring.';
+          : 'Return to its own terminal at the location above to continue working or end it there, then open it from the sidebar to retry restoring.');
       return { id: sessionActionNoticeId('Restore', session), text: `${sessionActionDescription(session)}: ${reason}. ${recovery}` };
     });
     showAppNotice({
@@ -611,9 +611,19 @@ function showLiveElsewhereNotice(skipped) {
 
 async function markRestoreIndexingDone() {
   restoreIndexingDone = true;
-  clearAppNotice('Restore:pending');
   const held = () => [...skippedWorkingSetEntries.values()].filter(entry => entry.retryContinuation);
-  if ((!restorePlanner || restorePlanner.isSettled()) && !held().length) return;
+  const reportRetryFailure = (entries, reason) => {
+    if (!entries.length) return;
+    showLiveElsewhereNotice(entries.map(entry => ({
+      session: { ...entry.item, ...sessionMap.get(entry.item.sessionId) }, continuation: true, reason,
+      recovery: 'Open it from the sidebar to retry restoring.',
+    })));
+    clearAppNotice('Restore:pending');
+  };
+  if ((!restorePlanner || restorePlanner.isSettled()) && !held().length) {
+    clearAppNotice('Restore:pending');
+    return;
+  }
   let reloaded = false;
   for (let attempt = 0; attempt < 2 && !reloaded; attempt++) {
     try {
@@ -621,10 +631,20 @@ async function markRestoreIndexingDone() {
       reloaded = true;
     } catch (e) { console.warn('[switchboard] reload after indexing failed', e); }
   }
-  if (!reloaded) return;
+  if (!reloaded) {
+    reportRetryFailure(held(), 'Could not reload sessions after indexing');
+    return;
+  }
   await tickRestorePlanner();
   const retry = held();
-  if (!retry.length || continuationRetryCancelled) return;
+  if (!retry.length) {
+    clearAppNotice('Restore:pending');
+    return;
+  }
+  if (continuationRetryCancelled) {
+    reportRetryFailure(retry, 'Automatic restore retry was cancelled after another session was opened');
+    return;
+  }
   for (const entry of retry) {
     entry.retryContinuation = false;
     window._startupResumeResolutions?.delete(entry.item.sessionId);
@@ -632,6 +652,10 @@ async function markRestoreIndexingDone() {
   restoringWorkingSet = true;
   try {
     await runRestore(retry.map(entry => entry.item), { retryAfterIndexing: false });
+    clearAppNotice('Restore:pending');
+  } catch (error) {
+    reportRetryFailure(retry.filter(entry => skippedWorkingSetEntries.has(entry.item.sessionId) && !openSessions.has(entry.item.sessionId)), `Could not retry restoring: ${error?.message || error || 'The backend is unavailable'}`);
+    throw error;
   } finally { restoringWorkingSet = false; }
   await persistWorkingSet();
 }

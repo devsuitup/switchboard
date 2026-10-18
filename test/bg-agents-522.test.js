@@ -224,7 +224,7 @@ test(`[522r2] own live descriptor keeps the job row and explains Switchboard own
   const detail = r.window.document.createElement('div');
   detail.innerHTML = r.renderAgentDetail(roster[0]);
   assert.equal(detail.querySelector('[data-verb="rm"]').disabled, true);
-  assert.match(detail.querySelector('[data-verb="rm"]').title, /open in Switchboard/i);
+  assert.match(detail.querySelector('[data-verb="rm"]').title, /open in this window.*Stop it from its sidebar row first/i);
 });
 }
 

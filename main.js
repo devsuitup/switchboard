@@ -3500,35 +3500,23 @@ if (!app.isPackaged) {
       if (isProjectSettingsArchived(cwd)) {
         log.info(`[schedule] ${name} suspended: project is archived`);
         if (onDone) onDone();
-        return;
+        return { ok: false, error: 'Project is archived; unarchive it before running schedules.' };
       }
       const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
       const profile = resolveShell(profileId);
       const shell = profile.path;
-      // Re-serialise the safe argv into a shell string so the user's login shell
-      // can initialise its profile (PATH, version managers, etc.) before running claude.
+      // see .ai/contexts/schedule-runner.md
       let cmd = 'claude ' + quoteArgvForShell(shell, claudeArgv);
       const env = { ...cleanPtyEnv, FORCE_COLOR: '0' };
 
-      // Scheduled runs honor the effective sandbox setting like interactive
-      // sessions do — an unattended headless run is exactly where the
-      // isolation matters most. Same global → project override chain as
-      // get-effective-settings.
       const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
       if (sandbox && process.platform !== 'linux') {
-        // Fail closed, exactly like the interactive path: the whole point of
-        // asking for a sandbox is not running unconfined. Silently downgrading
-        // an unattended run to "no isolation" is the one outcome the user
-        // cannot notice, so skip the run and surface the error instead.
         log.error(`[schedule] ${name}: skipped — sandbox is enabled but requires Linux (bubblewrap)`);
         if (onDone) onDone();
-        return;
+        return { ok: false, error: 'The schedule sandbox requires Linux (bubblewrap). Run it on Linux with bubblewrap, or disable Sandbox in the project or global settings and try Run now again.' };
       }
       if (sandbox) {
         cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
-        // A schedule's `cli: add-dirs:` paths surface in the argv as
-        // --add-dir pairs — bind them like interactive sessions bind
-        // Additional Directories.
         const addDirs = [];
         for (let i = 0; i < claudeArgv.length - 1; i++) {
           if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
@@ -3538,7 +3526,7 @@ if (!app.isPackaged) {
         if (refused.length) {
           log.error(`[schedule] ${name}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
           if (onDone) onDone();
-          return;
+          return { ok: false, error: `Sandbox add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}. Remove or change these add-dirs in the schedule file, then try Run now again.` };
         }
         const bindEnv = sandboxBindEnv(addDirs);
         if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
@@ -3547,11 +3535,19 @@ if (!app.isPackaged) {
       const args = shellArgs(shell, cmd, profile.args || []);
 
       log.info(`[schedule] Running: ${shell} ${args.join(' ')}`);
-      const child = cpSpawn(shell, args, {
-        cwd,
-        stdio: ['ignore', 'ignore', 'pipe'],
-        env,
-      });
+      const spawnFailure = err => ({ ok: false, error: `Could not start the schedule: ${err.message || String(err)}. Check the shell settings and project folder, then try Run now again.` });
+      let child;
+      try {
+        child = cpSpawn(shell, args, {
+          cwd,
+          stdio: ['ignore', 'ignore', 'pipe'],
+          env,
+        });
+      } catch (err) {
+        log.error(`[schedule] ${name} error:`, err.message);
+        if (onDone) onDone();
+        return spawnFailure(err);
+      }
       cliSessionState.trackScheduleRun(claudeArgv[claudeArgv.indexOf('--resume') + 1], child, cwd);
       // see .ai/contexts/activitywatch.md ("Running")
       const activityId = `schedule:${name}:${Date.now()}`;
@@ -3567,10 +3563,14 @@ if (!app.isPackaged) {
         if (onDone) onDone();
       });
 
-      child.on('error', (err) => {
-        log.error(`[schedule] ${name} error:`, err.message);
-        activityReporter.sessionEnded(activityId);
-        if (onDone) onDone();
+      return new Promise(resolve => {
+        child.once('spawn', () => resolve({ ok: true }));
+        child.on('error', (err) => {
+          log.error(`[schedule] ${name} error:`, err.message);
+          activityReporter.sessionEnded(activityId);
+          if (onDone) onDone();
+          resolve(spawnFailure(err));
+        });
       });
     }
 

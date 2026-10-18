@@ -96,9 +96,10 @@ Plain-terminal rows show Stop only; subagent rows have no buttons
   member with a local PTY or an open tab, and refuses up front when a
   background job is live on any member (V, `public/sidebar.js:1572-1585`;
   `public/stop-session-ui.js:39-71`).
-- R1.6 Delete refuses while any merged member is live or open, with "session
-  is still running — close it first" (V, `public/sidebar.js:1528-1533`); remote
-  delete is refused server-side after the dialog (V\*, `main.js:2230`).
+- R1.6 Delete refuses before its dialog while any merged member is live or
+  open, with a persistent notice naming the reason and recovery. Remote rows
+  offer no Delete; the server-side read-only guard remains (`public/sidebar.js`,
+  `main.js`).
 - R1.7 "Show running only" keeps rows with a member in local `activePtyIds`
   only; an alive remote or unattached background row is filtered out
   (V, `public/sidebar.js:684`).
@@ -289,8 +290,9 @@ row text `<state> · <status>` (`:227`); row icon from the session-state ladder
 status text.
 
 **Actions**: Agents: **Transcript** only; Respawn/Delete disabled with
-"Conversation is live in pid N; stop it first" or "Conversation is open in
-Switchboard in pid N; close it first" (`public/agents-view.js:315-316`).
+the pid and "Stop it from its sidebar row first" for a conversation open here,
+or "End that process first" for another process (`public/agents-view.js`,
+`renderAgentDetail`).
 Sidebar click: per kind (`public/resume-guard.js:20-44`):
 
 | Live in | Click result |
@@ -395,7 +397,7 @@ result; **minor** = confusing but recoverable.
 | M5 | major | Four state vocabularies (icon, descriptor text, Agents state, Running/Stopped); "Waiting for input" has two meanings; Waiting/Idle/Stale look identical in the grid and header; waiting is distinguished only in the sidebar and Agents view; "Running" has two populations | §1, §7, §8, §10, GLOSSARY "State words" |
 | M6 | resolved (#568) | Project Archive is reversible through Settings and preserves settings/cache while suspending schedules; destructive Delete is separate. Archive folder still returns on new activity. | §6 |
 | m1 | minor | Delete means transcript, job+worktree, or worktree, with three different confirmations; remote Delete refused after its dialog | §1, §6, §10 |
-| m2 | minor | Refusals name verbs that do not exist: "close it first", "stop it first" (External) | §1 R1.6, §11 |
+| m2 | resolved (#566) | Refusals name Stop on the sidebar row here, or ending the other process; remote rows offer no Delete | §1 R1.6, §11 |
 | m3 | minor | Grid card reads **Stopped** next to a visible Stop button for an alive unattached session | §8 |
 | m4 | minor | Two permission-mode lists ("Plan Mode" vs "Plan", `public/utils.js:26-33` vs `public/dialogs.js:691-696`) and two Additional Directories formats | — |
 | m5 | minor | "Resume with config" may be silently ignored on an open member (reachability S) | §1 |

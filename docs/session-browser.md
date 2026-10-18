@@ -239,8 +239,9 @@ disk and the number of subagent transcripts.
 
 - A running local session is stopped first. If it cannot be stopped, the delete
   is refused with the reason.
-- A session on a remote host is never deleted: its transcript is a mirrored
-  copy that the next refresh would fetch again.
+- Remote rows and their context menu offer no Delete action: their transcript
+  is a mirrored copy that the next refresh would fetch again. A direct deletion
+  request is still refused by the backend.
 - A transcript that resolves outside `~/.claude/projects` (through a symbolic
   link, for instance) is refused and logged.
 - A session that never started has no transcript; deleting it removes the row.
