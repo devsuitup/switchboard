@@ -227,7 +227,8 @@ for (const alias of ['junction', ...(process.platform === 'win32' ? ['short'] : 
   for (const boundary of ['out', 'runtimeRoot', 'home', 'repo']) {
     test(`GIVEN OAuth token inside ${boundary} through a ${alias} alias WHEN loading THEN refuse both path spellings`, t => {
       const f = oauthFixture(t);
-      const dir = boundary === 'repo' ? path.resolve(__dirname, '../.work-files') : f.opts[boundary];
+      const dir = boundary === 'repo' ? fs.mkdtempSync(path.resolve(__dirname, '../.canary-token-')) : f.opts[boundary];
+      if (boundary === 'repo') t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
       const tokenFile = path.join(dir, `..canary-${crypto.randomUUID()}.token`);
       fs.writeFileSync(tokenFile, f.token);
       t.after(() => fs.rmSync(tokenFile, { force: true }));
