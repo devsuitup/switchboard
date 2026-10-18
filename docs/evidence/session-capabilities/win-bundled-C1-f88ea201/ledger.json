@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "f88ea2014d609bba6cfe8f212f861a93f0e1d1d9",
+  "measurements": [
+    {
+      "sequence": 1,
+      "canary": "C1",
+      "status": "PASS",
+      "measuredAt": "2026-10-18T13:45:42.633Z",
+      "cli": {
+        "version": "2.1.302 (Claude Code)",
+        "build": "unknown",
+        "sha256": "3ab075f78998efef8b87f491c2e4a39c309dddf44e51d0103eba4f3713d2a0ae"
+      },
+      "harnessRevision": "2e746290a6047c8dedadfa983caec07a18ed87ffafda200697e0bc6a01b1495a",
+      "evidencePath": "docs/evidence/session-capabilities/win-bundled-C1-f88ea201/0001-C1-519eb313/evidence.json",
+      "evidenceSha256": "5a5a0847b78616229a9ee999f096c099555224606a8cd1646bb40014acfa9bc2",
+      "capabilities": {
+        "singleTurnDelivery": true,
+        "literalTranscript": true,
+        "eligibleConfirmation": true
+      },
+      "capabilityStatus": {
+        "singleTurnDelivery": "PASS",
+        "literalTranscript": "PASS",
+        "eligibleConfirmation": "PASS"
+      },
+      "baselineHead": "f88ea2014d609bba6cfe8f212f861a93f0e1d1d9",
+      "acceptedSpecBranch": null,
+      "execution": {
+        "label": "windows-conpty-bundled",
+        "platform": "win32",
+        "backend": "conpty-bundled"
+      }
+    }
+  ]
+}
