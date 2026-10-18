@@ -607,10 +607,13 @@ Neither suite launches the real CLI. Lint the canary JavaScript with
 
 Live capability measurements require `--oauth-token-file`; copied credentials
 are refused. Consolidation uses `git merge-base HEAD origin/main` as the root
-baseline, retains each run's own baseline, and marks historical setup failures
-without evidence identity as `evidenceIdentity: "ledger-only"` only when the
-record and all capability statuses are `UNVERIFIED`. These records cannot
-qualify a capability. The committed run evidence and its historical README
+baseline and retains each run's own baseline. Ledger records contain exactly
+the N1 keys; no `evidenceIdentity` marker is serialized. Validation derives
+legacy identity from evidence missing all five identity fields (schemaVersion,
+canary, platform, platformLabel and ptyBackend), only when `dryRun` is false
+and the record and all capability statuses are `UNVERIFIED`. `readCapabilities`
+returns these records' sequences as `legacySequences`; validation does not
+mutate its input. These records cannot qualify a capability. The committed run
+evidence and its historical README
 remain unchanged; these test and consolidation instructions supersede their
 earlier equivalents.
-

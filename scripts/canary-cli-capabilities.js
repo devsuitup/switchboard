@@ -1359,10 +1359,10 @@ function validateLedger(ledger, root) {
   requireValue(shape(ledger, ['schemaVersion', 'baselineHead', 'measurements']) && ledger.schemaVersion === 1 &&
     sha(ledger.baselineHead, 40) && Array.isArray(ledger.measurements) && ledger.measurements.length > 0);
   let sequence = 0, previousTime = -Infinity;
+  const legacySequences = [];
   for (const r of ledger.measurements) {
     requireValue(shape(r, ['sequence', 'canary', 'status', 'measuredAt', 'execution', 'baselineHead', 'cli',
-      'harnessRevision', 'evidencePath', 'evidenceSha256', 'capabilities', 'capabilityStatus', 'acceptedSpecBranch',
-      ...(Object.hasOwn(r, 'evidenceIdentity') ? ['evidenceIdentity'] : [])]));
+      'harnessRevision', 'evidencePath', 'evidenceSha256', 'capabilities', 'capabilityStatus', 'acceptedSpecBranch']));
     requireValue(Object.hasOwn(CAPS, r.canary) && Number.isSafeInteger(r.sequence) && r.sequence > sequence &&
       typeof r.measuredAt === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(r.measuredAt) &&
       Number.isFinite(Date.parse(r.measuredAt)) && new Date(r.measuredAt).toISOString() === r.measuredAt.replace(/Z$/, r.measuredAt.includes('.') ? 'Z' : '.000Z') && Date.parse(r.measuredAt) >= previousTime && sha(r.baselineHead, 40));
@@ -1391,8 +1391,7 @@ function validateLedger(ledger, root) {
       Object.values(r.capabilityStatus).every(s => s === 'UNVERIFIED');
     requireValue(evidence.dryRun === false && (legacy || evidence.schemaVersion === 1 && evidence.canary === r.canary &&
       evidence.platform === r.execution.platform && evidence.platformLabel === r.execution.label && evidence.ptyBackend === r.execution.backend));
-    if (Object.hasOwn(r, 'evidenceIdentity')) requireValue(legacy && r.evidenceIdentity === 'ledger-only');
-    if (legacy) r.evidenceIdentity = 'ledger-only';
+    if (legacy) legacySequences.push(r.sequence);
     if (!legacy && r.canary === 'C4' && r.execution.platform === 'win32') requireValue(r.capabilityStatus.sandboxChildSendMessage === 'NOT_APPLICABLE');
     if (r.acceptedSpecBranch !== null) {
       const runDir = path.join(root, ...r.evidencePath.split('/').slice(0, 4));
@@ -1401,13 +1400,13 @@ function validateLedger(ledger, root) {
         inside(runDir, canonical(path.resolve(root, r.acceptedSpecBranch))));
     }
   }
-  return ledger;
+  return { ledger, legacySequences };
 }
 
 function readCapabilities(file, { root = ROOT } = {}) {
   try {
     const bytes = fs.readFileSync(file);
-    const ledger = validateLedger(JSON.parse(bytes), root);
+    const { ledger, legacySequences } = validateLedger(JSON.parse(bytes), root);
     const capabilities = {}, capabilityStatus = {}, selectedSequences = {};
     for (const [canary, keys] of Object.entries(CAPS)) {
       selectedSequences[canary] = {};
@@ -1423,7 +1422,7 @@ function readCapabilities(file, { root = ROOT } = {}) {
         capabilities[key] = capabilityStatus[key] === 'PASS';
       }
     }
-    return { capabilities, capabilityStatus, selectedSequences, ledgerSha256: hash(bytes) };
+    return { capabilities, capabilityStatus, selectedSequences, legacySequences, ledgerSha256: hash(bytes) };
   } catch { throw new Error('session capability evidence is unavailable'); }
 }
 
@@ -1437,7 +1436,7 @@ function consolidate(dirs, out, { root = ROOT, baselineHead } = {}) {
       capabilityStatus: record.capabilityStatus ?? Object.fromEntries((CAPS[record.canary] || []).map(k => [k, record.status])) }));
   }).sort((a, b) => Date.parse(a.measuredAt) - Date.parse(b.measuredAt) || String(a.evidencePath).localeCompare(String(b.evidencePath)))
     .map((record, i) => ({ ...record, sequence: i + 1 }));
-  const ledger = validateLedger({ schemaVersion: 1, baselineHead, measurements }, root);
+  const { ledger } = validateLedger({ schemaVersion: 1, baselineHead, measurements }, root);
   fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
   save(out, ledger);
   return ledger;
@@ -1563,10 +1562,10 @@ async function main(argv = process.argv.slice(2)) {
     }
     if (!ctx.evidence.controls.length) ctx.evidence.controls.push({ name: 'table mutations', status: 'UNVERIFIED', reason: 'run separate --dry-run --mutation invocations; no result inferred from a different run' });
     persist(pendingRun);
-    output(process.stdout, `${canary} ${status}${opts.dryRun ? ' (EMULATED; not production evidence)' : ''}\n`);
-    if (status !== 'PASS') exit = 1;
     if (ctx.processes.some(p => !p.exited)) throw new Unverified('owned handles remain live after ledger write');
     pendingRun = null;
+    output(process.stdout, `${canary} ${status}${opts.dryRun ? ' (EMULATED; not production evidence)' : ''}\n`);
+    if (status !== 'PASS') exit = 1;
     if (interrupted) return 130;
   }
   return exit;
@@ -1580,6 +1579,7 @@ async function main(argv = process.argv.slice(2)) {
     for (const key of CAPS[canary]) capability(ctx, key,
       key === 'sandboxChildSendMessage' && windowsExecution({ opts }) ? 'NOT_APPLICABLE' : 'UNVERIFIED');
     persist(pendingRun);
+    output(process.stdout, `${canary} UNVERIFIED${opts.dryRun ? ' (EMULATED; not production evidence)' : ''}\n`);
     output(process.stderr, 'Harness run aborted; UNVERIFIED evidence retained\n');
     return 2;
   } finally {

@@ -466,8 +466,7 @@
         "label": "windows-conpty-bundled",
         "platform": "win32",
         "backend": "conpty-bundled"
-      },
-      "evidenceIdentity": "ledger-only"
+      }
     },
     {
       "sequence": 17,

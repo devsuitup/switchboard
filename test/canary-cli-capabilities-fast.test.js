@@ -114,6 +114,41 @@ test('GIVEN main throws after run creation WHEN recovering THEN leave identified
   assert.equal(record.status, 'UNVERIFIED');
 });
 
+test('GIVEN an owned handle observed live after ledger write WHEN aborting THEN stdout reports only the final ledger status', async t => {
+  const f = earlyAbortFixture(t);
+  const ledgerFile = path.join(f.opts.out, 'ledger.dry-run.json');
+  const writes = [];
+  const stdout = [];
+  const stderr = [];
+  const write = fs.writeFileSync;
+  t.mock.method(fs, 'writeFileSync', (file, ...args) => {
+    const result = write(file, ...args);
+    if (file === ledgerFile) writes.push(JSON.parse(args[0]));
+    return result;
+  });
+  t.mock.method(process.stdout, 'write', text => { stdout.push(text); return true; });
+  t.mock.method(process.stderr, 'write', text => { stderr.push(text); return true; });
+  const Module = require('node:module');
+  const loaded = new Module(script, module);
+  loaded.filename = script;
+  loaded.paths = require.resolve.paths(script);
+  loaded.canaryContext = {
+    opts: { dryRun: true },
+    processes: [{ record: { cleaned: true }, get exited() { return writes.length === 0; } }],
+    evidence: { controls: [] },
+    capabilities: Object.fromEntries(keys.C1.map(k => [k, true])),
+  };
+  loaded._compile(fs.readFileSync(script, 'utf8') + '\nmakeContext = async () => module.canaryContext; c1 = async () => {};', script);
+  assert.equal(await loaded.exports.main(f.args), 2);
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0].measurements[0].status, 'PASS');
+  const ledger = JSON.parse(fs.readFileSync(ledgerFile));
+  assert.equal(ledger.measurements.length, 1);
+  assert.equal(ledger.measurements[0].status, 'UNVERIFIED');
+  assert.deepEqual(stdout, [`C1 ${ledger.measurements[0].status} (EMULATED; not production evidence)\n`]);
+  assert.match(stderr.join(''), /Harness run aborted; UNVERIFIED evidence retained/);
+});
+
 test('GIVEN default runner WHEN collecting tests THEN fake CLI journeys are opt-in', t => {
   const subprocess = require('node:child_process');
   const calls = [];
@@ -264,13 +299,40 @@ for (const canary of ['C1', 'C4']) {
     const before = fs.readFileSync(f.file);
     const ledger = f.consolidate();
     const r = ledger.measurements.find(r => r.evidencePath === f.record.evidencePath);
-    assert.equal(r.evidenceIdentity, 'ledger-only');
+    assert.deepEqual(Object.keys(r).sort(), Object.keys(f.record).sort());
+    assert.equal(Object.hasOwn(r, 'evidenceIdentity'), false);
     assert.equal(r.status, 'UNVERIFIED');
     assert.ok(Object.values(r.capabilities).every(v => !v));
     assert.deepEqual(fs.readFileSync(f.file), before);
-    assert.ok(harness.readCapabilities(f.out, { root: f.root }).ledgerSha256);
+    const result = harness.readCapabilities(f.out, { root: f.root });
+    assert.ok(result.ledgerSha256);
+    assert.deepEqual(result.legacySequences, [r.sequence]);
   });
 }
+
+test('GIVEN frozen legacy N1 records WHEN validating THEN derive legacy identity without mutating the input', t => {
+  const f = legacyFixture(t);
+  const ledger = JSON.parse(fs.readFileSync(path.join(f.dirs[0], 'ledger.json')));
+  const before = JSON.stringify(ledger);
+  for (const r of ledger.measurements) Object.freeze(r);
+  Object.freeze(ledger.measurements);
+  Object.freeze(ledger);
+  const Module = require('node:module');
+  const loaded = new Module(script, module);
+  loaded.filename = script;
+  loaded.paths = module.paths;
+  loaded._compile(fs.readFileSync(script, 'utf8') + '\nmodule.exports.validateLedger = validateLedger;', script);
+  assert.doesNotThrow(() => loaded.exports.validateLedger(ledger, f.root));
+  assert.equal(JSON.stringify(ledger), before);
+});
+
+test('GIVEN a legacy ledger with an extra evidenceIdentity key WHEN reading or consolidating THEN refuse the non-N1 shape', t => {
+  const f = legacyFixture(t);
+  f.record.evidenceIdentity = 'ledger-only';
+  f.persist();
+  assert.throws(() => harness.readCapabilities(path.join(f.dirs[0], 'ledger.json'), { root: f.root }), /evidence is unavailable/);
+  assert.throws(() => f.consolidate(), /malformed ledger/);
+});
 
 for (const defect of ['pass', 'mixed-status', 'execution', 'partial-identity', 'wrong-identity', 'dry-run']) {
   test(`GIVEN legacy ${defect} WHEN consolidating THEN refuse instead of trusting a ledger-only identity`, t => {
@@ -322,12 +384,13 @@ test('GIVEN N1 tied timestamps and historical FAIL WHEN consolidating THEN prese
   assert.equal(result.capabilities.sandboxChildSendMessage, false);
 });
 
-test('GIVEN all 42 committed Phase 0 runs WHEN consolidating through CLI THEN records stay immutable and sandbox gate stays closed', async t => {
+test('GIVEN all committed Phase 0 runs WHEN consolidating through CLI THEN records stay immutable and sandbox gate stays closed', async t => {
   const root = path.resolve(__dirname, '..');
   const base = path.join(root, 'docs/evidence/session-capabilities');
   const dirs = fs.readdirSync(base).map(p => path.join(base, p)).filter(p => fs.existsSync(path.join(p, 'ledger.json')));
-  assert.equal(dirs.length, 42);
-  const files = dirs.flatMap(p => [path.join(p, 'ledger.json'), ...JSON.parse(fs.readFileSync(path.join(p, 'ledger.json'))).measurements.map(r => path.join(root, r.evidencePath))]);
+  assert.ok(dirs.length > 0);
+  const records = dirs.flatMap(p => JSON.parse(fs.readFileSync(path.join(p, 'ledger.json'))).measurements);
+  const files = [...dirs.map(p => path.join(p, 'ledger.json')), ...records.map(r => path.join(root, r.evidencePath))];
   const before = files.map(p => fs.readFileSync(p, 'utf8'));
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'canary-n1-history-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
@@ -336,9 +399,13 @@ test('GIVEN all 42 committed Phase 0 runs WHEN consolidating through CLI THEN re
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(files.map(p => fs.readFileSync(p, 'utf8')), before);
   const ledger = JSON.parse(fs.readFileSync(out));
-  assert.equal(ledger.measurements.length, 42);
-  assert.equal(ledger.measurements.find(r => r.evidencePath.includes('win-bundled-C1-6e6b9263/')).evidenceIdentity, 'ledger-only');
-  assert.equal(harness.readCapabilities(out).capabilities.sandboxChildSendMessage, false);
+  assert.equal(ledger.measurements.length, records.length);
+  assert.deepEqual(ledger.measurements.map(r => r.evidencePath).sort(), records.map(r => r.evidencePath).sort());
+  const legacy = ledger.measurements.find(r => r.evidencePath.includes('win-bundled-C1-6e6b9263/'));
+  assert.ok(legacy);
+  const read = harness.readCapabilities(out);
+  assert.deepEqual(read.legacySequences, [legacy.sequence]);
+  assert.equal(read.capabilities.sandboxChildSendMessage, false);
 });
 
 test('GIVEN N1 last per execution WHEN a new FAIL supersedes PASS THEN apply worst globally and retain other keys', async t => {
