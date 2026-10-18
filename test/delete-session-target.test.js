@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { isValidSessionId, isInsideDir, resolveDeletionTargets } = require('../delete-session-target');
+const { isValidSessionId, isInsideDir, resolveDeletionTargets, resolveRowDeletionTargets } = require('../delete-session-target');
 
 const ID = '57cf3347-04e1-485f-8063-4d8700785fba';
 
@@ -153,4 +153,93 @@ test('an unreadable projects directory is an error, not a throw', () => {
   const out = resolveDeletionTargets('/nonexistent-projects-dir', ID);
   assert.equal(out.ok, false);
   assert.match(out.error, /cannot read projects directory/);
+});
+
+test('row deletion resolves every part and its subagent directory across folders once', () => {
+  const r = rig();
+  try {
+    const expected = [];
+    const folders = new Map();
+    for (const id of ['a', 'b', 'c']) {
+      const folder = id === 'c' ? '-other-project' : path.basename(r.folder);
+      folders.set(id, folder);
+      const base = path.join(r.projects, folder);
+      fs.mkdirSync(path.join(base, id, 'subagents'), { recursive: true });
+      fs.writeFileSync(path.join(base, id + '.jsonl'), '{}\n');
+      fs.writeFileSync(path.join(base, id, 'subagents', 'agent-x.jsonl'), '{}\n');
+      expected.push(path.join(base, id + '.jsonl'), path.join(base, id));
+    }
+    const out = resolveRowDeletionTargets(r.projects, 'a', ['b', 'c', 'b', 'a'], id => folders.get(id));
+    assert.equal(out.ok, true);
+    assert.equal(out.parts, 3);
+    assert.deepEqual(out.targets.sort(), expected.sort());
+  } finally { r.cleanup(); }
+});
+
+test('an unresolved row member refuses all targets and preserves the resolvable transcript', () => {
+  const r = rig();
+  try {
+    const file = path.join(r.folder, 'a.jsonl');
+    fs.writeFileSync(file, '{}\n');
+    for (const members of [['b'], ['../invalid']]) {
+      const out = resolveRowDeletionTargets(r.projects, 'a', members, () => path.basename(r.folder));
+      assert.equal(out.ok, false);
+      assert.match(out.error, /part/);
+      assert.deepEqual(out.targets, []);
+      assert.equal(fs.existsSync(file), true);
+    }
+  } finally { r.cleanup(); }
+});
+
+test('row deletion refuses a folder lookup error and keeps a single placeholder dismissable', () => {
+  const r = rig();
+  try {
+    const refused = resolveRowDeletionTargets(r.projects, 'a', ['b'], () => { throw new Error('cache unavailable'); });
+    assert.equal(refused.ok, false);
+    assert.match(refused.error, /cache unavailable/);
+    assert.deepEqual(refused.targets, []);
+    const placeholder = resolveRowDeletionTargets(r.projects, 'a', [], () => null);
+    assert.equal(placeholder.ok, true);
+    assert.equal(placeholder.parts, 1);
+    assert.deepEqual(placeholder.targets, []);
+  } finally { r.cleanup(); }
+});
+
+test('one escaping member or subagent directory refuses the entire row', () => {
+  for (const suffix of ['b.jsonl', 'b']) {
+    const r = rig();
+    try {
+      const a = path.join(r.folder, 'a.jsonl');
+      fs.writeFileSync(a, '{}\n');
+      fs.writeFileSync(path.join(r.folder, 'b.jsonl'), '{}\n');
+      const outside = path.join(r.root, 'outside');
+      fs.mkdirSync(outside);
+      const link = path.join(r.folder, suffix);
+      if (suffix === 'b.jsonl') fs.unlinkSync(link);
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+      const out = resolveRowDeletionTargets(r.projects, 'a', ['b'], () => path.basename(r.folder));
+      assert.equal(out.ok, false);
+      assert.deepEqual(out.targets, []);
+      assert.equal(out.refused.length, 1);
+      assert.equal(fs.existsSync(a), true);
+      assert.equal(fs.existsSync(outside), true);
+    } finally { r.cleanup(); }
+  }
+});
+
+test('row fallback scan ignores ordinary files beside project folders and permits a placeholder', () => {
+  const r = rig();
+  const lstat = fs.lstatSync;
+  try {
+    const ordinary = path.join(r.projects, 'not-a-project');
+    fs.writeFileSync(ordinary, 'unrelated');
+    fs.lstatSync = (file, ...args) => {
+      if (file.startsWith(ordinary + path.sep)) throw Object.assign(new Error('not a directory'), { code: 'ENOTDIR' });
+      return lstat(file, ...args);
+    };
+    const out = resolveRowDeletionTargets(r.projects, 'placeholder', [], () => null);
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.targets, []);
+  } finally { fs.lstatSync = lstat; r.cleanup(); }
 });

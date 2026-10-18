@@ -68,9 +68,14 @@ function resolveDeletionTargets(projectsDir, sessionId, preferredFolder = null) 
   for (const folder of folders) {
     const base = path.join(projectsDir, folder);
     for (const candidate of [path.join(base, sessionId + '.jsonl'), path.join(base, sessionId)]) {
-      if (!fs.existsSync(candidate)) continue;
+      try {
+        fs.lstatSync(candidate);
+      } catch (err) {
+        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') continue;
+        return { ok: false, error: `cannot read target ${candidate}: ${err.message}`, targets: [], refused };
+      }
       const real = resolveOnDisk(candidate);
-      if (!real) continue;
+      if (!real) return { ok: false, error: `cannot resolve target ${candidate}`, targets: [], refused };
       if (!isInsideDir(real, root)) {
         refused.push({ path: candidate, real, reason: 'resolves outside the projects directory' });
         continue;
@@ -82,4 +87,25 @@ function resolveDeletionTargets(projectsDir, sessionId, preferredFolder = null) 
   return { ok: true, targets, refused };
 }
 
-module.exports = { isValidSessionId, isInsideDir, resolveDeletionTargets };
+function resolveRowDeletionTargets(projectsDir, id, memberIds, folderOf) {
+  const partIds = [...new Set([id, ...memberIds])];
+  const targets = new Set();
+  const refused = [];
+  for (const partId of partIds) {
+    let resolved;
+    try {
+      resolved = resolveDeletionTargets(projectsDir, partId, folderOf(partId));
+    } catch (err) {
+      return { ok: false, error: `cannot resolve conversation part ${partId}: ${err.message}`, targets: [], refused };
+    }
+    refused.push(...resolved.refused);
+    if (!resolved.ok || resolved.refused.length || (partIds.length > 1 && !resolved.targets.length)) {
+      const reason = resolved.error || resolved.refused[0]?.reason || 'no targets found';
+      return { ok: false, error: `cannot resolve conversation part ${partId}: ${reason}`, targets: [], refused };
+    }
+    for (const target of resolved.targets) targets.add(target);
+  }
+  return { ok: true, targets: [...targets], refused, parts: partIds.length };
+}
+
+module.exports = { isValidSessionId, isInsideDir, resolveDeletionTargets, resolveRowDeletionTargets };

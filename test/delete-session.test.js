@@ -31,7 +31,7 @@ test('delete-session: the liveness guard runs before anything is resolved or rem
   assert.ok(guard > 0, 'the handler asks delete-session-guard.js (behaviour tested in delete-session-guard.test.js)');
   assert.match(main, /const deleteSessionGuard = makeDeleteSessionGuard\(\{\s*activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids,/,
     'the guard is built from the real modules, not stubs');
-  assert.ok(guard < body.indexOf('resolveDeletionTargets('));
+  assert.ok(guard < body.indexOf('resolveRowDeletionTargets('));
   assert.match(body, /if \(refusal\) return \{ ok: false, error: refusal \}/);
 });
 
@@ -69,7 +69,7 @@ test('delete button: rendered on session cards and confirms before deleting', ()
   assert.doesNotMatch(handler, /window\.alert\(/,
     'alert() is modal and hard to dismiss — a failure must not block the renderer');
   assert.match(handler, /surfaceStopFailure\(deleteBtn,.*'Delete'\)/, 'a refusal must surface through the persistent notice adapter');
-  assert.match(handler, /pendingSessions\.delete\(session\.sessionId\)/,
+  assert.match(handler, /pendingSessions\.delete\(id\)/,
     'the sidebar re-injects transcript-less sessions, so the pending entry must be forgotten too');
 
   const css = fs.readFileSync(path.join(ROOT, 'public', 'style.css'), 'utf8');
@@ -90,7 +90,7 @@ test('delete-session: a session with no transcript is dismissed, not refused', (
   assert.match(empty, /placeholder: true/, 'the caller should be able to tell the two apart');
   // The cache clearing happens just above, for the parent and its subagents
   // alike, so it covers the placeholder case without repeating itself.
-  assert.match(body, /for \(const sid of \[id, \.\.\.subagentIds\]\)/,
+  assert.match(body, /for \(const sid of \[\.\.\.partIds, \.\.\.subagentIds\]\)/,
     'caches must still be cleared for a placeholder');
 });
 
@@ -100,8 +100,8 @@ test('delete-session: delegates its guards to the executable module', () => {
     'validation must live in the module the tests can execute, not inline in main.js');
   const start = src.indexOf("ipcMain.handle('delete-session'");
   const body = src.slice(start, src.indexOf('\n});', start));
-  assert.match(body, /resolveDeletionTargets\(PROJECTS_DIR, id, folder\)/);
-  assert.match(body, /getCachedFolder\(id\)/, 'the cached folder makes the lookup O(1)');
+  assert.match(body, /resolveRowDeletionTargets\(PROJECTS_DIR, id, memberIds,/);
+  assert.match(body, /getCachedFolder\(partId\)/, 'the cached folder makes the lookup O(1)');
   assert.match(body, /resolved\.refused/, 'a refused target must be logged, not silently dropped');
 });
 
@@ -114,11 +114,11 @@ test('delete-session: clears subagent rows, which are indexed under their own id
   // they are cached under `sub:<parent>:<agent>` ids. Left behind, the sidebar
   // renders them as a phantom "Orphan subagents" group and search returns hits
   // for deleted files.
-  assert.match(body, /getCachedByParent\(id\)/, 'subagent rows must be collected');
-  const collect = body.indexOf('getCachedByParent(id)');
+  assert.match(body, /getCachedByParent\(partId\)/, 'subagent rows must be collected');
+  const collect = body.indexOf('getCachedByParent(partId)');
   const remove = body.indexOf('fs.rmSync');
   assert.ok(collect < remove, 'they must be collected BEFORE the files are removed');
-  assert.match(body, /for \(const sid of \[id, \.\.\.subagentIds\]\)/,
+  assert.match(body, /for \(const sid of \[\.\.\.partIds, \.\.\.subagentIds\]\)/,
     'the parent and every subagent row must be cleared');
 });
 
@@ -138,5 +138,108 @@ test('delete button: closes the tab so it cannot point at a deleted transcript',
   const sidebar = fs.readFileSync(path.join(ROOT, 'public', 'sidebar.js'), 'utf8');
   const start = sidebar.indexOf("item.querySelector('.session-delete-btn')");
   const handler = sidebar.slice(start, sidebar.indexOf('const archiveBtn', start));
-  assert.match(handler, /destroySession\(session\.sessionId\)/);
+  assert.match(handler, /destroySession\(id\)/);
+});
+
+test('preview and delete use the same merged member source as the liveness guard', () => {
+  const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+  for (const name of ['delete-session-preview', 'delete-session']) {
+    const start = main.indexOf(`ipcMain.handle('${name}'`);
+    const body = main.slice(start, main.indexOf('\n});', start));
+    assert.match(body, /const memberIds = getMergedMemberIds\(id\)/);
+    assert.match(body, /resolveRowDeletionTargets\(PROJECTS_DIR, id, memberIds,/);
+  }
+  assert.match(main, /sessionHasPty, ptyPids,\s*getMergedMemberIds[,\s]/);
+});
+
+const os = require('node:os');
+const { loadDeletionHandlers } = require('./delete-session-harness');
+
+function deletionFixture(t, memberIds = ['b']) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'delete-row-')));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const folder = 'project';
+  fs.mkdirSync(path.join(root, folder));
+  const cached = new Set(['a', 'b', 'sub:a:x', 'sub:b:y']);
+  const search = new Set(cached);
+  const touched = new Set(cached);
+  const a = path.join(root, folder, 'a.jsonl');
+  const b = path.join(root, folder, 'b.jsonl');
+  fs.writeFileSync(a, '{}\n');
+  fs.writeFileSync(b, '{}\n');
+  const dependencies = {
+    PROJECTS_DIR: root,
+    getCachedFolder: () => folder,
+    getMergedMemberIds: () => memberIds,
+    getCachedByParent: id => [{ sessionId: `sub:${id}:${id === 'a' ? 'x' : 'y'}` }],
+    deleteCachedSession: id => cached.delete(id),
+    deleteSearchSession: id => search.delete(id),
+    mainTouchedCache: { dropSession: id => touched.delete(id) },
+  };
+  return { root, a, b, cached, search, touched, dependencies };
+}
+
+test('preview counts all parts and deletion clears every part and subagent from every cache', async t => {
+  const f = deletionFixture(t);
+  const handlers = loadDeletionHandlers(f.dependencies);
+  const preview = handlers.get('delete-session-preview')(null, 'a');
+  assert.equal(preview.parts, 2);
+  assert.equal(preview.subagents, 2);
+  assert.equal(preview.transcripts, 2);
+  const result = await handlers.get('delete-session')(null, 'a');
+  assert.equal(result.ok, true);
+  assert.equal(result.subagents, 2);
+  for (const entries of [f.cached, f.search, f.touched]) assert.equal(entries.size, 0);
+  assert.equal(fs.existsSync(f.a), false);
+  assert.equal(fs.existsSync(f.b), false);
+});
+
+test('an unresolved member refuses preview and deletion without removing files or cache rows', async t => {
+  const f = deletionFixture(t, ['b', 'missing']);
+  const handlers = loadDeletionHandlers(f.dependencies);
+  const preview = handlers.get('delete-session-preview')(null, 'a');
+  const result = await handlers.get('delete-session')(null, 'a');
+  for (const out of [preview, result]) {
+    assert.equal(out.ok, false);
+    assert.match(out.error, /missing/);
+  }
+  assert.equal(fs.existsSync(f.a), true);
+  assert.equal(fs.existsSync(f.b), true);
+  for (const entries of [f.cached, f.search, f.touched]) assert.equal(entries.size, 4);
+});
+
+test('an unreadable member folder refuses the whole delete', async t => {
+  const f = deletionFixture(t);
+  f.dependencies.getCachedFolder = id => { if (id === 'b') throw new Error('folder lookup failed'); return 'project'; };
+  const handlers = loadDeletionHandlers(f.dependencies);
+  const result = await handlers.get('delete-session')(null, 'a');
+  assert.equal(result.ok, false);
+  assert.match(result.error, /folder lookup failed/);
+  assert.equal(fs.existsSync(f.a), true);
+  assert.equal(fs.existsSync(f.b), true);
+});
+
+test('the live-part guard refuses before any folder lookup or removal', async t => {
+  const f = deletionFixture(t);
+  f.dependencies.deleteSessionGuard = async () => 'member is live';
+  f.dependencies.getCachedFolder = () => { throw new Error('must not resolve'); };
+  const handlers = loadDeletionHandlers(f.dependencies);
+  const result = await handlers.get('delete-session')(null, 'a');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'member is live');
+  assert.equal(fs.existsSync(f.a), true);
+  assert.equal(fs.existsSync(f.b), true);
+});
+
+test('unknown subagent lookup refuses preview and delete before any removal', async t => {
+  const f = deletionFixture(t);
+  f.dependencies.getCachedByParent = id => { if (id === 'b') throw new Error('subagents unavailable'); return []; };
+  const handlers = loadDeletionHandlers(f.dependencies);
+  for (const name of ['delete-session-preview', 'delete-session']) {
+    const result = await handlers.get(name)(null, 'a');
+    assert.equal(result.ok, false);
+    assert.match(result.error, /subagents unavailable/);
+  }
+  assert.equal(fs.existsSync(f.a), true);
+  assert.equal(fs.existsSync(f.b), true);
 });

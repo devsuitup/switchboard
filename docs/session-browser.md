@@ -232,13 +232,18 @@ row and grid card buttons still read **Stop session**.
 
 ## Delete
 
-The delete button **permanently removes the session's transcript from disk**,
-with every subagent transcript belonging to it and their index entries. There is
-no trash. The confirmation dialog names the project, the number of files on
-disk and the number of subagent transcripts.
+The delete button **permanently removes every part of the conversation from disk**,
+including the transcripts merged into a compacted conversation, their subagent
+directories and index entries. There is no trash or Undo, and no per-part delete.
+Delete always confirms. The dialog names the project, the number of parts for a
+merged conversation, the number of files on disk and the number of subagent transcripts.
+If any part's targets cannot be resolved, the whole delete is refused with a
+reason, before any files or index entries are removed.
 
 - A running local session is stopped first. If it cannot be stopped, the delete
   is refused with the reason.
+- A live merged member refuses deletion before the dialog; the backend checks
+  every part again before removing anything.
 - Remote rows and their context menu offer no Delete action: their transcript
   is a mirrored copy that the next refresh would fetch again. A direct deletion
   request is still refused by the backend.

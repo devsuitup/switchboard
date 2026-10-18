@@ -1687,12 +1687,14 @@ function rebindSidebarEvents(projects) {
             return;
           }
           clearAppNotice(sessionActionNoticeId('Delete', session));
-          if (typeof pendingSessions !== 'undefined') pendingSessions.delete(session.sessionId);
-          if (typeof dismissDormantSession === 'function') rowSessionIds(session).forEach(dismissDormantSession);
-          if (typeof sessionMap !== 'undefined') sessionMap.delete(session.sessionId);
-          if (typeof destroySession === 'function' && typeof openSessions !== 'undefined'
-              && openSessions.has(session.sessionId)) {
-            destroySession(session.sessionId);
+          for (const id of rowSessionIds(session)) {
+            if (typeof pendingSessions !== 'undefined') pendingSessions.delete(id);
+            if (typeof dismissDormantSession === 'function') dismissDormantSession(id);
+            if (typeof sessionMap !== 'undefined') sessionMap.delete(id);
+            if (typeof destroySession === 'function' && typeof openSessions !== 'undefined'
+                && openSessions.has(id)) {
+              destroySession(id);
+            }
           }
           Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
         } catch (error) {
@@ -2121,7 +2123,9 @@ async function showDeleteSessionDialog(session) {
         return;
       }
       const parts = [];
-      parts.push(p.transcripts > 0
+      parts.push(p.parts > 1
+        ? `${p.parts} parts of this conversation, ${p.transcripts} files on disk`
+        : p.transcripts > 0
         ? `${p.transcripts} file${p.transcripts !== 1 ? 's' : ''} on disk`
         : 'no transcript on disk (this session never started)');
       if (p.subagents > 0) parts.push(`${p.subagents} subagent transcript${p.subagents !== 1 ? 's' : ''}`);

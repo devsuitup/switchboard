@@ -507,7 +507,7 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 // --- Session cache helpers ---
 
 const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
-const { resolveDeletionTargets } = require('./delete-session-target');
+const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
 const sessionCache = require('./session-cache');
@@ -2194,17 +2194,23 @@ ipcMain.handle('stop-subagent-watch', (_event, watchId) => {
 // it rather than asking the user to trust a generic warning.
 ipcMain.handle('delete-session-preview', (_event, sessionId) => {
   const id = String(sessionId || '');
-  let folder = null;
-  try { folder = getCachedFolder(id); } catch {}
-  if (isRemoteFolder(folder)) return { ok: false, error: REMOTE_READ_ONLY };
-  const resolved = resolveDeletionTargets(PROJECTS_DIR, id, folder);
+  const memberIds = getMergedMemberIds(id);
+  const partIds = [...new Set([id, ...memberIds])];
+  const resolved = resolveRowDeletionTargets(PROJECTS_DIR, id, memberIds, partId => {
+    const folder = getCachedFolder(partId);
+    if (isRemoteFolder(folder)) throw new Error(REMOTE_READ_ONLY);
+    return folder;
+  });
   if (!resolved.ok) return { ok: false, error: resolved.error };
   let subagents = 0;
   try {
-    subagents = (getCachedByParent(id) || []).filter(r => r.sessionId && r.sessionId !== id).length;
-  } catch {}
-  const running = activeSessions.has(id) && !activeSessions.get(id).exited;
-  return { ok: true, transcripts: resolved.targets.length, subagents, running };
+    subagents = partIds.flatMap(partId => (getCachedByParent(partId) || [])
+      .filter(r => r.sessionId && r.sessionId !== partId)).length;
+  } catch (err) {
+    return { ok: false, error: `cannot resolve conversation subagents: ${err.message}` };
+  }
+  const running = partIds.some(partId => activeSessions.has(partId) && !activeSessions.get(partId).exited);
+  return { ok: true, parts: resolved.parts, transcripts: resolved.targets.length, subagents, running };
 });
 
 ipcMain.handle('delete-session', async (_event, sessionId) => {
@@ -2212,32 +2218,26 @@ ipcMain.handle('delete-session', async (_event, sessionId) => {
   const refusal = await deleteSessionGuard(id);
   if (refusal) return { ok: false, error: refusal };
 
-  // Validation, symlink resolution and containment live in
-  // delete-session-target.js so they can be executed by tests against real
-  // paths and symlinks. getCachedFolder makes the common case an O(1) lookup
-  // instead of a readdir of every project; fall back to the scan when the row
-  // is missing (a placeholder session that was never indexed).
-  let folder = null;
-  try { folder = getCachedFolder(id); } catch {}
-  // A mirrored transcript is a copy; the next refresh would fetch it back.
-  if (isRemoteFolder(folder)) return { ok: false, error: REMOTE_READ_ONLY };
-  const resolved = resolveDeletionTargets(PROJECTS_DIR, id, folder);
-  if (!resolved.ok) return { ok: false, error: resolved.error };
+  const memberIds = getMergedMemberIds(id);
+  const partIds = [...new Set([id, ...memberIds])];
+  const resolved = resolveRowDeletionTargets(PROJECTS_DIR, id, memberIds, partId => {
+    const folder = getCachedFolder(partId);
+    if (isRemoteFolder(folder)) throw new Error(REMOTE_READ_ONLY);
+    return folder;
+  });
   for (const r of resolved.refused) {
     log.warn(`[delete-session] refusing ${r.path} — ${r.reason} (${r.real})`);
   }
+  if (!resolved.ok) return { ok: false, error: resolved.error };
 
-  // Collect the subagents BEFORE removing anything: their transcripts sit inside
-  // the parent's directory and go with it, but they are indexed under their own
-  // composite `sub:<parent>:<agent>` ids, which nothing else here would clear.
-  // Left behind, the sidebar renders them as a phantom "Orphan subagents" group
-  // and search keeps returning hits pointing at deleted files.
-  let subagentIds = [];
+  let subagentIds;
   try {
-    subagentIds = (getCachedByParent(id) || [])
+    subagentIds = partIds.flatMap(partId => (getCachedByParent(partId) || [])
       .map(row => row.sessionId)
-      .filter(sid => sid && sid !== id);
-  } catch {}
+      .filter(sid => sid && sid !== partId));
+  } catch (err) {
+    return { ok: false, error: `cannot resolve conversation subagents: ${err.message}` };
+  }
 
   const removed = [];
   for (const target of resolved.targets) {
@@ -2250,7 +2250,7 @@ ipcMain.handle('delete-session', async (_event, sessionId) => {
     }
   }
 
-  for (const sid of [id, ...subagentIds]) {
+  for (const sid of [...partIds, ...subagentIds]) {
     mainTouchedCache.dropSession(sid);
     try { await deleteCachedSession(sid); } catch {}
     try { await deleteSearchSession(sid); } catch {}
@@ -3304,11 +3304,15 @@ const unsubscribeTaskJobs = bgAgents.onChange(({ roster }) => {
     if (job.sessionId && job.taskEvidence?.valid) taskRecords.job(job.sessionId, job.taskEvidence);
   }
 });
+function getMergedMemberIds(id) {
+  return getAllCached()
+    .filter(row => row.mergedIntoSessionId?.toLowerCase() === String(id || '').toLowerCase())
+    .map(row => row.sessionId);
+}
+
 const deleteSessionGuard = makeDeleteSessionGuard({
   activeSessions, bgAgents, cliSessionState, sessionHasPty, ptyPids,
-  getMergedMemberIds: id => getAllCached()
-    .filter(row => row.mergedIntoSessionId?.toLowerCase() === String(id || '').toLowerCase())
-    .map(row => row.sessionId),
+  getMergedMemberIds,
 });
 
 // --- fs.watch on projects directory ---

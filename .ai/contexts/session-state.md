@@ -398,6 +398,13 @@ delete that never happens, so the delete site checks
 `resolveSessionStop(session).remote` itself and skips the stop entirely for
 that kind, local sessions unaffected.
 
+**Delete covers every part of a merged conversation.** Preview, deletion and the
+main-side liveness guard share `getMergedMemberIds`. The guard runs before target
+resolution or removal. An unresolved part refuses the whole deletion with a
+reason; it never removes only the resolvable parts. Every part's transcript,
+subagent directory, cache/search entries and renderer pending/open state are
+removed together. The confirmation counts the parts when there is more than one.
+
 **The remote stop, main-side (`remote-stop.js`).** `createRemoteStopAdapter().stop(alias, descriptor)`
 builds one non-interactive ssh command (same `buildRemoteCommandArgs` transport
 as `remote-attach.js`'s probe/restore calls) that: (1) reuses

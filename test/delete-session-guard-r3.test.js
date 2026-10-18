@@ -11,16 +11,17 @@ function setup() {
   const activeSessions = new Map([['A', { exited: false }]]);
   const rows = [{ sessionId: 'B', mergedIntoSessionId: 'A' }];
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  const start = source.indexOf('const deleteSessionGuard = makeDeleteSessionGuard(');
+  const start = source.indexOf('function getMergedMemberIds(');
   assert.ok(start >= 0);
-  const end = source.indexOf(');', start) + 2;
+  const guardStart = source.indexOf('const deleteSessionGuard = makeDeleteSessionGuard(', start);
+  const end = source.indexOf(');', guardStart) + 2;
   const context = vm.createContext({
     makeDeleteSessionGuard, activeSessions, getAllCached: () => rows,
     bgAgents: { liveJobCheck: () => ({ known: true, job: null }) },
     cliSessionState: { liveElsewhereChecked: async () => ({ known: true, live: null }) },
     sessionHasPty: () => false, ptyPids: () => [],
   });
-  const guard = vm.runInContext(source.slice(start, end) + '\ndeleteSessionGuard;', context);
+  const guard = vm.runInContext(source.slice(start, end) + '\ndeleteSessionGuard;', context, { filename: 'main.js' });
   return { activeSessions, guard };
 }
 

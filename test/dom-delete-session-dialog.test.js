@@ -32,6 +32,50 @@ function stubApi(window, overrides = {}) {
 
 const tick = () => new Promise(r => setTimeout(r, 0));
 
+test('the merged conversation preview names all three parts before its file count', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    stubApi(ctx.window, { preview: { ok: true, parts: 3, transcripts: 6, subagents: 0 } });
+    const p = ctx.sidebar.showDeleteSessionDialog(SESSION);
+    await tick();
+    assert.equal(ctx.document.querySelector('h3').textContent, `Delete session "${SESSION.name}"?`);
+    assert.match(ctx.document.getElementById('dss-status').textContent, /3 parts of this conversation, 6 files on disk/);
+    ctx.document.getElementById('dss-cancel').click();
+    await p;
+  } finally { ctx.destroy(); }
+});
+
+test('confirming a merged row forgets every part and destroys every open part tab', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const session = { ...SESSION, mergedMemberIds: ['b', 'c'] };
+    const calls = stubApi(ctx.window, { preview: { ok: true, parts: 3, transcripts: 3, subagents: 0 } });
+    const destroyed = [], dismissed = [];
+    ctx.window.destroySession = id => { destroyed.push(id); ctx.window.openSessions.delete(id); };
+    ctx.window.dismissDormantSession = id => dismissed.push(id);
+    for (const id of [SESSION.sessionId, 'b', 'c']) {
+      ctx.window.sessionMap.set(id, session);
+      ctx.window.pendingSessions.set(id, { session });
+      ctx.window.openSessions.set(id, { closed: true });
+    }
+    const project = makeSampleProject();
+    project.sessions = [session];
+    ctx.sidebar.renderProjects([project], true);
+    ctx.document.getElementById('si-s-top-1').querySelector('.session-delete-btn').click();
+    await tick();
+    ctx.document.getElementById('dss-confirm').click();
+    await tick(); await tick();
+    assert.deepEqual(calls.deleteSession, [SESSION.sessionId]);
+    for (const id of [SESSION.sessionId, 'b', 'c']) {
+      assert.equal(ctx.window.sessionMap.has(id), false, `sessionMap ${id}`);
+      assert.equal(ctx.window.pendingSessions.has(id), false, `pendingSessions ${id}`);
+      assert.equal(ctx.window.openSessions.has(id), false, `tab ${id}`);
+    }
+    assert.deepEqual(destroyed.sort(), ['b', 'c', SESSION.sessionId].sort());
+    assert.deepEqual(dismissed.sort(), ['b', 'c', SESSION.sessionId].sort());
+  } finally { ctx.destroy(); }
+});
+
 test('the dialog names the session, the project, and what will be removed', async () => {
   const ctx = setupSidebarDom();
   try {
