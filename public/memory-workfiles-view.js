@@ -160,18 +160,26 @@ function buildMemoryItem(file) {
       playBtn.classList.add('running');
       playBtn.innerHTML = spinnerIcon;
       playBtn.title = 'Running...';
-      const result = await window.api.runScheduleNow(file.filePath);
-      playBtn.classList.remove('running');
-      playBtn.classList.add('done');
-      playBtn.innerHTML = checkIcon;
-      playBtn.title = 'Launched!';
-      setTimeout(() => {
+      const noticeId = `RunSchedule:${file.filePath}`;
+      try {
+        const result = await window.api.runScheduleNow(file.filePath);
+        if (!result?.ok) throw new Error(result?.error || 'The backend returned no result');
+        clearAppNotice(noticeId);
+        playBtn.classList.add('done');
+        playBtn.innerHTML = checkIcon;
+        playBtn.title = 'Launched!';
+        setTimeout(() => {
+          playBtn.classList.remove('done');
+          playBtn.innerHTML = playIcon;
+          playBtn.title = 'Run now';
+        }, 2000);
+      } catch (error) {
         playBtn.classList.remove('done');
         playBtn.innerHTML = playIcon;
         playBtn.title = 'Run now';
-      }, 2000);
-      if (result && !result.ok) {
-        console.error('Schedule run failed:', result.error);
+        showAppNotice({ id: noticeId, kind: 'error', message: `Could not run "${file.filename}": ${error?.message || error || 'The backend is unavailable'}. Check the schedule file, then try Run now again.` });
+      } finally {
+        playBtn.classList.remove('running');
       }
     });
     row.appendChild(playBtn);

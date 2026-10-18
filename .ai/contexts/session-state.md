@@ -14,7 +14,9 @@ Delete refusals for external processes direct the user to the session's own
 terminal at its project location. A backend refusal for a session running in
 this window names Stop on its sidebar row. A guard's existing recovery is not
 followed by a second recovery instruction. Remote Delete never stops a process
-before the read-only refusal (#271: remote Delete). Confirmations remain questions.
+before the read-only refusal (#271: remote Delete). Remote rows do not append
+the Delete button, and the row context menu offers no Delete. Main retains
+`REMOTE_READ_ONLY` as a guard for direct requests. Confirmations remain questions.
 After successful Delete, pendingSessions is cleared before reloading so its
 temporary row cannot be reinjected. An open tab is destroyed so it cannot remain
 selectable after its transcript and sidebar row are removed.
@@ -36,6 +38,12 @@ Evidence: `test/dom-row-action-errors.test.js`,
 `test/confirm-and-stop-session.test.js`,
 `test/dom-sidebar-stop-before-archive.test.js`,
 `test/dom-project-archive-folder.test.js`.
+
+`markRestoreIndexingDone` keeps `Restore:pending` until its continuation retry
+has run. A manual open cancelling that retry, two failed final reloads, or a
+thrown retry move the affected members into persistent `Restore:batch` with
+the reason and "Open it from the sidebar to retry restoring." Saved entries
+remain held. See `test/restore-pending-notice-666.test.js` (#666).
 
 ## Conversation head turn and the single spinner (#625)
 
@@ -369,8 +377,9 @@ and titled "Checking the host before archiving…" while this runs (the folder a
 | local | no PTY | nothing — `{ok:true}` |
 
 A `{ok:false, error}` return skips that session's archive/delete and surfaces
-the failure on its own button — `sidebar.js`'s `surfaceStopFailure(btn, message)`,
-the same flash-and-title-with-restore convention `confirmAndStopSession` uses.
+the failure through `showSessionActionFailure`, a persistent B8 notice naming
+the affected session, the reason and how to retry. `confirmAndStopSession`
+uses the same notice brick.
 For the two group archives (project header, slug group), one session's
 refusal only skips that session; the loop continues to the rest. The project
 header's confirmation names the host alias(es) it is about to stop, computed

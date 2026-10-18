@@ -125,7 +125,12 @@ One final id is selected automatically. A target absent from the index, the
 transcripts on disk and live CLI processes is ignored when its parent has another existing
 continuation. A transcript present on disk but not yet indexed still holds
 restore with a waiting-for-indexing notice; held entries retry once when indexing
-finishes. If process status cannot be checked, a missing target remains unresolved
+finishes. Its pending notice clears after the retry has run. If you opened a
+session manually during indexing, the automatic retry is cancelled; if the
+final reload fails twice, it cannot start. In either case, a persistent notice
+names the held sessions and says **Open it from the sidebar to retry restoring**.
+Their saved working-set entries are kept.
+If process status cannot be checked, a missing target remains unresolved
 instead of being discarded. If all of a node's targets are missing,
 restore stays unresolved rather than reopening that node automatically.
 Several final ids, a cycle or a malformed continuation record hold the saved entry

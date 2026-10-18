@@ -103,10 +103,12 @@ one live External row, keeping its job details, id and finished state. It remain
 visible when Finished is unchecked and still counts as finished. A conversation
 open in this Switchboard keeps its job row. Respawn and Delete are disabled in
 both cases; hover them to see the pid and where the conversation is open.
+For a conversation open here, the message directs you to Stop on its sidebar
+row. For one running in another process, it asks you to end that process first.
 
 An external interactive session offers Transcript only. A live session is
 never resumed: attach is the only way into it. To respawn or delete one, stop
-it first.
+it from its sidebar row if it is open here, or end its other process first.
 Switchboard checks again before Respawn or Delete, and before Stop on a
 finished job. A conversation held by an open terminal or another live process
 is refused even if the job says stopped or done. If the process or job files

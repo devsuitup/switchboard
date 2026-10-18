@@ -2015,7 +2015,7 @@ function buildSessionItem(session) {
     if (bridgeSessionUrl(session.bridgeSessionId)) actions.appendChild(bridgeBtn);
     actions.appendChild(archiveBtn);
     actions.appendChild(launchConfigBtn);
-    actions.appendChild(deleteBtn);
+    if (!session.remoteAlias) actions.appendChild(deleteBtn);
   }
 
   row.appendChild(pin);

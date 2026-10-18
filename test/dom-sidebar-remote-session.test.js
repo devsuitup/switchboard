@@ -35,6 +35,21 @@ function register(ctx, sessions) {
   for (const s of sessions) ctx.window.sessionMap.set(s.sessionId, s);
 }
 
+test('remote rows offer no Delete button or Delete context-menu action', () => {
+  const ctx = setupSidebarDom();
+  try {
+    register(ctx, [REMOTE_SESSION]);
+    ctx.sidebar.renderProjects([projectWithRemoteSession()], true);
+    const row = ctx.document.getElementById('si-remote-1');
+    assert.equal(row.querySelector('.session-delete-btn'), null);
+    ctx.window.showSessionContextMenu({ clientX: 10, clientY: 10 }, REMOTE_SESSION.sessionId);
+    assert.ok(ctx.document.querySelector('[role="menu"]'));
+    assert.ok([...ctx.document.querySelectorAll('[role="menuitem"]')].every(el => !/delete/i.test(el.textContent)));
+    ctx.sidebar.renderProjects([makeSampleProject({ sessions: [{ ...REMOTE_SESSION, sessionId: 'local-1', remoteAlias: undefined }] })], true);
+    assert.ok(ctx.document.getElementById('si-local-1').querySelector('.session-delete-btn'));
+  } finally { ctx.destroy(); }
+});
+
 test('a remote session row carries a badge naming its host', () => {
   const ctx = setupSidebarDom();
   try {

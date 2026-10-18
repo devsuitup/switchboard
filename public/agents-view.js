@@ -404,7 +404,7 @@ function renderAgentDetail(entry) {
     const pid = entry.conversationPid || (entry.kind === 'interactive' && entry.pid);
     if (verb === 'transcript' && !v.transcript) return 'Transcript does not exist or is not available yet';
     if ((verb === 'rm' || verb === 'respawn') && pid) return entry.conversationOwn
-      ? `Conversation is open in Switchboard in pid ${pid}; close it first` : `Conversation is live in pid ${pid}; stop it first`;
+      ? `Conversation is open in this window (pid ${pid}). Stop it from its sidebar row first.` : `Conversation is running in another process (pid ${pid}). End that process first.`;
     return '';
   };
   const btn = (verb, label, enabled) =>

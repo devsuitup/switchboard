@@ -260,10 +260,10 @@ test('per-session delete: a local session with an active PTY is stopped before t
   } finally { ctx.destroy(); }
 });
 
-test('per-session delete: a remote session is never stopped — delete is refused server-side for remote regardless', async () => {
+test('per-session delete: a stale local row that becomes remote never stops it before the backend refusal', async () => {
   const ctx = setupSidebarDom();
   try {
-    const r1 = remoteSession('r1', 'vps', true);
+    const r1 = localSession('r1');
     ctx.window.sessionMap.set('r1', r1);
     const calls = installRecordingApi(ctx, {
       deleteSession: () => Promise.resolve({ ok: false, error: 'remote sessions are read-only — this build observes them, it does not attach to them' }),
@@ -271,6 +271,7 @@ test('per-session delete: a remote session is never stopped — delete is refuse
 
     ctx.sidebar.renderProjects([{ projectPath: '/home/dev/proj', sessions: [r1] }], true);
     const item = ctx.document.getElementById('si-r1');
+    Object.assign(r1, remoteSession('r1', 'vps', true));
     item.querySelector('.session-delete-btn').click();
     await new Promise(r => setTimeout(r, 0));
     ctx.document.getElementById('dss-confirm').click();

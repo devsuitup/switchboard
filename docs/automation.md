@@ -175,8 +175,11 @@ session.
 The **Agent Files** tab lists the schedule files with a clock icon and a **Run
 now** button, which starts a run at once. **Run now** ignores `cron` and
 `enabled`, and does not wait for a run of the same schedule that is still going.
-The button shows a check mark once the run is launched; a launch failure is only
-logged.
+The button shows a check mark and **Launched!** only after the launch succeeds.
+A refused launch, an unavailable backend or a missing reply restores the Run
+now button and leaves a notice until you dismiss it. The notice names the
+schedule and reason, and asks you to check the schedule file and try Run now
+again. A successful retry clears that schedule's error.
 
 ## Triggers
 

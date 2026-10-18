@@ -26,6 +26,11 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 
 ## Invariants
 
+Disabled Respawn/Delete titles for an External conversation name its pid and
+a real recovery action: Stop on its sidebar row when `conversationOwn` is
+true, or end the other process otherwise. The External detail has no working
+Stop or Close action. See `test/dom-agents-view.test.js` (#566/S5).
+
 1. Never `--resume` or `--fork-session` a hosted job. Hosting follows
    `isHostedJob` (see "Job states"). `claude attach` is the
    only path to a live job (`guardResume` turns a `bg` verdict into attach

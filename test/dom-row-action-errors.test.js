@@ -92,14 +92,26 @@ for (const group of ['live', 'unavailable', 'pending']) {
   });
 }
 
+function prepareIndexRetry(h, item) {
+  h.window.restorePlanner = null;
+  h.window.skippedWorkingSetEntries = new Map([[item.sessionId, { item, retryContinuation: true }]]);
+  h.window.continuationRetryCancelled = false;
+  h.window.loadProjects = async () => {};
+  h.window.tickRestorePlanner = async () => {};
+  h.window.persistWorkingSet = async () => {};
+  const retried = [];
+  h.window.runRestore = async list => { retried.push(...list.map(entry => entry.sessionId)); };
+  return retried;
+}
+
 test('an indexing hold needing user action is persistent while automatic retries alone are pending', async t => {
   const h = setup(t);
-  h.window.restorePlanner = null;
-  h.window.skippedWorkingSetEntries = new Map();
+  const automatic = { sessionId: 'auto', projectPath: '/auto' };
+  const retried = prepareIndexRetry(h, automatic);
   const app = loadAppFunctions(h.context, { functions: ['showLiveElsewhereNotice', 'showRestoreNotice', 'markRestoreIndexingDone'] });
   app.showLiveElsewhereNotice([
     { session: h.session, waitingForIndex: true, retryAfterIndexing: false },
-    { session: { sessionId: 'auto', projectPath: '/auto' }, waitingForIndex: true, retryAfterIndexing: true },
+    { session: automatic, waitingForIndex: true, retryAfterIndexing: true },
   ]);
   const manual = h.document.querySelector('[data-notice-id="Restore:batch"]');
   const pending = h.document.querySelector('[data-notice-id="Restore:pending"]');
@@ -111,6 +123,7 @@ test('an indexing hold needing user action is persistent while automatic retries
   assert.match(pending.textContent, /auto.*will retry/);
   assert.doesNotMatch(pending.textContent, /s1/);
   await app.markRestoreIndexingDone();
+  assert.deepEqual(retried, ['auto']);
   assert.ok(manual.isConnected);
   assert.equal(pending.isConnected, false);
 });
@@ -136,7 +149,8 @@ for (const failure of ['rejected', 'refused', 'unavailable']) {
 
 for (const [reason, extra] of [['missing transcript', {}], ['REMOTE_READ_ONLY', { remoteAlias: 'vps' }], ['backend disconnected', {}]]) {
   test(`Delete ${reason} retains the row and explains recovery`, async t => {
-    const h = setup(t, extra);
+    const h = setup(t);
+    Object.assign(h.session, extra);
     h.window.showDeleteSessionDialog = async () => true;
     h.window.api.deleteSession = async () => {
       if (reason === 'backend disconnected') throw new Error(reason);
@@ -390,10 +404,9 @@ test('Unarchive clears its host partial Archive notice and preserves another ope
   assert.ok(h.document.querySelector('[data-notice-id="other"]'));
 });
 
-test('waiting for indexing is pending status and disappears when indexing finishes', async t => {
+test('waiting for indexing is pending status and disappears after the indexing retry runs', async t => {
   const h = setup(t);
-  h.window.restorePlanner = null;
-  h.window.skippedWorkingSetEntries = new Map();
+  const retried = prepareIndexRetry(h, h.session);
   const app = loadAppFunctions(h.context, { functions: ['showLiveElsewhereNotice', 'showRestoreNotice', 'markRestoreIndexingDone'] });
   app.showLiveElsewhereNotice([{ session: h.session, waitingForIndex: true, retryAfterIndexing: true }]);
   const el = h.document.querySelector('#app-notices [role="status"]');
@@ -402,6 +415,7 @@ test('waiting for indexing is pending status and disappears when indexing finish
   assert.doesNotMatch(el.textContent, /failed/i);
   assert.equal(h.document.querySelector('[role="alert"]'), null);
   await app.markRestoreIndexingDone();
+  assert.deepEqual(retried, ['s1']);
   assert.equal(el.isConnected, false);
 });
 

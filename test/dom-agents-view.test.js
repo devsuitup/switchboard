@@ -107,6 +107,23 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
+for (const own of [true, false]) {
+  test(`External refusal names an available recovery action (own window: ${own})`, async t => {
+    const h = setup();
+    t.after(() => h.destroy());
+    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], conversationPid: 42, conversationOwn: own }] });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    for (const verb of ['respawn', 'rm']) {
+      const button = h.document.querySelector(`[data-verb="${verb}"]`);
+      assert.equal(button.disabled, true);
+      assert.doesNotMatch(button.title, /close it first|; stop it first/i);
+      assert.match(button.title, own ? /Stop it from its sidebar row first/ : /End that process first/);
+      assert.match(button.title, /42/);
+    }
+  });
+}
+
 test('default state grouping puts hosted done under Idle with its waiting emoji', async () => {
   const h = setup({ storage: {} });
   try {

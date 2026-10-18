@@ -4,6 +4,14 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- Remote session rows no longer offer Delete, which could only be refused after opening its confirmation. (#566, #565)
+- Disabled Respawn and Delete buttons in Agents now tell you to use the conversation's sidebar Stop or end its other process, according to where it is running. (#566)
+
+### Fixed
+- Run now on a schedule shows Launched! only when the launch succeeds. A failed launch leaves a dismissible notice saying why and how to retry. (#566)
+- A restore retry cancelled during indexing, or blocked by a failed reload, now leaves a persistent notice telling you to open the session from the sidebar to retry restoring. (#666, #566)
+
 ## v0.0.97 — 2026-10-17
 
 ### Changed

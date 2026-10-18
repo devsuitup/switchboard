@@ -236,7 +236,7 @@ product-model decision.
 | Context-menu Refresh | no open tab for the row or a member | disabled (`sidebar.js:1629-1631`) | yes, same text |
 | Remote New session | launch tier unavailable | disabled (`sidebar.js:936-939`) | yes: `New session unavailable on <host>: <reason>` |
 | Remote Send | send blocked | disabled (`sidebar.js:1773-1776`) | yes: `Send unavailable: <reason>` |
-| Agents Respawn / Delete | conversation live in a pid | disabled (`agents-view.js:315-316`) | yes |
+| Agents Respawn / Delete | conversation live in a pid | disabled (`renderAgentDetail`, `agents-view.js`) | pid and recovery: Stop on its sidebar row here, or end the other process |
 | Agents Respawn / Delete | job live | disabled | **no** (`reason()` returns `''`, `agents-view.js:317`) |
 | Agents Attach / Stop | job finished or daemon unreachable | disabled (`agents-view.js:157-158`) | **no** (the daemon banner covers only the second case, `agents-view.js:366-369`) |
 | Agents Transcript | none available | disabled | yes |
@@ -247,7 +247,8 @@ product-model decision.
 | Row Stop | not running/alive | **hidden** (`style.css:1266-1273`) | — |
 | Grid Stop | not running/alive | **hidden** (`app.js:1206`, `grid-view.js:195`) | — |
 | Header Stop | no PTY | **hidden** (`app.js:1218`) | — |
-| Row Delete on a merged row with a live member | always | **enabled, then refused** by a `Failed` flash (`sidebar.js:1529-1533`) | 3 s `title`: `session is still running — close it first` (no control named "close" exists) |
+| Row Delete on a merged row with a live member | a member is live | refused before its confirmation (`sidebar.js`) | persistent B8 notice naming the reason and recovery |
+| Row Delete on a remote session | always | **not appended**; context menu offers no Delete | main retains the read-only guard for direct requests |
 | Row Send | not alive or attached | hidden (`style.css:1275-1281`) | — |
 | Row Resume with config | PTY running | hidden (`style.css:1283-1285`) | — |
 
@@ -274,6 +275,13 @@ uses `role="status"` and expires after 15 s. The #604 `Archived, but not
 stopped` notice now uses this persistent error variant, with its wording
 unchanged and no console-only duplicate.
 
+Stop, Detach, Delete and Archive failures use B8 and clear only the successful
+action's own notice. Run now reports success only after an `ok` reply; a refusal,
+rejected IPC or absent result restores the button and leaves a B8 error naming
+the schedule, reason and how to retry. Restore's pending indexing notice clears
+after its retry runs; an early return moves held members into persistent
+`Restore:batch`, with "Open it from the sidebar to retry restoring" (#666).
+
 The Undo variant (`kind: 'undo'`) lasts 10 s and uses `role="status"`. Its
 caller supplies the undo callback, `actionLabel: 'Undo'`, and text explaining
 the completed action. Undo and Dismiss are keyboard-reachable native buttons
@@ -284,8 +292,8 @@ records the other feedback mechanisms from the measured baseline.
 
 | Mechanism | Where | Notes |
 |---|---|---|
-| Button text flash `Failed` + reason in `title` for 3 s | `surfaceStopFailure` (`sidebar.js:21-28`): Archive, slug Archive, folder Archive, Delete pre-check, Delete stop; `confirmAndStopSession` (`app.js:1062-1067`) | the bar is `opacity:0` unless hovered or a button has keyboard focus (`:focus-visible`) (`style.css`, `.session-actions:has(:focus-visible)`): after both pointer and keyboard focus leave, nothing is seen |
-| Button text flash `Failed`, reason **only in console** | Row Delete failure (`sidebar.js:1547-1554`) | the user never learns why |
+| B8 persistent action failure | Stop/Detach, Delete, Archive and restore (`app.js`, `sidebar.js`) | reason and recovery stay visible after pointer leave; successful actions clear their own member |
+| B8 persistent Run now failure | `buildMemoryItem` (`memory-workfiles-view.js`) | restores the play button; no success check mark or Launched! on failure |
 | Button flash success | `flashButtonText` (`viewer-toolbar.js:28-39`): `Saved!` (`file-panel.js:446, 2089`, `viewer-toolbar.js:266`), `✓` / `Copied!` (`viewer-toolbar.js:271, 276`) | on `.icon-btn` it always flashes **green**, whatever the text; today no `Failed` caller is an `.icon-btn` (verified from the caller list) |
 | `window.alert` | 12 sites: `sidebar.js:1158, 1225, 1227, 1230, 1305, 1349`; `viewer-panel.js:290, 293`; `file-panel.js:448, 451`; `activity-trace-panel.js:70, 133` | blocking, OS-styled |
 | Inline error, persistent | Agents (`agents-view.js:349`, `.agents-detail-error`); dialog error lines (Add project `dialogs.js:647-665`, New agent `dialogs.js:803-875`); worktree dialog `.dwt-error` (`sidebar.js:1985, 1999`) | stays until the next attempt |
