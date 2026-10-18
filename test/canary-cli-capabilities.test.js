@@ -618,7 +618,7 @@ for (const mutation of ['', 'stale-descriptor-name', 'descriptor-only-name', 're
   });
 }
 
-for (const mutation of ['', 'receipt-delayed']) {
+for (const mutation of ['', 'receipt-delayed', 'receipt-report-lines', 'receipt-no-leading-lf', 'receipt-duplicate']) {
   test(`GIVEN live C4 receipt ${mutation} while child stays busy WHEN measuring THEN accept exact sender and body and exit gracefully`, async t => {
     const r = await run(t, ['--canary', 'C4', ...(mutation ? ['--mutation', mutation] : [])]);
     assert.equal(r.status, 0, r.stderr + (r.ledger ? JSON.stringify(data(r)) : 'no ledger'));
@@ -632,6 +632,12 @@ for (const mutation of ['', 'receipt-delayed']) {
       assert.equal(report.receipt.from.socketPathSha256, crypto.createHash('sha256').update(`/tmp/cc-socks/${child.pid}.sock`).digest('hex'));
       assert.equal(report.receipt.fromName, `native-${report.childId}`);
       assert.equal(report.receipt.fromMode, 'prompting');
+      const body = report.nonce + (mutation === 'receipt-report-lines' ? '\nChecks performed: fixture only.\nBlockers: none.' : '');
+      assert.equal(report.receipt.bodySha256, crypto.createHash('sha256').update(body).digest('hex'));
+      assert.equal(report.receipt.bodyLineCount, mutation === 'receipt-report-lines' ? 3 : 1);
+      assert.deepEqual(report.receipt.origin, { kind: 'peer', fromMode: 'prompting', verifiedPeerPidMatchesChild: true,
+        fromSha256: report.receipt.from.sha256 });
+      assert.equal(report.unexpectedNonceInOrigin, false);
       assert.ok(report.receiptOffset >= report.before);
       assert.equal(report.queueOperations.length, 2);
       assert.ok(report.queueOperations.every(x => x.type === 'queue-operation' && x.offset >= report.before && x.offset < report.receiptOffset));
@@ -643,6 +649,7 @@ for (const mutation of ['', 'receipt-delayed']) {
       assert.equal(origin.shutdown.gracefulExit, true);
     }
     assert.ok(!JSON.stringify(evidence.reports).includes('/tmp/cc-socks/'));
+    assert.ok(!JSON.stringify(evidence).includes('Checks performed: fixture only.'));
     const control = evidence.reports.find(x => x.wrongRecipientControl);
     assert.equal(control.sendResults[0].success, false);
     assert.match(control.sendResults[0].excerpt, /No agent named/);
@@ -658,7 +665,8 @@ test('GIVEN C4 alternative sender scheme WHEN endpoint matches THEN accept recei
   assert.match(data(r).reports[0].receipt.from.schemeSha256, /^[a-f0-9]{64}$/);
 });
 
-for (const mutation of ['receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-type', 'receipt-teammate']) {
+for (const mutation of ['receipt-wrong-sender', 'receipt-extra-body', 'receipt-wrong-type', 'receipt-teammate',
+  'receipt-nonce-later', 'receipt-empty-body', 'receipt-double-leading-lf', 'receipt-origin-name-mismatch', 'receipt-origin-body-mismatch']) {
   test(`GIVEN C4 ${mutation} WHEN measuring THEN do not qualify receipt but retain queue offsets and send result`, async t => {
     const r = await run(t, ['--canary', 'C4', '--mutation', mutation]);
     assert.equal(r.status, 1, r.stderr);
@@ -669,6 +677,23 @@ for (const mutation of ['receipt-wrong-sender', 'receipt-extra-body', 'receipt-w
     assert.equal(report.queueOperations.length, 2);
     assert.ok(Object.values(r.ledger.measurements[0].capabilities).every(x => x === false));
     assert.ok(data(r).processes.every(x => x.cleaned && x.shutdown.gracefulExit && !x.shutdown.forcedKill));
+  });
+}
+
+test('GIVEN C4 recognised receipt and enqueue WHEN checking origin THEN legitimate nonce is not unexpected', async t => {
+  const r = await run(t, ['--canary', 'C4']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(data(r).reports[0].nativeReceipt, true);
+  assert.equal(data(r).reports[0].unexpectedNonceInOrigin, false);
+});
+
+for (const mutation of ['receipt-extra-enqueue', 'receipt-unrelated-nonce']) {
+  test(`GIVEN C4 ${mutation} beside a valid receipt WHEN checking origin THEN unrelated nonce remains unexpected`, async t => {
+    const r = await run(t, ['--canary', 'C4', '--mutation', mutation]);
+    assert.equal(r.status, 0, r.stderr);
+    const report = data(r).reports[0];
+    assert.equal(report.nativeReceipt, true);
+    assert.equal(report.unexpectedNonceInOrigin, true);
   });
 }
 

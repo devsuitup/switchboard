@@ -135,12 +135,23 @@ must still be measured. Raw transcripts are not copied into evidence.
 
 The receipt shape supplied by the operator in brief-380p0j (Linux CLI
 2.1.301) is a `user` row containing a `cross-session-message` element,
-preceded by two `queue-operation` rows. Its body must equal the nonce
-exactly after removing the element's single framing newline on each side;
+preceded by two `queue-operation` rows. After one optional leading LF (or CRLF),
+the body's first line must equal the nonce exactly. Further report lines are
+allowed; empty bodies, text before the nonce and longer first lines are rejected.
+The optional prefix `Another Claude session sent a message:` is accepted.
 `from-name` must equal the child's current native name. Evidence records
 SHA-256 of the complete from address and its scheme, SHA-256 of a recognized
 endpoint path, `from-name`, `from-mode`,
-receipt byte offset, and queue row types/offsets after the saved boundary.
+receipt byte offset, bodyLineCount (excluding a single framing newline on each
+side), bodySha256 (the body after removing those framing newlines), and
+queue row types/offsets after the saved boundary. Report text is never evidence.
+When structured origin is present, its name and exact body must match the
+element's unframed body byte-for-byte; mismatches reject the receipt. Evidence retains origin.kind, fromMode,
+verifiedPeerPidMatchesChild and fromSha256, without the source address or body.
+unexpectedNonceInOrigin excludes all recognized receipt rows and preceding
+enqueue rows whose content exactly equals a recognized receipt's message.
+Other nonce-bearing rows remain unexpected. Wrong-recipient and rename controls
+exclude nothing and still require complete absence of the nonce.
 The owned descriptor's messagingSocketPath identifies the endpoint: absolute
 .sock paths use uds:, Windows `\\.\pipe\` paths use pipe: (npipe: is also
 recognized in receipts). A recognized endpoint must match the child's exact descriptor endpoint.
