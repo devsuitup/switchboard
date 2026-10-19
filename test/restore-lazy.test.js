@@ -410,8 +410,8 @@ function setupGroups({ recent = true } = {}) {
   const h = setup({ savedSet, recent });
   const project = h.window.cachedProjects[0];
   project.sessions = project.sessions.filter((s) => s.sessionId !== 'w');
-  for (const s of project.sessions) if (s.sessionId === 'x') s.slug = 'sl';
-  project.sessions.push({ sessionId: 'x2', name: 'x2', slug: 'sl', modified: OLD, messageCount: 1 });
+  for (const s of project.sessions) if (s.sessionId === 'x') s.scheduleSlug = 'sl';
+  project.sessions.push({ sessionId: 'x2', name: 'x2', scheduleSlug: 'sl', modified: OLD, messageCount: 1 });
   const worktree = { projectPath: WORKTREE, sessions: [{ sessionId: 'w', name: 'w', modified: OLD, messageCount: 1 }] };
   h.window.cachedProjects = [project, worktree];
   h.window.cachedAllProjects = [project, worktree];
@@ -721,8 +721,8 @@ function setupMerged({ saved = ['B', 'x'], members = ['B'], slug = false, head, 
   const rowIds = new Set(['A', ...members]);
   const headField = head ? { headSessionId: head } : {};
   project.sessions = project.sessions.filter((s) => !rowIds.has(s.sessionId));
-  project.sessions.push({ sessionId: 'A', name: 'web', modified: OLD, messageCount: 1, mergedMemberIds: members, ...headField, ...(slug ? { slug: 'sl' } : {}) });
-  if (slug) project.sessions.push({ sessionId: 'z', name: 'z', slug: 'sl', modified: OLD, messageCount: 1 });
+  project.sessions.push({ sessionId: 'A', name: 'web', modified: OLD, messageCount: 1, mergedMemberIds: members, ...headField, ...(slug ? { scheduleSlug: 'sl' } : {}) });
+  if (slug) project.sessions.push({ sessionId: 'z', name: 'z', scheduleSlug: 'sl', modified: OLD, messageCount: 1 });
   h.indexMerged = () => {
     h.window.sessionMap.set('A', { sessionId: 'A', projectPath: PROJECT, mergedMemberIds: members, ...headField });
     h.window.sessionMap.set('x', { sessionId: 'x', projectPath: PROJECT });

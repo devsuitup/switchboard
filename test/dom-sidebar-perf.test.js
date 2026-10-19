@@ -114,8 +114,8 @@ test('Fix1: renderProjects — slug-group carries js-stateful (slug fixture)', (
     const baseTime = Date.parse('2026-05-22T10:00:00Z');
     const t = (offset) => new Date(baseTime + offset).toISOString();
     const sessions = [
-      { sessionId: 'slug-a', name: 'alpha v1', slug: 'alpha', modified: t(0), archived: 0 },
-      { sessionId: 'slug-b', name: 'alpha v2', slug: 'alpha', modified: t(-1000), archived: 0 },
+      { sessionId: 'slug-a', name: 'alpha v1', scheduleSlug: 'alpha', modified: t(0), archived: 0 },
+      { sessionId: 'slug-b', name: 'alpha v2', scheduleSlug: 'alpha', modified: t(-1000), archived: 0 },
     ];
     ctx.sidebar.renderProjects([{ projectPath: '/home/dev/slugtest', sessions }], true);
     const sc = ctx.document.getElementById('sidebar-content');
@@ -138,9 +138,9 @@ test('Fix1: renderProjects — slug-group-more and slug-group-older carry js-sta
     const baseTime = Date.parse('2026-05-22T10:00:00Z');
     const t = (offset) => new Date(baseTime + offset).toISOString();
     const sessions = [
-      { sessionId: 'slug-run-1', name: 'running', slug: 'beta', modified: t(0), archived: 0 },
-      { sessionId: 'slug-rest-1', name: 'rest 1', slug: 'beta', modified: t(-1000), archived: 0 },
-      { sessionId: 'slug-rest-2', name: 'rest 2', slug: 'beta', modified: t(-2000), archived: 0 },
+      { sessionId: 'slug-run-1', name: 'running', scheduleSlug: 'beta', modified: t(0), archived: 0 },
+      { sessionId: 'slug-rest-1', name: 'rest 1', scheduleSlug: 'beta', modified: t(-1000), archived: 0 },
+      { sessionId: 'slug-rest-2', name: 'rest 2', scheduleSlug: 'beta', modified: t(-2000), archived: 0 },
     ];
     ctx.sidebar.renderProjects([{ projectPath: '/home/dev/slugmore', sessions }], true);
     const sc = ctx.document.getElementById('sidebar-content');

@@ -208,8 +208,8 @@ test('project archive-all: a stop refusal is surfaced, every other session is st
 test('slug-group archive: a stop refusal on one remote session skips it, the other (local) session still archives', async () => {
   const ctx = setupSidebarDom();
   try {
-    const r1 = remoteSession('r1', 'vps', true, { slug: 'grp' });
-    const s2 = localSession('s2', { slug: 'grp' });
+    const r1 = remoteSession('r1', 'vps', true, { scheduleSlug: 'grp' });
+    const s2 = localSession('s2', { scheduleSlug: 'grp' });
     const project = { projectPath: '/home/dev/proj', sessions: [r1, s2] };
     ctx.window.sessionMap.set('r1', r1);
     ctx.window.sessionMap.set('s2', s2);
@@ -219,7 +219,7 @@ test('slug-group archive: a stop refusal on one remote session skips it, the oth
     });
 
     ctx.sidebar.renderProjects([project], true);
-    const group = ctx.document.getElementById('slug-grp');
+    const group = ctx.document.querySelector('.slug-group');
     assert.ok(group, 'the two same-slug sessions must render as a slug group');
     await group.querySelector('.slug-group-archive-btn').onclick(new ctx.window.MouseEvent('click'));
 
@@ -386,14 +386,14 @@ test('stopBeforeArchive: an unreachable host is reported as not stopped, once pe
 test('slug-group archive: sessions on an unreachable host are archived with one notice per host listing sessions', async () => {
   const ctx = setupSidebarDom();
   try {
-    const r1 = remoteSession('r1', 'vps', true, { slug: 'grp' });
-    const r2 = remoteSession('r2', 'vps', true, { slug: 'grp' });
+    const r1 = remoteSession('r1', 'vps', true, { scheduleSlug: 'grp' });
+    const r2 = remoteSession('r2', 'vps', true, { scheduleSlug: 'grp' });
     const project = { projectPath: '/home/dev/proj', sessions: [r1, r2] };
     ctx.window.sessionMap.set('r1', r1);
     ctx.window.sessionMap.set('r2', r2);
     const calls = installRecordingApi(ctx, { remoteStopSession: unreachable });
     ctx.sidebar.renderProjects([project], true);
-    const button = ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn');
+    const button = ctx.document.querySelector('.slug-group').querySelector('.slug-group-archive-btn');
     const done = button.onclick(new ctx.window.MouseEvent('click'));
     assert.equal(button.disabled, true);
     await done;
@@ -458,8 +458,8 @@ test('folder archive is refused up front while a row of the folder is still chec
 test('a re-render keeps the slug-group and folder Archive buttons disabled while they check', async () => {
   const ctx = setupSidebarDom();
   try {
-    const r1 = remoteSession('r1', 'vps', true, { slug: 'grp' });
-    const r2 = remoteSession('r2', 'vps', true, { slug: 'grp' });
+    const r1 = remoteSession('r1', 'vps', true, { scheduleSlug: 'grp' });
+    const r2 = remoteSession('r2', 'vps', true, { scheduleSlug: 'grp' });
     const project = { projectPath: '/home/dev/proj', sessions: [r1, r2] };
     ctx.window.sessionMap.set('r1', r1);
     ctx.window.sessionMap.set('r2', r2);
@@ -467,13 +467,13 @@ test('a re-render keeps the slug-group and folder Archive buttons disabled while
     const gate = new Promise(resolve => { release = resolve; });
     installRecordingApi(ctx, { remoteStopSession: () => gate.then(() => ({ ok: true })) });
     ctx.sidebar.renderProjects([project], true);
-    const done = ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    const done = ctx.document.querySelector('.slug-group').querySelector('.slug-group-archive-btn').onclick(new ctx.window.MouseEvent('click'));
     await new Promise(r => setTimeout(r, 0));
     ctx.sidebar.renderProjects([project], true);
-    assert.equal(ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn').disabled, true);
+    assert.equal(ctx.document.querySelector('.slug-group').querySelector('.slug-group-archive-btn').disabled, true);
     release();
     await done;
-    assert.equal(ctx.document.getElementById('slug-grp').querySelector('.slug-group-archive-btn').disabled, false);
+    assert.equal(ctx.document.querySelector('.slug-group').querySelector('.slug-group-archive-btn').disabled, false);
   } finally { ctx.destroy(); }
 });
 

@@ -29,8 +29,10 @@ Surfaces named in the tables:
 
 ## 1. Sidebar row
 
-A row stands for one representative transcript plus `mergedMemberIds`
-(`public/session-activity-dom.js:3-5`). No doc defines it (M4).
+A row stands for one conversation: an original transcript plus
+`mergedMemberIds`. Its head (`headSessionId`) is its newest-modified part;
+the original part owns the row identity, name, pin and archived flag
+(`public/session-activity-dom.js` `rowHeadId`, `docs/session-browser.md`).
 
 **States**
 
@@ -103,16 +105,19 @@ Plain-terminal rows show Stop only; subagent rows have no buttons
 - R1.7 "Show running only" keeps rows with a member in local `activePtyIds`
   only; an alive remote or unattached background row is filtered out
   (V, `public/sidebar.js:684`).
+- R1.8 Fork session, Resume with config and View messages target the head.
+  A remote row opened as a transcript uses the head too
+  (`public/sidebar.js` `rebindSidebarEvents`). Agents Transcript opens the
+  job's own transcript: a job is not a sidebar row.
 
 ## 2. Merged web-session row
 
 **States**: as a row (R1.1). Not marked as merged anywhere in the UI (S: no
 badge or count found in `buildSessionItem`).
 
-**Actions**: as a row, with per-member rules R1.3–R1.6. Search matches the
-representative id only (V, audit `public/sidebar.js:484-489`); the transcript
-viewer shows the representative's file only (V,
-`.ai/contexts/session-cache.md:113`).
+**Actions**: as a row, with per-member rules R1.3–R1.6 and R1.8. Search matches
+the representative id only (V, audit `public/sidebar.js:484-489`); View messages
+shows the head's transcript (`public/sidebar.js` `rebindSidebarEvents`).
 
 **Where**: user doc, one sentence (`docs/session-restore.md:84`); semantics
 only in `.ai/contexts/session-cache.md:106-131`.
@@ -147,8 +152,11 @@ No row-level concept unifies these; each follows its own rule (M4).
 member in turn (V, `public/sidebar.js:1362-1380`); a member that fails to stop
 is skipped and flashes **Failed** on its row (`docs/session-browser.md:172-176`).
 
-**Rules**: R4.1 rows with the same `slug` / `scheduleSlug` are grouped; a
-schedule's runs share its slug (`docs/session-browser.md:145-147`).
+**Rules**: R4.1 only scheduled runs are grouped, using the same non-empty
+`scheduleSlug` within a project and host. Other conversations stay in separate
+rows even when their CLI `slug` matches (`public/sidebar.js` `renderProjects`,
+`docs/session-browser.md`, "Groups inside a project"). Group Archive still
+stops and archives the scheduled runs in turn.
 
 ## 5. Subagent
 

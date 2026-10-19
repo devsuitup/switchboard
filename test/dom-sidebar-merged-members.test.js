@@ -118,7 +118,7 @@ test('a slug group promotes a row whose merged member is live', t => {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   ctx.window.activePtyIds.add('B');
-  render(ctx, [{ ...row, slug: 'group' }, { sessionId: 'other', slug: 'group', modified: row.modified }]);
+  render(ctx, [{ ...row, scheduleSlug: 'group' }, { sessionId: 'other', scheduleSlug: 'group', modified: row.modified }]);
   assert.ok(ctx.document.querySelector('.slug-group-dot.running'));
   assert.ok(ctx.document.querySelector('.slug-group.has-promoted'));
 });

@@ -536,6 +536,14 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
   caret.after(childrenContainer);
 }
 
+function rowHeadSession(session, head = rowHeadId(session)) {
+  const mergedMemberIds = [
+    ...(session.mergedMemberIds || []).filter(id => id !== head),
+    ...(session.sessionId !== head ? [session.sessionId] : []),
+  ];
+  return { ...session, sessionId: head, mergedMemberIds };
+}
+
 // See .ai/contexts/subagent-observability.md (slug-group orphan-detection fix)
 function narrowSessionsToSearch(sessions, matchIds) {
   const matchedParents = new Set();
@@ -545,35 +553,33 @@ function narrowSessionsToSearch(sessions, matchIds) {
   return sessions.filter(s => matchIds.has(s.sessionId) || matchedParents.has(s.sessionId));
 }
 
-function buildSlugGroup(slug, sessions, subagentIndex, scheduled = false, project, legacyScheduleScopes) {
+function buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleScopes) {
   const group = document.createElement('div');
-  const id = scheduled ? 'schedule-' + encodeURIComponent(JSON.stringify([project.remoteAlias || '', project.projectPath, slug])) : slugId(slug);
+  const id = 'schedule-' + encodeURIComponent(JSON.stringify([project.remoteAlias || '', project.projectPath, slug]));
   const expandedSlugs = getExpandedSlugs();
-  if (scheduled) {
-    try {
-      const migrated = new Set(JSON.parse(sessionStorage.getItem('migratedScheduleSlugs') || '[]'));
-      if (!migrated.has(id)) {
-        migrated.add(id);
+  try {
+    const migrated = new Set(JSON.parse(sessionStorage.getItem('migratedScheduleSlugs') || '[]'));
+    if (!migrated.has(id)) {
+      migrated.add(id);
+      sessionStorage.setItem('migratedScheduleSlugs', JSON.stringify([...migrated]));
+      const legacyId = slugId(slug);
+      if (!migrated.has(legacyId)) {
+        migrated.add(legacyId);
         sessionStorage.setItem('migratedScheduleSlugs', JSON.stringify([...migrated]));
-        const legacyId = slugId(slug);
-        if (!migrated.has(legacyId)) {
-          migrated.add(legacyId);
-          sessionStorage.setItem('migratedScheduleSlugs', JSON.stringify([...migrated]));
-          if (legacyScheduleScopes.get(legacyId)?.size === 1 && expandedSlugs.has(legacyId)) {
-            expandedSlugs.add(id);
-            sessionStorage.setItem('expandedSlugs', JSON.stringify([...expandedSlugs]));
-          }
+        if (legacyScheduleScopes.get(legacyId)?.size === 1 && expandedSlugs.has(legacyId)) {
+          expandedSlugs.add(id);
+          sessionStorage.setItem('expandedSlugs', JSON.stringify([...expandedSlugs]));
         }
       }
-    } catch {}
-  }
+    }
+  } catch {}
   const expanded = expandedSlugs.has(id);
   group.className = expanded ? 'slug-group js-stateful' : 'slug-group collapsed js-stateful';
   group.id = id;
 
   const mostRecent = sessions.reduce((a, b) =>
     new Date(b.modified) > new Date(a.modified) ? b : a);
-  const displayName = scheduled ? slug : cleanDisplayName(mostRecent.name || mostRecent.aiTitle || mostRecent.summary || slug);
+  const displayName = slug;
   const mostRecentTime = new Date(mostRecent.modified);
   const timeStr = formatDate(mostRecentTime);
 
@@ -768,11 +774,10 @@ function renderProjects(projects, resort) {
     const ungrouped = [];
     for (const session of filtered) {
       const scheduled = typeof session.scheduleSlug === 'string' && session.scheduleSlug.length > 0;
-      const slug = scheduled ? session.scheduleSlug : session.slug;
+      const slug = scheduled ? session.scheduleSlug : null;
       if (slug) {
-        const key = JSON.stringify([scheduled, slug]);
-        if (!slugMap.has(key)) slugMap.set(key, { slug, scheduled, sessions: [] });
-        slugMap.get(key).sessions.push(session);
+        if (!slugMap.has(slug)) slugMap.set(slug, []);
+        slugMap.get(slug).push(session);
       } else {
         ungrouped.push(session);
       }
@@ -782,12 +787,12 @@ function renderProjects(projects, resort) {
       const isRunning = rowSessionIds(session).some(id => activePtyIds.has(id) || pendingSessions.has(id));
       allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, dormant: rowSessionIds(session).some(isDormantSession), element: buildSessionItem(session) });
     }
-    for (const { slug, scheduled, sessions } of slugMap.values()) {
+    for (const [slug, sessions] of slugMap) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
       const hasRunning = sessions.some(s => rowSessionIds(s).some(id => activePtyIds.has(id) || pendingSessions.has(id)));
       const hasPinned = sessions.some(s => s.starred);
       const hasDormant = sessions.some(s => rowSessionIds(s).some(isDormantSession));
-      const element = sessions.length === 1 && !scheduled ? buildSessionItem(sessions[0]) : buildSlugGroup(slug, sessions, subagentIndex, scheduled, project, legacyScheduleScopes);
+      const element = buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleScopes);
       allItems.push({ sortTime: mostRecentTime, pinned: hasPinned, running: hasRunning, dormant: hasDormant, element });
     }
 
@@ -1564,14 +1569,10 @@ function rebindSidebarEvents(projects) {
       if (item.dataset.subagent && session.parentSessionId) {
         showSubagentTranscript(session);
       } else if (session.remoteAlias && !session.remoteAttachable) {
-        showJsonlViewer(session);
+        showJsonlViewer(rowHeadSession(session));
       } else {
         const head = session.remoteAlias ? (session.remoteAttachSessionId || rowHeadId(session)) : rowHeadId(session);
-        const mergedMemberIds = [
-          ...(session.mergedMemberIds || []).filter(id => id !== head),
-          ...(session.sessionId !== head ? [session.sessionId] : []),
-        ];
-        openSession({ ...session, sessionId: head, mergedMemberIds });
+        openSession(rowHeadSession(session, head));
       }
     };
 
@@ -1624,7 +1625,7 @@ function rebindSidebarEvents(projects) {
     if (launchConfigBtn) {
       launchConfigBtn.onclick = (e) => {
         e.stopPropagation();
-        showResumeSessionDialog(session);
+        showResumeSessionDialog(rowHeadSession(session));
       };
     }
 
@@ -1637,7 +1638,7 @@ function rebindSidebarEvents(projects) {
           p.sessions.some(s => s.sessionId === session.sessionId)
         );
         if (project) {
-          forkSession(session, project);
+          forkSession(rowHeadSession(session), project);
         }
       };
     }
@@ -1655,7 +1656,7 @@ function rebindSidebarEvents(projects) {
     if (jsonlBtn) {
       jsonlBtn.onclick = (e) => {
         e.stopPropagation();
-        showJsonlViewer(session);
+        showJsonlViewer(rowHeadSession(session));
       };
     }
 
