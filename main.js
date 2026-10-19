@@ -1734,6 +1734,15 @@ async function handleSendToBackground(_event, sessionId) {
     kill: entry => killPty(entry, sessionId),
   });
   if (result.ok && session?.projectFolder) detectSessionTransitions(session.projectFolder);
+  if (result.ok) {
+    const persist = () => sessionCache.resolveSessionContinuations(oldId, {
+      getSessionLiveElsewhere: id => cliSessionState.liveElsewhereChecked(id, sessionHasPty, ptyPids),
+    }).then(() => writer.refreshFolder(session.projectFolder, { files: new Set([oldId + '.jsonl']) }))
+      .then(() => notifyRendererProjectsChanged('background-handoff'),
+        err => log.warn(`[bg-handoff] the continuation index of ${oldId} was not saved: ${err.message}`));
+    persist();
+    session.exitDrain?.then(persist);
+  }
   return result;
 }
 ipcMain.handle('send-session-to-background', handleSendToBackground);

@@ -26,6 +26,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Deleting a compacted conversation now deletes all of its parts, so newer parts cannot reappear as sessions; Delete asks you to retry if its parts changed after the preview. If a file cannot be removed, the conversation stays listed with its remaining parts and a message reports what was deleted. (#564)
 - Run now on a schedule shows Launched! only after its shell starts. A refused launch or shell spawn failure leaves a dismissible notice saying why and how to retry; later command failures remain in the main log. (#566)
 - A restore retry cancelled during indexing, even when indexing finishes during the restore, or blocked by a failed reload, now leaves a persistent notice telling you to open the session from the sidebar to retry restoring. A failed retry lists only the sessions that are still not open, and the "waiting for indexing" notice goes away once nothing is left to retry. (#666, #566)
+- A session you send to the background after Switchboard restarts keeps its single sidebar row and its name, instead of showing a second row titled with the conversation's generated title. (#715)
 
 ## v0.0.97 — 2026-10-17
 

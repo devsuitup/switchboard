@@ -442,3 +442,25 @@ test('bridge members on a continuation path contribute their visible row only on
   assert.equal(sessions[0].messageCount, 7);
   assert.deepEqual(sessions[0].mergedMemberIds.slice().sort(), [OLD, MID].sort());
 });
+
+test('#715 a descriptor-only bg row never shows the title the renderer inherited from the original conversation', t => {
+  const { mergeLocalBackgroundSessions } = require('../sidebar-bg-sessions');
+  const { loadAppFunctions } = require('./app-source');
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-715-'));
+  const ctx = setupSidebarDom();
+  t.after(() => { ctx.destroy(); fs.rmSync(projectPath, { recursive: true, force: true }); });
+  const projects = mergeLocalBackgroundSessions([], [], [{ kind: 'bg', jobId: '33333333', sessionId: HEAD, cwd: projectPath,
+    name: 'devex-board', startedAt: Date.parse('2026-10-19T08:15:29.000Z') }], {
+    hiddenProjects: new Set(), metaMap: new Map(), showArchived: false, jobs: new Map([['33333333', { state: 'working', sessionId: HEAD }]]),
+  });
+  const row = projects.flatMap(project => project.sessions).find(session => session.sessionId === HEAD);
+  assert.equal(row.descriptorOnly, true);
+  ctx.window.sessionMap.set(HEAD, { sessionId: HEAD, name: 'devex-board', aiTitle: 'Onboarding setup', summary: 'hello onboarding',
+    projectPath, bgJobId: '33333333', bgSessionId: HEAD });
+  const { dedup } = loadAppFunctions(ctx.context, { functions: ['dedup'] });
+  dedup(projects);
+  ctx.sidebar.renderProjects(projects, false);
+  const title = ctx.document.querySelector(`[data-session-id="${HEAD}"] .session-summary`).textContent;
+  assert.match(title, /devex-board/);
+  assert.doesNotMatch(title, /Onboarding setup/);
+});

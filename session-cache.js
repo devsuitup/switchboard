@@ -76,16 +76,29 @@ function rememberContinuation(file, stat, head, serialized) {
   while (continuationFiles.size > 128) continuationFiles.delete(continuationFiles.keys().next().value);
 }
 
+function resumesPersistedContinuation(previous, stat, head) {
+  let index;
+  try { index = JSON.parse(previous); } catch { return false; }
+  const stamp = index?.stamp;
+  if (matchesContinuationStamp(stamp, stat)) return true;
+  if (!stamp || typeof index.head !== 'string' || !head.startsWith(index.head)) return false;
+  try {
+    return stamp.dev === stat.dev.toString() && stamp.ino === stat.ino.toString()
+      && stamp.birthtimeNs === stat.birthtimeNs.toString() && BigInt(stamp.size) < stat.size;
+  } catch { return false; }
+}
+
 // see .ai/contexts/session-cache.md ("Continuation index")
 function scanCachedContinuation(file, id, previous, maxBytes, stat = fs.statSync(file, { bigint: true })) {
   const cached = continuationFiles.get(file);
   const head = continuationHead(file, stat.size, Math.max(0, maxBytes - 1));
   const reuse = cached?.serialized === previous && sameContinuationFile(cached, stat)
-    && (sameContinuationStamp(cached, stat) || (stat.size > cached.size && head.startsWith(cached.head)));
+    ? sameContinuationStamp(cached, stat) || (stat.size > cached.size && head.startsWith(cached.head))
+    : resumesPersistedContinuation(previous, stat, head);
   let serialized = scanContinuationIndex(file, id, reuse ? previous : undefined, maxBytes - head.length / 2);
   const after = fs.statSync(file, { bigint: true });
   if (!sameContinuationStamp(stat, after)) { continuationFiles.delete(file); return null; }
-  serialized = JSON.stringify({ ...JSON.parse(serialized), stamp: continuationStamp(stat) });
+  serialized = JSON.stringify({ ...JSON.parse(serialized), stamp: continuationStamp(stat), head });
   rememberContinuation(file, stat, head, serialized);
   return serialized;
 }

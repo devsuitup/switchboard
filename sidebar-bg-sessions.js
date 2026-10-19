@@ -157,7 +157,7 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
       const modified = Number.isFinite(descriptor.startedAt) && Math.abs(descriptor.startedAt) <= 8640000000000000
         ? new Date(descriptor.startedAt).toISOString() : null;
       visible = { sessionId: descriptor.sessionId, projectPath, remoteAlias: null, summary: (descriptor.nameSource !== 'collision' && descriptor.name) || 'Background session',
-        name: metaMap.get(descriptor.sessionId)?.name || null, messageCount: 0, modified, created: modified,
+        name: metaMap.get(descriptor.sessionId)?.name || null, aiTitle: null, messageCount: 0, modified, created: modified,
         starred: metaMap.get(descriptor.sessionId)?.starred || 0, archived: metaMap.get(descriptor.sessionId)?.archived || 0,
         mergedMemberIds: [], descriptorOnly: true };
       project.sessions.push(visible);

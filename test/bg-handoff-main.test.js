@@ -68,20 +68,36 @@ test('the interactive exit does not terminate the tasks of a confirmed backgroun
   assert.equal(h.sessions.has('bg'), false);
 });
 
-function ipcSetup(t, { status = 'idle' } = {}) {
+function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = () => {}, folderOf = () => 'folder' } = {}) {
   const fs = require('node:fs');
   const os = require('node:os');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-ipc-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.mkdirSync(path.join(root, 'folder'));
-  const transcript = path.join(root, 'folder', 'OLD.jsonl');
+  const folder = folderOf(root);
+  fs.mkdirSync(path.join(root, folder));
+  const transcript = path.join(root, folder, 'OLD.jsonl');
   fs.writeFileSync(transcript, JSON.stringify({ type: 'user', message: { content: 'hello' } }) + '\n');
   const writes = [], kills = [], listeners = new Set(), statusAsked = [], taps = [];
+  const events = [], warned = [], waiters = [];
+  let notifications = 0, exited;
+  const untilNotified = count => new Promise(resolve => {
+    waiters.push({ count, resolve });
+    for (const waiter of waiters) if (notifications >= waiter.count) waiter.resolve();
+  });
   let descriptors = [];
-  const session = { kind: 'local-pty', realSessionId: 'OLD', projectFolder: 'folder', composerState: require('../composer-state').createComposerState(), pty: { onData: fn => { const tap = { fn, disposed: false, dispose() { tap.disposed = true; } }; taps.push(tap); return tap; } } };
+  const session = { kind: 'local-pty', realSessionId: 'OLD', projectFolder: folder, exitDrain: new Promise(resolve => { exited = resolve; }), composerState: require('../composer-state').createComposerState(), pty: { onData: fn => { const tap = { fn, disposed: false, dispose() { tap.disposed = true; } }; taps.push(tap); return tap; } } };
   const ctx = vm.createContext({
     setTimeout, clearTimeout, Date, Promise, path, PROJECTS_DIR: root,
-    detectSessionTransitions() {},
+    detectSessionTransitions: name => onTransitions(name),
+    sessionCache: sessionCache || { resolveSessionContinuations: async id => { events.push('resolve:' + id); return { candidates: [], unresolved: false }; } },
+    writer: writer || { refreshFolder: async (name, options) => { events.push('refresh:' + name + ':' + [...options.files].join(',')); return false; } },
+    notifyRendererProjectsChanged: cause => {
+      events.push('notify:' + cause);
+      notifications++;
+      for (const waiter of waiters) if (notifications >= waiter.count) waiter.resolve();
+    },
+    log: { warn: (...args) => warned.push(args.join(' ')) },
+    sessionHasPty: () => false, ptyPids: () => [],
     activeSessions: new Map([['tab', session]]),
     mainWindow: { isDestroyed: () => false, webContents: { send() {} } },
     writePty: (entry, text) => {
@@ -97,11 +113,13 @@ function ipcSetup(t, { status = 'idle' } = {}) {
       getStatus: id => { statusAsked.push(id); return descriptors.length ? null : { status, waitingFor: null }; },
       readAllDescriptors: () => descriptors,
       onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+      liveElsewhereChecked: async id => ({ known: true, live: descriptors.find(d => d.sessionId === id) || null }),
     },
     ...require('../bg-handoff'),
   });
   const { handleSendToBackground } = loadAppFunctions(ctx, { functions: ['handleSendToBackground'], sourcePath: path.join(__dirname, '../main.js') });
-  return { handleSendToBackground, session, writes, kills, listeners, statusAsked, taps };
+  return { handleSendToBackground, session, writes, kills, listeners, statusAsked, taps, events, warned, untilNotified,
+    exit: () => exited(), root, folder, transcript, descriptors: () => descriptors };
 }
 
 test('M3: the shipped IPC handler maps CLI status, reads the tab transcript and wakes on descriptor changes', async t => {
@@ -122,4 +140,145 @@ test('M4: the shipped IPC handler refuses a waiting CLI status object before any
   const result = await h.handleSendToBackground({}, 'tab');
   assert.equal(result.code, 'refused');
   assert.deepEqual(h.writes, []);
+  h.exit();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.events, [], 'a refused handoff indexes nothing');
+});
+
+test('#715 a confirmed handoff saves the source continuation index, refreshes its row, then notifies projects', { timeout: 9000 }, async t => {
+  let release;
+  const events = [];
+  let lookup;
+  const sessionCache = { resolveSessionContinuations: (id, options) => { events.push('resolve:' + id); lookup = options; return new Promise(resolve => { release = resolve; }); } };
+  const writer = { refreshFolder: async (name, options) => { events.push('refresh:' + name + ':' + [...options.files].join(',')); return false; } };
+  const h = ipcSetup(t, { sessionCache, writer });
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.ok, true);
+  assert.deepEqual(events, ['resolve:OLD']);
+  assert.deepEqual(await lookup.getSessionLiveElsewhere('new'), { known: true, live: h.descriptors()[0] });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.events, [], 'nothing is refreshed or notified before the index is saved');
+  release({ candidates: [], unresolved: false });
+  await h.untilNotified(1);
+  assert.deepEqual(events, ['resolve:OLD', 'refresh:folder:OLD.jsonl']);
+  assert.deepEqual(h.events, ['notify:background-handoff']);
+});
+
+test('#715 the source is saved again once its interactive process has exited', { timeout: 9000 }, async t => {
+  const h = ipcSetup(t);
+  assert.equal((await h.handleSendToBackground({}, 'tab')).ok, true);
+  await h.untilNotified(1);
+  assert.deepEqual(h.events, ['resolve:OLD', 'refresh:folder:OLD.jsonl', 'notify:background-handoff']);
+  h.exit();
+  await h.untilNotified(2);
+  assert.deepEqual(h.events.slice(3), ['resolve:OLD', 'refresh:folder:OLD.jsonl', 'notify:background-handoff']);
+});
+
+test('#715 a failed save of the source continuation index is logged, not notified', { timeout: 9000 }, async t => {
+  const sessionCache = { resolveSessionContinuations: () => Promise.reject(new Error('disk gone')) };
+  const h = ipcSetup(t, { sessionCache });
+  assert.equal((await h.handleSendToBackground({}, 'tab')).ok, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.warned.length, 1);
+  assert.match(h.warned[0], /OLD.*disk gone/);
+  assert.deepEqual(h.events, []);
+});
+
+function realCache(t, { flushFirst = false, name = null } = {}) {
+  const fs = require('node:fs');
+  const cache = require('../session-cache');
+  const { encodeProjectPath } = require('../encode-project-path');
+  const rows = new Map();
+  const metadata = new Map(name ? [['OLD', { name }]] : []);
+  const db = {
+    getSetting: () => ({}), getAllFolderMeta: () => new Map(), getFolderMeta: () => undefined, getAllMeta: () => metadata,
+    getAllCached: () => [...rows.values()], getCachedByFolder: () => [...rows.values()], getCachedSession: id => rows.get(id),
+    upsertCachedSessions: entries => entries.forEach(row => rows.set(row.sessionId, row)),
+    setCachedContinuationIndex(id, index) { if (rows.has(id)) rows.set(id, { ...rows.get(id), continuationIndex: index }); },
+    setFolderMeta() {}, getMeta() {}, setName() {}, upsertSearchEntries() {}, replaceSessionMetrics() {}, touchCachedModified() {},
+    deleteCachedFolder() {}, deleteCachedSession() {}, deleteSearchFolder() {}, deleteSearchSession() {},
+  };
+  const contended = () => {
+    fs.appendFileSync(other, JSON.stringify({ type: 'assistant', message: { content: 'other work' } }) + '\n');
+    cache.refreshFolder(h.folder, { files: new Set(['OTHER.jsonl', 'OLD.jsonl']) });
+    return rows.get('OLD').continuationIndex;
+  };
+  let flushed;
+  const h = ipcSetup(t, {
+    sessionCache: cache, folderOf: encodeProjectPath,
+    writer: { refreshFolder: async (name, options) => cache.refreshFolder(name, options) },
+    onTransitions: () => { if (flushFirst && flushed === undefined) flushed = contended(); },
+  });
+  const user = id => JSON.stringify({ type: 'user', sessionId: id, cwd: h.root, timestamp: '2026-10-19T08:00:00.000Z', message: { content: 'hello' } }) + '\n';
+  fs.writeFileSync(h.transcript, user('OLD') + (JSON.stringify({ type: 'assistant', padding: 'x'.repeat(400 * 1024) }) + '\n').repeat(4));
+  const other = path.join(h.root, h.folder, 'OTHER.jsonl');
+  fs.writeFileSync(other, user('OTHER'));
+  const init = () => cache.init({ PROJECTS_DIR: h.root, db, activeSessions: new Map(), getMainWindow: () => null, log: console,
+    getLocalDescriptors: () => h.descriptors(), getLocalJobs: () => new Map() });
+  init();
+  cache.refreshFolder(h.folder);
+  assert.equal(JSON.parse(rows.get('OLD').continuationIndex).complete, true);
+  init();
+  const sidebar = () => cache.buildProjectsFromCache(false).flatMap(project => project.sessions)
+    .map(session => session.sessionId + (session.descriptorOnly ? ':descriptor-only' : '') + (session.mergedMemberIds?.length ? ':' + session.mergedMemberIds.join(',') : ''))
+    .filter(id => !id.startsWith('OTHER'));
+  return { ...h, rows, contended, sidebar, projects: () => cache.buildProjectsFromCache(false), flushed: () => flushed };
+}
+
+test('#715 after a restart and a flush whose continuation budget another transcript used, the handoff still merges the rows', { timeout: 9000 }, async t => {
+  const h = realCache(t, { flushFirst: true });
+  assert.equal((await h.handleSendToBackground({}, 'tab')).ok, true);
+  assert.equal(h.flushed(), null, 'the flush after the append left the source without an index');
+  await h.untilNotified(1);
+  assert.deepEqual(JSON.parse(h.rows.get('OLD').continuationIndex).ids, ['new']);
+  assert.deepEqual(h.sidebar(), ['new:OLD']);
+});
+
+test('#715 when the save finishes before any watcher flush, the notification already shows one row', { timeout: 9000 }, async t => {
+  const h = realCache(t);
+  assert.equal((await h.handleSendToBackground({}, 'tab')).ok, true);
+  await h.untilNotified(1);
+  assert.deepEqual(h.sidebar(), ['new:OLD']);
+});
+
+test('#715 a write to the source before its process exits cannot leave the rows split', { timeout: 9000 }, async t => {
+  const fs = require('node:fs');
+  const h = realCache(t);
+  assert.equal((await h.handleSendToBackground({}, 'tab')).ok, true);
+  await h.untilNotified(1);
+  assert.deepEqual(h.sidebar(), ['new:OLD']);
+  fs.appendFileSync(h.transcript, JSON.stringify({ type: 'system', subtype: 'shutdown' }) + '\n');
+  assert.equal(h.contended(), null, 'a contended flush clears the source index after the late write');
+  assert.deepEqual(h.sidebar(), ['OLD', 'new:descriptor-only']);
+  h.exit();
+  await h.untilNotified(2);
+  assert.deepEqual(h.sidebar(), ['new:OLD']);
+});
+
+test('#715 a restarted handoff renders one named conversation over the inherited renderer title', { timeout: 9000 }, async t => {
+  const { setupSidebarDom } = require('./dom-setup');
+  const h = realCache(t, { flushFirst: true, name: 'devex-board' });
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  ctx.window.sessionMap.set('new', { sessionId: 'new', aiTitle: 'Onboarding setup', projectPath: h.root });
+  assert.equal((await h.handleSendToBackground({}, 'tab')).ok, true);
+  await h.untilNotified(1);
+  const projects = h.projects();
+  const { dedup } = loadAppFunctions(ctx.context, { functions: ['dedup'] });
+  dedup(projects);
+  ctx.sidebar.renderProjects(projects, false);
+  assert.deepEqual(h.sidebar(), ['new:OLD']);
+  assert.equal(ctx.document.querySelectorAll('[data-session-id="new"]').length, 1);
+  const title = ctx.document.querySelector('[data-session-id="new"] .session-summary').textContent;
+  assert.match(title, /devex-board/);
+  assert.doesNotMatch(title, /Onboarding setup/);
+});
+
+test('#715 a failed targeted refresh is logged without notifying projects', { timeout: 9000 }, async t => {
+  const h = ipcSetup(t, { writer: { refreshFolder: () => Promise.reject(new Error('refresh failed')) } });
+  assert.equal((await h.handleSendToBackground({}, 'tab')).ok, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.warned.length, 1);
+  assert.match(h.warned[0], /\[bg-handoff\].*OLD.*refresh failed/);
+  assert.deepEqual(h.events, ['resolve:OLD']);
 });
