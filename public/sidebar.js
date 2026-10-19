@@ -1699,6 +1699,7 @@ function rebindSidebarEvents(projects) {
           }
           const removedPartIds = res?.ok ? confirmation.partIds : (res?.removedPartIds || []);
           for (const id of removedPartIds) {
+            window._continuationChoices?.delete('continuationChoice:' + id);
             if (typeof pendingSessions !== 'undefined') pendingSessions.delete(id);
             if (typeof dismissDormantSession === 'function') dismissDormantSession(id);
             if (typeof sessionMap !== 'undefined') sessionMap.delete(id);
@@ -1935,6 +1936,15 @@ function showSessionContextMenu(event, sessionId) {
   if (reason) bgButton.title = reason;
   bgButton.onclick = () => runSessionMenuAction(() => sendSessionToBackground(openId));
   menu.appendChild(bgButton);
+  const row = sessionMap.get(sessionId) || { sessionId };
+  if (window._continuationChoices?.has('continuationChoice:' + row.sessionId)) {
+    const choose = document.createElement('button');
+    choose.className = 'popover-option session-choose-part-btn';
+    choose.setAttribute('role', 'menuitem');
+    choose.textContent = 'Choose part to open…';
+    choose.onclick = () => runSessionMenuAction(() => openSession(rowHeadSession(row), undefined, { chooseAgain: true }));
+    menu.appendChild(choose);
+  }
   appendSessionPartsMenu(menu, sessionMap.get(sessionId) || { sessionId });
   const dormantIds = rowSessionIds(sessionMap.get(sessionId) || { sessionId }).filter(isDormantSession);
   if (dormantIds.length) {

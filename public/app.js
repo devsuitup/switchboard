@@ -2000,7 +2000,7 @@ const openingSessions = new Map();
 
 // see .ai/contexts/session-state.md ("Opening a session once")
 function openSession(session, customOptions, flags = {}) {
-  if (!flags.automatic && session.mergedMemberIds?.length && !rowOpenId(session)) {
+  if (!flags.automatic && !flags.chooseAgain && session.mergedMemberIds?.length && !rowOpenId(session)) {
     const dormantId = rowSessionIds(session).find(id => dormantWorkingSet.has(id));
     if (dormantId && dormantId !== session.sessionId) session = { ...session, sessionId: dormantId, mergedMemberIds: [] };
   }
@@ -2028,7 +2028,7 @@ function settleContinuedInFlight(item) {
   schedulePersistWorkingSet();
 }
 
-async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false } = {}, open = null) {
+async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false } = {}, open = null) {
   const restoreNoticeSessions = [session];
   let freshLive = false;
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
@@ -2051,19 +2051,19 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     }
     openId = settled;
   }
-  if (openId) {
+  if (openId && !chooseAgain) {
     for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
     if (clearDormantRow(openId)) schedulePersistWorkingSet();
     if (mayShow()) showSession(openId);
     return;
   }
   let continuationNotice;
-  if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
+  if (!continuationResolved && customOptions?.type !== 'attach' && (chooseAgain || !openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
     let continuationLive;
     let holdReason = { waitingForIndex: false };
     session = await resolveResumeSession(session, { automatic, api: window.api, confirm: question => appConfirm(question),
-      choices: (window._continuationChoices ||= new Map()), rowKey: indexedRowOf(session.sessionId)?.sessionId || session.sessionId,
+      choices: (window._continuationChoices ||= new Map()), rowKey: indexedRowOf(session.sessionId)?.sessionId || session.sessionId, chooseAgain,
       memoryNotify: notice => showAppNotice(notice),
       choose: question => appChoose(question), notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
       onHold: reason => { holdReason = reason; },
@@ -2123,6 +2123,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
       for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
       if (clearDormantRow(resolvedOpenId)) schedulePersistWorkingSet();
       if (mayShow()) showSession(resolvedOpenId);
+      if (continuationNotice) showAppNotice(continuationNotice);
       return;
     }
   }

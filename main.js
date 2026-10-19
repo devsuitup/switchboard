@@ -198,6 +198,14 @@ const { setStarred, setArchived, deleteCachedSession, deleteCachedFolder,
 // see docs/changelog.md ("What's new in the app")
 const INSTALL_PREDATES_LAUNCH = getSetting('global') !== null || isInitialScanComplete();
 
+async function sweepContinuationChoices() {
+  if (!isInitialScanComplete()) return;
+  const topLevelIds = new Set(getAllCached().filter(row => !row.parentSessionId).map(row => row.sessionId));
+  for (const key of listSettingKeys('continuationChoice:')) {
+    if (!topLevelIds.has(key.slice('continuationChoice:'.length))) await deleteSetting(key);
+  }
+}
+
 // The trace file sits next to switchboard.db — DB_PATH is the one resolution
 // of SWITCHBOARD_DATA_DIR, never re-derived here.
 const TRACE_DIR = path.dirname(DB_PATH);
@@ -2387,6 +2395,10 @@ ipcMain.handle('delete-session', async (_event, sessionId, previewPartIds) => {
   const deletedIds = [...new Set([...deletedPartIds, ...deletedSubagentIds])];
   for (const sid of deletedIds) {
     mainTouchedCache.dropSession(sid);
+    if (deletedPartIds.includes(sid)) {
+      try { await deleteSetting('continuationChoice:' + sid); }
+      catch (err) { log.warn(`[delete-session] could not delete continuationChoice:${sid}: ${err.message}`); }
+    }
     try { await deleteCachedSession(sid); } catch {}
     try { await deleteSearchSession(sid); } catch {}
   }
@@ -3812,7 +3824,7 @@ if (!app.isPackaged) {
     // inaccessible on open). populateCacheViaWorker runs in a Worker thread
     // and is non-blocking; concurrent callers share the same in-flight
     // Promise so the FTS-recreated path below (if also triggered) is free.
-    populateCacheViaWorker();
+    populateCacheViaWorker().then(sweepContinuationChoices).catch(error => log.warn('[continuation-choices] startup sweep failed:', error));
 
     // Re-index search if FTS table was recreated (e.g. tokenizer config change).
     // populateCacheViaWorker is already running above; the guard inside it

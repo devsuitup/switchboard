@@ -186,6 +186,38 @@ function deletionFixture(t, memberIds = ['b']) {
   return { root, a, b, cached, search, touched, dependencies };
 }
 
+test('S1 Delete clears every removed part choice without calling deleteSetting for subagents or unrelated settings', async t => {
+  const f = deletionFixture(t);
+  const settings = new Map(['a', 'b'].map(id => ['continuationChoice:' + id, {}]));
+  for (const key of ['global', 'project:a', 'continuationChoice:unrelated', 'continuationChoiceOther:a']) settings.set(key, { sentinel: true });
+  const deleted = [];
+  f.dependencies.deleteSetting = async key => { deleted.push(key); settings.delete(key); };
+  const result = await loadDeletionHandlers(f.dependencies).get('delete-session')(null, 'a', ['a', 'b']);
+  assert.equal(result.ok, true);
+  assert.deepEqual(deleted.sort(), ['continuationChoice:a', 'continuationChoice:b']);
+  assert.deepEqual([...settings.keys()].sort(), ['continuationChoice:unrelated', 'continuationChoiceOther:a', 'global', 'project:a']);
+});
+
+test('F1 Delete succeeds and clears every cache and search row when choice deletion rejects with SQLITE_BUSY', async t => {
+  const f = deletionFixture(t);
+  const attempted = [], warnings = [];
+  f.dependencies.deleteSetting = async key => {
+    attempted.push(key);
+    throw Object.assign(new Error('SQLITE_BUSY: database is locked'), { code: 'SQLITE_BUSY' });
+  };
+  f.dependencies.log = { info() {}, error() {}, warn: message => warnings.push(message) };
+  const result = await loadDeletionHandlers(f.dependencies).get('delete-session')(null, 'a', ['a', 'b']);
+  assert.equal(result.ok, true);
+  assert.equal(fs.existsSync(f.a), false);
+  assert.equal(fs.existsSync(f.b), false);
+  for (const entries of [f.cached, f.search, f.touched]) assert.equal(entries.size, 0);
+  for (const id of ['a', 'b']) {
+    assert.ok(attempted.includes('continuationChoice:' + id));
+    assert.ok(warnings.some(message => message.includes('[delete-session]')
+      && message.includes('continuationChoice:' + id) && message.includes('SQLITE_BUSY')));
+  }
+});
+
 test('preview counts all parts and deletion clears every part and subagent from every cache', async t => {
   const f = deletionFixture(t);
   const handlers = loadDeletionHandlers(f.dependencies);
@@ -402,6 +434,8 @@ test('preview reports a running member even when the head is stopped', t => {
 
 test('a failed transcript removal clears subagents whose directory is confirmed gone', async t => {
   const f = deletionFixture(t);
+  const deletedSettings = [];
+  f.dependencies.deleteSetting = async key => { deletedSettings.push(key); };
   const dir = path.join(f.root, 'project', 'b', 'subagents');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'agent-y.jsonl'), '{}\n');
@@ -419,6 +453,7 @@ test('a failed transcript removal clears subagents whose directory is confirmed 
     for (const id of ['a', 'b', 'sub:a:x']) assert.equal(entries.has(id), true, id);
   }
   assert.deepEqual(Array.from(result.removedPartIds), []);
+  assert.deepEqual(deletedSettings, [], 'retained parts and deleted subagents have no choice to remove');
 });
 
 test('a failed subagent directory removal retains its subagent cache and search rows', async t => {

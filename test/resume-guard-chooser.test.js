@@ -32,7 +32,7 @@ test('T1 one chooser lists named parts newest first and preselects the newest', 
   assert.deepEqual(q.options.map(o => o.id), [C, B, A]);
   assert.equal(q.selectedId, C);
   assert.equal(q.message[0], '"Plan" continues in 2 other parts. Choose the one to open.');
-  assert.equal(q.message[1], 'Switchboard opens your choice directly next time, as long as it is still there and no new part appears.');
+  assert.equal(q.message[1], 'Switchboard opens your choice directly next time, as long as it is still there and no new part appears. To choose again, use Choose part to open in the row\'s menu.');
   assert.deepEqual(h.batches[0].slice().sort(), [A, B, C].sort());
   for (const text of [q.message.join(' '), ...q.options.map(o => o.label + o.detail)]) assert.doesNotMatch(text, /[a-f]{8}-0000|undefined|null|NaN|Invalid Date/);
   assert.match(q.options[2].detail, /the part you clicked/);

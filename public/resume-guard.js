@@ -171,7 +171,11 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
       return true;
     });
   if (!candidateParts.length) {
-    if (result && !result.unresolved) return session;
+    if (result && !result.unresolved) {
+      if (chooseAgain) notify?.({ id: `continuation-choice:${rowKey}`,
+        message: 'This conversation no longer has parts to choose from.' });
+      return session;
+    }
     const reason = result?.waitingForIndex ? 'a part it continued in is still being indexed.'
       : 'its continuation records are damaged, or a part it continued in could not be checked.';
     return openAsWas(['Switchboard could not tell where "' + conversationName() + '" continued: ' + reason,
@@ -197,7 +201,7 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   });
   const message = ['"' + name + '" continues in ' + (candidateParts.length === 1 ? 'another part' : candidateParts.length + ' other parts') + '. Choose the one to open.'];
   if (!result || result.unresolved) message.push('Some continuation records could not be read, so this list may be incomplete. This choice is not remembered.');
-  else message.push('Switchboard opens your choice directly next time, as long as it is still there and no new part appears.');
+  else message.push('Switchboard opens your choice directly next time, as long as it is still there and no new part appears. To choose again, use Choose part to open in the row\'s menu.');
   if (liveFailed) message.push('Switchboard could not check which parts are running.');
   const rememberedId = record?.chosen === null ? session.sessionId : record?.chosen;
   const selectedId = options.find(option => option.id === rememberedId && !option.disabled)?.id || options.find(option => !option.disabled)?.id;
