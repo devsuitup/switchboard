@@ -95,6 +95,48 @@ test('i730c: appending dropped oversized tool results advances the worker writte
   }
 });
 
+for (const scan of ['append', 'backward']) {
+  for (const [kind, record, changes] of [
+    ['system', { type: 'system', content: 'x'.repeat(5 * 1024 * 1024) }, false],
+    ['user prompt', { type: 'user', message: { content: 'x'.repeat(5 * 1024 * 1024) } }, false],
+    ['tool result', { type: 'user', message: { content: [{ type: 'tool_result', content: 'x'.repeat(5 * 1024 * 1024) }] } }, true],
+    ['assistant', { type: 'assistant', message: { content: 'x'.repeat(5 * 1024 * 1024) } }, true],
+  ]) {
+    test(`i730d: a dropped 5 MiB ${kind} ${changes ? 'advances' : 'preserves'} the worker fingerprint on ${scan}`, async t => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-kind-'));
+      const file = path.join(dir, 's.jsonl');
+      let snapshot;
+      const client = createTaskRecordsClient({ onSnapshot: value => { snapshot = value; } });
+      t.after(() => { client.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+      const read = async () => {
+        await client.readBatch([{ file, parentSessionId: 's', turnOnly: true }]);
+        return snapshot.headTurn.writtenOutput;
+      };
+      const baseline = JSON.stringify({ type: 'assistant', message: { content: 'baseline' } }) + '\n';
+      fs.writeFileSync(file, baseline);
+      const previous = await read();
+      assert.match(previous, /^[a-f0-9]{64}$/);
+      const line = JSON.stringify(record) + '\n';
+      if (scan === 'append') {
+        fs.appendFileSync(file, line.slice(0, 17));
+        assert.equal(await read(), previous);
+        fs.appendFileSync(file, line.slice(17, -1));
+        for (let poll = 0; poll < 8; poll++) assert.equal(await read(), previous);
+        fs.appendFileSync(file, '\n');
+      } else {
+        fs.renameSync(file, file + '.old');
+        fs.writeFileSync(file, baseline + line);
+      }
+      let written;
+      for (let poll = 0; poll < 8; poll++) written = await read();
+      if (changes) assert.notEqual(written, previous);
+      else assert.equal(written, previous, `${kind} must not signal written activity`);
+      assert.match(written, /^[a-f0-9]{64}$/);
+      assert.equal(await read(), written, 'unchanged output must stay stable');
+    });
+  }
+}
+
 test('the worker validates new main output, ignores metadata/partial writes/children, and carries the signature through rekey', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-'));
   const file = path.join(dir, 's.jsonl');

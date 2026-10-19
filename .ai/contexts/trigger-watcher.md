@@ -1407,10 +1407,13 @@ escape detection; a changed sample or decreasing mtime restarts the scan.
 Until scanning catches up, classification uses the latest physical tail.
 Pending fragments retain at most 4 MiB; beyond that only a prefix sample and
 offset remain. At the line boundary, an API prefix discards the record; another
-prefix counts as unknown and consumes the logical tail budget. Its placeholder
-contains a synthetic assistant output with a SHA-256 fingerprint of the record's
-byte offset and length, padded to the logical tail budget. Completed dropped
-records therefore advance the task-records worker's written-activity signal;
+prefix counts as unknown and consumes the logical tail budget. The first 128
+bytes are retained on both backward and appended scans. Only a head starting
+with an assistant record, or a user record with a visible `tool_result` type,
+gets a synthetic assistant output with a SHA-256 fingerprint of the record's
+byte offset and length, padded to the logical tail budget. Other dropped records
+keep a spaces-only placeholder and do not advance written activity. Completed
+dropped outputs advance the task-records worker's written-activity signal;
 unchanged reads and backward rescans retain the same fingerprint. The placeholder
 has no timestamp, so it supplies no turn or prompt evidence. Non-API records
 within that bound remain whole for the written-output fingerprint.
