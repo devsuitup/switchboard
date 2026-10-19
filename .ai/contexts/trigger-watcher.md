@@ -1389,7 +1389,7 @@ with no message entry is never "closed".
 ### Transcript tail reads
 
 `transcript-tail.js` scans backward in 256 KiB blocks, skipping lines whose
-prefix identifies a top-level `api-request` or `api-request-shape` before JSON
+prefix identifies a top-level `api-request`, `api-request-shape` or `api-request-blob` before JSON
 parsing. The retained tail covers 256 KiB of other records, so API payloads cannot displace a user
 prompt or the closing assistant and its `turn_duration`. Both
 `transcriptOwnEntryAt` and `transcriptReactedSince` use this filtered prompt list.

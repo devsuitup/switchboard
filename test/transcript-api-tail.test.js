@@ -21,7 +21,7 @@ function fixture(t) {
 
 const prompt = (text = 'do it') => JSON.stringify({ type: 'user', timestamp: new Date(2000).toISOString(), message: { content: text } }) + '\n';
 
-for (const type of ['api-request', 'api-request-shape']) {
+for (const type of ['api-request', 'api-request-shape', 'api-request-blob']) {
   test(`i730: a 50 MB ${type} line is skipped over bounded polls and unchanged snapshots read no bytes`, t => {
     const file = fixture(t);
     fs.writeFileSync(file, prompt() + `{"type":"${type}","params":"`);

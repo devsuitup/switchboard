@@ -6,7 +6,7 @@ const CHUNK_BYTES = 256 * 1024;
 const READ_BYTES = 1024 * 1024;
 const MAX_PENDING_BYTES = 4 * 1024 * 1024;
 const HEAD_BYTES = 256;
-const API_PREFIX = /^\s*\{\s*"type"\s*:\s*"api-request(?:-shape)?"\s*[,}]/;
+const API_PREFIX = /^\s*\{\s*"type"\s*:\s*"api-request(?:-shape|-blob)?"\s*[,}]/;
 
 function readRange(filePath, start, length, expectedStat) {
   const buf = Buffer.alloc(length);
