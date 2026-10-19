@@ -60,6 +60,7 @@ for (const remoteAlias of [null, 'host']) {
     const member = list.querySelector('[data-part-id="member-111"]');
     [...member.querySelectorAll('button')].find(b => b.textContent === 'Copy id').click();
     assert.deepEqual(copied, ['member-111']);
+    assert.equal(ctx.document.querySelector('.app-notice'), null, 'successful copying stays silent');
     assert.equal(ctx.document.querySelector('.session-context-menu'), null);
     list = openParts(ctx, session);
     [...list.querySelector('[data-part-id="member-111"]').querySelectorAll('button')].find(b => b.textContent === 'View messages').click();
@@ -136,4 +137,103 @@ test('an open Parts menu yields keyboard control when focus moves outside it', t
   assert.equal(event.defaultPrevented, false, 'the new focused control keeps its keyboard behavior');
   assert.equal(ctx.document.activeElement, input);
   assert.equal(ctx.document.querySelector('.session-context-menu'), null);
+});
+
+test('Copy id rejection shows a persistent error notice with a reason and recovery', async t => {
+  const ctx = setup(t);
+  ctx.window.api.writeClipboard = () => Promise.reject(new Error('Clipboard unavailable'));
+  const list = openParts(ctx);
+  [...list.querySelector('[data-part-id="member-111"]').querySelectorAll('button')]
+    .find(button => button.textContent === 'Copy id').click();
+  await new Promise(resolve => setImmediate(resolve));
+  const notice = ctx.document.querySelector('.app-notice[role="alert"]');
+  assert.ok(notice, 'copy failure is visible after the menu closes');
+  assert.equal(notice.querySelector('.app-notice-message').textContent,
+    'Could not copy the id member: Clipboard unavailable. Try Copy id again.');
+  assert.ok(notice.querySelector('.app-notice-dismiss'), 'error remains dismissable');
+  assert.equal(ctx.document.querySelector('.session-context-menu'), null);
+});
+
+for (const action of ['Refresh screen', 'Send to background', "Don't restore", 'Copy id', 'View messages']) {
+  test(`choosing ${action} restores focus to the connected opener`, t => {
+    const ctx = setup(t);
+    const opener = ctx.document.createElement('button');
+    ctx.document.body.appendChild(opener);
+    opener.focus();
+    ctx.window.openSessions.set('head-222', { closed: false });
+    ctx.window.dormantWorkingSet = new Map([['root-000', {}]]);
+    ctx.window.backgroundActionReason = () => '';
+    ctx.window.requestTerminalRefresh = () => {};
+    ctx.window.sendSessionToBackground = () => {};
+    ctx.window.dismissDormantSession = () => {};
+    ctx.window.api.writeClipboard = () => Promise.resolve();
+    ctx.window.showJsonlViewer = () => {};
+    const root = action === 'Copy id' || action === 'View messages' ? openParts(ctx) : menu(ctx);
+    const button = [...root.querySelectorAll('button')].find(item => item.textContent === action);
+    assert.ok(button && !button.disabled);
+    button.click();
+    assert.equal(ctx.document.activeElement, opener);
+  });
+}
+
+test('a menu action preserves focus taken by its viewer', t => {
+  const ctx = setup(t);
+  const opener = ctx.document.createElement('button');
+  const viewer = ctx.document.createElement('textarea');
+  ctx.document.body.append(opener, viewer);
+  opener.focus();
+  ctx.window.showJsonlViewer = () => viewer.focus();
+  const list = openParts(ctx);
+  [...list.querySelectorAll('button')].find(button => button.textContent === 'View messages').click();
+  assert.equal(ctx.document.activeElement, viewer);
+});
+
+test('a menu action does not try to focus a disconnected opener', t => {
+  const ctx = setup(t);
+  const opener = ctx.document.createElement('button');
+  ctx.document.body.appendChild(opener);
+  opener.focus();
+  const list = openParts(ctx);
+  opener.remove();
+  let focused = false;
+  opener.focus = () => { focused = true; };
+  ctx.window.api.writeClipboard = () => Promise.resolve();
+  [...list.querySelectorAll('button')].find(button => button.textContent === 'Copy id').click();
+  assert.equal(focused, false);
+});
+
+test('Escape returns focus to the menu opener', t => {
+  const ctx = setup(t);
+  const opener = ctx.document.createElement('button');
+  ctx.document.body.appendChild(opener);
+  opener.focus();
+  menu(ctx);
+  ctx.document.activeElement.dispatchEvent(new ctx.window.KeyboardEvent('keydown', {
+    key: 'Escape', bubbles: true, cancelable: true,
+  }));
+  assert.equal(ctx.document.activeElement, opener);
+});
+
+test('modified menu navigation keys pass through without changing focus or activating actions', t => {
+  const ctx = setup(t);
+  const root = menu(ctx);
+  const button = root.querySelector('.session-parts-btn');
+  button.focus();
+  for (const modifier of ['ctrlKey', 'metaKey', 'altKey']) {
+    for (const key of ['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' ']) {
+      const event = new ctx.window.KeyboardEvent('keydown', { key, [modifier]: true, bubbles: true, cancelable: true });
+      button.dispatchEvent(event);
+      assert.equal(event.defaultPrevented, false, `${modifier}+${key} passes through`);
+      assert.equal(ctx.document.activeElement, button, `${modifier}+${key} keeps focus`);
+      assert.equal(button.getAttribute('aria-expanded'), 'false', `${modifier}+${key} does not open Parts`);
+    }
+  }
+});
+
+test('badge and Parts agree when member ids repeat and the head is outside the members', t => {
+  const session = { ...row, mergedMemberIds: ['member-111', 'member-111', 'root-000'] };
+  const ctx = setup(t, session);
+  const list = openParts(ctx, session);
+  assert.equal(list.querySelectorAll('.session-part').length, 3);
+  assert.equal(ctx.sidebar.buildSessionItem(session).querySelector('.session-parts-badge').textContent, '3 parts');
 });

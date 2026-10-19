@@ -25,7 +25,8 @@ test(`an existing background merge exposes part names and own dates (${variant})
   });
   const meta = new Map([[ids[1], { name: 'Middle name' }]]);
   cache.init({ PROJECTS_DIR: dir, activeSessions: new Map(), getMainWindow: () => null, log: console,
-    getLocalDescriptors: () => [{ sessionId: ids[2], kind: 'bg', jobId: '1234abcd', cwd: dir }],
+    getLocalDescriptors: () => [{ sessionId: ids[2], kind: 'bg', jobId: '1234abcd', cwd: dir,
+      name: 'Background head', startedAt: Date.parse('2026-10-13T09:00:00Z') }],
     getLocalJobs: () => new Map([['1234abcd', { state: 'working', sessionId: ids[2] }]]),
     db: { getAllCached: () => rows, getAllMeta: () => meta, getAllFolderMeta: () => new Map(), getSetting: () => ({}) },
   });
@@ -40,7 +41,7 @@ test(`an existing background merge exposes part names and own dates (${variant})
   [...ctx.document.querySelectorAll('.session-context-menu button')].find(button => button.textContent === 'Parts').click();
   const expected = [...rows].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified))
     .map(part => `${meta.get(part.sessionId)?.name || part.summary} · last active ${ctx.window.formatDate(new Date(part.modified))}`);
-  if (variant === 'unindexed head') expected.push('Untitled conversation · last active unknown');
+  if (variant === 'unindexed head') expected.unshift(`Background head · last active ${ctx.window.formatDate(new Date('2026-10-13T09:00:00Z'))}`);
   assert.deepEqual([...ctx.document.querySelectorAll('.session-part-label')].map(label => label.textContent), expected);
 });
 }

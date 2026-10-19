@@ -1762,6 +1762,17 @@ function closeSessionContextMenu() {
   document.removeEventListener('scroll', onSessionMenuScroll, true);
 }
 
+function runSessionMenuAction(action) {
+  const returnFocus = sessionMenuReturnFocus;
+  closeSessionContextMenu();
+  const focusBeforeAction = document.activeElement;
+  try {
+    return action();
+  } finally {
+    if (returnFocus?.isConnected && document.activeElement === focusBeforeAction) returnFocus.focus();
+  }
+}
+
 function onSessionMenuOutside(event) {
   if (!activeSessionContextMenu?.contains(event.target)) closeSessionContextMenu();
 }
@@ -1786,13 +1797,14 @@ function onSessionMenuKey(event) {
     event.preventDefault();
     event.stopPropagation();
     closeSessionContextMenu();
-    sessionMenuReturnFocus?.focus();
+    if (sessionMenuReturnFocus?.isConnected) sessionMenuReturnFocus.focus();
     return;
   }
   if (event.key === 'Tab') {
     closeSessionContextMenu();
     return;
   }
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
   const list = menu.querySelector('.session-parts-menu');
   const partsButton = menu.querySelector('.session-parts-btn');
   if (event.key === 'ArrowLeft' && list && !list.hidden) {
@@ -1818,8 +1830,13 @@ function onSessionMenuKey(event) {
   event.stopPropagation();
 }
 
+function rowPartIds(session) {
+  return [...new Set([...rowSessionIds(session), rowHeadId(session)])];
+}
+
 function appendSessionPartsMenu(menu, session) {
-  if (!session.mergedMemberIds?.length) return;
+  const partIds = rowPartIds(session);
+  if (partIds.length < 2) return;
   const button = document.createElement('button');
   button.className = 'popover-option session-parts-btn';
   button.textContent = 'Parts';
@@ -1834,7 +1851,7 @@ function appendSessionPartsMenu(menu, session) {
   list.setAttribute('aria-label', 'Parts');
   list.hidden = true;
   const metadata = new Map((session.conversationParts || []).map(part => [part.sessionId, part]));
-  const parts = [...new Set([...rowSessionIds(session), rowHeadId(session)])].map(id => ({
+  const parts = partIds.map(id => ({
     sessionId: id, ...metadata.get(id),
   }));
   const time = part => Date.parse(part.modified) || 0;
@@ -1854,16 +1871,22 @@ function appendSessionPartsMenu(menu, session) {
     group.appendChild(label);
     for (const [text, action] of [
       ['View messages', () => showJsonlViewer({ ...rowHeadSession(session, part.sessionId), name: null, aiTitle: null, summary: null, ...part })],
-      ['Copy id', () => window.api.writeClipboard(part.sessionId)],
+      ['Copy id', async () => {
+        try {
+          await window.api.writeClipboard(part.sessionId);
+        } catch (error) {
+          showAppNotice({
+            id: sessionActionNoticeId('Copy id', { ...session, sessionId: part.sessionId }), kind: 'error',
+            message: `Could not copy the id ${part.sessionId.split('-')[0]}: ${error?.message || error || 'Clipboard unavailable'}. Try Copy id again.`,
+          });
+        }
+      }],
     ]) {
       const item = document.createElement('button');
       item.className = 'popover-option';
       item.setAttribute('role', 'menuitem');
       item.textContent = text;
-      item.onclick = () => {
-        closeSessionContextMenu();
-        action();
-      };
+      item.onclick = () => runSessionMenuAction(action);
       group.appendChild(item);
     }
     list.appendChild(group);
@@ -1890,10 +1913,7 @@ function showSessionContextMenu(event, sessionId) {
   const openId = rowOpenId(sessionMap.get(sessionId) || { sessionId });
   button.disabled = !openId;
   if (button.disabled) button.title = 'Open this session in a terminal to refresh its screen';
-  button.onclick = () => {
-    closeSessionContextMenu();
-    requestTerminalRefresh(openId);
-  };
+  button.onclick = () => runSessionMenuAction(() => requestTerminalRefresh(openId));
   menu.appendChild(button);
   const bgButton = document.createElement('button');
   bgButton.className = 'popover-option session-bg-btn';
@@ -1902,10 +1922,7 @@ function showSessionContextMenu(event, sessionId) {
   const reason = backgroundActionReason(openId);
   bgButton.disabled = !!reason;
   if (reason) bgButton.title = reason;
-  bgButton.onclick = () => {
-    closeSessionContextMenu();
-    sendSessionToBackground(openId);
-  };
+  bgButton.onclick = () => runSessionMenuAction(() => sendSessionToBackground(openId));
   menu.appendChild(bgButton);
   appendSessionPartsMenu(menu, sessionMap.get(sessionId) || { sessionId });
   const dormantIds = rowSessionIds(sessionMap.get(sessionId) || { sessionId }).filter(isDormantSession);
@@ -1915,10 +1932,7 @@ function showSessionContextMenu(event, sessionId) {
     dismiss.setAttribute('role', 'menuitem');
     dismiss.textContent = "Don't restore";
     dismiss.title = 'Remove this session from the sessions to restore, without starting it';
-    dismiss.onclick = () => {
-      closeSessionContextMenu();
-      dormantIds.forEach(dismissDormantSession);
-    };
+    dismiss.onclick = () => runSessionMenuAction(() => dormantIds.forEach(dismissDormantSession));
     menu.appendChild(dismiss);
   }
   document.body.appendChild(menu);
@@ -2038,8 +2052,8 @@ function buildSessionItem(session) {
     statusEl.textContent = session.status + why + (age ? ' · ' + age : '');
   }
   metaEl.append(timeEl, shortIdEl, statusEl);
-  if (session.mergedMemberIds?.length) {
-    const count = session.mergedMemberIds.length + 1;
+  const count = rowPartIds(session).length;
+  if (count > 1) {
     const badge = document.createElement('span');
     badge.className = 'session-parts-badge';
     badge.textContent = `${count} parts`;

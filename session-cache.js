@@ -936,7 +936,13 @@ function buildProjectsFromCache(showArchived) {
     for (const session of proj.sessions) {
       if (!session.mergedMemberIds?.length) continue;
       session.conversationParts = [session.sessionId, ...session.mergedMemberIds].map(id => {
-        const part = cachedById.get(id);
+        const descriptor = !proj.remoteAlias && session.bgSessionId === id
+          ? localDescriptors.find(d => d.sessionId === id) : null;
+        const part = cachedById.get(id) || (descriptor && {
+          summary: (descriptor.nameSource !== 'collision' && descriptor.name) || 'Background session',
+          modified: Number.isFinite(descriptor.startedAt) && Math.abs(descriptor.startedAt) <= 8640000000000000
+            ? new Date(descriptor.startedAt).toISOString() : null,
+        });
         return {
           sessionId: id,
           name: metaMap.get(id)?.name || null,
