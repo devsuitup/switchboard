@@ -13,7 +13,7 @@ const bg = require('../bg-agents');
 const OLD = '11111111-1111-4111-8111-111111111111';
 const HEAD = '22222222-2222-4222-8222-222222222222';
 
-for (const proof of ['descriptor', 'job']) {
+for (const proof of ['descriptor', 'job', 'callback-error']) {
   test(`main wiring recognizes sanitized ${proof} proof and sends the background payload`, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-main-bg-639-'));
     const projects = path.join(root, 'projects'), descriptors = path.join(root, 'sessions'), jobs = path.join(root, 'jobs');
@@ -34,19 +34,20 @@ for (const proof of ['descriptor', 'job']) {
     cli.ensureWatching();
     bg.init({ jobsDir: jobs, cliSessionState: cli, resolveProjectRoots: async () => null });
     bg.start();
-    const events = [], metadata = [];
+    const events = [], metadata = [], confirmed = [], errors = [];
     const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
     const start = source.indexOf('sessionTransitions.init({');
     const end = source.indexOf('\n});', start) + '\n});'.length;
     vm.runInNewContext(source.slice(start, end), {
       PROJECTS_DIR: projects, activeSessions, sessionTransitions: transitions,
       mainWindow: { isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } },
-      log: { info() {}, debug() {} }, rekeyMcpServer() {},
+      log: { info() {}, debug() {}, warn: (...args) => errors.push(args), error: (...args) => errors.push(args) }, rekeyMcpServer() {},
+      persistBackgroundHandoff: context => { confirmed.push(context); return proof === 'callback-error' ? Promise.reject(Error('callback gone')) : Promise.resolve(); },
       activityReporter: { rekey() {} }, taskRecords: { rekey() {}, hasRecord: () => false },
       cliSessionState: cli, bgAgents: bg, getCachedSession: () => ({ customTitle: 'original title' }),
       isHostedJob: require('../bg-agents-roster').isHostedJob,
       writer: { rekeySessionMeta: async (...args) => { metadata.push(args); } },
-    });
+    }, { filename: 'main.js' });
     t.after(() => { transitions.init({ activeSessions: new Map() }); cli.stop(); bg.stop(); fs.rmSync(root, { recursive: true, force: true }); });
     transitions.detectSessionTransitions('project');
     if (proof === 'descriptor') {
@@ -70,6 +71,10 @@ for (const proof of ['descriptor', 'job']) {
     await transitions.drainMetadataWrites();
     assert.equal(activeSessions.get(HEAD), entry);
     assert.deepEqual(metadata, [[OLD, HEAD]]);
+    assert.equal(confirmed.length, 1);
+    assert.equal(confirmed[0].sourceId, OLD);
+    assert.equal(errors.length, proof === 'callback-error' ? 1 : 0);
+    if (proof === 'callback-error') assert.match(errors[0].join(' '), /callback gone/);
     assert.equal(events.length, 1);
     assert.deepEqual(events[0].slice(0, 4), ['session-forked', OLD, HEAD, 'background']);
     assert.equal(events[0][4].jobId, '1234abcd');

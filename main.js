@@ -1706,9 +1706,68 @@ ipcMain.handle('get-active-terminals', () => {
 // --- IPC: stop-session ---
 const { sendToBackground, createContinuationReader, holdBackgroundExit, cancellationIn } = require('./bg-handoff');
 
+const backgroundHandoffs = new WeakMap();
+
+function readBackgroundHandoffStamp(context) {
+  return require('./session-continuations').continuationStamp(fs.statSync(
+    path.join(PROJECTS_DIR, context.projectFolder, context.sourceId + '.jsonl'), { bigint: true }));
+}
+
+function persistBackgroundHandoff(context) {
+  let attempts = backgroundHandoffs.get(context.session);
+  if (!attempts) backgroundHandoffs.set(context.session, attempts = new Map());
+  const key = JSON.stringify([context.sourceId, context.targetId, context.jobId].map(id => id?.toLowerCase()));
+  let state = attempts.get(key);
+  if (!state) {
+    state = { context: { ...context }, running: null, successful: null, dirty: false, force: false };
+    attempts.set(key, state);
+    if (context.exitDrain) Promise.resolve(context.exitDrain).then(() => request(true), error => {
+      log.warn(`[bg-handoff] ${state.context.sourceId} exit-drain: ${error.message}`, error);
+    });
+  }
+  return request(false);
+
+  function request(force) {
+    let stamp;
+    try { stamp = JSON.stringify(readBackgroundHandoffStamp(state.context)); }
+    catch (error) { log.warn(`[bg-handoff] ${state.context.sourceId} stat: ${error.message}`, error); return Promise.resolve(); }
+    if (force) state.force = true;
+    if (state.running) {
+      if (stamp !== state.start) state.dirty = true;
+      return state.running;
+    }
+    state.running = run().finally(() => { state.running = null; });
+    return state.running;
+  }
+
+  async function run() {
+    do {
+      const forced = state.force;
+      state.force = false;
+      state.dirty = false;
+      let stage = 'stat';
+      try {
+        state.start = JSON.stringify(readBackgroundHandoffStamp(state.context));
+        if (!forced && state.start === state.successful) continue;
+        stage = 'resolve';
+        await sessionCache.resolveSessionContinuations(state.context.sourceId, {
+          getSessionLiveElsewhere: id => cliSessionState.liveElsewhereChecked(id, sessionHasPty, ptyPids),
+        });
+        stage = 'refresh';
+        await writer.refreshFolder(state.context.projectFolder, { files: new Set([state.context.sourceId + '.jsonl']) });
+        state.successful = state.start;
+        notifyRendererProjectsChanged('background-handoff');
+      } catch (error) {
+        log.warn(`[bg-handoff] ${state.context.sourceId} ${stage}: ${error.message}`, error);
+      }
+    } while (state.dirty || state.force);
+  }
+}
+
 async function handleSendToBackground(_event, sessionId) {
   const session = activeSessions.get(sessionId);
   const oldId = session?.realSessionId || sessionId;
+  const projectFolder = session?.projectFolder, exitDrain = session?.exitDrain;
   const read = session?.projectFolder
     ? createContinuationReader(path.join(PROJECTS_DIR, session.projectFolder, oldId + '.jsonl'), oldId)
     : async () => null;
@@ -1735,13 +1794,8 @@ async function handleSendToBackground(_event, sessionId) {
   });
   if (result.ok && session?.projectFolder) detectSessionTransitions(session.projectFolder);
   if (result.ok) {
-    const persist = () => sessionCache.resolveSessionContinuations(oldId, {
-      getSessionLiveElsewhere: id => cliSessionState.liveElsewhereChecked(id, sessionHasPty, ptyPids),
-    }).then(() => writer.refreshFolder(session.projectFolder, { files: new Set([oldId + '.jsonl']) }))
-      .then(() => notifyRendererProjectsChanged('background-handoff'),
-        err => log.warn(`[bg-handoff] the continuation index of ${oldId} was not saved: ${err.message}`));
-    persist();
-    session.exitDrain?.then(persist);
+    persistBackgroundHandoff({ session, sourceKey: sessionId, sourceId: oldId,
+      targetId: result.sessionId, jobId: result.jobId, projectFolder, exitDrain });
   }
   return result;
 }
@@ -3234,6 +3288,7 @@ ipcMain.handle('get-task-snapshots', async () => {
 const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
+  onBackgroundConfirmed: context => persistBackgroundHandoff(context),
   hasTaskRecord: (id, agentId) => taskRecords.hasRecord(id, agentId),
   backgroundJobExists: jobId => {
     const job = bgAgents.getCachedJobs().get(jobId);

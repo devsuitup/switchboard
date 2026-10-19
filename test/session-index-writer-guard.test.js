@@ -17,7 +17,7 @@ const cacheWriters = new Set(['deleteCachedFolder', 'upsertCachedSessions', 'del
   'upsertSearchEntries', 'setFolderMeta', 'setSetting', 'setName', 'setInitialScanComplete',
   'setCachedEntrypoints', 'setCachedContinuationIndex', 'setCachedCustomTitles']);
 const cacheCommands = new Set(['init', 'refreshFolder', 'dropFolderRows', 'releaseLiveSession',
-  'writeScannedFolder', 'writeScannedFolderPartial', 'applyProjectsWorkerEffects', 'buildProjectsFromCache', 'reconcileCacheFromFilesystem']);
+  'writeScannedFolder', 'writeScannedFolderPartial', 'applyProjectsWorkerEffects', 'buildProjectsFromCache', 'reconcileCacheFromFilesystem', 'reconcileCacheFromFilesystemAsync']);
 const cacheWriteOwners = new Set([...cacheCommands, 'setTranscriptName']);
 
 function violations(source, file = '') {

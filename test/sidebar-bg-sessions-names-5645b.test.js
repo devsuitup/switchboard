@@ -76,7 +76,7 @@ test('631 case 2: a legacy title backfilled by the Node worker yields without ch
   } finally { fs.readFileSync = read; }
 });
 
-test('631 case 7: the shipped projects worker reply overlays both views and preserves a Switchboard rename', options, t => {
+test('631 case 7: the shipped projects worker reply overlays both views and preserves a Switchboard rename', options, async t => {
   const h = fixture(t);
   h.db.setName(h.id, 'launch (3)');
   Object.assign(h.descriptor, { kind: 'bg', jobId: 'aaaaaaaa' });
@@ -89,15 +89,15 @@ test('631 case 7: the shipped projects worker reply overlays both views and pres
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { Buffer, console, structuredClone,
     require: id => id === 'better-sqlite3' ? Database : id === 'node:worker_threads'
       ? { parentPort: port, workerData: { dbPath: h.db.DB_PATH, projectsDir: h.projectsDir } } : nativeRequire(id) }, { filename });
-  const request = () => {
-    receive({ id: replies.length + 1, localDescriptors: [h.descriptor], localJobs: [...h.jobs] });
+  const request = async () => {
+    await receive({ id: replies.length + 1, localDescriptors: [h.descriptor], localJobs: [...h.jobs] });
     const reply = replies.at(-1);
     assert.equal(reply.error, undefined);
     return reply.result;
   };
   for (const name of ['registry rename', 'Switchboard rename']) {
     if (name === 'Switchboard rename') h.db.setName(h.id, name);
-    const reply = request();
+    const reply = await request();
     for (const projects of [reply.defaultProjects, reply.allProjects]) {
       const row = projects.flatMap(project => project.sessions).find(session => session.sessionId === h.id);
       assert.equal(row.name, name);

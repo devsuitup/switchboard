@@ -603,6 +603,12 @@ for an assumption a normal unit test can pin.
 
 ## Conversation continuations
 
+A proven typed `/bg` and confirmed button share captured-source index persistence
+and one exit pass. A descriptor-only transition remains pending until its hosted
+job enters the cache; subscriptions retry without a transcript write. A live
+attach destination still receives metadata without taking over either PTY.
+Command ownership, freshness and liveness checks retain their existing policy.
+
 A proven local linear chain now shares one sidebar row under its original part (#564), including compaction mirrors. Branches, convergence, remote or cross-project links stay separate; `/clear` has no link. Clicking a closed row opens its newest-modified head without a continuation prompt for ids already on that row, and checks every part for liveness elsewhere. Automatic restore resolves the saved part with the row's members and head, using `rowHeadSession(row, savedId)` for a saved member (#722). Candidates already on the row are excluded, including same-bridge-group alternatives; no remaining candidate opens the row's head, one external candidate is followed, and real branches remain held. Following the head rewrites the saved working-set entry to that id. Several saved parts of one row reuse one tab, and the final open checks every row member for liveness elsewhere. See [Continuation rows](session-cache.md#continuation-rows-564) for index proof, dangling-target and 32-hop rules.
 
 For an open interactive conversation moving to the daemon, #639 adds the

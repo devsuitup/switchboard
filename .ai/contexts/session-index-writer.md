@@ -138,6 +138,17 @@ reads use the acknowledged mirror without waiting for pending writes.
 
 ## Continuations and shutdown
 
+Refresh and retained-live release await linked-source preparation before opening
+the synchronous cache-effects recorder. A stale effects ACK recomputes preparation
+from current rows. Collectors add deferrals even on failed attempts and remove
+accounted paths only after successful ACK. One race retry per request occurs
+outside recorder scopes; no async scan or await runs inside a recorder/transaction.
+All resulting row, name, search and exact zero-folder-marker effects still use
+the admitted writer path. A confirmed button or typed handoff shares one source
+persistence sequence and captured exit pass. A forced shutdown timeout may
+interrupt it; this is not an unconditional durability guarantee. The existing
+bounded shutdown and admitted-work rules below remain in force.
+
 Background re-key awaits metadata persistence before publishing the PTY/map/MCP/
 activity identity. A pending command suppresses duplicate persistence. After ACK,
 main checks the old map entry, source identity, target liveness, stop request and

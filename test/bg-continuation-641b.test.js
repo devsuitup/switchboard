@@ -34,7 +34,7 @@ function fixture(t, { old = false } = {}) {
   let receiver;
   let jobExists = true;
   let proof = { sessionId: HEAD, jobId: '1234abcd', kind: 'bg' };
-  transitions.init({ PROJECTS_DIR: root, activeSessions, log: { info() {}, debug() {} }, rekeyMcpServer() {},
+  transitions.init({ PROJECTS_DIR: root, activeSessions, log: { info() {}, debug() {}, warn() {}, error() {} }, rekeyMcpServer() {},
     clearOwner: () => 'other', getBackgroundTarget: () => proof,
     backgroundJobExists: () => jobExists,
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (...args) => {

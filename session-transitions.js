@@ -10,6 +10,7 @@ const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
  * Call init(ctx) once with shared context.
  */
 let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, getDescriptorIdentity, setTimeoutFn, hasTaskRecord, getBackgroundTarget, rekeyMetadata, backgroundJobExists;
+let onBackgroundConfirmed;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -25,6 +26,7 @@ function init(ctx) {
   getBackgroundTarget = ctx.getBackgroundTarget || (() => null);
   rekeyMetadata = ctx.rekeyMetadata || (() => {});
   backgroundJobExists = ctx.backgroundJobExists || (() => false);
+  onBackgroundConfirmed = ctx.onBackgroundConfirmed || (() => {});
   rekeyed.clear();
   signalsCache.clear();
   for (const timer of recheckTimers.values()) clearTimeout(timer);
@@ -457,23 +459,80 @@ function isFresh(filePath) {
 
 // see .ai/contexts/session-state.md ("Proven continuation re-key")
 const metadataWrites = new Set();
+function transitionReason(session, sourceId, targetId, kind, jobId, reason, metadataCopied = false, error) {
+  const key = JSON.stringify([sourceId, targetId, kind, jobId].map(value => typeof value === 'string' ? value.toLowerCase() : value));
+  const diagnostics = session._transitionDiagnostics || (session._transitionDiagnostics = new Map());
+  let reasons = diagnostics.get(key);
+  if (!reasons) diagnostics.set(key, reasons = new Set());
+  if (!error && reasons.has(reason)) return;
+  reasons.add(reason);
+  const message = `[session-transition] ${sourceId} → ${targetId} (${kind}) jobId=${jobId || 'none'} ${reason} metadataCopied=${metadataCopied}`;
+  if (error) log?.error?.(message, error.message, error);
+  else log?.info?.(message);
+}
+
+function backgroundProofMatches(context) {
+  const { session, sourceId, targetId, jobId, projectFolder } = context;
+  let fresh;
+  try { fresh = freshContinuationIndex(session, sourceId, path.join(PROJECTS_DIR, projectFolder, sourceId + '.jsonl')); } catch {}
+  const target = getBackgroundTarget(targetId);
+  return backgroundCommandMatches(session, sourceId) && fresh?.complete && !fresh.unresolved
+    && fresh.ids.length === 1 && normalizeSessionId(fresh.ids[0]) === normalizeSessionId(targetId)
+    && target?.kind === 'bg' && normalizeSessionId(target.jobId) === normalizeSessionId(jobId);
+}
+
 function rekeySession(sessionId, newId, session, currentFiles, kind, background) {
-  if (session._metadataRekey) return;
-  const acknowledgment = rekeyMetadata(sessionId, newId, kind);
-  if (acknowledgment?.then) {
-    const sourceId = session.realSessionId || sessionId;
-    const pending = Promise.resolve(acknowledgment).then(() => {
-      const target = getBackgroundTarget(newId);
-      if (activeSessions.get(sessionId) !== session || (session.realSessionId || sessionId) !== sourceId
-        || isLive(newId) || session.stopRequested || (background && (target?.jobId !== background.jobId || !backgroundJobExists(background.jobId)))) return;
-      publishRekey(sessionId, newId, session, currentFiles, kind, background);
-    }).catch(error => { log?.error?.('[session-transition] metadata re-key failed:', error.message); })
-      .finally(() => { delete session._metadataRekey; metadataWrites.delete(pending); });
-    session._metadataRekey = pending;
-    metadataWrites.add(pending);
-    return;
+  const sourceId = session.realSessionId || sessionId;
+  const jobId = background?.jobId;
+  const report = (reason, copied, error) => transitionReason(session, sourceId, newId, kind, jobId, reason, copied, error);
+  if (session._metadataRekey) { report('metadata-pending', !!session._backgroundRekey?.copied); return; }
+  let attempt;
+  if (background) {
+    const tuple = JSON.stringify([sourceId, newId, jobId].map(normalizeSessionId));
+    attempt = session._backgroundRekey;
+    if (attempt?.tuple !== tuple) {
+      attempt = { tuple, copied: false, confirmed: false, context: { session, sourceKey: sessionId, sourceId,
+        targetId: newId, jobId, projectFolder: session.projectFolder, exitDrain: session.exitDrain } };
+      session._backgroundRekey = attempt;
+    }
+    if (!attempt.confirmed) {
+      attempt.confirmed = true;
+      try {
+        Promise.resolve(onBackgroundConfirmed(attempt.context)).catch(error => report('confirmation-failed', attempt.copied, error));
+      } catch (error) { report('confirmation-failed', attempt.copied, error); }
+    }
   }
-  publishRekey(sessionId, newId, session, currentFiles, kind, background);
+  const complete = () => {
+    if (attempt) attempt.copied = true;
+    let reason;
+    if (activeSessions.get(sessionId) !== session) reason = 'source-replaced';
+    else if (normalizeSessionId(session.realSessionId || sessionId) !== normalizeSessionId(sourceId)) reason = 'source-id-changed';
+    else if (isLive(newId)) reason = 'target-live';
+    else if (session.stopRequested) reason = 'source-stopped';
+    else if (background && !backgroundProofMatches(attempt.context)) reason = 'background-proof-changed';
+    else if (background && !backgroundJobExists(jobId)) reason = 'background-job-gone';
+    if (reason) { report(reason, true); return; }
+    publishRekey(sessionId, newId, session, currentFiles, kind, background);
+    delete session._backgroundRekey;
+  };
+  try {
+    if (attempt?.copied) { complete(); return; }
+    const acknowledgment = rekeyMetadata(background ? sourceId : sessionId, newId, kind);
+    if (acknowledgment?.then) {
+      const pending = Promise.resolve(acknowledgment).then(complete)
+        .catch(error => { report('metadata-failed', false, error); })
+        .finally(() => {
+          if (session._metadataRekey === pending) delete session._metadataRekey;
+          if (activeSessions.get(sessionId) !== session && session._backgroundRekey === attempt) delete session._backgroundRekey;
+          metadataWrites.delete(pending);
+        });
+      session._metadataRekey = pending;
+      metadataWrites.add(pending);
+      return;
+    }
+    if (background) complete();
+    else publishRekey(sessionId, newId, session, currentFiles, kind, background);
+  } catch (error) { report('metadata-failed', false, error); }
 }
 
 async function drainMetadataWrites() { await Promise.all([...metadataWrites]); }
@@ -527,12 +586,14 @@ function detectContinuation(sessionId, session, folderPath, currentFiles, descri
   }
   if (authorized && fresh?.complete && !fresh.unresolved && fresh.ids.length === 1 && !session.isAttach && (!session.backgrounding || session.backgrounded)) {
     const newId = fresh.ids[0];
-    if (newId !== sourceId && !isLive(newId)) {
+    if (normalizeSessionId(newId) !== normalizeSessionId(sourceId)) {
       const background = getBackgroundTarget(newId);
       if (background?.kind === 'bg' && background.jobId && backgroundJobExists(background.jobId)) {
         rekeySession(sessionId, newId, session, currentFiles, 'background', background);
-        return true;
+        return !isLive(newId) || activeSessions.get(newId) === session;
       }
+      transitionReason(session, sourceId, newId, 'background', background?.jobId,
+        background?.kind === 'bg' && background.jobId ? 'background-job-pending' : 'background-proof-pending');
     }
   }
   if (session.exited || backgroundOnly) return false;

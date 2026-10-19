@@ -211,6 +211,15 @@ plus the existing Agents DOM and #522 guard/attach suites.
 
 ### Background continuations (#639)
 
+Complete typed proof also requests source persistence when a distinct live tab
+holds the destination. Metadata is copied after the hosted job enters the cache;
+the existing tab and both PTYs stay in place. This metadata-only attempt returns
+false so fork and `/clear` detection and known-file bookkeeping can proceed.
+Copies and confirmation callbacks are deduplicated per source/target/job tuple.
+Ordinary info logs record each pending/refusal reason once per tuple, including
+whether metadata was already copied. A real later detection can publish after
+the destination exits, reusing its completed copy and rechecking proof.
+
 A complete, unambiguous new `continued-in` record in the interactive conversation
 plus a hosted cached job identifies a background continuation; any
 descriptor for the target must agree on a single `kind: bg` job. Before
@@ -817,7 +826,12 @@ then notifies projects with `background-handoff`: one row is shown without
 waiting for the watcher's flush. It repeats this sequence once the source PTY's
 exit has been handled (`exitDrain`), so a write by the exiting CLI cannot leave
 the rows split. A failure logs `[bg-handoff]` and notifies nothing. The IPC
-result waits for none of this. A `/bg` typed by hand is outside this path (#718).
+result waits for none of this. A confirmed button handoff and a proven typed `/bg`
+share source continuation persistence; later source writes are refreshed
+independently of the source's exit. `persistBackgroundHandoff` captures the old
+source id, folder and drain, coalesces equal BigInt stamps, reruns changed-stamp
+requests, and forces exactly one exit pass. Stat, resolve, refresh and drain
+failures produce one warning per failed pass; indexing never authorizes a re-key.
 
 Tests: `test/bg-handoff.test.js`, `test/bg-handoff-main.test.js`,
 `test/send-to-background-renderer.test.js`, `test/bg-handoff-trigger.test.js`,
