@@ -352,7 +352,8 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       const originalId = item.sessionId;
       const originalSession = s;
       let waitingForIndex = false;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
+      let continuationNotice;
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
       if (!s) {
         const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
         skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
@@ -389,6 +390,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       }
       if (openSessions.has(s.sessionId) && !openSessions.get(s.sessionId).closed) {
         clearAppNotice(sessionActionNoticeId('Restore', originalSession));
+        if (continuationNotice) showAppNotice(continuationNotice);
       }
       if (s.sessionId !== originalId && openSessions.get(s.sessionId)?.attach) {
         skippedWorkingSetEntries.set(s.sessionId, { item, index: restoreSavedIndex.get(s.sessionId), keepAttached: true });
@@ -1880,11 +1882,12 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     if (mayShow()) showSession(openId);
     return;
   }
+  let continuationNotice;
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
     let continuationLive;
     session = await resolveResumeSession(session, { automatic, api: window.api, confirm: question => appConfirm(question),
-      choose: question => appChoose(question), resolutions: window._startupResumeResolutions,
+      choose: question => appChoose(question), notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
       describe: id => {
         const row = indexedRowOf(id);
         const part = row?.conversationParts?.find(part => part.sessionId === id) || row;
@@ -2001,6 +2004,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
   for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
   if (entry.attach) clearAppNotice(sessionActionNoticeId('Attach background', session));
+  if (continuationNotice) showAppNotice(continuationNotice);
   if (result.reattached) entry.attach = !!result.attach;
   skippedWorkingSetEntries.delete(sessionId);
   if (allowBgAttach && entry.attach) {

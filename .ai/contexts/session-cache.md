@@ -2257,17 +2257,28 @@ This asynchronous directory inventory is shared within one resolution and reads
 no transcript contents. A file found anywhere in that root remains unresolved
 until indexed; resolution does not index it on demand. Directory read failures
 or symbolic links that may hide files also keep absence unconfirmed.
-For a local target without a cache row, the IPC also supplies the existing
+For a local target without a cache row, an active local conversation terminal
+keeps it present before any disk inventory, matching its real session id when
+the terminal still has a temporary key. Exited, plain and remote terminals do
+not count. The IPC also supplies the existing
 CLI `liveElsewhereChecked` lookup. A live descriptor keeps the target as a terminal
 candidate even before its first transcript record exists; `known:false`, including
 an unreadable descriptor directory, keeps resolution unresolved. A confirmed
 `known:true, live:null` result permits the disk inventory to check absence.
+A known result without an explicit live descriptor or `live:null` is unresolved;
+it cannot prove a handoff target absent. Inventory filenames are compared
+case-insensitively, as continuation row membership is.
 Remote mirror targets never query local CLI descriptors.
 Only a target absent from the cache, liveness lookup and inventory is marked missing.
 The graph drops that target if its parent has another existing continuation.
-If every child is confirmed missing, that parent remains unresolved, including
-inside a longer chain: silently resuming a discontinued branch is unsafe, and
-manual opening already offers an explicit original-id choice. Cached rows with
+If every child is confirmed missing, a present non-root parent remains a candidate
+and resolution stays unresolved. The traversal also returns those parents in
+`missingAt`, or an empty list when any other uncertainty remains. The resume
+guard opens the row head with the short proven-missing notice only when every
+such parent belongs to the queried row and no candidate is outside it. A parent
+in another row still brings up the chooser on click and holds restore. A root
+whose targets are all proven missing, with no other uncertainty, continues to
+report `missing:true`. Cached rows with
 missing or unreadable transcripts retain the existing unresolved behaviour.
 
 Full-scan and persisted chunk indexes both carry `version:3`, `size`, `sealedIds`, a bounded base64

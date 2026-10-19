@@ -124,20 +124,34 @@ for (const location of ['same folder', 'other folder', 'nested folder']) {
   });
 }
 
+test('R3 all targets proven missing at the root reopen the saved part', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: ['missing-a', 'missing-b'] });
+  const result = await h.ctx.api.getSessionContinuations('old');
+  assert.equal(result.unresolved, true);
+  assert.equal(result.missing, true);
+  assert.deepEqual(result.candidates, []);
+  await h.restore();
+  assert.deepEqual(h.spawned.map(call => call.id), ['old']);
+  assert.deepEqual(h.prompts, []);
+  assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
+  assert.match(h.dom.window.document.querySelector('#app-notices [role="status"]')?.textContent, /no longer exists on disk/);
+});
+
 for (const graph of [
-  { old: ['missing-a', 'missing-b'] },
-  { old: ['mid', 'missing-a'], mid: ['missing-b'] },
+  { old: ['mid'], mid: ['gone'] },
+  { old: ['mid', 'gone-a'], mid: ['gone-b'] },
 ]) {
-  test(`R3 all targets missing at ${graph.mid ? 'a descendant' : 'the root'} remain unresolved`, { timeout: 9000 }, async t => {
+  test(`R3 restore holds a present descendant with missing children (${graph.old.length} root targets)`, async t => {
     const h = setup(t, graph);
-    const result = await h.ctx.api.getSessionContinuations('old');
-    assert.equal(result.unresolved, true);
-    assert.deepEqual(result.candidates, []);
     await h.restore();
     assert.deepEqual(h.spawned, []);
     assert.deepEqual(h.prompts, []);
     assert.equal(h.settings().openWorkingSet[0].sessionId, 'old');
+    assert.equal(h.dom.window.document.querySelector('[data-notice-id="continuation-missing:old"]'), null);
     assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /sidebar/);
+    const result = await h.ctx.api.getSessionContinuations('old');
+    assert.equal(result.missing, false);
+    assert.deepEqual(result.candidates.map(candidate => candidate.sessionId), ['mid']);
   });
 }
 
@@ -169,7 +183,6 @@ for (const [name, graph, expected] of [
 for (const [name, graph] of [
   ['two terminal continuations', { old: ['a', 'b'], a: [], b: [] }],
   ['a cycle', { old: ['mid'], mid: ['old'] }],
-  ['a missing continuation', { old: ['missing'] }],
 ]) {
   test(`restore holds ${name} and spawns nothing on dismissal`, { timeout: 9000 }, async t => {
     const h = setup(t, graph);

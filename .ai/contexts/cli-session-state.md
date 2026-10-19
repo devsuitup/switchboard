@@ -640,6 +640,18 @@ and malformed continuation records return `unresolved`. Unrelated JSON parse
 failures and incomplete tails do not block resume. File scanning yields between
 chunks and has no total byte cap; chunk size only controls pacing.
 
+The traversal also returns `missing: true` when an all-missing branch was seen
+and no other cause is unresolved. A cycle, traversal bound, unreadable node,
+unresolved index, pending indexing or missing root makes `missing` false.
+`unresolved` stays true for an all-missing branch for other traversal consumers.
+With `missing` and no candidate outside the row, both manual open and restore
+open the original part without a continuation question. The resolver's `notify`
+adapter queues the notice in both app paths until opening succeeds, then
+`showAppNotice` shows the default 15-second
+notice: `"<name>" continued in a part that no longer exists on disk, so it was
+opened as it was.` A present candidate beside a missing target still reaches
+the manual chooser; automatic restore keeps its existing resolved/held rule.
+
 `resolveResumeSession` is shared by restore and sidebar clicks. An automatic
 restore selects exactly one terminal id outside the row, or opens the row's head when none remain, rewriting the saved entry to that id. Several external ids, unresolved graphs and
 failed lookups hold the saved entry and join the non-blocking restore notice,
