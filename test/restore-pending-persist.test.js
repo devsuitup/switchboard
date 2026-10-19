@@ -35,6 +35,7 @@ function setup() {
   vm.runInContext(`
     var openSessions = new Map([['opened', { session: { projectPath: '/p' }, closed: false }]]);
     var sessionMap = new Map();
+    var localMergedMemberRows = new Map();
     var pendingSessions = new Map();
     var activeSessionId = 'opened';
     var _persistChain = Promise.resolve();
@@ -50,7 +51,7 @@ function setup() {
     function showSession() {}
   `, ctx);
   const fns = loadAppFunctions(ctx, {
-    functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore'],
+    functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'indexedRowOf'],
     declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'exitingApp', 'persistSkippedWhileExiting', 'dormantWorkingSet'],
   });
   vm.runInContext(`restoreSavedIndex = new Map(${JSON.stringify(SAVED.map((item, i) => [item.sessionId, i]))});`, ctx);

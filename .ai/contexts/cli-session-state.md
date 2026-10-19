@@ -680,9 +680,38 @@ checked by the guard. Background parts without a usable job id are disabled;
 scheduled parts stay enabled and lead to Resume anyway. An unresolved graph
 with known candidates states that the list may be incomplete. With no known
 candidate, unknown graphs and failed lookups offer Open as it was or Cancel,
-with a named explanation (including waiting for indexing). Choices are not
-remembered yet, so resolved questions make no next-time or menu promise.
+with a named explanation (including waiting for indexing). A resolved choice is
+remembered across restarts; unresolved graphs neither use nor store choices.
 Cancellation keeps the held entry. Remote sessions retain their attach behavior.
+
+Choices use one settings key per representative row, `continuationChoice:<id>`,
+with `{ chosen: <candidate id> | null, candidates: <sorted candidate ids> }`.
+Null means the clicked row, even when its head changes. Candidate ids retain
+the graph's terminal parts; opening one still resolves its current row head and
+checks every member. Malformed records are ignored. Every open revalidates the
+resolved graph: a new candidate or a vanished choice asks again, preselecting
+the choice if still listed. A vanished unchosen candidate merely narrows the
+record. A vanished chosen part is followed only if its own fresh lookup is
+resolved with exactly one current candidate and no other candidate is new.
+The followed id and narrowed candidate set replace the record. A row without
+external candidates deletes its record, including the proven-missing case.
+`chooseAgain` bypasses valid memory and preserves it on Cancel for the later
+row-menu integration. That menu, Delete cleanup and startup sweep belong to
+PR 6b and are not exposed here.
+
+`restoreStartupSessions` loads `getSettingsByPrefix('continuationChoice:')` once
+into `window._continuationChoices` before reload and working-set restore.
+A failed settings read falls back to an empty map so both restores and the
+Agents view still run. An unresolved lookup with zero candidates leaves saved
+choices unread and unchanged while indexing completes.
+Both automatic paths apply valid choices before holding ambiguous graphs.
+The map updates immediately on choice; `setSetting` and `deleteSetting` are
+not awaited by the opening path. Rejected writes remove that attempted value
+from the map and show a persistent error notice without blocking the terminal.
+A failed deletion instead says the earlier choice could not be forgotten.
+They use separate keys, preserving `global.openWorkingSet` and other settings.
+Evidence: `test/resume-guard-memory.test.js`, `test/continuation-memory.test.js`,
+`test/settings-prefix.test.js`. The continuation harness stores keys separately.
 
 `restoreStartupSessions` shares a map of lookup promises between the remembered
 active-session open and working-set restore. Each original id is resolved once

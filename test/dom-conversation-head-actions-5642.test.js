@@ -72,7 +72,7 @@ function resumeSetup(t) {
     openTerminal: async id => { spawned.push(id); return { ok: true }; },
   });
   loadAppFunctions(ctx.context, {
-    functions: ['openSession', 'openSessionNow', 'beginPtyOpen', 'settlePtyOpen', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
+    functions: ['openSession', 'openSessionNow', 'beginPtyOpen', 'settlePtyOpen', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow', 'indexedRowOf'],
     declarations: ['openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'continuationRetryCancelled',
       'ptyGenerations', 'pendingOpens', 'dormantWorkingSet', 'restoreMode', 'restoreInFlight'],
   });

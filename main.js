@@ -1612,6 +1612,11 @@ ipcMain.handle('get-setting', (_event, key) => {
   return getSetting(key);
 });
 
+ipcMain.handle('get-settings-by-prefix', (_event, prefix) => {
+  if (prefix !== 'continuationChoice:') throw new TypeError('Invalid settings prefix');
+  return Object.fromEntries(listSettingKeys(prefix).map(key => [key, getSetting(key)]));
+});
+
 ipcMain.handle('set-setting', async (_event, key, value) => {
   await setSetting(key, value);
   if (key === 'global') applyUpdateChannel();

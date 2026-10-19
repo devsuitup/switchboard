@@ -85,6 +85,7 @@ function setup(t, { sandbox = false } = {}) {
   vm.runInContext(`
     var openSessions = new Map(), pendingSessions = new Map();
     var sessionMap = new Map();
+    var localMergedMemberRows = new Map();
     var activeSessionId = null;
     var restoringWorkingSet = false;
     var restorePlanner = null;

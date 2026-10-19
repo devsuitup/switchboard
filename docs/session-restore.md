@@ -149,7 +149,7 @@ instead of being discarded. When every continuation target is proven absent
 and nothing else is unresolved, restore opens the saved part directly. A
 15-second notice says that its continuation no longer exists on disk, so it
 was opened as it was. Manual opening follows the same rule.
-Several final ids, a cycle or a malformed continuation record hold the saved entry
+Several final ids without a valid remembered choice, a cycle or a malformed continuation record hold the saved entry
 without launching it. A non-blocking notice names the held conversation and
 asks you to open it from the sidebar to choose; other saved sessions continue
 restoring. Automatic restore never displays a continuation confirmation dialog.
@@ -162,8 +162,15 @@ A background part without an identifiable job is disabled with its reason.
 A scheduled part remains selectable and then asks **Resume anyway**.
 An incomplete list says so, as does a failure to check which parts are running.
 With no known candidate, a failed lookup or unresolved continuation offers
-**Open as it was** or **Cancel**, with the reason. Choices are not remembered;
-automatic restore holds ambiguous entries without showing the chooser. Reload also
+**Open as it was** or **Cancel**, with the reason. Switchboard remembers choices
+across restarts when the continuation graph can be checked. It opens the chosen
+part directly while it remains available and no new part appears. An unchosen
+part disappearing does not ask again. If the chosen part continues linearly,
+Switchboard follows it; a new branch or a vanished choice asks again. Choosing
+the clicked part remembers that conversation, including its latest part.
+Incomplete or failed checks never use or store a choice. If saving fails, an
+error notice says so while the part still opens.
+Automatic restore holds ambiguous entries without a valid choice and never shows the chooser. Reload also
 holds an ambiguous entry and shows the same dismissible notice naming it and
 asking you to open it from the sidebar to choose. If restore and reload both
 hold it, the notice lists it only once.

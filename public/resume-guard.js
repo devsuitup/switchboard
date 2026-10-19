@@ -76,10 +76,33 @@ const continuationLocations = {
   bg: 'running in the background', blockedBg: 'running in the background, cannot be attached',
 };
 
+function continuationChoiceRecord(value) {
+  return value && (value.chosen === null || typeof value.chosen === 'string' && value.chosen.length > 0)
+    && Array.isArray(value.candidates) && value.candidates.every(id => typeof id === 'string' && id.length > 0)
+    && (value.chosen === null || value.candidates.includes(value.chosen)) ? value : null;
+}
+
 async function resolveResumeSession(session, { automatic = false, api, confirm, choose, describe = () => ({}),
   formatDate = t => new Date(t).toLocaleString(), resolutions, onHold, onLive, notify,
+  choices, rowKey = session?.sessionId, chooseAgain = false, memoryNotify = notify,
   resolveRow = candidate => ({ ...session, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] }) } = {}) {
   if (!session || session.type === 'terminal' || session.remoteAlias) return session;
+  const key = 'continuationChoice:' + rowKey;
+  const remember = value => {
+    if (!choices) return;
+    if (value) choices.set(key, value);
+    else choices.delete(key);
+    (async () => {
+      if (value) await api.setSetting(key, value);
+      else await api.deleteSetting(key);
+    })().catch(error => {
+      if (value && choices.get(key) === value) choices.delete(key);
+      memoryNotify?.({ id: `continuation-memory:${rowKey}`, kind: 'error',
+        message: value
+          ? `Switchboard could not remember this choice: ${error.message || String(error)}. It will ask again next time.`
+          : `Switchboard could not forget the earlier choice: ${error.message || String(error)}. It is still saved for the next restart.` });
+    });
+  };
   const partInfo = (candidate, id = candidate.sessionId) => {
     const { name, aiTitle, summary, title, runningHere } = describe(id);
     return { ...candidate, name: name || candidate.name, aiTitle: aiTitle || candidate.aiTitle,
@@ -101,7 +124,10 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   }
   const rowIds = new Set([session.sessionId, ...(session.mergedMemberIds || [])]);
   const candidates = (result?.candidates || []).filter(candidate => !rowIds.has(candidate.sessionId));
+  const record = result && !result.unresolved ? continuationChoiceRecord(choices?.get(key)) : null;
+  const candidateIds = [...new Set(candidates.map(candidate => candidate.sessionId))].sort();
   const missing = result?.missing || (result?.missingAt?.length && result.missingAt.every(id => rowIds.has(id)));
+  if ((result && !result.unresolved || missing) && !candidates.length && choices?.has(key)) remember(null);
   if (missing && !candidates.length) {
     notify?.({ id: `continuation-missing:${session.sessionId}`,
       message: '"' + conversationName() + '" continued in a part that no longer exists on disk, so it was opened as it was.' });
@@ -109,9 +135,28 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
     return head === session.sessionId ? session
       : { ...session, sessionId: head, mergedMemberIds: [...rowIds].filter(id => id !== head) };
   }
+  if (result && !result.unresolved && candidates.length && record && !chooseAgain) {
+    let chosen = record.chosen;
+    let allowed = record.candidates;
+    if (chosen !== null && !candidateIds.includes(chosen)) {
+      let followed;
+      try { followed = await api.getSessionContinuations(chosen); } catch { followed = null; }
+      if (followed && !followed.unresolved && followed.candidates?.length === 1) {
+        const next = followed.candidates[0].sessionId;
+        if (candidateIds.includes(next)) {
+          allowed = [...record.candidates.filter(id => id !== chosen), next];
+          chosen = next;
+        }
+      }
+    }
+    if ((chosen === null || candidateIds.includes(chosen)) && candidateIds.every(id => allowed.includes(id))) {
+      if (chosen !== record.chosen || JSON.stringify(candidateIds) !== JSON.stringify(record.candidates)) remember({ chosen, candidates: candidateIds });
+      return chosen === null ? session : resolveRow(candidates.find(candidate => candidate.sessionId === chosen));
+    }
+  }
   if (automatic) {
     if (!result || result.unresolved) { onHold?.({ waitingForIndex: !!result?.waitingForIndex }); return null; }
-    return candidates.length === 1 ? { ...session, sessionId: candidates[0].sessionId } : candidates.length ? null : session;
+    return candidates.length === 1 ? resolveRow(candidates[0]) : candidates.length ? null : session;
   }
   const seenRows = new Set([session.sessionId]);
   const candidateParts = candidates.map(candidate => {
@@ -152,11 +197,14 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   });
   const message = ['"' + name + '" continues in ' + (candidateParts.length === 1 ? 'another part' : candidateParts.length + ' other parts') + '. Choose the one to open.'];
   if (!result || result.unresolved) message.push('Some continuation records could not be read, so this list may be incomplete. This choice is not remembered.');
+  else message.push('Switchboard opens your choice directly next time, as long as it is still there and no new part appears.');
   if (liveFailed) message.push('Switchboard could not check which parts are running.');
-  const selectedId = options.find(option => !option.disabled)?.id;
+  const rememberedId = record?.chosen === null ? session.sessionId : record?.chosen;
+  const selectedId = options.find(option => option.id === rememberedId && !option.disabled)?.id || options.find(option => !option.disabled)?.id;
   const answer = await choose({ title: 'Open which part?', message, options, selectedId, confirmLabel: 'Open' });
   const selected = options.find(option => option.id === answer?.choice && !option.disabled);
   if (!selected) return null;
+  if (result && !result.unresolved) remember({ chosen: selected.id === session.sessionId ? null : selected.id, candidates: candidateIds });
   const chosenPart = parts.find(part => part.sessionId === selected.id);
   if (!liveFailed) onLive?.(liveById[chosenPart.target.sessionId] || null);
   return chosenPart.target;
