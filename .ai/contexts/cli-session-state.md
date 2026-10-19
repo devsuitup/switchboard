@@ -361,6 +361,10 @@ to `runRestore`. The notice uses that part's id when it differs from the saved
 session, while the saved entry remains keyed by the requested id. Reporting
 the guard's result avoids an extra liveness query just to build the notice.
 `test/restore-merged-member.test.js` covers saved A with head B live elsewhere.
+During automatic restore, permission to attach a background job applies only
+to the id being opened. A live background job on another part holds the row
+without prompting; a job on the followed head can still attach. The same test
+file covers both cases and one-tab restore with a production-shaped head id.
 
 **The batch is read once, before the first spawn, on purpose.** A CLI started
 elsewhere on one of the batch's sessions during the restore stagger (500 ms per
