@@ -106,10 +106,12 @@ test('R2 a missing continuation API cannot silently bypass the resume guard', { 
 
 for (const graph of [{ old: ['a', 'b'], a: [], b: [] }, { old: ['missing'] }]) {
   test(`R2 manual open can explicitly select the original id (${Object.keys(graph).length} nodes)`, { timeout: 9000 }, async t => {
-    const h = setup(t, graph, { answer: message => /Open the original session old\?/.test(message) });
+    const h = setup(t, graph, { answer: true, choice: 'old' });
     await h.click();
     assert.deepEqual(h.spawned.map(call => call.id), ['old']);
-    assert.match(h.prompts.at(-1), /Open the original session old\?/);
+    const question = h.prompts.at(-1);
+    if (question.options) assert.equal(question.options.at(-1).id, 'old');
+    else assert.match(question[1], /Open the part you clicked as it was/);
   });
 }
 

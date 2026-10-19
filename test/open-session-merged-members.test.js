@@ -16,6 +16,7 @@ function setup(t) {
     restoringWorkingSet: false, sessionOpenedOutsideRestore: false, continuationRetryCancelled: false,
     showSession: id => shown.push(id),
     appConfirm: async ({ message }) => { prompts.push(message); return false; },
+    appChoose: async question => { prompts.push(question); return null; },
   });
   ctx.window.api.getSessionContinuations = async id => {
     checked.push(id);
@@ -74,6 +75,7 @@ test('opening a merged row with no live open member keeps the continuation promp
   h.ctx.window.openSessions.set('B', { closed: true });
   await h.openSession(row);
   assert.deepEqual(h.checked, ['A']);
-  assert.match(h.prompts[0], /continued under another id/);
+  assert.equal(h.prompts[0].title, 'Open which part?');
+  assert.deepEqual(Array.from(h.prompts[0].options, option => option.id), ['D', 'A']);
   assert.deepEqual(h.shown, []);
 });

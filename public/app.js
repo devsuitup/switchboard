@@ -1881,11 +1881,19 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
-    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), resolutions: window._startupResumeResolutions });
+    let continuationLive;
+    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: question => appConfirm(question),
+      choose: question => appChoose(question), resolutions: window._startupResumeResolutions,
+      describe: id => {
+        const row = indexedRowOf(id);
+        return { ...row, name: cleanDisplayName(row?.name || row?.aiTitle || row?.summary),
+          runningHere: !!openSessions.get(id) && !openSessions.get(id).closed };
+      }, onLive: found => { continuationLive = found; } });
     if (!session) return false;
     restoreNoticeSessions.push(session);
+    if (continuationLive !== undefined) live = continuationLive;
     if (session.sessionId !== originalId) {
-      live = undefined;
+      live = continuationLive;
       allowBgAttach = true;
       const held = skippedWorkingSetEntries.get(originalId);
       if (held || restoreSavedIndex.has(originalId)) {

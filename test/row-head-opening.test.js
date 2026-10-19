@@ -26,6 +26,7 @@ function setup(t, { session = row, live = {}, candidates = [], confirm = false }
     showSession: id => shown.push(id),
     showJsonlViewer: target => viewed.push(target.sessionId),
     appConfirm: async ({ message }) => { prompts.push(message); return confirm; },
+    appChoose: async question => { prompts.push(question); return confirm ? { choice: question.options.find(o => o.id === 'D').id } : null; },
     appAlert: async ({ message }) => { prompts.push(message); },
     createTerminalEntry: target => {
       const entry = { initialSize: { cols: 80, rows: 24 }, terminal: { write() {} } };
@@ -46,7 +47,7 @@ function setup(t, { session = row, live = {}, candidates = [], confirm = false }
     openTerminal: async id => { spawned.push(id); return { ok: true }; },
   });
   const app = loadAppFunctions(ctx.context, {
-    functions: ['openSession', 'openSessionNow', 'beginPtyOpen', 'settlePtyOpen', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
+    functions: ['indexedRowOf', 'openSession', 'openSessionNow', 'beginPtyOpen', 'settlePtyOpen', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
     declarations: ['openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex',
       'continuationRetryCancelled', 'ptyGenerations', 'pendingOpens', 'dormantWorkingSet', 'restoreMode', 'restoreInFlight'],
   });
@@ -132,7 +133,7 @@ test('merged row live elsewhere on a member is checked even with a supplied null
   const h = setup(t, { live: { C: { pid: 4242 } } });
   assert.equal(await h.app.openSession({ ...row, sessionId: 'B', mergedMemberIds: ['C', 'A'] }, undefined, { automatic: true, live: null }), false);
   assert.deepEqual(h.spawned, []);
-  assert.deepEqual(h.checked, [['B', 'C', 'A']]);
+  assert.deepEqual(h.checked, [['C', 'A']]);
 });
 
 test('merged row live elsewhere checks another scheduled part after accepting the head warning', async t => {
@@ -155,8 +156,9 @@ test('same-row continuation to the representative is excluded while an external 
   await h.click();
   assert.deepEqual(h.spawned, ['D']);
   assert.equal(h.prompts.length, 1);
-  assert.match(h.prompts[0], /Open D\?/);
-  assert.doesNotMatch(h.prompts[0], /A \(last activity/);
+  assert.equal(h.prompts[0].title, 'Open which part?');
+  assert.deepEqual(Array.from(h.prompts[0].options, option => option.id).sort(), ['B', 'D']);
+  assert.equal(h.checked.length, 1, 'choosing another row must not probe the old head again');
 });
 
 test('end-to-end click checks the head id and opens the head through real openSession functions', async t => {

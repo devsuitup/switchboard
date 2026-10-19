@@ -1454,7 +1454,7 @@ function populateCacheViaWorker({ force = false } = {}) {
 async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024, getSessionLiveElsewhere } = {}) {
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new RangeError('chunkBytes must be a positive integer');
   let diskEntries;
-  return resolveContinuations(sessionId, async id => {
+  const result = await resolveContinuations(sessionId, async id => {
     if (!validId(id)) return null;
     const row = getCachedSession?.(id);
     if (!row) {
@@ -1497,6 +1497,12 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     }
     return { index, modified: getCachedSession(id)?.modified || row.modified };
   });
+  result.candidates = result.candidates.map(candidate => {
+    const row = getCachedSession(candidate.sessionId);
+    return { ...candidate, title: getMeta(candidate.sessionId)?.name || row?.customTitle || row?.aiTitle || row?.summary || null,
+      messageCount: row?.messageCount };
+  });
+  return result;
 }
 
 module.exports = { shutdownProducers,

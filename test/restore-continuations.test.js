@@ -75,7 +75,7 @@ test('a continuation opens with Enter; only the live-elsewhere warning focuses C
   const doc = h.dom.window.document;
   assert.ok(doc.activeElement.classList.contains('choice-dialog-confirm'));
   assert.ok(!doc.activeElement.classList.contains('delete-worktree-confirm-btn'));
-  assert.equal(doc.activeElement.textContent, 'Open session');
+  assert.equal(doc.activeElement.textContent, 'Open');
   doc.activeElement.dispatchEvent(new h.dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
   await flush();
   assert.match(doc.querySelector('.choice-dialog-body').textContent, /already running/);
@@ -188,11 +188,11 @@ test('manual click offers the continuation before opening it', { timeout: 9000 }
   const h = setup(t, { old: ['new'], new: [] }, { answer: true });
   await h.click();
   assert.deepEqual(h.spawned.map(call => call.id), ['new']);
-  assert.match(h.prompts[0], /new/);
+  assert.equal(h.prompts[0].title, 'Open which part?');
 });
 
 test('choosing the second continuation opens only that candidate and persists it', { timeout: 9000 }, async t => {
-  const h = setup(t, { old: ['a', 'b'], a: [], b: [] }, { answer: message => /Open b\?/.test(message) });
+  const h = setup(t, { old: ['a', 'b'], a: [], b: [] }, { choice: 'b' });
   await h.click();
   assert.deepEqual(h.spawned.map(call => call.id), ['b']);
   assert.equal(h.settings().openWorkingSet[0].sessionId, 'b');
@@ -234,7 +234,7 @@ test('reopening a closed old tab still offers its continuation', { timeout: 9000
   vm.runInContext('openSessions.set("old", { session: sessionMap.get("old"), closed: true });', h.ctx);
   await h.click();
   assert.deepEqual(h.spawned.map(call => call.id), ['new']);
-  assert.match(h.prompts[0], /new/);
+  assert.equal(h.prompts[0].options.length, 2);
 });
 
 test('a held old entry opens its live scheduled continuation after confirmation and stays rekeyed', { timeout: 9000 }, async t => {
