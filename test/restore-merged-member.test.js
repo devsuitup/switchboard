@@ -228,21 +228,28 @@ test('a remembered active merged member B is reopened before working-set restore
   assert.deepEqual(await h.persist(), h.saved);
 });
 
-test('a remembered active id absent from all rows only restores the working set', async () => {
+test('a remembered active id absent from all rows is not reported during indexing', async () => {
   const calls = [];
+  const unavailableIds = [];
   const ctx = vm.createContext({
-    window: {},
+    window: { api: {
+      getSetting: async () => ({ openWorkingSet: [{ sessionId: 'missing', projectPath: PROJECT }] }),
+      getActiveSessions: async () => [],
+      getIndexingState: async () => ({ finished: false }),
+    } },
     localStorage: { getItem: () => null },
     activeSessionId: 'missing',
     openSessions: new Map(),
     sessionMap: new Map([['A', { sessionId: 'A', mergedMemberIds: ['B'] }]]),
     localMergedMemberRows: new Map(),
     openSession: async session => { calls.push(session.sessionId); },
+    showNotRestoredNotice: entries => { unavailableIds.push(...entries.map(entry => entry.sessionId)); },
     restoreWorkingSet: async () => { calls.push('working set'); },
     restoreAgentsViewAtStartup() {},
   });
   const { restoreStartupSessions } = loadAppFunctions(ctx, { functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'] });
   await assert.doesNotReject(restoreStartupSessions);
   assert.deepEqual(calls, ['working set']);
+  assert.deepEqual(unavailableIds, []);
   assert.equal(ctx.window._startupResumeResolutions, null);
 });

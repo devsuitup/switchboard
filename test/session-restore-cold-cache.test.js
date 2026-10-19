@@ -157,7 +157,11 @@ test('askOnce: indexingDone with some ids missing asks once with what indexed so
 
 test('wiring: the end of indexing ticks the restore planner', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-  assert.match(src, /window\.api\.onIndexingFinished\(markRestoreIndexingDone\)/);
+  assert.match(src, /window\.api\.onIndexingFinished\(restoreSessionsAfterIndexing\)/);
+  const handlerStart = src.indexOf('function restoreSessionsAfterIndexing');
+  const handler = src.slice(handlerStart, src.indexOf('\n}', handlerStart));
+  assert.match(handler, /await markRestoreIndexingDone\(\)/);
+  assert.match(handler, /await reopenActiveSessionAfterReload\(\)/);
   const fnStart = src.indexOf('function markRestoreIndexingDone');
   assert.ok(fnStart !== -1, 'markRestoreIndexingDone must exist');
   const body = src.slice(fnStart, src.indexOf('\n}', fnStart));

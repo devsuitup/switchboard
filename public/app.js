@@ -351,13 +351,13 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       }
       const originalId = item.sessionId;
       const originalSession = s;
-      let waitingForIndex = false;
+      let holdReason = { waitingForIndex: false };
       let continuationNotice;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions, onHold: reason => { holdReason = reason; } });
       if (!s) {
         const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
         skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
-        skippedNow.push({ session: originalSession, continuation: true, waitingForIndex, retryAfterIndexing });
+        skippedNow.push({ session: originalSession, continuation: true, ...holdReason, retryAfterIndexing });
         restoreInFlight.delete(originalId);
         continue;
       }
@@ -415,16 +415,45 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
 // see .ai/contexts/session-cache.md ("Restore on click")
 async function reopenActiveSessionAfterReload() {
   if (!activeSessionId || openSessions.has(activeSessionId)) return;
-  const session = indexedSessionById(activeSessionId);
-  if (!session) return;
   const g = await window.api.getSetting('global');
+  let session = indexedSessionById(activeSessionId);
+  if (!session) {
+    const item = g?.openWorkingSet?.find(entry => entry.sessionId === activeSessionId);
+    if (!item || g?.hiddenProjects?.includes(item.projectPath)) return;
+    let live;
+    try { live = await window.api.getActiveSessions(); } catch { return; }
+    if (live.some(entry => entry.sessionId === item.sessionId)) {
+      session = { sessionId: item.sessionId, projectPath: item.projectPath, summary: 'New session' };
+      pendingSessions.set(item.sessionId, { session, projectPath: item.projectPath, folder: encodeProjectPath(item.projectPath) });
+      sessionMap.set(item.sessionId, session);
+      await openSession(session, undefined, { automatic: true, reattachOnly: true, continuationResolved: true });
+      return;
+    }
+    if (item.fresh) return;
+    try {
+      if (!(await window.api.getIndexingState()).finished) return;
+      await loadProjects();
+    } catch { return; }
+    session = indexedSessionById(item.sessionId);
+    if (!session) {
+      const plan = createRestorePlanner({ savedSet: [item] }).tick({ sessionMap, openSessions, indexingDone: true });
+      if (plan.unavailable.length) showNotRestoredNotice(plan.unavailable);
+      return;
+    }
+  }
   if (((g && g.restoreOnStartup) || SETTING_DEFAULTS.restoreOnStartup) === 'lazy') {
     const live = await window.api.getActiveSessions().catch(() => []);
     if (!live.some(e => e.sessionId === session.sessionId)) return;
     await openSession(session, undefined, { automatic: true, reattachOnly: true, continuationResolved: true });
     return;
   }
-  await openSession(session, undefined, { automatic: true });
+  let skipped;
+  const opened = await openSession(session, undefined, {
+    automatic: true,
+    onBlocked: part => { skipped = { session: indexedSessionById(part.sessionId) || { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
+    onHold: reason => { skipped = { session, continuation: true, ...reason, retryAfterIndexing: skippedWorkingSetEntries.get(session.sessionId)?.retryContinuation }; },
+  });
+  if (opened === false && skipped) showLiveElsewhereNotice([skipped]);
 }
 
 async function restoreWorkingSet() {
@@ -590,21 +619,25 @@ function showNotRestoredNotice(unavailable) {
 
 function showLiveElsewhereNotice(skipped) {
   for (const pending of [true, false]) {
-    const items = skipped.filter(item => !!(item.waitingForIndex && item.retryAfterIndexing) === pending);
+    const items = skipped.filter(item => !!((item.waitingForIndex || item.lookupFailed) && item.retryAfterIndexing) === pending);
     if (!items.length) continue;
     const members = items.map(item => {
       const session = { ...item.session, projectPath: item.live?.cwd || item.session?.projectPath };
       const waiting = !!item.waitingForIndex;
-      const reason = item.reason || (waiting ? 'Waiting for indexing'
+      const reason = item.reason || (item.lookupFailed ? "Switchboard could not check the conversation's continuations"
+        : waiting ? 'Waiting for indexing'
         : item.continuation ? 'A continuation choice is needed'
           : 'The session is live outside this window in pid ' + (item.live?.pid || '?'));
-      const recovery = item.recovery || (waiting && item.retryAfterIndexing ? 'Restore will retry when indexing finishes. Open it from the sidebar to check.'
+      const recovery = item.recovery || ((waiting || item.lookupFailed) && item.retryAfterIndexing ? 'Restore will retry when indexing finishes. Open it from the sidebar to check.'
+        : item.lookupFailed ? 'Open it from the sidebar to retry checking and restoring.'
         : item.continuation || waiting ? 'Open it from the sidebar to choose and retry restoring.'
           : 'Return to its own terminal at the location above to continue working or end it there, then open it from the sidebar to retry restoring.');
       return { id: sessionActionNoticeId('Restore', session), text: `${sessionActionDescription(session)}: ${reason}. ${recovery}` };
     });
+    const id = pending ? 'Restore:pending' : 'Restore:batch';
+    for (const member of members) clearAppNotice(member.id, { membersOnly: true, exceptGroup: id });
     showAppNotice({
-      id: pending ? 'Restore:pending' : 'Restore:batch', kind: pending ? 'info' : 'error', members, mergeMembers: true,
+      id, kind: pending ? 'info' : 'error', members, mergeMembers: true,
       message: current => `${pending ? 'Restore pending' : 'Restore failed'} for ${current.map(member => member.text).join('; ')}`,
     });
   }
@@ -663,6 +696,11 @@ async function markRestoreIndexingDone() {
 
 async function maybeRetryRestoreWorkingSet() {
   await tickRestorePlanner();
+}
+
+async function restoreSessionsAfterIndexing() {
+  await markRestoreIndexingDone();
+  if (activeSessionId && !indexedSessionById(activeSessionId)) await reopenActiveSessionAfterReload();
 }
 
 // Expose for tests
@@ -1853,7 +1891,7 @@ function settleContinuedInFlight(item) {
   schedulePersistWorkingSet();
 }
 
-async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onOpenError, reattachOnly = false } = {}, open = null) {
+async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false } = {}, open = null) {
   const restoreNoticeSessions = [session];
   let freshLive = false;
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
@@ -1886,8 +1924,10 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
     let continuationLive;
+    let holdReason = { waitingForIndex: false };
     session = await resolveResumeSession(session, { automatic, api: window.api, confirm: question => appConfirm(question),
       choose: question => appChoose(question), notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
+      onHold: reason => { holdReason = reason; },
       describe: id => {
         const row = indexedRowOf(id);
         const part = row?.conversationParts?.find(part => part.sessionId === id) || row;
@@ -1898,7 +1938,10 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
         return row ? rowHeadSession(row) : { ...session, sessionId: candidate.sessionId,
           headSessionId: candidate.sessionId, mergedMemberIds: [] };
       }, onLive: found => { continuationLive = found; freshLive = true; } });
-    if (!session) return false;
+    if (!session) {
+      onHold?.(holdReason);
+      return false;
+    }
     restoreNoticeSessions.push(session);
     if (continuationLive !== undefined) live = continuationLive;
     if (session.sessionId !== originalId) {
@@ -2270,7 +2313,8 @@ setTimeout(() => {
 window._applyShortcuts = (stored) => setAppShortcuts(stored);
 
 // see .ai/contexts/cli-session-state.md ("Conversation continuations")
-async function restoreStartupSessions() {
+async function restoreStartupSessions({ projectsLoaded = true } = {}) {
+  if (!projectsLoaded) return;
   window._startupResumeResolutions = new Map();
   try {
     if (localStorage.getItem('gridViewActive') === '1') showGridView();
@@ -2287,11 +2331,15 @@ async function loadStartupProjects() {
     try { await loadProjects(); loaded = true; break; }
     catch (error) { console.warn('[switchboard] startup project load failed', error); }
   }
-  try { await restoreStartupSessions(); }
+  try { await restoreStartupSessions({ projectsLoaded: loaded }); }
   catch (error) { console.warn('[switchboard] startup restore failed', error); }
   if (!loaded) {
     const retry = async remaining => {
-      if (await reloadProjects()) return;
+      if (await reloadProjects()) {
+        try { await restoreStartupSessions(); }
+        catch (error) { console.warn('[switchboard] startup restore failed', error); }
+        return;
+      }
       if (remaining > 1) setTimeout(() => retry(remaining - 1), 1000);
     };
     setTimeout(() => retry(3), 1000);
@@ -2383,7 +2431,7 @@ function dismissIndexingBanner() {
   indexingBannerDismissed = true;
 }
 window.api.onIndexingProgress(updateIndexingBanner);
-window.api.onIndexingFinished(markRestoreIndexingDone);
+window.api.onIndexingFinished(restoreSessionsAfterIndexing);
 document.getElementById('indexing-banner-dismiss').addEventListener('click', dismissIndexingBanner);
 
 // Refocus the active terminal after a fullscreen transition (F11, menu, IPC).

@@ -87,6 +87,11 @@ quits ask about unsaved edits and write the set again.
 
 ## What restore does
 
+If both initial attempts to load the project list fail, all startup restore is
+deferred. Switchboard makes up to three delayed retries; a successful retry runs
+startup restore, including reopening the active session and restoring the Agents
+view.
+
 When several conversations share one web-session row in the sidebar, restore
 also finds saved members of that row. It reopens and saves each member under
 its own id, checks that member for continuations and processes live elsewhere,
@@ -118,6 +123,15 @@ Reloading the renderer with a remembered active session reopens that session and
 cancels the working-set planner, so it does not ask to restore or reopen the
 other saved entries. A manual open also cancels held continuation retries;
 an automatic remembered open does not cancel those retries.
+If the saved session that was active is still missing after indexing finishes
+and the projects load succeeds, reload shows the same dismissible notice as
+startup restore, including when restore is off, with steps to check the
+transcript, reindex and retry from the sidebar; both passes list it only once.
+A new session with no transcript is not reported missing: its running terminal
+is reattached, or its saved fresh entry follows the startup restore setting.
+Other live terminals are reattached too. An exited terminal outside the saved
+working set or a session in a hidden project is not reported missing. If the
+startup projects load fails, restore waits for a successful load.
 
 If a conversation continued under another id, restore follows its continuation
 chain and saves the final id with the saved entry's project and active state.
@@ -149,8 +163,15 @@ A scheduled part remains selectable and then asks **Resume anyway**.
 An incomplete list says so, as does a failure to check which parts are running.
 With no known candidate, a failed lookup or unresolved continuation offers
 **Open as it was** or **Cancel**, with the reason. Choices are not remembered;
-automatic restore holds ambiguous entries without showing the chooser. Reload opens
-no tab for an ambiguous entry and currently shows no notice (#729).
+automatic restore holds ambiguous entries without showing the chooser. Reload also
+holds an ambiguous entry and shows the same dismissible notice naming it and
+asking you to open it from the sidebar to choose. If restore and reload both
+hold it, the notice lists it only once.
+If the continuation lookup fails, reload and restore instead say that Switchboard
+could not check the conversation's continuations. While an automatic retry is
+scheduled, the notice says restore will retry when indexing finishes; otherwise
+it asks you to open the session from the sidebar to retry checking and restoring,
+without asking for a continuation choice.
 A proven linear chain or same-row bridge alternative needs no choice.
 Ordinary malformed lines that mention continuations, unrelated incomplete tails
 and oversized records do not block opening the original session. Large transcripts

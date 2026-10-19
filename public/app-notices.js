@@ -23,9 +23,9 @@ function showSessionActionFailure(operation, session, error, recovery, onRetry, 
   });
 }
 
-function clearAppNotice(id) {
+function clearAppNotice(id, { membersOnly = false, exceptGroup } = {}) {
   const entry = appNoticeEntries.get(id);
-  if (entry) {
+  if (entry && !membersOnly) {
     clearTimeout(entry.timer);
     const restoreFocus = entry.notice.contains(document.activeElement);
     entry.notice.remove();
@@ -33,6 +33,7 @@ function clearAppNotice(id) {
     if (restoreFocus && entry.returnFocus?.isConnected) entry.returnFocus.focus();
   }
   for (const [groupId, group] of [...appNoticeEntries]) {
+    if (groupId === exceptGroup) continue;
     if (!group.options.members?.some(member => member.id === id)) continue;
     const members = group.options.members.filter(member => member.id !== id);
     if (members.length) showAppNotice({ ...group.options, members, mergeMembers: false });
