@@ -94,6 +94,9 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     evalFile(dom, path.join(PUBLIC, 'settings-panel.js'));
   }
   loadAppFunctions(dom.getInternalVMContext(), { functions: ['indexedRowOf', 'indexedSessionById'] });
+  loadAppFunctions(dom.getInternalVMContext(), {
+    functions: ['rowHeadSession'], sourcePath: path.join(PUBLIC, 'sidebar.js'),
+  });
   window.initAgentsView();
   const read = (expr) => vm.runInContext(expr, dom.getInternalVMContext(), { filename: __filename });
   return {
@@ -1033,27 +1036,39 @@ for (const indexed of [false, true]) {
     assert.equal(opened.length, 1);
     assert.equal(opened[0].length, 1);
     assert.deepEqual(JSON.parse(JSON.stringify(opened[0][0])), indexed
-      ? { ...session, sessionId: 's-i', mergedMemberIds: [] }
+      ? { ...session, sessionId: 's-i', mergedMemberIds: ['root'] }
       : { sessionId: 's-i', projectPath: '/w/l', name: 'lvds-1b' });
     assert.deepEqual(h.calls.verbs, []);
   });
 }
 
 
-for (const accept of [false, true]) {
-  test(`External Resume uses the shared live-elsewhere question (accept: ${accept})`, async t => {
+for (const { merged, accept } of [false, true].flatMap(merged => [false, true].map(accept => ({ merged, accept })))) {
+  test(`External Resume uses only the shared live-elsewhere question (merged A→B→C: ${merged}, accept: ${accept})`, async t => {
     const h = setup(); t.after(() => h.destroy());
     const w = h.window, questions = [], spawned = [];
     const live = { kind: 'interactive', pid: 30, cwd: '/w/l', startedAt: 100 };
+    const row = { sessionId: 's-a', mergedMemberIds: ['s-i', 's-c'], headSessionId: 's-c', projectPath: '/w/l', name: 'lvds-1b' };
+    if (merged) {
+      w.sessionMap.set(row.sessionId, row);
+      for (const id of row.mergedMemberIds) w.localMergedMemberRows.set(id, row);
+    } else {
+      w.sessionMap.set('s-i', { sessionId: 's-i', projectPath: '/w/l', name: 'lvds-1b' });
+    }
+    const continuationChecks = [], liveChecks = [];
     Object.assign(w, {
       restoringWorkingSet: false, pendingSessions: new Map(),
-      appConfirm: async question => { questions.push(question); return accept; },
+      appConfirm: async question => { questions.push(question); return question.title === 'Session running elsewhere' && accept; },
       createTerminalEntry: () => ({ initialSize: {} }), resolveDefaultSessionOptions: async () => ({}),
       forgetSessionExit() {}, beginPtyOpen() {}, settlePtyOpen() {}, destroySession() {},
     });
     Object.assign(w.api, {
-      getSessionContinuations: async () => ({ candidates: [], unresolved: false }),
-      getSessionLiveElsewhere: async () => live,
+      getSessionContinuations: async id => {
+        continuationChecks.push(id);
+        return { candidates: merged ? [{ sessionId: 's-c', modified: 300 }] : [], unresolved: false };
+      },
+      getSessionLiveElsewhere: async id => { liveChecks.push(id); return id === 's-i' ? live : null; },
+      getSessionsLiveElsewhere: async ids => { liveChecks.push(...ids); return { 's-i': live }; },
       openTerminal: async (...args) => { spawned.push(args); return { notLive: true }; },
     });
     evalFile({ getInternalVMContext: () => h.ctx }, path.join(PUBLIC, 'resume-guard.js'));
@@ -1073,7 +1088,12 @@ for (const accept of [false, true]) {
     await finished;
     assert.equal(questions.length, 1);
     assert.deepEqual(JSON.parse(JSON.stringify(questions[0])), JSON.parse(JSON.stringify(w.liveElsewhereQuestion(live, 'lvds-1b'))));
+    assert.deepEqual(continuationChecks, ['s-i']);
+    assert.deepEqual([...new Set(liveChecks)].sort(), merged ? ['s-a', 's-c', 's-i'] : ['s-i']);
     assert.equal(spawned.length, accept ? 1 : 0);
-    if (accept) assert.notEqual(spawned[0][3].type, 'attach');
+    if (accept) {
+      assert.equal(spawned[0][0], 's-i');
+      assert.notEqual(spawned[0][3].type, 'attach');
+    }
   });
 }

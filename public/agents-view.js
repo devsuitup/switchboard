@@ -495,8 +495,9 @@ async function runAgentVerb(verb, entry) {
   const key = agentsEntryKey(entry);
   if (verb === 'resume') {
     if (!agentVerbAvailability(entry, agentsDaemonReachable).resume) return;
-    return openSession(indexedSessionById(entry.sessionId)
-      || { sessionId: entry.sessionId, projectPath: entry.cwd, name: entry.name });
+    const row = indexedRowOf(entry.sessionId);
+    return openSession(row ? rowHeadSession(row, entry.sessionId)
+      : { sessionId: entry.sessionId, projectPath: entry.cwd, name: entry.name });
   }
   if (verb === 'transcript') {
     if (!agentVerbAvailability(entry, agentsDaemonReachable).transcript) return;
