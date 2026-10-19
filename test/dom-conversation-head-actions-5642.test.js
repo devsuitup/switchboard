@@ -91,6 +91,11 @@ test('Resume with config goes through the dialog and openSession and warns about
   const warning = h.ctx.document.querySelector('.choice-dialog-overlay');
   assert.ok(warning, 'the live root must show a warning before resuming the head');
   assert.match(warning.textContent, /pid 4242/);
+  assert.match(warning.textContent, /"Conversation" is already running/);
+  assert.equal(warning.querySelector('h2').textContent, 'Session running elsewhere');
+  assert.equal(warning.querySelector('.choice-dialog-confirm').textContent, 'Resume anyway');
+  assert.ok(warning.querySelector('.choice-dialog-confirm').classList.contains('delete-worktree-confirm-btn'));
+  assert.equal(h.ctx.document.activeElement, warning.querySelector('.choice-dialog-cancel'));
   assert.deepEqual(h.checked, [['B', 'A']]);
   h.ctx.document.querySelector('.choice-dialog-cancel').click();
   await h.settled();

@@ -1,10 +1,15 @@
 // Dual-mode helper — see .ai/contexts/cli-session-state.md ("Live elsewhere")
 
-function liveElsewhereMessage(live) {
-  const where = live.cwd ? ` in ${live.cwd}` : '';
-  return `This session is already running in another process (pid ${live.pid}${where}).\n\n`
-    + 'Resuming it here starts a second claude CLI on the same session, and both will write to its transcript.\n\n'
-    + 'Resume it anyway?';
+function liveElsewhereQuestion(live, name = 'Untitled conversation', formatTime = t => new Date(t).toLocaleString()) {
+  const where = live.kind === 'schedule'
+    ? `in a scheduled run${live.scheduleName ? ` of "${live.scheduleName}"` : ''}` : 'in another process';
+  const details = [live.pid && `pid ${live.pid}`, live.cwd && `in ${live.cwd}`,
+    Number.isFinite(live.startedAt) && `started ${formatTime(live.startedAt)}`].filter(Boolean);
+  return {
+    title: 'Session running elsewhere', confirmLabel: 'Resume anyway', danger: true,
+    message: [`"${name || 'Untitled conversation'}" is already running ${where}${details.length ? ': ' + details.join(', ') : ''}.`,
+      'Resuming it here starts a second Claude on the same conversation, and both write to its transcript.'],
+  };
 }
 
 async function liveElsewhereMany(sessionIds, { api } = {}) {
@@ -17,7 +22,7 @@ async function liveElsewhereMany(sessionIds, { api } = {}) {
   }
 }
 
-async function guardResume(session, { automatic = false, api, confirm, alert = typeof appAlert === 'function' ? message => appAlert({ message }) : undefined, live, allowBgAttach = false, onBlocked } = {}) {
+async function guardResume(session, { automatic = false, api, confirm, name, notify = typeof showAppNotice === 'function' ? showAppNotice : undefined, live, allowBgAttach = false, onBlocked } = {}) {
   if (!session || session.type === 'terminal') return true;
   const sessionIds = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])]
     .filter(id => typeof id === 'string' && id))];
@@ -28,7 +33,7 @@ async function guardResume(session, { automatic = false, api, confirm, alert = t
     for (const id of sessionIds) {
       if (!liveById[id]) continue;
       const partVerdict = await guardResume({ sessionId: id }, {
-        automatic, api, confirm, alert, live: liveById[id], allowBgAttach: allowBgAttach && id === session.sessionId,
+        automatic, api, confirm, name, notify, live: liveById[id], allowBgAttach: allowBgAttach && id === session.sessionId,
       });
       if (partVerdict === false) {
         onBlocked?.({ sessionId: id, live: liveById[id] });
@@ -50,19 +55,19 @@ async function guardResume(session, { automatic = false, api, confirm, alert = t
     onBlocked?.({ sessionId: session.sessionId, live });
     return false;
   }
-  if (live.kind === 'schedule') {
-    if (typeof alert !== 'function') throw new TypeError('guardResume requires an alert adapter for a scheduled task notice');
-    const where = live.cwd ? ` in ${live.cwd}` : '';
-    await alert(`This session's scheduled task is already running (pid ${live.pid}${where}).\n\n`
-      + 'Wait for the scheduled run to finish before opening it here.');
-    return false;
-  }
   // see .ai/contexts/bg-agents.md
   if (live.kind === 'bg') {
     if (typeof live.jobId === 'string' && live.jobId) return { attach: live.jobId, cwd: live.cwd || null };
+    if (automatic) {
+      onBlocked?.({ sessionId: session.sessionId, live });
+      return false;
+    }
+    if (typeof notify !== 'function') throw new TypeError('guardResume requires a notify adapter for a background refusal');
+    notify({ id: `resume-background:${session.sessionId}`, kind: 'error',
+      message: `Cannot open "${name || 'Untitled conversation'}" here: it runs as a background session whose job Switchboard cannot identify, so it cannot be attached. Find it in the Agents view.` });
     return false;
   }
-  return !!(await confirm(liveElsewhereMessage(live)));
+  return !!(await confirm(liveElsewhereQuestion(live, name)));
 }
 
 // see .ai/contexts/cli-session-state.md ("Conversation continuations")
@@ -97,5 +102,5 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { guardResume, liveElsewhereMany, liveElsewhereMessage, resolveResumeSession };
+  module.exports = { guardResume, liveElsewhereMany, liveElsewhereQuestion, resolveResumeSession };
 }

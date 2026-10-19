@@ -103,6 +103,7 @@ function setup() {
   dom.window.document.body.append(notices);
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'public', 'app-notices.js'), 'utf8'), ctx);
   const run = (src, filename) => vm.runInContext(src, ctx, { filename });
+  run(fs.readFileSync(path.join(ROOT, 'public', 'utils.js'), 'utf8'), 'utils.js');
   run(PRELUDE, 'prelude.js');
   loadAppFunctions(ctx, {
     functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(ROOT, 'public/session-activity-dom.js'),

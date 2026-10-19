@@ -138,10 +138,11 @@ CLI on the same session, and both would write its transcript. Switchboard reads
 the CLI's own `~/.claude/sessions/<pid>.json` descriptors to detect this,
 ignoring the processes it runs itself:
 
-- A click on such a session asks first:
-  *This session is already running in another process (pid N in &lt;directory&gt;).
-  Resuming it here starts a second claude CLI on the same session, and both will
-  write to its transcript. Resume it anyway?*
+- A click asks with **Resume anyway** or **Cancel**, naming the conversation,
+  pid, folder and start time when known. A running scheduled task gets the same
+  question, with its schedule name. The warning says both processes write the transcript.
+- A background session attaches by its job id; without one, a notice explains
+  why it cannot attach and points to the Agents view.
 - An automatic resume skips such a session without asking: the
   [session restore](session-restore.md) at startup, which then names the
   sessions it did not reopen, and the reopening of the active session after a

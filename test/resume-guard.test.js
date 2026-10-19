@@ -23,17 +23,17 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 const LIVE = { pid: 4242, cwd: '/work/proj', startedAt: 1790685077444 };
 const SESSION = { sessionId: 'sess-1', projectPath: '/work/proj' };
 
-test('a schedule notice without injection uses the renderer appAlert fallback', async () => {
+test('a background refusal without injection uses the renderer notice fallback', async () => {
   const messages = [];
-  const ctx = vm.createContext({ appAlert: async options => messages.push(options) });
+  const ctx = vm.createContext({ showAppNotice: options => messages.push(options) });
   vm.runInContext(fs.readFileSync(GUARD_PATH, 'utf8'), ctx, { filename: GUARD_PATH });
-  assert.equal(await ctx.guardResume(SESSION, { live: { ...LIVE, kind: 'schedule' } }), false);
+  assert.equal(await ctx.guardResume(SESSION, { live: { ...LIVE, kind: 'bg' } }), false);
   assert.equal(messages.length, 1);
-  assert.match(messages[0].message, /scheduled task/);
+  assert.equal(messages[0].kind, 'error');
 });
 
-test('a schedule notice without any alert adapter fails with an explicit contract error', async () => {
-  await assert.rejects(guardResume(SESSION, { live: { ...LIVE, kind: 'schedule' } }), /guardResume requires an alert adapter/);
+test('a background refusal without any notice adapter fails with an explicit contract error', async () => {
+  await assert.rejects(guardResume(SESSION, { live: { ...LIVE, kind: 'bg' } }), /guardResume requires a notify adapter/);
 });
 
 function makeApi(answer) {
@@ -78,8 +78,8 @@ test('a user resume of a session live elsewhere asks, and a cancel stops it', as
   const { confirm, alert, messages } = makeConfirm(false);
   assert.equal(await guardResume(SESSION, { api, confirm, alert }), false);
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /pid 4242/);
-  assert.match(messages[0], /\/work\/proj/);
+  assert.match(messages[0].message[0], /pid 4242/);
+  assert.match(messages[0].message[0], /\/work\/proj/);
 });
 
 test('a user resume of a session live elsewhere goes ahead once confirmed', async () => {
@@ -212,9 +212,10 @@ test('an automatic resume of a session the daemon runs is still refused', async 
 test('a live bg descriptor without a usable jobId is refused: no resume offer, no attach', async () => {
   for (const jobId of [null, undefined, '']) {
     const api = makeApi({ ...LIVE_BG, jobId });
-    const { confirm, alert, messages } = makeConfirm(true);
-    assert.equal(await guardResume(SESSION, { api, confirm, alert }), false);
-    assert.equal(messages.length, 0);
+    const { confirm, messages } = makeConfirm(true);
+    assert.equal(await guardResume(SESSION, { api, confirm, notify: n => messages.push(n) }), false);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].kind, 'error');
   }
 });
 

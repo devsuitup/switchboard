@@ -55,7 +55,7 @@ test('a transcript-driven row state survives a sidebar re-render', async ({ home
     ].map(entry => JSON.stringify(entry)).join('\n') + '\n');
     await expect(icon).toHaveClass(/session-icon--response-ready/);
     await row.locator('.session-time').click();
-    await page.getByRole('button', { name: 'Open session', exact: true }).click();
+    await page.getByRole('button', { name: 'Resume anyway', exact: true }).click();
 
     await expect(icon).toHaveClass(/session-icon--waiting/, { timeout: 40000 });
     await expect(icon).toHaveAttribute('title', 'Waiting for input');

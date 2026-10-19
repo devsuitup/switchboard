@@ -307,9 +307,9 @@ Sidebar click: per kind (`public/resume-guard.js:20-44`):
 
 | Live in | Click result |
 |---|---|
-| a scheduled run | info-only dialog "This session's scheduled task is already running (pid N…). Wait for the scheduled run to finish before opening it here." |
-| a background job | attach |
-| anything else | "This session is already running in another process (pid N…). … Resume it anyway?" |
+| a scheduled run | Resume anyway / Cancel, naming the schedule when known, with the second-writer warning |
+| a background job | attach; without a job id, an error notice explains why it cannot attach |
+| anything else | Resume anyway / Cancel with the conversation name, pid, folder and start time when known |
 | (automatic restore) | skipped, named in a notice |
 
 **Rule**: R11.1 the Agents view never resumes a live session
@@ -402,7 +402,7 @@ result; **minor** = confusing but recoverable.
 |---|---|---|---|
 | M1 | major | Quit or update kills every running local session without warning; background and remote ones survive the same gesture | §7 R7.3 |
 | M2 | major | One stop control means kill, remote kill or detach; labels "Stop session", "Stop process", "Detach (the session keeps running)" differ by surface; after a detach the grid card footer says **Stopped** and the exit banner "session stopped" while the job runs; Agents **Stop** has no confirm; remote detach has no control | §1, §7, §10, §12 |
-| M3 | major | A session live elsewhere: the sidebar offers "Resume it anyway?", the Agents view forbids it | §11 |
+| M3 | major (partly resolved, #567) | Sidebar live-elsewhere questions share Resume anyway, including scheduled runs; the Agents view still forbids resume | §11 |
 | M4 | major | No definition of a row; `/compact`, `/clear`, continuations and slug groups follow four rules; verbs act on representative or one member | §1, §2, §3, §4 |
 | M5 | major | Four state vocabularies (icon, descriptor text, Agents state, Running/Stopped); "Waiting for input" has two meanings; Waiting/Idle/Stale look identical in the grid and header; waiting is distinguished only in the sidebar and Agents view; "Running" has two populations | §1, §7, §8, §10, GLOSSARY "State words" |
 | M6 | resolved (#568) | Project Archive is reversible through Settings and preserves settings/cache while suspending schedules; destructive Delete is separate. Archive folder still returns on new activity. | §6 |

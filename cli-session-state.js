@@ -63,9 +63,9 @@ const statusListeners = new Set();
 const pendingOwnerDeaths = new Map();
 const scheduledRuns = new Map();
 
-function trackScheduleRun(sessionId, child, cwd) {
+function trackScheduleRun(sessionId, child, cwd, scheduleName) {
   const key = sessionId.toLowerCase();
-  const live = { kind: 'schedule', pid: child.pid, cwd, startedAt: Date.now() };
+  const live = { kind: 'schedule', pid: child.pid, cwd, startedAt: Date.now(), scheduleName };
   scheduledRuns.set(key, live);
   const release = () => {
     if (scheduledRuns.get(key) === live) scheduledRuns.delete(key);

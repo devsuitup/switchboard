@@ -441,9 +441,9 @@ concept. Each entry gives:
 - **Code**: `getSessionLiveElsewhere`; `guardResume`
   (`public/resume-guard.js:20-44`); `.ai/contexts/cli-session-state.md`
   ("Live elsewhere").
-- **Today**: four outcomes by kind — schedule: info-only confirm "Wait for the
-  scheduled run to finish…" (`public/resume-guard.js:31-36`); bg: attach;
-  other: "Resume it anyway?" (`public/resume-guard.js:3-8`); automatic restore:
+- **Today**: scheduled runs and other processes share **Resume anyway** / Cancel,
+  with name, pid, folder, start time and schedule name when known; bg: attach
+  with a job id, otherwise refused by an error notice; automatic restore:
   skipped. The Agents view never resumes it (`docs/background-agents.md:104-106`)
   (M3).
 

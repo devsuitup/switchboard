@@ -170,16 +170,17 @@ Scheduled runs from before v0.0.90 are listed one per row. They have no `schedul
 ## Opening a running scheduled session (#484)
 
 `main.js`'s shared `runScheduleCommand` registers each spawned child with
-`cliSessionState.trackScheduleRun(sessionId, child, cwd)`, using the `--resume`
+`cliSessionState.trackScheduleRun(sessionId, child, cwd, name)`, using the `--resume`
 id from the scheduler's argv. Cron and Run now therefore share the same guard.
 The in-memory entry carries `kind: 'schedule'`, the shell child's pid, cwd and
-launch time. It is released on the child's `exit` or `error`; a refused spawn
+launch time, plus the schedule name. It is released on the child's `exit` or `error`; a refused spawn
 never creates an entry. No CLI descriptor is written and no polling is added.
 
 The live-elsewhere queries consult these entries independently of CLI files and
 the own-process ancestry filter, which otherwise excludes a scheduled child on
-Linux. `guardResume` refuses a manual open even if its wait dialog is accepted,
-and automatic reload and working-set restore skip the run without prompting.
+Linux. `guardResume` asks with Resume anyway or Cancel on a manual open,
+naming the schedule when known and warning that both processes write the transcript.
+Automatic reload and working-set restore skip the run without prompting.
 After the child exits, normal resume reads the whole scheduled transcript.
 There is no daemon job id or PTY to attach to for these headless runs.
 
