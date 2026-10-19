@@ -58,9 +58,9 @@ function applyHeadTurnSnapshot(turn) {
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
   const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
   const observedAt = changed ? Date.now() : previous.observedAt;
-  const ended = turn.state === 'closed' && (previous?.state === 'open' || !!previous?.ended);
+  const ended = turn.state === 'closed' && (!!previous?.endArmed || !!previous?.ended);
   if (turn.state === 'unknown' && previous && previous.state !== 'unknown') forgetObservedTurnEnd(turn.sessionId);
-  headTurns.set(turn.sessionId, { ...turn, observedAt, ready: ready || (previous?.ready && turn.state === 'closed'), ended });
+  headTurns.set(turn.sessionId, { ...turn, observedAt, ready: ready || (previous?.ready && turn.state === 'closed'), ended, endArmed: turn.state === 'open' });
   if (previous && changed) {
     for (const states of [typeof localPtyStates !== 'undefined' && localPtyStates,
       typeof localTranscriptStates !== 'undefined' && localTranscriptStates,

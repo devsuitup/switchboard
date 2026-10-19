@@ -50,6 +50,7 @@ test('#714 an OSC turn end observed here shows the waiting ring, focused or not'
     assert.deepEqual(slot(), ['session-icon--waiting'], `focused: ${focused}`);
     assert.equal(background(), 'rgba(0, 0, 0, 0)');
     assert.equal(icon().dataset.glyph, '○');
+    if (!focused) assert.ok(!ctx.document.getElementById('si-root').classList.contains('response-ready'));
   }
 });
 
@@ -302,3 +303,46 @@ test('#714 a head turn going unknown clears the observed end until a new end is 
   turn('unknown');
   assert.deepEqual(slot(), ['session-icon--idle'], 'unknown also clears the OSC-observed end');
 });
+
+function rowWithGrid(t, options) {
+  const h = row(t, options);
+  const { ctx, session } = h;
+  Object.assign(ctx.window, { terminalsEl: ctx.document.getElementById('terminals'), gridViewActive: false,
+    replayHiddenBuffer() {}, renderDefaultStatus() {} });
+  ctx.evalPublic('shortcuts.js');
+  ctx.evalPublic('grid-view.js');
+  loadAppFunctions(ctx.context, { functions: ['beginPtyOpen', 'updateRunningIndicators'],
+    declarations: ['pendingOpens', '_lastPtySignature'] });
+  ctx.window.openSessions.set('root', { session, element: ctx.document.createElement('div'),
+    terminal: { focus() {}, buffer: { active: { viewportY: 0, baseY: 0 } } } });
+  ctx.window.wrapInGridCard('root');
+  return { ...h, icons: () => [h.icon(), ctx.document.querySelector('.grid-card .grid-card-dot')] };
+}
+
+for (const surface of ['sidebar', 'grid']) {
+  test(`#714 an open head from before PTY start cannot arm a later closed snapshot on ${surface}`, t => {
+    const { ctx, turn, icons } = rowWithGrid(t, { pty: false });
+    const icon = () => icons()[surface === 'sidebar' ? 0 : 1];
+    turn('open');
+    ctx.window.beginPtyOpen('root');
+    ctx.window.activePtyIds.add('root');
+    ctx.window.updateRunningIndicators();
+    turn('closed');
+    assert.ok(icon().classList.contains('session-icon--idle'));
+    assert.equal(ctx.window.getComputedStyle(icon()).backgroundColor, GREEN);
+    turn('open');
+    turn('closed');
+    assert.ok(icon().classList.contains('session-icon--waiting'));
+    assert.equal(ctx.window.getComputedStyle(icon()).backgroundColor, 'rgba(0, 0, 0, 0)');
+  });
+
+  test(`#714 an unknown head after an OSC turn end shows Turn state unavailable on ${surface}`, t => {
+    const { ctx, turn, icons } = rowWithGrid(t, { extra: { status: undefined } });
+    const icon = () => icons()[surface === 'sidebar' ? 0 : 1];
+    turn('unknown');
+    ctx.setActivity('root', true, 'osc');
+    ctx.setActivity('root', false, 'osc');
+    assert.ok(icon().classList.contains('session-icon--waiting'));
+    assert.equal(icon().title, 'Turn state unavailable');
+  });
+}

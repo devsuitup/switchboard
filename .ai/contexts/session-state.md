@@ -135,7 +135,7 @@ ends. Rows live elsewhere keep `alive && headTurn !== 'open'`.
 | OSC busy / progress / reconciled busy | Clears the OSC end; a transcript end remains until the head opens. |
 | Attention | Clears the OSC end and owns the slot while set. |
 | Known head becomes `unknown` | `forgetObservedTurnEnd` clears both sources; `closed` without a new `open` does not restore an end. |
-| PTY start (`beginPtyOpen`) | Clears both sources and the adapter's `busy`, so an earlier end or pending remote activity cannot turn the first idle poll into an end. |
+| PTY start (`beginPtyOpen`) | Clears both sources, the head's `endArmed` baseline and the adapter's `busy`; only a fresh `open` snapshot can arm a transcript end, while head state, revision and unread evidence remain intact. |
 | Remote busy or decay | The remote adapter still updates, but both shadow writes to local-pty state are skipped while an unclosed tab is open here, including before the first PTY poll. |
 | Remote attach edge | Repaints the row but forgets nothing; pruning a remote row can reset its adapter's `attached` flag without stopping its PTY. |
 | PTY exit | The live-elsewhere rule applies once the PTY is gone; purge drops adapter state. |

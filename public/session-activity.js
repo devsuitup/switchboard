@@ -189,7 +189,7 @@ function setActivity(sessionId, active, via, opts) {
 function forgetObservedTurnEnd(sessionId, { busy = false } = {}) {
   localPtyStates.get(sessionId)?.apply({ type: 'turnEndForgotten', busy });
   const turn = headTurns.get(sessionId);
-  if (turn?.ended) headTurns.set(sessionId, { ...turn, ended: false });
+  if (turn) headTurns.set(sessionId, { ...turn, ended: false, endArmed: false });
 }
 
 function clearHeadUnread(sessionId) {
