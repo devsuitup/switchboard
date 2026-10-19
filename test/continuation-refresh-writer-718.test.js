@@ -170,6 +170,8 @@ test('D1 retained release recomputes after a stale effects ACK using the capture
 test('B5/D2 cold worker retries an identity race before publishing its source row', async t => {
   const fs = require('node:fs');
   const h = fixture(t); h.write(OLD, h.link()); cache.refreshFolder(h.folder); h.init(); h.append(OLD, h.padding);
+  const changedAt = new Date(h.folders.get(h.folder).indexMtimeMs + 1000);
+  fs.utimesSync(h.file(OLD), changedAt, changedAt);
   let raced = false;
   const worker = projectsWorker(h, { onYield: callback => {
     if (!raced) { raced = true; fs.renameSync(h.file(OLD), h.file(OLD) + '.old'); h.write(OLD, h.padding + h.link(OTHER)); }
@@ -179,7 +181,9 @@ test('B5/D2 cold worker retries an identity race before publishing its source ro
   assert.equal(raced, true);
   assert.equal(worker.replies.some(reply => reply.error), false);
   const effects = worker.replies.flatMap(reply => (reply.progress || reply.result).effects);
-  const source = effects.flatMap(effect => effect.name === 'upsertCachedSessions' ? effect.args[0] : []).find(row => row.sessionId === OLD);
+  const sources = effects.flatMap(effect => effect.name === 'upsertCachedSessions' ? effect.args[0] : []).filter(row => row.sessionId === OLD);
+  assert.equal(sources.length, 1, 'only the successful retry publishes a source row');
+  const [source] = sources;
   assert.ok(source, 'one retry publishes the replacement source rather than its stale row');
   const index = JSON.parse(source.continuationIndex);
   assert.deepEqual(index.ids, [OTHER]); assert.equal(index.bytes, fs.statSync(h.file(OLD)).size);
