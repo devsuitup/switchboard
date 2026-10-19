@@ -1641,16 +1641,16 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     if (!row) {
       const { alias } = parseFolderKey(getCachedSession?.(sessionId)?.folder || '');
       if (alias === null) {
+        const checked = getSessionLiveElsewhere ? await getSessionLiveElsewhere(id) : null;
+        if (checked?.live) return { index: { ids: [] } };
         for (const [key, session] of activeSessions || []) {
           if (session && !session.exited && !session.host && !session.isPlainTerminal
             && String(session.realSessionId || key).toLowerCase() === id.toLowerCase()) return { index: { ids: [] } };
         }
-      }
-      if (alias === null && getSessionLiveElsewhere) {
-        const checked = await getSessionLiveElsewhere(id);
-        if (!checked?.known) return null;
-        if (checked.live) return { index: { ids: [] } };
-        if (checked.live !== null) return null;
+        if (getSessionLiveElsewhere) {
+          if (!checked?.known) return null;
+          if (checked.live !== null) return null;
+        }
       }
       const root = alias === null ? PROJECTS_DIR : remoteRoots.get(alias);
       diskEntries ||= fs.promises.readdir(root, { recursive: true, withFileTypes: true });
