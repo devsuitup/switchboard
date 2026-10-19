@@ -385,10 +385,15 @@ function sidebarRowState(row) {
 function refreshFolder(folder, opts = {}) {
   opts = continuationRefreshScope(folder, opts);
   const collector = opts.continuationCollector || { deferred: new Set(), accounted: new Set() };
+  const clearDeferred = () => {
+    for (const file of deferredContinuationFiles.get(folder) || []) collector.accounted.add(file);
+    if (!opts.managedContinuations) applyContinuationRefresh(folder, collector, true);
+  };
   if (pendingRepairFolders().includes(folder)) return false;
   // null when the key names a host no longer declared — treated as vanished.
   const folderPath = resolveFolderDir(folder);
   if (!folderPath || !fs.existsSync(folderPath)) {
+    clearDeferred();
     return dropFolderRows(folder);
   }
 
@@ -405,6 +410,7 @@ function refreshFolder(folder, opts = {}) {
   let incomplete = false;
   if (!projectPath) projectPath = deriveFolderProjectPath(folderPath, folder, () => { incomplete = true; });
   if (!projectPath) {
+    clearDeferred();
     const dropped = parseFolderKey(folder).alias === null && dropFolderRows(folder, { search: true });
     setFolderMeta(folder, null, incomplete ? 0 : getFolderIndexMtimeMs(folderPath));
     return !!dropped || !!knownMeta?.projectPath;
@@ -457,6 +463,9 @@ function refreshFolder(folder, opts = {}) {
     filesToScan = enumerateSessionFiles(folderPath);
   }
 
+  for (const file of deferredContinuationFiles.get(folder) || []) {
+    if (!fs.existsSync(path.join(folderPath, file))) collector.accounted.add(file);
+  }
   let continuationBytesLeft = 1024 * 1024;
   const currentIds = new Set();
   let sidebarChanged = (knownMeta?.projectPath ?? null) !== projectPath;
@@ -684,8 +693,7 @@ function refreshFolder(folder, opts = {}) {
   for (const [id, observed] of linkedVersions) {
     let current;
     try { current = fs.statSync(observed.filePath, { bigint: true }); } catch {}
-    if (current && sameContinuationStamp(observed.stat, current)
-      && (!getCachedSession || getCachedSession(id)?.continuationIndex === cachedMap.get(id).continuationIndex)) continue;
+    if (current && sameContinuationStamp(observed.stat, current)) continue;
     racedRows.add(id);
     collector.accounted.delete(observed.relativeFile);
     collector.deferred.add(observed.relativeFile);
@@ -759,16 +767,24 @@ function reconciliationFolders(throttle) {
 }
 
 async function reconcileCacheFromFilesystemAsync({ onFolder, throttle = true } = {}) {
-  for (const { folder, refresh } of reconciliationFolders(throttle)) {
-    if (refresh) {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const preparedContinuations = await prepareContinuationRefresh(folder);
-        const continuationCollector = { deferred: new Set(), accounted: new Set() };
-        refreshFolder(folder, { preparedContinuations, continuationCollector, continuationRetry: attempt === 1 });
-        if (!continuationCollector.deferred.size) break;
+  try {
+    for (const { folder, refresh } of reconciliationFolders(throttle)) {
+      try {
+        if (refresh) {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const preparedContinuations = await prepareContinuationRefresh(folder);
+            const continuationCollector = { deferred: new Set(), accounted: new Set() };
+            refreshFolder(folder, { preparedContinuations, continuationCollector, continuationRetry: attempt === 1 });
+            if (!continuationCollector.deferred.size) break;
+          }
+        }
+        if (onFolder) onFolder(folder);
+      } catch (err) {
+        console.error('Error reconciling cache:', err);
       }
     }
-    if (onFolder) onFolder(folder);
+  } catch (err) {
+    console.error('Error reconciling cache:', err);
   }
 }
 

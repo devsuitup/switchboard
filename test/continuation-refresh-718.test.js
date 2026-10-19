@@ -222,3 +222,65 @@ test('B5 deferred linked source receives no bridge-merge effects from a new pred
   assert.equal(h.effects.some(([kind, value]) => kind === 'upsert' ? value.some(row => row.sessionId === OLD) : value === OLD), false);
   assert.equal(h.folders.get(h.folder).indexMtimeMs, 0);
 });
+
+for (const failure of ['missing-projects', 'folder-read']) test('718b reconcile tolerates ' + failure + ' and continues healthy folders', async t => {
+  const path = require('node:path');
+  const h = fixture(t), errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args));
+  if (failure === 'missing-projects') {
+    fs.rmSync(h.dir, { recursive: true });
+    fs.rmdirSync(h.root);
+  } else {
+    h.write(OLD);
+    const healthyRoot = path.join(h.root, 'healthy');
+    const healthyFolder = require('../encode-project-path').encodeProjectPath(healthyRoot);
+    fs.mkdirSync(healthyRoot);
+    fs.mkdirSync(path.join(h.root, healthyFolder));
+    fs.writeFileSync(path.join(h.root, healthyFolder, OTHER + '.jsonl'), line({ type: 'user', sessionId: OTHER,
+      cwd: healthyRoot, message: { content: 'healthy' } }));
+    let reads = 0;
+    h.db.getCachedByFolder = folder => { if (folder === h.folder && ++reads === 2) throw Error('folder read failed'); return []; };
+    h.init();
+  }
+  await assert.doesNotReject(cache.reconcileCacheFromFilesystemAsync({ throttle: false }));
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0][0], 'Error reconciling cache:');
+  assert.match(errors[0][1].message, failure === 'missing-projects' ? /ENOENT/ : /folder read failed/);
+  if (failure === 'folder-read') assert.ok(h.rows.has(OTHER), 'healthy folder is still reconciled');
+});
+
+for (const missing of ['file', 'folder', 'project-path']) test('718b deleted deferred ' + missing + ' is forgotten', async t => {
+  const h = fixture(t); h.write(OLD, h.link()); h.write(OTHER); cache.refreshFolder(h.folder); h.init();
+  h.append(OLD, h.padding); cache.refreshFolder(h.folder);
+  const scope = () => cache.continuationRefreshScope(h.folder, { files: new Set([OTHER + '.jsonl']) }).files;
+  assert.equal(scope().has(OLD + '.jsonl'), true);
+  if (missing === 'folder') fs.rmSync(h.dir, { recursive: true });
+  else if (missing === 'project-path') {
+    h.folders.delete(h.folder); fs.unlinkSync(h.file(OTHER)); fs.writeFileSync(h.file(OLD), '{}\n');
+  } else fs.unlinkSync(h.file(OLD));
+  cache.refreshFolder(h.folder);
+  assert.equal(scope().has(OLD + '.jsonl'), false, 'a full refresh clears obsolete deferred work');
+  if (missing === 'file') {
+    const committed = h.folders.get(h.folder).indexMtimeMs;
+    assert.ok(committed > 0);
+    const visited = [];
+    await cache.reconcileCacheFromFilesystemAsync({ throttle: false, onFolder: folder => visited.push(folder) });
+    assert.equal(h.folders.get(h.folder).indexMtimeMs, committed);
+    assert.deepEqual(visited, [h.folder]);
+  }
+});
+
+test('718b final stamp check defers a source changed after its header was accepted', async t => {
+  const h = fixture(t); h.write(OLD, h.link()); cache.refreshFolder(h.folder); h.append(OLD, h.padding);
+  const preparedContinuations = await cache.prepareContinuationRefresh(h.folder);
+  const before = structuredClone(h.rows.get(OLD)), stat = fs.statSync; let checks = 0;
+  const hook = t.mock.method(fs, 'statSync', (file, options) => {
+    if (file === h.file(OLD) && options?.bigint && ++checks === 3) h.append(OLD);
+    return stat(file, options);
+  });
+  cache.refreshFolder(h.folder, { preparedContinuations }); hook.mock.restore();
+  assert.equal(checks, 3, 'the race reaches the final pre-commit stamp check');
+  assert.deepEqual(h.rows.get(OLD), before, 'a late file change must not publish a stale row');
+  assert.equal(h.folders.get(h.folder).indexMtimeMs, 0);
+  assert.ok(cache.continuationRefreshScope(h.folder, { files: new Set([OTHER + '.jsonl']) }).files.has(OLD + '.jsonl'));
+});

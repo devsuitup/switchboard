@@ -1736,7 +1736,6 @@ function persistBackgroundHandoff(context) {
       if (stamp !== state.start) state.dirty = true;
       return state.running;
     }
-    if (!force && stamp === state.successful) return Promise.resolve();
     state.running = run().finally(() => { state.running = null; });
     return state.running;
   }

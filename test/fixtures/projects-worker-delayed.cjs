@@ -2,9 +2,9 @@
 
 const { workerData } = require('node:worker_threads');
 const cache = require('../../session-cache');
-const reconcile = cache.reconcileCacheFromFilesystem;
+const reconcile = cache.reconcileCacheFromFilesystemAsync;
 
-cache.reconcileCacheFromFilesystem = options => reconcile({
+cache.reconcileCacheFromFilesystemAsync = options => reconcile({
   ...options,
   onFolder: folder => {
     options.onFolder(folder);

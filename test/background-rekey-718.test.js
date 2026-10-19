@@ -30,11 +30,11 @@ test('C1/C4 lag then live attach copies once, confirms once and later reuses ACK
   h.hosted = true; h.detect(); h.detect();
   assert.equal(h.copies.length, 1); assert.equal(h.confirmed.length, 1);
   ack.resolve(); await transitions.drainMetadataWrites(); h.detect();
-  assert.equal(h.copies.length, 1); assert.equal(h.events.length, 0); assert.equal(h.migrated.length, 0);
+  assert.equal(h.copies.length, 1); assert.equal(h.confirmed.length, 1); assert.equal(h.events.length, 0); assert.equal(h.migrated.length, 0);
   assert.equal(h.activeSessions.get(OLD), h.entry); assert.equal(h.activeSessions.get(HEAD), attach);
   assert.ok(h.logs.some(x => x.join(' ').includes('target-live')));
   h.activeSessions.delete(HEAD); h.detect(); await transitions.drainMetadataWrites();
-  assert.equal(h.events.length, 1); assert.equal(h.copies.length, 1);
+  assert.equal(h.events.length, 1); assert.equal(h.copies.length, 1); assert.equal(h.confirmed.length, 1);
 });
 
 for (const reason of ['source-replaced', 'source-id-changed', 'target-live', 'source-stopped', 'background-proof-changed', 'background-job-gone', 'changed-job', 'revoked-command', 'changed-fresh-proof']) {
@@ -132,4 +132,15 @@ test('C6 captured effective source routes through real writer metadata command b
   h.activeSessions.delete(OLD); h.activeSessions.set('map-key', h.entry); h.entry.realSessionId = OLD;
   h.detect(); assert.deepEqual(calls, [[OLD, HEAD, OLD + ' title']]); assert.equal(h.events.length, 0);
   ack.resolve(); await transitions.drainMetadataWrites(); assert.equal(h.events[0][1], 'map-key');
+});
+
+for (const rejected of [false, true]) test('C2 removed source discards its background attempt after metadata settles, rejection=' + rejected, async t => {
+  const ack = barrier(), h = setup(t, { copy: () => ack.promise });
+  h.detect(); assert.ok(h.entry._backgroundRekey);
+  h.activeSessions.delete(OLD);
+  if (rejected) ack.reject(Error('metadata failed')); else ack.resolve();
+  await transitions.drainMetadataWrites();
+  assert.equal(h.entry._backgroundRekey, undefined, 'removed source must not retain an attempt');
+  assert.equal(h.entry._metadataRekey, undefined);
+  assert.equal(h.events.length, 0);
 });

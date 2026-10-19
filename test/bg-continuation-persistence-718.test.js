@@ -146,3 +146,30 @@ test('A3 already settled drain forces one serialized exit pass', { timeout: 9000
   await h.persistBackgroundHandoff(h.request); await tick();
   assert.equal(h.events.filter(x => x.startsWith('resolve:')).length, 2);
 });
+
+test('A6 same-stamp join of a failing refresh never requests an implicit retry', async () => {
+  const entered = barrier(), ack = barrier(); let refreshes = 0;
+  const h = helper({ writer: { refreshFolder: async () => { refreshes++; entered.resolve(); await ack.promise; throw Error('refresh failed'); } } });
+  const first = h.persistBackgroundHandoff(h.request); await entered.promise;
+  const joined = h.persistBackgroundHandoff(h.request);
+  ack.resolve(); await Promise.all([first, joined]);
+  assert.equal(refreshes, 1, 'joining an unchanged in-flight pass must not retry its failure');
+  assert.equal(h.warned.length, 1);
+  assert.equal(h.events.some(event => event.startsWith('notify:')), false);
+  await h.persistBackgroundHandoff(h.request);
+  assert.equal(refreshes, 2, 'a later explicit request may retry');
+});
+
+test('A6 queued change back to the last successful stamp does not refresh after a failed pass', async () => {
+  const entered = barrier(), ack = barrier(); let refreshes = 0;
+  const h = helper({ writer: { refreshFolder: async () => {
+    if (++refreshes === 1) return;
+    entered.resolve(); await ack.promise; throw Error('refresh failed');
+  } } });
+  await h.persistBackgroundHandoff(h.request);
+  h.stamp.size = '5'; const pending = h.persistBackgroundHandoff(h.request); await entered.promise;
+  h.stamp.size = '4'; const joined = h.persistBackgroundHandoff(h.request);
+  ack.resolve(); await Promise.all([pending, joined]);
+  assert.equal(refreshes, 2, 'the restored successful stamp already has acknowledged persistence');
+  assert.equal(h.warned.length, 1);
+});
