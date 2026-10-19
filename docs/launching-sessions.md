@@ -144,9 +144,9 @@ ignoring the processes it runs itself:
 - A background session attaches by its job id; without one, a notice explains
   why it cannot attach and points to the Agents view.
 - An automatic resume skips such a session without asking: the
-  [session restore](session-restore.md) at startup, which then names the
-  sessions it did not reopen, and the reopening of the active session after a
-  renderer reload.
+  [session restore](session-restore.md) at startup and the reopening of the
+  active session after a renderer reload both name the skipped session in a
+  dismissible notice. When both run, the same session is listed only once.
 
 The descriptor file is the CLI's, and undocumented. When it is missing or
 unreadable, the check finds nothing and the resume goes ahead.

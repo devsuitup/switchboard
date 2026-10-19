@@ -22,6 +22,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - The sidebar keeps updating other projects when one project cannot be read. (#718)
 - A session moved to the background with a typed `/bg` keeps one sidebar row and its name after a restart, including when its original transcript is written again. An already-open background tab keeps the conversation's name, pin and archive settings. (#718)
 - A conversation whose only continuation no longer exists on disk opens directly, with a short notice, instead of asking or waiting. (#567)
+- Reloading the window now names the session that was active when it cannot reopen because it is running elsewhere, needs a continuation choice, has continuations that could not be checked or is still missing after indexing finishes. New sessions and running terminals are no longer reported missing; a continuation check awaiting an automatic retry says so. (#729)
+- If the project list cannot be loaded at startup, session restore waits and runs when a delayed retry succeeds. (#729)
 - A restored conversation now reopens at its latest part and is no longer held with a notice when its apparent alternatives are its own parts. Real branches still wait for a choice from the sidebar. (#722)
 - A conversation stays held during startup restore when an older part is running in the background, instead of attaching to that older part's job. A background job on its latest part still attaches. (#722)
 - A blocked background job now shows the static orange waiting ring in the sidebar, grid and Agents view, including while attached, and keeps its Blocked label and tooltip. It still blinks when Claude separately asks for your attention. (#726)

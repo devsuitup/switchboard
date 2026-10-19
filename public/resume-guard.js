@@ -96,7 +96,7 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
       result = await resolutions.get(session.sessionId);
     } else result = await api.getSessionContinuations(session.sessionId);
   } catch {
-    if (automatic) return null;
+    if (automatic) { onHold?.({ lookupFailed: true }); return null; }
     return openAsWas(['Switchboard could not check whether "' + conversationName() + '" continued in another part.', 'Open it as it was?']);
   }
   const rowIds = new Set([session.sessionId, ...(session.mergedMemberIds || [])]);

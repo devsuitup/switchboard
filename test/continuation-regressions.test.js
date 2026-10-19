@@ -93,7 +93,17 @@ test('R2 automatic failed continuation lookup holds the entry without confirm', 
   await h.restore();
   assert.deepEqual(h.prompts, []);
   assert.deepEqual(h.spawned, []);
-  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
+  const document = h.dom.window.document;
+  assert.match(document.querySelector('[data-notice-id="Restore:pending"][role="status"]')?.textContent, /old.*could not check.*Restore will retry when indexing finishes/);
+  assert.equal(document.querySelector('#app-notices [role="alert"]'), null);
+  const { markRestoreIndexingDone } = loadAppFunctions(h.ctx, { functions: ['markRestoreIndexingDone', 'tickRestorePlanner'] });
+  h.ctx.loadProjects = async () => {};
+  await markRestoreIndexingDone();
+  assert.equal(document.querySelector('[data-notice-id="Restore:pending"]'), null);
+  assert.match(document.querySelector('[data-notice-id="Restore:batch"][role="alert"]')?.textContent, /old.*could not check.*sidebar to retry checking and restoring/);
+  assert.deepEqual(h.prompts, []);
+  assert.deepEqual(h.spawned, []);
+  assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId), ['old']);
 });
 
 test('R2 a missing continuation API cannot silently bypass the resume guard', { timeout: 9000 }, async t => {
@@ -102,7 +112,17 @@ test('R2 a missing continuation API cannot silently bypass the resume guard', { 
   await h.restore();
   assert.deepEqual(h.spawned, []);
   assert.deepEqual(h.prompts, []);
-  assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
+  const document = h.dom.window.document;
+  assert.match(document.querySelector('[data-notice-id="Restore:pending"][role="status"]')?.textContent, /old.*could not check.*Restore will retry when indexing finishes/);
+  assert.equal(document.querySelector('#app-notices [role="alert"]'), null);
+  const { markRestoreIndexingDone } = loadAppFunctions(h.ctx, { functions: ['markRestoreIndexingDone', 'tickRestorePlanner'] });
+  h.ctx.loadProjects = async () => {};
+  await markRestoreIndexingDone();
+  assert.equal(document.querySelector('[data-notice-id="Restore:pending"]'), null);
+  assert.match(document.querySelector('[data-notice-id="Restore:batch"][role="alert"]')?.textContent, /old.*could not check.*sidebar to retry checking and restoring/);
+  assert.deepEqual(h.spawned, []);
+  assert.deepEqual(h.prompts, []);
+  assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId), ['old']);
 });
 
 for (const [graph, dialog] of [[{ old: ['a', 'b'], a: [], b: [] }, 'chooser'], [{ old: ['unindexed'], unindexed: [] }, 'fallback']]) {

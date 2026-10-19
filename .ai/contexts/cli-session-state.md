@@ -332,7 +332,7 @@ See [schedule-runner.md](schedule-runner.md#opening-a-running-scheduled-session-
 
 | Resume | Live elsewhere | Result |
 |---|---|---|
-| automatic — the reload path (`sessionStorage.activeSessionId`) and `runRestore` | yes | not opened, no prompt; from `runRestore`, a one-line notice |
+| automatic — the reload path (`sessionStorage.activeSessionId`) and `runRestore` | yes | not opened, no prompt; a dismissible notice names each skipped session, shared between reload and restore to avoid duplicates |
 | asked for by the user (sidebar click, resume dialog, transcript viewer) | yes, scheduled run or other live process | `liveElsewhereQuestion`: name, pid, cwd, local start time and schedule name when known; Resume anyway (danger, Cancel focused) starts a second CLI |
 | asked for by the user | yes, background | attach with a job id; otherwise an error notice explains why it cannot attach |
 | any | no | spawns as before |
@@ -699,6 +699,24 @@ retains the existing renderer-reload behaviour: opening outside restore cancels
 the working-set planner, so it neither prompts nor resumes the other saved entries.
 The separate continuation-retry cancellation flag is set only by non-automatic
 opens; the automatic remembered open does not cancel a held indexing retry.
+
+`resolveResumeSession` reports a failed automatic lookup through `onHold` with
+`lookupFailed: true`. Both `openSessionNow` and `runRestore` retain that reason;
+`showLiveElsewhereNotice` says Switchboard could not check the conversation's
+continuations. With `retryAfterIndexing`, it uses `Restore:pending` and says the
+automatic retry will run when indexing finishes; otherwise it directs the user
+to the sidebar to retry checking and restoring. Reload preserves a retry already
+scheduled by restore. The same member id across reload and restore lists it once.
+For an active id absent from the rows, `reopenActiveSessionAfterReload` checks
+the saved working set and own PTYs first. A live PTY is reattached with
+`reattachOnly` and a pending row; a fresh entry without a PTY follows startup
+restore. Unsaved ids and hidden projects do not produce a missing-index notice.
+Other saved entries are checked through `createRestorePlanner` only after the
+index reports finished and `loadProjects` succeeds. `restoreSessionsAfterIndexing`
+rechecks an absent active id after the ordinary restore pass, including with
+restore off. `showNotRestoredNotice` merges the resulting `Restore:unavailable`
+notice with startup restore. Failed startup project loads defer both restore
+passes until a successful retry.
 
 For uncached local targets, continuation IPC uses `liveElsewhereChecked` before
 declaring the transcript missing. `known:false` keeps the graph unresolved when
