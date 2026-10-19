@@ -24,6 +24,13 @@ const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .c
 // public/sidebar.js (and equivalents). Kept readonly so reassignment
 // from another file gets flagged.
 const rendererCrossFileGlobals = {
+  localActivityRow: 'readonly',
+  selectBackgroundActivity: 'readonly',
+  backgroundAttachFacts: 'readonly',
+  observeSessionProjection: 'readonly',
+  agentsCliAvailable: 'readonly',
+  agentsCliEntryCount: 'readonly',
+  agentsSnapshotRevision: 'readonly',
   remoteHostLabel: 'readonly',
   setRemoteHostLabels: 'readonly',
   writtenActivitySnapshot: 'readonly',
@@ -665,6 +672,11 @@ module.exports = [
       'no-unused-vars': ['warn', { args: 'none', varsIgnorePattern: '^_' }],
       'no-redeclare': 'warn',
     },
+  },
+
+  {
+    files: ['public/session-projection-diagnostics.js'],
+    languageOptions: { globals: { module: 'writable', Buffer: 'readonly' } },
   },
 
   // Dual-mode pure domain module (public/session-state.js — see

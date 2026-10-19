@@ -46,7 +46,7 @@ parentPort.on('message', message => {
         }
       } catch {}
     }
-    else if (type === 'job') registry.applyJob(parentSessionId, message.evidence);
+    else if (type === 'job') registry.applyJob(parentSessionId, message.evidence, { jobId: message.jobId });
     else if (type === 'death') registry.ownerDied(parentSessionId);
     else if (type === 'alive') registry.ownerAlive(parentSessionId);
     else if (type === 'rekey') {

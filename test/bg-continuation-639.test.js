@@ -115,7 +115,7 @@ test('background rekey writes an activity trace after Diagnostics is enabled at 
 test('sidebar keeps one original conversation under its background UUID and original title', () => {
   const row = { sessionId: OLD, folder: 'project', projectPath: '/project', name: 'JB rename', summary: 'original', messageCount: 2,
     continuationIndex: JSON.stringify({ format: 3, complete: true, ids: [HEAD] }) };
-  const child = { sessionId: HEAD, folder: 'project', name: 'daemon (2)', summary: 'copied', messageCount: 3 };
+  const child = { sessionId: HEAD, folder: 'project', projectPath: '/project', name: 'daemon (2)', summary: 'copied', messageCount: 3 };
   const projects = [{ projectPath: '/project', sessions: [row, child] }];
   mergeLocalBackgroundSessions(projects, [row, child], [{ sessionId: HEAD, kind: 'bg', jobId: '1234abcd', name: 'daemon (2)', nameSource: 'collision' }],
     { hiddenProjects: new Set(), metaMap: new Map([[HEAD, { name: 'JB rename', starred: 1, archived: 1 }]]), showArchived: true,

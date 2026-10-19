@@ -373,10 +373,17 @@ projection also uses `isHostedJob`, preserving descriptor-only rows and proven
 continuation heads, merged members and registry renames across working/done
 turn transitions. A live bg descriptor also supplies a descriptor-only row when
 its job metadata is absent, before the job watcher fills or beyond `MAX_JOBS`.
-The attach-tab fallback supplies a synthetic descriptor only
-when the cached job is hosted without descriptor evidence (working/blocked).
-An attach PTY
-alone does not prove hosting.
+Hosting and conversation identity use separate facts. The attach fallback
+supplies a synthetic descriptor only for working/blocked. Cached jobs in all
+five known states can retain an indexed continuation's exact target, scoped by
+its cached row or lexical transcript folder and current folder metadata. An
+unscoped cached row cannot establish a merge. Every descriptor, cached, indexed
+and bridge path keeps the same project, folder and host boundary. A conflicting
+descriptor contributes nothing and cannot veto independent proof. An exact local
+open attach selects the target as representative/head; attach alone proves
+neither scope nor hosting. Delete, Archive, Pin and Rename use this same current
+part set, including proved unindexed members. Their filesystem target resolution
+and fresh liveness guards remain authoritative.
 Sidebar registry names replace launch titles only; a Switchboard rename wins.
 
 `parseDescriptor` retains `bridgeSessionId`. `bridge-session-id.js` strips only
@@ -402,14 +409,17 @@ IPC and renderer functions against disposable job/descriptor/transcript files.
 `jobs/<id>/state.json` (fs.watch, per directory) and `sessions/<pid>.json`
 (through `cli-session-state`'s flush) both call `scheduleRebuild()`,
 coalesced at `FLUSH_MS` (250 ms). `rebuild()` = `mergeRoster(cli, jobs,
-readAllDescriptors())`. The CLI list is the authority for which jobs exist
-and the fallback lifecycle state; a readable job file's state takes precedence.
+readAllDescriptors())`. Candidates are the union of parsed CLI background jobs, cached jobs and live bg
+descriptors with explicit valid job IDs. A readable cached lifecycle wins over
+the CLI fallback. Successful `[]` is omission rather than removal. `listed`
+records exact CLI inclusion; snapshots also carry `cliAvailable` and
+`cliEntryCount`, independently of daemon reachability.
 The file supplies normalized task evidence, `detail`, `tokens`, `fan`, `children`,
 `result`, `--agent`/`--model`/`--name`; the descriptor supplies identity,
 `pid`, `agent` and interactive-only status. `reconcile()` runs on every
 `get-bg-agents` (the renderer calls it at bootstrap, on open and every 30 s
 while visible) and after every verb and
-dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable}`.
+dispatch. The push `bg-agents-changed` carries `{roster, daemonReachable, cliAvailable, cliEntryCount}`.
 Descriptor appearance/disappearance schedules a rebuild through the existing
 subscription. Bootstrap installs the IPC push subscriber with Agents closed;
 main also subscribes for task records and starts the service at app startup.
@@ -662,7 +672,7 @@ branch and the fallback keep the cwd's spelling.
 ## The sidebar
 
 `bgAgentSessionIds` (a `Set` of the `sessionId` of every live background job,
-`agentJobIsLive`: `working` or `blocked`) is rebuilt by `applyAgentsSnapshot`,
+`agentJobIsLive`: working/blocked or done with a matching live bg descriptor) is rebuilt by `applyAgentsSnapshot`,
 which refreshes the sidebar when membership or job activity changes.
 `sidebar.js` prefixes a `bg` badge ("click to attach") to a session row with
 #620's project membership or a matching roster id. Two
@@ -671,7 +681,7 @@ consequences:
 - The roster set is fetched at renderer bootstrap, then refreshed on open
   and retained through the existing push while Agents is closed. #620's
   projects membership can badge a row before this first fetch completes.
-- A finished job loses its badge at the next snapshot. Clicking its row
+- An unhosted finished job loses its badge at the next snapshot. Clicking its row
   resumes normally: the attach decision is made by `guardResume` from a live
   descriptor, not from the badge.
 
@@ -899,8 +909,8 @@ the client is killed. The call resolves on `close` so stdout is drained, or
   identity/state when the file is missing. Without any of that evidence its
   direct guard can still pass `rm`/`respawn` through to the CLI. The shipped
   IPC's fresh conversation check refuses unknown liveness before calling it.
-- `MAX_JOBS` (200) truncates the watched job directories by sorted id, not by
-  recency; with the daemon answering, the roster still comes from the CLI list.
+- `MAX_JOBS` (200) limits watched directories by sorted id, not the full
+  CLI/cache/descriptor candidate union.
 - The jobs-directory watcher's `error` handler only logs; it does not re-arm
   the watcher, so new job directories are noticed by the next reconcile
   instead.
@@ -1003,3 +1013,30 @@ Agents view's own error handling belongs to a later #566 slice.
 Evidence: `test/dom-row-action-errors.test.js`,
 `test/send-to-background-renderer.test.js`,
 `test/restore-live-elsewhere.test.js`, `test/restore-unavailable.test.js`.
+
+## Exact activity selection and diagnostics (#719)
+
+The shared selector returns entry/source/selection/unavailable. It checks the
+row's explicit bg job/session pair first, then an exact validated open attach,
+then a unique identity job targeting the current head, then that head's unique
+roster entry. A missing/conflicting explicit identity never falls through; an
+ambiguous head never picks by roster order. Non-head identity is retained for
+membership without applying its activity to the head. Genuine resumed foreground
+PTYs keep their foreground rule; an attach never takes that branch.
+
+Task evidence stays keyed by job ID through main, task worker, snapshots and
+registry queries, with per-job monotonic evidence times across rekeys. Sidebar,
+grid, Agents and transcript adapters pass the same accepted row and selection.
+Invalid reads retain lifecycle/identity with invalid current evidence; removal
+evicts the contribution. No quiet-job TTL exists. Hosting and selected-source
+changes repaint while Agents is closed; token/detail/tempo updates do not reload
+projects. Omitted jobs retain normal verbs when reachable: hosted jobs offer
+Attach/Stop, unhosted terminal jobs offer Respawn/rm subject to conversation PID
+and fresh process guards. Unreachable disables daemon verbs, independently of
+Transcript availability.
+
+Accepted projects commits and roster changes feed the pure projection observer.
+Ordinary main.log receives one `[session-projection] ` JSON record per changed
+logical scope/root, with current build/generation/roster provenance and deciding
+inputs. CLI omission alone is silent and updates provenance. See
+[activity-trace.md](../../docs/activity-trace.md) for bounds and privacy.

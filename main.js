@@ -189,7 +189,7 @@ const {
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, listSettingKeys, isInitialScanComplete,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
-  DB_PATH, getProjectsRevision,
+        DB_PATH, getProjectsRevision,
 } = require('./db');
 const { setStarred, setArchived, deleteCachedSession, deleteCachedFolder,
   deleteSearchSession, deleteSearchFolder, deleteSearchType, applySearchFileBatch,
@@ -544,20 +544,22 @@ function projectsSnapshot() {
       sessionId: d.sessionId, kind: d.kind, jobId: d.jobId, cwd: d.cwd,
       name: d.name, nameSource: d.nameSource, startedAt: d.startedAt,
     })),
-    localJobs: [...bgAgents.getCachedJobs()].map(([id, job]) => [id, { state: job.state, name: job.name, nameSource: job.nameSource, sessionId: job.sessionId }]),
+    localJobs: [...bgAgents.getCachedJobs()].map(([id, job]) => [id, { state: job.state, name: job.name, nameSource: job.nameSource, sessionId: job.sessionId, transcriptPath: job.transcriptPath }]),
   };
   const liveVersion = JSON.stringify(state);
-  return { ...state, liveVersion, version: getProjectsRevision() + liveVersion };
+  return { ...state, liveVersion, version: getProjectsRevision() + liveVersion,
+    writerRevision: typeof getSetting === 'function' ? getSetting('_writer_revision', { fresh: true }) || 0 : undefined };
 }
 const projectsClient = createProjectsWorkerClient({
   workerFactory: () => new Worker(path.join(__dirname, 'workers', 'projects-query.js'), { workerData: { dbPath: DB_PATH, projectsDir: PROJECTS_DIR } }),
   snapshot: projectsSnapshot,
   apply: async result => {
-    await writer.applyProjectsWorkerEffects(result);
-    const version = projectsSnapshot().version;
-    if (result.reconciled) projectsReconciledAt = Date.now();
-    return { version };
+    const before = projectsSnapshot();
+    const acknowledgment = await writer.applyProjectsWorkerEffects(result);
+    return acknowledgment?.committedRevision !== undefined ? { committedRevision: acknowledgment.committedRevision }
+      : { version: acknowledgment?.version ?? before.version };
   },
+  accepted: result => { if (result.reconciled) projectsReconciledAt = Date.now(); },
 });
 
 const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
@@ -1257,15 +1259,36 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
     backfillEntrypoints();
     backfillCustomTitles();
     const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
-    const assemble = async (projects, archived) => annotateRemoteAttachable(await writer.applyAndPersistArchived(mergePlaceholderSessions(projects), archived));
+    const projection = result.projection ? structuredClone(result.projection) : undefined;
+    const assemble = async (projects, archived) => {
+      const merged = mergePlaceholderSessions(projects);
+      const kept = await writer.applyAndPersistArchived(merged, archived);
+      if (projection) {
+        const hidden = (getSetting('global') || {}).hiddenProjects || [];
+        for (const project of merged) {
+          if (kept.some(p => p.projectPath === project.projectPath && (p.remoteAlias || null) === (project.remoteAlias || null))) continue;
+          const filterReason = hidden.includes(project.projectPath) || hidden.includes(project.remoteAlias + '::' + project.projectPath)
+            ? 'hidden-project' : 'archived';
+          for (const row of project.sessions) {
+            const facts = row.projectionFacts;
+            if (facts) projection.removedInputs[facts.scope + '|' + facts.rootId] = { ...facts.inputs, filterReason };
+          }
+        }
+      }
+      return annotateRemoteAttachable(kept);
+    };
     const reply = showArchived === 'both'
-      ? { defaultProjects: await assemble(result.defaultProjects, false), allProjects: await assemble(result.allProjects, true) }
+      ? { defaultProjects: await assemble(result.defaultProjects, false), allProjects: await assemble(result.allProjects, true), projection }
       : await assemble(showArchived ? result.allProjects : result.defaultProjects, !!showArchived);
     if (TRACE.on) {
       if (started !== null) trace('ipc.get-projects', null, { totalMs: performance.now() - started, rows: result.rows, replyBytes: result.replyBytes?.[showArchived === 'both' ? 'both' : showArchived ? 'all' : 'default'] ?? null });
     }
     return reply;
   } catch (err) {
+    if (err.code === 'PROJECTS_SNAPSHOT_CONFLICT') {
+      notifyRendererProjectsChanged('conflict');
+      return { projectsError: { code: err.code, message: 'Projects changed while loading; reload to retry.' } };
+    }
     console.error('Error listing projects:', err);
     throw err;
   }
@@ -3055,6 +3078,15 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
 // --- IPC: activity-trace (fire-and-forget, opt-in) ---
 // Registered unconditionally — see .ai/contexts/ipc-bridge.md "Activity trace".
+ipcMain.on('session-projection-changed', (event, record) => {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed() || !event.senderFrame || event.sender !== mainWindow.webContents
+      || event.senderFrame !== mainWindow.webContents.mainFrame) return;
+    if (!require('./public/session-projection-diagnostics').validateSessionProjectionRecord(record)) return;
+    log.info('[session-projection] ' + JSON.stringify({ ...record, at: new Date().toISOString() }));
+  } catch {}
+});
+
 ipcMain.on('activity-trace', (_event, cat, sid, fields) => {
   trace(typeof cat === 'string' ? cat : 'renderer', sid, fields, 'renderer');
 });
@@ -3409,9 +3441,20 @@ bgAgents.onJobsChanged(() => notifyRendererProjectsChanged('bg-jobs'));
 bgAgents.onJobsChanged(() => {
   sessionTransitions.detectPendingBackgroundContinuations();
 });
+const taskJobOwners = new Map();
 const unsubscribeTaskJobs = bgAgents.onChange(({ roster }) => {
+  const present = new Set(roster.map(job => job.id));
+  for (const [jobId, sessionId] of taskJobOwners) if (!present.has(jobId)) {
+    taskRecords.job(sessionId, null, { jobId });
+    taskJobOwners.delete(jobId);
+  }
   for (const job of roster) {
-    if (job.sessionId && job.taskEvidence?.valid) taskRecords.job(job.sessionId, job.taskEvidence);
+    if (job.sessionId && job.id) {
+      const previous = taskJobOwners.get(job.id);
+      if (previous && previous !== job.sessionId) taskRecords.job(previous, null, { jobId: job.id });
+      taskJobOwners.set(job.id, job.sessionId);
+      taskRecords.job(job.sessionId, job.taskEvidence, { jobId: job.id });
+    }
   }
 });
 function getConversationPartIds(id) {
@@ -3419,7 +3462,7 @@ function getConversationPartIds(id) {
   const canonicalId = rows.find(row => row.sessionId.toLowerCase() === String(id).toLowerCase())?.sessionId
     || cliSessionState.getSidebarDescriptors().find(row => row.sessionId.toLowerCase() === String(id).toLowerCase())?.sessionId
     || [...activeSessions].map(([key, session]) => session.realSessionId || key)
-      .find(part => part.toLowerCase() === String(id).toLowerCase()) || id;
+      .find(part => part.toLowerCase() === String(id).toLowerCase()) || String(id).toLowerCase();
   return [canonicalId, ...sessionCache.conversationMemberIds(rows, canonicalId)];
 }
 

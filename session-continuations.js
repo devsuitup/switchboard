@@ -161,6 +161,7 @@ function resolveContinuationsSync(sessionId, getNode, options) {
 // see .ai/contexts/session-cache.md ("Continuation rows (#564)")
 function continuationRollup(rows) {
   const result = new Map();
+  result.proofs = new Map();
   const candidates = [];
   for (const row of rows) {
     if (row.parentSessionId || !row.projectPath) continue;
@@ -191,6 +192,7 @@ function continuationRollup(rows) {
       && index.ids.every(validId) && index.mtime === row.fileMtime;
     const value = { ids, proven };
     indexes.set(row, value);
+    result.proofs.set(row.sessionId.toLowerCase(), value);
     return value;
   };
   for (const row of candidates) {

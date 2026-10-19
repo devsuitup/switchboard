@@ -88,13 +88,19 @@ async function build(message) {
     publishedLiveRows = new Map(keptLiveRows);
   } });
   const defaultProjects = cache.buildProjectsFromCache(false);
+  const defaultProjection = cache.getProjectsProjection();
   const allProjects = cache.buildProjectsFromCache(true);
+  const projection = { buildId: message.id, removedInputs: { ...defaultProjection.removedInputs, ...cache.getProjectsProjection().removedInputs } };
+  for (const projects of [defaultProjects, allProjects]) for (const project of projects) for (const row of project.sessions) {
+    if (row.projectionFacts) row.projectionFacts.inputs.projectsBuildId = message.id;
+  }
+  for (const inputs of Object.values(projection.removedInputs)) inputs.projectsBuildId = message.id;
   const replyBytes = message.measureBytes ? {
     default: Buffer.byteLength(JSON.stringify(defaultProjects)),
     all: Buffer.byteLength(JSON.stringify(allProjects)),
     both: Buffer.byteLength(JSON.stringify({ defaultProjects, allProjects })),
   } : null;
-  return { defaultProjects, allProjects, effects, keptLiveRows: cache.getProjectsWorkerRetainedRows(), rows: rows.size, reconciled, replyBytes };
+  return { defaultProjects, allProjects, projection, effects, keptLiveRows: cache.getProjectsWorkerRetainedRows(), rows: rows.size, reconciled, replyBytes };
 }
 
 parentPort.on('message', async message => {

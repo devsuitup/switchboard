@@ -474,7 +474,7 @@
               if (result.error) throw new Error(result.error);
               archived = archived.filter(p => p !== entry);
               renderArchived();
-              if (typeof loadProjects === 'function') await Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+              if (typeof loadProjects === 'function') await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
             } catch (err) {
               button.disabled = false;
               await showChoiceDialog({ title: 'Could not unarchive project', message: err.message, confirmLabel: 'OK' });
@@ -690,7 +690,7 @@
           window._applyShortcuts(settings.shortcuts);
         }
         if (settings.hideSdkSessions !== hideSdkValue && typeof loadProjects === 'function') {
-          await Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+          await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
         } else if (typeof refreshSidebar === 'function') {
           refreshSidebar();
         }
@@ -773,7 +773,7 @@
           if (response.error) throw new Error(response.error);
           settingsViewer.style.display = 'none';
           document.getElementById('placeholder').style.display = 'flex';
-          if (typeof loadProjects === 'function') await Promise.resolve(loadProjects()).catch(error => console.warn('[switchboard] project reload failed', error));
+          if (typeof loadProjects === 'function') await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
         } catch (err) {
           await showChoiceDialog({ title: `Could not ${action} project`, message: err.message, confirmLabel: 'OK', returnFocus: button });
         }

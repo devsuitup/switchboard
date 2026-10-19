@@ -660,3 +660,22 @@ What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1
 | IPC | Args | Returns | Notes |
 |---|---|---|---|
 | `session-continuations` | `(sessionId)` | `{candidates:[{sessionId,modified}],unresolved,continued}` | Bounded traversal of the transcript continuation index; exposed as `api.getSessionContinuations`. Restore and manual resume share the renderer resolver. See cli-session-state.md, Conversation continuations. |
+
+## Projects conflicts and projection diagnostics (#719)
+
+On terminal PROJECTS_SNAPSHOT_CONFLICT, get-projects schedules the existing
+throttled projects-changed notification with cause conflict, then returns only
+{projectsError:{code:'PROJECTS_SNAPSHOT_CONFLICT',message:'Projects changed while loading; reload to retry.'}}.
+Preload recognizes that exact envelope and reconstructs a coded Error. Ordinary
+errors still reject; boolean arrays and the paired defaultProjects/allProjects
+reply retain their successful shapes, with compact provenance on the paired
+reply. Rejected worker results never reach placeholder/archive/attach assembly.
+
+session-projection-changed is a narrow preload send. Main requires its own
+window's webContents and main frame, validates allowlisted typed fields and logs
+newline-free JSON as data at info level. It carries opaque scope/root identity,
+accepted build/generation/roster revisions and deciding inputs. It accepts no
+raw prompts, names, CLI strings, paths, sockets, keys or liveVersion. Lists are
+capped at 128 with complete counts/truncation flags; oversized legitimate records
+compact before transport and remain below 64 KiB after main's timestamp. Invalid
+records or transport failures cannot break publication.

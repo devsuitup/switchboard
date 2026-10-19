@@ -1458,3 +1458,32 @@ creates a fresh-session placeholder.
   field 22, jiffies since boot) compared against the descriptor's own
   recorded start time — a pid recycled fast enough to still say "claude" in
   argv is caught by a start-time mismatch even when the cmdline check is not.
+
+## Accepted row projections and reloads (#719)
+
+Activity uses one exact row/job selector across sidebar, grid, Agents and local
+transcript adapters. Job evidence stays separate by job ID until selection;
+independent OSC/transcript/agent facts remain independent. Marker, exact attach,
+current-head identity and unique-head selection have that priority; ambiguity or
+explicit conflicts yield unavailable. Preserve #714's PTY-here observed-end gate
+and #728's blocked waiting evidence, including while attached.
+
+Dedup retains the representative object reference and renderer runtime stores.
+Received backend keys plus known handoff keys form the projection inventory:
+fresh omission deletes old optional fields, explicit null/false/[] survives and
+self-alias inputs are captured before clearing. The member index is rebuilt from
+accepted lists; hidden members keep their own existing status-refresh behavior.
+
+Request generations and committed generations are separate. N publishes unless
+a newer generation already committed; newer starts/failures cannot starve an
+eligible completion. Projects/settings/terminal/poll facts are staged before the
+synchronous commit. Obsolete replies never dedup, mutate pending/terminal state,
+paint or observe diagnostics. Older admissible commits paint immediately while
+the newest pending request retains the Refreshing indicator. A newest failure
+does not remove accepted lists. Public callers follow the newest settlement
+transitively, even while their older operation remains independently admissible.
+Restore planner requests coalesce once per effective accepted generation; failed
+generations request none. Detected/forked selection checks current active intent
+and resolves merged members to their accepted owner row. Resort intent follows
+unsettled callers. Existing sidebar/dialog/settings consumers use this same
+following promise and preserve successful action writes on reload failure.

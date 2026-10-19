@@ -61,7 +61,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector);
         }
         try {
-          if (effects.length) await client.request('effects', effects, revision);
+          const acknowledgment = effects.length ? await client.request('effects', effects, revision) : null;
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector, true);
           combinedResult = combinedResult === true || result === true ? true : combinedResult === 'activity' || result === 'activity' ? 'activity' : result;
           if (continuationCollector.deferred.size && !continuationRetry) {
@@ -69,7 +69,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
             attempt--;
             continue;
           }
-          return combinedResult;
+          return name === 'applyProjectsWorkerEffects' && acknowledgment?.committedRevision !== undefined ? acknowledgment : combinedResult;
         }
         catch (error) { if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects') throw error; }
       }

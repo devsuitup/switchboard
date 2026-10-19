@@ -95,7 +95,7 @@ function updateGridCardActivity(sessionId, card, row) {
   const snapshot = mergedRowSnapshot(rowSessionIds(row), sessionId, storedActivitySnapshot(sessionId, row), row);
   const running = activePtyIds.has(sessionId);
   const dot = card.querySelector('.grid-card-dot');
-  const label = typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId)?.state === 'blocked'
+  const label = typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(rowHeadId(row), row)?.state === 'blocked'
     && backgroundActivityLabel(sessionId, snapshot, row);
   paintSessionIconFromSnapshot(dot, snapshot, label?.title, label?.text);
   dot?.classList.toggle('running', running);

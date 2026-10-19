@@ -143,6 +143,13 @@ function emptyEntry() {
 function backgroundEntry(id, cliEntry, job, descriptor) {
   const e = emptyEntry();
   e.id = id;
+  e.listed = !!cliEntry;
+  const cachedJob = !!job;
+  if (job?.sessionId && sessionIdField(cliEntry?.sessionId) && job.sessionId.toLowerCase() !== cliEntry.sessionId.toLowerCase()) job = null;
+  if (descriptor?.sessionId && (cliEntry?.sessionId || job?.sessionId)
+    && descriptor.sessionId.toLowerCase() !== (cliEntry?.sessionId || job.sessionId).toLowerCase()) descriptor = null;
+  e.cachedJob = cachedJob;
+  e.descriptorInputs = descriptor ? [{ sessionId: descriptor.sessionId, jobId: descriptor.jobId, kind: descriptor.kind, pid: descriptor.pid || null }] : [];
   if (job) {
     Object.assign(e, {
       sessionId: job.sessionId, name: job.name, state: job.state, agent: job.agent, model: job.model,
@@ -152,7 +159,7 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     });
   }
   if (cliEntry) {
-    e.sessionId = cliEntry.sessionId || e.sessionId;
+    e.sessionId = job?.sessionId && !sessionIdField(cliEntry.sessionId) ? job.sessionId : cliEntry.sessionId || e.sessionId;
     e.name = cliEntry.name || e.name;
     e.cwd = cliEntry.cwd || e.cwd;
     e.state = (job && job.state) || cliEntry.state || e.state;
@@ -168,6 +175,7 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     e.startedAt = e.startedAt ?? descriptor.startedAt;
   }
   if (job?.nameSource === 'collision' || descriptor?.nameSource === 'collision') e.name = null;
+  if (sessionIdField(e.sessionId)) e.sessionId = e.sessionId.toLowerCase();
   return e;
 }
 
@@ -176,16 +184,13 @@ function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
   const attached = typeof isAttachedHere === 'function' ? isAttachedHere : () => false;
   const byJobId = new Map();
   for (const d of descriptors || []) {
-    if (d && d.kind === 'bg' && typeof d.jobId === 'string') byJobId.set(d.jobId, d);
+    if (d && d.kind === 'bg' && JOB_ID_RE.test(String(d.jobId || '').toLowerCase()) && str(d.sessionId)) byJobId.set(d.jobId.toLowerCase(), d);
   }
   const roster = [];
-  if (Array.isArray(cli)) {
-    for (const s of cli) {
-      if (s.kind !== 'background' || !s.id) continue;
-      roster.push(backgroundEntry(s.id, s, jobs ? jobs.get(s.id) : null, byJobId.get(s.id)));
-    }
-  } else if (jobs) {
-    for (const [id, job] of jobs) roster.push(backgroundEntry(id, null, job, byJobId.get(id)));
+  const listed = new Map((cli || []).filter(s => s.kind === 'background' && JOB_ID_RE.test(String(s.id || '').toLowerCase())).map(s => [s.id.toLowerCase(), s]));
+  const cached = new Map([...(jobs || [])].filter(([id]) => JOB_ID_RE.test(String(id).toLowerCase())).map(([id, job]) => [id.toLowerCase(), job]));
+  for (const id of new Set([...listed.keys(), ...cached.keys(), ...byJobId.keys()])) {
+    roster.push(backgroundEntry(id, listed.get(id), cached.get(id), byJobId.get(id)));
   }
   const matched = new Set();
   for (const e of roster) {
@@ -249,7 +254,7 @@ function dispatchArgs(fields) {
 function isHostedJob(job, descriptors = []) {
   if (!job || job.kind && job.kind !== 'background' || job.state === 'stopped' || job.state === 'failed') return false;
   return job.state === 'working' || job.state === 'blocked' || (descriptors || []).some(d => d?.kind === 'bg'
-    && (d.jobId ? d.jobId === job.id : job.sessionId && d.sessionId?.toLowerCase() === job.sessionId.toLowerCase()));
+    && (d.jobId ? d.jobId.toLowerCase() === String(job.id).toLowerCase() : job.sessionId && d.sessionId?.toLowerCase() === job.sessionId.toLowerCase()));
 }
 
 function dispatchRefusal({ sandbox, preLaunchCmd } = {}) {

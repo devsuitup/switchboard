@@ -18,7 +18,7 @@ restarts.
 
 ## The list
 
-One row per session: an activity glyph shared with the sidebar — an animated
+One row per background job or external interactive session: an activity glyph shared with the sidebar — an animated
 spinner during a turn, a static spinner for background tasks at the prompt,
 an orange hollow ring while waiting (including blocked jobs), `!` for Needs
 your attention, a blue dot for a response ready, a green dot for a session open
@@ -72,7 +72,9 @@ first (a section left empty is not shown), and the choice is remembered.
 
 A job is in one of five states: `working`, `blocked` (live, waiting for
 input), `done`, `stopped` or `failed` (ended in error). `working` and
-`blocked` both count as live; the other three are finished.
+`blocked` count as hosted. A done job with a matching live background descriptor
+also stays hosted and displays Idle. Descriptor-free done is finished; stopped
+and failed are always unhosted.
 
 A blocked job has parked itself, for example during a quota pause or while
 awaiting your go-ahead. It shows the static orange waiting ring in the sidebar,
@@ -101,7 +103,7 @@ requests open in the browser), its last result, and the verbs:
 | Verb | Runs | Available |
 |---|---|---|
 | Resume | opens the conversation here after the shared live-elsewhere question | an External interactive session with a session id |
-| Attach | `claude attach <id>` in a terminal tab | while the session is live (`working` or `blocked`) |
+| Attach | `claude attach <id>` in a terminal tab | while hosted (working, blocked, or done with a matching live background descriptor) and the daemon answers |
 | Transcript | the read-only transcript viewer | whenever the transcript exists |
 | Stop | `claude stop <id>`; the conversation is kept | while live |
 | Respawn | `claude respawn <id>` | a background session that is not live |
@@ -159,12 +161,12 @@ there; Switchboard does not answer that dialog for you.
 An unconfirmed move displays a notice with what to check. If the terminal
 has exited, open the conversation from the sidebar to check where it runs.
 If attaching fails after the move, the session still runs in the background;
-open it from the sidebar to attach again. Typing `/bg` yourself is not yet
-converted into an attach tab by Switchboard.
+open it from the sidebar to attach again. A confirmed typed `/bg` move uses the
+same continuation and metadata persistence as the toolbar action.
 
 ## Attaching
 
-Double-click a row you can attach to (a live `working` or `blocked` session,
+Double-click a row you can attach to (a hosted working/blocked or hosted done session,
 with the daemon answering) to attach, the same as the **Attach** button in the
 detail pane. A double click on a finished or external session, on a group
 header or on a button does nothing extra.
@@ -212,12 +214,21 @@ cannot be read, it refuses and says why.
 ## When the daemon does not answer
 
 The view reads two files the CLI writes for itself, `~/.claude/jobs/<id>/state.json`
-and `~/.claude/sessions/<pid>.json`, and asks `claude agents --json --all`
-which sessions exist. When that command fails, a banner says so, the list
-comes from the files alone. Background job verbs are disabled; Transcript
+and `~/.claude/sessions/<pid>.json`, alongside `claude agents --json --all`.
+The list combines CLI entries, cached jobs and live background descriptors. A
+successful listing that omits a cached job does not erase its available activity
+or disable its usual verbs while the daemon answers. When the command fails,
+a banner says so and the file-backed candidates remain. Background job verbs are disabled; Transcript
 and Resume on an External row remain available.
 Neither file is a documented interface; a CLI upgrade may change them, and
 `test/canary-bg-agents-files.test.js` says so when it happens.
 
-At most 200 job directories are watched; in that file-only mode the list
-shows only the jobs among them.
+At most 200 job directories are watched. This cap does not limit CLI or live
+descriptor candidates in the combined list.
+
+A proven conversation keeps its parts through temporary descriptor gaps,
+including a finished background continuation. Hosting controls the bg marker and
+Attach/Stop; attachment and current identity proof control which part represents
+the conversation. Sidebar conversation Delete includes every proved part and
+checks each for running/unknown processes and actual transcript targets. It is
+distinct from the Agents daemon Delete (`rm`) operation.

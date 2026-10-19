@@ -659,17 +659,21 @@ async function markRestoreIndexingDone() {
     return;
   }
   let reloaded = false;
+  let reloadOutcome;
   for (let attempt = 0; attempt < 2 && !reloaded; attempt++) {
     try {
-      await loadProjects();
+      reloadOutcome = await loadProjects();
       reloaded = true;
-    } catch (e) { console.warn('[switchboard] reload after indexing failed', e); }
+    } catch (e) {
+      if (!loadProjects.state?.reportedErrors?.has(e)) console.warn('[switchboard] reload after indexing failed', e);
+    }
   }
   if (!reloaded) {
     reportRetryFailure(held(), 'Could not reload sessions after indexing');
     return;
   }
-  await tickRestorePlanner();
+  if (reloadOutcome?.accepted) await maybeRetryRestoreWorkingSet(reloadOutcome);
+  else await tickRestorePlanner();
   const retry = held();
   if (!retry.length) {
     clearAppNotice('Restore:pending');
@@ -694,8 +698,15 @@ async function markRestoreIndexingDone() {
   await persistWorkingSet();
 }
 
-async function maybeRetryRestoreWorkingSet() {
-  await tickRestorePlanner();
+async function maybeRetryRestoreWorkingSet(outcome) {
+  if (outcome?.accepted && typeof followProjectsSettlement === 'function') outcome = await followProjectsSettlement(outcome);
+  if (!outcome?.accepted) return tickRestorePlanner();
+  const current = maybeRetryRestoreWorkingSet.current;
+  if (current?.generation === outcome.generation) return current.promise;
+  const request = { generation: outcome.generation };
+  maybeRetryRestoreWorkingSet.current = request;
+  request.promise = Promise.resolve().then(() => tickRestorePlanner());
+  return request.promise;
 }
 
 async function restoreSessionsAfterIndexing() {
@@ -771,13 +782,15 @@ window.api.onSessionDetected((tempId, realId) => {
   terminalHeaderName.textContent = 'New session';
 
   // Refresh sidebar to show the new session, then select it
-  loadProjects().then(() => {
-    const item = document.querySelector(`[data-session-id="${realId}"]`);
+  loadProjects().then(async outcome => {
+    if (typeof followProjectsSettlement === 'function') await followProjectsSettlement(outcome);
+    if (activeSessionId !== realId) return;
+    const item = sessionItemEl(realId);
     if (item) {
       document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
       item.classList.add('active');
     }
-  }).catch(error => console.warn('[switchboard] project reload failed', error));
+  }).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
   pollActiveSessions();
 });
 
@@ -829,15 +842,17 @@ window.api.onSessionForked((oldId, newId, kind, background) => {
 
   terminalHeaderId.textContent = newId;
 
-  loadProjects().then(() => {
-    const item = document.querySelector(`[data-session-id="${newId}"]`);
+  loadProjects().then(async outcome => {
+    if (typeof followProjectsSettlement === 'function') await followProjectsSettlement(outcome);
+    if (activeSessionId !== newId) return;
+    const item = sessionItemEl(newId);
     if (item) {
       document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
       item.classList.add('active');
       const summary = item.querySelector('.session-summary');
       if (summary) terminalHeaderName.textContent = summary.textContent;
     }
-  }).catch(error => console.warn('[switchboard] project reload failed', error));
+  }).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
   schedulePersistWorkingSet();
   pollActiveSessions();
 });
@@ -1316,6 +1331,7 @@ function rekeySessionEnvironment(oldId, newId) {
 async function attachBackgroundContinuation(entry, background) {
   const sessionId = entry.session.sessionId;
   entry.attach = true;
+  entry.attachJobId = background.jobId;
   entry.bgRestore = true;
   const index = [...openSessions.keys()].indexOf(sessionId);
   skippedWorkingSetEntries.set(sessionId, { item: { sessionId, projectPath: entry.session.projectPath, bg: true }, index, keepAttached: true });
@@ -1473,17 +1489,18 @@ function scheduleActiveSessionsPoll() {
   pollTimer = setTimeout(pollActiveSessions, delay);
 }
 
-async function pollActiveSessions() {
+async function pollActiveSessions({ stage = false } = {}) {
   try {
     const seq = currentActivitySeq();
     const entries = await window.api.getActiveSessions();
+    if (stage) return { entries, seq };
     if (window.ATRACE) window.atrace('poll.recv', null, { sinceSeq: seq, entries });
     activePtyIds = new Set(entries.map(e => e.sessionId));
     reconcileBusyState(entries, seq);
     updateRunningIndicators();
     updateTerminalHeader();
   } catch {}
-  scheduleActiveSessionsPoll();
+  if (!stage) scheduleActiveSessionsPoll();
 }
 
 // Signature of the pty-id set from the last updateRunningIndicators() call.
@@ -1599,14 +1616,23 @@ setInterval(() => {
 const sessionMap = new Map();
 
 function dedup(projects) {
+  dedup.projectionKeys ||= new WeakMap();
+  const known = ['bgJobId', 'bgSessionId', 'identityJobId', 'identitySessionId', 'descriptorOnly', 'headSessionId', 'mergedMemberIds', 'conversationParts', 'mergedMemberStatuses', 'status', 'statusUpdatedAt', 'waitingFor', 'remoteAlias', 'placeholder', 'remoteAttachable', 'remoteActiveAt'];
   for (const p of projects) {
     for (let i = 0; i < p.sessions.length; i++) {
       const s = p.sessions[i];
+      const fresh = { ...s };
+      const keys = Object.keys(fresh);
       if (sessionMap.has(s.sessionId)) {
-        Object.assign(sessionMap.get(s.sessionId), s);
-        p.sessions[i] = sessionMap.get(s.sessionId);
+        const existing = sessionMap.get(s.sessionId);
+        const previous = dedup.projectionKeys.get(existing) || new Set(known);
+        for (const key of previous) if (!Object.hasOwn(fresh, key)) delete existing[key];
+        Object.assign(existing, fresh);
+        dedup.projectionKeys.set(existing, new Set([...previous, ...(existing === s ? keys.filter(key => previous.has(key)) : keys)]));
+        p.sessions[i] = existing;
       } else {
         sessionMap.set(s.sessionId, s);
+        dedup.projectionKeys.set(s, new Set([...known, ...keys]));
       }
       if (!s.remoteAlias) {
         for (const id of s.mergedMemberIds || []) {
@@ -1623,92 +1649,195 @@ function dedup(projects) {
 }
 
 async function loadProjects({ resort = false } = {}) {
-  const wasEmpty = cachedProjects.length === 0;
-  if (wasEmpty) {
-    loadingStatus.textContent = 'Loading\u2026';
-    loadingStatus.className = 'active';
-    loadingStatus.style.display = '';
+  const state = loadProjects.state ||= { started: 0, committed: 0, followers: new Set(), latest: null, outcome: null, reportedErrors: new WeakSet() };
+  const job = { generation: ++state.started, resort, pending: true };
+  for (const caller of state.followers) {
+    caller.follow = job;
+    job.resort ||= caller.resort;
   }
-  const { defaultProjects, allProjects } = await window.api.getProjects('both');
-  const globalSettings = await window.api.getSetting('global');
-  setRemoteHostLabels(globalSettings?.remoteHosts);
-  cachedProjects = defaultProjects;
-  cachedAllProjects = allProjects;
-  loadingStatus.style.display = 'none';
-  loadingStatus.className = '';
-  dedup(cachedProjects);
-  dedup(cachedAllProjects);
-  reportActivityFocus(); // see .ai/contexts/activitywatch.md ("Attention")
-  reportActivityTitles();
-
-  // Reconcile pending sessions: remove ones that now have real data
-  let hasReinjected = false;
-  const hiddenProjects = globalSettings?.hiddenProjects || [];
-  for (const [sid, pending] of [...pendingSessions]) {
-    const realExists = allProjects.some(p => p.sessions.some(s => s.sessionId === sid));
-    if (realExists) {
-      pendingSessions.delete(sid);
-      if (openSessions.has(sid)) schedulePersistWorkingSet();
-    } else {
-      const alias = pending.session.remoteAlias || null;
-      if (hiddenProjects.includes(pending.projectPath)
-        || (alias && hiddenProjects.includes(alias + '::' + pending.projectPath))) continue;
-      hasReinjected = true;
-      // Still pending — re-inject into cached data
-      for (const projList of [cachedProjects, cachedAllProjects]) {
-        const pendingAlias = pending.session.remoteAlias || null;
-        let proj = projList.find(p => p.projectPath === pending.projectPath && (p.remoteAlias || null) === pendingAlias);
-        if (!proj && pending.cleared && projList === cachedProjects
-          && allProjects.some(p => p.projectPath === pending.projectPath && (p.remoteAlias || null) === pendingAlias)) continue;
-        if (!proj) {
-          // Project not in list (no other sessions) — create a synthetic entry
-          proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
-          if (pendingAlias) proj.remoteAlias = pendingAlias;
-          if (isHiddenRepositoryWorktree(pending.projectPath, pendingAlias, hiddenProjects)) proj.hiddenRepository = true;
-          projList.unshift(proj);
-        }
-        if (!proj.sessions.some(s => s.sessionId === sid)) {
-          proj.sessions.unshift(pending.session);
-        }
-      }
+  state.latest = job;
+  const following = new Promise((resolve, reject) => state.followers.add({ resolve, reject, requestedGeneration: job.generation, follow: job, resort }));
+  job.settlement = following;
+  following.catch(() => {});
+  const obsolete = () => job.generation <= state.committed;
+  const finish = (error, outcome) => {
+    job.pending = false;
+    for (const caller of state.followers) {
+      if (caller.follow !== job) continue;
+      state.followers.delete(caller);
+      if (error) caller.reject(error);
+      else caller.resolve({ ...outcome, requestedGeneration: caller.requestedGeneration,
+        superseded: caller.requestedGeneration !== outcome.generation });
     }
-  }
-
-  // Track active plain terminals in pendingSessions/sessionMap (data now comes from backend)
-  try {
-    const activeTerminals = await window.api.getActiveTerminals();
-    for (const { sessionId, projectPath } of activeTerminals) {
-      if (pendingSessions.has(sessionId)) continue; // already tracked
-      const folder = encodeProjectPath(projectPath);
-      // Find the session object already injected by the backend
-      let session;
-      for (const proj of cachedAllProjects) {
-        session = proj.sessions.find(s => s.sessionId === sessionId);
-        if (session) break;
-      }
-      if (!session) continue;
-      pendingSessions.set(sessionId, { session, projectPath, folder });
-      sessionMap.set(sessionId, session);
-    }
-  } catch {}
-
-  await pollActiveSessions();
-  refreshSidebar({ resort });
-  renderDefaultStatus();
-}
-
-// see .ai/contexts/session-cache.md ("Projects query worker")
-async function reloadProjects(options) {
-  try {
-    await loadProjects(options);
-    return true;
-  } catch (error) {
-    console.warn('[switchboard] project reload failed', error);
-    if (!cachedProjects.length) {
-      loadingStatus.textContent = 'Could not load projects. Reload to retry.';
+  };
+  const operation = async () => {
+    const wasEmpty = cachedProjects.length === 0;
+    {
+      loadingStatus.textContent = wasEmpty ? 'Loading\u2026' : 'Refreshing\u2026';
       loadingStatus.className = 'active';
       loadingStatus.style.display = '';
     }
+    const response = await window.api.getProjects('both');
+    if (obsolete()) return state.outcome;
+    const { defaultProjects, allProjects } = response;
+    const globalSettings = await window.api.getSetting('global');
+    if (obsolete()) return state.outcome;
+    let activeTerminals;
+    try { activeTerminals = await window.api.getActiveTerminals(); } catch {}
+    if (obsolete()) return state.outcome;
+    const poll = await pollActiveSessions({ stage: true });
+    if (obsolete()) return state.outcome;
+    state.committed = job.generation;
+    state.outcome = { accepted: true, generation: job.generation };
+    setRemoteHostLabels(globalSettings?.remoteHosts);
+    cachedProjects = defaultProjects;
+    cachedAllProjects = allProjects;
+    const newerPending = state.latest !== job && state.latest.pending;
+    loadingStatus.style.display = newerPending ? '' : 'none';
+    loadingStatus.className = newerPending ? 'active' : '';
+    if (newerPending) loadingStatus.textContent = 'Refreshing\u2026';
+    dedup([...cachedAllProjects, ...cachedProjects]);
+    reportActivityFocus(); // see .ai/contexts/activitywatch.md ("Attention")
+    reportActivityTitles();
+
+    // Reconcile pending sessions: remove ones that now have real data
+    let hasReinjected = false;
+    const hiddenProjects = globalSettings?.hiddenProjects || [];
+    for (const [sid, pending] of [...pendingSessions]) {
+      const realExists = allProjects.some(p => p.projectPath === pending.projectPath
+        && (p.remoteAlias || null) === (pending.session.remoteAlias || null)
+        && p.sessions.some(s => rowSessionIds(s).some(id => id.toLowerCase() === sid.toLowerCase())));
+      if (realExists) {
+        pendingSessions.delete(sid);
+        if (openSessions.has(sid)) schedulePersistWorkingSet();
+      } else {
+        const alias = pending.session.remoteAlias || null;
+        if (hiddenProjects.includes(pending.projectPath)
+          || (alias && hiddenProjects.includes(alias + '::' + pending.projectPath))) continue;
+        hasReinjected = true;
+        // Still pending — re-inject into cached data
+        for (const projList of [cachedProjects, cachedAllProjects]) {
+          const pendingAlias = pending.session.remoteAlias || null;
+          let proj = projList.find(p => p.projectPath === pending.projectPath && (p.remoteAlias || null) === pendingAlias);
+          if (!proj && pending.cleared && projList === cachedProjects
+            && allProjects.some(p => p.projectPath === pending.projectPath && (p.remoteAlias || null) === pendingAlias)) continue;
+          if (!proj) {
+            // Project not in list (no other sessions) — create a synthetic entry
+            proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
+            if (pendingAlias) proj.remoteAlias = pendingAlias;
+            if (isHiddenRepositoryWorktree(pending.projectPath, pendingAlias, hiddenProjects)) proj.hiddenRepository = true;
+            projList.unshift(proj);
+          }
+          if (!proj.sessions.some(s => s.sessionId === sid)) {
+            proj.sessions.unshift(pending.session);
+          }
+        }
+      }
+    }
+
+    // Track active plain terminals in pendingSessions/sessionMap (data now comes from backend)
+    if (activeTerminals) {
+      for (const { sessionId, projectPath } of activeTerminals) {
+        if (pendingSessions.has(sessionId)) continue; // already tracked
+        const folder = encodeProjectPath(projectPath);
+        // Find the session object already injected by the backend
+        let session;
+        for (const proj of cachedAllProjects) {
+          session = proj.sessions.find(s => s.sessionId === sessionId);
+          if (session) break;
+        }
+        if (!session) continue;
+        pendingSessions.set(sessionId, { session, projectPath, folder });
+        sessionMap.set(sessionId, session);
+      }
+    }
+    indexLocalMergedMemberRows(cachedAllProjects);
+    if (poll) {
+      activePtyIds = new Set(poll.entries.map(e => e.sessionId));
+      reconcileBusyState(poll.entries, poll.seq);
+      updateRunningIndicators();
+      updateTerminalHeader();
+      scheduleActiveSessionsPoll();
+    }
+    if (typeof observeSessionProjection === 'function') observeSessionProjection({ generation: job.generation, cause: 'projects', provenance: response.projection });
+    refreshSidebar({ resort: job.resort });
+    renderDefaultStatus();
+    return state.outcome;
+  };
+  operation().then(outcome => finish(null, outcome), error => {
+    if (!error || typeof error !== 'object') error = new Error(String(error));
+    if (state.latest === job && !obsolete()) {
+      state.reportedErrors.add(error);
+      console.warn('[switchboard] project reload failed', error);
+      if (!cachedProjects.length) {
+        loadingStatus.textContent = 'Could not load projects. Reload to retry.';
+        loadingStatus.className = 'active';
+        loadingStatus.style.display = '';
+      } else {
+        loadingStatus.style.display = 'none';
+        loadingStatus.className = '';
+      }
+    }
+    finish(error);
+  });
+  return following;
+}
+
+// see .ai/contexts/session-cache.md ("Projects query worker")
+async function followProjectsSettlement(outcome) {
+  while (loadProjects.state?.latest?.pending) outcome = await loadProjects.state.latest.settlement;
+  return loadProjects.state?.outcome?.generation > (outcome?.generation || 0) ? loadProjects.state.outcome : outcome;
+}
+
+function observeSessionProjection({ generation, cause, provenance } = {}) {
+  try {
+    const helper = window.SessionProjectionDiagnostics;
+    if (!helper) return;
+    const state = observeSessionProjection.state ||= { generation: 0, provenance: {},
+      observer: helper.createSessionProjectionDiagnostics({ emit: record => window.api.sessionProjectionChanged?.(record) }) };
+    if (generation !== undefined) state.generation = generation;
+    if (provenance) state.provenance = provenance;
+    const visible = new Set(cachedProjects.flatMap(project => project.sessions.map(row =>
+      helper.projectionScope(project.remoteAlias, project.projectPath) + '|' + row.sessionId.toLowerCase())));
+    const rows = [];
+    for (const project of cachedAllProjects) for (const row of project.sessions) {
+      if (row.parentSessionId || row.type === 'terminal') continue;
+      const selection = typeof selectBackgroundActivity === 'function' ? selectBackgroundActivity(rowHeadId(row), row) : null;
+      const entry = selection?.entry;
+      const facts = row.projectionFacts;
+      const foreground = typeof backgroundActivityIsForeground === 'function' && backgroundActivityIsForeground(rowHeadId(row), row, selection);
+      const scope = facts?.scope || helper.projectionScope(project.remoteAlias, project.projectPath);
+      const visibleInDefault = visible.has(scope + '|' + row.sessionId.toLowerCase());
+      const attaches = typeof backgroundAttachFacts === 'function' ? backgroundAttachFacts(row) : [];
+      const attached = attaches.length > 0;
+      const inputs = { ...(facts?.inputs || {}), projectsBuildId: state.provenance.buildId ?? facts?.inputs.projectsBuildId ?? null,
+        cli: typeof agentsCliAvailable === 'undefined' || !agentsCliAvailable ? 'unavailable' : entry?.listed ? 'included' : 'omitted',
+        cliEntryCount: typeof agentsCliEntryCount === 'undefined' ? 0 : agentsCliEntryCount,
+        cachedJob: entry?.cachedJob ?? facts?.inputs.cachedJob ?? false, jobState: entry?.state || null,
+        jobEvidenceValid: entry?.taskEvidence?.valid === true, jobEvidenceAt: entry?.taskEvidence?.at ?? null,
+        descriptors: entry?.descriptorInputs || facts?.inputs.descriptors || [],
+        attach: attaches.length === 1 ? attaches[0] : null,
+        proof: facts?.inputs.proof || { kind: 'single', rootId: row.sessionId.toLowerCase(), partIds: rowSessionIds(row), valid: true, reason: null },
+        filterReason: visibleInDefault ? null : row.archived ? 'archived'
+          : state.provenance.removedInputs?.[scope + '|' + (facts?.rootId || row.sessionId.toLowerCase())]?.filterReason || facts?.inputs.filterReason || null };
+      rows.push({ scope, rootId: facts?.rootId || row.sessionId.toLowerCase(), sessionId: row.sessionId.toLowerCase(),
+        headSessionId: rowHeadId(row).toLowerCase(), memberIds: rowSessionIds(row),
+        background: row.bgJobId ? { jobId: row.bgJobId, sessionId: row.bgSessionId || rowHeadId(row) } : null,
+        activity: { source: foreground ? 'foreground' : selection?.source || 'none', selection: selection?.selection || 'none',
+          jobId: entry?.id || null, valid: entry?.taskEvidence?.valid === true, state: entry?.state || null,
+          hosted: entry?.hosted === true, attached, foreground: !!foreground }, visibleInDefault, inputs });
+    }
+    state.observer.observe({ generation: state.generation, rosterRevision: typeof agentsSnapshotRevision === 'undefined' ? 0 : agentsSnapshotRevision,
+      cause: cause || 'projects', rows, removedInputs: state.provenance.removedInputs || {} });
+  } catch {}
+}
+
+async function reloadProjects(options) {
+  try {
+    const outcome = await loadProjects(options);
+    if (outcome?.accepted && options?.restoreRetry) await maybeRetryRestoreWorkingSet(outcome);
+    return outcome?.accepted === true;
+  } catch (error) {
     return false;
   }
 }
@@ -2003,6 +2132,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     || (session.type === 'terminal' ? { type: 'terminal' } : await resolveDefaultSessionOptions({ projectPath }));
   if (reattachOnly) resumeOptions = { ...resumeOptions, reattachOnly: true };
   entry.attach = resumeOptions.type === 'attach';
+  entry.attachJobId = entry.attach ? resumeOptions.jobId : null;
   forgetSessionExit(sessionId);
   beginPtyOpen(sessionId);
   let result;
@@ -2130,7 +2260,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
       // Catch up on changes that happened while on another tab
       if (projectsChangedWhileAway) {
         projectsChangedWhileAway = false;
-        reloadProjects().then(loaded => { if (loaded) return maybeRetryRestoreWorkingSet(); }).catch(error => console.warn('[switchboard] restore retry failed', error));
+        reloadProjects({ restoreRetry: true }).catch(error => console.warn('[switchboard] restore retry failed', error));
       }
     } else if (tabName === 'stats') {
       statsContent.style.display = '';
@@ -2329,7 +2459,9 @@ async function loadStartupProjects() {
   let loaded = false;
   for (let attempt = 0; attempt < 2; attempt++) {
     try { await loadProjects(); loaded = true; break; }
-    catch (error) { console.warn('[switchboard] startup project load failed', error); }
+    catch (error) {
+      if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] startup project load failed', error);
+    }
   }
   try { await restoreStartupSessions({ projectsLoaded: loaded }); }
   catch (error) { console.warn('[switchboard] startup restore failed', error); }
@@ -2363,7 +2495,7 @@ window.api.onProjectsChanged(() => {
   // sidebar redraws at most ~1×/sec.
   projectsChangedTimer = setTimeout(() => {
     projectsChangedTimer = null;
-    reloadProjects().then(loaded => { if (loaded) return maybeRetryRestoreWorkingSet(); }).catch(error => console.warn('[switchboard] restore retry failed', error));
+    reloadProjects({ restoreRetry: true }).catch(error => console.warn('[switchboard] restore retry failed', error));
   }, 900);
 });
 

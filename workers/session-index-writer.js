@@ -26,7 +26,7 @@ async function transaction(fn) {
       const before = db.changeCount();
       const result = fn();
       if (db.changeCount() !== before) db.setSetting('_writer_revision', (db.getSetting('_writer_revision') || 0) + 1);
-      return result;
+      return { result, committedRevision: db.getSetting('_writer_revision') || 0 };
     }); }
     catch (error) {
       if (!/^SQLITE_BUSY/.test(error.code || '') || attempt === backoff.length) throw error;
@@ -111,16 +111,20 @@ async function drain() {
       const unit = message.deferred || message.iterator.next();
       message.deferred = null;
       if (unit.done) {
-        parentPort.postMessage({ id: message.id, result: message.result, ...(message.mutated ? { settings: settings() } : {}) });
+        parentPort.postMessage({ id: message.id, result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result,
+          ...(message.mutated ? { settings: settings() } : {}) });
       } else {
         if (['close', 'drain', 'measurements'].includes(message.command)) message.result = unit.value();
         else if (message.command === 'beginOffer') {
           message.result = unit.value();
         } else {
           const before = db.getSetting('_writer_revision') || 0;
+          if (message.command === 'effects' && message.committedRevision !== undefined && before !== message.committedRevision) {
+            throw Object.assign(new Error('cache snapshot changed between writer effect batches'), { code: 'WRITER_STALE' });
+          }
           const buffered = [unit];
           let deferred;
-          message.result = await transaction(() => {
+          const acknowledgment = await transaction(() => {
             deferred = null;
             let next = unit, result, count = 0;
             while (!next.done) {
@@ -133,6 +137,8 @@ async function drain() {
             }
             return result;
           });
+          message.result = acknowledgment.result;
+          message.committedRevision = acknowledgment.committedRevision;
           message.deferred = deferred;
           message.mutated ||= (db.getSetting('_writer_revision') || 0) !== before;
         }
