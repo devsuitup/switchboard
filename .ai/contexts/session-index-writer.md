@@ -178,16 +178,19 @@ ACK has unknown outcome and is not evidence of rollback. synchronous=NORMAL reta
 its existing power-loss limitation.
 A close rejects new external admission while
 AsyncLocalStorage preserves accepted workflows through nested completion commands.
+For Linux installation and service-based relaunch, see [updater-relaunch.md](updater-relaunch.md).
 Update installation drains watcher/bounds/metadata/activity and the accepted writer
 commands without closing the database, stopping producers or killing PTYs. At the
-same 1.5-second deadline it calls quitAndInstall even if draining rejects or stalls.
+same 1.5-second deadline it invokes the installer even if draining rejects or stalls.
 The install flag bypasses another before-quit hold and resets on thrown or emitted
 updater errors or an explicit false return, leaving a failed install usable. Only
 when the installer actually reaches before-quit, the shared shutdownForExit holds
 the quit and applies the same drain, worker stop, grace and single-exit barrier as
 normal quit, bypassing the already accepted unsaved guard. This starts after
 electron-updater/out/BaseUpdater.js has invoked install and its setImmediate emits
-before-quit-for-update then calls app.quit. No second quitAndInstall is invoked.
+before-quit-for-update then calls app.quit on non-Linux. On Linux, successful
+install(false, false) is followed by the relaunch helper, whose quit callback sets
+the same flag and calls app.quit. No second install is invoked.
 Idempotent cleanup stops schedulers, observers, MCP servers and SSH children and
 closes the trace. Each disposer has isolated error handling; unrelated asynchronous
 disposers add no hold, while the task-records worker must confirm exit.

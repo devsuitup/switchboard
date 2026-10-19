@@ -33,6 +33,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
 | Test a PR or a release candidate against a running app | [../docs/testing-a-pr.md](../docs/testing-a-pr.md) |
 | Cut a release | [docs/releasing.md](../docs/releasing.md) — and its fork gotchas, which are not optional |
+| Change the Linux updater restart, environment, lock retry or manual restart notice | [contexts/updater-relaunch.md](contexts/updater-relaunch.md) |
 | Write a `CHANGELOG.md` entry, or change the changelog CI check or the What's new dialog | [docs/changelog.md](../docs/changelog.md) |
 | Drive a live instance that cannot see the user's sessions | [../docs/live-testing.md](../docs/live-testing.md) |
 

@@ -226,6 +226,7 @@ test('update install waits for the reversible drain before invoking the updater'
   vm.runInNewContext(source.slice(start, end), {
     ipcMain: { handle: (_name, fn) => { invoke = fn; } },
     mainWindow: null, unsavedGuard: {}, activityFlushedForQuit: false, updateInstalling: false,
+    process: { platform: 'win32' }, log: { error() {} },
     drainForUpdate: async () => { calls.push('drain'); await drained; calls.push('drained'); },
     autoUpdater: { quitAndInstall: () => calls.push('install') },
     stopNonDatabaseResources: () => calls.push('cleanup'),

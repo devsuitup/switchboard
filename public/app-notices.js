@@ -45,7 +45,7 @@ function showAppNotice(options) {
   if (options.mergeMembers) {
     options = { ...options, members: [...new Map([...(previous?.options.members || []), ...options.members].map(member => [member.id, member])).values()] };
   }
-  const { id, kind = 'info', message, members, actionLabel, onAction, dismissOnAction = true } = options;
+  const { id, kind = 'info', message, members, actionLabel, onAction, dismissOnAction = true, dismissible = true } = options;
   clearTimeout(previous?.timer);
   const focusedButton = previous?.notice.contains(document.activeElement) ? document.activeElement.className : null;
   const container = document.getElementById('app-notices');
@@ -69,12 +69,14 @@ function showAppNotice(options) {
     });
     notice.append(action);
   }
-  const dismiss = document.createElement('button');
-  dismiss.type = 'button';
-  dismiss.className = 'app-notice-dismiss';
-  dismiss.textContent = 'Dismiss';
-  dismiss.addEventListener('click', () => clearAppNotice(id));
-  notice.append(dismiss);
+  if (dismissible) {
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'app-notice-dismiss';
+    dismiss.textContent = 'Dismiss';
+    dismiss.addEventListener('click', () => clearAppNotice(id));
+    notice.append(dismiss);
+  }
   notice.addEventListener('mousedown', event => {
     if (event.target.closest('button')) event.preventDefault();
   });
