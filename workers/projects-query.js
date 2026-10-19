@@ -16,7 +16,7 @@ const readSnapshot = db.transaction(() => ({
   settings: db.prepare('SELECT key, value FROM settings').all(),
 }));
 
-function build(message) {
+async function build(message) {
   const data = readSnapshot();
   const rows = new Map(data.rows.map(row => [row.sessionId, row]));
   const meta = new Map(data.meta.map(row => [row.sessionId, row]));
@@ -79,7 +79,7 @@ function build(message) {
   cache.resetProjectsWorkerRetainedRows();
   let publishedLiveRows = new Map();
   const reconciled = !!message.reconcile && adapter.isInitialScanComplete();
-  if (reconciled) cache.reconcileCacheFromFilesystem({ throttle: false, onFolder: () => {
+  if (reconciled) await cache.reconcileCacheFromFilesystemAsync({ throttle: false, onFolder: () => {
     const keptLiveRows = cache.getProjectsWorkerRetainedRows();
     const liveRowsChanged = keptLiveRows.length !== publishedLiveRows.size
       || keptLiveRows.some(([id, folder]) => publishedLiveRows.get(id) !== folder);
@@ -97,9 +97,9 @@ function build(message) {
   return { defaultProjects, allProjects, effects, keptLiveRows: cache.getProjectsWorkerRetainedRows(), rows: rows.size, reconciled, replyBytes };
 }
 
-parentPort.on('message', message => {
+parentPort.on('message', async message => {
   try {
-    parentPort.postMessage({ id: message.id, result: build(message) });
+    parentPort.postMessage({ id: message.id, result: await build(message) });
   } catch (error) {
     parentPort.postMessage({ id: message.id, error: error.message });
   }

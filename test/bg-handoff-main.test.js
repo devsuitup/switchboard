@@ -87,7 +87,7 @@ function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = ()
   let descriptors = [];
   const session = { kind: 'local-pty', realSessionId: 'OLD', projectFolder: folder, exitDrain: new Promise(resolve => { exited = resolve; }), composerState: require('../composer-state').createComposerState(), pty: { onData: fn => { const tap = { fn, disposed: false, dispose() { tap.disposed = true; } }; taps.push(tap); return tap; } } };
   const ctx = vm.createContext({
-    setTimeout, clearTimeout, Date, Promise, path, PROJECTS_DIR: root,
+    setTimeout, clearTimeout, Date, Promise, path, fs, require: require('node:module').createRequire(path.join(__dirname, '../main.js')), PROJECTS_DIR: root,
     detectSessionTransitions: name => onTransitions(name),
     sessionCache: sessionCache || { resolveSessionContinuations: async id => { events.push('resolve:' + id); return { candidates: [], unresolved: false }; } },
     writer: writer || { refreshFolder: async (name, options) => { events.push('refresh:' + name + ':' + [...options.files].join(',')); return false; } },
@@ -117,7 +117,8 @@ function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = ()
     },
     ...require('../bg-handoff'),
   });
-  const { handleSendToBackground } = loadAppFunctions(ctx, { functions: ['handleSendToBackground'], sourcePath: path.join(__dirname, '../main.js') });
+  const { handleSendToBackground } = loadAppFunctions(ctx, { declarations: ['backgroundHandoffs'],
+    functions: ['handleSendToBackground', 'persistBackgroundHandoff', 'readBackgroundHandoffStamp'], sourcePath: path.join(__dirname, '../main.js') });
   return { handleSendToBackground, session, writes, kills, listeners, statusAsked, taps, events, warned, untilNotified,
     exit: () => exited(), root, folder, transcript, descriptors: () => descriptors };
 }
@@ -247,12 +248,16 @@ test('#715 a write to the source before its process exits cannot leave the rows 
   assert.equal((await h.handleSendToBackground({}, 'tab')).ok, true);
   await h.untilNotified(1);
   assert.deepEqual(h.sidebar(), ['new:OLD']);
+  const before = structuredClone(h.rows.get('OLD'));
   fs.appendFileSync(h.transcript, JSON.stringify({ type: 'system', subtype: 'shutdown' }) + '\n');
-  assert.equal(h.contended(), null, 'a contended flush clears the source index after the late write');
-  assert.deepEqual(h.sidebar(), ['OLD', 'new:descriptor-only']);
+  h.contended();
+  assert.deepEqual(h.rows.get('OLD'), before, 'a contended flush defers the entire linked row');
+  assert.deepEqual(h.sidebar(), ['new:OLD']);
   h.exit();
   await h.untilNotified(2);
   assert.deepEqual(h.sidebar(), ['new:OLD']);
+  assert.deepEqual(JSON.parse(h.rows.get('OLD').continuationIndex).stamp,
+    require('../session-continuations').continuationStamp(fs.statSync(h.transcript, { bigint: true })));
 });
 
 test('#715 a restarted handoff renders one named conversation over the inherited renderer title', { timeout: 9000 }, async t => {

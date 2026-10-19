@@ -2151,6 +2151,41 @@ Coverage: `test/continuation-rows-564.test.js` (graph and bounds), `test/continu
 
 ## Continuation index (#518B)
 
+Changed cached local parent rows with format/version 3 and known links receive
+`prepareContinuationRefresh` before synchronous refresh. The shared yielded
+scanner uses at most 1 MiB per chunk, exact BigInt stamps, persisted identity/head
+resume guards and the parser's tail witness, without a total file-size cap or
+graph traversal. This work has a separate budget from the ordinary shared 1 MiB.
+An unchanged linked legacy row without stamp/head/snapshot is skipped using its
+stored fileMtime; missing stamp alone never selects it. Its next mtime change
+upgrades the cursor. Remote rows, subagents and unknown links are not selected.
+
+Prepared proof is consumed before the unchanged/budget branches only if both the
+previous serialized index and final stat still match. Header work rechecks that
+version. A changed known linked row which cannot reach verified EOF defers its
+entire row and related effects; parser-level partial/malformed tails and new
+branches are published as observed. No old proof is attached to fresh fileMtime.
+
+The cache owns `deferredContinuationFiles`; targeted preparation and raw refresh
+union it into their scope, including an OTHER-only request. Writer computations
+retain deferrals immediately and remove accounted paths only after effects ACK;
+stale/rejected attempts retain scope and recompute preparation. Standalone raw
+callers apply their collector only at successful return. One preparation retry
+per request is allowed; a second race logs `continuation-refresh-raced` and
+leaves the committed row intact. Outstanding deferrals write exactly
+`setFolderMeta(folder, projectPath, 0)`, retaining the project path. That marker
+survives restart and forces the next admitted filesystem reconciliation; without
+another watcher/get-projects request there is no proactive retry. Main retains
+its five-second reconciliation admission interval.
+
+Projects uses `reconcileCacheFromFilesystemAsync`: prepare/retry each eligible
+folder before progress and both views, inside the readonly snapshot/overlay.
+The synchronous reconciliation API remains available. Worker build and its
+message handler await completion and return asynchronous errors with request id.
+The existing client admits one active request and coalesces pending requests;
+timeouts terminate the old worker. Overlay effects still pass relay revision,
+liveVersion and writer admission checks before persistence.
+
 `session_cache.continuationIndex` is nullable JSON with `format:3`, `ids`,
 `bytes`, `complete`, `mtime` and `unresolved`, plus `head` (the hexadecimal
 first at most 64 bytes, recorded with the stamp) and an additive `stamp` object
@@ -2167,9 +2202,9 @@ Each changed file also has the separate bounded 256 KiB head and 256 KiB tail
 display read; subagents receive only these display reads.
 An unchanged file keeps its persisted index without an upsert even when its
 caller-local snapshot is absent after restart, worker population or eviction.
-After the scan budget is spent, an index is cleared only when an existing
-snapshot or persisted stamp proves a change; otherwise it stays available until lazy
-revalidation on resume. Issue #656 compares BigInt dev/ino/birthtime and
+After the scan budget is spent, a changed index without a known link may be
+cleared. Known linked sources instead defer their whole row until a coherent
+current observation is available. Issue #656 compares BigInt dev/ino/birthtime and
 nanosecond mtime, following the NTFS identity/tunnelling rationale in
 [session-state.md (#648)](session-state.md). These snapshots cap at 128 entries
 and retain BigInts only inside the module; persisted stamps contain strings,

@@ -39,13 +39,38 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     const sourceVersion = backend?.getProjectsRevision?.();
     const work = cacheTail.then(async () => {
       await ready;
+      const folder = name === 'refreshFolder' ? args[0] : name === 'releaseLiveSession' ? cache.getRetainedFolder?.(args[0]) : undefined;
+      let continuationRetry = false, combinedResult;
       for (let attempt = 0; ; attempt++) {
         if (name === 'applyProjectsWorkerEffects' && backend.getProjectsRevision() !== sourceVersion) throw Object.assign(new Error('Projects effect snapshot changed while queued'), { code: 'WRITER_STALE' });
+        const continuationCollector = { deferred: new Set(), accounted: new Set() };
+        let computeArgs = args;
+        if (folder !== undefined && cache.prepareContinuationRefresh) {
+          const opts = name === 'refreshFolder' ? args[1] : {};
+          const preparedContinuations = await cache.prepareContinuationRefresh(folder, opts);
+          computeArgs = [args[0], { ...opts, preparedContinuations, continuationCollector,
+            managedContinuations: true, continuationRetry, retainedFolder: folder }];
+        }
         recorder.begin();
-        const result = cache[name](...args);
-        const revision = recorder.revision();
-        const effects = recorder.finish();
-        try { if (effects.length) await client.request('effects', effects, revision); return result; }
+        let result, revision, effects;
+        try {
+          result = cache[name](...computeArgs);
+          revision = recorder.revision();
+        } finally {
+          effects = recorder.finish();
+          if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector);
+        }
+        try {
+          if (effects.length) await client.request('effects', effects, revision);
+          if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector, true);
+          combinedResult = combinedResult === true || result === true ? true : combinedResult === 'activity' || result === 'activity' ? 'activity' : result;
+          if (continuationCollector.deferred.size && !continuationRetry) {
+            continuationRetry = true;
+            attempt--;
+            continue;
+          }
+          return combinedResult;
+        }
         catch (error) { if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects') throw error; }
       }
     });

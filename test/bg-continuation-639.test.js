@@ -29,7 +29,7 @@ function fixture(t, { persist, exited = false, transcript = true, ambiguous = fa
   let proof = { sessionId: HEAD, jobId: '1234abcd', kind: 'bg', cwd: root };
   transitions.init({ PROJECTS_DIR: root, activeSessions,
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } }),
-    log: { info() {}, debug() {} }, rekeyMcpServer() {}, clearOwner: () => 'other',
+    log: { info() {}, debug() {}, warn() {}, error() {} }, rekeyMcpServer() {}, clearOwner: () => 'other',
     getBackgroundTarget: id => id === HEAD ? proof : null,
     backgroundJobExists: () => true,
     rekeyMetadata: (...args) => persist ? persist(...args) : migrated.push(args), setTimeout: (fn, ms) => { timers.push({ fn, ms }); return { unref() {} }; },

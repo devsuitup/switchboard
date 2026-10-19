@@ -54,6 +54,79 @@ let getLocalJobs = () => new Map();
 let setCachedCustomTitles, getCachedMissingCustomTitle;
 let customTitleBackfill = null;
 const continuationFiles = new Map();
+const deferredContinuationFiles = new Map();
+
+function continuationRefreshScope(folder, opts = {}) {
+  if (!(opts.files instanceof Set) || !opts.files.size) return opts;
+  return { ...opts, files: new Set([...opts.files, ...(deferredContinuationFiles.get(folder) || [])]) };
+}
+
+function applyContinuationRefresh(folder, collector, committed = false) {
+  const outstanding = new Set(deferredContinuationFiles.get(folder) || []);
+  for (const file of collector.deferred) outstanding.add(file);
+  if (committed) for (const file of collector.accounted) outstanding.delete(file);
+  if (outstanding.size) deferredContinuationFiles.set(folder, outstanding);
+  else deferredContinuationFiles.delete(folder);
+}
+
+function linkedContinuation(row) {
+  if (row.parentSessionId || parseFolderKey(row.folder).alias !== null) return false;
+  try {
+    const index = JSON.parse(row.continuationIndex);
+    return index?.format === 3 && index.version === 3 && Array.isArray(index.ids) && index.ids.length > 0;
+  } catch { return false; }
+}
+
+function changedContinuation(row, file, stat) {
+  const snapshot = continuationFiles.get(file);
+  if (snapshot?.serialized === row.continuationIndex) return !sameContinuationStamp(snapshot, stat);
+  let stamp;
+  try { stamp = JSON.parse(row.continuationIndex)?.stamp; } catch {}
+  return stamp ? !matchesContinuationStamp(stamp, stat)
+    : row.fileMtime !== new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString();
+}
+
+async function scanContinuationFile(file, id, previous, chunkBytes = 1024 * 1024) {
+  if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new RangeError('chunkBytes must be a positive integer');
+  chunkBytes = Math.min(chunkBytes, 1024 * 1024);
+  let serialized = previous, index, stat, grew;
+  do {
+    serialized = scanCachedContinuation(file, id, serialized, chunkBytes);
+    if (serialized === null) return null;
+    index = JSON.parse(serialized);
+    stat = continuationFiles.get(file);
+    await new Promise(resolve => setImmediate(resolve));
+    const after = fs.statSync(file, { bigint: true });
+    grew = sameContinuationFile(stat, after) && after.size > stat.size;
+    if (!sameContinuationStamp(stat, after) && !grew) {
+      continuationFiles.delete(file);
+      return null;
+    }
+  } while (grew || (!index.complete && index.bytes < index.size));
+  return { serialized, stat };
+}
+
+async function prepareContinuationRefresh(folder, opts = {}) {
+  opts = continuationRefreshScope(folder, opts);
+  const prepared = new Map(), folderPath = resolveFolderDir(folder);
+  if (!folderPath || parseFolderKey(folder).alias !== null) return prepared;
+  for (const row of getCachedByFolder(folder)) {
+    if (!linkedContinuation(row)) continue;
+    const file = resolveJsonlPath(folderPath, { ...row, folder: '.' });
+    if (opts.files?.size && !opts.files.has(path.relative(folderPath, file))) continue;
+    try {
+      const stat = fs.statSync(file, { bigint: true });
+      if (!changedContinuation(row, file, stat)) continue;
+      const previous = row.continuationIndex;
+      const result = await scanContinuationFile(file, row.sessionId, previous);
+      prepared.set(row.sessionId, result && { ...result, previous });
+    } catch (error) {
+      log?.warn?.(`[session-cache] ${row.sessionId} continuation read failed: ${error.message}`, error);
+      prepared.set(row.sessionId, null);
+    }
+  }
+  return prepared;
+}
 
 function sameContinuationFile(a, b) {
   return a?.dev === b.dev && a.ino === b.ino && a.birthtimeNs === b.birthtimeNs;
@@ -99,13 +172,15 @@ function scanCachedContinuation(file, id, previous, maxBytes, stat = fs.statSync
   let serialized = scanContinuationIndex(file, id, reuse ? previous : undefined, maxBytes - head.length / 2);
   const after = fs.statSync(file, { bigint: true });
   if (!sameContinuationStamp(stat, after)) { continuationFiles.delete(file); return null; }
-  serialized = JSON.stringify({ ...JSON.parse(serialized), stamp: continuationStamp(stat), head });
+  serialized = JSON.stringify({ ...JSON.parse(serialized), stamp: continuationStamp(stat), head,
+    mtime: new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString() });
   rememberContinuation(file, stat, head, serialized);
   return serialized;
 }
 
 function init(ctx) {
   continuationFiles.clear();
+  deferredContinuationFiles.clear();
   stopping = false;
   populateRetry = null;
   populateNow = ctx.now || Date.now;
@@ -233,11 +308,14 @@ function dropFolderRows(folder, { search = false } = {}) {
   return dropped.length > 0;
 }
 
-function releaseLiveSession(sessionId) {
-  const folder = keptLiveRows.get(sessionId);
+function getRetainedFolder(sessionId) { return keptLiveRows.get(sessionId); }
+
+function releaseLiveSession(sessionId, opts = {}) {
+  const folder = keptLiveRows.get(sessionId) ?? opts.retainedFolder;
   if (folder === undefined || isRunningSession(sessionId)) return false;
+  if (opts.retainedFolder !== undefined && opts.retainedFolder !== folder) return false;
   keptLiveRows.delete(sessionId);
-  refreshFolder(folder);
+  refreshFolder(folder, opts);
   return true;
 }
 
@@ -305,6 +383,8 @@ function sidebarRowState(row) {
 }
 
 function refreshFolder(folder, opts = {}) {
+  opts = continuationRefreshScope(folder, opts);
+  const collector = opts.continuationCollector || { deferred: new Set(), accounted: new Set() };
   if (pendingRepairFolders().includes(folder)) return false;
   // null when the key names a host no longer declared — treated as vanished.
   const folderPath = resolveFolderDir(folder);
@@ -387,7 +467,9 @@ function refreshFolder(folder, opts = {}) {
   const searchEntriesToUpsert = [];
   const namesToSet = [];
   const sessionsToDelete = [];
+  const sessionsToTouch = [];
   const metricsToReplace = [];
+  const linkedVersions = new Map();
   // Full reads only (the "NEW file" branch below) -- kept separate from
   // sessionsToUpsert so mergeBridgeGroups never sees a header-only-refreshed
   // row and mistakes it for a safe-to-reread fresh read (it isn't: the whole
@@ -410,12 +492,24 @@ function refreshFolder(folder, opts = {}) {
     try {
       stat = fs.statSync(filePath, { bigint: true });
       fileMtime = new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString();
-    } catch { continue; }
+    } catch {
+      collector.accounted.add(path.relative(folderPath, filePath));
+      continue;
+    }
 
     const cachedDbId = filePathToDbId.get(filePath) || null;
     const cachedEntry = cachedDbId ? cachedMap.get(cachedDbId) : null;
 
     if (cachedDbId !== null) currentIds.add(cachedDbId);
+    const relativeFile = path.relative(folderPath, filePath);
+    const linked = cachedEntry && !parentSessionId && linkedContinuation(cachedEntry);
+    const changedLinked = linked && changedContinuation(cachedEntry, filePath, stat);
+    const plan = opts.preparedContinuations?.get(cachedDbId);
+    const validPlan = changedLinked && plan && plan.previous === cachedEntry.continuationIndex && sameContinuationStamp(plan.stat, stat);
+    const defer = () => {
+      collector.deferred.add(relativeFile);
+      if (opts.continuationRetry) log?.info?.(`[session-cache] ${cachedDbId} continuation-refresh-raced`);
+    };
 
     // Invalidation compares against the dedicated fileMtime column, not
     // `modified`. Upstream split the two (v7 migration): `modified` now holds
@@ -430,22 +524,37 @@ function refreshFolder(folder, opts = {}) {
     }
     const changedIndex = snapshot ? !sameContinuationStamp(snapshot, stat)
       : persistedStamp && !matchesContinuationStamp(persistedStamp, stat);
-    if (cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
+    if (!changedLinked && cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
       && (!cachedEntry.continuationIndex || !changedIndex || parentSessionId || cachedEntry.parentSessionId)) {
+      collector.accounted.add(relativeFile);
       continue; // unchanged, skip
     }
 
     if (cachedEntry) {
       let continuationIndex = cachedEntry.continuationIndex;
-      if (parentSessionId || cachedEntry.parentSessionId) continuationIndex = null;
+      if (validPlan) continuationIndex = plan.serialized;
+      else if (opts.preparedContinuations?.has(cachedDbId) && changedLinked) { defer(); continue; }
+      else if (parentSessionId || cachedEntry.parentSessionId) continuationIndex = null;
       else if (continuationBytesLeft) {
         continuationIndex = scanCachedContinuation(filePath, cachedEntry.sessionId, continuationIndex, continuationBytesLeft, stat);
         continuationBytesLeft = 0;
       } else if (changedIndex) continuationIndex = null;
+      if (changedLinked) {
+        let index;
+        try { index = JSON.parse(continuationIndex); } catch {}
+        if (!index || index.bytes !== Number(stat.size) || !matchesContinuationStamp(index.stamp, stat)) { defer(); continue; }
+      }
       if (cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
-        && continuationIndex === cachedEntry.continuationIndex) continue;
+        && continuationIndex === cachedEntry.continuationIndex) { collector.accounted.add(relativeFile); continue; }
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId });
+      if (linked) {
+        let after;
+        try { after = fs.statSync(filePath, { bigint: true }); } catch { defer(); continue; }
+        if (!sameContinuationStamp(stat, after)) { defer(); continue; }
+      }
+      collector.accounted.add(relativeFile);
+      if (linked) linkedVersions.set(cachedDbId, { stat, filePath, relativeFile });
       if (h) {
         // Merge: keep cached body/messageCount/created, overlay fresh display fields.
         const merged = {
@@ -483,10 +592,9 @@ function refreshFolder(folder, opts = {}) {
         // Header read couldn't extract signal -- just bump mtime so sort order
         // stays current. fileMtime has to move too, otherwise this file stays
         // permanently "dirty" and gets re-read on every watcher flush.
-        if (cachedEntry.modified !== fileMtime || cachedEntry.fileMtime !== fileMtime) activityChanged = true;
         if (continuationIndex !== cachedEntry.continuationIndex) {
           sessionsToUpsert.push({ ...cachedEntry, continuationIndex, modified: fileMtime, fileMtime });
-        } else touchCachedModified(cachedDbId, fileMtime);
+        } else sessionsToTouch.push({ sessionId: cachedDbId, fileMtime });
       }
       continue;
     }
@@ -506,6 +614,7 @@ function refreshFolder(folder, opts = {}) {
       currentIds.add(s.sessionId);
       newFileReads.push(s);
     }
+    collector.accounted.add(relativeFile);
   }
 
   // Remove sessions whose .jsonl files were deleted. Skip in targeted mode --
@@ -571,6 +680,22 @@ function refreshFolder(folder, opts = {}) {
   // to close.
   sessionsToDelete.push(...mergeDeletes);
 
+  const racedRows = new Set([...collector.deferred].map(file => filePathToDbId.get(path.join(folderPath, file))).filter(Boolean));
+  for (const [id, observed] of linkedVersions) {
+    let current;
+    try { current = fs.statSync(observed.filePath, { bigint: true }); } catch {}
+    if (current && sameContinuationStamp(observed.stat, current)
+      && (!getCachedSession || getCachedSession(id)?.continuationIndex === cachedMap.get(id).continuationIndex)) continue;
+    racedRows.add(id);
+    collector.accounted.delete(observed.relativeFile);
+    collector.deferred.add(observed.relativeFile);
+    if (opts.continuationRetry) log?.info?.(`[session-cache] ${id} continuation-refresh-raced`);
+  }
+  for (let i = sessionsToUpsert.length - 1; i >= 0; i--) if (racedRows.has(sessionsToUpsert[i].sessionId)) sessionsToUpsert.splice(i, 1);
+  for (let i = namesToSet.length - 1; i >= 0; i--) if (racedRows.has(namesToSet[i].id)) namesToSet.splice(i, 1);
+  for (let i = metricsToReplace.length - 1; i >= 0; i--) if (racedRows.has(metricsToReplace[i].sessionId)) metricsToReplace.splice(i, 1);
+  for (let i = searchEntriesToUpsert.length - 1; i >= 0; i--) if (racedRows.has(searchEntriesToUpsert[i].id)) searchEntriesToUpsert.splice(i, 1);
+  for (let i = sessionsToDelete.length - 1; i >= 0; i--) if (racedRows.has(sessionsToDelete[i])) sessionsToDelete.splice(i, 1);
   const updatedRows = new Map(sessionsToUpsert.map(row => [row.sessionId, row]));
   const beforeRows = new Map([...updatedRows.keys()].map(id => [id, sidebarRowState(cachedMap.get(id))]));
 
@@ -578,6 +703,12 @@ function refreshFolder(folder, opts = {}) {
   if (sessionsToUpsert.length > 0) {
     stripBridgeEvidence(sessionsToUpsert);
     upsertCachedSessions(sessionsToUpsert);
+  }
+  for (const { sessionId, fileMtime } of sessionsToTouch) {
+    if (racedRows.has(sessionId)) continue;
+    const before = cachedMap.get(sessionId);
+    if (before.modified !== fileMtime || before.fileMtime !== fileMtime) activityChanged = true;
+    touchCachedModified(sessionId, fileMtime);
   }
   for (const { sessionId, dailyMetrics } of metricsToReplace) {
     replaceSessionMetrics(sessionId, dailyMetrics);
@@ -599,7 +730,10 @@ function refreshFolder(folder, opts = {}) {
   }
 
   // Update folder mtime
-  setFolderMeta(folder, projectPath, getFolderIndexMtimeMs(folderPath));
+  const outstanding = new Set([...(deferredContinuationFiles.get(folder) || []), ...collector.deferred]);
+  for (const file of collector.accounted) outstanding.delete(file);
+  setFolderMeta(folder, projectPath, outstanding.size ? 0 : getFolderIndexMtimeMs(folderPath));
+  if (!opts.managedContinuations) applyContinuationRefresh(folder, collector, true);
   if (sidebarChanged || [...updatedRows].some(([id, row]) => beforeRows.get(id) !== sidebarRowState(row))) return true;
   if (activityChanged || [...updatedRows].some(([id, row]) =>
     PROJECT_ACTIVITY_FIELDS.some(field => row[field] !== cachedMap.get(id)?.[field]))) return 'activity';
@@ -609,23 +743,39 @@ function refreshFolder(folder, opts = {}) {
 // see .ai/contexts/session-cache.md ("Projects query worker")
 const RECONCILE_THROTTLE_MS = 5000;
 let lastReconcileAt = 0;
-function reconcileCacheFromFilesystem({ onFolder, throttle = true } = {}) {
+function reconciliationFolders(throttle) {
   const now = Date.now();
-  if (throttle && now - lastReconcileAt < RECONCILE_THROTTLE_MS) return;
+  if (throttle && now - lastReconcileAt < RECONCILE_THROTTLE_MS) return [];
   lastReconcileAt = now;
-  try {
-    const metaMap = getAllFolderMeta();
-    const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory() && d.name !== '.git')
-      .map(d => d.name);
+  const metaMap = getAllFolderMeta();
+  return fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+    .filter(d => d.isDirectory() && d.name !== '.git')
+    .map(d => {
+      const folder = d.name, meta = metaMap.get(folder);
+      const refresh = !meta || getFolderIndexMtimeMs(path.join(PROJECTS_DIR, folder)) > (meta.indexMtimeMs || 0)
+        || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder));
+      return { folder, refresh: refresh && !pendingRepairFolders().includes(folder) };
+    });
+}
 
-    for (const folder of folders) {
-      const meta = metaMap.get(folder);
-      const folderPath = path.join(PROJECTS_DIR, folder);
-      if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)
-        || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder))) {
-        if (!pendingRepairFolders().includes(folder)) refreshFolder(folder);
+async function reconcileCacheFromFilesystemAsync({ onFolder, throttle = true } = {}) {
+  for (const { folder, refresh } of reconciliationFolders(throttle)) {
+    if (refresh) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const preparedContinuations = await prepareContinuationRefresh(folder);
+        const continuationCollector = { deferred: new Set(), accounted: new Set() };
+        refreshFolder(folder, { preparedContinuations, continuationCollector, continuationRetry: attempt === 1 });
+        if (!continuationCollector.deferred.size) break;
       }
+    }
+    if (onFolder) onFolder(folder);
+  }
+}
+
+function reconcileCacheFromFilesystem({ onFolder, throttle = true } = {}) {
+  try {
+    for (const { folder, refresh } of reconciliationFolders(throttle)) {
+      if (refresh) refreshFolder(folder);
       if (onFolder) onFolder(folder);
     }
   } catch (err) {
@@ -1494,20 +1644,10 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     if (index?.format !== 3 || !index.complete || index.bytes !== Number(stat.size)
       || !(matchesContinuationStamp(index.stamp, stat)
         || (cached?.serialized === serialized && sameContinuationStamp(cached, stat)))) {
-      let grew;
-      do {
-        serialized = scanCachedContinuation(file, id, serialized, chunkBytes);
-        if (serialized === null) return null;
-        index = JSON.parse(serialized);
-        const scanned = continuationFiles.get(file);
-        await new Promise(resolve => setImmediate(resolve));
-        const after = fs.statSync(file, { bigint: true });
-        grew = sameContinuationFile(scanned, after) && after.size > scanned.size;
-        if (!sameContinuationStamp(scanned, after) && !grew) {
-          continuationFiles.delete(file);
-          return null;
-        }
-      } while (grew || (!index.complete && index.bytes < index.size));
+      const scanned = await scanContinuationFile(file, id, serialized, chunkBytes);
+      if (!scanned) return null;
+      serialized = scanned.serialized;
+      index = JSON.parse(serialized);
       await writer.setCachedContinuationIndex(id, serialized);
     }
     return { index, modified: getCachedSession(id)?.modified || row.modified };
@@ -1533,6 +1673,11 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
 }
 
 module.exports = { shutdownProducers,
+  prepareContinuationRefresh,
+  applyContinuationRefresh,
+  continuationRefreshScope,
+  getRetainedFolder,
+  reconcileCacheFromFilesystemAsync,
   writeScannedFolder, writeScannedFolderPartial,
   resolveSessionContinuations,
   resumesPersistedContinuation,

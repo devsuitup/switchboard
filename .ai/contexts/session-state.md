@@ -1373,6 +1373,23 @@ is the element whose position depends on how much room is left.
 
 ## Proven continuation re-key
 
+For a proven background move, capture map key/object, effective source id,
+target/job, folder and exit drain before invoking metadata or the confirmation
+callback. Metadata ACK precedes publication; the independent callback requests
+source index persistence even when the target is already live. Callback failures
+cannot escape detection or metadata cleanup. Synchronous background adapters use
+the same guards as ACK adapters; ordinary synchronous transitions keep their
+existing behavior.
+
+After ACK the first failed guard is reported in order: `source-replaced`,
+`source-id-changed`, `target-live`, `source-stopped`, `background-proof-changed`,
+`background-job-gone`. Metadata remains committed on refusal. A live target
+returns false from background detection, allowing fork/clear and known-file
+updates; no identity, alias, MCP, activity or PTY transfer occurs. Completed
+copies may be reused on a later genuine detection. Pending/copy/refusal reasons
+use deduplicated ordinary info logs per tuple, including metadataCopied status;
+write/callback failures use error. No Diagnostics toggle is needed.
+
 `session-transitions.js` scans the active transcript with
 `scanContinuationIndex` from `session-continuations.js`. Every valid
 `continued-in` target is considered, including transcripts already in

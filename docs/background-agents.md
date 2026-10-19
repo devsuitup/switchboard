@@ -134,6 +134,13 @@ removed after this check produces an error in the read-only viewer.
 
 ## Send to background
 
+A conversation moved with a typed `/bg` keeps its name and one sidebar row across
+restarts, including when the original transcript receives later bookkeeping.
+This requires a command observed by this tab's composer and a proven single
+continuation; unobserved slash-menu/history input and genuinely ambiguous
+branches retain their existing limits. The button's automatic conversion to an
+attach tab remains a separate attachment behavior.
+
 Use **Send to background** in a running session's header or its sidebar
 right-click menu to move it to the Claude daemon. The tab becomes an attached
 tab under the continuing conversation's new id. Closing it detaches it;
