@@ -16,7 +16,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Disabled Respawn and Delete buttons in Agents now tell you to use the conversation's sidebar Stop or end its other process, according to where it is running. (#566)
 
 ### Fixed
-- Automated command chains now recognize a recorded step and continue even when Claude writes a large API request after it. (#730)
+- Automated command chains now recognize a recorded step and continue even when Claude keeps writing large API requests after it during a long turn. (#730)
 - A restored conversation now reopens at its latest part and is no longer held with a notice when its apparent alternatives are its own parts. Real branches still wait for a choice from the sidebar. (#722)
 - A conversation stays held during startup restore when an older part is running in the background, instead of attaching to that older part's job. A background job on its latest part still attaches. (#722)
 - A blocked background job now shows the static orange waiting ring in the sidebar, grid and Agents view, including while attached, and keeps its Blocked label and tooltip. It still blinks when Claude separately asks for your attention. (#726)

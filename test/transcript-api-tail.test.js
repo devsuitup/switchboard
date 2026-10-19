@@ -6,6 +6,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createTranscriptTurnReader } = require('../transcript-turn');
+const { createTranscriptTailReader } = require('../transcript-tail');
+
+function statOf(file) {
+  const stat = fs.statSync(file, { bigint: true });
+  return { dev: stat.dev, ino: stat.ino, size: Number(stat.size), mtimeMs: String(stat.mtimeNs) };
+}
 
 function fixture(t) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-api-tail-')));
@@ -73,6 +79,124 @@ test('i730: user text containing an API prefix remains a prompt', t => {
   const text = '{"type":"api-request","params":"quoted"}';
   fs.writeFileSync(file, prompt(text));
   assert.deepEqual(createTranscriptTurnReader().read(file).prompts, [{ at: 2000, text }]);
+  fs.writeFileSync(file, JSON.stringify({ nested: { type: 'api-request', params: 'quoted' },
+    type: 'user', timestamp: new Date(2000).toISOString(), message: { content: text } }) + '\n');
+  assert.deepEqual(createTranscriptTurnReader().read(file).prompts, [{ at: 2000, text }]);
+});
+
+test('i730b: appended API records keep the prompt and read only appended bytes', t => {
+  const file = fixture(t);
+  const reader = createTranscriptTailReader();
+  fs.writeFileSync(file, prompt());
+  reader.read(file, statOf(file));
+  const realRead = fs.readSync;
+  let bytes = 0;
+  fs.readSync = (...args) => { const n = realRead(...args); bytes += n; return n; };
+  try {
+    for (let i = 0; i < 10; i++) {
+      const appended = JSON.stringify({ type: 'api-request', params: 'x'.repeat(200_000) }) + '\n{}\n';
+      fs.appendFileSync(file, appended);
+      bytes = 0;
+      const result = reader.read(file, statOf(file));
+      assert.ok(result.text.includes('do it'), `prompt lost on append ${i}`);
+      assert.ok(bytes <= Buffer.byteLength(appended) + 256, `reread old bytes: ${bytes}`);
+    }
+  } finally { fs.readSync = realRead; }
+});
+
+test('i730b: an unfinished scan progresses while the transcript grows every poll', t => {
+  const file = fixture(t);
+  const reader = createTranscriptTurnReader();
+  fs.writeFileSync(file, prompt() + JSON.stringify({ type: 'api-request', params: 'x'.repeat(3 * 1024 * 1024) }) + '\n');
+  let seen = false;
+  for (let i = 0; i < 12; i++) {
+    fs.appendFileSync(file, JSON.stringify({ type: 'api-request', params: 'x'.repeat(200_000) }) + '\n{}\n');
+    if (reader.read(file).prompts.some(p => p.text === 'do it')) seen = true;
+  }
+  assert.equal(seen, true);
+});
+
+for (const location of ['head', 'boundary']) {
+  test(`i730b: growth with a rewritten ${location} restarts the scan`, t => {
+    const file = fixture(t);
+    const reader = createTranscriptTurnReader();
+    fs.writeFileSync(file, prompt('old') + JSON.stringify({ type: 'api-request', params: 'x'.repeat(300_000) }) + '\n');
+    reader.read(file);
+    const fd = fs.openSync(file, 'r+');
+    try {
+      if (location === 'head') {
+        const replacement = Buffer.from(prompt('new').replace('.000Z', '.001Z'));
+        fs.writeSync(fd, replacement, 0, replacement.length, 0);
+      }
+      else fs.writeSync(fd, Buffer.from('!'), 0, 1, fs.statSync(file).size - 3);
+    } finally { fs.closeSync(fd); }
+    fs.appendFileSync(file, location === 'head' ? '{}\n' : prompt('new'));
+    assert.equal(reader.read(file).prompts.at(-1).text, 'new');
+  });
+}
+
+test('i730b: an oversized unknown partial line cannot expose an older closed turn', t => {
+  const file = fixture(t);
+  const reader = createTranscriptTurnReader();
+  fs.writeFileSync(file, JSON.stringify({ type: 'assistant', timestamp: new Date(2000).toISOString(), message: { stop_reason: 'end_turn' } })
+    + '\n' + JSON.stringify({ type: 'system', subtype: 'turn_duration' }) + '\n');
+  assert.equal(reader.read(file).closed, true);
+  fs.appendFileSync(file, '{"type":"user","message":{"content":"' + 'x'.repeat(5 * 1024 * 1024));
+  let turn;
+  for (let i = 0; i < 7; i++) turn = reader.read(file);
+  assert.equal(turn.state, 'unknown');
+  fs.appendFileSync(file, '"}}\n' + prompt('new'));
+  assert.deepEqual(reader.read(file).prompts, [{ at: 2000, text: 'new' }]);
+});
+
+test('i730b: pending fragments of a 30 MiB partial line retain bounded buffers', t => {
+  const file = fixture(t);
+  fs.writeFileSync(file, prompt() + '{"type":"api-request","params":"' + 'x'.repeat(30 * 1024 * 1024));
+  const vm = require('node:vm');
+  const filename = path.join(__dirname, '../transcript-tail.js');
+  const maps = [];
+  class TrackedMap extends Map { constructor(...args) { super(...args); maps.push(this); } }
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, exports: module.exports,
+    require: require('node:module').createRequire(filename), Buffer, Map: TrackedMap }, { filename });
+  const reader = module.exports.createTranscriptTailReader();
+  for (let i = 0; i < 30; i++) reader.read(file, statOf(file));
+  const buffers = new Set();
+  function retained(value) {
+    if (Buffer.isBuffer(value)) buffers.add(value.buffer);
+    else if (value && typeof value === 'object') Object.values(value).forEach(retained);
+  }
+  maps.forEach(map => [...map.values()].forEach(retained));
+  const bytes = [...buffers].reduce((n, buffer) => n + buffer.byteLength, 0);
+  assert.ok(bytes <= 5 * 1024 * 1024, `retained ${bytes} bytes`);
+  const result = reader.read(file, statOf(file));
+  assert.ok(result.text.includes('do it'));
+});
+
+test('i730b: the tail cache evicts the least recently used path', t => {
+  const first = fixture(t);
+  const dir = path.dirname(first);
+  const reader = createTranscriptTailReader();
+  fs.writeFileSync(first, prompt());
+  reader.read(first, statOf(first));
+  for (let i = 1; i < 128; i++) {
+    const file = path.join(dir, `${i}.jsonl`);
+    fs.writeFileSync(file, prompt());
+    reader.read(file, statOf(file));
+  }
+  reader.read(first, statOf(first));
+  const extra = path.join(dir, 'extra.jsonl');
+  fs.writeFileSync(extra, prompt());
+  reader.read(extra, statOf(extra));
+  const realRead = fs.readSync;
+  let bytes = 0;
+  fs.readSync = (...args) => { const n = realRead(...args); bytes += n; return n; };
+  try {
+    reader.read(first, statOf(first));
+    assert.equal(bytes, 0, 'recently accessed path was evicted');
+    reader.read(path.join(dir, '1.jsonl'), statOf(path.join(dir, '1.jsonl')));
+    assert.ok(bytes > 0, 'least recently accessed path was retained');
+  } finally { fs.readSync = realRead; }
 });
 
 test('i730: an oversized non-API output keeps its complete fingerprint after bounded scanning', t => {

@@ -476,10 +476,13 @@ test('reader: the tail cache is kept per path, so alternating sessions do not re
     const reader = createTranscriptTurnReader();
     assert.equal(reader.read(a).closed, true);
     assert.equal(reader.read(b).closed, false);
+    const initialA = opened.filter((p) => p === a).length;
+    const initialB = opened.filter((p) => p === b).length;
+    assert.ok(initialA > 0 && initialB > 0);
     assert.equal(reader.read(a).closed, true);
     assert.equal(reader.read(b).closed, false);
-    assert.equal(opened.filter((p) => p === a).length, 1);
-    assert.equal(opened.filter((p) => p === b).length, 1);
+    assert.equal(opened.filter((p) => p === a).length, initialA);
+    assert.equal(opened.filter((p) => p === b).length, initialB);
   } finally {
     fs.openSync = realOpen;
     fs.rmSync(dir, { recursive: true, force: true });
@@ -772,6 +775,101 @@ async function runChain(chain, session, uuid, timeoutMs) {
 }
 
 const ownPrompt = (at, command) => userPrompt(at, { message: { role: 'user', content: command } });
+
+test('i730b: a busy chain confirms while more than 1 MiB of API records grow on every poll', async t => {
+  const previous = process.env.SWITCHBOARD_PENDING_OWN_ENTRY_MS;
+  process.env.SWITCHBOARD_PENDING_OWN_ENTRY_MS = '200';
+  t.after(() => { process.env.SWITCHBOARD_PENDING_OWN_ENTRY_MS = previous; });
+  const uuid = 'sess-i730b-growing-' + Date.now();
+  let enteredAt = null;
+  let commandText = null;
+  let polls = 0;
+  const s = transcriptSession(uuid, { onEnter: ({ append, command }) => {
+    enteredAt = Date.now();
+    commandText = command;
+    append([ownPrompt(enteredAt, command), apiRequestLine(1200_000)]);
+  } });
+  const read = s.ctx.getTranscriptTurn;
+  s.ctx.getTranscriptTurn = (...args) => {
+    if (enteredAt !== null) {
+      polls++;
+      const entries = [apiRequestLine(200_000), systemEntry(Date.now(), 'progress')];
+      if (polls === 16) entries.push(assistant(Date.now(), 'end_turn'), systemEntry(Date.now(), 'turn_duration'));
+      if (polls <= 16) fs.appendFileSync(s.file, jsonl(entries));
+    }
+    return read(...args);
+  };
+  try {
+    const result = await runChain([{ command: 'long busy step' }, { command: 'next step' }], s, uuid, 6000);
+    assert.equal(result.steps[0].submit_confirmed, true, JSON.stringify(result));
+    assert.equal(result.steps[0].confirm_source, 'transcript');
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(commandText, 'next step');
+    assert.ok(polls >= 16);
+  } finally { s.cleanup(); }
+});
+
+function watcherInternals() {
+  const filename = path.join(__dirname, '../trigger-watcher.js');
+  const module = { exports: {} };
+  require('node:vm').runInNewContext(fs.readFileSync(filename, 'utf8')
+    + '\nmodule.exports.pending = waitForPendingConfirmation; module.exports.submit = submitWithVerify;',
+  { module, exports: module.exports, require: require('node:module').createRequire(filename),
+    process, setTimeout, clearTimeout, Date, Buffer }, { filename });
+  return module.exports;
+}
+
+for (const change of ['append', 'replace']) {
+  test(`i730b: pending confirmation latches an own entry across ${change} only on the same inode`, async t => {
+    fakeClock(t);
+    const { pending } = watcherInternals();
+    const dir = mkTmp('sw-i730b-latch-');
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, 's.jsonl');
+    const reader = createTranscriptTurnReader();
+    fs.writeFileSync(file, jsonl([ownPrompt(Date.now(), 'long step')]));
+    const ctx = { ...fallbackCtx({ status: 'busy', statusUpdatedAt: 900_000 }), getTranscriptTurn: () => reader.read(file) };
+    const waiting = pending('sid', ctx, Date.now(), 'long step', Date.now() + 4000);
+    if (change === 'replace') fs.renameSync(file, file + '.old');
+    const filler = jsonl([{ type: 'system', content: 'x'.repeat(300_000) }]);
+    if (change === 'replace') fs.writeFileSync(file, filler);
+    else fs.appendFileSync(file, filler);
+    setTimeout(() => {
+      fs.appendFileSync(file, jsonl([assistant(Date.now(), 'end_turn'), systemEntry(Date.now(), 'turn_duration')]));
+      fs.utimesSync(file, new Date(Date.now()), new Date(Date.now()));
+    }, 1600);
+    const result = await settleRun(t, waiting);
+    assert.equal(result.confirmed, change === 'append', JSON.stringify(result));
+    if (change === 'append') assert.equal(result.source, 'transcript');
+  });
+}
+
+test('i730b: submit verification remembers an own entry until the descriptor reads busy', async t => {
+  fakeClock(t);
+  const { submit } = watcherInternals();
+  const dir = mkTmp('sw-i730b-submit-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, '');
+  const reader = createTranscriptTurnReader();
+  const desc = { status: 'idle', statusUpdatedAt: 900_000 };
+  const writes = [];
+  const handle = { write(data) {
+    writes.push(data);
+    if (data === '\r') fs.appendFileSync(file, jsonl([ownPrompt(Date.now(), 'step')]));
+  } };
+  const ctx = { ...fallbackCtx(desc), getCliStatus: () => ({ ...desc }),
+    getComposerState: () => ({ pending: 0, lastInputAt: 0 }), getTranscriptTurn: () => reader.read(file) };
+  const promise = submit(handle, 'sid', 'step', ctx, Date.now() + 2000, { transcriptReaction: true });
+  t.mock.timers.tick(5);
+  await new Promise(resolve => setImmediate(resolve));
+  fs.appendFileSync(file, jsonl([{ type: 'system', content: 'x'.repeat(300_000) }]));
+  desc.status = 'busy';
+  const result = await settleRun(t, promise);
+  assert.equal(result.confirmed, true, JSON.stringify(result));
+  assert.equal(result.confirmSource, 'transcript');
+  assert.equal(writes.length, 2);
+});
 
 test('i730 acceptance: a busy chain confirms its prompt before a 300000-byte API request and writes the next step', async () => {
   const uuid = 'sess-i730-' + Date.now();
@@ -1126,16 +1224,19 @@ test('trigger context: forgetTranscriptTurn drops the cached tail of a session, 
     const sessions = new Map([['sid', { pty: { pid: process.pid, write() {} }, projectFolder: 'C--proj' }]]);
     const ctx = createTriggerContext({ activeSessions: sessions, log: { info() {}, warn() {}, error() {} }, projectsDir: dir });
     ctx.getTranscriptTurn('sid');
+    const initialOpens = opened.filter((p) => p === file).length;
+    assert.ok(initialOpens > 0);
     ctx.getTranscriptTurn('sid');
-    assert.equal(opened.filter((p) => p === file).length, 1);
+    assert.equal(opened.filter((p) => p === file).length, initialOpens);
     ctx.forgetTranscriptTurn('sid');
     ctx.getTranscriptTurn('sid');
-    assert.equal(opened.filter((p) => p === file).length, 2);
+    const afterForget = opened.filter((p) => p === file).length;
+    assert.ok(afterForget > initialOpens);
     sessions.delete('sid');
     ctx.forgetTranscriptTurn('sid');
     sessions.set('sid', { pty: { pid: process.pid, write() {} }, projectFolder: 'C--proj' });
     ctx.getTranscriptTurn('sid');
-    assert.equal(opened.filter((p) => p === file).length, 3);
+    assert.ok(opened.filter((p) => p === file).length > afterForget);
     ctx.forgetTranscriptTurn('unknown');
   } finally {
     fs.openSync = realOpen;

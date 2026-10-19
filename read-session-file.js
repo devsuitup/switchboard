@@ -688,7 +688,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
 const SDK_FULL_SCAN_MAX_BYTES = 2 * 1024 * 1024;
 const SDK_TAIL_SCAN_BYTES = 256 * 1024;
-const sdkTails = require('./transcript-tail').createTranscriptTailReader({ tailBytes: SDK_TAIL_SCAN_BYTES });
+const SDK_TAIL_READ_BYTES = 4 * 1024 * 1024;
 
 function entrypointOf(entry) {
   return typeof entry.entrypoint === 'string' ? entry.entrypoint : '';
@@ -754,7 +754,8 @@ function readSessionEntrypoint(filePath, { full = false } = {}) {
     if (full || size <= SDK_FULL_SCAN_MAX_BYTES) return hasTerminalTurn(readTextRange(fd, 0, size)) ? 'cli' : first;
     const head = readTextRange(fd, 0, SDK_TAIL_SCAN_BYTES);
     const exact = fs.fstatSync(fd, { bigint: true });
-    const tail = sdkTails.read(filePath, { size, dev: exact.dev, ino: exact.ino, mtimeMs: String(exact.mtimeNs) });
+    const tail = require('./transcript-tail').createTranscriptTailReader({ tailBytes: SDK_TAIL_SCAN_BYTES })
+      .read(filePath, { size, dev: exact.dev, ino: exact.ino, mtimeMs: String(exact.mtimeNs) }, SDK_TAIL_READ_BYTES);
     return hasTerminalTurn(head) || hasTerminalTurn(tail.text) ? 'cli' : tail.complete ? first : null;
   } catch {
     return null;

@@ -1393,26 +1393,33 @@ prefix identifies a top-level `api-request` before JSON parsing. The retained
 tail covers 256 KiB of other records, so API payloads cannot displace a user
 prompt or the closing assistant and its `turn_duration`. Both
 `transcriptOwnEntryAt` and `transcriptReactedSince` use this filtered prompt list.
-This is the prefix-filtering approach to #730, rather than accumulating prompt
-timestamps across changing transcript snapshots.
+Each chain step also latches its own observed prompt timestamp through submit
+verification and pending confirmation while the transcript path, device and
+inode stay the same. Losing the prompt from a later filtered tail does not
+restart the own-entry timeout; replacing the transcript discards that proof.
 
 An ordinary call reads at most 1 MiB. If a line extends beyond that budget,
-the next call on the same snapshot resumes from its saved byte offset, even
-without a file change. Until the scan completes, classification uses only the
-original physical tail. Pending fragments are retained until the line's prefix
-can be checked; their memory use grows with that line. API payloads are discarded
-without concatenating or parsing them. Oversized non-API records remain whole
-for the existing written-output fingerprint and consume the logical tail budget.
+the next call resumes from its saved byte offset, including when the file grows.
+Growth on the same device/inode checks the first and previous last 64 bytes,
+then preserves the backward scan and consumes appended records forward. These
+boundary checks cannot detect edits in the middle that retain both samples.
+Until scanning catches up, classification uses the latest physical tail.
+Pending fragments retain at most 4 MiB; beyond that only a prefix sample and
+offset remain. At the line boundary, an API prefix discards the record; another
+prefix counts as unknown and consumes the logical tail budget. Non-API records
+within that bound remain whole for the written-output fingerprint.
 Classification still receives only the final 256 KiB of filtered bytes, so an
 oversized non-API user record keeps its existing unknown-head behavior.
 An unchanged completed
-snapshot reads no bytes. Changed size, mtime or file identity restarts the scan;
-`forgetTranscriptTurn` also clears it. Each filtered-tail reader retains at most
-128 paths. A continuously changing oversized suffix can restart an unfinished
-scan; this bounded reader does not promise confirmation before a chain deadline.
+snapshot reads no bytes. Truncation, replacement, changed boundary samples or
+same-size mtime changes restart the scan; `forgetTranscriptTurn` also clears it.
+Each filtered-tail reader retains at most 128 paths, evicting the least recently
+used path. Growth does not throw away progress, but scanning remains subject to
+the chain's overall deadline.
 
-The live SDK entrypoint reader shares this filtered tail while preserving its
-existing head sample and full-scan mode. An unfinished scan with no terminal
+The live SDK entrypoint reader uses a fresh filtered-tail reader with a 4 MiB
+one-shot budget and retains no scan cache, preserving its head sample and
+full-scan mode. An unfinished scan with no terminal
 proof returns `null` rather than declaring the session SDK-only. Fixtures for
 #730 measured both previously unmeasured cases: a closing assistant before a
 300,000-byte API line lost `closedAt`, and a terminal user in a transcript over

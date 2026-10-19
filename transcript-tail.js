@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const CHUNK_BYTES = 256 * 1024;
 const READ_BYTES = 1024 * 1024;
+const MAX_PENDING_BYTES = 4 * 1024 * 1024;
 const API_PREFIX = /^\s*\{\s*"type"\s*:\s*"api-request"\s*[,}]/;
 
 function readRange(filePath, start, length, expectedStat) {
@@ -31,29 +32,63 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
   return {
     read(filePath, stat, budget = READ_BYTES) {
       let scan = cache.get(filePath);
-      if (!scan || scan.size !== stat.size || scan.mtimeMs !== stat.mtimeMs || scan.dev !== stat.dev || scan.ino !== stat.ino) {
-        scan = { ...stat, offset: stat.size, pending: [], pendingBytes: 0,
-          lines: [], bytes: 0, raw: '', lastLine: true, complete: stat.size === 0 };
-        if (!cache.has(filePath) && cache.size >= 128) cache.delete(cache.keys().next().value);
-        cache.set(filePath, scan);
+      let consumed = 0;
+      const sample = (start, length) => {
+        consumed += length;
+        return readRange(filePath, start, length, stat);
+      };
+      const sameIdentity = scan && scan.dev === stat.dev && scan.ino === stat.ino;
+      const unchanged = sameIdentity && scan.size === stat.size && scan.mtimeMs === stat.mtimeMs;
+      const appended = !unchanged && sameIdentity && stat.size > scan.size
+        && sample(0, scan.head.length).equals(scan.head)
+        && sample(scan.size - scan.boundary.length, scan.boundary.length).equals(scan.boundary);
+      if (!unchanged && !appended) {
+        scan = { ...stat, offset: stat.size, end: stat.size, pending: [], pendingBytes: 0, pendingHead: Buffer.alloc(0), dropped: false,
+          lines: [], bytes: 0, raw: '', lastLine: true, complete: stat.size === 0,
+          trailing: Buffer.alloc(0), trailingDropped: false, trailingApi: false,
+          head: sample(0, Math.min(64, stat.size)),
+          boundary: sample(Math.max(0, stat.size - 64), Math.min(64, stat.size)) };
+      } else if (appended) {
+        if (!scan.complete) {
+          const length = Math.min(tailBytes, stat.size - scan.size, Math.max(0, Math.floor((budget - consumed - 128) / 2)));
+          const newest = sample(stat.size - length, length).toString('utf8');
+          scan.raw = length === stat.size - scan.size ? (scan.raw + newest).slice(-tailBytes) : newest;
+        }
+        scan.size = stat.size;
+        scan.mtimeMs = stat.mtimeMs;
+        if (scan.head.length < 64) scan.head = sample(0, Math.min(64, stat.size));
+        scan.boundary = sample(Math.max(0, stat.size - 64), Math.min(64, stat.size));
       }
+      cache.delete(filePath);
+      if (cache.size >= 128) cache.delete(cache.keys().next().value);
+      cache.set(filePath, scan);
       const finishLine = prefix => {
         const bytes = prefix.length + scan.pendingBytes;
-        const head = Buffer.concat([prefix, ...scan.pending.slice(0, 2)].map(part => part.subarray(0, 128))).toString('utf8', 0, 128);
-        const terminated = !scan.lastLine || scan.raw.endsWith('\n');
+        const head = Buffer.concat([prefix.subarray(0, 128), scan.pendingHead]).toString('utf8', 0, 128);
+        const terminated = !scan.lastLine || scan.baseEndsWithNewline;
         scan.lastLine = false;
-        const line = bytes && !API_PREFIX.test(head) ? Buffer.concat([prefix, ...scan.pending]) : null;
+        const api = API_PREFIX.test(head);
+        const line = bytes && !api ? scan.dropped ? Buffer.alloc(tailBytes, 32) : Buffer.concat([prefix, ...scan.pending]) : null;
+        if (!terminated) {
+          scan.trailing = line && !scan.dropped ? line : Buffer.alloc(0);
+          scan.trailingDropped = api || scan.dropped;
+          scan.trailingApi = api;
+        }
         scan.pending = [];
         scan.pendingBytes = 0;
+        scan.pendingHead = Buffer.alloc(0);
+        scan.dropped = false;
         if (!line) return;
         scan.lines.unshift({ line, terminated });
-        scan.bytes += bytes + 1;
+        scan.bytes += line.length + 1;
       };
-      let consumed = 0;
       while (!scan.complete && consumed < budget) {
         const length = Math.min(tailBytes, scan.offset, budget - consumed);
         const chunk = readRange(filePath, scan.offset - length, length, stat);
-        if (scan.offset === stat.size) scan.raw = chunk.toString('utf8');
+        if (scan.offset === scan.end) {
+          scan.raw = chunk.toString('utf8');
+          scan.baseEndsWithNewline = scan.raw.endsWith('\n');
+        }
         scan.offset -= length;
         consumed += length;
         let end = chunk.length;
@@ -65,15 +100,62 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
         }
         if (!scan.complete) {
           scan.pendingBytes += end;
-          if (end) scan.pending.unshift(chunk.subarray(0, end));
+          scan.pendingHead = Buffer.concat([chunk.subarray(0, Math.min(end, 128)), scan.pendingHead]).subarray(0, 128);
+          if (scan.pendingBytes > MAX_PENDING_BYTES) { scan.pending = []; scan.dropped = true; }
+          if (end && !scan.dropped) scan.pending.unshift(chunk.subarray(0, end));
           if (!scan.offset) { finishLine(Buffer.alloc(0)); scan.complete = true; }
         }
       }
-      const writtenText = scan.complete ? scan.lines.map(({ line }) => line.toString('utf8')).join('\n')
-        + (scan.lines.at(-1)?.terminated ? '\n' : '') : scan.raw;
+      if (scan.complete && scan.end < stat.size && scan.lines.at(-1)?.terminated === false) {
+        const removed = scan.lines.pop();
+        scan.bytes -= removed.line.length + 1;
+      }
+      while (scan.complete && scan.end < stat.size && consumed < budget) {
+        const length = Math.min(tailBytes, stat.size - scan.end, budget - consumed);
+        const chunk = readRange(filePath, scan.end, length, stat);
+        scan.end += length;
+        consumed += length;
+        scan.raw = (scan.raw + chunk.toString('utf8')).slice(-tailBytes);
+        let start = 0;
+        for (let i = 0; i <= chunk.length; i++) {
+          if (i < chunk.length && chunk[i] !== 10) continue;
+          const part = chunk.subarray(start, i);
+          if (!scan.trailingDropped) {
+            if (scan.trailing.length + part.length > MAX_PENDING_BYTES) {
+              scan.trailing = Buffer.alloc(0);
+              scan.trailingDropped = true;
+            } else {
+              scan.trailing = Buffer.concat([scan.trailing, part]);
+              if (API_PREFIX.test(scan.trailing.toString('utf8', 0, 128))) {
+                scan.trailing = Buffer.alloc(0);
+                scan.trailingDropped = true;
+                scan.trailingApi = true;
+              }
+            }
+          }
+          if (i < chunk.length) {
+            if (!scan.trailingApi) {
+              const line = scan.trailingDropped ? Buffer.alloc(tailBytes, 32) : scan.trailing;
+              scan.lines.push({ line, terminated: true });
+              scan.bytes += line.length + 1;
+            }
+            scan.trailing = Buffer.alloc(0);
+            scan.trailingDropped = false;
+            scan.trailingApi = false;
+          }
+          start = i + 1;
+        }
+        while (scan.lines.length > 1 && scan.bytes - scan.lines[0].line.length - 1 >= tailBytes) {
+          scan.bytes -= scan.lines.shift().line.length + 1;
+        }
+      }
+      const complete = scan.complete && scan.end === stat.size;
+      const trailingText = scan.trailingDropped && !scan.trailingApi ? ' '.repeat(tailBytes) : scan.trailing.toString('utf8');
+      const writtenText = complete ? scan.lines.map(({ line, terminated }) => line.toString('utf8') + (terminated ? '\n' : '')).join('')
+        + (scan.lines.at(-1)?.terminated !== false ? trailingText : '') : scan.raw;
       const bytes = Buffer.from(writtenText);
       const text = bytes.subarray(Math.max(0, bytes.length - tailBytes)).toString('utf8');
-      return { text, writtenText, complete: scan.complete, endsWithNewline: !stat.size || scan.raw.endsWith('\n') };
+      return { text, writtenText, complete, endsWithNewline: !stat.size || scan.boundary.at(-1) === 10 };
     },
     forget(filePath) { cache.delete(filePath); },
   };
