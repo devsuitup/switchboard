@@ -72,11 +72,12 @@ test('R2 legacy scan completes beyond its injectable pacing budget and yields', 
 
 for (const [name, graph] of [
   ['two continuations', { old: ['a', 'b'], a: [], b: [], other: [] }],
-  ['unresolved continuation', { old: ['missing'], other: [] }],
+  ['unresolved continuation', { old: [], other: [] }],
 ]) {
   test(`R2 automatic restore holds ${name}, restores others and lists a nonblocking notice`, { timeout: 9000 }, async t => {
     const savedEntries = [{ sessionId: 'old', active: true }, { sessionId: 'other' }];
     const h = setup(t, graph, { savedEntries });
+    if (name === 'unresolved continuation') append(h, '{"type":"continued-in","sessionId":"old","continuedInSessionId":"../invalid"}\n');
     await h.restore();
     assert.deepEqual(h.prompts, []);
     assert.deepEqual(h.spawned.map(call => call.id), ['other']);
@@ -104,9 +105,10 @@ test('R2 a missing continuation API cannot silently bypass the resume guard', { 
   assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
 });
 
-for (const [graph, dialog] of [[{ old: ['a', 'b'], a: [], b: [] }, 'chooser'], [{ old: ['missing'] }, 'fallback']]) {
+for (const [graph, dialog] of [[{ old: ['a', 'b'], a: [], b: [] }, 'chooser'], [{ old: ['unindexed'], unindexed: [] }, 'fallback']]) {
   test(`R2 manual open can explicitly select the original id (${Object.keys(graph).length} nodes)`, { timeout: 9000 }, async t => {
     const h = setup(t, graph, { answer: true, choice: 'old' });
+    if (dialog === 'fallback') h.rows.delete('unindexed');
     await h.click();
     assert.deepEqual(h.spawned.map(call => call.id), ['old']);
     const question = h.prompts.at(-1);

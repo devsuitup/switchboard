@@ -77,7 +77,7 @@ const continuationLocations = {
 };
 
 async function resolveResumeSession(session, { automatic = false, api, confirm, choose, describe = () => ({}),
-  formatDate = t => new Date(t).toLocaleString(), resolutions, onHold, onLive,
+  formatDate = t => new Date(t).toLocaleString(), resolutions, onHold, onLive, notify,
   resolveRow = candidate => ({ ...session, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] }) } = {}) {
   if (!session || session.type === 'terminal' || session.remoteAlias) return session;
   const partInfo = (candidate, id = candidate.sessionId) => {
@@ -101,6 +101,11 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   }
   const rowIds = new Set([session.sessionId, ...(session.mergedMemberIds || [])]);
   const candidates = (result?.candidates || []).filter(candidate => !rowIds.has(candidate.sessionId));
+  if (result?.missing && !candidates.length) {
+    notify?.({ id: `continuation-missing:${session.sessionId}`,
+      message: '"' + conversationName() + '" continued in a part that no longer exists on disk, so it was opened as it was.' });
+    return session;
+  }
   if (automatic) {
     if (!result || result.unresolved) { onHold?.({ waitingForIndex: !!result?.waitingForIndex }); return null; }
     return candidates.length === 1 ? { ...session, sessionId: candidates[0].sessionId } : candidates.length ? null : session;

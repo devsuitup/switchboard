@@ -97,16 +97,17 @@ function* continuationTraversal(sessionId, { maxDepth = 32, maxNodes = 128, incl
   const candidates = new Map(), visiting = new Set(), visited = new Set();
   const reachable = new Set();
   let unresolved = false, incomplete = false, nodes = 0, continued = false, waitingForIndex = false;
+  let allMissingSeen = false, other = false;
   function* visit(id, depth) {
-    if (visiting.has(id) || depth > maxDepth || ++nodes > maxNodes) { unresolved = true; return; }
+    if (visiting.has(id) || depth > maxDepth || ++nodes > maxNodes) { unresolved = other = true; return; }
     if (visited.has(id)) return;
     const node = yield id;
-    if (!node) { unresolved = true; return; }
-    if (node.waitingForIndex) { unresolved = true; waitingForIndex = true; return; }
+    if (!node) { unresolved = other = true; return; }
+    if (node.waitingForIndex) { unresolved = other = true; waitingForIndex = true; return; }
     if (node.missing) { incomplete = true; return false; }
     reachable.add(id);
     const index = node.index;
-    if (index?.unresolved) unresolved = true;
+    if (index?.unresolved) unresolved = other = true;
     const children = index?.ids || [];
     if (!children.length) {
       if (id !== sessionId) candidates.set(id, { sessionId: id, modified: node.modified || null });
@@ -118,14 +119,14 @@ function* continuationTraversal(sessionId, { maxDepth = 32, maxNodes = 128, incl
         if ((yield* visit(child, depth + 1)) !== false) allMissing = false;
         if (nodes > maxNodes) break;
       }
-      if (allMissing) unresolved = true;
+      if (allMissing) unresolved = allMissingSeen = true;
       visiting.delete(id);
     }
     visited.add(id);
   }
-  if (!validId(sessionId)) return { candidates: [], unresolved: true, continued: false };
-  if ((yield* visit(sessionId, 0)) === false) unresolved = true;
-  return { candidates: [...candidates.values()], unresolved, continued, waitingForIndex,
+  if (!validId(sessionId)) return { candidates: [], unresolved: true, continued: false, missing: false };
+  if ((yield* visit(sessionId, 0)) === false) unresolved = other = true;
+  return { candidates: [...candidates.values()], unresolved, continued, waitingForIndex, missing: unresolved && allMissingSeen && !other,
     ...(includeReachable ? { reachable: [...reachable], incomplete: incomplete || unresolved } : {}) };
 }
 
