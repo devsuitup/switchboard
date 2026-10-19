@@ -23,8 +23,8 @@ When several states hold at once, the first one in this table wins:
 The two violet states are explained on [Subagents](subagents.md#live-status).
 
 A blocked background job keeps its Blocked label and tooltip. Blocking alone
-does not request attention; a separate OSC 9 attention notification or a live
-`waiting` descriptor with `attention: true` still takes the blinking LED's priority.
+does not request attention. When Claude separately asks for your attention,
+such as with a permission prompt, the blinking LED takes priority.
 
 Sessions Switchboard does not run itself have no terminal to read signals
 from. Their row shows the working spinner while their transcript is being

@@ -181,7 +181,7 @@ test('Agents rows supply genuine attention, blocked waiting and finished glyphs 
   const { window, document, setSnapshot, destroy } = setup();
   try {
     setSnapshot({ daemonReachable: true, roster: [
-      { id: 'waiting', kind: 'background', state: 'blocked', hosted: true, status: 'waiting' },
+      { id: 'waiting', sessionId: 's-waiting', kind: 'background', state: 'blocked', hosted: true, status: 'waiting' },
       { sessionId: 'permission', kind: 'interactive', status: 'waiting' },
       { id: 'idle', kind: 'background', state: 'working', hosted: true, status: 'idle' },
       { id: 'finished', kind: 'background', state: 'done', hosted: false, status: 'idle' },
@@ -190,7 +190,7 @@ test('Agents rows supply genuine attention, blocked waiting and finished glyphs 
     const blocked = document.querySelector('.agents-row[data-key="bg:waiting"] .session-icon');
     assert.ok(blocked.classList.contains('session-icon--waiting'));
     assert.equal(blocked.classList.contains('session-icon--attention'), false);
-    assert.match(blocked.title, /Blocked/);
+    assert.match(blocked.title, /job blocked/);
     const { renderSessionIcon } = require('../public/session-state');
     for (const [rung, snapshot] of [['attention', { attention: true }], ['waiting', { waitingForInput: true }], ['stale', { stale: true }]]) {
       const slot = document.querySelector(`.agents-row .session-icon--${rung}`);

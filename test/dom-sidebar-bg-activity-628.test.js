@@ -193,7 +193,8 @@ for (const [state, kind, head, slot, label] of [
         assert.equal(row.querySelectorAll('.session-icon').length, 1);
         const icon = row.querySelector(`.session-icon--${slot}`);
         assert.ok(icon, row.innerHTML);
-        assert.equal(icon.title, state === 'blocked' ? `${label} · Blocked` : label);
+        assert.equal(icon.title, state === 'blocked'
+          ? h.document.querySelector('.session-item .session-icon').title : label);
         if (state === 'blocked') assert.equal(icon.dataset.glyph, '○');
         const status = row.querySelector('.agents-row-state');
         assert.match(status.textContent, new RegExp(state));
