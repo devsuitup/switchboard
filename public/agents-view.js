@@ -496,7 +496,7 @@ async function runAgentVerb(verb, entry) {
   if (verb === 'resume') {
     if (!agentVerbAvailability(entry, agentsDaemonReachable).resume) return;
     const row = indexedRowOf(entry.sessionId);
-    return openSession(row ? rowHeadSession(row, entry.sessionId)
+    return openSession(row ? rowHeadSession(row)
       : { sessionId: entry.sessionId, projectPath: entry.cwd, name: entry.name });
   }
   if (verb === 'transcript') {

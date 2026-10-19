@@ -95,6 +95,9 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
   }
   loadAppFunctions(dom.getInternalVMContext(), { functions: ['indexedRowOf', 'indexedSessionById'] });
   loadAppFunctions(dom.getInternalVMContext(), {
+    functions: ['rowHeadId'], sourcePath: path.join(PUBLIC, 'session-activity-dom.js'),
+  });
+  loadAppFunctions(dom.getInternalVMContext(), {
     functions: ['rowHeadSession'], sourcePath: path.join(PUBLIC, 'sidebar.js'),
   });
   window.initAgentsView();
@@ -1036,15 +1039,19 @@ for (const indexed of [false, true]) {
     assert.equal(opened.length, 1);
     assert.equal(opened[0].length, 1);
     assert.deepEqual(JSON.parse(JSON.stringify(opened[0][0])), indexed
-      ? { ...session, sessionId: 's-i', mergedMemberIds: ['root'] }
+      ? session
       : { sessionId: 's-i', projectPath: '/w/l', name: 'lvds-1b' });
     assert.deepEqual(h.calls.verbs, []);
   });
 }
 
 
-for (const { merged, accept } of [false, true].flatMap(merged => [false, true].map(accept => ({ merged, accept })))) {
-  test(`External Resume uses only the shared live-elsewhere question (merged A→B→C: ${merged}, accept: ${accept})`, async t => {
+for (const { merged, liveId, accept } of [
+  { merged: false, liveId: 's-i' },
+  { merged: true, liveId: 's-i' },
+  { merged: true, liveId: 's-a' },
+].flatMap(scenario => [false, true].map(accept => ({ ...scenario, accept })))) {
+  test(`External Resume opens the row head with one live-elsewhere question (merged A→B→C: ${merged}, live: ${liveId}, accept: ${accept})`, async t => {
     const h = setup(); t.after(() => h.destroy());
     const w = h.window, questions = [], spawned = [];
     const live = { kind: 'interactive', pid: 30, cwd: '/w/l', startedAt: 100 };
@@ -1065,10 +1072,10 @@ for (const { merged, accept } of [false, true].flatMap(merged => [false, true].m
     Object.assign(w.api, {
       getSessionContinuations: async id => {
         continuationChecks.push(id);
-        return { candidates: merged ? [{ sessionId: 's-c', modified: 300 }] : [], unresolved: false };
+        return { candidates: merged && id !== 's-c' ? [{ sessionId: 's-c', modified: 300 }] : [], unresolved: false };
       },
-      getSessionLiveElsewhere: async id => { liveChecks.push(id); return id === 's-i' ? live : null; },
-      getSessionsLiveElsewhere: async ids => { liveChecks.push(...ids); return { 's-i': live }; },
+      getSessionLiveElsewhere: async id => { liveChecks.push(id); return id === liveId ? live : null; },
+      getSessionsLiveElsewhere: async ids => { liveChecks.push(...ids); return { [liveId]: live }; },
       openTerminal: async (...args) => { spawned.push(args); return { notLive: true }; },
     });
     evalFile({ getInternalVMContext: () => h.ctx }, path.join(PUBLIC, 'resume-guard.js'));
@@ -1081,19 +1088,19 @@ for (const { merged, accept } of [false, true].flatMap(merged => [false, true].m
     });
     let finished;
     w.openSession = (...args) => { finished = app.openSession(...args); return finished; };
-    h.setSnapshot({ daemonReachable: true, roster: [ROSTER[2]] });
+    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[2], sessionId: liveId }] });
     await w.showAgentsView();
     h.document.querySelector('.agents-row').click();
     h.document.querySelector('[data-verb="resume"]')?.click();
     await finished;
     assert.equal(questions.length, 1);
     assert.deepEqual(JSON.parse(JSON.stringify(questions[0])), JSON.parse(JSON.stringify(w.liveElsewhereQuestion(live, 'lvds-1b'))));
-    assert.deepEqual(continuationChecks, ['s-i']);
-    assert.deepEqual([...new Set(liveChecks)].sort(), merged ? ['s-a', 's-c', 's-i'] : ['s-i']);
     assert.equal(spawned.length, accept ? 1 : 0);
     if (accept) {
-      assert.equal(spawned[0][0], 's-i');
+      assert.equal(spawned[0][0], merged ? 's-c' : 's-i');
       assert.notEqual(spawned[0][3].type, 'attach');
     }
+    assert.deepEqual(continuationChecks, [merged ? 's-c' : 's-i']);
+    assert.deepEqual([...new Set(liveChecks)].sort(), merged ? ['s-a', 's-c', 's-i'] : ['s-i']);
   });
 }

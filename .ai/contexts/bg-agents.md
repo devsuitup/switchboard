@@ -669,11 +669,13 @@ consequences:
 ## External Resume
 
 An interactive row with a session id offers Resume even when the daemon is
-unreachable. `runAgentVerb('resume')` passes `indexedSessionById(sessionId)`
-or the roster's id/cwd/name fallback to `openSession` without options. This
+unreachable. `runAgentVerb('resume')` opens the indexed row's head with its
+parts through `rowHeadSession(row)`, as a sidebar click does, or passes the
+roster's id/cwd/name fallback to `openSession` without options. This
 keeps continuation resolution and the shared `guardResume` /
 `liveElsewhereQuestion` adapter on the normal manual-open path. Cancel opens
-nothing; acceptance resumes here. An already-open row is shown by `rowOpenId`.
+nothing; acceptance resumes the head here, even when an older part is live.
+An already-open row is shown by `rowOpenId`.
 Background jobs keep Attach, and Resume never calls the daemon verb IPC.
 
 ## Attach
