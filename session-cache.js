@@ -1644,11 +1644,12 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
         const checked = await getSessionLiveElsewhere(id);
         if (!checked?.known) return null;
         if (checked.live) return { index: { ids: [] } };
+        if (checked.live !== null) return null;
       }
       const root = alias === null ? PROJECTS_DIR : remoteRoots.get(alias);
       diskEntries ||= fs.promises.readdir(root, { recursive: true, withFileTypes: true });
       const entries = await diskEntries;
-      if (entries.some(entry => entry.isFile() && entry.name === id + '.jsonl')) return { waitingForIndex: true };
+      if (entries.some(entry => entry.isFile() && entry.name.toLowerCase() === id.toLowerCase() + '.jsonl')) return { waitingForIndex: true };
       return entries.some(entry => entry.isSymbolicLink()) ? null : { missing: true };
     }
     if (row.parentSessionId) return null;

@@ -2,8 +2,11 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { resolveContinuations, resolveContinuationsSync } = require('../session-continuations');
 const { setup } = require('./continuations-harness');
+const cache = require('../session-cache');
 
 for (const [name, other, options] of [
   ['X1 sole proven-missing target', undefined, {}],
@@ -12,11 +15,11 @@ for (const [name, other, options] of [
   ['X4 unreadable node', null, {}],
   ['cycle', { index: { ids: ['old'] } }, {}],
   ['depth bound', { index: { ids: ['deep'] } }, { maxDepth: 2 }],
-  ['node bound', { index: { ids: [] } }, { maxNodes: 3 }],
+  ['node bound', { index: { ids: [] } }, { maxNodes: 2 }],
 ]) {
   test(`${name} distinguishes absence from uncertainty in sync and async traversal`, async () => {
-    const graph = { old: { index: { ids: ['mid', ...(other === undefined ? [] : ['other'])] } },
-      mid: { index: { ids: ['gone'] } }, gone: { missing: true }, other, deep: { index: { ids: ['deeper'] } } };
+    const graph = { old: { index: { ids: ['gone', ...(other === undefined ? [] : ['other'])] } },
+      gone: { missing: true }, other, deep: { index: { ids: ['deeper'] } } };
     for (const resolve of [resolveContinuationsSync, resolveContinuations]) {
       const result = await resolve('old', id => graph[id], options);
       assert.equal(result.unresolved, true);
@@ -29,6 +32,84 @@ test('a missing root is not a proven-missing continuation', () => {
   assert.equal(resolveContinuationsSync('old', () => ({ missing: true })).missing, false);
   assert.equal(resolveContinuationsSync('../invalid', () => null).missing, false);
 });
+
+test('a present descendant is the last available candidate in sync and async traversal', async () => {
+  const graph = { old: { index: { ids: ['mid'] } }, mid: { index: { ids: ['gone'] } }, gone: { missing: true } };
+  for (const resolve of [resolveContinuationsSync, resolveContinuations]) {
+    const result = await resolve('old', id => graph[id]);
+    assert.equal(result.missing, false);
+    assert.deepEqual(result.candidates.map(candidate => candidate.sessionId), ['mid']);
+  }
+});
+
+for (const graph of [
+  { old: ['mid'], mid: ['gone'] },
+  { old: ['mid', 'gone-a'], mid: ['gone-b'] },
+]) {
+  test(`manual click offers a present descendant with missing children (${graph.old.length} root targets)`, async t => {
+    const h = setup(t, graph, { choice: 'mid' });
+    await h.click();
+    assert.deepEqual(h.spawned.map(call => call.id), ['mid']);
+    assert.equal(h.prompts.length, 1);
+    assert.equal(h.prompts[0].title, 'Open which part?');
+    assert.deepEqual(Array.from(h.prompts[0].options, option => option.id).sort(), ['mid', 'old']);
+    assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId), ['mid']);
+    assert.equal(h.dom.window.document.querySelector('[data-notice-id="continuation-missing:old"]'), null);
+  });
+}
+
+for (const automatic of [false, true]) {
+  for (const variant of ['X2 unresolved index', 'X3 waiting for indexing', 'X4 unreadable inventory']) {
+    test(`${variant} ${automatic ? 'holds restore' : 'asks before manual opening'}`, async t => {
+      const h = setup(t, { old: ['gone'] });
+      if (variant.startsWith('X2')) {
+        fs.appendFileSync(path.join(h.root, h.folder, 'old.jsonl'),
+          JSON.stringify({ type: 'continued-in', sessionId: 'old', continuedInSessionId: '../invalid' }) + '\n');
+      } else if (variant.startsWith('X3')) {
+        fs.writeFileSync(path.join(h.root, h.folder, 'gone.jsonl'), '{}\n');
+      } else {
+        t.mock.method(fs.promises, 'readdir', async () => { throw new Error('fixture unreadable'); });
+      }
+      await (automatic ? h.restore() : h.click());
+      assert.deepEqual(h.spawned, []);
+      assert.equal(h.prompts.length, automatic ? 0 : 1);
+      if (!automatic) assert.match(h.prompts[0].join(' '), /continued|still being indexed/);
+      if (automatic) assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId), ['old']);
+      assert.equal(h.dom.window.document.querySelector('[data-notice-id="continuation-missing:old"]'), null);
+    });
+  }
+}
+
+for (const automatic of [false, true]) {
+  test(`a differently cased unindexed transcript ${automatic ? 'holds restore' : 'asks before opening'}`, async t => {
+    const h = setup(t, { old: ['UNINDEXED'], unindexed: [] });
+    h.rows.delete('unindexed');
+    await (automatic ? h.restore() : h.click());
+    assert.deepEqual(h.spawned, []);
+    assert.equal(h.prompts.length, automatic ? 0 : 1);
+    if (!automatic) assert.match(h.prompts[0].join(' '), /still being indexed/);
+    assert.equal(h.dom.window.document.querySelector('[data-notice-id="continuation-missing:old"]'), null);
+  });
+}
+
+for (const automatic of [false, true]) {
+  for (const live of [undefined, false]) {
+    test(`a known handoff target without a completed live check (${live}) ${automatic ? 'holds restore' : 'asks before opening'}`, async t => {
+      const h = setup(t, { old: ['handoff'] });
+      h.ctx.api.getSessionContinuations = id => cache.resolveSessionContinuations(id, {
+        getSessionLiveElsewhere: async () => ({ known: true, ...(live === undefined ? {} : { live }) }),
+      });
+      await (automatic ? h.restore() : h.click());
+      assert.deepEqual(h.spawned, []);
+      assert.equal(h.prompts.length, automatic ? 0 : 1);
+      if (!automatic) assert.match(h.prompts[0].join(' '), /could not tell where/);
+      assert.equal(h.dom.window.document.querySelector('[data-notice-id="continuation-missing:old"]'), null);
+      const result = await h.ctx.api.getSessionContinuations('old');
+      assert.equal(result.missing, false);
+      assert.equal(result.unresolved, true);
+    });
+  }
+}
 
 function noticeTimer(t, h) {
   const timers = [];

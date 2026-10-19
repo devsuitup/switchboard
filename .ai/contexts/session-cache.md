@@ -2262,12 +2262,16 @@ CLI `liveElsewhereChecked` lookup. A live descriptor keeps the target as a termi
 candidate even before its first transcript record exists; `known:false`, including
 an unreadable descriptor directory, keeps resolution unresolved. A confirmed
 `known:true, live:null` result permits the disk inventory to check absence.
+A known result without an explicit live descriptor or `live:null` is unresolved;
+it cannot prove a handoff target absent. Inventory filenames are compared
+case-insensitively, as continuation row membership is.
 Remote mirror targets never query local CLI descriptors.
 Only a target absent from the cache, liveness lookup and inventory is marked missing.
 The graph drops that target if its parent has another existing continuation.
-If every child is confirmed missing, that parent remains unresolved, including
-inside a longer chain: silently resuming a discontinued branch is unsafe, and
-manual opening already offers an explicit original-id choice. Cached rows with
+If every child is confirmed missing, a present non-root parent remains a candidate
+and resolution stays unresolved: manual opening offers the chooser and restore
+holds. Only a root whose targets are all proven missing, with no other uncertainty,
+reports `missing:true`; it opens as it was with a short notice. Cached rows with
 missing or unreadable transcripts retain the existing unresolved behaviour.
 
 Full-scan and persisted chunk indexes both carry `version:3`, `size`, `sealedIds`, a bounded base64

@@ -119,7 +119,14 @@ function* continuationTraversal(sessionId, { maxDepth = 32, maxNodes = 128, incl
         if ((yield* visit(child, depth + 1)) !== false) allMissing = false;
         if (nodes > maxNodes) break;
       }
-      if (allMissing) unresolved = allMissingSeen = true;
+      if (allMissing) {
+        unresolved = true;
+        if (id === sessionId) allMissingSeen = true;
+        else {
+          other = true;
+          candidates.set(id, { sessionId: id, modified: node.modified || null });
+        }
+      }
       visiting.delete(id);
     }
     visited.add(id);
