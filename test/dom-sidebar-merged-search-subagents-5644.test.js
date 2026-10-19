@@ -58,6 +58,17 @@ for (const parent of ['b', 'head-only']) {
   });
 }
 
+test('a row keeps its own subagents when another row lists its id as a member', t => {
+  const ctx = setup(t);
+  const x = { ...row, sessionId: 'x', headSessionId: 'x', mergedMemberIds: [] };
+  const y = { ...row, sessionId: 'y', headSessionId: 'y', mergedMemberIds: ['x'], modified: '2026-10-18T06:00:00Z' };
+  ctx.sidebar.renderProjects([makeSampleProject({ sessions: [x, y, child('x')] })], true);
+
+  const container = ctx.document.getElementById('subc-x');
+  assert.ok(container, 'row x keeps its child container');
+  assert.ok(container.contains(ctx.document.getElementById('si-sub:x:1')));
+});
+
 for (const hit of ['c', 'head-only']) {
   test(`20: refreshSidebar keeps the project whose only hit is ${hit}`, t => {
     const ctx = setup(t);

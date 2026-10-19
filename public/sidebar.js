@@ -728,8 +728,11 @@ function renderProjects(projects, resort) {
   function buildSubagentIndex(sessions) {
     const owners = new Map();
     for (const s of sessions) {
+      if (!s.parentSessionId) owners.set(s.sessionId, s.sessionId);
+    }
+    for (const s of sessions) {
       if (s.parentSessionId) continue;
-      for (const id of [...rowSessionIds(s), rowHeadId(s)]) owners.set(id, s.sessionId);
+      for (const id of [...rowSessionIds(s), rowHeadId(s)]) if (!owners.has(id)) owners.set(id, s.sessionId);
     }
     const index = new Map();
     for (const s of sessions) {
