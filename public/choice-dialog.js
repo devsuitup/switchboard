@@ -11,6 +11,7 @@ function writeRememberedChoice(rememberKey, checked) {
 // see .ai/contexts/app-dialogs.md
 let choiceDialogReturnFocus = null;
 let closeOpenChoiceDialog = null;
+let choiceDialogOptionId = 0;
 
 function showChoiceDialog(options = {}) {
   const active = document.activeElement;
@@ -77,24 +78,31 @@ function openChoiceDialog({
       group.setAttribute('aria-labelledby', heading.id);
       const selected = options.find(option => option.id === selectedId && !option.disabled) || options.find(option => !option.disabled);
       for (const option of options) {
-        const label = document.createElement('label');
-        label.className = 'choice-dialog-choice';
+        const row = document.createElement('div');
+        row.className = 'choice-dialog-choice';
         const radio = document.createElement('input');
         radio.type = 'radio';
+        radio.id = `choice-dialog-option-${++choiceDialogOptionId}`;
         radio.name = 'choice-dialog-option';
         radio.dataset.choiceId = option.id;
         radio.disabled = !!option.disabled;
         radio.checked = option === selected;
         const text = document.createElement('span');
-        text.textContent = option.label;
-        if (option.detail || option.disabledReason) {
+        const label = document.createElement('label');
+        label.htmlFor = radio.id;
+        label.textContent = option.label;
+        text.appendChild(label);
+        const description = [option.detail, option.disabled && option.disabledReason].filter(Boolean).join(' · ');
+        if (description) {
           const detail = document.createElement('span');
+          detail.id = `${radio.id}-detail`;
           detail.className = 'choice-dialog-detail';
-          detail.textContent = [option.detail, option.disabled && option.disabledReason].filter(Boolean).join(' · ');
+          detail.textContent = description;
+          radio.setAttribute('aria-describedby', detail.id);
           text.appendChild(detail);
         }
-        label.append(radio, text);
-        group.appendChild(label);
+        row.append(radio, text);
+        group.appendChild(row);
         radios.push({ option, radio });
       }
       body.appendChild(group);

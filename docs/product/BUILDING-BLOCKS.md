@@ -171,7 +171,8 @@ own class names.
   It returns `{ choice: id }`, or `null` on Cancel, Escape, Close or backdrop.
 - **Anatomy.** A labelled native radio group; each option supplies `id`,
   `label`, optional `detail`, `disabled` and `disabledReason`. Text is never
-  parsed as markup. The selected enabled option, or the first enabled option,
+  parsed as markup. The label names the radio; detail and disabled reason are
+  a separate accessible description. The selected enabled option, or the first enabled option,
   is preselected. Disabled options show their reason; no enabled options
   disables Open. Cancel + `Open`; Open receives initial focus.
 - **Keyboard.** Enter accepts the current selection; Escape cancels. Tab

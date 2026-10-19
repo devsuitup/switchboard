@@ -49,7 +49,7 @@ function registerModal({ overlay, cancel, enter, bodyEnter = false, restoreFocus
   };
 }
 
-function modalControls(overlay) {
+function modalControls(overlay, backward = false) {
   return [...overlay.querySelectorAll('button, input, select, textarea, a[href], [tabindex]')]
     .filter(control => control.tabIndex >= 0 && !control.matches(':disabled') && !control.closest('[hidden], [inert]'))
     .filter(control => {
@@ -62,7 +62,7 @@ function modalControls(overlay) {
     .filter((control, _, controls) => {
       if (!control.matches('input[type="radio"]') || !control.name) return true;
       const group = controls.filter(other => other.matches('input[type="radio"]') && other.name === control.name && other.form === control.form);
-      return control === (group.find(radio => radio.checked) || group[0]);
+      return control === (group.find(radio => radio.checked) || (backward ? group[group.length - 1] : group[0]));
     });
 }
 
@@ -77,9 +77,13 @@ function routeModalKey(event) {
   } else if (event.key === 'Tab') {
     event.preventDefault();
     event.stopImmediatePropagation();
-    const controls = modalControls(modal.overlay);
+    const controls = modalControls(modal.overlay, event.shiftKey);
     if (!controls.length) { modal.overlay.focus(); return; }
-    const at = controls.indexOf(document.activeElement);
+    const active = document.activeElement;
+    let at = controls.indexOf(active);
+    if (at === -1 && active.matches('input[type="radio"]') && active.name) {
+      at = controls.findIndex(control => control.matches('input[type="radio"]') && control.name === active.name && control.form === active.form);
+    }
     const next = at === -1 ? (event.shiftKey ? controls.length - 1 : 0)
       : (at + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
     controls[next].focus();

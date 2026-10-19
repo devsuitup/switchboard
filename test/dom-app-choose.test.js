@@ -56,7 +56,8 @@ test('C4: a disabled option exposes its reason and cannot replace the selection'
   try {
     const pending = ctx.window.appChoose({ options: [...options, { id: 'd', label: 'Unavailable', disabled: true, disabledReason: 'Cannot attach' }], selectedId: 'b' });
     assert.ok(radio(ctx, 'd').disabled);
-    assert.ok(radio(ctx, 'd').closest('label').textContent.includes('Cannot attach'));
+    const description = ctx.document.getElementById(radio(ctx, 'd').getAttribute('aria-describedby'));
+    assert.equal(description?.textContent, 'Cannot attach');
     radio(ctx, 'd').click();
     key(ctx, 'Enter');
     assert.deepEqual({ ...await pending }, { choice: 'b' });
@@ -124,4 +125,95 @@ test('C6: renderer ESLint accepts appChoose at a caller boundary', async () => {
   const lint = new ESLint();
   const [result] = await lint.lintText('appChoose({ options: [] });', { filePath: 'public/choose-fixture.js' });
   assert.equal(result.errorCount, 0, JSON.stringify(result.messages));
+});
+
+for (const shiftKey of [false, true]) {
+  test(`C5: ${shiftKey ? 'Shift+Tab' : 'Tab'} leaves a focused unchecked radio omitted from the group stop`, () => {
+    const ctx = setupSidebarDom();
+    try {
+      const overlay = ctx.document.createElement('div');
+      overlay.innerHTML = '<button>S</button><input type="radio" name="g"><input type="radio" name="g"><input type="radio" name="g"><button>E</button>';
+      ctx.document.body.append(overlay);
+      const [start, , middle, , end] = overlay.children;
+      const unregister = ctx.window.registerModal({ overlay, cancel() {} });
+      middle.focus();
+      assert.equal(overlay.querySelector(':checked'), null);
+      key(ctx, 'Tab', shiftKey);
+      assert.equal(ctx.document.activeElement, shiftKey ? start : end);
+      unregister();
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('C5: Shift+Tab enters an unchecked group at its last enabled visible radio', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const overlay = ctx.document.createElement('div');
+    overlay.innerHTML = '<button>S</button><input type="radio" name="g"><input type="radio" name="g"><input type="radio" name="g"><input type="radio" name="g" hidden><input type="radio" name="g" disabled><button>E</button>';
+    ctx.document.body.append(overlay);
+    const [start, first, , last, , , end] = overlay.children;
+    const unregister = ctx.window.registerModal({ overlay, cancel() {} });
+    end.focus();
+    key(ctx, 'Tab', true);
+    assert.equal(ctx.document.activeElement, last);
+    key(ctx, 'Tab', true);
+    assert.equal(ctx.document.activeElement, start);
+    key(ctx, 'Tab');
+    assert.equal(ctx.document.activeElement, first);
+    unregister();
+  } finally { ctx.destroy(); }
+});
+
+test('C4: a radio uses only its label as its native accessible name', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const pending = ctx.window.appChoose({ options: [
+      { id: 'a', label: 'Available', detail: 'Details A' },
+      { id: 'd', label: 'Unavailable', detail: 'Details D', disabled: true, disabledReason: 'Cannot attach' },
+    ] });
+    for (const [id, name] of [['a', 'Available'], ['d', 'Unavailable']]) {
+      const input = radio(ctx, id);
+      assert.equal(input.labels.length, 1);
+      assert.equal(input.labels[0].textContent, name);
+      assert.equal(input.getAttribute('aria-label'), null);
+      assert.equal(input.getAttribute('aria-labelledby'), null);
+    }
+    key(ctx, 'Escape');
+    await pending;
+  } finally { ctx.destroy(); }
+});
+
+test('C4: radio descriptions link to unique literal details and disabled reasons', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const pending = ctx.window.appChoose({ options: [
+      { id: 'a', label: 'Available', detail: '<b>Details</b>' },
+      { id: 'd', label: 'Unavailable', detail: 'Details', disabled: true, disabledReason: '<img src=x>' },
+    ] });
+    const ids = [];
+    for (const [id, expected] of [['a', '<b>Details</b>'], ['d', 'Details · <img src=x>']]) {
+      const descriptionId = radio(ctx, id).getAttribute('aria-describedby');
+      assert.ok(descriptionId);
+      ids.push(descriptionId);
+      const detail = ctx.document.getElementById(descriptionId);
+      assert.equal(detail?.textContent, expected);
+      assert.equal(detail.closest('label'), null);
+      assert.equal(ctx.document.querySelectorAll(`[id="${descriptionId}"]`).length, 1);
+    }
+    assert.notEqual(ids[0], ids[1]);
+    assert.equal(ctx.document.querySelector('img, b'), null);
+    key(ctx, 'Escape');
+    await pending;
+  } finally { ctx.destroy(); }
+});
+
+test('C4: an enabled option with only a disabled reason has no empty detail element', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const pending = ctx.window.appChoose({ options: [{ id: 'a', label: 'Available', disabledReason: 'Unused reason' }] });
+    assert.equal(ctx.document.querySelector('.choice-dialog-detail'), null);
+    assert.equal(radio(ctx, 'a').hasAttribute('aria-describedby'), false);
+    key(ctx, 'Escape');
+    await pending;
+  } finally { ctx.destroy(); }
 });
