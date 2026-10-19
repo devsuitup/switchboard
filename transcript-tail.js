@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { createHash } = require('node:crypto');
 const CHUNK_BYTES = 256 * 1024;
 const READ_BYTES = 1024 * 1024;
 const MAX_PENDING_BYTES = 4 * 1024 * 1024;
@@ -29,6 +30,11 @@ function readRange(filePath, start, length, expectedStat) {
 // see .ai/contexts/trigger-watcher.md, "Transcript tail reads"
 function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
   const cache = new Map();
+  const droppedLine = (offset, length) => {
+    const fingerprint = createHash('sha256').update(`${offset}:${length}`).digest('hex');
+    const record = JSON.stringify({ type: 'assistant', message: { content: fingerprint } });
+    return Buffer.from(record.padEnd(tailBytes, ' '));
+  };
   return {
     read(filePath, stat, budget = READ_BYTES) {
       let scan = cache.get(filePath);
@@ -39,38 +45,42 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
       };
       const sameIdentity = scan && scan.dev === stat.dev && scan.ino === stat.ino;
       const unchanged = sameIdentity && scan.size === stat.size && scan.mtimeMs === stat.mtimeMs;
-      const appended = !unchanged && sameIdentity && stat.size > scan.size
+      const appended = !unchanged && sameIdentity && stat.size > scan.size && scan.mtimeMs <= stat.mtimeMs
         && sample(0, scan.head.length).equals(scan.head)
+        && sample(Math.floor(scan.size / 2), scan.middle.length).equals(scan.middle)
         && sample(scan.size - scan.boundary.length, scan.boundary.length).equals(scan.boundary);
       if (!unchanged && !appended) {
         scan = { ...stat, offset: stat.size, end: stat.size, pending: [], pendingBytes: 0, pendingHead: Buffer.alloc(0), dropped: false,
           lines: [], bytes: 0, raw: '', lastLine: true, complete: stat.size === 0,
-          trailing: Buffer.alloc(0), trailingDropped: false, trailingApi: false,
+          trailing: Buffer.alloc(0), trailingStart: stat.size, trailingDropped: false, trailingApi: false,
           head: sample(0, Math.min(64, stat.size)),
+          middle: sample(Math.floor(stat.size / 2), Math.min(64, stat.size - Math.floor(stat.size / 2))),
           boundary: sample(Math.max(0, stat.size - 64), Math.min(64, stat.size)) };
       } else if (appended) {
         if (!scan.complete) {
-          const length = Math.min(tailBytes, stat.size - scan.size, Math.max(0, Math.floor((budget - consumed - 128) / 2)));
+          const length = Math.min(tailBytes, stat.size - scan.size, Math.max(0, Math.floor((budget - consumed - 192) / 2)));
           const newest = sample(stat.size - length, length).toString('utf8');
           scan.raw = length === stat.size - scan.size ? (scan.raw + newest).slice(-tailBytes) : newest;
         }
         scan.size = stat.size;
         scan.mtimeMs = stat.mtimeMs;
         if (scan.head.length < 64) scan.head = sample(0, Math.min(64, stat.size));
+        scan.middle = sample(Math.floor(stat.size / 2), Math.min(64, stat.size - Math.floor(stat.size / 2)));
         scan.boundary = sample(Math.max(0, stat.size - 64), Math.min(64, stat.size));
       }
       cache.delete(filePath);
       if (cache.size >= 128) cache.delete(cache.keys().next().value);
       cache.set(filePath, scan);
-      const finishLine = prefix => {
+      const finishLine = (prefix, offset) => {
         const bytes = prefix.length + scan.pendingBytes;
         const head = Buffer.concat([prefix.subarray(0, 128), scan.pendingHead]).toString('utf8', 0, 128);
         const terminated = !scan.lastLine || scan.baseEndsWithNewline;
         scan.lastLine = false;
         const api = API_PREFIX.test(head);
-        const line = bytes && !api ? scan.dropped ? Buffer.alloc(tailBytes, 32) : Buffer.concat([prefix, ...scan.pending]) : null;
+        const line = bytes && !api ? scan.dropped ? droppedLine(offset, bytes) : Buffer.concat([prefix, ...scan.pending]) : null;
         if (!terminated) {
           scan.trailing = line && !scan.dropped ? line : Buffer.alloc(0);
+          scan.trailingStart = offset;
           scan.trailingDropped = api || scan.dropped;
           scan.trailingApi = api;
         }
@@ -94,7 +104,7 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
         let end = chunk.length;
         for (let i = chunk.length - 1; i >= 0; i--) {
           if (chunk[i] !== 10) continue;
-          finishLine(chunk.subarray(i + 1, end));
+          finishLine(chunk.subarray(i + 1, end), scan.offset + i + 1);
           end = i;
           if (scan.bytes >= tailBytes) { scan.complete = true; break; }
         }
@@ -103,7 +113,7 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
           scan.pendingHead = Buffer.concat([chunk.subarray(0, Math.min(end, 128)), scan.pendingHead]).subarray(0, 128);
           if (scan.pendingBytes > MAX_PENDING_BYTES) { scan.pending = []; scan.dropped = true; }
           if (end && !scan.dropped) scan.pending.unshift(chunk.subarray(0, end));
-          if (!scan.offset) { finishLine(Buffer.alloc(0)); scan.complete = true; }
+          if (!scan.offset) { finishLine(Buffer.alloc(0), 0); scan.complete = true; }
         }
       }
       if (scan.complete && scan.end < stat.size && scan.lines.at(-1)?.terminated === false) {
@@ -135,11 +145,12 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
           }
           if (i < chunk.length) {
             if (!scan.trailingApi) {
-              const line = scan.trailingDropped ? Buffer.alloc(tailBytes, 32) : scan.trailing;
+              const line = scan.trailingDropped ? droppedLine(scan.trailingStart, scan.end - chunk.length + i - scan.trailingStart) : scan.trailing;
               scan.lines.push({ line, terminated: true });
               scan.bytes += line.length + 1;
             }
             scan.trailing = Buffer.alloc(0);
+            scan.trailingStart = scan.end - chunk.length + i + 1;
             scan.trailingDropped = false;
             scan.trailingApi = false;
           }
@@ -150,7 +161,7 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
         }
       }
       const complete = scan.complete && scan.end === stat.size;
-      const trailingText = scan.trailingDropped && !scan.trailingApi ? ' '.repeat(tailBytes) : scan.trailing.toString('utf8');
+      const trailingText = scan.trailingDropped && !scan.trailingApi ? droppedLine(scan.trailingStart, scan.end - scan.trailingStart).toString('utf8') : scan.trailing.toString('utf8');
       const writtenText = complete ? scan.lines.map(({ line, terminated }) => line.toString('utf8') + (terminated ? '\n' : '')).join('')
         + (scan.lines.at(-1)?.terminated !== false ? trailingText : '') : scan.raw;
       const bytes = Buffer.from(writtenText);

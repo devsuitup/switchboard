@@ -1400,13 +1400,19 @@ restart the own-entry timeout; replacing the transcript discards that proof.
 
 An ordinary call reads at most 1 MiB. If a line extends beyond that budget,
 the next call resumes from its saved byte offset, including when the file grows.
-Growth on the same device/inode checks the first and previous last 64 bytes,
-then preserves the backward scan and consumes appended records forward. These
-boundary checks cannot detect edits in the middle that retain both samples.
+Strict growth on the same device/inode with a nondecreasing mtime checks the
+first, old middle and previous last 64 bytes, then preserves the backward scan
+and consumes appended records forward. Edits outside those samples can still
+escape detection; a changed sample or decreasing mtime restarts the scan.
 Until scanning catches up, classification uses the latest physical tail.
 Pending fragments retain at most 4 MiB; beyond that only a prefix sample and
 offset remain. At the line boundary, an API prefix discards the record; another
-prefix counts as unknown and consumes the logical tail budget. Non-API records
+prefix counts as unknown and consumes the logical tail budget. Its placeholder
+contains a synthetic assistant output with a SHA-256 fingerprint of the record's
+byte offset and length, padded to the logical tail budget. Completed dropped
+records therefore advance the task-records worker's written-activity signal;
+unchanged reads and backward rescans retain the same fingerprint. The placeholder
+has no timestamp, so it supplies no turn or prompt evidence. Non-API records
 within that bound remain whole for the written-output fingerprint.
 Classification still receives only the final 256 KiB of filtered bytes, so an
 oversized non-API user record keeps its existing unknown-head behavior.

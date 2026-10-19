@@ -66,6 +66,35 @@ test('the worker advances written output for a tool result larger than the trans
   }
 });
 
+test('i730c: appending dropped oversized tool results advances the worker written-output signal', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-dropped-'));
+  const file = path.join(dir, 's.jsonl');
+  let snapshot;
+  const client = createTaskRecordsClient({ onSnapshot: value => { snapshot = value; } });
+  t.after(() => { client.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const read = async () => {
+    await client.readBatch([{ file, parentSessionId: 's', turnOnly: true }]);
+    return snapshot.headTurn.writtenOutput;
+  };
+  fs.writeFileSync(file, JSON.stringify({ type: 'assistant', message: { content: 'baseline' } }) + '\n');
+  let previous = await read();
+  const line = JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'x'.repeat(5 * 1024 * 1024) }] } }) + '\n';
+  for (let record = 0; record < 2; record++) {
+    fs.appendFileSync(file, line);
+    let written;
+    for (let poll = 0; poll < 8; poll++) written = await read();
+    assert.notEqual(written, previous, 'a newly dropped record must signal written activity');
+    assert.match(written, /^[a-f0-9]{64}$/);
+    assert.equal(await read(), written, 'unchanged output must stay stable');
+    const coldReader = require('../transcript-turn').createTranscriptTurnReader();
+    let cold;
+    for (let poll = 0; poll < 8; poll++) cold = coldReader.read(file);
+    assert.equal(cold.writtenOutput, written, 'backward and appended scans must identify the same record');
+    assert.equal(cold.state, 'unknown');
+    previous = written;
+  }
+});
+
 test('the worker validates new main output, ignores metadata/partial writes/children, and carries the signature through rekey', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-'));
   const file = path.join(dir, 's.jsonl');

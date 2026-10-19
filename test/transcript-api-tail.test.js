@@ -99,7 +99,7 @@ test('i730b: appended API records keep the prompt and read only appended bytes',
       bytes = 0;
       const result = reader.read(file, statOf(file));
       assert.ok(result.text.includes('do it'), `prompt lost on append ${i}`);
-      assert.ok(bytes <= Buffer.byteLength(appended) + 256, `reread old bytes: ${bytes}`);
+      assert.ok(bytes <= Buffer.byteLength(appended) + 384, `reread old bytes: ${bytes}`);
     }
   } finally { fs.readSync = realRead; }
 });
@@ -147,6 +147,46 @@ test('i730b: an oversized unknown partial line cannot expose an older closed tur
   assert.equal(turn.state, 'unknown');
   fs.appendFileSync(file, '"}}\n' + prompt('new'));
   assert.deepEqual(reader.read(file).prompts, [{ at: 2000, text: 'new' }]);
+});
+
+test('i730c: a growing same-inode rewrite in the old middle discards the cached prompt', t => {
+  const file = fixture(t);
+  const reader = createTranscriptTurnReader();
+  const middle = prompt('OLD');
+  const prefix = JSON.stringify({ type: 'api-request', params: 'x'.repeat(1000) }) + '\n';
+  const suffix = JSON.stringify({ type: 'api-request', params: 'x'.repeat(1000) }) + '\n';
+  fs.writeFileSync(file, prefix + middle + suffix);
+  const before = fs.statSync(file);
+  assert.equal(reader.read(file).prompts[0].text, 'OLD');
+  const fd = fs.openSync(file, 'r+');
+  try {
+    const replacement = Buffer.from(prompt('NEW'));
+    fs.writeSync(fd, replacement, 0, replacement.length, Buffer.byteLength(prefix));
+  } finally { fs.closeSync(fd); }
+  fs.appendFileSync(file, '{}\n');
+  assert.equal(fs.statSync(file).ino, before.ino);
+  assert.deepEqual(reader.read(file).prompts, [{ at: 2000, text: 'NEW' }]);
+});
+
+test('i730c: growth with an older mtime discards edits outside the samples', t => {
+  const file = fixture(t);
+  const reader = createTranscriptTurnReader();
+  const prefix = JSON.stringify({ type: 'api-request', params: 'x'.repeat(1000) }) + '\n';
+  fs.writeFileSync(file, prefix + prompt('OLD') + JSON.stringify({ type: 'api-request', params: 'x'.repeat(3 * 1024 * 1024) }) + '\n');
+  const before = fs.statSync(file);
+  let turn;
+  for (let poll = 0; poll < 5; poll++) turn = reader.read(file);
+  assert.equal(turn.prompts[0].text, 'OLD');
+  const fd = fs.openSync(file, 'r+');
+  try {
+    const replacement = Buffer.from(prompt('NEW'));
+    fs.writeSync(fd, replacement, 0, replacement.length, Buffer.byteLength(prefix));
+  } finally { fs.closeSync(fd); }
+  fs.appendFileSync(file, '{}\n');
+  const older = new Date(before.mtimeMs - 10_000);
+  fs.utimesSync(file, older, older);
+  for (let poll = 0; poll < 5; poll++) turn = reader.read(file);
+  assert.deepEqual(turn.prompts, [{ at: 2000, text: 'NEW' }]);
 });
 
 test('i730b: pending fragments of a 30 MiB partial line retain bounded buffers', t => {
