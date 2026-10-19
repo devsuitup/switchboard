@@ -8,6 +8,8 @@ let agentsSnapshotRevision = 0;
 let agentsViewActive = false;
 let agentsRoster = [];
 let agentsDaemonReachable = true;
+let agentsCliAvailable = false;
+let agentsCliEntryCount = 0;
 let agentsSelectedKey = null;
 let agentsShowFinished = true;
 let agentsGroupBy = 'state';
@@ -151,8 +153,11 @@ function groupAgentEntries(entries, mode, opts = {}) {
 }
 
 function agentRowIcon(entry) {
-  const stored = typeof storedActivitySnapshot === 'function' ? storedActivitySnapshot(entry.sessionId) : {};
-  const foreground = entry.kind === 'background' && backgroundActivityIsForeground(entry.sessionId, entry);
+  const row = { ...(typeof localActivityRow === 'function' && localActivityRow(entry.sessionId)),
+    sessionId: entry.sessionId, headSessionId: entry.sessionId, bgJobId: entry.id, bgSessionId: entry.sessionId };
+  const selection = selectBackgroundActivity(entry.sessionId, row);
+  const stored = typeof storedActivitySnapshot === 'function' ? storedActivitySnapshot(entry.sessionId, row, selection) : {};
+  const foreground = entry.kind === 'background' && backgroundActivityIsForeground(entry.sessionId, row, selection);
   const live = foreground ? stored.liveness === 'alive'
     || typeof activePtyIds !== 'undefined' && activePtyIds.has(entry.sessionId) : agentIsLive(entry);
   const ports = foreground ? stored : {
@@ -165,20 +170,68 @@ function agentRowIcon(entry) {
     idleHintAt: entry.kind === 'interactive' && entry.status === 'idle' && Number.isFinite(entry.statusUpdatedAt)
       ? Math.max(stored.idleHintAt ?? -Infinity, entry.statusUpdatedAt) : stored.idleHintAt,
   };
-  let snapshot = typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, ports) : { ...ports, headTurn: 'unknown' };
+  let snapshot = typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, ports, row, selection) : { ...ports, headTurn: 'unknown' };
   if (entry.kind === 'background' && !foreground) snapshot = projectBackgroundActivity(entry, snapshot);
   const icon = renderSessionIcon(snapshot);
   const title = entry.kind === 'background' && entry.state === 'blocked'
-    ? backgroundActivityLabel(entry.sessionId, snapshot)?.title || `${icon.title} · job blocked` : icon.title;
+    ? entry.sessionId && backgroundActivityLabel(entry.sessionId, snapshot, row, selection)?.title || `${icon.title} · job blocked` : icon.title;
   return { slotClass: icon.slotClasses[0], live, glyph: icon.glyph, title };
 }
 
-function backgroundActivityEntry(sessionId) {
-  return bgActivityEntries.get(String(sessionId).toLowerCase());
+function backgroundAttachFacts(row, { headOnly = false } = {}) {
+  const lower = id => String(id || '').toLowerCase();
+  const members = new Set([row.sessionId, ...(row.mergedMemberIds || []), row.headSessionId].filter(Boolean).map(lower));
+  const head = lower(row.headSessionId || row.sessionId);
+  const facts = new Map();
+  if (typeof openSessions !== 'undefined') for (const [id, open] of openSessions) {
+    const target = lower(open.realSessionId || id);
+    if (!open.attach || open.exited || open.closed || open.session?.remoteAlias || !members.has(target) || headOnly && target !== head) continue;
+    const projectPath = open.session?.projectPath || open.projectPath || open.cwd;
+    if (row.remoteAlias || !row.projectPath || !projectPath || row.projectPath !== projectPath) continue;
+    const projected = lower(row.attachSessionId) === target && row.attachJobId;
+    const jobId = lower(open.attachJobId || open.session?.bgJobId || projected);
+    const entry = bgActivityEntries.get(jobId);
+    if (!entry || lower(entry.sessionId) !== target || entry.cachedJob === false && lower(projected) !== jobId) continue;
+    facts.set(jobId + '|' + target, { jobId, sessionId: target, exited: false, host: null });
+  }
+  return [...facts.values()];
 }
 
-function backgroundActivityIsForeground(sessionId, entry = backgroundActivityEntry(sessionId)) {
-  if (typeof openSessions !== 'undefined' && openSessions.get(sessionId)?.attach) return false;
+function selectBackgroundActivity(sessionId, row) {
+  const lower = id => String(id || '').toLowerCase();
+  row ||= typeof localActivityRow === 'function' ? localActivityRow(sessionId) : null;
+  row ||= { sessionId };
+  const head = lower(row.headSessionId || row.sessionId || sessionId);
+  const finish = (entry, selection, unavailable = false) => ({ entry: entry || null, selection,
+    unavailable, source: entry ? entry.taskEvidence?.valid === true ? 'job-valid' : 'job-invalid' : unavailable ? 'unavailable' : 'none' });
+  const exact = (jobId, target, selection) => {
+    const entry = bgActivityEntries.get(lower(jobId));
+    return entry && lower(entry.sessionId) === head && (!target || lower(target) === head)
+      ? finish(entry, selection) : finish(null, selection, true);
+  };
+  if (lower(sessionId) !== head) return finish(null, 'none');
+  if (row.bgJobId) return exact(row.bgJobId, row.bgSessionId, 'marker');
+  const attaches = new Map();
+  for (const attach of backgroundAttachFacts(row, { headOnly: true })) {
+    const candidate = exact(attach.jobId, attach.sessionId, 'attach');
+    if (candidate.entry) attaches.set(attach.jobId, candidate);
+  }
+  if (attaches.size > 1) return finish(null, 'attach', true);
+  if (attaches.size === 1) return attaches.values().next().value;
+  if (row.identityJobId && (!row.identitySessionId || lower(row.identitySessionId) === head)) return exact(row.identityJobId, row.identitySessionId || 'missing', 'identity');
+  const entries = [...bgActivityEntries.values()].filter(e => lower(e.sessionId) === head);
+  return entries.length === 1 ? finish(entries[0], 'unique-head') : finish(null, 'none', entries.length > 1);
+}
+
+function backgroundActivityEntry(sessionId, row, selection) {
+  return (selection || selectBackgroundActivity(sessionId, row)).entry;
+}
+
+function backgroundActivityIsForeground(sessionId, row, selection) {
+  selection ||= selectBackgroundActivity(sessionId, row);
+  const entry = selection.entry;
+  if (selection.selection === 'attach' || typeof openSessions !== 'undefined' && [...openSessions].some(([id, open]) => open.attach
+    && !open.closed && !open.exited && String(open.realSessionId || id).toLowerCase() === String(sessionId).toLowerCase())) return false;
   return typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId) && (!entry || !agentJobIsLive(entry))
     || entry?.conversationOwn && !agentJobIsLive(entry) && ['done', 'stopped', 'failed'].includes(entry.state);
 }
@@ -198,18 +251,20 @@ function projectBackgroundActivity(entry, snapshot) {
       && (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(entry.sessionId)) || !!snapshot.waitingForInput) };
 }
 
-function backgroundActivitySnapshot(sessionId, snapshot) {
-  const entry = backgroundActivityEntry(sessionId);
-  return entry && !backgroundActivityIsForeground(sessionId) ? projectBackgroundActivity(entry, snapshot) : snapshot;
+function backgroundActivitySnapshot(sessionId, snapshot, row, selection) {
+  selection ||= selectBackgroundActivity(sessionId, row);
+  const entry = selection.entry;
+  return entry && !backgroundActivityIsForeground(sessionId, row, selection) ? projectBackgroundActivity(entry, snapshot) : snapshot;
 }
 
-function backgroundActivityLabel(sessionId, snapshot, row) {
-  const entry = backgroundActivityEntry(sessionId);
+function backgroundActivityLabel(sessionId, snapshot, row, selection) {
+  selection ||= selectBackgroundActivity(sessionId, row);
+  const entry = selection.entry;
   if (!entry) {
-    const background = row?.bgJobId || typeof localSessionForStatus === 'function' && localSessionForStatus(sessionId)?.bgJobId;
+    const background = selection.unavailable || row?.bgJobId;
     return background ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null;
   }
-  if (backgroundActivityIsForeground(sessionId)) return { text: renderSessionIcon(snapshot).title, title: '' };
+  if (backgroundActivityIsForeground(sessionId, row, selection)) return { text: renderSessionIcon(snapshot).title, title: '' };
   const valid = entry.taskEvidence?.valid === true;
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const kinds = valid ? (entry.taskEvidence.inFlightKinds || []).map(k => k.label).join(', ') : '';
@@ -261,14 +316,18 @@ function agentsSelectedEntry() {
 function applyAgentsSnapshot(snapshot) {
   agentsSnapshotRevision++;
   const activityFields = entries => JSON.stringify([...entries].map(([id, entry]) =>
-    [id, entry.state, entry.taskEvidence, entry.conversationOwn]).sort(([a], [b]) => a.localeCompare(b)));
+    [id, entry.sessionId, entry.state, entry.taskEvidence?.valid, entry.taskEvidence?.at, entry.taskEvidence?.tasks, entry.taskEvidence?.inFlight,
+      entry.hosted, entry.attachedHere, entry.conversationOwn]).sort(([a], [b]) => a.localeCompare(b)));
   const previous = activityFields(bgActivityEntries);
+  const previousJobs = new Map(bgActivityEntries);
   agentsRoster = Array.isArray(snapshot && snapshot.roster) ? snapshot.roster : [];
   agentsDaemonReachable = !snapshot || snapshot.daemonReachable !== false;
+  agentsCliAvailable = snapshot?.cliAvailable === true;
+  agentsCliEntryCount = snapshot?.cliEntryCount || 0;
   bgActivityEntries.clear();
   for (const entry of agentsRoster) {
     if (entry.kind !== 'background' || !entry.sessionId) continue;
-    const id = String(entry.sessionId).toLowerCase();
+    const id = String(entry.id).toLowerCase();
     const at = bgActivityUpdatedAt.get(id);
     if (entry.taskEvidence?.valid && Number.isFinite(at) && entry.taskEvidence.at < at) {
       entry.taskEvidence = { ...entry.taskEvidence, valid: false };
@@ -277,7 +336,8 @@ function applyAgentsSnapshot(snapshot) {
     bgActivityEntries.set(id, entry);
   }
   for (const id of bgActivityUpdatedAt.keys()) if (!bgActivityEntries.has(id)) bgActivityUpdatedAt.delete(id);
-  for (const [id, entry] of bgActivityEntries) window.taskRegistry?.applyJob(id, entry.taskEvidence);
+  for (const [id, entry] of previousJobs) if (bgActivityEntries.get(id)?.sessionId !== entry.sessionId) window.taskRegistry?.applyJob(entry.sessionId, null, { jobId: id });
+  for (const [id, entry] of bgActivityEntries) window.taskRegistry?.applyJob(entry.sessionId, entry.taskEvidence, { jobId: id });
   const next = new Set(agentsRoster.filter(e => agentJobIsLive(e) && e.sessionId).map(e => String(e.sessionId).toLowerCase()));
   let changed = next.size !== bgAgentSessionIds.size;
   if (!changed) for (const id of next) if (!bgAgentSessionIds.has(id)) { changed = true; break; }
@@ -286,6 +346,7 @@ function applyAgentsSnapshot(snapshot) {
     for (const id of next) bgAgentSessionIds.add(id);
   }
   if ((changed || previous !== activityFields(bgActivityEntries)) && typeof refreshSidebar === 'function') refreshSidebar();
+  if (typeof observeSessionProjection === 'function') observeSessionProjection({ cause: 'roster' });
   if (agentsViewActive) renderAgentsView();
 }
 

@@ -113,9 +113,9 @@ test('background rekey writes an activity trace after Diagnostics is enabled at 
 });
 
 test('sidebar keeps one original conversation under its background UUID and original title', () => {
-  const row = { sessionId: OLD, folder: 'project', projectPath: '/project', name: 'JB rename', summary: 'original', messageCount: 2,
+  const row = { sessionId: OLD, folder: '-project', projectPath: '/project', name: 'JB rename', summary: 'original', messageCount: 2,
     continuationIndex: JSON.stringify({ format: 3, complete: true, ids: [HEAD] }) };
-  const child = { sessionId: HEAD, folder: 'project', name: 'daemon (2)', summary: 'copied', messageCount: 3 };
+  const child = { sessionId: HEAD, folder: '-project', projectPath: '/project', name: 'daemon (2)', summary: 'copied', messageCount: 3 };
   const projects = [{ projectPath: '/project', sessions: [row, child] }];
   mergeLocalBackgroundSessions(projects, [row, child], [{ sessionId: HEAD, kind: 'bg', jobId: '1234abcd', name: 'daemon (2)', nameSource: 'collision' }],
     { hiddenProjects: new Set(), metaMap: new Map([[HEAD, { name: 'JB rename', starred: 1, archived: 1 }]]), showArchived: true,
@@ -128,7 +128,7 @@ test('sidebar keeps one original conversation under its background UUID and orig
 });
 
 test('a head name without nameSource is ignored and the background row keeps the predecessor name', () => {
-  const row = { sessionId: OLD, folder: 'project', projectPath: '/project', name: 'original title', customTitle: 'original title', messageCount: 2,
+  const row = { sessionId: OLD, folder: '-project', projectPath: '/project', name: 'original title', customTitle: 'original title', messageCount: 2,
     continuationIndex: JSON.stringify({ format: 3, complete: true, ids: [HEAD] }) };
   const projects = [{ projectPath: '/project', sessions: [row] }];
   mergeLocalBackgroundSessions(projects, [row], [{ sessionId: HEAD, kind: 'bg', jobId: '1234abcd', name: 'original title (2)', nameSource: 'collision' }],
@@ -138,10 +138,10 @@ test('a head name without nameSource is ignored and the background row keeps the
 });
 
 test('an archived background UUID keeps its unarchived predecessor visible before its first turn', () => {
-  const row = { sessionId: OLD, folder: 'project', projectPath: '/project', name: 'original', messageCount: 2,
+  const row = { sessionId: OLD, folder: '-project', projectPath: '/project', name: 'original', messageCount: 2,
     continuationIndex: JSON.stringify({ format: 3, complete: true, ids: [HEAD] }) };
   const projects = [{ projectPath: '/project', sessions: [row] }];
-  mergeLocalBackgroundSessions(projects, [row], [{ sessionId: HEAD, kind: 'bg', jobId: '1234abcd', nameSource: 'collision' }],
+  mergeLocalBackgroundSessions(projects, [row], [{ sessionId: HEAD, kind: 'bg', jobId: '1234abcd', cwd: '/project', nameSource: 'collision' }],
     { hiddenProjects: new Set(), metaMap: new Map([[HEAD, { name: 'original', archived: 1 }]]), showArchived: false,
       jobs: new Map([['1234abcd', { state: 'working' }]]) });
   assert.equal(projects.flatMap(project => project.sessions).length, 1);
@@ -189,7 +189,7 @@ test('a daemon collision custom-title refresh cannot overwrite the migrated Swit
       { type: 'user', sessionId: '${HEAD}', cwd: root, timestamp: '2026-10-14T00:00:00Z', message: { content: 'prompt' } }
     ].map(JSON.stringify).join('\\n') + '\\n');
     cache.init({ PROJECTS_DIR: projects, activeSessions: new Map(), getMainWindow: () => null, db,
-      getLocalDescriptors: () => [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', nameSource: 'collision', name: 'daemon (2)' }],
+      getLocalDescriptors: () => [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', cwd: root, nameSource: 'collision', name: 'daemon (2)' }],
       getLocalJobs: () => new Map([['1234abcd', { sessionId: '${HEAD}', state: 'working', nameSource: 'collision' }]]),
       log: { info() {}, warn() {}, error() {}, debug() {} } });
     cache.refreshFolder(folder);

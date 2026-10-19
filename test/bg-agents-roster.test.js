@@ -112,10 +112,10 @@ function fixture() {
   return { cli, jobs, descriptors, isOwnPid: (pid) => pid === 20, isAttachedHere: (id) => id === 'aaaaaaaa' };
 }
 
-test('mergeRoster: the CLI list decides which jobs exist; the job file state, being live, wins over the CLI snapshot', () => {
+test('mergeRoster unions CLI, cached and descriptor-only jobs while live file state wins', () => {
   const roster = mergeRoster(fixture());
   const ids = roster.map(e => e.kind === 'background' ? e.id : e.sessionId);
-  assert.deepEqual(ids, ['aaaaaaaa', 'bbbbbbbb', 's-ext']);
+  assert.deepEqual(ids.sort(), ['aaaaaaaa', 'bbbbbbbb', 'cccccccc', 'dddddddd', 's-ext']);
   const a = roster[0];
   assert.equal(a.state, 'done', 'the live state.json wins over the cached CLI state');
   assert.equal(a.status, null, 'background activity never inherits coarse descriptor or CLI status');
@@ -125,16 +125,19 @@ test('mergeRoster: the CLI list decides which jobs exist; the job file state, be
   assert.equal(a.attachedHere, true);
   assert.equal(roster[1].attachedHere, false);
   assert.equal(roster[1].detail, null, 'a job without a file still lists');
-  const ext = roster[2];
+  assert.equal(a.listed, true);
+  assert.equal(roster.find(e => e.id === 'cccccccc').listed, false);
+  const ext = roster.find(e => e.sessionId === 's-ext');
   assert.equal(ext.kind, 'interactive');
   assert.equal(ext.id, null);
   assert.equal(ext.status, 'waiting');
 });
 
-test('mergeRoster without the CLI lists the jobs on disk instead', () => {
+test('mergeRoster without CLI retains cached and descriptor-only candidates with omitted provenance', () => {
   const f = fixture();
   const roster = mergeRoster({ ...f, cli: null });
-  assert.deepEqual(roster.filter(e => e.kind === 'background').map(e => e.id).sort(), ['aaaaaaaa', 'cccccccc']);
+  assert.deepEqual(roster.filter(e => e.kind === 'background').map(e => e.id).sort(), ['aaaaaaaa', 'cccccccc', 'dddddddd']);
+  assert.ok(roster.filter(e => e.kind === 'background').every(e => e.listed === false));
   const a = roster.find(e => e.id === 'aaaaaaaa');
   assert.equal(a.state, 'done', 'file state stands when the CLI is unreachable');
   assert.equal(a.sessionId, 's-a', 'the descriptor supplies the session id');

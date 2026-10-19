@@ -125,20 +125,18 @@ for (const progress of [false, true]) {
   });
 }
 
-test('repeated stale effect ACKs publish rows within the existing conflict budget', async () => {
+test('repeated stale effect ACKs reject within the existing conflict budget', async () => {
   const f = fixture({ apply: async () => { throw Object.assign(new Error('snapshot changed'), { code: 'WRITER_STALE' }); } });
   try {
     const request = f.client.request();
     request.catch(() => {});
+    const refused = assert.rejects(request, { code: 'PROJECTS_SNAPSHOT_CONFLICT' });
     for (let i = 0; i < 3; i++) {
       assert.equal(f.messages.length, i + 1);
       f.reply(i, { effects: [{ name: 'setName' }], keptLiveRows: [], value: 'cached' });
       await new Promise(resolve => setImmediate(resolve));
     }
-    const result = await request;
-    assert.equal(result.value, 'cached');
-    assert.deepEqual(result.effects, []);
-    assert.equal(result.stale, true);
+    await refused;
   } finally { await f.client.shutdown(); }
 });
 
@@ -188,21 +186,18 @@ test('pending non-reconcile requests cannot cancel requested reconciliation', as
   } finally { f.client.shutdown(); }
 });
 
-test('three version conflicts publish views without stale writes or retained rows', async () => {
+test('three version conflicts reject without stale writes or arrays', async () => {
   const f = fixture();
   const waiter = f.client.request();
   waiter.catch(() => {});
+  const refused = assert.rejects(waiter, { code: 'PROJECTS_SNAPSHOT_CONFLICT' });
   try {
     for (let i = 0; i < 3; i++) {
       f.change();
       f.reply(i, { value: i, effects: [{ name: 'write' }], keptLiveRows: [['live', 'folder']], reconciled: true });
     }
     assert.equal(f.messages.length, 3);
-    const result = await waiter;
-    assert.equal(result.value, 2);
-    assert.deepEqual(result.effects, []);
-    assert.deepEqual(result.keptLiveRows, []);
-    assert.equal(result.reconciled, false);
+    await refused;
     assert.deepEqual(f.applied, []);
   } finally { f.client.shutdown(); }
 });

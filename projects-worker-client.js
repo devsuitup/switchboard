@@ -3,7 +3,7 @@
 // see .ai/contexts/session-cache.md ("Projects query worker")
 const RECONCILE_TIMEOUT_MS = 5 * 60 * 1000;
 
-function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3 }) {
+function createProjectsWorkerClient({ workerFactory, snapshot, apply, accepted = () => {}, timeoutMs = 30000, reconcileTimeoutMs = RECONCILE_TIMEOUT_MS, maxDiscards = 3 }) {
   let worker = null;
   const terminations = new Set();
   let stopped = false;
@@ -45,17 +45,38 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
     if (job && job.waiters.some(waiter => waiters.has(waiter))) dispatch(job);
   }
 
+  function conflict(job) {
+    if (active !== job) return;
+    clearTimeout(job.timer);
+    if (++job.discards < maxDiscards && job.waiters.some(waiter => waiters.has(waiter))) {
+      job.options = mergeOptions(job.options, pending?.options);
+      job.waiters.push(...(pending?.waiters || []));
+      pending = null;
+      dispatch(job);
+      return;
+    }
+    active = null;
+    const error = Object.assign(new Error('Projects changed while loading; reload to retry.'), { code: 'PROJECTS_SNAPSHOT_CONFLICT' });
+    for (const waiter of job.waiters) settle(waiter, error);
+    dispatchPending();
+  }
+
   function receive(message) {
     if (!active || message.id !== active.id) return;
     if (message.error) { fail(new Error(message.error)); return; }
     try {
       const state = snapshot();
       if (message.progress) {
-        if (active.stale || state.version !== active.version) { active.stale = true; return; }
+        if (active.stale || state.version !== active.version || state.liveVersion !== active.liveVersion) { active.stale = true; return; }
         const job = active;
         const applied = apply({ ...message.progress, reconciled: false });
         const finish = acknowledgment => {
-          if (active === job) active.version = acknowledgment?.version ?? snapshot().version;
+          if (active !== job) return;
+          const current = snapshot();
+          if (current.liveVersion !== job.liveVersion
+            || acknowledgment?.committedRevision !== undefined && current.writerRevision !== acknowledgment.committedRevision
+            || acknowledgment?.version !== undefined && current.version !== acknowledgment.version) job.stale = true;
+          if (!job.stale) active.version = acknowledgment?.version ?? current.version;
         };
         if (applied?.then) return applied.then(finish).catch(error => {
           if (active !== job) return;
@@ -65,34 +86,31 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
         return finish();
       }
       const job = active;
-      clearTimeout(job.timer);
       const result = message.result;
       const readOnly = result.effects?.length === 0 && result.keptLiveRows?.length === 0 && !result.reconciled;
       const stale = job.stale || state.liveVersion !== job.liveVersion || (!readOnly && state.version !== job.version);
-      if (stale && ++job.discards < maxDiscards && job.waiters.some(waiter => waiters.has(waiter))) {
-        job.options = mergeOptions(job.options, pending?.options);
-        job.waiters.push(...(pending?.waiters || []));
-        pending = null;
-        dispatch(job);
-        return;
-      }
-      const published = stale ? { ...result, effects: [], keptLiveRows: [], reconciled: false, stale: true } : result;
-      const finish = () => {
+      if (stale) return conflict(job);
+      const finish = acknowledgment => {
         if (active !== job) return;
+        const current = snapshot();
+        const dbChanged = acknowledgment?.committedRevision !== undefined
+          ? current.writerRevision !== acknowledgment.committedRevision : current.version !== (acknowledgment?.version ?? job.version);
+        if (current.liveVersion !== job.liveVersion || (!readOnly && dbChanged)) return conflict(job);
+        clearTimeout(job.timer);
+        accepted(result);
         active = null;
-        for (const waiter of job.waiters) settle(waiter, null, published);
+        for (const waiter of job.waiters) settle(waiter, null, result);
         dispatchPending();
       };
-      const applied = !stale && apply(result);
+      const applied = apply(result);
       if (applied?.then) return applied.then(finish).catch(error => {
         if (active !== job) return;
         if (error.code === 'WRITER_STALE') {
-          job.stale = true;
-          return receive(message);
+          return conflict(job);
         }
         fail(error);
       });
-      finish();
+      finish(applied);
     } catch (error) { fail(error); }
   }
 
@@ -115,7 +133,8 @@ function createProjectsWorkerClient({ workerFactory, snapshot, apply, timeoutMs 
       const state = snapshot();
       active = { ...job, id: ++nextId, version: state.version, liveVersion: state.liveVersion, stale: false };
       if (job.options.reconcile) {
-        active.timer = setTimeout(() => fail(new Error('projects worker reconcile timed out')), reconcileTimeoutMs);
+        active.hardDeadline ||= Date.now() + reconcileTimeoutMs;
+        active.timer = setTimeout(() => fail(new Error('projects worker reconcile timed out')), Math.max(0, active.hardDeadline - Date.now()));
       }
       worker.postMessage({ ...state, ...job.options, id: active.id });
     } catch (error) { fail(error); }

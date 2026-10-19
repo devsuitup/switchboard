@@ -137,13 +137,13 @@ Async reconciliation logs a missing projects directory and resolves, matching th
 
 Main remains the only writer. Before applying effects without an intervening await, the relay checks the request token against SQLite total_changes/data_version and the current projected activeSessions/remoteRoots. The worker sends ordered effects after each completed folder only when effects exist or retained live rows changed; unchanged folders send no progress message. Main validates the version before each batch and refreshes the token after its own writes; a watcher/scan/settings/live-session change stops further writes from that snapshot and retries with a fresh snapshot. Worker reconciles bypass the synchronous helper's throttle because main owns their five-second throttle. A read-only reply with no retained-row changes and no reconciliation may publish its partial snapshot during cold-scan writes, so first paint never waits for the background scan to settle. Retained live rows are copied back for releaseLiveSession on exit. The worker skips reconciliation while the completeness marker is absent and excludes pending repair folders. Only an accepted reconciliation advances main's five-second throttle. Cold-start population stays fire-and-forget; the existing entrypoint backfill, archive state persistence, remote placeholders and attachability annotation stay on main.
 
-There is one in-flight job and at most one pending job. Each dispatch owns its callers; a valid result resolves them even when newer callers are pending. Pending options retain reconcile and byte-measurement requests with logical OR. Each caller has a fixed 30-second deadline from registration, including queue and retries. After three version conflicts, views publish with no remaining effects or retained-row updates; the next request recomputes writes. Already accepted folder batches remain valid. Errors/exits reject waiters and reset the worker. An expired build with no remaining callers resets the worker; a reconcile keeps running after caller deadlines so completed folders persist and successful completion advances main's throttle. Each reconcile dispatch also has a five-minute hard ceiling (RECONCILE_TIMEOUT_MS). At that ceiling main rejects all outstanding waiters and resets the worker; a later request starts a fresh worker. Already applied folder batches remain in SQLite. The hard timer is cleared on completion, retry, error and shutdown. There is no synchronous main-thread fallback. Quit rejects pending work and terminates the worker. Structured-clone costs and actual main-side DB writes remain. External data-directory sharing is still forbidden.
+There is one in-flight job and at most one pending job. Each dispatch owns its callers; a valid result resolves them even when newer callers are pending. Pending options retain reconcile and byte-measurement requests with logical OR. Each caller has a fixed 30-second deadline from registration, including queue and retries. The third conflicting dispatch rejects with PROJECTS_SNAPSHOT_CONFLICT and no arrays or remaining effects. Main emits the existing throttled projects-changed notification with cause conflict; the renderer debounce recovers without an unrelated event. Already accepted folder batches remain valid. Errors/exits reject waiters and reset the worker. An expired build with no remaining callers resets the worker; a reconcile keeps running after caller deadlines so completed folders persist and successful completion advances main's throttle. Each reconciliation retains its five-minute hard ceiling across retries (RECONCILE_TIMEOUT_MS). At that ceiling main rejects all outstanding waiters and resets the worker; a later request starts a fresh worker. Already applied folder batches remain in SQLite. The hard timer is cleared on completion, retry, error and shutdown. There is no synchronous main-thread fallback. Quit rejects pending work and terminates the worker. Structured-clone costs and actual main-side DB writes remain. External data-directory sharing is still forbidden.
 
 getProjects(false/true) still returns its existing array. loadProjects calls getProjects('both') once per reload and receives {defaultProjects, allProjects}; the false view is assembled before the true view, preserving archive reappearance writes. The renderer samples global settings after the worker reply, preventing a pending session from reappearing when its project was archived during that fetch. Each view retains its own project/session arrays until the renderer's existing dedup joins session identities. Search, archived parents/subagents, SDK filtering, hidden repositories, remote placeholders, pending sessions and plain/panel terminals keep their policies. Worker failure rejects IPC. Event reloads catch rejection and retain the previous sidebar lists; there is no S3 persistent-notice surface in this slice, and an empty list uses the loading status for an error. Startup retries the load once and runs working-set restore even when both attempts fail. After both immediate attempts fail, three additional reloads run one second apart, stopping at the first success without waiting for a filesystem event. Scheduled persistence is guarded until restoreWorkingSet has read global.openWorkingSet, matching the exit-flush guard.
 
 Diagnostics emits main.loop once per second while TRACE.on, with lagMs (the existing one-second interval’s lateness, clamped to zero). The expected tick is rebased after every callback, even while tracing is off; enabling tracing preserves that baseline. This signal adds no timer and does not measure a latency percentile: a stall that ends before the next tick is not seen. Measured idle lagMs on Windows was 0–20 ms, with rare outliers (one at 73 ms). Sleep/resume probably appears as one large lagMs sample; this has not been verified. Sampling stops on quit. For an explicit fine measurement, start with SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1 (read once at monitor startup) and enable tracing. Only then is monitorEventLoopDelay enabled at 20 ms, adding maxMs and p99Ms (nanoseconds converted to milliseconds) to each event. Histogram values have a floor at least equal to the 20 ms resolution, including when idle; armed at 20 ms, the histogram measured about 32 ms at idle in Electron, so a 32 ms histogram value alone is not a stall. Disabling tracing disables the histogram even when armed. ipc.get-projects carries totalMs (including queue/retries), rows (cache rows in the built snapshot) and replyBytes (UTF-8 JSON size of the worker-built view selected for the reply, before main adds placeholders or applies archive and attachability filters; not the final IPC payload or Electron wire framing). The worker measures boolean and paired views only when requested by tracing; main reads the numeric measurement without serializing the full reply.
 
-Tests: app-projects-single-invoke, get-projects-worker-wiring, projects-worker-client, projects-worker-equivalence (real isolated WAL DB with an Electron Node-mode worker), main-loop-monitor, plus the existing cold-start and pending/archive tests. Regression coverage includes the reviewer's 51-caller arrival probe, caller deadlines across retries, three-conflict view publication, startup failure/retry and pre-read persistence. Real worker equivalence applies effects to a second unreconciled WAL DB copy and compares session_cache/cache_meta; dropping the worker upsert must fail that comparison. The test-only projects-worker-delayed.cjs wrapper intercepts the shared reconcile helper and uses Atomics.wait after folder publication, keeping the delay seam out of the shipped worker. Real-worker regressions cover recovery from a hung sweep and zero progress for unchanged folders versus one for a changed folder. No stress runs or live typing measurements.
+Tests: app-projects-single-invoke, get-projects-worker-wiring, projects-worker-client, projects-worker-equivalence (real isolated WAL DB with an Electron Node-mode worker), main-loop-monitor, plus the existing cold-start and pending/archive tests. Regression coverage includes the reviewer's 51-caller arrival probe, caller deadlines across retries, three-conflict rejection and event-driven recovery, startup failure/retry and pre-read persistence. Real worker equivalence applies effects to a second unreconciled WAL DB copy and compares session_cache/cache_meta; dropping the worker upsert must fail that comparison. The test-only projects-worker-delayed.cjs wrapper intercepts the shared reconcile helper and uses Atomics.wait after folder publication, keeping the delay seam out of the shipped worker. Real-worker regressions cover recovery from a hung sweep and zero progress for unchanged folders versus one for a changed folder. No stress runs or live typing measurements.
 
 
 ### Memory and Work Files queries
@@ -270,39 +270,41 @@ Stop still targets one live member per click, representative first, then members
 
 ## Local background sidebar rows (#620)
 
-`sidebar-bg-sessions.js` projects live local background descriptors into the
-fresh sidebar payload. `session-cache.init` receives `getLocalDescriptors`,
-wired to the CLI watcher's cached `getSidebarDescriptors`, and `getLocalJobs`,
-wired to `bg-agents.getCachedJobs`. The existing job watcher starts with the
-app and notifies projects only when its cached job id to state/name projection
-changes; opening Agents is unnecessary. Roster rebuilding is independent and
-requires an Agents subscriber. Job watching survives macOS window close/activate.
-Project loads perform no additional job-file or transcript scan. Only cached
-job states `working` and `blocked` permit a bg marker, display merge or synthetic
-row, even when a finished job's descriptor PID or attach PTY remains live. A bg UUID
-without an indexed row gets a transient `descriptorOnly` row, grouped through
-the existing worktree resolver. An open local attach PTY supplies its explicit
-session UUID/job id if its registry descriptor is absent; registering that PTY
-notifies projects immediately. Indexed rows replace it without double counts;
-PID exit or job completion removes it. Hidden projects stay hidden. The metadata union is computed before archive filtering, so an archived predecessor remains visible while a background part is unarchived.
-No synthetic row, rename overlay or display merge is persisted to SQLite/FTS.
+The shared conversation resolver separates current identity from hosting. Cached
+jobs in working/blocked/done/stopped/failed can extend a complete unique local
+continuation to an exact unindexed target. Canonical scope comes from a scoped
+cache row first; a present row without projectPath is ineligible and is omitted
+from the facade. Otherwise a confined absolute PROJECTS_DIR/folder/target.jsonl
+path fixes the target folder without filesystem lookup. Existing folder metadata
+fixes its project; only exact source-folder equality may supply a missing mapping.
+Unknown, foreign, remote or contradictory scope cannot authorize a merge. A
+descriptor must agree with this canonical scope; disagreement discards its
+contribution, preserving independent proof and preventing duplicate foreign rows.
+Indexed, bridge, cached-job and descriptor paths all enforce the same boundary,
+graph completeness, unique root and 32-hop limit. Current proof is recomputed,
+never latched. Cached transcriptPath crosses main and worker snapshots and its
+structural change requests the existing job notification; no extra scan occurs.
 
-Complete, non-malformed, linear format-3 continuation indexes are parsed once
-per build into a reverse predecessor index. The metadata pass builds conversation groups and background paths once; the display merge reuses those groups and paths without parsing the indexes again. Walking back from a live bg head
-retains the forward resolver's 32-hop bound and unique-root rule. One unique head matching a live bg
-descriptor can join the outermost proven predecessor's visible row. The row
-uses the live bg head UUID while that job remains live, gains the other continuation UUIDs in
-`mergedMemberIds`, and carries `bgJobId`/`bgSessionId` from the head. Display
-counts aggregate each visible row once. Incomplete/stale indexes, cycles,
-ambiguous heads and competing predecessors never establish a display merge.
-Bridge labels alone prove nothing; prior bridge merge membership is retained.
-Remote rows stay in their host namespace. This does not re-key any PTY and does
-not replace #579/ADR 0003's closest-writer proof. It is the limited bg projection
-of #564's distinction between a conversation row and its head.
+Both archive views and operation membership share this proof. Merge metadata
+before filtering; aggregate indexed counts once. Unindexed parts have unknown
+own title/date and zero messages unless a current accepted descriptor supplies
+them. A genuinely descriptor-only row preserves explicit aiTitle:null (#715).
+Pin/Rename/Archive/Delete use all proved parts. Unindexed Delete still passes a
+null cached folder to the existing all-folder on-demand filesystem resolver;
+fresh per-part guards and whole-set/missing-target checks remain mandatory.
+Sidebar Archive/Delete retain the existing stop/detach prelude for every part.
 
-The descriptor-only background projection exists only while the bg PID and cached job remain live. An indexed linear chain stays on one row afterwards, keyed by its root instead of the live background head. Unindexed or ambiguous paths retain the existing background-only behaviour. Pin and Rename write every resolved part. If the proven root is hidden, its whole conversation is archived (with archived
-sessions excluded), or all of its parts are SDK-only, the head loses its marker and registry-name
-overlay as intended; a visible indexed head keeps its ordinary display name.
+An exact local, non-exited attach chooses its cached target as representative and
+head, even for descriptor-free done/stopped/failed. Without attach or hosting,
+the indexed root is representative and the newest indexed part remains head.
+An unindexed target remains a member with identityJobId/identitySessionId; without
+attach/hosting it does not displace the indexed head. Closing an attach restores
+those choices. Working/blocked may host through the exact attach fallback;
+done requires a matching live bg descriptor; stopped/failed never host. Both
+bgJobId/bgSessionId are absent during identity-only gaps. No synthetic standalone
+finished-job row is invented. Removing the last current identity proof drops an
+unindexed member. An attach by itself cannot retain it. Shared operation parts
+include these identities, with no parallel display-only member class.
 
 A live registry `name` overlays a row's display name only when `nameSource`
 is `user` and the database name is absent or still matches the launch/custom-title
@@ -392,7 +394,7 @@ known absence of a title; `NULL` means it has not been backfilled yet. Cache
 upserts bind omitted titles as `NULL` and preserve a known title on conflict
 when the incoming title is unknown, including header-only refreshes with no visible title.
 
-The projects request snapshots cached sidebar descriptors and job state/name,
+The projects request snapshots cached sidebar descriptors and job state/name/session/transcriptPath,
 plus the attach PTY's UUID, job id, cwd and host. These projections participate
 in the request version alongside the DB, active sessions and remote roots.
 `workers/projects-query.js` supplies them to `session-cache.init`, so both
@@ -403,7 +405,7 @@ to registry names and job liveness while a build is pending.
 The request also carries `liveVersion`, the serialized non-DB projection.
 A read-only reply may ignore DB-only changes during cold population, but a
 live-version change uses the relay's bounded retry path. The existing caller
-deadlines and three-conflict publication limit still apply.
+deadlines and three-conflict rejection limit still apply.
 
 `get-projects` starts the custom-title backfill without awaiting it, before
 requesting the projects worker. The backfill promise is retained even when
@@ -2129,7 +2131,7 @@ settings(key PK, value JSON)
 
 ## Continuation rows (#564)
 
-`continuationRollup(rows)` in `session-continuations.js` reads cached local top-level rows only. It returns a map from rolled representatives to the chain root. `buildProjectsFromCache` computes it once after bridge grouping and before SDK hiding; it adds each rolled representative and its mirrors to the root's children. Counts, newest-modified head, own-part dates, search, subagents and the Parts menu then use the existing merged-row paths. `conversationGroups` receives the same map for metadata; its default computes it for the shared main-side `conversationMemberIds` resolver used by Delete, Archive, Pin and Rename. No second membership or metadata rule is added.
+`continuationRollup(rows)` in `session-continuations.js` reads cached local top-level rows only. It returns a map from rolled representatives to the chain root. `buildProjectsFromCache` computes it once after bridge grouping and before SDK hiding; it adds each rolled representative and its mirrors to the root's children. Counts, newest-modified head, own-part dates, search, subagents and the Parts menu then use the existing merged-row paths. `conversationGroups` receives the same map for metadata; its default computes it for the shared main-side `conversationMemberIds` resolver used by Delete, Archive, Pin and Rename. Indexed and cached-identity proof extend the same current operation member set, with canonical project/folder/host checks on every path.
 
 The graph rules are:
 
@@ -2322,3 +2324,18 @@ its original behaviour: any open outside working-set restore cancels the planner
 including the automatic remembered open on a renderer reload. Entries still
 ambiguous after indexing retain the sidebar-choice notice. Entries still unindexed
 after the retry name that state and offer a manual sidebar retry.
+
+## Accepted projection provenance (#719)
+
+Build IDs belong to the worker reply envelope, rather than its session rows.
+The renderer combines that ID with row facts for diagnostics. Direct cache
+builds and worker builds therefore return equivalent session payloads.
+
+The worker returns cloneable build provenance and current exclusion inputs for
+archived, hidden-project and sdk-only rows. Main carries it through assembly;
+renderer diagnostics compare complete allProjects membership and default-view
+visibility. An archived row still in allProjects records visibility loss rather
+than removal. Current proof reasons distinguish identity-lost and proof-invalid.
+Logging-only build/roster revisions and task timestamps do not enter liveVersion.
+Post-ACK freshness uses the actual committed writer revision; progress advances
+only the DB baseline and never refreshes away changed live inputs.

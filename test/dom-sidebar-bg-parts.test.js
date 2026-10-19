@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cache = require('../session-cache');
+const { encodeProjectPath } = require('../encode-project-path');
 const { setupSidebarDom } = require('./dom-setup');
 
 for (const variant of ['indexed head', 'bridge union', 'unindexed head']) {
@@ -14,14 +15,14 @@ test(`an existing background merge exposes part names and own dates (${variant})
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const ids = [1, 2, 3].map(n => `${n}${'0'.repeat(7)}-0000-4000-8000-000000000000`);
   const rows = ids.map((sessionId, i) => ({
-    sessionId, folder: 'project', projectPath: dir, summary: `Part ${i + 1}`, messageCount: 1,
+    sessionId, folder: encodeProjectPath(dir), projectPath: dir, summary: `Part ${i + 1}`, messageCount: 1,
     modified: `2026-10-${10 + i}T09:00:00Z`,
     continuationIndex: JSON.stringify({ format: 3, complete: true, ids: ids.slice(i + 1, i + 2) }),
   }));
   if (variant === 'unindexed head') rows.pop();
   if (variant === 'bridge union') rows.push({
     sessionId: '40000000-0000-4000-8000-000000000000', mergedIntoSessionId: ids[0],
-    folder: 'project', projectPath: dir, summary: 'Mirror', messageCount: 1, modified: '2026-10-10T10:00:00Z',
+    folder: encodeProjectPath(dir), projectPath: dir, summary: 'Mirror', messageCount: 1, modified: '2026-10-10T10:00:00Z',
   });
   const meta = new Map([[ids[1], { name: 'Middle name' }]]);
   cache.init({ PROJECTS_DIR: dir, activeSessions: new Map(), getMainWindow: () => null, log: console,

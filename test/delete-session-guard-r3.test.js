@@ -9,7 +9,8 @@ const { makeDeleteSessionGuard } = require('../delete-session-guard');
 
 function setup() {
   const activeSessions = new Map([['A', { exited: false }]]);
-  const rows = [{ sessionId: 'B', mergedIntoSessionId: 'A' }];
+  const rows = [{ sessionId: 'B', mergedIntoSessionId: 'A', projectPath: '/p', folder: '-p' },
+    { sessionId: 'A', projectPath: '/p', folder: '-p' }];
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   const start = source.indexOf('function getConversationPartIds(');
   assert.ok(start >= 0);

@@ -95,8 +95,10 @@ function updateGridCardActivity(sessionId, card, row) {
   const snapshot = mergedRowSnapshot(rowSessionIds(row), sessionId, storedActivitySnapshot(sessionId, row), row);
   const running = activePtyIds.has(sessionId);
   const dot = card.querySelector('.grid-card-dot');
-  const label = typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId)?.state === 'blocked'
-    && backgroundActivityLabel(sessionId, snapshot, row);
+  const head = rowHeadId(row);
+  const selection = typeof selectBackgroundActivity === 'function' ? selectBackgroundActivity(head, row) : null;
+  const label = typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(head, row, selection)?.state === 'blocked'
+    && backgroundActivityLabel(head, snapshot, row, selection);
   paintSessionIconFromSnapshot(dot, snapshot, label?.title, label?.text);
   dot?.classList.toggle('running', running);
   setHasBusyAgents(card, snapshot.agentsBusy);

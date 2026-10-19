@@ -18,6 +18,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Disabled Respawn and Delete buttons in Agents now tell you to use the conversation's sidebar Stop or end its other process, according to where it is running. (#566)
 
 ### Fixed
+- Background conversations keep their available activity and their parts together through temporary gaps in the daemon listing or session descriptors. Refreshes no longer replace a newer conversation list with an older result. (#719)
+- Background conversations in worktrees keep their parts together, finished jobs clear older task activity, and blocked jobs keep their label in Agents and the grid. (#719)
 - Automated command chains now recognize a recorded step and continue even when Claude keeps writing large API requests after it during a long turn. (#730)
 - The sidebar keeps updating other projects when one project cannot be read. (#718)
 - A session moved to the background with a typed `/bg` keeps one sidebar row and its name after a restart, including when its original transcript is written again. An already-open background tab keeps the conversation's name, pin and archive settings. (#718)

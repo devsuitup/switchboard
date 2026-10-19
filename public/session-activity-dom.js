@@ -72,12 +72,12 @@ function applyHeadTurnSnapshot(turn) {
   if (typeof agentsViewActive !== 'undefined' && agentsViewActive && typeof renderAgentsView === 'function') renderAgentsView();
 }
 
-function headActivitySnapshot(sessionId, snapshot) {
+function headActivitySnapshot(sessionId, snapshot, row, selection) {
   const s = snapshot || {};
   const turn = headTurns.get(sessionId);
   const ptyHere = typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId);
   const alive = s.liveness === 'alive' || ptyHere;
-  const background = typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId)
+  const background = typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId, row, selection)
     || s.backgroundJob;
   const promptHint = s.promptHint && (!background || Number.isFinite(s.promptHintAt));
   const idleNewer = !background && Number.isFinite(s.idleHintAt) && Number.isFinite(turn?.lastEntryAt) && s.idleHintAt > turn.lastEntryAt
@@ -88,11 +88,13 @@ function headActivitySnapshot(sessionId, snapshot) {
     liveness: alive ? 'alive' : s.liveness };
 }
 
-function taskActivitySnapshot(sessionId, snapshot) {
+function taskActivitySnapshot(sessionId, snapshot, row, selection) {
+  selection ||= typeof selectBackgroundActivity === 'function' ? selectBackgroundActivity(sessionId, row) : null;
   const tasks = window.taskRegistry;
   const result = headActivitySnapshot(sessionId, tasks ? { ...snapshot,
-    agentsBusy: tasks.agents(sessionId).length > 0, backgroundWork: tasks.background(sessionId) } : snapshot);
-  return typeof backgroundActivitySnapshot === 'function' ? backgroundActivitySnapshot(sessionId, result) : result;
+    agentsBusy: tasks.agents(sessionId, selection ? selection.entry?.id || null : undefined).length > 0,
+    backgroundWork: tasks.background(sessionId, selection ? selection.entry?.id || null : undefined) } : snapshot, row, selection);
+  return typeof backgroundActivitySnapshot === 'function' ? backgroundActivitySnapshot(sessionId, result, row, selection) : result;
 }
 
 // DOM projection for session activity, sole writer of the activity classes — see .ai/contexts/session-state.md
@@ -120,6 +122,13 @@ function sessionItemEl(sessionId, container = document) {
 
 const localMergedMemberRows = new Map();
 
+function localActivityRow(sessionId, row) {
+  const current = row || localMergedMemberRows.get(sessionId) || (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId));
+  if (current) return current;
+  const item = sessionItemEl(sessionId);
+  return item && typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId);
+}
+
 function indexLocalMergedMemberRows(projects) {
   localMergedMemberRows.clear();
   for (const project of projects) {
@@ -132,7 +141,13 @@ function indexLocalMergedMemberRows(projects) {
 }
 
 function localSessionForStatus(sessionId, session) {
-  if (session) return session;
+  if (session) {
+    if (session.sessionId !== sessionId && session.mergedMemberIds?.includes(sessionId)) {
+      const status = session.mergedMemberStatuses?.[sessionId];
+      return { ...session, sessionId, status: status?.status, statusUpdatedAt: status?.statusUpdatedAt };
+    }
+    return session;
+  }
   if (typeof sessionMap === 'undefined') return undefined;
   const current = localMergedMemberRows.get(sessionId);
   if (current) return { sessionId, ...current.mergedMemberStatuses?.[sessionId] };
@@ -152,14 +167,15 @@ function localSessionForStatus(sessionId, session) {
   if (latest) return { sessionId, ...latest.mergedMemberStatuses?.[sessionId] };
 }
 
-function storedActivitySnapshot(sessionId, session) {
-  const local = snapshotForLocal(sessionId, session);
-  if (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)) return taskActivitySnapshot(sessionId, local);
+function storedActivitySnapshot(sessionId, session, selection) {
+  const row = session || (typeof selectBackgroundActivity === 'function' ? localActivityRow(sessionId) : null);
+  const local = snapshotForLocal(sessionId, session, selection);
+  if (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)) return taskActivitySnapshot(sessionId, local, row, selection);
   const remote = typeof remoteSessionStates !== 'undefined' && remoteSessionStates.get(sessionId)?.snapshot();
-  if (remote && !remote.attached) return taskActivitySnapshot(sessionId, remote);
-  if (typeof localTranscriptStates !== 'undefined' && localTranscriptStates.has(sessionId)) seedLocalTranscriptDescriptor(sessionId, session);
+  if (remote && !remote.attached) return taskActivitySnapshot(sessionId, remote, row, selection);
+  if (typeof localTranscriptStates !== 'undefined' && localTranscriptStates.has(sessionId)) seedLocalTranscriptDescriptor(sessionId, session, selection);
   const transcript = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.get(sessionId)?.snapshot();
-  return taskActivitySnapshot(sessionId, transcript ? (local.backgroundJob ? { ...transcript, backgroundJob: true } : transcript) : local);
+  return taskActivitySnapshot(sessionId, transcript ? (local.backgroundJob ? { ...transcript, backgroundJob: true } : transcript) : local, row, selection);
 }
 
 function mergedRowSnapshot(ids, sessionId, snapshot, row) {
@@ -170,8 +186,8 @@ function mergedRowSnapshot(ids, sessionId, snapshot, row) {
     row = item && { sessionId: item.dataset.sessionId, headSessionId: item.dataset.headSessionId };
   }
   const head = row ? rowHeadId(row) : sessionId;
-  const snapshots = ids.map(id => id === sessionId ? snapshot : storedActivitySnapshot(id)).filter(Boolean);
-  const combined = { ...(head === sessionId ? snapshot : storedActivitySnapshot(head)) };
+  const snapshots = ids.map(id => id === sessionId ? snapshot : storedActivitySnapshot(id, row)).filter(Boolean);
+  const combined = { ...(head === sessionId ? snapshot : storedActivitySnapshot(head, row)) };
   for (const field of ['attention', 'agentsBusy', 'backgroundWork']) {
     combined[field] = snapshots.some(s => s[field]);
   }
@@ -179,7 +195,7 @@ function mergedRowSnapshot(ids, sessionId, snapshot, row) {
   const ptyIds = typeof activePtyIds === 'undefined' ? [] : ids.filter(id => activePtyIds.has(id));
   if (ptyIds.length && !ptyIds.includes(head)) {
     combined.waitingForInput = combined.headTurn !== 'open'
-      && ptyIds.some(id => !!(id === sessionId ? snapshot : storedActivitySnapshot(id))?.waitingForInput);
+      && ptyIds.some(id => !!(id === sessionId ? snapshot : storedActivitySnapshot(id, row))?.waitingForInput);
   }
   return combined;
 }
@@ -224,8 +240,9 @@ function applyStateClasses(sessionId, snapshot) {
     return;
   }
   const ids = [item.dataset.sessionId, ...(item.dataset.mergedMemberIds?.split(' ') || [])];
-  snapshot = taskActivitySnapshot(sessionId, snapshot);
-  snapshot = mergedRowSnapshot(ids, sessionId, snapshot);
+  const row = typeof selectBackgroundActivity === 'function' ? localActivityRow(item.dataset.sessionId) : undefined;
+  snapshot = taskActivitySnapshot(sessionId, snapshot, row);
+  snapshot = mergedRowSnapshot(ids, sessionId, snapshot, row);
   const icon = renderSessionIcon(snapshot);
   // Row classes read snapshot fields directly, not icon.classes — see .ai/contexts/session-state.md ("The local-pty adapter")
   const attention = !!(snapshot && snapshot.attention);
@@ -273,10 +290,11 @@ function writeIconSlot(el, icon, title, text) {
 }
 
 // Thin wrapper over the local-pty adapter's own persisted state — see .ai/contexts/session-state.md ("The local-pty adapter")
-function snapshotForLocal(sessionId, session) {
+function snapshotForLocal(sessionId, session, selection) {
   let state = localPtyState(sessionId);
   const sess = localSessionForStatus(sessionId, session);
-  const background = sess?.bgJobId || typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId);
+  const targetHere = !sess?.headSessionId || sess.headSessionId === sessionId;
+  const background = targetHere && (sess?.bgJobId || typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId, localActivityRow(sessionId, session), selection));
   if (sess && sess.status !== undefined) {
     // session.status present is itself the liveness signal — see .ai/contexts/cli-session-state.md
     state.apply({ type: 'liveness', value: 'alive' });

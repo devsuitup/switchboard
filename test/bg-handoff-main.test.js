@@ -104,7 +104,7 @@ function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = ()
       writes.push(text);
       if (text === '\r') {
         fs.appendFileSync(transcript, JSON.stringify({ type: 'continued-in', sessionId: 'OLD', continuedInSessionId: 'new' }) + '\n');
-        setTimeout(() => { descriptors = [{ kind: 'bg', sessionId: 'new', jobId: '1234abcd', cwd: '/bg' }]; for (const fn of [...listeners]) fn(); }, 10);
+        setTimeout(() => { descriptors = [{ kind: 'bg', sessionId: 'new', jobId: '1234abcd', cwd: root }]; for (const fn of [...listeners]) fn(); }, 10);
       }
       return true;
     },
@@ -127,7 +127,7 @@ test('M3: the shipped IPC handler maps CLI status, reads the tab transcript and 
   const h = ipcSetup(t);
   const started = Date.now();
   const result = await h.handleSendToBackground({}, 'tab');
-  assert.deepEqual(JSON.parse(JSON.stringify(result)), { ok: true, oldSessionId: 'tab', jobId: '1234abcd', sessionId: 'new', cwd: '/bg' });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { ok: true, oldSessionId: 'tab', jobId: '1234abcd', sessionId: 'new', cwd: h.root });
   assert.deepEqual(h.writes, ['/bg', '\r']);
   assert.ok(Date.now() - started < 5000);
   assert.equal(h.statusAsked.every(id => id === 'OLD'), true);

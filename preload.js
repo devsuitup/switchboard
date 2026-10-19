@@ -13,7 +13,16 @@ contextBridge.exposeInMainWorld('api', {
   readWorkFile: (filePath) => ipcRenderer.invoke('read-work-file', filePath),
   deleteWorkFile: (filePath) => ipcRenderer.invoke('delete-work-file', filePath),
   getIndexingState: () => ipcRenderer.invoke('get-indexing-state'),
-  getProjects: (showArchived) => ipcRenderer.invoke('get-projects', showArchived),
+  getProjects: async (showArchived) => {
+    const reply = await ipcRenderer.invoke('get-projects', showArchived);
+    if (reply?.projectsError?.code === 'PROJECTS_SNAPSHOT_CONFLICT'
+      && reply.projectsError.message === 'Projects changed while loading; reload to retry.'
+      && !Array.isArray(reply) && Object.keys(reply).length === 1 && Object.keys(reply.projectsError).length === 2) {
+      throw Object.assign(new Error(reply.projectsError.message), { code: reply.projectsError.code });
+    }
+    return reply;
+  },
+  sessionProjectionChanged: record => ipcRenderer.send('session-projection-changed', record),
   rebuildCache: () => ipcRenderer.invoke('rebuild-cache'),
   getActiveSessions: () => ipcRenderer.invoke('get-active-sessions'),
   getSessionLiveElsewhere: (id) => ipcRenderer.invoke('session-live-elsewhere', id),

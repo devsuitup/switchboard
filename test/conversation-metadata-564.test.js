@@ -8,6 +8,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const cache = require('../session-cache');
 const { mergeLocalBackgroundSessions } = require('../sidebar-bg-sessions');
+const { encodeProjectPath } = require('../encode-project-path');
 const { createWriterCommands } = require('../session-index-commands');
 const openStore = require('./fixtures/conversation-store.cjs');
 const storeOptions = { skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22' };
@@ -15,7 +16,7 @@ const storeOptions = { skip: !openStore.supported && 'native SQLite ABI differs;
 function fixture(t, background = false, missingHead = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'conversation-564-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const rows = ['a', 'b', 'c'].map((sessionId, i) => ({ sessionId, folder: 'project', projectPath: dir,
+  const rows = ['a', 'b', 'c'].map((sessionId, i) => ({ sessionId, folder: encodeProjectPath(dir), projectPath: dir,
     summary: sessionId, modified: `2026-10-19T00:00:0${i}Z`, messageCount: 1,
     mergedIntoSessionId: i && !background ? 'a' : null }));
   if (background) {
@@ -23,8 +24,8 @@ function fixture(t, background = false, missingHead = false) {
     rows[1].continuationIndex = JSON.stringify({ format: 3, complete: true, ids: ['c'] });
     if (missingHead) rows.pop();
   }
-  const descriptors = background ? [{ sessionId: 'c', kind: 'bg', jobId: 'job', cwd: dir }] : [];
-  const jobs = new Map([['job', { state: 'working' }]]);
+  const descriptors = background ? [{ sessionId: 'c', kind: 'bg', jobId: 'abcdef12', cwd: dir }] : [];
+  const jobs = new Map(background ? [['abcdef12', { state: 'working', sessionId: 'c' }]] : []);
   const meta = new Map();
   const activeSessions = new Map();
   cache.init({ PROJECTS_DIR: dir, activeSessions, getMainWindow: () => null, log: console,
@@ -156,11 +157,11 @@ test('30: live background metadata reads root, middle, head and mirrors alike', 
 });
 
 test('25: clearing the latest background rename restores the original title', () => {
-  const row = { sessionId: 'a', folder: 'project', projectPath: '/project', name: 'older rename',
+  const row = { sessionId: 'a', folder: '-project', projectPath: '/project', name: 'older rename',
     customTitle: 'Original title', continuationIndex: JSON.stringify({ format: 3, complete: true, ids: ['b'] }) };
   mergeLocalBackgroundSessions([{ projectPath: '/project', sessions: [row] }], [row],
-    [{ sessionId: 'b', kind: 'bg', jobId: 'job', nameSource: 'collision' }], {
-      hiddenProjects: new Set(), showArchived: true, jobs: new Map([['job', { state: 'working' }]]),
+    [{ sessionId: 'b', kind: 'bg', jobId: 'abcdef12', cwd: '/project', nameSource: 'collision' }], {
+      hiddenProjects: new Set(), showArchived: true, jobs: new Map([['abcdef12', { state: 'working', sessionId: 'b' }]]),
       metaMap: new Map([['a', { name: 'older rename', nameSource: 'user', nameRevision: 1 }],
         ['b', { name: null, nameSource: 'user', nameRevision: 3 }]]),
     });
@@ -225,7 +226,7 @@ for (const attached of [false, true]) test(`26: main resolves every part and ign
   h.rows.push({ ...h.rows[1], sessionId: 'm', mergedIntoSessionId: 'b', continuationIndex: null });
   if (attached) {
     h.descriptors.length = 0;
-    h.activeSessions.set('c', { isAttach: true, attachJobId: 'job', cwd: h.rows[0].projectPath });
+    h.activeSessions.set('c', { isAttach: true, attachJobId: 'abcdef12', cwd: h.rows[0].projectPath });
   }
   const commands = createWriterCommands(db);
   const handlers = new Map();

@@ -79,7 +79,7 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
   }
   return { read,
     readBatch: rows => send({ type: 'readBatch', rows }),
-    job: (parentSessionId, evidence) => send({ type: 'job', parentSessionId, evidence }),
+    job: (parentSessionId, evidence, { jobId } = {}) => send({ type: 'job', parentSessionId, evidence, jobId }),
     child: (file, parentSessionId, agentId) => send({ type: 'child', file, parentSessionId, agentId }),
     ownerDied: parentSessionId => send({ type: 'death', parentSessionId }),
     ownerAlive: parentSessionId => send({ type: 'alive', parentSessionId }),

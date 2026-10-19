@@ -41,7 +41,8 @@ function clearLocalTranscriptAgentsTimer(sessionId) {
 }
 
 // descriptorStatus/liveness from session.status — see .ai/contexts/session-state.md
-function seedLocalTranscriptDescriptor(sessionId, session) {
+function seedLocalTranscriptDescriptor(sessionId, session, selection) {
+  const row = typeof localActivityRow === 'function' && localActivityRow(sessionId, session);
   session = localSessionForStatus(sessionId, session);
   if (!session || session.status === undefined) {
     const state = localTranscriptStates.get(sessionId);
@@ -56,7 +57,8 @@ function seedLocalTranscriptDescriptor(sessionId, session) {
   const state = localTranscriptState(sessionId);
   state.apply({ type: 'liveness', value: 'alive' });
   localTranscriptDescriptorLosses.delete(sessionId);
-  const background = session.bgJobId || typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId);
+  const targetHere = !session.headSessionId || session.headSessionId === sessionId;
+  const background = targetHere && (session.bgJobId || typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId, row, selection));
   if (!background) state.apply({ type: 'descriptorStatus', status: session.status, at: session.statusUpdatedAt });
 }
 

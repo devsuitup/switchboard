@@ -49,7 +49,7 @@ async function run() {
     const source = fs.readFileSync(path.join(__dirname, '../../main.js'), 'utf8');
     const applyStart = source.indexOf('  apply: async result => {', source.indexOf('const projectsClient'));
     const applyEnd = source.indexOf('\n  },', applyStart) + 4;
-    const context = vm.createContext({ writer, projectsSnapshot: snapshot, projectsReconciledAt: 0, Date });
+    const context = vm.createContext({ writer, projectsSnapshot: snapshot, projectsReconciledAt: 0, Date, structuredClone });
     const apply = vm.runInContext('({' + source.slice(applyStart, applyEnd) + '}).apply', context);
     let applications = 0, reconciled = false, workers = 0;
     projectsClient = createProjectsWorkerClient({

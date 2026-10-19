@@ -81,10 +81,10 @@ function scheduleJobsChanged() {
   if (!started || !jobsListeners.size || jobsFlushTimer) return;
   jobsFlushTimer = setTimeout(() => {
     jobsFlushTimer = null;
-    const next = new Map([...jobs].map(([id, job]) => [id, { state: job.state, name: job.name, nameSource: job.nameSource, sessionId: job.sessionId }]));
+    const next = new Map([...jobs].map(([id, job]) => [id, { state: job.state, name: job.name, nameSource: job.nameSource, sessionId: job.sessionId, transcriptPath: job.transcriptPath }]));
     const changed = next.size !== jobsProjection.size || [...next].some(([id, job]) => {
       const previous = jobsProjection.get(id);
-      return !previous || ['state', 'name', 'nameSource', 'sessionId'].some(field => previous[field] !== job[field]);
+      return !previous || ['state', 'name', 'nameSource', 'sessionId', 'transcriptPath'].some(field => previous[field] !== job[field]);
     });
     jobsProjection = next;
     if (!changed) return;
@@ -96,7 +96,7 @@ function scheduleJobsChanged() {
 }
 
 function getSnapshot() {
-  return { roster, daemonReachable };
+  return { roster, daemonReachable, cliAvailable: Array.isArray(cliList), cliEntryCount: cliList?.length || 0 };
 }
 
 function getCachedJobs() {

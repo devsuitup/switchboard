@@ -45,8 +45,21 @@ to rebuild. Replies with no effects or retained live rows bypass the cache
 computation queue, so a scan's outstanding folder ACK cannot delay first paint.
 The Projects relay handles conflicts both before queue execution and at writer
 admission: progress conflicts invalidate the job, and final conflicts use its
-existing three-snapshot budget before publishing rows without remaining effects.
+three-snapshot budget, then reject with PROJECTS_SNAPSHOT_CONFLICT and notify the renderer through the existing conflict recovery route.
 Search publication reads the current name and cached summary on the writer.
+
+An effects message is not one atomic transaction. Its admitted chunks remain
+committed if an interactive command changes the revision between chunks.
+WRITER_STALE rejects the remainder and its view; it does not roll back those
+earlier chunks. The Projects relay rebuilds from a new SQLite snapshot rather
+than replaying the old effect list. Source refresh upserts are repeatable, and
+writer-owned name precedence preserves an intervening user rename. After three
+conflicts no stale view is published; admitted chunks remain and the existing
+conflict notification requests a fresh load. This is the bounded-chunk repair
+contract, also used for already acknowledged folder progress in #718/#719.
+`test/session-index-effects-retry-719b.test.js` exercises the shipped drain with
+real disposable SQLite: partial commit, interleaved rename, stale remainder
+refusal, then successful fresh-revision admission without undoing that rename.
 
 BEGIN IMMEDIATE chunks target 32 SQLite changes and 65536 bound-input bytes.
 Per-unit savepoints defer a unit to the next transaction when adding it would cross
@@ -222,3 +235,16 @@ chunk adaptation, execution deadlines, heartbeats, restart windows and bounded e
 Tests use temporary isolated data dirs. No live application process or packaged
 build is used by these tests. The report in .work-files/codex-report-6166c.md records
 the final executed file census and packaged qualification checklist.
+
+## Projects ACK baseline (#719)
+
+Effects replies carry committedRevision captured inside the last owned SQLite
+transaction. The writer retains that token for Projects apply; other computation
+return shapes remain unchanged. A revision discontinuity between effects chunks
+refuses remaining effects with WRITER_STALE while preserving admitted batches.
+Main compares the ACK with db.getSetting('_writer_revision', { fresh: true }),
+which reads the persisted readonly store instead of the settings mirror. Ordinary
+settings reads retain the acknowledged mirror. No-op applies retain the pre-await baseline.
+Only post-ACK accepted final results advance projectsReconciledAt, including
+accepted callerless reconciliation. Archive retirement and shutdown keep their
+independent budgets and admission rules.

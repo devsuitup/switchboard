@@ -9,7 +9,7 @@ function applySettingsAcknowledgment(entries) {
 }
 module.exports = {
   ...store,
-  getSetting: key => structuredClone(settings.get(key) ?? null),
+  getSetting: (key, { fresh = false } = {}) => structuredClone((fresh ? store.getSetting(key) : settings.get(key)) ?? null),
   listSettingKeys: prefix => [...settings.keys()].filter(key => key.startsWith(prefix)),
   isInitialScanComplete: () => settings.get('initial_scan_complete') === true,
   applySettingsAcknowledgment,

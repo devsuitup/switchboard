@@ -11,6 +11,7 @@ const transitions = require('../session-transitions');
 const { handleTerminalInput } = require('../terminal-input');
 const { createComposerState } = require('../composer-state');
 const { loadAppFunctions } = require('./app-source');
+const { encodeProjectPath } = require('../encode-project-path');
 const { mergeLocalBackgroundSessions } = require('../sidebar-bg-sessions');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 const { setupSidebarDom } = require('./dom-setup');
@@ -314,11 +315,11 @@ test('typed /bg, altscreen off, collision daemon fork and attach row produce one
   assert.equal(w.openSessions.get(HEAD), terminal);
   assert.equal(w.openSessions.has(OLD), false);
   assert.equal(h.events[0]?.[3], 'background');
-  const row = { sessionId: OLD, folder: 'project', name: 'Original', customTitle: 'Original', projectPath: h.root, messageCount: 1,
+  const row = { sessionId: OLD, folder: encodeProjectPath(h.root), name: 'Original', customTitle: 'Original', projectPath: h.root, messageCount: 1,
     continuationIndex: JSON.stringify({ format: 3, complete: true, ids: [HEAD] }) };
-  const attach = { sessionId: HEAD, folder: 'project', name: 'Original (2)', projectPath: h.root, messageCount: 0 };
+  const attach = { sessionId: HEAD, folder: encodeProjectPath(h.root), name: 'Original (2)', projectPath: h.root, messageCount: 0 };
   const projects = [{ projectPath: h.root, sessions: [row, attach] }];
-  mergeLocalBackgroundSessions(projects, [row, attach], [{ sessionId: HEAD, kind: 'bg', jobId: '1234abcd', nameSource: 'collision' }],
+  mergeLocalBackgroundSessions(projects, [row, attach], [{ sessionId: HEAD, kind: 'bg', jobId: '1234abcd', cwd: h.root, nameSource: 'collision' }],
     { hiddenProjects: new Set(), metaMap: new Map(), showArchived: true,
       jobs: new Map([['1234abcd', { state: 'working', nameSource: 'collision' }]]) });
   assert.equal(projects[0].sessions.length, 1);
@@ -447,10 +448,10 @@ test('a newer genuine head rename selected by SQLite also appears on the merged 
     db.setName('${OLD}', 'Older Switchboard rename');
     db.setName('${HEAD}', 'Newer Switchboard rename');
     db.rekeySessionMeta('${OLD}', '${HEAD}', 'Original title');
-    const row = { sessionId: '${OLD}', folder: 'project', name: 'Older Switchboard rename', customTitle: 'Original title',
+    const row = { sessionId: '${OLD}', folder: '-project', name: 'Older Switchboard rename', customTitle: 'Original title',
       projectPath: '/project', continuationIndex: JSON.stringify({ format: 3, complete: true, ids: ['${HEAD}'] }) };
     const projects = [{ projectPath: '/project', sessions: [row] }];
-    mergeLocalBackgroundSessions(projects, [row], [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', nameSource: 'collision' }],
+    mergeLocalBackgroundSessions(projects, [row], [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', cwd: '/project', nameSource: 'collision' }],
       { hiddenProjects: new Set(), metaMap: db.getAllMeta(true), showArchived: true,
         jobs: new Map([['1234abcd', { state: 'working', nameSource: 'collision' }]]) });
     assert.equal(row.name, 'Newer Switchboard rename');
@@ -459,7 +460,7 @@ test('a newer genuine head rename selected by SQLite also appears on the merged 
     db.setName('${HEAD}', null);
     const cleared = { ...row, sessionId: '${OLD}', name: 'Older Switchboard rename', mergedMemberIds: [] };
     mergeLocalBackgroundSessions([{ projectPath: '/project', sessions: [cleared] }], [cleared],
-      [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', nameSource: 'collision' }],
+      [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', cwd: '/project', nameSource: 'collision' }],
       { hiddenProjects: new Set(), metaMap: db.getAllMeta(true), showArchived: true,
         jobs: new Map([['1234abcd', { state: 'working', nameSource: 'collision' }]]) });
     assert.equal(cleared.name, 'Original title');
@@ -475,24 +476,24 @@ test('a newer original rename survives indexed titles and older head renames bef
     const assert = require('node:assert/strict'), db = require('./test/fixtures/writer-store.cjs');
     const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
     db.setName('${OLD}', 'Switchboard rename'); db.setName('${HEAD}', 'Original (2)', 'transcript');
-    const row = { sessionId: '${OLD}', folder: 'project', name: 'Switchboard rename', customTitle: 'Original',
+    const row = { sessionId: '${OLD}', folder: '-project', name: 'Switchboard rename', customTitle: 'Original',
       projectPath: '/project', continuationIndex: JSON.stringify({ format: 3, complete: true, ids: ['${HEAD}'] }) };
     const projects = [{ projectPath: '/project', sessions: [row] }];
-    mergeLocalBackgroundSessions(projects, [row], [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', nameSource: 'collision' }],
+    mergeLocalBackgroundSessions(projects, [row], [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', cwd: '/project', nameSource: 'collision' }],
       { hiddenProjects: new Set(), metaMap: db.getAllMeta(true), showArchived: true,
         jobs: new Map([['1234abcd', { state: 'working', nameSource: 'collision' }]]) });
     assert.equal(row.name, 'Switchboard rename');
     db.setName('${HEAD}', 'Older head rename'); db.setName('${OLD}', 'Newest original rename');
     const newerOriginal = { ...row, sessionId: '${OLD}', name: 'Newest original rename', mergedMemberIds: [] };
     const nextProjects = [{ projectPath: '/project', sessions: [newerOriginal] }];
-    mergeLocalBackgroundSessions(nextProjects, [newerOriginal], [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', nameSource: 'collision' }],
+    mergeLocalBackgroundSessions(nextProjects, [newerOriginal], [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', cwd: '/project', nameSource: 'collision' }],
       { hiddenProjects: new Set(), metaMap: db.getAllMeta(true), showArchived: true,
         jobs: new Map([['1234abcd', { state: 'working', nameSource: 'collision' }]]) });
     assert.equal(newerOriginal.name, 'Newest original rename');
     db.setName('${OLD}', null);
     const cleared = { ...newerOriginal, sessionId: '${OLD}', name: 'Original', mergedMemberIds: [] };
     mergeLocalBackgroundSessions([{ projectPath: '/project', sessions: [cleared] }], [cleared],
-      [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', nameSource: 'collision' }],
+      [{ sessionId: '${HEAD}', kind: 'bg', jobId: '1234abcd', cwd: '/project', nameSource: 'collision' }],
       { hiddenProjects: new Set(), metaMap: db.getAllMeta(true), showArchived: true,
         jobs: new Map([['1234abcd', { state: 'working', nameSource: 'collision' }]]) });
     assert.equal(cleared.name, 'Original');

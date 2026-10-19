@@ -731,3 +731,10 @@ opening; background continuation attachments retain the resolved entry in the
 working set. Ordinary attach tabs remain excluded. #639 adds the live
 background continuation re-key described above; other live descriptor
 identity changes still use their existing ownership checks.
+
+## Identity-only attaches (#719)
+
+Exact open attach facts may choose a proven conversation representative/head.
+They do not grant daemon hosting, process ownership, resumability or authority to
+stop/delete a conversation. Live-elsewhere/resume questions and fresh per-member
+Delete checks retain their existing process evidence and refusal behavior.

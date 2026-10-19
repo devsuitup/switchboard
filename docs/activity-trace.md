@@ -455,3 +455,26 @@ before it fires, which the Electron main process never does.
 - [Status indicators](notifications.md) — what each indicator means
 - [`.ai/contexts/ipc-bridge.md`](../.ai/contexts/ipc-bridge.md) — busy-state reconciliation
 - [`.ai/contexts/subagent-observability.md`](../.ai/contexts/subagent-observability.md) — subagent spawn and completion detection
+
+## Conversation projection records (#719)
+
+Ordinary main.log includes info-level lines prefixed [session-projection], even
+in packaged builds with Diagnostics off. One newline-free JSON object records
+each accepted logical conversation change, combining background/merge membership,
+representative/head, selected activity source and visibility facets. Omission or
+metadata-time changes alone are silent; current deciding inputs still refresh.
+These records complement the optional OSC/paint trace above.
+
+Correlate schema:1, main timestamp, cause, opaque host/project scope and graph
+root with projects generation/build and roster revision. Inputs describe exact
+CLI inclusion/availability, cached-job evidence, accepted descriptors, attach and
+current proof/filter reasons. Removed rows use current producer exclusions when
+known; an unknown disappearance explicitly labels priorInputs as prior. Archived
+rows retained in the all view log visibility loss. Splits log every affected root.
+
+Full member sets are compared before emission truncates each list to 128 entries
+with original counts and truncation flags. Records above the transport budget
+compact while retaining identifiers, facets, counts and reasons; the final line
+stays below 64 KiB. The main-window/frame bridge validates allowlisted typed fields
+and rejects controls and untrusted extra fields. Records contain no raw project
+paths, names, prompts, transcript/CLI text, secrets or serialized liveVersion.

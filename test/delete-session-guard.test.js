@@ -75,7 +75,8 @@ test('the main-process delete guard reads merged member ids from the current cac
   const start = source.indexOf('function getConversationPartIds(');
   const guardStart = source.indexOf('const deleteSessionGuard = makeDeleteSessionGuard(', start);
   const end = source.indexOf(');', guardStart) + 2;
-  const rows = [{ sessionId: SID, mergedIntoSessionId: 'representative' }];
+  const rows = [{ sessionId: SID, mergedIntoSessionId: 'representative', projectPath: '/p', folder: '-p' },
+    { sessionId: 'representative', projectPath: '/p', folder: '-p' }];
   const context = vm.createContext({
     makeDeleteSessionGuard, activeSessions: new Map([[SID, { exited: false }]]),
     bgAgents, cliSessionState, sessionHasPty: () => false, ptyPids: () => [], getAllCached: () => rows,
