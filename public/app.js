@@ -349,8 +349,6 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         restoreInFlight.delete(item.sessionId);
         continue;
       }
-      // Resume with the project's current "new session" defaults, exactly like a
-      // manual session relaunch — not options frozen from a previous launch.
       const originalId = item.sessionId;
       const originalSession = s;
       let waitingForIndex = false;
@@ -362,6 +360,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         restoreInFlight.delete(originalId);
         continue;
       }
+      if (s.sessionId === originalId && s.headSessionId && s.headSessionId !== originalId) s = rowHeadSession(s);
       if (s.sessionId !== originalId) {
         restoreSavedIndex.set(s.sessionId, restoreSavedIndex.get(originalId) ?? position);
         skippedWorkingSetEntries.delete(originalId);
@@ -374,7 +373,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       let opened;
       let blockedBy;
       try {
-        opened = await openSession({ ...s, mergedMemberIds: [] }, undefined, {
+        opened = await openSession(s, undefined, {
           automatic: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true,
           onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
         });

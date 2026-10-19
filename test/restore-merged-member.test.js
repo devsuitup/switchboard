@@ -125,25 +125,25 @@ test('auto restore of saved primary A is unchanged', async t => {
 });
 
 for (const ids of [['B', 'A'], ['A', 'B'], ['B', 'C']]) {
-  test(`auto restore spawns every saved id in order [${ids.join(', ')}]`, async t => {
+  test(`auto restore reuses one tab for saved row members [${ids.join(', ')}]`, async t => {
     const h = setup(t, { ids, members: ['C', 'B'] });
     await h.restoreWorkingSet();
-    assert.deepEqual(h.spawned.map(s => s.sessionId), ids, 'restore must spawn every saved id in saved order');
-    assert.deepEqual(await h.persist(), h.saved, 'every restored id keeps its saved order and active state');
+    assert.deepEqual(h.spawned.map(s => s.sessionId), [ids[0]]);
+    assert.deepEqual(await h.persist(), [{ sessionId: ids[0], projectPath: PROJECT, active: true }]);
   });
 }
 
-test('auto restore persists both B and primary A when B was saved first', async t => {
+test('auto restore persists one tab when B and primary A were saved', async t => {
   const h = setup(t, { ids: ['B', 'A'] });
   await h.restoreWorkingSet();
-  assert.deepEqual(await h.persist(), h.saved, 'the saved primary A must not disappear after member B opens');
+  assert.deepEqual(await h.persist(), [{ sessionId: 'B', projectPath: PROJECT, active: true }]);
 });
 
 test('saved merged member B live elsewhere is skipped, checked by B and kept', async t => {
   const h = setup(t, { live: true });
   await h.restoreWorkingSet();
   assert.deepEqual(h.spawned, []);
-  assert.deepEqual(h.liveQueries, [['B']], 'liveness must be checked for member B');
+  assert.ok(h.liveQueries.some(ids => ids.includes('B') && ids.includes('A')), 'liveness must cover every row member');
   assert.deepEqual(await h.persist(), [{ ...h.saved[0], active: false }], 'the skipped member stays saved like any live-elsewhere session');
   assert.match(h.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /live outside this window in pid 4242/);
   assert.equal(h.document.getElementById('restore-unavailable-toast'), null);
@@ -154,7 +154,7 @@ test('saved primary A with head B live elsewhere is skipped with a notice naming
   await h.restoreWorkingSet();
   assert.deepEqual(h.spawned, [], 'restore must not resume a conversation whose head is live elsewhere');
   assert.match(h.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /B.*live outside this window in pid 4242/);
-  assert.deepEqual(await h.persist(), [{ ...h.saved[0], active: false }], 'the skipped primary stays saved');
+  assert.deepEqual(await h.persist(), [{ sessionId: 'B', projectPath: PROJECT, active: false }], 'the held entry follows the head');
   assert.equal(h.document.getElementById('restore-unavailable-toast'), null);
 });
 
