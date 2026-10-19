@@ -240,10 +240,10 @@ test('#629 Stop visibility follows descriptor liveness on the same projection', 
   assert.equal(card.querySelector('.grid-card-stop-btn').style.display, 'none');
 });
 
-test('#629 unknown live head does not animate and has the shared unavailable tooltip', t => {
+test('#629 an unknown head with its PTY here does not animate and shows the same idle dot on both surfaces', t => {
   const { ctx, create } = setup(t);
   const card = create();
-  parity(ctx, card, 'Turn state unavailable');
+  parity(ctx, card, 'Idle');
 });
 
 test('#629 written output paints the title blue and visible rendered output clears both surfaces', t => {
@@ -251,7 +251,7 @@ test('#629 written output paints the title blue and visible rendered output clea
   const card = create();
   ctx.window.openSessions.get(session.sessionId).renderedWrittenWatermark = ctx.window.noteWrittenActivity(session.sessionId);
   assert.equal(card.classList.contains('unseen-written-activity'), true);
-  parity(ctx, card, 'Turn state unavailable');
+  parity(ctx, card, 'Idle');
   ctx.window.gridViewActive = true;
   card.dataset.outputVisible = 'false';
   ctx.window.markTerminalOutputSeen(ctx.window.openSessions.get(session.sessionId));
@@ -259,7 +259,7 @@ test('#629 written output paints the title blue and visible rendered output clea
   card.dataset.outputVisible = 'true';
   ctx.window.markTerminalOutputSeen(ctx.window.openSessions.get(session.sessionId));
   assert.equal(card.classList.contains('unseen-written-activity'), false);
-  parity(ctx, card, 'Turn state unavailable');
+  parity(ctx, card, 'Idle');
 });
 
 test('#629 completion while a card is absent cannot resurrect tasks when it is created', t => {
@@ -270,7 +270,7 @@ test('#629 completion while a card is absent cannot resurrect tasks when it is c
   tasks([{ id: 'A', terminal: true }]);
   ctx.emitSubagentSpawned({ parentSessionId: 'head-629', agentId: 'A', _heartbeat: true });
   const card = create();
-  parity(ctx, card, 'Waiting for input');
+  parity(ctx, card, 'Idle');
   assert.equal(card.querySelector('.grid-subagent-count'), null);
 });
 

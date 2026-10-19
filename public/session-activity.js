@@ -185,6 +185,13 @@ function setActivity(sessionId, active, via, opts) {
   if (wasBusy && !active) notifySessionIdle(sessionId);
 }
 
+// see .ai/contexts/session-state.md
+function forgetObservedTurnEnd(sessionId, { busy = false } = {}) {
+  localPtyStates.get(sessionId)?.apply({ type: 'turnEndForgotten', busy });
+  const turn = headTurns.get(sessionId);
+  if (turn?.ended) headTurns.set(sessionId, { ...turn, ended: false });
+}
+
 function clearHeadUnread(sessionId) {
   const turn = headTurns.get(sessionId);
   if (turn?.ready) headTurns.set(sessionId, { ...turn, ready: false });

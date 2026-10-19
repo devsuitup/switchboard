@@ -135,7 +135,7 @@ test('a fresh fork or clear does not inherit the previous conversations unread h
   h.applyHeadTurnSnapshot({ sessionId: 's1', state: 'closed', revision: 2 });
   h.rekeyActivityState('s1', 'fresh');
   assert.equal(h.item('fresh').classList.contains('response-ready'), false);
-  assert.equal(h.item('fresh').querySelector('.session-icon').title, 'Turn state unavailable');
+  assert.equal(h.item('fresh').querySelector('.session-icon').title, 'Idle');
 });
 
 test('an ordinary continuation carries head evidence without preserving the source row', t => {

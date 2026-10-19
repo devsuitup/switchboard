@@ -177,7 +177,7 @@ test('an unknown oversized head loses Waiting for input after a busy signal', as
   assert.equal(icon().title, 'Waiting for input');
   advance();
   ctx.setActivity('root', true, 'onCliBusyState');
-  assert.equal(icon().title, 'Turn state unavailable');
+  assert.equal(icon().title, 'Idle');
 });
 
 test('new oversized transcript evidence clears Waiting for input on an unknown attached head', async t => {
@@ -188,7 +188,7 @@ test('new oversized transcript evidence clears Waiting for input on an unknown a
   assert.equal(icon().title, 'Waiting for input');
   advance();
   await append([{ type: 'tool_result', content: 'x'.repeat(300_000) }]);
-  assert.equal(icon().title, 'Turn state unavailable');
+  assert.equal(icon().title, 'Idle');
 });
 
 test('a changed oversized tail preserves the hint when both snapshots lack timestamped evidence', async t => {

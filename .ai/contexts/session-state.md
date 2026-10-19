@@ -97,10 +97,17 @@ hints, but never close or reopen the projected turn.
 `headActivitySnapshot` selects the authoritative icon inputs, while
 `mergedRowSnapshot` retains the head's busy, prompt and unread states. Attention,
 background work and row liveness may aggregate across members; an older
-member's open turn cannot animate the head. `taskRegistry.background` is the
-source of background work, including non-agent kinds. A closed live head uses
-the existing waiting glyph, or the static full-braille glyph when background
-work remains. Attention owns the one slot first, followed by Response ready.
+member's open turn cannot animate the head. When the head holds a PTY here,
+its gate and observed ends decide the waiting state. When only older parts
+hold PTYs here, the row waits after one of those parts' observed ends,
+whatever the head's descriptor says; an open head prevents the ring. The head
+keeps the spinner, response-ready state and its turn.
+`taskRegistry.background` is the source of background work, including non-agent
+kinds. A live head outside an open turn uses the waiting glyph only if its
+PTY is elsewhere or Switchboard has observed a turn end since this PTY started.
+A PTY-here row at rest otherwise shows the green running dot. Background work
+keeps the static full-braille glyph. Attention owns the one slot first,
+followed by Response ready.
 An unseen confirmed closure keeps both the unread flag and its response-ready
 glyph until read or consumed by explicit or descriptor-owned attention.
 Maintainer decision (JB, 2026-10-14): retain the **● Response ready** glyph
@@ -109,9 +116,37 @@ the row is seen. The slot has five visible states: animated, static, waiting,
 attention, and response-ready.
 Projection does not mutate stored turn evidence; event handlers replace it.
 An unknown
-live head cannot animate and uses the tooltip "Turn state unavailable" when
-there is no known background work. This does not implement #626 title colour
+live head cannot animate; its waiting glyph uses the tooltip "Turn state unavailable"
+when there is no known background work. A PTY-here unknown head at rest reads
+`Idle`. This does not implement #626 title colour
 or #627 subagent counts.
+
+An OSC-observed end is the local-pty adapter's `waitingForInput`, set by an
+explicit busy-to-idle signal. A transcript-observed end is an `open→closed`
+head snapshot observed in this renderer: `headTurns.ended` carries it across
+later `closed` revisions, independently of focus and `clearUnread`. A first
+`closed` snapshot, descriptor idle (`idleHintAt`, `promptHint`, including the
+descriptor branch of `idleNewer`), silence and activity decays are not observed
+ends. Rows live elsewhere keep `alive && headTurn !== 'open'`.
+
+| Event | Observed-end effect |
+|---|---|
+| Head `open` | Clears `ended`; the busy rung wins until the next observed closure. |
+| OSC busy / progress / reconciled busy | Clears the OSC end; a transcript end remains until the head opens. |
+| Attention | Clears the OSC end and owns the slot while set. |
+| Known head becomes `unknown` | `forgetObservedTurnEnd` clears both sources; `closed` without a new `open` does not restore an end. |
+| PTY start (`beginPtyOpen`) | Clears both sources and the adapter's `busy`, so an earlier end or pending remote activity cannot turn the first idle poll into an end. |
+| Remote busy or decay | The remote adapter still updates, but both shadow writes to local-pty state are skipped while an unclosed tab is open here, including before the first PTY poll. |
+| Remote attach edge | Repaints the row but forgets nothing; pruning a remote row can reset its adapter's `attached` flag without stopping its PTY. |
+| PTY exit | The live-elsewhere rule applies once the PTY is gone; purge drops adapter state. |
+| Typing without submitting | Does not write activity state. |
+
+Neither source persists across renderer reload or app restart; a sidebar
+rebuild keeps both. A re-key always moves local-pty state and moves the head's
+`ended` only with `preserveHead`. A fork or `/clear` keeps an OSC end and drops
+a transcript end. Background attach calls `beginPtyOpen` after re-keying,
+clearing both ends while retaining head evidence and response-ready state.
+Coverage: `test/green-dot-pty-here-714.test.js`.
 
 The CLI also emits job fan kind `shell` (observed live on 2.1.296). The job
 normalizer accepts it as the existing canonical `bash` kind; otherwise one
@@ -148,6 +183,7 @@ Grid cards use the same `storedActivitySnapshot` / `mergedRowSnapshot`,
 `paintSessionIconFromSnapshot` as the sidebar (#629). Their single
 `.grid-card-dot.session-icon` carries the animated head turn, static background
 work, attention or response-ready glyph and the same accessible tooltip.
+The dot carries `running` from `activePtyIds`, like the sidebar icon.
 `updateGridSubagentPills` retains its registry callback name and now paints
 both activity and the authoritative agent count. `applyStateClasses` refreshes
 matching cards after projecting a row, including when the sidebar row is absent;
@@ -1005,13 +1041,18 @@ public/session-activity.js       the local-pty adapter — one persistent
 persistent per-session-id adapter (`localPtyStates` / `localTranscriptStates` /
 `remoteSessionStates`). Snapshot fields:
 
+The domain event `turnEndForgotten` clears `waitingForInput` and, when its
+`busy` option is true, the adapter's `busy`; it leaves all other fields alone.
+`forgetObservedTurnEnd` applies it only to an existing local-pty entry and
+clears `headTurns.ended` without creating adapter state.
+
 | field | meaning |
 |---|---|
 | `kind` | which adapter produced this state |
 | `liveness` | `'alive' \| 'dead' \| 'unknown'` — is the CLI process running |
 | `attached` | Switchboard holds a PTY / ssh attach for it — **separate from liveness** (2026-09-11 lifecycle decision: a row is active because the process is alive, not because a tab is open) |
 | `busy` | adapter activity hint; projected busy requires a live, open head turn |
-| `waitingForInput` | adapter prompt hint; projected waiting uses head and ordered idle evidence |
+| `waitingForInput` | adapter prompt hint and OSC-observed turn end; projected waiting uses head and ordered idle evidence and, for an id with a PTY here, an observed turn end since that PTY started |
 | `attention` | OSC 9 — needs the user right now (permission/approval/plan) |
 | `responseReady` | subset of `waitingForInput`: idle **and** unseen when it went idle (the legacy "Claude finished, you haven't looked" rung). Not in the issue's original field list — added because the priority order names it as its own rung, distinct from plain `waitingForInput`; see "Design notes" below. |
 | `agentsBusy` | subagents running under this session |
@@ -1085,7 +1126,7 @@ Selectors depend only on `session-icon--<rung>`, with no layout measurement.
 | busy | `session-icon--busy` | blue animated braille spinner, violet with busy subagents | sidebar and Agents |
 | agentsBusy | `session-icon--agents-busy` | violet static braille cell | sidebar |
 | waitingForInput | `session-icon--waiting` | orange `--state-waiting` hollow `○`, no halo or animation | sidebar and Agents |
-| idle | `session-icon--idle` | no glyph; base grey filled dot, green only with `.running` | sidebar and live idle Agents jobs |
+| idle | `session-icon--idle` | no glyph; green with `.running` — a row or grid card whose PTY is here, at rest | sidebar, grid and live idle Agents jobs |
 | stale | `session-icon--stale` | no glyph; base grey filled dot at 0.5 opacity | Agents only, for a job that is not live |
 | archived | `session-icon--archived` | same as stale | reserved, unused |
 

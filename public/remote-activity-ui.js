@@ -73,7 +73,8 @@ function markRemoteBusy(sessionId, via, at) {
   const t = at || Date.now();
   state.apply({ type: 'transcriptTouched', at: t, source: via });
   state.apply({ type: 'busy', active: true, at: t });
-  setActivity(sessionId, true, via, { at: t });
+  const tab = typeof openSessions !== 'undefined' && openSessions.get(sessionId);
+  if (!tab || tab.closed) setActivity(sessionId, true, via, { at: t });
   projectRemoteState(sessionId);
 }
 
@@ -83,7 +84,8 @@ function decayRemoteBusy(sessionId) {
   const state = remoteState(sessionId);
   if (state.snapshot().attached) return;
   state.apply({ type: 'busy', active: false, armReady: false });
-  setActivity(sessionId, false, 'remote-decay', { armReady: false });
+  const tab = typeof openSessions !== 'undefined' && openSessions.get(sessionId);
+  if (!tab || tab.closed) setActivity(sessionId, false, 'remote-decay', { armReady: false });
   projectRemoteState(sessionId);
 }
 
@@ -177,6 +179,7 @@ function setRemoteAttached(sessionId, attached) {
   const state = remoteState(sessionId);
   const wasAttached = state.snapshot().attached;
   state.apply({ type: 'attached', value: attached });
+  if (!wasAttached && attached) applyStateClasses(sessionId, storedActivitySnapshot(sessionId));
   if (wasAttached && !attached) {
     clearRemoteActivityTimer(sessionId);
     remoteSeedFloors.set(sessionId, Date.now());

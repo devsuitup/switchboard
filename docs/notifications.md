@@ -16,7 +16,8 @@ When several states hold at once, the first one in this table wins:
 | Working | Light-blue braille spinner | light blue | Claude is working | Claude stops |
 | Working, with subagents | The same spinner, violet | light blue | Claude is working and subagents run under it | — |
 | Subagents running | Static violet ⠿ | — | Claude is at its prompt, subagents still run under it | The last subagent ends |
-| Running | Green dot | — | Switchboard holds a live process for the session | The process exits |
+| Waiting for input | Orange hollow ring | — | Switchboard saw Claude finish a turn in a session open here, or a session running elsewhere is at its prompt | A new turn starts |
+| Running | Green dot | — | Switchboard holds a live process for the session and has not seen a turn end since that process started or since the last turn began | Claude finishes a turn, or the process exits |
 | — | Grey dot | — | Anything else | — |
 
 The two violet states are explained on [Subagents](subagents.md#live-status).

@@ -16,6 +16,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - On Linux, Switchboard restarted by an update could no longer install the next update or open links in snap applications such as Firefox; it now restarts through your desktop session's service manager, so it keeps the rights the application menu gives it. (#590)
+- A session open in Switchboard shows its green dot again, in the sidebar and the grid, while it is at rest; the orange waiting ring appears once Switchboard has seen Claude finish a turn in it. A plain terminal keeps its green glow. (#714)
 - Search now finds a compacted conversation by text from any of its parts, and the subagents of its later parts are listed under it instead of under Orphan subagents. (#564)
 - On a compacted conversation, Fork, Resume with config and View messages now use its latest part. (#564)
 - Deleting a compacted conversation now deletes all of its parts, so newer parts cannot reappear as sessions; Delete asks you to retry if its parts changed after the preview. If a file cannot be removed, the conversation stays listed with its remaining parts and a message reports what was deleted. (#564)

@@ -58,7 +58,9 @@ function applyHeadTurnSnapshot(turn) {
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
   const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
   const observedAt = changed ? Date.now() : previous.observedAt;
-  headTurns.set(turn.sessionId, { ...turn, observedAt, ready: ready || (previous?.ready && turn.state === 'closed') });
+  const ended = turn.state === 'closed' && (previous?.state === 'open' || !!previous?.ended);
+  if (turn.state === 'unknown' && previous && previous.state !== 'unknown') forgetObservedTurnEnd(turn.sessionId);
+  headTurns.set(turn.sessionId, { ...turn, observedAt, ready: ready || (previous?.ready && turn.state === 'closed'), ended });
   if (previous && changed) {
     for (const states of [typeof localPtyStates !== 'undefined' && localPtyStates,
       typeof localTranscriptStates !== 'undefined' && localTranscriptStates,
@@ -73,7 +75,8 @@ function applyHeadTurnSnapshot(turn) {
 function headActivitySnapshot(sessionId, snapshot) {
   const s = snapshot || {};
   const turn = headTurns.get(sessionId);
-  const alive = s.liveness === 'alive' || (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId));
+  const ptyHere = typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId);
+  const alive = s.liveness === 'alive' || ptyHere;
   const background = typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId)
     || s.backgroundJob;
   const promptHint = s.promptHint && (!background || Number.isFinite(s.promptHintAt));
@@ -81,7 +84,7 @@ function headActivitySnapshot(sessionId, snapshot) {
     || turn?.state === 'open' && Number.isFinite(s.promptHintAt) && Number.isFinite(turn?.observedAt) && s.promptHintAt > turn.observedAt;
   const headTurn = idleNewer || (promptHint && (!turn || turn.state === 'unknown')) ? 'closed' : turn?.state || 'unknown';
   return { ...s, ...writtenActivitySnapshot(sessionId), headTurn, busy: alive && headTurn === 'open',
-    responseReady: !s.attention && !!turn?.ready, waitingForInput: alive && headTurn !== 'open',
+    responseReady: !s.attention && !!turn?.ready, waitingForInput: alive && headTurn !== 'open' && (!ptyHere || !!s.waitingForInput || !!turn?.ended),
     liveness: alive ? 'alive' : s.liveness };
 }
 
@@ -173,6 +176,11 @@ function mergedRowSnapshot(ids, sessionId, snapshot, row) {
     combined[field] = snapshots.some(s => s[field]);
   }
   if (snapshots.some(s => s.liveness === 'alive')) combined.liveness = 'alive';
+  const ptyIds = typeof activePtyIds === 'undefined' ? [] : ids.filter(id => activePtyIds.has(id));
+  if (ptyIds.length && !ptyIds.includes(head)) {
+    combined.waitingForInput = combined.headTurn !== 'open'
+      && ptyIds.some(id => !!(id === sessionId ? snapshot : storedActivitySnapshot(id))?.waitingForInput);
+  }
   return combined;
 }
 
