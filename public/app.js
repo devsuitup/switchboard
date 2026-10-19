@@ -2123,6 +2123,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
       for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
       if (clearDormantRow(resolvedOpenId)) schedulePersistWorkingSet();
       if (mayShow()) showSession(resolvedOpenId);
+      if (continuationNotice) showAppNotice(continuationNotice);
       return;
     }
   }

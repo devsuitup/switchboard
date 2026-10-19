@@ -171,7 +171,11 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
       return true;
     });
   if (!candidateParts.length) {
-    if (result && !result.unresolved) return session;
+    if (result && !result.unresolved) {
+      if (chooseAgain) notify?.({ id: `continuation-choice:${rowKey}`,
+        message: 'This conversation no longer has parts to choose from.' });
+      return session;
+    }
     const reason = result?.waitingForIndex ? 'a part it continued in is still being indexed.'
       : 'its continuation records are damaged, or a part it continued in could not be checked.';
     return openAsWas(['Switchboard could not tell where "' + conversationName() + '" continued: ' + reason,

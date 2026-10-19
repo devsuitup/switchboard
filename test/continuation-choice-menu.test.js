@@ -7,8 +7,8 @@ const { setupSidebarDom } = require('./dom-setup');
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
-function menuFixture(t, { open = false, chosen = 'b' } = {}) {
-  const h = setup(t, { old: [], head: ['b', 'c'], b: [], c: [] });
+function menuFixture(t, { open = false, chosen = 'b', linear = false } = {}) {
+  const h = setup(t, { old: [], head: linear ? [] : ['b', 'c'], b: [], c: [] });
   const ui = setupSidebarDom();
   t.after(() => ui.destroy());
   Object.assign(h.rows.get('old'), { headSessionId: 'head', mergedMemberIds: ['head'] });
@@ -29,6 +29,26 @@ function menuFixture(t, { open = false, chosen = 'b' } = {}) {
   };
   return { h, ui, record, menu };
 }
+
+test('S2 a linear row explains Choose part to open, while normal and automatic opens stay silent', async t => {
+  for (const mode of ['chooseAgain', 'chooseAgainOpen', 'normal', 'automatic']) {
+    const { h, record, menu } = menuFixture(t, { linear: true, open: mode === 'chooseAgainOpen' });
+    await h.ctx.api.setSetting('continuationChoice:old', record);
+    if (mode.startsWith('chooseAgain')) {
+      menu().click();
+      await tick(); await tick();
+    } else {
+      await h.app.openSession(h.ctx.rowHeadSession(h.rows.get('old')), undefined, { automatic: mode === 'automatic' });
+    }
+    assert.deepEqual(h.spawned.map(entry => entry.id), mode === 'chooseAgainOpen' ? [] : ['head'], mode);
+    assert.deepEqual(h.prompts, [], mode);
+    assert.equal(h.ctx._continuationChoices.has('continuationChoice:old'), false, mode);
+    assert.equal(await h.ctx.api.getSetting('continuationChoice:old'), null, mode);
+    const notices = [...h.dom.window.document.querySelectorAll('.app-notice')];
+    assert.equal(notices.length, mode.startsWith('chooseAgain') ? 1 : 0, mode);
+    if (mode.startsWith('chooseAgain')) assert.ok(notices[0].textContent.includes('This conversation no longer has parts to choose from.'));
+  }
+});
 
 test('S3 the row menu offers Choose part to open only for its representative record', t => {
   const { h, menu } = menuFixture(t);

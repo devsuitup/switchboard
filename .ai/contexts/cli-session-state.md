@@ -699,10 +699,16 @@ The row menu shows **Choose part to open…** only when the renderer map holds
 the representative row's record. It opens the current head with `chooseAgain`,
 bypassing valid memory and the open-tab shortcut. The chooser preselects the
 saved choice when listed; Cancel preserves the record, and Open replaces it.
-Normal clicks retain the open-tab shortcut.
+If revalidation finds no external candidates, the menu action opens or focuses
+the row and shows "This conversation no longer has parts to choose from."
+Normal and automatic opens do not show this notice. Normal clicks retain the
+open-tab shortcut.
 
 Delete awaits removal of `continuationChoice:<id>` for every confirmed deleted
-part and subagent. The renderer drops choices alongside confirmed removed parts,
+part, excluding subagents. A rejected settings deletion logs a warning and still
+clears cache and search rows for every deleted part and subagent; it does not
+turn a completed file deletion into an IPC failure.
+The renderer drops choices alongside confirmed removed parts,
 including partial deletion, retaining records for parts that could not be removed.
 After startup cache population settles, `sweepContinuationChoices` checks
 `isInitialScanComplete()` and removes keys whose ids are not cached top-level

@@ -2395,7 +2395,10 @@ ipcMain.handle('delete-session', async (_event, sessionId, previewPartIds) => {
   const deletedIds = [...new Set([...deletedPartIds, ...deletedSubagentIds])];
   for (const sid of deletedIds) {
     mainTouchedCache.dropSession(sid);
-    await deleteSetting('continuationChoice:' + sid);
+    if (deletedPartIds.includes(sid)) {
+      try { await deleteSetting('continuationChoice:' + sid); }
+      catch (err) { log.warn(`[delete-session] could not delete continuationChoice:${sid}: ${err.message}`); }
+    }
     try { await deleteCachedSession(sid); } catch {}
     try { await deleteSearchSession(sid); } catch {}
   }
