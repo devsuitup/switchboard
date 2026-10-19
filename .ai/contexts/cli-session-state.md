@@ -599,6 +599,8 @@ for an assumption a normal unit test can pin.
 
 ## Conversation continuations
 
+A proven local linear chain now shares one sidebar row under its original part (#564), including compaction mirrors. Branches, convergence, remote or cross-project links stay separate; `/clear` has no link. Clicking a closed row opens its newest-modified head without a continuation prompt for ids already on that row, and checks every part for liveness elsewhere. Automatic restore still follows a saved part to its terminal id, which may differ from the newest-modified head. See [Continuation rows](session-cache.md#continuation-rows-564) for index proof, dangling-target and 32-hop rules.
+
 For an open interactive conversation moving to the daemon, #639 adds the
 background proof path in `session-transitions.js`. A single complete fresh
 `continued-in` target must have a live `kind: bg` descriptor or a working/blocked

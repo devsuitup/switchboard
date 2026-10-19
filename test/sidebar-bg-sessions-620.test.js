@@ -390,23 +390,25 @@ test('a non-user bg head takes the most recent user-named part in either descrip
   }
 });
 
-test('a dead bg PID splits the predecessor and indexed head back into separate rows', t => {
+test('a dead bg PID keeps the indexed chain on its root row without a bg marker', t => {
   const h = setup(t, { graph: { [OLD]: [HEAD] }, indexedHead: true });
   assert.equal(h.projects().flatMap(p => p.sessions).length, 1);
   h.die();
   const sessions = h.projects().flatMap(p => p.sessions);
-  assert.equal(sessions.length, 2);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].sessionId, OLD);
+  assert.deepEqual(sessions[0].mergedMemberIds, [HEAD]);
   assert.ok(sessions.every(row => !row.bgJobId));
 });
 
-test('an SDK-only root drops the visible head marker and registry name', t => {
+test('a non-SDK continuation keeps its SDK root listed with the bg marker and registry name', t => {
   const h = setup(t, { graph: { [OLD]: [HEAD] }, indexedHead: true });
   h.rows[0].entrypoint = 'sdk-ts';
   const sessions = h.projects().flatMap(p => p.sessions);
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].sessionId, HEAD);
-  assert.equal(sessions[0].bgJobId, undefined);
-  assert.equal(sessions[0].name, 'fixture launch (2)');
+  assert.equal(sessions[0].bgJobId, '33333333');
+  assert.equal(sessions[0].name, 'fixture renamed');
 });
 
 test('continuation projection matches the bounded forward resolver on graph fixtures', t => {

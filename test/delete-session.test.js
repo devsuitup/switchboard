@@ -15,6 +15,13 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 
+test('21: Delete delegates conversation membership to the shared resolver', () => {
+  const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+  const start = main.indexOf('function getConversationPartIds(');
+  const body = main.slice(start, main.indexOf('\n}', start));
+  assert.match(body, /sessionCache\.conversationMemberIds\(rows, canonicalId\)/);
+});
+
 test('delete-session: the IPC handler exists and is exposed to the renderer', () => {
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
   const preload = fs.readFileSync(path.join(ROOT, 'preload.js'), 'utf8');

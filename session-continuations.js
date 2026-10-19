@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { parseFolderKey } = require('./remote-hosts');
 
 const validId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(id);
 
@@ -151,5 +152,77 @@ function resolveContinuationsSync(sessionId, getNode, options) {
   return step.value;
 }
 
+// see .ai/contexts/session-cache.md ("Continuation rows (#564)")
+function continuationRollup(rows) {
+  const result = new Map();
+  const candidates = [];
+  for (const row of rows) {
+    if (row.parentSessionId || !row.projectPath) continue;
+    const serialized = row.continuationIndex;
+    if (serialized && !serialized.includes('"ids":[]') && parseFolderKey(row.folder).alias === null) candidates.push(row);
+  }
+  if (!candidates.length) return result;
+  const local = rows.filter(row => !row.parentSessionId && row.projectPath && parseFolderKey(row.folder).alias === null);
+  const byId = new Map(local.map(row => [row.sessionId, row]));
+  let folded;
+  const find = id => byId.get(id) || (folded ||= new Map(local.map(row => [row.sessionId.toLowerCase(), row]))).get(String(id).toLowerCase());
+  const representative = row => find(row.mergedIntoSessionId || row.sessionId)?.sessionId;
+  const nodes = new Map();
+  for (const row of local) {
+    const id = representative(row);
+    if (!id) continue;
+    if (!nodes.has(id)) nodes.set(id, { row: find(id), parts: [], next: new Set(), incoming: new Set() });
+    nodes.get(id).parts.push(row);
+  }
+  const indexes = new Map(), blocked = new Set();
+  const read = row => {
+    if (indexes.has(row)) return indexes.get(row);
+    let index;
+    try { index = JSON.parse(row.continuationIndex); } catch {}
+    const ids = Array.isArray(index?.ids) ? index.ids : [...(String(row.continuationIndex || '')
+      .match(/"ids"\s*:\s*\[([^\]]*)/)?.[1] || '').matchAll(/"([A-Za-z0-9_-]+)"/g)].map(match => match[1]);
+    const proven = index?.format === 3 && index.complete && !index.unresolved && Array.isArray(index.ids)
+      && index.ids.every(validId) && index.mtime === row.fileMtime;
+    const value = { ids, proven };
+    indexes.set(row, value);
+    return value;
+  };
+  for (const row of candidates) {
+    const source = nodes.get(representative(row));
+    if (!source) continue;
+    const { ids, proven } = read(row);
+    for (const id of ids) {
+      const target = find(id), targetId = target && representative(target);
+      if (!proven) {
+        if (targetId) blocked.add(targetId);
+      }
+      if (target && row.bridgeSessionId && row.bridgeSessionId === target.bridgeSessionId) continue;
+      if (targetId === source.row.sessionId) continue;
+      const nextId = targetId || String(id).toLowerCase();
+      source.next.add(nextId);
+      if (proven && targetId) nodes.get(targetId)?.incoming.add(source.row.sessionId);
+    }
+  }
+  for (const [rootId, root] of nodes) {
+    if (root.incoming.size || !root.next.size) continue;
+    const chain = [];
+    let node = root, valid = true;
+    while (node) {
+      if (blocked.has(node.row.sessionId) || node.row.projectPath !== root.row.projectPath
+        || node.row.folder !== root.row.folder || chain.length > 32) { valid = false; break; }
+      chain.push(node.row.sessionId);
+      if (!node.next.size) break;
+      if (node.next.size > 1) { valid = false; break; }
+      const next = nodes.get(node.next.values().next().value);
+      if (!next) break;
+      if (!node.parts.every(part => read(part).proven)) { valid = false; break; }
+      if (next.incoming.size !== 1) { valid = false; break; }
+      node = next;
+    }
+    if (valid) for (const id of chain.slice(1)) result.set(id, rootId);
+  }
+  return result;
+}
+
 module.exports = { continuationId, continuationStamp, matchesContinuationStamp,
-  scanContinuationIndex, resolveContinuations, resolveContinuationsSync, validId };
+  scanContinuationIndex, resolveContinuations, resolveContinuationsSync, validId, continuationRollup };

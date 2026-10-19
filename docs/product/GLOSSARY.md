@@ -111,7 +111,9 @@ concept. Each entry gives:
 
 - **Definition**: a sidebar row whose representative transcript carries
   `mergedMemberIds`, the other transcripts that share its `bridgeSessionId`
-  (a `/compact` mirror or a claude.ai bridge mirror).
+  (a `/compact` mirror or a claude.ai bridge mirror), plus the parts of a proven
+  local linear continuation chain. Branching, remote and cross-project chains
+  stay separate.
 - **Don't say**: "group" (that is the slug group), "linked sessions".
 - **Code**: `mergedMemberIds`, `mergedIntoSessionId`, `bridgeSessionId`
   (`.ai/contexts/session-cache.md:106-131`); `mergedRowSnapshot`

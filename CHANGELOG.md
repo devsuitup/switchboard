@@ -8,6 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A conversation made of several transcripts now shows N parts, and its menu lists the parts with View messages and Copy id for each. (#564)
 
 ### Changed
+- A conversation the CLI continued under a new id now stays on one row when there is only one way it went. (#564)
 - A conversation made of several parts now stays listed while any part is unarchived and is pinned when any part is pinned. Archive, Pin and Rename apply to every part at once, and its subagents are hidden only when the whole conversation is archived. (#564)
 - Sessions are grouped by name only for scheduled tasks; other sessions are listed one per row. Scheduled runs from before v0.0.90 are listed one per row. (#564)
 - Remote session rows no longer offer Delete, which could only be refused after opening its confirmation. (#566, #565)
