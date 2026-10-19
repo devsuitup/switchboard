@@ -1752,25 +1752,159 @@ function rebindSidebarEvents(projects) {
 
 const SESSION_MENU_EDGE_MARGIN = 4;
 let activeSessionContextMenu = null;
+let sessionMenuReturnFocus = null;
 
 function closeSessionContextMenu() {
   activeSessionContextMenu?.remove();
   activeSessionContextMenu = null;
   document.removeEventListener('mousedown', onSessionMenuOutside, true);
   document.removeEventListener('keydown', onSessionMenuKey, true);
-  document.removeEventListener('scroll', closeSessionContextMenu, true);
+  document.removeEventListener('scroll', onSessionMenuScroll, true);
+}
+
+function runSessionMenuAction(action) {
+  const returnFocus = sessionMenuReturnFocus;
+  closeSessionContextMenu();
+  const focusBeforeAction = document.activeElement;
+  try {
+    return action();
+  } finally {
+    if (returnFocus?.isConnected && document.activeElement === focusBeforeAction) returnFocus.focus();
+  }
 }
 
 function onSessionMenuOutside(event) {
   if (!activeSessionContextMenu?.contains(event.target)) closeSessionContextMenu();
 }
 
+function onSessionMenuScroll(event) {
+  if (!activeSessionContextMenu?.contains(event.target)) closeSessionContextMenu();
+}
+
+function positionSessionContextMenu(menu, x, y) {
+  menu.style.left = Math.max(0, Math.min(x, window.innerWidth - menu.offsetWidth - SESSION_MENU_EDGE_MARGIN)) + 'px';
+  menu.style.top = Math.max(0, Math.min(y, window.innerHeight - menu.offsetHeight - SESSION_MENU_EDGE_MARGIN)) + 'px';
+}
+
 function onSessionMenuKey(event) {
-  if (event.key === 'Escape') closeSessionContextMenu();
+  const menu = activeSessionContextMenu;
+  if (!menu) return;
+  if (!menu.contains(event.target)) {
+    closeSessionContextMenu();
+    return;
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSessionContextMenu();
+    if (sessionMenuReturnFocus?.isConnected) sessionMenuReturnFocus.focus();
+    return;
+  }
+  if (event.key === 'Tab') {
+    closeSessionContextMenu();
+    return;
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+  const list = menu.querySelector('.session-parts-menu');
+  const partsButton = menu.querySelector('.session-parts-btn');
+  if (event.key === 'ArrowLeft' && list && !list.hidden) {
+    list.hidden = true;
+    partsButton.setAttribute('aria-expanded', 'false');
+    partsButton.focus();
+  } else if (event.key === 'ArrowRight' && event.target === partsButton) {
+    partsButton.click();
+  } else {
+    const scope = list && !list.hidden && list.contains(event.target) ? list : menu;
+    const buttons = [...scope.querySelectorAll('button')].filter(b => !b.disabled && !b.closest('[hidden]'));
+    const index = buttons.indexOf(document.activeElement);
+    let next;
+    if (event.key === 'ArrowDown') next = (index + 1) % buttons.length;
+    else if (event.key === 'ArrowUp') next = (index - 1 + buttons.length) % buttons.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = buttons.length - 1;
+    else if ((event.key === 'Enter' || event.key === ' ') && index >= 0) buttons[index].click();
+    else return;
+    if (next !== undefined) buttons[next]?.focus();
+  }
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function rowPartIds(session) {
+  return [...new Set([...rowSessionIds(session), rowHeadId(session)])];
+}
+
+function appendSessionPartsMenu(menu, session) {
+  const partIds = rowPartIds(session);
+  if (partIds.length < 2) return;
+  const button = document.createElement('button');
+  button.className = 'popover-option session-parts-btn';
+  button.textContent = 'Parts';
+  button.setAttribute('role', 'menuitem');
+  button.setAttribute('aria-haspopup', 'menu');
+  button.setAttribute('aria-expanded', 'false');
+  button.setAttribute('aria-controls', 'session-parts-menu');
+  const list = document.createElement('div');
+  list.id = 'session-parts-menu';
+  list.className = 'session-parts-menu';
+  list.setAttribute('role', 'menu');
+  list.setAttribute('aria-label', 'Parts');
+  list.hidden = true;
+  const metadata = new Map((session.conversationParts || []).map(part => [part.sessionId, part]));
+  const parts = partIds.map(id => ({
+    sessionId: id, ...metadata.get(id),
+  }));
+  const time = part => Date.parse(part.modified) || 0;
+  parts.sort((a, b) => time(b) - time(a) || (a.sessionId === rowHeadId(session) ? -1 : b.sessionId === rowHeadId(session) ? 1 : a.sessionId.localeCompare(b.sessionId)));
+  for (const part of parts) {
+    const group = document.createElement('div');
+    group.className = 'session-part';
+    group.dataset.partId = part.sessionId;
+    group.setAttribute('role', 'group');
+    const label = document.createElement('div');
+    label.className = 'session-part-label';
+    label.id = 'session-part-' + part.sessionId;
+    const name = cleanDisplayName(part.name || part.aiTitle || part.summary) || 'Untitled conversation';
+    const date = part.modified && Number.isFinite(Date.parse(part.modified)) ? formatDate(new Date(part.modified)) : 'unknown';
+    label.textContent = `${name} · last active ${date}`;
+    group.setAttribute('aria-labelledby', label.id);
+    group.appendChild(label);
+    for (const [text, action] of [
+      ['View messages', () => showJsonlViewer({ ...rowHeadSession(session, part.sessionId), name: null, aiTitle: null, summary: null, ...part })],
+      ['Copy id', async () => {
+        const noticeId = sessionActionNoticeId('Copy id', { ...session, sessionId: part.sessionId });
+        try {
+          await window.api.writeClipboard(part.sessionId);
+          clearAppNotice(noticeId);
+        } catch (error) {
+          showAppNotice({
+            id: noticeId, kind: 'error',
+            message: `Could not copy the id ${part.sessionId.split('-')[0]}: ${error?.message || error || 'Clipboard unavailable'}. Try Copy id again.`,
+          });
+        }
+      }],
+    ]) {
+      const item = document.createElement('button');
+      item.className = 'popover-option';
+      item.setAttribute('role', 'menuitem');
+      item.textContent = text;
+      item.onclick = () => runSessionMenuAction(action);
+      group.appendChild(item);
+    }
+    list.appendChild(group);
+  }
+  button.onclick = () => {
+    list.hidden = !list.hidden;
+    button.setAttribute('aria-expanded', String(!list.hidden));
+    positionSessionContextMenu(menu, parseFloat(menu.style.left), parseFloat(menu.style.top));
+    if (!list.hidden) list.querySelector('button')?.focus();
+  };
+  menu.append(button, list);
 }
 
 function showSessionContextMenu(event, sessionId) {
   closeSessionContextMenu();
+  sessionMenuReturnFocus = document.activeElement;
   const menu = document.createElement('div');
   menu.className = 'popover terminal-context-menu session-context-menu';
   menu.setAttribute('role', 'menu');
@@ -1781,10 +1915,7 @@ function showSessionContextMenu(event, sessionId) {
   const openId = rowOpenId(sessionMap.get(sessionId) || { sessionId });
   button.disabled = !openId;
   if (button.disabled) button.title = 'Open this session in a terminal to refresh its screen';
-  button.onclick = () => {
-    closeSessionContextMenu();
-    requestTerminalRefresh(openId);
-  };
+  button.onclick = () => runSessionMenuAction(() => requestTerminalRefresh(openId));
   menu.appendChild(button);
   const bgButton = document.createElement('button');
   bgButton.className = 'popover-option session-bg-btn';
@@ -1793,11 +1924,9 @@ function showSessionContextMenu(event, sessionId) {
   const reason = backgroundActionReason(openId);
   bgButton.disabled = !!reason;
   if (reason) bgButton.title = reason;
-  bgButton.onclick = () => {
-    closeSessionContextMenu();
-    sendSessionToBackground(openId);
-  };
+  bgButton.onclick = () => runSessionMenuAction(() => sendSessionToBackground(openId));
   menu.appendChild(bgButton);
+  appendSessionPartsMenu(menu, sessionMap.get(sessionId) || { sessionId });
   const dormantIds = rowSessionIds(sessionMap.get(sessionId) || { sessionId }).filter(isDormantSession);
   if (dormantIds.length) {
     const dismiss = document.createElement('button');
@@ -1805,19 +1934,16 @@ function showSessionContextMenu(event, sessionId) {
     dismiss.setAttribute('role', 'menuitem');
     dismiss.textContent = "Don't restore";
     dismiss.title = 'Remove this session from the sessions to restore, without starting it';
-    dismiss.onclick = () => {
-      closeSessionContextMenu();
-      dormantIds.forEach(dismissDormantSession);
-    };
+    dismiss.onclick = () => runSessionMenuAction(() => dormantIds.forEach(dismissDormantSession));
     menu.appendChild(dismiss);
   }
   document.body.appendChild(menu);
-  menu.style.left = Math.max(0, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - SESSION_MENU_EDGE_MARGIN)) + 'px';
-  menu.style.top = Math.max(0, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - SESSION_MENU_EDGE_MARGIN)) + 'px';
+  positionSessionContextMenu(menu, event.clientX, event.clientY);
   activeSessionContextMenu = menu;
   document.addEventListener('mousedown', onSessionMenuOutside, true);
   document.addEventListener('keydown', onSessionMenuKey, true);
-  document.addEventListener('scroll', closeSessionContextMenu, true);
+  document.addEventListener('scroll', onSessionMenuScroll, true);
+  menu.querySelector('button:not(:disabled)')?.focus();
 }
 
 // see .ai/contexts/session-state.md ("Descriptor-owned attention")
@@ -1914,8 +2040,8 @@ function buildSessionItem(session) {
   timeEl.textContent = timeStr + (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '');
   const shortIdEl = document.createElement('span');
   shortIdEl.className = 'session-short-id';
-  shortIdEl.title = session.sessionId;
-  shortIdEl.textContent = session.sessionId.split('-')[0];
+  shortIdEl.title = rowHeadId(session);
+  shortIdEl.textContent = rowHeadId(session).split('-')[0];
 
   // see .ai/contexts/session-state.md ("Surfacing status on the session object")
   const statusEl = document.createElement('span');
@@ -1928,6 +2054,14 @@ function buildSessionItem(session) {
     statusEl.textContent = session.status + why + (age ? ' · ' + age : '');
   }
   metaEl.append(timeEl, shortIdEl, statusEl);
+  const count = rowPartIds(session).length;
+  if (count > 1) {
+    const badge = document.createElement('span');
+    badge.className = 'session-parts-badge';
+    badge.textContent = `${count} parts`;
+    badge.title = `This conversation has ${count} parts: compaction mirrors and continuations of one exchange`;
+    metaEl.insertBefore(badge, statusEl);
+  }
 
   if (session.remoteAlias) {
     const badge = document.createElement('span');

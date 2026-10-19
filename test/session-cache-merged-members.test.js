@@ -45,3 +45,29 @@ test('merged member ids are newest-first regardless of database row order, with 
   const session = cache.buildProjectsFromCache(false).flatMap(p => p.sessions).find(s => s.sessionId === 'A');
   assert.deepEqual(session.mergedMemberIds, ['C', 'D', 'B', 'E']);
 });
+
+for (const alias of [null, 'host']) {
+  test(`Parts metadata retains each transcript's own name and date (${alias || 'local'})`, t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-parts-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const { joinFolderKey } = require('../remote-hosts');
+    const base = { projectPath: dir, folder: alias ? joinFolderKey(alias, 'project') : 'project', messageCount: 1 };
+    const rows = [
+      { ...base, sessionId: 'A', summary: 'Root', modified: '2026-10-10T09:00:00Z' },
+      { ...base, sessionId: 'B', mergedIntoSessionId: 'A', aiTitle: 'Member title', modified: '2026-10-11T09:00:00Z' },
+      { ...base, sessionId: 'C', mergedIntoSessionId: 'A', modified: null },
+    ];
+    cache.init({ PROJECTS_DIR: dir, activeSessions: new Map(), getMainWindow: () => null, log: console, db: {
+      getAllCached: () => rows, getAllMeta: () => new Map([['B', { name: 'Member name' }]]), getAllFolderMeta: () => new Map(), getSetting: () => ({}),
+    } });
+    const session = cache.buildProjectsFromCache(false).flatMap(p => p.sessions).find(s => s.sessionId === 'A');
+    assert.ok(session.conversationParts, 'payload carries per-part metadata');
+    assert.deepEqual(session.conversationParts.map(p => [p.sessionId, p.name, p.aiTitle, p.summary, p.modified]), [
+      ['A', null, null, 'Root', rows[0].modified],
+      ['B', 'Member name', 'Member title', null, rows[1].modified],
+      ['C', null, null, null, null],
+    ]);
+    assert.equal(session.modified, rows[1].modified);
+    assert.equal(session.remoteAlias, alias);
+  });
+}

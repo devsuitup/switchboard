@@ -1249,6 +1249,36 @@ body { display: flex; flex-direction: column; }
   flex-shrink: 0;
 }
 
+.session-parts-badge {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+}
+
+.session-context-menu {
+  max-width: calc(100vw - 8px);
+  max-height: calc(100vh - 8px);
+  overflow-y: auto;
+}
+
+.session-part-label {
+  padding: 8px 12px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.session-parts-menu {
+  border-left: 1px solid var(--hairline);
+  margin-left: 12px;
+}
+
+.session-context-menu .popover-option:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+
 /* ---- Session action buttons ---- */
 .session-actions {
   flex-shrink: 0;

@@ -758,8 +758,8 @@ function buildProjectsFromCache(showArchived) {
   const hiddenSdkIds = hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent);
   const sdkOnlyProjectKeys = new Set();
 
-  const cachedIds = new Set(cachedRows.map(r => r.sessionId));
-  const isArchivedParent = (id) => cachedIds.has(id) && !!metaMap.get(id)?.archived;
+  const cachedById = new Map(cachedRows.map(r => [r.sessionId, r]));
+  const isArchivedParent = (id) => cachedById.has(id) && !!metaMap.get(id)?.archived;
 
   // Keyed on alias + projectPath: two hosts can hold the same absolute path.
   const projectMap = new Map();
@@ -933,6 +933,25 @@ function buildProjectsFromCache(showArchived) {
     hiddenProjects, metaMap, showArchived, jobs: localJobs,
   });
   for (const proj of projects) {
+    for (const session of proj.sessions) {
+      if (!session.mergedMemberIds?.length) continue;
+      session.conversationParts = [session.sessionId, ...session.mergedMemberIds].map(id => {
+        const descriptor = !proj.remoteAlias && session.bgSessionId === id
+          ? localDescriptors.find(d => d.sessionId === id) : null;
+        const part = cachedById.get(id) || (descriptor && {
+          summary: (descriptor.nameSource !== 'collision' && descriptor.name) || 'Background session',
+          modified: Number.isFinite(descriptor.startedAt) && Math.abs(descriptor.startedAt) <= 8640000000000000
+            ? new Date(descriptor.startedAt).toISOString() : null,
+        });
+        return {
+          sessionId: id,
+          name: metaMap.get(id)?.name || null,
+          aiTitle: part?.aiTitle || null,
+          summary: part?.summary || null,
+          modified: part?.modified || null,
+        };
+      });
+    }
     proj.sessions.sort((a, b) => new Date(b.modified) - new Date(a.modified));
   }
 
