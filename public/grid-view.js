@@ -93,11 +93,13 @@ function updateGridSubagentPills(parentSessionId) {
 
 function updateGridCardActivity(sessionId, card, row) {
   const snapshot = mergedRowSnapshot(rowSessionIds(row), sessionId, storedActivitySnapshot(sessionId, row), row);
-  paintSessionIconFromSnapshot(card.querySelector('.grid-card-dot'), snapshot);
+  const running = activePtyIds.has(sessionId);
+  const dot = card.querySelector('.grid-card-dot');
+  paintSessionIconFromSnapshot(dot, snapshot);
+  dot?.classList.toggle('running', running);
   setHasBusyAgents(card, snapshot.agentsBusy);
   setNeedsAttention(card, snapshot.attention);
   setUnseenWrittenActivity(card, snapshot.unseenWrittenActivity);
-  const running = activePtyIds.has(sessionId);
   const exit = !running && snapshot.liveness !== 'alive' && lastSessionExit(sessionId);
   const footer = card.querySelector('.grid-card-footer');
   if (footer?.children[0]) footer.children[0].textContent = running ? 'Running' : snapshot.liveness === 'alive' ? 'Running elsewhere'

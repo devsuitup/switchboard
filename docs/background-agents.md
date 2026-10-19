@@ -21,8 +21,9 @@ restarts.
 One row per session: an activity glyph shared with the sidebar — an animated
 spinner during a turn, a static spinner for background tasks at the prompt,
 an orange hollow ring while waiting, `!` for Needs your attention (including
-blocked jobs), a green filled dot for a response ready, or a dim grey dot when
-finished — its name, its `--agent`, its state emoji and job state (see the
+blocked jobs), a blue dot for a response ready, a green dot for a session open
+in one of Switchboard's own tabs (an attach tab included) at rest, or a dim grey
+dot when finished — its name, its `--agent`, its state emoji and job state (see the
 table below), its directory, and its age. Background rows omit `· busy` and
 `· idle`; external interactive rows also show their session status. Working
 and blocked sessions and external interactive sessions come first, newest
@@ -150,7 +151,9 @@ with the daemon answering) to attach, the same as the **Attach** button in the
 detail pane. A double click on a finished or external session, on a group
 header or on a button does nothing extra.
 
-An attach tab is an ordinary terminal tab running `claude attach`. Its stop
+An attach tab is an ordinary terminal tab running `claude attach`. Its row shows
+the green dot until Switchboard sees a turn end in that tab, then the orange
+ring. Its stop
 button reads **Detach**: closing the tab sends Ctrl+Z, the attach client
 leaves, and the session keeps running under the daemon. Stopping the session
 is only offered in the Agents view. Tabs created by Send to background or

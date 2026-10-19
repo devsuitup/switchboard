@@ -889,6 +889,7 @@ function handleProcessExited(sessionId, exitCode, signal, stopped, generation) {
 
 function beginPtyOpen(sessionId) {
   pendingOpens.set(sessionId, []);
+  if (typeof forgetObservedTurnEnd === 'function') forgetObservedTurnEnd(sessionId, { busy: true });
 }
 
 function settlePtyOpen(sessionId, result) {

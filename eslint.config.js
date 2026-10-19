@@ -34,6 +34,7 @@ const rendererCrossFileGlobals = {
   markTranscriptOutputSeen: 'readonly',
   setUnseenWrittenActivity: 'readonly',
   clearHeadUnread: 'readonly',
+  forgetObservedTurnEnd: 'readonly',
   registerModal: 'readonly',
   hasOpenModal: 'readonly',
   enqueueModalQuestion: 'readonly',

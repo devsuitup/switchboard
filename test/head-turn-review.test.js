@@ -76,7 +76,7 @@ test('OSC idle is ordered against local head observation; stale progress and dec
   ctx.setActivity('root', false, 'onCliBusyState');
   assert.equal(icon().title, 'Waiting for input');
   ctx.setActivity('root', true, 'onCliBusyState');
-  assert.equal(icon().title, 'Waiting for input');
+  assert.equal(icon().title, 'Idle');
   ctx.window.Date.now = () => 1_800_000_000_020;
   turn('open', 1_800_000_000_020);
   assert.equal(icon().title, 'Working');

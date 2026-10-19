@@ -101,6 +101,10 @@ function createSessionState(kind) {
       case 'clearUnread':
         responseReady = false;
         break;
+      case 'turnEndForgotten':
+        waitingForInput = false;
+        if (event.busy) busy = false;
+        break;
       case 'liveness':
         liveness = event.value === 'alive' || event.value === 'dead' ? event.value : 'unknown';
         if (liveness === 'dead') releaseDescriptorAttention();

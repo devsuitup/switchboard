@@ -78,7 +78,7 @@ test('OSC busy alone cannot animate an unknown or closed head; background shells
   assert.equal(icon().dataset.glyph, '⠿');
   assert.equal(ctx.document.getElementById('si-root').querySelectorAll('.session-icon').length, 1);
   ctx.window.taskRegistry.end('root', 'shell');
-  assert.equal(icon().classList.contains('session-icon--waiting'), true);
+  assert.equal(icon().classList.contains('session-icon--idle'), true);
 });
 
 test('the task registry alone decides when known fallback background work has ended', t => {

@@ -52,9 +52,9 @@ for (const [state, kind, head, hosted, valid, text, activity, foreground = false
   ['failed', null, 'closed', false, true, 'Job failed', 'Stale'],
   ['working', null, 'open', true, false, 'Activity unavailable', 'Working'],
   ['done', null, 'open', false, true, 'Working', 'Working', true],
-  ['done', null, 'closed', false, true, 'Waiting for input', 'Waiting for input', true],
+  ['done', null, 'closed', false, true, 'Idle', 'Idle', true],
   ['failed', null, 'open', false, true, 'Working', 'Working', true],
-  ['failed', null, 'closed', false, true, 'Waiting for input', 'Waiting for input', true],
+  ['failed', null, 'closed', false, true, 'Idle', 'Idle', true],
 ]) {
   test(`[702] ${state}/${activity} (valid: ${valid}, foreground: ${foreground}) keeps the same concise status and icon detail on render and live update`, async t => {
     const entries = roster(state, kind);
@@ -159,7 +159,7 @@ test('[702b] remote attention owns the icon title when it overrides local backgr
 });
 
 for (const [state, kind, head, slot, label] of [
-  ['working', null, 'closed', 'waiting', 'Waiting for input'],
+  ['working', null, 'closed', 'idle', 'Idle'],
   ['blocked', null, 'closed', 'attention', 'Needs your attention'],
   ['working', 'agent', 'closed', 'agents-busy', 'Background work running'],
   ['working', 'agent', 'open', 'busy', 'Working'],
@@ -315,9 +315,9 @@ for (const state of ['done', 'stopped', 'failed']) {
       const h = await setup(t, entries, true);
       h.window.openSessions.set(SID, { session: { sessionId: SID }, attach: false });
       h.emitHeadTurn(SID, 'closed');
-      assert.equal(h.document.querySelector('.session-status').textContent, 'Waiting for input');
-      assert.ok(h.document.querySelector('.session-icon--waiting'));
-      assert.equal(h.window.agentRowIcon(entries[0]).slotClass, 'session-icon--waiting');
+      assert.equal(h.document.querySelector('.session-status').textContent, 'Idle');
+      assert.ok(h.document.querySelector('.session-icon--idle'));
+      assert.equal(h.window.agentRowIcon(entries[0]).slotClass, 'session-icon--idle');
       h.emitHeadTurn(SID, 'open', { revision: 2 });
       h.window.refreshSidebar();
       const row = h.document.querySelector('.session-item');
