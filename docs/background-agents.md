@@ -20,8 +20,8 @@ restarts.
 
 One row per session: an activity glyph shared with the sidebar — an animated
 spinner during a turn, a static spinner for background tasks at the prompt,
-an orange hollow ring while waiting, `!` for Needs your attention (including
-blocked jobs), a blue dot for a response ready, a green dot for a session open
+an orange hollow ring while waiting (including blocked jobs), `!` for Needs
+your attention, a blue dot for a response ready, a green dot for a session open
 in one of Switchboard's own tabs (an attach tab included) at rest, or a dim grey
 dot when finished — its name, its `--agent`, its state emoji and job state (see the
 table below), its directory, and its age. Background rows omit `· busy` and
@@ -73,6 +73,13 @@ first (a section left empty is not shown), and the choice is remembered.
 A job is in one of five states: `working`, `blocked` (live, waiting for
 input), `done`, `stopped` or `failed` (ended in error). `working` and
 `blocked` both count as live; the other three are finished.
+
+A blocked job has parked itself, for example during a quota pause or while
+awaiting your go-ahead. It shows the static orange waiting ring in the sidebar,
+grid and Agents view, including while attached, and keeps its Blocked label
+and tooltip. A separate attention notification or a live descriptor explicitly
+requesting attention still makes it blink. When the job leaves `blocked`, its
+icon follows its current activity again.
 
 The same emoji marks a state in the State headers and at the start of every
 row's state column, whatever the grouping:

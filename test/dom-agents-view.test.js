@@ -177,15 +177,20 @@ test('Agents row and detail retain the original conversation name over a collisi
   } finally { h.destroy(); }
 });
 
-test('Agents rows supply attention, unknown-live and finished glyphs to the shared slot CSS', { timeout: 1000 }, async () => {
+test('Agents rows supply genuine attention, blocked waiting and finished glyphs to the shared slot CSS', { timeout: 1000 }, async () => {
   const { window, document, setSnapshot, destroy } = setup();
   try {
     setSnapshot({ daemonReachable: true, roster: [
-      { id: 'waiting', kind: 'background', state: 'blocked', hosted: true, status: 'waiting' },
+      { id: 'waiting', sessionId: 's-waiting', kind: 'background', state: 'blocked', hosted: true, status: 'waiting' },
+      { sessionId: 'permission', kind: 'interactive', status: 'waiting' },
       { id: 'idle', kind: 'background', state: 'working', hosted: true, status: 'idle' },
       { id: 'finished', kind: 'background', state: 'done', hosted: false, status: 'idle' },
     ] });
     await window.showAgentsView();
+    const blocked = document.querySelector('.agents-row[data-key="bg:waiting"] .session-icon');
+    assert.ok(blocked.classList.contains('session-icon--waiting'));
+    assert.equal(blocked.classList.contains('session-icon--attention'), false);
+    assert.match(blocked.title, /job blocked/);
     const { renderSessionIcon } = require('../public/session-state');
     for (const [rung, snapshot] of [['attention', { attention: true }], ['waiting', { waitingForInput: true }], ['stale', { stale: true }]]) {
       const slot = document.querySelector(`.agents-row .session-icon--${rung}`);
@@ -195,6 +200,16 @@ test('Agents rows supply attention, unknown-live and finished glyphs to the shar
   } finally {
     destroy();
   }
+});
+
+test('a blocked Agents row without a sessionId keeps job blocked in its tooltip', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ daemonReachable: true, roster: [
+    { id: 'blocked-without-session', kind: 'background', state: 'blocked', hosted: true },
+  ] });
+  await ctx.window.showAgentsView();
+  const icon = ctx.document.querySelector('.agents-row[data-key="bg:blocked-without-session"] .session-icon');
+  assert.match(icon.title, /job blocked/);
 });
 
 test('Agents rows mark only live jobs as running', { timeout: 1000 }, async () => {

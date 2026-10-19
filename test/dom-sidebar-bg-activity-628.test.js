@@ -44,8 +44,8 @@ for (const [state, kind, head, hosted, valid, text, activity, foreground = false
   ['working', null, 'open', true, true, '', 'Working'],
   ['working', 'agent', 'closed', true, true, '', 'Background work running'],
   ['working', null, 'closed', true, true, '', 'Waiting for input'],
-  ['blocked', null, 'closed', true, true, 'Blocked', 'Needs your attention'],
-  ['blocked', null, 'closed', true, false, 'Blocked', 'Needs your attention'],
+  ['blocked', null, 'closed', true, true, 'Blocked', 'Waiting for input'],
+  ['blocked', null, 'closed', true, false, 'Blocked', 'Waiting for input'],
   ['done', null, 'closed', true, true, 'Idle', 'Waiting for input'],
   ['done', null, 'closed', false, true, 'Job done', 'Stale'],
   ['stopped', null, 'closed', false, true, 'Job stopped', 'Stale'],
@@ -160,7 +160,7 @@ test('[702b] remote attention owns the icon title when it overrides local backgr
 
 for (const [state, kind, head, slot, label] of [
   ['working', null, 'closed', 'idle', 'Idle'],
-  ['blocked', null, 'closed', 'attention', 'Needs your attention'],
+  ['blocked', null, 'closed', 'waiting', 'Waiting for input'],
   ['working', 'agent', 'closed', 'agents-busy', 'Background work running'],
   ['working', 'agent', 'open', 'busy', 'Working'],
 ]) {
@@ -193,8 +193,9 @@ for (const [state, kind, head, slot, label] of [
         assert.equal(row.querySelectorAll('.session-icon').length, 1);
         const icon = row.querySelector(`.session-icon--${slot}`);
         assert.ok(icon, row.innerHTML);
-        assert.equal(icon.title, label);
-        if (state === 'blocked') assert.equal(icon.dataset.glyph, '!');
+        assert.equal(icon.title, state === 'blocked'
+          ? h.document.querySelector('.session-item .session-icon').title : label);
+        if (state === 'blocked') assert.equal(icon.dataset.glyph, '○');
         const status = row.querySelector('.agents-row-state');
         assert.match(status.textContent, new RegExp(state));
         assert.doesNotMatch(status.textContent, /busy|idle|ago|\d+[smhd]/i);
@@ -367,7 +368,7 @@ test('[628b] metadata-only pushes avoid sidebar rebuilds while activity changes 
   assert.equal(h.sidebarRenders(), before);
   h.push({ roster: roster('blocked'), daemonReachable: true });
   assert.equal(h.sidebarRenders(), before + 1);
-  assert.ok(h.document.querySelector('.session-icon--attention'));
+  assert.ok(h.document.querySelector('.session-icon--waiting'));
   h.push({ roster: [], daemonReachable: true });
   assert.equal(h.sidebarRenders(), before + 2);
 });
@@ -389,7 +390,7 @@ for (const [state, kind, head, slot, count] of [
   ['working', 'bash', 'closed', 'agents-busy', 0],
   ['working', 'monitor', 'closed', 'agents-busy', 0],
   ['working', 'agent', 'open', 'busy', 1],
-  ['blocked', 'agent', 'open', 'attention', 1],
+  ['blocked', 'agent', 'open', 'waiting', 1],
   ['done', 'agent', 'open', 'stale', 0],
   ['stopped', 'agent', 'open', 'stale', 0],
   ['failed', 'agent', 'open', 'stale', 0],
@@ -435,7 +436,7 @@ test('[628] pushes refresh same-member activity and retain head/unseen evidence 
   assert.ok(row.querySelector('.session-icon--busy'), 'validated head is still usable without a job format');
   h.push({ roster: roster('blocked'), daemonReachable: true });
   row = h.document.querySelector('.session-item');
-  assert.ok(row.querySelector('.session-icon--attention'));
+  assert.ok(row.querySelector('.session-icon--waiting'));
   assert.match(row.querySelector('.session-status').textContent, /blocked/i);
   assert.equal(h.subscriptions(), 1);
 });

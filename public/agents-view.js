@@ -168,7 +168,9 @@ function agentRowIcon(entry) {
   let snapshot = typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, ports) : { ...ports, headTurn: 'unknown' };
   if (entry.kind === 'background' && !foreground) snapshot = projectBackgroundActivity(entry, snapshot);
   const icon = renderSessionIcon(snapshot);
-  return { slotClass: icon.slotClasses[0], live, glyph: icon.glyph, title: icon.title };
+  const title = entry.kind === 'background' && entry.state === 'blocked'
+    ? backgroundActivityLabel(entry.sessionId, snapshot)?.title || `${icon.title} · job blocked` : icon.title;
+  return { slotClass: icon.slotClasses[0], live, glyph: icon.glyph, title };
 }
 
 function backgroundActivityEntry(sessionId) {
@@ -188,11 +190,11 @@ function projectBackgroundActivity(entry, snapshot) {
   const turnActive = live && !terminal && !blocked;
   const headTurn = terminal || blocked ? 'closed' : snapshot.headTurn;
   return { ...snapshot, headTurn, liveness: live ? 'alive' : 'dead', stale: !live,
-    attention: blocked || turnActive && snapshot.attention, busy: turnActive && headTurn === 'open',
+    attention: live && !terminal && snapshot.attention, busy: turnActive && headTurn === 'open',
     responseReady: turnActive && snapshot.responseReady,
     agentsBusy: turnActive && snapshot.agentsBusy,
     backgroundWork: turnActive && snapshot.backgroundWork,
-    waitingForInput: live && headTurn !== 'open'
+    waitingForInput: blocked || live && headTurn !== 'open'
       && (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(entry.sessionId)) || !!snapshot.waitingForInput) };
 }
 
