@@ -110,7 +110,8 @@ That check reads the CLI's undocumented `~/.claude/sessions/<pid>.json`, and the
 PR under test may predate or break it. So:
 
 - Open only sessions you started in the test instance, or sessions that run
-  nowhere else. When a click asks *Resume it anyway?*, answer Cancel.
+  nowhere else. When a click offers **Resume anyway**, including for a running
+  scheduled task, answer Cancel. The question names the schedule when known.
 - Seed the test database with `restoreOnStartup` off and `openWorkingSet`
   removed (see [Cold start](#cold-start-seed-the-database)).
 - Before reloading the test instance, make sure the session it remembers is one

@@ -237,11 +237,11 @@ test('reopening a closed old tab still offers its continuation', { timeout: 9000
   assert.match(h.prompts[0], /new/);
 });
 
-test('a held old entry is rekeyed when manual continuation opening meets a live schedule', { timeout: 9000 }, async t => {
+test('a held old entry opens its live scheduled continuation after confirmation and stays rekeyed', { timeout: 9000 }, async t => {
   const h = setup(t, { old: ['new'], new: [] }, { answer: true, live: { new: { kind: 'schedule', pid: 2 } } });
-  vm.runInContext(`skippedWorkingSetEntries.set('old', { item: { sessionId: 'old', projectPath: ${JSON.stringify(h.root)} }, index: 0 });`, h.ctx);
+  vm.runInContext(`skippedWorkingSetEntries.set('old', { item: { sessionId: 'old', projectPath: ${JSON.stringify(h.root)} }, index: 0 });`, h.ctx, { filename: __filename });
   await h.click();
-  assert.deepEqual(h.spawned, []);
+  assert.deepEqual(h.spawned.map(call => call.id), ['new']);
   assert.equal(h.settings().openWorkingSet[0].sessionId, 'new');
 });
 

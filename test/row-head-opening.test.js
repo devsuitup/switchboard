@@ -123,7 +123,7 @@ for (const id of ['B', 'A', 'C']) {
     await h.click();
     assert.deepEqual(h.spawned, []);
     assert.equal(h.prompts.length, 1);
-    assert.match(h.prompts[0], /pid 4242/);
+    assert.match(h.prompts[0][0], /pid 4242/);
     assert.deepEqual(h.checked, [['B', 'C', 'A']]);
   });
 }
@@ -138,9 +138,9 @@ test('merged row live elsewhere on a member is checked even with a supplied null
 test('merged row live elsewhere checks another scheduled part after accepting the head warning', async t => {
   const h = setup(t, { confirm: true, live: { B: { pid: 11 }, C: { pid: 12, kind: 'schedule' } } });
   await h.click();
-  assert.deepEqual(h.spawned, []);
+  assert.deepEqual(h.spawned, ['B']);
   assert.equal(h.prompts.length, 2);
-  assert.match(h.prompts[1], /scheduled task/);
+  assert.match(h.prompts[1][0], /in a scheduled run/);
 });
 
 test('same-row continuation from a representative head to a member opens the head without a prompt', async t => {

@@ -52,11 +52,11 @@ function setup(t, { sandbox = false } = {}) {
     log,
   });
   const source = read('main.js');
-  vm.runInContext(extractFunction(source.replace(/^    (async )?function runScheduleCommand/m, '$1function runScheduleCommand'), 'runScheduleCommand'), main);
+  vm.runInContext(extractFunction(source.replace(/^    (async )?function runScheduleCommand/m, '$1function runScheduleCommand'), 'runScheduleCommand'), main, { filename: path.join(ROOT, 'main.js') });
   for (const channel of ['session-live-elsewhere', 'sessions-live-elsewhere']) {
     const line = source.split('\n').find((line) => line.includes(`ipcMain.handle('${channel}'`));
     assert.ok(line, `missing ${channel} handler`);
-    vm.runInContext(line, main);
+    vm.runInContext(line, main, { filename: path.join(ROOT, 'main.js') });
   }
 
   const dom = new JSDOM('<!DOCTYPE html><body></body>', { runScripts: 'outside-only' });
@@ -64,7 +64,7 @@ function setup(t, { sandbox = false } = {}) {
   const notices = dom.window.document.createElement('div');
   notices.id = 'app-notices';
   dom.window.document.body.append(notices);
-  vm.runInContext(fs.readFileSync(path.join(ROOT, 'public', 'app-notices.js'), 'utf8'), ctx);
+  vm.runInContext(read('public/app-notices.js'), ctx, { filename: path.join(ROOT, 'public/app-notices.js') });
   const openTerminalCalls = [];
   const messages = [];
   const confirmations = [];
@@ -78,9 +78,9 @@ function setup(t, { sandbox = false } = {}) {
     getSetting: async (key) => settings[key],
     setSetting: async (key, value) => { settings[key] = value; },
   };
-  dom.window.appConfirm = async ({ message }) => { confirmations.push(message); return true; };
+  dom.window.appConfirm = async question => { confirmations.push(question); return true; };
   dom.window.appAlert = async ({ message }) => { messages.push(message); };
-  vm.runInContext(read('public/utils.js'), ctx);
+  vm.runInContext(read('public/utils.js'), ctx, { filename: path.join(ROOT, 'public/utils.js') });
   vm.runInContext(read('public/resume-guard.js'), ctx, { filename: path.join(ROOT, 'public/resume-guard.js') });
   vm.runInContext(`
     var openSessions = new Map(), pendingSessions = new Map();
@@ -107,7 +107,7 @@ function setup(t, { sandbox = false } = {}) {
     function settlePtyOpen() {}
     function schedulePersistWorkingSet() {}
     function pollActiveSessions() {}
-  `, ctx);
+  `, ctx, { filename: __filename });
   loadAppFunctions(ctx, {
     functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(ROOT, 'public/session-activity-dom.js'),
   });
@@ -142,18 +142,20 @@ function setup(t, { sandbox = false } = {}) {
   };
 }
 
-test('a click during a scheduled run refuses a second process even when the dialog is accepted', async (t) => {
+test('a click during a scheduled run asks Resume anyway and opens when accepted', async (t) => {
   const h = setup(t);
   (await h.start());
   assert.equal(h.spawns.length, 1);
   await h.open();
-  assert.equal(h.openTerminalCalls.length, 0, 'a live scheduled run must not spawn a second claude --resume');
-  assert.equal(h.messages.length, 1);
-  assert.deepEqual(h.confirmations, [], 'a scheduled run offers an OK-only notice, never an Open session confirmation');
-  assert.match(h.messages[0], /scheduled.*running/i);
+  assert.equal(h.openTerminalCalls.length, 1);
+  assert.equal(h.messages.length, 0);
+  assert.equal(h.confirmations.length, 1);
+  assert.equal(h.confirmations[0].confirmLabel, 'Resume anyway');
+  assert.match(h.confirmations[0].message[0], /in a scheduled run of "Scheduled task"/);
   h.child.emit('exit', 0);
+  h.ctx.openSessions.get(SID).closed = true;
   await h.open();
-  assert.equal(h.openTerminalCalls.length, 1, 'the completed scheduled transcript becomes resumable');
+  assert.equal(h.openTerminalCalls.length, 2, 'the completed scheduled transcript becomes resumable');
   assert.equal(h.done.length, 1);
 });
 
@@ -183,6 +185,8 @@ test('a scheduled child without a CLI descriptor is visible under either session
   assert.equal(live?.kind, 'schedule');
   assert.equal(live.pid, h.child.pid);
   assert.equal(live.cwd, h.session.projectPath);
+  assert.equal(live.scheduleName, 'Scheduled task');
+  assert.equal((await h.batch([SID]))[SID].scheduleName, 'Scheduled task');
   assert.equal((await h.batch([SID.toUpperCase()]))[SID.toUpperCase()]?.kind, 'schedule');
   assert.equal(await h.query('unrelated'), null);
 });
@@ -227,15 +231,14 @@ test('a refused scheduled spawn leaves no live run', async (t) => {
   assert.equal(h.openTerminalCalls.length, 1);
 });
 
-test('the schedule verdict never offers a resume override or a daemon attach', async () => {
+test('the schedule verdict offers a resume override and Cancel refuses it', async () => {
   const messages = [];
   const result = await guardResume({ sessionId: SID }, {
     live: { kind: 'schedule', pid: 4242, cwd: '/scheduled' },
-    confirm: () => assert.fail('a scheduled run must never offer a resume override'),
-    alert: async (message) => { messages.push(message); },
+    confirm: async question => { messages.push(question); return false; },
+    notify: () => assert.fail('no refusal notice'),
   });
   assert.equal(result, false);
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /wait/i);
-  assert.doesNotMatch(messages[0], /anyway/i);
+  assert.equal(messages[0].confirmLabel, 'Resume anyway');
 });

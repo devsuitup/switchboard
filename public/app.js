@@ -1928,7 +1928,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
 
   // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
-  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, onBlocked, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session', danger: true }), alert: message => appAlert({ title: 'Scheduled task already running', message }) });
+  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, onBlocked, api: window.api, name: cleanDisplayName(session.name || session.aiTitle || session.summary), confirm: question => appConfirm({ ...question }), notify: notice => showAppNotice(notice) });
   if (verdict === false) return false;
   if (verdict && typeof verdict === 'object' && verdict.attach) {
     customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };

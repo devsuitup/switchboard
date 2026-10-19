@@ -326,15 +326,15 @@ ids past the cap are not looked up and resume as before the guard.
 Scheduled children this instance starts are registered by `trackScheduleRun`
 until `exit` or `error`. The single and batch resume queries return their
 `kind: 'schedule'` entry even without a CLI descriptor, before excluding this
-instance's child processes. A manual open shows a wait dialog and is always
-refused, regardless of the dialog's answer; automatic opens are skipped.
+instance's child processes. The entry includes the schedule name. A manual
+open asks with Resume anyway or Cancel; automatic opens are skipped.
 See [schedule-runner.md](schedule-runner.md#opening-a-running-scheduled-session-484).
 
 | Resume | Live elsewhere | Result |
 |---|---|---|
 | automatic — the reload path (`sessionStorage.activeSessionId`) and `runRestore` | yes | not opened, no prompt; from `runRestore`, a one-line notice |
-| asked for by the user (sidebar click, resume dialog, transcript viewer) | yes, scheduled run | wait dialog; always refused, even if accepted |
-| asked for by the user (sidebar click, resume dialog, transcript viewer) | yes, other live session | `confirm()`; cancel aborts, OK spawns the second CLI |
+| asked for by the user (sidebar click, resume dialog, transcript viewer) | yes, scheduled run or other live process | `liveElsewhereQuestion`: name, pid, cwd, local start time and schedule name when known; Resume anyway (danger, Cancel focused) starts a second CLI |
+| asked for by the user | yes, background | attach with a job id; otherwise an error notice explains why it cannot attach |
 | any | no | spawns as before |
 
 Plain terminals are never checked.
