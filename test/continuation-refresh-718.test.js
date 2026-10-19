@@ -70,6 +70,38 @@ test('B5/B7 raw exhausted refresh defers the whole row, targeted OTHER retries i
   assert.equal(cache.continuationRefreshScope(h.folder, { files: new Set([OTHER + '.jsonl']) }).files.has(OLD + '.jsonl'), false);
 });
 
+test('B5/B7 linked growth with pinned mtime defers then refreshes through its continuation stamp', { timeout: 9000 }, async t => {
+  const h = fixture(t); h.write(OLD, h.padding + h.link()); h.write(OTHER);
+  const pinned = new Date('2030-01-01T00:00:00.000Z');
+  fs.utimesSync(h.file(OLD), pinned, pinned);
+  cache.refreshFolder(h.folder); h.init();
+  const before = structuredClone(h.rows.get(OLD)), oldStat = fs.statSync(h.file(OLD), { bigint: true });
+  h.append(OLD, h.padding); h.append(OTHER);
+  fs.utimesSync(h.file(OLD), pinned, pinned);
+  const grownStat = fs.statSync(h.file(OLD), { bigint: true });
+  assert.equal(grownStat.mtimeNs, oldStat.mtimeNs);
+  assert.ok(grownStat.size > oldStat.size);
+  h.effects.length = 0;
+  cache.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', OLD + '.jsonl']) });
+  assert.deepEqual(h.rows.get(OLD), before, 'the entire linked row is deferred despite its unchanged mtime');
+  assert.equal(h.effects.some(([kind, value]) => kind === 'upsert' ? value.some(row => row.sessionId === OLD) : value === OLD), false);
+  assert.equal(h.folders.get(h.folder).indexMtimeMs, 0);
+  const opts = { files: new Set([OTHER + '.jsonl']) };
+  assert.ok(cache.continuationRefreshScope(h.folder, opts).files.has(OLD + '.jsonl'));
+  const preparedContinuations = await cache.prepareContinuationRefresh(h.folder, opts);
+  assert.ok(preparedContinuations.has(OLD));
+  cache.refreshFolder(h.folder, { ...opts, preparedContinuations });
+  const row = h.rows.get(OLD), index = JSON.parse(row.continuationIndex);
+  assert.equal(row.fileMtime, before.fileMtime);
+  assert.deepEqual(index.ids, [HEAD]); assert.equal(index.complete, true);
+  assert.equal(index.bytes, Number(grownStat.size));
+  assert.deepEqual(index.stamp, continuationStamp(grownStat));
+  assert.notDeepEqual(index.stamp, JSON.parse(before.continuationIndex).stamp);
+  assert.equal(h.views().length, 1); assert.ok(h.views()[0].mergedMemberIds.includes(OLD));
+  assert.ok(h.folders.get(h.folder).indexMtimeMs > 0);
+  assert.equal(cache.continuationRefreshScope(h.folder, opts).files.has(OLD + '.jsonl'), false);
+});
+
 test('#733 watcher between index save and targeted refresh retains a coherent row', { timeout: 9000 }, async t => {
   const h = fixture(t); h.write(OLD, h.padding); h.write(OTHER); cache.refreshFolder(h.folder); h.init();
   h.append(OLD, h.link());

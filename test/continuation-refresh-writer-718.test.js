@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const cache = require('../session-cache');
 const { memoryWriter } = require('./fixtures/writer-memory.cjs');
 const { fixture, OLD, HEAD, OTHER } = require('./fixtures/continuation-718.cjs');
@@ -71,6 +72,10 @@ for (const zero of [false, true]) test('D2 shipped readonly worker awaits cold p
   const h = fixture(t); h.write(OLD, h.padding + h.link()); h.write(OTHER); cache.refreshFolder(h.folder); h.init();
   h.append(OLD, h.padding); h.append(OTHER);
   if (zero) h.folders.get(h.folder).indexMtimeMs = 0;
+  else {
+    const changedAt = new Date(h.folders.get(h.folder).indexMtimeMs + 1000);
+    fs.utimesSync(h.file(OLD), changedAt, changedAt);
+  }
   const worker = projectsWorker(h);
   await worker.handle({ id: 71, reconcile: true, localDescriptors: h.descriptors });
   const final = worker.replies.find(r => r.result);
@@ -96,6 +101,8 @@ test('D2 asynchronous build error keeps request id and next request succeeds', {
 
 test('D3 actual client serializes VM worker requests paused at scan yield and resets after error', { timeout: 9000 }, async t => {
   const h = fixture(t); h.write(OLD, h.padding + h.link()); cache.refreshFolder(h.folder); h.append(OLD, h.padding);
+  const changedAt = new Date(h.folders.get(h.folder).indexMtimeMs + 1000);
+  fs.utimesSync(h.file(OLD), changedAt, changedAt);
   const entered = barrier(), gate = barrier(), workers = [], dispatched = [];
   let paused = false, fail = false;
   const client = createProjectsWorkerClient({ snapshot: () => ({ version: 0, liveVersion: 0, localDescriptors: h.descriptors }), apply() {},
