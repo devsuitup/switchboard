@@ -118,8 +118,11 @@ concept. Each entry gives:
   (`public/session-activity-dom.js:27-36`).
 - **Today**: the user-facing name "web-session row" appears in one user doc
   sentence only (`docs/session-restore.md:84`). Activity is OR-ed over members,
-  but the `bg` badge, status text, id, pin, name and archive flag come from the
-  representative (M4).
+  and the live background projection supplies its `bg` badge and head id.
+  Pin, name and archive belong to the conversation: any pinned part pins it,
+  every part must be archived to hide it, and its newest user rename wins,
+  falling back to the representative's name. Each metadata action writes all
+  parts together.
 
 ### Slug group
 
@@ -149,7 +152,7 @@ concept. Each entry gives:
 - **Definition**: a per-row flag that sorts the row first and keeps it out of
   `+ N older`.
 - **Don't say**: "star", "favourite" in UI text.
-- **Code**: `starred`, `toggleStar` (`public/sidebar.js:1450-1457`);
+- **Code**: `starred`, `setStar` (`public/sidebar.js`), `setStarred` (`session-index-store.js`);
   `#star-toggle` "Show pinned only" (`public/index.html:26`).
 - **Today**: the code says "star", the UI says "pin" (internal only, nit).
 

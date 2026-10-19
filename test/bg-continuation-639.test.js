@@ -127,24 +127,25 @@ test('sidebar keeps one original conversation under its background UUID and orig
   assert.ok(row.mergedMemberIds.includes(OLD));
 });
 
-test('a reindexed predecessor title yields to the name migrated to its background head', () => {
+test('a head name without nameSource is ignored and the background row keeps the predecessor name', () => {
   const row = { sessionId: OLD, folder: 'project', projectPath: '/project', name: 'original title', customTitle: 'original title', messageCount: 2,
     continuationIndex: JSON.stringify({ format: 3, complete: true, ids: [HEAD] }) };
   const projects = [{ projectPath: '/project', sessions: [row] }];
   mergeLocalBackgroundSessions(projects, [row], [{ sessionId: HEAD, kind: 'bg', jobId: '1234abcd', name: 'original title (2)', nameSource: 'collision' }],
     { hiddenProjects: new Set(), metaMap: new Map([[OLD, { name: 'original title' }], [HEAD, { name: 'JB rename' }]]), showArchived: false,
       jobs: new Map([['1234abcd', { state: 'working', nameSource: 'collision' }]]) });
-  assert.equal(row.name, 'JB rename');
+  assert.equal(row.name, 'original title');
 });
 
-test('the archive filter follows metadata migrated to the background UUID before its first turn', () => {
+test('an archived background UUID keeps its unarchived predecessor visible before its first turn', () => {
   const row = { sessionId: OLD, folder: 'project', projectPath: '/project', name: 'original', messageCount: 2,
     continuationIndex: JSON.stringify({ format: 3, complete: true, ids: [HEAD] }) };
   const projects = [{ projectPath: '/project', sessions: [row] }];
   mergeLocalBackgroundSessions(projects, [row], [{ sessionId: HEAD, kind: 'bg', jobId: '1234abcd', nameSource: 'collision' }],
     { hiddenProjects: new Set(), metaMap: new Map([[HEAD, { name: 'original', archived: 1 }]]), showArchived: false,
       jobs: new Map([['1234abcd', { state: 'working' }]]) });
-  assert.equal(projects.flatMap(project => project.sessions).length, 0);
+  assert.equal(projects.flatMap(project => project.sessions).length, 1);
+  assert.equal(row.archived, 0);
 });
 
 test('collision job names are suppressed even when the CLI list repeats them', () => {

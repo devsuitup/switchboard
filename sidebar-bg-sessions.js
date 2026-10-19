@@ -6,6 +6,7 @@ const { resolveWorktreePath } = require('./derive-project-path');
 const { parseFolderKey } = require('./remote-hosts');
 const { validId } = require('./session-continuations');
 const { isHostedJob } = require('./bg-agents-roster');
+const { conversationMeta } = require('./conversation-meta');
 
 const key = id => String(id).toLowerCase();
 
@@ -49,8 +50,43 @@ function backgroundPath(head, { indexes, predecessors }) {
   return reachable;
 }
 
+function conversationGroups(cachedRows, descriptors = [], jobs = new Map()) {
+  const groups = new Map();
+  for (const row of cachedRows) {
+    const rootId = row.mergedIntoSessionId || row.sessionId;
+    if (!groups.has(key(rootId))) groups.set(key(rootId), { rootId, partIds: new Set([rootId]) });
+    groups.get(key(rootId)).partIds.add(row.sessionId);
+  }
+  const byPart = new Map();
+  for (const group of groups.values()) for (const id of group.partIds) byPart.set(key(id), group);
+  let graph;
+  for (const descriptor of descriptors) {
+    if (!validId(descriptor.sessionId) || descriptor.kind !== 'bg' || !descriptor.jobId
+      || !isHostedJob({ ...jobs.get(descriptor.jobId), id: descriptor.jobId, sessionId: descriptor.sessionId }, [descriptor])) continue;
+    graph ||= continuationGraph(new Map(cachedRows.filter(row => !row.parentSessionId && parseFolderKey(row.folder).alias === null)
+      .map(row => [key(row.sessionId), row])));
+    const reachable = backgroundPath(key(descriptor.sessionId), graph);
+    if (!reachable) continue;
+    const root = byPart.get(reachable[0]);
+    if (!root) continue;
+    root.backgroundPaths ||= new Map();
+    root.backgroundPaths.set(key(descriptor.sessionId), reachable);
+    for (const id of reachable) {
+      for (const part of byPart.get(id)?.partIds || [descriptor.sessionId]) root.partIds.add(part);
+    }
+    for (const part of root.partIds) byPart.set(key(part), root);
+  }
+  return byPart;
+}
+
+function conversationMemberIds(rows, id, descriptors = [], jobs = new Map()) {
+  const group = conversationGroups(rows, descriptors, jobs).get(key(id));
+  return [...(group?.partIds || [])].filter(part => key(part) !== key(id));
+}
+
 // see .ai/contexts/session-cache.md ("Local background sidebar rows")
-function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hiddenProjects, metaMap, showArchived, jobs = new Map() }) {
+function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hiddenProjects, metaMap, showArchived, jobs = new Map(),
+  conversations = conversationGroups(cachedRows, descriptors, jobs) }) {
   const localRows = new Map(cachedRows.filter(row => !row.parentSessionId && parseFolderKey(row.folder).alias === null)
     .map(row => [key(row.sessionId), row]));
   const visibleRows = new Map();
@@ -64,12 +100,11 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
   const validDescriptors = descriptors.filter(descriptor => validId(descriptor.sessionId));
   const backgrounds = validDescriptors.filter(descriptor => descriptor.kind === 'bg' && descriptor.jobId
     && isHostedJob({ ...jobs.get(descriptor.jobId), id: descriptor.jobId, sessionId: descriptor.sessionId }, [descriptor]));
-  const graph = backgrounds.length ? continuationGraph(localRows) : null;
   const suppressedNames = new Set();
   for (const descriptor of backgrounds) {
     const head = key(descriptor.sessionId);
     let visible = findVisible(head);
-    const reachable = backgroundPath(head, graph);
+    const reachable = conversations.get(head)?.backgroundPaths?.get(head);
     if (reachable) {
       const root = findVisible(reachable[0]);
       if (!root) { suppressedNames.add(head); continue; }
@@ -93,17 +128,14 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
       root.sessionId = descriptor.sessionId;
       root.headSessionId = descriptor.sessionId;
       root.mergedMemberIds = [...new Set([originalId, ...root.mergedMemberIds])].filter(id => key(id) !== head);
-      const meta = metaMap.get(descriptor.sessionId);
-      if (meta) {
-        const originalMeta = metaMap.get(originalId), originalName = originalMeta?.name;
-        const headRename = meta.nameSource === 'user', sourceRename = originalMeta?.nameSource === 'user';
-        if (headRename || sourceRename) {
-          const chosen = headRename && (!sourceRename || (meta.nameRevision || 0) >= (originalMeta.nameRevision || 0)) ? meta : originalMeta;
-          root.name = chosen.name || localRows.get(key(originalId))?.customTitle || root.aiTitle || root.summary || null;
-        } else if (!originalName || originalName === localRows.get(key(originalId))?.customTitle) root.name = meta.name || root.name;
-        root.starred = meta.starred ?? root.starred;
-        root.archived = meta.archived ?? root.archived;
-      }
+      const conversation = conversations.get(head);
+      const partIds = conversation ? [...conversation.partIds] : [root.sessionId, ...root.mergedMemberIds];
+      const metadata = conversationMeta(partIds, metaMap, conversation?.rootId || originalId);
+      const userRenamed = partIds.some(id => metaMap.get(id)?.nameSource === 'user');
+      root.name = metadata.name || (userRenamed
+        ? localRows.get(key(originalId))?.customTitle || root.aiTitle || root.summary || null : root.name);
+      root.starred = metadata.starred;
+      root.archived = metadata.archived;
       if (!showArchived && root.archived) {
         for (const project of projects) project.sessions = project.sessions.filter(row => row !== root);
         suppressedNames.add(head);
@@ -153,4 +185,4 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
   return projects;
 }
 
-module.exports = { mergeLocalBackgroundSessions };
+module.exports = { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds };

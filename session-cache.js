@@ -32,7 +32,8 @@ const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp } = require('./session-continuations');
-const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
+const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds: resolveConversationMemberIds } = require('./sidebar-bg-sessions');
+const { conversationMeta } = require('./conversation-meta');
 const { isHostedJob } = require('./bg-agents-roster');
 const { state: TRACE, trace } = require('./activity-trace');
 
@@ -728,6 +729,27 @@ function hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent) {
   return hidden;
 }
 
+function localBackgroundState() {
+  const localDescriptors = [...getLocalDescriptors()];
+  const localJobs = getLocalJobs();
+  const descriptorIds = new Set(localDescriptors.map(descriptor => descriptor.sessionId.toLowerCase()));
+  for (const [id, session] of activeSessions) {
+    if (session.exited || !session.isAttach || session.host || !session.attachJobId) continue;
+    const sessionId = session.realSessionId || id;
+    if (descriptorIds.has(sessionId.toLowerCase())) continue;
+    if (!isHostedJob({ ...localJobs.get(session.attachJobId), id: session.attachJobId })) continue;
+    localDescriptors.push({ sessionId, kind: 'bg', jobId: session.attachJobId,
+      cwd: session.cwd || session.projectPath, startedAt: session._openedAt });
+    descriptorIds.add(sessionId.toLowerCase());
+  }
+  return { localDescriptors, localJobs };
+}
+
+function conversationMemberIds(rows, id) {
+  const { localDescriptors, localJobs } = localBackgroundState();
+  return resolveConversationMemberIds(rows, id, localDescriptors, localJobs);
+}
+
 /** Build projects response from cached data */
 function buildProjectsFromCache(showArchived) {
   const metaMap = getAllMeta(true);
@@ -759,7 +781,12 @@ function buildProjectsFromCache(showArchived) {
   const sdkOnlyProjectKeys = new Set();
 
   const cachedById = new Map(cachedRows.map(r => [r.sessionId, r]));
-  const isArchivedParent = (id) => cachedById.has(id) && !!metaMap.get(id)?.archived;
+  const { localDescriptors, localJobs } = localBackgroundState();
+  const conversations = conversationGroups(cachedRows, localDescriptors, localJobs);
+  const metadataFor = id => {
+    const group = conversations.get(id.toLowerCase());
+    return conversationMeta(group ? [...group.partIds] : [id], metaMap, group?.rootId || id);
+  };
 
   // Keyed on alias + projectPath: two hosts can hold the same absolute path.
   const projectMap = new Map();
@@ -774,7 +801,7 @@ function buildProjectsFromCache(showArchived) {
       continue;
     }
     if (isProjectHidden(hiddenProjects, alias, row.projectPath)) continue;
-    const meta = metaMap.get(row.sessionId);
+    const meta = metadataFor(row.sessionId);
     const children = mergedChildrenByParent.get(row.sessionId) || [];
     const orderedChildren = [...children].sort((a, b) =>
       (b.modified || '').localeCompare(a.modified || '') || a.sessionId.localeCompare(b.sessionId)
@@ -811,8 +838,9 @@ function buildProjectsFromCache(showArchived) {
       mergedMemberIds: orderedChildren.map(child => child.sessionId),
     };
     if (!showArchived && s.archived) continue;
-    // see .ai/contexts/subagent-observability.md ("A subagent follows its archived parent")
-    if (!showArchived && s.parentSessionId && isArchivedParent(s.parentSessionId)) continue;
+    // see .ai/contexts/subagent-observability.md ("A subagent follows its archived conversation")
+    if (!showArchived && s.parentSessionId && conversations.has(s.parentSessionId.toLowerCase())
+      && metadataFor(s.parentSessionId).archived) continue;
     const key = groupKey(alias, row.projectPath);
     if (!projectMap.has(key)) {
       projectMap.set(key, {
@@ -917,20 +945,8 @@ function buildProjectsFromCache(showArchived) {
     }
   }
 
-  const localDescriptors = [...getLocalDescriptors()];
-  const localJobs = getLocalJobs();
-  const descriptorIds = new Set(localDescriptors.map(descriptor => descriptor.sessionId.toLowerCase()));
-  for (const [id, session] of activeSessions) {
-    if (session.exited || !session.isAttach || session.host || !session.attachJobId) continue;
-    const sessionId = session.realSessionId || id;
-    if (descriptorIds.has(sessionId.toLowerCase())) continue;
-    if (!isHostedJob({ ...localJobs.get(session.attachJobId), id: session.attachJobId })) continue;
-    localDescriptors.push({ sessionId, kind: 'bg', jobId: session.attachJobId,
-      cwd: session.cwd || session.projectPath, startedAt: session._openedAt });
-    descriptorIds.add(sessionId.toLowerCase());
-  }
   const projects = mergeLocalBackgroundSessions([...projectMap.values()], cachedRows, localDescriptors, {
-    hiddenProjects, metaMap, showArchived, jobs: localJobs,
+    hiddenProjects, metaMap, showArchived, jobs: localJobs, conversations,
   });
   for (const proj of projects) {
     for (const session of proj.sessions) {
@@ -1488,6 +1504,7 @@ module.exports = { shutdownProducers,
   releaseLiveSession,
   reconcileCacheFromFilesystem,
   buildProjectsFromCache,
+  conversationMemberIds,
   backfillEntrypoints,
   backfillCustomTitles,
   revealIfSdkSession,

@@ -32,7 +32,7 @@ contextBridge.exposeInMainWorld('api', {
   remoteStopSession: (alias, sessionId) => ipcRenderer.invoke('remote-stop-session', { alias, sessionId }),
   remoteLaunchSession: (payload) => ipcRenderer.invoke('remote-launch-session', payload),
   remoteSendPrompt: (alias, sessionId, text) => ipcRenderer.invoke('remote-send-prompt', { alias, sessionId, text }),
-  toggleStar: (id) => ipcRenderer.invoke('toggle-star', id),
+  setStar: (id, starred) => ipcRenderer.invoke('set-star', id, starred),
   renameSession: (id, name) => ipcRenderer.invoke('rename-session', id, name),
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
   getProjectArchivePlan: (groups) => ipcRenderer.invoke('get-project-archive-plan', groups),

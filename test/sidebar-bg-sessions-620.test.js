@@ -223,10 +223,12 @@ test('a fork that converges on the bg head does not collapse the branching prede
   assert.equal(rows.find(row => row.sessionId === HEAD).bgJobId, '33333333');
 });
 
-test('hidden projects and archived predecessors are not resurrected by their bg descriptor', t => {
+test('hidden projects stay hidden and a bg conversation hides only when every part is archived', t => {
   const hidden = setup(t, { hidden: true });
   assert.equal(hidden.projects().flatMap(p => p.sessions).length, 0);
   const archived = setup(t, { graph: { [OLD]: [HEAD] }, archived: true });
+  assert.equal(archived.projects().flatMap(p => p.sessions).length, 1);
+  archived.meta.set(HEAD, { archived: 1 });
   assert.equal(archived.projects().flatMap(p => p.sessions).length, 0);
 });
 

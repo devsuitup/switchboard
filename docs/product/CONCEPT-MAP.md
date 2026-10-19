@@ -31,7 +31,9 @@ Surfaces named in the tables:
 
 A row stands for one conversation: an original transcript plus
 `mergedMemberIds`. Its head (`headSessionId`) is its newest-modified part;
-the original part owns the row identity, name, pin and archived flag
+the original part owns the row identity. The conversation is pinned when any
+part is pinned and archived only when every part is archived. Its name is the
+newest user rename on any part, otherwise the original part's name
 (`public/session-activity-dom.js` `rowHeadId`, `docs/session-browser.md`).
 
 **States**

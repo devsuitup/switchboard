@@ -847,32 +847,23 @@ Two consumers had missed it and were fixed together:
 
 Covered by `test/dom-project-archive-all.test.js`.
 
-### A subagent follows its archived parent
+### A subagent follows its archived conversation
 
-Archiving writes `archived = 1` on the parent's `session_meta` row only — the
-per-session button and both archive-all buttons alike — so a subagent row
-never carries the archived flag of its parent. Hiding it is a display rule in
-`buildProjectsFromCache(false)`: a subagent row is dropped when its
-`parentSessionId` has a row in `session_cache` **and** that row's meta is
-archived. `buildProjectsFromCache(true)` keeps both, so "Show archived
-sessions" renders the archived parent with its children nested under it, and
-unarchiving the parent brings the children back with it, since nothing about
-them was ever stored.
+Archive and Unarchive write every conversation part together, including
+compaction mirrors and the live background head. Subagent metadata is left
+alone. In `buildProjectsFromCache(false)`, a subagent is hidden only when
+all parts of the conversation owning its `parentSessionId` are archived.
+The same mirror and live-background membership map supplies the row metadata
+before filtering. `buildProjectsFromCache(true)` keeps archived conversations
+and their subagents. Unarchiving any part makes the conversation visible again.
 
-The row-existence check is what keeps the orphan group meaningful. The
-renderer's orphan pass (`buildSessionsList`) can only see which parents it
-rendered; a parent absent from the payload because it is archived and a
-parent absent because its transcript is gone look identical there. The cache
-is the one place that can tell them apart, so the distinction is made there:
-a subagent whose parent has no `session_cache` row — even when a stale
-`session_meta` entry for that id says archived — stays in the payload and
-lands in "Orphan subagents".
+A missing parent with only stale archived metadata still leaves its subagent
+in the payload for Orphan subagents. A proven background head without a cache
+row can belong to a conversation; its metadata participates in the same union.
+No archive flag is copied to the subagent itself.
 
-No DB write accompanies this: archiving the children too would change stored
-state for a presentation concern and would re-open the archive-all rule above.
-
-Covered by `test/dom-archived-parent-subagents.test.js`, which feeds the real
-`buildProjectsFromCache` output into `renderProjects`.
+Covered by `test/dom-archived-parent-subagents.test.js` and
+`test/conversation-metadata-564.test.js`.
 
 ### Subagents of merged parts (#564)
 

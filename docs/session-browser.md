@@ -195,6 +195,13 @@ freeze the window.
 
 ## Pin and archive
 
+Name, pin and archive apply to the whole conversation, including compaction
+mirrors and a live background row. It stays listed while any part is
+unarchived and is pinned when any part is pinned. Its name is the newest user
+rename on any part, otherwise the original part's name. Rename, Pin, Unpin,
+Archive and Unarchive update every part at once. Its subagents are hidden only
+when the whole conversation is archived.
+
 - **Pin**: click the pin at the left of a row. Pinned sessions sort before
   unpinned ones and are never hidden behind `+ N older`.
 - **Archive**: the archive button on a row, or **Archive all sessions in

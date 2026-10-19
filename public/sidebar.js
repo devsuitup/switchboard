@@ -1598,7 +1598,7 @@ function rebindSidebarEvents(projects) {
     if (pin) {
       pin.onclick = async (e) => {
         e.stopPropagation();
-        const { starred } = await window.api.toggleStar(session.sessionId);
+        const { starred } = await window.api.setStar(session.sessionId, !session.starred);
         session.starred = starred;
         refreshSidebar({ resort: true });
       };
