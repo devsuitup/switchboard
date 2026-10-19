@@ -91,7 +91,7 @@ receipts and status/replay recovery are deliberately not added in step 1.
 | Command | Writer-owned current-state work |
 | --- | --- |
 | patchGlobal | Merge only supplied fields into current global |
-| toggleStar / setArchived / setName | Current metadata and per-field provenance in one transaction |
+| toggleStar / setStarred / setArchived / setName | Current metadata and per-field provenance in one transaction |
 | renameSession | Name, current cached summary and FTS title in one transaction |
 | rekeySessionMeta | Current predecessor/head values and per-field revision precedence |
 | hideProject | Current visibility/kinds, deduplicated entry |

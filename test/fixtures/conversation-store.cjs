@@ -8,10 +8,10 @@ const { createRequire } = require('node:module');
 module.exports = function openStore() {
   const filename = path.join(__dirname, '../../session-index-store.js');
   const nativeRequire = createRequire(filename);
-  let Database = nativeRequire('better-sqlite3');
-  try { new Database(':memory:').close(); }
+  let Database;
+  try { Database = nativeRequire('better-sqlite3'); new Database(':memory:').close(); }
   catch (error) {
-    if (!error.message.includes('NODE_MODULE_VERSION')) throw error;
+    if (error.code !== 'ERR_DLOPEN_FAILED' && !error.message.includes('NODE_MODULE_VERSION')) throw error;
     const { DatabaseSync } = require('node:sqlite');
     Database = class {
       constructor(file) { this.raw = new DatabaseSync(file); this.sequence = 0; }

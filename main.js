@@ -3353,9 +3353,7 @@ function getConversationPartIds(id) {
 }
 
 function getMergedMemberIds(id) {
-  return getAllCached()
-    .filter(row => row.mergedIntoSessionId?.toLowerCase() === String(id || '').toLowerCase())
-    .map(row => row.sessionId);
+  return getConversationPartIds(id).filter(part => part.toLowerCase() !== String(id || '').toLowerCase());
 }
 
 const deleteSessionGuard = makeDeleteSessionGuard({

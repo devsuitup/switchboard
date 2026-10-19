@@ -152,7 +152,7 @@ concept. Each entry gives:
 - **Definition**: a per-row flag that sorts the row first and keeps it out of
   `+ N older`.
 - **Don't say**: "star", "favourite" in UI text.
-- **Code**: `starred`, `toggleStar` (`public/sidebar.js:1450-1457`);
+- **Code**: `starred`, `setStar` (`public/sidebar.js`), `setStarred` (`session-index-store.js`);
   `#star-toggle` "Show pinned only" (`public/index.html:26`).
 - **Today**: the code says "star", the UI says "pin" (internal only, nit).
 

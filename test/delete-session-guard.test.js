@@ -72,13 +72,14 @@ test('deleting a merged representative refuses its member live in an open termin
 test('the main-process delete guard reads merged member ids from the current cache before refusing', async () => {
   setup({ jobsDir: path.join(root, 'jobs'), descriptorsDir: path.join(root, 'sessions') });
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  const start = source.indexOf('function getMergedMemberIds(');
+  const start = source.indexOf('function getConversationPartIds(');
   const guardStart = source.indexOf('const deleteSessionGuard = makeDeleteSessionGuard(', start);
   const end = source.indexOf(');', guardStart) + 2;
   const rows = [{ sessionId: SID, mergedIntoSessionId: 'representative' }];
   const context = vm.createContext({
     makeDeleteSessionGuard, activeSessions: new Map([[SID, { exited: false }]]),
     bgAgents, cliSessionState, sessionHasPty: () => false, ptyPids: () => [], getAllCached: () => rows,
+    sessionCache: require('../sidebar-bg-sessions'),
   });
   const guard = vm.runInContext(source.slice(start, end) + '\ndeleteSessionGuard;', context, { filename: 'main.js' });
   assert.equal(await guard('REPRESENTATIVE'), 'session is still running in this window — use Stop on its row in the sidebar, then retry Delete');

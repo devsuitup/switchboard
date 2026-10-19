@@ -127,7 +127,7 @@ test('sidebar keeps one original conversation under its background UUID and orig
   assert.ok(row.mergedMemberIds.includes(OLD));
 });
 
-test('without a user rename the background row keeps the predecessor name', () => {
+test('a head name without nameSource is ignored and the background row keeps the predecessor name', () => {
   const row = { sessionId: OLD, folder: 'project', projectPath: '/project', name: 'original title', customTitle: 'original title', messageCount: 2,
     continuationIndex: JSON.stringify({ format: 3, complete: true, ids: [HEAD] }) };
   const projects = [{ projectPath: '/project', sessions: [row] }];

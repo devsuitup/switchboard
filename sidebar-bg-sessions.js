@@ -69,6 +69,8 @@ function conversationGroups(cachedRows, descriptors = [], jobs = new Map()) {
     if (!reachable) continue;
     const root = byPart.get(reachable[0]);
     if (!root) continue;
+    root.backgroundPaths ||= new Map();
+    root.backgroundPaths.set(key(descriptor.sessionId), reachable);
     for (const id of reachable) {
       for (const part of byPart.get(id)?.partIds || [descriptor.sessionId]) root.partIds.add(part);
     }
@@ -83,8 +85,8 @@ function conversationMemberIds(rows, id, descriptors = [], jobs = new Map()) {
 }
 
 // see .ai/contexts/session-cache.md ("Local background sidebar rows")
-function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hiddenProjects, metaMap, showArchived, jobs = new Map() }) {
-  const conversations = conversationGroups(cachedRows, descriptors, jobs);
+function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hiddenProjects, metaMap, showArchived, jobs = new Map(),
+  conversations = conversationGroups(cachedRows, descriptors, jobs) }) {
   const localRows = new Map(cachedRows.filter(row => !row.parentSessionId && parseFolderKey(row.folder).alias === null)
     .map(row => [key(row.sessionId), row]));
   const visibleRows = new Map();
@@ -98,12 +100,11 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
   const validDescriptors = descriptors.filter(descriptor => validId(descriptor.sessionId));
   const backgrounds = validDescriptors.filter(descriptor => descriptor.kind === 'bg' && descriptor.jobId
     && isHostedJob({ ...jobs.get(descriptor.jobId), id: descriptor.jobId, sessionId: descriptor.sessionId }, [descriptor]));
-  const graph = backgrounds.length ? continuationGraph(localRows) : null;
   const suppressedNames = new Set();
   for (const descriptor of backgrounds) {
     const head = key(descriptor.sessionId);
     let visible = findVisible(head);
-    const reachable = backgroundPath(head, graph);
+    const reachable = conversations.get(head)?.backgroundPaths?.get(head);
     if (reachable) {
       const root = findVisible(reachable[0]);
       if (!root) { suppressedNames.add(head); continue; }
@@ -174,8 +175,6 @@ function mergeLocalBackgroundSessions(projects, cachedRows, descriptors, { hidde
   }
   const launchName = name => name?.replace(/ \(\d+\)$/, '');
   for (const [row, names] of namesByRow) {
-    const partIds = conversations.get(key(row.sessionId))?.partIds || [row.sessionId, ...(row.mergedMemberIds || [])];
-    if ([...partIds].some(id => metaMap.get(id)?.nameSource === 'user')) continue;
     names.sort((a, b) => Number(key(b.sessionId) === key(row.bgSessionId)) - Number(key(a.sessionId) === key(row.bgSessionId))
       || (localRows.get(key(b.sessionId))?.modified || '').localeCompare(localRows.get(key(a.sessionId))?.modified || '')
       || (b.startedAt || 0) - (a.startedAt || 0) || a.sessionId.localeCompare(b.sessionId) || a.name.localeCompare(b.name));

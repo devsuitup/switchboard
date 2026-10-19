@@ -53,6 +53,56 @@ test('metadata-only mirror builds do not read continuation indexes without a liv
   assert.equal(reads, 0);
 });
 
+test('a live background build reads each continuation index once', t => {
+  const h = fixture(t, true);
+  let reads = 0;
+  for (const row of h.rows) {
+    const index = row.continuationIndex;
+    Object.defineProperty(row, 'continuationIndex', { get() { reads++; return index; } });
+  }
+  assert.equal(h.list().length, 1);
+  assert.equal(reads, h.rows.length);
+});
+
+test('a live background row has identical Delete and Archive targets and checks its guard before removal', async t => {
+  const h = fixture(t, true);
+  h.rows.push({ ...h.rows[1], sessionId: 'm', mergedIntoSessionId: 'b', continuationIndex: null });
+  const filename = path.join(__dirname, '../main.js');
+  const source = fs.readFileSync(filename, 'utf8');
+  const handlers = new Map();
+  let archived;
+  const sandbox = { getAllCached: () => h.rows, sessionCache: cache, activeSessions: h.activeSessions,
+    cliSessionState: { getSidebarDescriptors: () => h.descriptors },
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    setArchived: ids => { archived = Array.from(ids); } };
+  vm.createContext(sandbox);
+  for (const name of ['getConversationPartIds', 'getMergedMemberIds']) {
+    const start = source.indexOf(`function ${name}(`);
+    vm.runInContext(source.slice(start, source.indexOf('\n}', start) + 2), sandbox, { filename });
+  }
+  const start = source.indexOf("ipcMain.handle('archive-session'");
+  vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 4), sandbox, { filename });
+  const folder = path.join(h.rows[0].projectPath, 'project');
+  fs.mkdirSync(folder);
+  for (const row of h.rows) fs.writeFileSync(path.join(folder, row.sessionId + '.jsonl'), '{}\n');
+  const { loadDeletionHandlers } = require('./delete-session-harness');
+  let guarded;
+  const deletion = loadDeletionHandlers({ PROJECTS_DIR: h.rows[0].projectPath,
+    getCachedFolder: () => 'project', getMergedMemberIds: sandbox.getMergedMemberIds, getCachedByParent: () => [],
+    deleteSessionGuard: async (_id, ids) => { guarded = Array.from(ids); return 'live background'; } });
+  for (const id of ['a', 'b', 'c', 'm']) {
+    await handlers.get('archive-session')(null, id, true);
+    const preview = deletion.get('delete-session-preview')(null, id);
+    assert.equal(preview.ok, true);
+    assert.deepEqual(Array.from(preview.partIds).sort(), archived.slice().sort());
+    const result = await deletion.get('delete-session')(null, id, preview.partIds);
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'live background');
+    assert.deepEqual(guarded.sort(), archived.slice().sort());
+    for (const row of h.rows) assert.ok(fs.existsSync(path.join(folder, row.sessionId + '.jsonl')));
+  }
+});
+
 test('24: any pinned part pins the conversation and no pinned part clears it', t => {
   const h = fixture(t);
   h.meta.set('c', { starred: 1 });
@@ -122,7 +172,7 @@ test('30: a filtered SDK mirror still supplies pin and archive to the background
   h.rows[1].entrypoint = 'sdk-ts';
   h.rows.push({ ...h.rows[1], sessionId: 'm', mergedIntoSessionId: 'b', continuationIndex: null });
   for (const id of ['a', 'b', 'c']) h.meta.set(id, { archived: 1 });
-  h.rows[0].customTitle = 'mirror rename';
+  h.rows[0].customTitle = 'launch title';
   Object.assign(h.descriptors[0], { name: 'registry overlay', nameSource: 'user' });
   h.meta.set('m', { archived: 0, starred: 1, name: 'mirror rename', nameSource: 'user', nameRevision: 1 });
   assert.equal(h.list().length, 1);

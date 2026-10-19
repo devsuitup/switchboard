@@ -946,7 +946,7 @@ function buildProjectsFromCache(showArchived) {
   }
 
   const projects = mergeLocalBackgroundSessions([...projectMap.values()], cachedRows, localDescriptors, {
-    hiddenProjects, metaMap, showArchived, jobs: localJobs,
+    hiddenProjects, metaMap, showArchived, jobs: localJobs, conversations,
   });
   for (const proj of projects) {
     for (const session of proj.sessions) {
