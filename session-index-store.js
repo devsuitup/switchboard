@@ -372,6 +372,8 @@ const stmts = {
     INSERT INTO session_meta (sessionId, starred) VALUES (?, 1)
     ON CONFLICT(sessionId) DO UPDATE SET starred = CASE WHEN starred = 1 THEN 0 ELSE 1 END
   `),
+  setStar: db.prepare(`INSERT INTO session_meta (sessionId, starred) VALUES (?, ?)
+    ON CONFLICT(sessionId) DO UPDATE SET starred = excluded.starred`),
   upsertArchived: db.prepare(`
     INSERT INTO session_meta (sessionId, archived) VALUES (?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET archived = excluded.archived
@@ -508,12 +510,15 @@ function getAllMeta(withNameSource = false) {
   return map;
 }
 
-const setName = db.transaction((sessionId, name, source = 'user') => {
-  const previous = getMeta(sessionId, true);
-  const next = applySessionName(previous, sessionId, name, source, stmts.cacheGetSession.get(sessionId)?.customTitle ?? null);
-  if (next === previous) return;
-  stmts.upsertName.run(sessionId, name);
-  metaFieldSet.run(sessionId, 'name', metaFieldNext.get().revision, source, next.nameTranscriptTitle);
+const partIds = ids => Array.isArray(ids) ? [...new Set(ids)] : [ids];
+const setName = db.transaction((ids, name, source = 'user') => {
+  for (const sessionId of partIds(ids)) {
+    const previous = getMeta(sessionId, true);
+    const next = applySessionName(previous, sessionId, name, source, stmts.cacheGetSession.get(sessionId)?.customTitle ?? null);
+    if (next === previous) continue;
+    stmts.upsertName.run(sessionId, name);
+    metaFieldSet.run(sessionId, 'name', metaFieldNext.get().revision, source, next.nameTranscriptTitle);
+  }
 });
 
 const toggleStar = db.transaction(sessionId => {
@@ -523,9 +528,19 @@ const toggleStar = db.transaction(sessionId => {
   return row.starred;
 });
 
-const setArchived = db.transaction((sessionId, archived) => {
-  stmts.upsertArchived.run(sessionId, archived ? 1 : 0);
-  metaFieldSet.run(sessionId, 'archived', metaFieldNext.get().revision, 'user', null);
+const setStarred = db.transaction((ids, starred) => {
+  for (const sessionId of partIds(ids)) {
+    stmts.setStar.run(sessionId, starred ? 1 : 0);
+    metaFieldSet.run(sessionId, 'starred', metaFieldNext.get().revision, 'user', null);
+  }
+  return starred ? 1 : 0;
+});
+
+const setArchived = db.transaction((ids, archived) => {
+  for (const sessionId of partIds(ids)) {
+    stmts.upsertArchived.run(sessionId, archived ? 1 : 0);
+    metaFieldSet.run(sessionId, 'archived', metaFieldNext.get().revision, 'user', null);
+  }
 });
 
 function isCachePopulated() {
@@ -903,7 +918,7 @@ return {
   beginSearchEntry, appendSearchBody, publishSearchEntry,
   connection: db, transact, chunkUnit, changeCount: totalChanges, measurements: () => measured.slice(), nextChunkSize: () => chunkSize,
   rekeySessionMeta,
-  getMeta, getAllMeta, setName, toggleStar, setArchived,
+  getMeta, getAllMeta, setName, toggleStar, setStarred, setArchived,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
   touchCachedModified: (sessionId, modified, fileMtime = modified) => stmts.cacheTouchModified.run(modified, fileMtime, sessionId),
   setCachedContinuationIndex: (sessionId, index) => stmts.cacheSetContinuationIndex.run(index, sessionId),

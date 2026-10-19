@@ -8,7 +8,7 @@ const { createWriterCommands } = require('../session-index-commands');
 // see .ai/contexts/session-index-writer.md
 const db = openSessionIndexStore({ readonly: false });
 const commands = createWriterCommands(db);
-const rawCommands = new Set(['setSetting', 'deleteSetting', 'toggleStar', 'setArchived', 'setName',
+const rawCommands = new Set(['setSetting', 'deleteSetting', 'toggleStar', 'setStarred', 'setArchived', 'setName',
   'upsertCachedSessions', 'deleteCachedSession', 'deleteCachedFolder', 'replaceSessionMetrics',
   'touchCachedModified', 'setFolderMeta', 'deleteSearchFolder', 'deleteSearchSession', 'deleteSearchType',
   'upsertSearchEntries', 'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles',

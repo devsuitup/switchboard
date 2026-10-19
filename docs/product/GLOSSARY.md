@@ -118,8 +118,11 @@ concept. Each entry gives:
   (`public/session-activity-dom.js:27-36`).
 - **Today**: the user-facing name "web-session row" appears in one user doc
   sentence only (`docs/session-restore.md:84`). Activity is OR-ed over members,
-  but the `bg` badge, status text, id, pin, name and archive flag come from the
-  representative (M4).
+  and the live background projection supplies its `bg` badge and head id.
+  Pin, name and archive belong to the conversation: any pinned part pins it,
+  every part must be archived to hide it, and its newest user rename wins,
+  falling back to the representative's name. Each metadata action writes all
+  parts together.
 
 ### Slug group
 

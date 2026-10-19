@@ -34,7 +34,9 @@ function createWriterCommands(db) {
     },
     renameSession(id, name) {
       db.setName(id, name || null);
-      db.updateSearchTitle(id, 'session', (name ? name + ' ' : '') + (db.getCachedSession(id)?.summary || ''));
+      for (const part of Array.isArray(id) ? id : [id]) {
+        db.updateSearchTitle(part, 'session', (name ? name + ' ' : '') + (db.getCachedSession(part)?.summary || ''));
+      }
       return { name: name || null };
     },
     rekeySessionMeta(from, to) {

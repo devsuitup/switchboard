@@ -1,0 +1,47 @@
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { createRequire } = require('node:module');
+
+module.exports = function openStore() {
+  const filename = path.join(__dirname, '../../session-index-store.js');
+  const nativeRequire = createRequire(filename);
+  let Database = nativeRequire('better-sqlite3');
+  try { new Database(':memory:').close(); }
+  catch (error) {
+    if (!error.message.includes('NODE_MODULE_VERSION')) throw error;
+    const { DatabaseSync } = require('node:sqlite');
+    Database = class {
+      constructor(file) { this.raw = new DatabaseSync(file); this.sequence = 0; }
+      get open() { return this.raw.isOpen; }
+      prepare(sql) { return this.raw.prepare(sql); }
+      exec(sql) { this.raw.exec(sql); }
+      close() { this.raw.close(); }
+      pragma(sql, options) {
+        const rows = this.raw.prepare('PRAGMA ' + sql).all();
+        return options?.simple ? Object.values(rows[0])[0] : rows;
+      }
+      transaction(fn) {
+        const run = (...args) => {
+          const savepoint = 'test_' + this.sequence++;
+          this.exec('SAVEPOINT ' + savepoint);
+          try { const result = fn(...args); this.exec('RELEASE ' + savepoint); return result; }
+          catch (error) { this.exec('ROLLBACK TO ' + savepoint); this.exec('RELEASE ' + savepoint); throw error; }
+        };
+        run.immediate = run;
+        return run;
+      }
+    };
+  }
+  const module = { exports: {} };
+  vm.runInNewContext('(function(require,module,exports){' + fs.readFileSync(filename, 'utf8') + '\n})',
+    { process, performance, Buffer, console }, { filename })(id => id === 'better-sqlite3' ? Database : nativeRequire(id), module, module.exports);
+  return module.exports.openSessionIndexStore({ readonly: false });
+};
+
+module.exports.supported = (() => {
+  try { const Database = require('better-sqlite3'); new Database(':memory:').close(); return true; }
+  catch { return Number(process.versions.node.split('.')[0]) >= 22; }
+})();

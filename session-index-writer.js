@@ -243,7 +243,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     },
     measurements: () => request('measurements'),
   };
-  for (const name of ['setSetting', 'deleteSetting', 'toggleStar', 'setArchived', 'deleteCachedSession',
+  for (const name of ['setSetting', 'deleteSetting', 'toggleStar', 'setStarred', 'setArchived', 'deleteCachedSession',
     'deleteSearchSession', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'applySearchFileBatch',
     'setCachedEntrypoints', 'setCachedCustomTitles', 'setCachedContinuationIndex', 'setInitialScanComplete',
     'clearArchivedEntry', 'hideProject', 'unhideProject', 'revealAddedProject', 'dropRemoteFolder',

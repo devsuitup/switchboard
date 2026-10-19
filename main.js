@@ -185,7 +185,7 @@ const {
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
   DB_PATH, getProjectsRevision,
 } = require('./db');
-const { toggleStar, setArchived, deleteCachedSession, deleteCachedFolder,
+const { setStarred, setArchived, deleteCachedSession, deleteCachedFolder,
   deleteSearchSession, deleteSearchFolder, deleteSearchType, applySearchFileBatch,
   setSetting, deleteSetting, closeDb } = writer;
 
@@ -2031,15 +2031,14 @@ ipcMain.handle('session-touched-files', async (_event, sessionId, options = {}) 
   }
 });
 
-// --- IPC: toggle-star ---
-ipcMain.handle('toggle-star', async (_event, sessionId) => {
-  const starred = await toggleStar(sessionId);
+ipcMain.handle('set-star', async (_event, sessionId, value) => {
+  const starred = await setStarred(getConversationPartIds(sessionId), !!value);
   return { starred };
 });
 
 // --- IPC: rename-session ---
 ipcMain.handle('rename-session', async (_event, sessionId, name) => {
-  return await writer.renameSession(sessionId, name);
+  return await writer.renameSession(getConversationPartIds(sessionId), name);
 });
 
 // --- IPC: archive-session ---
@@ -2310,7 +2309,7 @@ ipcMain.handle('delete-session', async (_event, sessionId, previewPartIds) => {
 
 ipcMain.handle('archive-session', async (_event, sessionId, archived) => {
   const val = archived ? 1 : 0;
-  await setArchived(sessionId, val);
+  await setArchived(getConversationPartIds(sessionId), val);
   return { archived: val };
 });
 
@@ -3344,6 +3343,15 @@ const unsubscribeTaskJobs = bgAgents.onChange(({ roster }) => {
     if (job.sessionId && job.taskEvidence?.valid) taskRecords.job(job.sessionId, job.taskEvidence);
   }
 });
+function getConversationPartIds(id) {
+  const rows = getAllCached();
+  const canonicalId = rows.find(row => row.sessionId.toLowerCase() === String(id).toLowerCase())?.sessionId
+    || cliSessionState.getSidebarDescriptors().find(row => row.sessionId.toLowerCase() === String(id).toLowerCase())?.sessionId
+    || [...activeSessions].map(([key, session]) => session.realSessionId || key)
+      .find(part => part.toLowerCase() === String(id).toLowerCase()) || id;
+  return [canonicalId, ...sessionCache.conversationMemberIds(rows, canonicalId)];
+}
+
 function getMergedMemberIds(id) {
   return getAllCached()
     .filter(row => row.mergedIntoSessionId?.toLowerCase() === String(id || '').toLowerCase())

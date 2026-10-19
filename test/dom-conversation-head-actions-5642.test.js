@@ -128,13 +128,16 @@ test('a remote merged row without an attach target opens messages of its head', 
   assert.deepEqual(viewed, ['B']);
 });
 
-test('Pin on a merged row still targets its root', async t => {
+test('Pin and Unpin send the desired conversation value through its root', async t => {
   const ctx = setup(t);
   const pinned = [];
-  ctx.window.api.toggleStar = async id => { pinned.push(id); return { starred: 1 }; };
+  ctx.window.api.setStar = async (id, value) => { pinned.push([id, value]); return { starred: Number(value) }; };
   await ctx.document.querySelector('#si-A .session-pin').onclick({ stopPropagation() {} });
-  assert.deepEqual(pinned, ['A']);
+  assert.deepEqual(pinned, [['A', true]]);
   assert.equal(ctx.session.starred, 1);
+  await ctx.document.querySelector('#si-A .session-pin').onclick({ stopPropagation() {} });
+  assert.deepEqual(pinned, [['A', true], ['A', false]]);
+  assert.equal(ctx.session.starred, 0);
 });
 
 test('Rename on a merged row still targets its root', async t => {
