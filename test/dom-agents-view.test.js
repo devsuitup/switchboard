@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
+const { loadAppFunctions } = require('./app-source');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const HTML = `<!DOCTYPE html><html><body>
@@ -70,6 +71,7 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     workFilesPanel: { open: () => {} },
     openSessions: new Map(),
     sessionMap: new Map(),
+    localMergedMemberRows: new Map(),
     activeSessionId: null,
     gridViewActive: false,
     showSession: (id) => calls.shown.push(id),
@@ -80,7 +82,7 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     appConfirm: async () => true,
   };
   for (const [k, v] of Object.entries(g)) Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js'), 'utf8'), dom.getInternalVMContext());
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js'), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC, '../node_modules/morphdom/dist/morphdom-umd.js') });
   evalFile(dom, path.join(PUBLIC, 'utils.js'));
   evalFile(dom, path.join(PUBLIC, 'session-state.js'));
   evalFile(dom, path.join(PUBLIC, 'memory-workfiles-view.js'));
@@ -91,10 +93,11 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     evalFile(dom, path.join(PUBLIC, 'terminal-themes.js'));
     evalFile(dom, path.join(PUBLIC, 'settings-panel.js'));
   }
+  loadAppFunctions(dom.getInternalVMContext(), { functions: ['indexedRowOf', 'indexedSessionById'] });
   window.initAgentsView();
-  const read = (expr) => vm.runInContext(expr, dom.getInternalVMContext());
+  const read = (expr) => vm.runInContext(expr, dom.getInternalVMContext(), { filename: __filename });
   return {
-    window, document: window.document, calls, read,
+    window, document: window.document, calls, read, ctx: dom.getInternalVMContext(),
     setSnapshot(s) { snapshot = s; },
     emitChanged(s) { snapshot = s; changedCb(s); },
     destroy() { window.close(); },
@@ -312,7 +315,7 @@ test('stop on a session attached here detaches the tab after daemon success', as
   assert.deepEqual(ctx.calls.verbs, [['stop', 'aaaaaaaa']]);
 });
 
-test('an unreachable daemon shows the banner and disables every verb but Transcript; an empty roster shows the empty state', async (t) => {
+test('an unreachable daemon shows the banner and disables background job verbs; an empty roster shows the empty state', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
   ctx.setSnapshot({ roster: ROSTER, daemonReachable: false });
   await ctx.window.showAgentsView();
@@ -1000,3 +1003,77 @@ test('background Delete waits for its async confirmation and cancellation sends 
   await ctx.window.runAgentVerb('rm', ROSTER[1]);
   assert.deepEqual(ctx.calls.verbs, [['rm', ROSTER[1].id]]);
 });
+
+for (const daemonReachable of [true, false]) {
+  test(`External row offers Resume even when daemon reachable is ${daemonReachable}`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    h.setSnapshot({ daemonReachable, roster: [ROSTER[2]] });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    const resume = h.document.querySelector('[data-verb="resume"]');
+    assert.ok(resume);
+    assert.equal(resume.disabled, false);
+    assert.equal(resume.textContent, 'Resume');
+    assert.equal(resume.title, 'Resume this conversation here; it asks first, because it is running in another process');
+    for (const verb of ['attach', 'stop', 'respawn', 'rm']) assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, true);
+  });
+}
+
+for (const indexed of [false, true]) {
+  test(`External Resume opens the conversation without attach options (indexed: ${indexed})`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    const session = { sessionId: 'root', mergedMemberIds: ['s-i'], projectPath: '/indexed', name: 'Indexed name' };
+    if (indexed) h.window.sessionMap.set('root', session);
+    h.setSnapshot({ daemonReachable: true, roster: [ROSTER[2]] });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    const opened = [];
+    h.window.openSession = (...args) => opened.push(args);
+    h.document.querySelector('[data-verb="resume"]')?.click();
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].length, 1);
+    assert.deepEqual(JSON.parse(JSON.stringify(opened[0][0])), indexed
+      ? { ...session, sessionId: 's-i', mergedMemberIds: [] }
+      : { sessionId: 's-i', projectPath: '/w/l', name: 'lvds-1b' });
+    assert.deepEqual(h.calls.verbs, []);
+  });
+}
+
+
+for (const accept of [false, true]) {
+  test(`External Resume uses the shared live-elsewhere question (accept: ${accept})`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    const w = h.window, questions = [], spawned = [];
+    const live = { kind: 'interactive', pid: 30, cwd: '/w/l', startedAt: 100 };
+    Object.assign(w, {
+      restoringWorkingSet: false, pendingSessions: new Map(),
+      appConfirm: async question => { questions.push(question); return accept; },
+      createTerminalEntry: () => ({ initialSize: {} }), resolveDefaultSessionOptions: async () => ({}),
+      forgetSessionExit() {}, beginPtyOpen() {}, settlePtyOpen() {}, destroySession() {},
+    });
+    Object.assign(w.api, {
+      getSessionContinuations: async () => ({ candidates: [], unresolved: false }),
+      getSessionLiveElsewhere: async () => live,
+      openTerminal: async (...args) => { spawned.push(args); return { notLive: true }; },
+    });
+    evalFile({ getInternalVMContext: () => h.ctx }, path.join(PUBLIC, 'resume-guard.js'));
+    loadAppFunctions(h.ctx, {
+      functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(PUBLIC, 'session-activity-dom.js'),
+    });
+    const app = loadAppFunctions(h.ctx, {
+      functions: ['openSession', 'openSessionNow'],
+      declarations: ['openingSessions', 'dormantWorkingSet', 'continuationRetryCancelled'],
+    });
+    let finished;
+    w.openSession = (...args) => { finished = app.openSession(...args); return finished; };
+    h.setSnapshot({ daemonReachable: true, roster: [ROSTER[2]] });
+    await w.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    h.document.querySelector('[data-verb="resume"]')?.click();
+    await finished;
+    assert.equal(questions.length, 1);
+    assert.deepEqual(JSON.parse(JSON.stringify(questions[0])), JSON.parse(JSON.stringify(w.liveElsewhereQuestion(live, 'lvds-1b'))));
+    assert.equal(spawned.length, accept ? 1 : 0);
+    if (accept) assert.notEqual(spawned[0][3].type, 'attach');
+  });
+}
