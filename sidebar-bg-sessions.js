@@ -4,7 +4,7 @@ const fs = require('fs');
 const { encodeProjectPath } = require('./encode-project-path');
 const { resolveWorktreePath } = require('./derive-project-path');
 const { parseFolderKey } = require('./remote-hosts');
-const { validId } = require('./session-continuations');
+const { validId, continuationRollup } = require('./session-continuations');
 const { isHostedJob } = require('./bg-agents-roster');
 const { conversationMeta } = require('./conversation-meta');
 
@@ -50,10 +50,11 @@ function backgroundPath(head, { indexes, predecessors }) {
   return reachable;
 }
 
-function conversationGroups(cachedRows, descriptors = [], jobs = new Map()) {
+function conversationGroups(cachedRows, descriptors = [], jobs = new Map(), rollup = continuationRollup(cachedRows)) {
   const groups = new Map();
   for (const row of cachedRows) {
-    const rootId = row.mergedIntoSessionId || row.sessionId;
+    const representative = row.mergedIntoSessionId || row.sessionId;
+    const rootId = rollup.get(representative) || representative;
     if (!groups.has(key(rootId))) groups.set(key(rootId), { rootId, partIds: new Set([rootId]) });
     groups.get(key(rootId)).partIds.add(row.sessionId);
   }

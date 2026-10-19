@@ -45,15 +45,15 @@ test('16: an archived root stays visible until every existing merged part is arc
   }
 });
 
-test('metadata-only mirror builds do not read continuation indexes without a live background', t => {
+test('metadata-only mirror builds prefilter indexes without parsing empty values', t => {
   const h = fixture(t);
   let reads = 0;
   Object.defineProperty(h.rows[0], 'continuationIndex', { get() { reads++; return null; } });
   assert.equal(h.list().length, 1);
-  assert.equal(reads, 0);
+  assert.equal(reads, 1);
 });
 
-test('a live background build reads each continuation index once', t => {
+test('a live background build shares the rollup between display and metadata', t => {
   const h = fixture(t, true);
   let reads = 0;
   for (const row of h.rows) {
@@ -61,7 +61,7 @@ test('a live background build reads each continuation index once', t => {
     Object.defineProperty(row, 'continuationIndex', { get() { reads++; return index; } });
   }
   assert.equal(h.list().length, 1);
-  assert.equal(reads, h.rows.length);
+  assert.equal(reads, 2 * h.rows.length + 2);
 });
 
 test('a live background row has identical Delete and Archive targets and checks its guard before removal', async t => {

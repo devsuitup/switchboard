@@ -867,6 +867,8 @@ Covered by `test/dom-archived-parent-subagents.test.js` and
 
 ### Subagents of merged parts (#564)
 
+Merged parts include proven linear continuation chains as well as compaction mirrors. The continuation rollup supplies their member ids before this renderer indexing; a child of a later continuation stays under the root row, following the whole conversation's archive state.
+
 Within each project, `buildSubagentIndex` maps every top-level row's own id,
 `mergedMemberIds` and `headSessionId` to that row's representative id before
 indexing its children. A subagent of any part therefore renders in that row's

@@ -140,7 +140,7 @@ No row-level concept unifies these; each follows its own rule (M4).
 | `/compact` | one merged row (§2) | `.ai/contexts/session-cache.md:106-112` |
 | `/clear` (Linux, Windows) | the open terminal's row follows the new transcript; the old one becomes a past row | `CHANGELOG.md:25` |
 | `/clear` (macOS) | new transcript listed as a separate row | `CHANGELOG.md:25` |
-| Continuation | separate rows; chosen by confirm dialogs at open time: "This conversation continued under another id: … Open <id>?" | `public/resume-guard.js:46-75` |
+| Continuation | one root row for a proven local linear chain, opening its newest-modified head; ambiguous, branching, remote or cross-project paths stay separate and retain open-time choice | `session-continuations.js:continuationRollup`, `public/resume-guard.js` |
 | **Fork session** | new row, new id, original unchanged | `docs/launching-sessions.md:98-105` |
 
 ## 4. Slug group

@@ -31,7 +31,7 @@ const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-p
 const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
-const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp } = require('./session-continuations');
+const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp, continuationRollup } = require('./session-continuations');
 const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds: resolveConversationMemberIds } = require('./sidebar-bg-sessions');
 const { conversationMeta } = require('./conversation-meta');
 const { isHostedJob } = require('./bg-agents-roster');
@@ -277,7 +277,7 @@ function sidebarContinuation(row) {
   try { index = JSON.parse(row.continuationIndex); } catch {}
   if (!index) return null;
   if (index.format !== 3 || !index.complete || index.unresolved || !Array.isArray(index.ids)
-    || index.ids.length > 1 || (row.fileMtime && index.mtime !== row.fileMtime)) return false;
+    || (row.fileMtime && index.mtime !== row.fileMtime)) return false;
   return index.ids.length ? index.ids.map(id => String(id).toLowerCase()) : null;
 }
 
@@ -777,12 +777,19 @@ function buildProjectsFromCache(showArchived) {
     mergedChildrenByParent.get(row.mergedIntoSessionId).push(row);
   }
 
+  const rollup = continuationRollup(cachedRows);
+  for (const row of cachedRows) {
+    const rootId = rollup.get(row.mergedIntoSessionId || row.sessionId);
+    if (!rootId) continue;
+    if (!mergedChildrenByParent.has(rootId)) mergedChildrenByParent.set(rootId, []);
+    mergedChildrenByParent.get(rootId).push(row);
+  }
   const hiddenSdkIds = hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent);
   const sdkOnlyProjectKeys = new Set();
 
   const cachedById = new Map(cachedRows.map(r => [r.sessionId, r]));
   const { localDescriptors, localJobs } = localBackgroundState();
-  const conversations = conversationGroups(cachedRows, localDescriptors, localJobs);
+  const conversations = conversationGroups(cachedRows, localDescriptors, localJobs, rollup);
   const metadataFor = id => {
     const group = conversations.get(id.toLowerCase());
     return conversationMeta(group ? [...group.partIds] : [id], metaMap, group?.rootId || id);
@@ -793,7 +800,7 @@ function buildProjectsFromCache(showArchived) {
   // '|' cannot occur in an alias (remote-hosts.js ALIAS_RE): the key is injective.
   const groupKey = (alias, projectPath) => (alias === null ? '' : alias) + '|' + projectPath;
   for (const row of cachedRows) {
-    if (row.mergedIntoSessionId) continue; // rolled up into its parent below, not its own entry
+    if (row.mergedIntoSessionId || rollup.has(row.sessionId)) continue;
     if (!row.projectPath) continue;
     const { alias } = parseFolderKey(row.folder);
     if (hiddenSdkIds.has(row.sessionId) || hiddenSdkIds.has(row.parentSessionId)) {

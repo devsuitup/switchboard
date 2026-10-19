@@ -111,16 +111,15 @@ Clicking a row opens the session in the terminal: it attaches to the running
 process, or resumes the session with `claude --resume`. A subagent row opens its
 transcript instead — see [Subagents](subagents.md).
 
-A compacted conversation can have several transcripts on one row. Clicking it
+A compacted conversation or a proven linear continuation can have several transcripts on one row. A continuation stays together only when its cached links prove a single local path; branching, remote and cross-project conversations remain separate. `/clear` starts a new row. Clicking it
 first shows the open tab of its latest-modified part, then another open part
 from newest to oldest, then the original transcript's tab. If no part is open,
 it resumes the latest-modified part, including the original transcript if it
-was used again after compaction.
+was used again after compaction or continuation. Automatic restore instead follows a saved part to the terminal id.
 
 On a merged conversation, **Fork session**, **Resume with config** and
 **View messages** use that latest-modified part too. View messages shows
-that part's transcript. The conversation's name, pin and archived flag
-belong to its original part.
+that part's transcript. The original part keeps the row identity; name, pin and archive follow the whole-conversation rule below.
 
 Such a row also shows **N parts** next to the short id. Its tooltip explains:
 "This conversation has N parts: compaction mirrors and continuations of one exchange".
@@ -183,7 +182,7 @@ index held in Switchboard's database:
 - on **Agent Files**, the listed memory and command files;
 - on **Work Files**, the files under `.work-files/`.
 
-A compacted conversation matches when any of its parts matches, including its
+A compacted or continued conversation matches when any of its parts matches, including its
 latest part. A matching subagent stays nested under that conversation even
 when it belongs to a later part.
 
@@ -196,7 +195,7 @@ freeze the window.
 ## Pin and archive
 
 Name, pin and archive apply to the whole conversation, including compaction
-mirrors and a live background row. It stays listed while any part is
+mirrors, rolled continuation parts and a live background row. It stays listed while any part is
 unarchived and is pinned when any part is pinned. Its name is the newest user
 rename on any part, otherwise the original part's name. Rename, Pin, Unpin,
 Archive and Unarchive update every part at once. Its subagents are hidden only
