@@ -6,8 +6,24 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cache = require('../session-cache');
+const { continuationStamp } = require('../session-continuations');
 const { createContinuationReader } = require('../bg-handoff');
 const { encodeProjectPath } = require('../encode-project-path');
+
+for (const [name, change, reused] of [
+  ['matching exact stamp', {}, true],
+  ['same-identity growth', { size: 513n, mtimeNs: 2_000_000_001n }, true],
+  ['growth after inode reuse with a new birthtime', { size: 513n, birthtimeNs: 1_000_000_001n }, false],
+  ['growth on a different device', { size: 513n, dev: 2n ** 54n + 1n }, false],
+  ['growth with a different inode', { size: 513n, ino: 2n ** 54n + 1n }, false],
+]) {
+  test(`#715b persisted-continuation reuse: ${name}`, () => {
+    const stat = { dev: 2n ** 54n, ino: 2n ** 54n, birthtimeNs: 1_000_000_000n,
+      mtimeNs: 2_000_000_000n, size: 512n };
+    const previous = JSON.stringify({ stamp: continuationStamp(stat), head: 'aabb' });
+    assert.equal(cache.resumesPersistedContinuation(previous, { ...stat, ...change }, 'aabbcc'), reused);
+  });
+}
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-continuation-656-'));

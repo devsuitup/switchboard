@@ -68,7 +68,7 @@ and merged members. The sidebar displays those results in `buildSessionItem`,
 empty project entries. For local top-level rows, continuation comparison keeps
 only the graph's effective state (absent or empty, unusable, or normalized successor IDs):
 `format`, `complete`, `unresolved`, `ids`, and validity of `mtime` against
-`fileMtime`. Index byte offsets, stamps and tails are ignored, as are
+`fileMtime`. Index byte offsets, stamps, heads and tails are ignored, as are
 `textContent`, daily metrics and folder index freshness.
 
 Activity fields are `modified`, `fileMtime`, and `messageCount`. Cache writes
@@ -312,6 +312,12 @@ order cannot change the selected name. Status vocabulary,
 idle callbacks and the background activity indicator policy remain separate:
 the historical frozen bg descriptor in `audit-indicators.md` is not treated
 as reliable turn evidence by this display projection.
+
+A descriptor-only row carries `aiTitle: null`, so the renderer's `dedup`
+merge cannot keep the generated title copied from the original conversation
+during handoff. Its fallback title is the descriptor `name` through `summary`,
+unless `nameSource` is `collision`. A descriptor name without
+`nameSource: user` never becomes the row's `name`.
 
 ### Session names and transcript refreshes
 
@@ -2146,7 +2152,8 @@ Coverage: `test/continuation-rows-564.test.js` (graph and bounds), `test/continu
 ## Continuation index (#518B)
 
 `session_cache.continuationIndex` is nullable JSON with `format:3`, `ids`,
-`bytes`, `complete`, `mtime` and `unresolved`, plus an additive `stamp` object
+`bytes`, `complete`, `mtime` and `unresolved`, plus `head` (the hexadecimal
+first at most 64 bytes, recorded with the stamp) and an additive `stamp` object
 whose `dev`, `ino`, `birthtimeNs`, `mtimeNs` and `size` are decimal strings from
 the BigInt stat around the scan (#656). Schema reconciliation adds the
 column without wiping old rows. Full transcript scans collect links while
@@ -2175,6 +2182,14 @@ the verified stamp. Refresh derives its ISO mtime from the same BigInt stat as
 before conversion matches Node's Number-stat date at millisecond boundaries.
 Converting nanoseconds to Number before rounding loses precision (#656).
 Existing display-header and SDK-entrypoint reads keep their own budgets.
+
+When a scan has no matching in-memory snapshot after restart, a projects-query
+worker build or eviction, it reuses an exact persisted stamp match, as resolve
+does. Otherwise it resumes the persisted cursor only on same-identity growth
+(equal dev, ino and birthtimeNs, smaller saved size) when the saved hexadecimal
+head is a prefix of the current head; the tail at the cursor is then checked
+as for any reuse. Any other change, including equal size with another mtime,
+rescans from zero. A grown index persisted without head is rescanned once.
 
 `resolveSessionContinuations` trusts a complete format-3 index after stat only
 when its persisted stamp matches one BigInt stat, or when the exact serialized
@@ -2218,8 +2233,9 @@ inside a longer chain: silently resuming a discontinued branch is unsafe, and
 manual opening already offers an explicit original-id choice. Cached rows with
 missing or unreadable transcripts retain the existing unresolved behaviour.
 
-Full-scan and chunk indexes both carry `version:3`, `size`, `sealedIds`, a bounded base64
-`pending` line, and the last 64 indexed bytes as hexadecimal `tail`. The tail is
+Full-scan and persisted chunk indexes both carry `version:3`, `size`, `sealedIds`, a bounded base64
+`pending` line, the first at most 64 bytes as hexadecimal `head`, and the last
+64 indexed bytes as hexadecimal `tail`. The tail is
 verified before reusing a cursor after growth; mismatch, shrink or a same-size
 mtime change starts at byte zero. This is a local tail check, not a proof that
 an arbitrary rewrite preserved the entire prefix. Full reads retain the same

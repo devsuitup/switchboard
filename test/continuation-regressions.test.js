@@ -256,3 +256,88 @@ for (const failure of ['refusal', 'rejection']) {
     assert.deepEqual(h.settings().openWorkingSet.map(item => item.sessionId), ['next']);
   });
 }
+
+function restart(h) {
+  cache.init({ PROJECTS_DIR: h.root, db: h.db, activeSessions: new Map(), getMainWindow: () => null, log: console });
+}
+
+test('#715 a restart keeps the persisted continuation cursor for the next append', { timeout: 9000 }, t => {
+  const h = setup(t, { old: [], new: [] });
+  const file = append(h, (JSON.stringify({ type: 'assistant', padding: 'x'.repeat(400 * 1024) }) + '\n').repeat(4));
+  h.rows.clear();
+  cache.refreshFolder(h.folder);
+  const indexed = fs.statSync(file).size;
+  assert.equal(JSON.parse(h.rows.get('old').continuationIndex).bytes, indexed);
+  restart(h);
+  append(h, '{"type":"continued-in","sessionId":"old","continuedInSessionId":"new"}\n');
+  const read = t.mock.method(fs, 'readSync');
+  cache.refreshFolder(h.folder, { files: new Set(['old.jsonl']) });
+  const index = JSON.parse(h.rows.get('old').continuationIndex);
+  assert.equal(index.complete, true);
+  assert.equal(index.bytes, fs.statSync(file).size);
+  assert.deepEqual(index.ids, ['new']);
+  const positions = read.mock.calls.filter(call => call.arguments[3] > 64).map(call => call.arguments[4]);
+  assert.ok(positions.includes(indexed), 'the scan resumes at the persisted cursor');
+  const resumed = index.bytes;
+  restart(h);
+  append(h, (JSON.stringify({ type: 'assistant', padding: 'y'.repeat(300 * 1024) }) + '\n').repeat(2));
+  read.mock.resetCalls();
+  cache.refreshFolder(h.folder, { files: new Set(['old.jsonl']) });
+  const again = JSON.parse(h.rows.get('old').continuationIndex);
+  assert.equal(again.complete, true, 'an incrementally scanned index is resumable after another restart');
+  assert.deepEqual(again.ids, ['new']);
+  assert.ok(read.mock.calls.some(call => call.arguments[3] > 64 && call.arguments[4] === resumed));
+});
+
+test('#715 a persisted cursor is not resumed when the transcript head was rewritten in place', { timeout: 9000 }, t => {
+  const h = setup(t, { old: [], a: [], b: [] });
+  const file = path.join(h.root, h.folder, 'old.jsonl');
+  const line = id => JSON.stringify({ continuedInSessionId: id, type: 'continued-in', sessionId: 'old' }) + '\n';
+  const body = [{ type: 'user', cwd: h.root, message: { content: 'hello' } }, { type: 'assistant', message: { content: 'unchanged tail '.repeat(12) } }]
+    .map(record => JSON.stringify(record) + '\n').join('');
+  fs.writeFileSync(file, line('a') + body);
+  h.rows.clear();
+  cache.refreshFolder(h.folder);
+  assert.deepEqual(JSON.parse(h.rows.get('old').continuationIndex).ids, ['a']);
+  const before = fs.statSync(file, { bigint: true });
+  restart(h);
+  fs.writeFileSync(file, line('b') + body + '{}\n');
+  const after = fs.statSync(file, { bigint: true });
+  assert.equal(after.ino, before.ino, 'rewritten in place');
+  cache.refreshFolder(h.folder, { files: new Set(['old.jsonl']) });
+  assert.deepEqual(JSON.parse(h.rows.get('old').continuationIndex).ids, ['b']);
+});
+
+test('#715 an index saved by a resolve survives a restart and a full refresh of the unchanged transcript', { timeout: 9000 }, async t => {
+  const h = setup(t, { old: [], new: [] });
+  const file = append(h, (JSON.stringify({ type: 'assistant', padding: 'x'.repeat(400 * 1024) }) + '\n').repeat(4));
+  h.rows.clear();
+  cache.refreshFolder(h.folder);
+  append(h, '{"type":"continued-in","sessionId":"old","continuedInSessionId":"new"}\n');
+  fs.utimesSync(file, new Date('2030-01-01'), new Date('2030-01-01'));
+  await cache.resolveSessionContinuations('old', { getSessionLiveElsewhere: async () => ({ known: true, live: { pid: 7 } }) });
+  assert.equal(JSON.parse(h.rows.get('old').continuationIndex).complete, true);
+  assert.notEqual(h.rows.get('old').fileMtime, fs.statSync(file).mtime.toISOString(), 'a resolve writes only the index column');
+  restart(h);
+  cache.refreshFolder(h.folder);
+  const index = JSON.parse(h.rows.get('old').continuationIndex);
+  assert.equal(index.complete, true);
+  assert.deepEqual(index.ids, ['new']);
+});
+
+test('#715 a persisted cursor is not resumed on a replaced transcript with the same head and tail', { timeout: 9000 }, t => {
+  const h = setup(t, { old: [], a: [], b: [] });
+  const file = path.join(h.root, h.folder, 'old.jsonl');
+  const head = JSON.stringify({ type: 'user', cwd: h.root, message: { content: 'hello '.repeat(20) } }) + '\n';
+  const line = id => JSON.stringify({ type: 'continued-in', sessionId: 'old', continuedInSessionId: id }) + '\n';
+  const body = JSON.stringify({ type: 'assistant', message: { content: 'unchanged tail '.repeat(12) } }) + '\n';
+  fs.writeFileSync(file, head + line('a') + body);
+  h.rows.clear();
+  cache.refreshFolder(h.folder);
+  assert.deepEqual(JSON.parse(h.rows.get('old').continuationIndex).ids, ['a']);
+  restart(h);
+  fs.renameSync(file, file + '.previous');
+  fs.writeFileSync(file, head + line('b') + body + '{}\n');
+  cache.refreshFolder(h.folder, { files: new Set(['old.jsonl']) });
+  assert.deepEqual(JSON.parse(h.rows.get('old').continuationIndex).ids, ['b']);
+});

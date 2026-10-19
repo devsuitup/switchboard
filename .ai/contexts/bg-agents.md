@@ -809,6 +809,16 @@ followed by this action; quit/update and grid actions remain separate slices.
 The IPC handler is the named `handleSendToBackground` in `main.js`, so
 `test/bg-handoff-main.test.js` loads it through `loadAppFunctions`.
 
+After a confirmed Send to background handoff, the handler saves the source's
+continuations with `sessionCache.resolveSessionContinuations`, using the
+`session-continuations` IPC's liveness lookup. It then refreshes the source row
+through `writer.refreshFolder` so its `fileMtime` matches the saved index,
+then notifies projects with `background-handoff`: one row is shown without
+waiting for the watcher's flush. It repeats this sequence once the source PTY's
+exit has been handled (`exitDrain`), so a write by the exiting CLI cannot leave
+the rows split. A failure logs `[bg-handoff]` and notifies nothing. The IPC
+result waits for none of this. A `/bg` typed by hand is outside this path (#718).
+
 Tests: `test/bg-handoff.test.js`, `test/bg-handoff-main.test.js`,
 `test/send-to-background-renderer.test.js`, `test/bg-handoff-trigger.test.js`,
 header/control and restore neighbours.
