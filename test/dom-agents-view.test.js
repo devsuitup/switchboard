@@ -202,6 +202,16 @@ test('Agents rows supply genuine attention, blocked waiting and finished glyphs 
   }
 });
 
+test('a blocked Agents row without a sessionId keeps job blocked in its tooltip', async (t) => {
+  const ctx = setup(); t.after(() => ctx.destroy());
+  ctx.setSnapshot({ daemonReachable: true, roster: [
+    { id: 'blocked-without-session', kind: 'background', state: 'blocked', hosted: true },
+  ] });
+  await ctx.window.showAgentsView();
+  const icon = ctx.document.querySelector('.agents-row[data-key="bg:blocked-without-session"] .session-icon');
+  assert.match(icon.title, /job blocked/);
+});
+
 test('Agents rows mark only live jobs as running', { timeout: 1000 }, async () => {
   const { window, document, setSnapshot, destroy } = setup();
   try {
