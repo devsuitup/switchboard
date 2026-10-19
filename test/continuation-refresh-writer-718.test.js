@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const cache = require('../session-cache');
 const { memoryWriter } = require('./fixtures/writer-memory.cjs');
 const { fixture, OLD, HEAD, OTHER } = require('./fixtures/continuation-718.cjs');
@@ -71,6 +72,10 @@ for (const zero of [false, true]) test('D2 shipped readonly worker awaits cold p
   const h = fixture(t); h.write(OLD, h.padding + h.link()); h.write(OTHER); cache.refreshFolder(h.folder); h.init();
   h.append(OLD, h.padding); h.append(OTHER);
   if (zero) h.folders.get(h.folder).indexMtimeMs = 0;
+  else {
+    const changedAt = new Date(h.folders.get(h.folder).indexMtimeMs + 1000);
+    fs.utimesSync(h.file(OLD), changedAt, changedAt);
+  }
   const worker = projectsWorker(h);
   await worker.handle({ id: 71, reconcile: true, localDescriptors: h.descriptors });
   const final = worker.replies.find(r => r.result);
@@ -96,6 +101,8 @@ test('D2 asynchronous build error keeps request id and next request succeeds', {
 
 test('D3 actual client serializes VM worker requests paused at scan yield and resets after error', { timeout: 9000 }, async t => {
   const h = fixture(t); h.write(OLD, h.padding + h.link()); cache.refreshFolder(h.folder); h.append(OLD, h.padding);
+  const changedAt = new Date(h.folders.get(h.folder).indexMtimeMs + 1000);
+  fs.utimesSync(h.file(OLD), changedAt, changedAt);
   const entered = barrier(), gate = barrier(), workers = [], dispatched = [];
   let paused = false, fail = false;
   const client = createProjectsWorkerClient({ snapshot: () => ({ version: 0, liveVersion: 0, localDescriptors: h.descriptors }), apply() {},
@@ -170,6 +177,8 @@ test('D1 retained release recomputes after a stale effects ACK using the capture
 test('B5/D2 cold worker retries an identity race before publishing its source row', async t => {
   const fs = require('node:fs');
   const h = fixture(t); h.write(OLD, h.link()); cache.refreshFolder(h.folder); h.init(); h.append(OLD, h.padding);
+  const changedAt = new Date(h.folders.get(h.folder).indexMtimeMs + 1000);
+  fs.utimesSync(h.file(OLD), changedAt, changedAt);
   let raced = false;
   const worker = projectsWorker(h, { onYield: callback => {
     if (!raced) { raced = true; fs.renameSync(h.file(OLD), h.file(OLD) + '.old'); h.write(OLD, h.padding + h.link(OTHER)); }
@@ -179,7 +188,9 @@ test('B5/D2 cold worker retries an identity race before publishing its source ro
   assert.equal(raced, true);
   assert.equal(worker.replies.some(reply => reply.error), false);
   const effects = worker.replies.flatMap(reply => (reply.progress || reply.result).effects);
-  const source = effects.flatMap(effect => effect.name === 'upsertCachedSessions' ? effect.args[0] : []).find(row => row.sessionId === OLD);
+  const sources = effects.flatMap(effect => effect.name === 'upsertCachedSessions' ? effect.args[0] : []).filter(row => row.sessionId === OLD);
+  assert.equal(sources.length, 1, 'only the successful retry publishes a source row');
+  const [source] = sources;
   assert.ok(source, 'one retry publishes the replacement source rather than its stale row');
   const index = JSON.parse(source.continuationIndex);
   assert.deepEqual(index.ids, [OTHER]); assert.equal(index.bytes, fs.statSync(h.file(OLD)).size);
