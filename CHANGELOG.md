@@ -13,6 +13,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Disabled Respawn and Delete buttons in Agents now tell you to use the conversation's sidebar Stop or end its other process, according to where it is running. (#566)
 
 ### Fixed
+- Search now finds a compacted conversation by text from any of its parts, and the subagents of its later parts are listed under it instead of under Orphan subagents. (#564)
 - On a compacted conversation, Fork, Resume with config and View messages now use its latest part. (#564)
 - Deleting a compacted conversation now deletes all of its parts, so newer parts cannot reappear as sessions; Delete asks you to retry if its parts changed after the preview. If a file cannot be removed, the conversation stays listed with its remaining parts and a message reports what was deleted. (#564)
 - Run now on a schedule shows Launched! only after its shell starts. A refused launch or shell spawn failure leaves a dismissible notice saying why and how to retry; later command failures remain in the main log. (#566)

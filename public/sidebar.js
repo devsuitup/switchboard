@@ -550,7 +550,7 @@ function narrowSessionsToSearch(sessions, matchIds) {
   for (const s of sessions) {
     if (s.parentSessionId && matchIds.has(s.sessionId)) matchedParents.add(s.parentSessionId);
   }
-  return sessions.filter(s => matchIds.has(s.sessionId) || matchedParents.has(s.sessionId));
+  return sessions.filter(s => [...rowSessionIds(s), rowHeadId(s)].some(id => matchIds.has(id) || matchedParents.has(id)));
 }
 
 function buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleScopes) {
@@ -726,11 +726,17 @@ function renderProjects(projects, resort) {
 
   // Build subagent child index from all sessions in this project: parentSessionId → [sessions]
   function buildSubagentIndex(sessions) {
+    const owners = new Map();
+    for (const s of sessions) {
+      if (s.parentSessionId) continue;
+      for (const id of [...rowSessionIds(s), rowHeadId(s)]) owners.set(id, s.sessionId);
+    }
     const index = new Map();
     for (const s of sessions) {
       if (s.parentSessionId) {
-        if (!index.has(s.parentSessionId)) index.set(s.parentSessionId, []);
-        index.get(s.parentSessionId).push(s);
+        const parentId = owners.get(s.parentSessionId) || s.parentSessionId;
+        if (!index.has(parentId)) index.set(parentId, []);
+        index.get(parentId).push(s);
       }
     }
     return index;
