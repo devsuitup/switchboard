@@ -126,10 +126,17 @@ Such a row also shows **N parts** next to the short id. Its tooltip explains:
 Right-click the row and choose **Parts** to list every transcript, newest first,
 by its own name and last-active date. Each part offers **View messages** and
 **Copy id** (the full id). This also works for mirrored remote conversations.
+
 A missing name appears as **Untitled conversation**; a missing date as
 **last active unknown**. In the menu, arrow keys move between actions,
 Right opens Parts, Left returns, and Escape dismisses the menu.
 The session menu takes keyboard focus and returns it to the row after an action or Escape.
+
+When Switchboard remembers a choice for a branched conversation, the row's
+right-click menu also offers **Choose part to open…**. It opens the chooser
+with your saved choice selected when it is still listed. **Open** changes the
+choice; **Cancel** keeps it and opens nothing. The menu works while a part is
+already open, too. Deleting the conversation removes its saved choice.
 
 ### Names
 

@@ -17,6 +17,7 @@ function loadDeletionHandlers(overrides) {
     isRemoteFolder: folder => folder?.includes('::'),
     REMOTE_READ_ONLY: 'remote transcript is read-only',
     mainTouchedCache: { dropSession() {} },
+    deleteSetting: async () => {},
     ...overrides,
   });
   vm.runInContext(source.slice(start, end), context, { filename: 'main.js' });

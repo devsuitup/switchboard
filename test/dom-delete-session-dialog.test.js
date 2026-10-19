@@ -49,6 +49,7 @@ test('confirming a merged row forgets every part and destroys every open part ta
   const ctx = setupSidebarDom();
   try {
     const session = { ...SESSION, mergedMemberIds: ['stale-renderer-part'] };
+    ctx.window._continuationChoices = new Map([SESSION.sessionId, 'b', 'c', 'stale-renderer-part'].map(id => ['continuationChoice:' + id, {}]));
     const calls = stubApi(ctx.window, { preview: { ok: true, partIds: [SESSION.sessionId, 'b', 'c'], parts: 3, transcripts: 3, subagents: 0 } });
     const destroyed = [], dismissed = [];
     ctx.window.destroySession = id => { destroyed.push(id); ctx.window.openSessions.delete(id); };
@@ -70,12 +71,14 @@ test('confirming a merged row forgets every part and destroys every open part ta
       assert.equal(ctx.window.sessionMap.has(id), false, `sessionMap ${id}`);
       assert.equal(ctx.window.pendingSessions.has(id), false, `pendingSessions ${id}`);
       assert.equal(ctx.window.openSessions.has(id), false, `tab ${id}`);
+      assert.equal(ctx.window._continuationChoices.has('continuationChoice:' + id), false, `choice ${id}`);
     }
     assert.deepEqual(destroyed.sort(), ['b', 'c', SESSION.sessionId].sort());
     assert.deepEqual(dismissed.sort(), ['b', 'c', SESSION.sessionId].sort());
     assert.equal(ctx.window.sessionMap.has('stale-renderer-part'), true);
     assert.equal(ctx.window.pendingSessions.has('stale-renderer-part'), true);
     assert.equal(ctx.window.openSessions.has('stale-renderer-part'), true);
+    assert.equal(ctx.window._continuationChoices.has('continuationChoice:stale-renderer-part'), true);
   } finally { ctx.destroy(); }
 });
 

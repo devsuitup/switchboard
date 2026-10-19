@@ -695,9 +695,19 @@ record. A vanished chosen part is followed only if its own fresh lookup is
 resolved with exactly one current candidate and no other candidate is new.
 The followed id and narrowed candidate set replace the record. A row without
 external candidates deletes its record, including the proven-missing case.
-`chooseAgain` bypasses valid memory and preserves it on Cancel for the later
-row-menu integration. That menu, Delete cleanup and startup sweep belong to
-PR 6b and are not exposed here.
+The row menu shows **Choose part to open…** only when the renderer map holds
+the representative row's record. It opens the current head with `chooseAgain`,
+bypassing valid memory and the open-tab shortcut. The chooser preselects the
+saved choice when listed; Cancel preserves the record, and Open replaces it.
+Normal clicks retain the open-tab shortcut.
+
+Delete awaits removal of `continuationChoice:<id>` for every confirmed deleted
+part and subagent. The renderer drops choices alongside confirmed removed parts,
+including partial deletion, retaining records for parts that could not be removed.
+After startup cache population settles, `sweepContinuationChoices` checks
+`isInitialScanComplete()` and removes keys whose ids are not cached top-level
+rows. An incomplete initial scan leaves every record untouched. Both cleanup
+paths address only `continuationChoice:` keys.
 
 `restoreStartupSessions` loads `getSettingsByPrefix('continuationChoice:')` once
 into `window._continuationChoices` before reload and working-set restore.
@@ -711,7 +721,9 @@ from the map and show a persistent error notice without blocking the terminal.
 A failed deletion instead says the earlier choice could not be forgotten.
 They use separate keys, preserving `global.openWorkingSet` and other settings.
 Evidence: `test/resume-guard-memory.test.js`, `test/continuation-memory.test.js`,
-`test/settings-prefix.test.js`. The continuation harness stores keys separately.
+`test/settings-prefix.test.js`, `test/continuation-choice-menu.test.js`,
+`test/continuation-choice-sweep.test.js`, `test/delete-session.test.js` and
+`test/dom-delete-session-dialog.test.js`. The continuation harness stores keys separately.
 
 `restoreStartupSessions` shares a map of lookup promises between the remembered
 active-session open and working-set restore. Each original id is resolved once

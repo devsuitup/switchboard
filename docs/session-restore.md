@@ -170,6 +170,13 @@ Switchboard follows it; a new branch or a vanished choice asks again. Choosing
 the clicked part remembers that conversation, including its latest part.
 Incomplete or failed checks never use or store a choice. If saving fails, an
 error notice says so while the part still opens.
+
+To change a remembered choice, right-click its row and select **Choose part to
+open…**. The saved choice is preselected when still listed; **Cancel** keeps it.
+Deleting a part removes its saved choice. After startup indexing, Switchboard
+also removes choices for rows that are no longer in its cache; it keeps them
+while the initial scan is incomplete.
+
 Automatic restore holds ambiguous entries without a valid choice and never shows the chooser. Reload also
 holds an ambiguous entry and shows the same dismissible notice naming it and
 asking you to open it from the sidebar to choose. If restore and reload both

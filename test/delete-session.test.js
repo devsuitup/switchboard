@@ -186,6 +186,18 @@ function deletionFixture(t, memberIds = ['b']) {
   return { root, a, b, cached, search, touched, dependencies };
 }
 
+test('S4 Delete clears the choice of every deleted part and subagent, and no unrelated setting', async t => {
+  const f = deletionFixture(t);
+  const settings = new Map([...f.cached].map(id => ['continuationChoice:' + id, {}]));
+  for (const key of ['global', 'project:a', 'continuationChoice:unrelated', 'continuationChoiceOther:a']) settings.set(key, { sentinel: true });
+  const deleted = [];
+  f.dependencies.deleteSetting = async key => { deleted.push(key); settings.delete(key); };
+  const result = await loadDeletionHandlers(f.dependencies).get('delete-session')(null, 'a', ['a', 'b']);
+  assert.equal(result.ok, true);
+  assert.deepEqual(deleted.sort(), ['continuationChoice:a', 'continuationChoice:b', 'continuationChoice:sub:a:x', 'continuationChoice:sub:b:y']);
+  assert.deepEqual([...settings.keys()].sort(), ['continuationChoice:unrelated', 'continuationChoiceOther:a', 'global', 'project:a']);
+});
+
 test('preview counts all parts and deletion clears every part and subagent from every cache', async t => {
   const f = deletionFixture(t);
   const handlers = loadDeletionHandlers(f.dependencies);
