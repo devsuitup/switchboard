@@ -20,9 +20,16 @@ test('a complete output record in the tail avoids reading backwards through an 8
     return count;
   } };
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../transcript-turn.js'), 'utf8'), {
-    module, Buffer, require: name => name === 'fs' ? trackedFs : require(name),
-  });
+  const tailFilename = path.join(__dirname, '../transcript-tail.js');
+  const tailModule = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(tailFilename, 'utf8'), {
+    module: tailModule, Buffer, require: name => name === 'node:fs' ? trackedFs : require(name),
+  }, { filename: tailFilename });
+  const filename = path.join(__dirname, '../transcript-turn.js');
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, Buffer, require: name => name === 'fs' ? trackedFs
+      : name === './transcript-tail' ? tailModule.exports : require(name),
+  }, { filename });
   const reader = module.exports.createTranscriptTurnReader({ tailBytes });
   fs.writeFileSync(file, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'image', source: { data: 'x'.repeat(8 * 1024 * 1024) } }] } }) + '\n');
   let previous;
@@ -30,7 +37,7 @@ test('a complete output record in the tail avoids reading backwards through an 8
     fs.appendFileSync(file, JSON.stringify({ type: 'assistant', message: { content: text } }) + '\n');
     bytesRead = 0;
     const output = reader.read(file).writtenOutput;
-    assert.equal(bytesRead, tailBytes);
+    assert.ok(bytesRead <= 1024 * 1024, 'one poll must not scan the 8 MB image');
     assert.notEqual(output, previous);
     assert.match(output, /^[a-f0-9]{64}$/);
     previous = output;

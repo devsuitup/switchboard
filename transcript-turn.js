@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const { createHash } = require('node:crypto');
+const { createTranscriptTailReader, readRange } = require('./transcript-tail');
 
 const CLOSED_STOP_REASONS = new Set(['end_turn', 'stop_sequence']);
 const DEFAULT_TAIL_BYTES = 256 * 1024;
@@ -158,46 +159,6 @@ function classifyTranscriptTail(text) {
   return { state: 'unknown', closed: false, closedAt: null, lastEntryAt, prompts, compactBoundaries };
 }
 
-function readTail(filePath, size, tailBytes, includeWritten) {
-  const start = Math.max(0, size - tailBytes);
-  const length = size - start;
-  const chunks = [readRange(filePath, start, length)];
-  const text = chunks[0].toString('utf8');
-  const extendWritten = includeWritten && start > 0 && !latestWrittenOutput(text);
-  let offset = start;
-  while (extendWritten && offset > 0) {
-    const count = Math.min(tailBytes, offset);
-    const chunk = readRange(filePath, offset - count, count);
-    const newline = chunk.lastIndexOf(10);
-    chunks.unshift(chunk.subarray(newline + 1));
-    if (newline >= 0) break;
-    offset -= count;
-  }
-  return { text, writtenText: Buffer.concat(chunks).toString('utf8') };
-}
-
-function readRange(filePath, start, length, expectedStat) {
-  const buf = Buffer.alloc(length);
-  const fd = fs.openSync(filePath, 'r');
-  try {
-    if (expectedStat) {
-      const actual = fs.fstatSync(fd, { bigint: true });
-      if (actual.dev !== expectedStat.dev || actual.ino !== expectedStat.ino || actual.size < BigInt(start + length)) {
-        throw new Error('transcript changed during read');
-      }
-    }
-    let off = 0;
-    while (off < length) {
-      const n = fs.readSync(fd, buf, off, length - off, start + off);
-      if (n <= 0) throw new Error('transcript shortened during read');
-      off += n;
-    }
-    return buf.subarray(0, off);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
 // see .ai/contexts/trigger-watcher.md, "Compaction evidence"
 function readCompactChunk(filePath, stat, cursor) {
   if (cursor.invalid || cursor.filePath !== filePath || cursor.dev !== stat.dev
@@ -227,6 +188,7 @@ function readCompactChunk(filePath, stat, cursor) {
 
 function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
   const cache = new Map();
+  const tails = createTranscriptTailReader({ tailBytes });
   return {
     read(filePath, compactionCursor) {
       let stat;
@@ -238,14 +200,14 @@ function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
       const hit = cache.get(filePath);
       let cached = hit;
       if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.size !== stat.size || hit.ino !== stat.ino || hit.dev !== stat.dev
-        || !compactionCursor && !hit.writtenComplete) {
+        || !hit.complete || !compactionCursor && !hit.writtenComplete) {
         let tail;
-        try { tail = readTail(filePath, stat.size, tailBytes, !compactionCursor); } catch (_) { return null; }
+        try { tail = tails.read(filePath, stat, compactionCursor ? tailBytes : undefined); } catch (_) { return null; }
         const turn = { ...classifyTranscriptTail(tail.text), mtimeMs: stat.mtimeMs,
           writtenOutput: latestWrittenOutput(tail.writtenText) ?? hit?.turn.writtenOutput ?? '' };
         cached = { mtimeMs: stat.mtimeMs, size: stat.size, dev: stat.dev, ino: stat.ino,
-          writtenComplete: !compactionCursor,
-          skipLine: tail.text.length > 0 && !tail.text.endsWith('\n'), turn };
+          writtenComplete: !compactionCursor, complete: tail.complete,
+          skipLine: !tail.endsWithNewline, turn };
         cache.set(filePath, cached);
       }
       const turn = { ...cached.turn };
@@ -257,6 +219,7 @@ function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
     },
     forget(filePath) {
       cache.delete(filePath);
+      tails.forget(filePath);
     },
   };
 }

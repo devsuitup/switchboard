@@ -35,6 +35,44 @@ const systemEntry = (at, subtype) => ({ type: 'system', subtype, timestamp: iso(
 const queueOp     = (at, operation) => ({ type: 'queue-operation', operation, timestamp: iso(at) });
 const jsonl = (entries) => entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
 
+function apiRequestLine(bytes = 300_000) {
+  const entry = { type: 'api-request', params: '' };
+  entry.params = 'x'.repeat(bytes - Buffer.byteLength(JSON.stringify(entry)));
+  const line = JSON.stringify(entry);
+  assert.equal(Buffer.byteLength(line), bytes);
+  return JSON.parse(line);
+}
+
+test('i730 acceptance: transcriptOwnEntryAt finds a prompt before a 300000-byte API request in an open turn', () => {
+  const vm = require('node:vm');
+  const filename = path.join(__dirname, '../trigger-watcher.js');
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8') + '\nmodule.exports.ownAt = transcriptOwnEntryAt;',
+    { module, exports: module.exports, require: require('node:module').createRequire(filename), process, setTimeout, clearTimeout, Buffer }, { filename });
+  const dir = mkTmp('sw-i730-own-');
+  const file = path.join(dir, 'session.jsonl');
+  try {
+    fs.writeFileSync(file, jsonl([userPrompt(2000), apiRequestLine()]));
+    const reader = createTranscriptTurnReader();
+    const ctx = { getTranscriptTurn: () => reader.read(file) };
+    assert.equal(module.exports.ownAt(ctx, 'sid', 2000, 'do it'), 2000);
+    assert.equal(module.exports.ownAt(ctx, 'sid', 1999, 'do it'), 2000);
+    assert.equal(module.exports.ownAt(ctx, 'sid', 2001, 'do it'), null);
+    assert.equal(reader.read(file).closed, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('i730 measurement: a 300000-byte API request after the closing assistant preserves closure', () => {
+  const dir = mkTmp('sw-i730-closed-');
+  const file = path.join(dir, 'session.jsonl');
+  try {
+    const text = jsonl([userPrompt(1000), assistant(2000, 'end_turn'), systemEntry(2100, 'turn_duration'), apiRequestLine()]);
+    fs.writeFileSync(file, text);
+    assert.equal(classifyTranscriptTail(text).closedAt, 2000);
+    assert.equal(createTranscriptTurnReader().read(file).closedAt, 2000);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('i488-fix2: a bounded cursor finds a boundary after oversized records across several polls', () => {
   const dir = mkTmp('sw-compact-cursor-');
   const file = path.join(dir, 'session.jsonl');
@@ -734,6 +772,22 @@ async function runChain(chain, session, uuid, timeoutMs) {
 }
 
 const ownPrompt = (at, command) => userPrompt(at, { message: { role: 'user', content: command } });
+
+test('i730 acceptance: a busy chain confirms its prompt before a 300000-byte API request and writes the next step', async () => {
+  const uuid = 'sess-i730-' + Date.now();
+  const s = transcriptSession(uuid, { onEnter: ({ append, command }) => {
+    append([ownPrompt(Date.now(), command), apiRequestLine()]);
+    setTimeout(() => append([assistant(Date.now(), 'end_turn'), systemEntry(Date.now(), 'turn_duration')]), 100);
+  } });
+  try {
+    const result = await runChain([{ command: 'first step' }, { command: 'second step' }], s, uuid, 6000);
+    assert.equal(result.steps[0].submit_confirmed, true, JSON.stringify(result));
+    assert.equal(result.steps[0].confirm_source, 'transcript');
+    assert.ok(s.written.some(w => w.data === 'second step'), JSON.stringify(result));
+    assert.equal(result.ok, true);
+    assert.equal(s.desc.status, 'busy');
+  } finally { s.cleanup(); }
+});
 
 function closedTurnAfter(delayMs) {
   return ({ append, command }) => {
