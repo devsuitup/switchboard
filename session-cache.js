@@ -1515,6 +1515,7 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
 module.exports = { shutdownProducers,
   writeScannedFolder, writeScannedFolderPartial,
   resolveSessionContinuations,
+  resumesPersistedContinuation,
   applyProjectsWorkerEffects,
   resetProjectsWorkerRetainedRows,
   getProjectsWorkerRetainedRows,

@@ -2233,7 +2233,7 @@ inside a longer chain: silently resuming a discontinued branch is unsafe, and
 manual opening already offers an explicit original-id choice. Cached rows with
 missing or unreadable transcripts retain the existing unresolved behaviour.
 
-Full-scan and chunk indexes both carry `version:3`, `size`, `sealedIds`, a bounded base64
+Full-scan and persisted chunk indexes both carry `version:3`, `size`, `sealedIds`, a bounded base64
 `pending` line, the first at most 64 bytes as hexadecimal `head`, and the last
 64 indexed bytes as hexadecimal `tail`. The tail is
 verified before reusing a cursor after growth; mismatch, shrink or a same-size

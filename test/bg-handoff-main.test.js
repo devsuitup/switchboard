@@ -206,7 +206,7 @@ function realCache(t, { flushFirst = false, name = null } = {}) {
   let flushed;
   const h = ipcSetup(t, {
     sessionCache: cache, folderOf: encodeProjectPath,
-    writer: { refreshFolder: async (name, options) => cache.refreshFolder(name, options) },
+    writer: { refreshFolder: async (name, options) => { init(); return cache.refreshFolder(name, options); } },
     onTransitions: () => { if (flushFirst && flushed === undefined) flushed = contended(); },
   });
   const user = id => JSON.stringify({ type: 'user', sessionId: id, cwd: h.root, timestamp: '2026-10-19T08:00:00.000Z', message: { content: 'hello' } }) + '\n';
