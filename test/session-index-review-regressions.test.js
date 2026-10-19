@@ -449,6 +449,7 @@ test('second-instance tolerates a destroyed window and bootstrap failure is visi
   vm.runInNewContext(source.slice(start, end), {
     app: { on: (_event, fn) => { second = fn; } },
     mainWindow: { isDestroyed: () => true, isMinimized: () => assert.fail('destroyed window queried') },
+    updateInstalling: false,
   });
   assert.doesNotThrow(second);
   let fail;
