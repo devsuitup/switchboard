@@ -2394,6 +2394,7 @@ const updaterHandler = (type, data) => {
       break;
     case 'relaunch-required':
       showAppNotice({ id: 'updater-relaunch', kind: 'error', message: data.message,
+        dismissible: false, dismissOnAction: false,
         actionLabel: 'Close Switchboard', onAction: () => window.api.updaterClose() });
       break;
     case 'checking':

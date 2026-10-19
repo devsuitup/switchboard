@@ -6,16 +6,24 @@ module.exports = async function relaunch({
   env = process.env, spawnSync = require('node:child_process').spawnSync, now = Date.now,
   quit, notify, log = console,
 }) {
-  const args = ['--user', `--unit=switchboard-relaunch-${now()}-${process.pid}`, '--collect', '--service-type=exec', `--working-directory=${cwd}`];
-  for (const key of ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'SWITCHBOARD_DATA_DIR']) {
-    if (env[key]) args.push(`--setenv=${key}=${env[key]}`);
-  }
+  const unit = `switchboard-relaunch-${now()}-${process.pid}`;
+  const runtimeKeys = new Set(['CHROME_CRASHPAD_PIPE_NAME', 'CHROME_RESTART', 'INVOCATION_ID', 'JOURNAL_STREAM',
+    'SYSTEMD_EXEC_PID', 'NOTIFY_SOCKET', 'WATCHDOG_PID', 'WATCHDOG_USEC', 'SWITCHBOARD_RELAUNCH']);
+  const childEnv = Object.fromEntries(Object.entries(require('./clean-env').cleanEnv(env)).filter(([key]) => !runtimeKeys.has(key)));
+  const args = ['--user', `--unit=${unit}`, '--collect', '--service-type=exec', '--property=KillMode=process', `--working-directory=${cwd}`];
+  for (const key of Object.keys(childEnv)) args.push(`--setenv=${key}`);
   const commandArgs = argv.filter(arg => arg !== '--switchboard-relaunch').map(arg => arg.replace(/\$/g, () => '$$'));
   args.push('--', execPath, ...commandArgs, '--switchboard-relaunch');
   let result;
   try {
-    result = spawnSync('systemd-run', args, { shell: false, timeout: 5000, encoding: 'utf8', env });
+    result = spawnSync('systemd-run', args, { shell: false, timeout: 5000, encoding: 'utf8', env: childEnv });
   } catch (error) { result = { error }; }
+  if (result.error?.code === 'ETIMEDOUT') {
+    try {
+      const active = spawnSync('systemctl', ['--user', 'is-active', '--quiet', unit], { shell: false, timeout: 2000, encoding: 'utf8', env: childEnv });
+      if (!active.error && active.status === 0) result = active;
+    } catch {}
+  }
   if (result.error || result.status !== 0) {
     log.warn('[relaunch] user service unavailable:', result.error?.message || result.stderr || result.status);
     await notify('Switchboard will close; start it again from the application menu.');

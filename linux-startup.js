@@ -2,14 +2,18 @@
 
 // see .ai/contexts/updater-relaunch.md
 async function acquireInstanceLock(app, {
-  platform = process.platform, argv = process.argv, now = Date.now,
+  platform = process.platform, argv = process.argv, now = Date.now, log = console,
   delay = ms => new Promise(resolve => setTimeout(resolve, ms)),
 } = {}) {
   const retry = platform === 'linux' && argv.includes('--switchboard-relaunch');
   const deadline = now() + 10000;
   do {
     if (app.requestSingleInstanceLock()) return true;
-    if (!retry || now() >= deadline) return false;
+    if (!retry) return false;
+    if (now() >= deadline) {
+      log.warn('[startup] relaunch could not acquire the single-instance lock within 10000 ms; exiting.');
+      return false;
+    }
     await delay(Math.min(200, Math.max(0, deadline - now())));
   } while (true);
 }

@@ -163,7 +163,7 @@ let mainWindow = null;
 let activityFlushedForQuit = false;
 let updateInstalling = false;
 async function startApplication() {
-if (!await acquireInstanceLock(app)) { app.quit(); return; }
+if (!await acquireInstanceLock(app, { log })) { app.quit(); return; }
 const privilegeNotice = readNoNewPrivs({ log });
 const writer = require('./session-index-writer').createSessionIndexWriter();
 let bootstrapQuit;
@@ -3535,6 +3535,7 @@ if (!app.isPackaged) {
 {
   // Focus the existing window when a second launch is attempted.
   app.on('second-instance', () => {
+    if (updateInstalling) return;
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();

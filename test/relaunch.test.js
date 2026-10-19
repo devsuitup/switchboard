@@ -68,6 +68,8 @@ test('helper submits a transient service with literal argv, then quits', async (
   assert.ok(!args.includes('--scope'));
   assert.deepEqual(args.slice(-3), ['/opt/a b/switchboard', '--example=a b', '--switchboard-relaunch']);
   assert.equal(opts.shell, false);
+  assert.equal(opts.timeout, 5000);
+  assert.ok(args.includes('--working-directory=/work'));
   assert.equal(calls[1], 'quit');
 });
 
@@ -204,12 +206,146 @@ test('renderer uses a persistent app notice and close action for fallback and st
   assert.equal(notices[0].message, 'restricted');
   assert.equal(notices[1].kind, 'error');
   assert.equal(notices[1].actionLabel, 'Close Switchboard');
+  assert.equal(notices[1].dismissible, false);
   notices[1].onAction();
   assert.equal(closed, 1);
 });
 
+test('service stop leaves independently surviving children alone', async () => {
+  let submitted;
+  await require('../relaunch')({ env: {}, spawnSync: (_cmd, args) => {
+    submitted = args;
+    return { status: 0 };
+  }, quit() {}, notify: () => assert.fail('unexpected fallback') });
+  assert.ok(submitted.includes('--property=KillMode=process'));
+});
+
+test('relaunch forwards caller configuration without exposing values in argv or retaining runtime identities', async () => {
+  const keep = { HOME: '/isolated/home', CLAUDE_CONFIG_DIR: '/isolated/claude', SWITCHBOARD_TRIGGERS_DIR: '/isolated/triggers',
+    SWITCHBOARD_DATA_DIR: '/isolated/data', PATH: '/custom/bin', SSH_AUTH_SOCK: '/run/ssh', LANG: 'fr_FR.UTF-8',
+    LC_CTYPE: 'fr_FR.UTF-8', XDG_CONFIG_HOME: '/isolated/config', XDG_RUNTIME_DIR: '/run/user/1000',
+    DISPLAY: ':1', WAYLAND_DISPLAY: 'wayland-1', XAUTHORITY: '/isolated/authority', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/bus',
+    CUSTOM_SECRET: 'sentinel=$secret with spaces', EMPTY: '' };
+  const denied = [...require('../clean-env').SESSION_MARKERS, 'ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ASAR', 'NODE_OPTIONS',
+    'GOOGLE_API_KEY', 'ORIGINAL_XDG_CURRENT_DESKTOP', 'WT_SESSION', 'CHROME_CRASHPAD_PIPE_NAME', 'CHROME_RESTART',
+    'INVOCATION_ID', 'JOURNAL_STREAM', 'SYSTEMD_EXEC_PID', 'NOTIFY_SOCKET', 'WATCHDOG_PID', 'WATCHDOG_USEC', 'SWITCHBOARD_RELAUNCH'];
+  const env = { ...keep, ...Object.fromEntries(denied.map(key => [key, 'stale-runtime'])) };
+  let submitted;
+  await require('../relaunch')({ env, spawnSync: (_cmd, args, opts) => {
+    submitted = { args, opts };
+    return { status: 0 };
+  }, quit() {}, notify: () => assert.fail('unexpected fallback') });
+  const { args, opts } = submitted;
+  assert.deepEqual(args.filter(a => a.startsWith('--setenv=')).sort(), Object.keys(keep).map(k => `--setenv=${k}`).sort());
+  assert.deepEqual(opts.env, keep);
+  assert.ok(!args.some(a => a.includes('sentinel=') || a.includes('stale-runtime')));
+  assert.equal(env.CLAUDE_CODE_SESSION_ID, 'stale-runtime');
+});
+
+test('a relaunch of a relaunched instance strips the old marker before adding one', async () => {
+  let submitted;
+  await require('../relaunch')({ env: {}, argv: ['--switchboard-relaunch', 'document', '--switchboard-relaunch'],
+    spawnSync: (_cmd, args) => {
+      submitted = args;
+      return { status: 0 };
+    }, quit() {}, notify: () => assert.fail('unexpected fallback') });
+  assert.deepEqual(submitted.slice(submitted.indexOf('--') + 2), ['document', '--switchboard-relaunch']);
+});
+
+test('second-instance focuses ordinary launches but ignores an instance quitting for an update', () => {
+  let node;
+  function visit(value) {
+    if (!value || typeof value !== 'object') return;
+    if (value.type === 'CallExpression' && value.callee?.object?.name === 'app' && value.arguments?.[0]?.value === 'second-instance') node = value;
+    for (const child of Object.values(value)) if (typeof child === 'object') {
+      if (Array.isArray(child)) child.forEach(visit); else visit(child);
+    }
+  }
+  visit(ast);
+  let handler;
+  const calls = [];
+  const context = vm.createContext({ updateInstalling: false, app: { on: (_event, cb) => { handler = cb; } },
+    mainWindow: { isDestroyed: () => false, isMinimized: () => true, restore: () => calls.push('restore'), focus: () => calls.push('focus') } });
+  vm.runInContext(source.slice(...node.range), context);
+  handler();
+  assert.deepEqual(calls, ['restore', 'focus']);
+  calls.length = 0;
+  context.updateInstalling = true;
+  handler();
+  assert.deepEqual(calls, []);
+});
+
+test('a marked lock retry reports exhaustion clearly before returning false', async () => {
+  const warnings = [];
+  let elapsed = 0;
+  assert.equal(await require('../linux-startup').acquireInstanceLock({ requestSingleInstanceLock: () => false }, {
+    platform: 'linux', argv: ['--switchboard-relaunch'], now: () => elapsed, delay: async ms => { elapsed += ms; },
+    log: { warn: text => warnings.push(text) },
+  }), false);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /relaunch.*lock.*10000.*exiting/i);
+});
+
+test('installed DebUpdater executes its force-run branch only when requested; version is pinned', () => {
+  const mod = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(require.resolve('electron-updater/out/DebUpdater'), 'utf8'), {
+    exports: mod.exports, require: name => name === './LinuxUpdater' ? { LinuxUpdater: class {} } : {},
+  });
+  const updater = new mod.exports.DebUpdater();
+  const calls = [];
+  Object.assign(updater, { installerPath: '/tmp/update.deb', hasCommand: () => true, detectPackageManager: () => 'dpkg',
+    runCommandWithSudoIfNeeded: args => calls.push([...args]), _logger: { warn() {} },
+    app: { relaunch: () => calls.push('app.relaunch') }, dispatchError: err => { throw err; } });
+  assert.equal(updater.doInstall({ isForceRunAfter: false }), true);
+  assert.deepEqual(calls, [['dpkg', '-i', '/tmp/update.deb']]);
+  calls.length = 0;
+  assert.equal(updater.doInstall({ isForceRunAfter: true }), true);
+  assert.deepEqual(calls, [['dpkg', '-i', '/tmp/update.deb'], 'app.relaunch']);
+  assert.equal(require('../package.json').dependencies['electron-updater'], '6.8.9');
+  assert.equal(require('electron-updater/package.json').version, '6.8.9');
+  assert.equal(require('../package-lock.json').packages['node_modules/electron-updater'].version, '6.8.9');
+});
+
+for (const state of ['active', 'inactive', 'query-timeout']) test(`submission timeout checks the same service before fallback (${state})`, async () => {
+  const calls = [];
+  let unit;
+  await require('../relaunch')({ env: { HOME: '/isolated' }, spawnSync: (cmd, args, opts) => {
+    calls.push(cmd);
+    if (cmd === 'systemd-run') {
+      unit = args.find(a => a.startsWith('--unit=')).slice(7);
+      return { error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }), status: null };
+    }
+    assert.equal(cmd, 'systemctl');
+    assert.deepEqual(args, ['--user', 'is-active', '--quiet', unit]);
+    assert.equal(opts.timeout, 2000);
+    assert.equal(opts.shell, false);
+    assert.equal(opts.env.HOME, '/isolated');
+    return state === 'query-timeout' ? { error: new Error('query timeout') } : { status: state === 'active' ? 0 : 3 };
+  }, log: { warn() {} }, quit: () => calls.push('quit'), notify: async () => calls.push('notice') });
+  assert.deepEqual(calls, ['systemd-run', 'systemctl', ...(state === 'active' ? [] : ['notice']), 'quit']);
+});
+
+test('manual restart notice stays visible until its sole Close Switchboard action', t => {
+  const { window, document, destroy } = require('./dom-setup').setupSidebarDom();
+  t.after(destroy);
+  const renderer = fs.readFileSync(require.resolve('../public/app'), 'utf8');
+  const from = renderer.indexOf('const updaterHandler =');
+  const to = renderer.indexOf('window.api.onUpdaterEvent(updaterHandler)', from);
+  let closed = 0;
+  window.api = { updaterClose: () => { closed++; } };
+  window.eval(renderer.slice(from, to) + '\nwindow.handleUpdate = updaterHandler;');
+  window.handleUpdate('relaunch-required', { message: 'manual restart' });
+  const notice = document.querySelector('[data-notice-id="updater-relaunch"]');
+  assert.ok(notice);
+  assert.equal(notice.querySelector('.app-notice-dismiss'), null);
+  assert.equal(notice.querySelectorAll('button').length, 1);
+  notice.querySelector('.app-notice-action').click();
+  assert.equal(closed, 1);
+  assert.ok(notice.isConnected);
+});
+
 test('main wires the startup lock, diagnostic delivery, and disables native auto-run only on Linux', () => {
-  assert.match(source, /if \(!await acquireInstanceLock\(app\)\)/);
+  assert.match(source, /if \(!await acquireInstanceLock\(app, \{ log \}\)\)/);
   assert.match(source, /const privilegeNotice = readNoNewPrivs\(\{ log \}\)/);
   assert.match(source, /if \(privilegeNotice\) mainWindow\.webContents\.send\('updater-event', 'startup-notice', privilegeNotice\)/);
   const updaterIndex = ast.body.findIndex(n => n.declarations?.some(d => d.id.name === 'autoUpdater'));
