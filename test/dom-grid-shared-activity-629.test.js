@@ -34,6 +34,73 @@ function setup(t, kind = 'local-pty', overrides = {}) {
   return { ctx, session, render, create, turn, tasks };
 }
 
+for (const attached of [false, true]) {
+  for (const head of ['open', 'closed', 'unknown']) {
+    for (const attention of ['none', 'osc', 'descriptor']) {
+      test(`#726 blocked job: attached ${attached}, head ${head}, attention ${attention} on all surfaces`, t => {
+        const { ctx, session, render, create, turn } = setup(t, 'background');
+        ctx.evalPublic('agents-view.js');
+        ctx.window.refreshSidebar = render;
+        if (attached) {
+          ctx.window.activePtyIds.add(session.sessionId);
+          ctx.window.openSessions.get(session.sessionId).attach = true;
+        }
+        let entry = { kind: 'background', id: 'job-629', sessionId: session.sessionId,
+          state: 'blocked', hosted: true, attachedHere: attached, status: 'busy',
+          taskEvidence: { valid: false } };
+        const push = () => {
+          ctx.window.applyAgentsSnapshot({ roster: [entry], daemonReachable: true });
+          ctx.window.applyStateClasses(session.sessionId, ctx.window.storedActivitySnapshot(session.sessionId));
+        };
+        push();
+        turn(head);
+        const card = create();
+        const check = (slot, blocked) => {
+          const sidebar = ctx.window.sessionItemEl(session.sessionId);
+          const agent = ctx.document.createElement('div');
+          agent.innerHTML = ctx.window.renderAgentRow(entry);
+          for (const el of [sidebar.querySelector('.session-icon'), card.querySelector('.grid-card-dot'), agent.querySelector('.session-icon')]) {
+            assert.ok(el.classList.contains(`session-icon--${slot}`), el.outerHTML);
+            assert.equal(el.classList.contains('session-icon--attention'), slot === 'attention');
+            if (blocked) assert.match(el.title, /blocked/i);
+            else assert.doesNotMatch(el.title, /blocked/i);
+          }
+          if (blocked) {
+            assert.equal(sidebar.querySelector('.session-status').textContent, 'Blocked');
+            assert.match(agent.querySelector('.agents-row-state').textContent, /blocked/i);
+          }
+        };
+        check('waiting', true);
+        if (attention === 'osc') ctx.window.setAttention(session.sessionId, true, 'onTerminalNotification');
+        if (attention === 'descriptor') {
+          ctx.window.localPtyState(session.sessionId).apply({ type: 'descriptorStatus', status: 'waiting', attention: true });
+          ctx.window.applyStateClasses(session.sessionId, ctx.window.storedActivitySnapshot(session.sessionId));
+        }
+        check(attention === 'none' ? 'waiting' : 'attention', true);
+        render();
+        ctx.window.paintSessionIcon(ctx.window.sessionItemEl(session.sessionId).querySelector('.session-icon'), session.sessionId);
+        ctx.window.updateGridSubagentPills(session.sessionId);
+        check(attention === 'none' ? 'waiting' : 'attention', true);
+        if (attention === 'osc') ctx.window.setAttention(session.sessionId, false, 'onTerminalNotification');
+        if (attention === 'descriptor') {
+          ctx.window.localPtyState(session.sessionId).apply({ type: 'descriptorStatus', status: 'busy', attention: false });
+          ctx.window.applyStateClasses(session.sessionId, ctx.window.storedActivitySnapshot(session.sessionId));
+        }
+        check('waiting', true);
+        entry = { ...entry, state: 'working' };
+        push();
+        check(head === 'open' ? 'busy' : attached ? 'idle' : 'waiting', false);
+        entry = { ...entry, state: 'blocked' };
+        push();
+        check('waiting', true);
+        entry = { ...entry, state: 'stopped', hosted: false };
+        push();
+        check('stale', false);
+      });
+    }
+  }
+}
+
 test('#629 process exit preserves the local exit reason after its descriptor disappears', t => {
   const { ctx, session, create } = setup(t);
   const card = create();

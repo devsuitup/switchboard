@@ -145,12 +145,15 @@ terminal jobs alone may omit `inFlight` entirely.
 The shared background projection reads #638's head-turn and #626's unseen-output state:
 only an open head turn animates; agents, shells, monitors and cron at the prompt
 share the static background glyph. Only agent tasks contribute to #627's count.
-A blocked job takes attention priority; done/stopped/failed suppress head busy,
-background work and response-ready, while retaining unseen written output.
-An attached terminal's explicit attention notification still takes priority.
+A blocked job shows the static waiting ring, including with a PTY attached here:
+the job state supplies observed waiting evidence without a recorded turn end.
+It suppresses head busy, background work and response-ready, while retaining
+unseen written output. A genuine OSC 9 attention notification or a live
+`waiting` descriptor with `attention: true` still takes priority. Done/stopped/failed
+suppress head busy, background work and response-ready as before.
 Sessions with a live non-attach PTY here keep the conversation's own activity
 only when their matching entry is not a live job. Attaching to a working or
-blocked job keeps the job projection, including blocked attention and labels
+blocked job keeps the job projection, including blocked waiting and labels
 without descriptor status or age. Finished entries with `conversationOwn`
 also keep the conversation's own activity unless their open tab is an attach
 client (`openSessions.get(sessionId).attach`, the renderer marker). When that
@@ -294,10 +297,12 @@ absent at zero, so a roster without external sessions reads as before.
 
 `JOB_STATES` is `working`, `blocked`, `done`, `stopped`, `failed`. These are
 turn states: `done` means the turn ended, while the daemon may still host the
-session between messages. `working` means an active turn; `blocked` needs
-user input (see `docs/background-agents.md`, "The list") and projects
-attention in `projectBackgroundActivity`, so the sidebar keeps a short
-`Blocked` label (#702). `stopped` and `failed` are finished even with a leftover descriptor.
+session between messages. `working` means an active turn; `blocked` means the
+job parked itself (for example, a quota pause or awaiting a go-ahead) and projects
+waiting in `projectBackgroundActivity`. The sidebar keeps its short `Blocked`
+label (#702), and the sidebar, grid and Agents tooltips retain the blocked state.
+Leaving `blocked` removes that waiting evidence; the normal head-turn and PTY
+rules apply again. `stopped` and `failed` are finished even with a leftover descriptor.
 
 `isHostedJob(job, descriptors)` in `bg-agents-roster.js` is the single hosting
 rule: a background job is hosted if working/blocked, or if a live `kind: bg`
@@ -319,7 +324,7 @@ consumes that field for badges, row liveness, ordering, counts, the Finished
 filter and verbs. A hosted idle row retains the `done` turn state and shows `Idle`
 in the sidebar status and Agents row label (a finished Agents row shows `done`).
 It shows the waiting glyph and counts as running. Done without a live descriptor
-is finished. Busy/head-turn and blocked attention still follow turn evidence.
+is finished. Busy/head-turn and blocked waiting still follow turn evidence.
 `runVerb`, the fresh conversation check and `liveJobCheck` use the same hosting
 rule, including descriptors that changed after the last snapshot.
 
@@ -333,7 +338,8 @@ rule, including descriptors that changed after the last snapshot.
 
 The UI disables the buttons (`agentVerbAvailability`); `runVerb` refuses
 `respawn`/`rm` on a live roster entry with the same rule, so a stale renderer
-cannot bypass it. A blocked row draws the attention `!` (Needs your attention).
+cannot bypass it. A blocked row draws the static orange waiting ring; only a
+genuine attention input overrides it with the blinking attention `!` (#726).
 The shipped IPC adds invariant 10's fresh conversation check; the roster
 state alone cannot authorize a destructive verb. A finished job that matches
 a live interactive descriptor by case-insensitive `sessionId` or by the same

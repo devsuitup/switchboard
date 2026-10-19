@@ -109,7 +109,7 @@ test('blocked Agents jobs suppress an open head even when the descriptor says bu
   ctx.evalPublic('agents-view.js'); turn('open');
   ctx.window.taskRegistry.note('root', 'shell', 'cli-task', { kind: 'shell' });
   for (const status of ['idle', null, 'busy']) {
-    assert.equal(ctx.window.agentRowIcon({ sessionId: 'root', kind: 'background', state: 'blocked', hosted: true, status }).slotClass, 'session-icon--attention');
+    assert.equal(ctx.window.agentRowIcon({ sessionId: 'root', kind: 'background', state: 'blocked', hosted: true, status }).slotClass, 'session-icon--waiting');
   }
 });
 test('Agents background idle descriptor cannot close a validated head turn', t => {

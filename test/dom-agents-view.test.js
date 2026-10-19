@@ -177,15 +177,20 @@ test('Agents row and detail retain the original conversation name over a collisi
   } finally { h.destroy(); }
 });
 
-test('Agents rows supply attention, unknown-live and finished glyphs to the shared slot CSS', { timeout: 1000 }, async () => {
+test('Agents rows supply genuine attention, blocked waiting and finished glyphs to the shared slot CSS', { timeout: 1000 }, async () => {
   const { window, document, setSnapshot, destroy } = setup();
   try {
     setSnapshot({ daemonReachable: true, roster: [
       { id: 'waiting', kind: 'background', state: 'blocked', hosted: true, status: 'waiting' },
+      { sessionId: 'permission', kind: 'interactive', status: 'waiting' },
       { id: 'idle', kind: 'background', state: 'working', hosted: true, status: 'idle' },
       { id: 'finished', kind: 'background', state: 'done', hosted: false, status: 'idle' },
     ] });
     await window.showAgentsView();
+    const blocked = document.querySelector('.agents-row[data-key="bg:waiting"] .session-icon');
+    assert.ok(blocked.classList.contains('session-icon--waiting'));
+    assert.equal(blocked.classList.contains('session-icon--attention'), false);
+    assert.match(blocked.title, /Blocked/);
     const { renderSessionIcon } = require('../public/session-state');
     for (const [rung, snapshot] of [['attention', { attention: true }], ['waiting', { waitingForInput: true }], ['stale', { stale: true }]]) {
       const slot = document.querySelector(`.agents-row .session-icon--${rung}`);

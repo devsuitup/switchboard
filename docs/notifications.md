@@ -16,11 +16,15 @@ When several states hold at once, the first one in this table wins:
 | Working | Light-blue braille spinner | light blue | Claude is working | Claude stops |
 | Working, with subagents | The same spinner, violet | light blue | Claude is working and subagents run under it | — |
 | Subagents running | Static violet ⠿ | — | Claude is at its prompt, subagents still run under it | The last subagent ends |
-| Waiting for input | Orange hollow ring | — | Switchboard saw Claude finish a turn in a session open here, or a session running elsewhere is at its prompt | A new turn starts |
+| Waiting for input | Orange hollow ring | — | Switchboard saw Claude finish a turn in a session open here, a session running elsewhere is at its prompt, or a background job is blocked (including while attached here) | A new turn starts or the job leaves blocked |
 | Running | Green dot | — | Switchboard holds a live process for the session and has not seen a turn end since that process started or since the last turn began | Claude finishes a turn, or the process exits |
 | — | Grey dot | — | Anything else | — |
 
 The two violet states are explained on [Subagents](subagents.md#live-status).
+
+A blocked background job keeps its Blocked label and tooltip. Blocking alone
+does not request attention; a separate OSC 9 attention notification or a live
+`waiting` descriptor with `attention: true` still takes the blinking LED's priority.
 
 Sessions Switchboard does not run itself have no terminal to read signals
 from. Their row shows the working spinner while their transcript is being
