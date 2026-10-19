@@ -285,10 +285,15 @@ Refresh only redraws the local buffer; it never resizes the ssh PTY.
 
 ## Stop, archive, delete
 
-- **Stop** asks *Stop this session on &lt;label&gt;?*, then ends the process on
-  the host: after checking that the pid is still a `claude` process, it kills
+- **Stop** confirms once, naming the session and host for a single tab, or the
+  count and locations of every running part for a merged row. It says the
+  processes end and the conversation is kept and can be resumed. A host that
+  has not synced yet has its parts listed as possibly running. Stop then ends
+  each target's process on the host: after checking that the pid is still a `claude` process, it kills
   the session's tmux pane (or window), or sends `SIGTERM` and, 3 seconds later,
-  `SIGKILL`.
+  `SIGKILL`. An absent session counts as stopped. An unreachable host is asked
+  only once per action; the failure notice names every target left unstopped.
+  Retry confirms and retries only the targets that failed.
 - **Archive** stops a live session first, the same way. On a merged row, it
   checks each member's own live state before hiding the row. For an attached
   session, or a row listed from the saved copy after a restart, whose host has

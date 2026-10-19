@@ -114,24 +114,108 @@ test('a mixed row Stop detaches an attached job tab and never kills its job', as
   assert.equal(h.window.activePtyIds.has('J'), false);
 });
 
-test('unknown background ownership is declared and excluded before stopping other row parts', async t => {
+test('active local parts stop even when background ownership is unknown or names a job', async t => {
   const h = setup(t);
   h.window.activePtyIds.add('B').add('C');
-  h.window.api.bgAgentLiveJob = async id => ({ known: id !== 'C', reason: 'daemon unavailable', job: null });
+  h.window.api.bgAgentLiveJob = async id => ({ known: id !== 'C', reason: 'daemon unavailable', job: id === 'B' ? { id: 'job-B' } : null });
   await h.stopRow();
-  assert.match(h.calls.questions[0].message, /C.*cannot tell.*daemon unavailable/);
-  assert.deepEqual(h.calls.stopped, ['B']);
-  assert.ok(h.window.activePtyIds.has('C'));
+  assert.equal(h.calls.questions.length, 1);
+  assert.deepEqual(h.calls.stopped, ['B', 'C']);
+  assert.equal(h.window.activePtyIds.has('C'), false);
 });
 
 test('tab Stop names the loss and location but only stops that tab of a merged conversation', async t => {
   const h = setup(t);
   h.window.activePtyIds.add('A').add('B');
   await h.app.confirmAndStopSession('A');
-  assert.match(h.calls.questions[0].message, /1 part.*A.*in this window/s);
+  assert.match(h.calls.questions[0].message, /this session.*Conversation.*in this window/is);
+  assert.doesNotMatch(h.calls.questions[0].message, /\bpart\b/i);
   assert.match(h.calls.questions[0].message, /conversation is kept/);
   assert.deepEqual(h.calls.stopped, ['A']);
   assert.ok(h.window.activePtyIds.has('B'));
+});
+
+test('a plain local tab stops once after one confirmation when the job directory is unreadable', async t => {
+  const h = setup(t, { mergedMemberIds: [] });
+  h.window.activePtyIds.add('A');
+  h.window.api.bgAgentLiveJob = async () => ({ known: false, reason: 'unreadable unrelated job' });
+  await h.app.confirmAndStopSession('A');
+  assert.equal(h.calls.questions.length, 1);
+  assert.deepEqual(h.calls.stopped, ['A']);
+});
+
+test('an unseeded remote row accepts absent members while stopping its only running member', async t => {
+  const h = setup(t, { remoteAlias: 'host', remoteHostAt: null });
+  h.window.api.remoteStopSession = async (alias, id) => {
+    h.calls.remote.push([alias, id]);
+    return id === 'B' ? { ok: true } : { ok: false, error: 'session not found on that host' };
+  };
+  await h.stopRow();
+  assert.deepEqual(h.calls.remote, [['host', 'A'], ['host', 'B'], ['host', 'C']]);
+  assert.equal(h.document.querySelector('[role="alert"]'), null);
+});
+
+test('an unreachable host is asked only once and every remaining target reports its reason', async t => {
+  const h = setup(t, { remoteAlias: 'host', remoteHostAt: null });
+  h.window.api.remoteStopSession = async (alias, id) => {
+    h.calls.remote.push([alias, id]);
+    return { ok: false, hostUnreachable: true, error: 'ssh timed out' };
+  };
+  await h.stopRow();
+  assert.deepEqual(h.calls.remote, [['host', 'A']]);
+  const alerts = h.document.querySelectorAll('[role="alert"]');
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0].textContent, /A.*ssh timed out.*B.*ssh timed out.*C.*ssh timed out/s);
+});
+
+for (const [field, value] of [['name', 'My named session'], ['aiTitle', 'Generated title'], ['summary', 'Conversation']]) {
+  test(`a single-part Stop uses the row display ${field} without a raw id or part wording`, async t => {
+    const h = setup(t, { mergedMemberIds: [], [field]: value });
+    h.window.activePtyIds.add('A');
+    await h.stopRow();
+    const message = h.calls.questions[0].message;
+    assert.match(message, /Stop this session\?/);
+    assert.ok(message.includes(value));
+    assert.doesNotMatch(message, /\bpart\b|\bA\b/);
+    assert.match(message, /process ends.*conversation is kept.*resumed/s);
+  });
+}
+
+test('a single-part Stop without a display name never exposes its raw id', async t => {
+  const h = setup(t, { mergedMemberIds: [], summary: '' });
+  h.window.activePtyIds.add('A');
+  await h.stopRow();
+  assert.match(h.calls.questions[0].message, /Untitled conversation/);
+  assert.doesNotMatch(h.calls.questions[0].message, /\bpart\b|\bA\b/);
+});
+
+test('a Stop with an empty plan explains that nothing is running', async t => {
+  const h = setup(t);
+  await h.stopRow();
+  assert.deepEqual(h.calls.questions, []);
+  assert.deepEqual(h.calls.stopped, []);
+  assert.match(h.document.querySelector('#app-notices').textContent, /nothing is running to stop/i);
+});
+
+test('Retry confirms only failed targets and does not stop a successful open tab again before its exit event', async t => {
+  const h = setup(t);
+  h.window.activePtyIds.add('B').add('C');
+  h.window.openSessions.set('B', { closed: false });
+  h.window.openSessions.set('C', { closed: false });
+  let failed = true;
+  h.window.api.stopSession = async id => {
+    h.calls.stopped.push(id);
+    return id === 'C' && failed ? { ok: false, error: 'stop refused' } : { ok: true };
+  };
+  await h.stopRow();
+  failed = false;
+  h.document.querySelector('.app-notice-action').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.calls.questions.length, 2);
+  assert.match(h.calls.questions[1].message, /C.*in this window/);
+  assert.doesNotMatch(h.calls.questions[1].message, /\bB\b/);
+  assert.deepEqual(h.calls.stopped, ['B', 'C', 'C']);
+  assert.equal(h.document.querySelector('[role="alert"]'), null);
 });
 
 test('a closed job tab remains excluded while other local parts stop', async t => {

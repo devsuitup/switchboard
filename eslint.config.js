@@ -24,7 +24,6 @@ const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .c
 // public/sidebar.js (and equivalents). Kept readonly so reassignment
 // from another file gets flagged.
 const rendererCrossFileGlobals = {
-  planSessionStop: 'readonly',
   localActivityRow: 'readonly',
   selectBackgroundActivity: 'readonly',
   backgroundAttachFacts: 'readonly',
@@ -255,6 +254,7 @@ const rendererCrossFileGlobals = {
   applyRemoteStopped: 'readonly',
   // public/stop-session-ui.js — see .ai/contexts/session-state.md (issue #271)
   resolveSessionStop: 'readonly',
+  planSessionStop: 'readonly',
   isRemoteSessionAlive: 'readonly',
   stopBeforeArchive: 'readonly',
   showRestoreNotice: 'readonly',
