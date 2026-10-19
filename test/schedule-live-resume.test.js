@@ -133,9 +133,9 @@ function setup(t, { sandbox = false } = {}) {
     open: (options) => app.openSession(session, undefined, options),
     query: (id = SID) => dom.window.api.getSessionLiveElsewhere(id),
     batch: (ids) => dom.window.api.getSessionsLiveElsewhere(ids),
-    restore: async () => {
+    restore: async (entry = {}) => {
       ctx.restoringWorkingSet = true;
-      await app.runRestore([{ sessionId: SID, projectPath: dir, active: true }]);
+      await app.runRestore([{ sessionId: SID, projectPath: dir, active: true, ...entry }]);
       await app.persistWorkingSet();
       ctx.restoringWorkingSet = false;
     },
@@ -148,6 +148,8 @@ test('a click during a scheduled run asks Resume anyway and opens when accepted'
   assert.equal(h.spawns.length, 1);
   await h.open();
   assert.equal(h.openTerminalCalls.length, 1);
+  assert.notEqual(h.openTerminalCalls[0][3].type, 'attach', 'scheduled runs never attach to the daemon');
+  assert.equal(h.ctx.openSessions.get(SID).attach, false);
   assert.equal(h.messages.length, 0);
   assert.equal(h.confirmations.length, 1);
   assert.equal(h.confirmations[0].confirmLabel, 'Resume anyway');
@@ -175,6 +177,46 @@ test('working-set restore skips the scheduled run and retains its saved entry', 
   assert.equal(h.settings.global.openWorkingSet[0].sessionId, SID);
   assert.equal(h.settings.global.openWorkingSet[0].active, false);
   assert.equal(h.messages.length, 0);
+});
+
+test('background restore without a job id shows only the restore notice', async t => {
+  const h = setup(t);
+  h.dom.window.api.getSessionsLiveElsewhere = async () => ({ [SID]: { kind: 'bg', pid: 4242 } });
+  await h.restore({ bg: true });
+  assert.equal(h.openTerminalCalls.length, 0);
+  assert.equal(h.confirmations.length, 0);
+  assert.equal(h.messages.length, 0);
+  const notices = h.dom.window.document.querySelectorAll('[data-notice-id]');
+  assert.equal(notices.length, 1, 'one skipped entry gets only its restore notice');
+  assert.equal(notices[0].dataset.noticeId, 'Restore:batch');
+  assert.match(notices[0].textContent, /Scheduled task/);
+  assert.equal(h.dom.window.document.querySelector('[data-notice-id^="resume-background:"]'), null);
+  assert.equal(h.settings.global.openWorkingSet[0].sessionId, SID);
+});
+
+test('an interactive background click without a job id keeps its error notice', async t => {
+  const h = setup(t);
+  await h.open({ live: { kind: 'bg', pid: 4242 } });
+  assert.equal(h.openTerminalCalls.length, 0);
+  assert.equal(h.confirmations.length, 0);
+  const notices = h.dom.window.document.querySelectorAll('[data-notice-id]');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].dataset.noticeId, `resume-background:${SID}`);
+  assert.equal(notices[0].getAttribute('role'), 'alert');
+  assert.match(notices[0].textContent, /Cannot open "Scheduled task".*Agents view/);
+});
+
+test('cancelling a scheduled-session click opens no terminal and does not attach', async t => {
+  const h = setup(t);
+  await h.start();
+  h.dom.window.appConfirm = async question => { h.confirmations.push(question); return false; };
+  const opened = await h.open();
+  assert.equal(h.confirmations.length, 1);
+  assert.equal(h.confirmations[0].confirmLabel, 'Resume anyway');
+  assert.equal(h.openTerminalCalls.length, 0);
+  assert.equal(h.ctx.openSessions.size, 0);
+  assert.equal(h.openTerminalCalls.some(([, , , options]) => options?.type === 'attach'), false);
+  assert.equal(opened, false);
 });
 
 test('a scheduled child without a CLI descriptor is visible under either session id case', async (t) => {
@@ -241,4 +283,9 @@ test('the schedule verdict offers a resume override and Cancel refuses it', asyn
   assert.equal(result, false);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].confirmLabel, 'Resume anyway');
+  assert.equal(await guardResume({ sessionId: SID }, {
+    live: { kind: 'schedule', pid: 4242, cwd: '/scheduled' },
+    confirm: async () => true,
+    notify: () => assert.fail('no refusal notice'),
+  }), true, 'accepting a scheduled run resumes it rather than returning a daemon attach verdict');
 });

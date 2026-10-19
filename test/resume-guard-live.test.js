@@ -44,3 +44,15 @@ test('L6 background without job id refuses by error notice without asking', asyn
   assert.equal(notices[0].kind, 'error');
   assert.equal(notices[0].message, 'Cannot open "Plan" here: it runs as a background session whose job Switchboard cannot identify, so it cannot be attached. Find it in the Agents view.');
 });
+
+test('automatic background refusal without a job id reports the blocked session silently', async () => {
+  const blocked = [];
+  const live = { kind: 'bg', pid: 9 };
+  assert.equal(await guardResume({ sessionId: 's' }, {
+    automatic: true, allowBgAttach: true, live,
+    confirm: () => assert.fail('no dialog'),
+    notify: () => assert.fail('restore owns its notice'),
+    onBlocked: part => blocked.push(part),
+  }), false);
+  assert.deepEqual(blocked, [{ sessionId: 's', live }]);
+});

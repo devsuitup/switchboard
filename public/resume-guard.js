@@ -58,6 +58,10 @@ async function guardResume(session, { automatic = false, api, confirm, name, not
   // see .ai/contexts/bg-agents.md
   if (live.kind === 'bg') {
     if (typeof live.jobId === 'string' && live.jobId) return { attach: live.jobId, cwd: live.cwd || null };
+    if (automatic) {
+      onBlocked?.({ sessionId: session.sessionId, live });
+      return false;
+    }
     if (typeof notify !== 'function') throw new TypeError('guardResume requires a notify adapter for a background refusal');
     notify({ id: `resume-background:${session.sessionId}`, kind: 'error',
       message: `Cannot open "${name || 'Untitled conversation'}" here: it runs as a background session whose job Switchboard cannot identify, so it cannot be attached. Find it in the Agents view.` });
