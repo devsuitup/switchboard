@@ -21,7 +21,7 @@ app was not run. The patterns these bricks serve are in
 | B3 | Session row | `buildSessionItem` | exists, 2 near-duplicates |
 | B4 | Action button | `.session-*-btn`, `.icon-btn`, `.control-btn`, … | exists in ≥6 styles |
 | B5 | Confirmation dialog | `showChoiceDialog` | exists, used once |
-| B6 | Chooser dialog | — | missing |
+| B6 | Chooser dialog | `appChoose` / `openChoiceDialog` | exists, no production caller yet |
 | B7 | Form dialog | `.new-session-overlay` family | exists, no dialog semantics |
 | B8 | Notice | `app-notices.js` | exists, shared error/info/Undo notices; restore/update remain separate |
 | B9 | Inline error | `.agents-detail-error`, `.dwt-error`, dialog error lines | exists, ad hoc |
@@ -162,13 +162,24 @@ dialogs' preview) and default focus on Cancel for `danger`; migrate the
 destructive `confirm` calls and the two delete dialogs onto it; give it its
 own class names.
 
-## B6. Chooser dialog (missing)
+## B6. Chooser dialog
 
 - **Job.** Pick one of N (continuation candidates; live-elsewhere
   resolution).
-- **Today.** A loop of `confirm` calls (`resume-guard.js:67-72`), raw UUIDs.
-- **Anatomy (proposed).** B5 shell; a list of candidates (title, last
-  activity, where it runs), one preselected, Cancel + `Open`.
+- **Implementation.** `appChoose({ title, message, options, selectedId,
+  confirmLabel })` in `public/app-dialogs.js` adapts the queued B5 shell.
+  It returns `{ choice: id }`, or `null` on Cancel, Escape, Close or backdrop.
+- **Anatomy.** A labelled native radio group; each option supplies `id`,
+  `label`, optional `detail`, `disabled` and `disabledReason`. Text is never
+  parsed as markup. The label names the radio; detail and disabled reason are
+  a separate accessible description. The selected enabled option, or the first enabled option,
+  is preselected. Disabled options show their reason; no enabled options
+  disables Open. Cancel + `Open`; Open receives initial focus.
+- **Keyboard.** Enter accepts the current selection; Escape cancels. Tab
+  leaves the radio group for Cancel, Shift+Tab returns to its checked radio;
+  arrows use native browser navigation.
+- **Current uses.** None yet. The continuation confirmation loop in
+  `resume-guard.js` will migrate separately; this change only adds the brick.
 
 ## B7. Form dialog
 

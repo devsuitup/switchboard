@@ -2319,6 +2319,8 @@ body { display: flex; flex-direction: column; }
   cursor: pointer;
 }
 .choice-dialog-choice input { margin-top: 3px; flex-shrink: 0; }
+.choice-dialog-detail { display: block; color: var(--text-muted); font-size: 12px; }
+.choice-dialog-choice:has(input:disabled) { opacity: 0.6; cursor: default; }
 .choice-dialog-actions { margin-top: 4px; padding: 0 20px 16px; }
 
 .schedule-reenable-notice {

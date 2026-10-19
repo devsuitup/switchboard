@@ -11,6 +11,7 @@ function writeRememberedChoice(rememberKey, checked) {
 // see .ai/contexts/app-dialogs.md
 let choiceDialogReturnFocus = null;
 let closeOpenChoiceDialog = null;
+let choiceDialogOptionId = 0;
 
 function showChoiceDialog(options = {}) {
   const active = document.activeElement;
@@ -31,6 +32,8 @@ function openChoiceDialog({
   title,
   message,
   choices = [],
+  options = null,
+  selectedId,
   confirmLabel,
   cancelLabel = 'Cancel',
   initialFocus = 'confirm',
@@ -68,6 +71,45 @@ function openChoiceDialog({
       p.textContent = line;
       body.appendChild(p);
     }
+    const radios = [];
+    if (options) {
+      const group = document.createElement('div');
+      group.setAttribute('role', 'radiogroup');
+      group.setAttribute('aria-labelledby', heading.id);
+      const selected = options.find(option => option.id === selectedId && !option.disabled) || options.find(option => !option.disabled);
+      for (const option of options) {
+        const row = document.createElement('div');
+        row.className = 'choice-dialog-choice';
+        const radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.id = `choice-dialog-option-${++choiceDialogOptionId}`;
+        radio.name = 'choice-dialog-option';
+        radio.dataset.choiceId = option.id;
+        radio.disabled = !!option.disabled;
+        radio.checked = option === selected;
+        const text = document.createElement('span');
+        const label = document.createElement('label');
+        label.htmlFor = radio.id;
+        label.textContent = option.label;
+        text.appendChild(label);
+        const description = [option.detail, option.disabled && option.disabledReason].filter(Boolean).join(' · ');
+        if (description) {
+          const detail = document.createElement('span');
+          detail.id = `${radio.id}-detail`;
+          detail.className = 'choice-dialog-detail';
+          detail.textContent = description;
+          radio.setAttribute('aria-describedby', detail.id);
+          text.appendChild(detail);
+        }
+        row.append(radio, text);
+        row.addEventListener('click', (event) => {
+          if (!radio.disabled && event.target !== radio && !label.contains(event.target)) radio.click();
+        });
+        group.appendChild(row);
+        radios.push({ option, radio });
+      }
+      body.appendChild(group);
+    }
     const boxes = [];
     for (const choice of choices) {
       const label = document.createElement('label');
@@ -95,6 +137,7 @@ function openChoiceDialog({
     confirmBtn.type = 'button';
     confirmBtn.className = (danger ? 'delete-worktree-confirm-btn' : 'new-session-start-btn') + ' choice-dialog-confirm';
     confirmBtn.textContent = confirmLabel || 'OK';
+    confirmBtn.disabled = !!options && !radios.some(({ radio }) => radio.checked && !radio.disabled);
     actions.append(cancelBtn, confirmBtn);
 
     dialog.append(header, body, actions);
@@ -114,7 +157,10 @@ function openChoiceDialog({
     }
 
     function accept() {
+      const selected = radios.find(({ radio }) => radio.checked && !radio.disabled);
+      if (options && !selected) return;
       const result = {};
+      if (selected) result.choice = selected.option.id;
       for (const { choice, box } of boxes) {
         result[choice.id] = box.checked;
         if (choice.rememberKey) writeRememberedChoice(choice.rememberKey, box.checked);
