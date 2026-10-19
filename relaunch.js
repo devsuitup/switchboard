@@ -9,7 +9,11 @@ module.exports = async function relaunch({
   const unit = `switchboard-relaunch-${now()}-${process.pid}`;
   const runtimeKeys = new Set(['CHROME_CRASHPAD_PIPE_NAME', 'CHROME_RESTART', 'INVOCATION_ID', 'JOURNAL_STREAM',
     'SYSTEMD_EXEC_PID', 'NOTIFY_SOCKET', 'WATCHDOG_PID', 'WATCHDOG_USEC', 'SWITCHBOARD_RELAUNCH']);
-  const childEnv = Object.fromEntries(Object.entries(require('./clean-env').cleanEnv(env)).filter(([key]) => !runtimeKeys.has(key)));
+  const cleaned = require('./clean-env').cleanEnv(env);
+  if (env.ELECTRON_OZONE_PLATFORM_HINT) cleaned.ELECTRON_OZONE_PLATFORM_HINT = env.ELECTRON_OZONE_PLATFORM_HINT;
+  const skipped = Object.keys(cleaned).filter(key => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key));
+  if (skipped.length) log.warn('[relaunch] not forwarding environment names systemd rejects:', skipped.join(', '));
+  const childEnv = Object.fromEntries(Object.entries(cleaned).filter(([key]) => !runtimeKeys.has(key) && !skipped.includes(key)));
   const args = ['--user', `--unit=${unit}`, '--collect', '--service-type=exec', '--property=KillMode=process', `--working-directory=${cwd}`];
   for (const key of Object.keys(childEnv)) args.push(`--setenv=${key}`);
   const commandArgs = argv.filter(arg => arg !== '--switchboard-relaunch').map(arg => arg.replace(/\$/g, () => '$$'));

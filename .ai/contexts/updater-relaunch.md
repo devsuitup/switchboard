@@ -16,6 +16,10 @@ child-process exclusions. Additionally, CHROME_CRASHPAD_PIPE_NAME and CHROME_RES
 belong to the old Chromium process; INVOCATION_ID, JOURNAL_STREAM, SYSTEMD_EXEC_PID,
 NOTIFY_SOCKET and WATCHDOG_PID/USEC identify its old service; SWITCHBOARD_RELAUNCH
 is reserved for relaunch state. None are forwarded. The caller's object is not mutated.
+`ELECTRON_OZONE_PLATFORM_HINT` is the one Electron variable kept: it configures the app
+itself, not a child. Names systemd rejects (anything outside `[A-Za-z_][A-Za-z0-9_]*`,
+such as bash's exported `BASH_FUNC_x%%`) are skipped and logged, since one of them
+would make systemd-run fail and send every update to the manual fallback.
 Only names appear in `--setenv=NAME`; values are supplied in systemd-run's own
 environment, keeping credentials out of its command line. This name-only syntax
 was added in systemd 250: compare the [v249 parser](https://github.com/systemd/systemd/blob/v249/src/run/run.c)

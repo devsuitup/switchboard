@@ -242,6 +242,21 @@ test('relaunch forwards caller configuration without exposing values in argv or 
   assert.equal(env.CLAUDE_CODE_SESSION_ID, 'stale-runtime');
 });
 
+test('relaunch skips names systemd rejects, keeps the Ozone hint, and logs what it skipped', async () => {
+  const env = { HOME: '/home/u', 'BASH_FUNC_x%%': '() { :; }', 'dotted.name': 'v', 'dash-name': 'v',
+    ELECTRON_OZONE_PLATFORM_HINT: 'wayland', ELECTRON_RUN_AS_NODE: '1' };
+  let submitted;
+  const warnings = [];
+  await require('../relaunch')({ env, spawnSync: (_cmd, args, opts) => {
+    submitted = { args, opts };
+    return { status: 0 };
+  }, quit() {}, notify: () => assert.fail('unexpected fallback'), log: { warn: (...a) => warnings.push(a.join(' ')) } });
+  assert.deepEqual(submitted.args.filter(a => a.startsWith('--setenv=')).sort(),
+    ['--setenv=ELECTRON_OZONE_PLATFORM_HINT', '--setenv=HOME']);
+  assert.deepEqual(submitted.opts.env, { HOME: '/home/u', ELECTRON_OZONE_PLATFORM_HINT: 'wayland' });
+  assert.ok(warnings.some(w => w.includes('BASH_FUNC_x%%') && w.includes('dotted.name') && w.includes('dash-name')));
+});
+
 test('a relaunch of a relaunched instance strips the old marker before adding one', async () => {
   let submitted;
   await require('../relaunch')({ env: {}, argv: ['--switchboard-relaunch', 'document', '--switchboard-relaunch'],
