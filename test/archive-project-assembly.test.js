@@ -50,7 +50,7 @@ test('archive assembly: only confirmed, disableable schedules are disabled', () 
   try {
     const res = archiveProjectFolders([group('/p')], { disableSchedules: [A, '/p/c'] }, h.deps);
     assert.deepEqual(h.calls.setEnabled.map(c => [c.filePath, c.enabled]), [[A, false]]);
-    assert.deepEqual(res, { ok: true, disabled: ['a'], failed: [] });
+    assert.deepEqual(res, { ok: true, archivedAt: 'T1', disabled: ['a'], failed: [] });
     assert.deepEqual(h.settings.archivedProjects[archivedEntry(null, '/p')].disabledSchedules, [A]);
   } finally { h.cleanup(); }
 });
@@ -116,7 +116,7 @@ test('archive assembly: malformed groups are ignored', () => {
   try {
     archiveProjectFolders([null, { projectPath: 5 }, { projectPath: '' }, { projectPath: '/x', folderKey: 3 }, group('/p')], {}, h.deps);
     assert.deepEqual(Object.keys(h.settings.archivedProjects), [archivedEntry(null, '/p')]);
-    assert.deepEqual(archiveProjectFolders('nope', {}, h.deps), { ok: true, disabled: [], failed: [] });
+    assert.deepEqual(archiveProjectFolders('nope', {}, h.deps), { ok: true, archivedAt: 'T1', disabled: [], failed: [] });
   } finally { h.cleanup(); }
 });
 

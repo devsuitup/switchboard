@@ -155,8 +155,20 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         const completedArchive = await request('completeArchive', accepted, completed);
         deps.notify();
         if (!completedArchive) return { error: 'archive changed before schedule completion', disabled };
-        return { ok: true, disabled, failed };
+        return { ok: true, archivedAt: now, disabled, failed };
       } catch (error) { return { error: error.message, disabled }; }
+    },
+    async undoArchiveProjectFolders(groups, archivedAt, deps) {
+      const result = await request('undoArchiveProjectFolders', groups, archivedAt);
+      if (result.error) return result;
+      const enabled = [], failed = [];
+      for (const { filePaths, projectRoot } of result.schedules) {
+        const restored = (deps.reenable || archive.reenableScheduleFiles)(filePaths, projectRoot);
+        enabled.push(...restored.enabled);
+        failed.push(...restored.failed.map(f => ({ name: f.name, error: f.error })));
+      }
+      deps.notify();
+      return { ok: true, enabled, failed };
     },
     async applyAndPersistArchived(projects, showArchived) {
       await ready;

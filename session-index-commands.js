@@ -90,7 +90,8 @@ function createWriterCommands(db) {
       const offers = { ...(db.getSetting('scheduleReenableOffers') || {}) };
       for (const { entry, record, disabledFiles } of entries) {
         const offered = offers[entry]?.disabledSchedules || [];
-        archived[entry] = { ...record, disabledSchedules: offered.filter(file => disabledFiles.includes(file)) };
+        archived[entry] = { ...record, disabledSchedules: offered.filter(file => disabledFiles.includes(file)),
+          disabledByArchive: [], priorOffer: offers[entry] || null };
         delete offers[entry];
       }
       db.setSetting('archivedProjects', archived);
@@ -101,10 +102,20 @@ function createWriterCommands(db) {
       const archived = { ...(db.getSetting('archivedProjects') || {}) };
       if (entries.some(({ entry, record }) => JSON.stringify(archived[entry]) !== JSON.stringify(record))) return false;
       for (const { entry, record } of entries) {
-        archived[entry] = { ...record, disabledSchedules: [...new Set([...record.disabledSchedules, ...(disabled[entry] || [])])] };
+        archived[entry] = { ...record, disabledSchedules: [...new Set([...record.disabledSchedules, ...(disabled[entry] || [])])],
+          disabledByArchive: disabled[entry] || [] };
       }
       db.setSetting('archivedProjects', archived);
       return true;
+    },
+    undoArchiveProjectFolders(groups, archivedAt) {
+      const schedules = [];
+      const result = archive.undoArchiveProjectFolders(groups, archivedAt, { ...settings, notify() {},
+        reenable(filePaths, projectRoot) {
+          schedules.push({ filePaths, projectRoot });
+          return { enabled: [], failed: [] };
+        } });
+      return result.error ? result : { ...result, schedules };
     },
     completeRepairFolders(folders) {
       const pending = db.getSetting('bridge_uuid_reindex_folders');

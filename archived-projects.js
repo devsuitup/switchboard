@@ -237,6 +237,7 @@ function archiveProjectFolders(groups, opts, deps) {
     const offers = { ...(getSetting(OFFERS_KEY) || {}) };
     const entries = targets.map(({ group, alias }, i) => {
       const entry = archivedEntry(alias, group.projectPath);
+      const priorOffer = offers[entry] || null;
       const offered = (offers[entry] && Array.isArray(offers[entry].disabledSchedules)) ? offers[entry].disabledSchedules : [];
       delete offers[entry];
       return {
@@ -245,6 +246,8 @@ function archiveProjectFolders(groups, opts, deps) {
           archivedAt,
           knownSessionIds: knownIdsForGroup({ projects, activeSessions: deps.activeSessions, diskIds: diskIds[i], alias, projectPath: group.projectPath }),
           disabledSchedules: offered.filter(filePath => readEnabled(filePath) === 'false'),
+          disabledByArchive: [],
+          priorOffer,
         },
       };
     });
@@ -267,6 +270,7 @@ function archiveProjectFolders(groups, opts, deps) {
         }
         if (res.ok) {
           entries[i].record.disabledSchedules.push(schedule.filePath);
+          entries[i].record.disabledByArchive.push(schedule.filePath);
           disabled.push(schedule.name);
         } else {
           failed.push({ name: schedule.name, error: res.error });
@@ -275,10 +279,36 @@ function archiveProjectFolders(groups, opts, deps) {
     });
     if (disabled.length > 0) writeEntries();
     deps.notify();
-    return { ok: true, disabled, failed };
+    return { ok: true, archivedAt, disabled, failed };
   } catch (err) {
     return { error: err.message, disabled };
   }
+}
+
+function undoArchiveProjectFolders(groups, archivedAt, { getSetting, setSetting, notify, reenable = reenableScheduleFiles }) {
+  const valid = validArchiveGroups(groups);
+  if (!valid.length || valid.length !== groups.length) return { error: 'invalid archive groups' };
+  if (typeof archivedAt !== 'string' || !archivedAt) return { error: 'invalid archive timestamp' };
+  const archived = { ...(getSetting(SETTING_KEY) || {}) };
+  const targets = [...new Map(valid.map(group => [archivedEntry(parseFolderKey(group.folderKey).alias, group.projectPath), group])).entries()];
+  if (targets.some(([entry]) => !archived[entry] || archived[entry].archivedAt !== archivedAt)) return { error: 'stale archive Undo' };
+  const offers = { ...(getSetting(OFFERS_KEY) || {}) };
+  const records = targets.map(([entry, group]) => ({ entry, group, record: archived[entry] }));
+  for (const { entry, record } of records) {
+    delete archived[entry];
+    if (record.priorOffer) offers[entry] = record.priorOffer;
+    else delete offers[entry];
+  }
+  setSetting(SETTING_KEY, archived);
+  setSetting(OFFERS_KEY, offers);
+  const enabled = [], failed = [];
+  for (const { group, record } of records) {
+    const result = reenable(record.disabledByArchive || [], group.projectPath);
+    enabled.push(...result.enabled);
+    failed.push(...result.failed.map(f => ({ name: f.name, error: f.error })));
+  }
+  notify();
+  return { ok: true, enabled, failed };
 }
 
 /** reenable-project-schedules: turn back on the folder's offered schedules; failures stay offered. */
@@ -312,5 +342,5 @@ function dismissReenableOffer(projectPath, folderKey, { getSetting, setSetting, 
 module.exports = {
   archivedEntry, knownIdsForGroup, applyArchivedProjects, applyAndPersistArchived,
   clearArchivedEntry, retireArchivedEntries, archivePlanForGroups, reenableScheduleFiles,
-  validArchiveGroups, archiveProjectFolders, reenableOfferedSchedules, dismissReenableOffer,
+  validArchiveGroups, archiveProjectFolders, undoArchiveProjectFolders, reenableOfferedSchedules, dismissReenableOffer,
 };

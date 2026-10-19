@@ -1981,7 +1981,7 @@ passes its host-qualified folder key. Tests: `project-settings-archive.test.js`.
 **Archive folder** on a project header hides the folder, and its nested
 worktree folders, until a session it did not hold at archive time appears in
 it. The state is the `archivedProjects` settings row:
-`{ [entry]: { archivedAt, knownSessionIds } }`.
+`{ [entry]: { archivedAt, knownSessionIds, disabledSchedules, disabledByArchive, priorOffer } }`.
 
 `get-projects` filters these groups on main using the acknowledged settings
 mirror. Unchanged archive state does not enter the writer queue. Reappearance
@@ -2007,12 +2007,23 @@ lists never cross the writer transport. See `session-index-writer.md` for orderi
   3. a group whose entry remains is dropped unless `showArchived`, so Show
      archived and search (which renders from `cachedAllProjects`) still see it.
   The setting is written back only when an entry was cleared.
-- **Main-process side.** `archiveProjectFolders`, `reenableOfferedSchedules`
-  and `dismissReenableOffer` in `archived-projects.js` hold the logic of the
-  `archive-project`, `reenable-project-schedules` and
-  `dismiss-schedule-reenable-offer` handlers, with every effect injected
-  (`archiveDeps()` in `main.js`); they are synchronous, so no read-modify-write
-  of a setting has an `await` in it.
+- **Main-process side.** `archive-project`, `undo-archive-project`,
+  `reenable-project-schedules` and `dismiss-schedule-reenable-offer` use the
+  session-index writer with effects supplied by `archiveDeps()` in `main.js`.
+  Synchronous setting changes run in `session-index-commands.js` on the worker;
+  schedule file effects stay on main, outside SQLite transactions. The injectable
+  helpers in `archived-projects.js` also exercise the reverse path directly.
+- **Folder Undo (#565 PR5a).** Archive returns its `archivedAt`. Each record
+  preserves the consumed `scheduleReenableOffers[entry]` as `priorOffer` (or null),
+  and records only this Archive's successful disables as `disabledByArchive`.
+  `disabledSchedules` still includes earlier offered files that remain off.
+  `undoArchiveProjectFolders(groups, archivedAt)` checks every group's current
+  timestamp before any mutation; a missing or changed record refuses the whole
+  Undo. The writer removes the entries without retiring them into new offers,
+  restores each prior offer, then acknowledges the exact file lists to main.
+  Main calls `reenableScheduleFiles` with each group's own root and reports
+  `enabled`/`failed`; files already changed or deleted are skipped. Undo does not
+  alter session archive flags or restart processes. No renderer calls it yet.
 - **Snapshot.** `archiveProjectFolders` computes `knownSessionIds` per group,
   after `refreshFolder` of every folder of the group (the `row.folder` of its
   cached rows with the same alias and entry, plus its encoded folder, kept when
