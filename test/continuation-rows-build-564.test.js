@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const cache = require('../session-cache');
 const { encodeProjectPath } = require('../encode-project-path');
 
-function fixture(t) {
+function fixture(t, { active = new Map(), global = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rollup-564-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const folder = encodeProjectPath(dir);
@@ -16,8 +16,8 @@ function fixture(t) {
     modified: `2026-10-19T00:00:0${i}.000Z`, summary: 'prompt', firstPrompt: 'prompt', messageCount: i + 1,
     fileMtime: 'now', continuationIndex: JSON.stringify({ format: 3, complete: true, mtime: 'now', ids: i < 2 ? [['b', 'c'][i]] : [] }) }));
   const meta = new Map();
-  cache.init({ PROJECTS_DIR: dir, activeSessions: new Map(), getMainWindow: () => null, log: console,
-    db: { getAllCached: () => rows, getAllMeta: () => meta, getAllFolderMeta: () => new Map(), getSetting: () => null,
+  cache.init({ PROJECTS_DIR: dir, activeSessions: active, getMainWindow: () => null, log: console,
+    db: { getAllCached: () => rows, getAllMeta: () => meta, getAllFolderMeta: () => new Map(), getSetting: key => key === 'global' ? global : null,
       getMeta: id => meta.get(id), getCachedByFolder: () => rows,
       getFolderMeta: () => ({ projectPath: dir }), setFolderMeta() {},
       upsertCachedSessions: updated => { for (const r of updated) Object.assign(rows.find(old => old.sessionId === r.sessionId), r); },
@@ -93,4 +93,48 @@ test('22: refresh reports a multi-id continuation change with unchanged display 
   r.fileMtime = 'old';
   assert.equal(cache.refreshFolder(h.folder, { files: new Set(['a.jsonl']) }), true);
   assert.deepEqual(JSON.parse(r.continuationIndex).ids, ['m', 'd']);
+});
+
+for (const [name, options] of [
+  ['P1: a running SDK continuation part keeps its row listed', { active: new Map([['b', { exited: false }]]) }],
+  ['P1b: a saved SDK continuation part keeps its row listed', { global: { openWorkingSet: [{ sessionId: 'b' }] } }],
+]) {
+  test(name, t => {
+    const h = fixture(t, options);
+    for (const r of h.rows) r.entrypoint = 'sdk-py';
+    const sessions = h.list();
+    assert.deepEqual(sessions.map(s => s.sessionId), ['a']);
+    assert.deepEqual(sessions[0].mergedMemberIds, ['c', 'b']);
+  });
+}
+
+test('P12: subagents of SDK rolled parts and mirrors follow their visible root', t => {
+  const h = fixture(t);
+  h.rows[0].entrypoint = 'cli';
+  h.rows[1].entrypoint = 'sdk-py';
+  h.rows[2].entrypoint = 'sdk-py';
+  h.rows.push({ ...h.rows[2], sessionId: 'm', mergedIntoSessionId: 'c' });
+  for (const parentSessionId of ['b', 'c', 'm']) {
+    h.rows.push({ ...h.rows[1], sessionId: `sub:${parentSessionId}:1`, parentSessionId, continuationIndex: null });
+  }
+  assert.deepEqual(h.list().map(s => s.sessionId).sort(), ['a', 'sub:b:1', 'sub:c:1', 'sub:m:1']);
+  h.rows[0].entrypoint = 'sdk-py';
+  assert.deepEqual(h.list(), []);
+});
+
+test('notification: reordering continuation ids does not refresh the sidebar', t => {
+  const h = fixture(t);
+  h.rows.splice(1);
+  const r = h.rows[0];
+  const dir = path.join(h.dir, h.folder);
+  fs.mkdirSync(dir);
+  const file = path.join(dir, 'a.jsonl');
+  fs.writeFileSync(file, [
+    { type: 'user', sessionId: 'a', cwd: h.dir, message: { content: 'prompt' } },
+    ...['b', 'm'].map(id => ({ type: 'continued-in', sessionId: 'a', continuedInSessionId: id })),
+  ].map(JSON.stringify).join('\n') + '\n');
+  r.fileMtime = fs.statSync(file).mtime.toISOString();
+  r.continuationIndex = JSON.stringify({ format: 3, complete: true, mtime: r.fileMtime, ids: ['m', 'b'], stamp: { size: '0' } });
+  assert.equal(cache.refreshFolder(h.folder, { files: new Set(['a.jsonl']) }), 'activity');
+  assert.deepEqual(JSON.parse(r.continuationIndex).ids, ['b', 'm']);
 });

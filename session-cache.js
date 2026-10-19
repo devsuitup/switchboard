@@ -278,7 +278,7 @@ function sidebarContinuation(row) {
   if (!index) return null;
   if (index.format !== 3 || !index.complete || index.unresolved || !Array.isArray(index.ids)
     || (row.fileMtime && index.mtime !== row.fileMtime)) return false;
-  return index.ids.length ? index.ids.map(id => String(id).toLowerCase()) : null;
+  return index.ids.length ? index.ids.map(id => String(id).toLowerCase()).sort() : null;
 }
 
 function sidebarRowState(row) {
@@ -713,7 +713,7 @@ function revealIfSdkSession(sessionId) {
 }
 
 // see .ai/contexts/session-cache.md ("SDK-launched sessions")
-function hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent) {
+function hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent, rollup) {
   if (!(global.hideSdkSessions ?? SETTING_DEFAULTS.hideSdkSessions)) return new Set();
   const kept = new Set((global.openWorkingSet || []).map(item => item && item.sessionId));
   for (const [sessionId, session] of activeSessions || []) {
@@ -721,10 +721,12 @@ function hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent) {
   }
   const hidden = new Set();
   for (const row of cachedRows) {
+    if (row.parentSessionId || row.mergedIntoSessionId || rollup.has(row.sessionId)) continue;
     if (!isSdkEntrypoint(row.entrypoint) || kept.has(row.sessionId)) continue;
     const children = mergedChildrenByParent.get(row.sessionId) || [];
-    if (children.some(child => !isSdkEntrypoint(child.entrypoint))) continue;
+    if (children.some(child => !isSdkEntrypoint(child.entrypoint) || kept.has(child.sessionId))) continue;
     hidden.add(row.sessionId);
+    for (const child of children) hidden.add(child.sessionId);
   }
   return hidden;
 }
@@ -784,7 +786,7 @@ function buildProjectsFromCache(showArchived) {
     if (!mergedChildrenByParent.has(rootId)) mergedChildrenByParent.set(rootId, []);
     mergedChildrenByParent.get(rootId).push(row);
   }
-  const hiddenSdkIds = hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent);
+  const hiddenSdkIds = hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent, rollup);
   const sdkOnlyProjectKeys = new Set();
 
   const cachedById = new Map(cachedRows.map(r => [r.sessionId, r]));

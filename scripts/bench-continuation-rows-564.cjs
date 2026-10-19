@@ -6,6 +6,7 @@ const { execFileSync } = require('node:child_process');
 const { performance } = require('node:perf_hooks');
 const current = require('../session-cache');
 const root = path.resolve(__dirname, '..');
+const baselineRef = process.argv[2] || execFileSync('git', ['merge-base', 'HEAD', 'origin/main'], { cwd: root, encoding: 'utf8' }).trim();
 function baselineModule(file, overrides = {}) {
   const filename = path.join(root, file);
   const mod = new Module(filename, module);
@@ -13,7 +14,7 @@ function baselineModule(file, overrides = {}) {
   mod.paths = Module._nodeModulePaths(root);
   const original = mod.require.bind(mod);
   mod.require = id => overrides[id] || original(id);
-  mod._compile(execFileSync('git', ['show', `HEAD:${file}`], { cwd: root, encoding: 'utf8' }), filename);
+  mod._compile(execFileSync('git', ['show', `${baselineRef}:${file}`], { cwd: root, encoding: 'utf8' }), filename);
   return mod.exports;
 }
 const baseline = baselineModule('session-cache.js', { './sidebar-bg-sessions': baselineModule('sidebar-bg-sessions.js') });
@@ -40,7 +41,7 @@ const results = [measure('5000 rows, 100 edges')];
 for (const row of rows) row.continuationIndex = row.continuationIndex.replace(/"ids":\[[^\]]*\]/, '"ids":[]');
 results.push(measure('5000 rows, no edges'));
 const result = { node: process.version, head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
-  rows: rows.length, warmRuns: 20, results };
+  baselineRef, rows: rows.length, warmRuns: 20, results };
 process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-if (process.argv[2]) fs.writeFileSync(process.argv[2], JSON.stringify(result, null, 2) + '\n');
+if (process.argv[3]) fs.writeFileSync(process.argv[3], JSON.stringify(result, null, 2) + '\n');
 if (results.some(item => item.addedMs > 10)) process.exitCode = 1;

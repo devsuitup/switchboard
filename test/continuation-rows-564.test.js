@@ -41,6 +41,14 @@ test('8: a dangling sibling counts as a branch', () => {
 test('9: a single dangling tail ends the chain', () => {
   assert.deepEqual(roll([row('a', ['b']), row('b', ['missing'])]), { b: 'a' });
 });
+
+test('P10: an unproven final index with a sole missing target ends the chain', () => {
+  for (const extra of [{ mtime: 'old' }, { complete: false }, { unresolved: true }]) {
+    assert.deepEqual(roll([row('a', ['b']), row('b', [], { continuationIndex: index(['zz'], extra) })]), { b: 'a' });
+    assert.deepEqual(roll([row('a', ['b']), row('b', [], { continuationIndex: index(['zz', 'missing'], extra) })]), {});
+    assert.deepEqual(roll([row('a', ['b']), row('b', [], { continuationIndex: index(['zz', 'a'], extra) })]), {});
+  }
+});
 test('9b: an unproven raw incoming edge blocks any chain member including mirrors', () => {
   for (const continuationIndex of [index(['m'], { mtime: 'old' }), index(['m'], { complete: false }),
     index(['m'], { unresolved: true }), index(['m'], { format: 2 }), '{"ids":["m"],broken']) {

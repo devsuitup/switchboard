@@ -212,9 +212,10 @@ function continuationRollup(rows) {
         || node.row.folder !== root.row.folder || chain.length > 32) { valid = false; break; }
       chain.push(node.row.sessionId);
       if (!node.next.size) break;
-      if (node.next.size > 1 || !node.parts.every(part => read(part).proven)) { valid = false; break; }
+      if (node.next.size > 1) { valid = false; break; }
       const next = nodes.get(node.next.values().next().value);
       if (!next) break;
+      if (!node.parts.every(part => read(part).proven)) { valid = false; break; }
       if (next.incoming.size !== 1) { valid = false; break; }
       node = next;
     }
