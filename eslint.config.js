@@ -205,6 +205,7 @@ const rendererCrossFileGlobals = {
   sessionItemEl: 'readonly',
   rowSessionIds: 'readonly',
   rowHeadId: 'readonly',
+  rowHeadSession: 'readonly',
   rowOpenId: 'readonly',
   localMergedMemberRows: 'readonly',
   mergedRowSnapshot: 'readonly',

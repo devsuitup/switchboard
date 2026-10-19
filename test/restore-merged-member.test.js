@@ -17,12 +17,13 @@ async function waitUntil(check, { tries = 500, intervalMs = 10 } = {}) {
   return check();
 }
 
-function setup(t, { id = 'B', ids = [id], members = ['B'], headSessionId, mode = 'auto', live = false, liveId = id, fresh = false, indexed = true, remembered = false } = {}) {
+function setup(t, { id = 'B', ids = [id], members = ['B'], headSessionId = members[0], mode = 'auto', live = false, liveId = id, liveDescriptor = LIVE, fresh = false, indexed = true, remembered = false } = {}) {
   const h = setupSidebarDom();
   t.after(() => h.destroy());
   const saved = ids.map(sessionId => ({ sessionId, projectPath: PROJECT, active: sessionId === ids.at(-1), ...(fresh ? { fresh: true } : {}) }));
   const settings = { global: { restoreOnStartup: mode, openWorkingSet: saved } };
   const spawned = [];
+  const attached = [];
   const continuationQueries = [];
   const liveQueries = [];
   const row = {
@@ -41,11 +42,12 @@ function setup(t, { id = 'B', ids = [id], members = ['B'], headSessionId, mode =
     },
     getSessionsLiveElsewhere: async ids => {
       liveQueries.push([...ids]);
-      return live && ids.includes(liveId) ? { [liveId]: LIVE } : {};
+      return live && ids.includes(liveId) ? { [liveId]: liveDescriptor } : {};
     },
-    getSessionLiveElsewhere: async sessionId => live && sessionId === liveId ? LIVE : null,
-    openTerminal: async (sessionId, projectPath) => {
-      spawned.push({ sessionId, projectPath });
+    getSessionLiveElsewhere: async sessionId => live && sessionId === liveId ? liveDescriptor : null,
+    openTerminal: async (sessionId, projectPath, _sandboxed, options) => {
+      if (options?.type === 'attach') attached.push({ sessionId, jobId: options.jobId });
+      else spawned.push({ sessionId, projectPath });
       return { ok: true };
     },
   });
@@ -96,15 +98,15 @@ function setup(t, { id = 'B', ids = [id], members = ['B'], headSessionId, mode =
   };
   const assertRunningRow = () => {
     h.sidebar.renderProjects(projects);
-    const el = h.window.sessionItemEl(id);
+    const el = h.window.sessionItemEl(headSessionId);
     assert.equal(el?.dataset.sessionId, 'A', 'the member uses the primary sidebar row');
     assert.ok(el.classList.contains('has-running-pty'), 'the merged row has a running PTY');
     assert.ok(el.querySelector('.session-icon').classList.contains('running'), 'the merged row shows its running icon');
     assert.ok(el.classList.contains('active'), 'the merged row is active');
-    assert.equal(h.window.rowOpenId(row), id, 'the row follows the restored member');
+    assert.equal(h.window.rowOpenId(row), headSessionId, 'the row follows the restored head');
     assert.deepEqual([...h.window.sessionMap.keys()], ['A'], 'the sidebar map keeps row primaries only');
   };
-  return { ...h, ...functions, saved, settings, spawned, continuationQueries, liveQueries, persist, assertRunningRow };
+  return { ...h, ...functions, saved, settings, spawned, attached, continuationQueries, liveQueries, persist, assertRunningRow };
 }
 
 test('auto restore reopens saved merged member B and persists B on active row A', async t => {
@@ -116,34 +118,36 @@ test('auto restore reopens saved merged member B and persists B on active row A'
   h.assertRunningRow();
 });
 
-test('auto restore of saved primary A is unchanged', async t => {
+test('auto restore of saved primary A follows head B', async t => {
   const h = setup(t, { id: 'A' });
   await h.restoreWorkingSet();
-  assert.deepEqual(h.spawned, [{ sessionId: 'A', projectPath: PROJECT }]);
-  assert.deepEqual(await h.persist(), h.saved);
+  assert.deepEqual(h.spawned, [{ sessionId: 'B', projectPath: PROJECT }]);
+  assert.deepEqual(await h.persist(), [{ sessionId: 'B', projectPath: PROJECT, active: true }]);
   h.assertRunningRow();
 });
 
 for (const ids of [['B', 'A'], ['A', 'B'], ['B', 'C']]) {
-  test(`auto restore spawns every saved id in order [${ids.join(', ')}]`, async t => {
-    const h = setup(t, { ids, members: ['C', 'B'] });
+  test(`auto restore reuses one head tab for saved row members [${ids.join(', ')}]`, async t => {
+    const headSessionId = ids.includes('C') ? 'C' : 'B';
+    const h = setup(t, { ids, members: headSessionId === 'C' ? ['C', 'B'] : ['B'] });
     await h.restoreWorkingSet();
-    assert.deepEqual(h.spawned.map(s => s.sessionId), ids, 'restore must spawn every saved id in saved order');
-    assert.deepEqual(await h.persist(), h.saved, 'every restored id keeps its saved order and active state');
+    assert.deepEqual(h.spawned.map(s => s.sessionId), [headSessionId]);
+    assert.equal(h.window.openSessions.size, 1);
+    assert.deepEqual(await h.persist(), [{ sessionId: headSessionId, projectPath: PROJECT, active: true }]);
   });
 }
 
-test('auto restore persists both B and primary A when B was saved first', async t => {
+test('auto restore persists one tab when B and primary A were saved', async t => {
   const h = setup(t, { ids: ['B', 'A'] });
   await h.restoreWorkingSet();
-  assert.deepEqual(await h.persist(), h.saved, 'the saved primary A must not disappear after member B opens');
+  assert.deepEqual(await h.persist(), [{ sessionId: 'B', projectPath: PROJECT, active: true }]);
 });
 
 test('saved merged member B live elsewhere is skipped, checked by B and kept', async t => {
   const h = setup(t, { live: true });
   await h.restoreWorkingSet();
   assert.deepEqual(h.spawned, []);
-  assert.deepEqual(h.liveQueries, [['B']], 'liveness must be checked for member B');
+  assert.ok(h.liveQueries.some(ids => ids.includes('B') && ids.includes('A')), 'liveness must cover every row member');
   assert.deepEqual(await h.persist(), [{ ...h.saved[0], active: false }], 'the skipped member stays saved like any live-elsewhere session');
   assert.match(h.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /live outside this window in pid 4242/);
   assert.equal(h.document.getElementById('restore-unavailable-toast'), null);
@@ -154,8 +158,27 @@ test('saved primary A with head B live elsewhere is skipped with a notice naming
   await h.restoreWorkingSet();
   assert.deepEqual(h.spawned, [], 'restore must not resume a conversation whose head is live elsewhere');
   assert.match(h.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /B.*live outside this window in pid 4242/);
-  assert.deepEqual(await h.persist(), [{ ...h.saved[0], active: false }], 'the skipped primary stays saved');
+  assert.deepEqual(await h.persist(), [{ sessionId: 'B', projectPath: PROJECT, active: false }], 'the held entry follows the head');
   assert.equal(h.document.getElementById('restore-unavailable-toast'), null);
+});
+
+test('saved root A is held without prompting when middle B has a live bg job', async t => {
+  const h = setup(t, { id: 'A', members: ['C', 'B'], live: true, liveId: 'B', liveDescriptor: { ...LIVE, kind: 'bg', jobId: 'middle-job' } });
+  await h.restoreWorkingSet();
+  assert.deepEqual(h.attached, [], 'restore must not attach to the middle part job');
+  assert.deepEqual(h.spawned, [], 'a live middle part must hold the conversation');
+  assert.equal(h.window.openSessions.size, 0);
+  assert.deepEqual(await h.persist(), [{ sessionId: 'C', projectPath: PROJECT, active: false }]);
+  assert.match(h.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /B.*live outside this window/);
+});
+
+test('saved root A still attaches when head C has a live bg job', async t => {
+  const h = setup(t, { id: 'A', members: ['C', 'B'], live: true, liveId: 'C', liveDescriptor: { ...LIVE, kind: 'bg', jobId: 'head-job' } });
+  await h.restoreWorkingSet();
+  assert.deepEqual(h.attached, [{ sessionId: 'C', jobId: 'head-job' }]);
+  assert.deepEqual(h.spawned, [], 'attaching must not spawn a resume');
+  assert.equal(h.window.openSessions.size, 1);
+  assert.deepEqual(await h.persist(), [{ sessionId: 'C', projectPath: PROJECT, active: true, bg: true }]);
 });
 
 test('ask mode offers saved merged member B, keeps it pending and restores B on consent', async t => {

@@ -361,6 +361,10 @@ to `runRestore`. The notice uses that part's id when it differs from the saved
 session, while the saved entry remains keyed by the requested id. Reporting
 the guard's result avoids an extra liveness query just to build the notice.
 `test/restore-merged-member.test.js` covers saved A with head B live elsewhere.
+During automatic restore, permission to attach a background job applies only
+to the id being opened. A live background job on another part holds the row
+without prompting; a job on the followed head can still attach. The same test
+file covers both cases and one-tab restore with a production-shaped head id.
 
 **The batch is read once, before the first spawn, on purpose.** A CLI started
 elsewhere on one of the batch's sessions during the restore stagger (500 ms per
@@ -599,7 +603,7 @@ for an assumption a normal unit test can pin.
 
 ## Conversation continuations
 
-A proven local linear chain now shares one sidebar row under its original part (#564), including compaction mirrors. Branches, convergence, remote or cross-project links stay separate; `/clear` has no link. Clicking a closed row opens its newest-modified head without a continuation prompt for ids already on that row, and checks every part for liveness elsewhere. Automatic restore still follows a saved part to its terminal id, which may differ from the newest-modified head. See [Continuation rows](session-cache.md#continuation-rows-564) for index proof, dangling-target and 32-hop rules.
+A proven local linear chain now shares one sidebar row under its original part (#564), including compaction mirrors. Branches, convergence, remote or cross-project links stay separate; `/clear` has no link. Clicking a closed row opens its newest-modified head without a continuation prompt for ids already on that row, and checks every part for liveness elsewhere. Automatic restore resolves the saved part with the row's members and head, using `rowHeadSession(row, savedId)` for a saved member (#722). Candidates already on the row are excluded, including same-bridge-group alternatives; no remaining candidate opens the row's head, one external candidate is followed, and real branches remain held. Following the head rewrites the saved working-set entry to that id. Several saved parts of one row reuse one tab, and the final open checks every row member for liveness elsewhere. See [Continuation rows](session-cache.md#continuation-rows-564) for index proof, dangling-target and 32-hop rules.
 
 For an open interactive conversation moving to the daemon, #639 adds the
 background proof path in `session-transitions.js`. A single complete fresh
@@ -631,7 +635,7 @@ failures and incomplete tails do not block resume. File scanning yields between
 chunks and has no total byte cap; chunk size only controls pacing.
 
 `resolveResumeSession` is shared by restore and sidebar clicks. An automatic
-restore selects exactly one terminal id. Several ids, unresolved graphs and
+restore selects exactly one terminal id outside the row, or opens the row's head when none remain, rewriting the saved entry to that id. Several external ids, unresolved graphs and
 failed lookups hold the saved entry and join the non-blocking restore notice,
 which names the original entry. A disk-present, unindexed continuation says
 it is waiting for indexing; held entries retry once when indexing finishes,

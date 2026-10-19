@@ -28,7 +28,7 @@ async function guardResume(session, { automatic = false, api, confirm, alert = t
     for (const id of sessionIds) {
       if (!liveById[id]) continue;
       const partVerdict = await guardResume({ sessionId: id }, {
-        automatic, api, confirm, alert, live: liveById[id], allowBgAttach,
+        automatic, api, confirm, alert, live: liveById[id], allowBgAttach: allowBgAttach && id === session.sessionId,
       });
       if (partVerdict === false) {
         onBlocked?.({ sessionId: id, live: liveById[id] });
