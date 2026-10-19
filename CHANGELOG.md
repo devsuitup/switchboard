@@ -19,7 +19,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Automated command chains now recognize a recorded step and continue even when Claude keeps writing large API requests after it during a long turn. (#730)
-- The sidebar keeps updating other projects when one project cannot be read, and stops retrying a deleted transcript. (#718)
+- The sidebar keeps updating other projects when one project cannot be read. (#718)
 - A session moved to the background with a typed `/bg` keeps one sidebar row and its name after a restart, including when its original transcript is written again. An already-open background tab keeps the conversation's name, pin and archive settings. (#718)
 - A restored conversation now reopens at its latest part and is no longer held with a notice when its apparent alternatives are its own parts. Real branches still wait for a choice from the sidebar. (#722)
 - A conversation stays held during startup restore when an older part is running in the background, instead of attaching to that older part's job. A background job on its latest part still attaches. (#722)
