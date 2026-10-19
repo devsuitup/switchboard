@@ -102,6 +102,9 @@ function openChoiceDialog({
           text.appendChild(detail);
         }
         row.append(radio, text);
+        row.addEventListener('click', (event) => {
+          if (!radio.disabled && event.target !== radio && !label.contains(event.target)) radio.click();
+        });
         group.appendChild(row);
         radios.push({ option, radio });
       }

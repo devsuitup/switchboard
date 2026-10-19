@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { ESLint } = require('eslint');
 const { setupSidebarDom } = require('./dom-setup');
 
@@ -35,6 +37,63 @@ test('C2: appChoose returns the radio clicked after preselection and preserves l
     radio(ctx, 'c').focus();
     key(ctx, 'Enter');
     assert.deepEqual({ ...await pending }, { choice: 'c' });
+  } finally { ctx.destroy(); }
+});
+
+for (const target of ['detail', 'row padding']) {
+  test(`C2: clicking the option ${target} selects it before Enter`, async () => {
+    const ctx = setupSidebarDom();
+    try {
+      const pending = ctx.window.appChoose({ options, selectedId: 'b' });
+      const input = radio(ctx, 'c');
+      const row = input.closest('.choice-dialog-choice');
+      (target === 'detail' ? row.querySelector('.choice-dialog-detail') : row).click();
+      assert.equal(input.checked, true);
+      assert.equal(radio(ctx, 'b').checked, false);
+      key(ctx, 'Enter');
+      assert.deepEqual({ ...await pending }, { choice: 'c' });
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('C2: clicking an option label activates its radio exactly once', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const pending = ctx.window.appChoose({ options, selectedId: 'b' });
+    const input = radio(ctx, 'c');
+    let clicks = 0;
+    let changes = 0;
+    input.addEventListener('click', () => clicks++);
+    input.addEventListener('change', () => changes++);
+    input.labels[0].click();
+    assert.equal(input.checked, true);
+    assert.equal(radio(ctx, 'b').checked, false);
+    assert.equal(clicks, 1);
+    assert.equal(changes, 1);
+    key(ctx, 'Enter');
+    assert.deepEqual({ ...await pending }, { choice: 'c' });
+  } finally { ctx.destroy(); }
+});
+
+test('C4: clicking a disabled option row does nothing and uses a default cursor', async (t) => {
+  const ctx = setupSidebarDom();
+  try {
+    const style = ctx.document.createElement('style');
+    style.textContent = fs.readFileSync(path.join(__dirname, '../public/style.css'), 'utf8');
+    ctx.document.head.append(style);
+    const pending = ctx.window.appChoose({ options: [...options, { id: 'd', label: 'Unavailable', detail: 'Details D', disabled: true }], selectedId: 'b' });
+    const input = radio(ctx, 'd');
+    const click = t.mock.method(input, 'click');
+    const row = input.closest('.choice-dialog-choice');
+    assert.equal(ctx.window.getComputedStyle(row).cursor, 'default');
+    assert.equal(ctx.window.getComputedStyle(radio(ctx, 'b').closest('.choice-dialog-choice')).cursor, 'pointer');
+    row.click();
+    row.querySelector('.choice-dialog-detail').click();
+    assert.equal(click.mock.callCount(), 0);
+    assert.equal(input.checked, false);
+    assert.equal(radio(ctx, 'b').checked, true);
+    key(ctx, 'Enter');
+    assert.deepEqual({ ...await pending }, { choice: 'b' });
   } finally { ctx.destroy(); }
 });
 

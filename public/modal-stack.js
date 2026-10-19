@@ -81,7 +81,7 @@ function routeModalKey(event) {
     if (!controls.length) { modal.overlay.focus(); return; }
     const active = document.activeElement;
     let at = controls.indexOf(active);
-    if (at === -1 && active.matches('input[type="radio"]') && active.name) {
+    if (at === -1 && active?.matches?.('input[type="radio"]') && active.name) {
       at = controls.findIndex(control => control.matches('input[type="radio"]') && control.name === active.name && control.form === active.form);
     }
     const next = at === -1 ? (event.shiftKey ? controls.length - 1 : 0)
