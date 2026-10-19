@@ -92,7 +92,7 @@ A row shows, from left to right:
 - the **pin**;
 - the status icon — see [Status indicators](notifications.md);
 - the session's name, then its age, message count, the first segment of its
-  id, and, while the `claude` CLI reports one, its status (`busy`, `idle`,
+  latest-modified part's id, and, while the `claude` CLI reports one, its status (`busy`, `idle`,
   `waiting`) and how long ago it changed;
 - a host badge for a remote session, a terminal badge for a plain terminal.
 
@@ -121,6 +121,15 @@ On a merged conversation, **Fork session**, **Resume with config** and
 **View messages** use that latest-modified part too. View messages shows
 that part's transcript. The conversation's name, pin and archived flag
 belong to its original part.
+
+Such a row also shows **N parts** next to the short id. Its tooltip explains:
+"This conversation has N parts: compaction mirrors and continuations of one exchange".
+Right-click the row and choose **Parts** to list every transcript, newest first,
+by its own name and last-active date. Each part offers **View messages** and
+**Copy id** (the full id). This also works for mirrored remote conversations.
+A missing name appears as **Untitled conversation**; a missing date as
+**last active unknown**. In the menu, arrow keys move between actions,
+Right opens Parts, Left returns, and Escape dismisses the menu.
 
 ### Names
 

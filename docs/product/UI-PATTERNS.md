@@ -94,10 +94,12 @@ Terminal light/dark themes do not change these slots. Grid cards use
    process alive anywhere, decides whether the Stop button shows
    (`has-running-pty` **or** `is-alive`, `style.css:1270-1273`; grid
    `app.js:1206`) without being called "Running".
-6. A merged row shows no mark that it stands for several transcripts
-   (no count, no badge; only `data-merged-member-ids`, `sidebar.js:1663`).
-   Its icon is the OR of members while its status text and short id are the
-   representative's (`sidebar.js:1715-1727`).
+6. **Resolved (#564, S14).** A merged row shows `N parts` beside the head's
+   short id. Its Parts menu lists every transcript newest first, with its
+   own name and last-active date, View messages and Copy id. Missing metadata
+   reads `Untitled conversation` and `last active unknown`. Local and remote
+   rows use the same menu (`public/sidebar.js`, `buildSessionItem` and
+   `appendSessionPartsMenu`).
 7. Colour is the only cue for the header dot, the grid dot and the
    slug-group dot (WCAG 1.4.1). Endless motion (LED, spinners, three
    `pulse-dot` cadences) has no `prefers-reduced-motion` path: `style.css`
@@ -115,8 +117,8 @@ Terminal light/dark themes do not change these slots. Grid cards use
 - Liveness/location ("here", "background", "remote", "elsewhere") shown as a
   badge, not as a state colour.
 - Detach writes a `Detached` exit label and banner, not `Stopped`.
-- A merged row shows its member count (e.g. `2 parts`) next to the short id,
-  with the members listed in the tooltip.
+- A merged row shows its part count (e.g. `2 parts`) next to the head's short id,
+  with the individual transcripts in its Parts menu (resolved, S14).
 - A `@media (prefers-reduced-motion: reduce)` block stops the spinner, LED and
   pulses (static marks instead); every dot that carries meaning has a text
   or shape companion.

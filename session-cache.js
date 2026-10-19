@@ -758,8 +758,8 @@ function buildProjectsFromCache(showArchived) {
   const hiddenSdkIds = hiddenSdkSessionIds(cachedRows, global, mergedChildrenByParent);
   const sdkOnlyProjectKeys = new Set();
 
-  const cachedIds = new Set(cachedRows.map(r => r.sessionId));
-  const isArchivedParent = (id) => cachedIds.has(id) && !!metaMap.get(id)?.archived;
+  const cachedById = new Map(cachedRows.map(r => [r.sessionId, r]));
+  const isArchivedParent = (id) => cachedById.has(id) && !!metaMap.get(id)?.archived;
 
   // Keyed on alias + projectPath: two hosts can hold the same absolute path.
   const projectMap = new Map();
@@ -933,6 +933,19 @@ function buildProjectsFromCache(showArchived) {
     hiddenProjects, metaMap, showArchived, jobs: localJobs,
   });
   for (const proj of projects) {
+    for (const session of proj.sessions) {
+      if (!session.mergedMemberIds?.length) continue;
+      session.conversationParts = [session.sessionId, ...session.mergedMemberIds].map(id => {
+        const part = cachedById.get(id);
+        return {
+          sessionId: id,
+          name: metaMap.get(id)?.name || null,
+          aiTitle: part?.aiTitle || null,
+          summary: part?.summary || null,
+          modified: part?.modified || null,
+        };
+      });
+    }
     proj.sessions.sort((a, b) => new Date(b.modified) - new Date(a.modified));
   }
 

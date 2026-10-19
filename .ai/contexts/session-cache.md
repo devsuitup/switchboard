@@ -93,6 +93,25 @@ Merged compaction mirrors choose `headSessionId` from the latest `modified`;
 a head change caused only by `modified` is accepted within the same 30s activity
 window. A new mirror adds a row and remains structural.
 
+Merged rows carry `conversationParts` in the existing projects payload: the
+root and each merged member's `sessionId`, metadata `name`, `aiTitle`, `summary`
+and own `modified` from the original cache row rather than the aggregate.
+It is assembled after the existing background merge so that already-grouped
+background continuations and their bridge members retain every part's data.
+An unindexed head keeps an unknown date. This uses the already-loaded cache
+rows and metadata map, including remote mirrors;
+it adds no IPC or database query. The renderer's merged-member index maps IDs
+back to the aggregate row, so it cannot supply per-part names or dates.
+`buildSessionItem` displays the head's short id and an `N parts` badge;
+`appendSessionPartsMenu` sorts those per-part timestamps newest first and uses
+the existing transcript viewer and main-process clipboard bridge. A missing
+name/date reads `Untitled conversation` / `last active unknown`. Parts extends
+the session context popover with an inline submenu, using its outside-click,
+Escape and page-scroll dismissal. Arrow keys, Enter/Space, Right/Left and
+Home/End navigate it; internal scrolling keeps it open.
+Keyboard events from a control outside the menu dismiss it without consuming
+that control's key or changing its focus.
+
 Busy and attention updates do not depend on this reload: main's OSC parser
 sends `cli-busy-state` and `terminal-notification`, the renderer calls
 `setActivity`/`setAttention` immediately, and its existing active-session poll
