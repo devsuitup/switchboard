@@ -299,7 +299,7 @@ row text `<state> · <status>` (`:227`); row icon from the session-state ladder
 **States**: Agents 🖥️ **External**; sidebar: an ordinary row with descriptor
 status text.
 
-**Actions**: Agents: **Transcript** only; Respawn/Delete disabled with
+**Actions**: Agents: **Resume** and **Transcript**; Respawn/Delete disabled with
 the pid and "Stop it from its sidebar row first" for a conversation open here,
 or "End that process first" for another process (`public/agents-view.js`,
 `renderAgentDetail`).
@@ -312,8 +312,10 @@ Sidebar click: per kind (`public/resume-guard.js:20-44`):
 | anything else | Resume anyway / Cancel with the conversation name, pid, folder and start time when known |
 | (automatic restore) | skipped, named in a notice |
 
-**Rule**: R11.1 the Agents view never resumes a live session
-(`docs/background-agents.md:104-106`); the sidebar offers to (M3).
+**Rule**: R11.1 Resume on an External Agents row follows the same manual-open
+path as the sidebar: the shared live-elsewhere question asks before starting
+a second writer. A conversation already open here is shown directly
+(`docs/background-agents.md`, M3).
 
 ## 12. Remote host session
 

@@ -444,7 +444,7 @@ concept. Each entry gives:
 - **Today**: scheduled runs and other processes share **Resume anyway** / Cancel,
   with name, pid, folder, start time and schedule name when known; bg: attach
   with a job id, otherwise refused by an error notice; automatic restore:
-  skipped. The Agents view never resumes it (`docs/background-agents.md:104-106`)
+  skipped. The Agents view's Resume on an External row asks the same question
   (M3).
 
 ### Remote host / remote session

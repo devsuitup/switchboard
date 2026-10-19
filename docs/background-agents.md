@@ -100,6 +100,7 @@ requests open in the browser), its last result, and the verbs:
 
 | Verb | Runs | Available |
 |---|---|---|
+| Resume | opens the conversation here after the shared live-elsewhere question | an External interactive session with a session id |
 | Attach | `claude attach <id>` in a terminal tab | while the session is live (`working` or `blocked`) |
 | Transcript | the read-only transcript viewer | whenever the transcript exists |
 | Stop | `claude stop <id>`; the conversation is kept | while live |
@@ -114,9 +115,12 @@ both cases; hover them to see the pid and where the conversation is open.
 For a conversation open here, the message directs you to Stop on its sidebar
 row. For one running in another process, it asks you to end that process first.
 
-An external interactive session offers Transcript only. A live session is
-never resumed: attach is the only way into it. To respawn or delete one, stop
-it from its sidebar row if it is open here, or end its other process first.
+An external interactive session offers **Resume** and **Transcript**. Resume
+uses the same question as a sidebar click: **Resume anyway** starts a second
+Claude on the conversation, with both writing to its transcript; **Cancel**
+opens nothing. A conversation already open in this window is shown directly.
+Live background jobs still use Attach. To respawn or delete a conversation,
+stop it from its sidebar row if it is open here, or end its other process first.
 Switchboard checks again before Respawn or Delete, and before Stop on a
 finished job. A conversation held by an open terminal or another live process
 is refused even if the job says stopped or done. If the process or job files
@@ -203,7 +207,8 @@ cannot be read, it refuses and says why.
 The view reads two files the CLI writes for itself, `~/.claude/jobs/<id>/state.json`
 and `~/.claude/sessions/<pid>.json`, and asks `claude agents --json --all`
 which sessions exist. When that command fails, a banner says so, the list
-comes from the files alone, and every verb but Transcript is disabled.
+comes from the files alone. Background job verbs are disabled; Transcript
+and Resume on an External row remain available.
 Neither file is a documented interface; a CLI upgrade may change them, and
 `test/canary-bg-agents-files.test.js` says so when it happens.
 

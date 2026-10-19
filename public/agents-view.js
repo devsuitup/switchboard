@@ -228,6 +228,7 @@ function agentVerbAvailability(entry, daemonReachable) {
   const reachable = !!daemonReachable;
   return {
     transcript: !!entry.sessionId && entry.transcriptAvailable !== false,
+    resume: entry.kind === 'interactive' && !!entry.sessionId,
     attach: live && reachable,
     stop: live && reachable,
     respawn: bg && !live && !entry.conversationPid && reachable,
@@ -405,6 +406,7 @@ function renderAgentDetail(entry) {
   const pending = agentsPendingVerbs.has(key);
   const reason = (verb) => {
     const pid = entry.conversationPid || (entry.kind === 'interactive' && entry.pid);
+    if (verb === 'resume') return 'Resume this conversation here; it asks first, because it is running in another process';
     if (verb === 'transcript' && !v.transcript) return 'Transcript does not exist or is not available yet';
     if ((verb === 'rm' || verb === 'respawn') && pid) return entry.conversationOwn
       ? `Conversation is open in this window (pid ${pid}). Stop it from its sidebar row first.` : `Conversation is running in another process (pid ${pid}). End that process first.`;
@@ -431,7 +433,7 @@ function renderAgentDetail(entry) {
     <div class="agents-detail-head">
       <span class="agents-detail-name">${escapeHtml(agentDisplayName(entry))}</span>
       <span class="agents-detail-actions">
-        ${btn('attach', 'Attach', v.attach)}${btn('transcript', 'Transcript', v.transcript)}${btn('stop', 'Stop', v.stop)}${btn('respawn', 'Respawn', v.respawn)}${btn('rm', 'Delete', v.rm)}
+        ${entry.kind === 'interactive' ? btn('resume', 'Resume', v.resume) : ''}${btn('attach', 'Attach', v.attach)}${btn('transcript', 'Transcript', v.transcript)}${btn('stop', 'Stop', v.stop)}${btn('respawn', 'Respawn', v.respawn)}${btn('rm', 'Delete', v.rm)}
       </span>
     </div>
     ${entry.detail ? `<div class="agents-detail-line">${escapeHtml(entry.detail)}</div>` : ''}
@@ -491,6 +493,12 @@ function attachBgAgent(entry) {
 async function runAgentVerb(verb, entry) {
   if (!entry) return;
   const key = agentsEntryKey(entry);
+  if (verb === 'resume') {
+    if (!agentVerbAvailability(entry, agentsDaemonReachable).resume) return;
+    const row = indexedRowOf(entry.sessionId);
+    return openSession(row ? rowHeadSession(row)
+      : { sessionId: entry.sessionId, projectPath: entry.cwd, name: entry.name });
+  }
   if (verb === 'transcript') {
     if (!agentVerbAvailability(entry, agentsDaemonReachable).transcript) return;
     if (!entry.id) {

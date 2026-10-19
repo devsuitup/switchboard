@@ -48,24 +48,24 @@ test('row icon: a blocked job waits whatever its descriptor status', t => {
 });
 
 test('verb availability follows the state, the kind and the daemon', () => {
-  assert.deepEqual(agentVerbAvailability(bg(), true), { transcript: true, attach: true, stop: true, respawn: false, rm: false });
-  assert.deepEqual(agentVerbAvailability(bg({ state: 'done', hosted: false }), true), { transcript: true, attach: false, stop: false, respawn: true, rm: true });
-  assert.deepEqual(agentVerbAvailability(bg({ state: 'stopped', hosted: false }), true), { transcript: true, attach: false, stop: false, respawn: true, rm: true });
-  assert.deepEqual(agentVerbAvailability(bg(), false), { transcript: true, attach: false, stop: false, respawn: false, rm: false });
-  assert.deepEqual(agentVerbAvailability({ kind: 'interactive', sessionId: 'i' }, true), { transcript: true, attach: false, stop: false, respawn: false, rm: false });
+  assert.deepEqual(agentVerbAvailability(bg(), true), { transcript: true, resume: false, attach: true, stop: true, respawn: false, rm: false });
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'done', hosted: false }), true), { transcript: true, resume: false, attach: false, stop: false, respawn: true, rm: true });
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'stopped', hosted: false }), true), { transcript: true, resume: false, attach: false, stop: false, respawn: true, rm: true });
+  assert.deepEqual(agentVerbAvailability(bg(), false), { transcript: true, resume: false, attach: false, stop: false, respawn: false, rm: false });
+  assert.deepEqual(agentVerbAvailability({ kind: 'interactive', sessionId: 'i' }, true), { transcript: true, resume: true, attach: false, stop: false, respawn: false, rm: false });
   assert.equal(agentVerbAvailability(bg({ sessionId: null, state: 'done', hosted: false }), true).transcript, false);
 });
 
 test('verb availability: a blocked job is live like a working one', () => {
-  assert.deepEqual(agentVerbAvailability(bg({ state: 'blocked', hosted: true }), true), { transcript: true, attach: true, stop: true, respawn: false, rm: false });
-  assert.deepEqual(agentVerbAvailability(bg({ state: 'blocked', hosted: true }), false), { transcript: true, attach: false, stop: false, respawn: false, rm: false });
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'blocked', hosted: true }), true), { transcript: true, resume: false, attach: true, stop: true, respawn: false, rm: false });
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'blocked', hosted: true }), false), { transcript: true, resume: false, attach: false, stop: false, respawn: false, rm: false });
 });
 
 test('a failed job is finished: sorts after the live rows, stale icon, Delete and Respawn allowed', () => {
   const sorted = sortAgentEntries([bg({ id: 'f1', state: 'failed', hosted: false, startedAt: 900 }), bg({ id: 'w1', startedAt: 100 })]);
   assert.deepEqual(sorted.map(e => e.id), ['w1', 'f1']);
   assert.equal(agentRowIcon(bg({ state: 'failed', hosted: false, status: 'busy' })).slotClass, 'session-icon--stale');
-  assert.deepEqual(agentVerbAvailability(bg({ state: 'failed', hosted: false }), true), { transcript: true, attach: false, stop: false, respawn: true, rm: true });
+  assert.deepEqual(agentVerbAvailability(bg({ state: 'failed', hosted: false }), true), { transcript: true, resume: false, attach: false, stop: false, respawn: true, rm: true });
 });
 
 const ext = (over) => ({ id: null, sessionId: 'i', kind: 'interactive', state: null, status: 'busy', startedAt: 100, ...over });
@@ -267,4 +267,12 @@ test('formatting helpers', () => {
   assert.equal(formatAgentAge(now - (2 * 24 + 6) * 3_600_000, now), '2d 6h');
   assert.equal(agentsEntryKey(bg()), 'bg:aaaaaaaa');
   assert.equal(agentsEntryKey({ kind: 'interactive', sessionId: 'x' }), 'int:x');
+});
+
+test('External Resume needs a session id, independently of daemon and transcript availability', () => {
+  for (const daemon of [true, false]) {
+    assert.equal(agentVerbAvailability({ kind: 'interactive', sessionId: 'i', transcriptAvailable: false }, daemon).resume, true);
+    assert.equal(agentVerbAvailability({ kind: 'interactive' }, daemon).resume, false);
+    assert.equal(agentVerbAvailability(bg(), daemon).resume, false);
+  }
 });

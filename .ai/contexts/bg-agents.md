@@ -348,9 +348,9 @@ interactive row (`state: null`, descriptor status/pid/cwd/start time, job
 tokens/model/detail/fan/result retained; the live UUID becomes its `sessionId`). Its `conversationPid` disables
 Respawn and Delete and supplies the tooltip's pid. Other interactive sessions
 owned by this instance remain excluded as before. The promoted row remains
-visible with Finished unchecked, groups as External, and offers no Attach or
-daemon Stop. Detail shows the job id and `jobState`; the job still counts as
-finished. When the matching descriptor belongs to this instance, it keeps its
+visible with Finished unchecked, groups as External, and offers Resume and
+Transcript, with no Attach or daemon Stop. Detail shows the job id and
+`jobState`; the job still counts as finished. When the matching descriptor belongs to this instance, it keeps its
 background job row instead of becoming External. `conversationOwn` supplies
 the "open in Switchboard" reason; `conversationPid` still disables destructive verbs.
 Any descriptor holding a row's session id supplies `conversationPid`, even
@@ -665,6 +665,18 @@ consequences:
 - A finished job loses its badge at the next snapshot. Clicking its row
   resumes normally: the attach decision is made by `guardResume` from a live
   descriptor, not from the badge.
+
+## External Resume
+
+An interactive row with a session id offers Resume even when the daemon is
+unreachable. `runAgentVerb('resume')` opens the indexed row's head with its
+parts through `rowHeadSession(row)`, as a sidebar click does, or passes the
+roster's id/cwd/name fallback to `openSession` without options. This
+keeps continuation resolution and the shared `guardResume` /
+`liveElsewhereQuestion` adapter on the normal manual-open path. Cancel opens
+nothing; acceptance resumes the head here, even when an older part is live.
+An already-open row is shown by `rowOpenId`.
+Background jobs keep Attach, and Resume never calls the daemon verb IPC.
 
 ## Attach
 
