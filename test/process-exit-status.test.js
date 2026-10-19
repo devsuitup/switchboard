@@ -47,6 +47,7 @@ const PRELUDE = `
   let sessionOpenedOutsideRestore = false;
   const openSessions = new Map();
   const sessionMap = new Map();
+  var localMergedMemberRows = new Map();
   const pendingSessions = new Map();
   const skippedWorkingSetEntries = new Set();
   const dormantWorkingSet = new Map();
@@ -114,6 +115,7 @@ function setup() {
   run(extractDeclaration(APP_SRC, 'openingSessions'), 'app.js#openingSessions');
   run(sliceBlock('function openSession(session'), 'app.js#openSession');
   run(sliceBlock('async function openSessionNow(session'), 'app.js#openSessionNow');
+  loadAppFunctions(ctx, { functions: ['indexedRowOf'] });
   run(sliceBlock('function clearDormantRow('), 'app.js#clearDormantRow');
   run(sliceBlock('function applyProcessExit('), 'app.js#applyProcessExit');
   run(sliceBlock('function handleProcessExited('), 'app.js#handleProcessExited');
