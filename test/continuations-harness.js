@@ -41,6 +41,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, 
   const settingsFile = path.join(root, 'settings.json');
   const saved = savedEntries || [{ sessionId: 'old', projectPath: root, active: true }];
   fs.writeFileSync(settingsFile, JSON.stringify({ openWorkingSet: saved }));
+  const settings = new Map([['global', JSON.parse(fs.readFileSync(settingsFile, 'utf8'))]]);
   const spawned = [], prompts = [];
   dom.window.appConfirm = async ({ message: message }) => { prompts.push(message); return typeof answer === 'function' ? answer(message) : answer; };
   dom.window.appAlert = async ({ message }) => { prompts.push(message); };
@@ -49,8 +50,13 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, 
     return choice !== undefined ? { choice } : answer === true ? { choice: question.selectedId } : null;
   };
   dom.window.api = {
-    getSetting: async () => JSON.parse(fs.readFileSync(settingsFile, 'utf8')),
-    setSetting: async (_, value) => fs.writeFileSync(settingsFile, JSON.stringify(value)),
+    getSetting: async key => key === 'global' ? JSON.parse(fs.readFileSync(settingsFile, 'utf8')) : settings.get(key) ?? null,
+    setSetting: async (key, value) => {
+      settings.set(key, value);
+      if (key === 'global') fs.writeFileSync(settingsFile, JSON.stringify(value));
+    },
+    deleteSetting: async key => { settings.delete(key); },
+    getSettingsByPrefix: async prefix => Object.fromEntries([...settings].filter(([key]) => key.startsWith(prefix))),
     getSessionContinuations: async id => typeof cache.resolveSessionContinuations === 'function'
       ? cache.resolveSessionContinuations(id, { chunkBytes, getSessionLiveElsewhere: async target => ({ known: true, live: live[target] || null }) }) : { candidates: [], unresolved: false },
     getSessionLiveElsewhere: async id => live[id] || null,
@@ -58,6 +64,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, 
     openTerminal: async (id, project, isNew, options) => { spawned.push({ id, project, options }); return { ok: true }; },
   };
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx, { filename: path.join(__dirname, '../public/resume-guard.js') });
+  ctx._continuationChoices = new Map();
   vm.runInContext(`
     var openSessions = new Map(), sessionMap = new Map(), pendingSessions = new Map(), localMergedMemberRows = new Map();
     var activeSessionId = null, restoringWorkingSet = true, restorePlanner = null;

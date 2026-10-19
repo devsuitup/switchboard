@@ -353,7 +353,15 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       const originalSession = s;
       let holdReason = { waitingForIndex: false };
       let continuationNotice;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions, onHold: reason => { holdReason = reason; } });
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api,
+        choices: (window._continuationChoices ||= new Map()), rowKey: indexedRowOf(s.sessionId)?.sessionId || s.sessionId,
+        memoryNotify: notice => showAppNotice(notice),
+        resolveRow: candidate => {
+          const row = indexedRowOf(candidate.sessionId);
+          return row ? rowHeadSession(row) : { ...s, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] };
+        },
+        notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
+        onHold: reason => { holdReason = reason; } });
       if (!s) {
         const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
         skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
@@ -2055,6 +2063,8 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     let continuationLive;
     let holdReason = { waitingForIndex: false };
     session = await resolveResumeSession(session, { automatic, api: window.api, confirm: question => appConfirm(question),
+      choices: (window._continuationChoices ||= new Map()), rowKey: indexedRowOf(session.sessionId)?.sessionId || session.sessionId,
+      memoryNotify: notice => showAppNotice(notice),
       choose: question => appChoose(question), notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
       onHold: reason => { holdReason = reason; },
       describe: id => {
@@ -2447,6 +2457,7 @@ async function restoreStartupSessions({ projectsLoaded = true } = {}) {
   if (!projectsLoaded) return;
   window._startupResumeResolutions = new Map();
   try {
+    window._continuationChoices = new Map(Object.entries(await window.api.getSettingsByPrefix('continuationChoice:')));
     if (localStorage.getItem('gridViewActive') === '1') showGridView();
     await reopenActiveSessionAfterReload();
     await restoreWorkingSet();

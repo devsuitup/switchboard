@@ -233,6 +233,7 @@ test('a remembered active id absent from all rows is not reported during indexin
   const unavailableIds = [];
   const ctx = vm.createContext({
     window: { api: {
+      getSettingsByPrefix: async () => ({}),
       getSetting: async () => ({ openWorkingSet: [{ sessionId: 'missing', projectPath: PROJECT }] }),
       getActiveSessions: async () => [],
       getIndexingState: async () => ({ finished: false }),
