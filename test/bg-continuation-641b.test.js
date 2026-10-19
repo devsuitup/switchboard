@@ -444,8 +444,7 @@ test('a newer genuine head rename selected by SQLite also appears on the merged 
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
     const assert = require('node:assert/strict'), db = require('./test/fixtures/writer-store.cjs');
-    const { encodeProjectPath } = require('../encode-project-path');
-const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
+    const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
     db.setName('${OLD}', 'Older Switchboard rename');
     db.setName('${HEAD}', 'Newer Switchboard rename');
     db.rekeySessionMeta('${OLD}', '${HEAD}', 'Original title');
@@ -475,8 +474,7 @@ test('a newer original rename survives indexed titles and older head renames bef
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const result = spawnSync(require('electron'), ['-e', `
     const assert = require('node:assert/strict'), db = require('./test/fixtures/writer-store.cjs');
-    const { encodeProjectPath } = require('../encode-project-path');
-const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
+    const { mergeLocalBackgroundSessions } = require('./sidebar-bg-sessions');
     db.setName('${OLD}', 'Switchboard rename'); db.setName('${HEAD}', 'Original (2)', 'transcript');
     const row = { sessionId: '${OLD}', folder: '-project', name: 'Switchboard rename', customTitle: 'Original',
       projectPath: '/project', continuationIndex: JSON.stringify({ format: 3, complete: true, ids: ['${HEAD}'] }) };

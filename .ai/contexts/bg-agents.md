@@ -1041,7 +1041,7 @@ logical scope/root, with current build/generation/roster provenance and deciding
 inputs. CLI omission alone is silent and updates provenance. See
 [activity-trace.md](../../docs/activity-trace.md) for bounds and privacy.
 
-## Review corrections for #719
+## Descriptor scope, terminal job evidence and orphaned members
 
 Descriptor project grouping resolves the repository root, while descriptor
 transcript scope encodes its actual cwd, including worktree components. An
