@@ -154,6 +154,20 @@ test('Copy id rejection shows a persistent error notice with a reason and recove
   assert.equal(ctx.document.querySelector('.session-context-menu'), null);
 });
 
+test('a later successful Copy id clears its earlier failure notice', async t => {
+  const ctx = setup(t);
+  const copy = () => [...openParts(ctx).querySelector('[data-part-id="member-111"]').querySelectorAll('button')]
+    .find(button => button.textContent === 'Copy id').click();
+  ctx.window.api.writeClipboard = () => Promise.reject(new Error('Clipboard unavailable'));
+  copy();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(ctx.document.querySelector('.app-notice[role="alert"]'));
+  ctx.window.api.writeClipboard = () => Promise.resolve();
+  copy();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ctx.document.querySelector('.app-notice[role="alert"]'), null);
+});
+
 for (const action of ['Refresh screen', 'Send to background', "Don't restore", 'Copy id', 'View messages']) {
   test(`choosing ${action} restores focus to the connected opener`, t => {
     const ctx = setup(t);

@@ -130,7 +130,7 @@ by its own name and last-active date. Each part offers **View messages** and
 A missing name appears as **Untitled conversation**; a missing date as
 **last active unknown**. In the menu, arrow keys move between actions,
 Right opens Parts, Left returns, and Escape dismisses the menu.
-The session menu takes keyboard focus and returns it after an action or Escape, unless the action focuses a dialog or viewer.
+The session menu takes keyboard focus and returns it to the row after an action or Escape.
 
 ### Names
 

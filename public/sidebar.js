@@ -1872,11 +1872,13 @@ function appendSessionPartsMenu(menu, session) {
     for (const [text, action] of [
       ['View messages', () => showJsonlViewer({ ...rowHeadSession(session, part.sessionId), name: null, aiTitle: null, summary: null, ...part })],
       ['Copy id', async () => {
+        const noticeId = sessionActionNoticeId('Copy id', { ...session, sessionId: part.sessionId });
         try {
           await window.api.writeClipboard(part.sessionId);
+          clearAppNotice(noticeId);
         } catch (error) {
           showAppNotice({
-            id: sessionActionNoticeId('Copy id', { ...session, sessionId: part.sessionId }), kind: 'error',
+            id: noticeId, kind: 'error',
             message: `Could not copy the id ${part.sessionId.split('-')[0]}: ${error?.message || error || 'Clipboard unavailable'}. Try Copy id again.`,
           });
         }
