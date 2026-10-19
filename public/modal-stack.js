@@ -58,6 +58,11 @@ function modalControls(overlay) {
         if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
       }
       return true;
+    })
+    .filter((control, _, controls) => {
+      if (!control.matches('input[type="radio"]') || !control.name) return true;
+      const group = controls.filter(other => other.matches('input[type="radio"]') && other.name === control.name && other.form === control.form);
+      return control === (group.find(radio => radio.checked) || group[0]);
     });
 }
 

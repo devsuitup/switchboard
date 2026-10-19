@@ -146,6 +146,7 @@ const rendererCrossFileGlobals = {
   showChoiceDialog: 'readonly',
   appConfirm: 'readonly',
   appAlert: 'readonly',
+  appChoose: 'readonly',
   showAppNotice: 'readonly',
   clearAppNotice: 'readonly',
   sessionActionNoticeId: 'readonly',

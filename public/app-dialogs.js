@@ -9,6 +9,10 @@ async function appAlert({ title = 'Switchboard', message } = {}) {
   await showChoiceDialog({ title, message: appDialogMessage(message), confirmLabel: 'OK', cancelLabel: null });
 }
 
+async function appChoose({ title = 'Choose', message, options = [], selectedId, confirmLabel = 'Open' } = {}) {
+  return showChoiceDialog({ title, message: appDialogMessage(message), options, selectedId, confirmLabel });
+}
+
 function appDialogMessage(message) {
   return typeof message === 'string' ? message.split('\n') : message;
 }
