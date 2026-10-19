@@ -208,6 +208,7 @@ contextBridge.exposeInMainWorld('api', {
   updaterCheck: () => ipcRenderer.invoke('updater-check'),
   updaterDownload: () => ipcRenderer.invoke('updater-download'),
   updaterInstall: () => ipcRenderer.invoke('updater-install'),
+  updaterClose: () => ipcRenderer.send('updater-close'),
   onUpdaterEvent: (callback) => {
     ipcRenderer.on('updater-event', (_event, type, data) => callback(type, data));
   },

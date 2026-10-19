@@ -8,6 +8,8 @@ const fs = require('fs');
 const os = require('os');
 const pty = require('node-pty');
 const log = require('electron-log');
+const relaunch = require('./relaunch');
+const { acquireInstanceLock, readNoNewPrivs } = require('./linux-startup');
 
 // Dev builds default to a separate SQLite DB so they don't race on
 // session_cache with a running installed AppImage. Honors an explicit
@@ -112,12 +114,15 @@ setPtyOpLogger(log);
 
 
 // --- Auto-updater (only in packaged builds) ---
+let relaunchExecPath = process.env.APPIMAGE || process.execPath;
 let autoUpdater = null;
 if (app.isPackaged || process.env.FORCE_UPDATER) {
   autoUpdater = require('electron-updater').autoUpdater;
   autoUpdater.logger = log;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  if (process.platform === 'linux') autoUpdater.autoRunAppAfterInstall = false;
+  autoUpdater.on('appimage-filename-updated', file => { relaunchExecPath = file; });
   autoUpdater.allowPrerelease = SETTING_DEFAULTS.receiveBetaVersions;
   if (!app.isPackaged) autoUpdater.forceDevUpdateConfig = true;
 
@@ -158,7 +163,8 @@ let mainWindow = null;
 let activityFlushedForQuit = false;
 let updateInstalling = false;
 async function startApplication() {
-if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+if (!await acquireInstanceLock(app)) { app.quit(); return; }
+const privilegeNotice = readNoNewPrivs({ log });
 const writer = require('./session-index-writer').createSessionIndexWriter();
 let bootstrapQuit;
 const holdBootstrapQuit = event => {
@@ -384,6 +390,7 @@ function createWindow() {
   // window.open() then sets location.href) routes through our IPC instead of
   // creating a child BrowserWindow.
   mainWindow.webContents.on('did-finish-load', () => {
+    if (privilegeNotice) mainWindow.webContents.send('updater-event', 'startup-notice', privilegeNotice);
     mainWindow.webContents.executeJavaScript(`
       window.open = function(url) {
         if (url && /^https?:\\/\\//i.test(url)) { window.api.openExternal(url); return null; }
@@ -3476,7 +3483,17 @@ ipcMain.handle('updater-install', async () => {
   if (mainWindow && !await unsavedGuard.confirmQuit(mainWindow)) return;
   await drainForUpdate();
   try {
-    autoUpdater.quitAndInstall();
+    if (process.platform === 'linux') {
+      if (!autoUpdater.install(false, false)) {
+        autoUpdater.quitAndInstallCalled = false;
+        activityFlushedForQuit = false;
+        return;
+      }
+      await relaunch({ execPath: relaunchExecPath, log, notify: notifyRelaunchRequired,
+        quit: () => { updateInstalling = true; app.quit(); } });
+    } else {
+      autoUpdater.quitAndInstall();
+    }
   }
   catch (error) {
     updateInstalling = false;
@@ -3485,6 +3502,22 @@ ipcMain.handle('updater-install', async () => {
     throw error;
   }
 });
+
+function notifyRelaunchRequired(message) {
+  return new Promise(resolve => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) { log.warn('[relaunch]', message); resolve(); return; }
+    const finish = () => {
+      ipcMain.removeListener('updater-close', onClose);
+      win.removeListener('closed', finish);
+      resolve();
+    };
+    const onClose = event => { if (event.sender === win.webContents) finish(); };
+    ipcMain.on('updater-close', onClose);
+    win.once('closed', finish);
+    win.webContents.send('updater-event', 'relaunch-required', { message });
+  });
+}
 
 // --- App lifecycle ---
 // Differentiate the dev build from the released binary in the OS task switcher,

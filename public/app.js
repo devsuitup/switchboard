@@ -2389,6 +2389,13 @@ function setUpdaterStatus(text, duration) {
 }
 const updaterHandler = (type, data) => {
   switch (type) {
+    case 'startup-notice':
+      showAppNotice(data);
+      break;
+    case 'relaunch-required':
+      showAppNotice({ id: 'updater-relaunch', kind: 'error', message: data.message,
+        actionLabel: 'Close Switchboard', onAction: () => window.api.updaterClose() });
+      break;
     case 'checking':
       setUpdaterStatus('Checking for updates…');
       break;
