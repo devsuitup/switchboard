@@ -25,7 +25,7 @@ function scopedConversationRows(rows) {
   const byId = new Map(rows.map(row => [key(row.sessionId), row]));
   return rows.map(row => {
     const target = row.mergedIntoSessionId && byId.get(key(row.mergedIntoSessionId));
-    return row.mergedIntoSessionId && (!target || !row.projectPath || row.projectPath !== target.projectPath || row.folder !== target.folder)
+    return target && (!row.projectPath || row.projectPath !== target.projectPath || row.folder !== target.folder)
       ? { ...row, mergedIntoSessionId: null } : row;
   });
 }
@@ -70,7 +70,7 @@ function conversationTargets(rows, descriptors, jobs, { projectsDir, folderMeta 
     if (candidates.has(target) && !canonical && (cached || candidates.get(target).some(c => c.folder))) continue;
     const projectPath = descriptor.cwd ? resolveWorktreePath(descriptor.cwd) : rowScope(cached)?.projectPath;
     if (!projectPath) continue;
-    const descriptorScope = { projectPath, folder: encodeProjectPath(projectPath) };
+    const descriptorScope = { projectPath, folder: descriptor.cwd ? encodeProjectPath(descriptor.cwd) : cached?.folder };
     const scope = cached ? rowScope(cached) : canonical?.scope || descriptorScope;
     if (!scope || scope.projectPath !== projectPath || (!cached && !sameScope(scope, descriptorScope))) continue;
     if (!isHostedJob({ ...job, id: descriptor.jobId, sessionId: descriptor.sessionId }, [descriptor])) continue;

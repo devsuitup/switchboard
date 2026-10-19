@@ -26,8 +26,9 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     return p.tasks.get(taskId);
   }
   function list(id, jobId) {
-    const tasks = [...(parents.get(id)?.tasks.values() || [])].filter(t => !t.terminal && t.sources.size);
     if (jobId === undefined && parents.get(id)?.jobs?.size === 1) jobId = parents.get(id).jobs.keys().next().value;
+    const cutoff = parents.get(id)?.jobTerminalAts?.get(jobId) ?? -Infinity;
+    const tasks = [...(parents.get(id)?.tasks.values() || [])].filter(t => !t.terminal && t.sources.size && t.at > cutoff);
     const evidence = parents.get(id)?.jobs?.get(jobId);
     if (evidence?.valid && !evidence.terminal) for (const t of evidence.tasks || []) {
       if (t.doneAt === null) tasks.push({ ...t, terminal: false, sources: new Map([['cli-task', evidence.at]]) });
@@ -264,11 +265,20 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
       if (!evidence) {
         if (!p.jobs.delete(jobId)) return;
         p.jobWatermarks.delete(jobId);
+        p.jobTerminalAts?.delete(jobId);
         changed(id);
         return;
       }
-      if (evidence?.valid && evidence.at < (p.jobWatermarks.get(jobId) ?? -Infinity)) return;
-      if (evidence?.valid) p.jobWatermarks.set(jobId, evidence.at);
+      if (evidence?.valid && (!Number.isFinite(evidence.at) || evidence.at < (p.jobWatermarks.get(jobId) ?? -Infinity))) return;
+      if (evidence?.valid) {
+        p.jobWatermarks.set(jobId, evidence.at);
+        p.known = true;
+      }
+      if (evidence?.valid && evidence.terminal) {
+        p.jobTerminalAts ||= new Map();
+        p.jobTerminalAts.set(jobId, evidence.at);
+        for (const t of p.tasks.values()) end(id, t.id, evidence.at, false);
+      }
       if (JSON.stringify(previous) === JSON.stringify(evidence)) return;
       p.jobs.set(jobId, evidence);
       if (JSON.stringify({ ...previous, at: null }) !== JSON.stringify({ ...evidence, at: null })) changed(id);
@@ -321,7 +331,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
   }
   function snapshot(id) {
     const p = parent(id);
-    return { parentSessionId: id, revision: p.revision, known: p.known, ownerDiedAt: p.diedAt, ownerAliveAt: p.aliveAt, terminalJobAt: p.terminalJobAt, backgroundUnknown: p.backgroundUnknown, jobs: [...(p.jobs || [])],
+    return { parentSessionId: id, revision: p.revision, known: known(id), ownerDiedAt: p.diedAt, ownerAliveAt: p.aliveAt, terminalJobAt: p.terminalJobAt, backgroundUnknown: p.backgroundUnknown, jobs: [...(p.jobs || [])], jobTerminalAts: [...(p.jobTerminalAts || [])],
       tasks: [...p.tasks.values()].filter(t => t.terminal || t.sources.has('cli-task')).map(t => ({ id: t.id, kind: t.kind, terminal: t.terminal, at: t.at, subagentType: t.subagentType })) };
   }
   function applySnapshot(s) {
@@ -336,6 +346,10 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     for (const jobId of p.snapshotJobIds || []) if (!jobIds.has(jobId)) applyJob(id, null, { jobId });
     p.snapshotJobIds = jobIds;
     for (const [jobId, evidence] of s.jobs || []) applyJob(id, evidence, { jobId });
+    for (const [jobId, at] of s.jobTerminalAts || []) {
+      p.jobTerminalAts ||= new Map();
+      p.jobTerminalAts.set(jobId, Math.max(at, p.jobTerminalAts.get(jobId) ?? -Infinity));
+    }
     p.known = s.known;
     if (Number.isFinite(s.ownerDiedAt)) p.diedAt = Math.max(p.diedAt || 0, s.ownerDiedAt);
     if (Number.isFinite(s.terminalJobAt)) p.terminalJobAt = Math.max(p.terminalJobAt || 0, s.terminalJobAt);
@@ -370,6 +384,10 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         if (!next.jobs.has(jobId) || (evidence?.at ?? -Infinity) > (next.jobs.get(jobId)?.at ?? -Infinity)) next.jobs.set(jobId, evidence);
         next.jobWatermarks.set(jobId, Math.max(next.jobWatermarks.get(jobId) ?? -Infinity, old.jobWatermarks?.get(jobId) ?? -Infinity));
       }
+    }
+    if (old.jobTerminalAts) {
+      next.jobTerminalAts ||= new Map();
+      for (const [jobId, at] of old.jobTerminalAts) next.jobTerminalAts.set(jobId, Math.max(at, next.jobTerminalAts.get(jobId) ?? -Infinity));
     }
     next.known ||= old.known;
     next.backgroundUnknown ||= old.backgroundUnknown;
@@ -413,11 +431,19 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     *values() { for (const [, map] of this) yield map; },
     get size() { return [...this].length; },
   };
+  function known(id) {
+    const p = parents.get(id);
+    return !!p?.known || [...(p?.jobs?.values() || [])].some(evidence => evidence?.valid);
+  }
+  function background(id, jobId) {
+    const p = parents.get(id);
+    if (jobId === undefined && p?.jobs?.size === 1) jobId = p.jobs.keys().next().value;
+    const evidence = p?.jobs?.get(jobId);
+    return !!p?.backgroundUnknown || !!(evidence?.valid && !evidence.terminal && evidence.inFlight > 0) || list(id, jobId).length > 0;
+  }
   return { note, release, end, prune, oldestFallback, primary, ingest, notification, correlateAgent, applyJob, ownerDied, ownerAlive, snapshot, applySnapshot, rekey, resolve, agents, runningAgentCount, list, agentView,
     snapshots: () => [...parents.keys()].map(snapshot),
-    known: id => !!parents.get(id)?.known,
-    background: (id, jobId) => !!parents.get(id)?.backgroundUnknown
-      || !!(parents.get(id)?.jobs?.get(jobId)?.valid && parents.get(id).jobs.get(jobId).inFlight > 0) || list(id, jobId).length > 0 };
+    known, background };
 }
 
 if (typeof module !== 'undefined') module.exports = { createTaskRegistry };

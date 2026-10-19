@@ -48,6 +48,19 @@ admission: progress conflicts invalidate the job, and final conflicts use its
 three-snapshot budget, then reject with PROJECTS_SNAPSHOT_CONFLICT and notify the renderer through the existing conflict recovery route.
 Search publication reads the current name and cached summary on the writer.
 
+An effects message is not one atomic transaction. Its admitted chunks remain
+committed if an interactive command changes the revision between chunks.
+WRITER_STALE rejects the remainder and its view; it does not roll back those
+earlier chunks. The Projects relay rebuilds from a new SQLite snapshot rather
+than replaying the old effect list. Source refresh upserts are repeatable, and
+writer-owned name precedence preserves an intervening user rename. After three
+conflicts no stale view is published; admitted chunks remain and the existing
+conflict notification requests a fresh load. This is the bounded-chunk repair
+contract, also used for already acknowledged folder progress in #718/#719.
+`test/session-index-effects-retry-719b.test.js` exercises the shipped drain with
+real disposable SQLite: partial commit, interleaved rename, stale remainder
+refusal, then successful fresh-revision admission without undoing that rename.
+
 BEGIN IMMEDIATE chunks target 32 SQLite changes and 65536 bound-input bytes.
 Per-unit savepoints defer a unit to the next transaction when adding it would cross
 the target; revision overhead is reserved. An indivisible oversized unit occupies

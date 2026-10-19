@@ -201,7 +201,7 @@ test('the readonly projects worker applies live background state to both views a
     descriptor.jobId = 'aaaaaaaa';
     const pendingId = '22222222-2222-4222-8222-222222222222';
     const pending = { sessionId: pendingId, kind: 'bg', jobId: 'bbbbbbbb', cwd: root, name: 'pending' };
-    const jobs = new Map([['aaaaaaaa', { state: 'working', name: 'launch' }], ['bbbbbbbb', { state: 'blocked' }]]);
+    const jobs = new Map([['aaaaaaaa', { state: 'working', sessionId: id, name: 'launch' }], ['bbbbbbbb', { state: 'blocked', sessionId: pendingId }]]);
     const worker = new Worker(path.join(process.cwd(), 'workers/projects-query.js'), { workerData: { dbPath: db.DB_PATH, projectsDir } });
     let nextId = 0;
     const request = (descriptors = [descriptor, pending], activeSessions = []) => new Promise((resolve, reject) => {

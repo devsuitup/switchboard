@@ -129,6 +129,7 @@ function makeFakeDb({ cachedRows, global }) {
   return {
     getAllMeta: () => new Map(),
     getAllCached: () => cachedRows,
+    getAllFolderMeta: () => new Map(),
     getSetting: (key) => (key === 'global' ? global : {}),
   };
 }

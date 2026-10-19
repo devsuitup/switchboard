@@ -2327,6 +2327,10 @@ after the retry name that state and offer a manual sidebar retry.
 
 ## Accepted projection provenance (#719)
 
+Build IDs belong to the worker reply envelope, rather than its session rows.
+The renderer combines that ID with row facts for diagnostics. Direct cache
+builds and worker builds therefore return equivalent session payloads.
+
 The worker returns cloneable build provenance and current exclusion inputs for
 archived, hidden-project and sdk-only rows. Main carries it through assembly;
 renderer diagnostics compare complete allProjects membership and default-view

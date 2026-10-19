@@ -174,7 +174,7 @@ function agentRowIcon(entry) {
   if (entry.kind === 'background' && !foreground) snapshot = projectBackgroundActivity(entry, snapshot);
   const icon = renderSessionIcon(snapshot);
   const title = entry.kind === 'background' && entry.state === 'blocked'
-    ? backgroundActivityLabel(entry.sessionId, snapshot, row, selection)?.title || `${icon.title} · job blocked` : icon.title;
+    ? entry.sessionId && backgroundActivityLabel(entry.sessionId, snapshot, row, selection)?.title || `${icon.title} · job blocked` : icon.title;
   return { slotClass: icon.slotClasses[0], live, glyph: icon.glyph, title };
 }
 

@@ -91,9 +91,6 @@ async function build(message) {
   const defaultProjection = cache.getProjectsProjection();
   const allProjects = cache.buildProjectsFromCache(true);
   const projection = { buildId: message.id, removedInputs: { ...defaultProjection.removedInputs, ...cache.getProjectsProjection().removedInputs } };
-  for (const projects of [defaultProjects, allProjects]) for (const project of projects) for (const row of project.sessions) {
-    if (row.projectionFacts) row.projectionFacts.inputs.projectsBuildId = message.id;
-  }
   for (const inputs of Object.values(projection.removedInputs)) inputs.projectsBuildId = message.id;
   const replyBytes = message.measureBytes ? {
     default: Buffer.byteLength(JSON.stringify(defaultProjects)),

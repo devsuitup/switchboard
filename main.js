@@ -189,7 +189,7 @@ const {
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, listSettingKeys, isInitialScanComplete,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
-        DB_PATH, getProjectsRevision,
+  DB_PATH, getProjectsRevision,
 } = require('./db');
 const { setStarred, setArchived, deleteCachedSession, deleteCachedFolder,
   deleteSearchSession, deleteSearchFolder, deleteSearchType, applySearchFileBatch,
@@ -3462,7 +3462,7 @@ function getConversationPartIds(id) {
   const canonicalId = rows.find(row => row.sessionId.toLowerCase() === String(id).toLowerCase())?.sessionId
     || cliSessionState.getSidebarDescriptors().find(row => row.sessionId.toLowerCase() === String(id).toLowerCase())?.sessionId
     || [...activeSessions].map(([key, session]) => session.realSessionId || key)
-      .find(part => part.toLowerCase() === String(id).toLowerCase()) || String(id).toLowerCase();
+      .find(part => part.toLowerCase() === String(id).toLowerCase()) || String(id);
   return [canonicalId, ...sessionCache.conversationMemberIds(rows, canonicalId)];
 }
 

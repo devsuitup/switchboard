@@ -1040,3 +1040,19 @@ Ordinary main.log receives one `[session-projection] ` JSON record per changed
 logical scope/root, with current build/generation/roster provenance and deciding
 inputs. CLI omission alone is silent and updates provenance. See
 [activity-trace.md](../../docs/activity-trace.md) for bounds and privacy.
+
+## Review corrections for #719
+
+Descriptor project grouping resolves the repository root, while descriptor
+transcript scope encodes its actual cwd, including worktree components. An
+orphaned bridge member retains its previous representative membership; a
+present representative in another project or folder still cannot absorb it.
+
+The task registry retains terminal timestamps per job, transports them in
+snapshots, and carries them across session rekeys. Terminal evidence ends known
+tasks at or before its timestamp, including after the roster entry disappears.
+The selected job's watermark also excludes older replayed CLI tasks without
+ending another job's own contribution.
+Known evidence and unenumerated in-flight work remain visible through the
+unique-job fallback. Corrupt reads can be repaired at the last valid timestamp;
+older valid evidence remains rejected.
