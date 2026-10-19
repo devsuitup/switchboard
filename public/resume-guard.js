@@ -22,13 +22,13 @@ async function liveElsewhereMany(sessionIds, { api } = {}) {
   }
 }
 
-async function guardResume(session, { automatic = false, api, confirm, name, notify = typeof showAppNotice === 'function' ? showAppNotice : undefined, live, allowBgAttach = false, onBlocked } = {}) {
+async function guardResume(session, { automatic = false, api, confirm, name, notify = typeof showAppNotice === 'function' ? showAppNotice : undefined, live, freshLive = false, allowBgAttach = false, onBlocked } = {}) {
   if (!session || session.type === 'terminal') return true;
   const sessionIds = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])]
     .filter(id => typeof id === 'string' && id))];
   if (sessionIds.length > 1) {
-    const liveById = await liveElsewhereMany(sessionIds, { api });
-    if (live) liveById[session.sessionId] = live;
+    const liveById = await liveElsewhereMany(sessionIds.filter(id => !freshLive || live === undefined || id !== session.sessionId), { api });
+    if (freshLive && live) liveById[session.sessionId] = live;
     let verdict = true;
     for (const id of sessionIds) {
       if (!liveById[id]) continue;
@@ -71,8 +71,24 @@ async function guardResume(session, { automatic = false, api, confirm, name, not
 }
 
 // see .ai/contexts/cli-session-state.md ("Conversation continuations")
-async function resolveResumeSession(session, { automatic = false, api, confirm, resolutions, onHold } = {}) {
+const continuationLocations = {
+  here: 'running here', interactive: 'running elsewhere', schedule: 'running in a scheduled run',
+  bg: 'running in the background', blockedBg: 'running in the background, cannot be attached',
+};
+
+async function resolveResumeSession(session, { automatic = false, api, confirm, choose, describe = () => ({}),
+  formatDate = t => new Date(t).toLocaleString(), resolutions, onHold, onLive,
+  resolveRow = candidate => ({ ...session, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] }) } = {}) {
   if (!session || session.type === 'terminal' || session.remoteAlias) return session;
+  const partInfo = (candidate, id = candidate.sessionId) => {
+    const { name, aiTitle, summary, title, runningHere } = describe(id);
+    return { ...candidate, name: name || candidate.name, aiTitle: aiTitle || candidate.aiTitle,
+      summary: summary || candidate.summary, title: title || candidate.title, runningHere };
+  };
+  const label = part => (part.name || part.aiTitle || part.summary || part.title || '').trim() || 'Untitled conversation';
+  const conversationName = () => label(partInfo(session));
+  const openAsWas = async message => await confirm({ title: 'Open this conversation?', message,
+    confirmLabel: 'Open as it was' }) ? session : null;
   let result;
   try {
     if (automatic && resolutions) {
@@ -81,24 +97,61 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
     } else result = await api.getSessionContinuations(session.sessionId);
   } catch {
     if (automatic) return null;
-    return await confirm('Could not check this conversation for continuations.\n\nOpen the original session ' + session.sessionId + '?') ? session : null;
+    return openAsWas(['Switchboard could not check whether "' + conversationName() + '" continued in another part.', 'Open it as it was?']);
   }
   const rowIds = new Set([session.sessionId, ...(session.mergedMemberIds || [])]);
   const candidates = (result?.candidates || []).filter(candidate => !rowIds.has(candidate.sessionId));
-  const listing = candidates.map(c => c.sessionId + ' (last activity: ' + (c.modified || 'unknown') + ')').join('\n');
-  if (!result || result.unresolved) {
-    if (automatic) { onHold?.({ waitingForIndex: !!result?.waitingForIndex }); return null; }
-    return await confirm('This conversation has an unresolved continuation (cycle, missing transcript or malformed continuation record).\n'
-      + listing + '\nYou can retry after indexing or open a candidate from the sidebar.\n\nOpen the original session ' + session.sessionId + '?') ? session : null;
+  if (automatic) {
+    if (!result || result.unresolved) { onHold?.({ waitingForIndex: !!result?.waitingForIndex }); return null; }
+    return candidates.length === 1 ? { ...session, sessionId: candidates[0].sessionId } : candidates.length ? null : session;
   }
-  if (!candidates.length) return session;
-  if (automatic) return candidates.length === 1 ? { ...session, sessionId: candidates[0].sessionId } : null;
-  for (const candidate of candidates) {
-    if (await confirm('This conversation continued under another id:\n' + listing + '\n\nOpen ' + candidate.sessionId + '?')) {
-      return { ...session, sessionId: candidate.sessionId };
-    }
+  const seenRows = new Set([session.sessionId]);
+  const candidateParts = candidates.map(candidate => {
+    const target = resolveRow(candidate);
+    const part = target.sessionId === candidate.sessionId ? candidate
+      : target.conversationParts?.find(part => part.sessionId === target.sessionId) || target;
+    return { ...partInfo({ ...part, sessionId: candidate.sessionId }, target.sessionId), target };
+  })
+    .filter(part => {
+      if (seenRows.has(part.target.sessionId)) return false;
+      seenRows.add(part.target.sessionId);
+      return true;
+    });
+  if (!candidateParts.length) {
+    if (result && !result.unresolved) return session;
+    const reason = result?.waitingForIndex ? 'a part it continued in is still being indexed.'
+      : 'its continuation records are damaged, or a part it continued in could not be checked.';
+    return openAsWas(['Switchboard could not tell where "' + conversationName() + '" continued: ' + reason,
+      'Open the part you clicked as it was, or cancel and try again later.']);
   }
-  return await confirm('No continuation selected.\n\nOpen the original session ' + session.sessionId + '?') ? session : null;
+  const clicked = partInfo(session), name = label(clicked);
+  const parts = [...candidateParts, { ...clicked, target: session }];
+  const activity = part => part.modified ? Date.parse(part.modified) : NaN;
+  parts.sort((a, b) => (Number.isFinite(activity(b)) ? activity(b) : -Infinity) - (Number.isFinite(activity(a)) ? activity(a) : -Infinity));
+  let liveById, liveFailed = false;
+  try {
+    liveById = await api.getSessionsLiveElsewhere(parts.map(part => part.target.sessionId));
+    if (!liveById || typeof liveById !== 'object' || Array.isArray(liveById)) throw new TypeError('Invalid liveness batch');
+  } catch { liveFailed = true; }
+  const options = parts.map(part => {
+    const live = liveById?.[part.target.sessionId];
+    const blocked = live?.kind === 'bg' && !(typeof live.jobId === 'string' && live.jobId);
+    const location = part.runningHere ? 'here' : blocked ? 'blockedBg' : live?.kind;
+    const detail = [Number.isFinite(activity(part)) ? 'last active ' + formatDate(activity(part)) : 'last active unknown',
+      Number.isFinite(part.messageCount) && part.messageCount >= 0 ? part.messageCount + (part.messageCount === 1 ? ' message' : ' messages') : null,
+      part.sessionId === session.sessionId && 'the part you clicked', continuationLocations[location]].filter(Boolean).join(' · ');
+    return { id: part.sessionId, label: label(part), detail, disabled: !!blocked };
+  });
+  const message = ['"' + name + '" continues in ' + (candidateParts.length === 1 ? 'another part' : candidateParts.length + ' other parts') + '. Choose the one to open.'];
+  if (!result || result.unresolved) message.push('Some continuation records could not be read, so this list may be incomplete. This choice is not remembered.');
+  if (liveFailed) message.push('Switchboard could not check which parts are running.');
+  const selectedId = options.find(option => !option.disabled)?.id;
+  const answer = await choose({ title: 'Open which part?', message, options, selectedId, confirmLabel: 'Open' });
+  const selected = options.find(option => option.id === answer?.choice && !option.disabled);
+  if (!selected) return null;
+  const chosenPart = parts.find(part => part.sessionId === selected.id);
+  if (!liveFailed) onLive?.(liveById[chosenPart.target.sessionId] || null);
+  return chosenPart.target;
 }
 
 if (typeof module !== 'undefined' && module.exports) {

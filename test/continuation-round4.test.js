@@ -219,7 +219,7 @@ test('R4 R3 live missing target with an indexed sibling remains ambiguous', { ti
 test('R4 R3 a live missing background target uses attach when manually chosen', { timeout: 9000 }, async t => {
   const h = setup(t, { old: ['new', 'fresh'], new: [] }, {
     live: { fresh: { kind: 'bg', jobId: '1234abcd', pid: 7 } },
-    answer: message => /Open fresh\?/.test(message),
+    choice: 'fresh',
   });
   await h.click();
   assert.deepEqual(h.spawned.map(call => call.id), ['fresh']);

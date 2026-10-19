@@ -34,6 +34,7 @@ const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp, continuationRollup } = require('./session-continuations');
 const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds: resolveConversationMemberIds } = require('./sidebar-bg-sessions');
 const { conversationMeta } = require('./conversation-meta');
+const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./bg-agents-roster');
 const { state: TRACE, trace } = require('./activity-trace');
 
@@ -987,6 +988,7 @@ function buildProjectsFromCache(showArchived) {
           aiTitle: part?.aiTitle || null,
           summary: part?.summary || null,
           modified: part?.modified || null,
+          messageCount: part?.messageCount,
         };
       });
     }
@@ -1467,7 +1469,7 @@ function populateCacheViaWorker({ force = false } = {}) {
 async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024, getSessionLiveElsewhere } = {}) {
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new RangeError('chunkBytes must be a positive integer');
   let diskEntries;
-  return resolveContinuations(sessionId, async id => {
+  const result = await resolveContinuations(sessionId, async id => {
     if (!validId(id)) return null;
     const row = getCachedSession?.(id);
     if (!row) {
@@ -1510,6 +1512,24 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     }
     return { index, modified: getCachedSession(id)?.modified || row.modified };
   });
+  if (!result.candidates.length) return result;
+  try {
+    const cachedRows = getAllCached();
+    const { localDescriptors, localJobs } = localBackgroundState();
+    const conversations = conversationGroups(cachedRows, localDescriptors, localJobs);
+    const metaMap = getAllMeta(true);
+    result.candidates = result.candidates.map(candidate => {
+      const row = getCachedSession(candidate.sessionId);
+      const group = conversations.get(candidate.sessionId.toLowerCase());
+      const meta = conversationMeta(group ? [...group.partIds] : [candidate.sessionId], metaMap, group?.rootId || candidate.sessionId);
+      return { ...candidate, title: cleanDisplayName(meta.name || row?.customTitle || row?.aiTitle || row?.summary || '').slice(0, 200) || null,
+        messageCount: row?.messageCount };
+    });
+  } catch (err) {
+    log?.warn?.('[session-cache] continuation enrichment failed:', err.message);
+    result.candidates = result.candidates.map(candidate => ({ ...candidate, title: null }));
+  }
+  return result;
 }
 
 module.exports = { shutdownProducers,

@@ -1853,6 +1853,7 @@ function settleContinuedInFlight(item) {
 
 async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onOpenError, reattachOnly = false } = {}, open = null) {
   const restoreNoticeSessions = [session];
+  let freshLive = false;
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
@@ -1881,11 +1882,24 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
   if (!continuationResolved && customOptions?.type !== 'attach' && (!openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
     const originalId = session.sessionId;
-    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), resolutions: window._startupResumeResolutions });
+    let continuationLive;
+    session = await resolveResumeSession(session, { automatic, api: window.api, confirm: question => appConfirm(question),
+      choose: question => appChoose(question), resolutions: window._startupResumeResolutions,
+      describe: id => {
+        const row = indexedRowOf(id);
+        const part = row?.conversationParts?.find(part => part.sessionId === id) || row;
+        return { name: cleanDisplayName(part?.name || part?.aiTitle || part?.summary),
+          runningHere: row ? !!rowOpenId(row) : !!openSessions.get(id) && !openSessions.get(id).closed };
+      }, resolveRow: candidate => {
+        const row = indexedRowOf(candidate.sessionId);
+        return row ? rowHeadSession(row) : { ...session, sessionId: candidate.sessionId,
+          headSessionId: candidate.sessionId, mergedMemberIds: [] };
+      }, onLive: found => { continuationLive = found; freshLive = true; } });
     if (!session) return false;
     restoreNoticeSessions.push(session);
+    if (continuationLive !== undefined) live = continuationLive;
     if (session.sessionId !== originalId) {
-      live = undefined;
+      live = continuationLive;
       allowBgAttach = true;
       const held = skippedWorkingSetEntries.get(originalId);
       if (held || restoreSavedIndex.has(originalId)) {
@@ -1915,20 +1929,21 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   const { sessionId, projectPath } = session;
 
   // If already open, handle closed-session cleanup or just show it
-  if (openSessions.has(sessionId)) {
-    const entry = openSessions.get(sessionId);
+  const resolvedOpenId = currentOpenId() || sessionId;
+  if (openSessions.has(resolvedOpenId)) {
+    const entry = openSessions.get(resolvedOpenId);
     if (entry.closed) {
-      destroySession(sessionId);
+      destroySession(resolvedOpenId);
     } else {
       for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
-      if (clearDormantRow(sessionId)) schedulePersistWorkingSet();
-      if (mayShow()) showSession(sessionId);
+      if (clearDormantRow(resolvedOpenId)) schedulePersistWorkingSet();
+      if (mayShow()) showSession(resolvedOpenId);
       return;
     }
   }
 
   // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
-  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, onBlocked, api: window.api, name: cleanDisplayName(session.name || session.aiTitle || session.summary), confirm: question => appConfirm({ ...question }), notify: notice => showAppNotice(notice) });
+  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, freshLive, allowBgAttach, onBlocked, api: window.api, name: cleanDisplayName(session.name || session.aiTitle || session.summary), confirm: question => appConfirm({ ...question }), notify: notice => showAppNotice(notice) });
   if (verdict === false) return false;
   if (verdict && typeof verdict === 'object' && verdict.attach) {
     customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };

@@ -640,10 +640,30 @@ failed lookups hold the saved entry and join the non-blocking restore notice,
 which names the original entry. A disk-present, unindexed continuation says
 it is waiting for indexing; held entries retry once when indexing finishes,
 even when the ordinary planner already settled. Ambiguous graphs ask for a
-sidebar choice. No continuation confirmation runs during automatic restore. Manual
-opens list each candidate's id and last activity before asking whether to open
-it. Declining all candidates offers an explicit original-session choice; an
-unresolved graph or failed lookup offers the same choice with a warning.
+sidebar choice. Automatic restore and reload never open the chooser. Manual
+opens with external candidates use one Open which part? chooser, including the
+clicked part. Options show a name, local last-active time, known message count,
+and location words from one map in resume-guard.js. Newest activity comes first,
+unknown dates last; the newest enabled option is preselected. Names use the
+indexed renderer row, then the main-side title (metadata name, custom title,
+AI title or summary). Main also supplies each candidate's known message count.
+Candidates on the same target row share one option. When that option opens a
+newer head, its name, date and own count come from the head's conversationParts
+entry, rather than the first candidate or the row's aggregate count. A target
+with any part open here says running here and selecting it shows that tab,
+using the sidebar's rowOpenId rule instead of spawning the head.
+Missing names say Untitled conversation, invalid dates say last active unknown,
+and unknown counts are omitted; session ids do not appear in the question text.
+A single liveness batch covers all options. The selected result feeds guardResume
+without a second probe; the guard still checks the selected row's other members,
+using the target row rather than the source row when the choice moves outside it.
+A failed or invalid batch is declared in the chooser and the selected part is
+checked by the guard. Background parts without a usable job id are disabled;
+scheduled parts stay enabled and lead to Resume anyway. An unresolved graph
+with known candidates states that the list may be incomplete. With no known
+candidate, unknown graphs and failed lookups offer Open as it was or Cancel,
+with a named explanation (including waiting for indexing). Choices are not
+remembered yet, so resolved questions make no next-time or menu promise.
 Cancellation keeps the held entry. Remote sessions retain their attach behavior.
 
 `restoreStartupSessions` shares a map of lookup promises between the remembered

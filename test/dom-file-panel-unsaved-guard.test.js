@@ -782,7 +782,7 @@ test('N2: unsaved guard traps Tab and cancels Escape from the body', async () =>
     assert.deepEqual(ctx.calls.answers, [{ id: 71, proceed: false }]);
   } finally { ctx.destroy(); }
 });
-test('N4: unsaved guard waits for every continuation question, including the final fallback', async () => {
+test('N4: unsaved guard waits for the single continuation chooser', async () => {
   const ctx = setup();
   try {
     loadAppDialogs(ctx);
@@ -791,16 +791,15 @@ test('N4: unsaved guard waits for every continuation question, including the fin
     await dirtyTab(ctx, 's1', A);
     const chain = ctx.window.resolveResumeSession({ sessionId: 'original' }, {
       api: { getSessionContinuations: async () => ({ candidates: [{ sessionId: 'first' }, { sessionId: 'second' }] }) },
-      confirm: message => ctx.window.appConfirm({ message }),
+      choose: question => ctx.window.appChoose(question),
     });
     await flush();
     const checking = ctx.calls.check(70, 'quit');
-    for (let i = 0; i < 3; i++) {
-      await flush();
-      assert.equal(dialog(ctx), null, `guard must wait for question ${i + 1}`);
-      assert.equal(ctx.window.document.querySelectorAll('.choice-dialog-overlay').length, 1);
-      dialogKey(ctx, 'Escape');
-    }
+    await flush();
+    assert.equal(dialog(ctx), null, 'guard must wait for the chooser');
+    assert.equal(ctx.window.document.querySelectorAll('.choice-dialog-overlay').length, 1);
+    assert.equal(ctx.window.document.querySelectorAll('input[type=radio]').length, 3);
+    dialogKey(ctx, 'Escape');
     assert.equal(await chain, null);
     await flush();
     assert.ok(dialog(ctx));

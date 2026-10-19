@@ -138,11 +138,18 @@ without launching it. A non-blocking notice names the held conversation and
 asks you to open it from the sidebar to choose; other saved sessions continue
 restoring. Automatic restore never displays a continuation confirmation dialog.
 
-Clicking an old sidebar row offers its continuations, listing each id and its
-last activity. After declining the candidates, you can explicitly choose
-**Open the original session** or cancel. An unresolved continuation also offers
-this explicit original-session choice, with a warning and any known candidates.
-The original id is never silently selected when continuation information exists.
+Opening a row with continuations outside that row shows one **Open which part?**
+dialog. It lists the candidates and the part you clicked by name, last activity,
+message count when known, and where each is running. The newest available part
+is preselected; **Open** has focus and Enter opens it. **Cancel** opens nothing.
+A background part without an identifiable job is disabled with its reason.
+A scheduled part remains selectable and then asks **Resume anyway**.
+An incomplete list says so, as does a failure to check which parts are running.
+With no known candidate, a failed lookup or unresolved continuation offers
+**Open as it was** or **Cancel**, with the reason. Choices are not remembered;
+automatic restore holds ambiguous entries without showing the chooser. Reload opens
+no tab for an ambiguous entry and currently shows no notice (#729).
+A proven linear chain or same-row bridge alternative needs no choice.
 Ordinary malformed lines that mention continuations, unrelated incomplete tails
 and oversized records do not block opening the original session. Large transcripts
 are indexed in yielded chunks without a total byte limit.

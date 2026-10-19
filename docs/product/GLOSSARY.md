@@ -31,8 +31,8 @@ concept. Each entry gives:
   `bridgeSessionId` group (`session-cache.js`, `mergeBridgeGroups`).
 - **Today**: the product has no word for it. The UI says "session" for it, for
   the process and for the row (m8, M4). The only UI strings that say
-  "conversation" are dialogs: "This conversation continued under another id"
-  (`public/resume-guard.js:68`), "Delete this background session? Its
+  "conversation" include the continuation chooser's Untitled conversation
+  fallback (`public/resume-guard.js`), "Delete this background session? Its
   conversation goes…" (`public/agents-view.js:421`).
 
 ### Transcript
@@ -66,10 +66,11 @@ concept. Each entry gives:
   `/compact` case).
 - **Code**: `resolveResumeSession` (`public/resume-guard.js:46-75`);
   `session-continuations.js`.
-- **Today**: a continuation stays a separate sidebar row; the choice is made in
-  a sequence of `confirm()` dialogs at open time: "This conversation continued
-  under another id: … Open <id>?" (`public/resume-guard.js:66-70`). Compare
-  with `/compact`, which merges into one row (M4).
+- **Today**: proven local linear chains share a row. Real alternatives outside
+  the row use one **Open which part?** chooser on manual opens, showing names,
+  last activity, known message counts and locations, plus the clicked part.
+  Choices are not remembered yet. Automatic restore holds ambiguity with a
+  notice; reload never prompts. A same-bridge alternative is not a branch.
 
 ### `/clear`
 

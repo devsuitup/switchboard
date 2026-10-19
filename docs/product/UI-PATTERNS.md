@@ -334,10 +334,11 @@ share one flash helper that colours by class, not by outcome.
 | New session popover | project and worktree + buttons (`dialogs.js`, `showNewSessionPopover`) | `role="menu"` / `menuitem`; opener has `aria-haspopup="menu"` and `aria-expanded`; first item focused on open; Up/Down wrap, Home/End select edges, Enter/Space activate; Escape closes and refocuses +; focusout to outside and outside click close |
 
 **Prompt rules as they are.**
-- Continuations: one `confirm` per candidate, each repeating the whole
-  listing with raw UUIDs, then `No continuation selected.\n\nOpen the
-  original session <uuid>?` (`resume-guard.js:58-72`). A manual open of a
-  closed session asks again every time (the `resolutions` cache is used only
+- Continuations: one B6 radio chooser with names, last activity, known message
+  counts and location words, newest enabled part preselected. Open has focus;
+  Cancel opens nothing. The clicked part is an option. Unknown data is stated,
+  and a background part without an identifiable job is disabled with a reason.
+  A manual open asks again every time (the `resolutions` cache is used only
   for automatic opens, `resume-guard.js:50-53`; `app.js:1507-1509`). Since
   #539 a double click runs one open, not two (`app.js:1481-1496`), and an
   open tab of the row or a member is shown without any prompt
@@ -350,15 +351,15 @@ share one flash helper that colours by class, not by outcome.
   (`choice-dialog.js:21, 133`), including for the folder Archive
   (`sidebar.js:1195`); the hand-built modals set none.
 
-**Divergences.** Four dialog implementations; the accessible one is used once.
-Choosing one item of N is modelled as N yes/no questions. An info message is
-a two-button question.
+**Divergences.** Several hand-built dialogs still coexist with the shared shell.
+Continuation selection now uses the shared accessible radio chooser rather than
+one yes/no question per candidate.
 
 **Proposed convergence.**
 - One dialog shell (B5's) for every modal: confirmation, form (B7), chooser
   (B6).
-- Continuation choice: B6 lists candidates by title and last activity, the
-  most recent preselected, asked once per session per run.
+- Continuation choice: B6 is now used on manual opens. Remembering and
+  revalidating a choice across opens and restarts remains future work.
 - An information-only case is a notice (B8), not a `confirm`.
 - Default focus: Cancel for `danger`, confirm otherwise.
 - `Cancel` for every dismiss button of a dialog that can change something;

@@ -9,7 +9,7 @@ const { loadAppFunctions } = require('./app-source');
 const cache = require('../session-cache');
 const { encodeProjectPath } = require('../encode-project-path');
 
-function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes } = {}) {
+function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, metadata = {}, choice } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-continuations-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const folder = encodeProjectPath(root);
@@ -24,11 +24,12 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   }
   const rows = new Map(), folderMeta = new Map();
   const db = {
-    getSetting: () => ({}), getAllFolderMeta: () => folderMeta, getFolderMeta: id => folderMeta.get(id), getAllMeta: () => new Map(),
+    getSetting: () => ({}), getAllFolderMeta: () => folderMeta, getFolderMeta: id => folderMeta.get(id), getAllMeta: () => new Map(Object.entries(metadata)),
+    getAllCached: () => [...rows.values()],
     getCachedByFolder: () => [...rows.values()], getCachedSession: id => rows.has(id) ? { ...rows.get(id) } : undefined,
     upsertCachedSessions: entries => entries.forEach(row => rows.set(row.sessionId, row)),
     setCachedContinuationIndex(id, index) { if (rows.has(id)) rows.set(id, { ...rows.get(id), continuationIndex: index }); },
-    setFolderMeta(id, projectPath, mtime) { folderMeta.set(id, { projectPath, mtime }); }, getMeta() {}, setName() {}, upsertSearchEntries() {}, replaceSessionMetrics() {},
+    setFolderMeta(id, projectPath, mtime) { folderMeta.set(id, { projectPath, mtime }); }, getMeta: id => metadata[id], setName() {}, upsertSearchEntries() {}, replaceSessionMetrics() {},
     deleteCachedFolder() {}, deleteCachedSession() {}, deleteSearchFolder() {}, deleteSearchSession() {},
   };
   cache.init({ PROJECTS_DIR: root, db, activeSessions: new Map(), getMainWindow: () => null, log: console });
@@ -36,13 +37,17 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   const dom = new JSDOM('<body><div id="app-notices"></div></body>', { runScripts: 'outside-only', url: 'http://localhost' });
   t.after(() => dom.window.close());
   const ctx = dom.getInternalVMContext();
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/app-notices.js'), 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/app-notices.js'), 'utf8'), ctx, { filename: path.join(__dirname, '../public/app-notices.js') });
   const settingsFile = path.join(root, 'settings.json');
   const saved = savedEntries || [{ sessionId: 'old', projectPath: root, active: true }];
   fs.writeFileSync(settingsFile, JSON.stringify({ openWorkingSet: saved }));
   const spawned = [], prompts = [];
   dom.window.appConfirm = async ({ message: message }) => { prompts.push(message); return typeof answer === 'function' ? answer(message) : answer; };
   dom.window.appAlert = async ({ message }) => { prompts.push(message); };
+  dom.window.appChoose = async question => {
+    prompts.push(question);
+    return choice !== undefined ? { choice } : answer === true ? { choice: question.selectedId } : null;
+  };
   dom.window.api = {
     getSetting: async () => JSON.parse(fs.readFileSync(settingsFile, 'utf8')),
     setSetting: async (_, value) => fs.writeFileSync(settingsFile, JSON.stringify(value)),
@@ -54,7 +59,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
   };
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx, { filename: path.join(__dirname, '../public/resume-guard.js') });
   vm.runInContext(`
-    var openSessions = new Map(), sessionMap = new Map(), pendingSessions = new Map();
+    var openSessions = new Map(), sessionMap = new Map(), pendingSessions = new Map(), localMergedMemberRows = new Map();
     var activeSessionId = null, restoringWorkingSet = true, restorePlanner = null;
     var sessionOpenedOutsideRestore = false, _persistChain = Promise.resolve();
     var RESTORE_STAGGER_MS = 0;
@@ -69,12 +74,15 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes }
     function forgetSessionExit() {} function beginPtyOpen() {} function settlePtyOpen() {}
     function schedulePersistWorkingSet() {} function pollActiveSessions() {}
     function cleanDisplayName(value) { return value || ''; }
-  `, ctx);
+  `, ctx, { filename: __filename });
   ctx.rows = [...rows.values()];
-  vm.runInContext('rows.forEach(row => sessionMap.set(row.sessionId, row));', ctx);
+  vm.runInContext('rows.forEach(row => sessionMap.set(row.sessionId, row));', ctx, { filename: __filename });
   dom.window.showRestoreNotice = (_, text) => { dom.window.notice = text; };
   loadAppFunctions(ctx, {
     functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
+  });
+  loadAppFunctions(ctx, {
+    functions: ['rowHeadSession'], sourcePath: path.join(__dirname, '../public/sidebar.js'),
   });
   dom.window.SETTING_DEFAULTS = require('../public/setting-defaults').SETTING_DEFAULTS;
   const app = loadAppFunctions(ctx, {
