@@ -9,6 +9,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A conversation made of several transcripts now shows N parts, and its menu lists the parts with View messages and Copy id for each. (#564)
 
 ### Changed
+- Stop on a conversation made of several parts now stops every running part after one confirmation that says how many run and where. Every Stop confirmation says what ends and that the conversation is kept; a part running as a background job keeps running and is stopped from the Agents view. (#565, #564)
 - Switchboard remembers which part of a branched conversation you open, across restarts. It follows that part when it continues, and asks again only when a new part appears or your choice is gone. Choose part to open in the row's menu changes it; if there are no longer any parts to choose from, a notice says so. (#567)
 - When a conversation continued in more than one place, one dialog lists each conversation once by the name, last activity and message count of the latest part it opens, the newest preselected, instead of asking once per session id. Choosing a conversation already open here shows its tab; otherwise, opening it checks whether any part is running elsewhere. (#567)
 - Opening a session that is already running elsewhere, including one its scheduled task is running right now, says where it runs (pid, folder, start time, schedule name) and offers Resume anyway or Cancel. A background session Switchboard cannot attach to is refused with a notice that says why. (#567)

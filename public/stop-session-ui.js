@@ -13,6 +13,57 @@ function resolveSessionStop(session, { attach = false } = {}) {
   return { remote: false, alias: null, attach: false, confirmText: 'Stop this session?' };
 }
 
+async function planSessionStop(row, { attach = false } = {}) {
+  const targets = [];
+  const excluded = [];
+  for (const id of new Set(rowSessionIds(row))) {
+    const member = id === row.sessionId ? row : {
+      ...row, sessionId: id,
+      remoteDescriptorSeen: row.remoteMemberDescriptorSeen?.[id] ?? row.remoteDescriptorSeen,
+    };
+    const open = openSessions.get(id);
+    const active = activePtyIds.has(id) || !!(open && !open.closed);
+    const route = resolveSessionStop(member, { attach: !!(open?.attach && !open.closed) || (id === row.sessionId && attach) });
+    if (route.remote) {
+      const possiblyLive = member.remoteHostAt === null && !(typeof remoteSessionStates !== 'undefined'
+        && remoteSessionStates.get(id)?.snapshot().liveness === 'dead');
+      if (possiblyLive || isRemoteSessionAlive(member) || active) {
+        targets.push({ sessionId: id, ...route, where: `on ${remoteHostLabel(route.alias)}`, possiblyLive });
+      }
+      continue;
+    }
+    if (route.attach) {
+      targets.push({ sessionId: id, ...route, where: 'in this window', jobId: open?.attachJobId });
+      continue;
+    }
+    let check;
+    if (typeof window.api.bgAgentLiveJob === 'function') {
+      try { check = await window.api.bgAgentLiveJob(id); } catch (error) {
+        check = { known: false, reason: error?.message || 'unknown error' };
+      }
+    }
+    if (check?.known === false) {
+      excluded.push({ sessionId: id, reason: `cannot tell whether a background job is running this part (${check.reason || 'unknown'})` });
+    } else if (check?.job) {
+      excluded.push({ sessionId: id, reason: `background job ${check.job.id} keeps running; stop it from the Agents view` });
+    } else if (active) {
+      targets.push({ sessionId: id, ...route, where: 'in this window' });
+    } else if (storedActivitySnapshot(id, row)?.liveness === 'alive') {
+      excluded.push({ sessionId: id, reason: 'a process outside this window keeps running; stop it in its own terminal' });
+    }
+  }
+  const stopping = targets.filter(target => !target.attach);
+  const attachOnly = targets.length > 0 && !stopping.length;
+  const lines = targets.map(target => target.attach
+    ? `Part ${target.sessionId}: detach its tab in this window; background job ${target.jobId || target.sessionId} keeps running; stop it from the Agents view.`
+    : `Part ${target.sessionId}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}.`);
+  const confirmText = [attachOnly ? 'Detach from this background session? It keeps running; the Agents view can stop it.'
+    : stopping.length ? `Stop ${stopping.length} part${stopping.length === 1 ? '' : 's'}?` : 'No parts can be stopped here.', ...lines,
+    ...(stopping.length ? ["Each stopped part's process ends; the conversation is kept and can be resumed."] : []),
+    ...excluded.map(part => `Part ${part.sessionId}: ${part.reason}.`)].join('\n');
+  return { targets, excluded, attach: attachOnly, confirmText };
+}
+
 // Is this remote session's process still running? See .ai/contexts/session-state.md ("stopBeforeArchive").
 function isRemoteSessionAlive(session) {
   if (!session) return false;
@@ -89,5 +140,5 @@ async function stopBeforeArchive(session, { unreachable } = {}) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { resolveSessionStop, isRemoteSessionAlive, stopBeforeArchive };
+  module.exports = { resolveSessionStop, planSessionStop, isRemoteSessionAlive, stopBeforeArchive };
 }

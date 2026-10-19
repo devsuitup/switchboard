@@ -276,14 +276,32 @@ active because the process is alive, not because a tab is open.
 | detach | not offered — closing a session's view is a stop (unchanged) | `stop-session`'s pre-existing behavior: `killPty` → the tmux adapter's `detach()` (`remote-attach.js`) — ends the local ssh client, optionally restores tmux options (solo attach, #256). Still reachable today wherever `activeSessions` cleanup calls `killPty` on a `kind: 'remote-attach'` session without a preceding `remote-stop-session` call, and via `close-terminal`'s ordinary detach (marks `rendererAttached=false`, kills nothing). |
 | stop | kill the PTY (`stop-session`, unchanged) | **new**: `remote-stop-session` IPC (`{alias, sessionId}`) — kills the process on the host itself, same control and same confirmation dialog as local. No session locked by name or role. |
 
-**No new dialog component.** `public/stop-session-ui.js`'s `resolveSessionStop(session)`
-is the only thing that differs between a local and a remote stop: which IPC
-to call, and the `confirm()` text (the host alias is named for a remote
-session). `app.js`'s `confirmAndStopSession` is still the single call site of
-the dialog and the single stop control (the sidebar row's `.session-stop-btn`,
-the terminal header's stop button, and the grid card's stop button all funnel
-through it) — it now asks `resolveSessionStop` which IPC to call instead of
-always calling `stopSession`.
+**No new dialog component.** `public/stop-session-ui.js`'s async
+`planSessionStop(row, { attach })` collects local PTYs, remote processes and
+attached background-job tabs. The sidebar passes its whole row; the terminal
+header and grid card pass an id and plan only that tab. `resolveSessionStop`
+still selects the IPC for each target and remains available to Archive/Delete.
+Confirmed-dead remote members are filtered out unless their view is still
+active; an unseeded host (`remoteHostAt === null`) is possibly live until a
+dead snapshot says otherwise. Remote locations use the saved host label;
+IPC retains the alias.
+
+`app.js`'s `confirmAndStopSession` asks once with danger styling, the number
+of processes, each part's id and location, and the consequence: each stopped
+process ends, while the conversation is kept and can be resumed. A background
+part keeps running and is named with its job id and the Agents view as the
+way to stop it. An attached job tab is a detach target, never a job stop.
+Processes outside this window and unreadable background-job ownership are
+excluded and explained before confirmation. With no targets, exclusions are
+shown as a notice without a confirmation. Detach-only plans still confirm;
+removing that question and adding Undo belong to #565 PR2.
+
+Cancel makes no stop calls. The executor attempts every target, clears PTY
+and remote state only after success, and reports all failed parts in one
+persistent notice with Retry. A retry builds a fresh plan. Archive and Delete
+keep their existing `stopBeforeArchive` behavior until their own #565 slices.
+The row's failure notice retains its Stop identity even if a retry has only
+detach targets left, so a successful retry clears the original notice.
 
 ### Opening a session once
 

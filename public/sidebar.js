@@ -1613,11 +1613,7 @@ function rebindSidebarEvents(projects) {
     if (stopBtn) {
       stopBtn.onclick = (e) => {
         e.stopPropagation();
-        const ids = rowSessionIds(session);
-        const runningId = ids.find(id => activePtyIds.has(id))
-          || (ids.length > 1 && ids.find(id => storedActivitySnapshot(id)?.liveness === 'alive'))
-          || session.sessionId;
-        return confirmAndStopSession(runningId, stopBtn, session);
+        return confirmAndStopSession(session, stopBtn);
       };
     }
 
