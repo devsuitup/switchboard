@@ -20,9 +20,16 @@ test('a complete output record in the tail avoids reading backwards through an 8
     return count;
   } };
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../transcript-turn.js'), 'utf8'), {
-    module, Buffer, require: name => name === 'fs' ? trackedFs : require(name),
-  });
+  const tailFilename = path.join(__dirname, '../transcript-tail.js');
+  const tailModule = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(tailFilename, 'utf8'), {
+    module: tailModule, Buffer, require: name => name === 'node:fs' ? trackedFs : require(name),
+  }, { filename: tailFilename });
+  const filename = path.join(__dirname, '../transcript-turn.js');
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, Buffer, require: name => name === 'fs' ? trackedFs
+      : name === './transcript-tail' ? tailModule.exports : require(name),
+  }, { filename });
   const reader = module.exports.createTranscriptTurnReader({ tailBytes });
   fs.writeFileSync(file, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'image', source: { data: 'x'.repeat(8 * 1024 * 1024) } }] } }) + '\n');
   let previous;
@@ -30,7 +37,7 @@ test('a complete output record in the tail avoids reading backwards through an 8
     fs.appendFileSync(file, JSON.stringify({ type: 'assistant', message: { content: text } }) + '\n');
     bytesRead = 0;
     const output = reader.read(file).writtenOutput;
-    assert.equal(bytesRead, tailBytes);
+    assert.ok(bytesRead <= 1024 * 1024, 'one poll must not scan the 8 MB image');
     assert.notEqual(output, previous);
     assert.match(output, /^[a-f0-9]{64}$/);
     previous = output;
@@ -58,6 +65,83 @@ test('the worker advances written output for a tool result larger than the trans
     previous = written;
   }
 });
+
+test('i730c: appending dropped oversized tool results advances the worker written-output signal', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-dropped-'));
+  const file = path.join(dir, 's.jsonl');
+  let snapshot;
+  const client = createTaskRecordsClient({ onSnapshot: value => { snapshot = value; } });
+  t.after(() => { client.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const read = async () => {
+    await client.readBatch([{ file, parentSessionId: 's', turnOnly: true }]);
+    return snapshot.headTurn.writtenOutput;
+  };
+  fs.writeFileSync(file, JSON.stringify({ type: 'assistant', message: { content: 'baseline' } }) + '\n');
+  let previous = await read();
+  const line = JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'x'.repeat(5 * 1024 * 1024) }] } }) + '\n';
+  for (let record = 0; record < 2; record++) {
+    fs.appendFileSync(file, line);
+    let written;
+    for (let poll = 0; poll < 8; poll++) written = await read();
+    assert.notEqual(written, previous, 'a newly dropped record must signal written activity');
+    assert.match(written, /^[a-f0-9]{64}$/);
+    assert.equal(await read(), written, 'unchanged output must stay stable');
+    const coldReader = require('../transcript-turn').createTranscriptTurnReader();
+    let cold;
+    for (let poll = 0; poll < 8; poll++) cold = coldReader.read(file);
+    assert.equal(cold.writtenOutput, written, 'backward and appended scans must identify the same record');
+    assert.equal(cold.state, 'unknown');
+    previous = written;
+  }
+});
+
+for (const scan of ['append', 'backward']) {
+  const parent = { parentUuid: '00000000-0000-4000-8000-000000000001', isSidechain: false };
+  for (const [kind, record, changes] of [
+    ['system', { parentUuid: null, logicalParentUuid: parent.parentUuid, isSidechain: false,
+      type: 'system', content: 'x'.repeat(5 * 1024 * 1024) }, false],
+    ['attachment', { type: 'attachment', content: 'x'.repeat(5 * 1024 * 1024) }, false],
+    ['user prompt', { ...parent, promptId: parent.parentUuid, type: 'user',
+      message: { role: 'user', content: 'x'.repeat(5 * 1024 * 1024) } }, false],
+    ['tool result', { ...parent, promptId: parent.parentUuid, type: 'user',
+      message: { role: 'user', content: [{ tool_use_id: 'toolu_synthetic', content: 'x'.repeat(5 * 1024 * 1024), type: 'tool_result' }] } }, true],
+    ['assistant', { ...parent, message: { model: 'claude-opus-5-5', id: 'msg_synthetic', type: 'message',
+      role: 'assistant', content: 'x'.repeat(5 * 1024 * 1024) }, type: 'assistant' }, true],
+  ]) {
+    test(`i730e: a dropped 5 MiB real-shape ${kind} ${changes ? 'advances' : 'preserves'} the worker fingerprint on ${scan}`, async t => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-kind-'));
+      const file = path.join(dir, 's.jsonl');
+      let snapshot;
+      const client = createTaskRecordsClient({ onSnapshot: value => { snapshot = value; } });
+      t.after(() => { client.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+      const read = async () => {
+        await client.readBatch([{ file, parentSessionId: 's', turnOnly: true }]);
+        return snapshot.headTurn.writtenOutput;
+      };
+      const baseline = JSON.stringify({ type: 'assistant', message: { content: 'baseline' } }) + '\n';
+      fs.writeFileSync(file, baseline);
+      const previous = await read();
+      assert.match(previous, /^[a-f0-9]{64}$/);
+      const line = JSON.stringify(record) + '\n';
+      if (scan === 'append') {
+        fs.appendFileSync(file, line.slice(0, 17));
+        assert.equal(await read(), previous);
+        fs.appendFileSync(file, line.slice(17, -1));
+        for (let poll = 0; poll < 8; poll++) assert.equal(await read(), previous);
+        fs.appendFileSync(file, '\n');
+      } else {
+        fs.renameSync(file, file + '.old');
+        fs.writeFileSync(file, baseline + line);
+      }
+      let written;
+      for (let poll = 0; poll < 8; poll++) written = await read();
+      if (changes) assert.notEqual(written, previous);
+      else assert.equal(written, previous, `${kind} must not signal written activity`);
+      assert.match(written, /^[a-f0-9]{64}$/);
+      assert.equal(await read(), written, 'unchanged output must stay stable');
+    });
+  }
+}
 
 test('the worker validates new main output, ignores metadata/partial writes/children, and carries the signature through rekey', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-'));

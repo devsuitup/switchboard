@@ -1377,14 +1377,70 @@ transcript also logs one info line.
 `ctx.getTranscriptTurn(sessionId)` when `main.js` passes `projectsDir`
 (`PROJECTS_DIR`): `<projectsDir>/<session.projectFolder>/<realSessionId or
 key>.jsonl`, local sessions only (a remote session returns `null`). The reader
-stats the file and re-reads the last 256 KiB only when its mtime, size or identity
-(device and inode, compared as BigInt; see Compaction evidence) changes, so an ordinary turn poll costs a `stat`. Compaction evidence additionally
+stats the file and refreshes its filtered tail when its mtime, size or identity
+(device and inode, compared as BigInt; see Compaction evidence) changes. A completed unchanged tail costs only a `stat`. Compaction evidence additionally
 uses the bounded cursor described below. The cache holds one entry per path, so
 two chains on two sessions do not re-read each other's files. A chain
 evicts its session's entry when it ends, whatever the outcome
 (`ctx.forgetTranscriptTurn`, which remembers the path read for the session,
 so it works after the session left `activeSessions`). A missing file, a read error, or a tail
 with no message entry is never "closed".
+
+### Transcript tail reads
+
+`transcript-tail.js` scans backward in 256 KiB blocks, skipping lines whose
+prefix identifies a top-level `api-request`, `api-request-shape` or `api-request-blob` before JSON
+parsing. The retained tail covers 256 KiB of other records, so API payloads cannot displace a user
+prompt or the closing assistant and its `turn_duration`. Both
+`transcriptOwnEntryAt` and `transcriptReactedSince` use this filtered prompt list.
+Each chain step also latches its own observed prompt timestamp through submit
+verification and pending confirmation while the transcript path, device and
+inode stay the same. Losing the prompt from a later filtered tail does not
+restart the own-entry timeout; replacing the transcript discards that proof.
+
+An ordinary call reads at most 1 MiB. If a line extends beyond that budget,
+the next call resumes from its saved byte offset, including when the file grows.
+Strict growth on the same device/inode with a nondecreasing mtime checks the
+first, old middle and previous last 64 bytes, then preserves the backward scan
+and consumes appended records forward. Edits outside those samples can still
+escape detection; a changed sample or decreasing mtime restarts the scan.
+Until scanning catches up, classification uses the latest physical tail.
+Pending fragments retain at most 4 MiB; beyond that only a prefix sample and
+offset remain. At the line boundary, an API prefix discards the record; another
+prefix counts as unknown and consumes the logical tail budget. The first 256
+bytes are retained on both backward and appended scans. Heads starting with
+`type` identify assistant records or user records with a visible `tool_result`
+type or `tool_use_id`. Real Claude heads starting with `parentUuid` identify
+assistant output through `message.model` (the outer `type` can follow the whole
+message), or user tool results through the same visible tool markers. The
+synthetic fixtures place `message.model` at byte 84 and `tool_use_id` at byte
+174; both fit within 256 bytes, while 128 misses the tool marker. Explicit
+non-output types before `message`, including `system` and `attachment`, remain
+spaces. Recognized output gets a synthetic assistant output with a SHA-256
+fingerprint of the record's byte offset and length, padded to the logical tail
+budget. Other dropped records
+keep a spaces-only placeholder and do not advance written activity. Completed
+dropped outputs advance the task-records worker's written-activity signal;
+unchanged reads and backward rescans retain the same fingerprint. The placeholder
+has no timestamp, so it supplies no turn or prompt evidence. Non-API records
+within that bound remain whole for the written-output fingerprint.
+Classification still receives only the final 256 KiB of filtered bytes, so an
+oversized non-API user record keeps its existing unknown-head behavior.
+An unchanged completed
+snapshot reads no bytes. Truncation, replacement, changed boundary samples or
+same-size mtime changes restart the scan; `forgetTranscriptTurn` also clears it.
+Each filtered-tail reader retains at most 128 paths, evicting the least recently
+used path. Growth does not throw away progress, but scanning remains subject to
+the chain's overall deadline.
+
+The live SDK entrypoint reader uses a fresh filtered-tail reader with a 4 MiB
+one-shot budget and retains no scan cache, preserving its head sample and
+full-scan mode. An unfinished scan with no terminal
+proof returns `null` rather than declaring the session SDK-only. Fixtures for
+#730 measured both previously unmeasured cases: a closing assistant before a
+300,000-byte API line lost `closedAt`, and a terminal user in a transcript over
+2 MiB was misclassified `sdk-cli`. Both now retain their evidence. The 50 MiB
+fixture verifies the per-call byte ceiling and zero-byte completed cache hits.
 
 **Known limits.**
 

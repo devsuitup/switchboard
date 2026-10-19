@@ -452,10 +452,21 @@ function transcriptShowsTurnOver(ctx, sessionId, desc, afterMs, now, dialogSeen)
   return now - turn.mtimeMs >= getTranscriptQuietMs();
 }
 
-function transcriptOwnEntryAt(ctx, sessionId, sinceMs, command) {
+function transcriptOwnEntryAt(ctx, sessionId, sinceMs, command, seen) {
   const turn = readTranscriptTurn(ctx, sessionId);
+  const identity = turn?.compactionCursor;
+  if (seen) {
+    if (!identity || identity.dev !== seen.dev || identity.ino !== seen.ino || identity.filePath !== seen.filePath) {
+      seen.at = null;
+    }
+    if (identity) Object.assign(seen, { dev: identity.dev, ino: identity.ino, filePath: identity.filePath });
+  }
   if (!turn || !Array.isArray(turn.prompts)) return null;
   const own = turn.prompts.find((p) => Number.isFinite(p.at) && p.at >= sinceMs && promptMatches(p.text, command));
+  if (seen && identity) {
+    seen.at = own ? own.at : seen.at ?? null;
+    return seen.at;
+  }
   return own ? own.at : null;
 }
 
@@ -464,13 +475,13 @@ function cliReadsBusyOrShell(ctx, sessionId) {
   return !!desc && TRANSCRIPT_FALLBACK_STATUSES.includes(desc.status);
 }
 
-function transcriptReactedSince(ctx, sessionId, sinceMs, command) {
-  if (!cliReadsBusyOrShell(ctx, sessionId)) return false;
-  return transcriptOwnEntryAt(ctx, sessionId, sinceMs, command) !== null;
+function transcriptReactedSince(ctx, sessionId, sinceMs, command, seen) {
+  const ownAt = transcriptOwnEntryAt(ctx, sessionId, sinceMs, command, seen);
+  return cliReadsBusyOrShell(ctx, sessionId) && ownAt !== null;
 }
 
 // see .ai/contexts/trigger-watcher.md, "A chain step written while the CLI stays busy"
-function waitForPendingConfirmation(sessionId, ctx, enterAtMs, command, deadlineMs) {
+function waitForPendingConfirmation(sessionId, ctx, enterAtMs, command, deadlineMs, seen = {}) {
   const start = Date.now();
   const ownEntryDeadline = isCompactCommand(command) ? deadlineMs : Math.min(deadlineMs, enterAtMs + getPendingOwnEntryMs());
   return pollLoop((resolve, scheduleNext) => {
@@ -482,7 +493,7 @@ function waitForPendingConfirmation(sessionId, ctx, enterAtMs, command, deadline
     if (cliReactedSince(ctx, sessionId, enterAtMs)) {
       return resolve({ confirmed: true, source: 'descriptor', sessionExited: false, timedOut: false, waited_ms });
     }
-    const ownAt = transcriptOwnEntryAt(ctx, sessionId, enterAtMs, command);
+    const ownAt = transcriptOwnEntryAt(ctx, sessionId, enterAtMs, command, seen);
     if (ownAt !== null
       && transcriptShowsTurnOver(ctx, sessionId, readCliStatusRaw(ctx, sessionId), ownAt, now, false)) {
       return resolve({ confirmed: true, source: 'transcript', sessionExited: false, timedOut: false, waited_ms });
@@ -724,7 +735,7 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
  * the caller keeps the legacy instant-reply semantics — submit_retries traces
  * that the verification could not confirm a turn started.
  */
-async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { transcriptReaction = false } = {}) {
+async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { transcriptReaction = false, ownEntry = {} } = {}) {
   // Sampled before the write — see .ai/contexts/trigger-watcher.md ("submitted").
   const preBusy = ctx.isSessionBusy(sessionId);
 
@@ -754,7 +765,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
   const probe = edgeMode
     ? () => {
       if (cliReactedSince(ctx, sessionId, enterAt)) { confirmSource = 'descriptor'; return true; }
-      if (transcriptReaction && transcriptReactedSince(ctx, sessionId, enterAt, command)) { confirmSource = 'transcript'; return true; }
+      if (transcriptReaction && transcriptReactedSince(ctx, sessionId, enterAt, command, ownEntry)) { confirmSource = 'transcript'; return true; }
       return false;
     }
     : undefined;
@@ -1788,9 +1799,10 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     // step spent, not just the submit-verify portion.
     let stepWaitedMs = polite.waited_ms + readyWaitedMs;
     let verify;
+    const ownEntry = {};
     try {
       if (delivery) delivery.deadline = stepDeadline;
-      verify = await submitWithVerify(entryHandle, sessionId, step.command, ctx, stepDeadline, { transcriptReaction: true });
+      verify = await submitWithVerify(entryHandle, sessionId, step.command, ctx, stepDeadline, { transcriptReaction: true, ownEntry });
     } catch (err) {
       if (err.deliveryRefusal || delivery?.step?.text_written) {
         await writeResult({ ...deliveryFailure(err, steps, i), total_waited_ms: totalWaitedMs });
@@ -1822,7 +1834,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     if (!isCompactCommand(step.command) && verify.confirmed === false && verify.recoverySkipped && !verify.timedOut && !verify.sessionExited
       && cliReadsBusyOrShell(ctx, sessionId) && readTranscriptTurn(ctx, sessionId) !== null) {
       ctx.log.info(`[trigger-watcher] Chain step ${i} written while the CLI reads busy, waiting for its confirmation:`, sessionId);
-      const pending = await waitForPendingConfirmation(sessionId, ctx, verify.enterAt, step.command, stepDeadline);
+      const pending = await waitForPendingConfirmation(sessionId, ctx, verify.enterAt, step.command, stepDeadline, ownEntry);
       stepWaitedMs += pending.waited_ms;
       totalWaitedMs += pending.waited_ms;
       if (pending.confirmed) {
