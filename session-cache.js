@@ -1640,6 +1640,12 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     const row = getCachedSession?.(id);
     if (!row) {
       const { alias } = parseFolderKey(getCachedSession?.(sessionId)?.folder || '');
+      if (alias === null) {
+        for (const [key, session] of activeSessions || []) {
+          if (session && !session.exited && !session.host && !session.isPlainTerminal
+            && String(session.realSessionId || key).toLowerCase() === id.toLowerCase()) return { index: { ids: [] } };
+        }
+      }
       if (alias === null && getSessionLiveElsewhere) {
         const checked = await getSessionLiveElsewhere(id);
         if (!checked?.known) return null;

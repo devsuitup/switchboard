@@ -101,10 +101,13 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   }
   const rowIds = new Set([session.sessionId, ...(session.mergedMemberIds || [])]);
   const candidates = (result?.candidates || []).filter(candidate => !rowIds.has(candidate.sessionId));
-  if (result?.missing && !candidates.length) {
+  const missing = result?.missing || (result?.missingAt?.length && result.missingAt.every(id => rowIds.has(id)));
+  if (missing && !candidates.length) {
     notify?.({ id: `continuation-missing:${session.sessionId}`,
       message: '"' + conversationName() + '" continued in a part that no longer exists on disk, so it was opened as it was.' });
-    return session;
+    const head = session.headSessionId || session.sessionId;
+    return head === session.sessionId ? session
+      : { ...session, sessionId: head, mergedMemberIds: [...rowIds].filter(id => id !== head) };
   }
   if (automatic) {
     if (!result || result.unresolved) { onHold?.({ waitingForIndex: !!result?.waitingForIndex }); return null; }
