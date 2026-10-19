@@ -98,7 +98,9 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
     })().catch(error => {
       if (value && choices.get(key) === value) choices.delete(key);
       memoryNotify?.({ id: `continuation-memory:${rowKey}`, kind: 'error',
-        message: `Switchboard could not remember this choice: ${error.message || String(error)}. It will ask again next time.` });
+        message: value
+          ? `Switchboard could not remember this choice: ${error.message || String(error)}. It will ask again next time.`
+          : `Switchboard could not forget the earlier choice: ${error.message || String(error)}. It is still saved for the next restart.` });
     });
   };
   const partInfo = (candidate, id = candidate.sessionId) => {

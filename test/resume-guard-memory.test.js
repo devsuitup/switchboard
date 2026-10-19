@@ -148,3 +148,48 @@ test('T10 incomplete chooser ignores remembered preselection', async () => {
   await h.open();
   assert.equal(h.asked[0].selectedId, 'c');
 });
+
+test('malformed string candidates cannot silently reuse a persisted choice', async () => {
+  const h = harness(undefined, { chosen: 'b', candidates: 'bc' });
+  assert.equal(await h.open(), null);
+  assert.equal(h.asked.length, 1);
+  assert.deepEqual(h.writes, []);
+});
+
+test('a choice absent from its recorded candidates cannot follow a continuation silently', async () => {
+  const h = harness(['b2', 'c'], { chosen: 'b', candidates: ['b2', 'c'] });
+  h.opts.api.getSessionContinuations = async id => {
+    h.lookups.push(id);
+    return { candidates: (id === 'b' ? ['b2'] : ['b2', 'c']).map(sessionId => ({ sessionId })) };
+  };
+  assert.equal(await h.open(), null);
+  assert.equal(h.asked.length, 1);
+  assert.deepEqual(h.lookups, ['a']);
+  assert.deepEqual(h.writes, []);
+});
+
+test('T10 waiting for indexing with zero candidates neither reads nor writes the saved choice', async () => {
+  const h = harness([]);
+  const record = h.choices.get('continuationChoice:root');
+  const reads = [];
+  h.choices.get = key => { reads.push(key); return Map.prototype.get.call(h.choices, key); };
+  h.opts.api.getSessionContinuations = async () => ({ unresolved: true, waitingForIndex: true, candidates: [] });
+  const holds = [];
+  assert.equal(await h.open({ automatic: true, onHold: reason => holds.push(reason) }), null);
+  assert.equal(await h.open(), null);
+  assert.deepEqual(holds, [{ waitingForIndex: true }]);
+  assert.deepEqual(reads, []);
+  assert.equal(Map.prototype.get.call(h.choices, 'continuationChoice:root'), record);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(h.deleted, []);
+});
+
+test('a rejected delete reports that the earlier choice could not be forgotten', async () => {
+  const h = harness([]);
+  h.opts.api.deleteSetting = async () => { throw new Error('disk full'); };
+  assert.equal((await h.open()).sessionId, 'a');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.choices.size, 0);
+  assert.equal(h.notices[0].kind, 'error');
+  assert.equal(h.notices[0].message, 'Switchboard could not forget the earlier choice: disk full. It is still saved for the next restart.');
+});

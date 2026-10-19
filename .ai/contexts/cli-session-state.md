@@ -701,10 +701,14 @@ PR 6b and are not exposed here.
 
 `restoreStartupSessions` loads `getSettingsByPrefix('continuationChoice:')` once
 into `window._continuationChoices` before reload and working-set restore.
+A failed settings read falls back to an empty map so both restores and the
+Agents view still run. An unresolved lookup with zero candidates leaves saved
+choices unread and unchanged while indexing completes.
 Both automatic paths apply valid choices before holding ambiguous graphs.
 The map updates immediately on choice; `setSetting` and `deleteSetting` are
 not awaited by the opening path. Rejected writes remove that attempted value
 from the map and show a persistent error notice without blocking the terminal.
+A failed deletion instead says the earlier choice could not be forgotten.
 They use separate keys, preserving `global.openWorkingSet` and other settings.
 Evidence: `test/resume-guard-memory.test.js`, `test/continuation-memory.test.js`,
 `test/settings-prefix.test.js`. The continuation harness stores keys separately.

@@ -83,3 +83,34 @@ test('S7 a rejected choice write shows an error notice while the real open still
   assert.match(notice?.textContent || '', /could not remember this choice: read only.*ask again next time/);
   assert.equal(notice.getAttribute('role'), 'alert');
 });
+
+test('startup restores reload, working set and Agents after the choice settings read rejects', async t => {
+  const h = setup(t, { old: [], other: [] }, { savedEntries: [
+    { sessionId: 'old', projectPath: 'saved-project', active: true },
+    { sessionId: 'other', projectPath: 'saved-project', active: false },
+  ] });
+  for (const item of h.saved) item.projectPath = h.root;
+  h.ctx.api.getSettingsByPrefix = async () => { throw new Error('settings unavailable'); };
+  h.ctx._continuationChoices.set('continuationChoice:old', { chosen: 'stale', candidates: ['stale'] });
+  vm.runInContext('activeSessionId = "old";', h.ctx, { filename: __filename });
+  const app = loadAppFunctions(h.ctx, { functions: ['restoreStartupSessions', 'reopenActiveSessionAfterReload'] });
+  const calls = [];
+  h.ctx.reopenActiveSessionAfterReload = async () => { calls.push('reload'); await app.reopenActiveSessionAfterReload(); };
+  h.ctx.restoreWorkingSet = async () => { calls.push('working set'); await h.restore(); };
+  h.ctx.restoreAgentsViewAtStartup = () => { calls.push('Agents'); };
+  await assert.doesNotReject(app.restoreStartupSessions);
+  assert.deepEqual(calls, ['reload', 'working set', 'Agents']);
+  assert.deepEqual(h.spawned.map(s => s.id), ['old', 'other']);
+  assert.equal(h.ctx._continuationChoices.size, 0);
+  assert.equal(h.ctx._startupResumeResolutions, null);
+});
+
+test('restore of an unindexed continuation keeps the saved project path', async t => {
+  const h = setup(t, { old: ['new'], new: [] });
+  h.rows.get('old').projectPath = 'stale-project';
+  h.ctx.sessionMap.delete('new');
+  await h.restore();
+  assert.deepEqual(h.spawned.map(s => ({ id: s.id, project: s.project })), [{ id: 'new', project: h.root }]);
+  assert.equal(h.ctx.openSessions.get('new').session.projectPath, h.root);
+  assert.equal(h.settings().openWorkingSet[0].projectPath, h.root);
+});

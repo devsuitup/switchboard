@@ -358,7 +358,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         memoryNotify: notice => showAppNotice(notice),
         resolveRow: candidate => {
           const row = indexedRowOf(candidate.sessionId);
-          return row ? rowHeadSession(row) : { ...s, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] };
+          return row ? rowHeadSession(row) : { ...s, projectPath: item.projectPath, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] };
         },
         notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
         onHold: reason => { holdReason = reason; } });
@@ -2457,7 +2457,9 @@ async function restoreStartupSessions({ projectsLoaded = true } = {}) {
   if (!projectsLoaded) return;
   window._startupResumeResolutions = new Map();
   try {
-    window._continuationChoices = new Map(Object.entries(await window.api.getSettingsByPrefix('continuationChoice:')));
+    try {
+      window._continuationChoices = new Map(Object.entries(await window.api.getSettingsByPrefix('continuationChoice:')));
+    } catch { window._continuationChoices = new Map(); }
     if (localStorage.getItem('gridViewActive') === '1') showGridView();
     await reopenActiveSessionAfterReload();
     await restoreWorkingSet();

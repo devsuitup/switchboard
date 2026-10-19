@@ -1613,6 +1613,7 @@ ipcMain.handle('get-setting', (_event, key) => {
 });
 
 ipcMain.handle('get-settings-by-prefix', (_event, prefix) => {
+  if (typeof prefix !== 'string' || !prefix || prefix !== 'continuationChoice:') throw new TypeError('Invalid settings prefix');
   return Object.fromEntries(listSettingKeys(prefix).map(key => [key, getSetting(key)]));
 });
 

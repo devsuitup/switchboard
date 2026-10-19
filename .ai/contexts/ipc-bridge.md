@@ -75,7 +75,7 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 | IPC | Notes |
 |---|---|
 | `get-setting` / `set-setting` / `delete-setting` | Generic key/value over `settings` table |
-| `get-settings-by-prefix` | `(prefix)` returns an object of matching keys and values; bridge: `getSettingsByPrefix`. Used to load continuation choices before restore and reload. |
+| `get-settings-by-prefix` | `(prefix)` accepts only the non-empty string `continuationChoice:` and returns an object of matching keys and values; other prefixes throw before reading settings. Bridge: `getSettingsByPrefix`. Used to load continuation choices before restore and reload. |
 | `get-effective-settings` | `(projectPath)` — resolves global + project overrides |
 | `get-shell-profiles` | Configured shell list |
 | `get-schedule-creator-command` / `create-schedule-session` / `run-schedule-now` | Schedule integration |

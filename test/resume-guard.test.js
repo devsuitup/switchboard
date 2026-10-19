@@ -154,7 +154,7 @@ test('openSession runs the guard before it asks main for a PTY', () => {
 test('the reload path resumes the remembered session as an automatic resume', async () => {
   const calls = [];
   const ctx = vm.createContext({
-    window: { api: { getSetting: async () => null, getSettingsByPrefix: async () => ({}) } },
+    window: { api: { getSetting: async () => null } },
     SETTING_DEFAULTS: { restoreOnStartup: 'ask' },
     localStorage: { getItem: () => null },
     activeSessionId: SESSION.sessionId,
