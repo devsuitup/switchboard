@@ -80,8 +80,8 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
   formatDate = t => new Date(t).toLocaleString(), resolutions, onHold, onLive,
   resolveRow = candidate => ({ ...session, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] }) } = {}) {
   if (!session || session.type === 'terminal' || session.remoteAlias) return session;
-  const partInfo = candidate => {
-    const { name, aiTitle, summary, title, runningHere } = describe(candidate.sessionId);
+  const partInfo = (candidate, id = candidate.sessionId) => {
+    const { name, aiTitle, summary, title, runningHere } = describe(id);
     return { ...candidate, name: name || candidate.name, aiTitle: aiTitle || candidate.aiTitle,
       summary: summary || candidate.summary, title: title || candidate.title, runningHere };
   };
@@ -106,7 +106,12 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
     return candidates.length === 1 ? { ...session, sessionId: candidates[0].sessionId } : candidates.length ? null : session;
   }
   const seenRows = new Set([session.sessionId]);
-  const candidateParts = candidates.map(partInfo).map(part => ({ ...part, target: resolveRow(part) }))
+  const candidateParts = candidates.map(candidate => {
+    const target = resolveRow(candidate);
+    const part = target.sessionId === candidate.sessionId ? candidate
+      : target.conversationParts?.find(part => part.sessionId === target.sessionId) || target;
+    return { ...partInfo({ ...part, sessionId: candidate.sessionId }, target.sessionId), target };
+  })
     .filter(part => {
       if (seenRows.has(part.target.sessionId)) return false;
       seenRows.add(part.target.sessionId);

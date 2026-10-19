@@ -95,7 +95,7 @@ window. A new mirror adds a row and remains structural.
 
 Merged rows carry `conversationParts` in the existing projects payload: the
 root and each merged member's `sessionId`, metadata `name`, `aiTitle`, `summary`
-and own `modified` from the original cache row rather than the aggregate.
+and own `modified` and `messageCount` from the original cache row rather than the aggregate.
 It is assembled after the existing background merge so that already-grouped
 background continuations and their bridge members retain every part's data.
 An unindexed local background head uses its live descriptor's name (excluding
@@ -2234,6 +2234,11 @@ only hold resolution when they match `"type"\s*:\s*"continued-in"`; an unrelated
 mention of the word does not. Valid continuation records with invalid targets
 also remain unresolved. Partial tails remain buffered for a
 later append; tail errors are recomputed rather than carried forward forever.
+Candidate title/count enrichment runs only when traversal found candidates.
+It uses the cached conversation groups and metadata; a failure logs one warning
+for that lookup and returns the original candidates with null titles and no
+counts, leaving traversal's unresolved and waiting-for-index evidence intact.
+
 No transcript content is sent through the IPC, only candidate ids and activity
 times.
 

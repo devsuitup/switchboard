@@ -8,7 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A conversation made of several transcripts now shows N parts, and its menu lists the parts with View messages and Copy id for each. (#564)
 
 ### Changed
-- When a conversation continued in more than one place, one dialog lists its parts by name, last activity and message count, the newest preselected, instead of asking once per session id. (#567)
+- When a conversation continued in more than one place, one dialog lists each conversation once by the name, last activity and message count of the latest part it opens, the newest preselected, instead of asking once per session id. Choosing a conversation already open here shows its tab; otherwise, opening it checks whether any part is running elsewhere. (#567)
 - Opening a session that is already running elsewhere, including one its scheduled task is running right now, says where it runs (pid, folder, start time, schedule name) and offers Resume anyway or Cancel. A background session Switchboard cannot attach to is refused with a notice that says why. (#567)
 - A conversation the CLI continued under a new id now stays on one row when there is only one way it went. (#564)
 - A conversation made of several parts now stays listed while any part is unarchived and is pinned when any part is pinned. Archive, Pin and Rename apply to every part at once, and its subagents are hidden only when the whole conversation is archived. (#564)
@@ -17,7 +17,6 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Disabled Respawn and Delete buttons in Agents now tell you to use the conversation's sidebar Stop or end its other process, according to where it is running. (#566)
 
 ### Fixed
-- Choosing a continuation that belongs to a conversation with several parts opens its latest part and checks whether any part is running elsewhere. The chooser lists that conversation once and keeps each candidate’s own activity date and message count. (#567)
 - A restored conversation now reopens at its latest part and is no longer held with a notice when its apparent alternatives are its own parts. Real branches still wait for a choice from the sidebar. (#722)
 - A conversation stays held during startup restore when an older part is running in the background, instead of attaching to that older part's job. A background job on its latest part still attaches. (#722)
 - On Linux, Switchboard restarted by an update could no longer install the next update or open links in snap applications such as Firefox; it now restarts through your desktop session's service manager, so it keeps the rights the application menu gives it. (#590)

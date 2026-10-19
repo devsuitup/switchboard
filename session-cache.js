@@ -975,6 +975,7 @@ function buildProjectsFromCache(showArchived) {
           aiTitle: part?.aiTitle || null,
           summary: part?.summary || null,
           modified: part?.modified || null,
+          messageCount: part?.messageCount,
         };
       });
     }
@@ -1498,17 +1499,23 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     }
     return { index, modified: getCachedSession(id)?.modified || row.modified };
   });
-  const cachedRows = getAllCached();
-  const { localDescriptors, localJobs } = localBackgroundState();
-  const conversations = conversationGroups(cachedRows, localDescriptors, localJobs);
-  const metaMap = getAllMeta(true);
-  result.candidates = result.candidates.map(candidate => {
-    const row = getCachedSession(candidate.sessionId);
-    const group = conversations.get(candidate.sessionId.toLowerCase());
-    const meta = conversationMeta(group ? [...group.partIds] : [candidate.sessionId], metaMap, group?.rootId || candidate.sessionId);
-    return { ...candidate, title: cleanDisplayName(meta.name || row?.customTitle || row?.aiTitle || row?.summary || '').slice(0, 200) || null,
-      messageCount: row?.messageCount };
-  });
+  if (!result.candidates.length) return result;
+  try {
+    const cachedRows = getAllCached();
+    const { localDescriptors, localJobs } = localBackgroundState();
+    const conversations = conversationGroups(cachedRows, localDescriptors, localJobs);
+    const metaMap = getAllMeta(true);
+    result.candidates = result.candidates.map(candidate => {
+      const row = getCachedSession(candidate.sessionId);
+      const group = conversations.get(candidate.sessionId.toLowerCase());
+      const meta = conversationMeta(group ? [...group.partIds] : [candidate.sessionId], metaMap, group?.rootId || candidate.sessionId);
+      return { ...candidate, title: cleanDisplayName(meta.name || row?.customTitle || row?.aiTitle || row?.summary || '').slice(0, 200) || null,
+        messageCount: row?.messageCount };
+    });
+  } catch (err) {
+    log?.warn?.('[session-cache] continuation enrichment failed:', err.message);
+    result.candidates = result.candidates.map(candidate => ({ ...candidate, title: null }));
+  }
   return result;
 }
 

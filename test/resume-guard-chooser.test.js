@@ -6,6 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { resolveResumeSession, guardResume } = require('../public/resume-guard');
 const { setup } = require('./continuations-harness');
+const cache = require('../session-cache');
 const A = 'aaaaaaaa-0000-4000-8000-000000000001';
 const B = 'bbbbbbbb-0000-4000-8000-000000000002';
 const C = 'cccccccc-0000-4000-8000-000000000003';
@@ -281,4 +282,72 @@ test('main candidate title uses the latest user rename across its conversation',
   const h = setup(t, { old: ['new'], new: [], mirror: [] }, { metadata });
   h.rows.get('mirror').mergedIntoSessionId = 'new';
   assert.equal((await h.ctx.api.getSessionContinuations('old')).candidates[0].title, 'Latest rename');
+});
+
+for (const openId of ['y', 'x', 'z']) {
+  test(`chosen row with ${openId} open shows its tab and marks the option running here`, async t => {
+    const h = setup(t, { old: ['x', 'b'], x: [], b: [], y: [], z: [] }, { choice: 'x' });
+    mergeTarget(h);
+    h.ctx.openSessions.set(openId, { session: { sessionId: openId, projectPath: h.root } });
+    await h.click();
+    assert.deepEqual(h.spawned, [], 'an open part must be shown without spawning the head');
+    assert.equal(h.ctx.activeSessionId, openId);
+    assert.match(h.prompts[0].options.find(option => option.id === 'x').detail, /running here/);
+  });
+}
+
+test('zero continuation candidates skip every enrichment helper', async t => {
+  const h = setup(t, { old: [] });
+  const called = [];
+  const record = (name, value) => () => { called.push(name); return value; };
+  cache.init({ PROJECTS_DIR: h.root, activeSessions: new Map(), getMainWindow: () => null, log: console,
+    db: { ...h.db, getAllCached: record('cache', [...h.rows.values()]), getAllMeta: record('meta', new Map()) },
+    getLocalDescriptors: record('descriptors', []), getLocalJobs: record('jobs', new Map()),
+  });
+  const result = await h.ctx.api.getSessionContinuations('old');
+  assert.deepEqual(result.candidates, []);
+  assert.equal(result.unresolved, false);
+  assert.deepEqual(called, []);
+});
+
+for (const failing of ['getAllCached', 'getLocalDescriptors', 'getLocalJobs', 'getAllMeta']) {
+  test(`continuation enrichment failure in ${failing} retains candidates without titles or counts and logs once`, async t => {
+    const h = setup(t, { old: ['a', 'b'], a: [], b: [] });
+    const warnings = [];
+    const fail = () => { throw new Error('enrichment unavailable'); };
+    const context = { PROJECTS_DIR: h.root, activeSessions: new Map(), getMainWindow: () => null,
+      log: { warn: (...args) => warnings.push(args.join(' ')) }, db: { ...h.db } };
+    if (failing.startsWith('getLocal')) context[failing] = fail;
+    else context.db[failing] = fail;
+    cache.init(context);
+    const result = await h.ctx.api.getSessionContinuations('old');
+    assert.equal(result.unresolved, false);
+    assert.deepEqual(result.candidates.map(candidate => candidate.sessionId), ['a', 'b']);
+    for (const candidate of result.candidates) {
+      assert.equal(candidate.title, null);
+      assert.equal(Object.hasOwn(candidate, 'messageCount'), false);
+      assert.ok(candidate.modified);
+    }
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /enrichment unavailable/);
+  });
+}
+
+test('deduplicated option shows the opened head name date and own count from the sidebar payload', async t => {
+  const h = setup(t, { old: ['x', 'b'], x: [], b: [], y: [], z: [] }, { choice: 'x' });
+  Object.assign(h.rows.get('old'), { modified: '2026-10-20T12:00:00Z' });
+  Object.assign(h.rows.get('x'), { mergedIntoSessionId: 'y', aiTitle: 'First candidate', modified: '2026-10-18T12:00:00Z', messageCount: 1 });
+  Object.assign(h.rows.get('y'), { aiTitle: 'Representative', modified: '2026-10-17T12:00:00Z', messageCount: 100 });
+  Object.assign(h.rows.get('z'), { mergedIntoSessionId: 'y', aiTitle: 'Opened head', modified: '2026-10-21T12:00:00Z', messageCount: 7 });
+  const projects = cache.buildProjectsFromCache(false);
+  h.ctx.sessionMap.clear();
+  for (const project of projects) for (const row of project.sessions) h.ctx.sessionMap.set(row.sessionId, row);
+  await h.click();
+  assert.deepEqual(h.spawned.map(call => call.id), ['z']);
+  const question = h.prompts[0];
+  const option = question.options.find(part => part.id === 'x');
+  assert.equal(option.label, 'Opened head');
+  assert.match(option.detail, /7 messages$/);
+  assert.ok(option.detail.includes(new Date('2026-10-21T12:00:00Z').toLocaleString()));
+  assert.equal(question.selectedId, 'x', 'preselection follows the head activity, not the first member');
 });

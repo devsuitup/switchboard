@@ -1887,8 +1887,9 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
       choose: question => appChoose(question), resolutions: window._startupResumeResolutions,
       describe: id => {
         const row = indexedRowOf(id);
-        return { name: cleanDisplayName(row?.name || row?.aiTitle || row?.summary),
-          runningHere: !!openSessions.get(id) && !openSessions.get(id).closed };
+        const part = row?.conversationParts?.find(part => part.sessionId === id) || row;
+        return { name: cleanDisplayName(part?.name || part?.aiTitle || part?.summary),
+          runningHere: row ? !!rowOpenId(row) : !!openSessions.get(id) && !openSessions.get(id).closed };
       }, resolveRow: candidate => {
         const row = indexedRowOf(candidate.sessionId);
         return row ? rowHeadSession(row) : { ...session, sessionId: candidate.sessionId,
@@ -1928,14 +1929,15 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   const { sessionId, projectPath } = session;
 
   // If already open, handle closed-session cleanup or just show it
-  if (openSessions.has(sessionId)) {
-    const entry = openSessions.get(sessionId);
+  const resolvedOpenId = currentOpenId() || sessionId;
+  if (openSessions.has(resolvedOpenId)) {
+    const entry = openSessions.get(resolvedOpenId);
     if (entry.closed) {
-      destroySession(sessionId);
+      destroySession(resolvedOpenId);
     } else {
       for (const target of restoreNoticeSessions) clearAppNotice(sessionActionNoticeId('Restore', target));
-      if (clearDormantRow(sessionId)) schedulePersistWorkingSet();
-      if (mayShow()) showSession(sessionId);
+      if (clearDormantRow(resolvedOpenId)) schedulePersistWorkingSet();
+      if (mayShow()) showSession(resolvedOpenId);
       return;
     }
   }

@@ -647,6 +647,11 @@ and location words from one map in resume-guard.js. Newest activity comes first,
 unknown dates last; the newest enabled option is preselected. Names use the
 indexed renderer row, then the main-side title (metadata name, custom title,
 AI title or summary). Main also supplies each candidate's known message count.
+Candidates on the same target row share one option. When that option opens a
+newer head, its name, date and own count come from the head's conversationParts
+entry, rather than the first candidate or the row's aggregate count. A target
+with any part open here says running here and selecting it shows that tab,
+using the sidebar's rowOpenId rule instead of spawning the head.
 Missing names say Untitled conversation, invalid dates say last active unknown,
 and unknown counts are omitted; session ids do not appear in the question text.
 A single liveness batch covers all options. The selected result feeds guardResume
