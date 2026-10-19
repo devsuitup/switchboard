@@ -318,7 +318,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
   const indexedSessions = new Map(sessionMap);
   for (const row of sessionMap.values()) {
     for (const sessionId of row.mergedMemberIds || []) {
-      if (!indexedSessions.has(sessionId)) indexedSessions.set(sessionId, { ...row, sessionId, mergedMemberIds: [] });
+      if (!indexedSessions.has(sessionId)) indexedSessions.set(sessionId, rowHeadSession(row, sessionId));
     }
   }
   const startsFresh = item => item.fresh && !indexedSessions.has(item.sessionId);
@@ -354,7 +354,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       const originalId = item.sessionId;
       const originalSession = s;
       let waitingForIndex = false;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath, mergedMemberIds: [] }, { automatic: true, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
+      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api, confirm: message => appConfirm({ title: 'Open session?', message, confirmLabel: 'Open session' }), resolutions: window._startupResumeResolutions, onHold: reason => { waitingForIndex = reason.waitingForIndex; } });
       if (!s) {
         const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
         skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
@@ -374,7 +374,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       let opened;
       let blockedBy;
       try {
-        opened = await openSession(s, undefined, {
+        opened = await openSession({ ...s, mergedMemberIds: [] }, undefined, {
           automatic: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true,
           onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
         });

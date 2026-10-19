@@ -599,7 +599,7 @@ for an assumption a normal unit test can pin.
 
 ## Conversation continuations
 
-A proven local linear chain now shares one sidebar row under its original part (#564), including compaction mirrors. Branches, convergence, remote or cross-project links stay separate; `/clear` has no link. Clicking a closed row opens its newest-modified head without a continuation prompt for ids already on that row, and checks every part for liveness elsewhere. Automatic restore still follows a saved part to its terminal id, which may differ from the newest-modified head. See [Continuation rows](session-cache.md#continuation-rows-564) for index proof, dangling-target and 32-hop rules.
+A proven local linear chain now shares one sidebar row under its original part (#564), including compaction mirrors. Branches, convergence, remote or cross-project links stay separate; `/clear` has no link. Clicking a closed row opens its newest-modified head without a continuation prompt for ids already on that row, and checks every part for liveness elsewhere. Automatic restore resolves the saved part with the row's members and head, using `rowHeadSession(row, savedId)` for a saved member (#722). Candidates already on the row are excluded, including same-bridge-group alternatives; no remaining candidate keeps the saved id, one external candidate is followed, and real branches remain held. The resolved part opens with the existing per-saved-id tab and liveness behavior, so several saved parts still restore separately. See [Continuation rows](session-cache.md#continuation-rows-564) for index proof, dangling-target and 32-hop rules.
 
 For an open interactive conversation moving to the daemon, #639 adds the
 background proof path in `session-transitions.js`. A single complete fresh
@@ -631,7 +631,7 @@ failures and incomplete tails do not block resume. File scanning yields between
 chunks and has no total byte cap; chunk size only controls pacing.
 
 `resolveResumeSession` is shared by restore and sidebar clicks. An automatic
-restore selects exactly one terminal id. Several ids, unresolved graphs and
+restore selects exactly one terminal id outside the row, or keeps the saved id when none remain. Several external ids, unresolved graphs and
 failed lookups hold the saved entry and join the non-blocking restore notice,
 which names the original entry. A disk-present, unindexed continuation says
 it is waiting for indexing; held entries retry once when indexing finishes,

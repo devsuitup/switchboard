@@ -15,6 +15,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Disabled Respawn and Delete buttons in Agents now tell you to use the conversation's sidebar Stop or end its other process, according to where it is running. (#566)
 
 ### Fixed
+- Restoring a conversation with several parts no longer asks for a continuation choice when the apparent alternatives already belong to its row. Real branches still wait for a choice from the sidebar. (#722)
 - On Linux, Switchboard restarted by an update could no longer install the next update or open links in snap applications such as Firefox; it now restarts through your desktop session's service manager, so it keeps the rights the application menu gives it. (#590)
 - A session open in Switchboard shows its green dot again, in the sidebar and the grid, while it is at rest; the orange waiting ring appears once Switchboard has seen Claude finish a turn in it. A plain terminal keeps its green glow. (#714)
 - Search now finds a compacted conversation by text from any of its parts, and the subagents of its later parts are listed under it instead of under Orphan subagents. (#564)
