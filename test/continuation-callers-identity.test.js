@@ -24,7 +24,7 @@ function fixture(t) {
   const rows = new Map(), meta = new Map();
   const db = {
     getSetting: () => ({}), getAllFolderMeta: () => meta, getFolderMeta: id => meta.get(id), getAllMeta: () => new Map(),
-    getCachedByFolder: () => [...rows.values()], getCachedSession: id => rows.get(id),
+    getAllCached: () => [...rows.values()], getCachedByFolder: () => [...rows.values()], getCachedSession: id => rows.get(id),
     upsertCachedSessions: entries => entries.forEach(row => { JSON.stringify(row); rows.set(row.sessionId, row); }),
     setCachedContinuationIndex(id, serialized) { rows.set(id, { ...rows.get(id), continuationIndex: serialized }); },
     setFolderMeta(id, projectPath, indexMtimeMs) { meta.set(id, { projectPath, indexMtimeMs }); },

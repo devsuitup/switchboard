@@ -1853,6 +1853,7 @@ function settleContinuedInFlight(item) {
 
 async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onOpenError, reattachOnly = false } = {}, open = null) {
   const restoreNoticeSessions = [session];
+  let freshLive = false;
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
@@ -1886,9 +1887,13 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
       choose: question => appChoose(question), resolutions: window._startupResumeResolutions,
       describe: id => {
         const row = indexedRowOf(id);
-        return { ...row, name: cleanDisplayName(row?.name || row?.aiTitle || row?.summary),
+        return { name: cleanDisplayName(row?.name || row?.aiTitle || row?.summary),
           runningHere: !!openSessions.get(id) && !openSessions.get(id).closed };
-      }, onLive: found => { continuationLive = found; } });
+      }, resolveRow: candidate => {
+        const row = indexedRowOf(candidate.sessionId);
+        return row ? rowHeadSession(row) : { ...session, sessionId: candidate.sessionId,
+          headSessionId: candidate.sessionId, mergedMemberIds: [] };
+      }, onLive: found => { continuationLive = found; freshLive = true; } });
     if (!session) return false;
     restoreNoticeSessions.push(session);
     if (continuationLive !== undefined) live = continuationLive;
@@ -1936,7 +1941,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
 
   // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
-  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, allowBgAttach, onBlocked, api: window.api, name: cleanDisplayName(session.name || session.aiTitle || session.summary), confirm: question => appConfirm({ ...question }), notify: notice => showAppNotice(notice) });
+  const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, freshLive, allowBgAttach, onBlocked, api: window.api, name: cleanDisplayName(session.name || session.aiTitle || session.summary), confirm: question => appConfirm({ ...question }), notify: notice => showAppNotice(notice) });
   if (verdict === false) return false;
   if (verdict && typeof verdict === 'object' && verdict.attach) {
     customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };

@@ -109,5 +109,5 @@ function shellEscape(path) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { remoteHostLabel };
+  module.exports = { remoteHostLabel, cleanDisplayName };
 }

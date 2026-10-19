@@ -133,7 +133,7 @@ test('merged row live elsewhere on a member is checked even with a supplied null
   const h = setup(t, { live: { C: { pid: 4242 } } });
   assert.equal(await h.app.openSession({ ...row, sessionId: 'B', mergedMemberIds: ['C', 'A'] }, undefined, { automatic: true, live: null }), false);
   assert.deepEqual(h.spawned, []);
-  assert.deepEqual(h.checked, [['C', 'A']]);
+  assert.deepEqual(h.checked, [['B', 'C', 'A']]);
 });
 
 test('merged row live elsewhere checks another scheduled part after accepting the head warning', async t => {

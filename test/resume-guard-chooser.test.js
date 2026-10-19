@@ -93,7 +93,7 @@ test('main supplies title and message count for a candidate missing from rendere
   let result = await h.ctx.api.getSessionContinuations('old');
   assert.equal(result.candidates[0].title, 'Archived plan');
   assert.equal(result.candidates[0].messageCount, 17);
-  metadata.new = { name: 'Renamed plan' };
+  metadata.new = { name: 'Renamed plan', nameSource: 'user', nameRevision: 1 };
   result = await h.ctx.api.getSessionContinuations('old');
   assert.equal(result.candidates[0].title, 'Renamed plan');
 });
@@ -179,7 +179,7 @@ test('all location words share chooser details and renderer data overrides the m
 test('selected clicked row reuses its liveness while still checking every other row part', async () => {
   const checked = [], questions = [];
   assert.equal(await guardResume({ sessionId: A, mergedMemberIds: [B] }, {
-    live: null,
+    live: null, freshLive: true,
     api: { getSessionsLiveElsewhere: async ids => { checked.push(ids); return { [B]: { kind: 'interactive', pid: 9 } }; } },
     confirm: async q => { questions.push(q); return false; },
   }), false);
@@ -188,17 +188,97 @@ test('selected clicked row reuses its liveness while still checking every other 
 });
 
 
-test('choosing another row checks that target row members rather than the source row members', async () => {
+test('choosing another row opens its head and checks its representative and every member', async () => {
   const h = harness(undefined, { choice: B });
-  h.opts.describe = id => id === B ? { mergedMemberIds: ['target-mirror'] } : {};
+  h.opts.resolveRow = candidate => candidate.sessionId === B
+    ? { sessionId: C, headSessionId: C, mergedMemberIds: [B, 'target-root'] } : candidate;
   let selectedLive;
   h.opts.onLive = live => { selectedLive = live; };
   const chosen = await resolveResumeSession({ ...session, headSessionId: A, mergedMemberIds: ['source-mirror'] }, h.opts);
   const checked = [];
-  const verdict = await guardResume(chosen, { live: selectedLive,
-    api: { getSessionsLiveElsewhere: async ids => { checked.push(ids); return { 'target-mirror': { kind: 'interactive', pid: 7 } }; } },
+  assert.equal(chosen.sessionId, C);
+  const verdict = await guardResume(chosen, { live: selectedLive, freshLive: true,
+    api: { getSessionsLiveElsewhere: async ids => { checked.push(ids); return { 'target-root': { kind: 'interactive', pid: 7 } }; } },
     confirm: async () => false,
   });
   assert.equal(verdict, false);
-  assert.deepEqual(checked, [['target-mirror']]);
+  assert.deepEqual(checked, [[B, 'target-root']]);
+});
+
+function mergeTarget(h) {
+  const row = h.rows.get('y');
+  Object.assign(row, { headSessionId: 'z', mergedMemberIds: ['z', 'x'] });
+  h.ctx.sessionMap.delete('x');
+  h.ctx.sessionMap.delete('z');
+  return row;
+}
+
+test('chosen member of another row asks once when its representative is live and Cancel spawns nothing', async t => {
+  const h = setup(t, { old: ['x', 'b'], x: [], b: [], y: [], z: [] }, {
+    choice: 'x', live: { y: { kind: 'interactive', pid: 71 } },
+  });
+  mergeTarget(h);
+  await h.click();
+  assert.equal(h.prompts.length, 2);
+  assert.match(h.prompts[1][0], /pid 71/);
+  assert.deepEqual(h.spawned, []);
+});
+
+test('chosen non-head member of another row opens that row head with all its parts', async t => {
+  const h = setup(t, { old: ['x', 'b'], x: [], b: [], y: [], z: [] }, { choice: 'x' });
+  mergeTarget(h);
+  await h.click();
+  assert.deepEqual(h.spawned.map(call => call.id), ['z']);
+  assert.deepEqual(Array.from(h.ctx.openSessions.get('z').session.mergedMemberIds), ['x', 'y']);
+});
+
+test('two candidate members of one other row give one option', async t => {
+  const h = setup(t, { old: ['x', 'z'], x: [], y: [], z: [] });
+  mergeTarget(h);
+  await h.click();
+  assert.equal(h.prompts[0].options.length, 2);
+  assert.match(h.prompts[0].message[0], /continues in another part/);
+});
+
+test('candidate date and count survive newer larger renderer row metadata', async () => {
+  const h = harness({ candidates: [candidates[0]] });
+  h.opts.describe = id => id === B ? { name: 'Named row', modified: '2099-01-01', messageCount: 999 } : {};
+  await resolveResumeSession({ ...session, modified: '2026-10-19' }, h.opts);
+  const question = h.asked[0];
+  assert.equal(question.selectedId, A);
+  assert.deepEqual(question.options.map(option => option.id), [A, B]);
+  assert.match(question.options[1].detail, /2026-10-18T00:00:00.000Z · 1 message$/);
+});
+
+test('merged guard rechecks supplied stale head liveness outside the chooser', async () => {
+  const checked = [];
+  const verdict = await guardResume({ sessionId: A, mergedMemberIds: [B] }, {
+    automatic: true, live: null,
+    api: { getSessionsLiveElsewhere: async ids => { checked.push(ids); return ids.includes(A) ? { [A]: { kind: 'interactive', pid: 9 } } : {}; } },
+    confirm: () => assert.fail('automatic opens never ask'),
+  });
+  assert.equal(verdict, false);
+  assert.deepEqual(checked, [[A, B]]);
+});
+
+for (const [raw, expected] of [
+  ['<command>Build the project</command>', 'Build the project'],
+  ['Implement the following plan: Fix the chooser', 'Fix the chooser'],
+  ['x'.repeat(300), 'x'.repeat(200)],
+]) {
+  test('main cleans and caps fallback candidate title: ' + expected.slice(0, 24), async t => {
+    const h = setup(t, { old: ['new'], new: [] });
+    h.rows.get('new').customTitle = raw;
+    assert.equal((await h.ctx.api.getSessionContinuations('old')).candidates[0].title, expected);
+  });
+}
+
+test('main candidate title uses the latest user rename across its conversation', async t => {
+  const metadata = {
+    new: { name: 'Earlier', nameSource: 'user', nameRevision: 1 },
+    mirror: { name: 'Latest rename', nameSource: 'user', nameRevision: 2 },
+  };
+  const h = setup(t, { old: ['new'], new: [], mirror: [] }, { metadata });
+  h.rows.get('mirror').mergedIntoSessionId = 'new';
+  assert.equal((await h.ctx.api.getSessionContinuations('old')).candidates[0].title, 'Latest rename');
 });

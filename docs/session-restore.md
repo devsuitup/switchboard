@@ -147,7 +147,8 @@ A scheduled part remains selectable and then asks **Resume anyway**.
 An incomplete list says so, as does a failure to check which parts are running.
 With no known candidate, a failed lookup or unresolved continuation offers
 **Open as it was** or **Cancel**, with the reason. Choices are not remembered;
-automatic restore and reload hold ambiguous entries without showing the chooser.
+automatic restore holds ambiguous entries without showing the chooser. Reload opens
+no tab for an ambiguous entry and currently shows no notice (#729).
 A proven linear chain or same-row bridge alternative needs no choice.
 Ordinary malformed lines that mention continuations, unrelated incomplete tails
 and oversized records do not block opening the original session. Large transcripts

@@ -104,14 +104,19 @@ test('R2 a missing continuation API cannot silently bypass the resume guard', { 
   assert.match(h.dom.window.document.querySelector('#app-notices [role="alert"]')?.textContent, /old/);
 });
 
-for (const graph of [{ old: ['a', 'b'], a: [], b: [] }, { old: ['missing'] }]) {
+for (const [graph, dialog] of [[{ old: ['a', 'b'], a: [], b: [] }, 'chooser'], [{ old: ['missing'] }, 'fallback']]) {
   test(`R2 manual open can explicitly select the original id (${Object.keys(graph).length} nodes)`, { timeout: 9000 }, async t => {
     const h = setup(t, graph, { answer: true, choice: 'old' });
     await h.click();
     assert.deepEqual(h.spawned.map(call => call.id), ['old']);
     const question = h.prompts.at(-1);
-    if (question.options) assert.equal(question.options.at(-1).id, 'old');
-    else assert.match(question[1], /Open the part you clicked as it was/);
+    if (dialog === 'chooser') {
+      assert.equal(question.title, 'Open which part?');
+      assert.equal(question.options.at(-1).id, 'old');
+    } else {
+      assert.ok(Array.isArray(question));
+      assert.match(question[1], /Open the part you clicked as it was/);
+    }
   });
 }
 

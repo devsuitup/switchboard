@@ -22,13 +22,13 @@ async function liveElsewhereMany(sessionIds, { api } = {}) {
   }
 }
 
-async function guardResume(session, { automatic = false, api, confirm, name, notify = typeof showAppNotice === 'function' ? showAppNotice : undefined, live, allowBgAttach = false, onBlocked } = {}) {
+async function guardResume(session, { automatic = false, api, confirm, name, notify = typeof showAppNotice === 'function' ? showAppNotice : undefined, live, freshLive = false, allowBgAttach = false, onBlocked } = {}) {
   if (!session || session.type === 'terminal') return true;
   const sessionIds = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])]
     .filter(id => typeof id === 'string' && id))];
   if (sessionIds.length > 1) {
-    const liveById = await liveElsewhereMany(sessionIds.filter(id => live === undefined || id !== session.sessionId), { api });
-    if (live) liveById[session.sessionId] = live;
+    const liveById = await liveElsewhereMany(sessionIds.filter(id => !freshLive || live === undefined || id !== session.sessionId), { api });
+    if (freshLive && live) liveById[session.sessionId] = live;
     let verdict = true;
     for (const id of sessionIds) {
       if (!liveById[id]) continue;
@@ -77,9 +77,14 @@ const continuationLocations = {
 };
 
 async function resolveResumeSession(session, { automatic = false, api, confirm, choose, describe = () => ({}),
-  formatDate = t => new Date(t).toLocaleString(), resolutions, onHold, onLive } = {}) {
+  formatDate = t => new Date(t).toLocaleString(), resolutions, onHold, onLive,
+  resolveRow = candidate => ({ ...session, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] }) } = {}) {
   if (!session || session.type === 'terminal' || session.remoteAlias) return session;
-  const partInfo = candidate => ({ ...candidate, ...describe(candidate.sessionId), sessionId: candidate.sessionId });
+  const partInfo = candidate => {
+    const { name, aiTitle, summary, title, runningHere } = describe(candidate.sessionId);
+    return { ...candidate, name: name || candidate.name, aiTitle: aiTitle || candidate.aiTitle,
+      summary: summary || candidate.summary, title: title || candidate.title, runningHere };
+  };
   const label = part => (part.name || part.aiTitle || part.summary || part.title || '').trim() || 'Untitled conversation';
   const conversationName = () => label(partInfo(session));
   const openAsWas = async message => await confirm({ title: 'Open this conversation?', message,
@@ -100,7 +105,14 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
     if (!result || result.unresolved) { onHold?.({ waitingForIndex: !!result?.waitingForIndex }); return null; }
     return candidates.length === 1 ? { ...session, sessionId: candidates[0].sessionId } : candidates.length ? null : session;
   }
-  if (!candidates.length) {
+  const seenRows = new Set([session.sessionId]);
+  const candidateParts = candidates.map(partInfo).map(part => ({ ...part, target: resolveRow(part) }))
+    .filter(part => {
+      if (seenRows.has(part.target.sessionId)) return false;
+      seenRows.add(part.target.sessionId);
+      return true;
+    });
+  if (!candidateParts.length) {
     if (result && !result.unresolved) return session;
     const reason = result?.waitingForIndex ? 'a part it continued in is still being indexed.'
       : 'its continuation records are damaged, or a part it continued in could not be checked.';
@@ -108,16 +120,16 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
       'Open the part you clicked as it was, or cancel and try again later.']);
   }
   const clicked = partInfo(session), name = label(clicked);
-  const parts = [...candidates.map(partInfo), clicked];
+  const parts = [...candidateParts, { ...clicked, target: session }];
   const activity = part => part.modified ? Date.parse(part.modified) : NaN;
   parts.sort((a, b) => (Number.isFinite(activity(b)) ? activity(b) : -Infinity) - (Number.isFinite(activity(a)) ? activity(a) : -Infinity));
   let liveById, liveFailed = false;
   try {
-    liveById = await api.getSessionsLiveElsewhere(parts.map(part => part.sessionId));
+    liveById = await api.getSessionsLiveElsewhere(parts.map(part => part.target.sessionId));
     if (!liveById || typeof liveById !== 'object' || Array.isArray(liveById)) throw new TypeError('Invalid liveness batch');
   } catch { liveFailed = true; }
   const options = parts.map(part => {
-    const live = liveById?.[part.sessionId];
+    const live = liveById?.[part.target.sessionId];
     const blocked = live?.kind === 'bg' && !(typeof live.jobId === 'string' && live.jobId);
     const location = part.runningHere ? 'here' : blocked ? 'blockedBg' : live?.kind;
     const detail = [Number.isFinite(activity(part)) ? 'last active ' + formatDate(activity(part)) : 'last active unknown',
@@ -125,17 +137,16 @@ async function resolveResumeSession(session, { automatic = false, api, confirm, 
       part.sessionId === session.sessionId && 'the part you clicked', continuationLocations[location]].filter(Boolean).join(' · ');
     return { id: part.sessionId, label: label(part), detail, disabled: !!blocked };
   });
-  const message = ['"' + name + '" continues in ' + (candidates.length === 1 ? 'another part' : candidates.length + ' other parts') + '. Choose the one to open.'];
+  const message = ['"' + name + '" continues in ' + (candidateParts.length === 1 ? 'another part' : candidateParts.length + ' other parts') + '. Choose the one to open.'];
   if (!result || result.unresolved) message.push('Some continuation records could not be read, so this list may be incomplete. This choice is not remembered.');
   if (liveFailed) message.push('Switchboard could not check which parts are running.');
   const selectedId = options.find(option => !option.disabled)?.id;
   const answer = await choose({ title: 'Open which part?', message, options, selectedId, confirmLabel: 'Open' });
   const selected = options.find(option => option.id === answer?.choice && !option.disabled);
   if (!selected) return null;
-  if (!liveFailed) onLive?.(liveById[selected.id] || null);
   const chosenPart = parts.find(part => part.sessionId === selected.id);
-  return selected.id === session.sessionId ? session
-    : { ...session, sessionId: selected.id, headSessionId: selected.id, mergedMemberIds: chosenPart.mergedMemberIds || [] };
+  if (!liveFailed) onLive?.(liveById[chosenPart.target.sessionId] || null);
+  return chosenPart.target;
 }
 
 if (typeof module !== 'undefined' && module.exports) {

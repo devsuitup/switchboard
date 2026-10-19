@@ -147,7 +147,7 @@ test('saved merged member B live elsewhere is skipped, checked by B and kept', a
   const h = setup(t, { live: true });
   await h.restoreWorkingSet();
   assert.deepEqual(h.spawned, []);
-  assert.deepEqual(h.liveQueries, [['B'], ['A']], 'the saved member is checked once, and every other row member is still checked');
+  assert.deepEqual(h.liveQueries, [['B'], ['B', 'A']], 'restore rechecks the head and every other row member');
   assert.deepEqual(await h.persist(), [{ ...h.saved[0], active: false }], 'the skipped member stays saved like any live-elsewhere session');
   assert.match(h.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /live outside this window in pid 4242/);
   assert.equal(h.document.getElementById('restore-unavailable-toast'), null);

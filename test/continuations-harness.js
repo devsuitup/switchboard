@@ -24,7 +24,8 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, 
   }
   const rows = new Map(), folderMeta = new Map();
   const db = {
-    getSetting: () => ({}), getAllFolderMeta: () => folderMeta, getFolderMeta: id => folderMeta.get(id), getAllMeta: () => new Map(),
+    getSetting: () => ({}), getAllFolderMeta: () => folderMeta, getFolderMeta: id => folderMeta.get(id), getAllMeta: () => new Map(Object.entries(metadata)),
+    getAllCached: () => [...rows.values()],
     getCachedByFolder: () => [...rows.values()], getCachedSession: id => rows.has(id) ? { ...rows.get(id) } : undefined,
     upsertCachedSessions: entries => entries.forEach(row => rows.set(row.sessionId, row)),
     setCachedContinuationIndex(id, index) { if (rows.has(id)) rows.set(id, { ...rows.get(id), continuationIndex: index }); },
@@ -79,6 +80,9 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, 
   dom.window.showRestoreNotice = (_, text) => { dom.window.notice = text; };
   loadAppFunctions(ctx, {
     functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
+  });
+  loadAppFunctions(ctx, {
+    functions: ['rowHeadSession'], sourcePath: path.join(__dirname, '../public/sidebar.js'),
   });
   dom.window.SETTING_DEFAULTS = require('../public/setting-defaults').SETTING_DEFAULTS;
   const app = loadAppFunctions(ctx, {

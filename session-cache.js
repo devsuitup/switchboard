@@ -34,6 +34,7 @@ const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp, continuationRollup } = require('./session-continuations');
 const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds: resolveConversationMemberIds } = require('./sidebar-bg-sessions');
 const { conversationMeta } = require('./conversation-meta');
+const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./bg-agents-roster');
 const { state: TRACE, trace } = require('./activity-trace');
 
@@ -1497,9 +1498,15 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     }
     return { index, modified: getCachedSession(id)?.modified || row.modified };
   });
+  const cachedRows = getAllCached();
+  const { localDescriptors, localJobs } = localBackgroundState();
+  const conversations = conversationGroups(cachedRows, localDescriptors, localJobs);
+  const metaMap = getAllMeta(true);
   result.candidates = result.candidates.map(candidate => {
     const row = getCachedSession(candidate.sessionId);
-    return { ...candidate, title: getMeta(candidate.sessionId)?.name || row?.customTitle || row?.aiTitle || row?.summary || null,
+    const group = conversations.get(candidate.sessionId.toLowerCase());
+    const meta = conversationMeta(group ? [...group.partIds] : [candidate.sessionId], metaMap, group?.rootId || candidate.sessionId);
+    return { ...candidate, title: cleanDisplayName(meta.name || row?.customTitle || row?.aiTitle || row?.summary || '').slice(0, 200) || null,
       messageCount: row?.messageCount };
   });
   return result;
