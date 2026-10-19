@@ -874,6 +874,22 @@ state for a presentation concern and would re-open the archive-all rule above.
 Covered by `test/dom-archived-parent-subagents.test.js`, which feeds the real
 `buildProjectsFromCache` output into `renderProjects`.
 
+### Subagents of merged parts (#564)
+
+Within each project, `buildSubagentIndex` maps every top-level row's own id,
+`mergedMemberIds` and `headSessionId` to that row's representative id before
+indexing its children. A subagent of any part therefore renders in that row's
+child container, including inside schedule groups, instead of in Orphan
+subagents. The child's original `parentSessionId` is preserved for transcript
+access and activity tracking. A parent absent from every row's parts still
+produces an orphan; a row hidden by a sidebar filter keeps its children hidden.
+
+Search keeps a merged row when any part matches, including when a matching
+subagent belongs to a later part. `refreshSidebar` uses the same part ids when
+deciding whether to keep the project. Covered by
+`test/dom-sidebar-merged-search-subagents-5644.test.js`, including a check that
+`sub:b:1` is present in row `a`'s child container.
+
 ### A hidden parent is not a missing parent
 
 The orphan pass of `buildSessionsList` takes its parent ids from

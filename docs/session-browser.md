@@ -183,6 +183,10 @@ index held in Switchboard's database:
 - on **Agent Files**, the listed memory and command files;
 - on **Work Files**, the files under `.work-files/`.
 
+A compacted conversation matches when any of its parts matches, including its
+latest part. A matching subagent stays nested under that conversation even
+when it belongs to a later part.
+
 Search starts at 3 characters, 350 ms after the last keystroke. Only the first
 48 characters of a query are used. **Tt** restricts the search to titles. The
 reindex button rereads every session for the index; pressing Enter in the field

@@ -950,7 +950,7 @@ function refreshSidebar({ resort = false } = {}) {
 
   if (searchMatchIds !== null) {
     projects = projects.map(p => {
-      const hasMatchingSessions = p.sessions.some(s => searchMatchIds.has(s.sessionId));
+      const hasMatchingSessions = p.sessions.some(s => [...rowSessionIds(s), rowHeadId(s)].some(id => searchMatchIds.has(id)));
       const projectMatched = searchMatchProjectPaths && searchMatchProjectPaths.has(p.projectPath);
       if (!hasMatchingSessions && !projectMatched) return null;
       return {
