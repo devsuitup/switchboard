@@ -1389,8 +1389,8 @@ with no message entry is never "closed".
 ### Transcript tail reads
 
 `transcript-tail.js` scans backward in 256 KiB blocks, skipping lines whose
-prefix identifies a top-level `api-request` before JSON parsing. The retained
-tail covers 256 KiB of other records, so API payloads cannot displace a user
+prefix identifies a top-level `api-request` or `api-request-shape` before JSON
+parsing. The retained tail covers 256 KiB of other records, so API payloads cannot displace a user
 prompt or the closing assistant and its `turn_duration`. Both
 `transcriptOwnEntryAt` and `transcriptReactedSince` use this filtered prompt list.
 Each chain step also latches its own observed prompt timestamp through submit
@@ -1407,11 +1407,18 @@ escape detection; a changed sample or decreasing mtime restarts the scan.
 Until scanning catches up, classification uses the latest physical tail.
 Pending fragments retain at most 4 MiB; beyond that only a prefix sample and
 offset remain. At the line boundary, an API prefix discards the record; another
-prefix counts as unknown and consumes the logical tail budget. The first 128
-bytes are retained on both backward and appended scans. Only a head starting
-with an assistant record, or a user record with a visible `tool_result` type,
-gets a synthetic assistant output with a SHA-256 fingerprint of the record's
-byte offset and length, padded to the logical tail budget. Other dropped records
+prefix counts as unknown and consumes the logical tail budget. The first 256
+bytes are retained on both backward and appended scans. Heads starting with
+`type` identify assistant records or user records with a visible `tool_result`
+type or `tool_use_id`. Real Claude heads starting with `parentUuid` identify
+assistant output through `message.model` (the outer `type` can follow the whole
+message), or user tool results through the same visible tool markers. The
+synthetic fixtures place `message.model` at byte 84 and `tool_use_id` at byte
+174; both fit within 256 bytes, while 128 misses the tool marker. Explicit
+non-output types before `message`, including `system` and `attachment`, remain
+spaces. Recognized output gets a synthetic assistant output with a SHA-256
+fingerprint of the record's byte offset and length, padded to the logical tail
+budget. Other dropped records
 keep a spaces-only placeholder and do not advance written activity. Completed
 dropped outputs advance the task-records worker's written-activity signal;
 unchanged reads and backward rescans retain the same fingerprint. The placeholder

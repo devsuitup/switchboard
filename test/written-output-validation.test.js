@@ -96,13 +96,19 @@ test('i730c: appending dropped oversized tool results advances the worker writte
 });
 
 for (const scan of ['append', 'backward']) {
+  const parent = { parentUuid: '00000000-0000-4000-8000-000000000001', isSidechain: false };
   for (const [kind, record, changes] of [
-    ['system', { type: 'system', content: 'x'.repeat(5 * 1024 * 1024) }, false],
-    ['user prompt', { type: 'user', message: { content: 'x'.repeat(5 * 1024 * 1024) } }, false],
-    ['tool result', { type: 'user', message: { content: [{ type: 'tool_result', content: 'x'.repeat(5 * 1024 * 1024) }] } }, true],
-    ['assistant', { type: 'assistant', message: { content: 'x'.repeat(5 * 1024 * 1024) } }, true],
+    ['system', { parentUuid: null, logicalParentUuid: parent.parentUuid, isSidechain: false,
+      type: 'system', content: 'x'.repeat(5 * 1024 * 1024) }, false],
+    ['attachment', { type: 'attachment', content: 'x'.repeat(5 * 1024 * 1024) }, false],
+    ['user prompt', { ...parent, promptId: parent.parentUuid, type: 'user',
+      message: { role: 'user', content: 'x'.repeat(5 * 1024 * 1024) } }, false],
+    ['tool result', { ...parent, promptId: parent.parentUuid, type: 'user',
+      message: { role: 'user', content: [{ tool_use_id: 'toolu_synthetic', content: 'x'.repeat(5 * 1024 * 1024), type: 'tool_result' }] } }, true],
+    ['assistant', { ...parent, message: { model: 'claude-opus-5-5', id: 'msg_synthetic', type: 'message',
+      role: 'assistant', content: 'x'.repeat(5 * 1024 * 1024) }, type: 'assistant' }, true],
   ]) {
-    test(`i730d: a dropped 5 MiB ${kind} ${changes ? 'advances' : 'preserves'} the worker fingerprint on ${scan}`, async t => {
+    test(`i730e: a dropped 5 MiB real-shape ${kind} ${changes ? 'advances' : 'preserves'} the worker fingerprint on ${scan}`, async t => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-written-kind-'));
       const file = path.join(dir, 's.jsonl');
       let snapshot;

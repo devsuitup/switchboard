@@ -21,30 +21,32 @@ function fixture(t) {
 
 const prompt = (text = 'do it') => JSON.stringify({ type: 'user', timestamp: new Date(2000).toISOString(), message: { content: text } }) + '\n';
 
-test('i730: a 50 MB API line is skipped over bounded polls and unchanged snapshots read no bytes', t => {
-  const file = fixture(t);
-  fs.writeFileSync(file, prompt() + '{"type":"api-request","params":"');
-  const block = 'x'.repeat(1024 * 1024);
-  for (let i = 0; i < 50; i++) fs.appendFileSync(file, block);
-  fs.appendFileSync(file, '"}\n');
-  const reader = createTranscriptTurnReader();
-  const realRead = fs.readSync;
-  let bytes = 0;
-  fs.readSync = (...args) => { const count = realRead(...args); bytes += count; return count; };
-  try {
-    let turn;
-    for (let i = 0; i < 52; i++) {
+for (const type of ['api-request', 'api-request-shape']) {
+  test(`i730: a 50 MB ${type} line is skipped over bounded polls and unchanged snapshots read no bytes`, t => {
+    const file = fixture(t);
+    fs.writeFileSync(file, prompt() + `{"type":"${type}","params":"`);
+    const block = 'x'.repeat(1024 * 1024);
+    for (let i = 0; i < 50; i++) fs.appendFileSync(file, block);
+    fs.appendFileSync(file, '"}\n');
+    const reader = createTranscriptTurnReader();
+    const realRead = fs.readSync;
+    let bytes = 0;
+    fs.readSync = (...args) => { const count = realRead(...args); bytes += count; return count; };
+    try {
+      let turn;
+      for (let i = 0; i < 52; i++) {
+        bytes = 0;
+        turn = reader.read(file);
+        assert.ok(bytes <= 1024 * 1024, 'read ' + bytes + ' bytes in one poll');
+        if (turn.prompts.length) break;
+      }
+      assert.deepEqual(turn.prompts, [{ at: 2000, text: 'do it' }]);
       bytes = 0;
-      turn = reader.read(file);
-      assert.ok(bytes <= 1024 * 1024, 'read ' + bytes + ' bytes in one poll');
-      if (turn.prompts.length) break;
-    }
-    assert.deepEqual(turn.prompts, [{ at: 2000, text: 'do it' }]);
-    bytes = 0;
-    reader.read(file);
-    assert.equal(bytes, 0);
-  } finally { fs.readSync = realRead; }
-});
+      reader.read(file);
+      assert.equal(bytes, 0);
+    } finally { fs.readSync = realRead; }
+  });
+}
 
 test('i730: API prefixes spanning chunk boundaries preserve UTF-8 prompts and ignore partial API writes', t => {
   const file = fixture(t);

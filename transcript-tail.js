@@ -5,7 +5,8 @@ const { createHash } = require('node:crypto');
 const CHUNK_BYTES = 256 * 1024;
 const READ_BYTES = 1024 * 1024;
 const MAX_PENDING_BYTES = 4 * 1024 * 1024;
-const API_PREFIX = /^\s*\{\s*"type"\s*:\s*"api-request"\s*[,}]/;
+const HEAD_BYTES = 256;
+const API_PREFIX = /^\s*\{\s*"type"\s*:\s*"api-request(?:-shape)?"\s*[,}]/;
 
 function readRange(filePath, start, length, expectedStat) {
   const buf = Buffer.alloc(length);
@@ -31,8 +32,11 @@ function readRange(filePath, start, length, expectedStat) {
 function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
   const cache = new Map();
   const droppedLine = (offset, length, head) => {
-    const type = head.match(/^\s*\{\s*"type"\s*:\s*"(assistant|user)"\s*[,}]/)?.[1];
-    if (type !== 'assistant' && !(type === 'user' && /"type"\s*:\s*"tool_result"\s*[,}]/.test(head))) return Buffer.alloc(tailBytes, ' ');
+    const recognizedHead = /^\s*\{\s*"(?:type|parentUuid)"\s*:/.test(head);
+    const type = head.split(/"message"\s*:/, 1)[0].match(/"type"\s*:\s*"([^"]+)"/)?.[1];
+    const assistant = type === 'assistant' || !type && /"message"\s*:\s*\{\s*"model"\s*:/.test(head);
+    const toolResult = type === 'user' && /"tool_use_id"\s*:|"type"\s*:\s*"tool_result"\s*[,}]/.test(head);
+    if (!recognizedHead || !assistant && !toolResult) return Buffer.alloc(tailBytes, ' ');
     const fingerprint = createHash('sha256').update(`${offset}:${length}`).digest('hex');
     const record = JSON.stringify({ type: 'assistant', message: { content: fingerprint } });
     return Buffer.from(record.padEnd(tailBytes, ' '));
@@ -75,7 +79,7 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
       cache.set(filePath, scan);
       const finishLine = (prefix, offset) => {
         const bytes = prefix.length + scan.pendingBytes;
-        const head = Buffer.concat([prefix.subarray(0, 128), scan.pendingHead]).toString('utf8', 0, 128);
+        const head = Buffer.concat([prefix.subarray(0, HEAD_BYTES), scan.pendingHead]).toString('utf8', 0, HEAD_BYTES);
         const terminated = !scan.lastLine || scan.baseEndsWithNewline;
         scan.lastLine = false;
         const api = API_PREFIX.test(head);
@@ -113,7 +117,7 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
         }
         if (!scan.complete) {
           scan.pendingBytes += end;
-          scan.pendingHead = Buffer.concat([chunk.subarray(0, Math.min(end, 128)), scan.pendingHead]).subarray(0, 128);
+          scan.pendingHead = Buffer.concat([chunk.subarray(0, Math.min(end, HEAD_BYTES)), scan.pendingHead]).subarray(0, HEAD_BYTES);
           if (scan.pendingBytes > MAX_PENDING_BYTES) { scan.pending = []; scan.dropped = true; }
           if (end && !scan.dropped) scan.pending.unshift(chunk.subarray(0, end));
           if (!scan.offset) { finishLine(Buffer.alloc(0), 0); scan.complete = true; }
@@ -133,14 +137,14 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
         for (let i = 0; i <= chunk.length; i++) {
           if (i < chunk.length && chunk[i] !== 10) continue;
           const part = chunk.subarray(start, i);
-          if (scan.trailingHead.length < 128) scan.trailingHead = Buffer.concat([scan.trailingHead, part.subarray(0, 128 - scan.trailingHead.length)]);
+          if (scan.trailingHead.length < HEAD_BYTES) scan.trailingHead = Buffer.concat([scan.trailingHead, part.subarray(0, HEAD_BYTES - scan.trailingHead.length)]);
           if (!scan.trailingDropped) {
             if (scan.trailing.length + part.length > MAX_PENDING_BYTES) {
               scan.trailing = Buffer.alloc(0);
               scan.trailingDropped = true;
             } else {
               scan.trailing = Buffer.concat([scan.trailing, part]);
-              if (API_PREFIX.test(scan.trailing.toString('utf8', 0, 128))) {
+              if (API_PREFIX.test(scan.trailing.toString('utf8', 0, HEAD_BYTES))) {
                 scan.trailing = Buffer.alloc(0);
                 scan.trailingDropped = true;
                 scan.trailingApi = true;
