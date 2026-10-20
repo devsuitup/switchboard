@@ -119,7 +119,8 @@ async function stopBeforeArchive(session, { unreachable, plan } = {}) {
   if (!session) return { ok: true };
   const refusal = await archiveBackgroundJobRefusal(session);
   if (refusal) return { ok: false, error: refusal };
-  const ids = plan ? plan.targets.map(target => target.sessionId) : rowSessionIds(session);
+  const ids = rowSessionIds(session);
+  let didStop = false;
   const alias = session.remoteAlias;
   if (alias) {
     const notStopped = [];
@@ -135,6 +136,9 @@ async function stopBeforeArchive(session, { unreachable, plan } = {}) {
       const open = typeof openSessions !== 'undefined' && openSessions.get(id);
       if (!hostUnsynced && !isRemoteSessionAlive(member) && !(open && !open.closed)
           && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(id))) continue;
+      if (plan && !plan.targets.some(target => target.sessionId === id)) {
+        return { ok: false, error: `Part ${id} started running; retry Archive to confirm stopping it.`, didStop };
+      }
       if (unreachable && unreachable.has(alias)) {
         notStopped.push({ alias, error: unreachable.get(alias) });
         continue;
@@ -146,22 +150,27 @@ async function stopBeforeArchive(session, { unreachable, plan } = {}) {
         continue;
       }
       if (!result || (result.ok === false && result.error !== 'session not found on that host')) {
-        return { ok: false, error: (result && result.error) || 'unknown error' };
+        return { ok: false, error: (result && result.error) || 'unknown error', didStop };
       }
+      didStop ||= result.ok !== false;
       if (typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
     }
-    return notStopped.length ? { ok: true, notStopped } : { ok: true };
+    return notStopped.length ? { ok: true, notStopped, didStop } : { ok: true, didStop };
   }
   for (const id of ids) {
     const open = typeof openSessions !== 'undefined' && openSessions.get(id);
     if (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(id)) && !(open && !open.closed)) continue;
+    if (plan && !plan.targets.some(target => target.sessionId === id)) {
+      return { ok: false, error: `Part ${id} started running; retry Archive to confirm stopping it.`, didStop };
+    }
     const result = await window.api.stopSession(id);
     if (!result || (result.ok === false && result.error !== 'not running')) {
-      return { ok: false, error: result?.error || 'The stop backend is unavailable or returned no result' };
+      return { ok: false, error: result?.error || 'The stop backend is unavailable or returned no result', didStop };
     }
+    didStop ||= result.ok !== false && !result.detached;
     if (typeof activePtyIds !== 'undefined') activePtyIds.delete(id);
   }
-  return { ok: true };
+  return { ok: true, didStop };
 }
 
 if (typeof module !== 'undefined' && module.exports) {

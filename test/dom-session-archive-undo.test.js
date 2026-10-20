@@ -8,7 +8,8 @@ function setup(t, rows = [{ sessionId: 'A' }]) {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   const calls = [];
-  rows = rows.map(row => ({ projectPath: '/project', summary: row.sessionId, modified: new Date().toISOString(), ...row }));
+  const modified = new Date().toISOString();
+  rows = rows.map(row => ({ projectPath: '/project', summary: row.sessionId, modified, ...row }));
   for (const row of rows) ctx.window.sessionMap.set(row.sessionId, row);
   ctx.window.cachedAllProjects = [makeSampleProject({ sessions: rows })];
   ctx.sidebar.renderProjects(ctx.window.cachedAllProjects, true);
@@ -58,6 +59,9 @@ test('P2 live row asks before any stop or archive and Cancel changes nothing', a
   const pending = archive(ctx);
   await settle();
   assert.ok(ctx.document.querySelector('.modal-overlay'), 'a confirmation opens');
+  assert.equal(ctx.document.getElementById('choice-dialog-title').textContent, 'Archive this session?');
+  assert.match(ctx.document.querySelector('.modal-overlay').textContent, /Archive this session\?/);
+  assert.doesNotMatch(ctx.document.querySelector('.modal-overlay').textContent, /Stop this session\?/);
   assert.deepEqual(ctx.calls, []);
   answer(ctx, false);
   await pending;
@@ -109,6 +113,10 @@ test('group live rows share one confirmation naming every target and Cancel chan
   const pending = archive(ctx, true);
   await settle();
   assert.equal(ctx.document.querySelectorAll('.modal-overlay').length, 1, 'one group confirmation');
+  assert.equal(ctx.document.getElementById('choice-dialog-title').textContent, 'Archive 2 sessions?');
+  assert.match(ctx.document.querySelector('.modal-overlay').textContent, /Archive 2 sessions\?/);
+  assert.match(ctx.document.querySelector('.modal-overlay').textContent, /2 running processes/);
+  assert.doesNotMatch(ctx.document.querySelector('.modal-overlay').textContent, /Stop this session\?/);
   assert.match(ctx.document.querySelector('.modal-overlay').textContent, /A.*in this window[\s\S]*B.*in this window/);
   assert.deepEqual(ctx.calls, []);
   answer(ctx, false);
@@ -121,6 +129,81 @@ test('group live rows share one confirmation naming every target and Cancel chan
   assert.equal(ctx.document.querySelector('.modal-overlay'), null, 'no second confirmation');
   assert.deepEqual(ctx.calls, [['stop', 'A'], ['archive', 'A', 1], ['stop', 'B'], ['archive', 'B', 1]]);
   assert.ok(undo(ctx), 'confirmed group offers Undo');
+});
+
+test('an older group Undo cannot reverse a later row Archive', async t => {
+  const ctx = setup(t, [{ sessionId: 'A', scheduleSlug: 'group' }, { sessionId: 'B', scheduleSlug: 'group' }]);
+  await archive(ctx, true);
+  await archive(ctx);
+  await archive(ctx);
+  assert.deepEqual(ctx.calls, [['archive', 'A', 1], ['archive', 'B', 1], ['archive', 'A', 0], ['archive', 'A', 1]]);
+  const older = ctx.document.querySelector('[data-notice-id="archive-sessions:A:B"] .app-notice-action');
+  older?.click();
+  await settle();
+  assert.equal(ctx.rows[0].archived, 1, 'the later row Archive must remain in force');
+  assert.equal(ctx.calls.filter(call => call[0] === 'archive' && call[1] === 'A' && call[2] === 0).length, 1);
+});
+
+for (const merged of [false, true]) {
+  test(`Archive reconfirms a newly live ${merged ? 'merged part' : 'group row'} before stopping or archiving`, async t => {
+    const ctx = setup(t, merged ? [{ sessionId: 'A', mergedMemberIds: ['B'] }]
+      : [{ sessionId: 'A', scheduleSlug: 'group' }, { sessionId: 'B', scheduleSlug: 'group' }]);
+    ctx.window.activePtyIds.add('A');
+    const pending = archive(ctx, !merged);
+    await settle();
+    ctx.window.activePtyIds.add('B');
+    answer(ctx, true);
+    await settle();
+    const second = ctx.document.querySelector('.modal-overlay');
+    assert.ok(second, 'newly running B requires a second confirmation');
+    assert.match(second.textContent, /B.*in this window/);
+    assert.deepEqual(ctx.calls, [], 'nothing is stopped or archived before reconfirmation');
+    answer(ctx, false);
+    await pending;
+    assert.deepEqual(ctx.calls, []);
+    assert.equal(ctx.window.activePtyIds.has('B'), true);
+  });
+}
+
+test('Archive stop-time liveness check refuses a part that starts after reconfirmation', async t => {
+  const ctx = setup(t, [{ sessionId: 'A', mergedMemberIds: ['B'] }]);
+  ctx.window.activePtyIds.add('A');
+  ctx.window.api.stopSession = async id => {
+    ctx.calls.push(['stop', id]);
+    ctx.window.activePtyIds.add('B');
+    return { ok: true };
+  };
+  const pending = archive(ctx);
+  await settle();
+  answer(ctx, true);
+  await pending;
+  assert.deepEqual(ctx.calls, [['stop', 'A']], 'unconfirmed B must neither be stopped nor archived');
+  assert.equal(ctx.window.activePtyIds.has('B'), true);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /B.*confirm|confirm.*B/i);
+});
+
+test('Undo does not claim a process stayed stopped when it exited during confirmation', async t => {
+  const ctx = setup(t);
+  ctx.window.activePtyIds.add('A');
+  const pending = archive(ctx);
+  await settle();
+  ctx.window.activePtyIds.delete('A');
+  answer(ctx, true);
+  await pending;
+  assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
+  assert.doesNotMatch(undo(ctx).parentElement.textContent, /stay stopped/);
+});
+
+test('Undo does not claim a stopped process when Archive only detached a tab', async t => {
+  const ctx = setup(t);
+  ctx.window.openSessions.set('A', { attach: true, closed: false, attachJobId: 'job-A' });
+  ctx.window.api.stopSession = async id => { ctx.calls.push(['detach', id]); return { ok: true, detached: true }; };
+  const pending = archive(ctx);
+  await settle();
+  answer(ctx, true);
+  await pending;
+  assert.deepEqual(ctx.calls, [['detach', 'A'], ['archive', 'A', 1]]);
+  assert.doesNotMatch(undo(ctx).parentElement.textContent, /stay stopped/);
 });
 
 test('group Undo restores exactly the rows archived by this click', async t => {

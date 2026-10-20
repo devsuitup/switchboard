@@ -459,9 +459,12 @@ For slug-group Archive, `planSessionArchive` checks every local part's
 background job before any dialog or effects. A live job, an unknown answer,
 or a rejected check refuses the whole action. The plan then reuses
 `planSessionStop` for each row. If any plan has targets, one danger
-confirmation names all of them; Cancel stops and archives nothing. No
-targets means immediate Archive. Execution is restricted to the planned
-targets, and rechecks background-job refusal before each row's stops.
+confirmation counts rows and running processes and names all targets without
+embedding a second Stop question. Cancel stops and archives nothing. After
+confirmation, planning runs again; newly live targets require another
+confirmation naming them. No targets means immediate Archive. Execution checks
+every part's current liveness and refuses an unconfirmed live part, and
+rechecks background-job refusal before each row's stops.
 Runtime stop or persistence failures skip that row and report the failure;
 other rows can still archive. The folder action retains its options dialog
 and its existing all-or-nothing archive after stops.
@@ -469,8 +472,11 @@ and its existing all-or-nothing archive after stops.
 Every successful row or slug-group Archive offers a ten-second Undo, even
 after confirmation. It calls `persistSessionArchive(session, 0)` only for
 the captured successful rows, excluding already archived rows and failures;
-it never reopens a process. When processes stopped, the notice says they
-stay stopped. Its `archive-sessions:` notice id is outside `loadProjects`'
+it never reopens a process. A later successful Archive of any captured row
+clears the older Undo notice so it cannot reverse that later action. Stop
+results carry `didStop`, including partial failures; only an actual stop adds
+the notice's "stay stopped" suffix. Unreachable hosts, absent processes and
+detached tabs do not count as stopped. Its `archive-sessions:` notice id is outside `loadProjects`'
 `archive-project:` reconciliation, so an older reload cannot clear it and
 no load-generation stamp is needed. Busy sets remain held through planning,
 confirmation, stopping and persistence, including across sidebar rebuilds.

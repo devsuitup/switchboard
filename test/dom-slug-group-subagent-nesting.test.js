@@ -125,7 +125,9 @@ test('"Archive all sessions in group" only archives the two top-level reruns, no
     const archiveBtn = ctx.document.querySelector('.slug-group .slug-group-archive-btn');
     assert.ok(archiveBtn, 'slug-group-archive-btn must be rendered');
     const pending = archiveBtn.onclick({ stopPropagation: () => {} });
-    await answerChoiceDialog(ctx, { confirm: true });
+    const confirmation = await answerChoiceDialog(ctx, { confirm: true });
+    assert.ok(confirmation, 'the running group requires confirmation');
+    assert.match(confirmation.textContent, /Archive 2 sessions\?[\s\S]*running process[\s\S]*in this window/);
     await pending;
 
     const archivedIds = archiveCalls.map(([sid]) => sid).sort();

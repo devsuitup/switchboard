@@ -84,6 +84,11 @@ async function persistSessionArchive(session, value, stopped = false) {
     const result = await window.api.archiveSession(session.sessionId, value);
     if (!result || result.ok === false || result.error) throw new Error(result?.error || 'The archive backend returned no result');
     session.archived = value;
+    if (value) {
+      for (const notice of document.querySelectorAll('[data-notice-id^="archive-sessions:"]')) {
+        if (notice.dataset.noticeId.split(':').slice(1).includes(session.sessionId)) clearAppNotice(notice.dataset.noticeId);
+      }
+    }
     clearAppNotice(sessionActionNoticeId(operation, session));
     if (!value) clearAppNotice(sessionActionNoticeId('Archive', session));
     return true;
@@ -94,10 +99,10 @@ async function persistSessionArchive(session, value, stopped = false) {
   }
 }
 
-function showSessionArchiveUndo(rows, confirmed) {
+function showSessionArchiveUndo(rows, didStop) {
   showAppNotice({
     id: `archive-sessions:${rows.map(session => session.sessionId).join(':')}`, kind: 'undo',
-    message: `${rows.length === 1 ? 'Session' : `${rows.length} sessions`} archived.${confirmed ? ' Stopped processes stay stopped.' : ''}`,
+    message: `${rows.length === 1 ? 'Session' : `${rows.length} sessions`} archived.${didStop ? ' Stopped processes stay stopped.' : ''}`,
     actionLabel: 'Undo',
     onAction: async () => {
       for (const session of rows) await persistSessionArchive(session, 0);
@@ -107,33 +112,47 @@ function showSessionArchiveUndo(rows, confirmed) {
 }
 
 async function archiveSessionRows(rows) {
-  const prepared = await window.planSessionArchive(rows);
+  let prepared = await window.planSessionArchive(rows);
+  while (prepared.ok) {
+    const targets = prepared.plans.flatMap(({ plan }) => plan.targets);
+    if (!targets.length) break;
+    const running = targets.filter(target => !target.attach).length;
+    const question = rows.length === 1 ? 'Archive this session?' : `Archive ${rows.length} sessions?`;
+    if (!await appConfirm({
+      title: question, confirmLabel: 'Archive', danger: true,
+      message: [question, `${running} running process${running === 1 ? '' : 'es'} will be stopped first.`,
+        ...prepared.plans.filter(({ plan }) => plan.targets.length).map(({ plan }) => plan.confirmText.split('\n').slice(1).join('\n'))].join('\n'),
+    })) return;
+    const latest = await window.planSessionArchive(rows);
+    if (!latest.ok) { prepared = latest; break; }
+    const added = latest.plans.some(({ plan }) => plan.targets.some(target => !targets.some(confirmed =>
+      confirmed.sessionId === target.sessionId && confirmed.alias === target.alias && confirmed.attach === target.attach)));
+    prepared = latest;
+    if (!added) break;
+  }
   if (!prepared.ok) {
     surfaceStopFailure(null, prepared.error, prepared.session);
     return;
   }
-  const livePlans = prepared.plans.filter(({ plan }) => plan.targets.length);
-  if (livePlans.length && !await appConfirm({
-    title: 'Archive sessions', confirmLabel: 'Archive', danger: true,
-    message: ['Archive these sessions? Running parts will be stopped first.', ...livePlans.map(({ plan }) => plan.confirmText)].join('\n'),
-  })) return;
   const unreachable = new Map();
   const notStopped = [];
   const archived = [];
+  let stoppedAny = false;
   for (const { session, plan } of prepared.plans) {
     const result = await stopForArchive(session, unreachable, plan);
+    stoppedAny ||= !!result.didStop;
     if (!result.ok) {
       surfaceStopFailure(null, result.error, session);
       continue;
     }
-    const didStop = plan.targets.some(target => !target.attach) && !result.notStopped?.length;
+    const didStop = !!result.didStop;
     if (await persistSessionArchive(session, 1, didStop)) {
       archived.push(session);
       notStopped.push(...(result.notStopped || []).map(entry => ({ ...entry, session })));
     }
   }
   announceNotStopped(notStopped);
-  if (archived.length) showSessionArchiveUndo(archived, livePlans.length > 0);
+  if (archived.length) showSessionArchiveUndo(archived, stoppedAny);
   pollActiveSessions();
   Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
 }

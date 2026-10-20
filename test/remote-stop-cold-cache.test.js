@@ -63,7 +63,8 @@ function setup(t, { present = true, pollError = null, stopError = null, polling 
   });
   vm.runInContext(mainSource.slice(start, end), main, { filename: mainPath });
   const ctx = setupSidebarDom();
-  ctx.window.appConfirm = async () => true;
+  ctx.confirmations = [];
+  ctx.window.appConfirm = async options => { ctx.confirmations.push(options); return true; };
   const session = { sessionId: 'A', mergedMemberIds: [], remoteAlias: 'host', projectPath: '/project', modified: new Date().toISOString() };
   ctx.window.sessionMap.set('A', session);
   ctx.sidebar.renderProjects([makeSampleProject({ sessions: [session] })], true);
@@ -83,6 +84,8 @@ function setup(t, { present = true, pollError = null, stopError = null, polling 
 async function archive(ctx) {
   const button = ctx.document.querySelector('#si-A .session-archive-btn');
   await button.onclick({ stopPropagation() {} });
+  assert.equal(ctx.confirmations.length, 1, 'the possibly live remote process requires confirmation');
+  assert.match(ctx.confirmations[0].message, /Archive this session\?[\s\S]*This session.*on host/);
   return button;
 }
 
@@ -114,6 +117,7 @@ test('Archive hides a cold-cache row anyway when the host fails its first poll, 
   assert.equal(ctx.notices.length, 2, 'not-stopped alert and Undo notice');
   assert.match(ctx.notices[0], /not stopped/);
   assert.match(ctx.notices[0], /host did not answer \(host unreachable\)/);
+  assert.doesNotMatch(ctx.notices[1], /stay stopped/);
 });
 
 test('Archive waits for a first poll already in flight and stops the session once it answers', async t => {

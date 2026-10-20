@@ -18,7 +18,8 @@ const assert = require('node:assert/strict');
 const { setupSidebarDom, answerChoiceDialog } = require('./dom-setup');
 
 function installRecordingApi(ctx, overrides = {}) {
-  ctx.window.appConfirm = async () => true;
+  ctx.confirmations = [];
+  ctx.window.appConfirm = async options => { ctx.confirmations.push(options); return true; };
   const calls = [];
   const impls = {
     stopSession: () => Promise.resolve({ ok: true }),
@@ -224,6 +225,8 @@ test('slug-group archive: a stop refusal on one remote session skips it, the oth
     assert.ok(group, 'the two same-slug sessions must render as a slug group');
     await group.querySelector('.slug-group-archive-btn').onclick(new ctx.window.MouseEvent('click'));
 
+    assert.equal(ctx.confirmations.length, 1);
+    assert.match(ctx.confirmations[0].message, /Archive[\s\S]*process[\s\S]*(?:in this window|on vps)/);
     assert.deepEqual(calls.filter(c => c.method === 'remoteStopSession').map(c => c.args), [['vps', 'r1']]);
     assert.deepEqual(calls.filter(c => c.method === 'stopSession').map(c => c.args[0]), ['s2']);
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]), ['s2'],
@@ -301,6 +304,8 @@ test('per-session archive toggle: local session with an active PTY is stopped, t
     await ctx.document.getElementById('si-s1').querySelector('.session-archive-btn').onclick(new ctx.window.MouseEvent('click'));
 
     const methods = calls.map(c => c.method);
+    assert.equal(ctx.confirmations.length, 1);
+    assert.match(ctx.confirmations[0].message, /Archive[\s\S]*process[\s\S]*(?:in this window|on vps)/);
     assert.deepEqual(methods.filter(method => method !== 'bgAgentLiveJob'), ['stopSession', 'archiveSession'], 'stop must precede archive');
   } finally { ctx.destroy(); }
 });
@@ -318,6 +323,8 @@ test('per-session archive toggle: a failed remote stop blocks the archive with a
     const archiveBtn = ctx.document.getElementById('si-r1').querySelector('.session-archive-btn');
     await archiveBtn.onclick(new ctx.window.MouseEvent('click'));
 
+    assert.equal(ctx.confirmations.length, 1);
+    assert.match(ctx.confirmations[0].message, /Archive[\s\S]*process[\s\S]*(?:in this window|on vps)/);
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession'), [], 'a refused stop must not archive');
     assert.match(ctx.document.querySelector('[data-notice-id="Archive:vps:r1"]').textContent, /non-claude/);
     assert.equal(r1.archived, 0, 'the session object itself must stay unarchived');
@@ -398,6 +405,8 @@ test('slug-group archive: sessions on an unreachable host are archived with one 
     const done = button.onclick(new ctx.window.MouseEvent('click'));
     assert.equal(button.disabled, true);
     await done;
+    assert.equal(ctx.confirmations.length, 1);
+    assert.match(ctx.confirmations[0].message, /Archive[\s\S]*process[\s\S]*(?:in this window|on vps)/);
     assert.deepEqual(calls.filter(c => c.method === 'archiveSession').map(c => c.args[0]).sort(), ['r1', 'r2']);
     const notices = ctx.document.querySelectorAll('#app-notices [role="alert"]');
     assert.equal(notices.length, 1);
@@ -451,6 +460,8 @@ test('folder archive is refused up front while a row of the folder is still chec
     assert.equal(ctx.document.querySelector('#si-r1 .session-archive-btn').disabled, true);
     release();
     await own;
+    assert.equal(ctx.confirmations.length, 1);
+    assert.match(ctx.confirmations[0].message, /Archive this session\?[\s\S]*r1.*on vps/);
     assert.equal(calls.filter(c => c.method === 'archiveSession').length, 0);
     assert.equal(ctx.document.querySelector('#si-r1 .session-archive-btn').disabled, false);
   } finally { ctx.destroy(); }
@@ -475,6 +486,8 @@ test('a re-render keeps the slug-group and folder Archive buttons disabled while
     release();
     await done;
     assert.equal(ctx.document.querySelector('.slug-group').querySelector('.slug-group-archive-btn').disabled, false);
+    assert.equal(ctx.confirmations.length, 1);
+    assert.match(ctx.confirmations[0].message, /Archive 2 sessions\?[\s\S]*2 running processes[\s\S]*on vps/);
   } finally { ctx.destroy(); }
 });
 

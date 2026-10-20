@@ -95,7 +95,8 @@ test('focusing a merged member grid card highlights its representative row', t =
 });
 
 function recordingApi(ctx, failedId = null) {
-  ctx.window.appConfirm = async () => true;
+  ctx.confirmations = [];
+  ctx.window.appConfirm = async options => { ctx.confirmations.push(options); return true; };
   const calls = [];
   ctx.window.api.bgAgentLiveJob = async () => ({ known: true, job: null });
   ctx.window.api.stopSession = async id => {
@@ -114,6 +115,8 @@ test('Archive stops every open or running merged member before hiding the repres
   ctx.window.activePtyIds.add('C');
   await ctx.document.querySelector('#si-A .session-archive-btn').onclick({ stopPropagation() {} });
   assert.deepEqual(calls, [['stop', 'B'], ['stop', 'C'], ['archive', 'A', 1]]);
+  assert.equal(ctx.confirmations.length, 1);
+  assert.match(ctx.confirmations[0].message, /2 running processes[\s\S]*Part B.*in this window[\s\S]*Part C.*in this window/);
   assert.equal(ctx.window.activePtyIds.has('C'), false);
 });
 
@@ -124,6 +127,8 @@ test('a merged member stop failure blocks Archive and surfaces the existing fail
   const button = ctx.document.querySelector('#si-A .session-archive-btn');
   await button.onclick({ stopPropagation() {} });
   assert.deepEqual(calls, [['stop', 'B']]);
+  assert.equal(ctx.confirmations.length, 1);
+  assert.match(ctx.confirmations[0].message, /Part B.*in this window/);
   assert.equal(ctx.window.activePtyIds.has('B'), true);
   assert.equal(ctx.window.sessionMap.get('A').archived || 0, 0);
   assert.match(ctx.document.querySelector('[role="alert"]').textContent, /stop refused/);
@@ -138,6 +143,7 @@ test('Archive checks all member background jobs before stopping any member', asy
   await button.onclick({ stopPropagation() {} });
   assert.deepEqual(calls, []);
   assert.match(ctx.document.querySelector('[role="alert"]').textContent, /background job job-C/);
+  assert.equal(ctx.confirmations.length, 0);
   assert.ok(ctx.window.activePtyIds.has('B'));
 });
 
@@ -148,6 +154,8 @@ test('Archive stops live remote members on their host and leaves dead members al
   ctx.window.api.remoteStopSession = async (alias, id) => { calls.push(['remoteStop', alias, id]); return { ok: true }; };
   await ctx.document.querySelector('#si-A .session-archive-btn').onclick({ stopPropagation() {} });
   assert.deepEqual(calls, [['remoteStop', 'host', 'B'], ['archive', 'A', 1]]);
+  assert.equal(ctx.confirmations.length, 1);
+  assert.match(ctx.confirmations[0].message, /Part B.*on host/);
   assert.equal(ctx.remoteSessionStates.get('B').snapshot().liveness, 'dead');
 });
 

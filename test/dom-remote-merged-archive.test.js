@@ -30,7 +30,8 @@ function setup(t, { seen, members = ['B'], at = 1000 }) {
     sessions: [{ sessionId: 'A', mergedMemberIds: members, remoteAlias: 'host', projectPath: '/project', modified: new Date().toISOString() }],
   })]);
   const ctx = setupSidebarDom();
-  ctx.window.appConfirm = async () => true;
+  ctx.confirmations = [];
+  ctx.window.appConfirm = async options => { ctx.confirmations.push(options); return true; };
   t.after(() => ctx.destroy());
   const payload = JSON.parse(JSON.stringify(projects));
   ctx.window.sessionMap.set('A', payload[0].sessions[0]);
@@ -45,8 +46,10 @@ function setup(t, { seen, members = ['B'], at = 1000 }) {
   return { ...ctx, calls, session: payload[0].sessions[0] };
 }
 
-async function archive(ctx) {
+async function archive(ctx, expected = 1) {
   await ctx.document.querySelector('#si-A .session-archive-btn').onclick({ stopPropagation() {} });
+  assert.equal(ctx.confirmations.length, expected);
+  if (expected) assert.match(ctx.confirmations[0].message, /Archive this session\?[\s\S]*on host/);
 }
 
 test('Archive stops an unseeded live member when the representative descriptor is unseen', async t => {
@@ -69,7 +72,7 @@ test('Archive does not borrow a seen representative descriptor for an unseeded d
 test('Archive on a non-merged remote row retains its own descriptor decision', async t => {
   for (const seen of [[], ['A']]) {
     const ctx = setup(t, { seen, members: [] });
-    await archive(ctx);
+    await archive(ctx, seen.length);
     assert.deepEqual(ctx.calls, seen.length ? [['stop', 'host', 'A'], ['archive', 'A', 1]] : [['archive', 'A', 1]]);
   }
 });
@@ -77,7 +80,7 @@ test('Archive on a non-merged remote row retains its own descriptor decision', a
 test('Archive keeps a confirmed dead member authoritative over its seen descriptor', async t => {
   const ctx = setup(t, { seen: ['B'] });
   ctx.read("remoteState('B').apply({ type: 'liveness', value: 'dead' })");
-  await archive(ctx);
+  await archive(ctx, 0);
   assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
 });
 
@@ -106,7 +109,7 @@ test('Archive asks the host about every member of a merged row whose host never 
 test('Archive trusts a confirmed dead state even when the host never synced', async t => {
   const ctx = setup(t, { seen: [], members: [], at: null });
   ctx.read("remoteState('A').apply({ type: 'liveness', value: 'dead' })");
-  await archive(ctx);
+  await archive(ctx, 0);
   assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
 });
 
