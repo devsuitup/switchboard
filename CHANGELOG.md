@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Changed
-- A session's line in the sidebar no longer repeats the CLI's own status word (busy, idle, waiting, shell); hover the status icon to see it. Local and remote sessions show the waiting reason and status age on the line; conversations with several parts use the latest part's status. (#563)
+- A session's line in the sidebar no longer repeats the CLI's own status word (busy, idle, waiting, shell); hover the status icon to see it. Local and remote sessions show the waiting reason and status age on the line; for both, conversations with several parts use the latest part's status on the line and in the tooltip. (#563)
 - The Agents view shows job states as Active, Blocked, Idle, Done, Stopped, Failed, External or Unknown, and screen readers announce each row's activity. Finished background rows in Agents, the sidebar and the grid now have tooltips that say Not running instead of Stale; jobs say Liveness unknown when neither a finished job state nor a live descriptor is available. (#563)
 - Delete on a conversation that is running in Switchboard is now refused before its confirmation; stop it first. Delete, Delete worktree and Change path say why they cannot proceed before their confirmation, not after you confirm. (#565)
 

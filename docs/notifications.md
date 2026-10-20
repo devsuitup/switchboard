@@ -58,7 +58,8 @@ for example `permission prompt · 1m ago`, or `1m ago` without a reason.
 The status icon's tooltip and accessible name include the CLI's own status
 (`busy`, `idle`, `waiting`, `shell`) and the waiting reason. These come from the
 CLI's own session descriptor — see [Session browser](session-browser.md#session-rows).
-For a conversation with several parts, these details come from its latest part.
+For both local and remote conversations with several parts, the line and icon
+details come from the latest part's descriptor, when available.
 A local waiting reason updates even when the status itself stays `waiting`.
 Background jobs keep their job activity labels. Grid icon tooltips show the
 shared activity label without the sidebar's CLI status detail.

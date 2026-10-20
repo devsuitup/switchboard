@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
+const fs = require('node:fs');
+const path = require('node:path');
+const { extractFunction } = require('./app-source');
+const { computeHostProfile, attachBlockReason, sendBlockReason } = require('../remote-host-profile');
 
 const now = Date.parse('2026-10-20T12:00:00Z');
 const cases = [
@@ -58,6 +62,40 @@ test('a merged waiting head exposes its own reason instead of the root reason', 
     assert.match(item.querySelector('.session-icon').title, /CLI status: waiting · question$/);
     ctx.window.paintSessionIcon(item.querySelector('.session-icon'), session.sessionId, session);
     assert.match(item.querySelector('.session-icon').title, /CLI status: waiting · question$/);
+  } finally { ctx.destroy(); }
+});
+
+test('a remote merged row shows its head descriptor reason, age and CLI tooltip', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.window.Date.now = () => now;
+    const descriptors = [
+      { sessionId: 'A', status: 'busy', statusUpdatedAt: now - 120000, waitingFor: 'root reason' },
+      { sessionId: 'B', status: 'waiting', statusUpdatedAt: now - 60000, waitingFor: 'permission prompt' },
+    ];
+    const annotate = new Function('remoteIndexer', 'remoteAttachAdapter', 'remoteActivityTracker',
+      'cliSessionState', 'attachBlockReason', 'sendBlockReason',
+      extractFunction(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), 'annotateRemoteAttachable')
+        + '\nreturn annotateRemoteAttachable;')({
+      getRemoteSessions: () => ({ sessions: descriptors, at: now, error: null }),
+      getRemoteHostState: () => ({ consecutiveFailures: 0, nextAttemptAt: 0 }),
+      getRemoteHostProfile: () => computeHostProfile({ at: now, error: null, descriptors }),
+    }, { supports: () => false }, { activeAt: () => null }, {}, attachBlockReason, sendBlockReason);
+    const session = sessionFor({ sessionId: 'A', headSessionId: 'B',
+      mergedMemberIds: ['B'], remoteAlias: 'host' });
+    annotate([{ remoteAlias: 'host', sessions: [session] }]);
+    ctx.window.applyRemoteDescriptor(session);
+    const item = ctx.sidebar.buildSessionItem(session);
+    const check = () => {
+      assert.equal(item.querySelector('.session-status').textContent, 'permission prompt · 1m ago');
+      const slot = item.querySelector('.session-icon');
+      assert.match(slot.title, /\nCLI status: waiting · permission prompt$/);
+      assert.match(slot.getAttribute('aria-label'), / · CLI status: waiting · permission prompt$/);
+      assert.doesNotMatch(slot.title, /root reason|CLI status: busy/);
+    };
+    check();
+    ctx.window.paintSessionIcon(item.querySelector('.session-icon'), session.sessionId, session);
+    check();
   } finally { ctx.destroy(); }
 });
 
