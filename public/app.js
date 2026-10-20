@@ -1320,11 +1320,33 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
     }
     stopped++;
     if (reattach) {
-      showAppNotice({ id: sessionActionNoticeId('Detach undo', reattach.session), kind: 'undo',
+      const noticeId = sessionActionNoticeId('Detach undo', reattach.session);
+      if (typeof reattach.options.jobId !== 'string' || !/^[0-9a-f]{8}$/.test(reattach.options.jobId)) {
+        showAppNotice({ id: noticeId, kind: 'info',
+          message: `Detached from ${sessionActionDescription(reattach.session)}. The background session keeps running.` });
+        continue;
+      }
+      showAppNotice({ id: noticeId, kind: 'undo',
         message: `Detached from ${sessionActionDescription(reattach.session)}. The background session keeps running.`,
         actionLabel: 'Undo', onAction: async () => {
+          showAppNotice({ id: noticeId, kind: 'info', message: `Reattaching to ${sessionActionDescription(reattach.session)}…` });
           if (reattach.entry && !reattach.entry.closed && result?.error !== 'not running') await reattach.entry.detachComplete;
-          return openSession(reattach.session, reattach.options);
+          let check;
+          try { check = await window.api.bgAgentLiveJob?.(id); } catch {}
+          if (check?.known === true && !check.job) {
+            showAppNotice({ id: noticeId, kind: 'error',
+              message: `The background job has ended for ${sessionActionDescription(reattach.session)}; there is nothing to reattach.` });
+            return;
+          }
+          try {
+            const opened = await openSession(reattach.session, reattach.options);
+            if (opened === false) throw new Error('The attach tab did not open');
+            showAppNotice({ id: noticeId, kind: 'info', message: `Reattached to ${sessionActionDescription(reattach.session)}.` });
+            return opened;
+          } catch (error) {
+            showAppNotice({ id: noticeId, kind: 'error',
+              message: `Could not reattach to ${sessionActionDescription(reattach.session)}: ${error?.message || error || 'unknown error'}.` });
+          }
         } });
     }
   }
