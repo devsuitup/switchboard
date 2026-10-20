@@ -101,7 +101,10 @@ see [session-cache.md](session-cache.md), "Archived projects"), which passes
 the group's project path as `projectRoot` and disables only the files of a
 fresh scan that the user confirmed; and `reenableScheduleFiles` in
 `archived-projects.js` (the re-enable offer), which turns back on only the
-offered files that still read `enabled: false`.
+offered files that still read `enabled: false`. The folder Archive reverse path
+also uses this helper, limited to `disabledByArchive`, so schedules already off
+before that Archive stay off. Undo restores the consumed prior offer separately;
+deleted files or files whose `enabled` changed are skipped without a failure.
 
 - **No link below the project root.** `scheduleFileUnlinked` holds when
   `realpath(filePath)` is `<realpath(projectRoot)>/.claude/commands/<name>`. A

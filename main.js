@@ -946,6 +946,9 @@ ipcMain.handle('archive-project', async (_event, groups, opts) => {
   return res;
 });
 
+ipcMain.handle('undo-archive-project', async (_event, groups, archivedAt) =>
+  await writer.undoArchiveProjectFolders(groups, archivedAt, archiveDeps()));
+
 ipcMain.handle('reenable-project-schedules', async (_event, projectPath, folderKey) =>
   await writer.reenableOfferedSchedules(projectPath, folderKey, archiveDeps()));
 

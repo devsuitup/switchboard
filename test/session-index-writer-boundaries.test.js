@@ -241,11 +241,12 @@ characterize('archive records known parents and only successful schedule disable
         return file === first ? { ok: true } : { ok: false, error: 'write denied' };
       },
     });
-  assert.deepEqual(result, { ok: true, disabled: ['first'], failed: [{ name: 'second', error: 'write denied' }] });
+  assert.deepEqual(result, { ok: true, archivedAt: 30, disabled: ['first'], failed: [{ name: 'second', error: 'write denied' }] });
   assert.equal(notifications, 1);
   assert.deepEqual(db.getSetting('archivedProjects'), {
     [otherEntry]: { archivedAt: 9 },
-    [entry]: { archivedAt: 30, knownSessionIds: ['parent'], disabledSchedules: [first] },
+    [entry]: { archivedAt: 30, knownSessionIds: ['parent'], disabledSchedules: [first],
+      disabledByArchive: [first], priorOffer: null },
   });
 `);
 

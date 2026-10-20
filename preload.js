@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('api', {
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
   getProjectArchivePlan: (groups) => ipcRenderer.invoke('get-project-archive-plan', groups),
   archiveProject: (groups, opts) => ipcRenderer.invoke('archive-project', groups, opts),
+  undoArchiveProject: (groups, archivedAt) => ipcRenderer.invoke('undo-archive-project', groups, archivedAt),
   reenableProjectSchedules: (projectPath, folderKey) => ipcRenderer.invoke('reenable-project-schedules', projectPath, folderKey),
   dismissScheduleReenableOffer: (projectPath, folderKey) => ipcRenderer.invoke('dismiss-schedule-reenable-offer', projectPath, folderKey),
   deleteSession: (id, partIds) => ipcRenderer.invoke('delete-session', id, partIds),
