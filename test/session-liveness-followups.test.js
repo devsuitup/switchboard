@@ -127,7 +127,7 @@ test('576 item 3: a descriptor loss clears the old inference and leaves unknown 
   h.render([{ sessionId: 'A', status: 'idle' }]);
   h.emitSessionTranscriptActivity({ sessionId: 'A', at: 10 });
   h.expire();
-  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input');
+  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input\nCLI status: idle');
   const missed = h.render([{ sessionId: 'A', status: undefined }]);
   assert.equal(h.read('localPtyStates.get("A").snapshot().liveness'), 'unknown');
   assert.equal(h.read('localTranscriptStates.has("A")'), false);
@@ -135,7 +135,7 @@ test('576 item 3: a descriptor loss clears the old inference and leaves unknown 
   assert.equal(missed.querySelector('.session-icon').title, 'Idle');
   const returned = h.render([{ sessionId: 'A', status: 'idle' }]);
   assert.ok(returned.classList.contains('is-alive'));
-  assert.equal(returned.querySelector('.session-icon').title, 'Waiting for input');
+  assert.equal(returned.querySelector('.session-icon').title, 'Waiting for input\nCLI status: idle');
 });
 
 test('576 a never-standalone merged member uses its own descriptor without creating a sidebar map entry', { timeout: 8000 }, t => {
@@ -145,7 +145,7 @@ test('576 a never-standalone merged member uses its own descriptor without creat
   assert.deepEqual([...h.window.sessionMap.keys()], ['A']);
   h.emitSessionTranscriptActivity({ sessionId: 'B' });
   h.expire();
-  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input');
+  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input\nCLI status: idle');
   assert.equal(h.read('localTranscriptStates.get("B").snapshot().liveness'), 'alive');
   h.render([{ ...row, mergedMemberStatuses: { B: null } }]);
   h.expire();

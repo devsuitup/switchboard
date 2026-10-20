@@ -1446,6 +1446,15 @@ constant; the CSS dropped `space-between` for a plain `gap`, with
 `margin-left: auto` on `.session-status` alone so it — not the short id —
 is the element whose position depends on how much room is left.
 
+Foreground rows show only the descriptor waiting reason (when `status` is
+`waiting`) plus `formatStatusAge(statusUpdatedAt)`, joined with ` · `; without
+a reason they show the age alone. Without a status the slot is empty. Both
+`buildSessionItem` and `applyStateClasses` write this same line. The activity
+icon keeps its activity label first; `writeIconSlot` appends `CLI status:`
+with the raw descriptor status and reason to its tooltip and accessible name.
+The initial painter, live writer and later `paintSessionIcon` refreshes supply
+the descriptor only for foreground rows, preserving background job labels.
+
 ## Proven continuation re-key
 
 For a proven background move, capture map key/object, effective source id,

@@ -52,7 +52,10 @@ app's idle CPU use low
 - Plain output does not count as work: it only updates the session's last
   activity time.
 
-The row's status text (`busy`, `idle`, `waiting`, with an age) comes from the
+The foreground row shows what the session waits for and the age of its status,
+for example `permission prompt · 1m ago`, or `1m ago` without a reason.
+The status icon's tooltip and accessible name include the CLI's own status
+(`busy`, `idle`, `waiting`, `shell`) and the waiting reason. These come from the
 CLI's own session descriptor — see [Session browser](session-browser.md#session-rows).
 
 [Debug mode](activity-trace.md) records every one of these signals, and what

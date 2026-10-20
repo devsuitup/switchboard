@@ -19,7 +19,7 @@ test('a rebuilt local row refreshes liveness when its descriptor appears after a
   } finally { ctx.destroy(); }
 });
 
-test('a local session with a status renders the state+age line', () => {
+test('a local session with a status renders the age line', () => {
   const ctx = setupSidebarDom();
   try {
     const now = Date.parse('2026-09-09T12:00:00Z');
@@ -41,7 +41,7 @@ test('a local session with a status renders the state+age line', () => {
 
       const statusEl = item.querySelector('.session-status');
       assert.ok(statusEl, 'a local session with status must render the status line');
-      assert.match(statusEl.textContent, /idle.*3m ago/);
+      assert.equal(statusEl.textContent, '3m ago');
       assert.equal(item.querySelector('.remote-badge'), null, 'a local session must not get a remote badge');
     } finally {
       ctx.window.Date.now = realNow;
@@ -94,7 +94,7 @@ test('a remote session still renders both its remote badge and the status line',
       assert.ok(item.querySelector('.remote-badge'), 'a remote session must still carry its badge');
       const statusEl = item.querySelector('.session-status');
       assert.ok(statusEl, 'a remote session must still render the status line');
-      assert.match(statusEl.textContent, /busy.*5s ago/);
+      assert.equal(statusEl.textContent, '5s ago');
     } finally {
       ctx.window.Date.now = realNow;
     }
@@ -154,11 +154,11 @@ test('a waiting session names what it waits for in the status line', () => {
   try {
     const base = {
       summary: 'remote session', modified: '2026-09-09T11:59:00.000Z', starred: false, archived: 0,
-      messageCount: 1, remoteAlias: 'planificator', status: 'waiting',
+      messageCount: 1, remoteAlias: 'planificator', status: 'waiting', statusUpdatedAt: Date.now() - 60000,
     };
     const waiting = ctx.sidebar.buildSessionItem({ ...base, sessionId: 'w', waitingFor: 'permission prompt' });
-    assert.match(waiting.querySelector('.session-status').textContent, /^waiting · permission prompt/);
+    assert.equal(waiting.querySelector('.session-status').textContent, 'permission prompt · 1m ago');
     const busy = ctx.sidebar.buildSessionItem({ ...base, sessionId: 'b', status: 'busy', waitingFor: 'permission prompt' });
-    assert.doesNotMatch(busy.querySelector('.session-status').textContent, /permission/);
+    assert.equal(busy.querySelector('.session-status').textContent, '1m ago');
   } finally { ctx.destroy(); }
 });

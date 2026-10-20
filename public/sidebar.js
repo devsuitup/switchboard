@@ -2175,8 +2175,8 @@ function buildSessionItem(session) {
   icon.className = 'session-icon' + (rowSessionIds(session).some(id => activePtyIds.has(id)) ? ' running' : '');
   const bgActivity = (typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(session), snapshot, session))
     || (session.bgJobId ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null);
-  paintSessionIconFromSnapshot(icon, snapshot, bgActivity?.title, bgActivity?.text);
-  if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention);
+  paintSessionIconFromSnapshot(icon, snapshot, bgActivity?.title, bgActivity?.text, !bgActivity && session);
+  if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention, undefined, undefined, !bgActivity && session);
 
   // Info block
   const info = document.createElement('div');
@@ -2206,8 +2206,8 @@ function buildSessionItem(session) {
     statusEl.textContent = bgActivity.text;
   } else if (session.status) {
     const age = formatStatusAge(session.statusUpdatedAt);
-    const why = session.status === 'waiting' && session.waitingFor ? ' · ' + session.waitingFor : '';
-    statusEl.textContent = session.status + why + (age ? ' · ' + age : '');
+    const why = session.status === 'waiting' ? session.waitingFor : '';
+    statusEl.textContent = [why, age].filter(Boolean).join(' · ');
   }
   metaEl.append(timeEl, shortIdEl, statusEl);
   const count = rowPartIds(session).length;

@@ -47,8 +47,10 @@ newest user rename on any part, otherwise the original part's name
   Liveness unknown (`public/agents-view.js`, `projectBackgroundActivity`).
 - Green dot class `running` on the icon when a member has a local PTY
   (`public/sidebar.js:1694`; tooltip "Running" per `docs/notifications.md:19`).
-- Status text, raw from the CLI descriptor: `busy` · `idle` ·
-  `waiting · <what>` · `shell`, with an age (`public/sidebar.js:1722-1727`).
+- Foreground status text: waiting reason plus age (`permission prompt · 1m ago`),
+  or age alone (`1m ago`). The CLI descriptor word (`busy`, `idle`, `waiting`,
+  `shell`) and reason appear in the icon tooltip and accessible name
+  (`public/sidebar.js`, `public/session-activity-dom.js`).
 - Badges: `bg` "Background session run by the claude daemon — click to
   attach" (`public/sidebar.js:1746`); host alias, tooltip "Live session on
   <alias> — click to attach" / "… attach unavailable: <reason>, click to read

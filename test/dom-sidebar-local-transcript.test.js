@@ -51,7 +51,7 @@ for (const state of ['descriptor', 'busy', 'waiting']) {
         }
         const before = ctx.document.getElementById('si-local-1');
         assert.ok(before.classList.contains('is-alive'));
-        if (state === 'waiting') assert.equal(before.querySelector('.session-icon').title, 'Waiting for input');
+        if (state === 'waiting') assert.equal(before.querySelector('.session-icon').title, 'Waiting for input\nCLI status: busy');
         if (disappearance === 'status') session.status = undefined;
         else {
           ctx.window.sessionMap.delete(session.sessionId);
@@ -101,7 +101,7 @@ for (const withDescriptor of [false, true]) {
           const icon = item.querySelector('.session-icon');
           const visible = withDescriptor ? state : 'idle';
           assert.ok(icon.classList.contains(`session-icon--${visible}`), `the ${visible} icon survives the render`);
-          assert.equal(icon.title, withDescriptor ? (state === 'busy' ? 'Working' : 'Waiting for input') : 'Idle');
+          assert.equal(icon.title, withDescriptor ? (state === 'busy' ? 'Working' : 'Waiting for input') + '\nCLI status: busy' : 'Idle');
           assert.equal(item.classList.contains('cli-busy'), withDescriptor && state === 'busy');
           assert.equal(item.classList.contains('response-ready'), false);
           assert.equal(item.classList.contains('needs-attention'), false);
@@ -146,7 +146,7 @@ test('a local row without a PTY needs head evidence to animate, independently of
 
     const statusEl = item.querySelector('.session-status');
     assert.ok(statusEl, 'the state+age line is rendered independently of the icon slot');
-    assert.match(statusEl.textContent, /^busy/, 'the age line survives the icon decay unaffected — it reads session.status directly');
+    assert.equal(statusEl.textContent, ctx.window.formatStatusAge(LOCAL_SESSION.statusUpdatedAt), 'the age line survives the icon decay');
   } finally { ctx.destroy(); }
 });
 
