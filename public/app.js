@@ -1341,6 +1341,11 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
               clearTimeout(detachTimer);
             }
           }
+          if (reattach.entry && openSessions.get(id) === reattach.entry && !reattach.entry.closed) {
+            showAppNotice({ id: noticeId, kind: 'error',
+              message: `The session is still detaching from ${sessionActionDescription(reattach.session)}. Open it from the sidebar to retry.` });
+            return;
+          }
           let check;
           try { check = await window.api.bgAgentLiveJob?.(id); } catch {}
           if (check?.known === true && !check.job) {

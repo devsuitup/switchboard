@@ -158,15 +158,22 @@ test('Undo reopens when the liveness IPC rejects', async t => {
   assert.equal(h.calls.opened.length, 1);
 });
 
-test('Undo with not running reopens immediately while the entry is still open', async t => {
+test('Undo with not running reports still detaching when the old entry remains open', async t => {
   const h = setup(t);
   h.window.api.stopSession = async () => ({ ok: false, error: 'not running' });
   await h.app.confirmAndStopSession('s1');
-  assert.equal(h.entry.closed, false);
+  const noticeId = h.undo().parentElement.dataset.noticeId;
   h.undo().click();
   await settle();
-  assert.equal(h.calls.opened.length, 1, 'not running must bypass the unresolved detachComplete');
-  assert.deepEqual({ ...h.calls.opened[0][1] }, { type: 'attach', jobId: '1234abcd', cwd: '/project/worktree' });
+  assert.equal(h.entry.closed, false);
+  assert.deepEqual(h.calls.opened, [], 'do not re-show the dying tab');
+  const notices = h.document.querySelectorAll('#app-notices .app-notice');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].dataset.noticeId, noticeId);
+  assert.equal(notices[0].getAttribute('role'), 'alert');
+  assert.match(notices[0].textContent, /still detaching/i);
+  assert.match(notices[0].textContent, /open.*sidebar.*retry/i);
+  assert.doesNotMatch(notices[0].textContent, /Reattaching|Reattached to/);
 });
 
 for (const jobId of [null, undefined, '', 'invalid', 1234]) {
@@ -221,9 +228,10 @@ test('Undo clears progress and keeps only the Attach background failure when reo
   assert.doesNotMatch(notices[0].textContent, /Reattaching|The attach tab did not open/);
 });
 
-test('Undo bounds an unresolved detach wait and replaces progress after reopening', async t => {
+test('Undo bounds an unresolved detach wait and reports still detaching without reopening', async t => {
   const h = setup(t);
   await h.app.confirmAndStopSession('s1');
+  const noticeId = h.undo().parentElement.dataset.noticeId;
   h.undo().click();
   await settle();
   assert.match(h.document.querySelector('#app-notices [role="status"]').textContent, /Reattaching/);
@@ -234,13 +242,14 @@ test('Undo bounds an unresolved detach wait and replaces progress after reopenin
   t.mock.timers.tick(1);
   await settle();
   assert.equal(h.entry.closed, false, 'the exit event never arrived');
-  assert.deepEqual(h.calls.liveChecks, ['s1']);
-  assert.equal(h.calls.opened.length, 1, 'reopen after the bounded wait even without an exit event');
-  assert.deepEqual({ ...h.calls.opened[0][1] }, { type: 'attach', jobId: '1234abcd', cwd: '/project/worktree' });
+  assert.deepEqual(h.calls.opened, [], 'do not re-show the dying tab after the bounded wait');
   const notices = h.document.querySelectorAll('#app-notices .app-notice');
   assert.equal(notices.length, 1);
-  assert.match(notices[0].textContent, /Reattached to/);
-  assert.doesNotMatch(notices[0].textContent, /Reattaching/);
+  assert.equal(notices[0].dataset.noticeId, noticeId);
+  assert.equal(notices[0].getAttribute('role'), 'alert');
+  assert.match(notices[0].textContent, /still detaching/i);
+  assert.match(notices[0].textContent, /open.*sidebar.*retry/i);
+  assert.doesNotMatch(notices[0].textContent, /Reattaching|Reattached to/);
 });
 
 test('Undo replaces progress with its own error when reopening throws', async t => {
