@@ -1950,7 +1950,9 @@ before any folder-archive reappearance logic. `loadProjects` excludes exact
 hidden projects when reinserting pending sessions, and retains the existing
 worktree-parent filtering. Archive does not stop running processes.
 
-`unarchive-project(entry)` refuses entries marked `delete` before any effects.
+`unarchive-project(entry)` refuses entries marked `delete` before any effects
+with `{ error, code: 'DELETED' }`; a missing hidden entry returns
+`{ error, code: 'NOT_ARCHIVED' }`.
 For an archived or legacy entry, it refreshes its encoded local
 or mirrored folder, clears any folder-archive entry for the same group and
 removes its hidden entry. `global.hiddenProjectKinds` records how each entry
@@ -1978,9 +1980,13 @@ and the worktree header runs without asking and shows a 10-second Undo notice.
 that exact stored entry to `showProjectArchiveUndo` in `public/sidebar.js`.
 Undo calls `unarchiveProject(entry)` and reloads projects; it never reconstructs
 the host-qualified key in the renderer. Failed Undo shows a persistent error
-notice, except that "Project is not archived" means Undo is already done.
-Accepted `loadProjects` snapshots clear project Undo notices whose entries
-are no longer hidden or are marked `delete`, including changes from other paths.
+notice, except that `code: 'NOT_ARCHIVED'` means Undo is already done,
+independently of the error text. `showAppNotice` returns the notice element so
+the project helper can stamp it with the current `loadProjects.state.started`
+generation. Accepted `loadProjects` snapshots clear project Undo notices whose
+entries are no longer hidden or are marked `delete`, including changes from
+other paths, only if their job started after the notice's generation stamp.
+An older job that read settings before Archive cannot clear the fresh Undo.
 After worktree Archive removes its button, focus returns to the surviving
 project header, or the sidebar when that header is gone, if focus is on the body.
 This edits `hiddenProjects`, separate from folder Archive and its

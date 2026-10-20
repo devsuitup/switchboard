@@ -11,19 +11,20 @@
 
 function showProjectArchiveUndo(entry, name) {
   const id = `archive-project:${entry}`;
-  showAppNotice({
+  const notice = showAppNotice({
     id, kind: 'undo', message: `Project "${name}" archived. Its settings and cached sessions are kept; schedules resume on unarchive.`,
     actionLabel: 'Undo',
     onAction: async () => {
       try {
         const result = await window.api.unarchiveProject(entry);
-        if (!result?.ok && result?.error !== 'Project is not archived') throw new Error(result?.error || 'The backend returned no result');
+        if (!result?.ok && result?.code !== 'NOT_ARCHIVED') throw new Error(result?.error || 'The backend returned no result');
         await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
       } catch (error) {
         showAppNotice({ id, kind: 'error', message: `Could not unarchive project "${name}": ${error.message}` });
       }
     },
   });
+  notice.dataset.loadGeneration = loadProjects.state?.started || 0;
 }
 
 function slugId(slug) {

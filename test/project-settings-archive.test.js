@@ -528,9 +528,46 @@ test('late project Undo cannot reverse Delete after an intervening Unarchive', a
   h.refreshed.length = 0;
   const result = await h.invoke('unarchive-project', h.projectPath);
   assert.equal(result.error, 'Project is deleted');
+  assert.equal(result.code, 'DELETED');
   assert.equal(h.refreshed.length, 0);
   assert.equal(h.cache.has(h.folder), false);
   assert.equal(fs.readFileSync(path.join(h.dir, 'settings.json'), 'utf8'), before);
+});
+
+test('a reload that read settings before Archive keeps the fresh Undo notice', async t => {
+  const h = setup(t);
+  const ctx = setupSidebarDom();
+  t.after(() => ctx.destroy());
+  ctx.window.api.getProjects = async () => ({ defaultProjects: [], allProjects: [] });
+  let releaseTerminals;
+  let reachedTerminals;
+  const waitingForTerminals = new Promise(resolve => { reachedTerminals = resolve; });
+  ctx.window.api.getActiveTerminals = () => new Promise(resolve => {
+    releaseTerminals = resolve;
+    reachedTerminals();
+  });
+  ctx.window.api.getSetting = async key => h.getSetting(key);
+  ctx.window.loadingStatus = ctx.document.createElement('div');
+  ctx.window.reportActivityFocus = () => {};
+  ctx.window.reportActivityTitles = () => {};
+  ctx.window.refreshSidebar = () => {};
+  ctx.window.renderDefaultStatus = () => {};
+  const app = loadAppFunctions(ctx.context, { functions: ['dedup', 'loadProjects'] });
+  const loading = app.loadProjects();
+  await waitingForTerminals;
+  await h.archive();
+  ctx.window.showProjectArchiveUndo(h.projectPath, 'Project');
+  const notice = ctx.document.querySelector('#app-notices .app-notice');
+  assert.ok(notice?.querySelector('.app-notice-action'));
+  releaseTerminals([]);
+  await loading;
+  assert.equal(notice.isConnected, true, 'the pre-Archive settings snapshot must not clear the fresh Undo');
+  ctx.window.api.getActiveTerminals = async () => [];
+  await app.loadProjects();
+  assert.equal(notice.isConnected, true, 'a later archived snapshot must keep Undo');
+  await h.invoke('unarchive-project', h.projectPath);
+  await app.loadProjects();
+  assert.equal(notice.isConnected, false, 'a later restored snapshot must clear Undo');
 });
 
 for (const transition of ['Unarchive', 'Add Project', 'Delete']) {
@@ -574,6 +611,30 @@ test('late Undo after Unarchive elsewhere is already done without an error notic
   await settle();
   assert.equal(dom.document.querySelector('#app-notices [role="alert"]'), null);
   assert.equal(dom.document.querySelector('#app-notices .app-notice-action'), null);
+});
+
+test('project Undo recognizes NOT_ARCHIVED independently of the error message', async t => {
+  const h = setup(t);
+  const dom = settingsDom(t, h);
+  const result = await h.invoke('unarchive-project', h.projectPath);
+  assert.equal(result.code, 'NOT_ARCHIVED');
+  dom.window.api.unarchiveProject = async () => ({ ...result, error: 'Already restored elsewhere' });
+  dom.window.showProjectArchiveUndo(h.projectPath, 'Project');
+  dom.document.querySelector('#app-notices .app-notice-action').click();
+  await settle();
+  assert.equal(dom.document.querySelector('#app-notices [role="alert"]'), null);
+  assert.equal(dom.reloads(), 1);
+});
+
+test('project Undo does not accept an uncoded error matching the old message', async t => {
+  const h = setup(t);
+  const dom = settingsDom(t, h);
+  dom.window.api.unarchiveProject = async () => ({ error: 'Project is not archived' });
+  dom.window.showProjectArchiveUndo(h.projectPath, 'Project');
+  dom.document.querySelector('#app-notices .app-notice-action').click();
+  await settle();
+  assert.match(dom.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /Project is not archived/);
+  assert.equal(dom.reloads(), 0);
 });
 
 test('worktree Archive moves focus to its surviving project header after reload', async t => {

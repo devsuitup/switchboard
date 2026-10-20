@@ -1735,6 +1735,7 @@ async function loadProjects({ resort = false } = {}) {
     let hasReinjected = false;
     const hiddenProjects = globalSettings?.hiddenProjects || [];
     for (const notice of document.querySelectorAll('#app-notices [data-notice-id^="archive-project:"]')) {
+      if (job.generation <= Number(notice.dataset.loadGeneration || 0)) continue;
       const entry = notice.dataset.noticeId.slice('archive-project:'.length);
       if (!hiddenProjects.includes(entry) || globalSettings?.hiddenProjectKinds?.[entry] === 'delete') clearAppNotice(notice.dataset.noticeId);
     }
