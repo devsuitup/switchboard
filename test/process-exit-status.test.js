@@ -413,6 +413,27 @@ test('#563 a merged member repaints the header from the same snapshot as its row
   assert.equal(h.read("sessionItemEl('s1').querySelector('.session-icon').getAttribute('aria-label')"), h.aria());
 });
 
+test('#563 a merged member repaints a filtered conversation header without another poll', t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  h.read(`
+    const row = { sessionId: 'root', headSessionId: 's1', mergedMemberIds: ['s1'] };
+    sessionMap.set('root', row);
+    localMergedMemberRows.set('s1', row);
+  `);
+  h.poll(true);
+  const initial = h.aria();
+  assert.equal(h.read("sessionItemEl('s1')"), null);
+  h.read("setAttention('root', true)");
+  assert.equal(h.aria(), 'Needs your attention · Open here');
+  assert.equal(h.title(), h.aria());
+  assert.equal(h.read("terminalHeaderStatus.classList.contains('session-icon--attention')"), true);
+  h.read("setAttention('root', false)");
+  assert.equal(h.aria(), initial, 'clearing the other member also repaints the filtered header');
+  h.read("setAttention('unrelated', true)");
+  assert.equal(h.aria(), initial, 'unrelated sessions leave the active header alone');
+});
+
 test('#563 the header keeps the shared busy-subagent tint and clears it with the activity', t => {
   const h = setup();
   t.after(() => h.destroy());

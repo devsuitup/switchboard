@@ -1245,7 +1245,10 @@ an absent PTY. Stop/Refresh controls and exit banners retain their own roles.
 `applyStateClasses` repaints the active header alongside the row, reusing the
 merged snapshot and rendered icon. An update from any member of the active
 conversation refreshes it; unrelated rows leave it alone. With no sidebar row
-(for example a filtered row), the active session still gets a header projection.
+(for example a filtered row), an update for the active session still projects
+its supplied snapshot. Updates for another member look up `localActivityRow`
+and check `rowSessionIds` for the active session, then repaint the header from
+the stored merged conversation state.
 The hot path performs no header lookup, poll, timer or layout measurement, and
 returns immediately when there is no header or the session is unrelated.
 

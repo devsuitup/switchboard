@@ -1647,7 +1647,7 @@ body { display: flex; flex-direction: column; }
 }
 
 #terminal-header-status {
-  margin: 6px 0 6px 6px;
+  margin: 8px 0 8px 8px;
   cursor: default;
 }
 

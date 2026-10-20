@@ -16,7 +16,6 @@ const {
   createHeaderToggle,
   setHeaderToggle,
 } = require('../public/header-controls');
-const { terminalStatusLabel } = require('../public/process-exit');
 const { STRIP_HEIGHT } = require('../window-frame');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 const { loadAppFunctions } = require('./app-source');
@@ -38,7 +37,6 @@ test('header Refresh is disabled with an accessible reason until the session is 
     window.activeSessionId = 's';
     window.terminalHeaderStatus = window.document.createElement('span');
     window.terminalStopBtn = window.document.getElementById('terminal-stop-btn');
-    window.terminalStatusLabel = terminalStatusLabel;
     window.forgetSessionExit = () => {};
     window.lastSessionExit = () => null;
     const calls = [];
@@ -209,13 +207,6 @@ test('the activity slot sits before the session name, with its words in the tool
   assert.equal(dot.classList.contains('session-icon'), true);
   assert.equal(HEADER_CONTROLS.some((c) => c.id === 'terminal-header-status'), false, 'it is not in the right-hand row');
 
-  assert.equal(terminalStatusLabel(true, null), 'Open here');
-  assert.equal(terminalStatusLabel(true, { exitCode: 1, signal: null }), 'Open here', 'a relaunched session is running whatever its last exit');
-  assert.equal(terminalStatusLabel(false, { exitCode: 0, signal: null }), 'Exited (code 0)');
-  assert.equal(terminalStatusLabel(false, { exitCode: 137, signal: null }), 'Exited (code 137)');
-  assert.equal(terminalStatusLabel(false, { exitCode: 0, signal: 'SIGKILL' }), 'Killed (SIGKILL)');
-  assert.equal(terminalStatusLabel(false, null), 'Not running');
-
   const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
   assert.match(app, /paintTerminalHeaderStatus\(activeSessionId\);/);
   assert.doesNotMatch(app, /terminalHeaderStatus\.textContent/, 'the dot carries no text');
@@ -283,7 +274,13 @@ test('the header slot keeps room for shared glyphs and halos inside the clipping
   const dot = ruleBodies(/^#terminal-header-status$/)[0].body;
   assert.doesNotMatch(dot, /background|box-shadow|border-radius|width|height/);
   const [top, , bottom, left] = /margin:\s*(\d+)(?:px)? (\d+)(?:px)? (\d+)(?:px)? (\d+)(?:px)?;/.exec(dot).slice(1).map(Number);
+  const haloSizes = ruleBodies(/\.session-icon(?:--[\w-]+)?\b/).flatMap(({ body }) =>
+    [...body.matchAll(/box-shadow:\s*([^;]+);/g)].flatMap(([, shadow]) =>
+      [...shadow.replace(/(?:rgba?|var)\([^)]*\)/g, '').matchAll(/(?:^|,)\s*(-?[\d.]+)(?:px)?\s+(-?[\d.]+)(?:px)?(?:\s+(-?[\d.]+)(?:px)?)?(?:\s+(-?[\d.]+)(?:px)?)?/g)]
+        .flatMap(match => [Number(match[3] || 0), Number(match[4] || 0)])));
+  assert.ok(haloSizes.length, 'shared slot shadows were found in the stylesheet');
+  const largestHalo = Math.max(...haloSizes);
   for (const [side, room] of [['top', top], ['bottom', bottom], ['left', left]]) {
-    assert.ok(room >= 6, `${side} margin ${room}px must cover the shared glyph and halo`);
+    assert.ok(room >= largestHalo, `${side} margin ${room}px must cover the largest shared blur or spread (${largestHalo}px)`);
   }
 });

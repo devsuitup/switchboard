@@ -94,6 +94,10 @@ incoherence m3 are resolved. Separate Detach/Stop controls remain owned by
 #546 slice 3 (M2); the remaining reduced-motion and host/group indicator
 questions are outside this change.
 
+**Open divergence — WCAG 1.4.1 (Use of Color).** The slug-group dot is
+colour-only: its green mark distinguishes a group with a PTY, without a
+non-colour cue for that state. The session count and time do not express it.
+
 ### 1.2 Other states shown with a mark
 
 | Concept | Where | Mark | Text |

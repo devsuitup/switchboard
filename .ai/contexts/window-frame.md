@@ -104,23 +104,16 @@ The header aligns from the left, the info group shrinks without taking spare
 space, and the name has a `30vw` maximum. Refresh remains beside the session
 id while the header's right part stays a drag area with the overlay inset.
 
-The session process's state is not in that row: `#terminal-header-status` is
-an 8 px dot right before `#terminal-header-name`, with no text, green with a
-glow while running and grey otherwise. `#terminal-header-info` clips its
-children (the name's ellipsis), so the dot's 6 px margin on the left, top and
-bottom is the room its 6 px glow needs. It is in the no-drag list so its
-tooltip shows.
+The session state sits before `#terminal-header-name` in the shared 6 px
+`#terminal-header-status.session-icon` slot, with no visible text. Its 8 px
+top, bottom and left margins cover the largest shared blur or spread inside
+the clipping name containers. It is in the no-drag list so its tooltip shows.
 
-`updateTerminalHeader` (`app.js`) puts the state in words in the dot's `title`
-and `aria-label` (`role="img"`), through `terminalStatusLabel()` in
-`public/process-exit.js`:
-
-- `Running` while the poll reports the process;
-- `Stopped` when the process ended after the user asked for a Stop (the Stop
-  itself sends SIGHUP, so it would otherwise read as killed);
-- `Killed (SIGKILL)` when a signal ended the process with no Stop asked for;
-- `Exited (code N)` when it exited on its own;
-- `Stopped` when no exit is known.
+`updateTerminalHeader` (`app.js`) calls `paintTerminalHeaderStatus` to put the
+shared activity and ranked lifecycle in the slot's `title` and `aria-label`
+(`role="img"`). `lifecycleLabel` in `public/process-exit.js` includes Open here,
+attachment and location, known job outcomes, recorded exits and unknown
+liveness. See [session-state.md](session-state.md) for the projection rules.
 
 `process-exited` carries the exit code, the signal's name and whether a Stop
 was asked for: main turns node-pty's signal number into a name with
