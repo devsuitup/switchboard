@@ -117,6 +117,65 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
+test('#563 every AGENT_STATE_META key reads its exact Title Case word', async t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  const words = { working: 'Active', blocked: 'Blocked', idle: 'Idle', done: 'Done', stopped: 'Stopped', failed: 'Failed', external: 'External', unknown: 'Unknown' };
+  assert.deepEqual(Object.keys(words).sort(), Object.keys(h.read('AGENT_STATE_META')).sort());
+  const fixtures = {
+    working: { state: 'working', hosted: true }, blocked: { state: 'blocked', hosted: true },
+    idle: { state: 'done', hosted: true }, done: { state: 'done', hosted: false },
+    stopped: { state: 'stopped', hosted: false }, failed: { state: 'failed', hosted: false },
+    external: { kind: 'interactive', state: null, status: 'busy' }, unknown: { state: null, hosted: false },
+  };
+  for (const [key, word] of Object.entries(words)) {
+    h.setSnapshot({ daemonReachable: true, roster: [{ id: key, sessionId: 's-' + key, kind: 'background', ...fixtures[key] }] });
+    await h.window.showAgentsView();
+    const column = h.document.querySelector('.agents-row-state');
+    assert.equal(column.textContent.trim().replace(/^\S+\s+/, ''), word, key);
+  }
+});
+
+test('#563 Agents status has an accessible name and a working job reads Active', async t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[0], state: 'working' }] });
+  await h.window.showAgentsView();
+  const icon = h.document.querySelector('.agents-row .session-icon');
+  assert.equal(icon.getAttribute('role'), 'img');
+  assert.ok(icon.getAttribute('aria-label'));
+  assert.equal(icon.getAttribute('aria-label'), icon.title.split('\n')[0]);
+  assert.equal(h.document.querySelector('.agents-row-state').textContent.toLowerCase().split(/[^a-z]+/).includes('working'), false);
+});
+
+test('#563 D8 background jobs without a known state or descriptor read Liveness unknown', async t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  for (const state of [null, 'unrecognized', 'working', 'blocked']) {
+    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], state, hosted: false, status: null }] });
+    await h.window.showAgentsView();
+    const icon = h.document.querySelector('.agents-row .session-icon');
+    assert.match(icon.title, /^Liveness unknown/);
+    assert.match(icon.getAttribute('aria-label'), /^Liveness unknown/);
+    assert.doesNotMatch(icon.title, /Not running|Stale|Idle/);
+  }
+});
+
+test('#563 finished background jobs without a live descriptor read Not running', async t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  for (const state of ['done', 'stopped', 'failed']) {
+    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], state, hosted: false }] });
+    await h.window.showAgentsView();
+    const icon = h.document.querySelector('.agents-row .session-icon');
+    assert.equal(icon.title, 'Not running');
+    assert.equal(icon.getAttribute('aria-label'), 'Not running');
+  }
+  h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], state: 'done', hosted: true }] });
+  await h.window.showAgentsView();
+  assert.doesNotMatch(h.document.querySelector('.agents-row .session-icon').title, /Not running/);
+});
+
 for (const own of [true, false]) {
   test(`External refusal names an available recovery action (own window: ${own})`, async t => {
     const h = setup();
@@ -145,7 +204,7 @@ test('default state grouping puts hosted done under Idle with its waiting emoji'
     assert.match(idle.nextElementSibling.querySelector('.agents-row-state').textContent, /💤 Idle/);
     const done = h.document.querySelector('[data-collapse="state:done"]');
     assert.ok(done);
-    assert.equal(done.nextElementSibling.querySelector('.agents-row-state').textContent.trim(), '✅ done');
+    assert.equal(done.nextElementSibling.querySelector('.agents-row-state').textContent.trim(), '✅ Done');
   } finally { h.destroy(); }
 });
 
@@ -403,13 +462,13 @@ test('a blocked job counts as running, sorts with the live rows and keeps only t
   assert.deepEqual({ ...ctx.calls.opened[0][1] }, { type: 'attach', jobId: 'cccccccc', cwd: '/w/em' });
 });
 
-test('a failed job reads "failed", counts as finished and is hidden by the Finished filter', async (t) => {
+test('a failed job reads "Failed", counts as finished and is hidden by the Finished filter', async (t) => {
   const ctx = setup(); t.after(() => ctx.destroy());
   const failed = { ...ROSTER[1], id: 'ffffffff', sessionId: 's-f', name: 'broke', state: 'failed', hosted: false };
   ctx.setSnapshot({ roster: [...ROSTER, failed], daemonReachable: true });
   await ctx.window.showAgentsView();
   const row = ctx.document.querySelector('.agents-row[data-key="bg:ffffffff"]');
-  assert.equal(row.querySelector('.agents-row-state').textContent, '❌ failed');
+  assert.equal(row.querySelector('.agents-row-state').textContent, '❌ Failed');
   assert.equal(ctx.document.getElementById('agents-viewer-count').textContent, '1 running · 2 finished · 1 external');
   row.click();
   const detail = ctx.document.getElementById('agents-detail');
@@ -446,7 +505,7 @@ test('group by state: a header per non-empty group with its count, each row once
   await ctx.window.showAgentsView();
   assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, 0);
   chooseGroupBy(ctx, 'state');
-  assert.deepEqual(listLayout(ctx), ['# ⚙️ Working · 1', 'em-platform', '# ✅ Done · 1', 'spike', '# ❌ Failed · 1', 'broke', '# 🖥️ External · 1', 'lvds-1b']);
+  assert.deepEqual(listLayout(ctx), ['# ⚙️ Active · 1', 'em-platform', '# ✅ Done · 1', 'spike', '# ❌ Failed · 1', 'broke', '# 🖥️ External · 1', 'lvds-1b']);
   assert.equal(ctx.document.querySelectorAll('.agents-row').length, 4);
   assert.equal(ctx.window.localStorage.getItem('agentsGroupBy'), 'state');
   chooseGroupBy(ctx, 'none');
@@ -474,7 +533,7 @@ test('the Finished filter applies before grouping: a group left empty is not sho
   const box = ctx.document.getElementById('agents-show-finished');
   box.checked = false;
   box.dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
-  assert.deepEqual(listLayout(ctx), ['# ⚙️ Working · 1', 'em-platform', '# 🖥️ External · 1', 'lvds-1b']);
+  assert.deepEqual(listLayout(ctx), ['# ⚙️ Active · 1', 'em-platform', '# 🖥️ External · 1', 'lvds-1b']);
   ctx.emitChanged({ roster: [], daemonReachable: true });
   assert.equal(ctx.document.querySelectorAll('.agents-group-header').length, 0);
   assert.match(ctx.document.getElementById('agents-list').textContent, /No background agents/);
@@ -516,13 +575,13 @@ test('collapse: a header click folds its rows, keeps label and count, flips the 
   assert.equal(done.querySelector('.agents-group-chevron').textContent, '▾');
   assert.equal(done.querySelector('.agents-group-chevron').getAttribute('aria-hidden'), 'true');
   done.click();
-  assert.deepEqual(listLayout(ctx), ['# ⚙️ Working · 1', 'em-platform', '# ✅ Done · 1', '# 🖥️ External · 1', 'lvds-1b']);
+  assert.deepEqual(listLayout(ctx), ['# ⚙️ Active · 1', 'em-platform', '# ✅ Done · 1', '# 🖥️ External · 1', 'lvds-1b']);
   const folded = header(ctx, 'state:done');
   assert.equal(folded.getAttribute('aria-expanded'), 'false');
   assert.equal(folded.querySelector('.agents-group-chevron').textContent, '▸');
   assert.deepEqual(storedCollapsed(ctx), ['state:done']);
   folded.click();
-  assert.deepEqual(listLayout(ctx), ['# ⚙️ Working · 1', 'em-platform', '# ✅ Done · 1', 'spike', '# 🖥️ External · 1', 'lvds-1b']);
+  assert.deepEqual(listLayout(ctx), ['# ⚙️ Active · 1', 'em-platform', '# ✅ Done · 1', 'spike', '# 🖥️ External · 1', 'lvds-1b']);
   assert.deepEqual(storedCollapsed(ctx), []);
 });
 
@@ -688,12 +747,12 @@ test('with nothing stored the list is grouped by state, headers carrying emoji, 
   await ctx.window.showAgentsView();
   assert.equal(ctx.read('agentsGroupBy'), 'state');
   assert.equal(ctx.document.getElementById('agents-group-by').value, 'state');
-  assert.deepEqual(listLayout(ctx), ['# ⚙️ Working · 1', 'em-platform', '# ✋ Blocked · 1', 'asks', '# ✅ Done · 1', 'spike',
+  assert.deepEqual(listLayout(ctx), ['# ⚙️ Active · 1', 'em-platform', '# ✋ Blocked · 1', 'asks', '# ✅ Done · 1', 'spike',
     '# ⏹️ Stopped · 1', 'halted', '# 🖥️ External · 1', 'lvds-1b', '# ❓ Unknown · 1', 'odd']);
   const emoji = ctx.document.querySelector('.agents-group-header .agents-group-emoji');
   assert.equal(emoji.getAttribute('aria-hidden'), 'true');
   assert.equal(emoji.textContent, '⚙️');
-  assert.equal(ctx.document.querySelector('.agents-group-header .agents-group-label').textContent, 'Working');
+  assert.equal(ctx.document.querySelector('.agents-group-header .agents-group-label').textContent, 'Active');
   assert.equal(ctx.window.localStorage.getItem('agentsGroupBy'), null, 'the default is not written back');
 });
 
@@ -714,7 +773,7 @@ test('every row starts its state column with its state emoji in every grouping m
   const odd = { ...ROSTER[1], id: 'eeeeeeee', sessionId: 's-e', name: 'odd', state: null };
   ctx.setSnapshot({ roster: [...ROSTER, failed, odd], daemonReachable: true });
   await ctx.window.showAgentsView();
-  const expected = { 'em-platform': '⚙️ working', spike: '✅ done', 'lvds-1b': '🖥️ external · busy', broke: '❌ failed', odd: '❓ ?' };
+  const expected = { 'em-platform': '⚙️ Active', spike: '✅ Done', 'lvds-1b': '🖥️ External', broke: '❌ Failed', odd: '❓ Unknown' };
   for (const mode of ['none', 'state', 'project']) {
     chooseGroupBy(ctx, mode);
     const got = Object.fromEntries([...ctx.document.querySelectorAll('.agents-row')].map(r =>

@@ -192,7 +192,7 @@ test('priority: waitingForInput beats stale/archived', () => {
 
 test('priority: stale beats archived', () => {
   const snap = { stale: true, archived: true };
-  assert.equal(renderSessionIcon(snap).title, 'Stale');
+  assert.equal(renderSessionIcon(snap).title, 'Not running');
 });
 
 test('priority: archived is the lowest rung', () => {

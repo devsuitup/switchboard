@@ -11,7 +11,7 @@ const ICON_BY_RUNG = {
   agentsBusy: { classes: ['has-busy-agents'], slotClasses: ['session-icon--agents-busy'], glyph: '⠿', title: 'Background work running' },
   waitingForInput: { classes: [], slotClasses: ['session-icon--waiting'], glyph: '○', title: 'Waiting for input' },
   idle: { classes: [], slotClasses: ['session-icon--idle'], glyph: '', title: 'Idle' },
-  stale: { classes: [], slotClasses: ['session-icon--stale'], glyph: '', title: 'Stale' },
+  stale: { classes: [], slotClasses: ['session-icon--stale'], glyph: '', title: 'Not running' },
   archived: { classes: [], slotClasses: ['session-icon--archived'], glyph: '', title: 'Archived' },
 };
 
@@ -202,7 +202,7 @@ function renderSessionIcon(snapshot) {
     }
   }
   const idle = ICON_BY_RUNG.idle;
-  return { classes: idle.classes.slice(), slotClasses: idle.slotClasses.slice(), glyph: idle.glyph, title: idle.title };
+  return { classes: idle.classes.slice(), slotClasses: idle.slotClasses.slice(), glyph: idle.glyph, title: s.titleOverride || idle.title };
 }
 
 function rungActive(s, rung) {

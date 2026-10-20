@@ -521,15 +521,17 @@ word is listed with the surface that shows it and its source.
 |---|---|---|---|
 | **Needs your attention** | sidebar icon tooltip | OSC 9 notification text, or a remote descriptor dialog | Claude asked for approval / attention in a session not on screen (`public/session-state.js:8`; `docs/notifications.md:12-14`) |
 | **Response ready** | sidebar icon tooltip | working ended while another session was on screen | an unseen result (`public/session-state.js:9`) |
-| **Working** | sidebar icon tooltip; Agents state | OSC 0 spinner / OSC 9;4 (sidebar); job `working` (Agents) | Claude is producing a turn (`public/session-state.js:10`; `public/agents-view.js:47`) |
-| **Subagents running** | sidebar icon tooltip | subagent transcripts growing | at the prompt, subagents still run (`public/session-state.js:11`) |
-| **Waiting for input** | sidebar icon tooltip; Agents row icon | idle at prompt (sidebar); job `blocked` or descriptor `waiting` (Agents) | two meanings on one tooltip (`public/session-state.js:12`; `public/agents-view.js:140-149`) |
-| **Idle** | sidebar icon tooltip | none of the above | (`public/session-state.js:13`) |
-| **Stale** | sidebar icon tooltip; Agents row icon | no live process | finished / not live (`public/session-state.js:14`; `public/agents-view.js:146`) |
+| **Working** | activity icon tooltip | OSC 0 spinner / OSC 9;4, or shared head-turn evidence | Claude is producing a turn (`public/session-state.js`, `renderSessionIcon`) |
+| **Active** | Agents state and group (⚙️) | job `working` | the job is active; its turn activity is shown separately by the glyph (`public/agents-view.js`, `AGENT_STATE_META`) |
+| **Background work running** | activity icon tooltip | shared task evidence | at the prompt, background tasks still run (`public/session-state.js`, `ICON_BY_RUNG.agentsBusy`) |
+| **Waiting for input** | activity icon tooltip | a live session at its prompt, or job `blocked` | a blocked job keeps Blocked in its tooltip and state column (`public/agents-view.js`, `projectBackgroundActivity`, `backgroundActivityLabel`) |
+| **Idle** | activity icon tooltip; Agents state and group (💤) | no higher activity rung; done job with a live descriptor (Agents) | the Agents word names a hosted done job, whose activity glyph still follows the shared projection (`public/agents-view.js`, `agentStateGroupKey`) |
+| **Not running** | finished background row tooltip in sidebar, grid and Agents | job `done`, `stopped` or `failed`, without a live descriptor | the shared `stale` rung's label (`public/session-state.js`, `ICON_BY_RUNG.stale`; `public/agents-view.js`, `projectBackgroundActivity`) |
+| **Liveness unknown** | background row tooltip and accessible name in sidebar, grid and Agents | no terminal job state and no live descriptor | missing data does not establish process death (`public/agents-view.js`, `projectBackgroundActivity`) |
 | `busy` / `idle` / `waiting` (+ `· <what>`) / `shell` | sidebar row status text | CLI descriptor `~/.claude/sessions/<pid>.json` | the CLI's own word, raw (`public/sidebar.js:1722-1727`) |
-| **Blocked** | Agents state (✋) | daemon job file | live job waiting for input (`public/agents-view.js:48`) |
-| **Done** / **Stopped** / **Failed** | Agents state (✅ ⏹️ ❌) | daemon job file | finished job (`public/agents-view.js:49-51`) |
-| **External** / **Unknown** | Agents state (🖥️ ❓) | descriptor / unreadable job | a location, and an absence of data, shown as states (`public/agents-view.js:52-53`) |
+| **Blocked** | Agents state (✋) | daemon job file | job waiting for input (`public/agents-view.js`, `AGENT_STATE_META`) |
+| **Done** / **Stopped** / **Failed** | Agents state (✅ ⏹️ ❌) | daemon job file | finished job; Done requires no live background descriptor (`public/agents-view.js`, `agentStateGroupKey`) |
+| **External** / **Unknown** | Agents state (🖥️ ❓) | interactive session / missing or unknown job state | a location, and an absence of data, shown as states (`public/agents-view.js`, `agentStateMeta`); the column omits raw descriptor words |
 | **Running** | terminal header status; grid card footer; status bar "N running"; Agents header "N running"; green row dot | local PTY alive (header, grid, status bar, dot); live jobs (Agents header) | two populations, one word (`public/process-exit.js:27`; `public/app.js:1203`, `1875`; `public/agents-view.js:365`); a third, alive anywhere (`is-alive`), shows the Stop control without the word (`public/style.css:1270-1273`) |
 | **Stopped** | terminal header; grid footer; exit banner "session stopped" | user pressed the stop control (incl. detach), or no local PTY | after a Detach the grid footer and the exit banner say it while the job runs; the header is hidden then (`public/process-exit.js:19,28`; `public/app.js:1074-1077`, `1203`) |
 | **Exited (code N)** / **Killed (SIG)** / **Exited** | terminal header; exit banner | process exit | (`public/process-exit.js:20-22`) |

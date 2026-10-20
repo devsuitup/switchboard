@@ -1144,7 +1144,7 @@ body { display: flex; flex-direction: column; }
   color: #7fd4f9;
 }
 
-/* ---- Subagents running under this session (has-busy-agents) ---- */
+/* ---- Background work running under this session (has-busy-agents) ---- */
 /* Parent is at the prompt while spawned subagents still work in the
    background — see .ai/contexts/session-state.md.
    Static full braille cell in violet — deliberately no animation

@@ -34,6 +34,35 @@ function setup(t, kind = 'local-pty', overrides = {}) {
   return { ctx, session, render, create, turn, tasks };
 }
 
+test('#563 sidebar and grid distinguish finished jobs from unknown liveness on render and repaint', t => {
+  const { ctx, session, render, create } = setup(t, 'background');
+  ctx.evalPublic('agents-view.js');
+  ctx.window.refreshSidebar = render;
+  const card = create();
+  for (const [state, title] of [[null, 'Liveness unknown'], ['unrecognized', 'Liveness unknown'],
+    ['working', 'Liveness unknown'], ['blocked', 'Liveness unknown'],
+    ['done', 'Not running'], ['stopped', 'Not running'], ['failed', 'Not running']]) {
+    ctx.window.applyAgentsSnapshot({ roster: [{ kind: 'background', id: 'job-629', sessionId: session.sessionId,
+      state, hosted: false, status: null }], daemonReachable: true });
+    ctx.window.applyStateClasses(session.sessionId, ctx.window.storedActivitySnapshot(session.sessionId));
+    const check = () => {
+      for (const icon of [ctx.window.sessionItemEl(session.sessionId).querySelector('.session-icon'), card.querySelector('.grid-card-dot')]) {
+        assert.ok(icon.title.startsWith(title), icon.title);
+        assert.ok(icon.getAttribute('aria-label').startsWith(title), icon.outerHTML);
+      }
+      const snapshot = ctx.window.storedActivitySnapshot(session.sessionId);
+      const projected = ctx.window.backgroundActivitySnapshot(session.sessionId, snapshot);
+      assert.equal(projected.liveness, title === 'Not running' ? 'dead' : 'unknown');
+      assert.equal(projected.stale, title === 'Not running');
+    };
+    check();
+    render();
+    ctx.window.paintSessionIcon(ctx.window.sessionItemEl(session.sessionId).querySelector('.session-icon'), session.sessionId);
+    ctx.window.updateGridSubagentPills(session.sessionId);
+    check();
+  }
+});
+
 for (const attached of [false, true]) {
   for (const head of ['open', 'closed', 'unknown']) {
     for (const attention of ['none', 'osc', 'descriptor']) {

@@ -20,13 +20,14 @@ restarts.
 
 One row per background job or external interactive session: an activity glyph shared with the sidebar — an animated
 spinner during a turn, a static spinner for background tasks at the prompt,
-an orange hollow ring while waiting (including blocked jobs), `!` for Needs
-your attention, a blue dot for a response ready, a green dot for a session open
+an orange hollow ring while waiting (including blocked jobs), a blinking orange
+LED with a halo for Needs your attention, a blue dot for a response ready, a green dot for a session open
 in one of Switchboard's own tabs (an attach tab included) at rest, or a dim grey
 dot when finished — its name, its `--agent`, its state emoji and job state (see the
-table below), its directory, and its age. Background rows omit `· busy` and
-`· idle`; external interactive rows also show their session status. Working
-and blocked sessions and external interactive sessions come first, newest
+table below), its directory, and its age. Every state column uses Title Case,
+without the raw descriptor status: Active, Blocked, Idle, Done, Stopped, Failed,
+External or Unknown. Screen readers announce the activity glyph's status.
+Active and blocked jobs and external interactive sessions come first, newest
 first. **Finished** shows or hides `done`, `stopped` and `failed` sessions;
 the choice is remembered. The header counts `running` and `finished` background
 sessions, then `N external` when the list holds external sessions (these are
@@ -38,7 +39,7 @@ and is re-read from the CLI every 30 seconds while the view is open.
 **Group**, next to Finished, splits the list into sections with a header
 each (its name and how many rows it holds):
 
-- **State** (the default): Working, Blocked, Done, Stopped, Failed, then
+- **State** (the default): Active, Blocked, Idle, Done, Stopped, Failed, then
   External for the interactive sessions running outside Switchboard, then
   Unknown. Each header starts with the state's emoji.
 - **None**: one flat list.
@@ -74,7 +75,10 @@ A job is in one of five states: `working`, `blocked` (live, waiting for
 input), `done`, `stopped` or `failed` (ended in error). `working` and
 `blocked` count as hosted. A done job with a matching live background descriptor
 also stays hosted and displays Idle. Descriptor-free done is finished; stopped
-and failed are always unhosted.
+and failed are always unhosted. A finished job without a live descriptor has
+the activity tooltip Not running, in Agents, the sidebar and the grid. Without
+a terminal job state or a live descriptor, it reads Liveness unknown: missing
+files alone do not establish that a process has ended.
 
 A blocked job has parked itself, for example during a quota pause or while
 awaiting your go-ahead. It shows the static orange waiting ring in the sidebar,
@@ -88,8 +92,9 @@ row's state column, whatever the grouping:
 
 | Emoji | State |
 |---|---|
-| ⚙️ | Working |
+| ⚙️ | Active (job `working`) |
 | ✋ | Blocked (waiting for input) |
+| 💤 | Idle (done job with a live background descriptor) |
 | ✅ | Done |
 | ⏹️ | Stopped |
 | ❌ | Failed |

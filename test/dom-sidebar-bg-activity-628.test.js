@@ -47,9 +47,9 @@ for (const [state, kind, head, hosted, valid, text, activity, foreground = false
   ['blocked', null, 'closed', true, true, 'Blocked', 'Waiting for input'],
   ['blocked', null, 'closed', true, false, 'Blocked', 'Waiting for input'],
   ['done', null, 'closed', true, true, 'Idle', 'Waiting for input'],
-  ['done', null, 'closed', false, true, 'Job done', 'Stale'],
-  ['stopped', null, 'closed', false, true, 'Job stopped', 'Stale'],
-  ['failed', null, 'closed', false, true, 'Job failed', 'Stale'],
+  ['done', null, 'closed', false, true, 'Job done', 'Not running'],
+  ['stopped', null, 'closed', false, true, 'Job stopped', 'Not running'],
+  ['failed', null, 'closed', false, true, 'Job failed', 'Not running'],
   ['working', null, 'open', true, false, 'Activity unavailable', 'Working'],
   ['done', null, 'open', false, true, 'Working', 'Working', true],
   ['done', null, 'closed', false, true, 'Idle', 'Idle', true],
@@ -197,7 +197,7 @@ for (const [state, kind, head, slot, label] of [
           ? h.document.querySelector('.session-item .session-icon').title : label);
         if (state === 'blocked') assert.equal(icon.dataset.glyph, '○');
         const status = row.querySelector('.agents-row-state');
-        assert.match(status.textContent, new RegExp(state));
+        assert.match(status.textContent, new RegExp(state === 'working' ? 'Active' : 'Blocked'));
         assert.doesNotMatch(status.textContent, /busy|idle|ago|\d+[smhd]/i);
       }
     });
@@ -380,7 +380,7 @@ for (const state of ['done', 'stopped', 'failed']) {
     assert.equal(secondary.textContent, `Job ${state}`);
     assert.equal(secondary.title, '');
     assert.equal(h.document.querySelector('.session-icon').title,
-      `Stale · job ${state}\nJob updated ${new Date(AT).toLocaleString()} (job metadata)`);
+      `Not running · job ${state}\nJob updated ${new Date(AT).toLocaleString()} (job metadata)`);
   });
 }
 
@@ -517,14 +517,14 @@ test('hosted done with conversation ownership cannot revive foreground head acti
 });
 
 for (const hosted of [true, false]) {
-  test(`done hosted=${hosted} shows ${hosted ? 'Idle' : 'done'} in sidebar and Agents`, async t => {
+  test(`done hosted=${hosted} shows ${hosted ? 'Idle' : 'Done'} in sidebar and Agents`, async t => {
     const entries = roster('done', null);
     entries[0].hosted = hosted;
     const h = await setup(t, entries);
     assert.equal(h.document.querySelector('.session-status').textContent, hosted ? 'Idle' : 'Job done');
     const row = h.document.createElement('div');
     row.innerHTML = h.window.renderAgentRow(entries[0]);
-    assert.equal(row.querySelector('.agents-row-state').textContent.trim().split(/\s+/).at(-1), hosted ? 'Idle' : 'done');
+    assert.equal(row.querySelector('.agents-row-state').textContent.trim().split(/\s+/).at(-1), hosted ? 'Idle' : 'Done');
   });
 }
 
