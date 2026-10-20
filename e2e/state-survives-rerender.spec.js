@@ -39,8 +39,7 @@ test('a transcript-driven row state survives a sidebar re-render', async ({ home
     }) + '\n');
 
     await expect(icon).toHaveClass(/session-icon--busy/);
-    await expect(icon).toHaveAttribute('title', 'Working
-CLI status: idle');
+    await expect(icon).toHaveAttribute('title', 'Working\nCLI status: idle');
     await archiveToggle.click();
     await expect(archiveToggle).toHaveClass(/active/);
     await expect(icon).toHaveClass(/session-icon--busy/, { timeout: 3000 });
@@ -59,8 +58,7 @@ CLI status: idle');
     await page.getByRole('button', { name: 'Resume anyway', exact: true }).click();
 
     await expect(icon).toHaveClass(/session-icon--waiting/, { timeout: 40000 });
-    await expect(icon).toHaveAttribute('title', 'Waiting for input
-CLI status: idle');
+    await expect(icon).toHaveAttribute('title', 'Waiting for input\nCLI status: idle');
     await archiveToggle.click();
     await expect(archiveToggle).toHaveClass(/active/);
     await expect(icon).toHaveClass(/session-icon--waiting/, { timeout: 3000 });
