@@ -1324,18 +1324,23 @@ function buildReenableNotice(project, fId) {
 
 const ARCHIVE_INDEXING_MESSAGE = 'Switchboard is still indexing sessions. Archive the folder once indexing has finished.';
 
-function showFolderArchiveUndo(project, groups, archivedAt, rows, didStop, children, disabled) {
+function showFolderArchiveUndo(project, groups, archivedAt, rows, didStop, children, disabled, staysEnabled) {
   const id = `archive-folder:${project.remoteAlias || 'local'}:${project.projectPath}`;
   showAppNotice({
     id, kind: 'undo',
     message: [`Folder "${shortProjectPath(project.projectPath)}" archived.`,
       ...(didStop ? ['Stopped processes stay stopped.'] : []),
       ...(children.length ? [`Worktrees archived with it: ${children.map(child => child.projectPath).join(', ')}.`] : []),
-      ...(disabled.length ? [`Schedules turned off: ${disabled.join(', ')}. Undo turns them back on.`] : [])].join(' '),
+      ...(disabled.length ? [`Schedules turned off: ${disabled.join(', ')}. Undo turns them back on.`] : []),
+      ...staysEnabled].join(' '),
     actionLabel: 'Undo',
     onAction: async () => {
       try {
         const result = await window.api.undoArchiveProject(groups, archivedAt);
+        if (result?.error === 'stale archive Undo') {
+          showAppNotice({ id, kind: 'error', message: 'The folder was archived or restored again since; nothing was undone.' });
+          return;
+        }
         if (!result?.ok) throw new Error(result?.error || 'The backend returned no result');
         for (const session of rows) await persistSessionArchive(session, 0);
         if (result.failed?.length) throw new Error(result.failed.map(failure => `${failure.name}: ${failure.error}`).join('; '));
@@ -1382,11 +1387,9 @@ async function archiveProjectFolder(project, button) {
     }
     const schedules = plan.schedules || [];
     const disableable = schedules.filter(s => s.disableable);
+    const staysEnabled = schedules.filter(s => !s.disableable).map(s => `${s.name} stays enabled: ${s.reason}`);
 
-    const message = ['The folder is hidden from the sidebar until it is added again or a new session starts in it.'];
-    for (const s of schedules) {
-      if (!s.disableable) message.push(`${s.name} stays enabled: ${s.reason}`);
-    }
+    const message = ['The folder is hidden from the sidebar until it is added again or a new session starts in it.', ...staysEnabled];
     if (children.length > 0) {
       message.push(`Its ${counted(children.length, 'worktree')} ${children.length === 1 ? 'is' : 'are'} archived with it.`);
     }
@@ -1395,8 +1398,7 @@ async function archiveProjectFolder(project, button) {
       const running = current.plans.flatMap(({ session, plan }) => plan.targets.filter(target => !target.attach).map(target =>
         `${cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId}${rowSessionIds(session).length > 1 ? ` (part ${target.sessionId})` : ''}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}`));
       if (sessions.length > 0) {
-        let label = `Archive the ${counted(sessions.length, 'session')}`;
-        if (running.length) label += ` — stopped first: ${running.slice(0, 5).join('; ')}${running.length > 5 ? `; +${running.length - 5} more` : ''}`;
+        const label = checked => `Archive the ${counted(sessions.length, 'session')}${checked && running.length ? ` — stopped first: ${running.slice(0, 5).join('; ')}${running.length > 5 ? `; +${running.length - 5} more` : ''}` : ''}`;
         choices.push({ id: 'archiveSessions', label, checked: true, rememberKey: 'archiveFolder.archiveSessions' });
       }
       if (disableable.length > 0) {
@@ -1414,7 +1416,7 @@ async function archiveProjectFolder(project, button) {
         message,
         choices,
         confirmLabel: 'Archive folder',
-        danger: running.length > 0,
+        danger: values => !!values.archiveSessions && running.length > 0,
         initialFocus: running.length ? 'cancel' : 'confirm',
         returnFocus: button,
       });
@@ -1486,7 +1488,7 @@ async function archiveProjectFolder(project, button) {
       clearAppNotice(sessionActionNoticeId('Archive folder', project));
     }
     if (res?.ok && !res.error && (didStop || (!sessions.length && !disableable.length))) {
-      showFolderArchiveUndo(project, groupsArg, res.archivedAt, archived, didStop, children, res.disabled || []);
+      showFolderArchiveUndo(project, groupsArg, res.archivedAt, archived, didStop, children, res.disabled || [], staysEnabled);
     }
     pollActiveSessions();
     Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });

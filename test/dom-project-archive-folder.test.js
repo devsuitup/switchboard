@@ -244,7 +244,7 @@ test('archive folder: while indexing, a persistent notice and no mutation', asyn
 
     assert.match(ctx.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /still indexing/);
     assert.equal(ctx.document.querySelector('.modal-overlay'), null);
-    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob', 'bgAgentLiveJob', 'getProjectArchivePlan']);
+    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob', 'getProjectArchivePlan']);
   } finally { ctx.destroy(); }
 });
 

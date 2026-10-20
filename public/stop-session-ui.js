@@ -13,7 +13,7 @@ function resolveSessionStop(session, { attach = false } = {}) {
   return { remote: false, alias: null, attach: false, confirmText: 'Stop this session?' };
 }
 
-async function planSessionStop(row, { attach = false, retryTargets } = {}) {
+async function planSessionStop(row, { attach = false, retryTargets, backgroundJobs } = {}) {
   const targets = [];
   const excluded = [];
   for (const id of new Set(retryTargets ? retryTargets.map(target => target.sessionId) : rowSessionIds(row))) {
@@ -41,12 +41,7 @@ async function planSessionStop(row, { attach = false, retryTargets } = {}) {
       targets.push({ sessionId: id, ...route, where: 'in this window' });
       continue;
     }
-    let check;
-    if (typeof window.api.bgAgentLiveJob === 'function') {
-      try { check = await window.api.bgAgentLiveJob(id); } catch (error) {
-        check = { known: false, reason: error?.message || 'unknown error' };
-      }
-    }
+    const check = await checkBackgroundJob(id, backgroundJobs);
     if (check?.known === false) {
       excluded.push({ sessionId: id, reason: `cannot tell whether a background job is running this part (${check.reason || 'unknown'})` });
     } else if (check?.job) {
@@ -84,40 +79,48 @@ function isRemoteSessionAlive(session) {
 }
 
 // see .ai/contexts/bg-agents.md ("Invariants")
-async function liveBackgroundJobRefusal(sessionId) {
+async function checkBackgroundJob(sessionId, backgroundJobs) {
+  if (backgroundJobs?.has(sessionId)) return backgroundJobs.get(sessionId);
   if (!window.api || typeof window.api.bgAgentLiveJob !== 'function') return null;
   let check;
   try { check = await window.api.bgAgentLiveJob(sessionId); } catch (err) {
-    return `cannot tell whether a background job is running this session (${(err && err.message) || 'unknown error'})`;
+    check = { known: false, reason: err?.message || 'unknown error' };
   }
+  backgroundJobs?.set(sessionId, check);
+  return check;
+}
+
+async function liveBackgroundJobRefusal(sessionId, backgroundJobs) {
+  const check = await checkBackgroundJob(sessionId, backgroundJobs);
   if (check && check.known === false) return `cannot tell whether a background job is running this session (${check.reason || 'unknown'})`;
   if (check && check.job) return `background job ${check.job.id} is still running this session — stop it from the Agents view first`;
   return null;
 }
 
-async function archiveBackgroundJobRefusal(session) {
+async function archiveBackgroundJobRefusal(session, backgroundJobs) {
   if (session.remoteAlias) return null;
   for (const id of rowSessionIds(session)) {
-    const refusal = await liveBackgroundJobRefusal(id);
+    const refusal = await liveBackgroundJobRefusal(id, backgroundJobs);
     if (refusal) return refusal;
   }
   return null;
 }
 
 async function planSessionArchive(rows) {
+  const backgroundJobs = new Map();
   for (const session of rows) {
-    const error = await archiveBackgroundJobRefusal(session);
+    const error = await archiveBackgroundJobRefusal(session, backgroundJobs);
     if (error) return { ok: false, session, error };
   }
   const plans = [];
-  for (const session of rows) plans.push({ session, plan: await planSessionStop(session) });
+  for (const session of rows) plans.push({ session, plan: await planSessionStop(session, { backgroundJobs }) });
   return { ok: true, plans };
 }
 
 // Stop-then-archive/delete verb shared by sidebar.js's archive/delete call sites — see .ai/contexts/session-state.md ("stopBeforeArchive").
 async function stopBeforeArchive(session, { unreachable, plan } = {}) {
   if (!session) return { ok: true };
-  const refusal = await archiveBackgroundJobRefusal(session);
+  const refusal = !plan && await archiveBackgroundJobRefusal(session);
   if (refusal) return { ok: false, error: refusal };
   const ids = rowSessionIds(session);
   let didStop = false;

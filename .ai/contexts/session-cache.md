@@ -2091,7 +2091,16 @@ lists never cross the writer transport. See `session-index-writer.md` for orderi
   a search projection during a search; with no matching cached group it only
   reloads. Every stop is attempted first; one refusal leaves
   everything unarchived, and the sessions already stopped stay stopped. The dialog is `showChoiceDialog`
-  (`public/choice-dialog.js`).
+  (`public/choice-dialog.js`). Each Archive planning pass checks every local
+  part's background job once and reuses that result for its stop plan. After
+  confirmation a new pass refreshes those checks; execution with that fresh
+  plan skips its own background refusal scan, retaining local and remote
+  stop-time liveness checks. The sessions checkbox updates its stop wording
+  and danger state from its remembered value and whenever it is toggled.
+  Empty folders with no disableable schedules skip the dialog and keep the
+  schedule stays-enabled reasons in their Undo notice. A stale folder Undo
+  says nothing was undone because the folder was archived or restored again,
+  without retry advice.
 - **Worktree nesting.** `renderProjects` nests a worktree group only under a
   listed group of the same alias and repository path
   (`public/worktree-nesting.js`, a classic `<script>` in the renderer that

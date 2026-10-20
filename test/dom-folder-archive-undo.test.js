@@ -199,3 +199,104 @@ test('PR5b a pre-Archive project reload keeps the fresh folder Undo', async t =>
   await app.loadProjects();
   assert.equal(action.isConnected, true, 'a later project reload also keeps folder Undo');
 });
+
+test('PR5b review checks each of ten sessions once per planning pass over the whole click', async t => {
+  const ctx = setup(t, Array.from({ length: 10 }, (_, i) => ({ sessionId: `S${i}` })));
+  ctx.window.activePtyIds.add('S0');
+  const checks = [];
+  ctx.window.api.bgAgentLiveJob = async id => { checks.push(id); return { known: true, job: null }; };
+  const pending = archive(ctx);
+  await settle();
+  const before = checks.length;
+  answer(ctx);
+  await pending;
+  assert.ok(before <= 10 && checks.length <= 20, `${before} before dialog; ${checks.length} over the whole click`);
+  for (const row of ctx.rows) assert.equal(checks.filter(id => id === row.sessionId).length, 2);
+  assert.equal(ctx.calls.filter(call => call[0] === 'archive').length, 10);
+  assert.ok(undo(ctx));
+});
+
+test('PR5b review refuses a background member that goes live during the folder dialog', async t => {
+  const ctx = setup(t, [{ sessionId: 'S', mergedMemberIds: ['B'] }]);
+  ctx.window.activePtyIds.add('S');
+  const pending = archive(ctx);
+  await settle();
+  ctx.window.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'B' ? { id: 'job-B' } : null });
+  answer(ctx);
+  await pending;
+  assert.deepEqual(ctx.calls, []);
+  assert.equal(undo(ctx), undefined);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /job-B/);
+});
+
+test('PR5b review stale folder Undo explains that nothing changed without retry advice', async t => {
+  const ctx = setup(t, [{ sessionId: 'S' }]);
+  ctx.window.activePtyIds.add('S');
+  ctx.window.api.undoArchiveProject = async () => ({ error: 'stale archive Undo' });
+  const pending = archive(ctx);
+  await settle(); answer(ctx); await pending;
+  undo(ctx).click(); await settle();
+  const notice = ctx.document.querySelector('[role="alert"]');
+  assert.match(notice.textContent, /The folder was archived or restored again since; nothing was undone\./);
+  assert.doesNotMatch(notice.textContent, /retry|stale archive Undo/i);
+  assert.equal(ctx.calls.some(call => call[0] === 'archive' && call[2] === 0), false);
+});
+
+test('PR5b review R2 empty folder keeps the reason a schedule stays enabled in its notice', async t => {
+  const ctx = setup(t, [], [{ name: 'Y', disableable: false, reason: 'remote schedules are read-only' }]);
+  await archive(ctx);
+  assert.equal(ctx.document.querySelector('.modal-overlay'), null);
+  assert.ok(undo(ctx));
+  assert.match(undo(ctx).parentElement.textContent, /Y stays enabled: remote schedules are read-only/);
+});
+
+for (const remembered of ['0', '1']) {
+  test(`PR5b review remembered archiveSessions=${remembered} updates stop wording and danger when toggled`, async t => {
+    const ctx = setup(t, [{ sessionId: 'S', name: 'Running conversation' }]);
+    ctx.window.activePtyIds.add('S');
+    ctx.window.localStorage.setItem('archiveFolder.archiveSessions', remembered);
+    const pending = archive(ctx);
+    await settle();
+    const box = ctx.document.querySelector('[data-choice-id="archiveSessions"]');
+    const confirm = ctx.document.querySelector('.choice-dialog-confirm');
+    const check = checked => {
+      assert.equal(box.checked, checked);
+      assert.equal(confirm.classList.contains('delete-worktree-confirm-btn'), checked);
+      assert.equal(/stopped first: Running conversation.*in this window/.test(box.parentElement.textContent), checked);
+    };
+    check(remembered === '1');
+    box.click();
+    check(remembered !== '1');
+    box.click();
+    check(remembered === '1');
+    answer(ctx);
+    await pending;
+    assert.equal(ctx.calls.some(call => call[0] === 'stop'), remembered === '1');
+    assert.equal(ctx.calls.some(call => call[0] === 'archive'), remembered === '1');
+  });
+}
+
+test('PR5b review archiveProject failure offers no folder Undo after stopping and archiving sessions', async t => {
+  const ctx = setup(t, [{ sessionId: 'S' }]);
+  ctx.window.activePtyIds.add('S');
+  ctx.window.api.archiveProject = async () => ({ error: 'folder write failed' });
+  const pending = archive(ctx);
+  await settle(); answer(ctx); await pending;
+  assert.deepEqual(ctx.calls, [['stop', 'S'], ['archive', 'S', 1]]);
+  assert.equal(undo(ctx), undefined);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /folder write failed/);
+});
+
+test('PR5b review one session archive failure keeps the folder and offers no folder Undo', async t => {
+  const ctx = setup(t, [{ sessionId: 'S' }, { sessionId: 'B' }]);
+  ctx.window.activePtyIds.add('S');
+  ctx.window.api.archiveSession = async (id, value) => {
+    ctx.calls.push(['archive', id, value]);
+    return id === 'B' ? { error: 'session write failed' } : { ok: true };
+  };
+  const pending = archive(ctx);
+  await settle(); answer(ctx); await pending;
+  assert.deepEqual(ctx.calls, [['stop', 'S'], ['archive', 'S', 1], ['archive', 'B', 1]]);
+  assert.equal(undo(ctx), undefined);
+  assert.match(ctx.document.getElementById('app-notices').textContent, /Some sessions could not be archived; the folder was kept/);
+});

@@ -120,10 +120,10 @@ function openChoiceDialog({
       const stored = choice.rememberKey ? readRememberedChoice(choice.rememberKey) : null;
       box.checked = stored === '1' ? true : stored === '0' ? false : !!choice.checked;
       const text = document.createElement('span');
-      text.textContent = choice.label;
+      text.textContent = typeof choice.label === 'function' ? choice.label(box.checked) : choice.label;
       label.append(box, text);
       body.appendChild(label);
-      boxes.push({ choice, box });
+      boxes.push({ choice, box, text });
     }
 
     const actions = document.createElement('div');
@@ -135,7 +135,17 @@ function openChoiceDialog({
     cancelBtn.hidden = cancelLabel === null;
     const confirmBtn = document.createElement('button');
     confirmBtn.type = 'button';
-    confirmBtn.className = (danger ? 'delete-worktree-confirm-btn' : 'new-session-start-btn') + ' choice-dialog-confirm';
+    let isDanger;
+    function updateChoices() {
+      const values = Object.fromEntries(boxes.map(({ choice, box }) => [choice.id, box.checked]));
+      isDanger = typeof danger === 'function' ? danger(values) : danger;
+      confirmBtn.className = (isDanger ? 'delete-worktree-confirm-btn' : 'new-session-start-btn') + ' choice-dialog-confirm';
+      for (const { choice, box, text } of boxes) {
+        if (typeof choice.label === 'function') text.textContent = choice.label(box.checked);
+      }
+    }
+    for (const { box } of boxes) box.addEventListener('change', updateChoices);
+    updateChoices();
     confirmBtn.textContent = confirmLabel || 'OK';
     confirmBtn.disabled = !!options && !radios.some(({ radio }) => radio.checked && !radio.disabled);
     actions.append(cancelBtn, confirmBtn);
@@ -170,7 +180,7 @@ function openChoiceDialog({
 
     function enter(event) {
       if (buttons.includes(event.target)) event.target.click();
-      else if (!danger && !event.target.matches('input[type="checkbox"]')) accept();
+      else if (!isDanger && !event.target.matches('input[type="checkbox"]')) accept();
       return true;
     }
 
