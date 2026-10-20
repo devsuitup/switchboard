@@ -11,6 +11,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Detaching from a background session now reads Detached, in its terminal and on its grid card, instead of Stopped: the session keeps running. A session whose process is gone without an exit Switchboard saw reads Not running, not Stopped. (#563)
+- Stopping or deleting a background job from Agents while its tab is attached here now reads Stopped, without saying the job keeps running. (#563)
 
 ## v0.0.98 — 2026-10-20
 

@@ -130,6 +130,18 @@ for (const attached of [false, true]) {
   }
 }
 
+test('#563 dormant grid card with no liveness or exit restores on click', t => {
+  const { ctx, session, create } = setup(t, 'local-transcript', { status: undefined });
+  ctx.window.dormantWorkingSet = new Map([[session.sessionId, { sessionId: session.sessionId }]]);
+  assert.equal(ctx.window.activePtyIds.has(session.sessionId), false);
+  assert.equal(ctx.window.lastSessionExit(session.sessionId), null);
+  const card = create();
+  const footer = () => card.querySelector('.grid-card-footer').firstChild.textContent;
+  assert.equal(footer(), 'Not reopened · restores on click');
+  ctx.window.updateRunningIndicators();
+  assert.equal(footer(), 'Not reopened · restores on click');
+});
+
 test('#629 process exit preserves the local exit reason after its descriptor disappears', t => {
   const { ctx, session, create } = setup(t);
   const card = create();

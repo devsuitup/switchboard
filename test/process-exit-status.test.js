@@ -125,6 +125,7 @@ function setup() {
   run(`sessionMap.set('s1', { sessionId: 's1', projectPath: '/p', type: 'claude' }); openSessions.set('s1', makeEntry());`, 'fixture.js');
   const read = (expr) => run(expr, 'read.js');
   return Object.assign(h, {
+    window, ctx, destroy: () => window.close(),
     exit: (code, signal, stopped, generation) => exitHandler('s1', code, signal, stopped, generation),
     exitOf: (id, code) => exitHandler(id, code, null, false),
     poll: (running) => { read(running ? "activePtyIds.add('s1')" : "activePtyIds.delete('s1')"); read('updateTerminalHeader()'); },
@@ -313,3 +314,48 @@ test('#563 detaching an attach tab reads Detached and says the job keeps running
   assert.match(h.lastWrite(), /session detached — it keeps running in the background/);
   assert.equal(h.read("lastSessionExit('s1').detached"), true);
 });
+
+for (const verb of ['stop', 'rm']) {
+  test(`#563 Agents ${verb} on a job attached here reads Stopped without a keeps-running banner`, async t => {
+    const h = setup();
+    t.after(() => h.destroy());
+    h.read(`
+      openSessions.get('s1').attach = true;
+      const agentsInFlightVerbs = new Set();
+      const agentsPendingVerbs = new Set();
+      const agentsVerbErrors = new Map();
+      let agentsViewActive = false;
+      async function appConfirm() { return true; }
+      async function refreshAgentsRoster() {}
+    `);
+    loadAppFunctions(h.ctx, {
+      functions: ['runAgentVerb', 'agentsEntryKey', 'agentDisplayName'],
+      sourcePath: path.join(ROOT, 'public', 'agents-view.js'),
+    });
+    const calls = [];
+    h.window.api.checkBgAgentVerb = async (checkedVerb, id) => {
+      calls.push(['check', checkedVerb, id]);
+      return { ok: true };
+    };
+    h.window.api.bgAgentVerb = async (jobVerb, id) => {
+      calls.push(['verb', jobVerb, id]);
+      return { ok: true };
+    };
+    h.window.api.stopSession = async id => {
+      calls.push(['stopSession', id]);
+      h.exit(0, null, true);
+      return { ok: true };
+    };
+
+    await h.window.runAgentVerb(verb, {
+      kind: 'background', id: 'aaaaaaaa', sessionId: 's1', attachedHere: true,
+    });
+
+    assert.deepEqual(calls, [['check', verb, 'aaaaaaaa'], ['verb', verb, 'aaaaaaaa'], ['stopSession', 's1']]);
+    assert.equal(h.title(), 'Stopped');
+    assert.equal(h.aria(), 'Stopped');
+    assert.match(h.lastWrite(), /session stopped/);
+    assert.doesNotMatch(h.lastWrite(), /detached|keeps running/i);
+    assert.equal(h.read("lastSessionExit('s1').detached"), false);
+  });
+}

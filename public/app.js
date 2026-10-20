@@ -875,7 +875,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     pollActiveSessions();
     return;
   }
-  noteSessionExit(sessionId, exitCode, signal, stopped, !!(stopped && entry?.attach));
+  noteSessionExit(sessionId, exitCode, signal, stopped, !!(stopped && entry?.attach && !entry.jobEnding));
   if (typeof setSessionMcpState === 'function' && typeof filePanelState !== 'undefined' && filePanelState.get(sessionId)) setSessionMcpState(sessionId, 'off');
   // see .ai/contexts/session-state.md ("A session main drops")
   activePtyIds.delete(sessionId);
