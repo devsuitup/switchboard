@@ -39,11 +39,12 @@ newest user rename on any part, otherwise the original part's name
 **States**
 
 - Icon (one slot, highest rung wins, `public/session-state.js:4-16`):
-  **Needs your attention** · **Response ready** · **Working** · **Subagents
-  running** · **Waiting for input** · **Idle** · **Stale** · **Archived**.
-  Only Working, Subagents running, Response ready and Needs your attention
-  have their own CSS; Waiting for input, Idle and Stale render the same
-  (V, `public/style.css:1021-1318`, no `session-icon--waiting|idle|stale` rule).
+  **Needs your attention** · **Response ready** · **Working** · **Background work
+  running** · **Waiting for input** · **Idle** · **Not running** · **Archived**.
+  Waiting for input uses an orange hollow ring; Idle a filled dot; Not running
+  a dim filled dot. Finished background jobs without a live descriptor read
+  Not running; without a terminal job state or live descriptor, they read
+  Liveness unknown (`public/agents-view.js`, `projectBackgroundActivity`).
 - Green dot class `running` on the icon when a member has a local PTY
   (`public/sidebar.js:1694`; tooltip "Running" per `docs/notifications.md:19`).
 - Status text, raw from the CLI descriptor: `busy` · `idle` ·

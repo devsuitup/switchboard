@@ -187,8 +187,9 @@ updates and sidebar rebuilds. Both sidebar paths pass the representative row
 to the label function so a merged member cannot lose its row's `bgJobId` when
 the roster is absent. A retained attach tab keeps the job projection after
 done/stopped/failed: the sidebar says `Idle` for hosted done, otherwise `Job done`, `Job stopped` or `Job failed`.
-An unhosted row shows the finished/stale glyph, even if `conversationOwn` is
-true; a done row with a live bg descriptor keeps the waiting ring. A resumed
+An unhosted done, stopped or failed row shows the finished/stale glyph
+(`Not running`), even if `conversationOwn` is true; an unhosted row of any
+other state keeps the idle slot titled `Liveness unknown`, never declared dead; a done row with a live bg descriptor keeps the waiting ring. A resumed
 non-attach conversation retains its own activity and glyph. The done/idle
 descriptor with a living CLI pid was measured on JB's machine on 2026-10-16
 (#682); the regression tests use disposable fixtures.
@@ -580,7 +581,7 @@ that throws still lets the choice apply for the session. The `<select>` in
   (entry → `{ key, emoji, label }`) is the only lookup: interactive entries
   are `external` whatever their state; a background entry whose state is
   `null` or not a key is `unknown`. Hosted `done` uses the `idle` key and
-  `💤 Idle` header and row label. Order: Working, Blocked, Idle, Done, Stopped,
+  `💤 Idle` header and row label. Order: Active, Blocked, Idle, Done, Stopped,
   Failed, External, Unknown. "Blocked" matches the row's own state word.
   Emojis are literals from the map, never data, and sit in their own
   `aria-hidden` span (`.agents-group-emoji`, `.agents-state-emoji`) so the

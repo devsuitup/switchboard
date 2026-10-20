@@ -15,7 +15,7 @@ When several states hold at once, the first one in this table wins:
 | Response ready | Blue dot with a glow | blue | Claude finished working in a session you are not viewing | You open the session |
 | Working | Light-blue braille spinner | light blue | Claude is working | Claude stops |
 | Working, with subagents | The same spinner, violet | light blue | Claude is working and subagents run under it | — |
-| Subagents running | Static violet ⠿ | — | Claude is at its prompt, subagents still run under it | The last subagent ends |
+| Background work running | Static violet ⠿ | — | Claude is at its prompt, background tasks still run under it | The last background task ends |
 | Waiting for input | Orange hollow ring | — | Switchboard saw Claude finish a turn in a session open here, a session running elsewhere is at its prompt, or a background job is blocked (including while attached here) | A new turn starts or the job leaves blocked |
 | Running | Green dot | — | Switchboard holds a live process for the session and has not seen a turn end since that process started or since the last turn began | Claude finishes a turn, or the process exits |
 | — | Grey dot | — | Anything else | — |

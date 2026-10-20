@@ -58,7 +58,7 @@ function sortAgentEntries(entries) {
 
 const AGENTS_GROUP_MODES = ['none', 'state', 'project'];
 const AGENT_STATE_META = {
-  working: { emoji: '⚙️', label: 'Working' },
+  working: { emoji: '⚙️', label: 'Active' },
   blocked: { emoji: '✋', label: 'Blocked' },
   idle: { emoji: '💤', label: 'Idle' },
   done: { emoji: '✅', label: 'Done' },
@@ -243,7 +243,8 @@ function projectBackgroundActivity(entry, snapshot) {
   const blocked = live && entry.state === 'blocked';
   const turnActive = live && !terminal && !blocked;
   const headTurn = terminal || blocked ? 'closed' : snapshot.headTurn;
-  return { ...snapshot, headTurn, liveness: live ? 'alive' : 'dead', stale: !live,
+  return { ...snapshot, headTurn, liveness: live ? 'alive' : terminal ? 'dead' : 'unknown', stale: !live && terminal,
+    titleOverride: !live && !terminal ? 'Liveness unknown' : null,
     attention: live && !terminal && snapshot.attention, busy: turnActive && headTurn === 'open',
     responseReady: turnActive && snapshot.responseReady,
     agentsBusy: turnActive && snapshot.agentsBusy,
@@ -369,19 +370,16 @@ function selectAgentsRow(id) {
 function renderAgentRow(entry, nested = false) {
   const key = agentsEntryKey(entry);
   const icon = agentRowIcon(entry);
-  const state = entry.kind === 'interactive' ? 'external'
-    : entry.state === 'done' && agentJobIsLive(entry) ? 'Idle' : (entry.state || '?');
-  const stateEmoji = agentStateMeta(entry).emoji;
-  const status = entry.kind === 'interactive' && entry.status ? ' · ' + entry.status : '';
+  const { label: state, emoji: stateEmoji } = agentStateMeta(entry);
   const classes = ['agents-row'];
   if (nested) classes.push('agents-row--nested');
   if (key === agentsSelectedKey) classes.push('selected');
   if (agentsPendingVerbs.has(key)) classes.push('pending');
   return `<div class="${classes.join(' ')}" data-key="${agentsEscapeAttr(key)}">
-    <span class="session-icon ${icon.slotClass}${icon.live ? ' running' : ''}" data-glyph="${agentsEscapeAttr(icon.glyph)}" title="${agentsEscapeAttr(icon.title)}"></span>
+    <span class="session-icon ${icon.slotClass}${icon.live ? ' running' : ''}" data-glyph="${agentsEscapeAttr(icon.glyph)}" title="${agentsEscapeAttr(icon.title)}" role="img" aria-label="${agentsEscapeAttr(icon.title.split('\n')[0])}"></span>
     <span class="agents-row-name">${escapeHtml(agentDisplayName(entry))}</span>
     <span class="agents-row-agent">${escapeHtml(entry.agent || '—')}</span>
-    <span class="agents-row-state"><span class="agents-state-emoji" aria-hidden="true">${stateEmoji}</span> ${escapeHtml(state + status)}</span>
+    <span class="agents-row-state"><span class="agents-state-emoji" aria-hidden="true">${stateEmoji}</span> ${escapeHtml(state)}</span>
     <span class="agents-row-cwd" title="${agentsEscapeAttr(entry.cwd || '')}">${escapeHtml(entry.cwd ? shortProjectPath(entry.cwd) : '')}</span>
     <span class="agents-row-age">${escapeHtml(formatAgentAge(entry.startedAt))}</span>
   </div>`;

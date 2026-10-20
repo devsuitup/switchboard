@@ -82,7 +82,7 @@ test('group mode: none, state and project are kept; anything else (unset include
 
 test('state meta: one emoji and label per state group, in the group order', () => {
   assert.deepEqual(Object.entries(AGENT_STATE_META).map(([k, m]) => [k, m.emoji, m.label]), [
-    ['working', '⚙️', 'Working'], ['blocked', '✋', 'Blocked'], ['idle', '💤', 'Idle'], ['done', '✅', 'Done'], ['stopped', '⏹️', 'Stopped'],
+    ['working', '⚙️', 'Active'], ['blocked', '✋', 'Blocked'], ['idle', '💤', 'Idle'], ['done', '✅', 'Done'], ['stopped', '⏹️', 'Stopped'],
     ['failed', '❌', 'Failed'], ['external', '🖥️', 'External'], ['unknown', '❓', 'Unknown'],
   ]);
   const every = Object.keys(AGENT_STATE_META).map((k) => (k === 'external' ? ext({ sessionId: k }) : bg({ id: k, state: k === 'unknown' ? null : k, hosted: k !== 'done' })));
@@ -125,7 +125,7 @@ test('group by state: fixed order, external and unknown last, empty groups dropp
     bg({ id: 's1', state: 'stopped', hosted: false }),
   ], 'state');
   assert.deepEqual(ids(groups), [
-    ['Working', ['w1', 'w2']], ['Blocked', ['b1']], ['Done', ['d1']], ['Stopped', ['s1']],
+    ['Active', ['w1', 'w2']], ['Blocked', ['b1']], ['Done', ['d1']], ['Stopped', ['s1']],
     ['Failed', ['f1']], ['External', ['i1']], ['Unknown', ['u1']],
   ]);
   assert.deepEqual(groups.map(g => g.key), ['working', 'blocked', 'done', 'stopped', 'failed', 'external', 'unknown']);

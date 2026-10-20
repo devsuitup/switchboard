@@ -29,7 +29,7 @@ conventions, and the internal-consistency rule "one job, one pattern".
 `attention > responseReady > busy > agentsBusy > waitingForInput > idle > stale > archived`;
 `ICON_BY_RUNG` (`session-state.js:7-16`) gives each rung a slot class, a glyph
 and a title: `Needs your attention`, `Response ready`, `Working`,
-`Subagents running`, `Waiting for input`, `Idle`, `Stale`, `Archived`.
+`Background work running`, `Waiting for input`, `Idle`, `Not running`, `Archived`.
 `renderSessionIcon` projects a snapshot onto one rung. The sole DOM writer of
 the row classes is `public/session-activity-dom.js` (header comment, line 1).
 
@@ -48,8 +48,15 @@ relying on colour or opacity. No animation is added.
 |---|---|---|---|
 | Waiting for input | `session-icon--waiting` | orange hollow `○`, no halo | same |
 | Idle | `session-icon--idle` | base grey filled dot; green with `.running` | green filled dot for a live idle job |
-| Stale | `session-icon--stale` | not produced | base grey filled dot at 0.5 opacity for a job that is not live |
+| Not running | `session-icon--stale` | finished background job without a live descriptor | base grey filled dot at 0.5 opacity for a finished job without a live descriptor |
 | Archived | `session-icon--archived` | reserved, unused | reserved, unused; same rule as stale |
+
+A background job with neither a terminal state nor a live descriptor keeps
+unknown liveness: its tooltip and accessible name read `Liveness unknown`.
+Agents state columns and group headers use `Active`, `Blocked`, `Idle`, `Done`,
+`Stopped`, `Failed`, `External` or `Unknown`, without raw descriptor words.
+The Agents activity slot has `role="img"` and its first tooltip line as its
+accessible name (`public/agents-view.js`, `renderAgentRow`).
 
 `--state-waiting` is in `:root` and is shared with the attention orange.
 Terminal light/dark themes do not change these slots. Grid cards use
