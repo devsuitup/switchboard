@@ -1100,6 +1100,28 @@ test('a state change keeps the same button node and updates disabled', async t =
 });
 
 for (const verb of ['stop', 'rm']) {
+  test(`cancelled ${verb} confirmation restores focus to its opener`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    for (const file of ['modal-stack.js', 'choice-dialog.js', 'app-dialogs.js']) {
+      vm.runInContext(fs.readFileSync(path.join(PUBLIC, file), 'utf8'), h.ctx, { filename: file });
+    }
+    const entry = verb === 'stop' ? ROSTER[0] : ROSTER[1];
+    h.setSnapshot({ roster: [entry], daemonReachable: true });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    const opener = h.document.querySelector(`[data-verb="${verb}"]`);
+    opener.focus();
+    const pending = h.window.runAgentVerb(verb, entry);
+    await new Promise(resolve => setImmediate(resolve));
+    const cancel = h.document.querySelector('.choice-dialog-cancel');
+    assert.ok(cancel, 'the real confirmation dialog must open');
+    assert.equal(h.document.activeElement, cancel);
+    cancel.click();
+    await pending;
+    assert.equal(h.document.activeElement, opener);
+    assert.deepEqual(h.calls.verbs, []);
+  });
+
   test(`double ${verb} clicks before the check resolves open one dialog`, async t => {
     const h = setup(); t.after(() => h.destroy());
     const entry = verb === 'stop' ? ROSTER[0] : ROSTER[1];
@@ -1120,9 +1142,11 @@ for (const verb of ['stop', 'rm']) {
     button.click();
     button.click();
     assert.equal(checks, 1);
-    assert.equal(button.disabled, true);
+    assert.equal(button.disabled, false);
     resolveCheck({ ok: true });
     await confirming;
+    h.emitChanged({ roster: [entry], daemonReachable: true });
+    assert.equal(button.disabled, false, 'a roster render during confirmation keeps the opener enabled');
     button.click();
     await h.window.runAgentVerb(verb === 'stop' ? 'rm' : 'stop', entry);
     assert.equal(checks, 1, 'the job is held through confirmation for both destructive verbs');
@@ -1157,12 +1181,13 @@ for (const verb of ['stop', 'rm']) {
         return true;
       };
       h.window.api.bgAgentVerb = async () => {
+        assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, true);
         executions++;
         if (executions === 1 && failure === 'verb rejection') throw new Error('Execution failed');
         return { ok: true };
       };
       const pending = h.window.runAgentVerb(verb, entry);
-      assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, true);
+      assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, false);
       await pending;
       assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, false);
       if (failure !== 'completion') {

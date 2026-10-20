@@ -19,6 +19,7 @@ let agentsCollapsedGroups = new Set();
 let agentsReconcileTimer = null;
 let agentsOpenAtStartup = false;
 const agentsPendingVerbs = new Set();
+const agentsInFlightVerbs = new Set();
 const agentsVerbErrors = new Map();
 
 function agentsEscapeAttr(value) {
@@ -581,10 +582,9 @@ async function runAgentVerb(verb, entry) {
     attachBgAgent(entry);
     return;
   }
-  if (agentsPendingVerbs.has(key)) return;
-  agentsPendingVerbs.add(key);
+  if (agentsInFlightVerbs.has(key)) return;
+  agentsInFlightVerbs.add(key);
   agentsVerbErrors.delete(key);
-  if (agentsViewActive) renderAgentsView();
   try {
     if (verb === 'stop' || verb === 'rm') {
       const check = await window.api.checkBgAgentVerb(verb, entry.id);
@@ -597,6 +597,8 @@ async function runAgentVerb(verb, entry) {
         : { title: 'Delete?', message: 'Delete this background session? Its conversation goes, and its worktree when that is safe.', confirmLabel: 'Delete', danger: true };
       if (!await appConfirm(confirmation)) return;
     }
+    agentsPendingVerbs.add(key);
+    if (agentsViewActive) renderAgentsView();
     const result = await window.api.bgAgentVerb(verb, entry.id);
     if (!result || result.ok === false) agentsVerbErrors.set(key, (result && result.error) || 'unknown error');
     else if (entry.attachedHere && (verb === 'stop' || verb === 'rm')) {
@@ -605,6 +607,7 @@ async function runAgentVerb(verb, entry) {
   } catch (err) {
     agentsVerbErrors.set(key, err && err.message ? err.message : String(err));
   } finally {
+    agentsInFlightVerbs.delete(key);
     agentsPendingVerbs.delete(key);
     if (agentsViewActive) renderAgentsView();
   }

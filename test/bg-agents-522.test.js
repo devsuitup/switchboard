@@ -149,7 +149,7 @@ function renderer(t) {
   window.showJsonlViewer = () => { throw new Error('missing transcript must not open the viewer'); };
   return { window, context: dom.getInternalVMContext(), ...loadAppFunctions(dom.getInternalVMContext(), {
     sourcePath: path.join(__dirname, '..', 'public', 'agents-view.js'),
-    declarations: ['agentsPendingVerbs', 'agentsVerbErrors', 'agentsViewActive', 'agentsDaemonReachable', 'agentsSnapshotRevision'],
+    declarations: ['agentsPendingVerbs', 'agentsInFlightVerbs', 'agentsVerbErrors', 'agentsViewActive', 'agentsDaemonReachable', 'agentsSnapshotRevision'],
     functions: ['agentJobIsLive', 'agentVerbAvailability', 'agentsEntryKey', 'agentDisplayName', 'renderAgentDetail',
       'formatTokens', 'formatAgentAge', 'agentsEscapeAttr', 'runAgentVerb', 'refreshAgentsRoster'],
   }) };
