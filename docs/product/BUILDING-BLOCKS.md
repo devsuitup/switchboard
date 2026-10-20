@@ -246,11 +246,12 @@ focus) with a form body.
   in progress use informational status, without a failure headline; only
   automatic indexing retries enter the pending group, which indexing completion
   clears. Holds requiring a sidebar choice remain persistent errors.
+- **Project Archive.** Settings and the worktree header use the Undo variant
+  through `showProjectArchiveUndo`; its action restores the stored project entry.
 - **Remaining separate.** `.restore-toast` retains restore consent, cold-cache
   indexing progress and informational handoff success; `#update-toast` is unchanged.
   Agents/settings failures and remaining information dialogs are later slices.
-  Archive and Detach Undo wiring
-  belongs to their own slices; S3 provides the shared variant.
+  Session/folder Archive and Detach Undo wiring belongs to their own slices.
 
 ## B9. Inline error
 

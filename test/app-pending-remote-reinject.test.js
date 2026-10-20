@@ -12,7 +12,7 @@ const { loadAppFunctions } = require('./app-source');
 
 const ID = '3f2a9c10-7b1d-4e55-9a60-0123456789ab';
 
-function run(projects, pendingSession, pendingFolder) {
+async function run(projects, pendingSession, pendingFolder) {
   const ctx = setupSidebarDom();
   try {
     const { window } = ctx;
@@ -32,7 +32,7 @@ function run(projects, pendingSession, pendingFolder) {
     window.cachedAllProjects = [];
     window.pendingSessions.set(ID, { session: pendingSession, projectPath: pendingSession.projectPath, folder: pendingFolder });
     const fns = loadAppFunctions(ctx.context, { functions: ['dedup', 'loadProjects'] });
-    return fns.loadProjects().then(() => JSON.parse(JSON.stringify({
+    return await fns.loadProjects().then(() => JSON.parse(JSON.stringify({
       cached: window.cachedProjects,
       all: window.cachedAllProjects,
     })));

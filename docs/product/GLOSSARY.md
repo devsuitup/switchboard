@@ -386,8 +386,9 @@ concept. Each entry gives:
   `remove-project` (`main.js`); **Archive Project** and **Delete Project**
   (`public/settings-panel.js`); worktree **Archive project**
   (`public/sidebar.js`).
-- **Today**: both actions confirm in an in-app dialog that states what is kept
-  or dropped. A deleted project is not listed under Archived projects.
+- **Today**: Archive runs without asking and offers Undo for about 10 seconds
+  in Settings and on a worktree header. Delete confirms in an in-app dialog
+  that states what is dropped. A deleted project is not listed under Archived projects.
 
 ### Respawn
 

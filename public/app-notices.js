@@ -112,4 +112,5 @@ function showAppNotice(options) {
     resume();
   }
   if (focusedButton) [...notice.querySelectorAll('button')].find(button => button.className === focusedButton)?.focus();
+  return notice;
 }

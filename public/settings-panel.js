@@ -751,26 +751,26 @@
       if (!button) continue;
       button.addEventListener('click', async () => {
         const deleting = action === 'delete';
-        const result = await showChoiceDialog({
-          title: `${deleting ? 'Delete' : 'Archive'} project "${shortName}"?`,
-          message: deleting ? [
-            'This removes the project settings, cached sessions and search index, and schedule registration from Switchboard.',
-            'The project folder, session files and schedule files are not deleted. Adding the project again uses default settings.',
-          ] : [
-            'The project is removed from the sidebar. Its settings and cached sessions are kept; its schedules are suspended while archived and resume on unarchive.',
-            'This is reversible from Settings → Archived projects.',
-          ],
-          confirmLabel: deleting ? 'Delete Project' : 'Archive Project',
-          danger: deleting,
-          initialFocus: deleting ? 'cancel' : 'confirm',
-          returnFocus: button,
-        });
-        if (!result) return;
+        if (deleting) {
+          const result = await showChoiceDialog({
+            title: `Delete project "${shortName}"?`,
+            message: [
+              'This removes the project settings, cached sessions and search index, and schedule registration from Switchboard.',
+              'The project folder, session files and schedule files are not deleted. Adding the project again uses default settings.',
+            ],
+            confirmLabel: 'Delete Project',
+            danger: true,
+            initialFocus: 'cancel',
+            returnFocus: button,
+          });
+          if (!result) return;
+        }
         try {
           const response = deleting
             ? await window.api.deleteProject(projectPath, folderKey)
             : await window.api.archiveProjectSettings(projectPath, folderKey);
           if (response.error) throw new Error(response.error);
+          if (!deleting) window.showProjectArchiveUndo(response.entry, shortName);
           settingsViewer.style.display = 'none';
           document.getElementById('placeholder').style.display = 'flex';
           if (typeof loadProjects === 'function') await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });

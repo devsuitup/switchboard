@@ -195,7 +195,7 @@ amber (`docs/remote-hosts.md:149-157`).
 | Project settings | **Project settings** (`:909`) | — | — |
 | Archive folder | **Archive folder** (`:915`) → dialog "Archive <path>?", boxes "Archive the N sessions", "Disable the N enabled schedules…", button **Archive folder** (`:1180-1196`) | — | **Turn back on** / **Dismiss** notice (`:1130-1134`) |
 | Change project path | **Change project path** (`:922`), confirm "Remap <name> to: <path>?" (`:1302`) | — | — |
-| Archive project | — | **Archive project**, reversible from Settings → Archived projects (`public/sidebar.js`) | Settings: **Archive Project** (`public/settings-panel.js`), in-app confirmation says settings/cache are kept and schedules suspended |
+| Archive project | — | **Archive project**, no confirmation, 10-second Undo notice (`public/sidebar.js`) | Settings: **Archive Project** (`public/settings-panel.js`), same Undo notice; settings/cache are kept and schedules suspended; also reversible from Settings → Archived projects |
 | Unarchive project | — | — | Global Settings → **Archived projects** → **Unarchive**, including legacy hidden entries |
 | Delete | — | **Delete worktree from disk** (`:994`) → dialog "Delete worktree "<name>"?" (`:1949-1961`) | Settings: **Delete Project**, destructive in-app confirmation lists settings, cache/search and schedule registration; keeps all disk files |
 | Reconnect (remote) | "Reconnect <alias> now" (`:896`) | — | — |

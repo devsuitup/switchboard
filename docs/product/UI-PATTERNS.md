@@ -180,8 +180,8 @@ The Changes badge is the one place that already meets "never colour alone".
 | Row Delete | `sidebar.js:1525-1568`, button `1798-1801`, dialog `1881-1945` | `Delete session (removes the transcript from disk)` → `Delete permanently` | stop then delete transcript; refused up front on a merged row with a live member (`1529-1533`) | custom modal with preview of what goes |
 | Agents Delete | `agents-view.js:340, 421` | `Delete` | `claude rm` (conversation + worktree when safe) | `window.confirm` |
 | Worktree Delete | `sidebar.js:1337-1352`, dialog `1949-2017` | `Delete anyway` | `git worktree remove` | custom modal with dirty-file list |
-| Worktree Archive project | `sidebar.js` (`worktree-hide-btn`) | `Archive Project` | removes the row, keeps settings and cache, suspends schedules; reversible from Settings | `showChoiceDialog` states what is kept |
-| Project Archive | `settings-panel.js` (`sv-archive-btn`) | `Archive Project` | same | `showChoiceDialog` states what is kept |
+| Worktree Archive project | `sidebar.js` (`worktree-hide-btn`) | `Archive Project` | removes the row, keeps settings and cache, suspends schedules; reversible from Settings | no confirmation; 10-second Undo notice |
+| Project Archive | `settings-panel.js` (`sv-archive-btn`) | `Archive Project` | same | no confirmation; 10-second Undo notice |
 | Project Delete | `settings-panel.js` (`sv-delete-btn`) | `Delete Project` | drops settings, cache, search index and schedule registration; no file on disk is deleted | `showChoiceDialog`, danger style, focus on Cancel |
 | File delete (Agent Files / Work Files) | `viewer-panel.js:283` | — | delete file | `confirm('Delete "<name>"?\n\nThis cannot be undone.')` |
 | Trace file delete | `activity-trace-panel.js:120` | — | delete file | same wording |

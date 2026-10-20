@@ -130,7 +130,8 @@ and **Session Launch**: Permission Mode, Worktree, Worktree Name, Chrome, Sandbo
 and nothing is stored for the project.
 
 **Archive Project** removes the project and its nested worktrees from the
-sidebar after an in-app confirmation. Settings, cached sessions and search
+sidebar immediately, without asking. A notice offers **Undo** for about 10
+seconds; it restores the project and resumes scheduling. Settings, cached sessions and search
 entries are kept. Schedules stay on disk with their enabled state unchanged,
 but Switchboard suspends their launches until you unarchive the project.
 Already running sessions and schedules continue.

@@ -1940,8 +1940,8 @@ Project Settings offers **Archive Project** and **Delete Project** (#568).
 Archive writes only the existing `global.hiddenProjects` array through
 `archive-project-settings`. Bare paths keep their historical all-host matching;
 `alias::path` entries match only that host. There is no key migration. Old Hide
-entries remain listed in Global Settings → **Archived projects**, alongside
-projects deleted from Switchboard.
+entries remain listed in Global Settings → **Archived projects**; entries marked
+as deleted are excluded.
 
 Archive keeps `project:<path>`, cache metadata, session rows, search rows and
 `scheduleProjects`. `buildProjectsFromCache` already filters hidden entries;
@@ -1950,14 +1950,17 @@ before any folder-archive reappearance logic. `loadProjects` excludes exact
 hidden projects when reinserting pending sessions, and retains the existing
 worktree-parent filtering. Archive does not stop running processes.
 
-`unarchive-project(entry)` accepts a stored entry, refreshes its encoded local
+`unarchive-project(entry)` refuses entries marked `delete` before any effects
+with `{ error, code: 'DELETED' }`; a missing hidden entry returns
+`{ error, code: 'NOT_ARCHIVED' }`.
+For an archived or legacy entry, it refreshes its encoded local
 or mirrored folder, clears any folder-archive entry for the same group and
 removes its hidden entry. `global.hiddenProjectKinds` records how each entry
 got there (`archive` or `delete`); an entry without a mark is a legacy Hide.
 A local restore adds the schedule registration only for a legacy entry whose
 folder exists, and resets the project's catch-up record; Archive never touches
 the registry, and a deleted entry is never registered again. Refresh is
-needed to rebuild legacy/deleted caches and pick up transcript changes made
+needed to rebuild legacy caches and pick up transcript changes made
 while archived; an ordinary Archive requires no cache deletion. Missing
 project settings fall through to global settings and `SETTING_DEFAULTS`.
 Folder-archive schedule files remain under their separate re-enable-offer flow.
@@ -1966,15 +1969,30 @@ Delete keeps the existing `remove-project` implementation: write the hidden
 entry, delete that folder's cache and search rows, delete `project:<path>` and
 remove its schedule registration. `deleteProject` names this destructive bridge. The directory, transcripts, schedule files
 and session metadata are not deleted. This is separate from Delete worktree
-from disk (#474). Adding/unarchiving the entry later rebuilds defaults.
+from disk (#474). Adding the project again later rebuilds defaults.
 
 Delete also marks the entry `delete`, and the Settings list leaves marked-deleted
 entries out, since a deleted project is gone rather than archived. The list
 escapes entries and invokes Unarchive directly; Save rereads
-global settings to retain current archive state. Both project confirmations
-use `showChoiceDialog`, with a destructive confirm and cancel focus for Delete.
-The former worktree Hide control now uses the reversible project action and
-passes its host-qualified folder key. Tests: `project-settings-archive.test.js`.
+global settings to retain current archive state. Archive Project in Settings
+and the worktree header runs without asking and shows a 10-second Undo notice.
+`archive-project-settings` returns `{ ok: true, entry }`; both surfaces pass
+that exact stored entry to `showProjectArchiveUndo` in `public/sidebar.js`.
+Undo calls `unarchiveProject(entry)` and reloads projects; it never reconstructs
+the host-qualified key in the renderer. Failed Undo shows a persistent error
+notice, except that `code: 'NOT_ARCHIVED'` means Undo is already done,
+independently of the error text. `showAppNotice` returns the notice element so
+the project helper can stamp it with the current `loadProjects.state.started`
+generation. Accepted `loadProjects` snapshots clear project Undo notices whose
+entries are no longer hidden or are marked `delete`, including changes from
+other paths, only if their job started after the notice's generation stamp.
+An older job that read settings before Archive cannot clear the fresh Undo.
+After worktree Archive removes its button, focus returns to the surviving
+project header, or the sidebar when that header is gone, if focus is on the body.
+This edits `hiddenProjects`, separate from folder Archive and its
+`undo-archive-project` reverse path. Delete keeps `showChoiceDialog`, with a
+destructive confirm and cancel focus. The former worktree Hide control passes
+its host-qualified folder key. Tests: `project-settings-archive.test.js`.
 
 ## Archived projects (issue #473)
 
