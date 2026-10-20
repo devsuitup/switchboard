@@ -57,7 +57,7 @@ function sidebar(t) {
   let revision = 0;
   const turn = (state, lastEntryAt = 1_800_000_000_001) => ctx.emitTaskSnapshot({ parentSessionId: 'root', revision: ++revision, tasks: [], headTurn: { sessionId: 'root', revision, state, lastEntryAt } });
   const icon = () => ctx.document.querySelector('#si-root .session-icon');
-  const title = () => icon().title.split('\nCLI status: ')[0];
+  const title = () => icon().title.split('\nCLI status: ')[0].split(' · ')[0];
   const label = () => icon().getAttribute('aria-label').split(' · CLI status: ')[0];
   return { ctx, turn, icon, title, label };
 }
@@ -101,10 +101,10 @@ test('projection is pure, attention consumes the ready glyph while unseen title 
 });
 test('the slot exposes accessible text on initial paint and incremental updates', t => {
   const { turn, icon, label } = sidebar(t);
-  assert.equal(label(), 'Turn state unavailable');
+  assert.equal(label(), 'Turn state unavailable · Running elsewhere');
   assert.equal(icon().getAttribute('role'), 'img');
   turn('open');
-  assert.equal(label(), 'Working');
+  assert.equal(label(), 'Working · Running elsewhere');
 });
 test('blocked Agents jobs suppress an open head even when the descriptor says busy', t => {
   const { ctx, turn } = sidebar(t);

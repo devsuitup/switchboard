@@ -200,10 +200,20 @@ rendered, indexed, mapped and opened conversation members. Written output
 colours the card title blue under the same unseen/attention rule as the row;
 existing terminal visibility and watermark checks consume it.
 
-Footer liveness is separate: `Running` means a PTY here, `Running elsewhere`
-means a live process without that PTY. Without a PTY or alive evidence,
-`lastSessionExit` supplies the recorded `processExitLabel`; otherwise dead
-evidence gives `Stopped` and absent evidence gives `Liveness unknown`.
+Footer lifecycle comes from the ranked `lifecycleLabel`: a PTY reads `Open here`
+or `Attached here`, with the remote host or local background detail. Without
+a PTY, finished jobs outrank live background jobs, live remote/local processes,
+dead liveness without a recorded end, recorded exits and dormant restoration,
+in that order. Unknown
+evidence reads `Liveness unknown`; death without a recorded exit reads
+`Not running`. `writeIconSlot` adds the same lifecycle to sidebar and grid
+labels, then job or CLI detail, deduplicating whole segments without changing
+the glyph. Dormant changes repaint through `syncDormantRow`. The status bar
+counts `N open here`; the filter selects the same PTY population. Idle remains
+a filled dot; open-here Idle adds a two-pixel satellite below it using shadow
+geometry, and Not running scales the dot to a six-by-two-pixel dash without
+changing its layout box, at half opacity. Waiting and dormant keep their
+separate hollow rings.
 Stop visibility and dispatch retain their existing PTY/live-row rule.
 The snapshot also sets `has-busy-agents` on the card so the shared CSS rule
 tints a busy head violet while agents run. The grid performs no lifecycle

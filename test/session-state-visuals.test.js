@@ -58,6 +58,20 @@ function styledSlots(rowClass = 'session-item') {
   };
 }
 
+for (const [left, right] of [['idle', 'stale'], ['live-idle', 'idle']]) {
+  test(`#563 ${left} and ${right} differ by shape beyond colour and opacity`, () => {
+    const { style, destroy } = styledSlots();
+    try {
+      const shape = id => ['width', 'height', 'border-radius', 'border-bottom-width', 'border-bottom-style',
+        'transform', 'clip-path', 'box-shadow'].map(property => style(id).getPropertyValue(property)
+        .replace(/rgba?\([^)]*\)|#[\da-f]+/gi, ''));
+      assert.notDeepEqual(shape(left), shape(right));
+    } finally {
+      destroy();
+    }
+  });
+}
+
 for (const rowClass of ['session-item', 'session-item is-terminal']) {
   test(`idle with running keeps the running green: ${rowClass}`, { timeout: 1000 }, () => {
     const { style, destroy } = styledSlots(rowClass);

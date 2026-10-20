@@ -236,8 +236,8 @@ test('#629 one head update looks up and paints only its indexed card', t => {
   }
   turn('open');
   assert.deepEqual(paints, ['head-629']);
-  assert.equal(card.querySelector('.grid-card-dot').title, 'Working');
-  assert.deepEqual(lookups, ['head-629', 'head-629', 'head-629', 'head-629', 'head-629']);
+  assert.equal(card.querySelector('.grid-card-dot').title, 'Working · Open here');
+  assert.deepEqual(lookups, ['head-629', 'head-629', 'head-629', 'head-629']);
 });
 
 test('#629 busy head with running agents shares the sidebar violet tint', t => {
@@ -323,7 +323,7 @@ function parity(ctx, card, expected) {
   assert.equal(slot.getAttribute('aria-label'), icon.getAttribute('aria-label').split(' · CLI status:')[0]);
   const classes = el => [...el.classList].filter(c => c.startsWith('session-icon--')).sort();
   assert.deepEqual(classes(slot), classes(icon));
-  assert.equal(slot.title, expected);
+  assert.equal(slot.title.split(' · ')[0], expected);
   assert.equal(card.querySelectorAll('.grid-card-dot').length, 1);
   assert.equal(card.classList.contains('unseen-written-activity'), sidebar.classList.contains('unseen-written-activity'));
   assert.equal(card.querySelector('.grid-subagent-count')?.textContent, sidebar.querySelector('.session-subagent-count')?.textContent);
@@ -452,7 +452,7 @@ test('#629 merged head selection includes sibling activity and survives a hidden
   parity(ctx, card, 'Background work running');
   ctx.document.getElementById('si-root-629').remove();
   turn('open');
-  assert.equal(card.querySelector('.grid-card-dot').title, 'Working');
+  assert.equal(card.querySelector('.grid-card-dot').title, 'Working · Running elsewhere');
   ctx.window.taskRegistry.end('older-629', 'A');
   assert.equal(card.querySelector('.grid-subagent-count'), null);
 });

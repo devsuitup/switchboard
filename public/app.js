@@ -193,7 +193,10 @@ function dormantRowIds(row) {
 
 function syncDormantRow(sessionId) {
   const row = sessionItemEl(sessionId);
-  if (row) row.classList.toggle('dormant', dormantRowIds(row).some(id => dormantWorkingSet.has(id)));
+  if (row) {
+    row.classList.toggle('dormant', dormantRowIds(row).some(id => dormantWorkingSet.has(id)));
+    paintSessionIcon(row.querySelector('.session-icon'), sessionId);
+  }
 }
 
 function clearDormantRow(sessionId) {
@@ -2612,7 +2615,7 @@ function renderDefaultStatus() {
   const totalProjects = cachedAllProjects.length;
   const running = runningSessionCount();
   const parts = [];
-  if (running > 0) parts.push(`${running} running`);
+  if (running > 0) parts.push(`${running} open here`);
   parts.push(`${totalSessions} sessions`);
   parts.push(`${totalProjects} projects`);
   statusBarInfo.textContent = parts.join(' \u00b7 ');

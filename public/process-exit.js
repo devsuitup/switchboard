@@ -24,7 +24,7 @@ function processExitLabel(exit) {
 }
 
 function terminalStatusLabel(running, exit) {
-  if (running) return 'Running';
+  if (running) return lifecycleLabel({ ptyHere: true });
   return exit ? processExitLabel(exit) : 'Not running';
 }
 

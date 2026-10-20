@@ -33,7 +33,7 @@ for (const at of [1000, 3000]) {
       }] })], true);
       ctx.window.markRemoteBusy('ordered', 'remote-watch', at);
       assert.equal(ctx.document.querySelector('#si-ordered .session-icon').title,
-        at < 2000 ? 'Waiting for input' : 'Turn state unavailable');
+        (at < 2000 ? 'Waiting for input' : 'Turn state unavailable') + ' · Running on host');
     } finally { ctx.destroy(); }
   });
 }
@@ -128,19 +128,19 @@ test('an mtime-only snapshot after OSC idle preserves waiting and all adapter hi
   advance();
   ctx.setActivity('root', false, 'onCliBusyState');
   const before = ctx.read('headTurns.get("root")');
-  assert.equal(icon().title, 'Waiting for input');
+  assert.equal(icon().title, 'Waiting for input · Attached here · runs on host');
   const sources = ['localPtyStates', 'localTranscriptStates', 'remoteSessionStates']
     .map(map => JSON.stringify(ctx.read(`${map}.get('root').snapshot()`)));
   advance();
   ctx.window.applyHeadTurnSnapshot({ ...before, revision: before.revision + 1, mtimeMs: before.mtimeMs + 1000 });
-  assert.equal(icon().title, 'Waiting for input');
+  assert.equal(icon().title, 'Waiting for input · Attached here · runs on host');
   assert.equal(ctx.read('headTurns.get("root").observedAt'), before.observedAt);
   for (const [i, map] of ['localPtyStates', 'localTranscriptStates', 'remoteSessionStates'].entries()) {
     assert.equal(JSON.stringify(ctx.read(`${map}.get('root').snapshot()`)), sources[i]);
   }
   advance();
   ctx.window.applyHeadTurnSnapshot({ ...before, revision: before.revision + 2, lastEntryAt: before.lastEntryAt + 1000 });
-  assert.equal(icon().title, 'Working');
+  assert.equal(icon().title, 'Working · Attached here · runs on host');
   for (const map of ['localPtyStates', 'localTranscriptStates', 'remoteSessionStates']) {
     assert.equal(ctx.read(`${map}.get('root').snapshot().lastActivitySource`), 'head-turn');
   }
@@ -150,22 +150,22 @@ for (const type of ['last-prompt', 'ai-title', 'mode', 'pr-link']) {
   test(`${type}: an untimestamped bookkeeping append after OSC idle cannot animate an open head`, async t => {
     const { ctx, append, appendRecord, advance, icon } = await attached(t);
     await append('Work');
-    assert.equal(icon().title, 'Working');
+    assert.equal(icon().title, 'Working · Attached here · runs on host');
     advance();
     ctx.setActivity('root', false, 'onCliBusyState');
     const before = ctx.read('headTurns.get("root")');
-    assert.equal(icon().title, 'Waiting for input');
+    assert.equal(icon().title, 'Waiting for input · Attached here · runs on host');
     advance();
     await appendRecord({ type, value: 'bookkeeping' });
     const after = ctx.read('headTurns.get("root")');
     assert.notEqual(after.mtimeMs, before.mtimeMs);
     assert.equal(after.state, before.state);
     assert.equal(after.lastEntryAt, before.lastEntryAt);
-    assert.equal(icon().title, 'Waiting for input');
+    assert.equal(icon().title, 'Waiting for input · Attached here · runs on host');
     assert.equal(after.observedAt, before.observedAt);
     advance();
     await append('Next prompt');
-    assert.equal(icon().title, 'Working');
+    assert.equal(icon().title, 'Working · Attached here · runs on host');
   });
 }
 
@@ -174,10 +174,10 @@ test('an unknown oversized head loses Waiting for input after a busy signal', as
   await append([{ type: 'tool_result', content: 'x'.repeat(300_000) }]);
   advance();
   ctx.setActivity('root', false, 'onCliBusyState');
-  assert.equal(icon().title, 'Waiting for input');
+  assert.equal(icon().title, 'Waiting for input · Attached here · runs on host');
   advance();
   ctx.setActivity('root', true, 'onCliBusyState');
-  assert.equal(icon().title, 'Idle');
+  assert.equal(icon().title, 'Idle · Attached here · runs on host');
 });
 
 test('new oversized transcript evidence clears Waiting for input on an unknown attached head', async t => {
@@ -185,10 +185,10 @@ test('new oversized transcript evidence clears Waiting for input on an unknown a
   await append('Work');
   advance();
   ctx.setActivity('root', false, 'onTerminalNotification');
-  assert.equal(icon().title, 'Waiting for input');
+  assert.equal(icon().title, 'Waiting for input · Attached here · runs on host');
   advance();
   await append([{ type: 'tool_result', content: 'x'.repeat(300_000) }]);
-  assert.equal(icon().title, 'Idle');
+  assert.equal(icon().title, 'Idle · Attached here · runs on host');
 });
 
 test('a changed oversized tail preserves the hint when both snapshots lack timestamped evidence', async t => {
@@ -196,25 +196,25 @@ test('a changed oversized tail preserves the hint when both snapshots lack times
   await append([{ type: 'tool_result', content: 'x'.repeat(300_000) }]);
   advance();
   ctx.setActivity('root', false, 'onCliBusyState');
-  assert.equal(icon().title, 'Waiting for input');
+  assert.equal(icon().title, 'Waiting for input · Attached here · runs on host');
   advance();
   await append([{ type: 'tool_result', content: 'y'.repeat(300_001) }]);
-  assert.equal(icon().title, 'Waiting for input');
+  assert.equal(icon().title, 'Waiting for input · Attached here · runs on host');
 });
 
 for (const skew of [60_000, -60_000]) {
   test(`attached remote OSC idle uses local transcript arrival with clock skew ${skew} ms`, async t => {
     const { ctx, append, read, advance, icon } = await attached(t, skew);
     await append('Work');
-    assert.equal(icon().title, 'Working');
+    assert.equal(icon().title, 'Working · Attached here · runs on host');
     advance();
     ctx.setActivity('root', false, 'onCliBusyState');
-    assert.equal(icon().title, 'Waiting for input');
+    assert.equal(icon().title, 'Waiting for input · Attached here · runs on host');
     advance();
     await read();
-    assert.equal(icon().title, 'Waiting for input', 'rereading unchanged evidence must not undo OSC idle');
+    assert.equal(icon().title, 'Waiting for input · Attached here · runs on host', 'rereading unchanged evidence must not undo OSC idle');
     advance();
     await append([{ type: 'tool_result', content: 'new result' }]);
-    assert.equal(icon().title, 'Working', 'new transcript evidence wins in either remote clock direction');
+    assert.equal(icon().title, 'Working · Attached here · runs on host', 'new transcript evidence wins in either remote clock direction');
   });
 }

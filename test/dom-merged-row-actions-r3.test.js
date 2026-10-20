@@ -49,7 +49,7 @@ test('a remote merged representative rebuild keeps its Working icon consistent w
   for (let rebuild = 0; rebuild < 2; rebuild++) {
     const item = ctx.sidebar.buildSessionItem({ ...row, remoteAlias: 'host' });
     assert.ok(item.classList.contains('cli-busy'));
-    assert.equal(item.querySelector('.session-icon').title, 'Working');
+    assert.equal(item.querySelector('.session-icon').title, 'Working · Running on host');
   }
 });
 
@@ -60,7 +60,7 @@ test('a merged representative rebuild uses its stored transcript activity for th
   ctx.emitHeadTurn('A', 'open');
   const item = ctx.sidebar.buildSessionItem({ ...row, status: 'busy', statusUpdatedAt: Date.now() });
   assert.ok(item.classList.contains('cli-busy'));
-  assert.equal(item.querySelector('.session-icon').title, 'Working\nCLI status: busy');
+  assert.equal(item.querySelector('.session-icon').title, 'Working · Running elsewhere\nCLI status: busy');
 });
 
 test('a merged local member still paints Working exactly once', t => {
@@ -74,7 +74,7 @@ test('a merged local member still paints Working exactly once', t => {
   ctx.window.writeIconSlot = (...args) => { paints++; return original(...args); };
   const item = ctx.sidebar.buildSessionItem({ ...row, headSessionId: 'B' });
   assert.ok(item.classList.contains('cli-busy'));
-  assert.equal(item.querySelector('.session-icon').title, 'Working');
+  assert.equal(item.querySelector('.session-icon').title, 'Working · Open here');
   assert.equal(paints, 1);
 });
 

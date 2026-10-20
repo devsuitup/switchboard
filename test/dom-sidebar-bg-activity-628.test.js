@@ -70,8 +70,11 @@ for (const [state, kind, head, hosted, valid, text, activity, foreground = false
       assert.equal(status.textContent, text);
       assert.equal(status.title, '');
       const source = valid ? `Job updated ${new Date(AT).toLocaleString()} (job metadata)` : 'Job activity unavailable';
-      assert.equal(icon.title, foreground ? activity : `${activity} · job ${state}\n${source}`);
-      assert.equal(icon.getAttribute('aria-label'), foreground ? activity : activity + (text ? ` · ${text}` : ''));
+      const lifecycle = foreground ? 'Open here' : hosted ? 'Running in background' : `Job ${state}`;
+      const detail = foreground ? '' : hosted ? ` · job ${state}` : '';
+      assert.equal(icon.title, foreground ? `${activity} · ${lifecycle}` : `${activity} · ${lifecycle}${detail}\n${source}`);
+      const extra = text && text !== activity && text !== lifecycle ? ` · ${text}` : '';
+      assert.equal(icon.getAttribute('aria-label'), `${activity} · ${lifecycle}${extra}`);
     };
     check();
     h.window.applyStateClasses(SID, h.window.storedActivitySnapshot(SID));
@@ -88,11 +91,11 @@ test('[702] live updates replace the working tooltip and clear a previous except
   h.emitHeadTurn(SID, 'closed');
   assert.equal(h.document.querySelector('.session-status').textContent, '');
   const icon = h.document.querySelector('.session-icon');
-  assert.match(icon.title, /^Background work running · job working/);
+  assert.match(icon.title, /^Background work running · Running in background · job working/);
   h.emitHeadTurn(SID, 'open', { revision: 2 });
-  assert.match(icon.title, /^Working · job working/);
+  assert.match(icon.title, /^Working · Running in background · job working/);
   assert.doesNotMatch(icon.title, /Blocked|Needs your attention|Background work running/);
-  assert.equal(icon.getAttribute('aria-label'), 'Working');
+  assert.equal(icon.getAttribute('aria-label'), 'Working · Running in background');
 });
 
 test('[702] missing job metadata retains known head activity in the icon tooltip', async t => {
@@ -101,8 +104,8 @@ test('[702] missing job metadata retains known head activity in the icon tooltip
   const check = () => {
     const icon = h.document.querySelector('.session-icon');
     assert.equal(h.document.querySelector('.session-status').textContent, 'Activity unavailable');
-    assert.equal(icon.title, 'Working\nJob activity unavailable');
-    assert.equal(icon.getAttribute('aria-label'), 'Working · Activity unavailable');
+    assert.equal(icon.title, 'Working · Running elsewhere\nJob activity unavailable');
+    assert.equal(icon.getAttribute('aria-label'), 'Working · Running elsewhere · Activity unavailable');
   };
   check();
   h.window.refreshSidebar();
@@ -123,9 +126,9 @@ for (const valid of [true, false]) {
       const icon = row.querySelector('.session-icon');
       assert.equal(row.querySelector('.session-status').textContent, 'Needs attention');
       assert.ok(icon.classList.contains('session-icon--attention'));
-      if (valid) assert.match(icon.title, /^Needs your attention · job working\nJob updated /);
-      else assert.equal(icon.title, 'Needs your attention · job working\nJob activity unavailable');
-      assert.equal(icon.getAttribute('aria-label'), 'Needs your attention · Needs attention');
+      if (valid) assert.match(icon.title, /^Needs your attention · Open here · job working\nJob updated /);
+      else assert.equal(icon.title, 'Needs your attention · Open here · job working\nJob activity unavailable');
+      assert.equal(icon.getAttribute('aria-label'), 'Needs your attention · Open here · Needs attention');
     };
     check();
     h.window.refreshSidebar();
@@ -136,11 +139,11 @@ for (const valid of [true, false]) {
     check();
     h.window.setAttention(SID, false, 'onTerminalNotification');
     assert.equal(h.document.querySelector('.session-status').textContent, valid ? '' : 'Activity unavailable');
-    assert.equal(h.document.querySelector('.session-icon').getAttribute('aria-label'), valid ? 'Working' : 'Working · Activity unavailable');
+    assert.equal(h.document.querySelector('.session-icon').getAttribute('aria-label'), valid ? 'Working · Open here' : 'Working · Open here · Activity unavailable');
     h.window.activeSessionId = SID;
     h.emitHeadTurn(SID, 'closed', { revision: 2 });
     assert.equal(h.document.querySelector('.session-status').textContent, valid ? '' : 'Activity unavailable');
-    assert.equal(h.document.querySelector('.session-icon').getAttribute('aria-label'), valid ? 'Waiting for input' : 'Waiting for input · Activity unavailable');
+    assert.equal(h.document.querySelector('.session-icon').getAttribute('aria-label'), valid ? 'Waiting for input · Open here' : 'Waiting for input · Open here · Activity unavailable');
   });
 }
 
@@ -154,8 +157,8 @@ test('[702b] remote attention owns the icon title when it overrides local backgr
   h.window.refreshSidebar();
   const icon = h.document.querySelector('.session-icon');
   assert.ok(icon.classList.contains('session-icon--attention'));
-  assert.equal(icon.title, 'Needs your attention');
-  assert.equal(icon.getAttribute('aria-label'), 'Needs your attention');
+  assert.equal(icon.title, 'Needs your attention · Running in background');
+  assert.equal(icon.getAttribute('aria-label'), 'Needs your attention · Running in background');
 });
 
 for (const [state, kind, head, slot, label] of [
@@ -182,7 +185,7 @@ for (const [state, kind, head, slot, label] of [
           assert.doesNotMatch(status.textContent, /busy|idle|ago|\d+[smhd]/i);
           assert.equal(status.title, '');
           assert.equal(row.querySelector('.session-icon').title,
-            `${label} · job ${state}\nJob updated ${new Date(AT).toLocaleString()} (job metadata)`);
+            `${label} · Open here · job ${state}\nJob updated ${new Date(AT).toLocaleString()} (job metadata)`);
         };
         check();
         h.window.refreshSidebar();
@@ -194,7 +197,7 @@ for (const [state, kind, head, slot, label] of [
         const icon = row.querySelector(`.session-icon--${slot}`);
         assert.ok(icon, row.innerHTML);
         assert.equal(icon.title, state === 'blocked'
-          ? h.document.querySelector('.session-item .session-icon').title : label);
+          ? h.document.querySelector('.session-item .session-icon').title.replace(' · Open here', '') : label);
         if (state === 'blocked') assert.equal(icon.dataset.glyph, '○');
         const status = row.querySelector('.agents-row-state');
         assert.match(status.textContent, new RegExp(state === 'working' ? 'Active' : 'Blocked'));
@@ -380,7 +383,7 @@ for (const state of ['done', 'stopped', 'failed']) {
     assert.equal(secondary.textContent, `Job ${state}`);
     assert.equal(secondary.title, '');
     assert.equal(h.document.querySelector('.session-icon').title,
-      `Not running · job ${state}\nJob updated ${new Date(AT).toLocaleString()} (job metadata)`);
+      `Not running · Job ${state}\nJob updated ${new Date(AT).toLocaleString()} (job metadata)`);
   });
 }
 
@@ -456,7 +459,7 @@ test('[628] secondary activity follows head pushes and attached attention withou
   h.emitHeadTurn(SID, 'closed');
   h.emitHeadTurn(SID, 'open', { revision: 2 });
   assert.equal(h.document.querySelector('.session-status').textContent, '');
-  assert.match(h.document.querySelector('.session-icon').title, /Working · job working/);
+  assert.match(h.document.querySelector('.session-icon').title, /Working · Running in background · job working/);
   h.window.activePtyIds.add(SID);
   h.window.setAttention(SID, true, 'onTerminalNotification');
   assert.ok(h.document.querySelector('.session-icon--attention'));

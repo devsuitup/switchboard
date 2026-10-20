@@ -208,8 +208,8 @@ test('the process status is a dot right before the session name, with its words 
   assert.equal(dot.getAttribute('role'), 'img', 'so that its aria-label is read');
   assert.equal(HEADER_CONTROLS.some((c) => c.id === 'terminal-header-status'), false, 'it is not in the right-hand row');
 
-  assert.equal(terminalStatusLabel(true, null), 'Running');
-  assert.equal(terminalStatusLabel(true, { exitCode: 1, signal: null }), 'Running', 'a relaunched session is running whatever its last exit');
+  assert.equal(terminalStatusLabel(true, null), 'Open here');
+  assert.equal(terminalStatusLabel(true, { exitCode: 1, signal: null }), 'Open here', 'a relaunched session is running whatever its last exit');
   assert.equal(terminalStatusLabel(false, { exitCode: 0, signal: null }), 'Exited (code 0)');
   assert.equal(terminalStatusLabel(false, { exitCode: 137, signal: null }), 'Exited (code 137)');
   assert.equal(terminalStatusLabel(false, { exitCode: 0, signal: 'SIGKILL' }), 'Killed (SIGKILL)');

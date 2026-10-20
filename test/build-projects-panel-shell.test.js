@@ -126,7 +126,7 @@ test('the exclusion keys on the session object, not on the "panel:" id spelling'
 });
 
 // --- The status bar reads this same payload ---------------------------------
-// "N running" and "N sessions" come from two different sources, and only one of
+// "N open here" and "N sessions" come from two different sources, and only one of
 // them was wrong. Pinning both here keeps the pair from drifting apart again.
 
 const APP_SRC = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
@@ -142,7 +142,7 @@ test('public/app.js: the session total counts the get-projects payload, which is
     'totalSessions is summed over the cached projects, so a phantom row there is a phantom session in the status bar');
 });
 
-test('public/app.js: "N running" goes through runningSessionCount, not activePtyIds.size (mutation target: counting the raw set)', () => {
+test('public/app.js: "N open here" goes through runningSessionCount, not activePtyIds.size (mutation target: counting the raw set)', () => {
   const body = renderDefaultStatusBody();
   assert.match(body, /const running = runningSessionCount\(\);/,
     'a panel shell is in activePtyIds by design — the LRU needs it there — so the count must filter');

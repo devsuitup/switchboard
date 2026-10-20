@@ -48,13 +48,13 @@ test('#627 sidebar counts agents A/B before child metadata and excludes shell/Mo
   const row = render(ctx, parent);
   snapshot(registry, PARENT, [{ id: 'A' }, { id: 'B' }, { id: 'shell', kind: 'bash' }, { id: 'watch', kind: 'monitor' }, { id: 'schedule', kind: 'cron' }]);
   label(row, '2 subagents running');
-  assert.equal(row.querySelector('.session-icon').title, 'Background work running');
+  assert.equal(row.querySelector('.session-icon').title, 'Background work running · Open here');
   assert.ok(row.querySelector('.session-icon').classList.contains('session-icon--agents-busy'));
   assert.equal(ctx.document.querySelector('[data-subagent]'), null);
   label(ctx.sidebar.buildSessionItem(parent), '2 subagents running');
   snapshot(registry, PARENT, [{ id: 'A', terminal: true }, { id: 'B', terminal: true }, { id: 'shell', kind: 'bash' }, { id: 'watch', kind: 'monitor' }, { id: 'schedule', kind: 'cron' }], 2);
   label(row, null);
-  assert.equal(row.querySelector('.session-icon').title, 'Background work running');
+  assert.equal(row.querySelector('.session-icon').title, 'Background work running · Open here');
   assert.equal(row.querySelectorAll('.session-icon').length, 1);
 });
 

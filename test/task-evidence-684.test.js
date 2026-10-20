@@ -116,7 +116,7 @@ for (const [kinds, labels, optionalCounts] of [
     assert.equal(status.textContent, '');
     assert.equal(status.title, '');
     const title = element.querySelector('.session-icon').title;
-    assert.match(title, /Background work running · job working/);
+    assert.match(title, /Background work running · Running in background · job working/);
     assert.ok(!title.includes('hidden-suffix'), title);
     for (const label of labels) assert.ok(title.includes(label), title);
     assert.ok(element.querySelector('.session-icon--agents-busy'));

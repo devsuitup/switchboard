@@ -1080,6 +1080,14 @@ body { display: flex; flex-direction: column; }
 
 .session-icon--idle {}
 
+.session-icon--idle.running {
+  box-shadow: 0 4px 0 -2px #3ecf5a;
+}
+
+.session-icon--stale {
+  transform: scaleY(0.333333);
+}
+
 .session-icon--waiting {
   background: transparent !important;
   box-shadow: none !important;

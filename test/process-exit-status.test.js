@@ -136,7 +136,7 @@ function setup() {
   });
 }
 
-test('the dot reports the exit code, then Running once a poll sees the process, then Not running with no new exit', () => {
+test('the dot reports the exit code, then Open here once a poll sees the process, then Not running with no new exit', () => {
   const h = setup();
   h.exit(3, null);
   assert.equal(h.title(), 'Exited (code 3)', 'the exit event records the code (mutation target: the noteSessionExit call)');
@@ -144,7 +144,7 @@ test('the dot reports the exit code, then Running once a poll sees the process, 
   assert.match(h.lastWrite(), /session exited \(code 3\)/);
 
   h.poll(true);
-  assert.equal(h.title(), 'Running');
+  assert.equal(h.title(), 'Open here');
 
   h.poll(false);
   assert.equal(h.title(), 'Not running', 'running again cleared the old code (mutation target: the forget in updateTerminalHeader)');

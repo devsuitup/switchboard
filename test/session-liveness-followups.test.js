@@ -127,15 +127,15 @@ test('576 item 3: a descriptor loss clears the old inference and leaves unknown 
   h.render([{ sessionId: 'A', status: 'idle' }]);
   h.emitSessionTranscriptActivity({ sessionId: 'A', at: 10 });
   h.expire();
-  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input\nCLI status: idle');
+  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input · Running elsewhere\nCLI status: idle');
   const missed = h.render([{ sessionId: 'A', status: undefined }]);
   assert.equal(h.read('localPtyStates.get("A").snapshot().liveness'), 'unknown');
   assert.equal(h.read('localTranscriptStates.has("A")'), false);
   assert.equal(missed.classList.contains('is-alive'), false);
-  assert.equal(missed.querySelector('.session-icon').title, 'Idle');
+  assert.equal(missed.querySelector('.session-icon').title, 'Idle · Liveness unknown');
   const returned = h.render([{ sessionId: 'A', status: 'idle' }]);
   assert.ok(returned.classList.contains('is-alive'));
-  assert.equal(returned.querySelector('.session-icon').title, 'Waiting for input\nCLI status: idle');
+  assert.equal(returned.querySelector('.session-icon').title, 'Waiting for input · Running elsewhere\nCLI status: idle');
 });
 
 test('576 a never-standalone merged member uses its own descriptor without creating a sidebar map entry', { timeout: 8000 }, t => {
@@ -145,11 +145,11 @@ test('576 a never-standalone merged member uses its own descriptor without creat
   assert.deepEqual([...h.window.sessionMap.keys()], ['A']);
   h.emitSessionTranscriptActivity({ sessionId: 'B' });
   h.expire();
-  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input\nCLI status: idle');
+  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input · Running elsewhere\nCLI status: idle');
   assert.equal(h.read('localTranscriptStates.get("B").snapshot().liveness'), 'alive');
   h.render([{ ...row, mergedMemberStatuses: { B: null } }]);
   h.expire();
-  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Idle');
+  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Idle · Liveness unknown');
   assert.deepEqual([...h.window.sessionMap.keys()], ['A']);
 });
 
@@ -174,7 +174,7 @@ test('576 item 4: a late transcript write after descriptor loss cannot leave Wai
   assert.equal(h.document.getElementById('si-A').classList.contains('cli-busy'), false);
   h.expire();
   const item = h.document.getElementById('si-A');
-  assert.equal(item.querySelector('.session-icon').title, 'Idle');
+  assert.equal(item.querySelector('.session-icon').title, 'Idle · Liveness unknown');
   assert.equal(item.classList.contains('is-alive'), false);
   assert.equal(h.read('localTranscriptStates.has("A")'), false);
   assert.equal(h.timers.size, 0);
@@ -190,7 +190,7 @@ test('576 repeated descriptor misses leave no old transcript state or grace time
   h.render([{ sessionId: 'A', status: undefined }]);
   assert.equal(h.read('localTranscriptDecayTimers.has("A")'), false);
   h.expire();
-  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Idle');
+  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Idle · Liveness unknown');
   assert.equal(h.read('localTranscriptStates.has("A")'), false);
 });
 
@@ -204,7 +204,7 @@ test('576 late subagent writes with unknown liveness expire both parent signals'
   h.emitSessionTranscriptActivity({ kind: 'subagent', parentSessionId: 'A' });
   assert.equal(h.document.getElementById('si-A').classList.contains('has-busy-agents'), false);
   h.expire();
-  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Idle');
+  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Idle · Liveness unknown');
   assert.equal(h.document.getElementById('si-A').classList.contains('has-busy-agents'), false);
   assert.equal(h.read('localTranscriptStates.has("A")'), false);
   assert.equal(h.timers.size, 0);
@@ -346,13 +346,13 @@ test('576r2 minor 4: a stale archived merged owner cannot override the current e
   h.emitSessionTranscriptActivity({ sessionId: 'B' });
   assert.equal(h.read('localTranscriptStates.get("B").snapshot().liveness'), 'unknown');
   h.expire();
-  assert.equal(item.querySelector('.session-icon').title, 'Idle', 'a transcript write without head liveness cannot imply a prompt');
+  assert.equal(item.querySelector('.session-icon').title, 'Idle · Liveness unknown', 'a transcript write without head liveness cannot imply a prompt');
   h.render([{ sessionId: 'A', mergedMemberIds: ['B'], mergedMemberStatuses: { B: { status: 'idle' } } }]);
   assert.equal(h.read('localSessionForStatus("B").status'), 'idle');
   const dead = h.render([{ sessionId: 'A', mergedMemberIds: ['B'], mergedMemberStatuses: { B: null } }]);
   h.expire();
   assert.equal(dead.classList.contains('is-alive'), false);
-  assert.equal(dead.querySelector('.session-icon').title, 'Idle');
+  assert.equal(dead.querySelector('.session-icon').title, 'Idle · Liveness unknown');
 });
 
 function missedDescriptor(t) {
