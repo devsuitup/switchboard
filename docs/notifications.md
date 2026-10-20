@@ -52,11 +52,16 @@ app's idle CPU use low
 - Plain output does not count as work: it only updates the session's last
   activity time.
 
-The foreground row shows what the session waits for and the age of its status,
+Local and remote session rows show what the session waits for while its status
+is `waiting`, plus the age of that status,
 for example `permission prompt · 1m ago`, or `1m ago` without a reason.
 The status icon's tooltip and accessible name include the CLI's own status
 (`busy`, `idle`, `waiting`, `shell`) and the waiting reason. These come from the
 CLI's own session descriptor — see [Session browser](session-browser.md#session-rows).
+For a conversation with several parts, these details come from its latest part.
+A local waiting reason updates even when the status itself stays `waiting`.
+Background jobs keep their job activity labels. Grid icon tooltips show the
+shared activity label without the sidebar's CLI status detail.
 
 [Debug mode](activity-trace.md) records every one of these signals, and what
 the sidebar did with it, when an indicator looks wrong.

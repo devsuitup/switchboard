@@ -2175,8 +2175,9 @@ function buildSessionItem(session) {
   icon.className = 'session-icon' + (rowSessionIds(session).some(id => activePtyIds.has(id)) ? ' running' : '');
   const bgActivity = (typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(session), snapshot, session))
     || (session.bgJobId ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null);
-  paintSessionIconFromSnapshot(icon, snapshot, bgActivity?.title, bgActivity?.text, !bgActivity && session);
-  if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention, undefined, undefined, !bgActivity && session);
+  const descriptor = localSessionForStatus(rowHeadId(session), session);
+  paintSessionIconFromSnapshot(icon, snapshot, bgActivity?.title, bgActivity?.text, !bgActivity && descriptor);
+  if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention, undefined, undefined, !bgActivity && descriptor);
 
   // Info block
   const info = document.createElement('div');
@@ -2204,9 +2205,9 @@ function buildSessionItem(session) {
   statusEl.className = 'session-status';
   if (bgActivity) {
     statusEl.textContent = bgActivity.text;
-  } else if (session.status) {
-    const age = formatStatusAge(session.statusUpdatedAt);
-    const why = session.status === 'waiting' ? session.waitingFor : '';
+  } else if (descriptor?.status) {
+    const age = formatStatusAge(descriptor.statusUpdatedAt);
+    const why = descriptor.status === 'waiting' ? descriptor.waitingFor : '';
     statusEl.textContent = [why, age].filter(Boolean).join(' · ');
   }
   metaEl.append(timeEl, shortIdEl, statusEl);

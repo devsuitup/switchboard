@@ -709,6 +709,7 @@ function annotateRemoteAttachable(projects) {
         const local = cliSessionState.getStatus(session.sessionId);
         session.status = local ? local.status : undefined;
         session.statusUpdatedAt = local ? local.statusUpdatedAt : undefined;
+        session.waitingFor = local ? local.waitingFor : null;
         session.mergedMemberStatuses = Object.fromEntries((session.mergedMemberIds || [])
           .map(id => [id, cliSessionState.getStatus(id) || null]));
       }

@@ -144,7 +144,8 @@ function localSessionForStatus(sessionId, session) {
   if (session) {
     if (session.sessionId !== sessionId && session.mergedMemberIds?.includes(sessionId)) {
       const status = session.mergedMemberStatuses?.[sessionId];
-      return { ...session, sessionId, status: status?.status, statusUpdatedAt: status?.statusUpdatedAt };
+      return { ...session, sessionId, status: status?.status, statusUpdatedAt: status?.statusUpdatedAt,
+        waitingFor: status?.waitingFor ?? null };
     }
     return session;
   }
@@ -259,7 +260,7 @@ function applyStateClasses(sessionId, snapshot) {
   const label = typeof backgroundActivityLabel === 'function'
     && backgroundActivityLabel(item.dataset.headSessionId || item.dataset.sessionId, snapshot,
       typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId));
-  const session = !label && localSessionForStatus(item.dataset.headSessionId || item.dataset.sessionId);
+  const session = !label && localSessionForStatus(item.dataset.headSessionId || item.dataset.sessionId, row);
   writeIconSlot(item.querySelector('.session-icon'), icon, label?.title, label?.text, session);
   const status = item.querySelector('.session-status');
   if (label && status) {
@@ -328,5 +329,6 @@ function paintSessionIcon(el, sessionId, session) {
   const row = session || (item && typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId)) || { sessionId };
   const projected = mergedRowSnapshot(rowSessionIds(row), sessionId, snapshot, row);
   const label = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(row), projected, row);
-  writeIconSlot(el, renderSessionIcon(projected), label?.title, label?.text, !label && !row.parentSessionId && row);
+  writeIconSlot(el, renderSessionIcon(projected), label?.title, label?.text,
+    !label && !row.parentSessionId && localSessionForStatus(rowHeadId(row), row));
 }

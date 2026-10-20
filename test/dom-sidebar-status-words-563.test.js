@@ -12,8 +12,73 @@ const cases = [
 
 function sessionFor(entry) {
   return { sessionId: 'status-563', summary: 'Foreground session', modified: new Date(now).toISOString(),
-    ...entry, statusUpdatedAt: now - 60000 };
+    statusUpdatedAt: now - 60000, ...entry };
 }
+
+test('a merged row uses the head descriptor for its first, live and refreshed status', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.window.Date.now = () => now;
+    ctx.evalPublic('agents-view.js');
+    const session = sessionFor({ status: 'busy', statusUpdatedAt: now - 120000,
+      headSessionId: 'head-563', mergedMemberIds: ['head-563'],
+      mergedMemberStatuses: { 'head-563': { status: 'idle', statusUpdatedAt: now - 60000, waitingFor: null } } });
+    ctx.window.activePtyIds.add(session.headSessionId);
+    ctx.window.sessionMap.set(session.sessionId, session);
+    const check = row => {
+      assert.equal(row.querySelector('.session-status').textContent, '1m ago');
+      const slot = row.querySelector('.session-icon');
+      assert.match(slot.title, /\nCLI status: idle$/);
+      assert.match(slot.getAttribute('aria-label'), / · CLI status: idle$/);
+      return { line: row.querySelector('.session-status').textContent,
+        title: slot.title, name: slot.getAttribute('aria-label') };
+    };
+    const first = check(ctx.sidebar.buildSessionItem(session));
+    ctx.sidebar.renderProjects([makeSampleProject({ sessions: [session] })], true);
+    const item = ctx.document.getElementById('si-' + session.sessionId);
+    assert.deepEqual(check(item), first);
+    ctx.window.applyStateClasses(session.headSessionId,
+      ctx.window.snapshotForLocal(session.headSessionId, session));
+    assert.deepEqual(check(item), first);
+    ctx.window.paintSessionIcon(item.querySelector('.session-icon'), session.sessionId, session);
+    assert.deepEqual(check(item), first);
+  } finally { ctx.destroy(); }
+});
+
+test('a merged waiting head exposes its own reason instead of the root reason', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.window.Date.now = () => now;
+    ctx.evalPublic('agents-view.js');
+    const session = sessionFor({ status: 'waiting', waitingFor: 'root reason',
+      headSessionId: 'head-563', mergedMemberIds: ['head-563'],
+      mergedMemberStatuses: { 'head-563': { status: 'waiting', statusUpdatedAt: now - 60000, waitingFor: 'question' } } });
+    const item = ctx.sidebar.buildSessionItem(session);
+    assert.equal(item.querySelector('.session-status').textContent, 'question · 1m ago');
+    assert.match(item.querySelector('.session-icon').title, /CLI status: waiting · question$/);
+    ctx.window.paintSessionIcon(item.querySelector('.session-icon'), session.sessionId, session);
+    assert.match(item.querySelector('.session-icon').title, /CLI status: waiting · question$/);
+  } finally { ctx.destroy(); }
+});
+
+test('a remote attention repaint preserves the descriptor status and waiting reason', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.window.Date.now = () => now;
+    const session = sessionFor({ status: 'waiting', waitingFor: 'permission prompt',
+      remoteAlias: 'host-563', remoteDescriptorSeen: true });
+    ctx.window.applyRemoteDescriptor(session);
+    const state = ctx.remoteSessionStates.get(session.sessionId);
+    assert.equal(state.snapshot().attention, true);
+    assert.equal(state.snapshot().attached, false);
+    const item = ctx.sidebar.buildSessionItem(session);
+    const slot = item.querySelector('.session-icon');
+    assert.ok(slot.classList.contains('session-icon--attention'));
+    assert.match(slot.title, /\nCLI status: waiting · permission prompt$/);
+    assert.match(slot.getAttribute('aria-label'), / · CLI status: waiting · permission prompt$/);
+    assert.equal(item.querySelector('.session-status').textContent, 'permission prompt · 1m ago');
+  } finally { ctx.destroy(); }
+});
 
 test('first render keeps reason plus age and the status slot for every CLI status', () => {
   const ctx = setupSidebarDom();

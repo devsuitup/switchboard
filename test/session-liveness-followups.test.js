@@ -330,7 +330,7 @@ test('576r2 minor 2: a descriptor read miss keeps the previous status while its 
   let clock = 10000;
   const h = bootMain(t, { now: () => clock });
   await descriptorBatch(t, () => fs.unlinkSync(path.join(h.dir, '4242.json')));
-  assert.deepEqual(cli.getStatus('A'), { status: 'idle', statusUpdatedAt: 10000 }, 'a live idle process survives a transient descriptor read miss');
+  assert.deepEqual(cli.getStatus('A'), { status: 'idle', statusUpdatedAt: 10000, waitingFor: null }, 'a live idle process survives a transient descriptor read miss');
   assert.deepEqual(h.sent, [], 'a retained live status needs no rebuild');
   h.kill();
   clock += 6000;
@@ -391,7 +391,7 @@ test('576r3 an existing unreadable descriptor keeps its live status but expires 
   });
   h.flush();
   assert.equal(fs.existsSync(h.file), true);
-  assert.deepEqual(cli.getStatus('A'), { status: 'idle', statusUpdatedAt: 10000 });
+  assert.deepEqual(cli.getStatus('A'), { status: 'idle', statusUpdatedAt: 10000, waitingFor: null });
   assert.deepEqual(h.sent, []);
   t.mock.timers.tick(4850);
   assert.equal(cli.getStatus('A').status, 'idle');

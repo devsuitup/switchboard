@@ -75,6 +75,50 @@ function oneSession(fields = {}) {
 
 test.afterEach(() => cliSessionState.stop());
 
+test('parseState carries a non-empty waitingFor string and normalizes other values to null', () => {
+  for (const waitingFor of ['permission prompt', 'question', '', null, undefined, 42, {}, []]) {
+    const state = cliSessionState.parseState(JSON.stringify({ pid: 4242, sessionId: 'sess-1',
+      status: 'waiting', waitingFor }));
+    assert.equal(state.waitingFor, typeof waitingFor === 'string' && waitingFor ? waitingFor : null);
+  }
+});
+
+test('getStatus preserves the seeded waiting reason and clears it on a later descriptor write', async () => {
+  const dir = mkTmp();
+  try {
+    writeState(dir, 4242, { status: 'waiting', statusUpdatedAt: 1000, waitingFor: 'permission prompt' });
+    boot(dir, oneSession());
+    assert.deepEqual(cliSessionState.getStatus('sess-1'),
+      { status: 'waiting', statusUpdatedAt: 1000, waitingFor: 'permission prompt' });
+    writeState(dir, 4242, { status: 'waiting', statusUpdatedAt: 1000, waitingFor: 42 });
+    await waitFor(() => cliSessionState.getStatus('sess-1')?.waitingFor === null);
+    assert.deepEqual(cliSessionState.getStatus('sess-1'),
+      { status: 'waiting', statusUpdatedAt: 1000, waitingFor: null });
+  } finally {
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a waiting reason-only change notifies sidebar status subscribers without an idle rescan', async () => {
+  const dir = mkTmp();
+  let off = () => {};
+  try {
+    writeState(dir, 4242, { status: 'waiting', statusUpdatedAt: 1000, waitingFor: 'permission prompt' });
+    const { rescans } = boot(dir, oneSession());
+    const changes = [];
+    off = cliSessionState.onStatusesChanged(() => changes.push(cliSessionState.getStatus('sess-1')));
+    writeState(dir, 4242, { status: 'waiting', statusUpdatedAt: 1000, waitingFor: 'question' });
+    await waitFor(() => changes.length > 0);
+    assert.deepEqual(changes.at(-1), { status: 'waiting', statusUpdatedAt: 1000, waitingFor: 'question' });
+    assert.equal(rescans.length, 0);
+  } finally {
+    off();
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a busy → idle transition rescans the matching session immediately', async () => {
   const dir = mkTmp();
   try {
@@ -302,11 +346,11 @@ test('getStatus returns the last parsed status/statusUpdatedAt for a sessionId',
     writeState(dir, 4242, { status: 'busy', statusUpdatedAt: 1000 });
     boot(dir, oneSession());
     await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
-    assert.deepEqual(cliSessionState.getStatus('sess-1'), { status: 'busy', statusUpdatedAt: 1000 });
+    assert.deepEqual(cliSessionState.getStatus('sess-1'), { status: 'busy', statusUpdatedAt: 1000, waitingFor: null });
 
     writeState(dir, 4242, { status: 'idle', statusUpdatedAt: 2000 });
     await waitFor(() => cliSessionState.getStatus('sess-1').status === 'idle');
-    assert.deepEqual(cliSessionState.getStatus('sess-1'), { status: 'idle', statusUpdatedAt: 2000 });
+    assert.deepEqual(cliSessionState.getStatus('sess-1'), { status: 'idle', statusUpdatedAt: 2000, waitingFor: null });
   } finally {
     cliSessionState.stop();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -319,7 +363,7 @@ test('getStatus finds a descriptor whatever the case of the id it is asked with'
     writeState(dir, 4242, { status: 'busy', statusUpdatedAt: 1000 });
     boot(dir, oneSession());
     await waitFor(() => cliSessionState.getStatus('sess-1') !== undefined);
-    assert.deepEqual(cliSessionState.getStatus('SESS-1'), { status: 'busy', statusUpdatedAt: 1000 });
+    assert.deepEqual(cliSessionState.getStatus('SESS-1'), { status: 'busy', statusUpdatedAt: 1000, waitingFor: null });
   } finally {
     cliSessionState.stop();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -334,7 +378,7 @@ test('getStatus works for a CLI descriptor with no matching Switchboard session 
     // but getStatus() is a pure sessionId lookup, independent of activeSessions.
     boot(dir, new Map());
     await waitFor(() => cliSessionState.getStatus('somebody-elses-session') !== undefined);
-    assert.deepEqual(cliSessionState.getStatus('somebody-elses-session'), { status: 'busy', statusUpdatedAt: 42 });
+    assert.deepEqual(cliSessionState.getStatus('somebody-elses-session'), { status: 'busy', statusUpdatedAt: 42, waitingFor: null });
   } finally {
     cliSessionState.stop();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -434,7 +478,7 @@ test('parseState rejects everything that is not a usable state file', () => {
     pid: 1, sessionId: 'a', status: 'idle', statusUpdatedAt: 5, procStart: 7,
   }));
   assert.deepEqual(ok, {
-    pid: 1, sessionId: 'a', status: 'idle', statusUpdatedAt: 5, procStart: '7',
+    pid: 1, sessionId: 'a', status: 'idle', statusUpdatedAt: 5, waitingFor: null, procStart: '7',
   });
 });
 
@@ -470,7 +514,7 @@ test('getStatus keeps returning the cached status within the 5s probe throttle e
 
     alive = false;
     clock += 4999; // still inside the throttle window — no re-probe
-    assert.deepEqual(cliSessionState.getStatus('sess-1'), { status: 'busy', statusUpdatedAt: 1000 },
+    assert.deepEqual(cliSessionState.getStatus('sess-1'), { status: 'busy', statusUpdatedAt: 1000, waitingFor: null },
       'within the throttle window the cached status must be served without probing');
   } finally {
     cliSessionState.stop();

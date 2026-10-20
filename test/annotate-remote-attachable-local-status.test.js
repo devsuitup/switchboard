@@ -54,6 +54,25 @@ function makeAnnotate(mocks) {
   );
 }
 
+test('local waiting reasons reach root and merged descriptors and clear when absent', () => {
+  let waitingFor = 'permission prompt';
+  const annotate = makeAnnotate({ cliSessionState: {
+    getStatus: () => ({ status: 'waiting', statusUpdatedAt: 1000, waitingFor }),
+  } });
+  const session = { sessionId: 'root-563', headSessionId: 'head-563', mergedMemberIds: ['head-563'] };
+  const projects = [{ sessions: [session] }];
+  annotate(projects);
+  assert.equal(session.waitingFor, 'permission prompt');
+  assert.equal(session.mergedMemberStatuses['head-563'].waitingFor, 'permission prompt');
+  waitingFor = null;
+  annotate(projects);
+  assert.equal(session.waitingFor, null);
+  assert.equal(session.mergedMemberStatuses['head-563'].waitingFor, null);
+  makeAnnotate({})(projects);
+  assert.equal(session.waitingFor, null);
+  assert.equal(session.mergedMemberStatuses['head-563'], null);
+});
+
 test('a local session (no remoteAlias) whose sessionId matches a local descriptor gets status/statusUpdatedAt attached', () => {
   const annotateRemoteAttachable = makeAnnotate({
     cliSessionState: {

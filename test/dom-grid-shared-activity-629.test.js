@@ -266,6 +266,14 @@ function parity(ctx, card, expected) {
   const sidebar = ctx.window.sessionItemEl(card.dataset.sessionId);
   const icon = sidebar.querySelector('.session-icon');
   const slot = card.querySelector('.grid-card-dot');
+  const descriptor = ctx.window.localSessionForStatus(sidebar.dataset.headSessionId || sidebar.dataset.sessionId);
+  for (const label of [icon.title, icon.getAttribute('aria-label')]) {
+    assert.equal((label.match(/CLI status:/g) || []).length, descriptor?.status ? 1 : 0,
+      'sidebar descriptor suffix appears exactly once when a status is available');
+  }
+  for (const label of [slot.title, slot.getAttribute('aria-label')]) {
+    assert.doesNotMatch(label, /CLI status:/, 'grid shows only the shared activity label');
+  }
   assert.equal(slot.dataset.glyph, icon.dataset.glyph, 'grid and sidebar glyph match');
   assert.equal(slot.title, icon.title.split('\nCLI status:')[0], 'grid and sidebar activity tooltip match');
   assert.equal(slot.getAttribute('aria-label'), icon.getAttribute('aria-label').split(' · CLI status:')[0]);

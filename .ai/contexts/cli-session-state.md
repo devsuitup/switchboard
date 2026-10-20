@@ -71,6 +71,8 @@ Facts established by measurement, not by documentation:
   attention state from it (see session-state.md, "Descriptor-owned attention");
   the remote index keeps `waitingFor` only as a trimmed string of at most 64
   characters without control characters, and drops anything else.
+  The local `parseState` path accepts `waitingFor` only as a non-empty string
+  and otherwise stores `null`.
 
 The `busy` glyph in the terminal title was considered instead and rejected: it
 conflates idle, waiting and shell. The state file distinguishes them, which is
@@ -158,18 +160,23 @@ undocumented file defensible at all.
 
 ## Surfacing status on the session object (issue #245)
 
-`getStatus(sessionId)` is a pure `Map` lookup over the `{status,
-statusUpdatedAt}` pairs `seed()`/`handleFile()` already parse for every state
+`getStatus(sessionId)` reads the cached `{status, statusUpdatedAt, waitingFor}`
+fields `seed()`/`handleFile()` already parse for every state
 file they see — it adds no disk read, no watcher, and never calls `onIdle`, so
 it does not touch the one invariant above. `main.js`'s `annotateRemoteAttachable`
 calls it for every session without a `remoteAlias`, writing the result to the
-same `session.status` / `session.statusUpdatedAt` pair a remote session gets
-from its host's mirrored descriptor — one field pair, one renderer code path
+same `session.status`, `session.statusUpdatedAt` and `session.waitingFor` fields
+a remote session gets from its host's mirrored descriptor — one field set, one renderer code path
 (`public/sidebar.js`), for both a local and a remote session. The renderer
-(`public/sidebar.js`, the state+age line built from `session.status` /
-`session.statusUpdatedAt`) treats both sources identically and renders
+(`public/sidebar.js`, the waiting-reason and age line built from those fields)
+treats both sources identically and renders
 regardless of `session.remoteAlias` — see also `.ai/contexts/session-cache.md`
 ("Remote hosts — freshness contract") for the remote half of that contract.
+
+Merged rows carry the same fields in each `mergedMemberStatuses` entry, and
+the renderer reads the head member's descriptor. A change to `waitingFor`
+alone notifies status subscribers, so a new waiting reason repaints without
+a status transition or an idle rescan.
 
 The backing `statusBySession` map (kept alongside `known`, filename-keyed)
 holds an entry **only while `isProcessAlive(state.pid)` is true** — a
@@ -182,7 +189,7 @@ liveness check fails, same as it does when the file itself disappears.
 **That gate only runs on a file event — a CLI killed without a clean exit
 writes no such event, so its last status stayed cached forever until this app
 restarted (F2, audit-fable-2026-09-11).** `getStatus(sessionId)` now keeps the
-`pid` alongside the cached `{status, statusUpdatedAt}` and re-probes
+`pid` alongside the cached `{status, statusUpdatedAt, waitingFor}` and re-probes
 `isProcessAlive(pid)` itself, lazily, throttled to once per
 `GET_STATUS_PROBE_THROTTLE_MS` (5 s) per sessionId (`now()` is injected so
 tests use a fake clock instead of real delays) — a dead pid deletes the entry

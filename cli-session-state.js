@@ -342,6 +342,7 @@ function parseState(text) {
     sessionId: raw.sessionId,
     status: raw.status,
     statusUpdatedAt: Number.isInteger(raw.statusUpdatedAt) ? raw.statusUpdatedAt : null,
+    waitingFor: typeof raw.waitingFor === 'string' && raw.waitingFor ? raw.waitingFor : null,
     procStart: raw.procStart == null ? null : String(raw.procStart),
   };
 }
@@ -480,7 +481,8 @@ function handleFile(name) {
   try { identity.descriptorMtimeMs = fs.statSync(path.join(dir, name)).mtimeMs; } catch {}
   known.set(name, identity);
   if (isProcessAlive(state.pid)) {
-    statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
+    statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status,
+      statusUpdatedAt: state.statusUpdatedAt, waitingFor: state.waitingFor, pid: state.pid });
   } else {
     notifyOwnerExit(state.sessionId, state.pid);
     forgetSession(state.sessionId);
@@ -570,7 +572,8 @@ function seed() {
       try { identity.descriptorMtimeMs = fs.statSync(path.join(dir, name)).mtimeMs; } catch {}
       known.set(name, identity);
       if (isProcessAlive(state.pid)) {
-        statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status, statusUpdatedAt: state.statusUpdatedAt, pid: state.pid });
+        statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status,
+          statusUpdatedAt: state.statusUpdatedAt, waitingFor: state.waitingFor, pid: state.pid });
       } else {
         notifyOwnerExit(state.sessionId, state.pid);
       }
@@ -659,11 +662,11 @@ function getStatus(sessionId) {
       return undefined;
     }
   }
-  return { status: entry.status, statusUpdatedAt: entry.statusUpdatedAt };
+  return { status: entry.status, statusUpdatedAt: entry.statusUpdatedAt, waitingFor: entry.waitingFor };
 }
 
 function sidebarStateChanged(previous, entry) {
-  return !previous || ['status', 'pid', 'kind', 'jobId', 'name', 'nameSource', 'cwd'].some(field => previous[field] !== entry[field]);
+  return !previous || ['status', 'waitingFor', 'pid', 'kind', 'jobId', 'name', 'nameSource', 'cwd'].some(field => previous[field] !== entry[field]);
 }
 
 function getSidebarDescriptors() {
