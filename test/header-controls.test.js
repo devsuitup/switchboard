@@ -213,7 +213,7 @@ test('the process status is a dot right before the session name, with its words 
   assert.equal(terminalStatusLabel(false, { exitCode: 0, signal: null }), 'Exited (code 0)');
   assert.equal(terminalStatusLabel(false, { exitCode: 137, signal: null }), 'Exited (code 137)');
   assert.equal(terminalStatusLabel(false, { exitCode: 0, signal: 'SIGKILL' }), 'Killed (SIGKILL)');
-  assert.equal(terminalStatusLabel(false, null), 'Stopped');
+  assert.equal(terminalStatusLabel(false, null), 'Not running');
 
   const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
   assert.match(app, /terminalHeaderStatus\.title = status;/);

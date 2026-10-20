@@ -875,7 +875,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     pollActiveSessions();
     return;
   }
-  noteSessionExit(sessionId, exitCode, signal, stopped);
+  noteSessionExit(sessionId, exitCode, signal, stopped, !!(stopped && entry?.attach));
   if (typeof setSessionMcpState === 'function' && typeof filePanelState !== 'undefined' && filePanelState.get(sessionId)) setSessionMcpState(sessionId, 'off');
   // see .ai/contexts/session-state.md ("A session main drops")
   activePtyIds.delete(sessionId);
@@ -893,7 +893,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     // terminal before the user could read the error.
     try {
       entry.terminal.write(
-        `\r\n${exitBannerColour(exit)}── session ${exitBannerPhrase(exit)} — re-click this session in the sidebar to relaunch, or click another to dismiss ──\x1b[0m\r\n`
+        `\r\n${exitBannerColour(exit)}── session ${exitBannerPhrase(exit)} — ${exit.detached ? 'it keeps running in the background' : 're-click this session in the sidebar to relaunch, or click another to dismiss'} ──\x1b[0m\r\n`
       );
     } catch {}
   }

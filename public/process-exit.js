@@ -3,8 +3,8 @@
 
 const sessionExits = new Map();
 
-function noteSessionExit(sessionId, exitCode, signal, stopped) {
-  sessionExits.set(sessionId, { exitCode, signal: signal || null, stopped: !!stopped });
+function noteSessionExit(sessionId, exitCode, signal, stopped, detached) {
+  sessionExits.set(sessionId, { exitCode, signal: signal || null, stopped: !!stopped, detached: !!detached });
 }
 
 function forgetSessionExit(sessionId) {
@@ -16,6 +16,7 @@ function lastSessionExit(sessionId) {
 }
 
 function processExitLabel(exit) {
+  if (exit.detached) return 'Detached';
   if (exit.stopped) return 'Stopped';
   if (exit.signal) return `Killed (${exit.signal})`;
   if (Number.isInteger(exit.exitCode)) return `Exited (code ${exit.exitCode})`;
@@ -24,7 +25,22 @@ function processExitLabel(exit) {
 
 function terminalStatusLabel(running, exit) {
   if (running) return 'Running';
-  return exit ? processExitLabel(exit) : 'Stopped';
+  return exit ? processExitLabel(exit) : 'Not running';
+}
+
+function lifecycleLabel({ ptyHere, attach, job, remoteAlias, liveness, exit, dormant }) {
+  if (ptyHere) {
+    if (remoteAlias) return `Attached here · runs on ${remoteAlias}`;
+    return attach ? 'Attached here · keeps running in the background' : 'Open here';
+  }
+  const liveJob = job?.kind === 'background' && job.hosted === true;
+  if (!liveJob && ['done', 'stopped', 'failed'].includes(job?.state)) return `Job ${job.state}`;
+  if (liveJob) return 'Running in background';
+  if (liveness === 'alive') return remoteAlias ? `Running on ${remoteAlias}` : 'Running elsewhere';
+  if (liveness === 'dead' && (!exit || exit.detached)) return 'Not running';
+  if (exit) return processExitLabel(exit);
+  if (dormant) return 'Not reopened · restores on click';
+  return 'Liveness unknown';
 }
 
 function exitBannerPhrase(exit) {
@@ -39,6 +55,6 @@ function exitBannerColour(exit) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     noteSessionExit, forgetSessionExit, lastSessionExit,
-    processExitLabel, terminalStatusLabel, exitBannerPhrase, exitBannerColour,
+    processExitLabel, terminalStatusLabel, lifecycleLabel, exitBannerPhrase, exitBannerColour,
   };
 }

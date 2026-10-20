@@ -135,7 +135,7 @@ function setup() {
   });
 }
 
-test('the dot reports the exit code, then Running once a poll sees the process, then Stopped with no new exit', () => {
+test('the dot reports the exit code, then Running once a poll sees the process, then Not running with no new exit', () => {
   const h = setup();
   h.exit(3, null);
   assert.equal(h.title(), 'Exited (code 3)', 'the exit event records the code (mutation target: the noteSessionExit call)');
@@ -146,7 +146,7 @@ test('the dot reports the exit code, then Running once a poll sees the process, 
   assert.equal(h.title(), 'Running');
 
   h.poll(false);
-  assert.equal(h.title(), 'Stopped', 'running again cleared the old code (mutation target: the forget in updateTerminalHeader)');
+  assert.equal(h.title(), 'Not running', 'running again cleared the old code (mutation target: the forget in updateTerminalHeader)');
 });
 
 test('a relaunch that fails to open shows no exit code from the process before it', async () => {
@@ -156,7 +156,7 @@ test('a relaunch that fails to open shows no exit code from the process before i
   h.read("openResult = { ok: false, error: 'boom' }");
   await h.read("openSession(sessionMap.get('s1'))");
   assert.equal(h.read('calls.opened.length'), 1, 'the relaunch reached openTerminal');
-  assert.equal(h.title(), 'Stopped');
+  assert.equal(h.title(), 'Not running');
 });
 
 test('a stale exit that arrives after the reply of the relaunch leaves the new pty alone', async () => {
@@ -301,4 +301,15 @@ test('destroying a session drops its recorded exit', () => {
     ctx.window.destroySession('s9');
     assert.equal(ctx.inCtx("lastSessionExit('s9')"), null);
   } finally { ctx.destroy(); }
+});
+
+test('#563 detaching an attach tab reads Detached and says the job keeps running', () => {
+  const h = setup();
+  h.read("openSessions.get('s1').attach = true");
+  h.exit(0, null, true);
+  assert.equal(h.title(), 'Detached');
+  assert.equal(h.aria(), 'Detached');
+  assert.doesNotMatch(h.lastWrite(), /session stopped|relaunch/);
+  assert.match(h.lastWrite(), /session detached — it keeps running in the background/);
+  assert.equal(h.read("lastSessionExit('s1').detached"), true);
 });

@@ -10,7 +10,8 @@ On the left, the header above the terminal shows:
 
 - a **status dot**, before the name: green with a glow while the process runs,
   grey otherwise. Its tooltip says the state in words: `Running`; `Stopped`
-  after a Stop you asked for, or when no exit is known; `Killed (SIGKILL)` (or
+  after a Stop you asked for; `Detached` after leaving an attached background
+  session; `Not running` when the process is gone with no recorded exit; `Killed (SIGKILL)` (or
   another signal) when a signal ended it without a Stop; `Exited (code N)` when
   it exited on its own;
 - the session's name, the title the program sets on the terminal (or Claude's
@@ -41,6 +42,11 @@ When the process ends, the terminal prints a banner in the same words —
 `session stopped`, `session killed (SIGKILL)`, `session exited (code 1)` — dim
 for a Stop or an exit with code 0, yellow otherwise. The panel shell's banner
 reads the same way (`shell exited (code 1)`).
+
+Detaching from a background session prints `session detached — it keeps running
+in the background`. The job continues; its grid card changes from `Detached` to
+`Running in background` when live job evidence arrives, or to the finished job
+state or `Not running` when the job ends or its process is known dead.
 
 ## Right-click
 

@@ -29,11 +29,17 @@ remembered (`localStorage.gridGroupByProject`).
   `N subagents running`, counting distinct active agent tasks. No line appears
   when the count is zero or unknown. Local, remote and background sessions use
   the same task snapshots as the sidebar.
-- **Footer**: `Running` for a local PTY, `Running elsewhere` for an unattached
-  live process, an exit label (`Exited (code 1)`, `Killed (SIGTERM)`, or
-  `Stopped`) when recorded, `Stopped` for known dead liveness, or
-  `Liveness unknown` when neither liveness nor an exit is known. The time of
-  the last modification follows it.
+- **Footer**: `Open here` for a local PTY, `Attached here · keeps running in the
+  background` for an attached background session, or `Attached here · runs on
+  <alias>` for an attached remote session. Without a PTY here, a finished job
+  reads `Job done`, `Job stopped` or `Job failed`; a live job reads `Running in
+  background`, a live remote process `Running on <alias>`, and another live
+  process `Running elsewhere`. After a Detach it reads `Detached` until new
+  liveness or job evidence arrives. Known dead liveness reads `Not running`
+  unless another exit was recorded (`Exited (code 1)`, `Killed (SIGTERM)`, or
+  `Stopped`). A dormant card reads `Not reopened · restores on click` when no
+  stronger evidence is available, otherwise `Liveness unknown` when nothing
+  is known. The time of the last modification follows it.
 
 ## Using it
 

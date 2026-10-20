@@ -148,7 +148,7 @@ test('updateRunningIndicators: gridCards loop runs on every call, not gated by p
 
     update();
     assert.ok(card.querySelector('.grid-card-dot').classList.contains('session-icon--waiting'), 'unknown live head waits for evidence');
-    assert.equal(card.querySelector('.grid-card-footer').children[0].textContent, 'Running', 'grid card footer shows Running');
+  assert.equal(card.querySelector('.grid-card-footer').children[0].textContent, 'Open here', 'grid card footer shows Open here');
     assert.equal(card.querySelector('.grid-card-stop-btn').style.display, '', 'stop button visible');
 
     ctx.sessionBusyState.set('s1', true);

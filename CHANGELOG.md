@@ -9,6 +9,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - The Agents view shows job states as Active, Blocked, Idle, Done, Stopped, Failed, External or Unknown, and screen readers announce each row's activity. Finished background rows in Agents, the sidebar and the grid now have tooltips that say Not running instead of Stale; jobs say Liveness unknown when neither a finished job state nor a live descriptor is available. (#563)
 - Delete on a conversation that is running in Switchboard is now refused before its confirmation; stop it first. Delete, Delete worktree and Change path say why they cannot proceed before their confirmation, not after you confirm. (#565)
 
+### Fixed
+- Detaching from a background session now reads Detached, in its terminal and on its grid card, instead of Stopped: the session keeps running. A session whose process is gone without an exit Switchboard saw reads Not running, not Stopped. (#563)
+
 ## v0.0.98 — 2026-10-20
 
 ### New
