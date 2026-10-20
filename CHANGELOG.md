@@ -9,6 +9,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A conversation made of several transcripts now shows N parts, and its menu lists the parts with View messages and Copy id for each. (#564)
 
 ### Changed
+- Stop in the Agents view now asks first and says which job ends. Delete in the Agents view says why it cannot proceed before asking, not after. (#565)
 - Archive folder names the sessions it would stop, local and remote, and says before its dialog when a background job keeps it from archiving. When it stopped running sessions, a notice offers Undo for about 10 seconds: it brings back the folder and its sessions and turns back on the schedules the Archive turned off; stopped processes stay stopped. An empty folder archives without a dialog and offers Undo. (#565)
 - Archive on a session or a group of sessions now asks first when it would stop something running, and says what. Archiving sessions that are not running happens at once. Either way a notice offers Undo for about 10 seconds; processes it stopped stay stopped. (#565, #564)
 - Detaching from a background session no longer asks first. A notice offers Undo for about 10 seconds, which attaches it again. (#565)

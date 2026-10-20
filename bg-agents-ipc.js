@@ -2,6 +2,7 @@
 'use strict';
 
 const { deleteSessionRefusal } = require('./delete-session-guard');
+const { JOB_ID_RE } = require('./bg-agents-roster');
 
 function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessionState, sessionHasPty, ptyPids }) {
   const push = (snapshot) => {
@@ -22,14 +23,14 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     bgAgents.start();
     return bgAgents.reconcile();
   });
-  ipcMain.handle('bg-agent-verb', async (_event, verb, id) => {
+  const checkVerb = async (verb, id) => {
     if (verb === 'rm' || verb === 'respawn' || verb === 'stop') {
       const action = { rm: 'delete', respawn: 'respawn', stop: 'stop' }[verb];
       const declined = { rm: 'not deleted', respawn: 'not respawned', stop: 'not stopped' }[verb];
       let check;
       try {
         check = bgAgents.conversationCheck(id);
-        if (verb === 'stop' && (!check.known || check.hosted)) return bgAgents.runVerb(verb, id);
+        if (verb === 'stop' && (!check.known || check.hosted)) return { ok: true };
         if (!check.known) return { ok: false, error: `cannot tell whether this conversation is running (${check.reason}) — ${declined}` };
         if (check.hosted) {
           return { ok: false, error: `cannot ${action} a ${check.state} session; stop it first` };
@@ -42,11 +43,20 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
           if (refusal) return { ok: false, error: refusal.replace('not deleted', declined) };
         }
       } catch (err) {
-        if (verb === 'stop' && !check) return bgAgents.runVerb(verb, id);
+        if (verb === 'stop' && !check) return { ok: true };
         return { ok: false, error: `cannot tell whether this conversation is running (${err.message}) — ${declined}` };
       }
     }
-    return bgAgents.runVerb(verb, id);
+    return { ok: true };
+  };
+  ipcMain.handle('check-bg-agent-verb', (_event, verb, id) => {
+    if (!['rm', 'respawn', 'stop'].includes(verb)) return { ok: false, error: `unknown verb: ${String(verb)}` };
+    if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { ok: false, error: 'invalid background session id' };
+    return checkVerb(verb, id);
+  });
+  ipcMain.handle('bg-agent-verb', async (_event, verb, id) => {
+    const check = await checkVerb(verb, id);
+    return check.ok ? bgAgents.runVerb(verb, id) : check;
   });
   ipcMain.handle('dispatch-bg-agent', (_event, fields) => bgAgents.dispatch(fields));
   ipcMain.handle('bg-agent-live-job', (_event, sessionId) => bgAgents.liveJobCheck(String(sessionId || '')));

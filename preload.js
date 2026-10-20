@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('api', {
   // see .ai/contexts/bg-agents.md
   getBgAgents: () => ipcRenderer.invoke('get-bg-agents'),
   bgAgentVerb: (verb, id) => ipcRenderer.invoke('bg-agent-verb', verb, id),
+  checkBgAgentVerb: (verb, id) => ipcRenderer.invoke('check-bg-agent-verb', verb, id),
   dispatchBgAgent: (fields) => ipcRenderer.invoke('dispatch-bg-agent', fields),
   bgAgentLiveJob: (sessionId) => ipcRenderer.invoke('bg-agent-live-job', sessionId),
   // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")

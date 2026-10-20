@@ -149,7 +149,7 @@ function renderer(t) {
   window.showJsonlViewer = () => { throw new Error('missing transcript must not open the viewer'); };
   return { window, context: dom.getInternalVMContext(), ...loadAppFunctions(dom.getInternalVMContext(), {
     sourcePath: path.join(__dirname, '..', 'public', 'agents-view.js'),
-    declarations: ['agentsPendingVerbs', 'agentsVerbErrors', 'agentsViewActive', 'agentsDaemonReachable', 'agentsSnapshotRevision'],
+    declarations: ['agentsPendingVerbs', 'agentsInFlightVerbs', 'agentsVerbErrors', 'agentsViewActive', 'agentsDaemonReachable', 'agentsSnapshotRevision'],
     functions: ['agentJobIsLive', 'agentVerbAvailability', 'agentsEntryKey', 'agentDisplayName', 'renderAgentDetail',
       'formatTokens', 'formatAgentAge', 'agentsEscapeAttr', 'runAgentVerb', 'refreshAgentsRoster'],
   }) };
@@ -286,10 +286,12 @@ for (const ok of [false, true]) {
     const r = renderer(t);
     const calls = [];
     r.window.api = {
+      checkBgAgentVerb: async () => ({ ok: true }),
       bgAgentVerb: async () => { calls.push('main'); return { ok, error: 'refused' }; },
       stopSession: async () => { calls.push('close'); },
       getBgAgents: async () => ({ roster: [], daemonReachable: true }),
     };
+    r.window.appConfirm = async () => true;
     r.window.applyAgentsSnapshot = () => {};
     await r.runAgentVerb('stop', { id: JOB, sessionId: SID, kind: 'background', attachedHere: true });
     assert.deepEqual(calls, ok ? ['main', 'close'] : ['main']);

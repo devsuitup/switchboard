@@ -40,6 +40,7 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
   let snapshot = { roster: [], daemonReachable: true };
   window.api = {
     getBgAgents: async () => { calls.fetches++; return snapshot; },
+    checkBgAgentVerb: async () => ({ ok: true }),
     bgAgentVerb: async (verb, id) => { calls.verbs.push([verb, id]); return { ok: verb !== 'rm', sessionId: verb === 'transcript' ? ROSTER.find(e => e.id === id)?.sessionId : undefined, error: verb === 'rm' ? 'nope' : undefined }; },
     onBgAgentsChanged: (cb) => { changedCb = cb; },
     openExternal: async (href) => calls.external.push(href),
@@ -999,8 +1000,11 @@ test('background Delete waits for its async confirmation and cancellation sends 
   ctx.setSnapshot({ roster: ROSTER, daemonReachable: true });
   await ctx.window.showAgentsView();
   let answer;
-  ctx.window.appConfirm = () => new Promise(resolve => { answer = resolve; });
+  let confirming;
+  const started = new Promise(resolve => { confirming = resolve; });
+  ctx.window.appConfirm = () => { confirming(); return new Promise(resolve => { answer = resolve; }); };
   const pending = ctx.window.runAgentVerb('rm', ROSTER[1]);
+  await started;
   assert.deepEqual(ctx.calls.verbs, []);
   answer(false);
   await pending;
@@ -1009,6 +1013,194 @@ test('background Delete waits for its async confirmation and cancellation sends 
   await ctx.window.runAgentVerb('rm', ROSTER[1]);
   assert.deepEqual(ctx.calls.verbs, [['rm', ROSTER[1].id]]);
 });
+
+test('PR6 Stop checks then confirms the job name, id and loss before running', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  const events = [];
+  h.window.api.checkBgAgentVerb = async (verb, id) => { events.push(['check', verb, id]); return { ok: true }; };
+  h.window.appConfirm = async options => {
+    events.push(['confirm']);
+    assert.match(options.message, /em-platform/);
+    assert.match(options.message, /aaaaaaaa/);
+    assert.match(options.message, /its process ends; the conversation is kept/i);
+    assert.equal(options.danger, true);
+    assert.equal(options.confirmLabel, 'Stop');
+    return true;
+  };
+  h.window.api.bgAgentVerb = async (verb, id) => { events.push(['verb', verb, id]); return { ok: true }; };
+  await h.window.runAgentVerb('stop', ROSTER[0]);
+  assert.deepEqual(events, [['check', 'stop', 'aaaaaaaa'], ['confirm'], ['verb', 'stop', 'aaaaaaaa']]);
+});
+
+test('PR6 declining Stop sends no verb and keeps the attached tab open', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  let confirmations = 0;
+  h.window.appConfirm = async () => { confirmations++; return false; };
+  await h.window.runAgentVerb('stop', { ...ROSTER[0], attachedHere: true });
+  assert.equal(confirmations, 1);
+  assert.deepEqual(h.calls.verbs, []);
+  assert.deepEqual(h.calls.stopped, []);
+});
+
+for (const verb of ['rm', 'stop']) {
+  for (const rejected of [false, true]) {
+    test(`PR6 ${verb} ${rejected ? 'rejected check' : 'refusal'} shows the detail error before any dialog`, async t => {
+      const h = setup(); t.after(() => h.destroy());
+      const entry = verb === 'rm' ? ROSTER[1] : ROSTER[0];
+      h.setSnapshot({ roster: [entry], daemonReachable: true });
+      await h.window.showAgentsView();
+      h.document.querySelector('.agents-row').click();
+      let confirmations = 0;
+      h.window.appConfirm = async () => { confirmations++; return true; };
+      h.window.api.checkBgAgentVerb = async (checkedVerb, id) => {
+        assert.equal(checkedVerb, verb);
+        assert.equal(id, entry.id);
+        if (rejected) throw new Error('Cannot read process state');
+        return { ok: false, error: 'Conversation is running elsewhere (pid 42)' };
+      };
+      await h.window.runAgentVerb(verb, { ...entry, attachedHere: true });
+      assert.equal(confirmations, 0, 'a refusal must precede every dialog');
+      assert.deepEqual(h.calls.verbs, []);
+      assert.deepEqual(h.calls.stopped, []);
+      assert.match(h.document.querySelector('.agents-detail-error').textContent,
+        rejected ? /Cannot read process state/ : /Conversation is running elsewhere \(pid 42\)/);
+    });
+  }
+}
+
+test('identical roster polls preserve the selected verb buttons and focus', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  h.setSnapshot({ roster: [ROSTER[1]], daemonReachable: true });
+  await h.window.showAgentsView();
+  h.document.querySelector('.agents-row').click();
+  const buttons = [...h.document.querySelectorAll('#agents-detail [data-verb]')];
+  const remove = h.document.querySelector('#agents-detail [data-verb="rm"]');
+  remove.focus();
+  h.emitChanged({ roster: [JSON.parse(JSON.stringify(ROSTER[1]))], daemonReachable: true });
+  const updated = [...h.document.querySelectorAll('#agents-detail [data-verb]')];
+  assert.equal(updated.length, buttons.length);
+  buttons.forEach((button, index) => assert.equal(updated[index], button));
+  assert.equal(h.document.activeElement, remove);
+});
+
+test('a state change keeps the same button node and updates disabled', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  h.setSnapshot({ roster: [ROSTER[1]], daemonReachable: true });
+  await h.window.showAgentsView();
+  h.document.querySelector('.agents-row').click();
+  const remove = h.document.querySelector('#agents-detail [data-verb="rm"]');
+  assert.equal(remove.disabled, false);
+  h.emitChanged({ roster: [{ ...ROSTER[1], state: 'working', hosted: true }], daemonReachable: true });
+  const updated = h.document.querySelector('#agents-detail [data-verb="rm"]');
+  assert.equal(updated, remove);
+  assert.equal(updated.disabled, true);
+  h.emitChanged({ roster: [ROSTER[1]], daemonReachable: true });
+  assert.equal(h.document.querySelector('#agents-detail [data-verb="rm"]'), remove);
+  assert.equal(remove.disabled, false);
+});
+
+for (const verb of ['stop', 'rm']) {
+  test(`cancelled ${verb} confirmation restores focus to its opener`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    for (const file of ['modal-stack.js', 'choice-dialog.js', 'app-dialogs.js']) {
+      vm.runInContext(fs.readFileSync(path.join(PUBLIC, file), 'utf8'), h.ctx, { filename: file });
+    }
+    const entry = verb === 'stop' ? ROSTER[0] : ROSTER[1];
+    h.setSnapshot({ roster: [entry], daemonReachable: true });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    const opener = h.document.querySelector(`[data-verb="${verb}"]`);
+    opener.focus();
+    const pending = h.window.runAgentVerb(verb, entry);
+    await new Promise(resolve => setImmediate(resolve));
+    const cancel = h.document.querySelector('.choice-dialog-cancel');
+    assert.ok(cancel, 'the real confirmation dialog must open');
+    assert.equal(h.document.activeElement, cancel);
+    cancel.click();
+    await pending;
+    assert.equal(h.document.activeElement, opener);
+    assert.deepEqual(h.calls.verbs, []);
+  });
+
+  test(`double ${verb} clicks before the check resolves open one dialog`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    const entry = verb === 'stop' ? ROSTER[0] : ROSTER[1];
+    h.setSnapshot({ roster: [entry], daemonReachable: true });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    let resolveCheck, resolveConfirmation, confirmationStarted;
+    let checks = 0, confirmations = 0;
+    const checked = new Promise(resolve => { resolveCheck = resolve; });
+    const confirming = new Promise(resolve => { confirmationStarted = resolve; });
+    h.window.api.checkBgAgentVerb = () => { checks++; return checked; };
+    h.window.appConfirm = () => {
+      confirmations++;
+      confirmationStarted();
+      return new Promise(resolve => { resolveConfirmation = resolve; });
+    };
+    const button = h.document.querySelector(`[data-verb="${verb}"]`);
+    button.click();
+    button.click();
+    assert.equal(checks, 1);
+    assert.equal(button.disabled, false);
+    resolveCheck({ ok: true });
+    await confirming;
+    h.emitChanged({ roster: [entry], daemonReachable: true });
+    assert.equal(button.disabled, false, 'a roster render during confirmation keeps the opener enabled');
+    button.click();
+    await h.window.runAgentVerb(verb === 'stop' ? 'rm' : 'stop', entry);
+    assert.equal(checks, 1, 'the job is held through confirmation for both destructive verbs');
+    assert.equal(confirmations, 1);
+    assert.deepEqual(h.calls.verbs, []);
+    resolveConfirmation(false);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(button.disabled, false);
+    h.window.appConfirm = async () => { confirmations++; return false; };
+    await h.window.runAgentVerb(verb, entry);
+    assert.equal(checks, 2, 'cancellation releases the job for a retry');
+    assert.equal(confirmations, 2);
+  });
+
+  for (const failure of ['refusal', 'check rejection', 'confirmation rejection', 'verb rejection', 'completion']) {
+    test(`${verb} releases pending after ${failure} and permits a retry`, async t => {
+      const h = setup(); t.after(() => h.destroy());
+      const entry = verb === 'stop' ? ROSTER[0] : ROSTER[1];
+      h.setSnapshot({ roster: [entry], daemonReachable: true });
+      await h.window.showAgentsView();
+      h.document.querySelector('.agents-row').click();
+      let checks = 0, confirmations = 0, executions = 0;
+      h.window.api.checkBgAgentVerb = async () => {
+        checks++;
+        if (checks === 1 && failure === 'check rejection') throw new Error('Check failed');
+        if (checks === 1 && failure === 'refusal') return { ok: false, error: 'Refused' };
+        return { ok: true };
+      };
+      h.window.appConfirm = async () => {
+        confirmations++;
+        if (confirmations === 1 && failure === 'confirmation rejection') throw new Error('Confirmation failed');
+        return true;
+      };
+      h.window.api.bgAgentVerb = async () => {
+        assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, true);
+        executions++;
+        if (executions === 1 && failure === 'verb rejection') throw new Error('Execution failed');
+        return { ok: true };
+      };
+      const pending = h.window.runAgentVerb(verb, entry);
+      assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, false);
+      await pending;
+      assert.equal(h.document.querySelector(`[data-verb="${verb}"]`).disabled, false);
+      if (failure !== 'completion') {
+        assert.match(h.document.querySelector('.agents-detail-error').textContent,
+          /Refused|Check failed|Confirmation failed|Execution failed/);
+      }
+      await h.window.runAgentVerb(verb, entry);
+      assert.equal(checks, 2);
+      assert.equal(executions, failure === 'completion' || failure === 'verb rejection' ? 2 : 1);
+      assert.equal(h.document.querySelector('.agents-detail-error'), null);
+    });
+  }
+}
 
 for (const daemonReachable of [true, false]) {
   test(`External row offers Resume even when daemon reachable is ${daemonReachable}`, async t => {

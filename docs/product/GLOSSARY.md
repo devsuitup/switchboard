@@ -331,8 +331,9 @@ concept. Each entry gives:
 - **Today**: one word, three behaviours, three labels — "Stop session" (row,
   grid card), "Stop process" (terminal header, `public/index.html:112`,
   `public/app.js:1457`), "Detach (the session keeps running)" (header on an
-  attach). The Agents view "Stop" runs `claude stop` with no confirmation
-  (`public/agents-view.js:421` confirms only `rm`). → M2.
+  attach). The Agents view "Stop" checks for refusals before confirming the
+  job name and id, saying its process ends and the conversation is kept,
+  then runs `claude stop`. → M2.
 
 ### Kill
 

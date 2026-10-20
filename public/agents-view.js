@@ -19,6 +19,7 @@ let agentsCollapsedGroups = new Set();
 let agentsReconcileTimer = null;
 let agentsOpenAtStartup = false;
 const agentsPendingVerbs = new Set();
+const agentsInFlightVerbs = new Set();
 const agentsVerbErrors = new Map();
 
 function agentsEscapeAttr(value) {
@@ -581,20 +582,34 @@ async function runAgentVerb(verb, entry) {
     attachBgAgent(entry);
     return;
   }
-  if (verb === 'rm' && !await appConfirm({ title: 'Delete?', message: 'Delete this background session? Its conversation goes, and its worktree when that is safe.', confirmLabel: 'Delete', danger: true })) return;
-  agentsPendingVerbs.add(key);
+  if (agentsInFlightVerbs.has(key)) return;
+  agentsInFlightVerbs.add(key);
   agentsVerbErrors.delete(key);
-  if (agentsViewActive) renderAgentsView();
-  let result;
   try {
-    result = await window.api.bgAgentVerb(verb, entry.id);
+    if (verb === 'stop' || verb === 'rm') {
+      const check = await window.api.checkBgAgentVerb(verb, entry.id);
+      if (!check || check.ok !== true) {
+        agentsVerbErrors.set(key, (check && check.error) || 'Cannot check this background session');
+        return;
+      }
+      const confirmation = verb === 'stop'
+        ? { title: 'Stop?', message: `Stop background job "${agentDisplayName(entry)}" (${entry.id})? Its process ends; the conversation is kept.`, confirmLabel: 'Stop', danger: true }
+        : { title: 'Delete?', message: 'Delete this background session? Its conversation goes, and its worktree when that is safe.', confirmLabel: 'Delete', danger: true };
+      if (!await appConfirm(confirmation)) return;
+    }
+    agentsPendingVerbs.add(key);
+    if (agentsViewActive) renderAgentsView();
+    const result = await window.api.bgAgentVerb(verb, entry.id);
+    if (!result || result.ok === false) agentsVerbErrors.set(key, (result && result.error) || 'unknown error');
+    else if (entry.attachedHere && (verb === 'stop' || verb === 'rm')) {
+      try { await window.api.stopSession(entry.sessionId); } catch {}
+    }
   } catch (err) {
-    result = { ok: false, error: err && err.message ? err.message : String(err) };
-  }
-  agentsPendingVerbs.delete(key);
-  if (!result || result.ok === false) agentsVerbErrors.set(key, (result && result.error) || 'unknown error');
-  else if (entry.attachedHere && (verb === 'stop' || verb === 'rm')) {
-    try { await window.api.stopSession(entry.sessionId); } catch {}
+    agentsVerbErrors.set(key, err && err.message ? err.message : String(err));
+  } finally {
+    agentsInFlightVerbs.delete(key);
+    agentsPendingVerbs.delete(key);
+    if (agentsViewActive) renderAgentsView();
   }
   await refreshAgentsRoster();
 }
