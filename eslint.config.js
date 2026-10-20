@@ -343,6 +343,7 @@ const rendererCrossFileGlobals = {
   setHeaderToggle: 'readonly',
   // public/process-exit.js — see .ai/contexts/window-frame.md
   terminalStatusLabel: 'readonly',
+  lifecycleLabel: 'readonly',
   noteSessionExit: 'readonly',
   forgetSessionExit: 'readonly',
   lastSessionExit: 'readonly',

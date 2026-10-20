@@ -130,6 +130,18 @@ for (const attached of [false, true]) {
   }
 }
 
+test('#563 dormant grid card with no liveness or exit restores on click', t => {
+  const { ctx, session, create } = setup(t, 'local-transcript', { status: undefined });
+  ctx.window.dormantWorkingSet = new Map([[session.sessionId, { sessionId: session.sessionId }]]);
+  assert.equal(ctx.window.activePtyIds.has(session.sessionId), false);
+  assert.equal(ctx.window.lastSessionExit(session.sessionId), null);
+  const card = create();
+  const footer = () => card.querySelector('.grid-card-footer').firstChild.textContent;
+  assert.equal(footer(), 'Not reopened · restores on click');
+  ctx.window.updateRunningIndicators();
+  assert.equal(footer(), 'Not reopened · restores on click');
+});
+
 test('#629 process exit preserves the local exit reason after its descriptor disappears', t => {
   const { ctx, session, create } = setup(t);
   const card = create();
@@ -146,10 +158,11 @@ for (const kind of ['local-pty', 'local-transcript', 'remote', 'background']) {
     const { ctx, session, create, render } = setup(t, kind);
     const card = create();
     const footer = () => card.querySelector('.grid-card-footer').firstChild.textContent;
-    assert.equal(footer(), kind === 'local-pty' ? 'Running' : 'Running elsewhere');
+    const liveLabel = kind === 'local-pty' ? 'Open here' : kind === 'remote' ? 'Running on host' : 'Running elsewhere';
+    assert.equal(footer(), liveLabel);
     ctx.window.noteSessionExit(session.sessionId, 1, null, false);
     ctx.window.updateRunningIndicators();
-    assert.equal(footer(), kind === 'local-pty' ? 'Running' : 'Running elsewhere', 'live process wins over an old exit');
+    assert.equal(footer(), liveLabel, 'live process wins over an old exit');
     ctx.window.activePtyIds.delete(session.sessionId);
     delete session.status;
     session.remoteDescriptorSeen = false;
@@ -169,9 +182,40 @@ for (const kind of ['local-pty', 'local-transcript', 'remote', 'background']) {
     const state = kind === 'remote' ? ctx.remoteSessionStates.get(session.sessionId) : ctx.window.localPtyState(session.sessionId);
     state.apply({ type: 'liveness', value: 'dead' });
     ctx.window.updateRunningIndicators();
-    assert.equal(footer(), 'Stopped');
+    assert.equal(footer(), 'Not running');
   });
 }
+
+test('#563 attached grid card progresses from Detached to live background and then finished or dead', t => {
+  const { ctx, session, create } = setup(t, 'background');
+  ctx.evalPublic('agents-view.js');
+  const entry = ctx.window.openSessions.get(session.sessionId);
+  entry.attach = true;
+  ctx.window.activePtyIds.add(session.sessionId);
+  const card = create();
+  const footer = () => card.querySelector('.grid-card-footer').firstChild.textContent;
+  assert.equal(footer(), 'Attached here · keeps running in the background');
+  delete session.status;
+  ctx.window.schedulePersistWorkingSet = () => {};
+  ctx.window.skippedWorkingSetEntries = new Set();
+  loadAppFunctions(ctx.context, { functions: ['applyProcessExit'] });
+  ctx.window.applyProcessExit(session.sessionId, 0, null, true);
+  assert.equal(footer(), 'Detached');
+  const job = { kind: 'background', id: 'job-629', sessionId: session.sessionId,
+    state: 'working', hosted: true, status: 'idle' };
+  ctx.window.applyAgentsSnapshot({ roster: [job], daemonReachable: true });
+  ctx.window.updateGridSubagentPills(session.sessionId);
+  assert.equal(footer(), 'Running in background');
+  for (const state of ['done', 'stopped', 'failed']) {
+    ctx.window.applyAgentsSnapshot({ roster: [{ ...job, state, hosted: false, status: null }], daemonReachable: true });
+    ctx.window.updateGridSubagentPills(session.sessionId);
+    assert.equal(footer(), `Job ${state}`);
+  }
+  ctx.window.applyAgentsSnapshot({ roster: [], daemonReachable: true });
+  ctx.window.localPtyState(session.sessionId).apply({ type: 'liveness', value: 'dead' });
+  ctx.window.updateGridSubagentPills(session.sessionId);
+  assert.equal(footer(), 'Not running');
+});
 
 test('#629 one head update looks up and paints only its indexed card', t => {
   const { ctx, create, turn } = setup(t);
@@ -322,7 +366,7 @@ test('#629 unattached live, unknown and dead liveness are distinct from activity
   const { ctx, session, create, turn, render } = setup(t, 'remote');
   const card = create();
   turn('open');
-  assert.equal(card.querySelector('.grid-card-footer').firstChild.textContent, 'Running elsewhere');
+  assert.equal(card.querySelector('.grid-card-footer').firstChild.textContent, 'Running on host');
   assert.equal(card.querySelector('.grid-card-stop-btn').style.display, '');
   session.status = null;
   session.remoteDescriptorSeen = false;
@@ -332,7 +376,7 @@ test('#629 unattached live, unknown and dead liveness are distinct from activity
   assert.equal(card.querySelector('.grid-card-footer').firstChild.textContent, 'Liveness unknown');
   ctx.remoteSessionStates.get(session.sessionId).apply({ type: 'liveness', value: 'dead' });
   ctx.window.applyStateClasses(session.sessionId, ctx.remoteSessionStates.get(session.sessionId).snapshot());
-  assert.equal(card.querySelector('.grid-card-footer').firstChild.textContent, 'Stopped');
+  assert.equal(card.querySelector('.grid-card-footer').firstChild.textContent, 'Not running');
   assert.equal(card.querySelector('.grid-card-stop-btn').style.display, 'none');
 });
 

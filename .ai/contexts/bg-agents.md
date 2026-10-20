@@ -499,7 +499,10 @@ The changed `hosted` field makes the snapshot differ and updates badge membershi
   descriptor (same `sessionId`), so busy/idle needs no special path.
 - When a row is attached here and the user runs Stop or Delete on it, the
   renderer calls the main-side verb first and stops the local attach pty
-  (`stopSession`) only after success. A refused verb keeps the tab open.
+  (`stopSession`) only after success, marking the open entry with `jobEnding`
+  before stopping it. The header and exit banner read Stopped without claiming
+  the job keeps running. Detached is reserved for a user Detach of the attach
+  client. A refused verb keeps the tab open.
 - Narrow widths: a row's grid columns add up to ~670 px of minimum width.
   Without `min-width: 0` on `#main` that minimum became `#main`'s own, so
   with a narrow window or a wide sidebar `#main` ran past the window edge

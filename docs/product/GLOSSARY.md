@@ -311,10 +311,11 @@ concept. Each entry gives:
   running)" (`public/app.js:1457`), the row and the grid card still read
   "Stop session". A successful detach of the session on screen hides the
   terminal header (`public/app.js:1074-1077`), so the header never shows the
-  result; what does: the grid card footer reads **Stopped**
-  (`public/app.js:1203`), and because the detach sets `stopRequested`
-  (`main.js:1789-1791`) the exit banner reads "session stopped"
-  (`public/process-exit.js:19`) while the job keeps running. A remote attach
+  result; the recorded header status and grid footer read **Detached**, and
+  the banner reads "session detached — it keeps running in the background"
+  (`public/process-exit.js`, `public/app.js`, `applyProcessExit`). New liveness
+  or job evidence replaces Detached in the footer: **Running in background**,
+  **Job done**, **Job stopped**, **Job failed**, or **Not running**. A remote attach
   has a detach in the protocol (`docs/remote-hosts.md:234`) but no control
   (M2).
 
@@ -526,18 +527,23 @@ word is listed with the surface that shows it and its source.
 | **Background work running** | activity icon tooltip | shared task evidence | at the prompt, background tasks still run (`public/session-state.js`, `ICON_BY_RUNG.agentsBusy`) |
 | **Waiting for input** | activity icon tooltip | a live session at its prompt, or job `blocked` | a blocked job keeps Blocked in its tooltip and state column (`public/agents-view.js`, `projectBackgroundActivity`, `backgroundActivityLabel`) |
 | **Idle** | activity icon tooltip; Agents state and group (💤) | no higher activity rung; done job with a live descriptor (Agents) | the Agents word names a hosted done job, whose activity glyph still follows the shared projection (`public/agents-view.js`, `agentStateGroupKey`) |
-| **Not running** | finished background row tooltip in sidebar, grid and Agents | job `done`, `stopped` or `failed`, without a live descriptor | the shared `stale` rung's label (`public/session-state.js`, `ICON_BY_RUNG.stale`; `public/agents-view.js`, `projectBackgroundActivity`) |
-| **Liveness unknown** | background row tooltip and accessible name in sidebar, grid and Agents | no terminal job state and no live descriptor | missing data does not establish process death (`public/agents-view.js`, `projectBackgroundActivity`) |
+| **Not running** | finished background row tooltip in sidebar, grid and Agents; terminal header and grid footer | finished job without a live descriptor (activity); dead liveness without a recorded exit, or after Detached (footer); no PTY and no recorded exit (header) | no user Stop is implied (`public/session-state.js`, `public/agents-view.js`, `public/process-exit.js`) |
+| **Liveness unknown** | background row tooltip and accessible name in sidebar, grid and Agents; grid footer | no terminal job state and no live descriptor (activity); no liveness, exit or dormant evidence (footer) | missing data does not establish process death (`public/agents-view.js`, `projectBackgroundActivity`; `public/process-exit.js`, `lifecycleLabel`) |
 | `busy` / `idle` / `waiting` / `shell` | foreground status icon tooltip and accessible name | CLI session descriptor | the CLI's own word and waiting reason; the visible row keeps only reason plus age (`public/sidebar.js`, `public/session-activity-dom.js`) |
 | Waiting reason plus age | foreground sidebar row status text | CLI descriptor `waitingFor` when `status` is `waiting`, and `statusUpdatedAt` | `permission prompt · 1m ago`, or `1m ago` alone without a reason; the status slot stays present when empty |
 | **Blocked** | Agents state (✋) | daemon job file | job waiting for input (`public/agents-view.js`, `AGENT_STATE_META`) |
 | **Done** / **Stopped** / **Failed** | Agents state (✅ ⏹️ ❌) | daemon job file | finished job; Done requires no live background descriptor (`public/agents-view.js`, `agentStateGroupKey`) |
 | **External** / **Unknown** | Agents state (🖥️ ❓) | interactive session / missing or unknown job state | a location, and an absence of data, shown as states (`public/agents-view.js`, `agentStateMeta`); the column omits raw descriptor words |
-| **Running** | terminal header status; grid card footer; status bar "N running"; Agents header "N running"; green row dot | local PTY alive (header, grid, status bar, dot); live jobs (Agents header) | two populations, one word (`public/process-exit.js:27`; `public/app.js:1203`, `1875`; `public/agents-view.js:365`); a third, alive anywhere (`is-alive`), shows the Stop control without the word (`public/style.css:1270-1273`) |
-| **Stopped** | terminal header; grid footer; exit banner "session stopped" | user pressed the stop control (incl. detach), or no local PTY | after a Detach the grid footer and the exit banner say it while the job runs; the header is hidden then (`public/process-exit.js:19,28`; `public/app.js:1074-1077`, `1203`) |
-| **Exited (code N)** / **Killed (SIG)** / **Exited** | terminal header; exit banner | process exit | (`public/process-exit.js:20-22`) |
+| **Running** | terminal header status; status bar "N running"; green row dot | PTY alive here | grid footer uses the separate lifecycle words below (`public/process-exit.js`, `terminalStatusLabel`; `public/app.js`, `updateRunningIndicators`) |
+| **Open here** / **Attached here** | grid footer | PTY here, ordinary or attached | attached local tabs add "keeps running in the background"; remote tabs add "runs on <alias>" (`public/process-exit.js`, `lifecycleLabel`) |
+| **Running in background** / **Running on <alias>** / **Running elsewhere** | grid footer | live job, live remote process, or another live process without a PTY here | job liveness uses the same hosted background contract as `agentJobIsLive` (`public/process-exit.js`, `lifecycleLabel`) |
+| **Job done** / **Job stopped** / **Job failed** | grid footer | finished job that is no longer live | wins over an older Detached exit (`public/process-exit.js`, `lifecycleLabel`) |
+| **Detached** | recorded terminal header status; grid footer; exit banner | user Detach of an attach client only | the background session keeps running; Agents Stop/Delete reads Stopped instead; finished job or dead liveness replaces Detached on the grid (`public/app.js`, `applyProcessExit`; `public/process-exit.js`) |
+| **Stopped** | terminal header; grid footer; exit banner "session stopped" | recorded user Stop of an ordinary process, or local attach client exit after a successful Agents Stop/Delete | neither a Detach nor missing exit evidence (`public/process-exit.js`, `processExitLabel`; `public/agents-view.js`, `runAgentVerb`) |
+| **Exited (code N)** / **Killed (SIG)** / **Exited** | terminal header; grid footer; exit banner | recorded process exit | preserved ahead of dead liveness (`public/process-exit.js`, `processExitLabel`, `lifecycleLabel`) |
+| **Not reopened · restores on click** | grid footer | dormant entry with no stronger lifecycle evidence | restoring it is a separate action (`public/process-exit.js`, `lifecycleLabel`) |
 | `running` / `finished` / `external` | Agents header count | job liveness | "N running · N finished · N external" (`public/agents-view.js:365`) |
 
-Rules for new text until M5 is decided: use the sidebar icon words for a
-conversation's activity, and **Running** / **Stopped** only for whether a
-process is alive here. Do not introduce a new state word.
+Use the sidebar icon words for activity. The grid footer uses the ranked
+lifecycle words above; Stopped requires a recorded Stop. Lifecycle additions
+to row labels, the status bar and the filter remain a separate #563 change.

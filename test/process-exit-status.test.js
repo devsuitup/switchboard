@@ -125,6 +125,7 @@ function setup() {
   run(`sessionMap.set('s1', { sessionId: 's1', projectPath: '/p', type: 'claude' }); openSessions.set('s1', makeEntry());`, 'fixture.js');
   const read = (expr) => run(expr, 'read.js');
   return Object.assign(h, {
+    window, ctx, destroy: () => window.close(),
     exit: (code, signal, stopped, generation) => exitHandler('s1', code, signal, stopped, generation),
     exitOf: (id, code) => exitHandler(id, code, null, false),
     poll: (running) => { read(running ? "activePtyIds.add('s1')" : "activePtyIds.delete('s1')"); read('updateTerminalHeader()'); },
@@ -135,7 +136,7 @@ function setup() {
   });
 }
 
-test('the dot reports the exit code, then Running once a poll sees the process, then Stopped with no new exit', () => {
+test('the dot reports the exit code, then Running once a poll sees the process, then Not running with no new exit', () => {
   const h = setup();
   h.exit(3, null);
   assert.equal(h.title(), 'Exited (code 3)', 'the exit event records the code (mutation target: the noteSessionExit call)');
@@ -146,7 +147,7 @@ test('the dot reports the exit code, then Running once a poll sees the process, 
   assert.equal(h.title(), 'Running');
 
   h.poll(false);
-  assert.equal(h.title(), 'Stopped', 'running again cleared the old code (mutation target: the forget in updateTerminalHeader)');
+  assert.equal(h.title(), 'Not running', 'running again cleared the old code (mutation target: the forget in updateTerminalHeader)');
 });
 
 test('a relaunch that fails to open shows no exit code from the process before it', async () => {
@@ -156,7 +157,7 @@ test('a relaunch that fails to open shows no exit code from the process before i
   h.read("openResult = { ok: false, error: 'boom' }");
   await h.read("openSession(sessionMap.get('s1'))");
   assert.equal(h.read('calls.opened.length'), 1, 'the relaunch reached openTerminal');
-  assert.equal(h.title(), 'Stopped');
+  assert.equal(h.title(), 'Not running');
 });
 
 test('a stale exit that arrives after the reply of the relaunch leaves the new pty alone', async () => {
@@ -302,3 +303,59 @@ test('destroying a session drops its recorded exit', () => {
     assert.equal(ctx.inCtx("lastSessionExit('s9')"), null);
   } finally { ctx.destroy(); }
 });
+
+test('#563 detaching an attach tab reads Detached and says the job keeps running', () => {
+  const h = setup();
+  h.read("openSessions.get('s1').attach = true");
+  h.exit(0, null, true);
+  assert.equal(h.title(), 'Detached');
+  assert.equal(h.aria(), 'Detached');
+  assert.doesNotMatch(h.lastWrite(), /session stopped|relaunch/);
+  assert.match(h.lastWrite(), /session detached — it keeps running in the background/);
+  assert.equal(h.read("lastSessionExit('s1').detached"), true);
+});
+
+for (const verb of ['stop', 'rm']) {
+  test(`#563 Agents ${verb} on a job attached here reads Stopped without a keeps-running banner`, async t => {
+    const h = setup();
+    t.after(() => h.destroy());
+    h.read(`
+      openSessions.get('s1').attach = true;
+      const agentsInFlightVerbs = new Set();
+      const agentsPendingVerbs = new Set();
+      const agentsVerbErrors = new Map();
+      let agentsViewActive = false;
+      async function appConfirm() { return true; }
+      async function refreshAgentsRoster() {}
+    `);
+    loadAppFunctions(h.ctx, {
+      functions: ['runAgentVerb', 'agentsEntryKey', 'agentDisplayName'],
+      sourcePath: path.join(ROOT, 'public', 'agents-view.js'),
+    });
+    const calls = [];
+    h.window.api.checkBgAgentVerb = async (checkedVerb, id) => {
+      calls.push(['check', checkedVerb, id]);
+      return { ok: true };
+    };
+    h.window.api.bgAgentVerb = async (jobVerb, id) => {
+      calls.push(['verb', jobVerb, id]);
+      return { ok: true };
+    };
+    h.window.api.stopSession = async id => {
+      calls.push(['stopSession', id]);
+      h.exit(0, null, true);
+      return { ok: true };
+    };
+
+    await h.window.runAgentVerb(verb, {
+      kind: 'background', id: 'aaaaaaaa', sessionId: 's1', attachedHere: true,
+    });
+
+    assert.deepEqual(calls, [['check', verb, 'aaaaaaaa'], ['verb', verb, 'aaaaaaaa'], ['stopSession', 's1']]);
+    assert.equal(h.title(), 'Stopped');
+    assert.equal(h.aria(), 'Stopped');
+    assert.match(h.lastWrite(), /session stopped/);
+    assert.doesNotMatch(h.lastWrite(), /detached|keeps running/i);
+    assert.equal(h.read("lastSessionExit('s1').detached"), false);
+  });
+}

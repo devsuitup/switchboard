@@ -104,10 +104,13 @@ function updateGridCardActivity(sessionId, card, row) {
   setHasBusyAgents(card, snapshot.agentsBusy);
   setNeedsAttention(card, snapshot.attention);
   setUnseenWrittenActivity(card, snapshot.unseenWrittenActivity);
-  const exit = !running && snapshot.liveness !== 'alive' && lastSessionExit(sessionId);
+  const exit = lastSessionExit(sessionId);
   const footer = card.querySelector('.grid-card-footer');
-  if (footer?.children[0]) footer.children[0].textContent = running ? 'Running' : snapshot.liveness === 'alive' ? 'Running elsewhere'
-    : exit ? processExitLabel(exit) : snapshot.liveness === 'dead' ? 'Stopped' : 'Liveness unknown';
+  if (footer?.children[0]) footer.children[0].textContent = lifecycleLabel({
+    ptyHere: running, attach: openSessions.get(sessionId)?.attach,
+    job: selection?.entry, remoteAlias: row.remoteAlias, liveness: snapshot.liveness, exit,
+    dormant: typeof dormantWorkingSet !== 'undefined' && dormantWorkingSet.has(sessionId),
+  });
   const stopBtn = card.querySelector('.grid-card-stop-btn');
   if (stopBtn) stopBtn.style.display = (running || isSessionAlive(sessionId)) ? '' : 'none';
 }
