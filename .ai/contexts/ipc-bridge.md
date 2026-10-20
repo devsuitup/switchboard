@@ -31,7 +31,7 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 | `set-star` | `(id, starred)` | `{ok}` | Set the desired pin state on every conversation part. |
 | `rename-session` | `(id, name)` | `{ok}` | Set customTitle. |
 | `archive-session` | `(id, archived)` | `{ok}` | Move to archive. |
-| `delete-session-preview` | `(id)` | `{ok, error?, partIds?, parts?, transcripts?, subagents?, running?}` | Awaits the full `deleteSessionGuard(id, partIds)` before resolving files. Refusals reach the renderer notice before any confirmation. |
+| `delete-session-preview` | `(id)` | `{ok, error?, partIds?, parts?, transcripts?, subagents?}` | Awaits the full `deleteSessionGuard(id, partIds)` before resolving files. Refusals reach the renderer notice before any confirmation. |
 | `delete-session` | `(id, partIds)` | `{ok, error?, removedPartIds?}` | Rechecks membership and the full guard against the confirmed parts before removal. Never stops a process. |
 | `read-session-jsonl` | `(sessionId)` | `Entry[]` | Full transcript. |
 | `read-subagent-jsonl` | `(parentSessionId, agentId)` | `Entry[]` | Subagent transcript. |

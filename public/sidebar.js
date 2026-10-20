@@ -33,6 +33,8 @@ function slugId(slug) {
 
 const archivingSessionIds = new Set();
 const archivingGroupIds = new Set();
+const remappingProjectPaths = new Set();
+const deletingWorktreePaths = new Set();
 const ARCHIVE_CHECKING_TITLE = 'Checking the host before archiving…';
 
 // see .ai/contexts/session-state.md ("Archive/delete are stop-then-archive/delete")
@@ -1559,22 +1561,28 @@ function rebindSidebarEvents(projects) {
     if (remapBtn) {
       remapBtn.onclick = async (e) => {
         e.stopPropagation();
+        if (remappingProjectPaths.has(project.projectPath)) return;
+        remappingProjectPaths.add(project.projectPath);
         try {
-          const check = await window.api.checkRemapProject(project.projectPath);
-          if (!check?.ok) throw new Error(check?.error || 'The remap check backend is unavailable');
-        } catch (error) {
-          showSessionActionFailure('Change path', project, error);
-          return;
-        }
-        const newPath = await window.api.browseFolder();
-        if (!newPath) return;
-        const projectShortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-        if (!await appConfirm({ title: 'Remap?', message: `Remap ${projectShortName} to:\n${newPath}?`, confirmLabel: 'Remap', danger: true })) return;
-        const result = await window.api.remapProject(project.projectPath, newPath);
-        if (result.error) {
-          await appAlert({ title: 'Switchboard', message: 'Failed to remap: ' + result.error });
-        } else {
-          Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+          try {
+            const check = await window.api.checkRemapProject(project.projectPath);
+            if (!check?.ok) throw new Error(check?.error || 'The remap check backend is unavailable');
+          } catch (error) {
+            showSessionActionFailure('Change path', project, error);
+            return;
+          }
+          const newPath = await window.api.browseFolder();
+          if (!newPath) return;
+          const projectShortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+          if (!await appConfirm({ title: 'Remap?', message: `Remap ${projectShortName} to:\n${newPath}?`, confirmLabel: 'Remap', danger: true })) return;
+          const result = await window.api.remapProject(project.projectPath, newPath);
+          if (result.error) {
+            await appAlert({ title: 'Switchboard', message: 'Failed to remap: ' + result.error });
+          } else {
+            Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+          }
+        } finally {
+          remappingProjectPaths.delete(project.projectPath);
         }
       };
     }
@@ -1619,22 +1627,28 @@ function rebindSidebarEvents(projects) {
     if (wtDeleteBtn) {
       wtDeleteBtn.onclick = async (e) => {
         e.stopPropagation();
+        if (deletingWorktreePaths.has(wtProject.projectPath)) return;
+        deletingWorktreePaths.add(wtProject.projectPath);
         try {
-          const check = await window.api.checkDeleteWorktree(wtProject.projectPath);
-          if (!check?.ok) throw new Error(check?.error || 'The deletion check is unavailable');
-        } catch (error) {
-          showSessionActionFailure('Delete worktree', wtProject, error);
-          return;
-        }
-        const name = wtProject.projectPath.split('/').pop();
-        const confirmed = await showDeleteWorktreeDialog(name, wtProject.projectPath);
-        if (!confirmed) return;
-        const result = await window.api.deleteWorktree(wtProject.projectPath);
-        if (result && result.ok) {
-          Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
-        } else {
-          const msg = (result && result.error) ? result.error : 'Unknown error';
-          await appAlert({ title: 'Switchboard', message: `Failed to delete worktree: ${msg}` });
+          try {
+            const check = await window.api.checkDeleteWorktree(wtProject.projectPath);
+            if (!check?.ok) throw new Error(check?.error || 'The deletion check is unavailable');
+          } catch (error) {
+            showSessionActionFailure('Delete worktree', wtProject, error);
+            return;
+          }
+          const name = wtProject.projectPath.split('/').pop();
+          const confirmed = await showDeleteWorktreeDialog(name, wtProject.projectPath);
+          if (!confirmed) return;
+          const result = await window.api.deleteWorktree(wtProject.projectPath);
+          if (result && result.ok) {
+            Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+          } else {
+            const msg = (result && result.error) ? result.error : 'Unknown error';
+            await appAlert({ title: 'Switchboard', message: `Failed to delete worktree: ${msg}` });
+          }
+        } finally {
+          deletingWorktreePaths.delete(wtProject.projectPath);
         }
       };
     }
@@ -1809,10 +1823,17 @@ function rebindSidebarEvents(projects) {
       deleteBtn.onclick = async (e) => {
         e.stopPropagation();
         try {
-          if (rowSessionIds(session).some(id =>
-            activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)
-            || storedActivitySnapshot(id)?.liveness === 'alive')) {
-            surfaceStopFailure(deleteBtn, 'A conversation part is still running — stop it first, then retry Delete', session, 'Delete');
+          const liveParts = rowSessionIds(session).map(id => {
+            if (activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)) {
+              return `Part ${id} is still running in this window — stop it first, then retry Delete`;
+            }
+            if (storedActivitySnapshot(id, session)?.liveness === 'alive') {
+              return `Part ${id} is still running outside this window — return to its own terminal and end it there, then retry Delete`;
+            }
+            return null;
+          }).filter(Boolean);
+          if (liveParts.length) {
+            surfaceStopFailure(deleteBtn, liveParts.join('\n'), session, 'Delete');
             return;
           }
           const confirmation = await showDeleteSessionDialog(session);

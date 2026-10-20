@@ -416,14 +416,6 @@ for (const remoteId of ['a', 'b']) {
   });
 }
 
-test('preview reports a running member even when the head is stopped', async t => {
-  const f = deletionFixture(t);
-  f.dependencies.activeSessions = new Map([['a', { exited: true }], ['b', { exited: false }]]);
-  assert.equal((await loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a')).running, true);
-  f.dependencies.activeSessions.get('b').exited = true;
-  assert.equal((await loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a')).running, false);
-});
-
 test('a failed transcript removal clears subagents whose directory is confirmed gone', async t => {
   const f = deletionFixture(t);
   const deletedSettings = [];

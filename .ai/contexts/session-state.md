@@ -498,7 +498,10 @@ with the same `isRemoteSessionAlive` check.
 **Delete never calls `stopBeforeArchive`.** The renderer checks `rowSessionIds`,
 including the representative, for a live PTY, non-closed tab or stored alive
 snapshot before requesting the preview. It shows a persistent refusal notice
-with no dialog or stop. The asynchronous `delete-session-preview` then runs
+with no dialog or stop: each part with a PTY or open tab here says to stop it
+first, while a part alive only by snapshot says to return to its own terminal
+and end it there. A mixed refusal names each part with its recovery. The
+asynchronous `delete-session-preview` then runs
 the full `deleteSessionGuard(id, partIds)`, using the same member snapshot as
 target resolution: background jobs, live-elsewhere and unknown-state refusals
 also arrive before any dialog. The action retains its own full guard. Remote

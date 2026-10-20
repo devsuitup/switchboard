@@ -94,7 +94,9 @@ for (const state of ['pty', 'tab', 'snapshot']) {
       const pending = opener.onclick({ stopPropagation() {} });
       await tick();
       try {
-        assertRefusal(ctx, opener, /still running.*stop/i);
+        if (state === 'snapshot') assert.doesNotMatch(ctx.document.querySelector('[role="alert"]').textContent, /stop it first/i);
+        assertRefusal(ctx, opener, state === 'snapshot' ? /running outside this window.*own terminal.*end it there/i
+          : /still running in this window.*stop it first/i);
         assert.deepEqual(calls, []);
       } finally {
         ctx.document.querySelector('#dss-cancel')?.click();

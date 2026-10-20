@@ -300,7 +300,10 @@ If any part's targets cannot be resolved, the whole delete is refused with a
 reason, before any files or index entries are removed.
 
 - Any live part, including the row's representative, refuses deletion before
-  the preview or dialog. Stop it first; Delete never stops it for you.
+  the preview or dialog. Stop parts running in this window first. For parts
+  running outside this window, return to their own terminal and end them there.
+  If both kinds are running, the notice names each part and its recovery.
+  Delete never stops a process for you.
   The preview also checks background jobs, processes outside this window and
   unreadable session state, reporting a refusal in a notice before asking.
 - The backend checks

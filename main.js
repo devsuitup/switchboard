@@ -2332,8 +2332,7 @@ ipcMain.handle('delete-session-preview', async (_event, sessionId) => {
   } catch (err) {
     return { ok: false, error: `cannot resolve conversation subagents: ${err.message}` };
   }
-  const running = partIds.some(partId => activeSessions.has(partId) && !activeSessions.get(partId).exited);
-  return { ok: true, parts: resolved.parts, partIds, transcripts, subagents, running };
+  return { ok: true, parts: resolved.parts, partIds, transcripts, subagents };
 });
 
 ipcMain.handle('delete-session', async (_event, sessionId, previewPartIds) => {
