@@ -25,7 +25,7 @@ Below the tabs, on the Sessions tab, a row of buttons:
 
 | Button (tooltip) | Effect |
 |---|---|
-| Show running only | Only sessions with a live process |
+| Show sessions open here only | Only sessions with a terminal open in this window |
 | Show pinned only | Only pinned sessions |
 | Show today's sessions only | Only sessions modified today |
 | Show archived sessions | Includes archived sessions in the list |
@@ -33,7 +33,7 @@ Below the tabs, on the Sessions tab, a row of buttons:
 | Re-sort sessions | Sorts the list again; between re-sorts, rows keep their place as they update |
 | Add project | Opens the Add Project dialog |
 
-"Running" and "pinned" exclude each other: turning one on turns the other off.
+"Open here" and "pinned" exclude each other: turning one on turns the other off.
 "Today" combines with either.
 
 ## Projects

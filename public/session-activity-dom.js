@@ -241,7 +241,10 @@ function applyStateClasses(sessionId, snapshot) {
     return;
   }
   const ids = [item.dataset.sessionId, ...(item.dataset.mergedMemberIds?.split(' ') || [])];
-  const row = typeof selectBackgroundActivity === 'function' ? localActivityRow(item.dataset.sessionId) : undefined;
+  const row = localActivityRow(item.dataset.sessionId) || {
+    sessionId: item.dataset.sessionId, headSessionId: item.dataset.headSessionId,
+    mergedMemberIds: ids.slice(1), remoteAlias: item.dataset.remoteAlias,
+  };
   snapshot = taskActivitySnapshot(sessionId, snapshot, row);
   snapshot = mergedRowSnapshot(ids, sessionId, snapshot, row);
   const icon = renderSessionIcon(snapshot);
@@ -261,7 +264,8 @@ function applyStateClasses(sessionId, snapshot) {
     && backgroundActivityLabel(item.dataset.headSessionId || item.dataset.sessionId, snapshot,
       typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId));
   const session = !label && localSessionForStatus(item.dataset.headSessionId || item.dataset.sessionId, row);
-  writeIconSlot(item.querySelector('.session-icon'), icon, label?.title, label?.text, session);
+  writeIconSlot(item.querySelector('.session-icon'), icon, label?.title, label?.text, session,
+    item.dataset.subagent ? null : rowLifecycleLabel(item.dataset.sessionId, snapshot, row));
   const status = item.querySelector('.session-status');
   if (label && status) {
     status.textContent = label.text;
@@ -278,7 +282,22 @@ function applyStateClasses(sessionId, snapshot) {
 }
 
 // One icon slot per row, written here and nowhere else — see .ai/contexts/session-state.md
-function writeIconSlot(el, icon, title, text, session) {
+function rowLifecycleLabel(sessionId, snapshot, row) {
+  if (typeof lifecycleLabel !== 'function') return null;
+  row ||= localActivityRow(sessionId) || { sessionId };
+  const ids = rowSessionIds(row);
+  const here = ids.find(id => activePtyIds.has(id));
+  const head = rowHeadId(row);
+  return lifecycleLabel({
+    ptyHere: !!here, attach: openSessions.get(here)?.attach,
+    job: typeof backgroundActivityEntry === 'function' ? backgroundActivityEntry(head, row) : null,
+    remoteAlias: row.remoteAlias, liveness: snapshot?.liveness,
+    exit: lastSessionExit(head) || ids.map(lastSessionExit).find(Boolean),
+    dormant: typeof dormantWorkingSet !== 'undefined' && ids.some(id => dormantWorkingSet.has(id)),
+  });
+}
+
+function writeIconSlot(el, icon, title, text, session, lifecycle) {
   if (!el || !icon) return;
   for (const cls of Array.from(el.classList)) {
     if (cls.indexOf('session-icon--') === 0) el.classList.remove(cls);
@@ -287,6 +306,14 @@ function writeIconSlot(el, icon, title, text, session) {
   el.title = title || icon.title || '';
   el.setAttribute('role', 'img');
   el.setAttribute('aria-label', (icon.title || 'Idle') + (text && text !== icon.title ? ` · ${text}` : ''));
+  if (lifecycle) {
+    const [first, ...details] = el.title.split('\n');
+    const unique = parts => parts.filter(Boolean).flatMap(part => part.split(' · '))
+      .filter((part, index, all) => all.findIndex(word => word.toLowerCase() === part.toLowerCase()) === index).join(' · ');
+    const words = unique([icon.title || 'Idle', lifecycle, first]);
+    el.title = [words, ...details].join('\n');
+    el.setAttribute('aria-label', unique([icon.title || 'Idle', lifecycle, text]));
+  }
   if (session?.status) {
     const why = session.status === 'waiting' ? session.waitingFor : '';
     const detail = 'CLI status: ' + [session.status, why].filter(Boolean).join(' · ');
@@ -317,9 +344,10 @@ function snapshotForLocal(sessionId, session, selection) {
 }
 
 // Paints an icon slot from a snapshot held by another adapter — see .ai/contexts/session-state.md ("Descriptor-owned attention")
-function paintSessionIconFromSnapshot(el, snapshot, title, text, session) {
+function paintSessionIconFromSnapshot(el, snapshot, title, text, session, row) {
   if (!el) return;
-  writeIconSlot(el, renderSessionIcon(snapshot), title, text, session);
+  writeIconSlot(el, renderSessionIcon(snapshot), title, text, session,
+    row && rowLifecycleLabel(row.sessionId, snapshot, row));
 }
 
 // see .ai/contexts/session-state.md
@@ -327,9 +355,12 @@ function paintSessionIcon(el, sessionId, session) {
   if (!el) return;
   const snapshot = storedActivitySnapshot(sessionId, session);
   const item = el.closest('.session-item');
-  const row = session || (item && typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId)) || { sessionId };
+  const row = session || (item && typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId))
+    || (item ? { sessionId: item.dataset.sessionId, headSessionId: item.dataset.headSessionId,
+      mergedMemberIds: item.dataset.mergedMemberIds?.split(' ') || [], remoteAlias: item.dataset.remoteAlias } : { sessionId });
   const projected = mergedRowSnapshot(rowSessionIds(row), sessionId, snapshot, row);
   const label = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(row), projected, row);
   writeIconSlot(el, renderSessionIcon(projected), label?.title, label?.text,
-    !label && !row.parentSessionId && localSessionForStatus(rowHeadId(row), row));
+    !label && !row.parentSessionId && localSessionForStatus(rowHeadId(row), row),
+    row.parentSessionId ? null : rowLifecycleLabel(sessionId, projected, row));
 }

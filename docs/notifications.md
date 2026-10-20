@@ -17,10 +17,17 @@ When several states hold at once, the first one in this table wins:
 | Working, with subagents | The same spinner, violet | light blue | Claude is working and subagents run under it | — |
 | Background work running | Static violet ⠿ | — | Claude is at its prompt, background tasks still run under it | The last background task ends |
 | Waiting for input | Orange hollow ring | — | Switchboard saw Claude finish a turn in a session open here, a session running elsewhere is at its prompt, or a background job is blocked (including while attached here) | A new turn starts or the job leaves blocked |
-| Running | Green dot | — | Switchboard holds a live process for the session and has not seen a turn end since that process started or since the last turn began | Claude finishes a turn, or the process exits |
-| — | Grey dot | — | Anything else | — |
+| Idle, open here | Green dot with a small dot below it | — | A terminal is open here, with no higher activity state | Activity changes or the terminal exits |
+| Idle | Grey dot | — | No higher activity state | Activity changes |
+| Not running | Solid grey dash | — | A finished background job has no live process | Liveness changes |
 
 The two violet states are explained on [Subagents](subagents.md#live-status).
+
+Hover the icon for its activity and lifecycle, for example `Idle · Open here`,
+`Running in background`, `Running on <host>` or `Running elsewhere`. A remote
+tab open here says `Attached here · runs on <alias>`; a session awaiting restore
+says `Not reopened · restores on click`. Job state and CLI details follow
+without repeating the same words. These details stay out of the glyph.
 
 A blocked background job keeps its Blocked label and tooltip. Blocking alone
 does not request attention. When Claude separately asks for your attention,
@@ -69,8 +76,8 @@ the sidebar did with it, when an indicator looks wrong.
 
 ## Status bar
 
-The bar at the bottom of the window shows `N running · N sessions · N projects`
-(the running count only when it is above zero), and transient messages such as
+The bar at the bottom of the window shows `N open here · N sessions · N projects`
+(the open-here count only when it is above zero), and transient messages such as
 indexing progress and the update status.
 
 On the right, **usage gauges** show the Claude plan's rate limits: the 5-hour

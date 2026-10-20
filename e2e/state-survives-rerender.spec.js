@@ -39,7 +39,7 @@ test('a transcript-driven row state survives a sidebar re-render', async ({ home
     }) + '\n');
 
     await expect(icon).toHaveClass(/session-icon--busy/);
-    await expect(icon).toHaveAttribute('title', 'Working\nCLI status: idle');
+    await expect(icon).toHaveAttribute('title', 'Working · Running elsewhere\nCLI status: idle');
     await archiveToggle.click();
     await expect(archiveToggle).toHaveClass(/active/);
     await expect(icon).toHaveClass(/session-icon--busy/, { timeout: 3000 });
@@ -58,7 +58,7 @@ test('a transcript-driven row state survives a sidebar re-render', async ({ home
     await page.getByRole('button', { name: 'Resume anyway', exact: true }).click();
 
     await expect(icon).toHaveClass(/session-icon--waiting/, { timeout: 40000 });
-    await expect(icon).toHaveAttribute('title', 'Waiting for input\nCLI status: idle');
+    await expect(icon).toHaveAttribute('title', 'Waiting for input · Running elsewhere\nCLI status: idle');
     await archiveToggle.click();
     await expect(archiveToggle).toHaveClass(/active/);
     await expect(icon).toHaveClass(/session-icon--waiting/, { timeout: 3000 });
@@ -73,7 +73,7 @@ test('a transcript-driven row state survives a sidebar re-render', async ({ home
     await page.locator('#search-refresh-btn').click();
     await expect(row).not.toHaveClass(/is-alive|cli-busy/);
     await expect(icon).toHaveClass(/session-icon--idle/);
-    await expect(icon).toHaveAttribute('title', 'Idle');
+    await expect(icon).toHaveAttribute('title', 'Idle · Exited (code 0)');
     await archiveToggle.click();
     await expect(icon).toHaveClass(/session-icon--idle/);
     await expect(row).not.toHaveClass(/is-alive/);

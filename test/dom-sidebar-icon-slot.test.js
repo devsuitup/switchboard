@@ -47,7 +47,7 @@ test('a busy local row carries the busy icon-slot markup (mutation-provable agai
     const slot = ctx.document.querySelector('#si-local-busy .session-icon');
     assert.ok(slot, 'the row must carry a .session-icon slot');
     assert.deepEqual(slotClassesOf(slot), ['session-icon--busy']);
-    assert.equal(slot.title, 'Working');
+    assert.equal(slot.title, 'Working · Open here');
     assert.equal(slot.dataset.glyph, '⠋');
   } finally { ctx.destroy(); }
 });
@@ -79,7 +79,8 @@ test('a local busy row and a remote busy row produce the same icon-slot markup',
     const remoteSlot = ctx.document.querySelector('#si-remote-busy-2 .session-icon');
     assert.ok(localSlot && remoteSlot, 'both rows must carry an icon slot');
     assert.deepEqual(slotClassesOf(localSlot), slotClassesOf(remoteSlot));
-    assert.equal(localSlot.title, remoteSlot.title);
+    assert.equal(localSlot.title, 'Working · Open here');
+    assert.equal(remoteSlot.title, 'Working · Running on planificator');
     assert.equal(localSlot.dataset.glyph, remoteSlot.dataset.glyph);
     assert.deepEqual(slotClassesOf(remoteSlot), ['session-icon--busy'], 'precondition: the remote row is actually busy');
   } finally { ctx.destroy(); }
@@ -110,7 +111,7 @@ test('a remote row past the decay window shows the age with no response-ready gl
       assert.ok(slot);
       assert.ok(!slot.classList.contains('session-icon--response-ready'),
         'a silence-based decay must never claim response-ready');
-      assert.equal(slot.title, 'Waiting for input');
+      assert.equal(slot.title, 'Waiting for input · Running on planificator');
 
       const statusEl = ctx.document.querySelector('#si-remote-decayed .session-status');
       assert.ok(statusEl, 'the age must still show via .session-status');

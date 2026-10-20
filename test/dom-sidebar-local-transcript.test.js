@@ -51,7 +51,7 @@ for (const state of ['descriptor', 'busy', 'waiting']) {
         }
         const before = ctx.document.getElementById('si-local-1');
         assert.ok(before.classList.contains('is-alive'));
-        if (state === 'waiting') assert.equal(before.querySelector('.session-icon').title, 'Waiting for input\nCLI status: busy');
+        if (state === 'waiting') assert.equal(before.querySelector('.session-icon').title, 'Waiting for input · Running elsewhere\nCLI status: busy');
         if (disappearance === 'status') session.status = undefined;
         else {
           ctx.window.sessionMap.delete(session.sessionId);
@@ -61,7 +61,7 @@ for (const state of ['descriptor', 'busy', 'waiting']) {
         const item = ctx.document.getElementById('si-local-1');
         assert.equal(item.classList.contains('is-alive'), false, 'the ended process is not alive');
         assert.equal(item.classList.contains('cli-busy'), false, 'the ended process is not busy');
-        assert.equal(item.querySelector('.session-icon').title, 'Idle', 'the ended process is not waiting');
+        assert.equal(item.querySelector('.session-icon').title, 'Idle · Liveness unknown', 'the ended process is not waiting');
         const local = ctx.read('localPtyStates.get("local-1").snapshot()');
         assert.notEqual(local.liveness, 'alive');
         assert.equal(local.busy, false);
@@ -69,7 +69,7 @@ for (const state of ['descriptor', 'busy', 'waiting']) {
         assert.equal(ctx.read('localTranscriptStates.has("local-1")'), false);
         assert.equal(ctx.read('localTranscriptDecayTimers.has("local-1")'), false);
         ctx.window.decayLocalTranscriptBusy(session.sessionId);
-        assert.equal(item.querySelector('.session-icon').title, 'Idle', 'late decay cannot restore waiting');
+        assert.equal(item.querySelector('.session-icon').title, 'Idle · Liveness unknown', 'late decay cannot restore waiting');
       } finally { ctx.destroy(); }
     });
   }
@@ -101,7 +101,7 @@ for (const withDescriptor of [false, true]) {
           const icon = item.querySelector('.session-icon');
           const visible = withDescriptor ? state : 'idle';
           assert.ok(icon.classList.contains(`session-icon--${visible}`), `the ${visible} icon survives the render`);
-          assert.equal(icon.title, withDescriptor ? (state === 'busy' ? 'Working' : 'Waiting for input') + '\nCLI status: busy' : 'Idle');
+          assert.equal(icon.title, withDescriptor ? (state === 'busy' ? 'Working' : 'Waiting for input') + ' · Running elsewhere\nCLI status: busy' : 'Idle · Liveness unknown');
           assert.equal(item.classList.contains('cli-busy'), withDescriptor && state === 'busy');
           assert.equal(item.classList.contains('response-ready'), false);
           assert.equal(item.classList.contains('needs-attention'), false);

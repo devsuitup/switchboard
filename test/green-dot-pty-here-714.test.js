@@ -38,7 +38,7 @@ for (const first of [null, 'closed', 'unknown']) {
     assert.deepEqual(slot(), ['session-icon--idle']);
     assert.ok(icon().classList.contains('running'));
     assert.equal(background(), GREEN);
-    assert.equal(icon().title, 'Idle\nCLI status: idle');
+    assert.equal(icon().title, 'Idle · Open here\nCLI status: idle');
   });
 }
 
@@ -343,6 +343,6 @@ for (const surface of ['sidebar', 'grid']) {
     ctx.setActivity('root', true, 'osc');
     ctx.setActivity('root', false, 'osc');
     assert.ok(icon().classList.contains('session-icon--waiting'));
-    assert.equal(icon().title, 'Turn state unavailable');
+    assert.equal(icon().title, surface === 'Agents' ? 'Turn state unavailable' : 'Turn state unavailable · Open here');
   });
 }

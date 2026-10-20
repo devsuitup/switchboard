@@ -165,7 +165,7 @@ test('an unseen closure keeps response-ready priority, and OSC cannot create or 
 test('an unknown live head exposes degraded information, and owner death gates stale open evidence', t => {
   const { ctx, turn, icon } = setup(t, { status: 'busy' });
   turn('unknown');
-  assert.equal(icon().title, 'Turn state unavailable\nCLI status: busy');
+  assert.equal(icon().title, 'Turn state unavailable · Running elsewhere\nCLI status: busy');
   turn('open');
   ctx.window.sessionMap.set('root', { sessionId: 'root', modified: stamp });
   ctx.window.projectLocalPtyState('root');
@@ -256,7 +256,7 @@ for (const method of ['refreshNow', 'refreshHostNow']) {
       assert.equal(pushes[0].channel, 'task-snapshot');
       assert.equal(pushes[0].snapshot.headTurn.state, 'open');
       assert.deepEqual(pushes[0].snapshot.tasks, []);
-      assert.equal(icon().title, 'Working\nCLI status: busy');
+      assert.equal(icon().title, 'Working · Running on host\nCLI status: busy');
     });
   }
 }

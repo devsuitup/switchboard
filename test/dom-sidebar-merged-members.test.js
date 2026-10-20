@@ -130,9 +130,9 @@ test('a sibling projection preserves the merged member waiting-for-input icon', 
   ctx.window.activePtyIds.add('B');
   turn(ctx, 'B', 'closed');
   ctx.setActivity('B', false, 'test', { armReady: false });
-  assert.equal(item.querySelector('.session-icon').title, 'Waiting for input');
+  assert.equal(item.querySelector('.session-icon').title, 'Waiting for input · Open here');
   ctx.read("projectLocalPtyState('A')");
-  assert.equal(item.querySelector('.session-icon').title, 'Waiting for input');
+  assert.equal(item.querySelector('.session-icon').title, 'Waiting for input · Open here');
 });
 
 test('a sibling transcript decay preserves the head with an open turn', t => {

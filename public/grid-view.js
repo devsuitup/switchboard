@@ -99,7 +99,7 @@ function updateGridCardActivity(sessionId, card, row) {
   const selection = typeof selectBackgroundActivity === 'function' ? selectBackgroundActivity(head, row) : null;
   const label = typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(head, row, selection)?.state === 'blocked'
     && backgroundActivityLabel(head, snapshot, row, selection);
-  paintSessionIconFromSnapshot(dot, snapshot, label?.title, label?.text);
+  paintSessionIconFromSnapshot(dot, snapshot, label?.title, label?.text, undefined, row);
   dot?.classList.toggle('running', running);
   setHasBusyAgents(card, snapshot.agentsBusy);
   setNeedsAttention(card, snapshot.attention);

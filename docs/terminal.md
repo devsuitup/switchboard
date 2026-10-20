@@ -158,7 +158,7 @@ terminal's shell exits or is stopped. If the shell exits on its own, its output 
 panel with a note; toggle **Shell** off and on for a new one.
 
 A panel shell is not a session: it is never listed in the sidebar, never counted
-in "N running", never restored at startup, and never
+in "N open here", never restored at startup, and never
 [sandboxed](sandbox.md). Remote sessions have none — the panel says so.
 
 ## Theme
