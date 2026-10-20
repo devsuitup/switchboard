@@ -44,7 +44,7 @@ test('project archive-all: confirmation counts only top-level sessions', async (
     assert.match(label, /^Archive the 1 session$/, `the box must count 1 top-level session, got: ${label}`);
     await answerChoiceDialog(ctx, { confirm: false });
     await done;
-    assert.deepEqual(calls.map(c => c.method), ['getProjectArchivePlan'], 'declining the dialog must archive nothing');
+    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob', 'getProjectArchivePlan'], 'declining the dialog must archive nothing');
   } finally {
     ctx.destroy();
   }

@@ -176,7 +176,7 @@ The Changes badge is the one place that already meets "never colour alone".
 |---|---|---|---|---|
 | Row Archive | `sidebar.js` (`session-archive-btn`, `archiveSessionRows`) | `Archive` / `Unarchive` | checks every part for background jobs, stops planned targets, then archives; Undo restores the row, leaving stopped processes stopped | one danger confirmation naming targets and locations when there are targets; otherwise instant; ten-second Undo either way |
 | Slug-group Archive | `sidebar.js` (`slug-group-archive-btn`, `archiveSessionRows`) | — (archive icon) | checks the whole group before any dialog; archives eligible rows; Undo restores exactly this click's successful rows | one danger confirmation for the whole group when there are targets; otherwise instant; ten-second Undo either way |
-| Folder Archive | `sidebar.js:1143-1235` | `Archive folder` | stops + archives sessions, disables schedules | `showChoiceDialog` (`sidebar.js:1190-1197`), names the hosts where sessions are stopped (`1174-1179`) |
+| Folder Archive | `sidebar.js:1143-1235` | `Archive folder` | stops + archives sessions, disables schedules | `showChoiceDialog` (`sidebar.js:1190-1197`), names running sessions and places, refuses background jobs before the dialog, and offers Undo after stopping processes or archiving an empty folder |
 | Row Delete | `sidebar.js:1525-1568`, button `1798-1801`, dialog `1881-1945` | `Delete session (removes the transcript from disk)` → `Delete permanently` | stop then delete transcript; refused up front on a merged row with a live member (`1529-1533`) | custom modal with preview of what goes |
 | Agents Delete | `agents-view.js:340, 421` | `Delete` | `claude rm` (conversation + worktree when safe) | `window.confirm` |
 | Worktree Delete | `sidebar.js:1337-1352`, dialog `1949-2017` | `Delete anyway` | `git worktree remove` | custom modal with dirty-file list |
@@ -189,7 +189,11 @@ The Changes badge is the one place that already meets "never colour alone".
 **Divergences.**
 1. Row and slug-group Archive now distinguish reversible archiving from
    stopping processes: only the latter asks first. Folder Archive retains
-   its separate options dialog.
+   an options dialog, naming running local and remote sessions and places.
+   It is danger only when processes could be stopped; an idle configuration
+   dialog has no Undo. Empty-options Archive runs immediately with Undo.
+   After stopping processes, Undo restores the folder, this click's sessions
+   and schedules disabled; stopped processes stay stopped.
 2. Three delete confirmations: custom modal with preview (session, worktree),
    OS `confirm` (Agents, files). The confirm button says `Delete permanently`,
    `Delete anyway`, or `OK`.

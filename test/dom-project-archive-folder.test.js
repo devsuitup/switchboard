@@ -135,15 +135,16 @@ test('archive folder: no schedule box without a disableable schedule; a linked o
   } finally { ctx.destroy(); }
 });
 
-test('archive folder: a folder without sessions still opens the dialog and is archived', async () => {
+test('archive folder: a folder without sessions or schedules archives without a dialog', async () => {
   const ctx = setupSidebarDom();
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [] };
     const calls = installApi(ctx);
     render(ctx, [project]);
-    const overlay = await clickArchive(ctx, '/p', { confirm: true });
+    await clickArchive(ctx, '/p');
 
-    assert.ok(overlay, 'the dialog must open');
+    assert.equal(ctx.document.querySelector('.modal-overlay'), null);
+    assert.ok(ctx.document.querySelector('[data-notice-id^="archive-folder:"] .app-notice-action'));
     assert.equal(named(calls, 'archiveProject').length, 1);
   } finally { ctx.destroy(); }
 });
@@ -157,7 +158,7 @@ test('archive folder: Cancel calls nothing but the plan', async () => {
     render(ctx, [project]);
     await clickArchive(ctx, '/p', { confirm: false });
 
-    assert.deepEqual(calls.map(c => c.method), ['getProjectArchivePlan']);
+    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob', 'getProjectArchivePlan']);
   } finally { ctx.destroy(); }
 });
 
@@ -243,7 +244,7 @@ test('archive folder: while indexing, a persistent notice and no mutation', asyn
 
     assert.match(ctx.document.querySelector('#app-notices [role="alert"]')?.textContent || '', /still indexing/);
     assert.equal(ctx.document.querySelector('.modal-overlay'), null);
-    assert.deepEqual(calls.map(c => c.method), ['getProjectArchivePlan']);
+    assert.deepEqual(calls.map(c => c.method), ['bgAgentLiveJob', 'getProjectArchivePlan']);
   } finally { ctx.destroy(); }
 });
 

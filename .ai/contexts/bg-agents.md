@@ -912,6 +912,9 @@ the client is killed. The call resolves on `close` so stdout is drained, or
   `stopBeforeArchive` (IPC `bg-agent-live-job`, the same `liveJobCheck`,
   failing closed) before anything is detached; a folder archive (#482) that
   holds one archives nothing. Stop the job from the Agents view first. With
+  Folder Archive checks every local part before its options dialog, even when
+  the remembered "Archive the sessions" option is unchecked; a live job or an
+  unknown answer refuses the action before configuration. Once allowed, with
   "Archive the sessions" unchecked a folder archive never calls
   `stopBeforeArchive`: it only hides the folder, archives and detaches
   nothing, and the job stays in the Agents view.

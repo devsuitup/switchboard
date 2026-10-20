@@ -255,7 +255,10 @@ focus) with a form body.
   indexing progress and informational handoff success; `#update-toast` is unchanged.
   Agents/settings failures and remaining information dialogs are later slices.
   Detach uses the Undo variant to reopen its captured attach job and cwd after
-  the local client exits. Folder Archive Undo wiring belongs to its own slice.
+  the local client exits. Folder Archive uses the Undo variant after an actual
+  stop and for an empty-options archive: it restores the timestamped folder
+  groups, exactly this click's sessions and the schedules it disabled. Its notice
+  names archived worktrees and disabled schedules; stopped processes stay stopped.
 
 ## B9. Inline error
 

@@ -138,10 +138,42 @@ test('an older group Undo cannot reverse a later row Archive', async t => {
   await archive(ctx);
   assert.deepEqual(ctx.calls, [['archive', 'A', 1], ['archive', 'B', 1], ['archive', 'A', 0], ['archive', 'A', 1]]);
   const older = ctx.document.querySelector('[data-notice-id="archive-sessions:A:B"] .app-notice-action');
-  older?.click();
+  assert.equal(older, null, 'the old group identity is retired');
+  const remaining = ctx.document.querySelector('[data-notice-id="archive-sessions:B"] .app-notice-action');
+  assert.ok(remaining, 'B keeps its older Undo');
+  remaining.click();
   await settle();
   assert.equal(ctx.rows[0].archived, 1, 'the later row Archive must remain in force');
   assert.equal(ctx.calls.filter(call => call[0] === 'archive' && call[1] === 'A' && call[2] === 0).length, 1);
+  assert.deepEqual(ctx.calls.at(-1), ['archive', 'B', 0]);
+});
+
+test('remote Archive stop-time refusal protects a member that became alive after planning', async t => {
+  const ctx = setup(t, [{ sessionId: 'A', remoteAlias: 'host', remoteDescriptorSeen: true,
+    mergedMemberIds: ['B'], remoteMemberDescriptorSeen: { B: false } }]);
+  ctx.window.api.remoteStopSession = async (alias, id) => {
+    ctx.calls.push(['remoteStop', alias, id]);
+    ctx.rows[0].remoteMemberDescriptorSeen.B = true;
+    return { ok: true };
+  };
+  const pending = archive(ctx);
+  await settle(); answer(ctx, true); await pending;
+  assert.deepEqual(ctx.calls, [['remoteStop', 'host', 'A']]);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /B.*confirm|confirm.*B/i);
+  assert.equal(undo(ctx), undefined);
+});
+
+test('attach-only Archive explains detaching without claiming zero stopped processes', async t => {
+  const ctx = setup(t);
+  ctx.window.openSessions.set('A', { attach: true, closed: false, attachJobId: 'job-A' });
+  const pending = archive(ctx);
+  await settle();
+  const text = ctx.document.querySelector('.modal-overlay').textContent;
+  assert.doesNotMatch(text, /0 running processes/);
+  assert.match(text, /detach.*job-A.*keeps running/);
+  answer(ctx, false);
+  await pending;
+  assert.deepEqual(ctx.calls, []);
 });
 
 for (const merged of [false, true]) {
