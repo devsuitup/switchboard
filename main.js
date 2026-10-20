@@ -838,6 +838,7 @@ ipcMain.handle('unarchive-project', async (_event, entry) => {
   try {
     const global = getSetting('global') || {};
     if (!(global.hiddenProjects || []).includes(entry)) return { error: 'Project is not archived' };
+    if (global.hiddenProjectKinds?.[entry] === 'delete') return { error: 'Project is deleted' };
     const { alias, folder: projectPath } = parseFolderKey(entry);
     const folder = alias === null ? encodeProjectPath(projectPath) : joinFolderKey(alias, encodeProjectPath(projectPath));
     await writer.refreshFolder(folder);

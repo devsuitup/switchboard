@@ -9,6 +9,23 @@
 // showNewSessionPopover, showRemoteLaunchDialog, openSettingsViewer, showResumeSessionDialog,
 // showJsonlViewer, forkSession, openSession, loadProjects (app.js/dialogs.js), resolveSessionStop, isRemoteSessionAlive, stopBeforeArchive (stop-session-ui.js), showAppNotice (app-notices.js)
 
+function showProjectArchiveUndo(entry, name) {
+  const id = `archive-project:${entry}`;
+  showAppNotice({
+    id, kind: 'undo', message: `Project "${name}" archived. Its settings and cached sessions are kept; schedules resume on unarchive.`,
+    actionLabel: 'Undo',
+    onAction: async () => {
+      try {
+        const result = await window.api.unarchiveProject(entry);
+        if (!result?.ok && result?.error !== 'Project is not archived') throw new Error(result?.error || 'The backend returned no result');
+        await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+      } catch (error) {
+        showAppNotice({ id, kind: 'error', message: `Could not unarchive project "${name}": ${error.message}` });
+      }
+    },
+  });
+}
+
 function slugId(slug) {
   return 'slug-' + slug.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -1450,11 +1467,17 @@ function rebindSidebarEvents(projects) {
       wtHideBtn.onclick = async (e) => {
         e.stopPropagation();
         const name = wtProject.projectPath.split('/').pop();
+        const returnFocusId = wtHeader.closest('.project-group')?.querySelector('.project-header')?.id;
         try {
           const result = await window.api.archiveProjectSettings(wtProject.projectPath, wtProject.folder);
           if (result.error) throw new Error(result.error);
           window.showProjectArchiveUndo(result.entry, name);
           await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+          if (!wtHideBtn.isConnected && document.activeElement === document.body) {
+            const target = document.getElementById(returnFocusId) || sidebarContent;
+            target.setAttribute('tabindex', '-1');
+            target.focus();
+          }
         } catch (err) {
           await showChoiceDialog({ title: 'Could not archive project', message: err.message, confirmLabel: 'OK', returnFocus: wtHideBtn });
         }

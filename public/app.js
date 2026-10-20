@@ -1734,6 +1734,10 @@ async function loadProjects({ resort = false } = {}) {
     // Reconcile pending sessions: remove ones that now have real data
     let hasReinjected = false;
     const hiddenProjects = globalSettings?.hiddenProjects || [];
+    for (const notice of document.querySelectorAll('#app-notices [data-notice-id^="archive-project:"]')) {
+      const entry = notice.dataset.noticeId.slice('archive-project:'.length);
+      if (!hiddenProjects.includes(entry) || globalSettings?.hiddenProjectKinds?.[entry] === 'delete') clearAppNotice(notice.dataset.noticeId);
+    }
     for (const [sid, pending] of [...pendingSessions]) {
       const realExists = allProjects.some(p => p.projectPath === pending.projectPath
         && (p.remoteAlias || null) === (pending.session.remoteAlias || null)
