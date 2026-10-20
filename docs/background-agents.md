@@ -105,7 +105,7 @@ requests open in the browser), its last result, and the verbs:
 | Resume | opens the conversation here after the shared live-elsewhere question | an External interactive session with a session id |
 | Attach | `claude attach <id>` in a terminal tab | while hosted (working, blocked, or done with a matching live background descriptor) and the daemon answers |
 | Transcript | the read-only transcript viewer | whenever the transcript exists |
-| Stop | `claude stop <id>`; the conversation is kept | while live |
+| Stop | `claude stop <id>`, after confirmation naming the job and id; its process ends and the conversation is kept | while live |
 | Respawn | `claude respawn <id>` | a background session that is not live |
 | Delete | `claude rm <id>`, after confirmation; the worktree goes too when that is safe | a background session that is not live |
 
@@ -129,6 +129,11 @@ is refused even if the job says stopped or done. If the process or job files
 cannot be read, the action is refused with a reason. Stop remains available
 for a working or blocked daemon job, including when its job file is missing or
 its fresh state is unknown. A refused Stop keeps an attached tab open.
+
+Stop and Delete check whether they can proceed before asking for confirmation.
+A refusal appears in the detail pane without a dialog. Cancel stops or deletes
+nothing. After confirmation, Switchboard checks again before running the command;
+a conversation that started running while the dialog was open can still refuse.
 
 Transcript checks the session index when clicked and shows a reason if the file
 is missing or not indexed yet. Click again after indexing to open it. A file

@@ -491,7 +491,7 @@ function renderAgentDetail(entry) {
     .join(' · ');
   const error = agentsVerbErrors.get(key);
   return `
-    <div class="agents-detail-head">
+    <div class="agents-detail-head" id="agents-detail-head-${agentsEscapeAttr(key)}-${agentsEscapeAttr(entry.state || '')}">
       <span class="agents-detail-name">${escapeHtml(agentDisplayName(entry))}</span>
       <span class="agents-detail-actions">
         ${entry.kind === 'interactive' ? btn('resume', 'Resume', v.resume) : ''}${btn('attach', 'Attach', v.attach)}${btn('transcript', 'Transcript', v.transcript)}${btn('stop', 'Stop', v.stop)}${btn('respawn', 'Respawn', v.respawn)}${btn('rm', 'Delete', v.rm)}
@@ -581,7 +581,20 @@ async function runAgentVerb(verb, entry) {
     attachBgAgent(entry);
     return;
   }
-  if (verb === 'rm' && !await appConfirm({ title: 'Delete?', message: 'Delete this background session? Its conversation goes, and its worktree when that is safe.', confirmLabel: 'Delete', danger: true })) return;
+  if (verb === 'stop' || verb === 'rm') {
+    let check;
+    try { check = await window.api.checkBgAgentVerb(verb, entry.id); }
+    catch (err) { check = { ok: false, error: err && err.message ? err.message : String(err) }; }
+    if (!check || check.ok !== true) {
+      agentsVerbErrors.set(key, (check && check.error) || 'Cannot check this background session');
+      if (agentsViewActive) renderAgentsView();
+      return;
+    }
+    const confirmation = verb === 'stop'
+      ? { title: 'Stop?', message: `Stop background job "${agentDisplayName(entry)}" (${entry.id})? Its process ends; the conversation is kept.`, confirmLabel: 'Stop', danger: true }
+      : { title: 'Delete?', message: 'Delete this background session? Its conversation goes, and its worktree when that is safe.', confirmLabel: 'Delete', danger: true };
+    if (!await appConfirm(confirmation)) return;
+  }
   agentsPendingVerbs.add(key);
   agentsVerbErrors.delete(key);
   if (agentsViewActive) renderAgentsView();

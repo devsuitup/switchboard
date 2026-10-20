@@ -286,10 +286,12 @@ for (const ok of [false, true]) {
     const r = renderer(t);
     const calls = [];
     r.window.api = {
+      checkBgAgentVerb: async () => ({ ok: true }),
       bgAgentVerb: async () => { calls.push('main'); return { ok, error: 'refused' }; },
       stopSession: async () => { calls.push('close'); },
       getBgAgents: async () => ({ roster: [], daemonReachable: true }),
     };
+    r.window.appConfirm = async () => true;
     r.window.applyAgentsSnapshot = () => {};
     await r.runAgentVerb('stop', { id: JOB, sessionId: SID, kind: 'background', attachedHere: true });
     assert.deepEqual(calls, ok ? ['main', 'close'] : ['main']);

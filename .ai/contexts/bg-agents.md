@@ -13,7 +13,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 | `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobCheck`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
 | `project-root.js` | `resolveProjectRoots(cwd)`: the `.claude/worktrees` pattern, else one `git rev-parse`; never throws |
 | `delete-session-guard.js` | `deleteSessionRefusal`: the fail-closed liveness check `delete-session` runs first |
-| `bg-agents-ipc.js` | `get-bg-agents`, `bg-agent-verb`, `dispatch-bg-agent`, the `bg-agents-changed` push |
+| `bg-agents-ipc.js` | `get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, the `bg-agents-changed` push |
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
 | `bridge-session-id.js` | Shared case-sensitive suffix for job `cse_` and descriptor `session_` bridge ids |
 | `pty-ops.js` | `detachPty` |
@@ -81,7 +81,7 @@ Stop or Close action. See `test/dom-agents-view.test.js` (#566/S5).
    settings cannot be read. A missing directory means nothing
    is live. Ids are compared lowercased everywhere, since Windows resolves a
    transcript path case-insensitively.
-10. `bg-agent-verb` checks the conversation before `rm` or `respawn`, and
+10. `check-bg-agent-verb` and `bg-agent-verb` share the conversation check before `rm` or `respawn`, and
     before `stop` on a finished job. It reads the job file afresh through
     `conversationCheck`; `rm`/`respawn` refuse an unreadable/unknown state or
     an absent conversation identity. Stop goes to the daemon unless the fresh
@@ -96,6 +96,26 @@ Stop or Close action. See `test/dom-agents-view.test.js` (#566/S5).
     The check and CLI invocation are separate: a process can start after the
     check but before the CLI runs. This reduces stale-roster mistakes; it is
     not an atomic lock on the conversation.
+
+### Agents confirmations and detail buttons (#565, #711)
+
+`runAgentVerb` awaits `checkBgAgentVerb` before either Stop or Delete opens
+`appConfirm`. A refusal or rejected check is displayed through
+`agentsVerbErrors` in the selected detail; it opens no dialog and sends no
+verb. The check-only IPC accepts only `stop`, `rm` and `respawn` with a
+`JOB_ID_RE` id, and never calls the CLI or reconciles the roster. Unknown or
+hosted Stop still passes the shared check. Execution repeats the check after
+confirmation, so a state change while the question is open can still refuse.
+
+Stop's danger confirmation names the job's display name and id and says its
+process ends while the conversation is kept. Cancel sends no verb and leaves
+an attached tab open. Delete retains its conversation/worktree loss wording.
+
+The detail uses morphdom, retaining verb button nodes and focus across equal
+roster polls. Its action header is keyed by job identity and state, so a
+changed state replaces the buttons and refreshes availability. The equal-roster
+retention already existed at the PR6 base; the state key adds the replacement
+boundary. Evidence: `test/dom-agents-view.test.js`, `test/bg-agents-ipc.test.js`.
 
 ## Sidebar membership (#620)
 

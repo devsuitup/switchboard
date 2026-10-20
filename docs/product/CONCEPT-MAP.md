@@ -282,9 +282,9 @@ row text `<state> · <status>` (`:227`); row icon from the session-state ladder
 |---|---|---|---|---|
 | Attach | **Attach**, or double-click row | live and daemon reachable | none | row click on a `bg` row; header then reads **Detach (the session keeps running)** |
 | Transcript | **Transcript** | transcript exists | none | row **View messages** |
-| Stop | **Stop** (`claude stop`) | live and reachable | **none** | row / card **Stop session** on an attached tab = detach, not stop |
+| Stop | **Stop** (`claude stop`) | live and reachable | After the fresh check: job name and id; its process ends, the conversation is kept | row / card **Stop session** on an attached tab = detach, not stop |
 | Respawn | **Respawn** | finished, no live conversation | none | — |
-| Delete | **Delete** (`claude rm`) | finished, no live conversation | "Delete this background session? Its conversation goes, and its worktree when that is safe." (`:421`) | row **Delete session** refused: "background job <id> is still running this session — stop it from the Agents view first" (`public/stop-session-ui.js:34`) |
+| Delete | **Delete** (`claude rm`) | finished, no live conversation | After the fresh check: "Delete this background session? Its conversation goes, and its worktree when that is safe." | row **Delete session** refused: "background job <id> is still running this session — stop it from the Agents view first" (`public/stop-session-ui.js:34`) |
 | New | **New agent** (`public/index.html:91`) | — | — | — |
 | View options | **Finished**, Group **None / State / Project**, **Worktrees** (`public/index.html:82-90`) | — | — | Primary+Shift+A toggles the view |
 

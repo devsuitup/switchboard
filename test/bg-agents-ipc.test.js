@@ -107,3 +107,80 @@ test('bg-agent-live-job answers liveJobCheck for the id, coerced to a string', a
   await handlers.get('bg-agent-live-job')({}, { toString: () => 'x' });
   assert.deepEqual(bg.calls, [['liveJobCheck', 'S-1'], ['liveJobCheck', ''], ['liveJobCheck', 'x']]);
 });
+
+for (const verb of ['rm', 'respawn', 'stop']) {
+  for (const scenario of ['unknown', 'hosted', 'own', 'external', 'unreadable', 'throwing', 'allowed']) {
+    test(`PR6 check-only and execution agree for ${verb}: ${scenario}`, async () => {
+      const { handlers, ipcMain } = fakeIpc();
+      const bg = fakeBgAgents();
+      bg.liveJobCheck = () => ({ known: true, job: null });
+      bg.conversationCheck = () => {
+        if (scenario === 'throwing') throw new Error('job read failed');
+        return scenario === 'unknown' ? { known: false, reason: 'unreadable state' }
+          : { known: true, hosted: scenario === 'hosted', state: 'working', sessionIds: ['s-1'] };
+      };
+      init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} },
+        activeSessions: new Map(scenario === 'own' ? [['s-1', {}]] : []),
+        cliSessionState: { liveElsewhereChecked: async () => scenario === 'unreadable'
+          ? { known: false, reason: 'descriptor read failed' }
+          : { known: true, live: scenario === 'external' ? { pid: 42 } : null } },
+        sessionHasPty: () => false, ptyPids: () => [],
+      });
+      const checkOnly = handlers.get('check-bg-agent-verb');
+      assert.equal(typeof checkOnly, 'function', 'check-only IPC must be registered');
+      const preview = await checkOnly({}, verb, 'aaaaaaaa');
+      assert.deepEqual(bg.calls, [], 'check-only must never invoke a verb or reconcile');
+      const execution = await handlers.get('bg-agent-verb')({}, verb, 'aaaaaaaa');
+      assert.deepEqual(preview, execution);
+      const allowed = scenario === 'allowed' || (verb === 'stop' && ['unknown', 'hosted', 'throwing'].includes(scenario));
+      assert.equal(preview.ok, allowed);
+      assert.deepEqual(bg.calls, allowed ? [['verb', verb, 'aaaaaaaa']] : []);
+    });
+  }
+}
+
+test('PR6 execution rechecks a job that becomes hosted after an allowed preview', async () => {
+  const { handlers, ipcMain } = fakeIpc();
+  const bg = fakeBgAgents();
+  let hosted = false;
+  bg.conversationCheck = () => ({ known: true, hosted, state: 'working', sessionIds: [] });
+  init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} } });
+  assert.equal(typeof handlers.get('check-bg-agent-verb'), 'function');
+  assert.deepEqual(await handlers.get('check-bg-agent-verb')({}, 'rm', 'aaaaaaaa'), { ok: true });
+  hosted = true;
+  assert.deepEqual(await handlers.get('bg-agent-verb')({}, 'rm', 'aaaaaaaa'),
+    { ok: false, error: 'cannot delete a working session; stop it first' });
+  assert.deepEqual(bg.calls, []);
+});
+
+test('PR6 check-only rejects unsupported verbs and malformed ids without reading jobs', async () => {
+  const { handlers, ipcMain } = fakeIpc();
+  const bg = fakeBgAgents();
+  bg.conversationCheck = () => { throw new Error('must not read an invalid request'); };
+  init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} } });
+  const check = handlers.get('check-bg-agent-verb');
+  assert.equal(typeof check, 'function');
+  for (const verb of ['attach', 'transcript', 'bogus', null]) {
+    assert.deepEqual(await check({}, verb, 'aaaaaaaa'), { ok: false, error: `unknown verb: ${String(verb)}` });
+  }
+  for (const id of ['../jobs', 'AAAAAAAA', '', null, {}]) {
+    assert.deepEqual(await check({}, 'stop', id), { ok: false, error: 'invalid background session id' });
+  }
+  assert.deepEqual(bg.calls, []);
+});
+
+test('PR6 preload forwards the check-only verb and id without invoking execution', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const calls = [];
+  let api;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8'), {
+    require: () => ({ contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } },
+      ipcRenderer: { invoke: async (...args) => { calls.push(args); return { ok: true }; } } }),
+    process: { platform: 'win32', argv: [] },
+  }, { filename: path.join(__dirname, '..', 'preload.js') });
+  assert.equal(typeof api.checkBgAgentVerb, 'function');
+  assert.deepEqual(await api.checkBgAgentVerb('rm', 'aaaaaaaa'), { ok: true });
+  assert.deepEqual(calls, [['check-bg-agent-verb', 'rm', 'aaaaaaaa']]);
+});

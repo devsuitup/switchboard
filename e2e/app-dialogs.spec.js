@@ -11,6 +11,8 @@ test('background Delete is a designed confirmation: Escape cancels and Delete pr
     ipcMain.handle('get-bg-agents', () => ({ daemonReachable: true, roster: [
       { id: 'aaaaaaaa', sessionId: 'dialog-session', name: 'Dialog fixture', cwd: '/fixture', kind: 'background', state: 'done', attachedHere: false },
     ] }));
+    ipcMain.removeHandler('check-bg-agent-verb');
+    ipcMain.handle('check-bg-agent-verb', () => ({ ok: true }));
     ipcMain.removeHandler('bg-agent-verb');
     ipcMain.handle('bg-agent-verb', (_event, verb, id) => {
       globalThis.dialogDeletes.push([verb, id]);
