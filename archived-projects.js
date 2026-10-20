@@ -291,7 +291,8 @@ function undoArchiveProjectFolders(groups, archivedAt, { getSetting, setSetting,
   if (typeof archivedAt !== 'string' || !archivedAt) return { error: 'invalid archive timestamp' };
   const archived = { ...(getSetting(SETTING_KEY) || {}) };
   const targets = [...new Map(valid.map(group => [archivedEntry(parseFolderKey(group.folderKey).alias, group.projectPath), group])).entries()];
-  if (targets.some(([entry]) => !archived[entry] || archived[entry].archivedAt !== archivedAt)) return { error: 'stale archive Undo' };
+  if (targets.some(([entry]) => !archived[entry] || archived[entry].archivedAt !== archivedAt
+    || !Array.isArray(archived[entry].disabledByArchive))) return { error: 'stale archive Undo' };
   const offers = { ...(getSetting(OFFERS_KEY) || {}) };
   const records = targets.map(([entry, group]) => ({ entry, group, record: archived[entry] }));
   for (const { entry, record } of records) {

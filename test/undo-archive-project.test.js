@@ -9,6 +9,7 @@ const vm = require('node:vm');
 const archive = require('../archived-projects');
 const { createWriterCommands } = require('../session-index-commands');
 const { createSessionIndexWriter } = require('../session-index-writer');
+const { setScheduleEnabled, parseFrontmatter } = require('../schedule-runner');
 
 const group = (projectPath, folderKey = '-p') => ({ projectPath, folderKey });
 const entry = archive.archivedEntry(null, '/p');
@@ -192,6 +193,71 @@ function writerFixture() {
   h.deps.seedProjects = () => [];
   h.deps.scan = () => [];
   return { ...h, commands, requests, writer };
+}
+
+test('folder Undo writer: Archive disables X while prior offered Y stays disabled through Undo', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-undo-writer-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const commands = path.join(root, '.claude', 'commands');
+  fs.mkdirSync(commands, { recursive: true });
+  const [x, y, z] = ['x', 'y', 'z'].map(name => path.join(commands, `schedule-${name}.md`));
+  for (const [name, file, enabled] of [['x', x, true], ['y', y, false], ['z', z, false]]) {
+    fs.writeFileSync(file, `---\nname: ${name}\ncron: 0 * * * *\nenabled: ${enabled}\n---\nPrompt\n`);
+  }
+  const key = archive.archivedEntry(null, root);
+  const offer = { ...priorOffer, disabledSchedules: [y] };
+  const h = writerFixture();
+  h.settings.scheduleReenableOffers = { [key]: structuredClone(offer), other: { disabledSchedules: ['other'] } };
+  h.deps.seedProjects = () => [root];
+  h.deps.scan = () => [{ name: 'x', filePath: x }, { name: 'y', filePath: y }, { name: 'z', filePath: z }];
+  h.deps.realpath = fs.realpathSync;
+  h.deps.setEnabled = setScheduleEnabled;
+  delete h.deps.reenable;
+  const enabled = file => parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.enabled;
+  const archived = await h.writer.archiveProjectFolders([group(root)], { disableSchedules: [x] }, h.deps);
+  assert.deepEqual(archived, { ok: true, archivedAt: 'T1', disabled: ['x'], failed: [] });
+  assert.deepEqual(h.requests.filter(name => /^(begin|complete)Archive$/.test(name)), ['beginArchive', 'completeArchive']);
+  assert.deepEqual(h.settings.archivedProjects[key], {
+    archivedAt: 'T1', knownSessionIds: [], disabledSchedules: [y, x], disabledByArchive: [x], priorOffer: offer,
+  });
+  assert.equal(h.settings.scheduleReenableOffers[key], undefined);
+  assert.deepEqual([x, y, z].map(enabled), ['false', 'false', 'false']);
+  const yBefore = fs.readFileSync(y, 'utf8'), zBefore = fs.readFileSync(z, 'utf8');
+  const undone = await h.writer.undoArchiveProjectFolders([group(root)], archived.archivedAt, h.deps);
+  assert.deepEqual(undone, { ok: true, enabled: ['x'], failed: [] });
+  assert.deepEqual([x, y, z].map(enabled), ['true', 'false', 'false']);
+  assert.equal(fs.readFileSync(y, 'utf8'), yBefore);
+  assert.equal(fs.readFileSync(z, 'utf8'), zBefore);
+  assert.deepEqual(h.settings.archivedProjects, {});
+  assert.deepEqual(h.settings.scheduleReenableOffers, { [key]: offer, other: { disabledSchedules: ['other'] } });
+  assert.equal(h.notifications(), 2);
+});
+
+for (const useWriter of [false, true]) {
+  test(`folder Undo${useWriter ? ' writer' : ''}: legacy records refuse Undo without any effects`, async () => {
+    for (const legacyIndex of [0, 1]) {
+      const h = useWriter ? writerFixture() : fixture();
+      h.runArchive();
+      const child = group('/p/.claude/worktrees/child');
+      const childEntry = archive.archivedEntry(null, child.projectPath);
+      h.settings.archivedProjects[childEntry] = {
+        archivedAt: 'T1', disabledSchedules: ['child.md'], disabledByArchive: ['child.md'], priorOffer: null,
+      };
+      delete h.settings.archivedProjects[[entry, childEntry][legacyIndex]].disabledByArchive;
+      const before = structuredClone(h.settings), filesBefore = [...h.files];
+      const writes = h.writes.length, notifications = h.notifications();
+      const groups = [group('/p'), child];
+      const result = useWriter
+        ? await h.writer.undoArchiveProjectFolders(groups, 'T1', h.deps)
+        : archive.undoArchiveProjectFolders(groups, 'T1', h.deps);
+      assert.deepEqual(result, { error: 'stale archive Undo' });
+      assert.deepEqual(h.settings, before);
+      assert.deepEqual([...h.files], filesBefore);
+      assert.equal(h.writes.length, writes);
+      assert.equal(h.notifications(), notifications);
+      assert.deepEqual(h.enabledCalls, []);
+    }
+  });
 }
 
 test('folder Undo writer: archive command records exact successful disables and the consumed offer', async () => {
