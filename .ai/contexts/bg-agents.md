@@ -97,7 +97,7 @@ Stop or Close action. See `test/dom-agents-view.test.js` (#566/S5).
     check but before the CLI runs. This reduces stale-roster mistakes; it is
     not an atomic lock on the conversation.
 
-### Agents confirmations and detail buttons (#565, #711)
+### Agents confirmations and detail buttons (#565)
 
 `runAgentVerb` awaits `checkBgAgentVerb` before either Stop or Delete opens
 `appConfirm`. A refusal or rejected check is displayed through
@@ -111,11 +111,13 @@ Stop's danger confirmation names the job's display name and id and says its
 process ends while the conversation is kept. Cancel sends no verb and leaves
 an attached tab open. Delete retains its conversation/worktree loss wording.
 
-The detail uses morphdom, retaining verb button nodes and focus across equal
-roster polls. Its action header is keyed by job identity and state, so a
-changed state replaces the buttons and refreshes availability. The equal-roster
-retention already existed at the PR6 base; the state key adds the replacement
-boundary. Evidence: `test/dom-agents-view.test.js`, `test/bg-agents-ipc.test.js`.
+The detail uses morphdom, retaining verb button nodes across roster polls and
+state changes while updating their disabled state. Equal-roster polls also
+retain focus; that retention already existed at the PR6 base. A pending job
+disables its action buttons before the check and stays held through confirmation
+and execution. Repeated Stop/Delete requests for that job are ignored until
+refusal, cancellation, error or completion releases it. Evidence:
+`test/dom-agents-view.test.js`, `test/bg-agents-ipc.test.js`.
 
 ## Sidebar membership (#620)
 
