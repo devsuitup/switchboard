@@ -355,7 +355,10 @@ concept. Each entry gives:
   stopped, naming those parts and their locations; with no stop target they
   run immediately. A background-job refusal precedes the dialog for the
   whole action. Both offer a ten-second Undo for exactly the rows archived;
-  stopped processes stay stopped. Folder Archive has its options dialog.
+  stopped processes stay stopped. Folder Archive keeps an idle options dialog
+  as configuration without Undo. With nothing to configure it archives at once
+  with Undo; after stopping processes its Undo restores the folder, this click's
+  sessions and disabled schedules, keeping stopped processes stopped.
   "Archive" also applies to a folder (**Archive folder**,
   `public/sidebar.js:915`), which in addition disables schedules and comes
   back on new activity — kept as one word on purpose (shared filter **Show

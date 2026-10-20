@@ -387,6 +387,17 @@ either way, and the resume-cwd lookup is already guarded on
 
 ### Archive/delete are stop-then-archive/delete (issue #271)
 
+Folder, row and slug-group Archive share `confirmSessionArchivePlan`: plan all
+parts before a dialog, refuse live/unknown background jobs, and re-plan after
+an accepted dialog. Any new target gets another confirmation; the executor
+also refuses a local or remote part starting after that recheck. Folder options
+name running sessions and places (five targets, then +N more). An idle options
+dialog is configuration without Undo; no options means immediate Archive with
+Undo. After an actual stop, folder Undo says processes stay stopped, names
+archived worktrees and schedules disabled, and invokes the timestamped folder
+reverse path before restoring exactly this click's archived session flags.
+An older session Undo loses only a re-archived row and retains its other rows.
+
 `public/sidebar.js`'s four archive/delete call sites (`.project-archive-btn`,
 `.slug-group-archive-btn`, `.session-delete-btn`, `.session-archive-btn`) used
 to call bare `stopSession` gated on `activePtyIds` — a detach for an attached

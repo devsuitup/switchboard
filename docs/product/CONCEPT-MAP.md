@@ -193,7 +193,7 @@ amber (`docs/remote-hosts.md:149-157`).
 | New session | `+` → **Claude** / **Claude (Configure...)** / **Terminal** (`public/sidebar.js:942`; `docs/launching-sessions.md:17-23`) | **New session in worktree** (`:1001`) | Remote: "New session on <alias>" (`:934`) |
 | Create scheduled task | clock, **Create scheduled task** (`:903`) | — | — |
 | Project settings | **Project settings** (`:909`) | — | — |
-| Archive folder | **Archive folder** (`:915`) → dialog "Archive <path>?", boxes "Archive the N sessions", "Disable the N enabled schedules…", button **Archive folder** (`:1180-1196`) | — | **Turn back on** / **Dismiss** notice (`:1130-1134`) |
+| Archive folder | **Archive folder** → options for sessions and schedules; names running sessions and places; danger only with processes to stop; background-job refusal before the dialog; empty-options Archive is immediate | **Undo** for about 10 seconds after stopping processes or archiving an empty folder; restores the folder, this click's sessions and disabled schedules; processes stay stopped | **Turn back on** / **Dismiss** notice when schedules disabled by an earlier Archive are offered again |
 | Change project path | **Change project path** (`:922`), confirm "Remap <name> to: <path>?" (`:1302`) | — | — |
 | Archive project | — | **Archive project**, no confirmation, 10-second Undo notice (`public/sidebar.js`) | Settings: **Archive Project** (`public/settings-panel.js`), same Undo notice; settings/cache are kept and schedules suspended; also reversible from Settings → Archived projects |
 | Unarchive project | — | — | Global Settings → **Archived projects** → **Unarchive**, including legacy hidden entries |

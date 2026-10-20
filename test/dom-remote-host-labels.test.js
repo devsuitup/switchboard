@@ -166,7 +166,7 @@ test('Archive folder names the host label in its running-session choice and stop
   const done = button.onclick(new h.window.MouseEvent('click'));
   await settle();
   const choice = h.document.querySelector('[data-choice-id="archiveSessions"]').closest('label');
-  assert.equal(choice.textContent, 'Archive the 1 session — running ones are stopped first (on VPS)');
+  assert.equal(choice.textContent, 'Archive the 1 session — stopped first: Remote work on VPS');
   assert.doesNotMatch(choice.textContent, /planificator/);
   h.document.querySelector('.choice-dialog-confirm').click();
   await done;

@@ -224,7 +224,9 @@ when the whole conversation is archived.
 
 ### Archive a folder
 
-**Archive folder** on a project header opens a dialog with two boxes, both
+**Archive folder** first checks for background jobs; a running job or an
+unavailable job check refuses the action before any dialog. It then offers
+these boxes when there are sessions or enabled schedules to configure, both
 ticked by default and remembered from one use to the next:
 
 - **Archive the N sessions**: archives every top-level session of the folder and
@@ -238,7 +240,20 @@ ticked by default and remembered from one use to the next:
   A schedule file reached through a symbolic link is left as it is, and the
   dialog names it.
 
-Confirming hides the folder and its nested worktrees from the sidebar, even
+The session option names the running sessions and where they run, showing up
+to five names followed by +N more. The dialog uses a danger button only when
+processes could be stopped. A session that starts while you configure the
+Archive requires another confirmation before it can be stopped. With no
+sessions or schedules to configure, the folder archives immediately.
+
+When Archive stopped processes, a notice offers **Undo** for about 10 seconds.
+It names the worktrees archived with the folder and schedules turned off. Undo
+brings back the folder and exactly the sessions this click archived, and turns
+back on exactly the schedules it disabled; stopped processes stay stopped.
+An empty folder archived without a dialog also offers Undo. An options dialog
+with nothing running is configuration and has no Undo notice.
+
+Accepting the options hides the folder and its nested worktrees from the sidebar, even
 with both boxes unticked. **Show archived sessions** shows it again, and search
 still finds its sessions. The folder comes back, with its settings, when it is
 added again with **Add Project**, or when a session it did not hold at archive
