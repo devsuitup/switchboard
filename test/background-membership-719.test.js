@@ -234,7 +234,7 @@ for (const state of ['done', 'stopped', 'failed']) for (const from of [A, B]) {
     const deletion = loadDeletionHandlers({ PROJECTS_DIR: h.projectsDir, getMergedMemberIds: context.getMergedMemberIds,
       getCachedFolder: id => id === A ? h.folder : null, getCachedByParent: () => [], deleteSessionGuard: guard,
       deleteCachedSession: id => cleaned.push(id), deleteSearchSession() {} });
-    const preview = deletion.get('delete-session-preview')(null, from);
+    const preview = await deletion.get('delete-session-preview')(null, from);
     assert.equal(preview.ok, true); assert.deepEqual(Array.from(preview.partIds).sort(), [A, B].sort());
     const removed = await deletion.get('delete-session')(null, from, preview.partIds);
     assert.equal(removed.ok, true); assert.deepEqual([...new Set(guarded)].sort(), [A, B].sort());
@@ -254,7 +254,7 @@ test('T2.7 missing unindexed targets and changed proof refuse whole deletion bef
   const { loadDeletionHandlers } = require('./delete-session-harness');
   const deletion = loadDeletionHandlers({ PROJECTS_DIR: h.projectsDir, getMergedMemberIds: id => cache.conversationMemberIds(h.rows, id),
     getCachedFolder: id => id === A ? h.folder : null, getCachedByParent: () => [] });
-  assert.equal(deletion.get('delete-session-preview')(null, A).ok, false);
+  assert.equal((await deletion.get('delete-session-preview')(null, A)).ok, false);
   const result = await deletion.get('delete-session')(null, A, [A, B]);
   assert.equal(result.ok, false); assert.ok(fs.existsSync(file));
 });
@@ -282,7 +282,7 @@ for (const reason of ['attach', 'elsewhere', 'unknown', 'working', 'blocked', 'h
     const handlers = loadDeletionHandlers({ PROJECTS_DIR: h.projectsDir, activeSessions: h.active,
       getMergedMemberIds: id => cache.conversationMemberIds(h.rows, id), getCachedFolder: id => id === A ? h.folder : null,
       getCachedByParent: () => [], deleteSessionGuard: guard, deleteCachedSession() {}, deleteSearchSession() {} });
-    const preview = handlers.get('delete-session-preview')(null, A);
+    const preview = await handlers.get('delete-session-preview')(null, A);
     const result = await handlers.get('delete-session')(null, A, preview.partIds);
     assert.equal(result.ok, reason.startsWith('clear-'));
     assert.equal(fs.existsSync(path.join(folder, A + '.jsonl')), !reason.startsWith('clear-'));
@@ -298,7 +298,7 @@ test('T2.7 a part-set change during guard await and a symlink refusal keep every
   const deps = { PROJECTS_DIR: h.projectsDir, getMergedMemberIds: id => cache.conversationMemberIds(h.rows, id),
     getCachedFolder: id => id === A ? h.folder : null, getCachedByParent: () => [] };
   const changing = loadDeletionHandlers({ ...deps, deleteSessionGuard: async () => { await Promise.resolve(); h.jobs.clear(); return null; } });
-  const preview = changing.get('delete-session-preview')(null, A);
+  const preview = await changing.get('delete-session-preview')(null, A);
   assert.equal((await changing.get('delete-session')(null, A, preview.partIds)).ok, false);
   assert.ok(fs.existsSync(path.join(folder, A + '.jsonl')));
   h.jobs.set(J, { sessionId: B, state: 'done', transcriptPath: path.join(folder, B + '.jsonl') });
@@ -306,7 +306,7 @@ test('T2.7 a part-set change during guard await and a symlink refusal keep every
   const outside = path.join(h.Q, 'outside.jsonl'); fs.writeFileSync(outside, '{}');
   fs.symlinkSync(outside, path.join(folder, B + '.jsonl'), 'file');
   const linked = loadDeletionHandlers(deps);
-  assert.equal(linked.get('delete-session-preview')(null, A).ok, false);
+  assert.equal((await linked.get('delete-session-preview')(null, A)).ok, false);
   assert.equal((await linked.get('delete-session')(null, A, [A, B])).ok, false);
   assert.ok(fs.existsSync(path.join(folder, A + '.jsonl'))); assert.ok(fs.existsSync(outside));
 });

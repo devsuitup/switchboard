@@ -84,7 +84,9 @@ header picks the directory's new location and rewrites the `cwd` recorded in
 every transcript of that project, subagent transcripts included, so the
 sessions resume there — from Switchboard and from the `claude` CLI. Each file
 is rewritten through a temporary copy and a rename. The rewrite is refused
-while a session of that project is running.
+while a non-panel terminal of that project is running. A notice explains this
+before the folder picker or confirmation opens; stop those sessions first.
+The panel shell does not block a path change.
 
 ## Session rows
 
@@ -290,16 +292,18 @@ row and grid card buttons still read **Stop session**.
 The delete button **permanently removes every part of the conversation from disk**,
 including the transcripts merged into a compacted conversation, their subagent
 directories and index entries. There is no trash or Undo, and no per-part delete.
-Delete always confirms. The dialog names the project, the number of parts for a
+An allowed Delete always confirms. The dialog names the project, the number of parts for a
 merged conversation, the number of files on disk and the number of subagent transcripts.
 Subagent directories are excluded from the file count. A refused preview shows
 its reason before any confirmation opens.
 If any part's targets cannot be resolved, the whole delete is refused with a
 reason, before any files or index entries are removed.
 
-- A running local session is stopped first. If it cannot be stopped, the delete
-  is refused with the reason.
-- A live merged member refuses deletion before the dialog. The backend checks
+- Any live part, including the row's representative, refuses deletion before
+  the preview or dialog. Stop it first; Delete never stops it for you.
+  The preview also checks background jobs, processes outside this window and
+  unreadable session state, reporting a refusal in a notice before asking.
+- The backend checks
   the exact parts confirmed in the preview and refuses if the conversation
   changed while checking; use Delete again to review the updated conversation.
 - Remote rows and their context menu offer no Delete action: their transcript

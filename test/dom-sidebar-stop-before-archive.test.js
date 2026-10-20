@@ -239,28 +239,18 @@ test('slug-group archive: a stop refusal on one remote session skips it, the oth
 // .session-delete-btn
 // ---------------------------------------------------------------------------
 
-test('per-session delete: a local session with an active PTY is stopped before the delete IPC', async () => {
+test('per-session delete: a local session with an active PTY is refused before preview', async () => {
   const ctx = setupSidebarDom();
   try {
     const s1 = localSession('s1');
     ctx.window.sessionMap.set('s1', s1);
     ctx.window.activePtyIds.add('s1');
     const calls = installRecordingApi(ctx);
-
     ctx.sidebar.renderProjects([{ projectPath: '/home/dev/proj', sessions: [s1] }], true);
-    const item = ctx.document.getElementById('si-s1');
-    item.querySelector('.session-delete-btn').click();
-    // showDeleteSessionDialog awaits deleteSessionPreview — flush both that
-    // microtask and the dialog's own promise chain before confirming.
-    await new Promise(r => setTimeout(r, 0));
-    ctx.document.getElementById('dss-confirm').click();
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
-
-    const methods = calls.map(c => c.method);
-    assert.ok(methods.indexOf('stopSession') !== -1, 'the running local session must be stopped');
-    assert.ok(methods.indexOf('stopSession') < methods.indexOf('deleteSession'),
-      'the stop must happen before the delete IPC call');
+    await ctx.document.getElementById('si-s1').querySelector('.session-delete-btn').onclick({ stopPropagation() {} });
+    assert.equal(ctx.document.querySelector('#dss-confirm'), null);
+    assert.deepEqual(calls, []);
+    assert.match(ctx.document.querySelector('[role="alert"]').textContent, /still running/);
   } finally { ctx.destroy(); }
 });
 

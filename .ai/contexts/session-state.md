@@ -385,7 +385,7 @@ nothing for this: its plain-terminal branch ignores `isNew` and spawns a shell
 either way, and the resume-cwd lookup is already guarded on
 `sessionOptions?.type !== 'terminal'`.
 
-### Archive/delete are stop-then-archive/delete (issue #271)
+### Archive stops after confirmation; Delete refuses live parts (#271, #565)
 
 Folder, row and slug-group Archive share `confirmSessionArchivePlan`: plan all
 parts before a dialog, refuse live/unknown background jobs, and re-plan after
@@ -398,10 +398,10 @@ archived worktrees and schedules disabled, and invokes the timestamped folder
 reverse path before restoring exactly this click's archived session flags.
 An older session Undo loses only a re-archived row and retains its other rows.
 
-`public/sidebar.js`'s four archive/delete call sites (`.project-archive-btn`,
-`.slug-group-archive-btn`, `.session-delete-btn`, `.session-archive-btn`) used
+`public/sidebar.js`'s archive call sites (`.project-archive-btn`,
+`.slug-group-archive-btn`, `.session-archive-btn`) used
 to call bare `stopSession` gated on `activePtyIds` — a detach for an attached
-remote row, and nothing at all for an unattached one, while the archive/delete
+remote row, and nothing at all for an unattached one, while the archive
 proceeded regardless. They now share `stop-session-ui.js`'s `stopBeforeArchive(session)`,
 built on `resolveSessionStop` plus `isRemoteSessionAlive(session)` (the
 `remote-ssh` adapter's own `remoteSessionStates` snapshot when one exists —
@@ -495,12 +495,16 @@ confirmation, stopping and persistence, including across sidebar rebuilds.
 The project header's confirmation names the host alias(es) it is about to stop, computed
 with the same `isRemoteSessionAlive` check.
 
-**Delete never calls `stopBeforeArchive` for a remote session.** `delete-session`
-is refused server-side for remote regardless (`REMOTE_READ_ONLY`, main.js) —
-stopping the process first would strand a killed remote session behind a
-delete that never happens, so the delete site checks
-`resolveSessionStop(session).remote` itself and skips the stop entirely for
-that kind, local sessions unaffected.
+**Delete never calls `stopBeforeArchive`.** The renderer checks `rowSessionIds`,
+including the representative, for a live PTY, non-closed tab or stored alive
+snapshot before requesting the preview. It shows a persistent refusal notice
+with no dialog or stop. The asynchronous `delete-session-preview` then runs
+the full `deleteSessionGuard(id, partIds)`, using the same member snapshot as
+target resolution: background jobs, live-elsewhere and unknown-state refusals
+also arrive before any dialog. The action retains its own full guard. Remote
+deletion remains refused (`REMOTE_READ_ONLY`). The dialog has no promise to
+stop anything. Refusal notices leave focus on the opener; dismissing a notice
+from its button restores that focus.
 
 **Delete covers every part of a merged conversation.** Preview returns its exact
 part ids and confirmation sends those ids back through preload. Deletion takes

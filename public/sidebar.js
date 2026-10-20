@@ -1559,6 +1559,13 @@ function rebindSidebarEvents(projects) {
     if (remapBtn) {
       remapBtn.onclick = async (e) => {
         e.stopPropagation();
+        try {
+          const check = await window.api.checkRemapProject(project.projectPath);
+          if (!check?.ok) throw new Error(check?.error || 'The remap check backend is unavailable');
+        } catch (error) {
+          showSessionActionFailure('Change path', project, error);
+          return;
+        }
         const newPath = await window.api.browseFolder();
         if (!newPath) return;
         const projectShortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
@@ -1612,6 +1619,13 @@ function rebindSidebarEvents(projects) {
     if (wtDeleteBtn) {
       wtDeleteBtn.onclick = async (e) => {
         e.stopPropagation();
+        try {
+          const check = await window.api.checkDeleteWorktree(wtProject.projectPath);
+          if (!check?.ok) throw new Error(check?.error || 'The deletion check is unavailable');
+        } catch (error) {
+          showSessionActionFailure('Delete worktree', wtProject, error);
+          return;
+        }
         const name = wtProject.projectPath.split('/').pop();
         const confirmed = await showDeleteWorktreeDialog(name, wtProject.projectPath);
         if (!confirmed) return;
@@ -1795,22 +1809,14 @@ function rebindSidebarEvents(projects) {
       deleteBtn.onclick = async (e) => {
         e.stopPropagation();
         try {
-          if (session.mergedMemberIds?.some(id =>
+          if (rowSessionIds(session).some(id =>
             activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)
             || storedActivitySnapshot(id)?.liveness === 'alive')) {
-            surfaceStopFailure(deleteBtn, 'A merged member is still running', session, 'Delete');
+            surfaceStopFailure(deleteBtn, 'A conversation part is still running — stop it first, then retry Delete', session, 'Delete');
             return;
           }
           const confirmation = await showDeleteSessionDialog(session);
           if (!confirmation) return;
-          if (!resolveSessionStop(session).remote) {
-            const stopResult = await stopBeforeArchive(session);
-            if (!stopResult.ok) {
-              surfaceStopFailure(deleteBtn, stopResult.error, session, 'Delete');
-              return;
-            }
-            pollActiveSessions();
-          }
           // see .ai/contexts/session-state.md (#271: remote Delete)
           const res = await window.api.deleteSession(session.sessionId, confirmation.partIds);
           if (!res || !res.ok) {
@@ -2386,7 +2392,6 @@ async function showDeleteSessionDialog(session) {
       ? `${p.transcripts} file${p.transcripts !== 1 ? 's' : ''} on disk`
       : 'no transcript on disk (this session never started)');
     if (p.subagents > 0) parts.push(`${p.subagents} subagent transcript${p.subagents !== 1 ? 's' : ''}`);
-    if (p.running) parts.push('session is still running and will be stopped first');
     statusEl.innerHTML = projectLine + `<pre class="dwt-dirty-list">${escapeHtml(parts.join('\n'))}</pre>`;
 
     function close(confirmed) {

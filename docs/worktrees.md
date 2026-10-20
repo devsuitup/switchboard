@@ -65,6 +65,9 @@ with git.
 **From Switchboard.** A worktree the sidebar shows as a nested header, under
 its repository, has a delete button in that header (**Delete worktree from
 disk**).
+Before opening the dialog, Switchboard checks that the path uses a recognized
+worktree layout and its parent repository is a known project. A refusal appears
+in a notice, without a confirmation. These checks run again when deleting.
 The dialog warns that uncommitted changes are lost and lists the worktree's
 uncommitted files, ten at most. **Delete anyway** runs
 `git worktree remove -f` from the repository, with a second `-f` when the

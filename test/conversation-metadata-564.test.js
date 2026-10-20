@@ -93,10 +93,11 @@ test('a live background row has identical Delete and Archive targets and checks 
     deleteSessionGuard: async (_id, ids) => { guarded = Array.from(ids); return 'live background'; } });
   for (const id of ['a', 'b', 'c', 'm']) {
     await handlers.get('archive-session')(null, id, true);
-    const preview = deletion.get('delete-session-preview')(null, id);
-    assert.equal(preview.ok, true);
-    assert.deepEqual(Array.from(preview.partIds).sort(), archived.slice().sort());
-    const result = await deletion.get('delete-session')(null, id, preview.partIds);
+    const preview = await deletion.get('delete-session-preview')(null, id);
+    assert.equal(preview.ok, false);
+    assert.equal(preview.error, 'live background');
+    assert.deepEqual(guarded.slice().sort(), archived.slice().sort());
+    const result = await deletion.get('delete-session')(null, id, archived);
     assert.equal(result.ok, false);
     assert.equal(result.error, 'live background');
     assert.deepEqual(guarded.sort(), archived.slice().sort());

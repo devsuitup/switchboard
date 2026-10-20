@@ -177,15 +177,15 @@ for (const [reason, extra] of [['missing transcript', {}], ['REMOTE_READ_ONLY', 
   });
 }
 
-test('a live merged member refuses Delete without promising unsupported Stop or Close', async t => {
+test('a live merged member refuses Delete with stop-first recovery and no Close promise', async t => {
   const h = setup(t, { mergedMemberIds: ['external'] });
   h.window.activePtyIds.add('external');
   let deleted = false;
   h.window.api.deleteSession = async () => { deleted = true; };
   await h.click('.session-delete-btn');
   const el = h.notice('running', 'Delete');
-  assert.match(el.textContent, /own terminal/);
-  assert.doesNotMatch(el.textContent, /close it first|stop it first/i);
+  assert.match(el.textContent, /stop it first, then retry Delete/);
+  assert.doesNotMatch(el.textContent, /close it first/i);
   assert.equal(deleted, false);
 });
 

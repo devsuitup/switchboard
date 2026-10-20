@@ -10,6 +10,7 @@ for (const agree of [false, true]) {
       const remapped = [];
       const alerts = [];
       ctx.window.api = {
+        checkRemapProject: async () => ({ ok: true }),
         browseFolder: async () => '/replacement',
         remapProject: async (...args) => { remapped.push(args); return { error: 'busy' }; },
       };
@@ -33,7 +34,10 @@ test('a failed worktree delete reports the error through appAlert', async () => 
     const parent = makeSampleProject({ projectPath: '/p' });
     const child = makeSampleProject({ projectPath: '/p/.claude/worktrees/w' });
     const alerts = [];
-    ctx.window.api = { deleteWorktree: async () => ({ ok: false, error: 'busy' }) };
+    ctx.window.api = {
+      checkDeleteWorktree: async () => ({ ok: true }),
+      deleteWorktree: async () => ({ ok: false, error: 'busy' }),
+    };
     ctx.window.showDeleteWorktreeDialog = async () => true;
     ctx.window.appAlert = async ({ message }) => { alerts.push(message); };
     ctx.sidebar.renderProjects([parent, child], true);
