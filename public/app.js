@@ -884,6 +884,8 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
   const exit = lastSessionExit(sessionId);
   if (entry) {
     entry.closed = true;
+    entry.completeDetach?.();
+    delete entry.completeDetach;
     if (entry.attach) skippedWorkingSetEntries.delete(sessionId);
     // Write a visible exit banner so the user can see when the process ended
     // and read any error output it printed (claude / devbox / shell stderr).
@@ -1272,7 +1274,13 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
       message: plan.excluded.length ? plan.confirmText : 'Nothing is running to stop.' });
     return;
   }
-  if (!await appConfirm({ title: plan.attach ? 'Detach session?' : 'Stop session?', message: plan.confirmText, confirmLabel: plan.attach ? 'Detach' : 'Stop', danger: true })) return;
+  if (!plan.attach && !await appConfirm({ title: 'Stop session?', message: plan.confirmText, confirmLabel: 'Stop', danger: true })) return;
+  const reattachments = new Map(plan.targets.filter(target => target.attach).map(target => {
+    const entry = openSessions.get(target.sessionId);
+    const source = entry?.session || sessionMap.get(target.sessionId) || session;
+    return [target.sessionId, { entry, session: { ...source, sessionId: target.sessionId, mergedMemberIds: [] },
+      options: { type: 'attach', jobId: target.jobId, cwd: entry?.attachCwd || source.projectPath } }];
+  }));
   const operation = !isRow && plan.attach ? 'Detach' : 'Stop';
   const failures = [];
   const failedTargets = [];
@@ -1280,11 +1288,16 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   let stopped = 0;
   for (const target of plan.targets) {
     const id = target.sessionId;
+    const reattach = reattachments.get(id);
+    if (reattach?.entry && !reattach.entry.closed) {
+      reattach.entry.detachComplete ||= new Promise(resolve => { reattach.entry.completeDetach = resolve; });
+    }
+    let result;
     try {
       if (target.remote && unreachable.has(target.alias)) throw new Error(unreachable.get(target.alias));
       const backend = target.remote ? window.api.remoteStopSession : window.api.stopSession;
       if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
-      const result = target.remote ? await backend(target.alias, id) : await backend(id);
+      result = target.remote ? await backend(target.alias, id) : await backend(id);
       if (target.remote && result?.hostUnreachable) {
         const reason = result.error || 'The host is unreachable';
         unreachable.set(target.alias, reason);
@@ -1306,6 +1319,54 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
       placeholder.style.display = '';
     }
     stopped++;
+    if (reattach) {
+      const noticeId = sessionActionNoticeId('Detach undo', reattach.session);
+      if (typeof reattach.options.jobId !== 'string' || !/^[0-9a-f]{8}$/.test(reattach.options.jobId)) {
+        showAppNotice({ id: noticeId, kind: 'info',
+          message: `Detached from ${sessionActionDescription(reattach.session)}. The background session keeps running.` });
+        continue;
+      }
+      showAppNotice({ id: noticeId, kind: 'undo',
+        message: `Detached from ${sessionActionDescription(reattach.session)}. The background session keeps running.`,
+        actionLabel: 'Undo', onAction: async () => {
+          showAppNotice({ id: noticeId, kind: 'info', message: `Reattaching to ${sessionActionDescription(reattach.session)}…` });
+          if (reattach.entry && !reattach.entry.closed && result?.error !== 'not running') {
+            const detachExitTimeoutMs = 3000;
+            let detachTimer;
+            try {
+              await Promise.race([reattach.entry.detachComplete, new Promise(resolve => {
+                detachTimer = setTimeout(resolve, detachExitTimeoutMs);
+              })]);
+            } finally {
+              clearTimeout(detachTimer);
+            }
+          }
+          if (reattach.entry && openSessions.get(id) === reattach.entry && !reattach.entry.closed) {
+            showAppNotice({ id: noticeId, kind: 'error',
+              message: `The session is still detaching from ${sessionActionDescription(reattach.session)}. Open it from the sidebar to retry.` });
+            return;
+          }
+          let check;
+          try { check = await window.api.bgAgentLiveJob?.(id); } catch {}
+          if (check?.known === true && !check.job) {
+            showAppNotice({ id: noticeId, kind: 'error',
+              message: `The background job has ended for ${sessionActionDescription(reattach.session)}; there is nothing to reattach.` });
+            return;
+          }
+          try {
+            const opened = await openSession(reattach.session, reattach.options);
+            if (opened === false) {
+              clearAppNotice(noticeId);
+              return false;
+            }
+            showAppNotice({ id: noticeId, kind: 'info', message: `Reattached to ${sessionActionDescription(reattach.session)}.` });
+            return opened;
+          } catch (error) {
+            showAppNotice({ id: noticeId, kind: 'error',
+              message: `Could not reattach to ${sessionActionDescription(reattach.session)}: ${error?.message || error || 'unknown error'}.` });
+          }
+        } });
+    }
   }
   if (failures.length) {
     showSessionActionFailure(operation, session, failures.join('\n'),
@@ -1363,13 +1424,14 @@ async function attachBackgroundContinuation(entry, background) {
   const sessionId = entry.session.sessionId;
   entry.attach = true;
   entry.attachJobId = background.jobId;
+  entry.attachCwd = background.cwd || entry.session.projectPath;
   entry.bgRestore = true;
   const index = [...openSessions.keys()].indexOf(sessionId);
   skippedWorkingSetEntries.set(sessionId, { item: { sessionId, projectPath: entry.session.projectPath, bg: true }, index, keepAttached: true });
   beginPtyOpen(sessionId);
   try {
     const result = await window.api.openTerminal(sessionId, entry.session.projectPath, false,
-      { type: 'attach', jobId: background.jobId, cwd: background.cwd || entry.session.projectPath }, entry.initialSize);
+      { type: 'attach', jobId: background.jobId, cwd: entry.attachCwd }, entry.initialSize);
     if (openSessions.get(sessionId) !== entry) return;
     entry.closed = !result?.ok;
     entry.openError = result?.ok ? null : result?.error || 'the attach tab did not open';
@@ -2172,6 +2234,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   if (reattachOnly) resumeOptions = { ...resumeOptions, reattachOnly: true };
   entry.attach = resumeOptions.type === 'attach';
   entry.attachJobId = entry.attach ? resumeOptions.jobId : null;
+  entry.attachCwd = entry.attach ? resumeOptions.cwd || projectPath : null;
   forgetSessionExit(sessionId);
   beginPtyOpen(sessionId);
   let result;

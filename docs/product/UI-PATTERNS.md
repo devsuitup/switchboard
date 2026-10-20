@@ -143,8 +143,8 @@ The Changes badge is the one place that already meets "never colour alone".
 
 | Control | Where | Label (title) | Icon | Effect | Confirmation |
 |---|---|---|---|---|---|
-| Row Stop | `sidebar.js` row handler | `Stop session` | red square | `confirmAndStopSession` (`app.js`): stop every running part in the row; kill local PTYs or remote processes; **detach** attached background-job tabs. Jobs and outside processes stay running and are named | One `appConfirm(plan.confirmText)`, naming the count, locations and process loss, and saying the conversation is kept and can be resumed. A single-part session uses its display name and “this session”. Retry confirms only failed targets; an empty plan shows a notice |
-| Grid Stop | `grid-view.js` | `Stop session` | red square | Same routes, targeting only the card's tab | One confirmation naming this session, its display name, location and process loss; an attach tab says it detaches and keeps running |
+| Row Stop | `sidebar.js` row handler | `Stop session` | red square | `confirmAndStopSession` (`app.js`): stop every running part in the row; kill local PTYs or remote processes; **detach** attached background-job tabs. Jobs and outside processes stay running and are named | One `appConfirm(plan.confirmText)` when processes would end, naming the count, locations and process loss, and saying the conversation is kept and can be resumed. A single-part session uses its display name and “this session”. Retry confirms only failed targets; an empty plan shows a notice. An attach-only plan skips confirmation; each successful detach offers Undo for 10 s |
+| Grid Stop | `grid-view.js` | `Stop session` | red square | Same routes, targeting only the card's tab | One confirmation naming this session, its display name, location and process loss; an attach tab detaches without asking and offers Undo for 10 s |
 | Header Stop | `index.html`, `app.js` | `Stop process`, or `Detach (the session keeps running)` on an attach tab | **same red square** in both cases | Same routes, targeting only the header's tab | Same as Grid Stop |
 | Agents Stop | `agents-view.js:340, 421-436` | `Stop` | text button | `claude stop` on the job | **none** |
 | Agents Attach | `agents-view.js:340, 386-395`; dblclick `563-569` | `Attach` | text | open an attach tab; if a tab is already open for the row, shows it (`app.js:1502-1506`) | none |
@@ -285,7 +285,9 @@ The Undo variant (`kind: 'undo'`) lasts 10 s and uses `role="status"`. Its
 caller supplies the undo callback, `actionLabel: 'Undo'`, and text explaining
 the completed action. Undo and Dismiss are keyboard-reachable native buttons
 with visible focus; the notification does not take focus. The action runs
-once and removes the notice. Archive/Detach wiring follows in S6/S8; restore
+once and removes the notice. Detach Undo reopens the captured job in its original
+attach cwd, waiting for the local client's exit if needed. Archive wiring follows
+in S8; restore
 and update toasts remain separate until #441's follow-up. The table below
 records the other feedback mechanisms from the measured baseline.
 

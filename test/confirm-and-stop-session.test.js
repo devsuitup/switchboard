@@ -107,17 +107,16 @@ test('declining the confirm() dialog calls neither IPC', async () => {
   });
 });
 
-test('an attached background session names its confirmation Detach', async () => {
-  let options;
+test('an attached background session detaches without a confirmation', async () => {
+  let questions = 0;
   const attached = () => ({
     sessionMap: new Map(),
     openSessions: new Map([['s1', { attach: true }]]),
-    appConfirm: async value => { options = value; return false; },
+    appConfirm: async () => { questions++; return false; },
   });
   await withHarness(attached, async ({ confirmAndStopSession, calls }) => {
     await confirmAndStopSession('s1', null);
-    assert.equal(options.confirmLabel, 'Detach');
-    assert.match(options.message, /keeps running/);
-    assert.deepEqual(calls.ipc, []);
+    assert.equal(questions, 0);
+    assert.deepEqual(calls.ipc, [['stop', 's1']]);
   });
 });

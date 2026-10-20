@@ -268,7 +268,8 @@ test('background handoff and attach errors persist independently and attach retr
   const handoff = h.notice('handoff disconnected', 'background');
   assert.equal(h.window.openSessions.get('s1'), entry);
   h.window.api.openTerminal = async () => ({ ok: false, error: 'attach disconnected' });
-  await app.attachBackgroundContinuation(entry, { jobId: 'job' });
+  await app.attachBackgroundContinuation(entry, { jobId: 'job', cwd: '/actual/background/cwd' });
+  assert.equal(entry.attachCwd, '/actual/background/cwd');
   const attach = h.notice('attach disconnected', 'attach');
   h.window.api.openTerminal = async () => ({ ok: true });
   await app.attachBackgroundContinuation(entry, { jobId: 'job' });

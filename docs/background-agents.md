@@ -174,8 +174,11 @@ header or on a button does nothing extra.
 An attach tab is an ordinary terminal tab running `claude attach`. Its row shows
 the green dot until Switchboard sees a turn end in that tab, then the orange
 ring. Its stop
-button reads **Detach**: closing the tab sends Ctrl+Z, the attach client
-leaves, and the session keeps running under the daemon. Stopping the session
+button reads **Detach**: it sends Ctrl+Z without asking, the attach client
+leaves, and the session keeps running under the daemon. A notice offers
+**Undo** for about 10 seconds to attach it again in the same working folder.
+If the client is still closing, Undo waits for it to leave before reattaching.
+Stopping the session
 is only offered in the Agents view. Tabs created by Send to background or
 background continuation restore are reopened by [session restore](session-restore.md);
 ordinary attach tabs are not. Quitting Switchboard or closing its
