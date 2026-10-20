@@ -163,10 +163,10 @@ function agentRowIcon(entry) {
     || typeof activePtyIds !== 'undefined' && activePtyIds.has(entry.sessionId) : agentIsLive(entry);
   const ports = foreground ? stored : {
     ...stored,
-    liveness: live ? 'alive' : 'unknown',
+    liveness: live ? 'alive' : 'dead',
     attention: entry.kind === 'interactive' ? live && entry.status === 'waiting' : stored.attention,
     waitingForInput: live && (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(entry.sessionId)) || !!stored.waitingForInput),
-    stale: false,
+    stale: !live,
     promptHint: entry.kind === 'interactive' && entry.status === 'idle' || stored.promptHint,
     idleHintAt: entry.kind === 'interactive' && entry.status === 'idle' && Number.isFinite(entry.statusUpdatedAt)
       ? Math.max(stored.idleHintAt ?? -Infinity, entry.statusUpdatedAt) : stored.idleHintAt,
