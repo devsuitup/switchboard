@@ -1450,18 +1450,10 @@ function rebindSidebarEvents(projects) {
       wtHideBtn.onclick = async (e) => {
         e.stopPropagation();
         const name = wtProject.projectPath.split('/').pop();
-        const choice = await showChoiceDialog({
-          title: `Archive project "${name}"?`,
-          message: [
-            'Its settings and cached sessions are kept. Its schedules are suspended while archived and resume on unarchive.',
-            'This is reversible from Settings → Archived projects.',
-          ],
-          confirmLabel: 'Archive Project', returnFocus: wtHideBtn,
-        });
-        if (!choice) return;
         try {
           const result = await window.api.archiveProjectSettings(wtProject.projectPath, wtProject.folder);
           if (result.error) throw new Error(result.error);
+          window.showProjectArchiveUndo(result.entry, name);
           await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
         } catch (err) {
           await showChoiceDialog({ title: 'Could not archive project', message: err.message, confirmLabel: 'OK', returnFocus: wtHideBtn });

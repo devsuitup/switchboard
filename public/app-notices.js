@@ -1,6 +1,23 @@
 // see docs/product/BUILDING-BLOCKS.md (B8)
 const appNoticeEntries = new Map();
 
+window.showProjectArchiveUndo = function (entry, name) {
+  const id = `archive-project:${entry}`;
+  showAppNotice({
+    id, kind: 'undo', message: `Project "${name}" archived. Its settings and cached sessions are kept; schedules resume on unarchive.`,
+    actionLabel: 'Undo',
+    onAction: async () => {
+      try {
+        const result = await window.api.unarchiveProject(entry);
+        if (!result?.ok) throw new Error(result?.error || 'The backend returned no result');
+        await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+      } catch (error) {
+        showAppNotice({ id, kind: 'error', message: `Could not unarchive project "${name}": ${error.message}` });
+      }
+    },
+  });
+};
+
 function sessionActionNoticeId(operation, session) {
   return `${operation}:${session?.remoteAlias || 'local'}:${session?.sessionId || session?.projectPath || 'unknown'}`;
 }

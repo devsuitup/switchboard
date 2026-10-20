@@ -1971,10 +1971,16 @@ from disk (#474). Adding/unarchiving the entry later rebuilds defaults.
 Delete also marks the entry `delete`, and the Settings list leaves marked-deleted
 entries out, since a deleted project is gone rather than archived. The list
 escapes entries and invokes Unarchive directly; Save rereads
-global settings to retain current archive state. Both project confirmations
-use `showChoiceDialog`, with a destructive confirm and cancel focus for Delete.
-The former worktree Hide control now uses the reversible project action and
-passes its host-qualified folder key. Tests: `project-settings-archive.test.js`.
+global settings to retain current archive state. Archive Project in Settings
+and the worktree header runs without asking and shows a 10-second Undo notice.
+`archive-project-settings` returns `{ ok: true, entry }`; both surfaces pass
+that exact stored entry to `showProjectArchiveUndo` in `public/app-notices.js`.
+Undo calls `unarchiveProject(entry)` and reloads projects; it never reconstructs
+the host-qualified key in the renderer. Failed Undo shows a persistent error
+notice. This edits `hiddenProjects`, separate from folder Archive and its
+`undo-archive-project` reverse path. Delete keeps `showChoiceDialog`, with a
+destructive confirm and cancel focus. The former worktree Hide control passes
+its host-qualified folder key. Tests: `project-settings-archive.test.js`.
 
 ## Archived projects (issue #473)
 

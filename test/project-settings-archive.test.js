@@ -11,7 +11,7 @@ const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 const { JSDOM } = require('jsdom');
 const { extractFunction, loadAppFunctions } = require('./app-source');
-const { setupSidebarDom, answerChoiceDialog } = require('./dom-setup');
+const { setupSidebarDom } = require('./dom-setup');
 const { encodeProjectPath } = require('../encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('../remote-hosts');
 const { applyAndPersistArchived, clearArchivedEntry } = require('../archived-projects');
@@ -97,6 +97,19 @@ test('archive keeps persisted project settings, cache, search and schedule regis
   assert.deepEqual(h.getSetting('global').hiddenProjects, [h.projectPath]);
   assert.equal(h.notices(), 1);
 });
+
+for (const alias of [null, 'server']) {
+  test(`project Archive returns its stored ${alias ? 'remote' : 'local'} entry for Undo`, async t => {
+    const h = setup(t);
+    const folder = alias ? joinFolderKey(alias, h.folder) : h.folder;
+    const result = await h.archive(h.projectPath, folder);
+    const entry = alias ? joinFolderKey(alias, h.projectPath) : h.projectPath;
+    assert.equal(result.entry, entry);
+    assert.deepEqual(h.getSetting('global').hiddenProjects, [result.entry]);
+    assert.equal((await h.invoke('unarchive-project', result.entry)).ok, true);
+    assert.deepEqual(h.getSetting('global').hiddenProjects, []);
+  });
+}
 
 test('archive and unarchive filter the public project payload and restore its sidebar row', async t => {
   const h = setup(t);
@@ -388,7 +401,7 @@ test('preload forwards Archive, Unarchive and Delete to their distinct IPC handl
 
 function settingsDom(t, h) {
   const ids = ['settings-viewer', 'settings-viewer-title', 'settings-viewer-body', 'terminal-area',
-    'terminal-header', 'placeholder', 'stats-viewer', 'memory-viewer', 'jsonl-viewer'];
+    'terminal-header', 'placeholder', 'stats-viewer', 'memory-viewer', 'jsonl-viewer', 'app-notices'];
   const dom = new JSDOM(ids.map(id => `<div id="${id}"></div>`).join(''), { url: 'http://localhost', runScripts: 'outside-only' });
   t.after(() => dom.window.close());
   const calls = [];
@@ -403,7 +416,7 @@ function settingsDom(t, h) {
   dom.window.alert = () => { throw new Error('native alert must not be used'); };
   let reloads = 0;
   dom.window.loadProjects = async () => { reloads++; };
-  for (const file of ['setting-defaults.js', 'utils.js', 'shortcuts.js', 'terminal-themes.js', 'modal-stack.js', 'choice-dialog.js', 'settings-panel.js']) {
+  for (const file of ['setting-defaults.js', 'utils.js', 'shortcuts.js', 'terminal-themes.js', 'modal-stack.js', 'choice-dialog.js', 'app-notices.js', 'settings-panel.js']) {
     vm.runInContext(read('public/' + file), dom.getInternalVMContext(), { filename: path.join(ROOT, 'public', file) });
   }
   return { window: dom.window, document: dom.window.document, calls, reloads: () => reloads };
@@ -430,38 +443,29 @@ test('Settings lists legacy and remote archived projects safely and Unarchive re
   assert.deepEqual(h.getSetting('global').hiddenProjects, ['server::/srv/<project>']);
 });
 
-for (const action of ['archive', 'delete']) {
-  test(`${action} confirmation describes its effects, cancels safely and uses an in-app dialog`, async t => {
-    const h = setup(t);
-    const dom = settingsDom(t, h);
-    await dom.window.openSettingsViewer('project', h.projectPath, h.folder);
-    const button = dom.document.querySelector(action === 'archive' ? '#sv-archive-btn' : '#sv-delete-btn');
-    assert.ok(button, `${action} must have a separate project action`);
-    button.click();
-    const dialog = dom.document.querySelector('.choice-dialog');
-    assert.ok(dialog);
-    if (action === 'archive') {
-      assert.match(dialog.textContent, /Settings → Archived projects/);
-      assert.match(dialog.textContent, /settings.*kept/i);
-      assert.match(dialog.textContent, /schedules.*suspended/i);
-      assert.equal(dialog.querySelector('.choice-dialog-confirm').classList.contains('delete-worktree-confirm-btn'), false);
-    } else {
-      assert.match(dialog.textContent, /project settings/i);
-      assert.match(dialog.textContent, /cache.*search index/i);
-      assert.match(dialog.textContent, /schedule registration/i);
-      assert.match(dialog.textContent, /folder.*session.*schedule files.*not deleted/i);
-      assert.ok(dialog.querySelector('.choice-dialog-confirm').classList.contains('delete-worktree-confirm-btn'));
-    }
-    dialog.querySelector('.choice-dialog-cancel').click();
-    await settle();
-    assert.equal(dom.calls.length, 0);
-    button.click();
-    dom.document.querySelector('.choice-dialog-confirm').click();
-    await settle();
-    assert.deepEqual(dom.calls, [[action, h.projectPath, h.folder]]);
-    assert.equal(dom.reloads(), 1);
-  });
-}
+test('delete confirmation describes its effects, cancels safely and uses an in-app dialog', async t => {
+  const h = setup(t);
+  const dom = settingsDom(t, h);
+  await dom.window.openSettingsViewer('project', h.projectPath, h.folder);
+  const button = dom.document.querySelector('#sv-delete-btn');
+  assert.ok(button, 'delete must have a separate project action');
+  button.click();
+  const dialog = dom.document.querySelector('.choice-dialog');
+  assert.ok(dialog);
+  assert.match(dialog.textContent, /project settings/i);
+  assert.match(dialog.textContent, /cache.*search index/i);
+  assert.match(dialog.textContent, /schedule registration/i);
+  assert.match(dialog.textContent, /folder.*session.*schedule files.*not deleted/i);
+  assert.ok(dialog.querySelector('.choice-dialog-confirm').classList.contains('delete-worktree-confirm-btn'));
+  dialog.querySelector('.choice-dialog-cancel').click();
+  await settle();
+  assert.equal(dom.calls.length, 0);
+  button.click();
+  dom.document.querySelector('.choice-dialog-confirm').click();
+  await settle();
+  assert.deepEqual(dom.calls, [['delete', h.projectPath, h.folder]]);
+  assert.equal(dom.reloads(), 1);
+});
 
 test('archiving an exact project does not reinsert a pending session into the sidebar', async t => {
   const h = setup(t);
@@ -552,24 +556,58 @@ test('Settings lists archived projects but not deleted ones, and Delete and Arch
   assert.deepEqual(h.getSetting('global').hiddenProjectKinds, { [h.projectPath]: 'delete' });
 });
 
-test('the worktree Archive button asks in the app dialog and archives that project', async t => {
-  const h = setup(t);
-  const ctx = setupSidebarDom();
-  t.after(() => ctx.destroy());
-  const repo = { folder: 'repo', projectPath: '/home/dev/myrepo', sessions: [] };
-  const worktree = { folder: 'wt-folder', projectPath: '/home/dev/myrepo/.claude/worktrees/agent-1', sessions: [] };
-  const calls = [];
-  let confirmed = 0;
-  ctx.window.confirm = () => { confirmed++; return true; };
-  ctx.window.api.archiveProjectSettings = async (...args) => { calls.push(args); return { ok: true }; };
-  ctx.window.loadProjects = async () => {};
-  ctx.sidebar.renderProjects([repo, worktree], true);
-  ctx.document.querySelector('.worktree-hide-btn').click();
-  await answerChoiceDialog(ctx);
-  await settle();
-  assert.deepEqual(calls, [[worktree.projectPath, worktree.folder]]);
-  assert.equal(confirmed, 0);
-});
+for (const alias of [null, 'server']) {
+  test(`the worktree Archive button archives its ${alias ? 'remote' : 'local'} project without asking and Undo restores the returned entry`, async t => {
+    const h = setup(t);
+    const ctx = setupSidebarDom();
+    t.after(() => ctx.destroy());
+    const repo = { folder: alias ? joinFolderKey(alias, 'repo') : 'repo', projectPath: '/home/dev/myrepo', remoteAlias: alias, sessions: [] };
+    const worktree = { folder: alias ? joinFolderKey(alias, 'wt-folder') : 'wt-folder', projectPath: '/home/dev/myrepo/.claude/worktrees/agent-1', remoteAlias: alias, sessions: [] };
+    const calls = [];
+    let confirmed = 0;
+    ctx.window.confirm = () => { confirmed++; return true; };
+    let reloads = 0;
+    ctx.window.api.archiveProjectSettings = async (...args) => { calls.push(['archive', ...args]); return h.archive(...args); };
+    ctx.window.api.unarchiveProject = async entry => { calls.push(['unarchive', entry]); return h.invoke('unarchive-project', entry); };
+    ctx.window.loadProjects = async () => { reloads++; };
+    ctx.sidebar.renderProjects([repo, worktree], true);
+    ctx.document.querySelector('.worktree-hide-btn').click();
+    await settle();
+    assert.equal(ctx.document.querySelector('.modal-overlay'), null, 'Archive must not ask');
+    assert.deepEqual(calls, [['archive', worktree.projectPath, worktree.folder]]);
+    const entry = alias ? joinFolderKey(alias, worktree.projectPath) : worktree.projectPath;
+    assert.deepEqual(h.getSetting('global').hiddenProjects, [entry]);
+    const undo = ctx.document.querySelector('#app-notices .app-notice-action');
+    assert.equal(undo?.textContent, 'Undo');
+    undo.click();
+    await settle();
+    assert.deepEqual(calls.at(-1), ['unarchive', entry]);
+    assert.deepEqual(h.getSetting('global').hiddenProjects, []);
+    assert.equal(reloads, 2);
+    assert.equal(confirmed, 0);
+  });
+
+  test(`Settings Archive archives its ${alias ? 'remote' : 'local'} project without asking and Undo restores the returned entry`, async t => {
+    const h = setup(t);
+    const dom = settingsDom(t, h);
+    const folder = alias ? joinFolderKey(alias, h.folder) : h.folder;
+    await dom.window.openSettingsViewer('project', h.projectPath, folder);
+    dom.document.querySelector('#sv-archive-btn').click();
+    await settle();
+    assert.equal(dom.document.querySelector('.modal-overlay'), null, 'Archive must not ask');
+    assert.deepEqual(dom.calls, [['archive', h.projectPath, folder]]);
+    const entry = alias ? joinFolderKey(alias, h.projectPath) : h.projectPath;
+    assert.deepEqual(h.getSetting('global').hiddenProjects, [entry]);
+    assert.equal(dom.document.querySelector('#settings-viewer').style.display, 'none');
+    const undo = dom.document.querySelector('#app-notices .app-notice-action');
+    assert.equal(undo?.textContent, 'Undo');
+    undo.click();
+    await settle();
+    assert.deepEqual(dom.calls.at(-1), ['unarchive', entry]);
+    assert.deepEqual(h.getSetting('global').hiddenProjects, []);
+    assert.equal(dom.reloads(), 2);
+  });
+}
 
 test('the worktree Archive button reports a failed archive instead of reloading', async t => {
   const ctx = setupSidebarDom();
@@ -579,7 +617,36 @@ test('the worktree Archive button reports a failed archive instead of reloading'
   ctx.window.loadProjects = async () => { throw new Error('must not reload'); };
   ctx.sidebar.renderProjects([{ folder: 'repo', projectPath: '/home/dev/myrepo', sessions: [] }, worktree], true);
   ctx.document.querySelector('.worktree-hide-btn').click();
-  await answerChoiceDialog(ctx);
   await settle();
   assert.match(ctx.document.querySelector('.modal-overlay').textContent, /disk full/);
+  assert.equal(ctx.document.querySelector('#app-notices .app-notice-action'), null);
 });
+
+for (const surface of ['Settings', 'worktree']) {
+  test(`${surface} project Undo reports a failed unarchive without reloading`, async t => {
+    const h = setup(t);
+    const dom = surface === 'Settings' ? settingsDom(t, h) : setupSidebarDom();
+    if (surface === 'worktree') t.after(() => dom.destroy());
+    let reloads = 0;
+    dom.window.loadProjects = async () => { reloads++; };
+    dom.window.api.unarchiveProject = async () => ({ error: 'disk full' });
+    if (surface === 'Settings') {
+      await dom.window.openSettingsViewer('project', h.projectPath, h.folder);
+      dom.document.querySelector('#sv-archive-btn').click();
+    } else {
+      dom.window.api.archiveProjectSettings = async () => ({ ok: true, entry: 'server::/stored/project' });
+      dom.sidebar.renderProjects([
+        { folder: 'repo', projectPath: '/repo', sessions: [] },
+        { folder: 'wt', projectPath: '/repo/.claude/worktrees/w', sessions: [] },
+      ], true);
+      dom.document.querySelector('.worktree-hide-btn').click();
+    }
+    await settle();
+    const undo = dom.document.querySelector('#app-notices .app-notice-action');
+    assert.ok(undo, 'Undo must be offered');
+    undo.click();
+    await settle();
+    assert.match(dom.document.querySelector('#app-notices [role="alert"]').textContent, /disk full/);
+    assert.equal(reloads, 1);
+  });
+}

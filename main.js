@@ -828,7 +828,7 @@ ipcMain.handle('archive-project-settings', async (_event, projectPath, folderKey
     const entry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
     await writer.hideProject(entry, 'archive');
     notifyRendererProjectsChanged('archive');
-    return { ok: true };
+    return { ok: true, entry };
   } catch (err) {
     return { error: err.message };
   }
