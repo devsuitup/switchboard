@@ -54,6 +54,60 @@ function makeAnnotate(mocks) {
   );
 }
 
+test('local waiting reasons reach root and merged descriptors and clear when absent', () => {
+  let waitingFor = 'permission prompt';
+  const annotate = makeAnnotate({ cliSessionState: {
+    getStatus: () => ({ status: 'waiting', statusUpdatedAt: 1000, waitingFor }),
+  } });
+  const session = { sessionId: 'root-563', headSessionId: 'head-563', mergedMemberIds: ['head-563'] };
+  const projects = [{ sessions: [session] }];
+  annotate(projects);
+  assert.equal(session.waitingFor, 'permission prompt');
+  assert.equal(session.mergedMemberStatuses['head-563'].waitingFor, 'permission prompt');
+  waitingFor = null;
+  annotate(projects);
+  assert.equal(session.waitingFor, null);
+  assert.equal(session.mergedMemberStatuses['head-563'].waitingFor, null);
+  makeAnnotate({})(projects);
+  assert.equal(session.waitingFor, null);
+  assert.equal(session.mergedMemberStatuses['head-563'], null);
+});
+
+test('remote merged member statuses come from their own descriptors and clear when absent', () => {
+  let descriptors = [
+    { sessionId: 'A', status: 'busy', statusUpdatedAt: 1, waitingFor: 'root reason' },
+    { sessionId: 'B', status: 'waiting', statusUpdatedAt: 2, waitingFor: 'permission prompt', pid: 42 },
+    { sessionId: 'empty', status: 'idle', statusUpdatedAt: 3, waitingFor: '' },
+    { sessionId: 'invalid', status: 'idle', statusUpdatedAt: 4, waitingFor: { reason: 'invalid' } },
+    { sessionId: 'no-reason', status: 'idle', statusUpdatedAt: 5 },
+  ];
+  const annotate = makeAnnotate({
+    remoteIndexer: {
+      getRemoteSessions: () => ({ sessions: descriptors, at: 100, error: null }),
+      getRemoteHostState: () => ({ consecutiveFailures: 0, nextAttemptAt: 0 }),
+      getRemoteHostProfile: () => computeHostProfile({ at: 100, error: null, descriptors }),
+    },
+    cliSessionState: { getStatus: () => { throw new Error('remote members must use remote descriptors'); } },
+  });
+  const session = { sessionId: 'A', headSessionId: 'B', remoteAlias: 'host',
+    mergedMemberIds: ['B', 'empty', 'invalid', 'no-reason', 'missing'] };
+  const projects = [{ remoteAlias: 'host', sessions: [session] }];
+  annotate(projects);
+  assert.deepEqual(session.mergedMemberStatuses, {
+    B: { status: 'waiting', statusUpdatedAt: 2, waitingFor: 'permission prompt' },
+    empty: { status: 'idle', statusUpdatedAt: 3, waitingFor: null },
+    invalid: { status: 'idle', statusUpdatedAt: 4, waitingFor: null },
+    'no-reason': { status: 'idle', statusUpdatedAt: 5, waitingFor: null },
+    missing: null,
+  });
+  assert.equal(session.status, 'busy');
+  assert.equal(session.waitingFor, 'root reason');
+  descriptors = [];
+  annotate(projects);
+  assert.deepEqual(session.mergedMemberStatuses,
+    Object.fromEntries(session.mergedMemberIds.map(id => [id, null])));
+});
+
 test('a local session (no remoteAlias) whose sessionId matches a local descriptor gets status/statusUpdatedAt attached', () => {
   const annotateRemoteAttachable = makeAnnotate({
     cliSessionState: {

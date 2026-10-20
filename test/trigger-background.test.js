@@ -144,7 +144,7 @@ test('background attach: a single trigger waits for the bg descriptor then deliv
   const f = fixture(t, { attached: true });
   assert.equal(f.ctx.getPtyForSession(sessionId).ptyProcess, f.session.pty);
   assert.deepEqual(f.ctx.getCliStatus(sessionId), {
-    status: 'busy', statusUpdatedAt: f.descriptor.statusUpdatedAt,
+    status: 'busy', statusUpdatedAt: f.descriptor.statusUpdatedAt, waitingFor: null,
   });
   f.setOnWrite(data => {
     assert.equal(f.descriptor.status, 'idle', 'readiness must hold writes while the bg descriptor is busy');

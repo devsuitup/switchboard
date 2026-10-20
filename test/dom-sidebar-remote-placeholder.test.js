@@ -56,7 +56,7 @@ test('a placeholder row renders alive, with a stop control, status text, and no 
 
     const statusEl = item.querySelector('.session-status');
     assert.ok(statusEl, 'status + age must be shown');
-    assert.match(statusEl.textContent, /busy/);
+    assert.equal(statusEl.textContent, ctx.window.formatStatusAge(PLACEHOLDER_SESSION.statusUpdatedAt));
     assert.match(statusEl.textContent, /ago/);
 
     assert.equal(item.querySelector('.session-jsonl-btn'), null,

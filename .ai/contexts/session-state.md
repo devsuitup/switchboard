@@ -1446,6 +1446,30 @@ constant; the CSS dropped `space-between` for a plain `gap`, with
 `margin-left: auto` on `.session-status` alone so it — not the short id —
 is the element whose position depends on how much room is left.
 
+`buildSessionItem` writes the descriptor waiting reason (when `status` is
+`waiting`) plus `formatStatusAge(statusUpdatedAt)`, joined with ` · `, for
+rows without a background activity label. This includes local and remote rows
+and sessions running elsewhere. Without a reason the line shows the age alone;
+without a status it is empty. For a merged row, `localSessionForStatus` selects
+the head member's descriptor, including its waiting reason and timestamp,
+instead of the root part's descriptor.
+
+`applyStateClasses` writes a background activity label when one exists. Without
+that label it refreshes the descriptor line only when
+`backgroundActivityIsForeground` holds; other rows retain their rendered line.
+`paintSessionIcon` refreshes the icon without writing the status line. All three
+paths select the same head descriptor. Their descriptor condition is `!label`
+(`!bgActivity` in the initial painter), which also covers remote rows and rows
+live elsewhere, rather than only foreground rows. Background labels retain
+their own presentation; icon refreshes also exclude subagent rows.
+
+The sidebar activity icon keeps its activity label first; `writeIconSlot`
+appends exactly one `CLI status:` suffix with the raw descriptor status and
+waiting reason to its tooltip and accessible name when a descriptor is supplied.
+Grid icons deliberately keep only the shared activity tooltip and accessible
+name, without this sidebar descriptor suffix. The #629 parity tests compare
+the shared activity portion and assert the suffix count separately.
+
 ## Proven continuation re-key
 
 For a proven background move, capture map key/object, effective source id,

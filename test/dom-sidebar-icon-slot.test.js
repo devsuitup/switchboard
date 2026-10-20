@@ -114,7 +114,7 @@ test('a remote row past the decay window shows the age with no response-ready gl
 
       const statusEl = ctx.document.querySelector('#si-remote-decayed .session-status');
       assert.ok(statusEl, 'the age must still show via .session-status');
-      assert.match(statusEl.textContent, /idle.*5s ago/);
+      assert.equal(statusEl.textContent, '5s ago');
     } finally {
       ctx.window.Date.now = realNow;
     }

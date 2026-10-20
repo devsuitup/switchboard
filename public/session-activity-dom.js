@@ -144,7 +144,8 @@ function localSessionForStatus(sessionId, session) {
   if (session) {
     if (session.sessionId !== sessionId && session.mergedMemberIds?.includes(sessionId)) {
       const status = session.mergedMemberStatuses?.[sessionId];
-      return { ...session, sessionId, status: status?.status, statusUpdatedAt: status?.statusUpdatedAt };
+      return { ...session, sessionId, status: status?.status, statusUpdatedAt: status?.statusUpdatedAt,
+        waitingFor: status?.waitingFor ?? null };
     }
     return session;
   }
@@ -154,7 +155,7 @@ function localSessionForStatus(sessionId, session) {
   const item = sessionItemEl(sessionId);
   const rendered = item && sessionMap.get(item.dataset.sessionId);
   if (rendered?.mergedMemberIds?.includes(sessionId)) {
-    return { sessionId, ...rendered.mergedMemberStatuses?.[sessionId] };
+    return { sessionId, remoteAlias: rendered.remoteAlias, ...rendered.mergedMemberStatuses?.[sessionId] };
   }
   const stored = sessionMap.get(sessionId);
   if (stored) return stored;
@@ -164,7 +165,7 @@ function localSessionForStatus(sessionId, session) {
       latest = row;
     }
   }
-  if (latest) return { sessionId, ...latest.mergedMemberStatuses?.[sessionId] };
+  if (latest) return { sessionId, remoteAlias: latest.remoteAlias, ...latest.mergedMemberStatuses?.[sessionId] };
 }
 
 function storedActivitySnapshot(sessionId, session, selection) {
@@ -259,17 +260,17 @@ function applyStateClasses(sessionId, snapshot) {
   const label = typeof backgroundActivityLabel === 'function'
     && backgroundActivityLabel(item.dataset.headSessionId || item.dataset.sessionId, snapshot,
       typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId));
-  writeIconSlot(item.querySelector('.session-icon'), icon, label?.title, label?.text);
+  const session = !label && localSessionForStatus(item.dataset.headSessionId || item.dataset.sessionId, row);
+  writeIconSlot(item.querySelector('.session-icon'), icon, label?.title, label?.text, session);
   const status = item.querySelector('.session-status');
   if (label && status) {
     status.textContent = label.text;
     status.title = '';
   } else if (status && typeof backgroundActivityIsForeground === 'function'
     && backgroundActivityIsForeground(item.dataset.headSessionId || item.dataset.sessionId)) {
-    const session = localSessionForStatus(item.dataset.headSessionId || item.dataset.sessionId);
     const age = formatStatusAge(session?.statusUpdatedAt);
-    const why = session?.status === 'waiting' && session.waitingFor ? ' · ' + session.waitingFor : '';
-    status.textContent = session?.status ? session.status + why + (age ? ' · ' + age : '') : '';
+    const why = session?.status === 'waiting' ? session.waitingFor : '';
+    status.textContent = session?.status ? [why, age].filter(Boolean).join(' · ') : '';
     status.title = '';
   }
   if (typeof updateGridSubagentPills === 'function') updateGridSubagentPills(sessionId);
@@ -277,7 +278,7 @@ function applyStateClasses(sessionId, snapshot) {
 }
 
 // One icon slot per row, written here and nowhere else — see .ai/contexts/session-state.md
-function writeIconSlot(el, icon, title, text) {
+function writeIconSlot(el, icon, title, text, session) {
   if (!el || !icon) return;
   for (const cls of Array.from(el.classList)) {
     if (cls.indexOf('session-icon--') === 0) el.classList.remove(cls);
@@ -286,6 +287,12 @@ function writeIconSlot(el, icon, title, text) {
   el.title = title || icon.title || '';
   el.setAttribute('role', 'img');
   el.setAttribute('aria-label', (icon.title || 'Idle') + (text && text !== icon.title ? ` · ${text}` : ''));
+  if (session?.status) {
+    const why = session.status === 'waiting' ? session.waitingFor : '';
+    const detail = 'CLI status: ' + [session.status, why].filter(Boolean).join(' · ');
+    el.title += '\n' + detail;
+    el.setAttribute('aria-label', el.getAttribute('aria-label') + ' · ' + detail);
+  }
   el.dataset.glyph = icon.glyph || '';
 }
 
@@ -293,6 +300,7 @@ function writeIconSlot(el, icon, title, text) {
 function snapshotForLocal(sessionId, session, selection) {
   let state = localPtyState(sessionId);
   const sess = localSessionForStatus(sessionId, session);
+  if (sess?.remoteAlias) return state.snapshot();
   const targetHere = !sess?.headSessionId || sess.headSessionId === sessionId;
   const background = targetHere && (sess?.bgJobId || typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId, localActivityRow(sessionId, session), selection));
   if (sess && sess.status !== undefined) {
@@ -309,9 +317,9 @@ function snapshotForLocal(sessionId, session, selection) {
 }
 
 // Paints an icon slot from a snapshot held by another adapter — see .ai/contexts/session-state.md ("Descriptor-owned attention")
-function paintSessionIconFromSnapshot(el, snapshot, title, text) {
+function paintSessionIconFromSnapshot(el, snapshot, title, text, session) {
   if (!el) return;
-  writeIconSlot(el, renderSessionIcon(snapshot), title, text);
+  writeIconSlot(el, renderSessionIcon(snapshot), title, text, session);
 }
 
 // see .ai/contexts/session-state.md
@@ -322,5 +330,6 @@ function paintSessionIcon(el, sessionId, session) {
   const row = session || (item && typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId)) || { sessionId };
   const projected = mergedRowSnapshot(rowSessionIds(row), sessionId, snapshot, row);
   const label = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(row), projected, row);
-  writeIconSlot(el, renderSessionIcon(projected), label?.title, label?.text);
+  writeIconSlot(el, renderSessionIcon(projected), label?.title, label?.text,
+    !label && !row.parentSessionId && localSessionForStatus(rowHeadId(row), row));
 }

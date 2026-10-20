@@ -144,8 +144,8 @@ test('a live remote session shows its status and age, and a 24h-old status does 
       assert.ok(staleEl, 'the stale session must show a status/age indicator');
       assert.ok(freshEl, 'the fresh session must show a status/age indicator');
 
-      assert.match(freshEl.textContent, /idle.*26s ago/);
-      assert.match(staleEl.textContent, /idle.*23h ago/);
+      assert.equal(freshEl.textContent, '26s ago');
+      assert.equal(staleEl.textContent, '23h ago');
       assert.notEqual(staleEl.textContent, freshEl.textContent);
       assert.doesNotMatch(staleEl.textContent, /\ds ago/, 'a 24h-old status must not read as a fresh few-seconds-old one');
     } finally {

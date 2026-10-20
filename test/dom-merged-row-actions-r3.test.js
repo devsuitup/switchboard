@@ -60,7 +60,7 @@ test('a merged representative rebuild uses its stored transcript activity for th
   ctx.emitHeadTurn('A', 'open');
   const item = ctx.sidebar.buildSessionItem({ ...row, status: 'busy', statusUpdatedAt: Date.now() });
   assert.ok(item.classList.contains('cli-busy'));
-  assert.equal(item.querySelector('.session-icon').title, 'Working');
+  assert.equal(item.querySelector('.session-icon').title, 'Working\nCLI status: busy');
 });
 
 test('a merged local member still paints Working exactly once', t => {

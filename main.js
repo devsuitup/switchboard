@@ -697,6 +697,14 @@ function annotateRemoteAttachable(projects) {
         session.status = descriptor ? (descriptor.status || null) : null;
         session.statusUpdatedAt = descriptor ? (descriptor.statusUpdatedAt || null) : null;
         session.waitingFor = descriptor ? (descriptor.waitingFor || null) : null;
+        session.mergedMemberStatuses = Object.fromEntries((session.mergedMemberIds || []).map(id => {
+          const member = info.byId.get(id);
+          return [id, member ? {
+            status: member.status || null,
+            statusUpdatedAt: member.statusUpdatedAt || null,
+            waitingFor: typeof member.waitingFor === 'string' && member.waitingFor ? member.waitingFor : null,
+          } : null];
+        }));
         session.remoteActiveAt = remoteActivityTracker.activeAt(session.remoteAlias, session.sessionId);
         // listed descriptor = live process (ALIVE filter) — see .ai/contexts/session-state.md
         session.remoteDescriptorSeen = !!descriptor;
@@ -709,6 +717,7 @@ function annotateRemoteAttachable(projects) {
         const local = cliSessionState.getStatus(session.sessionId);
         session.status = local ? local.status : undefined;
         session.statusUpdatedAt = local ? local.statusUpdatedAt : undefined;
+        session.waitingFor = local ? local.waitingFor : null;
         session.mergedMemberStatuses = Object.fromEntries((session.mergedMemberIds || [])
           .map(id => [id, cliSessionState.getStatus(id) || null]));
       }

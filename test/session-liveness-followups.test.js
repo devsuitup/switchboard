@@ -127,7 +127,7 @@ test('576 item 3: a descriptor loss clears the old inference and leaves unknown 
   h.render([{ sessionId: 'A', status: 'idle' }]);
   h.emitSessionTranscriptActivity({ sessionId: 'A', at: 10 });
   h.expire();
-  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input');
+  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input\nCLI status: idle');
   const missed = h.render([{ sessionId: 'A', status: undefined }]);
   assert.equal(h.read('localPtyStates.get("A").snapshot().liveness'), 'unknown');
   assert.equal(h.read('localTranscriptStates.has("A")'), false);
@@ -135,7 +135,7 @@ test('576 item 3: a descriptor loss clears the old inference and leaves unknown 
   assert.equal(missed.querySelector('.session-icon').title, 'Idle');
   const returned = h.render([{ sessionId: 'A', status: 'idle' }]);
   assert.ok(returned.classList.contains('is-alive'));
-  assert.equal(returned.querySelector('.session-icon').title, 'Waiting for input');
+  assert.equal(returned.querySelector('.session-icon').title, 'Waiting for input\nCLI status: idle');
 });
 
 test('576 a never-standalone merged member uses its own descriptor without creating a sidebar map entry', { timeout: 8000 }, t => {
@@ -145,7 +145,7 @@ test('576 a never-standalone merged member uses its own descriptor without creat
   assert.deepEqual([...h.window.sessionMap.keys()], ['A']);
   h.emitSessionTranscriptActivity({ sessionId: 'B' });
   h.expire();
-  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input');
+  assert.equal(h.document.querySelector('#si-A .session-icon').title, 'Waiting for input\nCLI status: idle');
   assert.equal(h.read('localTranscriptStates.get("B").snapshot().liveness'), 'alive');
   h.render([{ ...row, mergedMemberStatuses: { B: null } }]);
   h.expire();
@@ -330,7 +330,7 @@ test('576r2 minor 2: a descriptor read miss keeps the previous status while its 
   let clock = 10000;
   const h = bootMain(t, { now: () => clock });
   await descriptorBatch(t, () => fs.unlinkSync(path.join(h.dir, '4242.json')));
-  assert.deepEqual(cli.getStatus('A'), { status: 'idle', statusUpdatedAt: 10000 }, 'a live idle process survives a transient descriptor read miss');
+  assert.deepEqual(cli.getStatus('A'), { status: 'idle', statusUpdatedAt: 10000, waitingFor: null }, 'a live idle process survives a transient descriptor read miss');
   assert.deepEqual(h.sent, [], 'a retained live status needs no rebuild');
   h.kill();
   clock += 6000;
@@ -391,7 +391,7 @@ test('576r3 an existing unreadable descriptor keeps its live status but expires 
   });
   h.flush();
   assert.equal(fs.existsSync(h.file), true);
-  assert.deepEqual(cli.getStatus('A'), { status: 'idle', statusUpdatedAt: 10000 });
+  assert.deepEqual(cli.getStatus('A'), { status: 'idle', statusUpdatedAt: 10000, waitingFor: null });
   assert.deepEqual(h.sent, []);
   t.mock.timers.tick(4850);
   assert.equal(cli.getStatus('A').status, 'idle');

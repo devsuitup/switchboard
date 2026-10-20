@@ -38,7 +38,7 @@ for (const first of [null, 'closed', 'unknown']) {
     assert.deepEqual(slot(), ['session-icon--idle']);
     assert.ok(icon().classList.contains('running'));
     assert.equal(background(), GREEN);
-    assert.equal(icon().title, 'Idle');
+    assert.equal(icon().title, 'Idle\nCLI status: idle');
   });
 }
 

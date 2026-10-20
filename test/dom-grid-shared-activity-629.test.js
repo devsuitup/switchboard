@@ -193,7 +193,7 @@ test('#629 one head update looks up and paints only its indexed card', t => {
   turn('open');
   assert.deepEqual(paints, ['head-629']);
   assert.equal(card.querySelector('.grid-card-dot').title, 'Working');
-  assert.deepEqual(lookups, ['head-629', 'head-629', 'head-629']);
+  assert.deepEqual(lookups, ['head-629', 'head-629', 'head-629', 'head-629', 'head-629']);
 });
 
 test('#629 busy head with running agents shares the sidebar violet tint', t => {
@@ -266,9 +266,17 @@ function parity(ctx, card, expected) {
   const sidebar = ctx.window.sessionItemEl(card.dataset.sessionId);
   const icon = sidebar.querySelector('.session-icon');
   const slot = card.querySelector('.grid-card-dot');
+  const descriptor = ctx.window.localSessionForStatus(sidebar.dataset.headSessionId || sidebar.dataset.sessionId);
+  for (const label of [icon.title, icon.getAttribute('aria-label')]) {
+    assert.equal((label.match(/CLI status:/g) || []).length, descriptor?.status ? 1 : 0,
+      'sidebar descriptor suffix appears exactly once when a status is available');
+  }
+  for (const label of [slot.title, slot.getAttribute('aria-label')]) {
+    assert.doesNotMatch(label, /CLI status:/, 'grid shows only the shared activity label');
+  }
   assert.equal(slot.dataset.glyph, icon.dataset.glyph, 'grid and sidebar glyph match');
-  assert.equal(slot.title, icon.title, 'grid and sidebar tooltip match');
-  assert.equal(slot.getAttribute('aria-label'), icon.getAttribute('aria-label'));
+  assert.equal(slot.title, icon.title.split('\nCLI status:')[0], 'grid and sidebar activity tooltip match');
+  assert.equal(slot.getAttribute('aria-label'), icon.getAttribute('aria-label').split(' · CLI status:')[0]);
   const classes = el => [...el.classList].filter(c => c.startsWith('session-icon--')).sort();
   assert.deepEqual(classes(slot), classes(icon));
   assert.equal(slot.title, expected);
