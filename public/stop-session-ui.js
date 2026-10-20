@@ -14,9 +14,9 @@ function resolveSessionStop(session, { attach = false } = {}) {
 }
 
 async function planSessionStop(row, { attach = false, retryTargets } = {}) {
-  const targets = retryTargets || [];
+  const targets = [];
   const excluded = [];
-  for (const id of retryTargets ? [] : new Set(rowSessionIds(row))) {
+  for (const id of new Set(retryTargets ? retryTargets.map(target => target.sessionId) : rowSessionIds(row))) {
     const member = id === row.sessionId ? row : {
       ...row, sessionId: id,
       remoteDescriptorSeen: row.remoteMemberDescriptorSeen?.[id] ?? row.remoteDescriptorSeen,
@@ -32,6 +32,7 @@ async function planSessionStop(row, { attach = false, retryTargets } = {}) {
       }
       continue;
     }
+    if (retryTargets && !active) continue;
     if (route.attach) {
       targets.push({ sessionId: id, ...route, where: 'in this window', jobId: open?.attachJobId });
       continue;

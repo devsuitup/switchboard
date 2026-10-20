@@ -218,6 +218,107 @@ test('Retry confirms only failed targets and does not stop a successful open tab
   assert.equal(h.document.querySelector('[role="alert"]'), null);
 });
 
+for (const closedTab of [false, true]) {
+  test(`Retry clears the failed B notice without confirming or stopping after B exits (${closedTab ? 'closed tab' : 'no tab'})`, async t => {
+    const h = setup(t);
+    h.window.activePtyIds.add('B');
+    h.window.api.stopSession = async id => {
+      h.calls.stopped.push(id);
+      return { ok: false, error: h.window.activePtyIds.has(id) ? 'boom' : 'not running' };
+    };
+    await h.stopRow();
+    const notice = h.document.querySelector('[role="alert"]');
+    assert.match(notice.textContent, /B.*boom/);
+    h.window.activePtyIds.delete('B');
+    if (closedTab) h.window.openSessions.set('B', { closed: true });
+    notice.querySelector('.app-notice-action').click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.calls.questions.length, 1, 'Retry must not confirm an exited part');
+    assert.deepEqual(h.calls.stopped, ['B']);
+    assert.equal(h.document.querySelector('[role="alert"]'), null);
+    assert.equal(h.document.querySelector('.app-notice-action'), null);
+    assert.match(h.document.querySelector('#app-notices').textContent, /Nothing is running to stop\./);
+  });
+}
+
+for (const openTabOnly of [false, true]) {
+  test(`Retry confirms and stops only failed B while it has ${openTabOnly ? 'an open tab' : 'a live PTY'}`, async t => {
+    const h = setup(t);
+    h.window.activePtyIds.add('A').add('B').add('C');
+    let failed = true;
+    h.window.api.stopSession = async id => {
+      h.calls.stopped.push(id);
+      return failed && id !== 'A' ? { ok: false, error: 'boom' } : { ok: true };
+    };
+    await h.stopRow();
+    h.window.activePtyIds.delete('C');
+    h.window.openSessions.set('C', { closed: true });
+    if (openTabOnly) {
+      h.window.activePtyIds.delete('B');
+      h.window.openSessions.set('B', { closed: false });
+    }
+    failed = false;
+    h.document.querySelector('.app-notice-action').click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.calls.questions.length, 2);
+    assert.match(h.calls.questions[1].message, /Stop 1 part\?.*Part B in this window\./s);
+    assert.doesNotMatch(h.calls.questions[1].message, /Part [AC]\b/);
+    assert.deepEqual(h.calls.stopped, ['A', 'B', 'C', 'B']);
+    assert.equal(h.document.querySelector('[role="alert"]'), null);
+  });
+}
+
+test('a first local Stop that returns not running clears liveness without a failure notice', async t => {
+  const h = setup(t);
+  h.window.activePtyIds.add('B');
+  h.window.api.stopSession = async id => {
+    h.calls.stopped.push(id);
+    return { ok: false, error: 'not running' };
+  };
+  await h.stopRow();
+  assert.equal(h.calls.questions.length, 1);
+  assert.deepEqual(h.calls.stopped, ['B']);
+  assert.equal(h.window.activePtyIds.has('B'), false);
+  assert.equal(h.document.querySelector('[role="alert"]'), null);
+});
+
+test('Retry clears a remote failure after the unseeded member is confirmed dead', async t => {
+  const h = setup(t, { remoteAlias: 'host', remoteHostAt: null, remoteDescriptorSeen: true });
+  h.read("for (const id of ['A', 'C']) remoteState(id).apply({ type: 'liveness', value: 'dead' })");
+  h.window.api.remoteStopSession = async (alias, id) => {
+    h.calls.remote.push([alias, id]);
+    return { ok: false, error: 'boom' };
+  };
+  await h.stopRow();
+  h.read("remoteState('B').apply({ type: 'liveness', value: 'dead' })");
+  h.document.querySelector('.app-notice-action').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.calls.questions.length, 1);
+  assert.deepEqual(h.calls.remote, [['host', 'B']]);
+  assert.equal(h.document.querySelector('[role="alert"]'), null);
+  assert.match(h.document.querySelector('#app-notices').textContent, /Nothing is running to stop\./);
+});
+
+test('Retry retains a possibly running remote B while dropping confirmed dead C', async t => {
+  const h = setup(t, { remoteAlias: 'host', remoteHostAt: null, remoteDescriptorSeen: false });
+  h.read("remoteState('A').apply({ type: 'liveness', value: 'dead' })");
+  let failed = true;
+  h.window.api.remoteStopSession = async (alias, id) => {
+    h.calls.remote.push([alias, id]);
+    return failed ? { ok: false, error: 'boom' } : { ok: true };
+  };
+  await h.stopRow();
+  h.read("remoteState('C').apply({ type: 'liveness', value: 'dead' })");
+  failed = false;
+  h.document.querySelector('.app-notice-action').click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.calls.questions.length, 2);
+  assert.match(h.calls.questions[1].message, /Stop 1 part\?.*B.*possibly running/s);
+  assert.doesNotMatch(h.calls.questions[1].message, /Part C\b/);
+  assert.deepEqual(h.calls.remote, [['host', 'B'], ['host', 'C'], ['host', 'B']]);
+  assert.equal(h.document.querySelector('[role="alert"]'), null);
+});
+
 test('a closed job tab remains excluded while other local parts stop', async t => {
   const h = setup(t, { mergedMemberIds: ['B', 'J'] });
   h.window.activePtyIds.add('B');

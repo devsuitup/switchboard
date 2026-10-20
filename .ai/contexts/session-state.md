@@ -7,8 +7,11 @@ Stop/Detach, Delete and Archive use `showSessionActionFailure` in
 (folder Archive uses the project path). Errors have `role="alert"`, Dismiss,
 the affected session/location, the backend reason and a recovery step. They
 schedule no expiry and survive sidebar replacement and pointer leave. Stop's
-Retry repeats its confirmation and retains the error if cancelled; successful
-actions clear only their own key. No focus is moved by showing a notice.
+Retry rechecks only the failed targets against current PTYs, open tabs and
+remote liveness before confirming; an empty retry replaces the failure with
+"Nothing is running to stop." A local `not running` response counts as stopped.
+Cancelling confirmation retains the error; successful actions clear only their
+own key. No focus is moved by showing a notice.
 
 Delete refusals for external processes direct the user to the session's own
 terminal at its project location. A backend refusal for a session running in

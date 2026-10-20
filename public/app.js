@@ -1290,7 +1290,7 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
         unreachable.set(target.alias, reason);
         throw new Error(reason);
       }
-      if (!result || (result.ok === false && !(target.remote && result.error === 'session not found on that host'))) {
+      if (!result || (result.ok === false && result.error !== (target.remote ? 'session not found on that host' : 'not running'))) {
         throw new Error(result?.error || 'The stop backend is unavailable or returned no result');
       }
     } catch (error) {
