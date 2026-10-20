@@ -323,6 +323,7 @@ test('a Restore refusal for an external process stays visible with its terminal 
 
 test('Stop Retry retains its alert when confirmation is cancelled and clears only on success', async t => {
   const h = setup(t);
+  h.window.activePtyIds.add('s1');
   h.window.appConfirm = async () => true;
   h.window.api.stopSession = async () => ({ ok: false, error: 'stop refused' });
   const { confirmAndStopSession } = loadAppFunctions(h.context, { functions: ['confirmAndStopSession'], installSpies: false });

@@ -254,6 +254,7 @@ const rendererCrossFileGlobals = {
   applyRemoteStopped: 'readonly',
   // public/stop-session-ui.js — see .ai/contexts/session-state.md (issue #271)
   resolveSessionStop: 'readonly',
+  planSessionStop: 'readonly',
   isRemoteSessionAlive: 'readonly',
   stopBeforeArchive: 'readonly',
   showRestoreNotice: 'readonly',

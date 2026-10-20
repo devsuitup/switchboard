@@ -1261,37 +1261,60 @@ async function triggerRebuildAndSearch() {
 
 // --- Stop session helper ---
 // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
-// btn (optional): the clicked control, flashed on failure instead of alert() — see sidebar.js's session-delete-btn
-async function confirmAndStopSession(sessionId, btn, rowSession) {
+async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets) {
+  const isRow = typeof sessionOrId === 'object';
+  const sessionId = isRow ? sessionOrId.sessionId : sessionOrId;
   const openEntry = openSessions.get(sessionId);
-  const plan = resolveSessionStop(sessionMap.get(sessionId) || openEntry?.session || rowSession, { attach: !!(openEntry && openEntry.attach) });
-  if (!await appConfirm({ title: plan.attach ? 'Detach session?' : 'Stop session?', message: plan.confirmText, confirmLabel: plan.attach ? 'Detach' : 'Stop', danger: true })) return;
-  const session = sessionMap.get(sessionId) || openEntry?.session || rowSession || { sessionId };
-  const operation = plan.attach ? 'Detach' : 'Stop';
-  try {
-    const backend = plan.remote ? window.api.remoteStopSession : window.api.stopSession;
-    if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
-    const result = plan.remote ? await backend(plan.alias, sessionId) : await backend(sessionId);
-    if (!result || result.ok === false) throw new Error(result?.error || 'The stop backend is unavailable or returned no result');
-  } catch (error) {
-    showSessionActionFailure(operation, session, error,
-      plan.remote ? 'Check the connection to the host, then retry Stop from the sidebar.'
-        : plan.attach ? 'Check the background session in the Agents view, then retry Detach.'
-          : 'Check the session in its own terminal, then retry Stop from the sidebar.',
-      () => confirmAndStopSession(sessionId, btn, rowSession));
+  const session = isRow ? sessionOrId : { ...(sessionMap.get(sessionId) || openEntry?.session || rowSession), sessionId, mergedMemberIds: [] };
+  const plan = await planSessionStop(session, { attach: !!(openEntry?.attach && !openEntry.closed), retryTargets });
+  if (!plan.targets.length) {
+    showAppNotice({ id: sessionActionNoticeId('Stop', session), kind: plan.excluded.length ? 'error' : 'info',
+      message: plan.excluded.length ? plan.confirmText : 'Nothing is running to stop.' });
     return;
   }
-  clearAppNotice(sessionActionNoticeId(operation, session));
-  if (plan.remote && typeof applyRemoteStopped === 'function') {
-    applyRemoteStopped(sessionId);
+  if (!await appConfirm({ title: plan.attach ? 'Detach session?' : 'Stop session?', message: plan.confirmText, confirmLabel: plan.attach ? 'Detach' : 'Stop', danger: true })) return;
+  const operation = !isRow && plan.attach ? 'Detach' : 'Stop';
+  const failures = [];
+  const failedTargets = [];
+  const unreachable = new Map();
+  let stopped = 0;
+  for (const target of plan.targets) {
+    const id = target.sessionId;
+    try {
+      if (target.remote && unreachable.has(target.alias)) throw new Error(unreachable.get(target.alias));
+      const backend = target.remote ? window.api.remoteStopSession : window.api.stopSession;
+      if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
+      const result = target.remote ? await backend(target.alias, id) : await backend(id);
+      if (target.remote && result?.hostUnreachable) {
+        const reason = result.error || 'The host is unreachable';
+        unreachable.set(target.alias, reason);
+        throw new Error(reason);
+      }
+      if (!result || (result.ok === false && result.error !== (target.remote ? 'session not found on that host' : 'not running'))) {
+        throw new Error(result?.error || 'The stop backend is unavailable or returned no result');
+      }
+    } catch (error) {
+      failures.push(`Part ${id} ${target.where}: ${error?.message || error || 'unknown error'}`);
+      failedTargets.push(target);
+      continue;
+    }
+    if (target.remote && typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
+    activePtyIds.delete(id);
+    if (!gridViewActive && activeSessionId === id) {
+      setActiveSession(null);
+      terminalHeader.style.display = 'none';
+      placeholder.style.display = '';
+    }
+    stopped++;
   }
-  activePtyIds.delete(sessionId);
-  if (!gridViewActive && activeSessionId === sessionId) {
-    setActiveSession(null);
-    terminalHeader.style.display = 'none';
-    placeholder.style.display = '';
+  if (failures.length) {
+    showSessionActionFailure(operation, session, failures.join('\n'),
+      'Check the connection or the session in its own terminal (the Agents view for a background session), then retry ' + operation + ' from the sidebar.',
+      () => confirmAndStopSession(sessionOrId, btn, rowSession, failedTargets));
+  } else {
+    clearAppNotice(sessionActionNoticeId(operation, session));
   }
-  refreshSidebar();
+  if (stopped) refreshSidebar();
 }
 
 function backgroundActionReason(sessionId) {

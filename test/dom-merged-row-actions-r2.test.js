@@ -219,29 +219,28 @@ for (const ownOpen of [false, true]) {
   });
 }
 
-test('Stop targets newest cached live member first, one member per click', async t => {
+test('Stop passes the whole cached row once for all its live members', async t => {
   const ctx = setup(t);
-  cachedRow(ctx);
+  const session = cachedRow(ctx);
   const stopped = [];
   ctx.window.activePtyIds.add('B');
   ctx.window.activePtyIds.add('C');
-  ctx.window.confirmAndStopSession = id => { stopped.push(id); ctx.window.activePtyIds.delete(id); };
+  ctx.window.confirmAndStopSession = row => stopped.push(row);
   const button = ctx.document.querySelector('#si-A .session-stop-btn');
   await button.onclick({ stopPropagation() {} });
-  assert.deepEqual(stopped, ['C']);
-  assert.ok(ctx.window.activePtyIds.has('B'));
-  await button.onclick({ stopPropagation() {} });
-  assert.deepEqual(stopped, ['C', 'B']);
+  assert.deepEqual(stopped, [session]);
+  assert.deepEqual(Array.from(stopped[0].mergedMemberIds), ['C', 'B']);
 });
 
-test('Stop keeps the representative first when its own process is live', async t => {
+test('Stop includes the live representative and every cached member in the same row request', async t => {
   const ctx = setup(t);
-  cachedRow(ctx);
+  const session = cachedRow(ctx);
   const stopped = [];
   for (const id of ['A', 'B', 'C']) ctx.window.activePtyIds.add(id);
-  ctx.window.confirmAndStopSession = id => stopped.push(id);
+  ctx.window.confirmAndStopSession = row => stopped.push(row);
   await ctx.document.querySelector('#si-A .session-stop-btn').onclick({ stopPropagation() {} });
-  assert.deepEqual(stopped, ['A']);
+  assert.deepEqual(stopped, [session]);
+  assert.deepEqual(Array.from(ctx.window.rowSessionIds(stopped[0])), ['A', 'C', 'B']);
 });
 
 test('a remote merged row retains a confirmed dead state over a stale descriptor', t => {

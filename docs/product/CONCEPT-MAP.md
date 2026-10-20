@@ -92,9 +92,12 @@ Plain-terminal rows show Stop only; subagent rows have no buttons
   guard and attach or resume (V, `session-cache.js` `buildProjectsFromCache`,
   `public/session-activity-dom.js` `rowOpenId`, `public/sidebar.js`
   `rebindSidebarEvents`, `public/app.js` `openSessionNow`).
-- R1.4 Stop on a row targets the first member with a local PTY, else the first
-  alive member, else the representative — one member per click
-  (V, `public/sidebar.js:1468-1473`).
+- R1.4 Stop on a row stops every running part after one confirmation naming
+  the count, locations and process loss; the conversation is kept. Grid and
+  header Stop target only their tab. Attached job tabs detach; background jobs
+  and processes outside this window stay running and are named. Retry confirms
+  only the failed targets (V, `public/stop-session-ui.js` `planSessionStop`,
+  `public/app.js` `confirmAndStopSession`, `public/sidebar.js`).
 - R1.5 Archive stops first; a failure refuses the archive. On a remote row it
   stops every open or live member on its host; on a local row it stops every
   member with a local PTY or an open tab, and refuses up front when a

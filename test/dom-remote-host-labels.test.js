@@ -135,7 +135,11 @@ test('stop confirmation names the label but stop IPC keeps the alias', async t =
   h.window.gridViewActive = true;
   h.window.api.remoteStopSession = async (...args) => { calls.push(args); return { ok: true }; };
   await h.app.confirmAndStopSession(h.session.sessionId);
-  assert.equal(confirmations[0].message, 'Stop this session on VPS?');
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0].message, /Stop this session\?.*Remote work.*on VPS/s);
+  assert.match(confirmations[0].message, /process ends; the conversation is kept and can be resumed/);
+  assert.doesNotMatch(confirmations[0].message, /planificator/);
+  assert.doesNotMatch(confirmations[0].message, /\bpart\b|remote-label/);
   assert.deepEqual(calls, [[alias, h.session.sessionId]]);
 });
 

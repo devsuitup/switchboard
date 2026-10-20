@@ -143,9 +143,9 @@ The Changes badge is the one place that already meets "never colour alone".
 
 | Control | Where | Label (title) | Icon | Effect | Confirmation |
 |---|---|---|---|---|---|
-| Row Stop | `sidebar.js:1764-1767`, handler `1465-1475` | `Stop session` | red square | `confirmAndStopSession` (`app.js:1051`): kill local PTY; **detach** if the open tab is a bg attach; kill on host if remote. On a merged row, stops **one** live member per click (`sidebar.js:1469-1473`) | `confirm(plan.confirmText)` (`app.js:1054`) |
-| Grid Stop | `grid-view.js:190-199` | `Stop session` | red square | same | same |
-| Header Stop | `index.html:112`, `app.js:1083-1085`, title `app.js:1457` | `Stop process`, or `Detach (the session keeps running)` on an attach tab | **same red square** in both cases | same | same; texts `stop-session-ui.js:4-13`: `Stop this session?`, `Stop this session on <host>?`, `Detach from this background session? It keeps running; the Agents view can stop it.` |
+| Row Stop | `sidebar.js` row handler | `Stop session` | red square | `confirmAndStopSession` (`app.js`): stop every running part in the row; kill local PTYs or remote processes; **detach** attached background-job tabs. Jobs and outside processes stay running and are named | One `appConfirm(plan.confirmText)`, naming the count, locations and process loss, and saying the conversation is kept and can be resumed. A single-part session uses its display name and “this session”. Retry confirms only failed targets; an empty plan shows a notice |
+| Grid Stop | `grid-view.js` | `Stop session` | red square | Same routes, targeting only the card's tab | One confirmation naming this session, its display name, location and process loss; an attach tab says it detaches and keeps running |
+| Header Stop | `index.html`, `app.js` | `Stop process`, or `Detach (the session keeps running)` on an attach tab | **same red square** in both cases | Same routes, targeting only the header's tab | Same as Grid Stop |
 | Agents Stop | `agents-view.js:340, 421-436` | `Stop` | text button | `claude stop` on the job | **none** |
 | Agents Attach | `agents-view.js:340, 386-395`; dblclick `563-569` | `Attach` | text | open an attach tab; if a tab is already open for the row, shows it (`app.js:1502-1506`) | none |
 | Row click | `sidebar.js:1431-1439` | none | none | subagent → transcript; remote not attachable → transcript; else open/resume/attach; already-open member → show it (`app.js:1502-1506`); a second click while the first open is in flight joins it (`app.js:1481-1496`) | continuation and live-elsewhere prompts (§5) |
@@ -157,10 +157,7 @@ The Changes badge is the one place that already meets "never colour alone".
    the click detaches.
 2. A reversible verb (detach) shares the destructive verb's icon and colour.
 3. Agents Stop is the only Stop without a confirmation.
-4. On a merged row the confirmation (`Stop this session?`) does not say which
-   member is stopped, and a second live member needs a second click
-   (supposed reachable when two members are live; the row stays "running").
-5. `Attach` keeps its label when the click only goes to an open tab.
+4. `Attach` keeps its label when the click only goes to an open tab.
 
 **Proposed convergence.**
 - Two verbs, two controls, the same everywhere:
@@ -168,8 +165,8 @@ The Changes badge is the one place that already meets "never colour alone".
   (neutral eject icon, no confirm, reversible), offered wherever a view can
   be let go without ending the process (bg attach, remote attach).
 - Agents Stop goes through the same confirmation as every Stop.
-- On a merged row, Stop says how many parts run and stops them all in one
-  confirmed action (or names the one it stops).
+- Keep merged-row Stop as one confirmation naming all targets and exclusions;
+  grid and header Stop keep targeting only their tab.
 - `Attach` reads `Go to tab` when an attach tab is already open (audit
   proposal, not yet decided).
 

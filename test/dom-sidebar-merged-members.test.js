@@ -148,15 +148,16 @@ test('a sibling transcript decay preserves the head with an open turn', t => {
   assert.ok(render(ctx).classList.contains('cli-busy'));
 });
 
-test('the merged row stop control targets its live member', t => {
+test('the merged row stop control passes every member to the shared Stop plan', t => {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   ctx.window.activePtyIds.add('B');
   const stopped = [];
-  ctx.window.confirmAndStopSession = id => stopped.push(id);
+  ctx.window.confirmAndStopSession = row => stopped.push(row);
   const item = render(ctx);
   item.querySelector('.session-stop-btn').click();
-  assert.deepEqual(stopped, ['B']);
+  assert.equal(stopped.length, 1);
+  assert.deepEqual(Array.from(ctx.window.rowSessionIds(stopped[0])), ['A', 'B', 'C']);
 });
 
 test('member subagent transitions keep the merged row busy until all members finish', t => {
