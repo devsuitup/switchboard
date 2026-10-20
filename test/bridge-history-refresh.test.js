@@ -59,7 +59,7 @@ test('deleting a merged row removes every part before a full worker rescan', { t
     deleteSearchSession: f.db.deleteSearchSession,
     mainTouchedCache: { dropSession: id => dropped.push(id) },
   });
-  const preview = handlers.get('delete-session-preview')(null, 'a');
+  const preview = await handlers.get('delete-session-preview')(null, 'a');
   const result = await handlers.get('delete-session')(null, 'a', preview.partIds);
   assert.equal(result.ok, true);
   await cache.scanFoldersViaWorker({ projectsDir: f.root, folders: [f.folder] });

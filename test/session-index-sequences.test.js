@@ -22,9 +22,12 @@ function handler(name, deps) {
     && node.expression.arguments[0]?.value === name);
   assert.ok(registration, name);
   const callback = registration.expression.arguments[1];
-  return vm.runInNewContext(`(${source.slice(...callback.range)})`, {
-    ...deps, writer: memoryWriter(deps),
-  }, { filename: path.join(__dirname, '../main.js') });
+  const context = vm.createContext({ ...deps, writer: memoryWriter(deps) });
+  if (name === 'delete-worktree') {
+    const check = nodes.find(node => node.type === 'FunctionDeclaration' && node.id.name === 'checkDeleteWorktree');
+    vm.runInContext(source.slice(...check.range), context, { filename: path.join(__dirname, '../main.js') });
+  }
+  return vm.runInContext(`(${source.slice(...callback.range)})`, context, { filename: path.join(__dirname, '../main.js') });
 }
 
 function settings(initial) {

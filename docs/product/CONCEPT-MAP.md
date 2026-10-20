@@ -392,8 +392,10 @@ unsubmitted input (`docs/automation.md:291`).
    A third, a process alive anywhere (`is-alive`), decides whether the Stop
    control shows on a row or card without being called "Running"
    (`public/style.css:1270-1273`; `public/app.js:1206`).
-4. Archive and Delete stop first; a live background job blocks both from the
-   sidebar (`public/stop-session-ui.js:26-36`).
+4. Archive confirms before stopping live parts. Delete refuses any live part,
+   including the representative, before its dialog and never stops it. Both
+   check background jobs before asking (`public/stop-session-ui.js`,
+   `delete-session-guard.js`, `public/sidebar.js`).
 5. Quitting ends local processes and leaves background and remote ones running
    (R7.3).
 

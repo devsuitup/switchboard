@@ -189,13 +189,13 @@ test('a session that never started is described as having no transcript', async 
   } finally { ctx.destroy(); }
 });
 
-test('a running session is flagged in the dialog', async () => {
+test('the dialog never promises to stop a running session', async () => {
   const ctx = setupSidebarDom();
   try {
     stubApi(ctx.window, { preview: { ok: true, transcripts: 1, subagents: 0, running: true } });
     const p = ctx.sidebar.showDeleteSessionDialog(SESSION);
     await tick();
-    assert.match(ctx.document.getElementById('dss-status').textContent, /still running/);
+    assert.doesNotMatch(ctx.document.getElementById('dss-status').textContent, /still running|stopped first/);
     ctx.document.getElementById('dss-cancel').click();
     await p;
   } finally { ctx.destroy(); }

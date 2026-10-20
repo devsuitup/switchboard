@@ -33,6 +33,8 @@ function slugId(slug) {
 
 const archivingSessionIds = new Set();
 const archivingGroupIds = new Set();
+const remappingProjectPaths = new Set();
+const deletingWorktreePaths = new Set();
 const ARCHIVE_CHECKING_TITLE = 'Checking the host before archiving…';
 
 // see .ai/contexts/session-state.md ("Archive/delete are stop-then-archive/delete")
@@ -1559,15 +1561,28 @@ function rebindSidebarEvents(projects) {
     if (remapBtn) {
       remapBtn.onclick = async (e) => {
         e.stopPropagation();
-        const newPath = await window.api.browseFolder();
-        if (!newPath) return;
-        const projectShortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-        if (!await appConfirm({ title: 'Remap?', message: `Remap ${projectShortName} to:\n${newPath}?`, confirmLabel: 'Remap', danger: true })) return;
-        const result = await window.api.remapProject(project.projectPath, newPath);
-        if (result.error) {
-          await appAlert({ title: 'Switchboard', message: 'Failed to remap: ' + result.error });
-        } else {
-          Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+        if (remappingProjectPaths.has(project.projectPath)) return;
+        remappingProjectPaths.add(project.projectPath);
+        try {
+          try {
+            const check = await window.api.checkRemapProject(project.projectPath);
+            if (!check?.ok) throw new Error(check?.error || 'The remap check backend is unavailable');
+          } catch (error) {
+            showSessionActionFailure('Change path', project, error);
+            return;
+          }
+          const newPath = await window.api.browseFolder();
+          if (!newPath) return;
+          const projectShortName = project.projectPath.split('/').filter(Boolean).slice(-2).join('/');
+          if (!await appConfirm({ title: 'Remap?', message: `Remap ${projectShortName} to:\n${newPath}?`, confirmLabel: 'Remap', danger: true })) return;
+          const result = await window.api.remapProject(project.projectPath, newPath);
+          if (result.error) {
+            await appAlert({ title: 'Switchboard', message: 'Failed to remap: ' + result.error });
+          } else {
+            Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+          }
+        } finally {
+          remappingProjectPaths.delete(project.projectPath);
         }
       };
     }
@@ -1612,15 +1627,28 @@ function rebindSidebarEvents(projects) {
     if (wtDeleteBtn) {
       wtDeleteBtn.onclick = async (e) => {
         e.stopPropagation();
-        const name = wtProject.projectPath.split('/').pop();
-        const confirmed = await showDeleteWorktreeDialog(name, wtProject.projectPath);
-        if (!confirmed) return;
-        const result = await window.api.deleteWorktree(wtProject.projectPath);
-        if (result && result.ok) {
-          Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
-        } else {
-          const msg = (result && result.error) ? result.error : 'Unknown error';
-          await appAlert({ title: 'Switchboard', message: `Failed to delete worktree: ${msg}` });
+        if (deletingWorktreePaths.has(wtProject.projectPath)) return;
+        deletingWorktreePaths.add(wtProject.projectPath);
+        try {
+          try {
+            const check = await window.api.checkDeleteWorktree(wtProject.projectPath);
+            if (!check?.ok) throw new Error(check?.error || 'The deletion check is unavailable');
+          } catch (error) {
+            showSessionActionFailure('Delete worktree', wtProject, error);
+            return;
+          }
+          const name = wtProject.projectPath.split('/').pop();
+          const confirmed = await showDeleteWorktreeDialog(name, wtProject.projectPath);
+          if (!confirmed) return;
+          const result = await window.api.deleteWorktree(wtProject.projectPath);
+          if (result && result.ok) {
+            Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+          } else {
+            const msg = (result && result.error) ? result.error : 'Unknown error';
+            await appAlert({ title: 'Switchboard', message: `Failed to delete worktree: ${msg}` });
+          }
+        } finally {
+          deletingWorktreePaths.delete(wtProject.projectPath);
         }
       };
     }
@@ -1795,22 +1823,21 @@ function rebindSidebarEvents(projects) {
       deleteBtn.onclick = async (e) => {
         e.stopPropagation();
         try {
-          if (session.mergedMemberIds?.some(id =>
-            activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)
-            || storedActivitySnapshot(id)?.liveness === 'alive')) {
-            surfaceStopFailure(deleteBtn, 'A merged member is still running', session, 'Delete');
+          const liveParts = rowSessionIds(session).map(id => {
+            if (activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)) {
+              return `Part ${id} is still running in this window — stop it first, then retry Delete`;
+            }
+            if (storedActivitySnapshot(id, session)?.liveness === 'alive') {
+              return `Part ${id} is still running outside this window — return to its own terminal and end it there, then retry Delete`;
+            }
+            return null;
+          }).filter(Boolean);
+          if (liveParts.length) {
+            surfaceStopFailure(deleteBtn, liveParts.join('\n'), session, 'Delete');
             return;
           }
           const confirmation = await showDeleteSessionDialog(session);
           if (!confirmation) return;
-          if (!resolveSessionStop(session).remote) {
-            const stopResult = await stopBeforeArchive(session);
-            if (!stopResult.ok) {
-              surfaceStopFailure(deleteBtn, stopResult.error, session, 'Delete');
-              return;
-            }
-            pollActiveSessions();
-          }
           // see .ai/contexts/session-state.md (#271: remote Delete)
           const res = await window.api.deleteSession(session.sessionId, confirmation.partIds);
           if (!res || !res.ok) {
@@ -2386,7 +2413,6 @@ async function showDeleteSessionDialog(session) {
       ? `${p.transcripts} file${p.transcripts !== 1 ? 's' : ''} on disk`
       : 'no transcript on disk (this session never started)');
     if (p.subagents > 0) parts.push(`${p.subagents} subagent transcript${p.subagents !== 1 ? 's' : ''}`);
-    if (p.running) parts.push('session is still running and will be stopped first');
     statusEl.innerHTML = projectLine + `<pre class="dwt-dirty-list">${escapeHtml(parts.join('\n'))}</pre>`;
 
     function close(confirmed) {

@@ -62,16 +62,8 @@ test('delete button: rendered on session cards and confirms before deleting', ()
   const handler = sidebar.slice(start, sidebar.indexOf('const archiveBtn', start));
   assert.match(handler, /await showDeleteSessionDialog\(session\)/,
     'an irreversible action must be confirmed, via the styled dialog');
-  // issue #271: a running LOCAL session is stopped via the shared
-  // stop-then-archive/delete helper (stopBeforeArchive, public/stop-session-ui.js);
-  // a REMOTE session must skip the stop entirely — delete is refused
-  // server-side for remote regardless (REMOTE_READ_ONLY, main.js), so
-  // stopping first would strand a killed process behind a delete that never
-  // happens.
-  assert.match(handler, /stopBeforeArchive\(session\)/,
-    'a running session must be stopped before deletion, via the shared helper');
-  assert.match(handler, /resolveSessionStop\(session\)\.remote/,
-    'the stop must be skipped for a remote session — delete is refused server-side for remote anyway');
+  assert.doesNotMatch(handler, /stopBeforeArchive\(session\)/, 'Delete never stops a session');
+  assert.match(handler, /rowSessionIds\(session\)/, 'the representative participates in the live-part refusal');
   assert.match(handler, /window\.api\.deleteSession/);
   assert.doesNotMatch(handler, /window\.alert\(/,
     'alert() is modal and hard to dismiss — a failure must not block the renderer');
@@ -221,7 +213,7 @@ test('F1 Delete succeeds and clears every cache and search row when choice delet
 test('preview counts all parts and deletion clears every part and subagent from every cache', async t => {
   const f = deletionFixture(t);
   const handlers = loadDeletionHandlers(f.dependencies);
-  const preview = handlers.get('delete-session-preview')(null, 'a');
+  const preview = await handlers.get('delete-session-preview')(null, 'a');
   assert.equal(preview.parts, 2);
   assert.equal(preview.subagents, 2);
   assert.equal(preview.transcripts, 2);
@@ -236,7 +228,7 @@ test('preview counts all parts and deletion clears every part and subagent from 
 test('an unresolved member refuses preview and deletion without removing files or cache rows', async t => {
   const f = deletionFixture(t, ['b', 'missing']);
   const handlers = loadDeletionHandlers(f.dependencies);
-  const preview = handlers.get('delete-session-preview')(null, 'a');
+  const preview = await handlers.get('delete-session-preview')(null, 'a');
   const result = await handlers.get('delete-session')(null, 'a', ['a', 'b', 'missing']);
   for (const out of [preview, result]) {
     assert.equal(out.ok, false);
@@ -374,7 +366,7 @@ test('a middle-part EBUSY keeps the head listed, clears completed parts and allo
   }
   f.dependencies.fs = fs;
   const retry = loadDeletionHandlers(f.dependencies);
-  const preview = retry.get('delete-session-preview')(null, 'a');
+  const preview = await retry.get('delete-session-preview')(null, 'a');
   assert.equal(preview.parts, 2);
   assert.equal((await retry.get('delete-session')(null, 'a', preview.partIds)).ok, true);
   assert.equal(f.cached.size, 0);
@@ -398,11 +390,11 @@ test('a failed head directory removal keeps its transcript and incomplete cache 
   assert.equal(f.cached.has('b'), false);
 });
 
-test('preview counts transcript files separately from subagent directories and returns its exact parts', t => {
+test('preview counts transcript files separately from subagent directories and returns its exact parts', async t => {
   const f = deletionFixture(t);
   fs.mkdirSync(path.join(f.root, 'project', 'b', 'subagents'), { recursive: true });
   fs.writeFileSync(path.join(f.root, 'project', 'b', 'subagents', 'agent-y.jsonl'), '{}\n');
-  const preview = loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a');
+  const preview = await loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a');
   assert.equal(preview.transcripts, 2);
   assert.equal(preview.subagents, 2);
   assert.deepEqual(Array.from(preview.partIds), ['a', 'b']);
@@ -423,14 +415,6 @@ for (const remoteId of ['a', 'b']) {
     assert.equal(f.cached.size, 4);
   });
 }
-
-test('preview reports a running member even when the head is stopped', t => {
-  const f = deletionFixture(t);
-  f.dependencies.activeSessions = new Map([['a', { exited: true }], ['b', { exited: false }]]);
-  assert.equal(loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a').running, true);
-  f.dependencies.activeSessions.get('b').exited = true;
-  assert.equal(loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a').running, false);
-});
 
 test('a failed transcript removal clears subagents whose directory is confirmed gone', async t => {
   const f = deletionFixture(t);
@@ -470,10 +454,10 @@ test('a failed subagent directory removal retains its subagent cache and search 
   for (const entries of [f.cached, f.search, f.touched]) assert.equal(entries.has('sub:b:y'), true);
 });
 
-test('preview labels a target stat failure as a file inspection failure', t => {
+test('preview labels a target stat failure as a file inspection failure', async t => {
   const f = deletionFixture(t);
   f.dependencies.fs = { ...fs, statSync: () => { throw new Error('EACCES stat'); } };
-  const result = loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a');
+  const result = await loadDeletionHandlers(f.dependencies).get('delete-session-preview')(null, 'a');
   assert.equal(result.ok, false);
   assert.match(result.error, /cannot inspect conversation files: EACCES stat/);
 });

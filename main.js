@@ -958,6 +958,22 @@ ipcMain.handle('dismiss-schedule-reenable-offer', async (_event, projectPath, fo
 
 // --- IPC: remap-project ---
 
+function remapProjectRefusal(oldPath) {
+  if (typeof oldPath !== 'string') return 'Invalid arguments';
+  const folder = encodeProjectPath(oldPath);
+  for (const session of activeSessions.values()) {
+    if (!isPanelShellSession(session) && !session.exited && encodeProjectPath(session.projectPath) === folder) {
+      return 'Active sessions for this project — stop them first';
+    }
+  }
+  return null;
+}
+
+ipcMain.handle('check-remap-project', (_event, oldPath) => {
+  const error = remapProjectRefusal(oldPath);
+  return error ? { ok: false, error } : { ok: true };
+});
+
 ipcMain.handle('remap-project', async (_event, oldPath, newPath) => {
   try {
     // Validate oldPath/newPath are strings (basic sanitisation)
@@ -980,18 +996,8 @@ ipcMain.handle('remap-project', async (_event, oldPath, newPath) => {
     const folderPath = path.join(PROJECTS_DIR, folder);
     if (!fs.existsSync(folderPath)) return { error: 'No session data found for this project' };
 
-    // Refuse if any active PTY session is running for this folder — rewriting
-    // files while a live claude process is appending them risks data loss
-    // (our snapshot + rename would silently drop lines appended between read
-    // and rename). The user must stop all sessions for this project first.
-    for (const [, session] of activeSessions) {
-      // A panel shell appends to no transcript and has no row to stop it from
-      // — see .ai/contexts/panel-terminal.md
-      if (isPanelShellSession(session)) continue;
-      if (!session.exited && encodeProjectPath(session.projectPath) === folder) {
-        return { error: 'Active sessions for this project — stop them first' };
-      }
-    }
+    const refusal = remapProjectRefusal(oldPath);
+    if (refusal) return { error: refusal };
 
     // Rewrite cwd in all session JSONL files (top-level + subagents) so
     // `claude --resume` from CLI also picks up the new path.
@@ -1020,20 +1026,26 @@ function isKnownProjectRoot(candidatePath) {
   return _isKnownProjectRoot(candidatePath, [...getKnownProjectPaths()]);
 }
 
+function checkDeleteWorktree(worktreePath) {
+  if (typeof worktreePath !== 'string') return { ok: false, error: 'Invalid arguments' };
+  const normalizedPath = worktreePath.replace(/\/$/, '');
+  const match = normalizedPath.match(WORKTREE_PATH_RE);
+  if (!match) return { ok: false, error: 'Path does not match a recognized worktree layout' };
+  const parentRepo = match[1];
+  if (!isKnownProjectRoot(parentRepo)) return { ok: false, error: 'Parent repository is not a known project' };
+  return { ok: true, normalizedPath, parentRepo };
+}
+
+ipcMain.handle('check-delete-worktree', (_event, worktreePath) => {
+  const result = checkDeleteWorktree(worktreePath);
+  return result.ok ? { ok: true } : result;
+});
+
 ipcMain.handle('delete-worktree', (_event, worktreePath) => {
   return new Promise((resolve) => {
-    // Normalize trailing slash
-    const normalizedPath = worktreePath.replace(/\/$/, '');
-
-    // Validate path matches a known worktree layout
-    const match = normalizedPath.match(WORKTREE_PATH_RE);
-    if (!match) {
-      return resolve({ ok: false, error: 'Path does not match a recognized worktree layout' });
-    }
-    const parentRepo = match[1];
-    if (!isKnownProjectRoot(parentRepo)) {
-      return resolve({ ok: false, error: 'Parent repository is not a known project' });
-    }
+    const check = checkDeleteWorktree(worktreePath);
+    if (!check.ok) return resolve(check);
+    const { normalizedPath, parentRepo } = check;
 
     // Helper: run git worktree remove, optionally double-force
     function runRemove(doubleForce, callback) {
@@ -1070,15 +1082,9 @@ ipcMain.handle('delete-worktree', (_event, worktreePath) => {
 // --- IPC: worktree-status ---
 ipcMain.handle('worktree-status', (_event, worktreePath) => {
   return new Promise((resolve) => {
-    const normalizedPath = worktreePath.replace(/\/$/, '');
-    const match = normalizedPath.match(WORKTREE_PATH_RE);
-    if (!match) {
-      return resolve({ ok: false, error: 'Path does not match a recognized worktree layout' });
-    }
-    const parentRepo = match[1];
-    if (!isKnownProjectRoot(parentRepo)) {
-      return resolve({ ok: false, error: 'Parent repository is not a known project' });
-    }
+    const check = checkDeleteWorktree(worktreePath);
+    if (!check.ok) return resolve(check);
+    const { normalizedPath, parentRepo } = check;
 
     execFile('git', ['-C', parentRepo, '-C', normalizedPath, 'status', '--porcelain'], (err, stdout, stderr) => {
       if (err) {
@@ -2301,10 +2307,12 @@ ipcMain.handle('stop-subagent-watch', (_event, watchId) => {
 // --- IPC: delete-session-preview ---
 // What deleting `sessionId` would remove, so the confirmation dialog can state
 // it rather than asking the user to trust a generic warning.
-ipcMain.handle('delete-session-preview', (_event, sessionId) => {
+ipcMain.handle('delete-session-preview', async (_event, sessionId) => {
   const id = String(sessionId || '');
   const memberIds = [...getMergedMemberIds(id)];
   const partIds = [...new Set([id, ...memberIds])];
+  const refusal = await deleteSessionGuard(id, partIds);
+  if (refusal) return { ok: false, error: refusal };
   const resolved = resolveRowDeletionTargets(PROJECTS_DIR, id, memberIds, partId => {
     const folder = getCachedFolder(partId);
     if (isRemoteFolder(folder)) throw new Error(REMOTE_READ_ONLY);
@@ -2324,8 +2332,7 @@ ipcMain.handle('delete-session-preview', (_event, sessionId) => {
   } catch (err) {
     return { ok: false, error: `cannot resolve conversation subagents: ${err.message}` };
   }
-  const running = partIds.some(partId => activeSessions.has(partId) && !activeSessions.get(partId).exited);
-  return { ok: true, parts: resolved.parts, partIds, transcripts, subagents, running };
+  return { ok: true, parts: resolved.parts, partIds, transcripts, subagents };
 });
 
 ipcMain.handle('delete-session', async (_event, sessionId, previewPartIds) => {

@@ -167,7 +167,7 @@ test('Delete refuses a live merged member without stopping or deleting anything'
   const button = ctx.document.querySelector('#si-A .session-delete-btn');
   await button.onclick({ stopPropagation() {} });
   assert.deepEqual(calls, []);
-  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /merged member is still running/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /still running/);
 });
 
 test('Delete refuses an open merged member even before the running poll catches up', async t => {
@@ -178,7 +178,7 @@ test('Delete refuses an open merged member even before the running poll catches 
   const button = ctx.document.querySelector('#si-A .session-delete-btn');
   await button.onclick({ stopPropagation() {} });
   assert.deepEqual(calls, []);
-  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /merged member is still running/);
+  assert.match(ctx.document.querySelector('[role="alert"]').textContent, /still running/);
 });
 
 for (const ownOpen of [false, true]) {

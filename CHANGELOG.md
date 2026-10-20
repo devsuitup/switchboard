@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- Delete on a conversation that is running in Switchboard is now refused before its confirmation; stop it first. Delete, Delete worktree and Change path say why they cannot proceed before their confirmation, not after you confirm. (#565)
+
 ## v0.0.98 — 2026-10-20
 
 ### New

@@ -177,17 +177,29 @@ for (const [reason, extra] of [['missing transcript', {}], ['REMOTE_READ_ONLY', 
   });
 }
 
-test('a live merged member refuses Delete without promising unsupported Stop or Close', async t => {
-  const h = setup(t, { mergedMemberIds: ['external'] });
-  h.window.activePtyIds.add('external');
-  let deleted = false;
-  h.window.api.deleteSession = async () => { deleted = true; };
-  await h.click('.session-delete-btn');
-  const el = h.notice('running', 'Delete');
-  assert.match(el.textContent, /own terminal/);
-  assert.doesNotMatch(el.textContent, /close it first|stop it first/i);
-  assert.equal(deleted, false);
-});
+for (const state of ['pty', 'tab', 'elsewhere', 'mixed']) {
+  test(`a live merged member refuses Delete with ${state} recovery and no Close promise`, async t => {
+    const h = setup(t, { mergedMemberIds: ['external', 'here'] });
+    if (state === 'pty' || state === 'mixed') h.window.activePtyIds.add('here');
+    if (state === 'tab') h.window.openSessions.set('here', { closed: false });
+    if (state === 'elsewhere' || state === 'mixed') {
+      h.session.mergedMemberStatuses = { external: { status: 'idle' } };
+      h.read("seedLocalTranscriptDescriptor('external')");
+    }
+    const calls = [];
+    for (const method of ['deleteSessionPreview', 'deleteSession', 'stopSession']) {
+      h.window.api[method] = async () => { calls.push(method); };
+    }
+    await h.click('.session-delete-btn');
+    const el = h.notice('running', 'Delete');
+    if (state !== 'elsewhere') assert.match(el.textContent, /Part here.*in this window.*stop it first, then retry Delete/);
+    if (state === 'elsewhere' || state === 'mixed') assert.match(el.textContent, /Part external.*running outside this window.*own terminal.*end it there/);
+    if (state === 'elsewhere') assert.doesNotMatch(el.textContent, /stop it first/);
+    assert.doesNotMatch(el.textContent, /close it first/i);
+    assert.equal(h.document.querySelector('#dss-confirm'), null);
+    assert.deepEqual(calls, []);
+  });
+}
 
 test('external-process backend refusal describes its own terminal and location', async t => {
   const reason = await deleteSessionRefusal('s1', {
