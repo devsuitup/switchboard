@@ -249,6 +249,7 @@ const rendererCrossFileGlobals = {
   isSessionAlive: 'readonly',
   paintSessionIcon: 'readonly',
   paintSessionIconFromSnapshot: 'readonly',
+  paintTerminalHeaderStatus: 'readonly',
   // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
   setRemoteAttached: 'readonly',
   applyRemoteStopped: 'readonly',

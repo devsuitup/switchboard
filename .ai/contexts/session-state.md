@@ -1200,20 +1200,21 @@ Waiting uses `content: attr(data-glyph)` in an absolutely positioned `::before`
 inside the unchanged 6px slot. Its transparent background and absent box-shadow
 use `!important` to beat `.session-icon.running` and the terminal-row halo;
 `animation: none` keeps it static. Idle has an empty CSS rule so every slot
-class remains declared, with no overrides of the base dot or `.running`.
-Stale and archived only dim the base filled dot, without `!important`.
+class remains declared; `.session-icon--idle.running` adds a small dot below
+the green dot to distinguish Open here. Not running (`stale`) is an opaque
+grey dash (`scaleY(0.333333)`); archived keeps the dim base dot.
 Selectors depend only on `session-icon--<rung>`, with no layout measurement.
 
 | Rung | Slot class | Glyph / look | Produced on |
 |---|---|---|---|
-| attention | `session-icon--attention` | orange `--state-waiting` blinking LED and halo | sidebar |
-| responseReady | `session-icon--response-ready` | cyan glowing dot | sidebar |
-| busy | `session-icon--busy` | blue animated braille spinner, violet with busy subagents | sidebar and Agents |
-| agentsBusy | `session-icon--agents-busy` | violet static braille cell | sidebar |
-| waitingForInput | `session-icon--waiting` | orange `--state-waiting` hollow `○`, no halo or animation | sidebar and Agents |
-| idle | `session-icon--idle` | no glyph; green with `.running` — a row or grid card whose PTY is here, at rest | sidebar, grid and live idle Agents jobs |
-| stale | `session-icon--stale` | no glyph; base grey filled dot at 0.5 opacity | Agents only, for a job that is not live |
-| archived | `session-icon--archived` | same as stale | reserved, unused |
+| attention | `session-icon--attention` | orange `--state-waiting` blinking LED and halo | sidebar, grid and header |
+| responseReady | `session-icon--response-ready` | cyan glowing dot | sidebar, grid and header |
+| busy | `session-icon--busy` | blue animated braille spinner, violet with busy subagents | sidebar, grid, header and Agents |
+| agentsBusy | `session-icon--agents-busy` | violet static braille cell | sidebar, grid, header and Agents |
+| waitingForInput | `session-icon--waiting` | orange `--state-waiting` hollow `○`, no halo or animation | sidebar, grid, header and Agents |
+| idle | `session-icon--idle` | no glyph; green with `.running` — a row or grid card whose PTY is here, at rest | sidebar, grid, header and live idle Agents jobs |
+| stale | `session-icon--stale` | opaque grey dash | finished background jobs without a live descriptor, across session surfaces |
+| archived | `session-icon--archived` | base filled dot at 0.5 opacity | reserved, unused |
 
 `--state-waiting` lives in `:root` and reuses the existing attention orange;
 the attention slot and summary also reference it. The UI has one shared dark
@@ -1225,9 +1226,28 @@ Sidebar session and subagent rows receive `data-glyph` from `writeIconSlot`.
 The Agents view uses the same slot classes and now includes the domain glyph
 in its row markup (`agentRowIcon` / `renderAgentRow`, `public/agents-view.js`).
 `agentRowIcon` also adds `.running` when its existing `live` boolean is true.
-The sidebar never produces stale or archived; inactive rows fall back to idle.
+Finished background sidebar rows without a live descriptor produce stale (Not
+running); rows lacking both a finished job state and a live descriptor read
+Liveness unknown. Archived remains reserved.
 Grid cards use the same slot classes on `.grid-card-dot.session-icon`; their
 footer separately describes liveness and attachment (#629).
+
+The terminal header uses `#terminal-header-status.session-icon` and the same
+6px slot CSS, with only margin and cursor overrides. `updateTerminalHeader`
+forgets old exits when a PTY is present, then calls `paintTerminalHeaderStatus`.
+The painter uses `renderSessionIcon`, `writeIconSlot` and `rowLifecycleLabel`
+(the ranked `lifecycleLabel`) to write `<activity> · <lifecycle>` in both title
+and accessible name, with `role="img"`. It omits the sidebar-only CLI suffix.
+Recorded Detached, Stopped and exit details survive in the lifecycle; missing
+liveness with no exit reads Liveness unknown, rather than inferring death from
+an absent PTY. Stop/Refresh controls and exit banners retain their own roles.
+
+`applyStateClasses` repaints the active header alongside the row, reusing the
+merged snapshot and rendered icon. An update from any member of the active
+conversation refreshes it; unrelated rows leave it alone. With no sidebar row
+(for example a filtered row), the active session still gets a header projection.
+The hot path performs no header lookup, poll, timer or layout measurement, and
+returns immediately when there is no header or the session is unrelated.
 
 `session-activity-dom.js` is the only file that writes the sidebar slot:
 

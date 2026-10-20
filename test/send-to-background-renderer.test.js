@@ -193,7 +193,7 @@ test('R9: the shipped header action hides ineligible tabs and disables sandboxed
   doc.body.innerHTML = '<button id="terminal-bg-btn"></button><button id="terminal-refresh-btn"></button>';
   h.ctx.terminalHeaderStatus = doc.createElement('span');
   h.ctx.terminalStopBtn = doc.createElement('button');
-  h.ctx.terminalStatusLabel = () => 'Running';
+  h.ctx.paintTerminalHeaderStatus = () => {};
   h.ctx.lastSessionExit = () => null;
   h.ctx.updatePtyTitle = () => {};
   const app = loadAppFunctions(h.ctx, { functions: ['initTerminalBackgroundControl', 'updateTerminalHeader'] });

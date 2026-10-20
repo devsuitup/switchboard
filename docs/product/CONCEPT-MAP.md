@@ -42,11 +42,13 @@ newest user rename on any part, otherwise the original part's name
   **Needs your attention** · **Response ready** · **Working** · **Background work
   running** · **Waiting for input** · **Idle** · **Not running** · **Archived**.
   Waiting for input uses an orange hollow ring; Idle a filled dot; Not running
-  a dim filled dot. Finished background jobs without a live descriptor read
+  an opaque grey dash. Idle open here adds a small dot below the filled dot.
+  Finished background jobs without a live descriptor read
   Not running; without a terminal job state or live descriptor, they read
   Liveness unknown (`public/agents-view.js`, `projectBackgroundActivity`).
-- Green dot class `running` on the icon when a member has a local PTY
-  (`public/sidebar.js:1694`; tooltip "Running" per `docs/notifications.md:19`).
+- Green dot class `running` on the icon when a member has a PTY open here;
+  activity labels include the ranked lifecycle (`public/session-activity-dom.js`,
+  `rowLifecycleLabel`; `public/process-exit.js`, `lifecycleLabel`).
 - Foreground status text: waiting reason plus age (`permission prompt · 1m ago`),
   or age alone (`1m ago`). The CLI descriptor word (`busy`, `idle`, `waiting`,
   `shell`) and reason appear in the icon tooltip and accessible name
@@ -218,11 +220,15 @@ amber (`docs/remote-hosts.md:149-157`).
 
 ## 7. Open session (terminal view)
 
-**States** (header status, `public/process-exit.js:18-29`): **Running** ·
-**Stopped** · **Exited (code N)** · **Killed (SIGNAL)** · **Exited**. Exit
-banner: "── session <stopped|exited (code N)|killed (SIG)> — re-click this
-session in the sidebar to relaunch, or click another to dismiss ──"
-(`public/app.js:680-682`).
+**States**: the header uses the sidebar's shared activity slot, including
+attention, response-ready, Working, Waiting for input and Not running. Its
+tooltip and accessible name read `<activity> · <lifecycle>`; lifecycle uses
+the ranked `lifecycleLabel`, including Open here, Attached here, Detached,
+recorded exits and Liveness unknown (`public/session-activity-dom.js`,
+`paintTerminalHeaderStatus`; `public/process-exit.js`). Activity updates repaint
+the header with the row, without waiting for a poll. Exit banners retain
+Stopped, Exited (code N) and Killed (SIG); Detach reads "session detached — it
+keeps running in the background" (`public/app.js`, `applyProcessExit`).
 
 **Actions**
 
@@ -246,8 +252,12 @@ session in the sidebar to relaunch, or click another to dismiss ──"
 
 ## 8. Grid card
 
-**States**: dot green (running) / grey (stopped) / pulsing (busy); footer
-**Running** / **Stopped** from local PTY only (V, `public/app.js:1198-1203`).
+**States**: the same activity slot as the sidebar and terminal header. The
+footer uses the ranked lifecycle: Open here, Attached here, Running in
+background, Running on <alias>, Running elsewhere, job outcomes, Not running,
+Detached, recorded exits, Not reopened or Liveness unknown. Process liveness
+and attachment are separate from activity (`public/grid-view.js`,
+`updateGridCardActivity`; `public/process-exit.js`, `lifecycleLabel`).
 
 **Actions**: focus (click header, footer or terminal); double-click header →
 single view (`public/grid-view.js:264`); **Stop session** shown while the
@@ -414,11 +424,11 @@ result; **minor** = confusing but recoverable.
 | M2 | major | One stop control means kill, remote kill or detach; labels "Stop session", "Stop process", "Detach (the session keeps running)" differ by surface; after a detach the grid card footer says **Stopped** and the exit banner "session stopped" while the job runs; Agents **Stop** has no confirm; remote detach has no control | §1, §7, §10, §12 |
 | M3 | major (partly resolved, #567) | Sidebar live-elsewhere questions share Resume anyway, including scheduled runs; the Agents view still forbids resume | §11 |
 | M4 | major | No definition of a row; `/compact`, `/clear`, continuations and slug groups follow four rules; verbs act on representative or one member | §1, §2, §3, §4 |
-| M5 | major | Four state vocabularies (icon, descriptor text, Agents state, Running/Stopped); "Waiting for input" has two meanings; Waiting/Idle/Stale look identical in the grid and header; waiting is distinguished only in the sidebar and Agents view; "Running" has two populations | §1, §7, §8, §10, GLOSSARY "State words" |
+| M5 | resolved (#563) | Sidebar, grid, terminal header and Agents share the activity slot; labels distinguish activity from ranked lifecycle. The CLI word is in the tooltip; Agents uses Title Case job states and counts live jobs, while the status bar counts terminals open here. Waiting, Idle, Idle open here and Not running have distinct shapes. | §1, §7, §8, §10, GLOSSARY "State words" |
 | M6 | resolved (#568) | Project Archive is reversible through Settings and preserves settings/cache while suspending schedules; destructive Delete is separate. Archive folder still returns on new activity. | §6 |
 | m1 | minor | Delete means transcript, job+worktree, or worktree, with three different confirmations; remote Delete refused after its dialog | §1, §6, §10 |
 | m2 | resolved (#566) | Refusals name Stop on the sidebar row here, or ending the other process; remote rows offer no Delete | §1 R1.6, §11 |
-| m3 | minor | Grid card reads **Stopped** next to a visible Stop button for an alive unattached session | §8 |
+| m3 | resolved (#647, #563) | An alive unattached grid card describes where it runs; Stopped requires a recorded Stop, and Detach reads Detached while the job keeps running. | §8 |
 | m4 | minor | Two permission-mode lists ("Plan Mode" vs "Plan", `public/utils.js:26-33` vs `public/dialogs.js:691-696`) and two Additional Directories formats | — |
 | m5 | minor | "Resume with config" may be silently ignored on an open member (reachability S) | §1 |
 | m6 | minor | The grid counts open terminals and calls them sessions | §8 |
