@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { setupSidebarDom } = require('./dom-setup');
+const { setupSidebarDom, answerChoiceDialog } = require('./dom-setup');
 
 function scheduleRerunProject({ subagentParentId = 'sched-run-2', ...overrides } = {}) {
   const baseTime = Date.parse('2026-08-20T09:00:00Z');
@@ -124,7 +124,11 @@ test('"Archive all sessions in group" only archives the two top-level reruns, no
 
     const archiveBtn = ctx.document.querySelector('.slug-group .slug-group-archive-btn');
     assert.ok(archiveBtn, 'slug-group-archive-btn must be rendered');
-    await archiveBtn.onclick({ stopPropagation: () => {} });
+    const pending = archiveBtn.onclick({ stopPropagation: () => {} });
+    const confirmation = await answerChoiceDialog(ctx, { confirm: true });
+    assert.ok(confirmation, 'the running group requires confirmation');
+    assert.match(confirmation.textContent, /Archive 2 sessions\?[\s\S]*running process[\s\S]*in this window/);
+    await pending;
 
     const archivedIds = archiveCalls.map(([sid]) => sid).sort();
     assert.deepEqual(archivedIds, ['sched-run-1', 'sched-run-2'],

@@ -174,8 +174,8 @@ The Changes badge is the one place that already meets "never colour alone".
 
 | Control | Where | Label | Effect | Confirmation |
 |---|---|---|---|---|
-| Row Archive | `sidebar.js:1570-1587`, button `1778-1781` | `Archive` / `Unarchive` | **stops** the session first, then archives (`stop-session-ui.js:39-71`): on a remote row every open or live member; on a local row every member with a PTY or an open tab, refused when a background job is live on a member (`stop-session-ui.js:57-69`) | **none** |
-| Slug-group Archive | `sidebar.js:1359-1381` | — (archive icon) | stops + archives every session of the group | **none** |
+| Row Archive | `sidebar.js` (`session-archive-btn`, `archiveSessionRows`) | `Archive` / `Unarchive` | checks every part for background jobs, stops planned targets, then archives; Undo restores the row, leaving stopped processes stopped | one danger confirmation naming targets and locations when there are targets; otherwise instant; ten-second Undo either way |
+| Slug-group Archive | `sidebar.js` (`slug-group-archive-btn`, `archiveSessionRows`) | — (archive icon) | checks the whole group before any dialog; archives eligible rows; Undo restores exactly this click's successful rows | one danger confirmation for the whole group when there are targets; otherwise instant; ten-second Undo either way |
 | Folder Archive | `sidebar.js:1143-1235` | `Archive folder` | stops + archives sessions, disables schedules | `showChoiceDialog` (`sidebar.js:1190-1197`), names the hosts where sessions are stopped (`1174-1179`) |
 | Row Delete | `sidebar.js:1525-1568`, button `1798-1801`, dialog `1881-1945` | `Delete session (removes the transcript from disk)` → `Delete permanently` | stop then delete transcript; refused up front on a merged row with a live member (`1529-1533`) | custom modal with preview of what goes |
 | Agents Delete | `agents-view.js:340, 421` | `Delete` | `claude rm` (conversation + worktree when safe) | `window.confirm` |
@@ -187,17 +187,16 @@ The Changes badge is the one place that already meets "never colour alone".
 | Trace file delete | `activity-trace-panel.js:120` | — | delete file | same wording |
 
 **Divergences.**
-1. Archive is reversible but the stop it performs is not; the row and
-   slug-group Archive stop without asking while the folder Archive asks and
-   the Stop button asks (H5).
+1. Row and slug-group Archive now distinguish reversible archiving from
+   stopping processes: only the latter asks first. Folder Archive retains
+   its separate options dialog.
 2. Three delete confirmations: custom modal with preview (session, worktree),
    OS `confirm` (Agents, files). The confirm button says `Delete permanently`,
    `Delete anyway`, or `OK`.
 
 **Proposed convergence.**
-- Archive of a non-running session stays instant (undo = Unarchive). Archive
-  of a running one, at row and group level, asks with B5 using the folder
-  Archive's wording (`running ones are stopped first (on <host>)`).
+- Row and slug-group Archive use B5 for planned stops and B8 for Undo;
+  background-job refusals precede the dialog. Undo never restarts processes.
 - Every destructive confirmation uses B5 (`danger`), names the object, says
   what goes and what is kept, and labels the confirm button with the verb
   (`Delete`, `Stop`), never `OK`.

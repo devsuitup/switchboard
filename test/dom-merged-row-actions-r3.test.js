@@ -20,6 +20,8 @@ function open(ctx, id) {
 }
 
 function recordingApi(ctx) {
+  ctx.confirmations = [];
+  ctx.window.appConfirm = async options => { ctx.confirmations.push(options); return true; };
   const calls = [];
   ctx.window.api.bgAgentLiveJob = async () => ({ known: true, job: null });
   ctx.window.api.stopSession = async id => { calls.push(['stop', id]); return { ok: true }; };
@@ -29,9 +31,13 @@ function recordingApi(ctx) {
   return calls;
 }
 
-async function click(ctx, id, action) {
+async function click(ctx, id, action, confirmations = 1) {
   const button = ctx.document.querySelector(`#si-${id} .session-${action}-btn`);
   await button.onclick({ stopPropagation() {} });
+  if (action === 'archive') {
+    assert.equal(ctx.confirmations.length, confirmations);
+    if (confirmations) assert.match(ctx.confirmations[0].message, /Archive this session\?[\s\S]*process.*[\s\S]*(?:in this window|on host)/);
+  }
   return button;
 }
 
@@ -158,7 +164,7 @@ test('Archive leaves a confirmed dead remote member alone despite a seen descrip
   const ctx = setup(t, { ...row, remoteAlias: 'host', remoteDescriptorSeen: true });
   const calls = recordingApi(ctx);
   ctx.read("remoteState('A').apply({ type: 'liveness', value: 'dead' }); remoteState('B').apply({ type: 'liveness', value: 'dead' })");
-  await click(ctx, 'A', 'archive');
+  await click(ctx, 'A', 'archive', 0);
   assert.deepEqual(calls, [['archive', 'A', 1]]);
 });
 

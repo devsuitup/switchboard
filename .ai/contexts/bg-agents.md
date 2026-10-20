@@ -915,6 +915,9 @@ the client is killed. The call resolves on `close` so stdout is drained, or
   "Archive the sessions" unchecked a folder archive never calls
   `stopBeforeArchive`: it only hides the folder, archives and detaches
   nothing, and the job stays in the Agents view.
+  Row and slug-group Archive also run this fail-closed check for every local
+  part during `planSessionArchive`, before any confirmation or stop in the
+  action. A refused row blocks the whole slug-group action at that stage.
 - A live job keeps the sidebar's Fork button: a fork reads the transcript and
   starts a new session, it never resumes the job.
 - A global WSL shell profile runs `claude` inside WSL, whose daemon and

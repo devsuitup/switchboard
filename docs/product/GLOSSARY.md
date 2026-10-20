@@ -351,9 +351,12 @@ concept. Each entry gives:
 - **Code**: `archived` flag; `archive-session` (`main.js:2291`);
   `stopBeforeArchive` (`public/stop-session-ui.js:39`); row button
   `public/sidebar.js:1780`, handler `1570-1585`.
-- **Today**: single-row and slug-group Archive have no confirmation
-  (`public/sidebar.js:1362-1380`); folder Archive does
-  (`public/sidebar.js:1190`). "Archive" also applies to a folder (**Archive folder**,
+- **Today**: single-row and slug-group Archive ask once when parts would be
+  stopped, naming those parts and their locations; with no stop target they
+  run immediately. A background-job refusal precedes the dialog for the
+  whole action. Both offer a ten-second Undo for exactly the rows archived;
+  stopped processes stay stopped. Folder Archive has its options dialog.
+  "Archive" also applies to a folder (**Archive folder**,
   `public/sidebar.js:915`), which in addition disables schedules and comes
   back on new activity — kept as one word on purpose (shared filter **Show
   archived sessions**, `public/index.html:28`).

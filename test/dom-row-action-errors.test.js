@@ -7,6 +7,13 @@ const { deleteSessionRefusal } = require('../delete-session-guard');
 
 function setup(t, extra = {}) {
   const h = setupSidebarDom();
+  const confirm = h.window.appConfirm;
+  const confirmations = [];
+  h.window.appConfirm = options => {
+    if (options.confirmLabel !== 'Archive') return confirm(options);
+    confirmations.push(options);
+    return Promise.resolve(true);
+  };
   t.after(() => h.destroy());
   const session = { sessionId: 's1', name: 'Work', projectPath: '/project', modified: new Date().toISOString(), archived: 0, ...extra };
   const project = { projectPath: '/project', folder: '-project', sessions: [session] };
@@ -37,10 +44,12 @@ function setup(t, extra = {}) {
     el.dispatchEvent(new h.window.MouseEvent('mouseleave'));
     render();
     assert.ok(el.isConnected, 'survives sidebar rebuild and pointer leave');
-    assert.deepEqual(timers.filter(ms => ms > 0), [], 'failure schedules no expiry, including beyond 20 s (modal focus may schedule 0 ms)');
+    const undoTimers = [...h.document.querySelectorAll('#app-notices [role="status"] .app-notice-action')]
+      .filter(button => button.textContent === 'Undo').map(() => 10000);
+    assert.deepEqual(timers.filter(ms => ms > 0), undoTimers, 'only Undo schedules expiry; the failure stays persistent');
     return el;
   };
-  return { ...h, session, project, render, click, notice, focus, timers };
+  return { ...h, session, project, render, click, notice, focus, timers, confirmations };
 }
 
 test('successive not-stopped batches merge by host and refresh a repeated member reason', t => {
@@ -230,6 +239,8 @@ test('unreachable Archive names host and object while retaining its warning', as
   h.window.api.remoteStopSession = async () => ({ ok: false, hostUnreachable: true, error: 'host unreachable' });
   await h.click('.session-archive-btn');
   const el = h.notice('host unreachable', 'Archive');
+  assert.equal(h.confirmations.length, 1);
+  assert.match(h.confirmations[0].message, /Archive this session\?[\s\S]*Work.*on vps/);
   assert.match(el.textContent, /vps/);
   assert.match(el.textContent, /unarchive/i);
   assert.equal(h.session.archived, 1, 'established archive-on-unreachable policy');
@@ -308,6 +319,8 @@ test('an absent Stop acknowledgement blocks Archive and preserves PTY liveness',
   h.window.api.archiveSession = async () => { archived = true; return { archived: 1 }; };
   await h.click('.session-archive-btn');
   h.notice('no result', 'Archive');
+  assert.equal(h.confirmations.length, 1);
+  assert.match(h.confirmations[0].message, /Archive this session\?[\s\S]*Work.*in this window/);
   assert.equal(archived, false);
   assert.ok(h.window.activePtyIds.has('s1'));
 });
@@ -387,6 +400,8 @@ test('an Archive database failure after Stop says the process stopped and the ro
   h.window.api.archiveSession = async () => ({ ok: false, error: 'database locked' });
   await h.click('.session-archive-btn');
   const el = h.notice('database locked', 'Archive');
+  assert.equal(h.confirmations.length, 1);
+  assert.match(h.confirmations[0].message, /Archive this session\?[\s\S]*Work.*in this window/);
   assert.match(el.textContent, /process was stopped.*(?:row|session) is not archived/);
   assert.equal(h.session.archived, 0);
 });
@@ -396,6 +411,8 @@ test('Unarchive clears its host partial Archive notice and preserves another ope
   h.window.api.remoteStopSession = async () => ({ ok: false, hostUnreachable: true, error: 'offline' });
   await h.click('.session-archive-btn');
   const el = h.notice('offline', 'Archive');
+  assert.equal(h.confirmations.length, 1);
+  assert.match(h.confirmations[0].message, /Archive this session\?[\s\S]*Work.*on vps/);
   assert.match(el.textContent, /^Archived, but not stopped/);
   assert.doesNotMatch(el.textContent, /Archive failed/);
   h.window.showAppNotice({ id: 'other', kind: 'error', message: 'Other operation failed' });
@@ -404,6 +421,7 @@ test('Unarchive clears its host partial Archive notice and preserves another ope
   await h.click('.session-archive-btn');
   assert.equal(el.isConnected, false);
   assert.ok(h.document.querySelector('[data-notice-id="other"]'));
+  assert.equal(h.confirmations.length, 1, 'Unarchive adds no confirmation');
 });
 
 test('waiting for indexing is pending status and disappears after the indexing retry runs', async t => {
