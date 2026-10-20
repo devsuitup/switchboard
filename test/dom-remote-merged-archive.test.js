@@ -30,6 +30,7 @@ function setup(t, { seen, members = ['B'], at = 1000 }) {
     sessions: [{ sessionId: 'A', mergedMemberIds: members, remoteAlias: 'host', projectPath: '/project', modified: new Date().toISOString() }],
   })]);
   const ctx = setupSidebarDom();
+  ctx.window.appConfirm = async () => true;
   t.after(() => ctx.destroy());
   const payload = JSON.parse(JSON.stringify(projects));
   ctx.window.sessionMap.set('A', payload[0].sessions[0]);

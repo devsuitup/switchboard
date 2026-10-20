@@ -212,10 +212,15 @@ when the whole conversation is archived.
 - **Pin**: click the pin at the left of a row. Pinned sessions sort before
   unpinned ones and are never hidden behind `+ N older`.
 - **Archive**: the archive button on a row, or **Archive all sessions in
-  group** on a slug group. Archiving a running session stops it first — on its
-  host, for a remote session. The group button skips and reports any session
-  that fails to stop, and leaves it unarchived. Archived sessions are listed
-  with the **Show archived sessions** filter.
+  group** on a slug group. When a running part would be stopped, one
+  confirmation names what stops and where, including remote hosts. Cancel
+  stops and archives nothing. With nothing running, Archive happens at once.
+  A live background job, or a job state that cannot be checked, refuses the
+  whole action before a dialog; stop the job from the Agents view first.
+  A group skips and reports a session whose stop or archive then fails.
+  Either way a notice offers **Undo** for about ten seconds, restoring only
+  the rows this click archived. Stopped processes stay stopped. Archived
+  sessions are also listed with the **Show archived sessions** filter.
 
 ### Archive a folder
 

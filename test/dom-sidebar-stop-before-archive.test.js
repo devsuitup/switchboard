@@ -18,6 +18,7 @@ const assert = require('node:assert/strict');
 const { setupSidebarDom, answerChoiceDialog } = require('./dom-setup');
 
 function installRecordingApi(ctx, overrides = {}) {
+  ctx.window.appConfirm = async () => true;
   const calls = [];
   const impls = {
     stopSession: () => Promise.resolve({ ok: true }),
@@ -300,7 +301,7 @@ test('per-session archive toggle: local session with an active PTY is stopped, t
     await ctx.document.getElementById('si-s1').querySelector('.session-archive-btn').onclick(new ctx.window.MouseEvent('click'));
 
     const methods = calls.map(c => c.method);
-    assert.deepEqual(methods, ['bgAgentLiveJob', 'stopSession', 'archiveSession'], 'stop must precede archive');
+    assert.deepEqual(methods.filter(method => method !== 'bgAgentLiveJob'), ['stopSession', 'archiveSession'], 'stop must precede archive');
   } finally { ctx.destroy(); }
 });
 

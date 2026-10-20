@@ -53,9 +53,9 @@ function setGroupArchiveBusy(domId, busy) {
   if (btn) btn.disabled = busy;
 }
 
-async function stopForArchive(session, unreachable) {
+async function stopForArchive(session, unreachable, plan) {
   try {
-    return await stopBeforeArchive(session, { unreachable });
+    return await stopBeforeArchive(session, { unreachable, plan });
   } catch (err) {
     return { ok: false, error: (err && err.message) || 'unknown error' };
   }
@@ -92,6 +92,50 @@ async function persistSessionArchive(session, value, stopped = false) {
     showSessionActionFailure(operation, session, reason, 'Check the session location and connection, then retry ' + operation + ' from the sidebar.');
     return false;
   }
+}
+
+function showSessionArchiveUndo(rows, confirmed) {
+  showAppNotice({
+    id: `archive-sessions:${rows.map(session => session.sessionId).join(':')}`, kind: 'undo',
+    message: `${rows.length === 1 ? 'Session' : `${rows.length} sessions`} archived.${confirmed ? ' Stopped processes stay stopped.' : ''}`,
+    actionLabel: 'Undo',
+    onAction: async () => {
+      for (const session of rows) await persistSessionArchive(session, 0);
+      Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+    },
+  });
+}
+
+async function archiveSessionRows(rows) {
+  const prepared = await window.planSessionArchive(rows);
+  if (!prepared.ok) {
+    surfaceStopFailure(null, prepared.error, prepared.session);
+    return;
+  }
+  const livePlans = prepared.plans.filter(({ plan }) => plan.targets.length);
+  if (livePlans.length && !await appConfirm({
+    title: 'Archive sessions', confirmLabel: 'Archive', danger: true,
+    message: ['Archive these sessions? Running parts will be stopped first.', ...livePlans.map(({ plan }) => plan.confirmText)].join('\n'),
+  })) return;
+  const unreachable = new Map();
+  const notStopped = [];
+  const archived = [];
+  for (const { session, plan } of prepared.plans) {
+    const result = await stopForArchive(session, unreachable, plan);
+    if (!result.ok) {
+      surfaceStopFailure(null, result.error, session);
+      continue;
+    }
+    const didStop = plan.targets.some(target => !target.attach) && !result.notStopped?.length;
+    if (await persistSessionArchive(session, 1, didStop)) {
+      archived.push(session);
+      notStopped.push(...(result.notStopped || []).map(entry => ({ ...entry, session })));
+    }
+  }
+  announceNotStopped(notStopped);
+  if (archived.length) showSessionArchiveUndo(archived, livePlans.length > 0);
+  pollActiveSessions();
+  Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
 }
 
 function folderId(projectPath) {
@@ -1518,27 +1562,12 @@ function rebindSidebarEvents(projects) {
           .map(item => ({ item, sid: item.dataset.sessionId, session: sessionMap.get(item.dataset.sessionId) }))
           .filter(({ session, sid }) => session && !session.archived && !archivingSessionIds.has(sid));
         for (const { sid } of todo) setArchiveBusy(sid, true);
-        const unreachable = new Map();
-        const notStopped = [];
         try {
-          for (const { item, sid, session } of todo) {
-            let stopResult;
-            try { stopResult = await stopForArchive(session, unreachable); } finally { setArchiveBusy(sid, false); }
-            if (!stopResult.ok) {
-              surfaceStopFailure(item.querySelector('.session-archive-btn'), stopResult.error, session);
-              continue;
-            }
-            if (await persistSessionArchive(session, 1)) {
-              notStopped.push(...(stopResult.notStopped || []).map(entry => ({ ...entry, session })));
-            }
-          }
+          await archiveSessionRows(todo.map(({ session }) => session));
         } finally {
           for (const { sid } of todo) if (archivingSessionIds.has(sid)) setArchiveBusy(sid, false);
           setGroupArchiveBusy(group.id, false);
         }
-        announceNotStopped(notStopped);
-        pollActiveSessions();
-        Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
       };
     }
     header.onclick = (e) => {
@@ -1734,28 +1763,17 @@ function rebindSidebarEvents(projects) {
       archiveBtn.onclick = async (e) => {
         e.stopPropagation();
         const newVal = session.archived ? 0 : 1;
-        let notStoppedToAnnounce = [];
-        let stopped = false;
         if (newVal) {
           if (archivingSessionIds.has(session.sessionId)) return;
           setArchiveBusy(session.sessionId, true);
-          let stopResult;
-          const wasRunning = rowSessionIds(session).some(id => activePtyIds.has(id) || (openSessions.has(id) && !openSessions.get(id).closed)) || isRemoteSessionAlive(session);
           try {
-            stopResult = await stopForArchive(session);
+            await archiveSessionRows([session]);
           } finally {
             setArchiveBusy(session.sessionId, false);
           }
-          if (!stopResult.ok) {
-            surfaceStopFailure(sessionItemEl(session.sessionId, sidebarContent)?.querySelector('.session-archive-btn') || archiveBtn, stopResult.error, session);
-            return;
-          }
-          notStoppedToAnnounce = stopResult.notStopped || [];
-          stopped = wasRunning && !notStoppedToAnnounce.length;
-          pollActiveSessions();
+          return;
         }
-        if (!await persistSessionArchive(session, newVal, stopped)) return;
-        announceNotStopped(notStoppedToAnnounce.map(entry => ({ ...entry, session })));
+        if (!await persistSessionArchive(session, newVal)) return;
         Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
       };
     }

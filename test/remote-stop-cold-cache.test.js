@@ -63,6 +63,7 @@ function setup(t, { present = true, pollError = null, stopError = null, polling 
   });
   vm.runInContext(mainSource.slice(start, end), main, { filename: mainPath });
   const ctx = setupSidebarDom();
+  ctx.window.appConfirm = async () => true;
   const session = { sessionId: 'A', mergedMemberIds: [], remoteAlias: 'host', projectPath: '/project', modified: new Date().toISOString() };
   ctx.window.sessionMap.set('A', session);
   ctx.sidebar.renderProjects([makeSampleProject({ sessions: [session] })], true);
@@ -110,7 +111,7 @@ test('Archive hides a cold-cache row anyway when the host fails its first poll, 
   assert.deepEqual(ctx.calls, [['archive', 'A', 1]]);
   assert.equal(ctx.isLive(), true);
   assert.equal(ctx.attached.exited, false);
-  assert.equal(ctx.notices.length, 1);
+  assert.equal(ctx.notices.length, 2, 'not-stopped alert and Undo notice');
   assert.match(ctx.notices[0], /not stopped/);
   assert.match(ctx.notices[0], /host did not answer \(host unreachable\)/);
 });
@@ -125,7 +126,8 @@ test('Archive waits for a first poll already in flight and stops the session onc
   await pending;
   await click;
   assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['killAttach', 'A'], ['archive', 'A', 1]]);
-  assert.deepEqual(ctx.notices, []);
+  assert.equal(ctx.notices.length, 1);
+  assert.match(ctx.notices[0], /archived.*stay stopped/);
 });
 
 test('Archive preserves its attach and row if stopping after the first poll fails', async t => {
@@ -191,7 +193,7 @@ test('Archive is busy while it checks the host and ignores a second click', asyn
   await first;
   assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['killAttach', 'A'], ['archive', 'A', 1]]);
   assert.equal(button.disabled, false);
-  assert.equal(button.title, 'Archive');
+  assert.equal(button.title, 'Unarchive');
 });
 
 test('Archive re-enables its button after a refusal', async t => {
@@ -212,7 +214,7 @@ test('Archive busy state follows the live button when a re-render replaces it', 
   await first;
   const after = ctx.document.querySelector('#si-A .session-archive-btn');
   assert.equal(after.disabled, false);
-  assert.equal(after.title, 'Archive');
+  assert.equal(after.title, 'Unarchive');
 });
 
 test('Archive reports a stop that throws instead of leaving the click unhandled', async t => {
@@ -236,7 +238,8 @@ test('Archive does not take a stale error from an earlier attempt as the answer 
   await pending;
   await click;
   assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['killAttach', 'A'], ['archive', 'A', 1]]);
-  assert.deepEqual(ctx.notices, []);
+  assert.equal(ctx.notices.length, 1);
+  assert.match(ctx.notices[0], /archived.*stay stopped/);
 });
 
 test('Archive refuses, as before, when the first sync fails for a local reason rather than the connection', async t => {
@@ -276,7 +279,8 @@ test('Archive asks a host in backoff even when a global poll is busy elsewhere',
   await global;
   await click;
   assert.deepEqual(ctx.calls, [['stop', 'host', 'A'], ['killAttach', 'A'], ['archive', 'A', 1]]);
-  assert.deepEqual(ctx.notices, []);
+  assert.equal(ctx.notices.length, 1);
+  assert.match(ctx.notices[0], /archived.*stay stopped/);
 });
 
 test('Archive refuses when ssh answers with a plain non-zero exit, because the host did answer', async t => {

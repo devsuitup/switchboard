@@ -95,10 +95,31 @@ async function liveBackgroundJobRefusal(sessionId) {
   return null;
 }
 
+async function archiveBackgroundJobRefusal(session) {
+  if (session.remoteAlias) return null;
+  for (const id of rowSessionIds(session)) {
+    const refusal = await liveBackgroundJobRefusal(id);
+    if (refusal) return refusal;
+  }
+  return null;
+}
+
+async function planSessionArchive(rows) {
+  for (const session of rows) {
+    const error = await archiveBackgroundJobRefusal(session);
+    if (error) return { ok: false, session, error };
+  }
+  const plans = [];
+  for (const session of rows) plans.push({ session, plan: await planSessionStop(session) });
+  return { ok: true, plans };
+}
+
 // Stop-then-archive/delete verb shared by sidebar.js's archive/delete call sites — see .ai/contexts/session-state.md ("stopBeforeArchive").
-async function stopBeforeArchive(session, { unreachable } = {}) {
+async function stopBeforeArchive(session, { unreachable, plan } = {}) {
   if (!session) return { ok: true };
-  const ids = rowSessionIds(session);
+  const refusal = await archiveBackgroundJobRefusal(session);
+  if (refusal) return { ok: false, error: refusal };
+  const ids = plan ? plan.targets.map(target => target.sessionId) : rowSessionIds(session);
   const alias = session.remoteAlias;
   if (alias) {
     const notStopped = [];
@@ -132,10 +153,6 @@ async function stopBeforeArchive(session, { unreachable } = {}) {
     return notStopped.length ? { ok: true, notStopped } : { ok: true };
   }
   for (const id of ids) {
-    const refusal = await liveBackgroundJobRefusal(id);
-    if (refusal) return { ok: false, error: refusal };
-  }
-  for (const id of ids) {
     const open = typeof openSessions !== 'undefined' && openSessions.get(id);
     if (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(id)) && !(open && !open.closed)) continue;
     const result = await window.api.stopSession(id);
@@ -148,5 +165,5 @@ async function stopBeforeArchive(session, { unreachable } = {}) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { resolveSessionStop, planSessionStop, isRemoteSessionAlive, stopBeforeArchive };
+  module.exports = { resolveSessionStop, planSessionStop, planSessionArchive, isRemoteSessionAlive, stopBeforeArchive };
 }

@@ -7,6 +7,8 @@ const { deleteSessionRefusal } = require('../delete-session-guard');
 
 function setup(t, extra = {}) {
   const h = setupSidebarDom();
+  const confirm = h.window.appConfirm;
+  h.window.appConfirm = options => options.title === 'Archive sessions' ? Promise.resolve(true) : confirm(options);
   t.after(() => h.destroy());
   const session = { sessionId: 's1', name: 'Work', projectPath: '/project', modified: new Date().toISOString(), archived: 0, ...extra };
   const project = { projectPath: '/project', folder: '-project', sessions: [session] };
@@ -37,7 +39,9 @@ function setup(t, extra = {}) {
     el.dispatchEvent(new h.window.MouseEvent('mouseleave'));
     render();
     assert.ok(el.isConnected, 'survives sidebar rebuild and pointer leave');
-    assert.deepEqual(timers.filter(ms => ms > 0), [], 'failure schedules no expiry, including beyond 20 s (modal focus may schedule 0 ms)');
+    const undoTimers = [...h.document.querySelectorAll('#app-notices [role="status"] .app-notice-action')]
+      .filter(button => button.textContent === 'Undo').map(() => 10000);
+    assert.deepEqual(timers.filter(ms => ms > 0), undoTimers, 'only Undo schedules expiry; the failure stays persistent');
     return el;
   };
   return { ...h, session, project, render, click, notice, focus, timers };

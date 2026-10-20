@@ -432,7 +432,8 @@ updating a repeated member's name and reason. A successful retry removes only it
 member, and an empty group disappears, without a console error or
 the old 15 s `showRestoreNotice` timeout. The shared brick also provides
 15 s info and 10 s Undo notices. Detach Undo is wired in `confirmAndStopSession`;
-Archive Undo belongs to its own slices (see `docs/product/BUILDING-BLOCKS.md`, B8).
+row and slug-group Archive use the Undo variant through `showSessionArchiveUndo`
+(see `docs/product/BUILDING-BLOCKS.md`, B8).
 A host that answers but
 refuses the stop, or a first sync that fails locally (mirror directory, index
 scan; `lastErrorTransport` false), still returns `{ok:false}` and blocks the
@@ -454,9 +455,27 @@ A `{ok:false, error}` return skips that session's archive/delete and surfaces
 the failure through `showSessionActionFailure`, a persistent B8 notice naming
 the affected session, the reason and how to retry. `confirmAndStopSession`
 uses the same notice brick.
-For the two group archives (project header, slug group), one session's
-refusal only skips that session; the loop continues to the rest. The project
-header's confirmation names the host alias(es) it is about to stop, computed
+For slug-group Archive, `planSessionArchive` checks every local part's
+background job before any dialog or effects. A live job, an unknown answer,
+or a rejected check refuses the whole action. The plan then reuses
+`planSessionStop` for each row. If any plan has targets, one danger
+confirmation names all of them; Cancel stops and archives nothing. No
+targets means immediate Archive. Execution is restricted to the planned
+targets, and rechecks background-job refusal before each row's stops.
+Runtime stop or persistence failures skip that row and report the failure;
+other rows can still archive. The folder action retains its options dialog
+and its existing all-or-nothing archive after stops.
+
+Every successful row or slug-group Archive offers a ten-second Undo, even
+after confirmation. It calls `persistSessionArchive(session, 0)` only for
+the captured successful rows, excluding already archived rows and failures;
+it never reopens a process. When processes stopped, the notice says they
+stay stopped. Its `archive-sessions:` notice id is outside `loadProjects`'
+`archive-project:` reconciliation, so an older reload cannot clear it and
+no load-generation stamp is needed. Busy sets remain held through planning,
+confirmation, stopping and persistence, including across sidebar rebuilds.
+
+The project header's confirmation names the host alias(es) it is about to stop, computed
 with the same `isRemoteSessionAlive` check.
 
 **Delete never calls `stopBeforeArchive` for a remote session.** `delete-session`

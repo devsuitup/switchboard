@@ -20,6 +20,7 @@ function open(ctx, id) {
 }
 
 function recordingApi(ctx) {
+  ctx.window.appConfirm = async () => true;
   const calls = [];
   ctx.window.api.bgAgentLiveJob = async () => ({ known: true, job: null });
   ctx.window.api.stopSession = async id => { calls.push(['stop', id]); return { ok: true }; };

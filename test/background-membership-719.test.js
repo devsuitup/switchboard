@@ -316,6 +316,7 @@ for (const mode of ['hosted', 'unknown', 'done', 'stopped', 'failed', 'stop-fail
     const h = fixture(t, { attach: false }); h.descriptors.length = 0;
     const { setupSidebarDom } = require('./dom-setup');
     const dom = setupSidebarDom(); t.after(() => dom.destroy()); const w = dom.window, calls = [];
+    w.appConfirm = async () => true;
     const row = h.list(true)[0]; if (mode === 'unarchive') row.archived = 1;
     w.sessionMap.set(row.sessionId, row);
     for (const id of [A, B]) { w.openSessions.set(id, { session: { sessionId: id }, attach: id === B }); w.activePtyIds.add(id); }
@@ -331,7 +332,7 @@ for (const mode of ['hosted', 'unknown', 'done', 'stopped', 'failed', 'stop-fail
     else if (mode === 'hosted' || mode === 'unknown') assert.equal(calls.some(call => call.startsWith('stop:') || call === 'metadata'), false);
     else {
       assert.deepEqual(calls.slice(0, 2), ['check:' + A, 'check:' + B]);
-      assert.deepEqual(calls.slice(2, 4), ['stop:' + A, 'stop:' + B]);
+      assert.deepEqual(calls.filter(call => call.startsWith('stop:')), ['stop:' + A, 'stop:' + B]);
       assert.equal(calls.includes('metadata'), mode !== 'stop-failure');
     }
   });

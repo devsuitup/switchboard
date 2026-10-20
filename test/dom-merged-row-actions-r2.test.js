@@ -95,6 +95,7 @@ test('focusing a merged member grid card highlights its representative row', t =
 });
 
 function recordingApi(ctx, failedId = null) {
+  ctx.window.appConfirm = async () => true;
   const calls = [];
   ctx.window.api.bgAgentLiveJob = async () => ({ known: true, job: null });
   ctx.window.api.stopSession = async id => {
