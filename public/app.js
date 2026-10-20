@@ -1330,7 +1330,17 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
         message: `Detached from ${sessionActionDescription(reattach.session)}. The background session keeps running.`,
         actionLabel: 'Undo', onAction: async () => {
           showAppNotice({ id: noticeId, kind: 'info', message: `Reattaching to ${sessionActionDescription(reattach.session)}…` });
-          if (reattach.entry && !reattach.entry.closed && result?.error !== 'not running') await reattach.entry.detachComplete;
+          if (reattach.entry && !reattach.entry.closed && result?.error !== 'not running') {
+            const detachExitTimeoutMs = 3000;
+            let detachTimer;
+            try {
+              await Promise.race([reattach.entry.detachComplete, new Promise(resolve => {
+                detachTimer = setTimeout(resolve, detachExitTimeoutMs);
+              })]);
+            } finally {
+              clearTimeout(detachTimer);
+            }
+          }
           let check;
           try { check = await window.api.bgAgentLiveJob?.(id); } catch {}
           if (check?.known === true && !check.job) {
@@ -1340,7 +1350,10 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
           }
           try {
             const opened = await openSession(reattach.session, reattach.options);
-            if (opened === false) throw new Error('The attach tab did not open');
+            if (opened === false) {
+              clearAppNotice(noticeId);
+              return false;
+            }
             showAppNotice({ id: noticeId, kind: 'info', message: `Reattached to ${sessionActionDescription(reattach.session)}.` });
             return opened;
           } catch (error) {

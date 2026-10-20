@@ -203,19 +203,57 @@ test('Undo shows Reattaching while waiting and replaces it with the successful r
   assert.doesNotMatch(notice.textContent, /Reattaching/);
 });
 
-for (const rejects of [false, true]) {
-  test(`Undo replaces progress with an error when reopening ${rejects ? 'rejects' : 'returns false'}`, async t => {
-    const h = setup(t);
-    h.window.openSession = async () => {
-      if (rejects) throw new Error('attach unavailable');
-      return false;
-    };
-    await h.app.confirmAndStopSession('s1');
-    h.entry.closed = true;
-    h.undo().click();
-    await settle();
-    assert.equal(h.document.querySelectorAll('#app-notices .app-notice').length, 1);
-    assert.match(h.document.querySelector('#app-notices [role="alert"]').textContent, /reattach/i);
-    assert.doesNotMatch(h.document.querySelector('#app-notices').textContent, /Reattaching/);
-  });
-}
+test('Undo clears progress and keeps only the Attach background failure when reopening returns false', async t => {
+  const h = setup(t);
+  h.window.openSession = async () => {
+    h.window.showSessionActionFailure('Attach background', h.session, 'The attach backend is unavailable', 'Retry from the Agents view.');
+    return false;
+  };
+  await h.app.confirmAndStopSession('s1');
+  h.entry.closed = true;
+  h.undo().click();
+  await settle();
+  const notices = h.document.querySelectorAll('#app-notices .app-notice');
+  assert.equal(notices.length, 1, 'only the failure already reported by openSession should remain');
+  assert.equal(notices[0].getAttribute('role'), 'alert');
+  assert.match(notices[0].textContent, /Attach background/);
+  assert.match(notices[0].textContent, /The attach backend is unavailable/);
+  assert.doesNotMatch(notices[0].textContent, /Reattaching|The attach tab did not open/);
+});
+
+test('Undo bounds an unresolved detach wait and replaces progress after reopening', async t => {
+  const h = setup(t);
+  await h.app.confirmAndStopSession('s1');
+  h.undo().click();
+  await settle();
+  assert.match(h.document.querySelector('#app-notices [role="status"]').textContent, /Reattaching/);
+  t.mock.timers.tick(2999);
+  await settle();
+  assert.deepEqual(h.calls.opened, [], 'allow the two-second detach grace plus a margin');
+  assert.deepEqual(h.calls.liveChecks, []);
+  t.mock.timers.tick(1);
+  await settle();
+  assert.equal(h.entry.closed, false, 'the exit event never arrived');
+  assert.deepEqual(h.calls.liveChecks, ['s1']);
+  assert.equal(h.calls.opened.length, 1, 'reopen after the bounded wait even without an exit event');
+  assert.deepEqual({ ...h.calls.opened[0][1] }, { type: 'attach', jobId: '1234abcd', cwd: '/project/worktree' });
+  const notices = h.document.querySelectorAll('#app-notices .app-notice');
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].textContent, /Reattached to/);
+  assert.doesNotMatch(notices[0].textContent, /Reattaching/);
+});
+
+test('Undo replaces progress with its own error when reopening throws', async t => {
+  const h = setup(t);
+  h.window.openSession = async () => {
+    throw new Error('attach unavailable');
+  };
+  await h.app.confirmAndStopSession('s1');
+  h.entry.closed = true;
+  h.undo().click();
+  await settle();
+  assert.equal(h.document.querySelectorAll('#app-notices .app-notice').length, 1);
+  assert.match(h.document.querySelector('#app-notices [role="alert"]').textContent, /reattach/i);
+  assert.match(h.document.querySelector('#app-notices [role="alert"]').textContent, /attach unavailable/);
+  assert.doesNotMatch(h.document.querySelector('#app-notices').textContent, /Reattaching/);
+});
