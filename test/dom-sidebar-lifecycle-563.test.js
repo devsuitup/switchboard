@@ -92,3 +92,28 @@ test('#563 the sidebar filter names sessions open here', () => {
     dom.window.close();
   }
 });
+
+test('#563 a subagent keeps the same label after an activity update', t => {
+  const { ctx } = setup(t);
+  const child = { sessionId: 'child', parentSessionId: 's1', agentId: 'agent1', summary: 'Child' };
+  ctx.window.sessionMap.set('child', child);
+  const row = ctx.sidebar.buildSubagentItem(child);
+  ctx.window.sidebarContent.append(row);
+  checkSlot(row, 'Idle');
+  ctx.window.applyStateClasses('child', ctx.window.storedActivitySnapshot('child'));
+  checkSlot(row, 'Idle');
+});
+
+test('#563 a merged row shows the exit of its non-head root PTY', t => {
+  const { ctx, session } = setup(t, { headSessionId: 'head', mergedMemberIds: ['s1', 'head'] });
+  ctx.window.sessionMap.set('head', { sessionId: 'head' });
+  ctx.window.noteSessionExit('s1', 1, null, false);
+  const row = ctx.sidebar.buildSessionItem(session);
+  ctx.window.sidebarContent.append(row);
+  const expected = 'Idle · Exited (code 1)';
+  checkSlot(row, expected);
+  ctx.window.applyStateClasses('s1', ctx.window.storedActivitySnapshot('s1'));
+  checkSlot(row, expected);
+  ctx.window.paintSessionIcon(row.querySelector('.session-icon'), 's1');
+  checkSlot(row, expected);
+});

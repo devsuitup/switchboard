@@ -47,6 +47,22 @@ test('local commands and manual compaction close; automatic compaction preserves
   assert.equal(classifyTranscriptTail(jsonl([{ ...user('Summary'), isCompactSummary: true }])).state, 'unknown');
 });
 
+function activityTitle(title) {
+  const lifecycle = /^(?:Open here|Attached here|keeps running in the background|runs on .+|Job (?:done|stopped|failed)|Running in background|Running on .+|Running elsewhere|Not running|Detached|Stopped|Exited(?: \(code -?\d+\))?|Killed \([^)]+\)|Not reopened|restores on click|Liveness unknown)$/;
+  return title.split('\nCLI status: ')[0].split(' · ').filter((segment, index) => index === 0 || !lifecycle.test(segment)).join(' · ');
+}
+
+test('activity titles strip only the known lifecycle and keep unexpected segments', () => {
+  assert.equal(activityTitle('Working · Open here · Unexpected detail\nCLI status: busy'), 'Working · Unexpected detail');
+  for (const lifecycle of ['Open here', 'Attached here · keeps running in the background',
+    'Attached here · runs on vps', 'Job done', 'Job stopped', 'Job failed', 'Running in background',
+    'Running on vps', 'Running elsewhere', 'Not running', 'Detached', 'Stopped', 'Exited (code 1)',
+    'Killed (SIGTERM)', 'Exited', 'Not reopened · restores on click', 'Liveness unknown']) {
+    assert.equal(activityTitle(`Working · ${lifecycle}`), 'Working', lifecycle);
+  }
+  assert.equal(activityTitle('Background work running · 2 tasks · Running elsewhere'), 'Background work running · 2 tasks');
+});
+
 function sidebar(t) {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
@@ -57,7 +73,7 @@ function sidebar(t) {
   let revision = 0;
   const turn = (state, lastEntryAt = 1_800_000_000_001) => ctx.emitTaskSnapshot({ parentSessionId: 'root', revision: ++revision, tasks: [], headTurn: { sessionId: 'root', revision, state, lastEntryAt } });
   const icon = () => ctx.document.querySelector('#si-root .session-icon');
-  const title = () => icon().title.split('\nCLI status: ')[0].split(' · ')[0];
+  const title = () => activityTitle(icon().title);
   const label = () => icon().getAttribute('aria-label').split(' · CLI status: ')[0];
   return { ctx, turn, icon, title, label };
 }

@@ -19,7 +19,7 @@ When several states hold at once, the first one in this table wins:
 | Waiting for input | Orange hollow ring | — | Switchboard saw Claude finish a turn in a session open here, a session running elsewhere is at its prompt, or a background job is blocked (including while attached here) | A new turn starts or the job leaves blocked |
 | Idle, open here | Green dot with a small dot below it | — | A terminal is open here, with no higher activity state | Activity changes or the terminal exits |
 | Idle | Grey dot | — | No higher activity state | Activity changes |
-| Not running | Dim grey dash | — | A finished background job has no live process | Liveness changes |
+| Not running | Solid grey dash | — | A finished background job has no live process | Liveness changes |
 
 The two violet states are explained on [Subagents](subagents.md#live-status).
 

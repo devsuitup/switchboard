@@ -58,18 +58,20 @@ function styledSlots(rowClass = 'session-item') {
   };
 }
 
-for (const [left, right] of [['idle', 'stale'], ['live-idle', 'idle']]) {
-  test(`#563 ${left} and ${right} differ by shape beyond colour and opacity`, () => {
-    const { style, destroy } = styledSlots();
-    try {
-      const shape = id => ['width', 'height', 'border-radius', 'border-bottom-width', 'border-bottom-style',
-        'transform', 'clip-path', 'box-shadow'].map(property => style(id).getPropertyValue(property)
-        .replace(/rgba?\([^)]*\)|#[\da-f]+/gi, ''));
-      assert.notDeepEqual(shape(left), shape(right));
-    } finally {
-      destroy();
-    }
-  });
+for (const rowClass of ['session-item', 'session-item is-terminal']) {
+  for (const [left, right] of [['idle', 'stale'], ['live-idle', 'idle'], ['live-idle', 'live']]) {
+    test(`#563 ${left} and ${right} differ by shape beyond colour and opacity: ${rowClass}`, () => {
+      const { style, destroy } = styledSlots(rowClass);
+      try {
+        const shape = id => ['width', 'height', 'border-radius', 'border-bottom-width', 'border-bottom-style',
+          'transform', 'clip-path', 'box-shadow'].map(property => style(id).getPropertyValue(property)
+          .replace(/rgba?\([^)]*\)|#[\da-f]+/gi, ''));
+        assert.notDeepEqual(shape(left), shape(right));
+      } finally {
+        destroy();
+      }
+    });
+  }
 }
 
 for (const rowClass of ['session-item', 'session-item is-terminal']) {
@@ -124,17 +126,30 @@ test('waiting is hollow while idle is filled, independent of colour and opacity'
   }
 });
 
-test('stale and reserved archived are the same dim grey filled dot with no glyph', { timeout: 1000 }, () => {
+test('stale is a solid grey dash at full opacity with no ring or glyph', { timeout: 1000 }, () => {
   const { style, destroy } = styledSlots();
   try {
-    for (const rung of ['stale', 'archived']) {
+    assert.equal(style('stale').backgroundColor, 'rgb(128, 128, 128)');
+    assert.equal(style('stale').opacity, '1');
+    assert.equal(style('stale').transform, 'scaleY(0.333333)');
+    assert.equal(style('stale').boxShadow, style('idle').boxShadow);
+    assert.equal(icons.stale.glyph, '');
+    assert.ok(rungRules(icons.stale).every(rule => !rule.style.has('content')));
+  } finally {
+    destroy();
+  }
+});
+
+test('reserved archived stays a dim grey filled dot with no glyph', { timeout: 1000 }, () => {
+  const { style, destroy } = styledSlots();
+  try {
+    for (const rung of ['archived']) {
       assert.equal(icons[rung].glyph, '');
       assert.equal(style(rung).backgroundColor, style('base').backgroundColor);
       assert.equal(style(rung).borderRadius, style('base').borderRadius);
       assert.ok(Number(style(rung).opacity) > 0 && Number(style(rung).opacity) < Number(style('base').opacity));
       assert.ok(rungRules(icons[rung]).every(rule => !rule.style.has('content')));
     }
-    assert.equal(style('stale').opacity, style('archived').opacity);
   } finally {
     destroy();
   }

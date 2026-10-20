@@ -546,5 +546,5 @@ word is listed with the surface that shows it and its source.
 Use the sidebar icon words for activity. The grid footer uses the ranked
 lifecycle words above; Stopped requires a recorded Stop. Row icon labels carry
 the same lifecycle without repeating job or activity words. Idle is a filled
-dot, Idle open here adds a small dot below it, and Not running is a dim dash;
+dot, Idle open here adds a small dot below it, and Not running is a solid grey dash;
 waiting and dormant restoration keep their hollow rings.

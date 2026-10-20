@@ -11,6 +11,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Delete on a conversation that is running in Switchboard is now refused before its confirmation; stop it first. Delete, Delete worktree and Change path say why they cannot proceed before their confirmation, not after you confirm. (#565)
 
 ### Fixed
+- Plain terminals keep the small Open here mark, and the Not running dash is easier to see. Subagent labels stay consistent after activity updates, and conversations with several parts show exits recorded for an older part. (#563)
 - Detaching from a background session now reads Detached, in its terminal and on its grid card, instead of Stopped: the session keeps running. A session whose process is gone without an exit Switchboard saw reads Not running, not Stopped. (#563)
 - Stopping or deleting a background job from Agents while its tab is attached here now reads Stopped, without saying the job keeps running. (#563)
 

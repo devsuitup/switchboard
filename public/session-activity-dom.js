@@ -265,7 +265,7 @@ function applyStateClasses(sessionId, snapshot) {
       typeof sessionMap !== 'undefined' && sessionMap.get(item.dataset.sessionId));
   const session = !label && localSessionForStatus(item.dataset.headSessionId || item.dataset.sessionId, row);
   writeIconSlot(item.querySelector('.session-icon'), icon, label?.title, label?.text, session,
-    rowLifecycleLabel(item.dataset.sessionId, snapshot, row));
+    item.dataset.subagent ? null : rowLifecycleLabel(item.dataset.sessionId, snapshot, row));
   const status = item.querySelector('.session-status');
   if (label && status) {
     status.textContent = label.text;
@@ -291,7 +291,8 @@ function rowLifecycleLabel(sessionId, snapshot, row) {
   return lifecycleLabel({
     ptyHere: !!here, attach: openSessions.get(here)?.attach,
     job: typeof backgroundActivityEntry === 'function' ? backgroundActivityEntry(head, row) : null,
-    remoteAlias: row.remoteAlias, liveness: snapshot?.liveness, exit: lastSessionExit(head),
+    remoteAlias: row.remoteAlias, liveness: snapshot?.liveness,
+    exit: lastSessionExit(head) || ids.map(lastSessionExit).find(Boolean),
     dormant: typeof dormantWorkingSet !== 'undefined' && ids.some(id => dormantWorkingSet.has(id)),
   });
 }

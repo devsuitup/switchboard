@@ -54,7 +54,7 @@ everywhere a live PTY stands for a session the user can see or act on:
 | `layoutGridCards` (renderer) | Only *implicitly*, and the row above is what does it. Grid mode has no panel-shell predicate: it walks the sidebar's DOM rows and wraps every id that is also in `openGridSessionIds()`, which **does** contain `panel:<owner>`. Given a row, it would move the shell's container out of `#panel-terminal-region` into a grid card and cost it the WebGL context the mount/unmount pair manages. The absent row is therefore load-bearing for a second subsystem, and `test/panel-terminal.test.js` pins both halves. |
 | the missing-project remap guard (main) | It refuses a remap while sessions append to the transcripts being rewritten, and tells the user to stop them first. A shell appends to nothing and offers nothing to stop. |
 | `scheduleActiveSessionsPoll` (renderer) | A non-empty `activePtyIds` pins the poll at 3 s. One open shell would cancel the 30 s idle back-off of the v0.0.33–41 perf campaign for the whole window. |
-| `renderDefaultStatus` (renderer) | "N running" would count a session with a shell twice. |
+| `renderDefaultStatus` (renderer) | "N open here" would count a session with a shell twice. |
 
 **The two sides of the exclusion use different keys, because they hold
 different things.** In the main process the value is the session object, so
