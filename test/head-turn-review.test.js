@@ -57,52 +57,54 @@ function sidebar(t) {
   let revision = 0;
   const turn = (state, lastEntryAt = 1_800_000_000_001) => ctx.emitTaskSnapshot({ parentSessionId: 'root', revision: ++revision, tasks: [], headTurn: { sessionId: 'root', revision, state, lastEntryAt } });
   const icon = () => ctx.document.querySelector('#si-root .session-icon');
-  return { ctx, turn, icon };
+  const title = () => icon().title.split('\nCLI status: ')[0];
+  const label = () => icon().getAttribute('aria-label').split(' · CLI status: ')[0];
+  return { ctx, turn, icon, title, label };
 }
 test('a newer descriptor idle neutralises open evidence, while newer transcript evidence wins', t => {
-  const { ctx, turn, icon } = sidebar(t);
+  const { ctx, turn, icon, title } = sidebar(t);
   ctx.window.sessionMap.set('root', { sessionId: 'root', status: 'idle', statusUpdatedAt: 1_800_000_000_010 });
   turn('open');
-  assert.equal(icon().title, 'Waiting for input');
+  assert.equal(title(), 'Waiting for input');
   turn('open', 1_800_000_000_020);
-  assert.equal(icon().title, 'Working');
+  assert.equal(title(), 'Working');
 });
 test('OSC idle is ordered against local head observation; stale progress and decay cannot resurrect Working', t => {
-  const { ctx, turn, icon } = sidebar(t);
+  const { ctx, turn, icon, title } = sidebar(t);
   ctx.window.activePtyIds.add('root');
   ctx.window.Date.now = () => 1_800_000_000_001;
   turn('open');
   ctx.window.Date.now = () => 1_800_000_000_010;
   ctx.setActivity('root', false, 'onCliBusyState');
-  assert.equal(icon().title, 'Waiting for input');
+  assert.equal(title(), 'Waiting for input');
   ctx.setActivity('root', true, 'onCliBusyState');
-  assert.equal(icon().title, 'Idle');
+  assert.equal(title(), 'Idle');
   ctx.window.Date.now = () => 1_800_000_000_020;
   turn('open', 1_800_000_000_020);
-  assert.equal(icon().title, 'Working');
+  assert.equal(title(), 'Working');
   ctx.setActivity('root', false, 'onCliBusyState', { at: 1_800_000_000_015 });
-  assert.equal(icon().title, 'Working');
+  assert.equal(title(), 'Working');
 });
 test('projection is pure, attention consumes the ready glyph while unseen title writing survives', t => {
-  const { ctx, turn, icon } = sidebar(t);
+  const { ctx, turn, icon, title } = sidebar(t);
   ctx.window.activeSessionId = 'elsewhere';
   turn('open'); turn('closed');
   ctx.window.noteWrittenActivity('root');
-  assert.equal(icon().title, 'Response ready');
+  assert.equal(title(), 'Response ready');
   const before = JSON.stringify(ctx.read('headTurns.get("root")'));
   ctx.window.headActivitySnapshot('root', { attention: true, liveness: 'alive' });
   assert.equal(JSON.stringify(ctx.read('headTurns.get("root")')), before);
   ctx.window.setAttention('root', true);
   ctx.window.setAttention('root', false);
-  assert.equal(icon().title, 'Waiting for input');
+  assert.equal(title(), 'Waiting for input');
   assert.equal(ctx.document.querySelector('#si-root').classList.contains('unseen-written-activity'), true);
 });
 test('the slot exposes accessible text on initial paint and incremental updates', t => {
-  const { turn, icon } = sidebar(t);
-  assert.equal(icon().getAttribute('aria-label'), 'Turn state unavailable');
+  const { turn, icon, label } = sidebar(t);
+  assert.equal(label(), 'Turn state unavailable');
   assert.equal(icon().getAttribute('role'), 'img');
   turn('open');
-  assert.equal(icon().getAttribute('aria-label'), 'Working');
+  assert.equal(label(), 'Working');
 });
 test('blocked Agents jobs suppress an open head even when the descriptor says busy', t => {
   const { ctx, turn } = sidebar(t);
@@ -145,13 +147,13 @@ test('grid dots use head evidence, ignore OSC progress and show static backgroun
   assert.ok(!card.querySelector('.grid-card-dot').classList.contains('session-icon--busy'));
 });
 test('real worker and DOM sequence: prompt, silent tool, closed background shell, later prompt', async t => {
-  const { ctx, icon } = sidebar(t);
+  const { ctx, icon, title } = sidebar(t);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-head-638b-'));
   const file = path.join(dir, 'root.jsonl');
   const client = createTaskRecordsClient({ onSnapshot: s => ctx.emitTaskSnapshot(s) });
   t.after(async () => { await client.dispose(); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 }); });
   const entries = [user('Work')];
-  const read = async () => { fs.writeFileSync(file, jsonl(entries)); await client.read(file, 'root'); return icon().title; };
+  const read = async () => { fs.writeFileSync(file, jsonl(entries)); await client.read(file, 'root'); return title(); };
   assert.equal(await read(), 'Working');
   entries.push({ ...assistant('tool_use'), message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'toolu_sync', name: 'Bash', input: { command: 'sleep 60' } }] } });
   assert.equal(await read(), 'Working');
@@ -164,7 +166,7 @@ test('real worker and DOM sequence: prompt, silent tool, closed background shell
   assert.equal(await read(), 'Waiting for input');
   for (const kind of ['shell', 'monitor', 'cron']) {
     ctx.window.taskRegistry.note('root', kind, 'cli-task', { kind });
-    assert.equal(icon().title, 'Background work running');
+    assert.equal(title(), 'Background work running');
     assert.ok(icon().classList.contains('session-icon--agents-busy'));
     assert.equal(ctx.window.taskRegistry.agents('root').length, 0);
     ctx.window.taskRegistry.end('root', kind);

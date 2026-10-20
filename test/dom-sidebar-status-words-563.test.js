@@ -65,39 +65,50 @@ test('a merged waiting head exposes its own reason instead of the root reason', 
   } finally { ctx.destroy(); }
 });
 
-test('a remote merged row shows its head descriptor reason, age and CLI tooltip', () => {
-  const ctx = setupSidebarDom();
-  try {
-    ctx.window.Date.now = () => now;
-    const descriptors = [
-      { sessionId: 'A', status: 'busy', statusUpdatedAt: now - 120000, waitingFor: 'root reason' },
-      { sessionId: 'B', status: 'waiting', statusUpdatedAt: now - 60000, waitingFor: 'permission prompt' },
-    ];
-    const annotate = new Function('remoteIndexer', 'remoteAttachAdapter', 'remoteActivityTracker',
-      'cliSessionState', 'attachBlockReason', 'sendBlockReason',
-      extractFunction(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), 'annotateRemoteAttachable')
-        + '\nreturn annotateRemoteAttachable;')({
-      getRemoteSessions: () => ({ sessions: descriptors, at: now, error: null }),
-      getRemoteHostState: () => ({ consecutiveFailures: 0, nextAttemptAt: 0 }),
-      getRemoteHostProfile: () => computeHostProfile({ at: now, error: null, descriptors }),
-    }, { supports: () => false }, { activeAt: () => null }, {}, attachBlockReason, sendBlockReason);
-    const session = sessionFor({ sessionId: 'A', headSessionId: 'B',
-      mergedMemberIds: ['B'], remoteAlias: 'host' });
-    annotate([{ remoteAlias: 'host', sessions: [session] }]);
-    ctx.window.applyRemoteDescriptor(session);
-    const item = ctx.sidebar.buildSessionItem(session);
-    const check = () => {
-      assert.equal(item.querySelector('.session-status').textContent, 'permission prompt · 1m ago');
-      const slot = item.querySelector('.session-icon');
-      assert.match(slot.title, /\nCLI status: waiting · permission prompt$/);
-      assert.match(slot.getAttribute('aria-label'), / · CLI status: waiting · permission prompt$/);
-      assert.doesNotMatch(slot.title, /root reason|CLI status: busy/);
-    };
-    check();
-    ctx.window.paintSessionIcon(item.querySelector('.session-icon'), session.sessionId, session);
-    check();
-  } finally { ctx.destroy(); }
-});
+for (const rootSeen of [false, true]) for (const status of ['busy', 'idle', 'waiting']) {
+  test(`a remote merged ${status} head keeps base liveness and icon with root descriptor ${rootSeen ? 'present' : 'absent'}`, () => {
+    const ctx = setupSidebarDom();
+    try {
+      ctx.window.Date.now = () => now;
+      const descriptors = [
+        ...(rootSeen ? [{ sessionId: 'A', status: 'shell', statusUpdatedAt: now - 120000, waitingFor: 'root reason' }] : []),
+        { sessionId: 'B', status, statusUpdatedAt: now - 60000, waitingFor: status === 'waiting' ? 'permission prompt' : null },
+      ];
+      const annotate = new Function('remoteIndexer', 'remoteAttachAdapter', 'remoteActivityTracker',
+        'cliSessionState', 'attachBlockReason', 'sendBlockReason',
+        extractFunction(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'), 'annotateRemoteAttachable')
+          + '\nreturn annotateRemoteAttachable;')({
+        getRemoteSessions: () => ({ sessions: descriptors, at: now, error: null }),
+        getRemoteHostState: () => ({ consecutiveFailures: 0, nextAttemptAt: 0 }),
+        getRemoteHostProfile: () => computeHostProfile({ at: now, error: null, descriptors }),
+      }, { supports: () => false }, { activeAt: () => null }, {}, attachBlockReason, sendBlockReason);
+      const session = sessionFor({ sessionId: 'A', headSessionId: 'B',
+        mergedMemberIds: ['B'], remoteAlias: 'host' });
+      annotate([{ remoteAlias: 'host', sessions: [session] }]);
+      ctx.window.sessionMap.set(session.sessionId, session);
+      ctx.window.applyRemoteDescriptor(session);
+      const check = (item, seeded = false) => {
+        const reason = status === 'waiting' ? 'permission prompt · ' : '';
+        assert.equal(item.querySelector('.session-status').textContent, reason + '1m ago');
+        const slot = item.querySelector('.session-icon');
+        const detail = `CLI status: ${status}${status === 'waiting' ? ' · permission prompt' : ''}`;
+        assert.ok(slot.title.endsWith('\n' + detail), slot.title);
+        assert.ok(slot.getAttribute('aria-label').endsWith(' · ' + detail));
+        assert.doesNotMatch(slot.title, /root reason|CLI status: shell/);
+        assert.equal(item.classList.contains('is-alive'), seeded || rootSeen, 'd1b956fc liveness');
+        assert.equal(slot.className, 'session-icon session-icon--' + (seeded ? 'waiting' : 'idle'), 'd1b956fc icon slot');
+      };
+      check(ctx.sidebar.buildSessionItem(session));
+      ctx.sidebar.renderProjects([makeSampleProject({ remoteAlias: 'host', sessions: [session] })], true);
+      const item = ctx.document.getElementById('si-' + session.sessionId);
+      check(item, true);
+      ctx.window.paintSessionIcon(item.querySelector('.session-icon'), session.sessionId, session);
+      check(item, true);
+      const local = ctx.window.snapshotForLocal(session.headSessionId);
+      assert.equal(local.liveness, 'unknown', 'an implicit member lookup cannot seed local liveness');
+    } finally { ctx.destroy(); }
+  });
+}
 
 test('a remote attention repaint preserves the descriptor status and waiting reason', () => {
   const ctx = setupSidebarDom();

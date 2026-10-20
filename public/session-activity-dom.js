@@ -155,7 +155,7 @@ function localSessionForStatus(sessionId, session) {
   const item = sessionItemEl(sessionId);
   const rendered = item && sessionMap.get(item.dataset.sessionId);
   if (rendered?.mergedMemberIds?.includes(sessionId)) {
-    return { sessionId, ...rendered.mergedMemberStatuses?.[sessionId] };
+    return { sessionId, remoteAlias: rendered.remoteAlias, ...rendered.mergedMemberStatuses?.[sessionId] };
   }
   const stored = sessionMap.get(sessionId);
   if (stored) return stored;
@@ -165,7 +165,7 @@ function localSessionForStatus(sessionId, session) {
       latest = row;
     }
   }
-  if (latest) return { sessionId, ...latest.mergedMemberStatuses?.[sessionId] };
+  if (latest) return { sessionId, remoteAlias: latest.remoteAlias, ...latest.mergedMemberStatuses?.[sessionId] };
 }
 
 function storedActivitySnapshot(sessionId, session, selection) {
@@ -300,6 +300,7 @@ function writeIconSlot(el, icon, title, text, session) {
 function snapshotForLocal(sessionId, session, selection) {
   let state = localPtyState(sessionId);
   const sess = localSessionForStatus(sessionId, session);
+  if (sess?.remoteAlias) return state.snapshot();
   const targetHere = !sess?.headSessionId || sess.headSessionId === sessionId;
   const background = targetHere && (sess?.bgJobId || typeof backgroundActivityEntry === 'function' && backgroundActivityEntry(sessionId, localActivityRow(sessionId, session), selection));
   if (sess && sess.status !== undefined) {
