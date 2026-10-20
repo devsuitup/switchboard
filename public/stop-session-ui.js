@@ -8,7 +8,7 @@ function resolveSessionStop(session, { attach = false } = {}) {
     return { remote: true, alias, attach: false, confirmText: `Stop this session on ${label}?` };
   }
   if (attach) {
-    return { remote: false, alias: null, attach: true, confirmText: 'Detach from this background session? It keeps running; the Agents view can stop it.' };
+    return { remote: false, alias: null, attach: true, confirmText: 'Detach from this background session. It keeps running; the Agents view can stop it.' };
   }
   return { remote: false, alias: null, attach: false, confirmText: 'Stop this session?' };
 }
@@ -63,7 +63,7 @@ async function planSessionStop(row, { attach = false, retryTargets } = {}) {
   const lines = targets.map(target => target.attach
     ? `${label(target.sessionId)}: detach its tab in this window; background job ${target.jobId || (single ? 'for this session' : target.sessionId)} keeps running; stop it from the Agents view.`
     : `${label(target.sessionId)}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}.`);
-  const confirmText = [attachOnly ? 'Detach from this background session? It keeps running; the Agents view can stop it.'
+  const confirmText = [attachOnly ? 'Detach from this background session. It keeps running; the Agents view can stop it.'
     : stopping.length ? single ? 'Stop this session?' : `Stop ${stopping.length} part${stopping.length === 1 ? '' : 's'}?`
       : single ? 'This session cannot be stopped here.' : 'No parts can be stopped here.', ...lines,
     ...(stopping.length ? [single ? 'Its process ends; the conversation is kept and can be resumed.'

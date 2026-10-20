@@ -860,6 +860,14 @@ The header's stop button is labelled **Detach** for such a tab
 (`terminalStopBtn.title`). The job is stopped only by `claude stop`, from the
 Agents view.
 
+An attach-only Stop plan detaches without confirmation and shows a 10 s Undo
+notice. The renderer captures the session, `attachJobId` and `attachCwd`
+before detaching. Undo waits for the local client's exit if necessary, then
+calls `openSession(session, { type: 'attach', jobId, cwd })` with that snapshot.
+Initial attach and background handoff both retain the actual attach cwd on
+the entry. Failed detaches keep their Retry notice and offer no Undo; a mixed
+Stop plan still confirms before ending its local or remote processes.
+
 ## Running the CLI
 
 `runClaudeCommand` (`main.js`) runs `claude <argv>` through the login shell

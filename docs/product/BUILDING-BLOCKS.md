@@ -251,7 +251,9 @@ focus) with a form body.
 - **Remaining separate.** `.restore-toast` retains restore consent, cold-cache
   indexing progress and informational handoff success; `#update-toast` is unchanged.
   Agents/settings failures and remaining information dialogs are later slices.
-  Session/folder Archive and Detach Undo wiring belongs to their own slices.
+  Detach uses the Undo variant to reopen its captured attach job and cwd after
+  the local client exits. Session/folder Archive Undo wiring belongs to its own
+  slices.
 
 ## B9. Inline error
 

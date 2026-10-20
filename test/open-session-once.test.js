@@ -70,6 +70,17 @@ function setup() {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+test('an attach tab retains the actual attach cwd for Detach Undo', async () => {
+  const h = setup();
+  try {
+    const opening = h.openSession(h.window.sessionMap.get('s1'), { type: 'attach', jobId: '1234abcd', cwd: '/actual/worktree' });
+    await settle();
+    h.release();
+    await opening;
+    assert.equal(h.window.openSessions.get('s1').attachCwd, '/actual/worktree');
+  } finally { h.destroy(); }
+});
+
 test('a double click on a session row opens its terminal once', async () => {
   const h = setup();
   try {

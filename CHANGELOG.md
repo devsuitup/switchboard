@@ -9,6 +9,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - A conversation made of several transcripts now shows N parts, and its menu lists the parts with View messages and Copy id for each. (#564)
 
 ### Changed
+- Detaching from a background session no longer asks first. A notice offers Undo for about 10 seconds, which attaches it again. (#565)
 - Archive Project, in Project Settings and on a worktree, no longer asks first. A notice offers Undo for about 10 seconds. (#565)
 - Stop on a conversation made of several parts now stops every running part after one confirmation that says how many run and where. Every Stop confirmation says what ends and that the conversation is kept; a part running as a background job keeps running and is stopped from the Agents view. (#565, #564)
 - Switchboard remembers which part of a branched conversation you open, across restarts. It follows that part when it continues, and asks again only when a new part appears or your choice is gone. Choose part to open in the row's menu changes it; if there are no longer any parts to choose from, a notice says so. (#567)

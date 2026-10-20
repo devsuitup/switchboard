@@ -296,8 +296,19 @@ part keeps running and is named with its job id and the Agents view as the
 way to stop it. An attached job tab is a detach target, never a job stop.
 Processes outside this window and unreadable background-job ownership are
 excluded and explained before confirmation. With no targets, exclusions are
-shown as a notice without a confirmation. Detach-only plans still confirm;
-removing that question and adding Undo belong to #565 PR2.
+shown as a notice without a confirmation. Detach-only plans skip confirmation.
+Each successfully detached tab shows a 10 s Undo notice (`kind: 'undo'`).
+Before detaching, the executor captures that tab's session, job id and attach
+cwd; Undo calls `openSession` with those attach options. Both initial attach
+and background handoff retain the actual cwd as `entry.attachCwd`, falling
+back to the session project path. A mixed plan still confirms the processes
+it stops; Undo reattaches only its successfully detached tabs.
+
+The stop IPC accepts detach before the local attach client exits. The executor
+sets `entry.detachComplete` before the IPC; `applyProcessExit` closes the entry
+and resolves it through `entry.completeDetach`. An early Undo waits for this
+notification before reopening, so it cannot show the client being detached.
+A failed detach retains Retry without offering Undo.
 
 Cancel makes no stop calls. The executor attempts every target, clears PTY
 and remote state only after success, and reports all failed parts in one
@@ -420,8 +431,8 @@ is unchanged. It uses `role="alert"` and remains until Dismiss or
 updating a repeated member's name and reason. A successful retry removes only its
 member, and an empty group disappears, without a console error or
 the old 15 s `showRestoreNotice` timeout. The shared brick also provides
-15 s info and 10 s Undo notices; Archive/Detach undo actions are wired in
-their own slices (see `docs/product/BUILDING-BLOCKS.md`, B8).
+15 s info and 10 s Undo notices. Detach Undo is wired in `confirmAndStopSession`;
+Archive Undo belongs to its own slices (see `docs/product/BUILDING-BLOCKS.md`, B8).
 A host that answers but
 refuses the stop, or a first sync that fails locally (mirror directory, index
 scan; `lastErrorTransport` false), still returns `{ok:false}` and blocks the
