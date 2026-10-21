@@ -159,6 +159,21 @@ function exitDetail(action = 'quit', rows = null) {
   return { attempt: 1, version: 1, action, external: false, snapshot: { rows, counts, remote: { vps: 2 } } };
 }
 
+for (const n of [1, 2]) {
+  test(`B4 exit wording agrees for ${n} attached and remote sessions`, async () => {
+    const ctx = setup();
+    try {
+      const detail = exitDetail();
+      detail.snapshot.counts.attached = n;
+      detail.snapshot.remote = { vps: n };
+      ctx.calls.check(210, 'quit', detail); await flush();
+      const text = ctx.window.document.querySelector('.choice-dialog').textContent;
+      assert.ok(text.includes(`${n} session${n === 1 ? '' : 's'} attached here ${n === 1 ? 'is' : 'are'} detached and ${n === 1 ? 'keeps' : 'keep'} running in the background.`));
+      assert.ok(text.includes(`${n} session${n === 1 ? '' : 's'} from vps ${n === 1 ? 'keeps' : 'keep'} running on vps.`));
+    } finally { ctx.destroy(); }
+  });
+}
+
 test('A2 named exit question covers each intent and platform, identities and honest loss wording', async () => {
   for (const platform of ['win32', 'linux', 'darwin']) for (const action of ['quit', 'close', 'update']) {
     const ctx = setup(); ctx.window.api.platform = platform;

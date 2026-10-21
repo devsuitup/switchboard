@@ -10,7 +10,7 @@ const DEFAULT_DIALOG_CEILING_MS = 5 * 60 * 1000;
 const REASON_RANK = { reload: 0, close: 1, quit: 2 };
 const LOGOFF_CANCEL_MS = 60000;
 
-function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs = DEFAULT_PROBE_MS, dialogCeilingMs = DEFAULT_DIALOG_CEILING_MS, logoffCancelMs = LOGOFF_CANCEL_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {}, inventory = () => ({ rows: [], counts: {}, remote: {} }), externalFlush = () => {} }) {
+function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs = DEFAULT_PROBE_MS, dialogCeilingMs = DEFAULT_DIALOG_CEILING_MS, logoffCancelMs = LOGOFF_CANCEL_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {}, inventory = () => ({ rows: [], counts: {}, remote: {} }), externalFlush = () => {}, onAttemptReleased = () => {} }) {
   const pending = new Map();
   const probes = new Map();
   const dialogs = new WeakSet();
@@ -29,6 +29,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
       for (const release of reasonWaits.values()) if (release.wc === win?.webContents) release(false);
     },
     invalidateRenderer: (win, attempt) => {
+      onAttemptReleased();
       windows.get(win)?.invalidate();
       try { win?.webContents.send('exit-attempt-invalidated', attempt); } catch {}
     },
@@ -77,7 +78,12 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
   ipcMain.on('unsaved-check-result', (event, id, proceed, detail) => {
     const entry = pending.get(id);
     if (!entry || event?.sender !== entry.wc) return;
-    if (entry.detail && (detail?.attempt !== entry.detail.attempt || detail?.version !== entry.detail.version)) return;
+    if (entry.detail && !(entry.initialReason === 'reload' && detail == null) && (detail?.attempt !== entry.detail.attempt || detail?.version !== entry.detail.version)) {
+      entry.acked = false;
+      entry.arm();
+      try { entry.wc.send('unsaved-check', entry.id, entry.reason, entry.detail); } catch { entry.finish(true, 'unanswered'); }
+      return;
+    }
     entry.finish(proceed === true);
   });
 
@@ -142,7 +148,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     if (win.isDestroyed() || !wc || wc.isDestroyed() || wc.isCrashed()) return Promise.resolve({ proceed: true, ended: null });
     let settled = false;
     const id = nextId++;
-    const entry = { id, win, wc, reason, detail, acked: false, overdue: false, probe: null, timer: null, finish: null, arm: null, upgrade: null };
+    const entry = { id, win, wc, reason, initialReason: reason, detail, acked: false, overdue: false, probe: null, timer: null, finish: null, arm: null, upgrade: null };
     const asked = new Promise((resolve) => {
       const onGone = () => entry.finish(true);
       const stop = () => {

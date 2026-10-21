@@ -33,6 +33,20 @@ function menuItems(template) {
   return items;
 }
 
+for (const [platform, label, accelerator] of [['win32', 'Exit', undefined], ['linux', 'Quit', 'Ctrl+Q'], ['darwin', 'Quit Switchboard', 'Cmd+Q']]) {
+  test(`B5 ${platform} exit menu keeps its label and accelerator`, () => {
+    let requests = 0;
+    const onQuit = () => { requests++; };
+    const item = menuItems(applicationMenuTemplate('Switchboard', { platform, onQuit })).find(entry => entry.click === onQuit);
+    assert.ok(item);
+    assert.equal(item.label, label);
+    assert.equal(item.accelerator, accelerator);
+    if (platform === 'win32') assert.equal(Object.hasOwn(item, 'accelerator'), false);
+    item.click();
+    assert.equal(requests, 1);
+  });
+}
+
 test('every keyboard role is in the application menu, with its default accelerator left alone', () => {
   const items = menuItems(applicationMenuTemplate('Switchboard'));
   const roles = items.filter((i) => i.role).map((i) => i.role);

@@ -65,6 +65,10 @@ A false result
 resets its quitAndInstallCalled latch like BaseUpdater.quitAndInstall does.
 The helper's quit callback sets updateInstalling and enters the existing shared
 shutdown drain. Throws and updater error events reset the failure state.
+
+A native macOS install that arrives after the 30-second release bound can show
+the ordinary close wording rather than Restart wording; cancelling that close
+clears the install bypass so later Cmd+Q checks edits and sessions again.
 autoRunAppAfterInstall is also disabled on Linux. Other platforms retain the
 original zero-argument quitAndInstall call.
 

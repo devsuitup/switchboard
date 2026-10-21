@@ -35,13 +35,14 @@ function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer }
     try { return snapshot(); }
     catch { return { rows: [], counts: { sessions: 0, plain: 0, panels: 0, attached: 0 }, remote: {}, unknown: true }; }
   };
-  function invalidate() {
+  function invalidate(action) {
+    if (!current || (action && current.action !== action)) return false;
     const previous = current;
     current = null;
-    if (!previous) return;
     previous.phase = 'cancelled';
     cancelCheck(previous.window);
     invalidateRenderer(previous.window, previous.id);
+    return true;
   }
   function request(win, action, external = false) {
     if (current && current.window !== win) invalidate();

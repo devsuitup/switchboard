@@ -27,6 +27,7 @@ function setup(platform = 'win32') {
   Object.assign(win, { webContents: wc, isDestroyed: () => false, close: () => calls.push('close'), destroy: () => calls.push('destroy') });
   let token = null;
   const guard = createUnsavedGuard({ ipcMain, inventory: () => inventory(records),
+    onAttemptReleased: () => context.releaseAttempt?.(),
     quit: value => { token = value; calls.push('quit'); },
     externalFlush: () => context.flushForLogoff(),
     setTimeoutFn: (fn, ms) => { const t = { fn, ms }; timers.push(t); return t; }, clearTimeoutFn: t => { t.cleared = true; },
@@ -40,6 +41,10 @@ function setup(platform = 'win32') {
     ipcMain.emit('unsaved-check-result', { sender }, check.args[0], yes, check === checks().at(-1) ? detail() : check.args[2]);
     for (const message of sent.filter(m => m.channel === 'unsaved-check-reason')) ipcMain.emit('unsaved-check-reason-done', { sender }, message.args[0], message.args[2]);
   };
+  const answerVersion = (yes, version, check = checks().at(-1)) => {
+    ipcMain.emit('unsaved-check-ack', { sender: wc }, check.args[0]);
+    ipcMain.emit('unsaved-check-result', { sender: wc }, check.args[0], yes, version);
+  };
   const menu = () => applicationMenuTemplate('Switchboard', { platform, onQuit: () => guard.requestQuit(win) })[0].submenu.at(-1).click?.();
   const context = vm.createContext({ ipcMain, mainWindow: win, unsavedGuard: guard, quitAttemptToken: null,
     updateInstalling: false, activityFlushedForQuit: false, updateInstallPromise: null, updateWaitTimer: null,
@@ -49,6 +54,9 @@ function setup(platform = 'win32') {
     relaunch: async ({ quit }) => quit(), relaunchExecPath: '/app', notifyRelaunchRequired() {},
     log: { error() {} }, setTimeout: (fn, ms) => { const t = { fn, ms }; timers.push(t); return t; }, clearTimeout: t => { if (t) t.cleared = true; },
   });
+  const guardInit = ast.body.flatMap(n => n.declarations || []).find(n => n.id.name === 'unsavedGuard').init;
+  const release = guardInit.arguments[0].properties.find(p => p.key.name === 'onAttemptReleased');
+  if (release) context.releaseAttempt = vm.runInContext(source.slice(...release.value.range), context);
   vm.runInContext(require('./app-source').extractFunction(source, 'resetUpdateAttempt'), context);
   Object.assign(context, { flushProjectsBeforeExit: async () => {}, flushWindowBounds: async () => {},
     sessionTransitions: { drainMetadataWrites: async () => {} }, activityReporter: { flush: async () => {} },
@@ -63,7 +71,7 @@ function setup(platform = 'win32') {
   context.process.env = {};
   vm.runInContext(require('./app-source').extractFunction(source, 'spawnPty'), context);
   vm.runInContext(source.slice(...installNode.range), context);
-  return { guard, win, wc, sent, calls, records, event, checks, detail, answer, menu, timers, context,
+  return { guard, win, wc, sent, calls, records, event, checks, detail, answer, answerVersion, menu, timers, context,
     install: () => handlers.get('updater-install')(), token: () => token };
 }
 
@@ -108,6 +116,130 @@ test('A4 shipped menu, updater and close wait for consent; Cancel preserves proc
   }
   const t = setup(); t.records.clear(); t.menu();
   assert.equal(t.checks().length, 1, 'zero local PTYs still checks dirty editors');
+});
+
+for (const upgrade of ['close to quit', 'quit to update', 'user to external']) {
+  test(`B1 a previous-version answer after ${upgrade} renews consent and finishes the exit`, async () => {
+    const t = setup();
+    if (upgrade === 'close to quit') t.win.emit('close', t.event());
+    else t.menu();
+    const previous = t.detail();
+    let installing;
+    if (upgrade === 'close to quit') t.menu();
+    else if (upgrade === 'quit to update') installing = t.install();
+    else t.guard.beforeQuit(t.event(), t.win);
+    t.answerVersion(true, previous);
+    for (const m of t.sent.filter(m => m.channel === 'unsaved-check-reason')) {
+      t.context.ipcMain.emit('unsaved-check-reason-done', { sender: t.wc }, m.args[0], m.args[2], true);
+    }
+    await tick();
+    assert.equal(t.checks().length, 2, 'a stale answer must send a fresh check instead of hanging');
+    assert.deepEqual(t.calls, [], 'previous consent cannot authorize the upgraded exit');
+    t.answerVersion(true, t.detail());
+    await tick();
+    assert.equal(t.calls.filter(c => c === (installing ? 'install' : 'quit')).length, 1, 'the upgraded exit actually progresses');
+    await installing;
+  });
+}
+
+for (const proceed of [true, false]) {
+  test(`B1 a detail-less reload answer waits for late quit consent (${proceed})`, async () => {
+    const t = setup();
+    t.wc.emit('will-prevent-unload', t.event());
+    const check = t.checks().at(-1);
+    t.menu();
+    t.answerVersion(true, null, check);
+    await tick();
+    assert.deepEqual(t.calls, [], 'the late Stop question is still open');
+    const reason = t.sent.findLast(m => m.channel === 'unsaved-check-reason');
+    t.context.ipcMain.emit('unsaved-check-reason-done', { sender: t.wc }, reason.args[0], reason.args[2], proceed);
+    await tick();
+    if (proceed) assert.deepEqual(t.calls, ['quit'], 'the late quit actually progresses after Stop');
+    else {
+      t.menu();
+      assert.equal(t.checks().length, 2, 'Cancel releases the attempt so Quit can ask again');
+      t.answer(true); await tick();
+      assert.deepEqual(t.calls, ['quit']);
+    }
+  });
+}
+
+function wireUpdater(t) {
+  const updater = new EventEmitter();
+  const nativeUpdater = new EventEmitter();
+  Object.assign(updater, t.context.autoUpdater);
+  Object.assign(t.context, { SETTING_DEFAULTS: require('../public/setting-defaults').SETTING_DEFAULTS,
+    require: name => ({ autoUpdater: name === 'electron' ? nativeUpdater : updater }) });
+  t.context.app.isPackaged = true;
+  t.context.log.info = () => {};
+  const index = ast.body.findIndex(n => n.declarations?.some(d => d.id.name === 'autoUpdater'));
+  vm.runInContext(source.slice(ast.body[index].range[0], ast.body[index + 1].range[1]), t.context);
+  return { updater, nativeUpdater };
+}
+
+for (const intent of ['close', 'quit']) {
+  test(`B2 a background updater error preserves the open ${intent} choice`, async () => {
+    const t = setup();
+    const { updater } = wireUpdater(t);
+    if (intent === 'close') t.win.emit('close', t.event());
+    else t.menu();
+    const original = t.detail();
+    updater.emit('error', new Error('offline'));
+    await tick();
+    assert.equal(t.sent.some(m => m.channel === 'exit-attempt-invalidated'), false, 'offline checking must not dismiss the user choice');
+    assert.equal(t.detail(), original);
+    t.answer(true); await tick();
+    assert.deepEqual(t.calls, [intent], 'the original choice can still close or quit');
+  });
+}
+
+test('B2 a background updater error with no attempt preserves the exit latch', () => {
+  const t = setup();
+  const { updater } = wireUpdater(t);
+  t.context.quitAttemptToken = 17;
+  updater.emit('error', new Error('offline'));
+  assert.equal(t.context.quitAttemptToken, 17, 'an unrelated update check does not reset exit state');
+});
+
+test('B2 an install error during Linux relaunch releases its update gate', async () => {
+  const t = setup('linux');
+  const { updater } = wireUpdater(t);
+  let resume;
+  t.context.relaunch = () => new Promise(resolve => { resume = resolve; });
+  const pending = t.install();
+  t.answer(true); await tick();
+  assert.equal(t.guard.launchAllowed(), false);
+  updater.emit('error', new Error('install failed'));
+  assert.equal(t.guard.launchAllowed(), true, 'an actual install error releases the committed update');
+  assert.equal(t.context.updateInstallPromise, null);
+  assert.equal(updater.quitAndInstallCalled, false);
+  resume(); await pending;
+});
+
+test('B3 cancelling a late macOS native close releases the install bypass for later Cmd+Q', async () => {
+  const t = setup('darwin');
+  const { nativeUpdater } = wireUpdater(t);
+  const installing = t.install();
+  t.answer(true); await installing;
+  t.timers.find(timer => timer.ms === 30000 && !timer.cleared).fn();
+  assert.equal(t.guard.launchAllowed(), true);
+  nativeUpdater.emit('before-quit-for-update');
+  assert.equal(t.context.updateInstalling, true);
+  t.win.emit('close', t.event());
+  t.answer(false); await tick();
+  assert.equal(t.context.updateInstalling, false, 'a cancelled native close cannot retain the installer bypass');
+  t.menu();
+  assert.equal(t.detail().action, 'quit');
+  assert.equal(t.detail().external, false);
+  t.answer(true); await tick();
+  const app = new EventEmitter();
+  app.quit = () => {};
+  Object.assign(t.context, { app, shutdownComplete: false, exitOnce: () => {} });
+  const beforeQuit = startup.body.body.findLast(n => n.expression?.arguments?.[0]?.value === 'before-quit');
+  vm.runInContext(source.slice(...beforeQuit.range), t.context);
+  app.emit('before-quit', t.event()); await tick();
+  assert.equal(t.detail().external, true, 'an untagged quit must still enter the edits guard');
+  t.answer(false); await tick();
 });
 
 test('A5 upgrades renew consent, generations are revalidated, sender and launch gate remain scoped', async () => {

@@ -856,8 +856,8 @@ async function confirmSessionExit(detail, changed) {
     else message.push((row.type === 'plain' ? 'Plain terminal' : displayName(row.id) ? '"' + displayName(row.id) + '"' : 'Untitled conversation') + ' · ' + project + ' · ' + short);
   }
   message.push(sessions > 0 ? 'Their processes end, idle or working, with anything running in them. Each conversation is kept and can be resumed.' : 'Their shells end, with anything running in them.');
-  if (attached) message.push(count(attached, 'session') + ' attached here ' + (attached === 1 ? 'is' : 'are') + ' detached and keep running in the background.');
-  for (const [alias, n] of Object.entries(snapshot.remote)) if (n) message.push(count(n, 'session') + ' from ' + alias + ' keep running on ' + alias + '.');
+  if (attached) message.push(count(attached, 'session') + ' attached here ' + (attached === 1 ? 'is' : 'are') + ' detached and ' + (attached === 1 ? 'keeps' : 'keep') + ' running in the background.');
+  for (const [alias, n] of Object.entries(snapshot.remote)) if (n) message.push(count(n, 'session') + ' from ' + alias + (n === 1 ? ' keeps' : ' keep') + ' running on ' + alias + '.');
   if (snapshot.rows.some(row => row.canBackground && (typeof backgroundActionReason !== 'function' || !backgroundActionReason(row.id)))) message.push("To keep a session running, cancel, then use Send to background in its terminal header or its row's menu, where it is offered.");
   if (mac && action === 'close') message.push('Switchboard stays in the Dock.');
   const result = await showChoiceDialog({ title: 'Stop ' + total + ' and ' + verb + '?', message,

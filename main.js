@@ -46,7 +46,7 @@ const { createUnsavedGuard } = require('./unsaved-guard');
 const { inventory } = require('./session-exit');
 const { backgroundRefusal } = require('./bg-handoff');
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: attempt => { quitAttemptToken = attempt; app.quit(); },
-  inventory: () => exitInventory(), externalFlush: () => flushForLogoff() });
+  inventory: () => exitInventory(), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; } });
 let exitInventory = () => ({ rows: [], counts: {}, remote: {} });
 let flushForLogoff = () => Promise.resolve();
 const { cleanEnv, scrubSessionEnv } = require('./clean-env');
@@ -171,6 +171,8 @@ let quitAttemptToken = null;
 let updateInstallPromise = null;
 let updateWaitTimer = null;
 function resetUpdateAttempt() {
+  const invalidated = unsavedGuard.invalidate('update');
+  if (!invalidated && !updateInstalling && !updateInstallPromise) return;
   updateInstalling = false;
   activityFlushedForQuit = false;
   quitAttemptToken = null;
@@ -178,7 +180,6 @@ function resetUpdateAttempt() {
   if (updateWaitTimer) clearTimeout(updateWaitTimer);
   updateWaitTimer = null;
   if (autoUpdater) autoUpdater.quitAndInstallCalled = false;
-  unsavedGuard.invalidate();
 }
 async function startApplication() {
 if (!await acquireInstanceLock(app, { log })) { app.quit(); return; }
