@@ -773,7 +773,7 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 ### Exit handoff batch (#546, H1)
 
 `runExitHandoffs(ids, deps)` in `session-exit.js` is the main-owned batch
-primitive. It takes `send`, `status`, `waitForChange`, `now`, `busyBoundMs`,
+primitive. It takes `send`, `status`, `waitForChange(ms, signal)`, `now`, `busyBoundMs`,
 `signal` and `progress`. Results preserve input order as `{ id, ...result }`.
 Rows start concurrently. A busy row emits `{ id, phase: 'waiting' }` and polls
 descriptor changes in steps of at most 1000 ms. `EXIT_BUSY_WAIT_MS` is ten
@@ -798,7 +798,9 @@ handoff registration and before `stop-session`. It delegates sends to
 `handleSendToBackground(null, id)`, reads status using
 `record.realSessionId || id`, and waits through `cliSessionState` descriptor
 subscriptions. A module-scope `runExitBackground` binding is read lazily by
-the unsaved guard and assigned inside `startApplication`; its initial value
+the unsaved guard. Each busy waiter clears its timer and descriptor subscription
+when its signal aborts, including cancellation from another row's pre-write failure.
+The binding is assigned inside `startApplication`; its initial value
 resolves an empty array. No preload or renderer entry point calls this IPC
 in H1. The existing single-tab refusal, re-key and attach behaviour is unchanged.
 See [window-frame.md](window-frame.md#exit-handoff-backend-546-h1) for IPC

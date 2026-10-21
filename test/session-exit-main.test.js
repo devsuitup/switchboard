@@ -427,6 +427,60 @@ function backgroundSetup(intent = 'quit') {
   return { ...t, batches };
 }
 
+test('C2 shipped exit inventory classifies busy by the real CLI id after a clear rekey', () => {
+  const asked = [];
+  const context = vm.createContext({
+    exitInventory: null, inventory, backgroundRefusal: require('../bg-handoff').backgroundRefusal,
+    activeSessions: new Map([['tab', { kind: 'local-pty', pty: {}, realSessionId: 'real' }]]),
+    cliSessionState: { getStatus: id => { asked.push(id); return { status: id === 'real' ? 'busy' : 'idle' }; } },
+  });
+  const statement = startup.body.body.find(node => node.expression?.left?.name === 'exitInventory');
+  vm.runInContext(source.slice(...statement.range), context, { filename: require.resolve('../main') });
+  const row = context.exitInventory().rows[0];
+  assert.equal(row.background, 'busy');
+  assert.equal(row.canBackground, false);
+  assert.ok(asked.length >= 2 && asked.every(id => id === 'real'));
+});
+
+for (const completion of ['render-process-gone', 'destroyed', 'answer']) {
+  test(`C4 ${completion} during a busy wait commits without a later background write`, async () => {
+    const { runExitHandoffs } = require('../session-exit');
+    const states = new Map([['local', 'busy'], ['written', 'idle']]);
+    const writes = [], wakes = [];
+    let confirm;
+    const t = setup('win32', (ids, opts) => runExitHandoffs(ids, {
+      ...opts, status: id => states.get(id), now: () => 0,
+      waitForChange: () => new Promise(resolve => wakes.push(resolve)),
+      send: id => {
+        writes.push(id);
+        return id === 'written' ? new Promise(resolve => { confirm = resolve; }) : Promise.resolve({ ok: true });
+      },
+    }));
+    t.records.set('written', { kind: 'local-pty', pty: {} });
+    t.menu();
+    t.context.ipcMain.emit('unsaved-check-ack', { sender: t.wc }, t.checks()[0].args[0]);
+    const pending = t.handlers.get('exit-background')({ sender: t.wc }, t.checks()[0].args[0], t.detail(), ['local', 'written']);
+    assert.deepEqual(writes, ['written']);
+    if (completion === 'answer') t.answer(true);
+    else t.wc.emit(completion);
+    await tick();
+    assert.ok(t.guard.committedToken(t.win), 'the renderer check has committed the exit');
+    assert.deepEqual(t.calls, ['quit']);
+    let result;
+    pending.then(value => { result = value; });
+    await tick();
+    const progress = t.sent.filter(message => message.channel === 'exit-background-progress');
+    states.set('local', 'idle');
+    for (const wake of wakes.splice(0)) wake();
+    confirm({ ok: true });
+    await pending; await tick();
+    assert.deepEqual(writes, ['written'], 'a busy row must never write /bg after commit');
+    assert.deepEqual(result?.map(row => row.code), ['cancelled', 'pending']);
+    assert.deepEqual(t.sent.filter(message => message.channel === 'exit-background-progress'), progress,
+      'late handoffs must not publish progress after commit');
+  });
+}
+
 test('C4 background IPC rejects untrusted, stale and ineligible requests without a batch', async () => {
   const t = backgroundSetup();
   const detail = t.detail();

@@ -40,10 +40,12 @@ async function runExitHandoffs(ids, { send, status, waitForChange, now = Date.no
   let external = false;
   let wake;
   let finishExternal;
+  const waitController = new AbortController();
   const interrupted = new Promise(resolve => { wake = resolve; });
   const externalExit = new Promise(resolve => { finishExternal = resolve; });
   const abort = () => {
     cancelled = true;
+    waitController.abort();
     wake();
     if (signal?.reason?.external === true) {
       external = true;
@@ -54,7 +56,7 @@ async function runExitHandoffs(ids, { send, status, waitForChange, now = Date.no
   if (signal?.aborted) abort();
   const settle = (row, result) => {
     row.result = { ...result, id: row.id };
-    if (!row.started && !result.ok) { cancelled = true; wake(); }
+    if (!row.started && !result.ok) { cancelled = true; waitController.abort(); wake(); }
     if (!external) progress({ id: row.id, phase: 'done', result: row.result });
     return row.result;
   };
@@ -73,7 +75,7 @@ async function runExitHandoffs(ids, { send, status, waitForChange, now = Date.no
         if (!waited) progress({ id: row.id, phase: 'waiting' });
         waited = true;
         if (now() >= deadline) return settle(row, { ok: false, code: 'busy-timeout' });
-        await Promise.race([waitForChange(Math.min(1000, deadline - now())), interrupted]);
+        await Promise.race([waitForChange(Math.min(1000, deadline - now()), waitController.signal), interrupted]);
       }
       if (cancelled) return settle(row, { ok: false, code: 'cancelled' });
       progress({ id: row.id, phase: 'moving' });

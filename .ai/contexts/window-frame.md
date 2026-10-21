@@ -309,6 +309,9 @@ it. Logoff/session end and untagged before-quit abort all outstanding batches
 as external exits, including written handoffs still settling after a previous
 user cancellation or invalidation. An already aborted controller's reason is
 upgraded to external and its abort event is dispatched again for that case.
+An affirmative check completion also aborts outstanding batches as external
+before resolving consent, including when the renderer disappears. Busy rows
+cannot write after commit; written unresolved rows return `pending` immediately.
 Uncommitted attempts keep the launch gate open. Neither this backend nor its
 IPC stops processes, drains an update, grants consent or commits an attempt.
 See [bg-agents.md](bg-agents.md#exit-handoff-batch-546-h1) for row results and

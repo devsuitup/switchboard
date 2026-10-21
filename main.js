@@ -1887,10 +1887,18 @@ async function runExitBackgroundBatch(ids, opts) {
       return record && cliSessionState.getStatus(record.realSessionId || id)?.status;
     },
     now: Date.now,
-    waitForChange: ms => new Promise(resolve => {
+    waitForChange: (ms, signal) => new Promise(resolve => {
+      if (signal.aborted) { resolve(); return; }
       let timer;
-      const unsubscribe = cliSessionState.onDescriptorsChanged(() => { clearTimeout(timer); unsubscribe(); resolve(); });
-      timer = setTimeout(() => { unsubscribe(); resolve(); }, ms);
+      const done = () => {
+        clearTimeout(timer);
+        unsubscribe();
+        signal.removeEventListener('abort', done);
+        resolve();
+      };
+      const unsubscribe = cliSessionState.onDescriptorsChanged(done);
+      timer = setTimeout(done, ms);
+      signal.addEventListener('abort', done, { once: true });
     }),
   });
 }

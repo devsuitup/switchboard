@@ -213,6 +213,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
       entry.finish = (proceed, ended = null) => {
         if (!pending.has(id)) return;
         pending.delete(id);
+        if (proceed) abortBackground(true);
         stop();
         if (entry.probe) {
           clearTimeoutFn(entry.probe.timer);
