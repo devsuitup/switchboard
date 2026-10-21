@@ -317,6 +317,18 @@ async function flushStateForExit() {
 window.flushStateForExit = flushStateForExit;
 if (window.api.onExitFlush) window.api.onExitFlush(() => { flushStateForExit(); });
 
+function releaseExitState() {
+  exitingApp = false;
+  if (exitingAppTimer) clearTimeout(exitingAppTimer);
+  exitingAppTimer = null;
+  if (persistSkippedWhileExiting) {
+    persistSkippedWhileExiting = false;
+    persistWorkingSet();
+  }
+}
+window.releaseExitState = releaseExitState;
+if (window.api.onExitAttemptInvalidated) window.api.onExitAttemptInvalidated(() => releaseExitState());
+
 async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = {}) {
   const indexedSessions = new Map(sessionMap);
   for (const row of sessionMap.values()) {

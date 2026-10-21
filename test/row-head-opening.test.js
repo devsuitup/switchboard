@@ -68,6 +68,7 @@ function remoteMain(descriptorIds) {
   const context = vm.createContext({
     ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
     activeSessions: new Map(), mainWindow: { webContents: { send() {} } },
+    unsavedGuard: { launchAllowed: () => true },
     remoteIndexer: {
       getRemoteSessions: () => ({ sessions: descriptors, at: 100, error: null }),
       getRemoteHostState: () => ({ consecutiveFailures: 0 }),

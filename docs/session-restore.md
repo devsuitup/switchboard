@@ -74,16 +74,27 @@ them for the next start, while a session you stopped during the restore is
 left out. The saved active marker stays on its session until the restore has
 opened it, and passes to the replacement of a fresh entry while that one opens. An entry still awaiting consent that you attach by hand is saved during the ask window. An exit before the saved set has even been read writes nothing.
 
-If the exit does not happen after all (an installer that fails to start),
-saving resumes after the 10 s, and the set is written then if anything asked
-for a save in the meantime.
+If the exit is cancelled, invalidated or the installer fails to start, saving
+resumes immediately and writes any work skipped during the exit. The 10 s
+grace remains a fallback for exits that disappear without explicit invalidation.
 
 A Windows logoff or shutdown (`query-session-end`, `session-end`) does not
 ask about unsaved edits; main sends `exit-flush` instead, and the renderer
 writes the set without waiting for an answer. That write is best effort:
-Windows may end the app before it lands. A `query-session-end` approves quits
-for 60 s only: if the logoff is cancelled and no `session-end` follows, later
-quits ask about unsaved edits and write the set again.
+Windows may end the app before it lands. Main also starts a coalesced, bounded,
+non-destructive drain without closing the database or stopping PTYs/services.
+A query expires after 60 s; user Quit, X and Restart always ask independently
+of this external approval, including within that window.
+
+User Quit (Exit on Windows), Restart to update and window close ask about
+unsaved edits first, then name the local work that will stop in a separate
+Stop/Cancel question. Only both approvals permit the final renderer write.
+A late reload-to-exit upgrade also asks before writing. On macOS, Dock Quit
+and logout arrive as untagged external before-quit events: with no unsaved
+edits they can stop local sessions without the Stop question. JB accepted
+this residual on 2026-10-21; app-menu Cmd+Q asks. Force termination bypasses
+questions and flushing. Scheduled children are outside this inventory, with
+no guarantee of survival across every OS exit.
 
 ## What restore does
 

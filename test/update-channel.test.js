@@ -63,11 +63,13 @@ function setup(stored, { packaged = true, defaults = SETTING_DEFAULTS } = {}) {
     setSetting: (key, value) => { if (key === 'global') settings = value; },
     ipcMain: { handle: (name, callback) => handlers.set(name, callback) },
     log: { info: message => logs.push(message), error: () => {} },
-    mainWindow: null,
+    mainWindow: null, quitAttemptToken: null, updateInstallPromise: null, updateWaitTimer: null,
+    updateInstalling: false, activityFlushedForQuit: false, unsavedGuard: { invalidate() {} }, clearTimeout,
     setTimeout: callback => timers.push(callback),
     setInterval: callback => timers.push(callback),
   });
   vm.runInContext(updaterInit, context, { filename: 'main.js' });
+  vm.runInContext(extractFunction(source, 'resetUpdateAttempt'), context);
   vm.runInContext(extractFunction(source, 'applyUpdateChannel'), context, { filename: 'main.js' });
   vm.runInContext(source.slice(...settingsHandler.range), context, { filename: 'main.js' });
   vm.runInContext(source.slice(...startupBlock.range), context, { filename: 'main.js' });

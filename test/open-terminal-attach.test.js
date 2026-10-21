@@ -62,12 +62,12 @@ test('window close releases the Agents subscriber and app quit stops the job wat
     unsubscribeTaskJobs() {}, taskRecords: { dispose() {} },
     bgAgents: { stop: () => { stopped++; } },
     app: { on: (_name, callback) => { _beforeQuit = callback; } },
-    unsavedGuard: { beforeQuit: () => false }, activityFlushedForQuit: false,
+    unsavedGuard: { beforeQuit: () => false, committedToken: () => null, invalidate() {} }, activityFlushedForQuit: false,
     activityReporter: { hasPendingWork: false, stop() {} }, mainLoopMonitor: { stop() {} },
     TRACE: { on: false }, activityTrace: { close() {} }, shutdownAllMcp() {},
     localTranscriptTracker: { dispose() {} }, remoteActivityTracker: { dispose() {} }, projectsWatcher: null,
     cliSessionState: { stop() {} }, remoteIndexer: { dispose() {} }, remoteWatcher: { stopAll() {} },
-    appQuitting: false, updateInstalling: false,
+    appQuitting: false, updateInstalling: false, quitAttemptToken: null, process: { platform: 'win32' },
   };
   vm.runInNewContext(MAIN.slice(idx, end), context);
   closed();

@@ -223,9 +223,10 @@ test('update install waits for the reversible drain before invoking the updater'
   let invoke, release;
   const drained = new Promise(resolve => { release = resolve; });
   const calls = [];
-  vm.runInNewContext(source.slice(start, end), {
+  vm.runInNewContext(require('./app-source').extractFunction(source, 'resetUpdateAttempt') + '\n' + source.slice(start, end), {
     ipcMain: { handle: (_name, fn) => { invoke = fn; } },
-    mainWindow: null, unsavedGuard: {}, activityFlushedForQuit: false, updateInstalling: false,
+    mainWindow: null, quitAttemptToken: null, updateInstallPromise: null, updateWaitTimer: null,
+    setTimeout, clearTimeout, unsavedGuard: { invalidate() {} }, activityFlushedForQuit: false, updateInstalling: false,
     process: { platform: 'win32' }, log: { error() {} },
     drainForUpdate: async () => { calls.push('drain'); await drained; calls.push('drained'); },
     autoUpdater: { quitAndInstall: () => calls.push('install') },

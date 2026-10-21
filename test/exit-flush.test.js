@@ -181,6 +181,27 @@ test('an exit before the restore ends keeps the saved active session marked', as
   assert.deepEqual(opened.store.global.openWorkingSet.map((e) => [e.sessionId, e.active]), [['a', true], ['b', false]], 'once restored, the live choice counts');
 });
 
+test('explicit exit invalidation releases the grace timer and immediately resumes skipped persistence', async () => {
+  const t = setup();
+  t.open('a');
+  await t.flushStateForExit();
+  t.open('b');
+  t.schedulePersistWorkingSet();
+  let listener;
+  t.context.window.api.onExitAttemptInvalidated = cb => { listener = cb; };
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  const line = src.split('\n').find(l => l.includes('window.api.onExitAttemptInvalidated'));
+  assert.ok(line, 'renderer must subscribe to immediate exit invalidation');
+  loadAppFunctions(t.context, { functions: ['releaseExitState'] });
+  t.run(line);
+  listener();
+  await t.run('_persistChain');
+  assert.equal(t.run('exitingApp'), false);
+  assert.equal(t.run('exitingAppTimer'), null);
+  assert.equal(t.run('persistSkippedWhileExiting'), false);
+  assert.deepEqual(t.writes, [['a'], ['a', 'b']]);
+});
+
 test('a Windows session end flushes the app state', async () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
   const line = src.split('\n').find((l) => l.includes('window.api.onExitFlush'));

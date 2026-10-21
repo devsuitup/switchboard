@@ -260,9 +260,10 @@ function lifecycleFixture(extra = {}) {
   const nativeUpdater = new EventEmitter();
   const noop = () => {};
   const context = vm.createContext({
-    ...clock, console, Promise, process: { pid: 6166, kill: (pid, signal) => calls.push(`kill:${pid}:${signal}`) }, appQuitting: false, activityFlushedForQuit: false, updateInstalling: false,
+    ...clock, console, Promise, process: { pid: 6166, kill: (pid, signal) => calls.push(`kill:${pid}:${signal}`) }, appQuitting: false, activityFlushedForQuit: false, quitAttemptToken: null, exitInventory: null, inventory: () => ({}), flushForLogoff: null,
+    updateInstalling: false, updateInstallPromise: null, updateWaitTimer: null,
     app: { removeListener: noop, on: (_name, fn) => { context.quit = fn; }, exit: () => calls.push('exit'), quit: () => calls.push('quit') },
-    mainWindow: null, holdBootstrapQuit: noop, unsavedGuard: { beforeQuit: () => false },
+    mainWindow: null, holdBootstrapQuit: noop, unsavedGuard: { beforeQuit: () => false, invalidate() {} },
     log: { error: (...args) => calls.push(args.join(' ')), warn: noop },
     stopScheduler: noop, mainLoopMonitor: { stop: noop }, TRACE: { on: false },
     shutdownAllMcp: noop, localTranscriptTracker: { dispose: noop }, unsubscribeTaskJobs: noop,
@@ -288,6 +289,7 @@ function lifecycleFixture(extra = {}) {
   const installStart = source.indexOf("ipcMain.handle('updater-install'");
   const installEnd = source.indexOf('\n});', installStart) + 4;
   context.ipcMain = { handle: (_name, fn) => { context.install = fn; } };
+  vm.runInContext(require('./app-source').extractFunction(source, 'resetUpdateAttempt'), context);
   vm.runInContext(source.slice(installStart, installEnd), context);
   return { context, clock, calls, nativeUpdater };
 }

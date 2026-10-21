@@ -172,6 +172,8 @@ test('macOS window close and activate preserve sidebar job watching without an A
     const vm = require('node:vm');
     const context = {
       mainWindow: { on: (_name, callback) => { context.closed = callback; } },
+      quitAttemptToken: null, process: { platform: 'darwin' },
+      unsavedGuard: { committedToken: () => null, invalidate() {} },
       activeSessions: new Map(), killPty: () => assert.fail('no PTY to kill'),
       changesWatchers: { closeAll() {} }, closeAllFileWatchers() {}, subagentWatchers: new Map(),
       bgAgents, unsubscribeBgAgents() {}, BrowserWindow: { getAllWindows: () => [] },

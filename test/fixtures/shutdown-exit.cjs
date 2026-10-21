@@ -95,7 +95,8 @@ async function run() {
     sessionTransitions: { drainMetadataWrites: async () => {} },
     activityReporter: { stop() {}, flush: async () => {}, hasPendingWork: false }, activityFlushedForQuit: false,
     projectsClient: reader, fileListsClient: reader, searchClient: reader,
-    closeDb: () => writer.closeDb(), holdBootstrapQuit() {}, updateInstalling: false,
+    closeDb: () => writer.closeDb(), holdBootstrapQuit() {}, quitAttemptToken: null, exitInventory: null, inventory: () => ({}), flushForLogoff: null,
+    updateInstalling: false,
     mainWindow: null, unsavedGuard: { beforeQuit: () => false },
   });
   const source = fs.readFileSync(path.join(__dirname, '../../main.js'), 'utf8');

@@ -229,60 +229,56 @@ move and resize the window: `Super`+drag on GNOME, `Alt`+`F7`/`Alt`+`F8`, or
 
 ## Closing the window
 
-The close button sits a few pixels from the strip's own controls and the
-terminal's top-right corner, so a stray click there ended the app and every
-session in it. A **window close** (the close button, `Alt`+`F4`, the window
-manager's own close) now asks "Close Switchboard?" first; Cancel or `Escape`
-leaves everything running. On macOS closing the window does not quit (the app
-stays in the Dock), but the window's `closed` handler still stops every
-session, so there the question reads "Close the window?" and says the app
-stays in the Dock. The question is the in-page choice dialog
-(`confirmWindowClose` in `file-panel.js`), not a native `confirm()`: Cancel
-has the focus, so `Enter` keeps the app, and the page keeps running while it
-is shown, which the probe below relies on. Choice dialogs wait in the modal
-stack's question queue ([app-dialogs](app-dialogs.md)), so the close question
-is asked with `replace: true`: an open choice dialog (the Archive folder dialog,
-say) is cancelled first and the question goes to the front of the queue; any
-other open question (Delete session, Delete worktree) is left alone and the
-close question opens on top of it, like the unsaved guard, and Escape returns
-to it. Queued questions never go ahead of it. `closeWith` also settles a close
-question that has not opened yet, so a quit that arrives first is never held
-behind another question.
-It registers with the modal stack like any choice dialog: `Escape` cancels,
-`Tab` stays inside it, and every close path (answer, `replace`, `closeWith`)
-unregisters it.
+User menu Quit (Exit on Windows), Restart to update and window close enter
+one attempt in `session-exit.js` through `unsaved-guard.js`. Unsaved edits
+first ask Save/Discard/Cancel. Only after that choice does local work ask
+Stop/Cancel. Cancel stays focused; Enter, Escape, the backdrop and × cancel.
+The named question replaces the generic close question and uses the existing
+queued `showChoiceDialog` with danger styling and text-only names.
 
-It rides on the unsaved-edits guard (`unsaved-guard.js`, see
-[viewer-panel](viewer-panel.md), "Unsaved edits on quit, reload and close"):
-the window's `close` event asks the renderer with the reason `'close'`, while
-`before-quit` and the updater ask with `'quit'`. The renderer
-(`file-panel.js`, the `onUnsavedCheck` handler) adds the confirm only for
-`'close'`, and only when the unsaved-edits dialog was not shown: answering
-that dialog with Save or Discard is already a decision to close. A **quit**
-(☰ → Quit, which reads Exit on Windows and has `Ctrl`+`Q` only on Linux and
-`Cmd`+`Q` on macOS; an update install; `SIGTERM`) is not asked about again. A
-Windows logoff or shutdown approves the quit before the question
-(`query-session-end`).
+The inventory walks `activeSessions`, deduplicates process aliases, includes
+idle and busy local sessions, plain terminals and hidden panel shells, and
+excludes exited, dormant, attach, remote and daemon jobs. Attach counts and
+remote aliases explain what keeps running. Missing names fall back to the
+conversation label or id. Unknown inventory explicitly says it could not list
+the work; it never claims an empty inventory. The background hint requires both
+the main background refusal and renderer eligibility checks to pass.
 
-A check for `'close'` has no time bound before the acknowledgement: a page that
-is busy when the close arrives (stalled on a tab reveal) shows the question once
-it is free, rather than closing without it. A page still starting has no
-listener yet (`onUnsavedCheck` is registered by `initFilePanel`), so the check
-it missed is sent again: registering the listener sends `unsaved-ready`, and
-main sends the pending check again, with the reason it holds now, if it is not
-acknowledged yet and that page is the one asked (the renderer ignores an id it
-already has). A `'quit'` check keeps the 2.5 s bound, so a quit never waits for
-ever on the page.
+Menu items call an explicit `onQuit`: Quit Switchboard with Cmd+Q on macOS,
+Quit with Ctrl+Q on Linux, Exit without an accelerator on Windows. The ☰ menu
+uses the same item. Bare close always counts as user intent, even during the
+60-second cancelled-logoff window. Closing on macOS stops the window's PTYs
+but keeps the Dock app's writer/services and releases the launch gate.
 
-A quit that arrives while the close question is pending (`SIGTERM`, a Linux or
-macOS logout, an update install) joins the same check, and the guard upgrades
-its reason: main sends `unsaved-check-reason` (`id`, `'quit'`), the
-renderer closes the close question as a yes (or skips it if it is not shown
-yet), and a check not acknowledged yet gets the quit's 2.5 s bound. The
-unsaved-edits dialog stays: Cancel there still keeps the app, as for any quit.
-A reason is only ever upgraded (`'reload'` < `'close'` < `'quit'`): a close
-joining a reload question becomes a close, and a close joining a quit stays a
-quit.
+An attempt binds its window, id, action, version and displayed process
+generations. Repeated gestures join; close → Quit → Restart upgrades require
+renewed Stop consent. A new, replaced or re-keyed generation before commit
+asks again. Only then does the renderer flush (2-second bound) and main commit.
+Committed attempts refuse interactive launches, including pending spawn
+completions; scheduled admissions stay outside this path. Approved non-macOS
+close carries its token through window-all-closed, and normal Quit keeps the
+1500 ms drain and 250 ms worker termination bounds.
+
+Installer failure, cancellation and invalidation revoke guard and renderer
+unload approval, release the launch gate and immediately resume working-set
+persistence. Windows verifies the native updater latch after invocation;
+Linux false install resets it; macOS deferred fetching releases after 30 s
+or error. Linux relaunch acknowledgement keeps the committed gate until exit.
+
+Untagged before-quit is external and skips only the session question; edits,
+flush, no-ACK/hung escapes and bounded shutdown remain. It supersedes a pending
+user choice without granting installer consent. On macOS, Dock Quit and logout
+arrive untagged and can stop local sessions without the Stop question when
+there are no dirty edits. JB accepted this residual on 2026-10-21; app-menu
+Cmd+Q is tagged and asks. Force termination bypasses questions and flushing.
+WM_CLOSE has no origin and is handled like the X button. Bootstrap and
+windowless exits remain non-interactive. Scheduled children are not inventoried;
+their survival across every OS exit is not guaranteed.
+
+Windows query-session-end and session-end invalidate pending user choices,
+send exit-flush and start one coalesced, bounded, non-destructive main drain.
+They never veto the OS, stop services or close the database. Completion is
+best effort; no renderer ACK or human choice is awaited.
 
 ### A window that stops answering
 

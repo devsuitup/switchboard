@@ -27,6 +27,7 @@ test('main spawnPty registers the input error guard for ConPTY, fallback and POS
     const calls = [];
     const context = vm.createContext({
       guardPtyInputErrors,
+      unsavedGuard: { launchAllowed: () => true },
       pty: { spawn(file, args, opts) {
         calls.push({ file, args, opts });
         if (scenario.failBundled && opts.useConptyDll) throw new Error('missing conpty.dll');

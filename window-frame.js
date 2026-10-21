@@ -31,7 +31,7 @@ function windowFrameOptions(platform) {
   };
 }
 
-function applicationMenuTemplate(appName, { onWhatsNew } = {}) {
+function applicationMenuTemplate(appName, { onWhatsNew, onQuit, platform = process.platform } = {}) {
   return [
     {
       label: appName,
@@ -42,7 +42,8 @@ function applicationMenuTemplate(appName, { onWhatsNew } = {}) {
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
-        { role: 'quit' },
+        { label: platform === 'darwin' ? `Quit ${appName}` : platform === 'win32' ? 'Exit' : 'Quit',
+          ...(platform === 'win32' ? {} : { accelerator: platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q' }), click: onQuit },
       ],
     },
     {

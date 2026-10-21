@@ -23,13 +23,15 @@ function installContext(platform, installed = true) {
   };
   const context = vm.createContext({
     autoUpdater: updater, process: { platform, execPath: '/opt/Switchboard/switchboard', argv: ['switchboard'], env: {} },
-    mainWindow: null, unsavedGuard: {}, drainForUpdate: async () => calls.push(['drain']),
+    mainWindow: null, quitAttemptToken: null, updateInstallPromise: null, updateWaitTimer: null,
+    setTimeout, clearTimeout, unsavedGuard: { invalidate() {} }, drainForUpdate: async () => calls.push(['drain']),
     relaunchExecPath: '/opt/Switchboard/switchboard',
     relaunch: async opts => { calls.push(['helper']); opts.quit(); },
     app: { quit: () => calls.push(['quit']), relaunch: () => calls.push(['app.relaunch']) },
     notifyRelaunchRequired: async () => {}, updateInstalling: false, activityFlushedForQuit: true,
     log: { error() {} }, ipcMain: { handle: (_name, fn) => { handler = fn; } },
   });
+  vm.runInContext(extractFunction(source, 'resetUpdateAttempt'), context);
   vm.runInContext(source.slice(...install.range), context);
   return { calls, context, updater, run: () => handler() };
 }

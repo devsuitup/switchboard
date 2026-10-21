@@ -67,7 +67,7 @@ test('Help → What\'s new, last in the menu, calls the handler it is given', ()
 test('main.js installs the menu as the application menu and never removes it', () => {
   assert.match(
     MAIN_SRC,
-    /Menu\.setApplicationMenu\(\s*Menu\.buildFromTemplate\(\s*applicationMenuTemplate\(\s*app\.name\s*,\s*\{\s*onWhatsNew:\s*showWhatsNewFromMenu\s*\}\s*\)\s*\)\s*\)/,
+    /Menu\.setApplicationMenu\(\s*Menu\.buildFromTemplate\(\s*applicationMenuTemplate\(\s*app\.name\s*,\s*\{\s*onWhatsNew:\s*showWhatsNewFromMenu, onQuit: \(\) => unsavedGuard\.requestQuit\(mainWindow\)\s*\}\s*\)\s*\)\s*\)/,
     'buildMenu must set the template as the application menu: its accelerators live there',
   );
   assert.doesNotMatch(MAIN_SRC, /setApplicationMenu\(\s*null\s*\)/, 'setApplicationMenu(null) unregisters every accelerator');
