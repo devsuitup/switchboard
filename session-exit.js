@@ -7,7 +7,7 @@ function inventory(records, refusal = () => true) {
   const result = { rows: [], counts: { sessions: 0, plain: 0, panels: 0, attached: 0 }, remote: {} };
   const seen = new Set();
   for (const [id, record] of records) {
-    if (!record || record.exited || !record.pty || seen.has(record.pty)) continue;
+    if (!record || record.exited || record.backgrounded || !record.pty || seen.has(record.pty)) continue;
     seen.add(record.pty);
     if (record.kind === 'remote-attach') {
       const alias = record.remoteAlias || record.host || 'remote';
