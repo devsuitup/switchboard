@@ -263,7 +263,7 @@ function lifecycleFixture(extra = {}) {
     ...clock, console, Promise, process: { pid: 6166, kill: (pid, signal) => calls.push(`kill:${pid}:${signal}`) }, appQuitting: false, activityFlushedForQuit: false, quitAttemptToken: null, exitInventory: null, inventory: () => ({}), flushForLogoff: null,
     updateInstalling: false, updateInstallPromise: null, updateWaitTimer: null,
     app: { removeListener: noop, on: (_name, fn) => { context.quit = fn; }, exit: () => calls.push('exit'), quit: () => calls.push('quit') },
-    mainWindow: null, holdBootstrapQuit: noop, unsavedGuard: { beforeQuit: () => false, invalidate() {} },
+    mainWindow: null, holdBootstrapQuit: noop, unsavedGuard: { beforeQuit: () => false, committedToken: () => null, invalidate() {} },
     log: { error: (...args) => calls.push(args.join(' ')), warn: noop },
     stopScheduler: noop, mainLoopMonitor: { stop: noop }, TRACE: { on: false },
     shutdownAllMcp: noop, localTranscriptTracker: { dispose: noop }, unsubscribeTaskJobs: noop,
