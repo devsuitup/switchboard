@@ -337,9 +337,18 @@ Leaving `blocked` removes that waiting evidence; the normal head-turn and PTY
 rules apply again. `stopped` and `failed` are finished even with a leftover descriptor.
 
 `isHostedJob(job, descriptors)` in `bg-agents-roster.js` is the single hosting
-rule: a background job is hosted if working/blocked, or if a live `kind: bg`
-descriptor matches its job id. Only a descriptor without a job id may match
+rule: a background job is hosted if a live `kind: bg` descriptor matches its
+job id. Only a descriptor without a job id may match
 its case-insensitive session id; two jobs can share a resumed conversation.
+Without that bg evidence, a live interactive descriptor for the same
+case-insensitive session id overrides a stale working/blocked job file (#764).
+Otherwise working/blocked remains hosted: the original #374 file-only roster
+and CLI fallback need no descriptor, and #682 retained that rule when adding
+hosting between turns. No descriptor or job timestamp expires hosting.
+The same override applies to conversation checks, `liveJobCheck` and `runVerb`.
+Delete/Respawn and Stop then refuse through the existing interactive-process
+guard (including processes owned here), naming the live pid rather than saying
+to stop the stale daemon job first. Attach and daemon Stop are disabled in Agents.
 Stopped/failed override that evidence. Descriptors come from `cli-session-state.readAllDescriptors`:
 it parses the descriptor and checks `isProcessAlive(pid)`. Dead pids are excluded.
 It also reuses `deliveryProcessIdentity` to exclude confirmed stale process
@@ -698,7 +707,7 @@ branch and the fallback keep the cwd's spelling.
 ## The sidebar
 
 `bgAgentSessionIds` (a `Set` of the `sessionId` of every live background job,
-`agentJobIsLive`: working/blocked or done with a matching live bg descriptor) is rebuilt by `applyAgentsSnapshot`,
+`agentJobIsLive`: the shared `hosted` verdict, including the interactive override above) is rebuilt by `applyAgentsSnapshot`,
 which refreshes the sidebar when membership or job activity changes.
 `sidebar.js` prefixes a `bg` badge ("click to attach") to a session row with
 #620's project membership or a matching roster id. Two

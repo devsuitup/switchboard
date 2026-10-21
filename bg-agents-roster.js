@@ -253,8 +253,11 @@ function dispatchArgs(fields) {
 
 function isHostedJob(job, descriptors = []) {
   if (!job || job.kind && job.kind !== 'background' || job.state === 'stopped' || job.state === 'failed') return false;
-  return job.state === 'working' || job.state === 'blocked' || (descriptors || []).some(d => d?.kind === 'bg'
-    && (d.jobId ? d.jobId.toLowerCase() === String(job.id).toLowerCase() : job.sessionId && d.sessionId?.toLowerCase() === job.sessionId.toLowerCase()));
+  if ((descriptors || []).some(d => d?.kind === 'bg'
+    && (d.jobId ? d.jobId.toLowerCase() === String(job.id).toLowerCase() : job.sessionId && d.sessionId?.toLowerCase() === job.sessionId.toLowerCase()))) return true;
+  if ((descriptors || []).some(d => d?.kind === 'interactive'
+    && job.sessionId && d.sessionId?.toLowerCase() === job.sessionId.toLowerCase())) return false;
+  return job.state === 'working' || job.state === 'blocked';
 }
 
 function dispatchRefusal({ sandbox, preLaunchCmd } = {}) {
