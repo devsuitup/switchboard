@@ -238,8 +238,10 @@ function applyStateClasses(sessionId, snapshot) {
   const item = sessionItemEl(sessionId);
   if (!item) {
     paintTerminalHeaderStatus(sessionId, snapshot);
-    const row = localActivityRow(sessionId);
-    if (sessionId !== activeSessionId && row && rowSessionIds(row).includes(activeSessionId)) paintTerminalHeaderStatus(activeSessionId);
+    if (activeSessionId && sessionId !== activeSessionId) {
+      const row = localMergedMemberRows.get(sessionId) || (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId));
+      if (row && rowSessionIds(row).includes(activeSessionId)) paintTerminalHeaderStatus(activeSessionId);
+    }
     if (typeof updateGridSubagentPills === 'function') updateGridSubagentPills(sessionId);
     return;
   }

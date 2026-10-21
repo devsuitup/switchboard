@@ -1249,8 +1249,9 @@ conversation refreshes it; unrelated rows leave it alone. With no sidebar row
 its supplied snapshot. Updates for another member look up `localActivityRow`
 and check `rowSessionIds` for the active session, then repaint the header from
 the stored merged conversation state.
-The hot path performs no header lookup, poll, timer or layout measurement, and
-returns immediately when there is no header or the session is unrelated.
+The hot path performs no DOM query, poll, timer or layout measurement for the
+header: a rowless session costs two map lookups, and it returns immediately when
+there is no header or the session is unrelated.
 
 `session-activity-dom.js` is the only file that writes the sidebar slot:
 
