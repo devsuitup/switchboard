@@ -282,6 +282,12 @@ remote path strings. Saves without a remote session ID use the existing local
 guards, so opening a remote file does not disable a local save with the same
 path spelling.
 
+Remote Git retains the host locale. Its HEAD-missing/untracked classification
+still matches English `path … does not exist in 'HEAD'` / `invalid object name
+'HEAD'`; a translated message can therefore open the existing plain read-only
+pair instead of an empty-original HEAD pair. This remaining limitation requires
+a separate remote change; #754 adds no locale prefix or remote shell dependency.
+
 Tests use disposable mirrors, injected transports, shipped IPC handlers and
 the real CodeMirror factories. A local fake host executes the exact shell
 scripts against disposable files, including hostile filenames and a credential
@@ -337,9 +343,32 @@ file/root resolution tests cover the mismatch on every platform.
 A literal or natively resolved path containing a .git segment is refused before
 probing, including ordinary read and plain-save IPCs. Both local IPC checks use
 fs.realpathSync.native so Windows 8.3 metadata aliases are refused too.
-Exit 128 permits a non-repository
-fallback only when stderr says "not a git repository"; other Git probe errors
-remain errors. A missing or timed-out Git process during discovery, repository reread or
+`noRepositoryAt` permits a non-repository marker only for exit 128, a successful
+cwd directory stat and exact `false` from the shared bounded `gitEntryAtOrAbove`
+walk, independently of stderr. A directory with HEAD, regular gitfile or symlink
+(including dangling links) is presence; HEAD-less directories are ignored and
+cannot hide a higher entry. All uncertainty is refusal: HEAD errors other than
+ENOENT, inaccessible ancestors, missing filesystem operations, failed
+realpath/stat or unusable required device data never mean absence.
+
+Git-parsed `GIT_CEILING_DIRECTORIES` uses platform separators, canonicalizes
+absolute entries before its first empty marker and preserves literal entries
+after it. The nearest strict ancestor excludes its own `.git`; cwd-equal entries
+do not stop ascent. Device boundaries stop ascent unless Git's boolean
+`GIT_DISCOVERY_ACROSS_FILESYSTEM` permits it (signed/scaled nonzero integers,
+true/yes/on). Invalid values yield uncertainty; excluded entries and metadata
+are not consulted. The same snapshot feeds the Git child and corroboration.
+This shared helper changes Changes' absence corroboration too. It is not full
+repository validation: HEAD-only directories conservatively count; bare repos
+and pre-discovery global configuration diagnosis are outside this boundary.
+
+Main-process local Git uses `LC_ALL=C`, `LC_MESSAGES=C`, `LANG=C`, with
+`LANGUAGE` removed, without changing the parent locale or UTF-8 handling.
+Regression coverage includes the French-stderr/localGitEnv tests, empty-ancestor,
+Git-ceiling and device-boolean discovery cases in the file/runner suites and
+the real-Git Unicode case. #659's broader editing behavior remains separate;
+when rebased, its Changes read/save discovery fallback must use `noRepositoryAt`.
+A missing or timed-out Git process during discovery, repository reread or
 blob read, or a diff read refused for
 its filename or mixed line endings, uses the guarded file content
 as both sides of the pair, with line endings folded. Binary files are refused
@@ -439,9 +468,10 @@ the terminal menu's "Open in panel", and the CLI's IDE-emulation `openFile`
 - **A git-changed file** opens here too, with its diff against HEAD
   (`readTouchedChangesFile`). The Changes list is not opened by a click; its
   tool-bar toggle is the way to it.
-- **What the editor read refuses that a link check does not**: a path git
-  refuses to open (exit 128 not saying "not a git repository"), and the
-  Touched path rules of `resolveTouchedPath`. A symbolic link opens read-only.
+- **What the editor read refuses that a link check does not**: failed discovery
+  with qualifying repository evidence or an uncertain bounded walk, and the
+  Touched path rules of `resolveTouchedPath`. Thrown/-1 discovery transports
+  retain their separate plain marker fallback. A symbolic link opens read-only.
 - **`mcp-bridge.js`** sends `{filePath}` only and reads nothing, so the bytes
   of a file the panel refuses never cross IPC on this route.
 

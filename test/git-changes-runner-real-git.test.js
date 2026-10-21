@@ -25,6 +25,11 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
 const { createGitChangesRunner, isSafeNoIndexPath, NOT_A_REPO_REASON, missingCwdError, UNTRACKED_COUNT_LIMITS } = require('../git-changes-runner');
+const { realFixture, raw, git: localeGit, frenchLocale } = require('./git-locale-fixture');
+const { savedEnv } = require('./git-discovery-fixture');
+const { localGitEnv } = require('../git-changes-runner');
+
+require('./git-locale-fixture').isolateGitSuite();
 
 // git translates its diagnostics; the assertions below match its English text.
 // Set on this process so both the scratch-repo helper and the runner's own
@@ -32,29 +37,90 @@ const { createGitChangesRunner, isSafeNoIndexPath, NOT_A_REPO_REASON, missingCwd
 process.env.LC_ALL = 'C';
 process.env.LANGUAGE = 'C';
 
+test('real git: C child locale preserves Unicode paths and parsed changes', async t => {
+  const { ancestor: repo } = realFixture(t);
+  localeGit(repo, ['init', '-q', '--template=']);
+  const tracked = ['café.txt', '漢字.txt', 'emoji-🧪.txt'];
+  const untracked = ['nouveau-é-漢字.txt', 'binaire-é.dat'];
+  if (process.platform !== 'win32') untracked.push('quote"é.txt', 'back\\é.txt');
+  for (const name of [...tracked, 'ancien-é.txt']) fs.writeFileSync(path.join(repo,name),'été\n');
+  localeGit(repo,['add','.']);
+  localeGit(repo,['commit','-qm','fixture']);
+  localeGit(repo,['mv','ancien-é.txt','renommé-漢字.txt']);
+  for (const name of tracked) fs.appendFileSync(path.join(repo,name),'modifié\n');
+  for (const name of untracked) fs.writeFileSync(path.join(repo,name),name.endsWith('.dat') ? Buffer.from([0,1,2]) : 'nouveau\n');
+  let expected;
+  for (const language of ['C','fr_FR.utf8']) {
+    savedEnv(t,{ LANG:language, LC_ALL:language, LC_MESSAGES:language, LANGUAGE:language==='C' ? undefined : 'fr' });
+    const runner = createGitChangesRunner({kind:'local',cwd:repo});
+    const status = await runner.status();
+    assert.equal(status.ok,true,status.error);
+    assert.deepEqual(status.files.map(f=>f.path).sort(),[...tracked,...untracked,'renommé-漢字.txt'].sort());
+    if (expected) assert.deepEqual(status,expected);
+    expected=status;
+    for (const name of tracked) {
+      const diff=await runner.diff(name);
+      assert.equal(diff.ok,true,diff.error);
+      assert.match(diff.content,/\+modifié/);
+      const row=status.files.find(f=>f.path===name);
+      assert.equal(row.added,1);
+      assert.equal(row.deleted,0);
+    }
+    const renamed=await runner.diff('renommé-漢字.txt',{staged:true});
+    assert.equal(renamed.ok,true,renamed.error);
+    assert.match(renamed.content,/été/);
+    for (const name of untracked) {
+      const diff=await runner.diff(name,{untracked:true});
+      assert.equal(diff.ok,true,diff.error);
+      assert.ok(diff.content.includes(name.replace(/\\/g,'\\\\').replace(/"/g,'\\"')) || diff.content.includes(name));
+      if (name.endsWith('.dat')) assert.match(diff.content,/Binary files .*differ/);
+      else assert.match(diff.content,/\+nouveau/);
+    }
+    for (const args of [['status','--porcelain=v2','--branch','-uall','-z'],['diff','--numstat','-z'],['diff','--cached','--numstat','-z']]) {
+      const french=raw(repo,args,{...process.env,LANG:'fr_FR.utf8',LC_ALL:'fr_FR.utf8',LANGUAGE:'fr'},null);
+      const c=raw(repo,args,localGitEnv(),null);
+      assert.equal(c.status,0);
+      assert.deepEqual(french.stdout,c.stdout);
+      assert.ok(c.stdout.includes(Buffer.from('\0')));
+      assert.ok(c.stdout.includes(Buffer.from(args.includes('--cached') ? 'renommé-漢字' : 'café','utf8')));
+    }
+  }
+  if (process.platform !== 'win32') {
+    fs.writeFileSync(path.join(repo,'line\né.txt'),'newline\n');
+    const result=raw(repo,['ls-files','--others','--exclude-standard','-z']);
+    assert.ok(result.stdout.includes('line\né.txt\0'));
+  }
+});
+
+const fixtureRoots = new Map();
+let priorCeiling;
 function mkTmp() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-gcr-real-'));
-  // Windows can hand back a short (8.3) TEMP path (e.g. "JEAN-B~1"); git's
-  // own containment check resolves the repo root through its long form and
-  // then rejects a short-form pathspec as "outside repository" even when it
-  // points at the same file — an environment quirk, not the thing under
-  // test. Canonicalize once so cwd and every pathspec built from `dir` agree.
-  return fs.realpathSync.native(dir);
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-git-bounded-')));
+  const work = path.join(root, 'work');
+  fs.mkdirSync(work);
+  if (fixtureRoots.size === 0) priorCeiling = process.env.GIT_CEILING_DIRECTORIES;
+  fixtureRoots.set(work, root);
+  process.env.GIT_CEILING_DIRECTORIES = root;
+  return work;
 }
 
 // see .ai/contexts/changes-view.md ("A capped read waits for git to exit")
 function cleanup(dir) {
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  fs.rmSync(fixtureRoots.get(dir) || dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  fixtureRoots.delete(dir);
+  const ceiling = fixtureRoots.size ? Array.from(fixtureRoots.values()).at(-1) : priorCeiling;
+  if (ceiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+  else process.env.GIT_CEILING_DIRECTORIES = ceiling;
 }
 
 // Scratch repo only: drop the caller's GIT_* env (set when this suite runs under a hook) and its hooks.
 function scratchGitEnv() {
   const env = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (k.startsWith('GIT_') || k.startsWith('HUSKY')) continue;
-    env[k] = v;
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith('HUSKY') || (key.startsWith('GIT_') && !['GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0'].includes(key))) continue;
+    env[key] = value;
   }
-  return env;
+  return { ...env, LC_ALL: 'C', LC_MESSAGES: 'C', LANG: 'C', LANGUAGE: 'C' };
 }
 
 function git(cwd, args) {
@@ -380,25 +446,20 @@ const ALT_LOCALE = 'fr_FR.UTF-8';
 // second one. GitHub's runners ship no fr_FR.UTF-8, so without this probe the
 // locale tests pass vacuously on every CI leg.
 function gitSpeaks(locale) {
-  const message = (env) => {
-    const r = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
-      cwd: os.tmpdir(), encoding: 'utf8', env: { ...scratchGitEnv(), ...env },
-    });
-    return String(r.stderr || '');
-  };
-  const english = message({ LC_ALL: 'C', LANGUAGE: 'C', LANG: 'C' });
-  const other = message({ LC_ALL: locale, LANGUAGE: locale, LANG: locale });
-  return !!english && !!other && english !== other;
+  const tmp = mkTmp();
+  try {
+    const installed = spawnSync('locale', ['-a'], { cwd: tmp, env: scratchGitEnv(), encoding: 'utf8' });
+    if (installed.error || installed.status !== 0 || !installed.stdout.split(/\r?\n/).some(v => v.toLowerCase().replace('utf-8','utf8') === locale.toLowerCase().replace('utf-8','utf8'))) return false;
+    return !!frenchLocale({ skip() {} }, tmp);
+  } finally { cleanup(tmp); }
 }
 
 const ALT_LOCALE_AVAILABLE = gitSpeaks(ALT_LOCALE);
 const SKIP_ALT_LOCALE = ALT_LOCALE_AVAILABLE ? false : `git does not translate its output under ${ALT_LOCALE} here`;
 
-// A temp directory with a repository somewhere above it would answer "true";
-// os.tmpdir() is not inside one on any supported platform, and the assertions
-// below would fail loudly rather than silently if it ever were.
 function withLocale(locale, fn) {
-  const saved = { LC_ALL: process.env.LC_ALL, LANGUAGE: process.env.LANGUAGE, LANG: process.env.LANG };
+  const saved = { LC_MESSAGES: process.env.LC_MESSAGES, LC_ALL: process.env.LC_ALL, LANGUAGE: process.env.LANGUAGE, LANG: process.env.LANG };
+  process.env.LC_MESSAGES = locale;
   process.env.LC_ALL = locale;
   process.env.LANGUAGE = locale;
   process.env.LANG = locale;

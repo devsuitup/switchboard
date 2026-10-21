@@ -13,7 +13,11 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
 const { readChangesFile, writeChangesFile, versionOf, resolveTargetInsideRepo, hasGitSegment } = require('../git-changes-file');
-const { resolveOnDisk } = require('../resolve-path-on-disk');
+const { realFixture, raw, frenchLocale, git: localeGit } = require('./git-locale-fixture');
+const { savedEnv } = require('./git-discovery-fixture');
+const { localGitEnv, createGitChangesRunner } = require('../git-changes-runner');
+
+require('./git-locale-fixture').isolateGitSuite();
 
 // git translates its diagnostics; the assertions below match its English text.
 process.env.LC_ALL = 'C';
@@ -21,27 +25,129 @@ process.env.LANGUAGE = 'C';
 
 const MAX_BYTES = 1024 * 1024;
 
+test('real git: French app locale preserves the no-repository result and C diagnostics', async t => {
+  const { cwd, file } = realFixture(t);
+  const locale = frenchLocale(t, cwd);
+  if (!locale) return;
+  const api = require('../git-changes-file');
+  savedEnv(t, { LANG: 'C', LC_ALL: 'C', LC_MESSAGES: 'C', LANGUAGE: undefined });
+  const c = await api.readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES });
+  savedEnv(t, { LANG: locale, LC_ALL: locale, LC_MESSAGES: locale, LANGUAGE: 'fr' });
+  assert.deepEqual(await api.readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES }), { ok: true, git: false });
+  assert.deepEqual(c, { ok: true, git: false });
+  const result = raw(cwd, undefined, localGitEnv());
+  assert.equal(result.status, 128);
+  assert.match(result.stderr, /not a git repository/);
+  assert.doesNotMatch(result.stderr, /dépôt|warning.*locale/i);
+});
+
+test('real git: refused repositories keep their discovery error under a French app locale', async t => {
+  const { root, cwd } = realFixture(t);
+  const locale = frenchLocale({ skip() {} }, cwd);
+  const api = require('../git-changes-file');
+  for (const language of ['C', ...(locale ? [locale] : [])]) {
+    savedEnv(t, { LANG: language, LC_ALL: language, LC_MESSAGES: language, LANGUAGE: language === 'C' ? undefined : 'fr' });
+    for (const type of ['format', 'broken', 'invalid', 'removed-main']) {
+      const repo = path.join(root, language.replace(/[^a-z0-9]/gi, '') + type);
+      fs.mkdirSync(repo);
+      localeGit(repo, ['init', '-q', '--template=']);
+      fs.writeFileSync(path.join(repo, 'x.md'), 'été\n');
+      localeGit(repo, ['add', '.']);
+      localeGit(repo, ['commit', '-qm', 'fixture']);
+      let target = repo;
+      if (type === 'format') localeGit(repo, ['config', 'core.repositoryformatversion', '99']);
+      else if (type === 'removed-main') {
+        target = path.join(root, language.replace(/[^a-z0-9]/gi, '') + 'wt');
+        localeGit(repo, ['worktree', 'add', '-q', '-b', 'test-wt', target]);
+        fs.rmSync(repo, { recursive: true, force: true });
+      } else {
+        fs.rmSync(path.join(repo, '.git'), { recursive: true, force: true });
+        fs.writeFileSync(path.join(repo, '.git'), type === 'broken' ? 'gitdir: missing\n' : 'invalid\n');
+      }
+      assert.equal(raw(target, undefined, localGitEnv()).status, 128, type);
+      const result = await api.readTouchedChangesFile({ absolutePath: path.join(target, 'x.md'), maxBytes: MAX_BYTES });
+      assert.equal(result.ok, false, type);
+      assert.equal(result.reason, 'git', type);
+      assert.match(result.error, /fatal|error/i);
+      assert.doesNotMatch(result.error, /dépôt|avertissement/);
+    }
+  }
+});
+
+test('real git: an empty ancestor .git preserves Touched plain fallback and Changes absence', async t => {
+  const { cwd, ancestor, file } = realFixture(t);
+  fs.mkdirSync(path.join(ancestor, '.git'));
+  fs.mkdirSync(path.join(cwd, '.git'));
+  const locale = frenchLocale({ skip() {} }, cwd);
+  for (const language of ['C', ...(locale ? [locale] : [])]) {
+  savedEnv(t, { LANG: language, LC_ALL: language, LC_MESSAGES: language, LANGUAGE: language === 'C' ? undefined : 'fr' });
+  assert.equal(raw(cwd, undefined, localGitEnv()).status, 128);
+  assert.deepEqual(await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES }), { ok: true, git: false });
+  const runner = createGitChangesRunner({ kind: 'local', cwd });
+  assert.deepEqual(await runner.isWorkTree(), { ok: true, isRepo: false });
+  assert.equal((await runner.status()).reason, 'not-a-repo');
+  }
+});
+
+test('discovery: Git ceilings bound corroboration in Changes and Touched', async t => {
+  const { root, file, cwd, ancestor } = realFixture(t);
+  localeGit(ancestor, ['init', '-q', '--template=']);
+  localeGit(ancestor, ['add', '.']);
+  localeGit(ancestor, ['commit', '-qm', 'fixture']);
+  savedEnv(t, { GIT_CEILING_DIRECTORIES: ancestor });
+  assert.equal(raw(cwd).status, 128);
+  assert.deepEqual(await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES }), { ok: true, git: false });
+  const runner = createGitChangesRunner({ kind: 'local', cwd });
+  assert.deepEqual(await runner.isWorkTree(), { ok: true, isRepo: false });
+  assert.equal((await runner.status()).reason, 'not-a-repo');
+  process.env.GIT_CEILING_DIRECTORIES = root;
+  assert.equal(raw(cwd).status, 0);
+  const pair = await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES });
+  assert.equal(pair.ok, true, pair.error);
+  assert.equal(pair.git, true);
+});
+
+const fixtureRoots = new Map();
+let priorCeiling;
 function mkTmp() {
-  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-gcf-real-')));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-git-bounded-')));
+  const work = path.join(root, 'work');
+  fs.mkdirSync(work);
+  rememberFixture(work, root);
+  return work;
 }
 
 function mkTouchedTmp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-touched-real-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-touched-bounded-'));
+  const work = path.join(root, 'work');
+  fs.mkdirSync(work);
+  rememberFixture(work, fs.realpathSync.native(root));
+  return work;
+}
+
+function rememberFixture(work, root) {
+  if (fixtureRoots.size === 0) priorCeiling = process.env.GIT_CEILING_DIRECTORIES;
+  fixtureRoots.set(work, root);
+  process.env.GIT_CEILING_DIRECTORIES = root;
 }
 
 // see .ai/contexts/changes-view.md ("A capped read waits for git to exit")
 function cleanup(dir) {
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  fs.rmSync(fixtureRoots.get(dir) || dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  fixtureRoots.delete(dir);
+  const ceiling = fixtureRoots.size ? Array.from(fixtureRoots.values()).at(-1) : priorCeiling;
+  if (ceiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+  else process.env.GIT_CEILING_DIRECTORIES = ceiling;
 }
 
 // Scratch repo only: drop the caller's GIT_* env (set when this suite runs under a hook) and its hooks.
 function scratchGitEnv() {
-  return {
-    PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
-    HOME: os.tmpdir(), USERPROFILE: os.tmpdir(), TMP: os.tmpdir(), TEMP: os.tmpdir(),
-    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(os.tmpdir(), 'sb-gcf-no-global-config'),
-    LC_ALL: 'C', LANGUAGE: 'C',
-  };
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith('HUSKY') || (key.startsWith('GIT_') && !['GIT_CEILING_DIRECTORIES', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0'].includes(key))) continue;
+    env[key] = value;
+  }
+  return { ...env, LC_ALL: 'C', LC_MESSAGES: 'C', LANG: 'C', LANGUAGE: 'C' };
 }
 
 function git(cwd, args) {
@@ -1004,21 +1110,17 @@ for (const [name, current, original] of [
   });
 }
 
-test('Touched falls back outside a repository and refuses missing files and git metadata', async () => {
-  const tmp = mkTouchedTmp();
+test('Touched falls back outside a repository and refuses missing files and git metadata', async t => {
+  const f = realFixture(t);
+  const tmp = f.ancestor;
   try {
     const target = path.join(tmp, 'plain.txt');
     fs.writeFileSync(target, 'plain');
     const api = require('../git-changes-file');
-    const runGit = async (args, options) => {
-      const { runToExit } = require('../run-to-exit');
-      const result = await runToExit('git', args, { ...options, env: { ...scratchGitEnv(), GIT_CEILING_DIRECTORIES: resolveOnDisk(os.tmpdir()) } });
-      return { ...result, tooLarge: result.overflow };
-    };
-    const pair = await api.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES }, { runGit });
+    const pair = await api.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES });
     assert.equal(pair.ok, true, pair.error);
     assert.equal(pair.git, false);
-    const write = await api.writeTouchedChangesFile({ absolutePath: target, content: 'overwrite', version: 'v1', maxBytes: MAX_BYTES }, { runGit });
+    const write = await api.writeTouchedChangesFile({ absolutePath: target, content: 'overwrite', version: 'v1', maxBytes: MAX_BYTES });
     assert.equal(write.ok, false);
     assert.equal(fs.readFileSync(target, 'utf8'), 'plain');
     const repo = path.join(tmp, 'repo');

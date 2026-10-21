@@ -1,5 +1,4 @@
 'use strict';
-
 // git-changes-runner.js — local (execFile, no shell) and remote (ssh, shell on
 // the far end) command construction, fully injected: no real git, no ssh, no
 // network. See .ai/contexts/ipc-bridge.md ("Changes panel") and issue #251.
@@ -1003,7 +1002,8 @@ const FRENCH_DIFF_USAGE = ['warning: Pas un dépôt git. Utilisez --no-index pou
 // The fixture cwds are synthetic paths, so the fs seam describes them: a real
 // directory with no .git at or above it.
 const NO_REPO_FS = {
-  stat: () => ({ isDirectory: () => true }),
+  realpath: p => p,
+  stat: () => ({ dev: 10, isDirectory: () => true }),
   lstat: () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; },
 };
 
@@ -1166,9 +1166,11 @@ test('.diff(): an unexpected git failure reaches the caller bounded, never as th
 
 function fakeFs(entries, errorFor = {}) {
   return {
+    realpath: p => p,
+    stat: () => ({ dev: 10, isDirectory: () => true }),
     lstat: (p) => {
       if (errorFor[p]) { const e = new Error('nope'); e.code = errorFor[p]; throw e; }
-      if (entries.has(p)) return {};
+      if (entries.has(p)) return { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false };
       const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e;
     },
   };
@@ -1778,3 +1780,78 @@ test('local runner .status(): never two git calls in flight at once — a refres
   assert.equal(result.ok, true);
   assert.equal(peak, 1);
 });
+
+
+
+const { discoveryCases, savedEnv } = require('./git-discovery-fixture');
+
+test('discovery: an empty ancestor .git is ignored without hiding a higher entry: diagnostic matrix', require('./git-discovery-fixture').emptyAncestorMatrix);
+
+test('localGitEnv: French inheritance yields an isolated C child environment', t => {
+  const { localGitEnv } = require('../git-changes-runner');
+  const locations = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_PREFIX', 'GIT_NAMESPACE'];
+  const input = { LANG: 'fr_FR.utf8', LC_ALL: 'fr_FR.utf8', LC_MESSAGES: 'fr_FR.utf8', LANGUAGE: 'fr', KEEP_754: 'kept', GIT_CEILING_DIRECTORIES: '/limit', GIT_DISCOVERY_ACROSS_FILESYSTEM: 'true', ...Object.fromEntries(locations.map(k => [k, 'wrong'])) };
+  savedEnv(t, input);
+  const before = { ...process.env };
+  const check = child => {
+    for (const k of ['LC_ALL', 'LC_MESSAGES', 'LANG']) assert.equal(child[k], 'C', k);
+    assert.equal(Object.hasOwn(child, 'LANGUAGE'), false);
+    for (const k of locations) assert.equal(Object.hasOwn(child, k), false, k);
+    assert.equal(child.KEEP_754, 'kept');
+    assert.equal(child.GIT_CEILING_DIRECTORIES, '/limit');
+    assert.equal(child.GIT_DISCOVERY_ACROSS_FILESYSTEM, 'true');
+  };
+  const first = localGitEnv();
+  check(first);
+  check(localGitEnv(input));
+  assert.notEqual(first, localGitEnv());
+  assert.deepEqual({ ...process.env }, before);
+  assert.equal(input.LANGUAGE, 'fr');
+  assert.equal(input.GIT_DIR, 'wrong');
+  assert.equal(Object.hasOwn(localGitEnv(input), 'PATH'), false);
+});
+
+for (const flavour of ['posix', 'win32']) {
+  for (const group of ['discovery: an empty ancestor .git is ignored without hiding a higher entry', 'discovery: Git ceilings bound corroboration in Changes and Touched', 'discovery: device boundaries follow the Git boolean environment']) {
+    test(group + ' (' + flavour + ')', async t => {
+      const { gitEntryAtOrAbove, createGitChangesRunner } = require('../git-changes-runner');
+      const p = path[flavour];
+      for (const c of discoveryCases(p, flavour === 'win32' ? 'C:\\' : '/')) {
+        assert.equal(gitEntryAtOrAbove(c.cwd, c.fsOps, p, c.env), c.expected, c.label);
+        if (c.expected === false && /device boolean|ceiling nearest|ceiling trailing|ceiling symlink-before|ceiling excluded/.test(c.label)) {
+          const excluded = c.label.startsWith('device') ? c.ancestor : c.label === 'ceiling nearest' ? c.ancestor : c.repo;
+          assert.equal(c.reads.some(([op,value]) => op === 'lstat' && value === p.join(excluded,'.git')), false, c.label);
+        }
+        if (flavour !== (process.platform === 'win32' ? 'win32' : 'posix')) continue;
+        savedEnv(t, { ...c.env, GIT_DISCOVERY_ACROSS_FILESYSTEM: c.env.GIT_DISCOVERY_ACROSS_FILESYSTEM });
+        const runner = createGitChangesRunner({ kind: 'local', cwd: c.cwd, fsOps: c.fsOps, exec: async (_args, opts) => {
+          if (_args.includes('rev-parse')) {
+            assert.equal(opts.env.GIT_CEILING_DIRECTORIES, c.env.GIT_CEILING_DIRECTORIES);
+            process.env.GIT_CEILING_DIRECTORIES = c.cwd;
+          }
+          return { code: 128, stdout: '', stderr: 'probe' };
+        } });
+        if (!c.fsOps.stat) continue;
+        const result = await runner.isWorkTree();
+        assert.deepEqual(result, c.expected === false ? { ok: true, isRepo: false } : { ok: false, error: c.label === 'not directory' ? 'working directory is not a directory: ' + c.cwd : 'probe' }, c.label);
+        process.env.GIT_CEILING_DIRECTORIES = c.env.GIT_CEILING_DIRECTORIES;
+        const status = await runner.status();
+        assert.equal(status.reason, c.expected === false ? 'not-a-repo' : undefined, c.label);
+      }
+    });
+  }
+  test('discovery: platform roots and comparisons (' + flavour + ')', () => {
+    const { gitEntryAtOrAbove } = require('../git-changes-runner');
+    const { synthetic } = require('./git-discovery-fixture');
+    const p = path[flavour];
+    for (const root of flavour === 'win32' ? ['C:\\', '\\\\server\\share\\'] : ['/']) {
+      const c = synthetic(p, root);
+      assert.equal(gitEntryAtOrAbove(c.cwd,c.fsOps,p,{}),false);
+      assert.ok(c.reads.length < 30);
+      if (flavour === 'win32') {
+        c.entries.set(p.join(c.repo,'.git'),'file');
+        assert.equal(gitEntryAtOrAbove(c.cwd,c.fsOps,p,{GIT_CEILING_DIRECTORIES:c.repo.toUpperCase().replace(/\\/g,'/')}),false);
+      }
+    }
+  });
+}

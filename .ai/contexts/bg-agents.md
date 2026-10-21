@@ -674,10 +674,13 @@ directories elsewhere.
    pattern; `.worktrees` / `.claude-worktrees` go through git when they exist.
 2. Otherwise, if the cwd is an existing directory: one
    `git -C <cwd> rev-parse --git-common-dir --show-toplevel` through
-   `execFile` (argv array, no shell, `cwd` option, `GIT_TIMEOUT_MS` = 2 s,
-   `GIT_*` variables stripped from the env so an inherited `GIT_DIR` — e.g.
-   from a git hook — cannot point it at another repo). `worktreeRoot` = the
-   top-level; `projectRoot` = the parent of the common dir when it is named
+   `execFile` (argv array, no shell, `cwd` option, `GIT_TIMEOUT_MS` = 2 s).
+   `gitEnv` strips **all** `GIT_*` from the supplied environment, including
+   discovery-limit variables, then applies the common `localGitEnv` policy:
+   `LC_ALL=C`, `LC_MESSAGES=C`, `LANG=C`, and `LANGUAGE` removed. Other injected
+   values are preserved without merging ambient variables or mutating input.
+   `worktreeRoot` = the top-level; `projectRoot` = the parent of the common dir
+   when it is named
    `.git`, else (bare repo, submodule whose common dir is
    `.git/modules/<sub>`) the top-level.
 3. Anything else — missing directory, not a repository, git missing, timeout,

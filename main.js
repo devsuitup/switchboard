@@ -1082,7 +1082,7 @@ ipcMain.handle('delete-worktree', (_event, worktreePath) => {
       const args = ['-C', parentRepo, 'worktree', 'remove', '-f'];
       if (doubleForce) args.push('-f');
       args.push('--', normalizedPath);
-      execFile('git', args, (err, _stdout, stderr) => callback(err, stderr));
+      execFile('git', args, { env: localGitEnv() }, (err, _stdout, stderr) => callback(err, stderr));
     }
 
     runRemove(false, async (err, stderr) => {
@@ -1116,7 +1116,7 @@ ipcMain.handle('worktree-status', (_event, worktreePath) => {
     if (!check.ok) return resolve(check);
     const { normalizedPath, parentRepo } = check;
 
-    execFile('git', ['-C', parentRepo, '-C', normalizedPath, 'status', '--porcelain'], (err, stdout, stderr) => {
+    execFile('git', ['-C', parentRepo, '-C', normalizedPath, 'status', '--porcelain'], { env: localGitEnv() }, (err, stdout, stderr) => {
       if (err) {
         return resolve({ ok: false, error: (stderr || err.message || String(err)).trim() });
       }
