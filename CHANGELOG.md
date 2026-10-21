@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.99 — 2026-10-21
+
 ### Changed
 - The session header shows the same status icon as the sidebar row; hover it for what the session is doing and where it runs. (#563)
 - Session tooltips say Open here, Attached here, Running in background, Running on a host or Running elsewhere; sessions awaiting restore say Not reopened · restores on click. The status bar and filter say open here, and Idle, Idle open here and Not running now differ by shape. (#563)
