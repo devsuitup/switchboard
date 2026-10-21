@@ -43,7 +43,12 @@ const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDe
 const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
 const { createUnsavedGuard } = require('./unsaved-guard');
-const unsavedGuard = createUnsavedGuard({ ipcMain, quit: () => app.quit() });
+const { inventory } = require('./session-exit');
+const { backgroundRefusal } = require('./bg-handoff');
+const unsavedGuard = createUnsavedGuard({ ipcMain, quit: attempt => { quitAttemptToken = attempt; app.quit(); },
+  inventory: () => exitInventory(), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; } });
+let exitInventory = () => ({ rows: [], counts: {}, remote: {} });
+let flushForLogoff = () => Promise.resolve();
 const { cleanEnv, scrubSessionEnv } = require('./clean-env');
 scrubSessionEnv(process.env);
 const { normalizeProjectPath: normalizeArchivedProjectPath } = require('./normalize-project-path');
@@ -61,6 +66,7 @@ const cleanPtyEnv = cleanEnv(process.env);
 // repaint can remove them. VS Code ships the same flag for the same reason.
 // SWITCHBOARD_NO_CONPTY_DLL=1 reverts to the inbox ConPTY without a rebuild.
 function spawnPty(file, args, opts) {
+  if (!unsavedGuard.launchAllowed()) throw new Error('Switchboard is closing.');
   if (process.platform === 'win32' && !process.env.SWITCHBOARD_NO_CONPTY_DLL) {
     try {
       return guardPtyInputErrors(pty.spawn(file, args, { ...opts, useConptyDll: true }));
@@ -152,8 +158,7 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   require('electron').autoUpdater.on('before-quit-for-update', () => { updateInstalling = true; });
   autoUpdater.on('error', (err) => {
     log.error('[updater] Error:', err?.message || String(err));
-    activityFlushedForQuit = false; // see .ai/contexts/activitywatch.md ("Quitting")
-    updateInstalling = false;
+    resetUpdateAttempt();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('updater-event', 'error', { message: err?.message || String(err) });
     }
@@ -162,6 +167,20 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
 let mainWindow = null;
 let activityFlushedForQuit = false;
 let updateInstalling = false;
+let quitAttemptToken = null;
+let updateInstallPromise = null;
+let updateWaitTimer = null;
+function resetUpdateAttempt() {
+  const invalidated = unsavedGuard.invalidate('update');
+  if (!invalidated && !updateInstalling && !updateInstallPromise) return;
+  updateInstalling = false;
+  activityFlushedForQuit = false;
+  quitAttemptToken = null;
+  updateInstallPromise = null;
+  if (updateWaitTimer) clearTimeout(updateWaitTimer);
+  updateWaitTimer = null;
+  if (autoUpdater) autoUpdater.quitAndInstallCalled = false;
+}
 async function startApplication() {
 if (!await acquireInstanceLock(app, { log })) { app.quit(); return; }
 const privilegeNotice = readNoNewPrivs({ log });
@@ -475,6 +494,8 @@ function createWindow() {
   })().catch(err => log.error('[window] bounds save on close failed:', err.message)));
 
   mainWindow.on('closed', () => {
+    quitAttemptToken = unsavedGuard.committedToken(mainWindow);
+    if (process.platform === 'darwin') { quitAttemptToken = null; unsavedGuard.invalidate(); }
     // On macOS the app stays alive in the dock after the last window closes.
     // Kill all running PTY processes so orphaned `claude` processes don't
     // accumulate in the background with no way for the user to interact.
@@ -497,7 +518,7 @@ function createWindow() {
 }
 
 function buildMenu() {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(app.name, { onWhatsNew: showWhatsNewFromMenu })));
+  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate(app.name, { onWhatsNew: showWhatsNewFromMenu, onQuit: () => unsavedGuard.requestQuit(mainWindow) })));
 }
 
 // --- What's new (see docs/changelog.md) ---
@@ -2718,6 +2739,7 @@ function registerRemoteAttachSession(sessionId, { alias, projectPath, cwd, ptyPr
 
 ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions, initialSize) => {
   if (!mainWindow) return { ok: false, error: 'no window' };
+  if (!unsavedGuard.launchAllowed()) return { ok: false, error: 'Switchboard is closing.' };
 
   // Reattach to existing session
   if (activeSessions.has(sessionId)) {
@@ -2776,6 +2798,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         : { ok: false, error: REMOTE_READ_ONLY };
       if (!attachResult.ok) return { ok: false, error: attachResult.error || REMOTE_READ_ONLY };
 
+      if (!unsavedGuard.launchAllowed()) {
+        attachResult.ptyProcess.kill();
+        return { ok: false, error: 'Switchboard is closing.' };
+      }
       const remoteCwd = (descriptor && typeof descriptor.cwd === 'string') ? descriptor.cwd : null;
       const remoteSession = registerRemoteAttachSession(sessionId, {
         alias, projectPath, cwd: remoteCwd, ptyProcess: attachResult.ptyProcess,
@@ -3630,27 +3656,43 @@ ipcMain.handle('updater-download', () => {
 });
 ipcMain.handle('updater-install', async () => {
   if (!autoUpdater) return;
+  if (updateInstallPromise) return updateInstallPromise;
   if (mainWindow && !await unsavedGuard.confirmQuit(mainWindow)) return;
-  await drainForUpdate();
-  try {
-    if (process.platform === 'linux') {
-      if (!autoUpdater.install(false, false)) {
-        autoUpdater.quitAndInstallCalled = false;
-        activityFlushedForQuit = false;
-        return;
-      }
-      await relaunch({ execPath: relaunchExecPath, log, notify: notifyRelaunchRequired,
-        quit: () => { updateInstalling = true; app.quit(); } });
-    } else {
-      autoUpdater.quitAndInstall();
+  if (updateInstallPromise) return updateInstallPromise;
+  const installWindow = mainWindow;
+  const installToken = installWindow ? unsavedGuard.committedToken(installWindow) : null;
+  if (installWindow) quitAttemptToken = installToken;
+  const operation = (async () => {
+    await drainForUpdate();
+    if (installWindow && installToken !== unsavedGuard.committedToken(installWindow)) {
+      if (updateInstallPromise === operation) updateInstallPromise = null;
+      return;
     }
-  }
-  catch (error) {
-    updateInstalling = false;
-    activityFlushedForQuit = false;
-    log.error('[updater] install failed:', error);
-    throw error;
-  }
+    try {
+      if (process.platform === 'linux') {
+        if (!autoUpdater.install(false, false)) {
+          resetUpdateAttempt();
+          return;
+        }
+        await relaunch({ execPath: relaunchExecPath, log, notify: notifyRelaunchRequired,
+          quit: () => { updateInstalling = true; app.quit(); } });
+      } else {
+        autoUpdater.quitAndInstall();
+        if (process.platform === 'win32' && autoUpdater.quitAndInstallCalled === false) resetUpdateAttempt();
+        else if (process.platform === 'darwin' && !updateInstalling) {
+          updateWaitTimer = setTimeout(resetUpdateAttempt, 30000);
+          updateWaitTimer.unref?.();
+        }
+      }
+    }
+    catch (error) {
+      resetUpdateAttempt();
+      log.error('[updater] install failed:', error);
+      throw error;
+    }
+  })();
+  updateInstallPromise = operation;
+  return operation;
 });
 
 function notifyRelaunchRequired(message) {
@@ -3878,7 +3920,7 @@ if (!app.isPackaged) {
 } // end gotSingleInstanceLock else-branch
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin') { quitAttemptToken = unsavedGuard.committedToken(mainWindow) || quitAttemptToken; app.quit(); }
 });
 
 let appQuitting = false;
@@ -3979,10 +4021,12 @@ function shutdownForExit() {
   return shutdownPromise;
 }
 
+exitInventory = () => inventory(activeSessions, (record, id) => backgroundRefusal(record, cliSessionState.getStatus(record.realSessionId || id)?.status));
+flushForLogoff = drainForUpdate;
 app.removeListener('before-quit', holdBootstrapQuit);
 app.on('before-quit', event => {
   if (shutdownComplete) return;
-  if (!updateInstalling && unsavedGuard.beforeQuit(event, mainWindow)) return;
+  if (!updateInstalling && unsavedGuard.beforeQuit(event, mainWindow, quitAttemptToken)) return;
   event.preventDefault();
   shutdownForExit().finally(exitOnce);
 });

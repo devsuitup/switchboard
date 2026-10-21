@@ -20,7 +20,7 @@ function setup({ timeoutMs = 1000, probeMs = 1500, dialogCeilingMs, quit, closeF
   const sent = [];
   const wc = new EventEmitter();
   Object.assign(wc, {
-    send: (channel, ...args) => sent.push({ channel, args }),
+    send: (channel, ...args) => { if (channel !== 'exit-attempt-invalidated') sent.push({ channel, args }); },
     isDestroyed: () => false,
     isCrashed: () => false,
     reload: () => { wc.reloads += 1; },
@@ -40,10 +40,10 @@ function setup({ timeoutMs = 1000, probeMs = 1500, dialogCeilingMs, quit, closeF
   guard.attach(win);
 
   const closeEvent = () => ({ prevented: false, preventDefault() { this.prevented = true; } });
-  const answer = (id, proceed) => ipcMain.emit('unsaved-check-result', {}, id, proceed);
-  const ack = (id) => ipcMain.emit('unsaved-check-ack', {}, id);
+  const answer = (id, proceed) => ipcMain.emit('unsaved-check-result', { sender: wc }, id, proceed, sent.findLast(m => m.channel === 'unsaved-check-reason' && m.args[0] === id)?.args[3] || sent.find(m => m.channel === 'unsaved-check' && m.args[0] === id)?.args[2]);
+  const ack = (id) => ipcMain.emit('unsaved-check-ack', { sender: wc }, id);
   const reasonDone = (id) => {
-    for (const m of sent) if (m.channel === 'unsaved-check-reason' && m.args[0] === id) ipcMain.emit('unsaved-check-reason-done', {}, id, m.args[2]);
+    for (const m of sent) if (m.channel === 'unsaved-check-reason' && m.args[0] === id) ipcMain.emit('unsaved-check-reason-done', { sender: wc }, id, m.args[2]);
   };
   const pong = (token) => ipcMain.emit('unsaved-pong', { sender: wc }, token);
   const pings = () => sent.filter((m) => m.channel === 'unsaved-ping');
@@ -223,7 +223,7 @@ function fakeApp(t, cleanup) {
     app.emit('will-quit');
   };
   app.on('before-quit', (e) => {
-    if (t.guard.beforeQuit(e, t.win)) return;
+    if (t.guard.beforeQuit(e, t.win, t.guard.committedToken(t.win))) return;
     cleanup();
   });
   return app;
@@ -264,11 +264,15 @@ test('an updater install asks before the installer starts: a no leaves it unstar
   t.answer(t.sent[1].args[0], true);
   assert.equal(await second, true);
   const e2 = t.closeEvent();
-  assert.equal(t.guard.beforeQuit(e2, t.win), false, 'the quit the installer triggers is not asked about again');
+  assert.equal(t.guard.beforeQuit(e2, t.win, t.guard.committedToken(t.win)), false, 'the quit the installer triggers is not asked about again');
   assert.equal(e2.prevented, false);
   const c = t.closeEvent();
   t.win.emit('close', c);
   assert.equal(c.prevented, false);
+  const later = t.closeEvent();
+  assert.equal(t.guard.beforeQuit(later, t.win), true, 'a later untagged quit does not inherit the Update token');
+  assert.equal(t.checks().length, 3);
+  t.answer(t.checks().at(-1).args[0], false);
 });
 
 test('a Windows session end approves the quit so logoff never waits on the dialog, and asks the renderer to save', () => {
@@ -279,8 +283,8 @@ test('a Windows session end approves the quit so logoff never waits on the dialo
     assert.equal(t.guard.beforeQuit(e, t.win), false, name);
     const c = t.closeEvent();
     t.win.emit('close', c);
-    assert.equal(c.prevented, false, name);
-    assert.deepEqual(t.sent.map((m) => m.channel), ['exit-flush'], `${name}: no dialog, one save request`);
+    assert.equal(c.prevented, true, 'a user X still asks after logoff');
+    assert.deepEqual(t.sent.map((m) => m.channel), ['exit-flush', 'unsaved-check'], `${name}: one external save, user close checks edits`);
   }
 });
 
@@ -293,9 +297,12 @@ test('a window close and a quit share one question, and one answer settles both'
   t.reasonDone(t.sent[0].args[0]);
   t.answer(t.sent[0].args[0], true);
   await tick();
-  assert.equal(t.win.closes, 1);
+  assert.equal(t.win.closes, 0, 'the upgraded action owns the exit');
+  const committedClose = t.closeEvent();
+  t.win.emit('close', committedClose);
+  assert.equal(committedClose.prevented, false, 'the shared token also permits close');
   const again = t.closeEvent();
-  assert.equal(t.guard.beforeQuit(again, t.win), false, 'the same yes approved the quit');
+  assert.equal(t.guard.beforeQuit(again, t.win, t.guard.committedToken(t.win)), false, 'the same yes approved the quit');
 });
 
 test('a quit that joins an unanswered reload check tells the renderer it is now an exit, once', async () => {
@@ -396,10 +403,10 @@ test('each upgrade of a check is waited for by its own report, not by the first 
   const [toClose, toQuit] = t.reasons().map((m) => m.args[2]);
   assert.deepEqual(t.reasons().map((m) => m.args.slice(0, 2)), [[id, 'close'], [id, 'quit']]);
   t.answer(id, true);
-  t.ipcMain.emit('unsaved-check-reason-done', {}, id, toQuit);
+  t.ipcMain.emit('unsaved-check-reason-done', { sender: t.wc }, id, toQuit);
   await tick();
   assert.equal(quits.length, 0, 'the save the close upgrade asked for has not reported yet');
-  t.ipcMain.emit('unsaved-check-reason-done', {}, id, toClose);
+  t.ipcMain.emit('unsaved-check-reason-done', { sender: t.wc }, id, toClose);
   await tick();
   assert.equal(quits.length, 1);
 });
@@ -413,16 +420,16 @@ test('a check joined by two upgrades stays in flight until the last upgrade repo
   t.guard.beforeQuit(t.closeEvent(), t.win);
   const [toClose, toQuit] = t.reasons().map((m) => m.args[2]);
   t.answer(id, true);
-  t.ipcMain.emit('unsaved-check-reason-done', {}, id, toClose);
+  t.ipcMain.emit('unsaved-check-reason-done', { sender: t.wc }, id, toClose);
   await tick();
   const install = t.guard.confirmQuit(t.win);
   await tick();
   assert.equal(t.checks().length, 1, 'an install arriving before the quit upgrade reports joins the question');
   assert.equal(quits.length, 0);
-  t.ipcMain.emit('unsaved-check-reason-done', {}, id, toQuit);
+  t.ipcMain.emit('unsaved-check-reason-done', { sender: t.wc }, id, toQuit);
   await tick();
   assert.equal(quits.length, 1);
-  assert.equal(await install, true);
+  assert.equal(await install, false, 'an external quit never grants installer consent');
   assert.equal(t.checks().length, 1, 'still one question');
 });
 
@@ -441,9 +448,9 @@ test('the preload passes an upgrade token through, and back with the report', ()
   const changed = [];
   api.onUnsavedCheckReason((...args) => changed.push(args));
   listeners.get('unsaved-check-reason')({}, 3, 'quit', 9);
-  assert.deepEqual(changed, [[3, 'quit', 9]]);
+  assert.deepEqual(changed, [[3, 'quit', 9, undefined]]);
   api.unsavedCheckReasonDone(3, 9);
-  assert.deepEqual(sends.at(-1), { channel: 'unsaved-check-reason-done', args: [3, 9] });
+  assert.deepEqual(sends.at(-1), { channel: 'unsaved-check-reason-done', args: [3, 9, true] });
 });
 
 test('a close or quit arriving while a joined quit waits for the late save joins it instead of asking again', async () => {
@@ -464,8 +471,10 @@ test('a close or quit arriving while a joined quit waits for the late save joins
   t.reasonDone(id);
   await tick();
   assert.equal(quits.length, 1);
-  assert.equal(await install, true);
-  assert.equal(t.win.closes, 1, 'the held close goes through once the save is done');
+  assert.equal(await install, false, 'an external quit never grants installer consent');
+  const committedClose = t.closeEvent();
+  t.win.emit('close', committedClose);
+  assert.equal(committedClose.prevented, false, 'the held close is approved once the save is done');
 });
 
 test('a joined quit the page declined leaves nothing for a later close to join', async () => {
@@ -718,7 +727,9 @@ test('a quit that joins a close question tells the page, and a page that has not
   bound.fn();
   await tick();
   assert.equal(quits, 1);
-  assert.equal(t.win.closes, 1);
+  const committedClose = t.closeEvent();
+  t.win.emit('close', committedClose);
+  assert.equal(committedClose.prevented, false);
 });
 
 test('a reload question joined by a close becomes a close, and a quit is never turned back into a close', () => {
@@ -928,7 +939,7 @@ test('a check sent before the page listened is sent again once the page is ready
   t.ipcMain.emit('unsaved-ready', { sender: {} });
   assert.equal(t.checks().length, 1, 'another page being ready changes nothing');
   t.ipcMain.emit('unsaved-ready', { sender: t.wc });
-  assert.deepEqual(t.checks().map((m) => m.args), [[id, reason], [id, reason]]);
+  assert.deepEqual(t.checks().map((m) => m.args), [[id, reason, t.checks()[0].args[2]], [id, reason, t.checks()[0].args[2]]]);
   t.ack(id);
   t.ipcMain.emit('unsaved-ready', { sender: t.wc });
   assert.equal(t.checks().length, 2, 'an acknowledged check is not sent again');

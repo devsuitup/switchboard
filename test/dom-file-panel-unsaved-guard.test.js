@@ -55,7 +55,7 @@ function setup() {
     onUnsavedCheckReason: (cb) => { calls.reason = cb; },
     unsavedCheckAck: (id) => { calls.acks.push({ id, at: calls.answers.length, dialog: !!window.document.getElementById('unsaved-edits-dialog') }); },
     unsavedCheckResult: (id, proceed) => { calls.answers.push({ id, proceed }); },
-    unsavedCheckReasonDone: (id, token) => { calls.reasonDone.push(id); calls.reasonDoneTokens.push(token); },
+    unsavedCheckReasonDone: (id, token, proceed = true) => { calls.reasonDone.push(id); calls.reasonDoneTokens.push(token); (calls.reasonProceeds ||= []).push(proceed); },
     watchFile: () => Promise.resolve({ ok: true }),
     unwatchFile: () => Promise.resolve({ ok: true }),
     readFileForPanel: (p) => Promise.resolve(disk.has(p) ? { ok: true, git: false, original: disk.get(p), current: disk.get(p) } : { ok: false, code: 'ENOENT', error: 'ENOENT' }),
@@ -99,6 +99,8 @@ function setup() {
   window.isMac = false;
   window.appShortcuts = {};
   window.initFilePanel();
+  const rawCheck = calls.check;
+  calls.check = (id, reason, detail) => rawCheck(id, reason, detail === undefined && reason === 'close' ? exitDetail('close') : detail);
   registerPanelTerminals(dom, ['s1', 's3']);
   return { window, context: dom.getInternalVMContext(), disk, calls, editor: () => editor, destroy: () => window.close() };
 }
@@ -135,9 +137,9 @@ function wireGuard(ctx) {
   });
   guard.attach(win);
   Object.assign(ctx.window.api, {
-    unsavedCheckAck: (id) => ipcMain.emit('unsaved-check-ack', {}, id),
-    unsavedCheckResult: (id, proceed) => ipcMain.emit('unsaved-check-result', {}, id, proceed),
-    unsavedCheckReasonDone: (id, token) => ipcMain.emit('unsaved-check-reason-done', {}, id, token),
+    unsavedCheckAck: (id) => ipcMain.emit('unsaved-check-ack', { sender: wc }, id),
+    unsavedCheckResult: (id, proceed, detail) => ipcMain.emit('unsaved-check-result', { sender: wc }, id, proceed, detail),
+    unsavedCheckReasonDone: (id, token) => ipcMain.emit('unsaved-check-reason-done', { sender: wc }, id, token),
     unsavedDialog: (open) => ipcMain.emit('unsaved-dialog', { sender: wc }, open),
   });
   const close = () => win.emit('close', { preventDefault() {} });
@@ -149,6 +151,117 @@ function wireGuard(ctx) {
 const A = '/repo/a.md';
 const B = '/repo/b.md';
 const C = '/repo/c.md';
+
+function exitDetail(action = 'quit', rows = null) {
+  rows ||= [{ id: 'session-id', type: 'session', generation: 'g1', cwd: '/repo/project', canBackground: true }];
+  const counts = { sessions: 0, plain: 0, panels: 0, attached: 1 };
+  for (const row of rows) counts[row.type === 'panel' ? 'panels' : row.type === 'plain' ? 'plain' : 'sessions']++;
+  return { attempt: 1, version: 1, action, external: false, snapshot: { rows, counts, remote: { vps: 2 } } };
+}
+
+for (const n of [1, 2]) {
+  test(`B4 exit wording agrees for ${n} attached and remote sessions`, async () => {
+    const ctx = setup();
+    try {
+      const detail = exitDetail();
+      detail.snapshot.counts.attached = n;
+      detail.snapshot.remote = { vps: n };
+      ctx.calls.check(210, 'quit', detail); await flush();
+      const text = ctx.window.document.querySelector('.choice-dialog').textContent;
+      assert.ok(text.includes(`${n} session${n === 1 ? '' : 's'} attached here ${n === 1 ? 'is' : 'are'} detached and ${n === 1 ? 'keeps' : 'keep'} running in the background.`));
+      assert.ok(text.includes(`${n} session${n === 1 ? '' : 's'} from vps ${n === 1 ? 'keeps' : 'keep'} running on vps.`));
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('A2 named exit question covers each intent and platform, identities and honest loss wording', async () => {
+  for (const platform of ['win32', 'linux', 'darwin']) for (const action of ['quit', 'close', 'update']) {
+    const ctx = setup(); ctx.window.api.platform = platform;
+    ctx.window.openSessions.set('session-id', { session: { name: '<img src=x>', projectPath: '/repo/project' } });
+    try {
+      ctx.calls.check(200, 'quit', exitDetail(action)); await flush();
+      const d = ctx.window.document.querySelector('.choice-dialog');
+      assert.ok(d, 'local work must be named before approving the exit');
+      const verb = action === 'update' ? 'restart to update' : action === 'close' ? platform === 'darwin' ? 'close the window' : 'close Switchboard' : platform === 'win32' ? 'exit' : 'quit';
+      assert.equal(d.querySelector('h2').textContent, `Stop 1 session and ${verb}?`);
+      assert.match(d.textContent, /<img src=x>.*project.*session/);
+      assert.equal(d.querySelector('img'), null, 'names are text');
+      assert.match(d.textContent, /Their processes end, idle or working/);
+      assert.match(d.textContent, /1 session attached here is detached/);
+      assert.match(d.textContent, /2 sessions from vps keep running on vps/);
+      assert.match(d.textContent, /Send to background/);
+      assert.doesNotMatch(d.textContent, /open here|Every session running in it stops/);
+      assert.equal(ctx.window.document.activeElement, d.querySelector('.choice-dialog-cancel'));
+      if (platform === 'darwin' && action === 'close') assert.match(d.textContent, /stays in the Dock/);
+    } finally { ctx.destroy(); }
+  }
+  const ctx = setup();
+  try {
+    const detail = exitDetail('close', [{ id: 'plain', type: 'plain', cwd: '/repo' }, { id: 'panel', type: 'panel', owner: 'owner-id', cwd: '/repo' }]);
+    detail.snapshot.counts.attached = 0;
+    ctx.calls.check(201, 'close', detail); await flush();
+    const text = ctx.window.document.querySelector('.choice-dialog')?.textContent || '';
+    assert.match(text, /1 plain terminal and 1 panel shell/);
+    assert.match(text, /Panel shell of "owner-id"/);
+    assert.match(text, /Their shells end/);
+    assert.doesNotMatch(text, /Their processes end|Send to background|attached here/);
+    ctx.window.document.querySelector('.choice-dialog-cancel').click(); await flush();
+    ctx.calls.check(202, 'quit', exitDetail('quit', [])); await flush();
+    assert.equal(ctx.window.document.querySelector('.choice-dialog'), null, 'only remote and attach needs no Stop choice');
+    assert.equal(ctx.calls.answers.at(-1).proceed, true);
+    const busy = exitDetail('quit', [{ id: 'busy', type: 'session', canBackground: false }, { id: 'sandboxed', type: 'session', canBackground: false }]);
+    ctx.calls.check(203, 'quit', busy); await flush();
+    assert.doesNotMatch(ctx.window.document.querySelector('.choice-dialog').textContent, /Send to background/);
+    ctx.window.document.querySelector('.choice-dialog-cancel').click(); await flush();
+    const unknown = exitDetail('quit', []); unknown.snapshot.unknown = true;
+    ctx.calls.check(204, 'quit', unknown); await flush();
+    assert.match(ctx.window.document.querySelector('.choice-dialog').textContent, /could not list/);
+    assert.doesNotMatch(ctx.window.document.querySelector('.choice-dialog').textContent, /nothing will stop/);
+  } finally { ctx.destroy(); }
+});
+
+test('A3 edits precede Stop consent, Cancel releases unload approval and never flushes', async () => {
+  for (const choice of ['save', 'discard']) {
+    const ctx = setup(); let flushed = 0; ctx.window.flushStateForExit = async () => { flushed++; };
+    try {
+      await dirtyTab(ctx, 's1', A);
+      ctx.calls.check(210, 'quit', exitDetail()); await flush();
+      button(ctx, 'unsaved-' + choice).click(); await flush();
+      const d = ctx.window.document.querySelector('.choice-dialog');
+      assert.ok(d, 'Save or Discard is not Stop consent');
+      if (choice === 'discard') assert.equal(beforeUnload(ctx).defaultPrevented, true, 'Discard cannot unload while Stop is undecided');
+      assert.equal(flushed, 0, 'no flush before the session choice');
+      d.querySelector('.choice-dialog-cancel').click(); await flush();
+      assert.equal(flushed, 0); assert.equal(ctx.calls.answers.at(-1).proceed, false);
+      await dirtyTab(ctx, 's1', B);
+      assert.equal(beforeUnload(ctx).defaultPrevented, true, 'Cancel clears unload approval');
+      ctx.calls.check(211, 'quit', exitDetail()); await flush(); assert.ok(dialog(ctx));
+      button(ctx, 'unsaved-discard').click(); await flush();
+      ctx.window.document.querySelector('.choice-dialog-confirm').click(); await flush();
+      assert.equal(flushed, 1); assert.equal(ctx.calls.answers.at(-1).proceed, true);
+    } finally { ctx.destroy(); }
+  }
+  const ctx = setup(); let flushed = 0; ctx.window.flushStateForExit = async () => { flushed++; };
+  try {
+    ctx.calls.check(212, 'reload'); await flush();
+    ctx.calls.reason(212, 'quit', 44, exitDetail()); await flush();
+    assert.equal(ctx.window.document.querySelector('.choice-dialog'), null, 'late reason completion does not grant Stop consent');
+    ctx.calls.check(212, 'quit', exitDetail()); await flush();
+    assert.ok(ctx.window.document.querySelector('.choice-dialog'), 'the renewed check asks before flushing');
+    assert.equal(flushed, 0);
+    ctx.window.document.querySelector('.choice-dialog-cancel').click(); await flush();
+    assert.deepEqual(ctx.calls.answers.at(-1), { id: 212, proceed: false }, 'Cancel declines the renewed check');
+    assert.equal(flushed, 0);
+    await dirtyTab(ctx, 's1', A);
+    ctx.window.api.saveFileForPanel = async () => ({ ok: false, error: 'read only' });
+    ctx.calls.check(213, 'quit', exitDetail()); await flush();
+    button(ctx, 'unsaved-save').click(); await flush();
+    assert.ok(dialog(ctx), 'failed Save keeps the edits question open');
+    assert.equal(ctx.window.document.querySelector('.choice-dialog'), null);
+    assert.equal(flushed, 0);
+    button(ctx, 'unsaved-cancel').click(); await flush();
+  } finally { ctx.destroy(); }
+});
 
 test('the unsaved guard keeps its explicit opener restoration to one focus call', async () => {
   const ctx = setup();
@@ -369,7 +482,7 @@ test('a reload check that a quit joins before it is answered flushes once', asyn
   } finally { ctx.destroy(); }
 });
 
-test('a quit that joins a reload check the page has already answered still writes the app state', async () => {
+test('a quit after an answered reload writes the app state only through the renewed check', async () => {
   const ctx = setup();
   try {
     let flushed = 0;
@@ -378,6 +491,9 @@ test('a quit that joins a reload check the page has already answered still write
     await flush();
     assert.deepEqual(ctx.calls.answers, [{ id: 6, proceed: true }]);
     ctx.calls.reason(6, 'quit');
+    await flush();
+    assert.equal(flushed, 0, 'an answered reload cannot start a late exit flow');
+    ctx.calls.check(6, 'quit');
     await flush();
     assert.equal(flushed, 1);
     ctx.calls.reason(6, 'quit');
@@ -401,20 +517,26 @@ test('the page reports each upgrade with the token it came with', async () => {
   try {
     let finish = null;
     ctx.window.flushStateForExit = () => new Promise((resolve) => { finish = resolve; });
+    await dirtyTab(ctx, 's1', A);
     ctx.calls.check(6, 'reload');
     await flush();
     ctx.calls.reason(6, 'close', 41);
     await flush();
     ctx.calls.reason(6, 'quit', 42);
     await flush();
-    assert.deepEqual(ctx.calls.reasonDoneTokens, [42], 'the second upgrade has no save of its own to wait for');
+    assert.deepEqual(ctx.calls.reasonDoneTokens, [41, 42], 'each upgrade is acknowledged while the edits choice stays open');
+    assert.equal(finish, null, 'no flush before the edits choice');
+    button(ctx, 'unsaved-discard').click();
+    await flush();
+    assert.deepEqual(ctx.calls.answers, [], 'the current check waits for its flush');
     finish();
     await flush();
-    assert.deepEqual(ctx.calls.reasonDoneTokens, [42, 41], 'the first is reported once its save lands');
+    assert.deepEqual(ctx.calls.reasonDoneTokens, [41, 42], 'each token is reported once');
+    assert.deepEqual(ctx.calls.answers, [{ id: 6, proceed: true }]);
   } finally { ctx.destroy(); }
 });
 
-test('the page tells main when the save a late upgrade asked for is done, and at once when it has none to do', async () => {
+test('late upgrades finish their notification immediately while renewed checks wait for writes', async () => {
   const ctx = setup();
   try {
     let finish = null;
@@ -424,19 +546,28 @@ test('the page tells main when the save a late upgrade asked for is done, and at
     await flush();
     ctx.calls.reason(6, 'quit');
     await flush();
-    assert.deepEqual(ctx.calls.reasonDone, [], 'not before the save lands');
+    assert.deepEqual(ctx.calls.reasonDone, [6], 'the stale reload is left for main to re-check');
+    assert.equal(finish, null, 'the reason notification starts no write');
+    ctx.calls.check(6, 'quit');
+    await flush();
+    assert.deepEqual(ctx.calls.answers, [{ id: 6, proceed: true }], 'the renewed result waits for the write');
     finish();
     await flush();
     assert.deepEqual(ctx.calls.reasonDone, [6]);
+    assert.deepEqual(ctx.calls.answers, [{ id: 6, proceed: true }, { id: 6, proceed: true }], 'both the reload and renewed exit have answered');
 
     ctx.calls.check(7, 'reload');
     await flush();
     fail = true;
     ctx.calls.reason(7, 'quit');
     await flush();
+    ctx.calls.check(7, 'quit');
+    await flush();
     finish();
     await flush();
     assert.deepEqual(ctx.calls.reasonDone, [6, 7], 'a failed save still lets the quit go');
+    assert.equal(ctx.calls.answers.length, 4, 'the failed flush also settles its renewed exit check');
+    assert.deepEqual(ctx.calls.answers.at(-1), { id: 7, proceed: true });
 
     ctx.calls.reason(99, 'quit');
     await flush();
@@ -493,7 +624,7 @@ test('a window close with nothing unsaved asks to close Switchboard; Cancel, Ent
   try {
     ctx.calls.check(1, 'close');
     await flush();
-    assert.equal(closeDialog().querySelector('#choice-dialog-title').textContent, 'Close Switchboard?');
+    assert.equal(closeDialog().querySelector('#choice-dialog-title').textContent, 'Stop 1 session and close Switchboard?');
     assert.equal(document.activeElement, closeDialog().querySelector('.choice-dialog-cancel'), 'Cancel has the focus');
     key('Enter');
     await flush();
@@ -529,7 +660,7 @@ test('a window close while another choice dialog is open cancels that one and as
     await flush();
     assert.equal(other, null, 'the other dialog ends as a cancel, so nothing it offered is done');
     assert.equal(document.querySelectorAll('.choice-dialog').length, 1);
-    assert.equal(document.querySelector('#choice-dialog-title').textContent, 'Close Switchboard?');
+    assert.equal(document.querySelector('#choice-dialog-title').textContent, 'Stop 1 session and close Switchboard?');
     assert.deepEqual(ctx.calls.answers, [], 'the close is not answered before the user decides');
     document.querySelector('.choice-dialog-cancel').click();
     await flush();
@@ -573,7 +704,7 @@ test('a quit (menu, updater) is not asked about a second time', async () => {
   } finally { ctx.destroy(); }
 });
 
-test('a window close over unsaved edits asks once: Discard closes without a second question', async () => {
+test('a window close over unsaved edits asks Discard and then Stop', async () => {
   const ctx = setup();
   try {
     await dirtyTab(ctx, 's1', A);
@@ -582,7 +713,9 @@ test('a window close over unsaved edits asks once: Discard closes without a seco
     assert.ok(dialog(ctx));
     button(ctx, 'unsaved-discard').click();
     await flush();
-    assert.equal(ctx.window.document.querySelector('.choice-dialog'), null);
+    assert.ok(ctx.window.document.querySelector('.choice-dialog'));
+    ctx.window.document.querySelector('.choice-dialog-confirm').click();
+    await flush();
     assert.deepEqual(ctx.calls.answers, [{ id: 3, proceed: true }]);
   } finally { ctx.destroy(); }
 });
@@ -686,7 +819,7 @@ test('the close question on macOS says the app stays in the Dock', async () => {
   try {
     ctx.calls.check(1, 'close');
     await flush();
-    assert.equal(ctx.window.document.querySelector('#choice-dialog-title').textContent, 'Close the window?');
+    assert.equal(ctx.window.document.querySelector('#choice-dialog-title').textContent, 'Stop 1 session and close the window?');
     assert.match(ctx.window.document.querySelector('.choice-dialog').textContent, /stays in the Dock/);
   } finally { ctx.destroy(); }
 });

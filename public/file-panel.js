@@ -151,49 +151,90 @@ function initFilePanel() {
   });
   if (window.api.unsavedDialog) reportNativeDialogs();
   if (window.api.onUnsavedCheck) {
-    const unsavedCheckReasons = new Map();
-    const reasonChanged = new Map();
-    const answeredReloads = new Set();
-    if (window.api.onUnsavedCheckReason) {
-      window.api.onUnsavedCheckReason((id, reason, token) => {
-        const done = () => { if (window.api.unsavedCheckReasonDone) window.api.unsavedCheckReasonDone(id, token); };
-        if (!unsavedCheckReasons.has(id)) {
-          if (answeredReloads.delete(id) && typeof window.flushStateForExit === 'function') {
-            window.flushStateForExit().catch((err) => console.error('[exit-flush]', err)).finally(done);
-            return;
-          }
-          done();
-          return;
-        }
-        unsavedCheckReasons.set(id, reason);
-        const notify = reasonChanged.get(id);
-        if (notify) notify(reason);
-        done();
-      });
-    }
-    window.api.onUnsavedCheck(async (id, reason) => {
-      if (unsavedCheckReasons.has(id)) return;
-      unsavedCheckReasons.set(id, reason);
-      window.api.unsavedCheckAck(id);
-      let proceed = true;
+    const checks = new Map();
+    const flush = async () => {
+      if (typeof window.flushStateForExit !== 'function') return;
+      let timer;
       try {
-        const asksAboutEdits = collectUnsavedFileTabs().length > 0;
-        proceed = await askAboutUnsavedEdits();
-        // see .ai/contexts/window-frame.md ("Closing the window")
-        if (proceed && unsavedCheckReasons.get(id) === 'close' && !asksAboutEdits) {
-          proceed = await confirmWindowClose(new Promise((resolve) => reasonChanged.set(id, resolve)));
-        }
-      } catch (err) { console.error('[unsaved-check]', err); }
-      const finalReason = unsavedCheckReasons.get(id);
-      reasonChanged.delete(id);
-      // see docs/session-restore.md ("Closing the app")
-      if (proceed && finalReason !== 'reload' && typeof window.flushStateForExit === 'function') {
-        const bound = new Promise((resolve) => setTimeout(resolve, EXIT_FLUSH_BOUND_MS));
-        try { await Promise.race([window.flushStateForExit(), bound]); } catch (err) { console.error('[exit-flush]', err); }
+        await Promise.race([window.flushStateForExit(), new Promise(resolve => { timer = setTimeout(resolve, EXIT_FLUSH_BOUND_MS); })]);
+      } catch (err) { console.error('[exit-flush]', err); }
+      finally { clearTimeout(timer); }
+    };
+    if (window.api.onExitAttemptInvalidated) window.api.onExitAttemptInvalidated(attempt => {
+      unloadApproved = false;
+      if (unloadApprovalTimer) clearTimeout(unloadApprovalTimer);
+      unloadApprovalTimer = null;
+      for (const state of checks.values()) if (state.detail?.attempt === attempt) {
+        state.invalid = true;
+        state.changed?.();
+        cancelUnsavedQuestion?.();
       }
-      if (proceed && finalReason === 'reload') answeredReloads.add(id);
-      window.api.unsavedCheckResult(id, proceed);
-      unsavedCheckReasons.delete(id);
+      if (typeof window.releaseExitState === 'function') window.releaseExitState();
+    });
+    const choose = async state => {
+      while (!state.invalid && state.reason !== 'reload') {
+        const detail = state.detail;
+        let changed;
+        const change = new Promise(resolve => { changed = resolve; });
+        state.changed = changed;
+        window.api.unsavedCheckPhase?.(state.id, detail, 'choosing');
+        const yes = await confirmSessionExit(detail, change);
+        if (state.invalid) return false;
+        if (detail !== state.detail) continue;
+        return yes;
+      }
+      return !state.invalid;
+    };
+    if (window.api.onUnsavedCheckReason) window.api.onUnsavedCheckReason(async (id, reason, token, detail) => {
+      const done = (proceed = true) => window.api.unsavedCheckReasonDone?.(id, token, proceed);
+      const state = checks.get(id);
+      if (state) {
+        unloadApproved = false;
+        if (typeof window.releaseExitState === 'function') window.releaseExitState();
+        state.reason = reason;
+        state.detail = detail || { external: true };
+        state.changed?.();
+        done();
+        return;
+      }
+      done();
+    });
+    window.api.onUnsavedCheck(async (id, reason, detail = null) => {
+      if (checks.has(id)) return;
+      const state = { id, reason, detail, invalid: false };
+      checks.set(id, state);
+      window.api.unsavedCheckAck(id);
+      let proceed = false;
+      try {
+        proceed = await askAboutUnsavedEdits();
+        if (state.reason !== 'reload') approveFilePanelUnload(false);
+        if (proceed && state.detail?.attempt && window.api.getExitAttemptSnapshot) {
+          const detail = state.detail;
+          const snapshot = await window.api.getExitAttemptSnapshot(id, detail);
+          if (snapshot?.rows && detail === state.detail) state.detail = { ...detail, snapshot };
+        }
+        while (proceed && !state.invalid) {
+          proceed = await choose(state);
+          const revision = state.detail;
+          if (proceed && !state.invalid && state.reason !== 'reload') {
+            approveFilePanelUnload(true);
+            window.api.unsavedCheckPhase?.(id, state.detail, 'flushing');
+            await flush();
+          }
+          if (revision === state.detail) break;
+          if (typeof window.releaseExitState === 'function') window.releaseExitState();
+          proceed = true;
+        }
+      } catch (err) { proceed = false; console.error('[unsaved-check]', err); }
+      if (state.invalid) proceed = false;
+      if (!proceed) {
+        unloadApproved = false;
+        if (unloadApprovalTimer) clearTimeout(unloadApprovalTimer);
+        unloadApprovalTimer = null;
+        if (typeof window.releaseExitState === 'function') window.releaseExitState();
+      }
+      window.api.unsavedCheckResult(id, proceed, state.detail);
+      checks.delete(id);
     });
   }
 
@@ -628,6 +669,14 @@ function filePathKey(filePath) {
 
 // see .ai/contexts/viewer-panel.md ("Unsaved edits on quit, reload and close")
 let unloadApproved = false;
+let unloadApprovalTimer = null;
+let cancelUnsavedQuestion = null;
+
+function approveFilePanelUnload(approved) {
+  unloadApproved = approved;
+  if (unloadApprovalTimer) clearTimeout(unloadApprovalTimer);
+  unloadApprovalTimer = approved ? setTimeout(() => { unloadApproved = false; unloadApprovalTimer = null; }, 10000) : null;
+}
 let unsavedPrompt = null;
 
 function collectUnsavedFileTabs() {
@@ -711,7 +760,12 @@ function showUnsavedEditsDialog(tabs) {
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
+    let finished = false;
+    cancelUnsavedQuestion = () => finish(false);
     function finish(proceed) {
+      if (finished) return;
+      finished = true;
+      cancelUnsavedQuestion = null;
       overlay.remove();
       unregister();
       if (returnFocus?.isConnected) returnFocus.focus();
@@ -761,18 +815,38 @@ function reportNativeDialogs() {
 }
 
 // see .ai/contexts/window-frame.md ("Closing the window")
-async function confirmWindowClose(quitting = null) {
+async function confirmSessionExit(detail, changed) {
+  if (!detail || detail.external) return true;
+  const snapshot = detail.snapshot;
+  if (!snapshot || (!snapshot.unknown && !snapshot.rows.length)) return true;
+  const { sessions = 0, plain = 0, panels = 0, attached = 0 } = snapshot.counts;
+  const count = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+  const parts = [sessions && count(sessions, 'session'), plain && count(plain, 'plain terminal'), panels && count(panels, 'panel shell')].filter(Boolean);
+  const total = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts.at(-1) : parts[0] || 'local work';
   const mac = window.api.platform === 'darwin';
-  const result = await showChoiceDialog({
-    title: mac ? 'Close the window?' : 'Close Switchboard?',
-    message: mac ? 'Every session running in it stops; Switchboard stays in the Dock.' : 'Every session running in it stops.',
-    confirmLabel: 'Close',
-    initialFocus: 'cancel',
-    danger: true,
-    returnFocus: document.activeElement,
-    replace: true,
-    closeWith: quitting && quitting.then(() => ({})),
-  });
+  const action = detail.action;
+  const verb = action === 'update' ? 'restart to update' : action === 'close' ? mac ? 'close the window' : 'close Switchboard' : window.api.platform === 'win32' ? 'exit' : 'quit';
+  const label = action === 'update' ? 'update' : action === 'close' ? 'close' : window.api.platform === 'win32' ? 'exit' : 'quit';
+  const displayName = id => {
+    const session = openSessions.get(id)?.session;
+    return session?.name || session?.aiTitle || session?.summary || '';
+  };
+  const message = [];
+  if (snapshot.unknown) message.push('Switchboard could not list the local work that will stop.');
+  for (const row of snapshot.rows) {
+    const short = String(row.id).slice(0, 8);
+    const project = String(row.cwd || '').replace(/\\/g, '/').split('/').filter(Boolean).at(-1) || row.cwd || 'Unknown project';
+    if (row.type === 'panel') message.push('Panel shell of "' + (displayName(row.owner) || row.owner) + '" · ' + short);
+    else message.push((row.type === 'plain' ? 'Plain terminal' : displayName(row.id) ? '"' + displayName(row.id) + '"' : 'Untitled conversation') + ' · ' + project + ' · ' + short);
+  }
+  message.push(sessions > 0 ? 'Their processes end, idle or working, with anything running in them. Each conversation is kept and can be resumed.' : 'Their shells end, with anything running in them.');
+  if (attached) message.push(count(attached, 'session') + ' attached here ' + (attached === 1 ? 'is' : 'are') + ' detached and ' + (attached === 1 ? 'keeps' : 'keep') + ' running in the background.');
+  for (const [alias, n] of Object.entries(snapshot.remote)) if (n) message.push(count(n, 'session') + ' from ' + alias + (n === 1 ? ' keeps' : ' keep') + ' running on ' + alias + '.');
+  if (snapshot.rows.some(row => row.canBackground && (typeof backgroundActionReason !== 'function' || !backgroundActionReason(row.id)))) message.push("To keep a session running, cancel, then use Send to background in its terminal header or its row's menu, where it is offered.");
+  if (mac && action === 'close') message.push('Switchboard stays in the Dock.');
+  const result = await showChoiceDialog({ title: 'Stop ' + total + ' and ' + verb + '?', message,
+    confirmLabel: 'Stop and ' + label, initialFocus: 'cancel', danger: true,
+    returnFocus: document.activeElement, replace: true, closeWith: changed && changed.then(() => null) });
   return result !== null;
 }
 
@@ -786,8 +860,7 @@ function askAboutUnsavedEdits() {
   }, { whenIdle: true }).then((proceed) => {
     unsavedPrompt = null;
     if (proceed) {
-      unloadApproved = true;
-      setTimeout(() => { unloadApproved = false; }, 10000);
+      approveFilePanelUnload(true);
     }
     return proceed;
   });

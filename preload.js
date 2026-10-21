@@ -189,19 +189,22 @@ contextBridge.exposeInMainWorld('api', {
   onIndexingFinished: (callback) => {
     ipcRenderer.on('indexing-finished', () => callback());
   },
+  onExitAttemptInvalidated: callback => ipcRenderer.on('exit-attempt-invalidated', (_event, attempt) => callback(attempt)),
+  getExitAttemptSnapshot: (id, detail) => ipcRenderer.invoke('exit-attempt-snapshot', id, detail),
+  unsavedCheckPhase: (id, detail, phase) => ipcRenderer.send('unsaved-check-phase', id, detail, phase),
   onUnsavedCheck: (callback) => {
-    ipcRenderer.on('unsaved-check', (_event, id, reason) => callback(id, reason));
+    ipcRenderer.on('unsaved-check', (_event, id, reason, detail) => callback(id, reason, detail));
     // see .ai/contexts/window-frame.md ("A window that stops answering")
     ipcRenderer.on('unsaved-ping', (_event, token) => ipcRenderer.send('unsaved-pong', token));
     ipcRenderer.send('unsaved-ready');
   },
   onUnsavedCheckReason: (callback) => {
-    ipcRenderer.on('unsaved-check-reason', (_event, id, reason, token) => callback(id, reason, token));
+    ipcRenderer.on('unsaved-check-reason', (_event, id, reason, token, detail) => callback(id, reason, token, detail));
   },
   unsavedCheckAck: (id) => ipcRenderer.send('unsaved-check-ack', id),
   unsavedDialog: (open) => ipcRenderer.send('unsaved-dialog', open === true),
-  unsavedCheckResult: (id, proceed) => ipcRenderer.send('unsaved-check-result', id, proceed),
-  unsavedCheckReasonDone: (id, token) => ipcRenderer.send('unsaved-check-reason-done', id, token),
+  unsavedCheckResult: (id, proceed, detail) => ipcRenderer.send('unsaved-check-result', id, proceed, detail),
+  unsavedCheckReasonDone: (id, token, proceed = true) => ipcRenderer.send('unsaved-check-reason-done', id, token, proceed),
   onExitFlush: (callback) => {
     ipcRenderer.on('exit-flush', () => callback());
   },

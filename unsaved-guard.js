@@ -2,25 +2,50 @@
 
 // see .ai/contexts/viewer-panel.md ("Unsaved edits on quit, reload and close")
 
+const { createExitAttempts } = require('./session-exit');
+
 const DEFAULT_TIMEOUT_MS = 2500;
 const DEFAULT_PROBE_MS = 1500;
 const DEFAULT_DIALOG_CEILING_MS = 5 * 60 * 1000;
 const REASON_RANK = { reload: 0, close: 1, quit: 2 };
 const LOGOFF_CANCEL_MS = 60000;
 
-function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs = DEFAULT_PROBE_MS, dialogCeilingMs = DEFAULT_DIALOG_CEILING_MS, logoffCancelMs = LOGOFF_CANCEL_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {} }) {
+function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs = DEFAULT_PROBE_MS, dialogCeilingMs = DEFAULT_DIALOG_CEILING_MS, logoffCancelMs = LOGOFF_CANCEL_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {}, inventory = () => ({ rows: [], counts: {}, remote: {} }), externalFlush = () => {}, onAttemptReleased = () => {} }) {
   const pending = new Map();
   const probes = new Map();
   const dialogs = new WeakSet();
   const windows = new WeakMap();
   let nextId = 1;
-  let quitApproved = false;
   let logoffApproved = false;
   let logoffTimer = null;
   let quitAsking = false;
+  let userQuitPromise = null;
+  let actedQuitToken = null;
   let inflight = null;
   let current = null;
-  const approvedToQuit = () => quitApproved || logoffApproved;
+  const attempts = createExitAttempts({ snapshot: inventory, check: askFull,
+    cancelCheck: win => {
+      if (current?.win === win) current.finish(false);
+      for (const release of reasonWaits.values()) if (release.wc === win?.webContents) release(false);
+    },
+    invalidateRenderer: (win, attempt, wasCommitted = false) => {
+      if (!wasCommitted) onAttemptReleased();
+      windows.get(win)?.invalidate();
+      try { win?.webContents.send('exit-attempt-invalidated', attempt); } catch {}
+    },
+  });
+  let externalDrain = null;
+  const closeApproved = win => attempts.token(win) != null;
+
+  ipcMain.handle?.('exit-attempt-snapshot', (event, id, detail) => {
+    const entry = pending.get(id);
+    if (!entry || event?.sender !== entry.wc) return null;
+    return attempts.refresh(entry.win, detail);
+  });
+  ipcMain.on('unsaved-check-phase', (event, id, detail, phase) => {
+    const entry = pending.get(id);
+    if (entry && event?.sender === entry.wc) attempts.phase(detail, phase);
+  });
 
   ipcMain.on('unsaved-pong', (event, token) => {
     const probed = probes.get(token);
@@ -39,27 +64,33 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
   ipcMain.on('unsaved-ready', (event) => {
     const entry = current;
     if (!entry || entry.acked || !event || event.sender !== entry.wc) return;
-    try { entry.wc.send('unsaved-check', entry.id, entry.reason); } catch {}
+    try { entry.wc.send('unsaved-check', entry.id, entry.reason, entry.detail); } catch {}
   });
 
-  ipcMain.on('unsaved-check-ack', (_event, id) => {
+  ipcMain.on('unsaved-check-ack', (event, id) => {
     const entry = pending.get(id);
-    if (!entry || entry.acked) return;
+    if (!entry || entry.acked || event?.sender !== entry.wc) return;
     entry.acked = true;
     responsive(entry.win);
     entry.arm();
   });
 
-  ipcMain.on('unsaved-check-result', (_event, id, proceed) => {
+  ipcMain.on('unsaved-check-result', (event, id, proceed, detail) => {
     const entry = pending.get(id);
-    if (!entry) return;
+    if (!entry || event?.sender !== entry.wc) return;
+    if (entry.detail && (detail?.attempt !== entry.detail.attempt || detail?.version !== entry.detail.version)) {
+      entry.acked = false;
+      entry.arm();
+      try { entry.wc.send('unsaved-check', entry.id, entry.reason, entry.detail); } catch { entry.finish(true, 'unanswered'); }
+      return;
+    }
     entry.finish(proceed === true);
   });
 
   const reasonWaits = new Map();
-  ipcMain.on('unsaved-check-reason-done', (_event, _id, token) => {
+  ipcMain.on('unsaved-check-reason-done', (event, _id, token, proceed = true) => {
     const release = reasonWaits.get(token);
-    if (release) release();
+    if (release && release.wc === event?.sender) release(proceed);
   });
 
   function waitReasonDone(token, wc) {
@@ -67,13 +98,14 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     const done = new Promise((resolve) => {
       const timer = setTimeoutFn(() => release(), timeoutMs);
       const onGone = () => release();
-      release = () => {
+      release = (proceed = true) => {
         reasonWaits.delete(token);
         clearTimeoutFn(timer);
         wc.removeListener('render-process-gone', onGone);
         wc.removeListener('destroyed', onGone);
-        resolve();
+        resolve(proceed !== false);
       };
+      release.wc = wc;
       reasonWaits.set(token, release);
       wc.on('render-process-gone', onGone);
       wc.on('destroyed', onGone);
@@ -87,14 +119,14 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
   }
 
   // see .ai/contexts/window-frame.md ("A window that stops answering")
-  function askFull(win, reason) {
+  function askFull(win, reason, detail = null) {
     if (inflight) {
-      if (REASON_RANK[reason] > REASON_RANK[inflight.entry.reason]) {
+      if (REASON_RANK[reason] > REASON_RANK[inflight.entry.reason] || (detail && detail.version !== inflight.entry.detail?.version)) {
         const joined = inflight;
         joined.held = true;
         joined.upgrades = (joined.upgrades || 0) + 1;
         const token = nextId++;
-        const sent = joined.entry.upgrade(reason, token);
+        const sent = joined.entry.upgrade(reason, token, detail);
         const wait = waitReasonDone(token, win.webContents);
         if (!sent) wait.release();
         joined.asked = joined.asked.then((result) => {
@@ -102,7 +134,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
             wait.release();
             return result;
           }
-          return wait.done.then(() => result);
+          return wait.done.then(proceed => ({ ...result, proceed: result.proceed && proceed }));
         }).then((result) => {
           joined.upgrades -= 1;
           if (joined.upgrades === 0 && inflight === joined) inflight = null;
@@ -111,11 +143,12 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
       }
       return inflight.asked;
     }
+    if (!win) return Promise.resolve({ proceed: true, ended: null });
     const wc = win.webContents;
     if (win.isDestroyed() || !wc || wc.isDestroyed() || wc.isCrashed()) return Promise.resolve({ proceed: true, ended: null });
     let settled = false;
     const id = nextId++;
-    const entry = { id, win, wc, reason, acked: false, overdue: false, probe: null, timer: null, finish: null, arm: null, upgrade: null };
+    const entry = { id, win, wc, reason, detail, acked: false, overdue: false, probe: null, timer: null, finish: null, arm: null, upgrade: null };
     const asked = new Promise((resolve) => {
       const onGone = () => entry.finish(true);
       const stop = () => {
@@ -129,10 +162,11 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
         if (entry.reason !== 'close') entry.timer = setTimeoutFn(() => entry.finish(true, 'unanswered'), dialogs.has(wc) ? dialogCeilingMs : timeoutMs);
         else if (!dialogs.has(wc)) entry.timer = setTimeoutFn(() => { entry.overdue = true; }, timeoutMs);
       };
-      entry.upgrade = (to, token) => {
+      entry.upgrade = (to, token, nextDetail) => {
         entry.reason = to;
+        entry.detail = nextDetail;
         let sent = true;
-        try { wc.send('unsaved-check-reason', id, to, token); } catch { sent = false; }
+        try { wc.send('unsaved-check-reason', id, to, token, nextDetail); } catch { sent = false; }
         entry.arm();
         return sent;
       };
@@ -157,7 +191,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
       wc.on('render-process-gone', onGone);
       wc.on('destroyed', onGone);
       try {
-        wc.send('unsaved-check', id, reason);
+        wc.send('unsaved-check', id, reason, detail);
       } catch {
         entry.finish(true);
       }
@@ -225,35 +259,56 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     if (state && state.unresponsive) force(win);
   }
 
-  function beforeQuit(event, win) {
-    if (approvedToQuit() || !win || win.isDestroyed()) return false;
+  function beforeQuit(event, win, token = null) {
+    if (attempts.committed(token) || (token == null && logoffApproved) || !win || win.isDestroyed()) return false;
+    if (attempts.token(win) != null) attempts.invalidate();
     event.preventDefault();
     if (quitAsking) return true;
     quitAsking = true;
-    askFull(win, 'quit').then(({ proceed, ended }) => {
+    attempts.request(win, 'quit', true).then(({ proceed, ended, token: committed }) => {
       quitAsking = false;
       if (!proceed) return;
-      quitApproved = true;
       if (ended) markQuitUnanswered(win);
-      quit();
+      finishQuit(committed);
     });
     return true;
   }
 
+  function requestQuit(win) {
+    if (attempts.token(win) != null) return Promise.resolve();
+    if (userQuitPromise) return userQuitPromise;
+    userQuitPromise = attempts.request(win, 'quit').then(({ proceed, ended, token, action }) => {
+      if (!proceed || action !== 'quit') return;
+      if (ended) markQuitUnanswered(win);
+      finishQuit(token);
+    }).finally(() => { userQuitPromise = null; });
+    return userQuitPromise;
+  }
+
+  function finishQuit(token) {
+    if (actedQuitToken === token) return;
+    actedQuitToken = token;
+    quit(token);
+  }
+
   function attach(win) {
-    let approved = false;
     let closing = false;
     let reloading = false;
     let allowNextUnload = false;
     const state = { unanswered: false, quitUnanswered: false, unresponsive: false, closesSeen: 0 };
+    state.invalidate = () => { allowNextUnload = false; state.unanswered = false; state.quitUnanswered = false; state.closesSeen = 0; };
     windows.set(win, state);
 
     const endSession = (final) => {
+      attempts.invalidate();
+      for (const release of reasonWaits.values()) release();
+      if (!externalDrain) externalDrain = Promise.resolve().then(externalFlush);
       logoffApproved = true;
       if (logoffTimer) clearTimeoutFn(logoffTimer);
       logoffTimer = final ? null : setTimeoutFn(() => {
         logoffTimer = null;
         logoffApproved = false;
+        externalDrain = null;
       }, logoffCancelMs);
       const wc = win.webContents;
       if (win.isDestroyed() || !wc || wc.isDestroyed()) return;
@@ -271,7 +326,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     win.webContents.on('did-navigate', () => dialogs.delete(win.webContents));
 
     win.on('close', (event) => {
-      if (approved || approvedToQuit()) {
+      if (closeApproved(win)) {
         if (state.quitUnanswered && !state.unanswered) {
           state.unanswered = true;
           if (state.unresponsive) {
@@ -292,10 +347,9 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
         return;
       }
       closing = true;
-      askFull(win, 'close').then(({ proceed, ended }) => {
+      attempts.request(win, 'close').then(({ proceed, ended, action }) => {
         closing = false;
-        if (!proceed) return;
-        approved = true;
+        if (!proceed || action !== 'close') return;
         if (ended === 'hung') force(win);
         if (win.isDestroyed()) return;
         if (ended === 'unanswered') markUnanswered(win);
@@ -305,7 +359,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     });
 
     win.webContents.on('will-prevent-unload', (event) => {
-      if (approved || approvedToQuit() || allowNextUnload) {
+      if (closeApproved(win) || allowNextUnload) {
         allowNextUnload = false;
         event.preventDefault();
         return;
@@ -325,19 +379,18 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
   }
 
   function confirmQuit(win) {
-    return askFull(win, 'quit').then(({ proceed, ended }) => {
-      if (!proceed) return false;
-      quitApproved = true;
-      if (ended) markQuitUnanswered(win);
-      return true;
+    return attempts.request(win, 'update').then(({ proceed, ended, action }) => {
+      if (proceed && ended) markQuitUnanswered(win);
+      return proceed && action === 'update';
     });
   }
 
-  function approveQuit() {
-    quitApproved = true;
+  function approveQuit(win = null) {
+    return attempts.request(win, 'update');
   }
 
-  return { attach, beforeQuit, confirmQuit, approveQuit };
+  return { attach, beforeQuit, requestQuit, confirmQuit, approveQuit,
+    committedToken: attempts.token, launchAllowed: attempts.launchAllowed, invalidate: attempts.invalidate };
 }
 
 module.exports = { createUnsavedGuard, DEFAULT_TIMEOUT_MS, DEFAULT_PROBE_MS, DEFAULT_DIALOG_CEILING_MS, LOGOFF_CANCEL_MS };

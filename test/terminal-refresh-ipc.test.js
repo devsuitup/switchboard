@@ -135,7 +135,8 @@ test('remote open, reattach and launch preserve the adapter sizing capability in
     const attachResult = { ok: true, ptyProcess: {}, remoteResizeAllowed };
     const context = vm.createContext({
       activeSessions,
-      mainWindow: { webContents: { send() {} } },
+    mainWindow: { webContents: { send() {} } },
+    unsavedGuard: { launchAllowed: () => true },
       ipcMain: { handle: (name, cb) => handlers.set(name, cb) },
       getCachedFolder: () => 'remote-folder',
       isRemoteFolder: () => true,

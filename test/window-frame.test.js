@@ -33,6 +33,20 @@ function menuItems(template) {
   return items;
 }
 
+for (const [platform, label, accelerator] of [['win32', 'Exit', undefined], ['linux', 'Quit', 'Ctrl+Q'], ['darwin', 'Quit Switchboard', 'Cmd+Q']]) {
+  test(`B5 ${platform} exit menu keeps its label and accelerator`, () => {
+    let requests = 0;
+    const onQuit = () => { requests++; };
+    const item = menuItems(applicationMenuTemplate('Switchboard', { platform, onQuit })).find(entry => entry.click === onQuit);
+    assert.ok(item);
+    assert.equal(item.label, label);
+    assert.equal(item.accelerator, accelerator);
+    if (platform === 'win32') assert.equal(Object.hasOwn(item, 'accelerator'), false);
+    item.click();
+    assert.equal(requests, 1);
+  });
+}
+
 test('every keyboard role is in the application menu, with its default accelerator left alone', () => {
   const items = menuItems(applicationMenuTemplate('Switchboard'));
   const roles = items.filter((i) => i.role).map((i) => i.role);
@@ -67,7 +81,7 @@ test('Help → What\'s new, last in the menu, calls the handler it is given', ()
 test('main.js installs the menu as the application menu and never removes it', () => {
   assert.match(
     MAIN_SRC,
-    /Menu\.setApplicationMenu\(\s*Menu\.buildFromTemplate\(\s*applicationMenuTemplate\(\s*app\.name\s*,\s*\{\s*onWhatsNew:\s*showWhatsNewFromMenu\s*\}\s*\)\s*\)\s*\)/,
+    /Menu\.setApplicationMenu\(\s*Menu\.buildFromTemplate\(\s*applicationMenuTemplate\(\s*app\.name\s*,\s*\{\s*onWhatsNew:\s*showWhatsNewFromMenu, onQuit: \(\) => unsavedGuard\.requestQuit\(mainWindow\)\s*\}\s*\)\s*\)\s*\)/,
     'buildMenu must set the template as the application menu: its accelerators live there',
   );
   assert.doesNotMatch(MAIN_SRC, /setApplicationMenu\(\s*null\s*\)/, 'setApplicationMenu(null) unregisters every accelerator');
