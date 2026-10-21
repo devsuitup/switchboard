@@ -7,6 +7,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Changed
 - Quit (Exit on Windows), Restart to update and window close now name the local sessions, plain terminals and panel shells that will stop, with Stop and Cancel choices. Unsaved edits are handled first; attached background jobs and remote sessions are identified as continuing. (#546, #562)
 
+### Fixed
+- Sessions resumed interactively no longer keep a background badge or appear as running background jobs because of an old daemon job file. (#764)
+
 ## v0.0.99 — 2026-10-21
 
 ### Changed
