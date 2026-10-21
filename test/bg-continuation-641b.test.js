@@ -294,7 +294,7 @@ test('typed /bg, altscreen off, collision daemon fork and attach row produce one
   w.pendingSessions = new Map();
   loadAppFunctions(renderer.context, {
     declarations: ['lastActivityTime', 'sandboxedSessions', 'ptyGenerations', 'pendingOpens', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'openingSessions'],
-    functions: ['rekeySessionEnvironment', 'attachBackgroundContinuation', 'beginPtyOpen', 'settlePtyOpen', 'handleProcessExited'],
+    functions: ['rekeySessionTab', 'rekeySessionEnvironment', 'attachBackgroundContinuation', 'beginPtyOpen', 'settlePtyOpen', 'handleProcessExited'],
   });
   const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   const start = source.indexOf('window.api.onSessionForked(');

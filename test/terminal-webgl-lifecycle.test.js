@@ -6,6 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { setupTerminalDom } = require('./terminal-manager-harness');
+const { loadAppFunctions } = require('./app-source');
 
 function fixture({ trace = false } = {}) {
   const h = setupTerminalDom();
@@ -72,6 +73,7 @@ function loadShippedListener(f, listener) {
   f.w.pendingSessions = new Map();
   f.w.terminalHeaderId = f.w.document.createElement('span');
   f.w.terminalHeaderName = f.w.document.createElement('span');
+  if (listener === 'onSessionForked') loadAppFunctions(f.context, { functions: ['rekeySessionTab'] });
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
   const start = src.indexOf(`window.api.${listener}(`);
   assert.ok(start >= 0, `${listener} found in app.js`);

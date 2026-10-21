@@ -219,12 +219,12 @@ let persistSkippedWhileExiting = false;
 let savedWorkingSetRead = false;
 const EXIT_FLUSH_GRACE_MS = 10000;
 
-function persistWorkingSet({ final = false } = {}) {
+function persistWorkingSet({ final = false, checked = false } = {}) {
   if (exitingApp && !final) {
     persistSkippedWhileExiting = true;
     return _persistChain;
   }
-  _persistChain = _persistChain.then(async () => {
+  const write = _persistChain.then(async () => {
     const g = await window.api.getSetting('global');
     const global = g || {};
     const set = [];
@@ -267,8 +267,9 @@ function persistWorkingSet({ final = false } = {}) {
     }
     global.openWorkingSet = set;
     await window.api.setSetting('global', global);
-  }).catch((e) => { console.warn('[switchboard] failed to persist working set', e); });
-  return _persistChain;
+  });
+  _persistChain = write.catch((e) => { if (!checked) console.warn('[switchboard] failed to persist working set', e); });
+  return checked ? write : _persistChain;
 }
 
 // see .ai/contexts/session-cache.md ("Working-set restore: retry until indexing is done")
@@ -295,7 +296,7 @@ function schedulePersistWorkingSet() {
   }, 500);
 }
 
-async function flushStateForExit() {
+async function flushStateForExit({ checked = false } = {}) {
   if (persistWorkingSetTimer) {
     clearTimeout(persistWorkingSetTimer);
     persistWorkingSetTimer = null;
@@ -311,8 +312,12 @@ async function flushStateForExit() {
       persistWorkingSet();
     }
   }, EXIT_FLUSH_GRACE_MS);
-  if (!savedWorkingSetRead) return _persistChain;
-  return persistWorkingSet({ final: true });
+  if (!savedWorkingSetRead) {
+    if (checked) throw new Error('saved set not read');
+    return _persistChain;
+  }
+  await persistWorkingSet({ final: true, checked });
+  if (checked) return { saved: true };
 }
 window.flushStateForExit = flushStateForExit;
 if (window.api.onExitFlush) window.api.onExitFlush(() => { flushStateForExit(); });
@@ -817,8 +822,7 @@ window.api.onSessionDetected((tempId, realId) => {
   pollActiveSessions();
 });
 
-window.api.onSessionForked((oldId, newId, kind, background) => {
-  if (window.ATRACE) window.atrace('recv.session-forked', newId, { oldId, known: openSessions.has(oldId) });
+function rekeySessionTab(oldId, newId, kind, background, rekeyActivity, { spawnAttach = true } = {}) {
   const entry = openSessions.get(oldId);
   if (!entry) return;
 
@@ -838,11 +842,8 @@ window.api.onSessionForked((oldId, newId, kind, background) => {
 
   if (typeof syncToolBar === 'function') syncToolBar();
 
-  if (kind === 'background') rekeyActivityState(oldId, newId, true);
-  else if (kind === 'continuation') rekeyActivityState(oldId, newId, false, true);
-  else rekeyActivityState(oldId, newId);
+  rekeyActivity();
 
-  // Re-key pending session to newId so sidebar item persists until DB has real data
   const pendingEntry = pendingSessions.get(oldId);
   pendingSessions.delete(oldId);
   if (pendingEntry) {
@@ -860,7 +861,7 @@ window.api.onSessionForked((oldId, newId, kind, background) => {
   if (kind === 'background' && background?.jobId) {
     entry.session.bgJobId = background.jobId;
     entry.session.bgSessionId = newId;
-    entry.backgroundAttach = attachBackgroundContinuation(entry, background);
+    if (spawnAttach) entry.backgroundAttach = attachBackgroundContinuation(entry, background);
   }
 
   terminalHeaderId.textContent = newId;
@@ -878,6 +879,15 @@ window.api.onSessionForked((oldId, newId, kind, background) => {
   }).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
   schedulePersistWorkingSet();
   pollActiveSessions();
+}
+
+window.api.onSessionForked((oldId, newId, kind, background) => {
+  if (window.ATRACE) window.atrace('recv.session-forked', newId, { oldId, known: openSessions.has(oldId) });
+  rekeySessionTab(oldId, newId, kind, background, () => {
+    if (kind === 'background') rekeyActivityState(oldId, newId, true);
+    else if (kind === 'continuation') rekeyActivityState(oldId, newId, false, true);
+    else rekeyActivityState(oldId, newId);
+  }, { spawnAttach: true });
 });
 
 function applyProcessExit(sessionId, exitCode, signal, stopped) {
