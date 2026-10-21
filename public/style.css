@@ -1180,6 +1180,7 @@ body { display: flex; flex-direction: column; }
 
 /* Busy session WITH live subagents: the same spinner, same cadence, violet
    hue — see .ai/contexts/session-state.md. See docs/subagents.md "Live status". */
+.session-icon--busy.has-busy-agents::before,
 .grid-card.has-busy-agents .session-icon--busy::before,
 .session-item.has-busy-agents .session-icon--busy::before {
   color: var(--accent);
@@ -1646,18 +1647,8 @@ body { display: flex; flex-direction: column; }
 }
 
 #terminal-header-status {
-  width: 8px;
-  height: 8px;
-  margin: 6px 0 6px 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: #6a6a80;
+  margin: 8px 0 8px 8px;
   cursor: default;
-}
-
-#terminal-header-status.running {
-  background: #3ecf5a;
-  box-shadow: 0 0 6px rgba(62,207,90,0.5);
 }
 
 #terminal-header-session #terminal-header-sandbox {

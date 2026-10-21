@@ -16,7 +16,6 @@ const {
   createHeaderToggle,
   setHeaderToggle,
 } = require('../public/header-controls');
-const { terminalStatusLabel } = require('../public/process-exit');
 const { STRIP_HEIGHT } = require('../window-frame');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 const { loadAppFunctions } = require('./app-source');
@@ -38,7 +37,6 @@ test('header Refresh is disabled with an accessible reason until the session is 
     window.activeSessionId = 's';
     window.terminalHeaderStatus = window.document.createElement('span');
     window.terminalStopBtn = window.document.getElementById('terminal-stop-btn');
-    window.terminalStatusLabel = terminalStatusLabel;
     window.forgetSessionExit = () => {};
     window.lastSessionExit = () => null;
     const calls = [];
@@ -198,7 +196,7 @@ test('Stop is set apart from the toggles by a divider that is not part of its hi
   assert.match(divider[0].body, /pointer-events:\s*none/);
 });
 
-test('the process status is a dot right before the session name, with its words in the tooltip', () => {
+test('the activity slot sits before the session name, with its words in the tooltip', () => {
   const doc = new JSDOM(HTML).window.document;
   const dot = doc.getElementById('terminal-header-status');
   assert.equal(dot.parentElement.id, 'terminal-header-label');
@@ -206,18 +204,11 @@ test('the process status is a dot right before the session name, with its words 
   assert.equal(dot.nextElementSibling.id, 'terminal-header-name', 'the dot sits right before the name');
   assert.equal(dot.textContent, '', 'no text beside the dot');
   assert.equal(dot.getAttribute('role'), 'img', 'so that its aria-label is read');
+  assert.equal(dot.classList.contains('session-icon'), true);
   assert.equal(HEADER_CONTROLS.some((c) => c.id === 'terminal-header-status'), false, 'it is not in the right-hand row');
 
-  assert.equal(terminalStatusLabel(true, null), 'Open here');
-  assert.equal(terminalStatusLabel(true, { exitCode: 1, signal: null }), 'Open here', 'a relaunched session is running whatever its last exit');
-  assert.equal(terminalStatusLabel(false, { exitCode: 0, signal: null }), 'Exited (code 0)');
-  assert.equal(terminalStatusLabel(false, { exitCode: 137, signal: null }), 'Exited (code 137)');
-  assert.equal(terminalStatusLabel(false, { exitCode: 0, signal: 'SIGKILL' }), 'Killed (SIGKILL)');
-  assert.equal(terminalStatusLabel(false, null), 'Not running');
-
   const app = fs.readFileSync(path.join(ROOT, 'public', 'app.js'), 'utf8');
-  assert.match(app, /terminalHeaderStatus\.title = status;/);
-  assert.match(app, /terminalHeaderStatus\.setAttribute\('aria-label', status\);/);
+  assert.match(app, /paintTerminalHeaderStatus\(activeSessionId\);/);
   assert.doesNotMatch(app, /terminalHeaderStatus\.textContent/, 'the dot carries no text');
 });
 
@@ -247,16 +238,19 @@ test('both header toggles cascade to the same on state, the sidebar filter butto
   assert.deepEqual(look('archive-toggle'), shell, 'the same accent on state as the sidebar\'s archive filter');
 });
 
-test('the status dot cascades to grey when stopped and green when running', () => {
+test('the header slot shares the idle and Not running shapes and colours', () => {
   const window = cascadedRow();
   const dot = window.document.getElementById('terminal-header-status');
-  dot.className = 'stopped';
+  dot.className = 'session-icon session-icon--stale';
   const stopped = window.getComputedStyle(dot).backgroundColor;
-  dot.className = 'running';
+  assert.equal(window.getComputedStyle(dot).transform, 'scaleY(0.333333)');
+  assert.equal(window.getComputedStyle(dot).opacity, '1');
+  dot.className = 'session-icon session-icon--idle running';
   const running = window.getComputedStyle(dot).backgroundColor;
   assert.notEqual(stopped, running);
-  assert.match(`${stopped} ${running}`, /#6a6a80|rgb\(106, 106, 128\)/i);
+  assert.match(stopped, /#808080|rgb\(128, 128, 128\)/i);
   assert.match(running, /#3ecf5a|rgb\(62, 207, 90\)/i);
+  assert.match(window.getComputedStyle(dot).boxShadow, /0 4px 0 -2px/);
 });
 
 test('the header is exactly as tall as the strip: its buttons and padding fit inside the strip\'s minimum height', () => {
@@ -274,14 +268,19 @@ test('the header is exactly as tall as the strip: its buttons and padding fit in
     'one more pixel of padding and the header would outgrow the strip');
 });
 
-test('the running dot keeps room for its glow inside the name container, which clips', () => {
+test('the header slot keeps room for shared glyphs and halos inside the clipping name container', () => {
   const info = ruleBodies(/^#terminal-header-info$/)[0].body;
   assert.match(info, /overflow:\s*hidden/, 'the container clips, for the name\'s ellipsis');
   const dot = ruleBodies(/^#terminal-header-status$/)[0].body;
-  const running = ruleBodies(/^#terminal-header-status\.running$/)[0].body;
-  const blur = Number(/box-shadow:\s*0 0 (\d+)px/.exec(running)[1]);
+  assert.doesNotMatch(dot, /background|box-shadow|border-radius|width|height/);
   const [top, , bottom, left] = /margin:\s*(\d+)(?:px)? (\d+)(?:px)? (\d+)(?:px)? (\d+)(?:px)?;/.exec(dot).slice(1).map(Number);
+  const haloSizes = ruleBodies(/\.session-icon(?:--[\w-]+)?\b/).flatMap(({ body }) =>
+    [...body.matchAll(/box-shadow:\s*([^;]+);/g)].flatMap(([, shadow]) =>
+      [...shadow.replace(/(?:rgba?|var)\([^)]*\)/g, '').matchAll(/(?:^|,)\s*(-?[\d.]+)(?:px)?\s+(-?[\d.]+)(?:px)?(?:\s+(-?[\d.]+)(?:px)?)?(?:\s+(-?[\d.]+)(?:px)?)?/g)]
+        .flatMap(match => [Number(match[3] || 0), Number(match[4] || 0)])));
+  assert.ok(haloSizes.length, 'shared slot shadows were found in the stylesheet');
+  const largestHalo = Math.max(...haloSizes);
   for (const [side, room] of [['top', top], ['bottom', bottom], ['left', left]]) {
-    assert.ok(room >= blur, `${side} margin ${room}px must cover the ${blur}px glow`);
+    assert.ok(room >= largestHalo, `${side} margin ${room}px must cover the largest shared blur or spread (${largestHalo}px)`);
   }
 });

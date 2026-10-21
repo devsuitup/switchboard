@@ -1662,10 +1662,7 @@ function updateTerminalHeader() {
   if (!activeSessionId) return;
   const running = activePtyIds.has(activeSessionId);
   if (running) forgetSessionExit(activeSessionId);
-  const status = terminalStatusLabel(running, lastSessionExit(activeSessionId));
-  terminalHeaderStatus.className = running ? 'running' : 'stopped';
-  terminalHeaderStatus.title = status;
-  terminalHeaderStatus.setAttribute('aria-label', status);
+  paintTerminalHeaderStatus(activeSessionId);
   terminalStopBtn.style.display = running ? '' : 'none';
   const refreshButton = document.getElementById('terminal-refresh-btn');
   refreshButton.disabled = !running;

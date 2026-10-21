@@ -23,11 +23,6 @@ function processExitLabel(exit) {
   return 'Exited';
 }
 
-function terminalStatusLabel(running, exit) {
-  if (running) return lifecycleLabel({ ptyHere: true });
-  return exit ? processExitLabel(exit) : 'Not running';
-}
-
 function lifecycleLabel({ ptyHere, attach, job, remoteAlias, liveness, exit, dormant }) {
   if (ptyHere) {
     if (remoteAlias) return `Attached here · runs on ${remoteAlias}`;
@@ -55,6 +50,6 @@ function exitBannerColour(exit) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     noteSessionExit, forgetSessionExit, lastSessionExit,
-    processExitLabel, terminalStatusLabel, lifecycleLabel, exitBannerPhrase, exitBannerColour,
+    processExitLabel, lifecycleLabel, exitBannerPhrase, exitBannerColour,
   };
 }

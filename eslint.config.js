@@ -249,6 +249,7 @@ const rendererCrossFileGlobals = {
   isSessionAlive: 'readonly',
   paintSessionIcon: 'readonly',
   paintSessionIconFromSnapshot: 'readonly',
+  paintTerminalHeaderStatus: 'readonly',
   // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
   setRemoteAttached: 'readonly',
   applyRemoteStopped: 'readonly',
@@ -342,7 +343,6 @@ const rendererCrossFileGlobals = {
   createHeaderToggle: 'readonly',
   setHeaderToggle: 'readonly',
   // public/process-exit.js — see .ai/contexts/window-frame.md
-  terminalStatusLabel: 'readonly',
   lifecycleLabel: 'readonly',
   noteSessionExit: 'readonly',
   forgetSessionExit: 'readonly',

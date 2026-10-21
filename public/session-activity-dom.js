@@ -237,6 +237,11 @@ function applyStateClasses(sessionId, snapshot) {
   if (snapshot?.attention && typeof clearHeadUnread === 'function') clearHeadUnread(sessionId);
   const item = sessionItemEl(sessionId);
   if (!item) {
+    paintTerminalHeaderStatus(sessionId, snapshot);
+    if (activeSessionId && sessionId !== activeSessionId) {
+      const row = localMergedMemberRows.get(sessionId) || (typeof sessionMap !== 'undefined' && sessionMap.get(sessionId));
+      if (row && rowSessionIds(row).includes(activeSessionId)) paintTerminalHeaderStatus(activeSessionId);
+    }
     if (typeof updateGridSubagentPills === 'function') updateGridSubagentPills(sessionId);
     return;
   }
@@ -248,6 +253,7 @@ function applyStateClasses(sessionId, snapshot) {
   snapshot = taskActivitySnapshot(sessionId, snapshot, row);
   snapshot = mergedRowSnapshot(ids, sessionId, snapshot, row);
   const icon = renderSessionIcon(snapshot);
+  if (ids.includes(activeSessionId)) paintTerminalHeaderStatus(activeSessionId, snapshot, row, icon);
   // Row classes read snapshot fields directly, not icon.classes — see .ai/contexts/session-state.md ("The local-pty adapter")
   const attention = !!(snapshot && snapshot.attention);
   const ready = !!(snapshot && snapshot.responseReady);
@@ -282,6 +288,20 @@ function applyStateClasses(sessionId, snapshot) {
 }
 
 // One icon slot per row, written here and nowhere else — see .ai/contexts/session-state.md
+function paintTerminalHeaderStatus(sessionId, snapshot, row, icon) {
+  if (sessionId !== activeSessionId || typeof terminalHeaderStatus === 'undefined' || !terminalHeaderStatus) return;
+  if (!row) {
+    row = localActivityRow(sessionId) || { sessionId };
+    snapshot = mergedRowSnapshot(rowSessionIds(row), sessionId,
+      snapshot ? taskActivitySnapshot(sessionId, snapshot, row) : storedActivitySnapshot(sessionId, row), row);
+  }
+  terminalHeaderStatus.classList.add('session-icon');
+  terminalHeaderStatus.classList.toggle('running', activePtyIds.has(sessionId));
+  setHasBusyAgents(terminalHeaderStatus, snapshot?.agentsBusy);
+  writeIconSlot(terminalHeaderStatus, icon || renderSessionIcon(snapshot), null, null, null,
+    rowLifecycleLabel(sessionId, snapshot, row));
+}
+
 function rowLifecycleLabel(sessionId, snapshot, row) {
   if (typeof lifecycleLabel !== 'function') return null;
   row ||= localActivityRow(sessionId) || { sessionId };

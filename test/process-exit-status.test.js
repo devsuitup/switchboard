@@ -1,4 +1,4 @@
-// What the session header's status dot and the exit banners say about a
+// What the session header's activity slot and exit banners say about a
 // session's process. see .ai/contexts/window-frame.md ("The session header's controls")
 //
 // app.js cannot be evaluated whole in jsdom, so the shipped onProcessExited
@@ -47,7 +47,6 @@ const PRELUDE = `
   let sessionOpenedOutsideRestore = false;
   const openSessions = new Map();
   const sessionMap = new Map();
-  var localMergedMemberRows = new Map();
   const pendingSessions = new Map();
   const skippedWorkingSetEntries = new Set();
   const dormantWorkingSet = new Map();
@@ -68,7 +67,6 @@ const PRELUDE = `
   function setActiveSession() {}
   function refreshSidebar() {}
   function dropLocalPtySession(id) { calls.dropped.push(id); }
-  function sessionItemEl() { return null; }
   const ptyGenerations = new Map();
   const pendingOpens = new Map();
   function updateRunningIndicators() {}
@@ -106,9 +104,10 @@ function setup() {
   const run = (src, filename) => vm.runInContext(src, ctx, { filename });
   run(fs.readFileSync(path.join(ROOT, 'public', 'utils.js'), 'utf8'), 'utils.js');
   run(PRELUDE, 'prelude.js');
-  loadAppFunctions(ctx, {
-    functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(ROOT, 'public/session-activity-dom.js'),
-  });
+  for (const file of ['session-state.js', 'session-activity-dom.js', 'session-activity.js']) {
+    run(fs.readFileSync(path.join(ROOT, 'public', file), 'utf8'), file);
+  }
+  run(`dropLocalPtySession = id => { localPtyStates.delete(id); calls.dropped.push(id); };`, 'drop-spy.js');
   run(extractDeclaration(APP_SRC, 'continuationRetryCancelled'), 'app.js#continuationRetryCancelled');
   run(fs.readFileSync(path.join(ROOT, 'public', 'process-exit.js'), 'utf8'), 'process-exit.js');
   run(sliceBlock('function updateTerminalHeader() {'), 'app.js#updateTerminalHeader');
@@ -136,28 +135,28 @@ function setup() {
   });
 }
 
-test('the dot reports the exit code, then Open here once a poll sees the process, then Not running with no new exit', () => {
+test('the slot preserves exits, reports Open here with a PTY, and unknown liveness without new evidence', () => {
   const h = setup();
   h.exit(3, null);
-  assert.equal(h.title(), 'Exited (code 3)', 'the exit event records the code (mutation target: the noteSessionExit call)');
-  assert.equal(h.aria(), 'Exited (code 3)');
+  assert.equal(h.title(), 'Idle · Exited (code 3)', 'the exit event records the code (mutation target: the noteSessionExit call)');
+  assert.equal(h.aria(), 'Idle · Exited (code 3)');
   assert.match(h.lastWrite(), /session exited \(code 3\)/);
 
   h.poll(true);
-  assert.equal(h.title(), 'Open here');
+  assert.equal(h.title(), 'Idle · Open here');
 
   h.poll(false);
-  assert.equal(h.title(), 'Not running', 'running again cleared the old code (mutation target: the forget in updateTerminalHeader)');
+  assert.equal(h.title(), 'Idle · Liveness unknown', 'running again cleared the old code (mutation target: the forget in updateTerminalHeader)');
 });
 
 test('a relaunch that fails to open shows no exit code from the process before it', async () => {
   const h = setup();
   h.exit(1, null);
-  assert.equal(h.title(), 'Exited (code 1)');
+  assert.equal(h.title(), 'Idle · Exited (code 1)');
   h.read("openResult = { ok: false, error: 'boom' }");
   await h.read("openSession(sessionMap.get('s1'))");
   assert.equal(h.read('calls.opened.length'), 1, 'the relaunch reached openTerminal');
-  assert.equal(h.title(), 'Not running');
+  assert.equal(h.title(), 'Idle · Liveness unknown');
 });
 
 test('a stale exit that arrives after the reply of the relaunch leaves the new pty alone', async () => {
@@ -194,7 +193,7 @@ test('a fast-failing launch whose exit lands during the await is applied after t
   const droppedBefore = h.read('calls.dropped.length');
   await h.read("openSession(sessionMap.get('s1'))");
   assert.equal(h.read("openSessions.get('s1').closed"), true, 'the exit of the current pty closes its entry');
-  assert.equal(h.title(), 'Exited (code 3)');
+  assert.equal(h.title(), 'Idle · Exited (code 3)');
   assert.match(h.lastWrite(), /session exited \(code 3\)/);
   assert.equal(h.read('calls.dropped.length'), droppedBefore + 1, 'and drops its state');
 });
@@ -212,7 +211,7 @@ test('an exit that lands while the relaunch is still opening is kept, not forgot
   h.whileOpening = () => h.exit(1, null);
   h.read("openResult = { ok: false, error: 'pre-launch command failed' }");
   await h.read("openSession(sessionMap.get('s1'))");
-  assert.equal(h.title(), 'Exited (code 1)', 'the forget runs before openTerminal, so the new process\'s exit survives it');
+  assert.equal(h.title(), 'Idle · Exited (code 1)', 'the forget runs before openTerminal, so the new process\'s exit survives it');
   assert.match(h.read('calls.writes.join("")'), /session exited \(code 1\)/);
 });
 
@@ -232,7 +231,7 @@ test('a plain terminal that exits is torn down; a Claude session stays mounted w
 test('a Stop the user asked for reads Stopped, dim, and not Killed by the signal it sends', () => {
   const h = setup();
   h.exit(0, 'SIGHUP', true);
-  assert.equal(h.title(), 'Stopped');
+  assert.equal(h.title(), 'Idle · Stopped');
   assert.match(h.lastWrite(), /── session stopped — /);
   assert.ok(h.lastWrite().startsWith('\r\n\x1b[2m'), 'a requested stop is dim');
 });
@@ -240,7 +239,7 @@ test('a Stop the user asked for reads Stopped, dim, and not Killed by the signal
 test('a process killed by a signal reads Killed, in the dot and in the banner', () => {
   const h = setup();
   h.exit(0, 'SIGKILL');
-  assert.equal(h.title(), 'Killed (SIGKILL)', 'not "Exited (code 0)"');
+  assert.equal(h.title(), 'Idle · Killed (SIGKILL)', 'not "Exited (code 0)"');
   assert.match(h.lastWrite(), /session killed \(SIGKILL\)/);
   assert.ok(h.lastWrite().startsWith('\r\n\x1b[33m'), 'a kill is not a clean exit: the banner is yellow');
 });
@@ -308,8 +307,8 @@ test('#563 detaching an attach tab reads Detached and says the job keeps running
   const h = setup();
   h.read("openSessions.get('s1').attach = true");
   h.exit(0, null, true);
-  assert.equal(h.title(), 'Detached');
-  assert.equal(h.aria(), 'Detached');
+  assert.equal(h.title(), 'Idle · Detached');
+  assert.equal(h.aria(), 'Idle · Detached');
   assert.doesNotMatch(h.lastWrite(), /session stopped|relaunch/);
   assert.match(h.lastWrite(), /session detached — it keeps running in the background/);
   assert.equal(h.read("lastSessionExit('s1').detached"), true);
@@ -352,10 +351,107 @@ for (const verb of ['stop', 'rm']) {
     });
 
     assert.deepEqual(calls, [['check', verb, 'aaaaaaaa'], ['verb', verb, 'aaaaaaaa'], ['stopSession', 's1']]);
-    assert.equal(h.title(), 'Stopped');
-    assert.equal(h.aria(), 'Stopped');
+    assert.equal(h.title(), 'Idle · Stopped');
+    assert.equal(h.aria(), 'Idle · Stopped');
     assert.match(h.lastWrite(), /session stopped/);
     assert.doesNotMatch(h.lastWrite(), /detached|keeps running/i);
     assert.equal(h.read("lastSessionExit('s1').detached"), false);
   });
 }
+
+test('#563 after a poll the header exposes the shared activity slot and lifecycle', t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  h.read("applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 })");
+  h.poll(true);
+  assert.equal(h.read("terminalHeaderStatus.classList.contains('session-icon')"), true);
+  assert.equal(h.read("terminalHeaderStatus.classList.contains('session-icon--busy')"), true);
+  assert.equal(h.read("terminalHeaderStatus.getAttribute('role')"), 'img');
+  assert.equal(h.aria(), 'Working · Open here');
+  assert.equal(h.title(), h.aria());
+});
+
+test('#563 activity repaints the active header with the row without another poll', t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  h.read(`
+    document.body.innerHTML += '<div class="session-item" data-session-id="s1"><span class="session-icon"></span></div>';
+  `);
+  h.poll(true);
+  h.read("applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 })");
+  assert.equal(h.aria(), 'Working · Open here');
+  h.read("setAttention('s1', true)");
+  assert.equal(h.aria(), 'Needs your attention · Open here');
+  assert.equal(h.read("terminalHeaderStatus.classList.contains('session-icon--attention')"), true);
+  assert.equal(h.read("terminalHeaderStatus.classList.contains('session-icon--busy')"), false);
+  assert.equal(h.read("sessionItemEl('s1').querySelector('.session-icon').getAttribute('aria-label')"), h.aria());
+  h.read("setAttention('other', true)");
+  assert.equal(h.aria(), 'Needs your attention · Open here');
+});
+
+test('#563 activity repaints the active header even when its sidebar row is absent', t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  h.poll(true);
+  h.read("applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 })");
+  assert.equal(h.aria(), 'Working · Open here');
+  assert.equal(h.read("terminalHeaderStatus.classList.contains('session-icon--busy')"), true);
+});
+
+test('#563 a merged member repaints the header from the same snapshot as its row', t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  h.read(`
+    const row = { sessionId: 'root', headSessionId: 's1', mergedMemberIds: ['s1'] };
+    sessionMap.set('root', row);
+    localMergedMemberRows.set('s1', row);
+    document.body.innerHTML += '<div class="session-item" data-session-id="root" data-head-session-id="s1" data-merged-member-ids="s1"><span class="session-icon"></span></div>';
+  `);
+  h.poll(true);
+  h.read("setAttention('root', true)");
+  assert.equal(h.aria(), 'Needs your attention · Open here');
+  assert.equal(h.read("sessionItemEl('s1').querySelector('.session-icon').getAttribute('aria-label')"), h.aria());
+});
+
+test('#563 a merged member repaints a filtered conversation header without another poll', t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  h.read(`
+    const row = { sessionId: 'root', headSessionId: 's1', mergedMemberIds: ['s1'] };
+    sessionMap.set('root', row);
+    localMergedMemberRows.set('s1', row);
+  `);
+  h.poll(true);
+  const initial = h.aria();
+  assert.equal(h.read("sessionItemEl('s1')"), null);
+  h.read("setAttention('root', true)");
+  assert.equal(h.aria(), 'Needs your attention · Open here');
+  assert.equal(h.title(), h.aria());
+  assert.equal(h.read("terminalHeaderStatus.classList.contains('session-icon--attention')"), true);
+  h.read("setAttention('root', false)");
+  assert.equal(h.aria(), initial, 'clearing the other member also repaints the filtered header');
+  h.read("setAttention('unrelated', true)");
+  assert.equal(h.aria(), initial, 'unrelated sessions leave the active header alone');
+});
+
+test('#563 the header keeps the shared busy-subagent tint and clears it with the activity', t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  h.poll(true);
+  h.read("applyHeadTurnSnapshot({ sessionId: 's1', state: 'open', revision: 1 })");
+  const css = fs.readFileSync(path.join(ROOT, 'public/style.css'), 'utf8');
+  const style = h.window.document.createElement('style');
+  style.textContent = css;
+  h.window.document.head.append(style);
+  const tint = () => {
+    const el = h.read('terminalHeaderStatus');
+    return [...style.sheet.cssRules].filter(rule => rule.selectorText?.endsWith('::before')
+      && rule.selectorText.split(',').some(selector => el.matches(selector.trim().replace(/::before$/, ''))))
+      .map(rule => rule.style.color).filter(Boolean).at(-1);
+  };
+  h.read("applyStateClasses('s1', { liveness: 'alive', agentsBusy: true })");
+  assert.equal(tint(), 'var(--accent)');
+  assert.equal(h.read("terminalHeaderStatus.classList.contains('session-icon--busy')"), true);
+  h.read("applyStateClasses('s1', { liveness: 'alive', agentsBusy: false })");
+  assert.equal(tint(), 'rgb(79, 195, 247)');
+});

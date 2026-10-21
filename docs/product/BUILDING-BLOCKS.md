@@ -71,7 +71,7 @@ under reduced motion.
 - **Today, four vocabularies.** Rung titles (`session-state.js:8-15`); raw
   CLI status (`sidebar.js:1721-1727`, `agents-view.js:218, 227`); job states
   `AGENT_STATE_META` (`agents-view.js:46-54`); PTY status
-  `terminalStatusLabel` / `processExitLabel` (`process-exit.js:18-28`) and
+  `processExitLabel` (`process-exit.js:18-24`) and
   the grid footer (`app.js:1203`).
 - **Anatomy (proposed).** Title-case word from one table owned by the
   glossary, optionally followed by a reason (`· permission prompt`) and an
