@@ -95,6 +95,65 @@ test('an exit before the saved set is read writes nothing', async () => {
   assert.equal(t.store.global.openWorkingSet.length, 2);
 });
 
+test('C8: a checked exit rejects with the write error while an unchecked exit still resolves', async () => {
+  const t = setup();
+  t.open('a');
+  const error = new Error('working set write failed');
+  t.context.window.api.setSetting = async () => { throw error; };
+  await assert.rejects(t.flushStateForExit({ checked: true }), e => e === error);
+  await assert.doesNotReject(t.flushStateForExit());
+});
+
+test('C12: a checked exit rejects without writing when the saved set has not been read', async () => {
+  const t = setup();
+  t.open('a');
+  t.run('savedWorkingSetRead = false');
+  await assert.rejects(t.flushStateForExit({ checked: true }), /saved set not read/);
+  assert.deepEqual(t.writes, []);
+});
+
+test('a checked exit waits for queued persistence and reports a successful save', async () => {
+  const t = setup();
+  t.open('a');
+  let finish;
+  let started;
+  const writing = new Promise(resolve => { started = resolve; });
+  const getSetting = t.context.window.api.getSetting;
+  let reads = 0;
+  t.context.window.api.getSetting = (...args) => { reads++; return getSetting(...args); };
+  const setSetting = t.context.window.api.setSetting;
+  t.context.window.api.setSetting = async (...args) => {
+    started();
+    await new Promise(resolve => { finish = resolve; });
+    return setSetting(...args);
+  };
+  const queued = t.persistWorkingSet();
+  await writing;
+  t.context.window.api.setSetting = setSetting;
+  let saved = false;
+  const checked = t.flushStateForExit({ checked: true }).then(result => { saved = true; return result; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(saved, false);
+  assert.equal(reads, 1, 'the final save cannot start its read before the queued write finishes');
+  assert.deepEqual(t.writes, []);
+  finish();
+  await queued;
+  assert.deepEqual(JSON.parse(JSON.stringify(await checked)), { saved: true });
+  assert.deepEqual(t.writes, [['a'], ['a']]);
+});
+
+test('a checked read failure rejects with its error and leaves the persistence queue usable', async () => {
+  const t = setup();
+  t.open('a');
+  const error = new Error('working set read failed');
+  const getSetting = t.context.window.api.getSetting;
+  t.context.window.api.getSetting = async () => { throw error; };
+  await assert.rejects(t.flushStateForExit({ checked: true }), e => e === error);
+  t.context.window.api.getSetting = getSetting;
+  assert.deepEqual(JSON.parse(JSON.stringify(await t.flushStateForExit({ checked: true }))), { saved: true });
+  assert.deepEqual(t.writes, [['a']]);
+});
+
 test('an exit during a cold index keeps the saved sessions the index has not reached', async () => {
   const t = setup();
   t.saved(['a', 'b']);

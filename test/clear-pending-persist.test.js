@@ -60,7 +60,7 @@ function setup() {
   window.cachedAllProjects = [];
   vm.runInContext(PLAN_SRC, ctx.context);
   const fns = loadAppFunctions(ctx.context, {
-    functions: ['dedup', 'loadProjects', 'persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'indexedRowOf'],
+    functions: ['rekeySessionTab', 'dedup', 'loadProjects', 'persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'indexedRowOf'],
     declarations: ['_persistChain', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restorePlanner', 'exitingApp', 'persistSkippedWhileExiting', 'restoreIndexingDone', 'continuationRetryCancelled', 'dormantWorkingSet'],
   });
   const open = (sessionId, { pending, remoteAlias } = {}) => {

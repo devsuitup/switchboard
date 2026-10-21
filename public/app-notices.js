@@ -46,7 +46,7 @@ function showAppNotice(options) {
   if (options.mergeMembers) {
     options = { ...options, members: [...new Map([...(previous?.options.members || []), ...options.members].map(member => [member.id, member])).values()] };
   }
-  const { id, kind = 'info', message, members, actionLabel, onAction, dismissOnAction = true, dismissible = true } = options;
+  const { id, kind = 'info', message, members, actionLabel, onAction, dismissOnAction = true, dismissible = true, persistent = false } = options;
   clearTimeout(previous?.timer);
   const focusedButton = previous?.notice.contains(document.activeElement) ? document.activeElement.className : null;
   const container = document.getElementById('app-notices');
@@ -85,7 +85,7 @@ function showAppNotice(options) {
   if (previous) previous.notice.replaceWith(notice);
   else container.append(notice);
   appNoticeEntries.set(id, entry);
-  if (kind !== 'error') {
+  if (kind !== 'error' && !persistent) {
     let remaining = kind === 'undo' ? 10_000 : 15_000;
     let started;
     let focused = false;

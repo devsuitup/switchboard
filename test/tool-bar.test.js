@@ -246,7 +246,7 @@ test('R3 N1: forking with Changes open keeps panel visibility and pressed state 
       terminalHeaderId: window.document.createElement('span'),
       terminalHeaderName: window.document.createElement('span'),
     });
-    loadAppFunctions(ctx.context, { functions: ['setActiveSession'] });
+    loadAppFunctions(ctx.context, { functions: ['setActiveSession', 'rekeySessionTab'] });
     window.setActiveSession('s1');
     await window.openChangesTab('s1');
     const panel = window.document.getElementById('file-panel');
@@ -367,6 +367,7 @@ for (const listener of ['onSessionDetected', 'onSessionForked']) {
       window.pendingSessions = new Map();
       window.terminalHeaderId = window.document.createElement('span');
       window.terminalHeaderName = window.document.createElement('span');
+      if (listener === 'onSessionForked') loadAppFunctions(ctx.context, { functions: ['rekeySessionTab'] });
       const src = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
       const start = src.indexOf(`window.api.${listener}(`);
       assert.ok(start >= 0);

@@ -81,6 +81,24 @@ test('error notices stay after 20 seconds, announce as alerts and dismiss on req
   assert.equal(document.querySelector('[data-notice-id="failure"]'), null);
 });
 
+test('a persistent progress notice cancels its prior timer and keeps its action until cleared', t => {
+  const { window, document } = setup(t);
+  window.showAppNotice({ id: 'progress', message: 'Starting' });
+  t.mock.timers.tick(1_000);
+  let cancelled = 0;
+  window.showAppNotice({ id: 'progress', message: 'Moving', persistent: true,
+    actionLabel: 'Cancel', dismissOnAction: false, onAction: () => { cancelled++; } });
+  t.mock.timers.tick(600_000);
+  const notice = document.querySelector('[data-notice-id="progress"]');
+  assert.ok(notice);
+  assert.equal(notice.getAttribute('role'), 'status');
+  notice.querySelector('.app-notice-action').click();
+  assert.equal(cancelled, 1);
+  assert.ok(notice.isConnected);
+  window.clearAppNotice('progress');
+  assert.equal(notice.isConnected, false);
+});
+
 for (const [kind, duration] of [['undo', 10_000], ['info', 15_000]]) {
   for (const interaction of ['focus', 'pointer']) {
     test(`${kind} pauses for ${interaction} and expires after only the remaining time on leave`, t => {

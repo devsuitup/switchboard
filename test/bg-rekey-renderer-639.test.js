@@ -23,7 +23,7 @@ function fixture(t) {
   w.pendingSessions = new Map();
   loadAppFunctions(h.context, {
     declarations: ['lastActivityTime', 'sandboxedSessions', 'ptyGenerations', 'pendingOpens', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'openingSessions'],
-    functions: ['rekeySessionEnvironment', 'attachBackgroundContinuation', 'beginPtyOpen', 'settlePtyOpen', 'handleProcessExited'],
+    functions: ['rekeySessionTab', 'rekeySessionEnvironment', 'attachBackgroundContinuation', 'beginPtyOpen', 'settlePtyOpen', 'handleProcessExited'],
   });
   const src = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   const start = src.indexOf('window.api.onSessionForked(');
@@ -64,6 +64,26 @@ test('background rekey retains the original working-set position', t => {
   h.w.createTerminalEntry({ sessionId: 'other', projectPath: '/other' });
   h.receive('old', 'bg', 'background');
   assert.deepEqual([...h.w.openSessions.keys()], ['bg', 'other']);
+});
+
+test('H2a: the shared rekey with spawnAttach true still opens one attach in the original tab', async t => {
+  const h = fixture(t);
+  h.w.createTerminalEntry({ sessionId: 'other', projectPath: '/other' });
+  const calls = [];
+  h.w.api.openTerminal = async (...args) => { calls.push(args); return { ok: true, generation: 8 }; };
+  const activity = [];
+  h.w.rekeySessionTab('old', 'bg', 'background', { jobId: '1234abcd', cwd: '/worktree' },
+    () => activity.push([...h.w.openSessions.keys()]), { spawnAttach: true });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 3), ['bg', '/project', false]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][3])), { type: 'attach', jobId: '1234abcd', cwd: '/worktree' });
+  await h.entry.backgroundAttach;
+  assert.deepEqual(activity, [['bg', 'other']]);
+  assert.equal(h.w.openSessions.get('bg'), h.entry);
+  assert.equal(h.entry.closed, false);
+  assert.equal(h.entry.bgRestore, true);
+  assert.equal(h.inCtx("skippedWorkingSetEntries.get('bg').index"), 0);
+  assert.equal(h.spies.dispose, 0);
 });
 
 test('the preserved grid card sends Stop to the new background UUID', t => {
