@@ -538,7 +538,7 @@ platform list separator. Relative or unresolvable pre-marker entries are ignored
 absolute entries before the first empty field are realpathed. After that marker
 entries are literal (trailing separators removed, dot components preserved).
 The nearest strict ancestor bounds ascent: cwd-equal and sibling prefixes do not
-stop it. Windows comparisons respect case, separators and drive/UNC roots.
+stop it. Windows comparisons ignore case, treat `\` and `/` alike and respect drive/UNC roots; local Git matches `GIT_CEILING_DIRECTORIES` more strictly, so an oddly cased or backslashed ceiling can stop the walk where Git does not.
 The ceiling's own `.git` and excluded parent metadata are never consulted.
 
 `GIT_DISCOVERY_ACROSS_FILESYSTEM` uses Git booleans: unset/empty/false/no/off/zero

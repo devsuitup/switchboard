@@ -8,7 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Quit (Exit on Windows), Restart to update and window close now name the local sessions, plain terminals and panel shells that will stop, with Stop and Cancel choices. Unsaved edits are handled first; attached background jobs and remote sessions are identified as continuing. (#546, #562)
 
 ### Fixed
-- A file outside a Git repository now opens from the Touched tab when Git writes its messages in a language other than English, instead of showing Git's translated error. (#754)
+- Files outside a Git repository open from Touched when the system language is not English. Local Git errors are shown in English, and locked worktrees can be removed in any system language. (#754)
 - Sessions resumed interactively no longer keep a background badge or appear as running background jobs because of an old daemon job file. (#764)
 
 ## v0.0.99 — 2026-10-21
