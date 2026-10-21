@@ -43,11 +43,12 @@ const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDe
 const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
 const { createUnsavedGuard } = require('./unsaved-guard');
-const { inventory } = require('./session-exit');
+const { inventory, runExitHandoffs } = require('./session-exit');
 const { backgroundRefusal } = require('./bg-handoff');
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: attempt => { quitAttemptToken = attempt; app.quit(); },
-  inventory: () => exitInventory(), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; } });
+  inventory: () => exitInventory(), background: (ids, opts) => runExitBackground(ids, opts), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; } });
 let exitInventory = () => ({ rows: [], counts: {}, remote: {} });
+let runExitBackground = async () => [];
 let flushForLogoff = () => Promise.resolve();
 const { cleanEnv, scrubSessionEnv } = require('./clean-env');
 scrubSessionEnv(process.env);
@@ -1876,6 +1877,32 @@ async function handleSendToBackground(_event, sessionId) {
   return result;
 }
 ipcMain.handle('send-session-to-background', handleSendToBackground);
+
+async function runExitBackgroundBatch(ids, opts) {
+  return runExitHandoffs(ids, {
+    ...opts,
+    send: id => handleSendToBackground(null, id),
+    status: id => {
+      const record = activeSessions.get(id);
+      return record && cliSessionState.getStatus(record.realSessionId || id)?.status;
+    },
+    now: Date.now,
+    waitForChange: (ms, signal) => new Promise(resolve => {
+      if (signal.aborted) { resolve(); return; }
+      let timer;
+      const done = () => {
+        clearTimeout(timer);
+        unsubscribe();
+        signal.removeEventListener('abort', done);
+        resolve();
+      };
+      const unsubscribe = cliSessionState.onDescriptorsChanged(done);
+      timer = setTimeout(done, ms);
+      signal.addEventListener('abort', done, { once: true });
+    }),
+  });
+}
+runExitBackground = runExitBackgroundBatch;
 
 ipcMain.handle('stop-session', (_event, sessionId) => {
   const session = activeSessions.get(sessionId);
@@ -4021,7 +4048,7 @@ function shutdownForExit() {
   return shutdownPromise;
 }
 
-exitInventory = () => inventory(activeSessions, (record, id) => backgroundRefusal(record, cliSessionState.getStatus(record.realSessionId || id)?.status));
+exitInventory = () => inventory(activeSessions, (record, id, status) => backgroundRefusal(record, status ?? cliSessionState.getStatus(record.realSessionId || id)?.status), (record, id) => cliSessionState.getStatus(record.realSessionId || id)?.status);
 flushForLogoff = drainForUpdate;
 app.removeListener('before-quit', holdBootstrapQuit);
 app.on('before-quit', event => {

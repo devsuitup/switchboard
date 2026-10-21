@@ -4,7 +4,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const vm = require('node:vm');
+const espree = require('espree');
 const { loadAppFunctions } = require('./app-source');
+
+function wireExitBackground(context, source, sourcePath) {
+  const ast = espree.parse(source, { ecmaVersion: 'latest', sourceType: 'commonjs', range: true });
+  const statements = ast.body.find(node => node.id?.name === 'startApplication').body.body;
+  const index = statements.findIndex(node => node.id?.name === 'runExitBackgroundBatch');
+  assert.ok(index >= 0);
+  vm.runInContext(source.slice(...statements[index + 1].range), context, { filename: sourcePath });
+}
 
 function setup() {
   const messages = [], ended = [], dead = [], sessions = new Map();
@@ -287,3 +296,61 @@ test('#715 a failed targeted refresh is logged without notifying projects', { ti
   assert.match(h.warned[0], /\[bg-handoff\].*OLD.*refresh failed/);
   assert.deepEqual(h.events, ['resolve:OLD']);
 });
+
+test('C5 the exit batch waits on the real CLI id after a clear rekey', async () => {
+  const sourcePath = path.join(__dirname, '../main.js');
+  const source = require('node:fs').readFileSync(sourcePath, 'utf8');
+  assert.match(source, /async function runExitBackgroundBatch\(/);
+  const asked = [], sends = [], listeners = new Set();
+  let status = 'busy';
+  const context = vm.createContext({
+    runExitHandoffs: require('../session-exit').runExitHandoffs,
+    activeSessions: new Map([['tab', { realSessionId: 'real' }]]), Date, setTimeout, clearTimeout,
+    cliSessionState: {
+      getStatus: id => { asked.push(id); return { status: id === 'real' ? status : 'idle' }; },
+      onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+    },
+    handleSendToBackground: async (event, id) => { sends.push([event, id]); return { ok: true }; },
+    createUnsavedGuard: options => options, ipcMain: { handle() {} },
+  });
+  loadAppFunctions(context, { functions: ['runExitBackgroundBatch'], sourcePath });
+  vm.runInContext(source.slice(source.indexOf('const unsavedGuard ='), source.indexOf('const { cleanEnv')), context, { filename: sourcePath });
+  assert.deepEqual(JSON.parse(JSON.stringify(await vm.runInContext("unsavedGuard.background(['tab'], {})", context))), []);
+  wireExitBackground(context, source, sourcePath);
+  const pending = vm.runInContext("unsavedGuard.background(['tab'], {})", context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sends, [], 'the tab key reports idle but its real CLI is busy');
+  assert.equal(listeners.size, 1);
+  status = 'idle'; for (const listener of [...listeners]) listener();
+  assert.equal((await pending)[0].ok, true);
+  assert.deepEqual(sends, [[null, 'tab']]);
+  assert.ok(asked.length >= 2 && asked.every(id => id === 'real'));
+  assert.equal(listeners.size, 0);
+});
+
+for (const external of [false, true]) {
+  test(`C5 abort external=${external} clears the shipped busy waiter timer and listener`, async () => {
+    const sourcePath = path.join(__dirname, '../main.js');
+    const timers = new Set(), listeners = new Set(), sends = [];
+    const controller = new AbortController();
+    const context = vm.createContext({
+      runExitHandoffs: require('../session-exit').runExitHandoffs,
+      activeSessions: new Map([['tab', { realSessionId: 'real' }]]), Date,
+      setTimeout: fn => { timers.add(fn); return fn; }, clearTimeout: timer => timers.delete(timer),
+      cliSessionState: {
+        getStatus: () => ({ status: 'busy' }),
+        onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+      },
+      handleSendToBackground: async () => { sends.push('send'); return { ok: true }; },
+    });
+    const { runExitBackgroundBatch } = loadAppFunctions(context, { functions: ['runExitBackgroundBatch'], sourcePath });
+    const pending = runExitBackgroundBatch(['tab'], { signal: controller.signal });
+    assert.equal(timers.size, 1);
+    assert.equal(listeners.size, 1);
+    controller.abort({ external });
+    assert.equal((await pending)[0].code, 'cancelled');
+    assert.equal(timers.size, 0, 'abort must clear the pending busy-wait timer');
+    assert.equal(listeners.size, 0, 'abort must unsubscribe the descriptor listener');
+    assert.deepEqual(sends, []);
+  });
+}
