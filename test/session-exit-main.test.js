@@ -15,7 +15,7 @@ const startup = ast.body.find(n => n.id?.name === 'startApplication');
 const installNode = startup.body.body.find(n => n.expression?.arguments?.[0]?.value === 'updater-install');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-function setup(platform = 'win32') {
+function setup(platform = 'win32', background) {
   const ipcMain = new EventEmitter();
   const handlers = new Map();
   ipcMain.handle = (name, fn) => handlers.set(name, fn);
@@ -26,7 +26,7 @@ function setup(platform = 'win32') {
   const win = new EventEmitter();
   Object.assign(win, { webContents: wc, isDestroyed: () => false, close: () => calls.push('close'), destroy: () => calls.push('destroy') });
   let token = null;
-  const guard = createUnsavedGuard({ ipcMain, inventory: () => inventory(records),
+  const guard = createUnsavedGuard({ ipcMain, inventory: () => inventory(records, () => null), background,
     onAttemptReleased: () => context.releaseAttempt?.(),
     quit: value => { token = value; calls.push('quit'); },
     externalFlush: () => context.flushForLogoff(),
@@ -71,7 +71,7 @@ function setup(platform = 'win32') {
   context.process.env = {};
   vm.runInContext(require('./app-source').extractFunction(source, 'spawnPty'), context);
   vm.runInContext(source.slice(...installNode.range), context);
-  return { guard, win, wc, sent, calls, records, event, checks, detail, answer, answerVersion, menu, timers, context,
+  return { guard, win, wc, sent, calls, records, event, checks, detail, answer, answerVersion, menu, timers, context, handlers,
     install: () => handlers.get('updater-install')(), token: () => token };
 }
 
@@ -408,4 +408,160 @@ test('A8 untagged quit keeps edits checking but skips only the session choice; b
   t.guard.beforeQuit(t.event(), t.win); t.answer(true); await tick();
   const event = t.event(); assert.equal(t.guard.beforeQuit(event, t.win, t.token()), false);
   assert.deepEqual(t.calls, ['quit']);
+});
+
+function backgroundSetup(intent = 'quit') {
+  const batches = [];
+  const t = setup('win32', (ids, opts) => {
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    batches.push({ ids, ...opts, resolve });
+    return promise;
+  });
+  if (intent === 'close') t.win.emit('close', t.event());
+  else if (intent === 'update') t.installing = t.install();
+  else t.menu();
+  const handler = t.handlers.get('exit-background');
+  assert.equal(typeof handler, 'function', 'the guard must register exit-background');
+  t.startBatch = (ids = ['local'], detail = t.detail(), sender = t.wc, checkId = t.checks().at(-1).args[0]) => handler({ sender }, checkId, detail, ids);
+  return { ...t, batches };
+}
+
+test('C4 background IPC rejects untrusted, stale and ineligible requests without a batch', async () => {
+  const t = backgroundSetup();
+  const detail = t.detail();
+  for (const args of [
+    [['local'], detail, {}], [['local'], { ...detail, version: 0 }],
+    [['local'], { ...detail, attempt: 0 }], [['missing']], [['local'], detail, t.wc, 999],
+    [null], [['local', 'local']],
+  ]) assert.equal(t.startBatch(...args) === null, true);
+  for (const record of [{ isPlainTerminal: true }, { panelFor: 'local' }]) {
+    t.records.set('other', { kind: 'local-pty', pty: {}, ...record });
+    t.handlers.get('exit-attempt-snapshot')({ sender: t.wc }, t.checks().at(-1).args[0], detail);
+    assert.equal(t.startBatch(['other']) === null, true);
+  }
+  const row = t.handlers.get('exit-attempt-snapshot')({ sender: t.wc }, t.checks().at(-1).args[0], detail).rows[0];
+  row.background = 'refused';
+  assert.equal(t.startBatch() === null, true);
+  t.answer(true); await tick();
+  assert.equal(t.startBatch() === null, true, 'committed checks cannot transfer');
+  assert.equal(t.batches.length, 0);
+  const external = backgroundSetup();
+  external.guard.beforeQuit(external.event(), external.win);
+  assert.equal(external.startBatch() === null, true);
+  assert.equal(external.batches.length, 0);
+  external.answer(false); await tick();
+});
+
+test('C4 one batch forwards progress and background then yes commits after one check', async () => {
+  const t = backgroundSetup();
+  const pending = t.startBatch(); const duplicate = t.startBatch();
+  assert.equal(t.batches.length, 1);
+  const batch = t.batches[0];
+  batch.progress({ id: 'local', phase: 'moving' });
+  assert.deepEqual(t.sent.find(m => m.channel === 'exit-background-progress')?.args,
+    [t.detail().attempt, { id: 'local', phase: 'moving' }]);
+  t.records.get('local').backgrounded = true;
+  batch.resolve([{ id: 'local', ok: true }]);
+  assert.deepEqual(await pending, [{ id: 'local', ok: true }]); await duplicate;
+  t.answer(true); await tick();
+  assert.equal(t.checks().length, 1);
+  assert.deepEqual(t.calls, ['quit']);
+  assert.ok(t.token());
+});
+
+for (const action of ['cancel-ipc', 'invalidate', 'logoff', 'session-end', 'external', 'updater-error', 'other-window']) {
+  test(`C4 ${action} aborts the active background batch with its origin`, async () => {
+    const t = backgroundSetup(action === 'updater-error' ? 'update' : 'quit');
+    const pending = t.startBatch();
+    const batch = t.batches[0];
+    if (action === 'cancel-ipc') {
+      t.context.ipcMain.emit('exit-background-cancel', { sender: {} }, t.checks().at(-1).args[0], t.detail());
+      assert.equal(batch.signal.aborted, false);
+      t.context.ipcMain.emit('exit-background-cancel', { sender: t.wc }, t.checks().at(-1).args[0], { ...t.detail(), version: 0 });
+      assert.equal(batch.signal.aborted, false);
+      t.context.ipcMain.emit('exit-background-cancel', { sender: t.wc }, t.checks().at(-1).args[0], t.detail());
+    } else if (action === 'invalidate') t.guard.invalidate();
+    else if (action === 'logoff') t.win.emit('query-session-end');
+    else if (action === 'session-end') t.win.emit('session-end');
+    else if (action === 'external') t.guard.beforeQuit(t.event(), t.win);
+    else if (action === 'updater-error') wireUpdater(t).updater.emit('error', new Error('offline'));
+    else {
+      const wc = new EventEmitter(); Object.assign(wc, { send() {}, isDestroyed: () => false, isCrashed: () => false });
+      t.guard.confirmQuit({ webContents: wc, isDestroyed: () => false });
+    }
+    assert.equal(batch.signal.aborted, true);
+    assert.equal(batch.signal.reason?.external === true, ['logoff', 'session-end', 'external'].includes(action));
+    batch.resolve([{ id: 'local', ok: false, code: 'cancelled' }]); await pending;
+    t.answer(false); await tick(); await t.installing;
+    assert.equal(t.calls.includes('install'), false);
+  });
+}
+
+test('C4 a close to quit upgrade preserves the running batch', async () => {
+  const t = backgroundSetup('close');
+  const pending = t.startBatch();
+  t.menu(); await tick();
+  assert.equal(t.batches[0].signal.aborted, false);
+  assert.equal(t.detail().action, 'quit');
+  t.batches[0].resolve([{ id: 'local', ok: true }]); await pending;
+  t.answer(false); await tick();
+});
+
+test('C4 external exit resolves the real batch immediately and prevents later busy writes', async () => {
+  const { runExitHandoffs } = require('../session-exit');
+  const t = setup('win32', (ids, opts) => runExitHandoffs(ids, {
+    ...opts, status: () => 'busy', now: () => 0,
+    waitForChange: () => new Promise(() => {}), send: () => { t.calls.push('send'); },
+  }));
+  t.menu();
+  const handler = t.handlers.get('exit-background');
+  assert.equal(typeof handler, 'function');
+  const pending = handler({ sender: t.wc }, t.checks()[0].args[0], t.detail(), ['local']);
+  t.guard.beforeQuit(t.event(), t.win);
+  let result; pending.then(value => { result = value; }); await tick();
+  assert.equal(result?.[0].code, 'cancelled');
+  assert.equal(t.calls.includes('send'), false);
+  t.answer(false); await tick();
+});
+
+for (const ok of [true, false]) {
+  test(`C11 update background result ${ok} gates drain and joins a second Restart`, async () => {
+    const t = backgroundSetup('update');
+    const pending = t.startBatch();
+    const again = t.install();
+    const duplicate = t.startBatch();
+    assert.equal(t.batches.length, 1);
+    assert.deepEqual(t.calls, []);
+    t.batches[0].resolve([{ id: 'local', ok }]); await pending; await duplicate;
+    assert.deepEqual(t.calls, [], 'a completed batch alone cannot drain or install');
+    if (ok) t.records.get('local').backgrounded = true;
+    t.answer(ok); await t.installing; await again;
+    assert.equal(t.calls.filter(c => c === 'update-drain').length, ok ? 1 : 0);
+    assert.equal(t.calls.filter(c => c === 'install').length, ok ? 1 : 0);
+    assert.equal(t.guard.launchAllowed(), !ok);
+    if (!ok) assert.equal(t.context.updateInstallPromise, null);
+  });
+}
+
+test('C4 an external exit supersedes user cancellation of a written batch', async () => {
+  for (const cancel of ['ipc', 'invalidation']) {
+    let confirm;
+    const t = setup('win32', (ids, opts) => require('../session-exit').runExitHandoffs(ids, {
+      ...opts, status: () => 'idle', now: () => 0, waitForChange: async () => {},
+      send: () => new Promise(resolve => { confirm = resolve; }),
+    }));
+    t.menu();
+    const handler = t.handlers.get('exit-background');
+    assert.equal(typeof handler, 'function');
+    const pending = handler({ sender: t.wc }, t.checks()[0].args[0], t.detail(), ['local']);
+    if (cancel === 'ipc') t.context.ipcMain.emit('exit-background-cancel', { sender: t.wc }, t.checks()[0].args[0], t.detail());
+    else t.guard.invalidate();
+    let result; pending.then(value => { result = value; }); await tick();
+    assert.equal(result, undefined, 'user cancellation still collects the written handoff');
+    t.win.emit('query-session-end'); await tick();
+    assert.equal(result?.[0].code, 'pending', `${cancel}: logoff must stop awaiting the confirmation`);
+    confirm({ ok: true }); await tick();
+    assert.equal(result[0].code, 'pending');
+  }
 });

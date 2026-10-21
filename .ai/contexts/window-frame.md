@@ -283,6 +283,37 @@ send exit-flush and start one coalesced, bounded, non-destructive main drain.
 They never veto the OS, stop services or close the database. Completion is
 best effort; no renderer ACK or human choice is awaited.
 
+### Exit handoff backend (#546, H1)
+
+This main-side contract is available without a renderer caller. The Stop/Cancel
+dialog and its current behaviour remain as described above until H2 lands.
+Session inventory rows add `background: ready | busy | refused` and `reason`
+(the main refusal text or null); `canBackground` still means eligible now.
+Plain-terminal and panel-shell rows have neither new field. `inventory` accepts
+a refusal callback `(record, id, statusOverride)` and a status reader
+`(record, id)`, defaulting to `record.status`. A busy row qualifies only if the
+same refusal check with idle status succeeds. Main reads the real CLI id after
+a tab re-key. Confirmed background sources remain excluded by #769.
+
+`exit-background(event, checkId, detail, ids)` accepts only the pending check's
+webContents, current attempt/version, a user attempt that is not committed, and
+unique session ids classified ready or busy in its current snapshot. Invalid
+requests return null. The attempt enters the diagnostic `backgrounding` phase
+and owns one batch; repeated valid calls join its promise. Progress goes only
+to that webContents as `exit-background-progress(attemptId, event)`.
+`exit-background-cancel(event, checkId, detail)` has the same ownership checks.
+
+Invalidation, another window and an updater error on an update attempt abort
+the current batch as user cancellation. Close → quit → update upgrades preserve
+it. Logoff/session end and untagged before-quit abort all outstanding batches
+as external exits, including written handoffs still settling after a previous
+user cancellation or invalidation. An already aborted controller's reason is
+upgraded to external and its abort event is dispatched again for that case.
+Uncommitted attempts keep the launch gate open. Neither this backend nor its
+IPC stops processes, drains an update, grants consent or commits an attempt.
+See [bg-agents.md](bg-agents.md#exit-handoff-batch-546-h1) for row results and
+the bounded wait.
+
 ### A window that stops answering
 
 A hung page would hold a close for good: nothing bounds a `'close'` check

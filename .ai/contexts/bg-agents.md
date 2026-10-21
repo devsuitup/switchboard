@@ -770,6 +770,40 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 
 ## Send to background
 
+### Exit handoff batch (#546, H1)
+
+`runExitHandoffs(ids, deps)` in `session-exit.js` is the main-owned batch
+primitive. It takes `send`, `status`, `waitForChange`, `now`, `busyBoundMs`,
+`signal` and `progress`. Results preserve input order as `{ id, ...result }`.
+Rows start concurrently. A busy row emits `{ id, phase: 'waiting' }` and polls
+descriptor changes in steps of at most 1000 ms. `EXIT_BUSY_WAIT_MS` is ten
+minutes and can be overridden for tests. Deadline expiry returns
+`busy-timeout`; a transition to `waiting`, `shell` or an unreadable status
+returns `needs-answer`, `shell` or `refused` immediately, without a send.
+
+A ready row emits `moving` before calling `send`; a settled row emits `done`
+with its result. The first failure before a send cancels other unwritten rows
+immediately. Already started sends finish and their results are collected.
+A `refused` result from the single-tab primitive also counts as pre-write:
+its eligibility recheck guarantees that it wrote nothing.
+A failure after a send does not cancel the other rows. User cancellation
+follows the same rule. External cancellation (`signal.reason.external === true`)
+resolves immediately with confirmed results, started unresolved rows as
+`pending`, and unwritten rows as `cancelled`. Late results and progress cannot
+change that snapshot. An unconfirmed late job is not marked for bg restore;
+the future renderer flow must retain the old id and rely on `continued-in`.
+
+`runExitBackgroundBatch` in `main.js` sits immediately after the single-tab
+handoff registration and before `stop-session`. It delegates sends to
+`handleSendToBackground(null, id)`, reads status using
+`record.realSessionId || id`, and waits through `cliSessionState` descriptor
+subscriptions. A module-scope `runExitBackground` binding is read lazily by
+the unsaved guard and assigned inside `startApplication`; its initial value
+resolves an empty array. No preload or renderer entry point calls this IPC
+in H1. The existing single-tab refusal, re-key and attach behaviour is unchanged.
+See [window-frame.md](window-frame.md#exit-handoff-backend-546-h1) for IPC
+ownership, cancellation and exit-attempt rules.
+
 Issue #656 guards the handoff continuation reader with BigInt dev/ino/birthtime and nanosecond mtime before/after each scan, restarts equal-size changes from zero, and resumes only verified growth with a matching head, following the NTFS identity/tunnelling rationale in [session-state.md (#648)](session-state.md), while keeping BigInt entirely inside the reader. If the same file grows during a synchronous chunk, that poll returns no result but retains its scanned cursor and pre-scan snapshot so the next poll can continue incrementally; an identity or non-growth change discards both.
 
 The session header and sidebar context menu call `send-session-to-background`

@@ -3,6 +3,28 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { inventory } = require('../session-exit');
+const { backgroundRefusal } = require('../bg-handoff');
+
+test('C2 inventory classifies ready, busy and refused sessions with the main reason', () => {
+  const cases = [
+    ['idle', 'ready', {}], ['busy', 'busy', {}],
+    ['busy', 'refused', { sandbox: true }], ['busy', 'refused', { composerState: { text: 'unsent' } }],
+    ['waiting', 'refused', {}], ['shell', 'refused', {}], [undefined, 'refused', {}],
+    ['busy', 'refused', { preLaunch: true }], ['busy', 'refused', { backgrounding: true }],
+  ];
+  for (const [status, expected, extra] of cases) {
+    const record = { kind: 'local-pty', pty: {}, status, ...extra };
+    const [row] = inventory(new Map([['tab', record]]), (r, _id, override) => backgroundRefusal(r, override ?? r.status)).rows;
+    assert.equal(row.background, expected, `${status} ${JSON.stringify(extra)}`);
+    assert.equal(row.reason, backgroundRefusal(record, status));
+    assert.equal(row.canBackground, expected === 'ready');
+  }
+  for (const extra of [{ isPlainTerminal: true }, { panelFor: 'tab' }]) {
+    const [row] = inventory(new Map([['other', { kind: 'local-pty', pty: {}, ...extra }]])).rows;
+    assert.equal('background' in row, false);
+    assert.equal('reason' in row, false);
+  }
+});
 
 test('A1 inventory names each local process regardless of activity, aliases or sidebar visibility', () => {
   const local = (extra = {}) => ({ kind: 'local-pty', pty: {}, cwd: '/work', ...extra });

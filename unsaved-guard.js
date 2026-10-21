@@ -10,7 +10,7 @@ const DEFAULT_DIALOG_CEILING_MS = 5 * 60 * 1000;
 const REASON_RANK = { reload: 0, close: 1, quit: 2 };
 const LOGOFF_CANCEL_MS = 60000;
 
-function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs = DEFAULT_PROBE_MS, dialogCeilingMs = DEFAULT_DIALOG_CEILING_MS, logoffCancelMs = LOGOFF_CANCEL_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {}, inventory = () => ({ rows: [], counts: {}, remote: {} }), externalFlush = () => {}, onAttemptReleased = () => {} }) {
+function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs = DEFAULT_PROBE_MS, dialogCeilingMs = DEFAULT_DIALOG_CEILING_MS, logoffCancelMs = LOGOFF_CANCEL_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {}, inventory = () => ({ rows: [], counts: {}, remote: {} }), background = async () => [], externalFlush = () => {}, onAttemptReleased = () => {} }) {
   const pending = new Map();
   const probes = new Map();
   const dialogs = new WeakSet();
@@ -23,12 +23,25 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
   let actedQuitToken = null;
   let inflight = null;
   let current = null;
+  let backgroundBatch = null;
+  const backgroundBatches = new Set();
+  const abortBackground = external => {
+    for (const batch of external ? backgroundBatches : backgroundBatch ? [backgroundBatch] : []) {
+      const { controller } = batch;
+      if (external && controller.signal.aborted && !controller.signal.reason.external) {
+        controller.signal.reason.external = true;
+        controller.signal.dispatchEvent(new Event('abort'));
+      } else controller.abort({ external });
+    }
+  };
   const attempts = createExitAttempts({ snapshot: inventory, check: askFull,
     cancelCheck: win => {
       if (current?.win === win) current.finish(false);
       for (const release of reasonWaits.values()) if (release.wc === win?.webContents) release(false);
     },
     invalidateRenderer: (win, attempt, wasCommitted = false) => {
+      abortBackground(false);
+      backgroundBatch = null;
       if (!wasCommitted) onAttemptReleased();
       windows.get(win)?.invalidate();
       try { win?.webContents.send('exit-attempt-invalidated', attempt); } catch {}
@@ -41,6 +54,33 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     const entry = pending.get(id);
     if (!entry || event?.sender !== entry.wc) return null;
     return attempts.refresh(entry.win, detail);
+  });
+  const backgroundAttempt = (event, checkId, detail) => {
+    const entry = pending.get(checkId);
+    const attempt = attempts.current();
+    if (!entry || event?.sender !== entry.wc || attempt?.window !== entry.win || attempt.id !== detail?.attempt || attempt.version !== detail?.version || attempt.phase === 'committed' || attempt.external) return null;
+    return attempt;
+  };
+  ipcMain.handle?.('exit-background', (event, checkId, detail, ids) => {
+    const attempt = backgroundAttempt(event, checkId, detail);
+    if (!attempt || !Array.isArray(ids) || !ids.length || new Set(ids).size !== ids.length || ids.some(id => !attempt.snapshot.rows.some(row => row.id === id && row.type === 'session' && ['ready', 'busy'].includes(row.background)))) return null;
+    if (backgroundBatch) return backgroundBatch.promise;
+    const controller = new AbortController();
+    const batch = { controller, promise: null };
+    backgroundBatch = batch;
+    backgroundBatches.add(batch);
+    attempts.phase(detail, 'backgrounding');
+    batch.promise = Promise.resolve(background(ids, {
+      signal: controller.signal,
+      progress: progress => {
+        if (backgroundBatch !== batch || controller.signal.aborted && controller.signal.reason?.external) return;
+        try { event.sender.send('exit-background-progress', attempt.id, progress); } catch {}
+      },
+    })).finally(() => backgroundBatches.delete(batch));
+    return batch.promise;
+  });
+  ipcMain.on('exit-background-cancel', (event, checkId, detail) => {
+    if (backgroundAttempt(event, checkId, detail)) abortBackground(false);
   });
   ipcMain.on('unsaved-check-phase', (event, id, detail, phase) => {
     const entry = pending.get(id);
@@ -262,6 +302,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
   function beforeQuit(event, win, token = null) {
     if (attempts.committed(token) || (token == null && logoffApproved) || !win || win.isDestroyed()) return false;
     if (attempts.token(win) != null) attempts.invalidate();
+    abortBackground(true);
     event.preventDefault();
     if (quitAsking) return true;
     quitAsking = true;
@@ -300,6 +341,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     windows.set(win, state);
 
     const endSession = (final) => {
+      abortBackground(true);
       attempts.invalidate();
       for (const release of reasonWaits.values()) release();
       if (!externalDrain) externalDrain = Promise.resolve().then(externalFlush);

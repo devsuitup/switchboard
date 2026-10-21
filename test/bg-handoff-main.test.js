@@ -287,3 +287,34 @@ test('#715 a failed targeted refresh is logged without notifying projects', { ti
   assert.match(h.warned[0], /\[bg-handoff\].*OLD.*refresh failed/);
   assert.deepEqual(h.events, ['resolve:OLD']);
 });
+
+test('C5 the exit batch waits on the real CLI id after a clear rekey', async () => {
+  const sourcePath = path.join(__dirname, '../main.js');
+  const source = require('node:fs').readFileSync(sourcePath, 'utf8');
+  assert.match(source, /async function runExitBackgroundBatch\(/);
+  const asked = [], sends = [], listeners = new Set();
+  let status = 'busy';
+  const context = vm.createContext({
+    runExitHandoffs: require('../session-exit').runExitHandoffs,
+    activeSessions: new Map([['tab', { realSessionId: 'real' }]]), Date, setTimeout, clearTimeout,
+    cliSessionState: {
+      getStatus: id => { asked.push(id); return { status: id === 'real' ? status : 'idle' }; },
+      onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+    },
+    handleSendToBackground: async (event, id) => { sends.push([event, id]); return { ok: true }; },
+    createUnsavedGuard: options => options, ipcMain: {},
+  });
+  loadAppFunctions(context, { functions: ['runExitBackgroundBatch'], sourcePath });
+  vm.runInContext(source.slice(source.indexOf('const unsavedGuard ='), source.indexOf('const { cleanEnv')), context, { filename: sourcePath });
+  assert.deepEqual(JSON.parse(JSON.stringify(await vm.runInContext("unsavedGuard.background(['tab'], {})", context))), []);
+  vm.runInContext('runExitBackground = runExitBackgroundBatch;', context, { filename: sourcePath });
+  const pending = vm.runInContext("unsavedGuard.background(['tab'], {})", context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(sends, [], 'the tab key reports idle but its real CLI is busy');
+  assert.equal(listeners.size, 1);
+  status = 'idle'; for (const listener of [...listeners]) listener();
+  assert.equal((await pending)[0].ok, true);
+  assert.deepEqual(sends, [[null, 'tab']]);
+  assert.ok(asked.length >= 2 && asked.every(id => id === 'real'));
+  assert.equal(listeners.size, 0);
+});
