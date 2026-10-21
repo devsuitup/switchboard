@@ -323,6 +323,37 @@ test('A5 upgrades renew consent, generations are revalidated, sender and launch 
   assert.equal(update.calls.filter(c => c === 'update-drain').length, 1);
 });
 
+test('#769 a confirmed handoff during an open exit dialog does not ask again after rekey', async () => {
+  const t = setup();
+  const session = t.records.get('local');
+  session.composerState = require('../composer-state').createComposerState();
+  let entered = false, time = 0;
+  t.menu();
+  assert.equal(t.checks().length, 1);
+  assert.deepEqual(t.detail().snapshot.rows.map(row => row.id), ['local']);
+  const result = await require('../bg-handoff').sendToBackground('local', {
+    getSession: id => t.records.get(id), getStatus: () => 'idle', now: () => time,
+    readContinuationIds: () => entered ? ['continuation'] : [],
+    readDescriptors: () => [{ kind: 'bg', sessionId: 'continuation', jobId: '1234abcd' }],
+    tapOutput: () => () => {},
+    write: (_record, text) => { if (text === '\r') entered = true; return true; },
+    delay: async ms => { time += ms; }, waitForChange: async ms => { time += ms; },
+    onConfirmed: job => {
+      t.records.delete('local');
+      t.records.set(job.sessionId, session);
+      session.realSessionId = job.sessionId;
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(session.backgrounded, true, 'the real handoff marks the inventoried record');
+  assert.ok(!session.exited && session.pty, 'the source PTY has not exited yet');
+  t.answer(true);
+  await tick();
+  assert.equal(t.checks().length, 1, 'a confirmed background handoff must not ask twice');
+  assert.deepEqual(t.calls, ['quit']);
+  assert.equal(t.guard.launchAllowed(), false);
+});
+
 test('A7 logoff supersedes a user choice, coalesces non-destructive drains and never grants user consent', async () => {
   const t = setup(); t.win.emit('close', t.event());
   assert.equal(t.detail()?.action, 'close');
