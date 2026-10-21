@@ -3,7 +3,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
@@ -14,12 +13,7 @@ const { createMainPanelSaves } = require('../viewer-save-guard');
 const { runToExit } = require('../run-to-exit');
 const MAX_BYTES = 1024;
 async function fixtureRunGit(args, options) {
-  const env = {
-    PATH: process.env.PATH, SystemRoot: process.env.SystemRoot,
-    HOME: os.tmpdir(), USERPROFILE: os.tmpdir(), TMP: os.tmpdir(), TEMP: os.tmpdir(),
-    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(os.tmpdir(), 'sb-touched-no-config'),
-    GIT_CEILING_DIRECTORIES: fs.realpathSync(os.tmpdir()), LC_ALL: 'C', LANGUAGE: 'C',
-  };
+  const env = require('../git-changes-runner').localGitEnv(options.env);
   const result = await runToExit('git', args, { ...options, env });
   return { ...result, tooLarge: result.overflow };
 }
@@ -424,9 +418,12 @@ test('remote Touched refuses invalid UTF-8 in the working file and in HEAD', asy
 });
 
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-touched-ipc-'));
+  const { root, ancestor: dir } = require('./git-locale-fixture').realFixture(t);
+  const config = path.join(root, 'empty-config');
+  fs.writeFileSync(config, '');
+  require('./git-discovery-fixture').savedEnv(t, { HOME: root, USERPROFILE: root, XDG_CONFIG_HOME: root, GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1' });
   t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
-  const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: dir, USERPROFILE: dir, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(dir, 'empty-config') };
+  const env = require('../git-changes-runner').localGitEnv();
   const git = (...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd: dir, env, timeout: 10_000, stdio: 'pipe' });
   return { dir, git };
 }

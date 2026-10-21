@@ -25,10 +25,11 @@ test('round 3: Changes fixtures expand short temporary directory spellings', () 
   const short = 'C:\\Users\\RUNNER~1\\Temp\\fixture';
   const canonical = 'C:\\Users\\Runner Administrator\\Temp\\fixture';
   const context = {
-    fs: { mkdtempSync: () => short, realpathSync: Object.assign(p => p, { native: () => canonical }) },
+    fs: { mkdirSync() {}, mkdtempSync: () => short, realpathSync: Object.assign(p => p, { native: () => canonical }) },
+    rememberFixture: (work,root) => { assert.equal(root,canonical); assert.equal(work,path.win32.join(canonical,'work')); },
     path: path.win32, os: { tmpdir: () => 'C:\\Users\\RUNNER~1\\Temp' },
   };
-  assert.equal(vm.runInNewContext(source.slice(start, end) + '\nmkTmp()', context), canonical);
+  assert.equal(vm.runInNewContext(source.slice(start, end) + '\nmkTmp()', context), path.win32.join(canonical,'work'));
 });
 
 test('round 3: Touched fixtures deliberately retain short temporary directory spellings', () => {
@@ -38,10 +39,11 @@ test('round 3: Touched fixtures deliberately retain short temporary directory sp
   assert.ok(start >= 0 && end > start);
   const short = 'C:\\Users\\RUNNER~1\\Temp\\fixture';
   const context = {
-    fs: { mkdtempSync: () => short, realpathSync: Object.assign(p => p, { native: () => 'C:\\Users\\Runner Administrator\\Temp\\fixture' }) },
+    fs: { mkdirSync() {}, mkdtempSync: () => short, realpathSync: Object.assign(p => p, { native: () => 'C:\\Users\\Runner Administrator\\Temp\\fixture' }) },
+    rememberFixture: (work,root) => { assert.equal(root,'C:\\Users\\Runner Administrator\\Temp\\fixture'); assert.equal(work,path.win32.join(short,'work')); },
     path: path.win32, os: { tmpdir: () => 'C:\\Users\\RUNNER~1\\Temp' },
   };
-  assert.equal(vm.runInNewContext(source.slice(start, end) + '\nmkTouchedTmp()', context), short);
+  assert.equal(vm.runInNewContext(source.slice(start, end) + '\nmkTouchedTmp()', context), path.win32.join(short,'work'));
 });
 
 for (const shortPart of ['file', 'root', 'both', 'case']) {

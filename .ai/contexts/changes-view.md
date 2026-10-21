@@ -490,9 +490,7 @@ not open this repository" are indistinguishable from git's exit status, and they
 must not read alike in the panel — the second is a repository the user has,
 usually with a one-line fix in git's own message.
 
-**No message is ever matched.** git translates every diagnostic (this project's
-own host runs it in French), so the detection reads only `git rev-parse
---is-inside-work-tree`'s exit code and the two literal tokens it prints:
+Repository detection never matches Git diagnostic text. Main-process local Git runs with `LC_ALL=C`, `LC_MESSAGES=C`, and `LANG=C`, with `LANGUAGE` removed. Remote Git keeps the host's locale, so its translated diagnostics cannot be used for detection. The worktree probe reads only `git rev-parse --is-inside-work-tree`'s exit code and the literal `true`/`false` tokens; local exit 128 additionally requires the bounded filesystem corroboration below.
 
 | probe result | meaning | outcome |
 |---|---|---|
@@ -517,29 +515,39 @@ be shown for. `test/git-changes-runner-real-git.test.js` builds those
 fixtures against real git, asserts each really does exit 128, and pins that none
 of them produces `reason: 'not-a-repo'`.
 
-**A cwd that is gone is ruled out before the corroboration is trusted.** The walk
-below answers "no `.git` anywhere" for a path that does not exist, so a deleted
-worktree outside a repository would otherwise be reported as "not a git
-repository". The local spawn happens to fail for such a cwd — code `-1`, not 128 — but the local and
-remote transports differ here (`git -C <gone>` exits 128), so the check is an
-outcome of its own rather than something left to a code that happens not to
-match. It also decides the wording: `spawn git ENOENT` reads as "git is not
-installed", where the truth is that the directory is gone, and the message names
-it.
+The shared `gitEntryAtOrAbove(cwd, fsOps, pathOps, childEnv)` canonicalizes the
+starting cwd to its physical absolute directory and requires successful directory
+metadata. Changes retains its cwd-specific missing/non-directory errors.
+`missingCwdError` requires `fsOps.stat`; the walk needs synchronous `stat`,
+`lstat` and `realpath`. Missing operations, failed path/metadata operations,
+unsupported entry types and unusable required device values are uncertainty.
 
-`fsOps` is dependency injection for tests only, and both functions that use it
-require a complete seam: `missingCwdError` throws a `TypeError` rather than
-treating a missing `stat` as "the cwd is fine", which would switch the check off
-with nothing to show for it.
+The walk checks `.git` with `lstat`: a regular gitfile or a symlink (even dangling)
+is presence (`true`); a directory counts only when `lstat(.git/HEAD)` succeeds,
+including a HEAD symlink. An empty directory without HEAD is ignored and cannot
+hide a higher qualifying entry. Only HEAD's `ENOENT` permits continuation;
+`ENOTDIR`, permission errors and errors without a code yield `null`.
+An absent `.git` (`ENOENT`/`ENOTDIR`) permits ascent after the directory check.
+This is conservative corroboration, not repository validation: HEAD-only
+directories count, while bare repositories and pre-discovery global-config
+diagnosis remain outside this contract.
 
-The corroboration is `gitEntryAtOrAbove(cwd)`: an `fs.lstat` for a `.git` entry
-at the cwd and at each ancestor up to the filesystem root. It needs no process
-and no locale, and it answers the one question the exit code cannot — *is there
-a repository here at all*. It returns three ways, and only `false` (a walk that
-reached the root seeing nothing) is "there is no repository here"; an `EACCES`
-or any other unexpected `lstat` error is `null`, undecidable, and reports. A `.git` that
-exists but is broken counts as `true`: the repository is there, it is just
-unreadable.
+One effective child environment snapshot is used by the local Git probe and
+corroboration, including injected transports. `GIT_CEILING_DIRECTORIES` uses the
+platform list separator. Relative or unresolvable pre-marker entries are ignored;
+absolute entries before the first empty field are realpathed. After that marker
+entries are literal (trailing separators removed, dot components preserved).
+The nearest strict ancestor bounds ascent: cwd-equal and sibling prefixes do not
+stop it. Windows comparisons respect case, separators and drive/UNC roots.
+The ceiling's own `.git` and excluded parent metadata are never consulted.
+
+`GIT_DISCOVERY_ACROSS_FILESYSTEM` uses Git booleans: unset/empty/false/no/off/zero
+stop before inspecting a parent on another device; true/yes/on/nonzero signed or
+scaled Git integers allow ascent. Invalid booleans are `null`. Required `stat.dev`
+values must be usable. The current entry is checked before ascent; ceilings
+apply before accessing an excluded parent. Definite absence at a ceiling,
+device boundary or root is `false`; only exact `false` corroborates exit 128.
+The shared walk affects both Changes and Touched, without extra Git processes.
 
 **Local and remote diverge here, deliberately.** The probe itself goes through
 the same `invoke()` and the same quoting on both transports, but the
@@ -584,11 +592,10 @@ page is what the panel would display. The bound is the first lines rather than a
 flat character cut because git's own diagnosis is on the first line and the
 noise is below it.
 
-A genuine failure — a permission error, a corrupt repository, a transport
-problem — is still reported, in git's own words and in whatever language git
-chose. Only the volume is capped. That is what "Not a repository" above leans
-on: every failure the probe cannot positively explain falls back to this
-message rather than to the "not a git repository" line.
+Genuine permission, repository and transport failures retain bounded messages.
+Local Git diagnostics use C/English; remote Git retains the host locale. Every
+failure the probe cannot corroborate preserves its error rather than claiming
+that a repository is absent.
 
 ## cwd resolution (`git-changes-target.js`)
 
@@ -910,15 +917,28 @@ The real ssh child process (`remote-attach.js`'s `defaultRunRemoteCommand` actua
 
 ## Local exec and inherited git environment
 
-`defaultLocalExec` strips the repo-location variables (`GIT_DIR`, `GIT_WORK_TREE`,
-`GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, `GIT_PREFIX`,
-`GIT_NAMESPACE`) from the child's environment: the session's cwd is the only
-thing that decides which repository a Changes command reads. Measured
-2026-09-13: with those inherited (the test suite running under the pre-commit
-hook), the scratch-repo test wrote `tracked.txt` into the outer repository's
-index and rewrote its local `user.email`; the test helper now drops `GIT_*` /
-`HUSKY*` for the scratch repo and disables its hooks, and the runner no longer
-trusts them either.
+`localGitEnv(baseEnv = process.env)` returns a fresh child environment, preserving
+unrelated values, removing `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`,
+`GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, `GIT_PREFIX` and `GIT_NAMESPACE`, and
+forcing `LC_ALL=C`, `LC_MESSAGES=C`, `LANG=C`, with `LANGUAGE` deleted. Neither
+the supplied object nor the Electron process environment is mutated. Discovery
+limits are preserved and shared with the bounded filesystem corroboration.
+
+The six main-process launch sites are `defaultLocalExec`, `defaultRunGit`,
+`gitCommonDirOf`, both worktree IPC launches (`delete-worktree`, including its
+double-force locked retry, and `worktree-status`), and `project-root.gitEnv`.
+Project-root first strips **all** `GIT_*`, including discovery limits, then
+normalizes the filtered injected environment without ambient merging.
+
+UTF-8 decoding, NUL-delimited (`-z`) machine output, path guards and quoting
+remain unchanged. M1 measured byte equality on Linux Git 2.53.0 for valid UTF-8
+paths/content under French and C locales; it did not measure every platform,
+non-UTF-8 filenames, filters, textconv or external diff tools.
+Remote Git keeps its host locale: `buildRemoteGitCommand` has no locale prefix.
+The sandbox shell-bootstrap Git calls discard diagnostics and remain outside
+this main-process policy, as do tooling, test fixtures and user/session commands.
+The local locked-worktree retry still matches English `locked`; remote Touched
+still matches English HEAD-missing text, a separate remaining locale limitation.
 
 ## A capped read waits for git to exit
 
@@ -1003,8 +1023,14 @@ segments are blocked with fs.realpathSync.native on read-file-for-panel and
 save-file-for-panel, including Windows 8.3 aliases, for every
 caller, including terminal links. This is an intended change from the earlier
 ordinary viewer policy. A save after deletion returns "File does not exist".
-A probe exit 128 is a non-repository result only with
-the matching stderr diagnostic. The Touched tool-bar toggle keys on returnList
+`noRepositoryAt(cwd, probe, deps, childEnv)` is the exported failed-discovery
+decision: only exit 128, an existing directory and exact `false` from the shared
+bounded walk permit the non-repository marker, independently of stderr.
+Thrown invocations and code -1 retain the explicit transport fallback outside
+that decision. Discovery refusals precede later blob/reread fallback behavior.
+#754 lands before #659: Changes read/save still refuse a failed root lookup;
+when #659 adds plain editing it must use this same export for every discovery
+fallback on both reads and saves. The Touched tool-bar toggle keys on returnList
 and uses the Changes discard guard when closing its editor.
 
 The tool entry point is the right-hand bar, using the shown terminal owner.

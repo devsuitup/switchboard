@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const childProcess = require('child_process');
+const { localGitEnv } = require('./git-changes-runner');
 
 const GIT_TIMEOUT_MS = 2000;
 const CLAUDE_WORKTREE_RE = /^(.+?)([/\\]\.claude[/\\]worktrees[/\\][^/\\]+)(?:[/\\].*)?$/;
@@ -29,7 +30,7 @@ function rootFromCommonDir(commonDir) {
 function gitEnv(env) {
   const out = {};
   for (const [k, v] of Object.entries(env || {})) if (!k.startsWith('GIT_')) out[k] = v;
-  return out;
+  return localGitEnv(out);
 }
 
 function runGit(execFile, cwd, env) {

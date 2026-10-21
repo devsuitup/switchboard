@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
+const { fixture, assertAbsent, FRENCH, discoveryCases, savedEnv } = require('./git-discovery-fixture');
 
 // main.js cannot be required from a test, so the wiring that keeps a remote
 // session out of a local-only handler is asserted against its source, with
@@ -195,12 +196,138 @@ test('round 2: Touched refuses any literal git directory before probing on read 
   }
 });
 
-test('round 2: a not-a-repository diagnostic permits plain fallback', async () => {
-  const result = await require('../git-changes-file').readTouchedChangesFile({ absolutePath: path.join(ROOT, 'example.txt'), maxBytes: 1024 }, {
+test('round 2: corroborated absence permits plain fallback', async (t) => {
+  const { file, cwd, root } = fixture(t);
+  assertAbsent(cwd, root);
+  const result = await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, {
     runGit: async () => ({ code: 128, stderr: 'fatal: not a git repository (or any of the parent directories): .git' }),
   });
   assert.equal(result.ok, true);
   assert.equal(result.git, false);
+});
+
+test('Touched: exit 128 outside a repository is independent of French stderr', async t => {
+  const { file, cwd, root } = fixture(t);
+  assertAbsent(cwd, root);
+  for (const stderr of [...FRENCH, '', '致命的なエラー']) {
+    await t.test(stderr || 'empty stderr', async () => {
+    const calls = [];
+    const result = await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, {
+      runGit: async (args, options) => { calls.push({ args, options }); return { code: 128, stdout: '', stderr }; },
+    });
+    assert.deepEqual(result, { ok: true, git: false }, stderr);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].args, ['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir']);
+    assert.equal(calls[0].options.cwd, cwd);
+    assert.equal(calls[0].options.timeoutMs, 10000);
+    assert.equal(calls[0].options.maxBuffer, 64 * 1024);
+    assert.equal(calls[0].options.env.GIT_CEILING_DIRECTORIES, root);
+    });
+  }
+});
+
+test('discovery: an empty ancestor .git is ignored without hiding a higher entry: diagnostic matrix', require('./git-discovery-fixture').emptyAncestorMatrix);
+
+test('Touched: an English no-repository diagnostic does not hide a broken gitfile', async t => {
+  const { file, ancestor } = fixture(t);
+  fs.writeFileSync(path.join(ancestor, '.git'), 'gitdir: missing\n');
+  const stderr = 'fatal: not a git repository: missing';
+  const result = await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, {
+    runGit: async () => ({ code: 128, stdout: '', stderr }),
+  });
+  assert.deepEqual(result, { ok: false, reason: 'git', error: stderr });
+});
+
+test('Touched: fatal discovery needs definite filesystem absence', async t => {
+  const { file, cwd } = fixture(t);
+  const api = require('../git-changes-file');
+  for (const code of [1, 127, 255, 0, -1]) {
+    const result = await api.readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, { runGit: async () => ({ code, stdout: '', stderr: 'probe' }) });
+    assert.deepEqual(result, code === -1 ? { ok: true, git: false } : { ok: false, reason: 'git', error: 'probe' });
+  }
+  for (const runGit of [async () => { throw new Error('transport'); }, async () => null]) {
+    assert.deepEqual(await api.readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, { runGit }), { ok: true, git: false });
+  }
+  for (const text of ['', 'invalid', 'gitdir: missing\n']) {
+    fs.writeFileSync(path.join(cwd, '.git'), text);
+    assert.equal(api.noRepositoryAt(cwd, { code: 128 }), false);
+    fs.unlinkSync(path.join(cwd, '.git'));
+  }
+});
+
+for (const group of ['discovery: an empty ancestor .git is ignored without hiding a higher entry', 'discovery: Git ceilings bound corroboration in Changes and Touched', 'discovery: device boundaries follow the Git boolean environment', 'discovery: one exported noRepositoryAt contract covers both landing orders']) {
+  test(group, async t => {
+    const { file, cwd } = fixture(t);
+    const api = require('../git-changes-file');
+    assert.equal(typeof api.noRepositoryAt, 'function');
+    const cases = discoveryCases().filter(c => group.includes('empty ancestor') ? /empty|HEAD/.test(c.label) : group.includes('ceilings') ? /ceiling/.test(c.label) : group.includes('device') ? /dev|stat failure/.test(c.label) : true);
+    for (const c of cases) {
+      const realpath = value => c.fsOps.realpath(value === cwd ? c.cwd : value);
+      const injected = {
+        lstatSync: value => value === file ? { isSymbolicLink: () => false } : c.fsOps.lstat(value),
+        statSync: value => c.fsOps.stat(value === cwd ? c.cwd : value),
+        realpathSync: { native: realpath },
+      };
+      if (!c.fsOps.lstat) delete injected.lstatSync;
+      if (!c.fsOps.stat) delete injected.statSync;
+      if (!c.fsOps.realpath) delete injected.realpathSync;
+      savedEnv(t, { ...c.env, GIT_DISCOVERY_ACROSS_FILESYSTEM: c.env.GIT_DISCOVERY_ACROSS_FILESYSTEM });
+      const deps = { fs: injected, runGit: async (_args, options) => {
+        assert.equal(options.env.GIT_CEILING_DIRECTORIES, c.env.GIT_CEILING_DIRECTORIES);
+        process.env.GIT_CEILING_DIRECTORIES = cwd;
+        return { code: 128, stdout: '', stderr: 'probe' };
+      } };
+      assert.equal(api.noRepositoryAt(cwd, { code: 128 }, deps, c.env), c.expected === false, c.label);
+      for (const code of [-1, 0, 1, 127, 255]) assert.equal(api.noRepositoryAt(cwd, { code }, deps, c.env), false, c.label + code);
+      process.env.GIT_CEILING_DIRECTORIES = c.env.GIT_CEILING_DIRECTORIES;
+      assert.deepEqual(await api.readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, deps), c.expected === false ? { ok: true, git: false } : { ok: false, reason: 'git', error: 'probe' }, c.label);
+      process.env.GIT_CEILING_DIRECTORIES = c.env.GIT_CEILING_DIRECTORIES;
+      assert.deepEqual(await api.writeTouchedChangesFile({ absolutePath: file, content: 'refused', version: 'v1', maxBytes: 1024 }, deps), c.expected === false ? { ok: false, reason: 'repo', error: 'not a git repository' } : { ok: false, reason: 'git', error: 'probe' }, c.label);
+      assert.equal(fs.readFileSync(file, 'utf8'), 'été\n');
+    }
+  });
+}
+
+test('discovery: shipped source uses the single noRepositoryAt decision', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'git-changes-file.js'), 'utf8');
+  for (const line of source.split('\n').filter(l => l.includes('not a git repository'))) {
+    assert.match(line, /return \{ ok: false, error: 'not a git repository', reason: 'repo' \}/);
+  }
+  assert.doesNotMatch(source, /(?:test|match|includes)\(probe[.](?:stderr|message)/);
+  assert.equal((source.match(/probe\?\.code [!=]== NOT_IN_TREE_EXIT_CODE/g) || []).length, 1);
+  assert.match(source, /noRepositoryAt\(path.dirname\(realPath\), probe, deps, childEnv\)/);
+  const ast = require('espree').parse(source, { ecmaVersion: 'latest', range: true });
+  const visit = node => {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'IfStatement' || node.type === 'ConditionalExpression') assert.doesNotMatch(source.slice(...node.test.range), /stderr|\.message/);
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === 'object') visit(value);
+    }
+  };
+  visit(ast);
+});
+
+test('noRepositoryAt: original cwd must be a directory before canonical walk', t => {
+  const { cwd } = fixture(t);
+  const { shape } = require('./git-discovery-fixture');
+  const { noRepositoryAt } = require('../git-changes-file');
+  const fsOps = {
+    statSync: value => shape(value === cwd ? 'file' : 'directory'),
+    realpathSync: { native: value => value === cwd ? path.join(path.dirname(cwd),'physical') : value },
+    lstatSync: () => { throw Object.assign(new Error('missing'),{ code:'ENOENT' }); },
+  };
+  assert.equal(noRepositoryAt(cwd,{code:128},{fs:fsOps}),false);
+});
+
+test('Touched: dangling git symlink refuses fallback', async t => {
+  const { cwd, file } = fixture(t);
+  try { fs.symlinkSync(path.join(cwd,'missing'),path.join(cwd,'.git'),'file'); }
+  catch (err) {
+    if (['EPERM','EACCES','ENOSYS'].includes(err.code)) { t.skip('platform cannot create a dangling symlink: '+err.code); return; }
+    throw err;
+  }
+  assert.deepEqual(await require('../git-changes-file').readTouchedChangesFile({absolutePath:file,maxBytes:1024},{runGit:async()=>({code:128,stdout:'',stderr:'probe'})}),{ok:false,reason:'git',error:'probe'});
 });
 
 test('round 3: a Touched file symlink selects read-only plain content before probing git', async () => {

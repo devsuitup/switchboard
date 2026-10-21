@@ -332,24 +332,81 @@ function parseBinaryDrivers(text) {
 }
 
 // true/false/null (undecidable) — see .ai/contexts/changes-view.md ("Not a repository")
-function gitEntryAtOrAbove(startDir, fsOps = DEFAULT_FS_OPS, pathOps = path) {
-  let dir;
+function gitEntryAtOrAbove(startDir, fsOps = DEFAULT_FS_OPS, pathOps = path, childEnv = localGitEnv()) {
   try {
-    dir = pathOps.resolve(startDir);
+    if (!['stat', 'lstat', 'realpath'].every(key => typeof fsOps?.[key] === 'function')) return null;
+    const windows = pathOps.sep === '\\';
+    const compare = value => {
+      const normalized = windows ? value.replace(/\\/g, '/').toLowerCase() : value;
+      const root = pathOps.parse(value).root;
+      return normalized.length > root.length ? normalized.replace(/\/+$/, '') : normalized;
+    };
+    const strictAncestor = (ancestor, child) => child !== ancestor && child.startsWith(ancestor.endsWith('/') ? ancestor : ancestor + '/');
+    let dir = fsOps.realpath(pathOps.resolve(startDir));
+    if (typeof dir !== 'string' || !pathOps.isAbsolute(dir)) return null;
+    let stat = fsOps.stat(dir);
+    if (!stat.isDirectory()) return null;
+    const bool = childEnv.GIT_DISCOVERY_ACROSS_FILESYSTEM;
+    let across = false;
+    if (bool !== undefined && bool !== '') {
+      const value = String(bool).toLowerCase();
+      if (['true', 'yes', 'on'].includes(value)) across = true;
+      else if (!['false', 'no', 'off'].includes(value)) {
+        const m = /^[\t\n\v\f\r ]*([+-]?)(0x[0-9a-f]+|0[0-7]*|[1-9]\d*)([kmg]?)$/.exec(value);
+        if (!m) return null;
+        const digits = /^0[0-7]+$/.test(m[2]) ? '0o' + m[2].slice(1) : m[2];
+        const number = BigInt(digits) * (m[1] === '-' ? -1n : 1n) * (1024n ** BigInt({ '': 0, k: 1, m: 2, g: 3 }[m[3]]));
+        if (number < -2147483647n || number > 2147483647n) return null;
+        across = number !== 0n;
+      }
+    }
+    let literal = false;
+    let ceiling = null;
+    const start = compare(dir);
+    for (const entry of String(childEnv.GIT_CEILING_DIRECTORIES || '').split(pathOps.delimiter)) {
+      if (entry === '') { literal = true; continue; }
+      if (!pathOps.isAbsolute(entry)) continue;
+      let candidate = entry;
+      if (!literal) {
+        try { candidate = fsOps.realpath(entry); } catch { continue; }
+      }
+      if (typeof candidate !== 'string' || !pathOps.isAbsolute(candidate)) continue;
+      candidate = compare(candidate);
+      if (strictAncestor(candidate, start) && (!ceiling || candidate.length > ceiling.length)) ceiling = candidate;
+    }
+    const validDev = value => (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) || (typeof value === 'bigint' && value >= 0n);
+    for (;;) {
+      if (!stat.isDirectory() || (!across && !validDev(stat.dev))) return null;
+      const gitPath = pathOps.join(dir, '.git');
+      let entry;
+      let missing = false;
+      try {
+        entry = fsOps.lstat(gitPath);
+      } catch (err) {
+        if (!['ENOENT', 'ENOTDIR'].includes(err?.code)) return null;
+        missing = true;
+      }
+      if (!missing) {
+        if (!entry) return null;
+        if (entry.isSymbolicLink() || entry.isFile()) return true;
+        if (!entry.isDirectory()) return null;
+        try {
+          fsOps.lstat(pathOps.join(gitPath, 'HEAD'));
+          return true;
+        } catch (err) {
+          if (err?.code !== 'ENOENT') return null;
+        }
+      }
+      const parent = pathOps.dirname(dir);
+      if (compare(parent) === compare(dir) || compare(parent) === ceiling) return false;
+      const parentStat = fsOps.stat(parent);
+      if (!parentStat.isDirectory() || (!across && !validDev(parentStat.dev))) return null;
+      if (!across && parentStat.dev !== stat.dev) return false;
+      dir = parent;
+      stat = parentStat;
+    }
   } catch {
     return null;
-  }
-  for (;;) {
-    try {
-      fsOps.lstat(pathOps.join(dir, '.git'));
-      return true;
-    } catch (err) {
-      const code = err && err.code;
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
-    }
-    const parent = pathOps.dirname(dir);
-    if (parent === dir) return false;
-    dir = parent;
   }
 }
 
@@ -401,14 +458,18 @@ function buildRemoteGitCommand(cwd, args) {
 // The session's cwd is authoritative: inherited repo-location vars must not redirect git — see .ai/contexts/changes-view.md
 const GIT_LOCATION_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_PREFIX', 'GIT_NAMESPACE'];
 
-function localGitEnv() {
-  const env = { ...process.env };
+function localGitEnv(baseEnv = process.env) {
+  const env = { ...baseEnv };
   for (const k of GIT_LOCATION_ENV) delete env[k];
+  env.LC_ALL = 'C';
+  env.LC_MESSAGES = 'C';
+  env.LANG = 'C';
+  delete env.LANGUAGE;
   return env;
 }
 
-async function defaultLocalExec(args, { cwd, timeoutMs, input }) {
-  const result = await runToExit('git', args, { cwd, env: localGitEnv(), timeoutMs, maxBuffer: LOCAL_MAX_BUFFER, input });
+async function defaultLocalExec(args, { cwd, timeoutMs, input, env = localGitEnv() }) {
+  const result = await runToExit('git', args, { cwd, env, timeoutMs, maxBuffer: LOCAL_MAX_BUFFER, input });
   const stdout = result.stdout.toString('utf8');
   if (result.code === 0) return { code: 0, stdout, stderr: result.stderr };
   return { code: result.code, stdout, stderr: result.stderr || result.message };
@@ -464,7 +525,7 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, coun
   const effectiveTimeout = timeoutMs || (kind === 'local' ? DEFAULT_LOCAL_TIMEOUT_MS : DEFAULT_REMOTE_TIMEOUT_MS);
 
   const runExec = exec || (kind === 'local'
-    ? (args, localOpts = {}) => defaultLocalExec(args, { cwd: localOpts.cwd || cwd, timeoutMs: effectiveTimeout, input: localOpts.input })
+    ? (args, localOpts = {}) => defaultLocalExec(args, { cwd: localOpts.cwd || cwd, timeoutMs: effectiveTimeout, input: localOpts.input, env: localOpts.env })
     : (command, remoteOpts) => defaultRunRemoteCommand(alias, command, {
         timeoutMs: effectiveTimeout,
         maxStdoutBytes: remoteOpts && remoteOpts.maxStdoutBytes,
@@ -480,6 +541,7 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, coun
       const localOpts = {};
       if (opts.at) localOpts.cwd = opts.at;
       if (opts.input !== undefined) localOpts.input = opts.input;
+      if (opts.env !== undefined) localOpts.env = opts.env;
       return runExec(fullArgs, localOpts);
     }
     return runExec(buildRemoteGitCommand(at, fullArgs), { maxStdoutBytes: opts.maxStdoutBytes });
@@ -556,8 +618,9 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, coun
   // Only positive evidence withdraws the panel — see .ai/contexts/changes-view.md ("Not a repository")
   async function isWorkTree() {
     let probe;
+    const childEnv = kind === 'local' ? localGitEnv() : undefined;
     try {
-      probe = await invoke(['rev-parse', '--is-inside-work-tree']);
+      probe = await invoke(['rev-parse', '--is-inside-work-tree'], { env: childEnv });
     } catch (err) {
       return { ok: false, error: cwdRefusal() || err.message };
     }
@@ -571,7 +634,7 @@ function createGitChangesRunner({ kind, cwd, alias, exec, timeoutMs, fsOps, coun
     const gone = cwdRefusal();
     if (gone) return { ok: false, error: gone };
     const corroborated = kind === 'local'
-      ? gitEntryAtOrAbove(cwd, fsOps || DEFAULT_FS_OPS)
+      ? gitEntryAtOrAbove(cwd, fsOps || DEFAULT_FS_OPS, path, childEnv)
       : null;
     if (corroborated === false) return { ok: true, isRepo: false };
     return { ok: false, error: firstError(probe) };

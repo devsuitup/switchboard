@@ -6,7 +6,7 @@ const realFs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { runToExit } = require('./run-to-exit');
-const { localGitEnv } = require('./git-changes-runner');
+const { localGitEnv, gitEntryAtOrAbove } = require('./git-changes-runner');
 const { resolveOnDisk, isInsideDir } = require('./resolve-path-on-disk');
 const { isSensitivePath } = require('./ipc-path-validator');
 
@@ -51,19 +51,20 @@ function requireLocalTarget(target) {
   return target;
 }
 
-async function defaultRunGit(args, { cwd, timeoutMs, maxBuffer }) {
-  const result = await runToExit('git', args, { cwd, env: localGitEnv(), timeoutMs, maxBuffer });
+async function defaultRunGit(args, { cwd, timeoutMs, maxBuffer, env = localGitEnv() }) {
+  const result = await runToExit('git', args, { cwd, env, timeoutMs, maxBuffer });
   if (result.code === 0) return { code: 0, stdout: result.stdout, stderr: '', tooLarge: false };
   return { code: result.code, stdout: result.stdout, stderr: result.stderr || result.message, tooLarge: result.overflow };
 }
 
 // see .ai/contexts/changes-view.md ("Containment, and which path the write runs on")
-async function resolveRepoDirs(cwd, deps) {
+async function resolveRepoDirs(cwd, deps, childEnv = localGitEnv()) {
   const runGit = deps.runGit || defaultRunGit;
   const result = await runGit(['rev-parse', '--show-toplevel', '--absolute-git-dir', '--git-common-dir'], {
     cwd,
     timeoutMs: deps.timeoutMs || DEFAULT_TIMEOUT_MS,
     maxBuffer: TOPLEVEL_MAX_BUFFER,
+    env: childEnv,
   });
   if (result.code !== 0) return null;
   const lines = String(result.stdout).split('\n').map((l) => l.trim()).filter(Boolean);
@@ -268,6 +269,21 @@ function resolveTouchedOnDisk(filePath, deps) {
   }
 }
 
+function noRepositoryAt(cwd, probe, deps = {}, childEnv = localGitEnv()) {
+  if (probe?.code !== NOT_IN_TREE_EXIT_CODE) return false;
+  const fs = deps.fs || realFs;
+  try {
+    if (!fs.statSync(cwd).isDirectory()) return false;
+    return gitEntryAtOrAbove(cwd, {
+      stat: p => fs.statSync(p),
+      lstat: p => fs.lstatSync(p),
+      realpath: p => fs.realpathSync.native(p),
+    }, path, childEnv) === false;
+  } catch {
+    return false;
+  }
+}
+
 // see .ai/contexts/touched-files.md ("Shared editor")
 async function resolveTouchedRepo(absolutePath, deps) {
   const { resolveTouchedPath } = require('./session-touched-files');
@@ -287,16 +303,17 @@ async function resolveTouchedRepo(absolutePath, deps) {
   let probe;
   let repo;
   const runGit = deps.runGit || defaultRunGit;
+  const childEnv = localGitEnv();
   try {
     repo = await resolveRepoDirs(path.dirname(realPath), {
       ...deps,
       runGit: async (args, options) => { probe = await runGit(args, options); return probe; },
-    });
+    }, childEnv);
   } catch {
     return { ok: true, git: false };
   }
   if (!repo) {
-    if (probe?.code === GIT_RUN_FAILED_CODE || (probe?.code === NOT_IN_TREE_EXIT_CODE && /not a git repository/i.test(probe.stderr || ''))) {
+    if (probe?.code === GIT_RUN_FAILED_CODE || noRepositoryAt(path.dirname(realPath), probe, deps, childEnv)) {
       return { ok: true, git: false };
     }
     return { ok: false, error: probe?.stderr || 'could not locate the repository', reason: 'git' };
@@ -342,6 +359,7 @@ async function writeTouchedChangesFile({ absolutePath, content, version, maxByte
 }
 
 module.exports = {
+  noRepositoryAt,
   readTouchedChangesFile,
   writeTouchedChangesFile,
   readChangesFile,

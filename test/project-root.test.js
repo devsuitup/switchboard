@@ -6,6 +6,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { savedEnv } = require('./git-discovery-fixture');
+require('./git-locale-fixture').isolateGitSuite();
 
 const {
   projectRootFromPattern, worktreeRootFromPattern, rootFromCommonDir, resolveProjectRoots, gitEnv, GIT_TIMEOUT_MS,
@@ -50,7 +52,7 @@ test('common dir: <root>/.git gives <root>; a bare repo or a submodule module di
 
 test('git env: GIT_* variables of the caller are dropped', () => {
   const env = gitEnv({ PATH: '/bin', GIT_DIR: '/x/.git', GIT_INDEX_FILE: '/x/.git/index', HOME: '/h' });
-  assert.deepEqual(env, { PATH: '/bin', HOME: '/h' });
+  assert.deepEqual(env, { PATH: '/bin', HOME: '/h', LANG: 'C', LC_ALL: 'C', LC_MESSAGES: 'C' });
 });
 
 function hasGit() {
@@ -66,6 +68,9 @@ test('a real repo: main checkout, subdirectories and `git worktree add` director
   if (!hasGit()) { t.skip('git not available'); return; }
   const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-project-root-')));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const home = path.join(tmp, 'home');
+  fs.mkdirSync(home);
+  savedEnv(t, { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home });
   const repo = path.join(tmp, 'repo');
   fs.mkdirSync(path.join(repo, 'sub'), { recursive: true });
   git(repo, ['init', '-q']);
@@ -82,7 +87,29 @@ test('a real repo: main checkout, subdirectories and `git worktree add` director
   assert.deepEqual(await resolveProjectRoots(wt), { projectRoot: repo, worktreeRoot: wt });
   assert.deepEqual(await resolveProjectRoots(path.join(wt, 'deep', 'er')), { projectRoot: repo, worktreeRoot: wt });
   assert.deepEqual(await resolveProjectRoots(claudeWt), { projectRoot: repo, worktreeRoot: claudeWt });
-  assert.deepEqual(await resolveProjectRoots(plain), { projectRoot: plain, worktreeRoot: plain });
+  assert.deepEqual(await resolveProjectRoots(plain, { execFile: (_cmd,_args,_opts,cb) => cb(new Error('not a repository')) }), { projectRoot: plain, worktreeRoot: plain });
+});
+
+test('project roots: injected French environment uses C and still drops all GIT variables', async t => {
+  const { root, cwd } = require('./git-discovery-fixture').fixture(t);
+  const env = { PATH: '/bin', CUSTOM: 'preserved', LANG: 'fr_FR.utf8', LC_ALL: 'fr_FR.utf8', LC_MESSAGES: 'fr_FR.utf8', LANGUAGE: 'fr', GIT_DIR: '/wrong', GIT_CEILING_DIRECTORIES: '/wrong', GIT_CONFIG_GLOBAL: '/wrong', GIT_TEST_EXTRA: 'wrong' };
+  const before = { ...env };
+  let calls = 0;
+  let seen;
+  const result = await resolveProjectRoots(cwd, { env, execFile(cmd,args,opts,cb) {
+    calls++;
+    seen = { cmd, args, opts };
+    cb(null,path.join(root,'.git')+'\n'+cwd+'\n');
+  } });
+  assert.equal(calls,1);
+  assert.equal(seen.cmd,'git');
+  assert.deepEqual(seen.args,['-C',cwd,'rev-parse','--git-common-dir','--show-toplevel']);
+  assert.equal(seen.opts.cwd,cwd);
+  assert.equal(seen.opts.timeout,2000);
+  assert.equal(seen.opts.shell,undefined);
+  assert.deepEqual(seen.opts.env,{ PATH: '/bin', CUSTOM: 'preserved', LANG: 'C', LC_ALL: 'C', LC_MESSAGES: 'C' });
+  assert.deepEqual(result,{ projectRoot: root, worktreeRoot: cwd });
+  assert.deepEqual(env,before);
 });
 
 test('no git call for the pattern, a missing dir or an empty cwd; a failing or throwing runner falls back to the cwd', async () => {
