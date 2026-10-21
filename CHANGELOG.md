@@ -4,10 +4,12 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- Quit (Exit on Windows), Restart to update and window close now name the local sessions, plain terminals and panel shells that will stop, with Stop and Cancel choices. Unsaved edits are handled first; attached background jobs and remote sessions are identified as continuing. (#546, #562)
+
 ## v0.0.99 — 2026-10-21
 
 ### Changed
-- Quit (Exit on Windows), Restart to update and window close now name the local sessions, plain terminals and panel shells that will stop, with Stop and Cancel choices. Unsaved edits are handled first; attached background jobs and remote sessions are identified as continuing. (#546, #562)
 - The session header shows the same status icon as the sidebar row; hover it for what the session is doing and where it runs. (#563)
 - Session tooltips say Open here, Attached here, Running in background, Running on a host or Running elsewhere; sessions awaiting restore say Not reopened · restores on click. The status bar and filter say open here, and Idle, Idle open here and Not running now differ by shape. (#563)
 - A session's line in the sidebar no longer repeats the CLI's own status word (busy, idle, waiting, shell); hover the status icon to see it. Local and remote sessions show the waiting reason and status age on the line; for both, conversations with several parts use the latest part's status on the line and in the tooltip. (#563)
