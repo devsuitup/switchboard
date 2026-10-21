@@ -151,13 +151,22 @@ for (const proceed of [true, false]) {
     t.answerVersion(true, null, check);
     await tick();
     assert.deepEqual(t.calls, [], 'the late Stop question is still open');
-    const reason = t.sent.findLast(m => m.channel === 'unsaved-check-reason');
-    t.context.ipcMain.emit('unsaved-check-reason-done', { sender: t.wc }, reason.args[0], reason.args[2], proceed);
+    const renewed = t.checks().at(-1);
+    t.context.ipcMain.emit('unsaved-check-ack', { sender: t.wc }, renewed.args[0]);
+    for (const timer of t.timers.filter(timer => !timer.cleared)) {
+      timer.cleared = true;
+      timer.fn();
+    }
+    await tick();
+    assert.deepEqual(t.calls, [], 'queued timers cannot quit while the Stop question is open');
+    assert.equal(t.checks().length, 2, 'the stale reload answer re-sends the current exit check');
+    assert.equal(renewed.args[2], t.detail());
+    t.answer(proceed);
     await tick();
     if (proceed) assert.deepEqual(t.calls, ['quit'], 'the late quit actually progresses after Stop');
     else {
       t.menu();
-      assert.equal(t.checks().length, 2, 'Cancel releases the attempt so Quit can ask again');
+      assert.equal(t.checks().length, 3, 'Cancel releases the attempt so Quit can ask again');
       t.answer(true); await tick();
       assert.deepEqual(t.calls, ['quit']);
     }
@@ -240,6 +249,28 @@ test('B3 cancelling a late macOS native close releases the install bypass for la
   app.emit('before-quit', t.event()); await tick();
   assert.equal(t.detail().external, true, 'an untagged quit must still enter the edits guard');
   t.answer(false); await tick();
+});
+
+test('C2 a committed macOS native install keeps its bypass when the window closes', async () => {
+  const t = setup('darwin');
+  const { nativeUpdater } = wireUpdater(t);
+  const installing = t.install();
+  t.answer(true); await installing;
+  nativeUpdater.emit('before-quit-for-update');
+  assert.equal(t.context.updateInstalling, true);
+  const close = t.event();
+  t.win.emit('close', close);
+  assert.equal(close.prevented, false, 'committed Stop consent permits the native close');
+  Object.assign(t.context, { activeSessions: t.records, closedSessions: new Map(),
+    killPty: () => t.calls.push('stop-pty'), changesWatchers: { closeAll() {} },
+    closeAllFileWatchers() {}, unsubscribeBgAgents() {}, subagentWatchers: new Map() });
+  const start = source.indexOf("  mainWindow.on('closed'");
+  const end = source.indexOf('\n  });', start) + 6;
+  vm.runInContext(source.slice(start, end), t.context);
+  t.win.emit('closed');
+  assert.equal(t.context.updateInstalling, true, 'releasing a committed window must preserve the native install bypass');
+  assert.equal(t.guard.launchAllowed(), true, 'window cleanup still releases the attempt');
+  assert.equal(t.checks().length, 1, 'the native close never asks for consent twice');
 });
 
 test('A5 upgrades renew consent, generations are revalidated, sender and launch gate remain scoped', async () => {

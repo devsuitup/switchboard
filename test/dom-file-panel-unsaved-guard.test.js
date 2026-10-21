@@ -245,10 +245,12 @@ test('A3 edits precede Stop consent, Cancel releases unload approval and never f
   try {
     ctx.calls.check(212, 'reload'); await flush();
     ctx.calls.reason(212, 'quit', 44, exitDetail()); await flush();
-    assert.ok(ctx.window.document.querySelector('.choice-dialog'), 'late reload upgrade asks before flushing');
+    assert.equal(ctx.window.document.querySelector('.choice-dialog'), null, 'late reason completion does not grant Stop consent');
+    ctx.calls.check(212, 'quit', exitDetail()); await flush();
+    assert.ok(ctx.window.document.querySelector('.choice-dialog'), 'the renewed check asks before flushing');
     assert.equal(flushed, 0);
     ctx.window.document.querySelector('.choice-dialog-cancel').click(); await flush();
-    assert.equal(ctx.calls.reasonProceeds.at(-1), false, 'late Cancel also declines the main continuation');
+    assert.deepEqual(ctx.calls.answers.at(-1), { id: 212, proceed: false }, 'Cancel declines the renewed check');
     assert.equal(flushed, 0);
     await dirtyTab(ctx, 's1', A);
     ctx.window.api.saveFileForPanel = async () => ({ ok: false, error: 'read only' });
@@ -480,7 +482,7 @@ test('a reload check that a quit joins before it is answered flushes once', asyn
   } finally { ctx.destroy(); }
 });
 
-test('a quit that joins a reload check the page has already answered still writes the app state', async () => {
+test('a quit after an answered reload writes the app state only through the renewed check', async () => {
   const ctx = setup();
   try {
     let flushed = 0;
@@ -489,6 +491,9 @@ test('a quit that joins a reload check the page has already answered still write
     await flush();
     assert.deepEqual(ctx.calls.answers, [{ id: 6, proceed: true }]);
     ctx.calls.reason(6, 'quit');
+    await flush();
+    assert.equal(flushed, 0, 'an answered reload cannot start a late exit flow');
+    ctx.calls.check(6, 'quit');
     await flush();
     assert.equal(flushed, 1);
     ctx.calls.reason(6, 'quit');
@@ -512,20 +517,26 @@ test('the page reports each upgrade with the token it came with', async () => {
   try {
     let finish = null;
     ctx.window.flushStateForExit = () => new Promise((resolve) => { finish = resolve; });
+    await dirtyTab(ctx, 's1', A);
     ctx.calls.check(6, 'reload');
     await flush();
     ctx.calls.reason(6, 'close', 41);
     await flush();
     ctx.calls.reason(6, 'quit', 42);
     await flush();
-    assert.deepEqual(ctx.calls.reasonDoneTokens, [42], 'the second upgrade has no save of its own to wait for');
+    assert.deepEqual(ctx.calls.reasonDoneTokens, [41, 42], 'each upgrade is acknowledged while the edits choice stays open');
+    assert.equal(finish, null, 'no flush before the edits choice');
+    button(ctx, 'unsaved-discard').click();
+    await flush();
+    assert.deepEqual(ctx.calls.answers, [], 'the current check waits for its flush');
     finish();
     await flush();
-    assert.deepEqual(ctx.calls.reasonDoneTokens, [42, 41], 'the first is reported once its save lands');
+    assert.deepEqual(ctx.calls.reasonDoneTokens, [41, 42], 'each token is reported once');
+    assert.deepEqual(ctx.calls.answers, [{ id: 6, proceed: true }]);
   } finally { ctx.destroy(); }
 });
 
-test('the page tells main when the save a late upgrade asked for is done, and at once when it has none to do', async () => {
+test('late upgrades finish their notification immediately while renewed checks wait for writes', async () => {
   const ctx = setup();
   try {
     let finish = null;
@@ -535,19 +546,28 @@ test('the page tells main when the save a late upgrade asked for is done, and at
     await flush();
     ctx.calls.reason(6, 'quit');
     await flush();
-    assert.deepEqual(ctx.calls.reasonDone, [], 'not before the save lands');
+    assert.deepEqual(ctx.calls.reasonDone, [6], 'the stale reload is left for main to re-check');
+    assert.equal(finish, null, 'the reason notification starts no write');
+    ctx.calls.check(6, 'quit');
+    await flush();
+    assert.deepEqual(ctx.calls.answers, [{ id: 6, proceed: true }], 'the renewed result waits for the write');
     finish();
     await flush();
     assert.deepEqual(ctx.calls.reasonDone, [6]);
+    assert.deepEqual(ctx.calls.answers, [{ id: 6, proceed: true }, { id: 6, proceed: true }], 'both the reload and renewed exit have answered');
 
     ctx.calls.check(7, 'reload');
     await flush();
     fail = true;
     ctx.calls.reason(7, 'quit');
     await flush();
+    ctx.calls.check(7, 'quit');
+    await flush();
     finish();
     await flush();
     assert.deepEqual(ctx.calls.reasonDone, [6, 7], 'a failed save still lets the quit go');
+    assert.equal(ctx.calls.answers.length, 4, 'the failed flush also settles its renewed exit check');
+    assert.deepEqual(ctx.calls.answers.at(-1), { id: 7, proceed: true });
 
     ctx.calls.reason(99, 'quit');
     await flush();

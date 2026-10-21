@@ -152,7 +152,6 @@ function initFilePanel() {
   if (window.api.unsavedDialog) reportNativeDialogs();
   if (window.api.onUnsavedCheck) {
     const checks = new Map();
-    const answeredReloads = new Set();
     const flush = async () => {
       if (typeof window.flushStateForExit !== 'function') return;
       let timer;
@@ -198,20 +197,6 @@ function initFilePanel() {
         done();
         return;
       }
-      if (answeredReloads.delete(id)) {
-        const late = { id, reason, detail: detail || { external: true } };
-        checks.set(id, late);
-        const proceed = await choose(late);
-        if (proceed) { approveFilePanelUnload(true); window.api.unsavedCheckPhase?.(id, late.detail, 'flushing'); await flush(); }
-        else {
-          unloadApproved = false;
-          if (unloadApprovalTimer) clearTimeout(unloadApprovalTimer);
-          unloadApprovalTimer = null;
-        }
-        checks.delete(id);
-        done(proceed && !late.invalid);
-        return;
-      }
       done();
     });
     window.api.onUnsavedCheck(async (id, reason, detail = null) => {
@@ -248,7 +233,6 @@ function initFilePanel() {
         unloadApprovalTimer = null;
         if (typeof window.releaseExitState === 'function') window.releaseExitState();
       }
-      if (proceed && state.reason === 'reload') answeredReloads.add(id);
       window.api.unsavedCheckResult(id, proceed, state.detail);
       checks.delete(id);
     });

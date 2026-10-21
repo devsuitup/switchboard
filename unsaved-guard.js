@@ -28,8 +28,8 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
       if (current?.win === win) current.finish(false);
       for (const release of reasonWaits.values()) if (release.wc === win?.webContents) release(false);
     },
-    invalidateRenderer: (win, attempt) => {
-      onAttemptReleased();
+    invalidateRenderer: (win, attempt, wasCommitted = false) => {
+      if (!wasCommitted) onAttemptReleased();
       windows.get(win)?.invalidate();
       try { win?.webContents.send('exit-attempt-invalidated', attempt); } catch {}
     },
@@ -78,7 +78,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
   ipcMain.on('unsaved-check-result', (event, id, proceed, detail) => {
     const entry = pending.get(id);
     if (!entry || event?.sender !== entry.wc) return;
-    if (entry.detail && !(entry.initialReason === 'reload' && detail == null) && (detail?.attempt !== entry.detail.attempt || detail?.version !== entry.detail.version)) {
+    if (entry.detail && (detail?.attempt !== entry.detail.attempt || detail?.version !== entry.detail.version)) {
       entry.acked = false;
       entry.arm();
       try { entry.wc.send('unsaved-check', entry.id, entry.reason, entry.detail); } catch { entry.finish(true, 'unanswered'); }
@@ -148,7 +148,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     if (win.isDestroyed() || !wc || wc.isDestroyed() || wc.isCrashed()) return Promise.resolve({ proceed: true, ended: null });
     let settled = false;
     const id = nextId++;
-    const entry = { id, win, wc, reason, initialReason: reason, detail, acked: false, overdue: false, probe: null, timer: null, finish: null, arm: null, upgrade: null };
+    const entry = { id, win, wc, reason, detail, acked: false, overdue: false, probe: null, timer: null, finish: null, arm: null, upgrade: null };
     const asked = new Promise((resolve) => {
       const onGone = () => entry.finish(true);
       const stop = () => {

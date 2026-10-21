@@ -264,6 +264,9 @@ unload approval, release the launch gate and immediately resume working-set
 persistence. Windows verifies the native updater latch after invocation;
 Linux false install resets it; macOS deferred fetching releases after 30 s
 or error. Linux relaunch acknowledgement keeps the committed gate until exit.
+The release callback clears the install bypass only for an uncommitted attempt.
+Invalidating a committed attempt during macOS native window cleanup preserves
+`updateInstalling`; explicit installer failure still resets it.
 
 Untagged before-quit is external and skips only the session question; edits,
 flush, no-ACK/hung escapes and bounded shutdown remain. It supersedes a pending

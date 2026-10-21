@@ -38,10 +38,11 @@ function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer }
   function invalidate(action) {
     if (!current || (action && current.action !== action)) return false;
     const previous = current;
+    const wasCommitted = previous.phase === 'committed';
     current = null;
     previous.phase = 'cancelled';
     cancelCheck(previous.window);
-    invalidateRenderer(previous.window, previous.id);
+    invalidateRenderer(previous.window, previous.id, wasCommitted);
     return true;
   }
   function request(win, action, external = false) {
