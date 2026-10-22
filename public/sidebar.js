@@ -2173,8 +2173,8 @@ function buildSessionItem(session) {
   // One icon slot per row, painted by session-activity-dom.js — see .ai/contexts/session-state.md
   const icon = document.createElement('span');
   icon.className = 'session-icon' + (rowSessionIds(session).some(id => activePtyIds.has(id)) ? ' running' : '');
-  const bgActivity = (typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(session), snapshot, session))
-    || (session.bgJobId ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null);
+  const bgActivity = typeof backgroundActivityLabel === 'function' ? backgroundActivityLabel(rowHeadId(session), snapshot, session)
+    : (session.bgJobId ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null);
   const descriptor = localSessionForStatus(rowHeadId(session), session);
   paintSessionIconFromSnapshot(icon, snapshot, bgActivity?.title, bgActivity?.text, !bgActivity && descriptor, session);
   if (remoteAttention) paintSessionIconFromSnapshot(icon, remoteAttention, undefined, undefined, !bgActivity && descriptor, session);

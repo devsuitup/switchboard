@@ -267,8 +267,7 @@ function backgroundActivityLabel(sessionId, snapshot, row, selection) {
   selection ||= selectBackgroundActivity(sessionId, row);
   const entry = selection.entry;
   if (!entry) {
-    const background = selection.unavailable || row?.bgJobId;
-    return background ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null;
+    return selection.unavailable ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null;
   }
   if (backgroundActivityIsForeground(sessionId, row, selection)) return { text: renderSessionIcon(snapshot).title, title: '' };
   const state = ['working', 'blocked'].includes(entry.state) ? agentStateGroupKey(entry) : entry.state;
@@ -480,7 +479,9 @@ function renderAgentDetail(entry) {
   const btn = (verb, label, enabled) =>
     `<button type="button" class="control-btn agents-verb-btn" data-verb="${verb}" title="${agentsEscapeAttr(reason(verb))}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
   const meta = [];
-  if (entry.id) meta.push('job ' + entry.id + (entry.jobState || entry.state ? ' · ' + (entry.jobState || entry.state) : ''));
+  const state = ['working', 'blocked'].includes(entry.state) && agentStateGroupKey(entry) === 'unknown'
+    ? 'Unknown' : entry.jobState || entry.state;
+  if (entry.id) meta.push('job ' + entry.id + (state ? ' · ' + state : ''));
   if (Number.isFinite(entry.tokens)) meta.push(formatTokens(entry.tokens) + ' tokens');
   if (entry.model) meta.push(entry.model);
   if (Number.isFinite(entry.startedAt)) meta.push('started ' + new Date(entry.startedAt).toLocaleString());

@@ -10,7 +10,7 @@ const JOB = 'abcdef01';
 const AT = Date.now() - 10_000;
 
 for (const state of ['working', 'blocked']) {
-  for (const route of ['identity', 'unique-head']) {
+  for (const route of ['marker', 'identity', 'unique-head']) {
     for (const owned of [false, true]) {
       test(`[767] ${state} ${route} interactive ${owned ? 'owned-PTY' : 'outside-terminal'} keeps normal activity`, t => {
         const h = setupSidebarDom();
@@ -24,6 +24,7 @@ for (const state of ['working', 'blocked']) {
         assert.equal(roster.find(e => e.id === JOB).hosted, false);
         const row = { sessionId: SID, projectPath: descriptor.cwd, status: descriptor.status,
           statusUpdatedAt: AT, waitingFor: 'Choose a branch', summary: 'Interactive conversation',
+          ...(route === 'marker' ? { bgJobId: JOB, bgSessionId: SID } : {}),
           ...(route === 'identity' ? { identityJobId: JOB, identitySessionId: SID } : {}) };
         h.window.sessionMap.set(SID, row);
         if (owned) {
@@ -32,12 +33,12 @@ for (const state of ['working', 'blocked']) {
           h.window.setActivity(SID, true, 'test');
           h.emitHeadTurn(SID, 'open');
         }
-        const render = () => {
-          const item = h.sidebar.buildSessionItem(row);
+        const render = (session = row) => {
+          const item = h.sidebar.buildSessionItem(session);
           h.document.getElementById('sidebar-content').replaceChildren(item);
           return item;
         };
-        const before = render();
+        const before = render({ ...row, bgJobId: undefined, bgSessionId: undefined });
         const expectedTitle = owned ? 'Working · Open here' : before.querySelector('.session-icon').title;
         const expectedStatus = owned ? 'Working' : before.querySelector('.session-status').textContent;
         assert.match(expectedTitle, owned ? /^Working · Open here/ : /Running elsewhere\nCLI status: waiting · Choose a branch/);
@@ -46,7 +47,7 @@ for (const state of ['working', 'blocked']) {
         const check = item => {
           assert.equal(item.querySelector('.session-icon').title, expectedTitle, 'stale job must not replace interactive activity');
           assert.equal(item.querySelector('.session-status').textContent, expectedStatus);
-          assert.equal(item.querySelector('.bg-badge'), null);
+          assert.equal(!!item.querySelector('.bg-badge'), route === 'marker');
           const snapshot = h.window.storedActivitySnapshot(SID, row);
           assert.equal(snapshot.liveness, 'alive');
           if (!owned) assert.equal(h.window.backgroundActivityLabel(SID, snapshot, row), null);

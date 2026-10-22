@@ -142,6 +142,23 @@ for (const [state, hosted, label] of [['working', false, 'Unknown'], ['blocked',
   });
 }
 
+for (const [state, hosted, expected] of [
+  ['working', false, 'Unknown'], ['blocked', false, 'Unknown'],
+  ['working', true, 'working'], ['blocked', true, 'blocked'], ['done', true, 'done'],
+]) {
+  test(`[767b] ${hosted ? 'hosted' : 'non-hosted'} ${state} detail reads ${expected}`, async t => {
+    const h = setup();
+    t.after(() => h.destroy());
+    const entry = { ...ROSTER[0], state, jobState: state, hosted };
+    h.setSnapshot({ daemonReachable: true, roster: [entry] });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    const meta = h.document.querySelector('.agents-detail-meta').textContent;
+    assert.ok(meta.startsWith(`job ${entry.id} · ${expected} ·`), `detail state follows hosting: ${meta}`);
+    if (!hosted) assert.match(h.document.querySelector('.agents-row-state').textContent, /Unknown/);
+  });
+}
+
 test('#563 every AGENT_STATE_META key reads its exact Title Case word', async t => {
   const h = setup();
   t.after(() => h.destroy());
