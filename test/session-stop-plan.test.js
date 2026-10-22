@@ -21,7 +21,7 @@ function setup(t, extra = {}) {
   window.api.remoteStopSession = async (alias, id) => { calls.remote.push([alias, id]); return { ok: true }; };
   window.api.bgAgentVerb = async (...args) => { calls.jobs.push(args); return { ok: true }; };
   window.appConfirm = async options => { calls.questions.push(options); return true; };
-  const app = loadAppFunctions(ctx.context, { functions: ['confirmAndStopSession'] });
+  const app = loadAppFunctions(ctx.context, { functions: ['confirmAndStopSession', 'detachSession'] });
   const stopRow = () => document.querySelector('#si-A .session-stop-btn').onclick({ stopPropagation() {} });
   return { ...ctx, row, calls, app, stopRow };
 }
@@ -54,15 +54,15 @@ test('remote row Stop names the host label and stops only its alive member', asy
   assert.deepEqual(h.calls.stopped, []);
 });
 
-test('Q2 row Stop names a background part that keeps running and stops only the local part', async t => {
+test('Q2 row Stop names and stops the live background part and the local part', async t => {
   const h = setup(t, { mergedMemberIds: ['B', 'J'] });
   h.window.activePtyIds.add('B');
-  h.window.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'J' ? { id: 'job-J' } : null });
+  h.window.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'J' ? { id: 'abcd1234' } : null });
   await h.stopRow();
   assert.equal(h.calls.questions.length, 1);
-  assert.match(h.calls.questions[0].message, /J.*job-J.*keeps running.*Agents view/s);
+  assert.match(h.calls.questions[0].message, /J.*abcd1234; its process ends/s);
   assert.deepEqual(h.calls.stopped, ['B']);
-  assert.deepEqual(h.calls.jobs, []);
+  assert.deepEqual(h.calls.jobs, [['stop', 'abcd1234']]);
 });
 
 test('an unseeded remote member is named as possibly running and is stopped', async t => {
@@ -101,23 +101,23 @@ test('a row Stop names the outside process it cannot stop', async t => {
   assert.deepEqual(h.calls.stopped, ['B']);
 });
 
-test('a mixed row Stop detaches an attached job tab and never kills its job', async t => {
+test('a mixed row Stop ends an attached job before closing its tab', async t => {
   const h = setup(t, { mergedMemberIds: ['B', 'J'] });
   h.window.activePtyIds.add('B').add('J');
-  h.window.openSessions.set('J', { attach: true, attachJobId: 'job-J', session: { sessionId: 'J' } });
-  h.window.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'J' ? { id: 'job-J' } : null });
+  h.window.openSessions.set('J', { attach: true, attachJobId: 'abcd1234', session: { sessionId: 'J' } });
+  h.window.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'J' ? { id: 'abcd1234' } : null });
   await h.stopRow();
-  assert.match(h.calls.questions[0].message, /J.*detach/i);
-  assert.match(h.calls.questions[0].message, /job-J.*keeps running.*Agents view/s);
+  assert.match(h.calls.questions[0].message, /J.*background job/i);
+  assert.match(h.calls.questions[0].message, /abcd1234; its process ends/s);
   assert.deepEqual(h.calls.stopped, ['B', 'J']);
-  assert.deepEqual(h.calls.jobs, []);
+  assert.deepEqual(h.calls.jobs, [['stop', 'abcd1234']]);
   assert.equal(h.window.activePtyIds.has('J'), false);
 });
 
 test('active local parts stop even when background ownership is unknown or names a job', async t => {
   const h = setup(t);
   h.window.activePtyIds.add('B').add('C');
-  h.window.api.bgAgentLiveJob = async id => ({ known: id !== 'C', reason: 'daemon unavailable', job: id === 'B' ? { id: 'job-B' } : null });
+  h.window.api.bgAgentLiveJob = async id => ({ known: id !== 'C', reason: 'daemon unavailable', job: id === 'B' ? { id: '1234abcd' } : null });
   await h.stopRow();
   assert.equal(h.calls.questions.length, 1);
   assert.deepEqual(h.calls.stopped, ['B', 'C']);
@@ -319,14 +319,15 @@ test('Retry retains a possibly running remote B while dropping confirmed dead C'
   assert.equal(h.document.querySelector('[role="alert"]'), null);
 });
 
-test('a closed job tab remains excluded while other local parts stop', async t => {
+test('a closed job tab stops its live job while other local parts stop', async t => {
   const h = setup(t, { mergedMemberIds: ['B', 'J'] });
   h.window.activePtyIds.add('B');
-  h.window.openSessions.set('J', { attach: true, closed: true, attachJobId: 'job-J' });
-  h.window.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'J' ? { id: 'job-J' } : null });
+  h.window.openSessions.set('J', { attach: true, closed: true, attachJobId: 'abcd1234' });
+  h.window.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'J' ? { id: 'abcd1234' } : null });
   await h.stopRow();
   assert.deepEqual(h.calls.stopped, ['B']);
-  assert.match(h.calls.questions[0].message, /job-J.*keeps running.*Agents view/s);
+  assert.match(h.calls.questions[0].message, /abcd1234; its process ends/s);
+  assert.deepEqual(h.calls.jobs, [['stop', 'abcd1234']]);
   assert.doesNotMatch(h.calls.questions[0].message, /detach/i);
 });
 
@@ -345,27 +346,26 @@ test('a null backend rejection is reported without preventing the other parts fr
   assert.equal(h.window.activePtyIds.has('C'), false);
 });
 
-test('a background-only row explains the exclusion without asking to stop zero parts', async t => {
+test('a background-only row confirms and stops job abcd1234', async t => {
   const h = setup(t, { mergedMemberIds: ['J'] });
-  h.window.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'J' ? { id: 'job-J' } : null });
+  h.window.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'J' ? { id: 'abcd1234' } : null });
   await h.stopRow();
-  assert.deepEqual(h.calls.questions, []);
+  assert.equal(h.calls.questions.length, 1);
   assert.deepEqual(h.calls.stopped, []);
-  const notice = h.document.querySelector('[role="alert"]');
-  assert.match(notice.textContent, /J.*job-J.*keeps running.*Agents view/s);
-  assert.doesNotMatch(notice.textContent, /Stop 0 parts\?/);
+  assert.deepEqual(h.calls.jobs, [['stop', 'abcd1234']]);
+  assert.match(h.calls.questions[0].message, /J.*abcd1234; its process ends/s);
 });
 
 test('Retry clears a mixed row failure when only its failed detach target remains', async t => {
   const h = setup(t, { mergedMemberIds: ['B', 'J'] });
   h.window.activePtyIds.add('B').add('J');
-  h.window.openSessions.set('J', { attach: true, attachJobId: 'job-J' });
+  h.window.openSessions.set('J', { attach: true, attachJobId: 'abcd1234' });
   let failed = true;
   h.window.api.stopSession = async id => id === 'J' && failed ? { ok: false, error: 'detach refused' } : { ok: true };
-  await h.stopRow();
+  await h.app.detachSession(h.row);
   const notice = h.document.querySelector('[role="alert"]');
   assert.match(notice.textContent, /detach refused/);
-  assert.equal(h.window.activePtyIds.has('B'), false);
+  assert.equal(h.window.activePtyIds.has('B'), true);
   failed = false;
   notice.querySelector('.app-notice-action').click();
   await new Promise(resolve => setImmediate(resolve));

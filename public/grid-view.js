@@ -113,6 +113,9 @@ function updateGridCardActivity(sessionId, card, row) {
   });
   const stopBtn = card.querySelector('.grid-card-stop-btn');
   if (stopBtn) stopBtn.style.display = (running || isSessionAlive(sessionId)) ? '' : 'none';
+  const detachBtn = card.querySelector('.grid-card-detach-btn');
+  const entry = openSessions.get(sessionId);
+  if (detachBtn) detachBtn.style.display = running && entry?.attach && !entry.closed && !entry.session?.remoteAlias ? '' : 'none';
 }
 
 function wrapInGridCard(sessionId) {
@@ -152,6 +155,7 @@ function wrapInGridCard(sessionId) {
   const stopBtn = document.createElement('button');
   stopBtn.className = 'grid-card-stop-btn';
   stopBtn.title = 'Stop session';
+  stopBtn.setAttribute('aria-label', stopBtn.title);
   stopBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
   // is-alive: process alive on its host though unattached — see .ai/contexts/session-state.md
   stopBtn.style.display = (activePtyIds.has(sessionId) || isSessionAlive(sessionId)) ? '' : 'none';
@@ -160,6 +164,18 @@ function wrapInGridCard(sessionId) {
     confirmAndStopSession(sessionId, stopBtn);
   };
   header.appendChild(stopBtn);
+
+  const detachBtn = document.createElement('button');
+  detachBtn.className = 'grid-card-detach-btn';
+  detachBtn.title = 'Detach (the session keeps running)';
+  detachBtn.setAttribute('aria-label', detachBtn.title);
+  detachBtn.innerHTML = ICONS.detach(12);
+  detachBtn.style.display = activePtyIds.has(sessionId) && entry.attach && !entry.closed && !entry.session?.remoteAlias ? '' : 'none';
+  detachBtn.onclick = (e) => {
+    e.stopPropagation();
+    detachSession(sessionId, detachBtn);
+  };
+  header.appendChild(detachBtn);
 
   // Footer
   const footer = document.createElement('div');

@@ -13,7 +13,7 @@ function resolveSessionStop(session, { attach = false } = {}) {
   return { remote: false, alias: null, attach: false, confirmText: 'Stop this session?' };
 }
 
-async function planSessionStop(row, { attach = false, retryTargets, backgroundJobs } = {}) {
+async function planSessionStop(row, { attach = false, retryTargets, backgroundJobs, jobStop = false } = {}) {
   const targets = [];
   const excluded = [];
   for (const id of new Set(retryTargets ? retryTargets.map(target => target.sessionId) : rowSessionIds(row))) {
@@ -32,9 +32,23 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
       }
       continue;
     }
-    if (retryTargets && !active) continue;
+    if (retryTargets && !active && !(jobStop && retryTargets.some(target => target.sessionId === id && target.job))) continue;
     if (route.attach) {
-      targets.push({ sessionId: id, ...route, where: 'in this window', jobId: open?.attachJobId });
+      if (jobStop) {
+        const jobId = open?.attachJobId;
+        if (typeof jobId !== 'string' || !/^[0-9a-f]{8}$/.test(jobId)) {
+          excluded.push({ sessionId: id, reason: 'cannot tell which background job runs this part; stop it from the Agents view' });
+          continue;
+        }
+        const check = await checkBackgroundJob(id, backgroundJobs);
+        if (check?.known !== true) {
+          excluded.push({ sessionId: id, reason: `cannot tell whether a background job is running this part (${check?.reason || 'unknown'})` });
+          continue;
+        }
+        targets.push({ sessionId: id, job: true, jobId, attachedHere: true, notHosted: !check.job, where: 'in the background' });
+      } else {
+        targets.push({ sessionId: id, ...route, where: 'in this window', jobId: open?.attachJobId });
+      }
       continue;
     }
     if (active) {
@@ -42,20 +56,35 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
       continue;
     }
     const check = await checkBackgroundJob(id, backgroundJobs);
-    if (check?.known === false) {
-      excluded.push({ sessionId: id, reason: `cannot tell whether a background job is running this part (${check.reason || 'unknown'})` });
+    if (check?.known === false || (jobStop && check?.known !== true)) {
+      excluded.push({ sessionId: id, reason: `cannot tell whether a background job is running this part (${check?.reason || 'unknown'})` });
     } else if (check?.job) {
-      excluded.push({ sessionId: id, reason: `background job ${check.job.id} keeps running; stop it from the Agents view` });
+      if (jobStop) {
+        if (typeof check.job.id !== 'string' || !/^[0-9a-f]{8}$/.test(check.job.id)) {
+          excluded.push({ sessionId: id, reason: 'cannot tell which background job runs this part; stop it from the Agents view' });
+        } else {
+          targets.push({ sessionId: id, job: true, jobId: check.job.id, attachedHere: false, where: 'in the background' });
+        }
+      } else {
+        excluded.push({ sessionId: id, reason: `background job ${check.job.id} keeps running; stop it from the Agents view` });
+      }
     } else if (storedActivitySnapshot(id, row)?.liveness === 'alive') {
       excluded.push({ sessionId: id, reason: 'a process outside this window keeps running; stop it in its own terminal' });
     }
   }
+  return describeSessionStopPlan(row, targets, excluded);
+}
+
+function describeSessionStopPlan(row, targets, excluded) {
   const stopping = targets.filter(target => !target.attach);
   const attachOnly = targets.length > 0 && !stopping.length;
   const single = rowSessionIds(row).length === 1;
   const name = cleanDisplayName(row.name || row.aiTitle || row.summary) || 'Untitled conversation';
   const label = id => single ? `This session "${name}"` : `Part ${id}`;
-  const lines = targets.map(target => target.attach
+  const lines = targets.map(target => target.notHosted
+    ? `${label(target.sessionId)}: background job ${target.jobId} is not running in the daemon; its tab detaches.`
+    : target.job ? `${label(target.sessionId)}: background job ${target.jobId}; its process ends.`
+    : target.attach
     ? `${label(target.sessionId)}: detach its tab in this window; background job ${target.jobId || (single ? 'for this session' : target.sessionId)} keeps running; stop it from the Agents view.`
     : `${label(target.sessionId)}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}.`);
   const confirmText = [attachOnly ? 'Detach from this background session. It keeps running; the Agents view can stop it.'
@@ -65,6 +94,16 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
       : "Each stopped part's process ends; the conversation is kept and can be resumed."] : []),
     ...excluded.map(part => `${label(part.sessionId)}: ${part.reason}.`)].join('\n');
   return { targets, excluded, attach: attachOnly, confirmText };
+}
+
+function planSessionDetach(row, { tabOnly = false, retryTargets } = {}) {
+  const ids = tabOnly ? [row.sessionId] : rowSessionIds(row);
+  return { targets: [...new Set(ids)].filter(id => !retryTargets || retryTargets.some(target => target.sessionId === id))
+    .flatMap(id => {
+      const entry = openSessions.get(id);
+      return activePtyIds.has(id) && entry?.attach && !entry.closed && !entry.session?.remoteAlias
+        ? [{ sessionId: id, attach: true, jobId: entry.attachJobId, where: 'in this window' }] : [];
+    }) };
 }
 
 // Is this remote session's process still running? See .ai/contexts/session-state.md ("stopBeforeArchive").
@@ -177,5 +216,5 @@ async function stopBeforeArchive(session, { unreachable, plan } = {}) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { resolveSessionStop, planSessionStop, planSessionArchive, isRemoteSessionAlive, stopBeforeArchive };
+  module.exports = { resolveSessionStop, planSessionStop, planSessionDetach, planSessionArchive, isRemoteSessionAlive, stopBeforeArchive };
 }

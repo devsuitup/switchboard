@@ -37,10 +37,14 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
         }
         for (const sessionId of check.sessionIds) {
           const refusal = await deleteSessionRefusal(sessionId, {
-            activeSessions, liveJobCheck: sid => bgAgents.liveJobCheck(sid), describeLiveProcess: true,
+            activeSessions: verb === 'stop' ? new Map([...activeSessions || []].filter(([, session]) =>
+              !(session?.isAttach && String(session.attachJobId).toLowerCase() === id.toLowerCase()))) : activeSessions,
+            liveJobCheck: sid => bgAgents.liveJobCheck(sid), describeLiveProcess: true,
             liveElsewhereChecked: sid => cliSessionState.liveElsewhereChecked(sid, sessionHasPty, ptyPids, { includeOwnProcesses: true }),
           });
-          if (refusal) return { ok: false, error: refusal.replace('not deleted', declined) };
+          if (refusal) return { ok: false, error: verb === 'stop'
+            ? refusal.replace(/ — .*?(?:retry Delete|not deleted)$/, ' — not stopped')
+            : refusal.replace('not deleted', declined) };
         }
       } catch (err) {
         if (verb === 'stop' && !check) return { ok: true };

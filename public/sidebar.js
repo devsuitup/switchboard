@@ -1770,6 +1770,14 @@ function rebindSidebarEvents(projects) {
       };
     }
 
+    const detachBtn = item.querySelector('.session-detach-btn');
+    if (detachBtn) {
+      detachBtn.onclick = (e) => {
+        e.stopPropagation();
+        return detachSession(session, detachBtn);
+      };
+    }
+
     const sendBtn = item.querySelector('.session-send-btn');
     if (sendBtn) {
       sendBtn.onclick = (e) => {
@@ -2138,6 +2146,7 @@ function buildSessionItem(session) {
   if (session.type === 'terminal') item.classList.add('is-terminal');
   if (session.archived) item.classList.add('archived-item');
   if (rowSessionIds(session).some(id => activePtyIds.has(id))) item.classList.add('has-running-pty');
+  if (planSessionDetach(session).targets.length) item.classList.add('has-detachable-tab');
   const ids = rowSessionIds(session);
   item.dataset.headSessionId = rowHeadId(session);
   if (ids.some(isDormantSession)) item.classList.add('dormant');
@@ -2258,7 +2267,14 @@ function buildSessionItem(session) {
   const stopBtn = document.createElement('button');
   stopBtn.className = 'session-stop-btn';
   stopBtn.title = 'Stop session';
+  stopBtn.setAttribute('aria-label', stopBtn.title);
   stopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>';
+
+  const detachBtn = document.createElement('button');
+  detachBtn.className = 'session-detach-btn';
+  detachBtn.title = 'Detach (the session keeps running)';
+  detachBtn.setAttribute('aria-label', detachBtn.title);
+  detachBtn.innerHTML = ICONS.detach(12);
 
   const sendBtn = document.createElement('button');
   sendBtn.className = 'session-send-btn';
@@ -2304,6 +2320,7 @@ function buildSessionItem(session) {
   launchConfigBtn.innerHTML = ICONS.launchConfig(14);
 
   actions.appendChild(stopBtn);
+  actions.appendChild(detachBtn);
   if (session.remoteAlias) actions.appendChild(sendBtn);
   if (session.type !== 'terminal') {
     actions.appendChild(forkBtn);

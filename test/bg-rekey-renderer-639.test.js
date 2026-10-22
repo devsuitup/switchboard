@@ -107,11 +107,15 @@ test('the preserved grid card sends Stop to the new background UUID', t => {
   h.w.wrapInGridCard('old');
   const card = h.inCtx("gridCards.get('old')");
   const stops = [];
+  const detaches = [];
+  h.w.detachSession = id => detaches.push(id);
   h.w.confirmAndStopSession = id => stops.push(id);
   h.receive('old', 'bg', 'background');
   card.querySelector('.grid-card-stop-btn').click();
   assert.equal(h.inCtx("gridCards.get('bg')"), card);
   assert.deepEqual(stops, ['bg']);
+  card.querySelector('.grid-card-detach-btn').click();
+  assert.deepEqual(detaches, ['bg']);
 });
 
 test('a merged background rekey keeps sidebar, grid and Agents on the migrated conversation head', t => {

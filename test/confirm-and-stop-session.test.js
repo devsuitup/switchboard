@@ -27,8 +27,8 @@ async function withHarness(overrides, fn) {
       remoteStopSession: async (alias, id) => { calls.ipc.push(['remote-stop', alias, id]); return { ok: true }; },
     };
     Object.assign(window, overrides(calls, window));
-    const { confirmAndStopSession } = loadAppFunctions(ctx.context, { functions: ['confirmAndStopSession'] });
-    return await fn({ confirmAndStopSession, window, calls });
+    const { confirmAndStopSession, detachSession } = loadAppFunctions(ctx.context, { functions: ['confirmAndStopSession', 'detachSession'] });
+    return await fn({ confirmAndStopSession, detachSession, window, calls });
   } finally {
     ctx.destroy();
   }
@@ -114,8 +114,8 @@ test('an attached background session detaches without a confirmation', async () 
     openSessions: new Map([['s1', { attach: true }]]),
     appConfirm: async () => { questions++; return false; },
   });
-  await withHarness(attached, async ({ confirmAndStopSession, calls }) => {
-    await confirmAndStopSession('s1', null);
+  await withHarness(attached, async ({ detachSession, calls }) => {
+    await detachSession('s1', null);
     assert.equal(questions, 0);
     assert.deepEqual(calls.ipc, [['stop', 's1']]);
   });

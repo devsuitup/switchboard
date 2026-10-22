@@ -70,6 +70,7 @@ test('the row is declared once: Refresh, Send to background, Stop, then indicato
     ['terminal-refresh-btn', 'action'],
     ['terminal-bg-btn', 'action'],
     ['terminal-stop-btn', 'action'],
+    ['terminal-detach-btn', 'action'],
     ['terminal-header-sandbox', 'indicator'],
     ['ide-emulation-indicator', 'indicator'],
   ]);
@@ -84,7 +85,7 @@ test('index.html carries its static controls in the declared order, marked with 
   const staticIds = [...controls.children].map((e) => e.id);
   const declared = HEADER_CONTROLS.map((c) => c.id).filter((id) => staticIds.includes(id));
   assert.deepEqual(staticIds, declared);
-  assert.deepEqual(staticIds, ['terminal-refresh-btn', 'terminal-bg-btn', 'terminal-stop-btn', 'terminal-header-sandbox']);
+  assert.deepEqual(staticIds, ['terminal-refresh-btn', 'terminal-bg-btn', 'terminal-stop-btn', 'terminal-detach-btn', 'terminal-header-sandbox']);
   for (const el of controls.children) {
     assert.equal(el.dataset.headerKind, HEADER_CONTROLS.find((c) => c.id === el.id).kind, `#${el.id}`);
   }
@@ -94,8 +95,8 @@ test('index.html carries its static controls in the declared order, marked with 
 
 test('placeHeaderControl puts each control at its declared place whatever the insertion order', () => {
   const orders = [
-    ['ide-emulation-indicator', 'terminal-stop-btn', 'terminal-bg-btn', 'terminal-refresh-btn', 'terminal-header-sandbox'],
-    ['terminal-header-sandbox', 'ide-emulation-indicator', 'terminal-stop-btn', 'terminal-bg-btn', 'terminal-refresh-btn'],
+    ['ide-emulation-indicator', 'terminal-detach-btn', 'terminal-stop-btn', 'terminal-bg-btn', 'terminal-refresh-btn', 'terminal-header-sandbox'],
+    ['terminal-header-sandbox', 'ide-emulation-indicator', 'terminal-detach-btn', 'terminal-stop-btn', 'terminal-bg-btn', 'terminal-refresh-btn'],
     HEADER_CONTROLS.map((c) => c.id),
   ];
   for (const order of orders) {
@@ -150,7 +151,7 @@ test('the live row, built by the modules in their start-up order, reads in the d
   try {
     const doc = ctx.window.document;
     const present = HEADER_CONTROLS.map((c) => c.id).filter((id) => doc.getElementById(id));
-    assert.deepEqual(present, ['terminal-stop-btn', 'ide-emulation-indicator']);
+    assert.deepEqual(present, ['terminal-stop-btn', 'terminal-detach-btn', 'ide-emulation-indicator']);
     assert.deepEqual(rowIds(doc), present);
     for (const id of ['panel-terminal-toggle-btn', 'changes-toggle-btn', 'touched-toggle-btn']) {
       assert.equal(doc.getElementById(id).className, 'icon-btn', `#${id}`);

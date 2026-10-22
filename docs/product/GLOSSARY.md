@@ -303,13 +303,11 @@ concept. Each entry gives:
 - **Definition**: leave an attached process running and end only Switchboard's
   client of it.
 - **Don't say**: "stop", "close".
-- **Code**: `detachPty` via `stop-session` when `session.isAttach`
-  (`main.js:1784-1793`); `resolveSessionStop({attach:true})`
-  (`public/stop-session-ui.js:9-11`).
-- **Today**: offered only for a background attach, only under the label of the
-  Stop control; the terminal header reads "Detach (the session keeps
-  running)" (`public/app.js:1457`), the row and the grid card still read
-  "Stop session". A successful detach of the session on screen hides the
+- **Code**: `detachSession` and `planSessionDetach` call `stop-session`, which
+  uses `detachPty` when `session.isAttach`.
+- **Today**: a separate neutral eject button on the background attach's row,
+  grid card and terminal header, labelled "Detach (the session keeps running)".
+  It asks nothing and offers Undo for 10 s. A successful detach of the session on screen hides the
   terminal header (`public/app.js:1074-1077`), so the header never shows the
   result; the recorded header status and grid footer read **Detached**, and
   the banner reads "session detached — it keeps running in the background"
@@ -321,20 +319,17 @@ concept. Each entry gives:
 
 ### Stop
 
-- **Definition (as implemented)**: the square stop control, which ends a local
-  process, ends a remote process on its host, or detaches from a background
-  job, depending on the session.
+- **Definition (as implemented)**: end the session's process: a local PTY,
+  a remote process on its host, or a background agent, attached here or not.
 - **Don't say**: "kill" in UI text; "close".
-- **Code**: `confirmAndStopSession` (`public/app.js:1051-1080`);
-  `resolveSessionStop` (`public/stop-session-ui.js:4-13`); `stop-session`
-  (`main.js:1784-1797`), `remote-stop-session` (`main.js:1801`); Agents view
-  `bgAgentVerb('stop')` (`public/agents-view.js:424-428`).
-- **Today**: one word, three behaviours, three labels — "Stop session" (row,
-  grid card), "Stop process" (terminal header, `public/index.html:112`,
-  `public/app.js:1457`), "Detach (the session keeps running)" (header on an
-  attach). The Agents view "Stop" checks for refusals before confirming the
-  job name and id, saying its process ends and the conversation is kept,
-  then runs `claude stop`. → M2.
+- **Code**: `confirmAndStopSession`, `planSessionStop(..., {jobStop:true})`,
+  `stop-session`, `remote-stop-session` and `bgAgentVerb('stop')`.
+- **Today**: "Stop session" on row, card and header; "Stop" in Agents. Each
+  checks job refusals before one confirmation naming what ends and keeping
+  the conversation. An attached job no longer reported hosted by the daemon
+  only detaches its tab, as explained in the confirmation; it reads Detached.
+  Unknown job identities and checks are excluded with a reason. Archive keeps
+  its existing detach route through the planner's default `jobStop:false`.
 
 ### Kill
 

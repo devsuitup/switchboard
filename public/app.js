@@ -1298,23 +1298,101 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   const sessionId = isRow ? sessionOrId.sessionId : sessionOrId;
   const openEntry = openSessions.get(sessionId);
   const session = isRow ? sessionOrId : { ...(sessionMap.get(sessionId) || openEntry?.session || rowSession), sessionId, mergedMemberIds: [] };
-  const plan = await planSessionStop(session, { attach: !!(openEntry?.attach && !openEntry.closed), retryTargets });
-  if (!plan.targets.length) {
-    showAppNotice({ id: sessionActionNoticeId('Stop', session), kind: plan.excluded.length ? 'error' : 'info',
-      message: plan.excluded.length ? plan.confirmText : 'Nothing is running to stop.' });
+  const planned = await planSessionStop(session, { attach: !!(openEntry?.attach && !openEntry.closed), retryTargets, jobStop: true });
+  const targets = [];
+  const excluded = [...planned.excluded];
+  for (const target of planned.targets) {
+    if (target.job && !target.notHosted) {
+      try {
+        const check = await window.api.checkBgAgentVerb('stop', target.jobId);
+        if (!check?.ok) throw new Error(check?.error || 'The background job check is unavailable');
+      } catch (error) {
+        excluded.push({ sessionId: target.sessionId, reason: error?.message || 'The background job check is unavailable' });
+        continue;
+      }
+    }
+    targets.push(target);
+  }
+  const plan = describeSessionStopPlan(session, targets, excluded);
+  if (!targets.length) {
+    showAppNotice({ id: sessionActionNoticeId('Stop', session), kind: excluded.length ? 'error' : 'info',
+      message: excluded.length ? plan.confirmText : 'Nothing is running to stop.' });
     return;
   }
-  if (!plan.attach && !await appConfirm({ title: 'Stop session?', message: plan.confirmText, confirmLabel: 'Stop', danger: true })) return;
+  if (!await appConfirm({ title: 'Stop session?', message: plan.confirmText, confirmLabel: 'Stop', danger: true })) return;
+  const failures = [];
+  const failedTargets = [];
+  const unreachable = new Map();
+  let stopped = 0;
+  for (const target of targets) {
+    const id = target.sessionId;
+    try {
+      if (target.job && !target.notHosted) {
+        const result = await window.api.bgAgentVerb('stop', target.jobId);
+        if (!result?.ok) throw new Error(result?.error || 'The background stop backend is unavailable');
+        if (target.attachedHere) {
+          const entry = openSessions.get(id);
+          if (entry && !entry.closed) entry.jobEnding = 'stop';
+        }
+      }
+      if (!target.job || target.attachedHere) {
+        if (target.remote && unreachable.has(target.alias)) throw new Error(unreachable.get(target.alias));
+        const backend = target.remote ? window.api.remoteStopSession : window.api.stopSession;
+        if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
+        const result = target.remote ? await backend(target.alias, id) : await backend(id);
+        if (target.remote && result?.hostUnreachable) {
+          const reason = result.error || 'The host is unreachable';
+          unreachable.set(target.alias, reason);
+          throw new Error(reason);
+        }
+        if (!result || (result.ok === false && result.error !== (target.remote ? 'session not found on that host' : 'not running'))) {
+          throw new Error(result?.error || 'The stop backend is unavailable or returned no result');
+        }
+      }
+      if (target.job && !target.notHosted && typeof refreshAgentsRoster === 'function') refreshAgentsRoster();
+    } catch (error) {
+      failures.push(`Part ${id} ${target.where}: ${error?.message || error || 'unknown error'}`);
+      failedTargets.push(target);
+      continue;
+    }
+    if (target.remote && typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
+    activePtyIds.delete(id);
+    if (!gridViewActive && activeSessionId === id) {
+      setActiveSession(null);
+      terminalHeader.style.display = 'none';
+      placeholder.style.display = '';
+    }
+    stopped++;
+  }
+  if (failures.length) {
+    showSessionActionFailure('Stop', session, failures.join('\n'),
+      'Check the connection or the session in its own terminal (the Agents view for a background session), then retry Stop from the sidebar.',
+      () => confirmAndStopSession(sessionOrId, btn, rowSession, failedTargets));
+  } else {
+    clearAppNotice(sessionActionNoticeId('Stop', session));
+  }
+  if (stopped) refreshSidebar();
+}
+
+async function detachSession(sessionOrId, btn, retryTargets) {
+  const isRow = typeof sessionOrId === 'object';
+  const sessionId = isRow ? sessionOrId.sessionId : sessionOrId;
+  const openEntry = openSessions.get(sessionId);
+  const session = isRow ? sessionOrId : { ...(sessionMap.get(sessionId) || openEntry?.session), sessionId, mergedMemberIds: [] };
+  const plan = planSessionDetach(session, { tabOnly: !isRow, retryTargets });
+  if (!plan.targets.length) {
+    showAppNotice({ id: sessionActionNoticeId('Detach', session), kind: 'info', message: 'Nothing is attached to detach.' });
+    return;
+  }
   const reattachments = new Map(plan.targets.filter(target => target.attach).map(target => {
     const entry = openSessions.get(target.sessionId);
     const source = entry?.session || sessionMap.get(target.sessionId) || session;
     return [target.sessionId, { entry, session: { ...source, sessionId: target.sessionId, mergedMemberIds: [] },
       options: { type: 'attach', jobId: target.jobId, cwd: entry?.attachCwd || source.projectPath } }];
   }));
-  const operation = !isRow && plan.attach ? 'Detach' : 'Stop';
+  const operation = 'Detach';
   const failures = [];
   const failedTargets = [];
-  const unreachable = new Map();
   let stopped = 0;
   for (const target of plan.targets) {
     const id = target.sessionId;
@@ -1324,16 +1402,12 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
     }
     let result;
     try {
-      if (target.remote && unreachable.has(target.alias)) throw new Error(unreachable.get(target.alias));
-      const backend = target.remote ? window.api.remoteStopSession : window.api.stopSession;
+      const entry = openSessions.get(id);
+      if (entry) entry.detachRequested = true;
+      const backend = window.api.stopSession;
       if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
-      result = target.remote ? await backend(target.alias, id) : await backend(id);
-      if (target.remote && result?.hostUnreachable) {
-        const reason = result.error || 'The host is unreachable';
-        unreachable.set(target.alias, reason);
-        throw new Error(reason);
-      }
-      if (!result || (result.ok === false && result.error !== (target.remote ? 'session not found on that host' : 'not running'))) {
+      result = await backend(id);
+      if (!result || (result.ok === false && result.error !== 'not running')) {
         throw new Error(result?.error || 'The stop backend is unavailable or returned no result');
       }
     } catch (error) {
@@ -1341,7 +1415,6 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
       failedTargets.push(target);
       continue;
     }
-    if (target.remote && typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
     activePtyIds.delete(id);
     if (!gridViewActive && activeSessionId === id) {
       setActiveSession(null);
@@ -1401,7 +1474,7 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   if (failures.length) {
     showSessionActionFailure(operation, session, failures.join('\n'),
       'Check the connection or the session in its own terminal (the Agents view for a background session), then retry ' + operation + ' from the sidebar.',
-      () => confirmAndStopSession(sessionOrId, btn, rowSession, failedTargets));
+      () => detachSession(sessionOrId, btn, failedTargets));
   } else {
     clearAppNotice(sessionActionNoticeId(operation, session));
   }
@@ -1748,6 +1821,14 @@ terminalStopBtn.addEventListener('click', () => {
   if (activeSessionId) confirmAndStopSession(activeSessionId, terminalStopBtn);
 });
 
+function initTerminalDetachControl() {
+  const button = document.getElementById('terminal-detach-btn');
+  button?.addEventListener('click', () => {
+    if (activeSessionId) detachSession(activeSessionId, button);
+  });
+}
+initTerminalDetachControl();
+
 function initTerminalRefreshControl() {
   const button = document.getElementById('terminal-refresh-btn');
   button.addEventListener('click', () => {
@@ -1832,6 +1913,7 @@ function updateRunningIndicators() {
       const ids = rowSessionIds(session);
       const running = ids.some(sid => activePtyIds.has(sid));
       item.classList.toggle('has-running-pty', running);
+      item.classList.toggle('has-detachable-tab', planSessionDetach(session).targets.length > 0);
       if (item.dataset.remoteAlias) {
         for (const sid of ids) setRemoteAttached(sid, activePtyIds.has(sid));
       }
@@ -1860,6 +1942,13 @@ function updateTerminalHeader() {
   if (running) forgetSessionExit(activeSessionId);
   paintTerminalHeaderStatus(activeSessionId);
   terminalStopBtn.style.display = running ? '' : 'none';
+  terminalStopBtn.title = 'Stop session';
+  terminalStopBtn.setAttribute('aria-label', terminalStopBtn.title);
+  const detachButton = document.getElementById('terminal-detach-btn');
+  if (detachButton) {
+    const entry = openSessions.get(activeSessionId);
+    detachButton.style.display = running && entry?.attach && !entry.closed && !entry.session?.remoteAlias ? '' : 'none';
+  }
   const refreshButton = document.getElementById('terminal-refresh-btn');
   refreshButton.disabled = !running;
   refreshButton.setAttribute('aria-disabled', String(!running));
@@ -2257,8 +2346,7 @@ async function showTerminalHeader(session) {
   terminalHeaderName.textContent = displayName;
   terminalHeaderId.textContent = session.sessionId;
   terminalHeaderSandbox.style.display = sandboxedSessions.get(session.sessionId) ? '' : 'none';
-  const headerEntry = openSessions.get(session.sessionId);
-  terminalStopBtn.title = headerEntry && headerEntry.attach ? 'Detach (the session keeps running)' : 'Stop process';
+  terminalStopBtn.title = 'Stop session';
   terminalStopBtn.setAttribute('aria-label', terminalStopBtn.title);
   terminalHeader.style.display = '';
   updateTerminalHeader();

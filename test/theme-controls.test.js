@@ -18,7 +18,7 @@ const BASE_STYLED_BUTTONS = new Set([
   'sidebar-expand-btn', 'app-menu-btn', 'global-settings-btn', 'sidebar-collapse-btn',
   'running-toggle', 'star-toggle', 'today-toggle', 'archive-toggle', 'resort-btn',
   'add-project-btn', 'search-clear', 'search-titles-toggle', 'search-refresh-btn',
-  'indexing-banner-dismiss', 'terminal-refresh-btn', 'terminal-bg-btn', 'terminal-stop-btn',
+  'indexing-banner-dismiss', 'terminal-refresh-btn', 'terminal-bg-btn', 'terminal-stop-btn', 'terminal-detach-btn',
   'grid-group-toggle-btn', 'update-restart-btn', 'update-dismiss-btn',
 ]);
 
@@ -111,7 +111,7 @@ test('shared selects preserve the Settings look, themed menu and interaction sta
 test('every declared index button and every optional viewer toolbar button has a background rule', () => {
   const dom = new JSDOM(source('index.html'), { runScripts: 'outside-only' });
   try {
-    assert.equal(assertThemedButtons(dom.window.document).length, 25);
+    assert.equal(assertThemedButtons(dom.window.document).length, 26);
     vm.runInContext(source('viewer-toolbar.js'), dom.getInternalVMContext());
     const toolbar = dom.window.createViewerToolbar({
       copyPath: true, copyContent: true, preview: true, wrap: true, gotoLine: true,

@@ -28,14 +28,14 @@ function setup(t) {
   w.api.stopSession = async id => { calls.stopped.push(id); return { ok: true, detached: true }; };
   w.api.bgAgentLiveJob = async id => { calls.liveChecks.push(id); return { known: true, job: { id: '1234abcd' } }; };
   w.openSession = async (...args) => { calls.opened.push(args); };
-  const app = loadAppFunctions(h.context, { functions: ['confirmAndStopSession'] });
+  const app = loadAppFunctions(h.context, { functions: ['detachSession'] });
   const undo = () => [...h.document.querySelectorAll('#app-notices .app-notice-action')].find(button => button.textContent === 'Undo');
   return { ...h, app, session, entry, calls, undo };
 }
 
 test('P4 an attach tab detaches once without asking and offers Undo', async t => {
   const h = setup(t);
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   assert.equal(h.calls.questions.length, 0, 'Detach does not ask');
   assert.deepEqual(h.calls.stopped, ['s1']);
   assert.equal(h.window.activePtyIds.has('s1'), false);
@@ -53,7 +53,7 @@ test('Undo reattaches with the job id and cwd captured before detach even after 
     h.window.openSessions.delete(id);
     return { ok: true, detached: true };
   };
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   assert.ok(h.undo(), 'Detach offers Undo');
   h.undo().click();
   await settle();
@@ -65,7 +65,7 @@ test('Undo reattaches with the job id and cwd captured before detach even after 
 
 test('the detach Undo notice expires at 10001 ms', async t => {
   const h = setup(t);
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   assert.ok(h.undo(), 'Detach offers Undo');
   t.mock.timers.tick(9999);
   assert.ok(h.undo());
@@ -83,7 +83,7 @@ test('Undo clicked while the attach client is exiting waits for its process exit
     updateRunningIndicators() {}, schedulePersistWorkingSet() {},
   });
   const { applyProcessExit } = loadAppFunctions(h.context, { functions: ['applyProcessExit'] });
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   assert.ok(h.undo(), 'Detach offers Undo');
   h.undo().click();
   await settle();
@@ -97,7 +97,7 @@ test('Undo clicked while the attach client is exiting waits for its process exit
 test('a detach failure offers Retry without Undo, then a successful retry offers Undo without asking', async t => {
   const h = setup(t);
   h.window.api.stopSession = async () => ({ ok: false, error: 'client unavailable' });
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   assert.equal(h.undo(), undefined);
   assert.ok(h.window.activePtyIds.has('s1'));
   const retry = h.document.querySelector('#app-notices [role="alert"] .app-notice-action');
@@ -112,7 +112,7 @@ test('a detach failure offers Retry without Undo, then a successful retry offers
 
 test('Undo refuses a background job that ended while the attach client was exiting', async t => {
   const h = setup(t);
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   h.undo().click();
   await settle();
   assert.deepEqual(h.calls.liveChecks, [], 'check liveness after the detach grace');
@@ -137,7 +137,7 @@ for (const [label, check] of [
   test(`Undo checks a ${label} job and reopens with the captured attach options`, async t => {
     const h = setup(t);
     h.window.api.bgAgentLiveJob = async id => { h.calls.liveChecks.push(id); return check; };
-    await h.app.confirmAndStopSession('s1');
+    await h.app.detachSession('s1');
     h.entry.closed = true;
     h.undo().click();
     await settle();
@@ -150,7 +150,7 @@ for (const [label, check] of [
 test('Undo reopens when the liveness IPC rejects', async t => {
   const h = setup(t);
   h.window.api.bgAgentLiveJob = async id => { h.calls.liveChecks.push(id); throw new Error('IPC unavailable'); };
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   h.entry.closed = true;
   h.undo().click();
   await settle();
@@ -161,7 +161,7 @@ test('Undo reopens when the liveness IPC rejects', async t => {
 test('Undo with not running reports still detaching when the old entry remains open', async t => {
   const h = setup(t);
   h.window.api.stopSession = async () => ({ ok: false, error: 'not running' });
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   const noticeId = h.undo().parentElement.dataset.noticeId;
   h.undo().click();
   await settle();
@@ -180,7 +180,7 @@ for (const jobId of [null, undefined, '', 'invalid', 1234]) {
   test(`a detached tab with job id ${String(jobId)} shows a plain notice without Undo`, async t => {
     const h = setup(t);
     h.entry.attachJobId = jobId;
-    await h.app.confirmAndStopSession('s1');
+    await h.app.detachSession('s1');
     assert.deepEqual(h.calls.stopped, ['s1']);
     assert.equal(h.undo(), undefined);
     const notices = h.document.querySelectorAll('#app-notices .app-notice');
@@ -193,7 +193,7 @@ for (const jobId of [null, undefined, '', 'invalid', 1234]) {
 
 test('Undo shows Reattaching while waiting and replaces it with the successful result', async t => {
   const h = setup(t);
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   h.undo().click();
   await settle();
   assert.equal(h.undo(), undefined);
@@ -216,7 +216,7 @@ test('Undo clears progress and keeps only the Attach background failure when reo
     h.window.showSessionActionFailure('Attach background', h.session, 'The attach backend is unavailable', 'Retry from the Agents view.');
     return false;
   };
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   h.entry.closed = true;
   h.undo().click();
   await settle();
@@ -230,7 +230,7 @@ test('Undo clears progress and keeps only the Attach background failure when reo
 
 test('Undo bounds an unresolved detach wait and reports still detaching without reopening', async t => {
   const h = setup(t);
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   const noticeId = h.undo().parentElement.dataset.noticeId;
   h.undo().click();
   await settle();
@@ -257,7 +257,7 @@ test('Undo replaces progress with its own error when reopening throws', async t 
   h.window.openSession = async () => {
     throw new Error('attach unavailable');
   };
-  await h.app.confirmAndStopSession('s1');
+  await h.app.detachSession('s1');
   h.entry.closed = true;
   h.undo().click();
   await settle();

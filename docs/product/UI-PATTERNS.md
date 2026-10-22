@@ -118,20 +118,21 @@ The Changes badge is the one place that already meets "never colour alone".
 
 | Control | Where | Label (title) | Icon | Effect | Confirmation |
 |---|---|---|---|---|---|
-| Row Stop | `sidebar.js` row handler | `Stop session` | red square | `confirmAndStopSession` (`app.js`): stop every running part in the row; kill local PTYs or remote processes; **detach** attached background-job tabs. Jobs and outside processes stay running and are named | One `appConfirm(plan.confirmText)` when processes would end, naming the count, locations and process loss, and saying the conversation is kept and can be resumed. A single-part session uses its display name and “this session”. Retry confirms only failed targets; an empty plan shows a notice. An attach-only plan skips confirmation; each successful detach offers Undo for 10 s |
-| Grid Stop | `grid-view.js` | `Stop session` | red square | Same routes, targeting only the card's tab | One confirmation naming this session, its display name, location and process loss; an attach tab detaches without asking and offers Undo for 10 s |
-| Header Stop | `index.html`, `app.js` | `Stop process`, or `Detach (the session keeps running)` on an attach tab | **same red square** in both cases | Same routes, targeting only the header's tab | Same as Grid Stop |
+| Row Stop | `sidebar.js` row handler | `Stop session` | red square | `confirmAndStopSession` (`app.js`): stop every eligible part, including background jobs attached here or not; local PTYs and remote processes keep their routes | Fresh job checks before one danger confirmation naming the count, locations, job ids and process loss, with the conversation kept. Refusals and unknown checks explain exclusions; Retry targets only failures; an empty plan shows a notice |
+| Grid Stop | `grid-view.js` | `Stop session` | red square | Same routes, targeting only the card's tab; an attached background agent ends | One confirmation naming this session and what ends |
+| Header Stop | `index.html`, `app.js` | `Stop session` | red square | Same routes, targeting only the header's tab | Same as Grid Stop |
+| Row / Grid / Header Detach | `sidebar.js`, `grid-view.js`, `app.js` | `Detach (the session keeps running)` | neutral eject | `detachSession`: detach open background attach clients; row gathers every attached part, card and header target only their tab | None; each successful detach offers Undo for 10 s |
 | Agents Stop | `agents-view.js` `runAgentVerb` | `Stop` | text button | `claude stop` on the job | Fresh refusal check, then danger `appConfirm` naming the job and id, the process ending and the conversation kept |
 | Agents Attach | `agents-view.js:340, 386-395`; dblclick `563-569` | `Attach` | text | open an attach tab; if a tab is already open for the row, shows it (`app.js:1502-1506`) | none |
 | Row click | `sidebar.js:1431-1439` | none | none | subagent → transcript; remote not attachable → transcript; else open/resume/attach; already-open member → show it (`app.js:1502-1506`); a second click while the first open is in flight joins it (`app.js:1481-1496`) | continuation and live-elsewhere prompts (§5) |
 | Remote Detach | — | **no control** | — | happens only on close/eviction paths | — |
 
 **Divergences.**
-1. One red square, three effects (kill, detach, remote kill), one of three
-   surfaces says which (H2, H4). Row and card say `Stop session` even when
-   the click detaches.
-2. A reversible verb (detach) shares the destructive verb's icon and colour.
-3. Agents Stop is the only Stop without a confirmation.
+1. Background Stop and Detach now have separate controls and accessible names
+   on row, grid and header. If the daemon reports an attached job as not hosted,
+   Stop explains before confirmation that only its tab detaches; it reads Detached.
+2. Detach uses a neutral eject icon and no confirmation; Stop uses a red square
+   and one confirmation everywhere. Remote Detach is still pending (S3b).
 4. `Attach` keeps its label when the click only goes to an open tab.
 
 **Proposed convergence.**
@@ -139,7 +140,7 @@ The Changes badge is the one place that already meets "never colour alone".
   **Stop** (red square, confirm naming what ends and where) and **Detach**
   (neutral eject icon, no confirm, reversible), offered wherever a view can
   be let go without ending the process (bg attach, remote attach).
-- Agents Stop goes through the same confirmation as every Stop.
+- Agents Stop goes through the same confirmation as every Stop (implemented).
 - Keep merged-row Stop as one confirmation naming all targets and exclusions;
   grid and header Stop keep targeting only their tab.
 - `Attach` reads `Go to tab` when an attach tab is already open (audit

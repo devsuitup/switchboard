@@ -114,6 +114,13 @@ requests open in the browser), its last result, and the verbs:
 | Respawn | `claude respawn <id>` | a background session that is not live |
 | Delete | `claude rm <id>`, after confirmation; the worktree goes too when that is safe | a background session that is not live |
 
+**Stop session** on a sidebar row, grid card or terminal header also stops the
+background agent after one confirmation. The row can stop a live job without
+attaching first; a merged row names every eligible part in one question.
+An attached tab has a separate neutral **Detach (the session keeps running)**
+button on all three surfaces. Detach asks nothing and offers Undo for about
+10 seconds, reattaching in the same working folder.
+
 A finished job whose conversation is still running interactively appears as
 one live External row, keeping its job details, id and finished state. It remains
 visible when Finished is unchecked and still counts as finished. A conversation
@@ -129,8 +136,10 @@ opens nothing. A conversation already open in this window is shown directly.
 Live background jobs still use Attach. To respawn or delete a conversation,
 stop it from its sidebar row if it is open here, or end its other process first.
 Switchboard checks again before Respawn or Delete, and before Stop on a
-finished job. A conversation held by an open terminal or another live process
-is refused even if the job says stopped or done. If the process or job files
+finished job. Stop ignores this window's attach client of that same job; a
+different open terminal or another live process still refuses it. Respawn and
+Delete refuse every open terminal, including the job's own attach client.
+If the process or job files
 cannot be read, the action is refused with a reason. Stop remains available
 for a working or blocked daemon job, including when its job file is missing or
 its fresh state is unknown. A refused Stop keeps an attached tab open.
@@ -139,6 +148,11 @@ Stop and Delete check whether they can proceed before asking for confirmation.
 A refusal appears in the detail pane without a dialog. Cancel stops or deletes
 nothing. After confirmation, Switchboard checks again before running the command;
 a conversation that started running while the dialog was open can still refuse.
+
+On a row, card or header, Stop excludes unknown job identities and checks with
+their reason before asking. A job reported as no longer hosted only detaches
+its attached tab after the confirmation explains this; the exit reads
+Detached. A failed job Stop leaves the tab open and offers Retry.
 
 Transcript checks the session index when clicked and shows a reason if the file
 is missing or not indexed yet. Click again after indexing to open it. A file
