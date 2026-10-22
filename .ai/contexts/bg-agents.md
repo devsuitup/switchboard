@@ -62,6 +62,11 @@ Stop or Close action. See `test/dom-agents-view.test.js` (#566/S5).
 7. The attach options are exactly `{ type: 'attach', jobId, cwd }`. Never
    `sandbox`, `preLaunchCmd` or MCP emulation: the attach branch of
    `open-terminal` skips them, and the client only talks to the daemon.
+   In Agents, Attach reads Go to tab when `attachedHere` is true. The button
+   keeps its node and `data-verb="attach"` through roster renders. The click
+   searches non-closed attach entries by `attachJobId`, hides Agents without
+   restoring another tab and shows the matching map key. A roster session id
+   can differ after handoff; it must not cause a second attach.
 8. Dispatch is refused in a project whose effective settings ask for a
    sandbox or a pre-launch command (`dispatchRefusal`, fed by main's
    `dispatchSettings(cwd)`): the daemon starts the worker, so neither could

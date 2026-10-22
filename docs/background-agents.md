@@ -108,7 +108,7 @@ requests open in the browser), its last result, and the verbs:
 | Verb | Runs | Available |
 |---|---|---|
 | Resume | opens the conversation here after the shared live-elsewhere question | an External interactive session with a session id |
-| Attach | `claude attach <id>` in a terminal tab | while hosted (working, blocked, or done with a matching live background descriptor) and the daemon answers |
+| Attach / Go to tab | `claude attach <id>` in a terminal tab; reads **Go to tab** when already open here and shows that job's existing tab, even when its session id changed | while hosted (working, blocked, or done with a matching live background descriptor) and the daemon answers |
 | Transcript | the read-only transcript viewer | whenever the transcript exists |
 | Stop | `claude stop <id>`, after confirmation naming the job and id; its process ends and the conversation is kept | while live |
 | Respawn | `claude respawn <id>` | a background session that is not live |

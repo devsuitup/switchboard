@@ -123,7 +123,7 @@ The Changes badge is the one place that already meets "never colour alone".
 | Header Stop | `index.html`, `app.js` | `Stop session` | red square | Same routes, targeting only the header's tab | Same as Grid Stop |
 | Row / Grid / Header Detach | `sidebar.js`, `grid-view.js`, `app.js` | `Detach (the session keeps running)` | neutral eject | `detachSession`: detach open background attach clients; row gathers every attached part, card and header target only their tab | None; each successful detach offers Undo for 10 s |
 | Agents Stop | `agents-view.js` `runAgentVerb` | `Stop` | text button | `claude stop` on the job | Fresh refusal check, then danger `appConfirm` naming the job and id, the process ending and the conversation kept |
-| Agents Attach | `agents-view.js:340, 386-395`; dblclick `563-569` | `Attach` | text | open an attach tab; if a tab is already open for the row, shows it (`app.js:1502-1506`) | none |
+| Agents Attach | `agents-view.js` `attachBgAgent`; button or double-click | `Attach` / `Go to tab`; title = aria-label | text | open an attach tab; when already attached here, find the open tab by job id and show it, including when its key differs from the roster session id | none |
 | Row click | `sidebar.js:1431-1439` | none | none | subagent → transcript; remote not attachable → transcript; else open/resume/attach; already-open member → show it (`app.js:1502-1506`); a second click while the first open is in flight joins it (`app.js:1481-1496`) | continuation and live-elsewhere prompts (§5) |
 | Remote Detach | sidebar row, grid card, terminal header | `Detach (the session keeps running on <host label>)`; title = aria-label | neutral eject | `stopSession` detaches the local tmux attach client; exit reads Detached and names the host | None; Undo for 10 s if remoteAttachable, through the row-click opening path; otherwise information only |
 
@@ -136,7 +136,6 @@ The Changes badge is the one place that already meets "never colour alone".
    `Stop session?` dialog and `Stop` button.
 2. Detach uses a neutral eject icon and no confirmation; Stop uses a red square
    and one confirmation everywhere. Remote Detach names the host on all three surfaces.
-4. `Attach` keeps its label when the click only goes to an open tab.
 
 **Proposed convergence.**
 - Two verbs, two controls, the same everywhere:
@@ -146,8 +145,9 @@ The Changes badge is the one place that already meets "never colour alone".
 - Agents Stop goes through the same confirmation as every Stop (implemented).
 - Keep merged-row Stop as one confirmation naming all targets and exclusions;
   grid and header Stop keep targeting only their tab.
-- `Attach` reads `Go to tab` when an attach tab is already open (audit
-  proposal, not yet decided).
+- `Attach` reads `Go to tab` when an attach tab is already open (implemented,
+  decision 2026-10-22, #546). The same button and `data-verb="attach"` survive
+  roster renders; only its label and accessible name change.
 
 ### 2.2 Archive, Delete
 

@@ -26,6 +26,39 @@ function setup(t, extra = {}) {
   return { ...ctx, row, calls, app, stopRow };
 }
 
+test('Stop routes a remote member by its open tab under a local row', async t => {
+  const h = setup(t, { mergedMemberIds: ['B'] });
+  h.window.activePtyIds.add('A');
+  h.window.openSessions.set('B', { session: { sessionId: 'B', remoteAlias: 'host', remoteDescriptorSeen: true }, closed: false });
+  h.window.setRemoteHostLabels([{ alias: 'host', label: 'Production' }]);
+  await h.stopRow();
+  assert.deepEqual(h.calls.remote, [['host', 'B']], 'the remote member must stop on its own host');
+  assert.deepEqual(h.calls.stopped, ['A']);
+  assert.deepEqual(h.calls.jobs, []);
+  assert.match(h.calls.questions[0].message, /Part B on Production/);
+});
+
+test('Stop routes a local member by its open tab under a remote row', async t => {
+  const h = setup(t, { mergedMemberIds: ['B'], remoteAlias: 'host', remoteDescriptorSeen: true });
+  h.window.openSessions.set('B', { session: { sessionId: 'B', projectPath: '/project' }, closed: false });
+  await h.stopRow();
+  assert.deepEqual(h.calls.jobs, []);
+  assert.deepEqual(h.calls.remote, [['host', 'A']]);
+  assert.deepEqual(h.calls.stopped, ['B'], 'the local member must stop through its own terminal');
+  assert.match(h.calls.questions[0].message, /Part B in this window/);
+});
+
+test('Stop routes a member without an open tab or session record through its row host', async t => {
+  const h = setup(t, { mergedMemberIds: ['B'], remoteAlias: 'host', remoteDescriptorSeen: true });
+  h.window.sessionMap.delete('B');
+  h.window.api.bgAgentLiveJob = async () => { throw new Error('remote members must not query the local daemon'); };
+  await h.stopRow();
+  assert.deepEqual(h.calls.remote, [['host', 'A'], ['host', 'B']], 'unopened members inherit their row host');
+  assert.deepEqual(h.calls.stopped, []);
+  assert.deepEqual(h.calls.jobs, []);
+  assert.match(h.calls.questions[0].message, /Part B on host/);
+});
+
 test('P3 row Stop confirms both live parts once and ends both processes while keeping the conversation', async t => {
   const h = setup(t);
   h.window.activePtyIds.add('B').add('C');

@@ -298,6 +298,15 @@ Confirmed-dead remote members are filtered out unless their view is still
 active; an unseeded host (`remoteHostAt === null`) is possibly live until a
 dead snapshot says otherwise. Remote locations use the saved host label;
 IPC retains the alias.
+For Stop, an open tab's own session determines its route; a member without a
+tab keeps the route derived from its row. Merges never span hosts
+(`scopedConversationRows` drops links across project or folder, and a remote
+folder key carries the host alias), so the tab-first rule is defensive.
+Remote Stop clears the tab's `detachRequested` before invoking the host stop:
+an exit arriving during that call reads Stopped even if an earlier Detach
+succeeded or returned `not running` without delivering its exit yet. A failed
+host stop (unreachable, error, rejection) restores the pending Detach; an
+accepted `session not found on that host` keeps it cleared.
 
 `app.js`'s `confirmAndStopSession` asks once with danger styling, the number
 of processes, each part's id and location, and the consequence: each stopped

@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Changed
+- In the Agents view, Attach reads Go to tab when the agent is already open in a tab, and goes to that tab. (#546)
 - A remote session open in a terminal can now be detached: Detach closes the terminal and leaves the session running on its host, and it reads Detached instead of Stopped. (#546)
 - Background agents now have separate Detach and Stop buttons on their sidebar row, grid card and terminal header. Detach leaves the agent running without asking, as before; Stop ends the agent after a confirmation, as in the Agents view, whether or not it is open here. The stop button is called Stop session everywhere. (#546)
 - Quit (Exit on Windows), Restart to update and window close offer to move eligible sessions to the background and stop the rest, waiting up to 10 minutes for working sessions to finish their turn. Moved sessions reattach at the next start; if one cannot move or the moved sessions cannot be saved, Switchboard stays open and stops nothing. (#546)
