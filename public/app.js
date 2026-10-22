@@ -1341,6 +1341,10 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
         if (target.remote && unreachable.has(target.alias)) throw new Error(unreachable.get(target.alias));
         const backend = target.remote ? window.api.remoteStopSession : window.api.stopSession;
         if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
+        if (target.remote) {
+          const entry = openSessions.get(id);
+          if (entry) delete entry.detachRequested;
+        }
         const result = target.remote ? await backend(target.alias, id) : await backend(id);
         if (target.remote && result?.hostUnreachable) {
           const reason = result.error || 'The host is unreachable';

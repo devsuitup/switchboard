@@ -477,7 +477,7 @@ function renderAgentDetail(entry) {
     return '';
   };
   const btn = (verb, label, enabled) =>
-    `<button type="button" class="control-btn agents-verb-btn" data-verb="${verb}" title="${agentsEscapeAttr(reason(verb))}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
+    `<button type="button" class="control-btn agents-verb-btn" data-verb="${verb}" aria-label="${agentsEscapeAttr(label)}" title="${agentsEscapeAttr(reason(verb) || (verb === 'attach' ? label : ''))}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
   const meta = [];
   const state = ['working', 'blocked'].includes(entry.state) && agentStateGroupKey(entry) === 'unknown'
     ? 'Unknown' : entry.jobState || entry.state;
@@ -499,7 +499,7 @@ function renderAgentDetail(entry) {
     <div class="agents-detail-head">
       <span class="agents-detail-name">${escapeHtml(agentDisplayName(entry))}</span>
       <span class="agents-detail-actions">
-        ${entry.kind === 'interactive' ? btn('resume', 'Resume', v.resume) : ''}${btn('attach', 'Attach', v.attach)}${btn('transcript', 'Transcript', v.transcript)}${btn('stop', 'Stop', v.stop)}${btn('respawn', 'Respawn', v.respawn)}${btn('rm', 'Delete', v.rm)}
+        ${entry.kind === 'interactive' ? btn('resume', 'Resume', v.resume) : ''}${btn('attach', entry.attachedHere ? 'Go to tab' : 'Attach', v.attach)}${btn('transcript', 'Transcript', v.transcript)}${btn('stop', 'Stop', v.stop)}${btn('respawn', 'Respawn', v.respawn)}${btn('rm', 'Delete', v.rm)}
       </span>
     </div>
     ${entry.detail ? `<div class="agents-detail-line">${escapeHtml(entry.detail)}</div>` : ''}
@@ -547,6 +547,13 @@ function renderAgentsView() {
 
 function attachBgAgent(entry) {
   if (!entry || !agentJobIsLive(entry) || !entry.sessionId) return;
+  for (const [id, opened] of openSessions) {
+    if (opened.attach && !opened.closed && opened.attachJobId === entry.id) {
+      hideAgentsView({ restore: gridViewActive });
+      showSession(id);
+      return;
+    }
+  }
   let session = sessionMap.get(entry.sessionId);
   if (!session) {
     session = { sessionId: entry.sessionId, projectPath: entry.cwd, name: entry.name, summary: entry.name || entry.id, firstPrompt: '' };

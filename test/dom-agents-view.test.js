@@ -117,6 +117,46 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
+test('C1 Attach becomes Go to tab on the same button across roster renders', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  h.setSnapshot({ roster: [ROSTER[0]], daemonReachable: true });
+  await h.window.showAgentsView();
+  h.document.querySelector('.agents-row').click();
+  const button = h.document.querySelector('[data-verb="attach"]');
+  assert.equal(button.textContent, 'Attach');
+  const attached = { ...ROSTER[0], attachedHere: true };
+  h.emitChanged({ roster: [attached], daemonReachable: true });
+  assert.equal(h.document.querySelector('[data-verb="attach"]'), button, 'morphdom preserves the Attach button');
+  assert.equal(button.textContent, 'Go to tab');
+  assert.equal(button.getAttribute('aria-label'), 'Go to tab');
+  assert.equal(button.title, 'Go to tab');
+  h.emitChanged({ roster: [attached], daemonReachable: true });
+  assert.equal(h.document.querySelector('[data-verb="attach"]'), button);
+  h.emitChanged({ roster: [ROSTER[0]], daemonReachable: true });
+  assert.equal(h.document.querySelector('[data-verb="attach"]'), button);
+  assert.equal(button.textContent, 'Attach');
+});
+
+for (const grid of [false, true]) {
+  test(`C2 Go to tab finds the job under a different tab key (grid=${grid})`, async t => {
+    const h = setup(); t.after(() => h.destroy());
+    const agent = { ...ROSTER[0], id: 'abcdef12', sessionId: 'new', attachedHere: true };
+    h.window.gridViewActive = grid;
+    h.window.openSessions.set('closed', { attach: true, attachJobId: agent.id, closed: true });
+    h.window.openSessions.set('unrelated', { attach: true, attachJobId: '1234abcd', closed: false });
+    h.window.openSessions.set('old', { attach: true, attachJobId: agent.id, closed: false });
+    h.setSnapshot({ roster: [agent], daemonReachable: true });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    h.document.querySelector('[data-verb="attach"]').click();
+    assert.deepEqual(h.calls.shown, ['old'], 'Go to tab shows the existing job tab');
+    assert.deepEqual(h.calls.opened, [], 'Go to tab never opens a second attach');
+    assert.equal(h.read('agentsViewActive'), false);
+    assert.equal(h.window.sessionMap.has('new'), false, 'focusing needs no synthetic session');
+    if (grid) assert.equal(h.window.terminalArea.style.display, '', 'Go to tab restores the visible grid');
+  });
+}
+
 for (const [state, hosted, label] of [['working', false, 'Unknown'], ['blocked', false, 'Unknown'], ['working', true, 'Active']]) {
   test(`[767] ${hosted ? 'hosted' : 'non-hosted'} ${state} job reads ${label} consistently with Finished`, async t => {
     const h = setup({ storage: { agentsGroupBy: 'state' } });

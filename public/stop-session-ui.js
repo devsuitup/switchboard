@@ -23,7 +23,7 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
     };
     const open = openSessions.get(id);
     const active = activePtyIds.has(id) || !!(open && !open.closed);
-    const route = resolveSessionStop(member, { attach: !!(open?.attach && !open.closed) || (id === row.sessionId && attach) });
+    const route = resolveSessionStop(jobStop && open?.session ? open.session : member, { attach: !!(open?.attach && !open.closed) || (id === row.sessionId && attach) });
     if (route.remote) {
       const possiblyLive = member.remoteHostAt === null && !(typeof remoteSessionStates !== 'undefined'
         && remoteSessionStates.get(id)?.snapshot().liveness === 'dead');
