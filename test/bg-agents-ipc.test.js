@@ -50,6 +50,18 @@ for (const verb of ['stop', 'rm', 'respawn']) {
   }
 }
 
+test('Stop refusal retains em dashes within the backend reason', async () => {
+  const { handlers, ipcMain } = fakeIpc();
+  const bg = fakeBgAgents();
+  bg.conversationCheck = () => ({ known: true, hosted: false, state: 'done', sessionIds: ['s1'] });
+  bg.liveJobCheck = () => ({ known: false, reason: 'daemon unavailable — state read failed — retry later' });
+  init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} } });
+  const expected = { ok: false, error: 'cannot tell whether a background job is still running this session (daemon unavailable — state read failed — retry later) — not stopped' };
+  assert.deepEqual(await handlers.get('check-bg-agent-verb')({}, 'stop', 'abcdef12'), expected);
+  assert.deepEqual(await handlers.get('bg-agent-verb')({}, 'stop', 'abcdef12'), expected);
+  assert.deepEqual(bg.calls.filter(call => Array.isArray(call) && call[0] === 'verb'), []);
+});
+
 test('get-bg-agents arms the watchers then reconciles; the verbs pass straight through', async () => {
   const { handlers, ipcMain } = fakeIpc();
   const bg = fakeBgAgents();

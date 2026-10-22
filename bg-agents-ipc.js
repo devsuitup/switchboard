@@ -43,7 +43,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
             liveElsewhereChecked: sid => cliSessionState.liveElsewhereChecked(sid, sessionHasPty, ptyPids, { includeOwnProcesses: true }),
           });
           if (refusal) return { ok: false, error: verb === 'stop'
-            ? refusal.replace(/ — .*?(?:retry Delete|not deleted)$/, ' — not stopped')
+            ? refusal.replace(/ — [^—]*(?:retry Delete|not deleted)$/, ' — not stopped')
             : refusal.replace('not deleted', declined) };
         }
       } catch (err) {

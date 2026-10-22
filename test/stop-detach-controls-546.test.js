@@ -98,6 +98,8 @@ test('A7 a job not hosted by the daemon only detaches and its exit reads Detache
   await h.stop();
   const question = h.calls.find(call => call[0] === 'confirm');
   assert.match(question?.[1].message || '', /background job abcdef12 is not running in the daemon; its tab detaches/);
+  assert.doesNotMatch(question?.[1].message || '', /process ends/);
+  assert.match(question?.[1].message || '', /^Detach this tab\?/);
   assert.deepEqual(h.calls.filter(call => ['check', 'verb'].includes(call[0])), []);
   assert.equal(h.entry.jobEnding, undefined);
   h.w.gridViewActive = false;
@@ -105,6 +107,22 @@ test('A7 a job not hosted by the daemon only detaches and its exit reads Detache
   h.w.applyProcessExit('A', 0, null, true);
   assert.equal(h.w.lastSessionExit('A').detached, true);
   assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Detached');
+});
+
+test('A7 mixed hosted and notHosted parts describe stopping one job and detaching the other tab', async t => {
+  const h = setup(t, { merged: ['B'] });
+  h.w.openSessions.set('B', { attach: true, attachJobId: '1234abcd', closed: false });
+  h.w.activePtyIds.add('B');
+  h.w.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'A' ? null : { id: '1234abcd' } });
+  await h.stop();
+  const message = h.calls.find(call => call[0] === 'confirm')?.[1].message || '';
+  assert.match(message, /^Stop 1 part\?/);
+  assert.match(message, /Part A: background job abcdef12 is not running in the daemon; its tab detaches\./);
+  assert.match(message, /Part B: background job 1234abcd; its process ends\./);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'verb'), [['verb', 'stop', '1234abcd']]);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'tab').map(call => call[1]), ['A', 'B']);
+  assert.equal(h.entry.jobEnding, undefined);
+  assert.equal(h.w.openSessions.get('B').jobEnding, 'stop');
 });
 
 test('A8 row Detach asks nothing, keeps the job running and offers Undo', async t => {
@@ -230,6 +248,50 @@ test('a failed job Stop leaves its tab open and Retry stops only the failed job'
   for (let i = 0; i < 24; i++) await Promise.resolve();
   assert.deepEqual(h.calls.filter(call => call[0] === 'tab'), [['tab', 'B', undefined], ['tab', 'A', 'stop']]);
   assert.equal(h.calls.filter(call => call[0] === 'confirm').length, 2);
+  assert.equal(h.document.querySelector('[role="alert"]'), null);
+});
+
+test('Retry after job Stop succeeds only retries the failed tab and retains the Stopped exit', async t => {
+  const h = setup(t);
+  let failed = true;
+  h.w.api.stopSession = async id => {
+    h.calls.push(['tab', id, h.entry.jobEnding]);
+    if (failed) throw new Error('tab detach transport failed');
+    return { ok: true, detached: true };
+  };
+  await h.stop();
+  assert.equal(h.entry.jobEnding, 'stop');
+  assert.deepEqual(h.calls.filter(call => call[0] === 'check'), [['check', 'stop', 'abcdef12']]);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'verb'), [['verb', 'stop', 'abcdef12']]);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'tab'), [['tab', 'A', 'stop']]);
+  const retry = h.document.querySelector('[role="alert"] .app-notice-action');
+  assert.equal(retry?.textContent, 'Retry');
+  failed = false;
+  retry.click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.calls.filter(call => call[0] === 'check'), [['check', 'stop', 'abcdef12']], 'Retry must not check the already stopped job again');
+  assert.deepEqual(h.calls.filter(call => call[0] === 'verb'), [['verb', 'stop', 'abcdef12']], 'Retry must not stop the already stopped job again');
+  assert.deepEqual(h.calls.filter(call => call[0] === 'tab'), [['tab', 'A', 'stop'], ['tab', 'A', 'stop']]);
+  assert.equal(h.entry.jobEnding, 'stop');
+  assert.equal(h.document.querySelector('[role="alert"]'), null);
+  h.w.gridViewActive = false;
+  h.w.activeSessionId = null;
+  h.w.applyProcessExit('A', 0, null, true);
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
+});
+
+test('an attached tab refuses a different daemon job and accepts its own id case-insensitively', async t => {
+  const h = setup(t);
+  h.w.api.bgAgentLiveJob = async () => ({ known: true, job: { id: '1234abcd' } });
+  await h.stop();
+  assert.deepEqual(h.calls, [], 'a changed daemon job must neither be confirmed nor stopped nor detached');
+  assert.match(h.document.querySelector('[role="alert"]')?.textContent || '',
+    /background job abcdef12 is no longer the running job \(1234abcd\); stop it from the Agents view/);
+  assert.ok(h.w.activePtyIds.has('A'));
+  assert.equal(h.entry.jobEnding, undefined);
+  h.w.api.bgAgentLiveJob = async () => ({ known: true, job: { id: 'ABCDEF12' } });
+  await h.stop();
+  assert.deepEqual(h.calls.filter(call => call[0] === 'verb'), [['verb', 'stop', 'abcdef12']]);
   assert.equal(h.document.querySelector('[role="alert"]'), null);
 });
 

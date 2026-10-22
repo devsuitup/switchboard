@@ -32,7 +32,12 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
       }
       continue;
     }
-    if (retryTargets && !active && !(jobStop && retryTargets.some(target => target.sessionId === id && target.job))) continue;
+    const retryTarget = retryTargets?.find(target => target.sessionId === id);
+    if (retryTargets && !active && !(jobStop && retryTarget?.job && !retryTarget.jobStopped)) continue;
+    if (retryTarget?.jobStopped) {
+      targets.push({ ...retryTarget, job: false, attach: true, where: 'in this window' });
+      continue;
+    }
     if (route.attach) {
       if (jobStop) {
         const jobId = open?.attachJobId;
@@ -43,6 +48,10 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
         const check = await checkBackgroundJob(id, backgroundJobs);
         if (check?.known !== true) {
           excluded.push({ sessionId: id, reason: `cannot tell whether a background job is running this part (${check?.reason || 'unknown'})` });
+          continue;
+        }
+        if (check.job && String(check.job.id).toLowerCase() !== jobId.toLowerCase()) {
+          excluded.push({ sessionId: id, reason: `background job ${jobId} is no longer the running job (${check.job.id}); stop it from the Agents view` });
           continue;
         }
         targets.push({ sessionId: id, job: true, jobId, attachedHere: true, notHosted: !check.job, where: 'in the background' });
@@ -76,18 +85,22 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
 }
 
 function describeSessionStopPlan(row, targets, excluded) {
-  const stopping = targets.filter(target => !target.attach);
+  const stopping = targets.filter(target => !target.attach && !target.notHosted);
   const attachOnly = targets.length > 0 && !stopping.length;
   const single = rowSessionIds(row).length === 1;
   const name = cleanDisplayName(row.name || row.aiTitle || row.summary) || 'Untitled conversation';
   const label = id => single ? `This session "${name}"` : `Part ${id}`;
-  const lines = targets.map(target => target.notHosted
+  const lines = targets.map(target => target.jobStopped
+    ? `${label(target.sessionId)}: background job ${target.jobId} has stopped; its tab detaches.`
+    : target.notHosted
     ? `${label(target.sessionId)}: background job ${target.jobId} is not running in the daemon; its tab detaches.`
     : target.job ? `${label(target.sessionId)}: background job ${target.jobId}; its process ends.`
     : target.attach
     ? `${label(target.sessionId)}: detach its tab in this window; background job ${target.jobId || (single ? 'for this session' : target.sessionId)} keeps running; stop it from the Agents view.`
     : `${label(target.sessionId)}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}.`);
-  const confirmText = [attachOnly ? 'Detach from this background session. It keeps running; the Agents view can stop it.'
+  const confirmText = [attachOnly ? targets.some(target => target.notHosted || target.jobStopped)
+    ? single ? 'Detach this tab?' : `Detach ${targets.length} tabs?`
+    : 'Detach from this background session. It keeps running; the Agents view can stop it.'
     : stopping.length ? single ? 'Stop this session?' : `Stop ${stopping.length} part${stopping.length === 1 ? '' : 's'}?`
       : single ? 'This session cannot be stopped here.' : 'No parts can be stopped here.', ...lines,
     ...(stopping.length ? [single ? 'Its process ends; the conversation is kept and can be resumed.'

@@ -1330,6 +1330,7 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
       if (target.job && !target.notHosted) {
         const result = await window.api.bgAgentVerb('stop', target.jobId);
         if (!result?.ok) throw new Error(result?.error || 'The background stop backend is unavailable');
+        target.jobStopped = true;
         if (target.attachedHere) {
           const entry = openSessions.get(id);
           if (entry && !entry.closed) entry.jobEnding = 'stop';
