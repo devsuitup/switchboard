@@ -42,6 +42,23 @@ mode starts nothing by itself and the entry has no row to click.
 
 ## Closing the app
 
+Quit, Restart to update and window close can move eligible conversations to
+the background before stopping the remaining local work. Switchboard waits
+up to ten minutes for a working conversation to finish its turn, with Cancel
+available throughout. Confirmed moves keep their tab positions and reopen as
+attach tabs at the next start; no attach starts during a successful exit.
+
+This choice checks that the saved set was read and that the final write
+succeeded, with a two-second bound. A failed move or save keeps Switchboard
+open, stops nothing and reattaches the confirmed moves. A failed recovery
+attach remains saved for retry from the sidebar. A new process appearing
+before commit renews consent without attaching the already moved sessions.
+External OS exits flush unchecked and do not recover tabs. Confirmed jobs are
+marked; an unresolved handoff is not saved as confirmed and is found through
+the old conversation's continuation on the next start. Untagged macOS Dock
+Quit and logout can bypass the session choice; force termination can bypass
+the save entirely.
+
 The saved set is written on each open and close half a second later, so
 the last change before quitting could be lost, and so could the whole set:
 quitting stops every session, and each of those exits was itself a "session
@@ -52,8 +69,8 @@ Once a close or quit is confirmed (the window's close, ☰ → Quit, an update
 install; see the unsaved-edits guard in `.ai/contexts/viewer-panel.md`), the
 renderer writes the set at once, before it answers main (`flushStateForExit`
 in `public/app.js`, called by the `unsaved-check` handler in
-`public/file-panel.js`, bounded to 2 s so a stuck write cannot hold the
-window open), and stops saving it for the next 10 s. Main stops sending
+`public/file-panel.js`, bounded to 2 s; Move stays open on a failed write,
+while Stop keeps its best-effort save), and stops saving it for the next 10 s. Main stops sending
 `process-exited` once `before-quit` starts killing the sessions
 (`appQuitting`), so the shutdown cannot record them as closed. A reload is
 not an exit and does neither. A quit or close that arrives while a reload's

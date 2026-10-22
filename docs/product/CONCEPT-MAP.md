@@ -420,7 +420,7 @@ result; **minor** = confusing but recoverable.
 
 | # | Severity | Incoherence | Sections |
 |---|---|---|---|
-| M1 | major | Quit or update kills every running local session without warning; background and remote ones survive the same gesture | §7 R7.3 |
+| M1 | resolved (#546) | Quit, update and window close name what stops and can move eligible sessions to background first, with a cancellable ten-minute busy wait. Failure keeps the app open and stops nothing; background and remote sessions keep running. Untagged external OS exits retain their documented bypass. | §7 R7.3 |
 | M2 | major | One stop control means kill, remote kill or detach; labels "Stop session", "Stop process", "Detach (the session keeps running)" differ by surface; after a detach the grid card footer says **Stopped** and the exit banner "session stopped" while the job runs; Agents **Stop** has no confirm; remote detach has no control | §1, §7, §10, §12 |
 | M3 | major (partly resolved, #567) | Sidebar live-elsewhere questions share Resume anyway, including scheduled runs; the Agents view still forbids resume | §11 |
 | M4 | major | No definition of a row; `/compact`, `/clear`, continuations and slug groups follow four rules; verbs act on representative or one member | §1, §2, §3, §4 |

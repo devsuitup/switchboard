@@ -293,8 +293,8 @@ test('typed /bg, altscreen off, collision daemon fork and attach row produce one
   w.terminalHeaderId = w.document.createElement('span'); w.terminalHeaderName = w.document.createElement('span');
   w.pendingSessions = new Map();
   loadAppFunctions(renderer.context, {
-    declarations: ['lastActivityTime', 'sandboxedSessions', 'ptyGenerations', 'pendingOpens', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'openingSessions'],
-    functions: ['rekeySessionTab', 'rekeySessionEnvironment', 'attachBackgroundContinuation', 'beginPtyOpen', 'settlePtyOpen', 'handleProcessExited'],
+    declarations: ['exitHandoffs', 'lastActivityTime', 'sandboxedSessions', 'ptyGenerations', 'pendingOpens', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'openingSessions'],
+    functions: ['markExitBackground', 'rekeySessionTab', 'rekeySessionEnvironment', 'attachBackgroundContinuation', 'beginPtyOpen', 'settlePtyOpen', 'handleProcessExited'],
   });
   const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   const start = source.indexOf('window.api.onSessionForked(');

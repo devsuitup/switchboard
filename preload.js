@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('api', {
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
   stopSession: (id) => ipcRenderer.invoke('stop-session', id),
   sendSessionToBackground: (id) => ipcRenderer.invoke('send-session-to-background', id),
+  exitBackground: (id, detail, ids) => ipcRenderer.invoke('exit-background', id, detail, ids),
+  exitBackgroundCancel: (id, detail) => ipcRenderer.send('exit-background-cancel', id, detail),
+  onExitBackgroundProgress: callback => ipcRenderer.on('exit-background-progress', (_event, attempt, progress) => callback(attempt, progress)),
   onBgHandoffNotice: (callback) => ipcRenderer.on('bg-handoff-notice', (_event, sessionId, message) => callback(sessionId, message)),
   // see .ai/contexts/bg-agents.md
   getBgAgents: () => ipcRenderer.invoke('get-bg-agents'),
@@ -189,7 +192,7 @@ contextBridge.exposeInMainWorld('api', {
   onIndexingFinished: (callback) => {
     ipcRenderer.on('indexing-finished', () => callback());
   },
-  onExitAttemptInvalidated: callback => ipcRenderer.on('exit-attempt-invalidated', (_event, attempt) => callback(attempt)),
+  onExitAttemptInvalidated: callback => ipcRenderer.on('exit-attempt-invalidated', (_event, attempt, outcome) => callback(attempt, outcome)),
   getExitAttemptSnapshot: (id, detail) => ipcRenderer.invoke('exit-attempt-snapshot', id, detail),
   unsavedCheckPhase: (id, detail, phase) => ipcRenderer.send('unsaved-check-phase', id, detail, phase),
   onUnsavedCheck: (callback) => {

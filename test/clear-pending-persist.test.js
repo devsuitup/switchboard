@@ -60,8 +60,8 @@ function setup() {
   window.cachedAllProjects = [];
   vm.runInContext(PLAN_SRC, ctx.context);
   const fns = loadAppFunctions(ctx.context, {
-    functions: ['rekeySessionTab', 'dedup', 'loadProjects', 'persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'indexedRowOf'],
-    declarations: ['_persistChain', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restorePlanner', 'exitingApp', 'persistSkippedWhileExiting', 'restoreIndexingDone', 'continuationRetryCancelled', 'dormantWorkingSet'],
+    functions: ['markExitBackground', 'rekeySessionTab', 'dedup', 'loadProjects', 'persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'indexedRowOf'],
+    declarations: ['exitHandoffs', '_persistChain', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restorePlanner', 'exitingApp', 'persistSkippedWhileExiting', 'restoreIndexingDone', 'continuationRetryCancelled', 'dormantWorkingSet'],
   });
   const open = (sessionId, { pending, remoteAlias } = {}) => {
     const session = { sessionId, projectPath: '/srv/app', summary: 'Earlier work', ...(remoteAlias ? { remoteAlias } : {}) };

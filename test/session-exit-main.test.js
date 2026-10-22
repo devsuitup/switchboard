@@ -286,6 +286,7 @@ test('A5 upgrades renew consent, generations are revalidated, sender and launch 
   t.records.set('added', { kind: 'local-pty', pty: {} });
   t.answer(true); await tick(); assert.deepEqual(t.calls, []);
   assert.equal(t.detail().snapshot.rows.length, 2);
+  assert.equal(t.sent.findLast(message => message.channel === 'exit-attempt-invalidated')?.args[1]?.reask, true);
   t.records.set('added', { kind: 'local-pty', pty: {} });
   t.answer(true); await tick(); assert.deepEqual(t.calls, []);
   const moved = t.records.get('added'); t.records.delete('added'); t.records.set('rekeyed', moved);
@@ -546,6 +547,7 @@ for (const action of ['cancel-ipc', 'invalidate', 'logoff', 'session-end', 'exte
     }
     assert.equal(batch.signal.aborted, true);
     assert.equal(batch.signal.reason?.external === true, ['logoff', 'session-end', 'external'].includes(action));
+    if (['logoff', 'session-end'].includes(action)) assert.equal(t.sent.findLast(message => message.channel === 'exit-attempt-invalidated')?.args[1]?.external, true);
     batch.resolve([{ id: 'local', ok: false, code: 'cancelled' }]); await pending;
     t.answer(false); await tick(); await t.installing;
     assert.equal(t.calls.includes('install'), false);
@@ -560,6 +562,37 @@ test('C4 a close to quit upgrade preserves the running batch', async () => {
   assert.equal(t.detail().action, 'quit');
   t.batches[0].resolve([{ id: 'local', ok: true }]); await pending;
   t.answer(false); await tick();
+});
+
+test('H2b an upgraded question can move a newly admitted session after the first batch settles', async () => {
+  const t = backgroundSetup('close');
+  const first = t.startBatch();
+  t.records.get('local').backgrounded = true;
+  t.batches[0].resolve([{ id: 'local', ok: true }]);
+  await first;
+  t.records.set('new', { kind: 'local-pty', pty: {} });
+  t.menu(); await tick();
+  const checkId = t.checks().at(-1).args[0];
+  const second = t.handlers.get('exit-background')({ sender: t.wc }, checkId, t.detail(), ['new']);
+  assert.equal(t.batches.length, 2, 'a completed batch must not answer a new Move with its old results');
+  t.records.get('new').backgrounded = true;
+  t.batches[1].resolve([{ id: 'new', ok: true }]);
+  await second;
+  t.answer(true); await tick();
+  assert.deepEqual(t.calls, ['quit']);
+});
+
+test('H2b an untagged exit marks committed-attempt invalidation external', async () => {
+  const t = setup('darwin');
+  t.win.emit('close', t.event());
+  t.answer(true); await tick();
+  assert.ok(t.guard.committedToken(t.win));
+  t.guard.beforeQuit(t.event(), t.win);
+  const invalidation = t.sent.findLast(message => message.channel === 'exit-attempt-invalidated');
+  assert.equal(invalidation?.args[1]?.external, true, 'a system exit must not recover confirmed background tabs');
+  assert.equal(t.detail().external, true);
+  t.answer(true); await tick();
+  assert.equal(t.calls.includes('quit'), true);
 });
 
 test('C4 external exit resolves the real batch immediately and prevents later busy writes', async () => {

@@ -791,7 +791,7 @@ follows the same rule. External cancellation (`signal.reason.external === true`)
 resolves immediately with confirmed results, started unresolved rows as
 `pending`, and unwritten rows as `cancelled`. Late results and progress cannot
 change that snapshot. An unconfirmed late job is not marked for bg restore;
-the future renderer flow must retain the old id and rely on `continued-in`.
+the renderer retains the old id and relies on `continued-in`.
 
 `runExitBackgroundBatch` in `main.js` sits immediately after the single-tab
 handoff registration and before `stop-session`. It delegates sends to
@@ -801,8 +801,21 @@ subscriptions. A module-scope `runExitBackground` binding is read lazily by
 the unsaved guard. Each busy waiter clears its timer and descriptor subscription
 when its signal aborts, including cancellation from another row's pre-write failure.
 The binding is assigned inside `startApplication`; its initial value
-resolves an empty array. No preload or renderer entry point calls this IPC
-in H1. The existing single-tab refusal, re-key and attach behaviour is unchanged.
+resolves an empty array. Preload exposes `exitBackground`,
+`exitBackgroundCancel` and `onExitBackgroundProgress` to the renderer.
+The existing single-tab refusal, re-key and attach behaviour is unchanged.
+
+The exit renderer enrolls old ids in `exitHandoffs`, retaining the entry object
+and attempt id. Both `session-forked` and the IPC result call `rekeySessionTab`
+with `spawnAttach: false`, then `markExitBackground` records a closed attach
+with `bgRestore` and a held `bg: true` working-set entry at its original
+position. The callback retains its literal activity re-key calls. An IPC result
+also handles the source-exit-before-metadata-ACK case where no event arrives.
+`exitBackgroundAttempts` retains successful marks through renewed consent;
+recovery uses `attachBackgroundContinuation` once per confirmed entry.
+Every recovery releases the exit hold, including checked-save rejection.
+Progress, terminal confirmation and cancellation share the persistent
+`exit-background` notice. External exits suppress late result and event attach.
 See [window-frame.md](window-frame.md#exit-handoff-backend-546-h1) for IPC
 ownership, cancellation and exit-attempt rules.
 

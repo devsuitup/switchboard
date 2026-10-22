@@ -39,12 +39,12 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
       if (current?.win === win) current.finish(false);
       for (const release of reasonWaits.values()) if (release.wc === win?.webContents) release(false);
     },
-    invalidateRenderer: (win, attempt, wasCommitted = false) => {
+    invalidateRenderer: (win, attempt, wasCommitted = false, outcome = {}) => {
       abortBackground(false);
       backgroundBatch = null;
       if (!wasCommitted) onAttemptReleased();
       windows.get(win)?.invalidate();
-      try { win?.webContents.send('exit-attempt-invalidated', attempt); } catch {}
+      try { win?.webContents.send('exit-attempt-invalidated', attempt, outcome); } catch {}
     },
   });
   let externalDrain = null;
@@ -76,7 +76,10 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
         if (backgroundBatch !== batch || controller.signal.aborted && controller.signal.reason?.external) return;
         try { event.sender.send('exit-background-progress', attempt.id, progress); } catch {}
       },
-    })).finally(() => backgroundBatches.delete(batch));
+    })).finally(() => {
+      backgroundBatches.delete(batch);
+      if (backgroundBatch === batch) backgroundBatch = null;
+    });
     return batch.promise;
   });
   ipcMain.on('exit-background-cancel', (event, checkId, detail) => {
@@ -302,7 +305,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
 
   function beforeQuit(event, win, token = null) {
     if (attempts.committed(token) || (token == null && logoffApproved) || !win || win.isDestroyed()) return false;
-    if (attempts.token(win) != null) attempts.invalidate();
+    if (attempts.token(win) != null) attempts.invalidate(undefined, { external: true });
     abortBackground(true);
     event.preventDefault();
     if (quitAsking) return true;
@@ -343,7 +346,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
 
     const endSession = (final) => {
       abortBackground(true);
-      attempts.invalidate();
+      attempts.invalidate(undefined, { external: true });
       for (const release of reasonWaits.values()) release();
       if (!externalDrain) externalDrain = Promise.resolve().then(externalFlush);
       logoffApproved = true;

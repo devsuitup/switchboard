@@ -214,6 +214,8 @@ let _persistChain = Promise.resolve();
 
 // see docs/session-restore.md ("Closing the app")
 let exitingApp = false;
+const exitHandoffs = new Map();
+const exitBackgroundAttempts = new Map();
 let exitingAppTimer = null;
 let persistSkippedWhileExiting = false;
 let savedWorkingSetRead = false;
@@ -320,7 +322,7 @@ async function flushStateForExit({ checked = false } = {}) {
   if (checked) return { saved: true };
 }
 window.flushStateForExit = flushStateForExit;
-if (window.api.onExitFlush) window.api.onExitFlush(() => { flushStateForExit(); });
+if (window.api.onExitFlush) window.api.onExitFlush(() => { if (typeof exitBackgroundAttempts !== 'undefined') for (const [attempt] of exitBackgroundAttempts) finishExitBackground(attempt, { external: true }); flushStateForExit(); });
 
 function releaseExitState() {
   exitingApp = false;
@@ -883,11 +885,14 @@ function rekeySessionTab(oldId, newId, kind, background, rekeyActivity, { spawnA
 
 window.api.onSessionForked((oldId, newId, kind, background) => {
   if (window.ATRACE) window.atrace('recv.session-forked', newId, { oldId, known: openSessions.has(oldId) });
+  const exit = kind === 'background' ? exitHandoffs.get(oldId) : null;
+  if (exit?.external) return;
   rekeySessionTab(oldId, newId, kind, background, () => {
     if (kind === 'background') rekeyActivityState(oldId, newId, true);
     else if (kind === 'continuation') rekeyActivityState(oldId, newId, false, true);
     else rekeyActivityState(oldId, newId);
-  }, { spawnAttach: true });
+  }, { spawnAttach: !exit });
+  if (exit && background?.jobId) markExitBackground(exit, newId, background);
 });
 
 function applyProcessExit(sessionId, exitCode, signal, stopped) {
@@ -1479,6 +1484,163 @@ async function attachBackgroundContinuation(entry, background) {
   }
 }
 
+function markExitBackground(enrollment, sessionId, background) {
+  const entry = enrollment.entry;
+  if (!entry || openSessions.get(sessionId) !== entry) return;
+  entry.attach = true;
+  entry.attachJobId = background.jobId;
+  entry.attachCwd = background.cwd || entry.session.projectPath;
+  entry.bgRestore = true;
+  entry.closed = true;
+  enrollment.background = { ...background, sessionId };
+  const index = [...openSessions.keys()].indexOf(sessionId);
+  skippedWorkingSetEntries.set(sessionId, { item: { sessionId, projectPath: entry.session.projectPath, bg: true }, index, keepAttached: true });
+}
+
+function exitBackgroundFailure(name, result) {
+  const reason = result?.code === 'busy-timeout' ? 'still working after 10 minutes. Quit again once it is idle, or stop it.'
+    : result?.code === 'needs-answer' ? 'needs an answer in its terminal. Answer it, then quit again, or stop it.'
+      : result?.code === 'shell' ? 'a shell command is running in its terminal. Quit again once it is done, or stop it.'
+        : result?.error || (result?.code === 'cancelled' ? 'Moving was cancelled.' : result?.code === 'pending' ? 'The handoff is not confirmed.' : 'The handoff backend is unavailable or returned no confirmed result.');
+  return name + ': ' + reason;
+}
+
+function showExitBackgroundProgress(batch) {
+  if (batch.external || batch.finished) return;
+  const confirmed = [...batch.entries.values()].filter(row => row.result?.ok).length;
+  const verb = batch.detail.action === 'update' ? 'update' : batch.detail.action === 'close' ? 'close' : window.api.platform === 'win32' ? 'exit' : 'quit';
+  const lines = [`Moving ${batch.entries.size} to background before ${verb}: ${confirmed} of ${batch.entries.size} confirmed`];
+  for (const row of batch.entries.values()) {
+    if (row.result && !row.result.ok) lines.push(exitBackgroundFailure(row.name, row.result));
+    else if (row.phase === 'waiting') lines.push(row.name + ' waits for its turn to end');
+    else if (row.phase === 'confirming') lines.push(row.name + ' asks you to confirm in its terminal');
+  }
+  showAppNotice({ id: 'exit-background', kind: 'info', persistent: true, dismissible: false,
+    message: lines.join('\n'), actionLabel: 'Cancel', dismissOnAction: false,
+    onAction: () => {
+      batch.cancelled = true;
+      window.api.exitBackgroundCancel(batch.checkId, batch.detail);
+    } });
+}
+
+async function moveSessionsForExit(checkId, detail, ids) {
+  let batch = exitBackgroundAttempts.get(detail.attempt);
+  if (!batch) {
+    batch = { entries: new Map(), detail, checkId, external: false, cancelled: false, finished: false };
+    exitBackgroundAttempts.set(detail.attempt, batch);
+  }
+  batch.checkId = checkId;
+  batch.detail = detail;
+  batch.finished = false;
+  const rows = ids.map(id => {
+    const entry = openSessions.get(id);
+    const session = entry?.session;
+    const row = { attempt: detail.attempt, entry, id, name: session?.name || session?.aiTitle || session?.summary || id };
+    batch.entries.set(id, row);
+    exitHandoffs.set(id, row);
+    return row;
+  });
+  showExitBackgroundProgress(batch);
+  const external = new Promise(resolve => { batch.abortExternal = () => resolve(null); });
+  const apply = result => {
+    const row = batch.entries.get(result?.id);
+    if (!row || row.result?.ok) return;
+    row.result = result?.ok === true && result.sessionId && result.jobId ? result : { ...result, ok: false };
+    row.phase = 'done';
+    if (!row.result.ok) return;
+    if (openSessions.get(row.id) === row.entry) {
+      rekeySessionTab(row.id, result.sessionId, 'background', result,
+        () => rekeyActivityState(row.id, result.sessionId, true), { spawnAttach: false });
+    }
+    markExitBackground(row, result.sessionId, result);
+  };
+  batch.apply = apply;
+  batch.running = Promise.race([Promise.resolve().then(() => window.api.exitBackground(checkId, detail, ids)), external]);
+  try {
+    const results = await batch.running;
+    batch.running = null;
+    batch.finished = true;
+    if (batch.external) return true;
+    for (const row of rows) apply(Array.isArray(results) && results.find(result => result?.id === row.id) || { id: row.id, ok: false, error: 'The handoff backend is unavailable or returned no result' });
+    const ok = !batch.cancelled && rows.every(row => row.result?.ok);
+    if (!ok) await finishExitBackground(detail.attempt);
+    return ok;
+  } catch (error) {
+    batch.running = null;
+    batch.finished = true;
+    if (batch.external) return true;
+    for (const row of rows) if (!row.result) row.result = { ok: false, error: error.message };
+    await finishExitBackground(detail.attempt);
+    return false;
+  } finally {
+    batch.running = null;
+    batch.finished = true;
+    clearAppNotice('exit-background');
+  }
+}
+window.moveSessionsForExit = moveSessionsForExit;
+window.hasExitBackground = detail => exitBackgroundAttempts.has(detail?.attempt);
+
+async function recoverExitBackground(batch) {
+  releaseExitState();
+  if (batch.recovered || batch.external) return;
+  batch.recovered = true;
+  exitBackgroundAttempts.delete(batch.detail.attempt);
+  const confirmed = [...batch.entries.values()].filter(row => row.result?.ok);
+  const failures = [...batch.entries.values()].filter(row => !row.result?.ok);
+  for (const row of batch.entries.values()) exitHandoffs.delete(row.id);
+  await Promise.all(confirmed.map(row => {
+    if (openSessions.get(row.result.sessionId) !== row.entry) return;
+    row.entry.backgroundAttach = attachBackgroundContinuation(row.entry, row.result);
+    return row.entry.backgroundAttach;
+  }));
+  const message = batch.saveError
+    ? 'The moved sessions run in the background, but Switchboard could not save them for the next start, so it stayed open: ' + batch.saveError
+    : `Switchboard stayed open. ${confirmed.length} of ${batch.entries.size} sessions moved to the background; nothing was stopped.` + (failures.length ? '\n' + failures.map(row => exitBackgroundFailure(row.name, row.result)).join('\n') : '');
+  showAppNotice({ id: 'exit-background-failure', kind: 'error', message });
+}
+
+async function finishExitBackground(attempt, { reask = false, external = false, saveError } = {}) {
+  const batch = exitBackgroundAttempts.get(attempt);
+  if (!batch || reask) return;
+  if (external) {
+    batch.external = true;
+    for (const row of batch.entries.values()) row.external = true;
+    batch.abortExternal?.();
+    clearAppNotice('exit-background');
+    releaseExitState();
+    return;
+  }
+  if (batch.external || batch.recovered) return;
+  batch.cancelled = true;
+  if (saveError) batch.saveError = saveError;
+  window.api.exitBackgroundCancel(batch.checkId, batch.detail);
+  if (batch.running && !batch.finished) {
+    return;
+  }
+  await recoverExitBackground(batch);
+}
+window.finishExitBackground = finishExitBackground;
+
+function initExitBackgroundControl() {
+  window.api.onExitBackgroundProgress?.((attempt, event) => {
+    const batch = exitBackgroundAttempts.get(attempt);
+    const row = batch?.entries.get(event.id);
+    if (!row || batch.external || batch.finished) return;
+    row.phase = event.phase;
+    if (event.phase === 'done') batch.apply(event.result);
+    showExitBackgroundProgress(batch);
+  });
+  window.api.onBgHandoffNotice?.((id) => {
+    const enrollment = exitHandoffs.get(id);
+    const batch = exitBackgroundAttempts.get(enrollment?.attempt);
+    if (!batch || batch.external || batch.finished) return;
+    enrollment.phase = 'confirming';
+    showExitBackgroundProgress(batch);
+  });
+}
+initExitBackgroundControl();
+
 async function sendSessionToBackground(sessionId) {
   const reason = backgroundActionReason(sessionId);
   const source = openSessions.get(sessionId)?.session || sessionMap.get(sessionId) || { sessionId };
@@ -1564,6 +1726,7 @@ function initTerminalBackgroundControl() {
   const button = document.getElementById('terminal-bg-btn');
   button.addEventListener('click', () => { if (activeSessionId) sendSessionToBackground(activeSessionId); });
   if (window.api.onBgHandoffNotice) window.api.onBgHandoffNotice((id, message) => {
+    if (typeof exitHandoffs !== 'undefined' && exitHandoffs.has(id)) return;
     showAppNotice({ id: 'background-progress:' + id, kind: 'info', message });
   });
 }

@@ -35,6 +35,24 @@ const box = (ctx, id) => shown(ctx).querySelector(`input[type="checkbox"][data-c
 const confirmBtn = (ctx) => shown(ctx).querySelector('.choice-dialog-confirm');
 const cancelBtn = (ctx) => shown(ctx).querySelector('.choice-dialog-cancel');
 
+test('secondary action resolves its id on click and Enter while Cancel keeps initial focus', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    for (const keyboard of [false, true]) {
+      const pending = open(ctx, { initialFocus: 'cancel', secondaryAction: { id: 'background', label: '<Move>', danger: true } });
+      const secondary = shown(ctx).querySelector('.choice-dialog-secondary');
+      assert.ok(secondary, 'secondary action must be rendered');
+      assert.equal(secondary.textContent, '<Move>');
+      assert.equal(secondary.querySelector('move'), null);
+      assert.ok(secondary.classList.contains('delete-worktree-confirm-btn'));
+      assert.equal(ctx.document.activeElement, cancelBtn(ctx));
+      if (keyboard) { secondary.focus(); key(ctx, secondary, 'Enter'); }
+      else secondary.click();
+      assert.deepEqual({ ...await pending }, { action: 'background' });
+    }
+  } finally { ctx.destroy(); }
+});
+
 test('choice dialog: confirm returns each box and remembers it', async () => {
   const ctx = setupSidebarDom();
   try {

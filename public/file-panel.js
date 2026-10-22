@@ -152,15 +152,19 @@ function initFilePanel() {
   if (window.api.unsavedDialog) reportNativeDialogs();
   if (window.api.onUnsavedCheck) {
     const checks = new Map();
-    const flush = async () => {
-      if (typeof window.flushStateForExit !== 'function') return;
+    const flush = async (checked = false) => {
+      if (typeof window.flushStateForExit !== 'function') {
+        if (checked) throw new Error('state saving is unavailable');
+        return;
+      }
       let timer;
       try {
-        await Promise.race([window.flushStateForExit(), new Promise(resolve => { timer = setTimeout(resolve, EXIT_FLUSH_BOUND_MS); })]);
-      } catch (err) { console.error('[exit-flush]', err); }
+        const result = await Promise.race([window.flushStateForExit(checked ? { checked: true } : undefined), new Promise((resolve, reject) => { timer = setTimeout(() => checked ? reject(new Error('state save timed out')) : resolve(), EXIT_FLUSH_BOUND_MS); })]);
+        if (checked && result?.saved !== true) throw new Error('state was not saved');
+      } catch (err) { if (checked) throw err; console.error('[exit-flush]', err); }
       finally { clearTimeout(timer); }
     };
-    if (window.api.onExitAttemptInvalidated) window.api.onExitAttemptInvalidated(attempt => {
+    if (window.api.onExitAttemptInvalidated) window.api.onExitAttemptInvalidated((attempt, outcome) => {
       unloadApproved = false;
       if (unloadApprovalTimer) clearTimeout(unloadApprovalTimer);
       unloadApprovalTimer = null;
@@ -170,6 +174,7 @@ function initFilePanel() {
         cancelUnsavedQuestion?.();
       }
       if (typeof window.releaseExitState === 'function') window.releaseExitState();
+      if (typeof window.finishExitBackground === 'function') window.finishExitBackground(attempt, outcome);
     });
     const choose = async state => {
       while (!state.invalid && state.reason !== 'reload') {
@@ -178,10 +183,23 @@ function initFilePanel() {
         const change = new Promise(resolve => { changed = resolve; });
         state.changed = changed;
         window.api.unsavedCheckPhase?.(state.id, detail, 'choosing');
-        const yes = await confirmSessionExit(detail, change);
+        const choice = await confirmSessionExit(detail, change);
         if (state.invalid) return false;
         if (detail !== state.detail) continue;
-        return yes;
+        if (choice === 'background') {
+          state.background = true;
+          if (typeof window.moveSessionsForExit !== 'function') return false;
+          const moved = await window.moveSessionsForExit(state.id, detail, exitBackgroundRows(detail.snapshot).map(row => row.id));
+          if (!moved) return false;
+          if (state.invalid) return false;
+          if (detail !== state.detail) {
+            const latest = state.detail;
+            const snapshot = await window.api.getExitAttemptSnapshot?.(state.id, latest);
+            if (snapshot?.rows && latest === state.detail) state.detail = { ...latest, snapshot };
+            continue;
+          }
+        }
+        return !!choice;
       }
       return !state.invalid;
     };
@@ -193,6 +211,7 @@ function initFilePanel() {
         if (typeof window.releaseExitState === 'function') window.releaseExitState();
         state.reason = reason;
         state.detail = detail || { external: true };
+        if (state.detail.external && typeof window.finishExitBackground === 'function') window.finishExitBackground(state.detail.attempt, { external: true });
         state.changed?.();
         done();
         return;
@@ -219,10 +238,17 @@ function initFilePanel() {
           if (proceed && !state.invalid && state.reason !== 'reload') {
             approveFilePanelUnload(true);
             window.api.unsavedCheckPhase?.(id, state.detail, 'flushing');
-            await flush();
+            const checked = !state.detail?.external && (state.background || typeof window.hasExitBackground === 'function' && window.hasExitBackground(state.detail));
+            try { await flush(checked); }
+            catch (error) {
+              if (state.detail?.external) continue;
+              if (typeof window.finishExitBackground === 'function') await window.finishExitBackground(state.detail?.attempt, { saveError: error.message });
+              throw error;
+            }
           }
           if (revision === state.detail) break;
           if (typeof window.releaseExitState === 'function') window.releaseExitState();
+          if (!proceed) break;
           proceed = true;
         }
       } catch (err) { proceed = false; console.error('[unsaved-check]', err); }
@@ -232,6 +258,7 @@ function initFilePanel() {
         if (unloadApprovalTimer) clearTimeout(unloadApprovalTimer);
         unloadApprovalTimer = null;
         if (typeof window.releaseExitState === 'function') window.releaseExitState();
+        if (typeof window.finishExitBackground === 'function') await window.finishExitBackground(state.detail?.attempt);
       }
       window.api.unsavedCheckResult(id, proceed, state.detail);
       checks.delete(id);
@@ -815,6 +842,11 @@ function reportNativeDialogs() {
 }
 
 // see .ai/contexts/window-frame.md ("Closing the window")
+function exitBackgroundRows(snapshot) {
+  if (!snapshot || snapshot.unknown) return [];
+  return snapshot.rows.filter(row => row.type === 'session' && ['ready', 'busy'].includes(row.background) && (typeof backgroundActionReason !== 'function' || !backgroundActionReason(row.id)));
+}
+
 async function confirmSessionExit(detail, changed) {
   if (!detail || detail.external) return true;
   const snapshot = detail.snapshot;
@@ -831,23 +863,47 @@ async function confirmSessionExit(detail, changed) {
     const session = openSessions.get(id)?.session;
     return session?.name || session?.aiTitle || session?.summary || '';
   };
+  const moving = exitBackgroundRows(snapshot);
+  const stopping = snapshot.rows.filter(row => !moving.includes(row));
+  const words = rows => {
+    const parts = ['session', 'plain', 'panel'].map(type => {
+      const n = rows.filter(row => row.type === type).length;
+      return n && count(n, type === 'plain' ? 'plain terminal' : type === 'panel' ? 'panel shell' : 'session');
+    }).filter(Boolean);
+    return parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts.at(-1) : parts[0];
+  };
   const message = [];
   if (snapshot.unknown) message.push('Switchboard could not list the local work that will stop.');
-  for (const row of snapshot.rows) {
+  const describe = row => {
     const short = String(row.id).slice(0, 8);
     const project = String(row.cwd || '').replace(/\\/g, '/').split('/').filter(Boolean).at(-1) || row.cwd || 'Unknown project';
-    if (row.type === 'panel') message.push('Panel shell of "' + (displayName(row.owner) || row.owner) + '" · ' + short);
-    else message.push((row.type === 'plain' ? 'Plain terminal' : displayName(row.id) ? '"' + displayName(row.id) + '"' : 'Untitled conversation') + ' · ' + project + ' · ' + short);
+    let line = row.type === 'panel' ? 'Panel shell of "' + (displayName(row.owner) || row.owner) + '" · ' + short
+      : (row.type === 'plain' ? 'Plain terminal' : displayName(row.id) ? '"' + displayName(row.id) + '"' : 'Untitled conversation') + ' · ' + project + ' · ' + short;
+    if (moving.includes(row)) {
+      if (row.background === 'busy') line += ' · waits for its turn to end (up to 10 minutes)';
+      const n = typeof activeSubagentsByParent !== 'undefined' ? activeSubagentsByParent.get(row.id)?.size || 0 : 0;
+      if (n) line += ' · ' + n + ' running subagent' + (n === 1 ? '' : 's') + ' may stop';
+    } else if (row.type === 'session') {
+      const reason = row.reason || (typeof backgroundActionReason === 'function' && backgroundActionReason(row.id));
+      if (reason) line += ' · ' + reason;
+    }
+    return line;
+  };
+  if (moving.length) {
+    message.push('Moves to the background:', ...moving.map(describe), 'Stops:', ...stopping.map(describe));
+  } else {
+    message.push(...snapshot.rows.map(describe));
   }
   message.push(sessions > 0 ? 'Their processes end, idle or working, with anything running in them. Each conversation is kept and can be resumed.' : 'Their shells end, with anything running in them.');
   if (attached) message.push(count(attached, 'session') + ' attached here ' + (attached === 1 ? 'is' : 'are') + ' detached and ' + (attached === 1 ? 'keeps' : 'keep') + ' running in the background.');
   for (const [alias, n] of Object.entries(snapshot.remote)) if (n) message.push(count(n, 'session') + ' from ' + alias + (n === 1 ? ' keeps' : ' keep') + ' running on ' + alias + '.');
-  if (snapshot.rows.some(row => row.canBackground && (typeof backgroundActionReason !== 'function' || !backgroundActionReason(row.id)))) message.push("To keep a session running, cancel, then use Send to background in its terminal header or its row's menu, where it is offered.");
+  if (moving.length) message.push('Moved sessions keep running in the background; Switchboard reattaches them at the next start.');
   if (mac && action === 'close') message.push('Switchboard stays in the Dock.');
   const result = await showChoiceDialog({ title: 'Stop ' + total + ' and ' + verb + '?', message,
     confirmLabel: 'Stop and ' + label, initialFocus: 'cancel', danger: true,
+    secondaryAction: moving.length ? { id: 'background', label: 'Move ' + words(moving) + ' to background' + (stopping.length ? ', stop ' + words(stopping) + ', and ' : ' and ') + label, danger: stopping.length > 0 } : null,
     returnFocus: document.activeElement, replace: true, closeWith: changed && changed.then(() => null) });
-  return result !== null;
+  return result === null ? false : result.action === 'background' ? 'background' : 'stop';
 }
 
 function askAboutUnsavedEdits() {
