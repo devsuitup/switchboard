@@ -2272,7 +2272,7 @@ function buildSessionItem(session) {
 
   const detachBtn = document.createElement('button');
   detachBtn.className = 'session-detach-btn';
-  detachBtn.title = 'Detach (the session keeps running)';
+  detachBtn.title = session.remoteAlias ? `Detach (the session keeps running on ${remoteHostLabel(session.remoteAlias)})` : 'Detach (the session keeps running)';
   detachBtn.setAttribute('aria-label', detachBtn.title);
   detachBtn.innerHTML = ICONS.detach(12);
 

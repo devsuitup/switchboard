@@ -114,8 +114,9 @@ function planSessionDetach(row, { tabOnly = false, retryTargets } = {}) {
   return { targets: [...new Set(ids)].filter(id => !retryTargets || retryTargets.some(target => target.sessionId === id))
     .flatMap(id => {
       const entry = openSessions.get(id);
-      return activePtyIds.has(id) && entry?.attach && !entry.closed && !entry.session?.remoteAlias
-        ? [{ sessionId: id, attach: true, jobId: entry.attachJobId, where: 'in this window' }] : [];
+      return activePtyIds.has(id) && entry && !entry.closed && (entry.attach || entry.session?.remoteAlias)
+        ? [{ sessionId: id, attach: !entry.session?.remoteAlias, remote: !!entry.session?.remoteAlias,
+          alias: entry.session?.remoteAlias, jobId: entry.attachJobId, where: 'in this window' }] : [];
     }) };
 }
 

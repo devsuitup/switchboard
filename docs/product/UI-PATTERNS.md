@@ -125,14 +125,17 @@ The Changes badge is the one place that already meets "never colour alone".
 | Agents Stop | `agents-view.js` `runAgentVerb` | `Stop` | text button | `claude stop` on the job | Fresh refusal check, then danger `appConfirm` naming the job and id, the process ending and the conversation kept |
 | Agents Attach | `agents-view.js:340, 386-395`; dblclick `563-569` | `Attach` | text | open an attach tab; if a tab is already open for the row, shows it (`app.js:1502-1506`) | none |
 | Row click | `sidebar.js:1431-1439` | none | none | subagent → transcript; remote not attachable → transcript; else open/resume/attach; already-open member → show it (`app.js:1502-1506`); a second click while the first open is in flight joins it (`app.js:1481-1496`) | continuation and live-elsewhere prompts (§5) |
-| Remote Detach | — | **no control** | — | happens only on close/eviction paths | — |
+| Remote Detach | sidebar row, grid card, terminal header | `Detach (the session keeps running on <host label>)`; title = aria-label | neutral eject | `stopSession` detaches the local tmux attach client; exit reads Detached and names the host | None; Undo for 10 s if remoteAttachable, through the row-click opening path; otherwise information only |
 
 **Divergences.**
 1. Background Stop and Detach now have separate controls and accessible names
    on row, grid and header. If the daemon reports an attached job as not hosted,
    Stop explains before confirmation that only its tab detaches; it reads Detached.
+   A detach-only plan uses a non-danger `Detach tab?` dialog with a `Detach`
+   button, including Retry after the job stopped. A mixed plan keeps the danger
+   `Stop session?` dialog and `Stop` button.
 2. Detach uses a neutral eject icon and no confirmation; Stop uses a red square
-   and one confirmation everywhere. Remote Detach is still pending (S3b).
+   and one confirmation everywhere. Remote Detach names the host on all three surfaces.
 4. `Attach` keeps its label when the click only goes to an open tab.
 
 **Proposed convergence.**

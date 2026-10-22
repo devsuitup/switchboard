@@ -346,9 +346,10 @@ this session on <alias>?" then kill on host (`public/stop-session-ui.js:6-7`;
 <alias>", **Send** / **Close**, "Sent. The session reads it when it is next
 free." (`public/dialogs.js:561-603`); Archive stops first; Delete refused.
 
-**Rules**: R12.1 leaving an attached remote view ends the local ssh client
-only; the session keeps running (`docs/remote-hosts.md:234-235`) — no control
-is labelled as that (M2). R12.2 no panel shell, IDE emulation or path links
+**Rules**: R12.1 Detach on an attached remote row, grid card or terminal header
+ends the local ssh client only; the session keeps running on the named host.
+It asks nothing, reads Detached and offers Undo for 10 s when attachable
+(`docs/remote-hosts.md`, "Stop, archive, delete"). R12.2 no panel shell, IDE emulation or path links
 (`docs/remote-hosts.md:245-247`).
 
 ## 13. Working set and restore
