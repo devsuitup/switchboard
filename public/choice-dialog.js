@@ -38,6 +38,7 @@ function openChoiceDialog({
   cancelLabel = 'Cancel',
   initialFocus = 'confirm',
   danger = false,
+  secondaryAction = null,
   returnFocus,
   closeWith = null,
 } = {}) {
@@ -148,12 +149,19 @@ function openChoiceDialog({
     updateChoices();
     confirmBtn.textContent = confirmLabel || 'OK';
     confirmBtn.disabled = !!options && !radios.some(({ radio }) => radio.checked && !radio.disabled);
-    actions.append(cancelBtn, confirmBtn);
+    const secondaryBtn = secondaryAction ? document.createElement('button') : null;
+    if (secondaryBtn) {
+      secondaryBtn.type = 'button';
+      secondaryBtn.className = (secondaryAction.danger ? 'delete-worktree-confirm-btn' : 'new-session-start-btn') + ' choice-dialog-secondary';
+      secondaryBtn.textContent = secondaryAction.label;
+      secondaryBtn.addEventListener('click', () => close({ action: secondaryAction.id }));
+      actions.append(cancelBtn, secondaryBtn, confirmBtn);
+    } else actions.append(cancelBtn, confirmBtn);
 
     dialog.append(header, body, actions);
     overlay.appendChild(dialog);
 
-    const buttons = [closeBtn, cancelBtn, confirmBtn];
+    const buttons = [closeBtn, cancelBtn, secondaryBtn, confirmBtn].filter(Boolean);
 
     let closed = false;
     function close(value) {

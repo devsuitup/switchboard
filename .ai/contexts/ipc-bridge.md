@@ -17,6 +17,17 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 
 ### Sessions (request/response)
 
+The exit flow exposes `exit-background(checkId, detail, ids)` as
+`exitBackground`, `exit-background-cancel(checkId, detail)` as
+`exitBackgroundCancel`, and `exit-background-progress(attempt, event)` as
+`onExitBackgroundProgress`. Main validates sender, check, attempt/version and
+session eligibility. Cancel retains sender, check and current uncommitted user
+attempt ownership checks but accepts earlier versions after an upgrade. The
+batch never grants consent or stops processes.
+`onExitAttemptInvalidated(attempt, outcome)` forwards optional `{ reask: true }`
+or `{ external: true }` so the renderer can preserve marks during renewed
+consent and avoid recovery during a system exit. See window-frame.md.
+
 | IPC | Args | Returns | Notes |
 |---|---|---|---|
 | `get-projects` | `(showArchived)` | `Project[]` | Sidebar payload. Reads from cache. |

@@ -99,14 +99,14 @@ function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer }
     try { return snapshot(); }
     catch { return { rows: [], counts: { sessions: 0, plain: 0, panels: 0, attached: 0 }, remote: {}, unknown: true }; }
   };
-  function invalidate(action) {
+  function invalidate(action, outcome = {}) {
     if (!current || (action && current.action !== action)) return false;
     const previous = current;
     const wasCommitted = previous.phase === 'committed';
     current = null;
     previous.phase = 'cancelled';
     cancelCheck(previous.window);
-    invalidateRenderer(previous.window, previous.id, wasCommitted);
+    invalidateRenderer(previous.window, previous.id, wasCommitted, outcome);
     return true;
   }
   function request(win, action, external = false) {
@@ -146,7 +146,7 @@ function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer }
       const consent = new Set(attempt.snapshot.rows.map(row => row.generation));
       if (!result.ended && !attempt.external && ((fresh.unknown && !attempt.snapshot.unknown) || fresh.rows.some(row => !consent.has(row.generation)))) {
         attempt.version++;
-        invalidateRenderer(attempt.window, attempt.id);
+        invalidateRenderer(attempt.window, attempt.id, false, { reask: true });
         continue;
       }
       attempt.phase = 'committed';

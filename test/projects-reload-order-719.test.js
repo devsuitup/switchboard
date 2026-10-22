@@ -80,7 +80,7 @@ for (const eventName of ['onSessionDetected', 'onSessionForked']) for (const act
     w.rekeyActivityState = () => {}; w.schedulePersistWorkingSet = () => {};
     w.pollActiveSessions = async () => undefined;
     w.refreshSidebar = () => h.sidebar.renderProjects(w.cachedProjects, true);
-    loadAppFunctions(h.context, { functions: ['followProjectsSettlement', 'rekeySessionTab'] });
+    loadAppFunctions(h.context, { declarations: ['exitHandoffs'], functions: ['markExitBackground', 'followProjectsSettlement', 'rekeySessionTab'] });
     const source = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
     const start = source.indexOf('window.api.' + eventName + '(');
     vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 4), h.context);

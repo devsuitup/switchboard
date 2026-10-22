@@ -22,8 +22,8 @@ function fixture(t) {
   w.terminalHeaderName = w.document.createElement('span');
   w.pendingSessions = new Map();
   loadAppFunctions(h.context, {
-    declarations: ['lastActivityTime', 'sandboxedSessions', 'ptyGenerations', 'pendingOpens', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'openingSessions'],
-    functions: ['rekeySessionTab', 'rekeySessionEnvironment', 'attachBackgroundContinuation', 'beginPtyOpen', 'settlePtyOpen', 'handleProcessExited'],
+    declarations: ['exitHandoffs', 'lastActivityTime', 'sandboxedSessions', 'ptyGenerations', 'pendingOpens', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'openingSessions'],
+    functions: ['markExitBackground', 'rekeySessionTab', 'rekeySessionEnvironment', 'attachBackgroundContinuation', 'beginPtyOpen', 'settlePtyOpen', 'handleProcessExited'],
   });
   const src = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
   const start = src.indexOf('window.api.onSessionForked(');
@@ -37,6 +37,21 @@ function fixture(t) {
   h.inCtx("lastActivityTime.set('old', 123); sandboxedSessions.set('old', false); ptyGenerations.set('old', 7); pendingOpens.set('old', []);");
   return { ...h, w, entry, receive };
 }
+
+test('C7 an enrolled exit event marks the preserved tab without spawning an attach', async t => {
+  const h = fixture(t);
+  h.w.createTerminalEntry({ sessionId: 'other', projectPath: '/other' });
+  const calls = [];
+  h.w.api.openTerminal = async (...args) => { calls.push(args); return { ok: true }; };
+  h.inCtx("exitHandoffs.set('old', { attempt: 1, entry: openSessions.get('old') })");
+  h.receive('old', 'bg', 'background', { jobId: 'job', cwd: '/worktree' });
+  assert.equal(calls.length, 0, 'exit must not spawn an attach');
+  assert.deepEqual([...h.w.openSessions.keys()], ['bg', 'other']);
+  assert.equal(h.entry.closed, true);
+  assert.equal(h.entry.attach, true);
+  assert.equal(h.entry.bgRestore, true);
+  assert.equal(h.inCtx("skippedWorkingSetEntries.get('bg').item.bg"), true);
+});
 
 test('shipped rekey preserves the terminal, panel owner and every outstanding session map', t => {
   const h = fixture(t);

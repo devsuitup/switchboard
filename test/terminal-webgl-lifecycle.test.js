@@ -73,7 +73,7 @@ function loadShippedListener(f, listener) {
   f.w.pendingSessions = new Map();
   f.w.terminalHeaderId = f.w.document.createElement('span');
   f.w.terminalHeaderName = f.w.document.createElement('span');
-  if (listener === 'onSessionForked') loadAppFunctions(f.context, { functions: ['rekeySessionTab'] });
+  if (listener === 'onSessionForked') loadAppFunctions(f.context, { declarations: ['exitHandoffs'], functions: ['markExitBackground', 'rekeySessionTab'] });
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
   const start = src.indexOf(`window.api.${listener}(`);
   assert.ok(start >= 0, `${listener} found in app.js`);

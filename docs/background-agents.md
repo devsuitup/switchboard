@@ -174,6 +174,21 @@ If attaching fails after the move, the session still runs in the background;
 open it from the sidebar to attach again. A confirmed typed `/bg` move uses the
 same continuation and metadata persistence as the toolbar action.
 
+### Closing Switchboard
+
+Quit (Exit on Windows), Restart to update and window close offer **Move to
+background** for eligible sessions, alongside Stop and Cancel. The dialog
+names what moves and what stops, including plain terminals and panel shells.
+A working session waits up to ten minutes for its turn to end; Cancel remains
+available. A session that needs an answer or starts a shell command during
+that wait fails immediately. The progress notice also points to a terminal
+when Claude asks you to confirm Background or Stay after a move starts.
+
+On success, Switchboard saves the moved sessions and attaches them at the
+next start. If any move or the save fails, Switchboard stays open, stops
+nothing, names the failure and reattaches the confirmed moves. An attach
+failure leaves the job running and offers retry from the sidebar.
+
 ## Attaching
 
 Double-click a row you can attach to (a hosted working/blocked or hosted done session,
