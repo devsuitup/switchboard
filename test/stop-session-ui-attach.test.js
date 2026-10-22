@@ -15,7 +15,7 @@ test('an attach tab describes a reversible detach without asking and stays local
   assert.equal(resolveSessionStop({ sessionId: 's', remoteAlias: 'h' }, { attach: true }).remote, true);
 });
 
-test('Detach plans only open background attach tabs and respects tabOnly and Retry', t => {
+test('Detach plans open background and remote attach tabs and respect tabOnly and Retry', t => {
   const h = setupSidebarDom();
   t.after(() => h.destroy());
   const w = h.window;
@@ -26,7 +26,7 @@ test('Detach plans only open background attach tabs and respects tabOnly and Ret
   w.openSessions.set('C', { attach: true, closed: true });
   w.openSessions.set('D', { attach: true, session: { remoteAlias: 'host' } });
   w.openSessions.set('E', { attach: true, attachJobId: '1234abcd' });
-  assert.deepEqual(Array.from(w.planSessionDetach(row).targets, target => target.sessionId), ['A', 'E']);
+  assert.deepEqual(Array.from(w.planSessionDetach(row).targets, target => target.sessionId), ['A', 'D', 'E']);
   assert.deepEqual(Array.from(w.planSessionDetach(row, { tabOnly: true }).targets, target => target.sessionId), ['A']);
   assert.deepEqual(Array.from(w.planSessionDetach(row, { retryTargets: [{ sessionId: 'E' }] }).targets, target => target.sessionId), ['E']);
 });
