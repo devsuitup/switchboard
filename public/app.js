@@ -1347,7 +1347,6 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
           if (entry) delete entry.detachRequested;
         }
         const result = target.remote ? await backend(target.alias, id) : await backend(id);
-        if (entry && !result?.ok) entry.detachRequested = previousDetachRequested;
         if (target.remote && result?.hostUnreachable) {
           const reason = result.error || 'The host is unreachable';
           unreachable.set(target.alias, reason);

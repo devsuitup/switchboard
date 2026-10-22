@@ -348,6 +348,22 @@ for (const [failure, stop] of [
   });
 }
 
+test('remote Stop after pending Detach reads Stopped when the host session is already gone', async t => {
+  const h = remoteSetup(t);
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  await h.w.detachSession('A');
+  assert.equal(h.entry.detachRequested, true);
+  h.w.api.remoteStopSession = async () => ({ ok: false, error: 'session not found on that host' });
+  await h.stop();
+  h.w.gridViewActive = false;
+  h.w.activeSessionId = null;
+  h.w.applyProcessExit('A', 0, null, true);
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped', 'an already absent host session completes Stop');
+  assert.doesNotMatch(writes.at(-1), /keeps running on/);
+  assert.equal(h.document.querySelector('[role="alert"]'), null);
+});
+
 for (const result of [{ ok: true, detached: true }, { ok: false, error: 'not running' }]) {
   test(`remote Stop after Detach before exit reads Stopped (${result.error || 'success'})`, async t => {
     const h = remoteSetup(t);
