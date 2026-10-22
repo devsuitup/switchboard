@@ -16,6 +16,7 @@ function setup(t, { attached = true, jobId = 'abcdef12', merged = [] } = {}) {
   const entry = { session, attach: attached, attachJobId: jobId, element: h.document.createElement('div'),
     terminal: { write() {} }, closed: false };
   w.sessionMap.set('A', session);
+  for (const id of merged) w.sessionMap.set(id, { ...session, sessionId: id, mergedMemberIds: [] });
   w.openSessions.set('A', entry);
   w.activePtyIds.add('A');
   Object.assign(w, { gridViewActive: true, terminalsEl: h.document.getElementById('terminals'),
@@ -322,6 +323,29 @@ function remoteSetup(t, options) {
   h.w.api.remoteStopSession = async (...args) => { h.calls.push(['remoteStop', ...args]); return { ok: true }; };
   h.render();
   return h;
+}
+
+for (const [failure, stop] of [
+  ['hostUnreachable', async () => ({ ok: false, hostUnreachable: true, error: 'host unreachable' })],
+  ['non-ok result', async () => ({ ok: false, error: 'remote stop refused' })],
+  ['rejection', async () => { throw new Error('remote stop rejected'); }],
+]) {
+  test(`failed remote Stop after pending Detach still exits as Detached (${failure})`, async t => {
+    const h = remoteSetup(t);
+    const writes = [];
+    h.entry.terminal.write = data => writes.push(data);
+    await h.w.detachSession('A');
+    assert.equal(h.entry.detachRequested, true, 'Detach is still awaiting its exit');
+    h.w.api.remoteStopSession = stop;
+    await h.stop();
+    assert.equal(h.entry.closed, false, 'the pending Detach exit has not arrived');
+    assert.equal(h.document.querySelector('[role="alert"] .app-notice-action')?.textContent, 'Retry');
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 0, null, true);
+    assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Detached');
+    assert.match(writes.at(-1), /session detached .*it keeps running on Build server/);
+  });
 }
 
 for (const result of [{ ok: true, detached: true }, { ok: false, error: 'not running' }]) {

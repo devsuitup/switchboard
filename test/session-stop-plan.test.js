@@ -13,6 +13,10 @@ function setup(t, extra = {}) {
   const { window, document } = ctx;
   const calls = { questions: [], stopped: [], remote: [], jobs: [] };
   window.sessionMap.set('A', row);
+  for (const id of row.mergedMemberIds) {
+    window.sessionMap.set(id, { ...row, sessionId: id, mergedMemberIds: [],
+      remoteDescriptorSeen: row.remoteMemberDescriptorSeen?.[id] ?? row.remoteDescriptorSeen });
+  }
   ctx.sidebar.renderProjects([makeSampleProject({ projectPath: '/project', sessions: [row] })], true);
   window.gridViewActive = true;
   window.refreshSidebar = () => {};
@@ -25,6 +29,40 @@ function setup(t, extra = {}) {
   const stopRow = () => document.querySelector('#si-A .session-stop-btn').onclick({ stopPropagation() {} });
   return { ...ctx, row, calls, app, stopRow };
 }
+
+test('Stop routes a remote member without an open tab by its own record under a local row', async t => {
+  const h = setup(t, { mergedMemberIds: ['B'] });
+  h.window.activePtyIds.add('A');
+  h.window.sessionMap.set('B', { sessionId: 'B', remoteAlias: 'host', remoteDescriptorSeen: true });
+  h.window.setRemoteHostLabels([{ alias: 'host', label: 'Production' }]);
+  await h.stopRow();
+  assert.deepEqual(h.calls.remote, [['host', 'B']], 'the remote member must stop on its own host');
+  assert.deepEqual(h.calls.stopped, ['A']);
+  assert.deepEqual(h.calls.jobs, []);
+  assert.match(h.calls.questions[0].message, /Part B on Production/);
+});
+
+test('Stop routes a local member without an open tab by its own record under a remote row', async t => {
+  const h = setup(t, { mergedMemberIds: ['B'], remoteAlias: 'host', remoteDescriptorSeen: true });
+  h.window.sessionMap.set('B', { sessionId: 'B', projectPath: '/project' });
+  h.window.api.bgAgentLiveJob = async id => ({ known: true, job: id === 'B' ? { id: 'abcd1234' } : null });
+  await h.stopRow();
+  assert.deepEqual(h.calls.jobs, [['stop', 'abcd1234']], 'the local member must stop through its own daemon');
+  assert.deepEqual(h.calls.remote, [['host', 'A']]);
+  assert.deepEqual(h.calls.stopped, []);
+  assert.match(h.calls.questions[0].message, /Part B: background job abcd1234; its process ends/);
+});
+
+test('Stop excludes a member without an open tab or known session record with its reason', async t => {
+  const h = setup(t, { mergedMemberIds: ['B'], remoteAlias: 'host', remoteDescriptorSeen: true });
+  h.window.sessionMap.delete('B');
+  h.window.api.bgAgentLiveJob = async () => { throw new Error('unknown members must not be routed'); };
+  await h.stopRow();
+  assert.deepEqual(h.calls.remote, [['host', 'A']], 'unknown members must not inherit the row host');
+  assert.deepEqual(h.calls.stopped, []);
+  assert.deepEqual(h.calls.jobs, []);
+  assert.match(h.calls.questions[0].message, /Part B: cannot tell which session runs this part/);
+});
 
 test('P3 row Stop confirms both live parts once and ends both processes while keeping the conversation', async t => {
   const h = setup(t);

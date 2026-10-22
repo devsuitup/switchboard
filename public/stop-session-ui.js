@@ -17,12 +17,19 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
   const targets = [];
   const excluded = [];
   for (const id of new Set(retryTargets ? retryTargets.map(target => target.sessionId) : rowSessionIds(row))) {
-    const member = id === row.sessionId ? row : {
+    let member = id === row.sessionId ? row : {
       ...row, sessionId: id,
       remoteDescriptorSeen: row.remoteMemberDescriptorSeen?.[id] ?? row.remoteDescriptorSeen,
     };
     const open = openSessions.get(id);
     const active = activePtyIds.has(id) || !!(open && !open.closed);
+    if (jobStop) {
+      member = open?.session || sessionMap.get(id) || (id === row.sessionId ? row : null);
+      if (!member) {
+        excluded.push({ sessionId: id, reason: 'cannot tell which session runs this part; its session record is unavailable' });
+        continue;
+      }
+    }
     const route = resolveSessionStop(jobStop && open?.session ? open.session : member, { attach: !!(open?.attach && !open.closed) || (id === row.sessionId && attach) });
     if (route.remote) {
       const possiblyLive = member.remoteHostAt === null && !(typeof remoteSessionStates !== 'undefined'

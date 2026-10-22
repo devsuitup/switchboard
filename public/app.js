@@ -1327,6 +1327,8 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   let stopped = 0;
   for (const target of targets) {
     const id = target.sessionId;
+    const entry = target.remote ? openSessions.get(id) : null;
+    const previousDetachRequested = entry?.detachRequested;
     try {
       if (target.job && !target.notHosted) {
         const result = await window.api.bgAgentVerb('stop', target.jobId);
@@ -1342,10 +1344,10 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
         const backend = target.remote ? window.api.remoteStopSession : window.api.stopSession;
         if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
         if (target.remote) {
-          const entry = openSessions.get(id);
           if (entry) delete entry.detachRequested;
         }
         const result = target.remote ? await backend(target.alias, id) : await backend(id);
+        if (entry && !result?.ok) entry.detachRequested = previousDetachRequested;
         if (target.remote && result?.hostUnreachable) {
           const reason = result.error || 'The host is unreachable';
           unreachable.set(target.alias, reason);
@@ -1357,6 +1359,7 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
       }
       if (target.job && !target.notHosted && typeof refreshAgentsRoster === 'function') refreshAgentsRoster();
     } catch (error) {
+      if (entry) entry.detachRequested = previousDetachRequested;
       failures.push(`Part ${id} ${target.where}: ${error?.message || error || 'unknown error'}`);
       failedTargets.push(target);
       continue;
