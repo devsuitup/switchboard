@@ -55,10 +55,10 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     if (!entry || event?.sender !== entry.wc) return null;
     return attempts.refresh(entry.win, detail);
   });
-  const backgroundAttempt = (event, checkId, detail) => {
+  const backgroundAttempt = (event, checkId, detail, checkVersion = true) => {
     const entry = pending.get(checkId);
     const attempt = attempts.current();
-    if (!entry || event?.sender !== entry.wc || attempt?.window !== entry.win || attempt.id !== detail?.attempt || attempt.version !== detail?.version || attempt.phase === 'committed' || attempt.external) return null;
+    if (!entry || event?.sender !== entry.wc || attempt?.window !== entry.win || attempt.id !== detail?.attempt || checkVersion && attempt.version !== detail?.version || attempt.phase === 'committed' || attempt.external) return null;
     return attempt;
   };
   ipcMain.handle?.('exit-background', (event, checkId, detail, ids) => {
@@ -83,7 +83,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
     return batch.promise;
   });
   ipcMain.on('exit-background-cancel', (event, checkId, detail) => {
-    if (backgroundAttempt(event, checkId, detail)) abortBackground(false);
+    if (backgroundAttempt(event, checkId, detail, false)) abortBackground(false);
   });
   ipcMain.on('unsaved-check-phase', (event, id, detail, phase) => {
     const entry = pending.get(id);

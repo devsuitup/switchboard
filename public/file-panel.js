@@ -220,6 +220,7 @@ function initFilePanel() {
     });
     window.api.onUnsavedCheck(async (id, reason, detail = null) => {
       if (checks.has(id)) return;
+      if (typeof window.clearExternalExitBackground === 'function') window.clearExternalExitBackground();
       const state = { id, reason, detail, invalid: false };
       checks.set(id, state);
       window.api.unsavedCheckAck(id);
@@ -890,7 +891,8 @@ async function confirmSessionExit(detail, changed) {
     return line;
   };
   if (moving.length) {
-    message.push('Moves to the background:', ...moving.map(describe), 'Stops:', ...stopping.map(describe));
+    message.push('Moves to the background:', ...moving.map(describe));
+    if (stopping.length) message.push('Stops:', ...stopping.map(describe));
   } else {
     message.push(...snapshot.rows.map(describe));
   }

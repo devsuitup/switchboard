@@ -169,7 +169,7 @@ function exitRuntime(ctx) {
   w.openSessions.clear();
   w.document.body.insertAdjacentHTML('beforeend', '<div id="app-notices"></div>');
   if (typeof w.showAppNotice !== 'function') vm.runInContext(fs.readFileSync(path.join(PUBLIC_DIR, 'app-notices.js'), 'utf8'), ctx.context, { filename: path.join(PUBLIC_DIR, 'app-notices.js') });
-  const functions = ['moveSessionsForExit', 'markExitBackground', 'recoverExitBackground', 'finishExitBackground', 'showExitBackgroundProgress', 'exitBackgroundFailure', 'initExitBackgroundControl', 'rekeySessionTab', 'attachBackgroundContinuation', 'persistWorkingSet', 'pendingRestoreEntries', 'flushStateForExit', 'releaseExitState', 'beginPtyOpen', 'settlePtyOpen'];
+  const functions = ['moveSessionsForExit', 'markExitBackground', 'recoverExitBackground', 'finishExitBackground', 'clearExternalExitBackground', 'showExitBackgroundProgress', 'exitBackgroundFailure', 'initExitBackgroundControl', 'rekeySessionTab', 'attachBackgroundContinuation', 'persistWorkingSet', 'pendingRestoreEntries', 'flushStateForExit', 'releaseExitState', 'beginPtyOpen', 'settlePtyOpen'];
   const declarations = ['exitHandoffs', 'exitBackgroundAttempts', 'skippedWorkingSetEntries', 'ptyGenerations', 'pendingOpens', 'restoringWorkingSet', 'persistWorkingSetTimer', '_persistChain', 'exitingApp', 'exitingAppTimer', 'persistSkippedWhileExiting', 'savedWorkingSetRead', 'EXIT_FLUSH_GRACE_MS', 'restorePlanner', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'dormantWorkingSet'];
   loadAppFunctions(ctx.context, {
     functions, declarations,
@@ -226,6 +226,139 @@ async function clickMove(ctx) {
 }
 
 const moved = id => ({ id, ok: true, sessionId: id + '-bg', jobId: id + '-job', cwd: '/repo' });
+
+for (const [from, to] of [['close', 'quit'], ['quit', 'update']]) {
+  test(`H2b progress Cancel after ${from} to ${to} aborts the real busy batch`, async () => {
+    const ctx = setup();
+    try {
+      exitRuntime(ctx);
+      const { inventory, runExitHandoffs } = require('../session-exit');
+      const ipcMain = new EventEmitter();
+      const handlers = new Map();
+      ipcMain.handle = (name, fn) => handlers.set(name, fn);
+      const records = new Map(['one', 'two'].map(id => [id, { kind: 'local-pty', pty: {} }]));
+      const wc = new EventEmitter();
+      Object.assign(wc, { isDestroyed: () => false, isCrashed: () => false,
+        send: (channel, ...args) => {
+          const callback = { 'unsaved-check': ctx.calls.check, 'unsaved-check-reason': ctx.calls.reason,
+            'exit-background-progress': ctx.calls.progress }[channel];
+          if (callback) queueMicrotask(() => callback(...args));
+        } });
+      const win = new EventEmitter();
+      Object.assign(win, { webContents: wc, isDestroyed: () => false, close() {} });
+      let signal;
+      const writes = [];
+      const guard = createUnsavedGuard({ ipcMain, inventory: () => inventory(records, (_record, _id, state) => state === 'idle' ? null : 'Session is busy', () => 'busy'),
+        background: (ids, opts) => {
+          signal = opts.signal;
+          return runExitHandoffs(ids, { ...opts, status: () => 'busy', now: () => 0,
+            waitForChange: () => new Promise(() => {}), send: id => writes.push(id) });
+        }, setTimeoutFn: () => ({}), clearTimeoutFn() {} });
+      guard.attach(win);
+      ctx.window.api.unsavedCheckAck = id => ipcMain.emit('unsaved-check-ack', { sender: wc }, id);
+      ctx.window.api.unsavedCheckReasonDone = (id, token, proceed) => ipcMain.emit('unsaved-check-reason-done', { sender: wc }, id, token, proceed);
+      ctx.window.api.unsavedCheckResult = (id, proceed, detail) => {
+        ctx.calls.answers.push({ id, proceed });
+        ipcMain.emit('unsaved-check-result', { sender: wc }, id, proceed, detail);
+      };
+      ctx.window.api.exitBackground = (id, detail, ids) => handlers.get('exit-background')({ sender: wc }, id, detail, ids);
+      ctx.window.api.exitBackgroundCancel = (id, detail) => ipcMain.emit('exit-background-cancel', { sender: wc }, id, detail);
+      if (from === 'close') win.emit('close', { preventDefault() {} });
+      else guard.requestQuit(win);
+      await clickMove(ctx);
+      assert.ok(signal && !signal.aborted, 'the real busy batch has started');
+      let upgrading;
+      if (to === 'quit') upgrading = guard.requestQuit(win);
+      else upgrading = guard.confirmQuit(win);
+      await flush();
+      ctx.window.document.querySelector('[data-notice-id="exit-background"] .app-notice-action').click();
+      assert.equal(signal.aborted, true, 'the progress Cancel must abort after the upgrade');
+      await flush(); await upgrading;
+      assert.equal(ctx.calls.answers.at(-1).proceed, false);
+      assert.deepEqual(writes, [], 'no busy row writes /bg after Cancel');
+    } finally { ctx.destroy(); }
+  });
+}
+
+test('H2b an all-move dialog omits Stops while a mixed dialog names what stops', async () => {
+  const ctx = setup();
+  try {
+    const detail = exitRuntime(ctx);
+    ctx.calls.check(320, 'quit', detail); await flush();
+    assert.doesNotMatch(ctx.window.document.querySelector('.choice-dialog').textContent, /Stops:/);
+    ctx.window.document.querySelector('.choice-dialog-cancel').click(); await flush();
+    const mixed = exitDetail('quit', [...detail.snapshot.rows, { id: 'plain', type: 'plain' }]);
+    ctx.calls.check(321, 'quit', mixed); await flush();
+    assert.match(ctx.window.document.querySelector('.choice-dialog').textContent, /Stops:.*Plain terminal/);
+  } finally { ctx.destroy(); }
+});
+
+test('H2b a new attempt after cancelled logoff restores typed background rekey and notices', async () => {
+  const ctx = setup();
+  try {
+    const detail = exitRuntime(ctx);
+    ctx.window.document.body.insertAdjacentHTML('beforeend', '<button id="terminal-bg-btn"></button>');
+    loadAppFunctions(ctx.context, { functions: ['initTerminalBackgroundControl'] });
+    const callbacks = [ctx.calls.handoffNotice];
+    ctx.window.api.onBgHandoffNotice = cb => callbacks.push(cb);
+    ctx.window.initTerminalBackgroundControl();
+    ctx.calls.check(322, 'quit', detail); await clickMove(ctx);
+    ctx.calls.progress(1, { id: 'one', phase: 'done', result: moved('one') });
+    for (const cb of ctx.calls.invalidated) cb(1, { external: true });
+    await flush();
+    callbacks.forEach(cb => cb('two', 'Choose Background or Stay'));
+    assert.equal(ctx.window.document.querySelector('[data-notice-id="background-progress:two"]'), null);
+    const next = exitDetail('quit', [{ id: 'two', type: 'session', background: 'ready' }]); next.attempt = 2;
+    ctx.calls.check(323, 'quit', next); await flush();
+    ctx.window.document.querySelector('.choice-dialog-cancel').click(); await flush();
+    callbacks.forEach(cb => cb('two', 'Choose Background or Stay'));
+    assert.match(ctx.window.document.querySelector('[data-notice-id="background-progress:two"]')?.textContent || '', /Choose Background or Stay/,
+      'a later typed handoff must show its confirmation notice');
+    const entry = ctx.window.openSessions.get('two');
+    ctx.calls.forked('two', 'two-bg', 'background', moved('two')); await flush();
+    assert.equal(ctx.window.openSessions.get('two-bg'), entry, 'a later typed /bg must rekey its tab');
+    assert.equal(ctx.calls.attaches.length, 1, 'the typed handoff attaches normally');
+    assert.equal(ctx.window.openSessions.get('one-bg').bgRestore, true, 'confirmed external marks survive cleanup');
+    ctx.calls.finishBatch([moved('one'), moved('two')]); await flush();
+    assert.equal(ctx.calls.attaches.length, 1, 'the old external result cannot attach again');
+  } finally { ctx.destroy(); }
+});
+
+test('H2b recovery waits for a written row and reports the settled confirmation count', async () => {
+  const ctx = setup();
+  try {
+    const detail = exitRuntime(ctx);
+    ctx.calls.check(324, 'quit', detail); await clickMove(ctx);
+    ctx.calls.progress(1, { id: 'one', phase: 'done', result: moved('one') });
+    ctx.calls.progress(1, { id: 'two', phase: 'confirming' });
+    for (const cb of ctx.calls.invalidated) cb(1);
+    await flush();
+    assert.equal(ctx.calls.attaches.length, 0, 'recovery must wait for the written row to settle');
+    assert.match(ctx.window.document.querySelector('[data-notice-id="exit-background"]').textContent, /1 of 2 confirmed/);
+    assert.equal(ctx.window.document.querySelector('[data-notice-id="exit-background-failure"]'), null);
+    ctx.calls.finishBatch([moved('one'), moved('two')]); await flush();
+    assert.equal(ctx.calls.attaches.length, 2);
+    assert.match(ctx.window.document.querySelector('[data-notice-id="exit-background-failure"]').textContent, /2 of 2 sessions moved/);
+    assert.equal(ctx.calls.answers.at(-1).proceed, false);
+  } finally { ctx.destroy(); }
+});
+
+test('H2b re-ask then Stop requires a checked save of the earlier moves', async () => {
+  const ctx = setup();
+  try {
+    const detail = exitRuntime(ctx);
+    ctx.calls.check(325, 'quit', detail); await clickMove(ctx);
+    ctx.calls.finishBatch([moved('one'), moved('two')]); await flush();
+    for (const cb of ctx.calls.invalidated) cb(1, { reask: true });
+    const next = exitDetail('quit', [{ id: 'new', type: 'plain' }]); next.version = 2;
+    ctx.calls.check(326, 'quit', next); await flush();
+    ctx.window.api.setSetting = async () => { throw new Error('disk full after re-ask'); };
+    ctx.window.document.querySelector('.choice-dialog-confirm').click(); await flush();
+    assert.equal(ctx.calls.answers.at(-1).proceed, false, 'Stop must fail when the moved working set cannot be saved');
+    assert.equal(ctx.calls.attaches.length, 2);
+    assert.match(ctx.window.document.querySelector('[data-notice-id="exit-background-failure"]').textContent, /could not save them.*disk full after re-ask/);
+  } finally { ctx.destroy(); }
+});
 
 test('C7 event then result converges once, in place, and saves bg with zero attach spawns', async () => {
   const ctx = setup();
@@ -501,7 +634,7 @@ test('A2 named exit question covers each intent and platform, identities and hon
       const label = action === 'update' ? 'update' : action === 'close' ? 'close' : platform === 'win32' ? 'exit' : 'quit';
       assert.equal(d.querySelector('.choice-dialog-secondary')?.textContent, `Move 1 session to background and ${label}`);
       assert.match(d.textContent, /Moves to the background:/);
-      assert.match(d.textContent, /Stops:/);
+      assert.doesNotMatch(d.textContent, /Stops:/);
       assert.doesNotMatch(d.textContent, /Send to background/);
       assert.doesNotMatch(d.textContent, /open here|Every session running in it stops/);
       assert.equal(ctx.window.document.activeElement, d.querySelector('.choice-dialog-cancel'));

@@ -428,6 +428,31 @@ function backgroundSetup(intent = 'quit') {
   return { ...t, batches };
 }
 
+for (const [from, to] of [['close', 'quit'], ['quit', 'update']]) {
+  test(`H2b Cancel after ${from} to ${to} aborts the current batch with its original detail`, async () => {
+    const t = backgroundSetup(from);
+    const original = t.detail();
+    const checkId = t.checks().at(-1).args[0];
+    const pending = t.startBatch();
+    let upgrading;
+    if (to === 'quit') t.menu();
+    else upgrading = t.install();
+    assert.equal(t.detail().version, original.version + 1);
+    assert.equal(t.startBatch(['local'], original), null, 'a stale version cannot start a handoff');
+    const cancel = (sender, id, detail) => t.context.ipcMain.emit('exit-background-cancel', { sender }, id, detail);
+    cancel({}, checkId, original);
+    cancel(t.wc, 999, original);
+    cancel(t.wc, checkId, { ...original, attempt: original.attempt + 1 });
+    assert.equal(t.batches[0].signal.aborted, false, 'untrusted cancellation must not abort');
+    cancel(t.wc, checkId, original);
+    assert.equal(t.batches[0].signal.aborted, true, 'Cancel with the original detail must abort the upgraded busy wait');
+    t.batches[0].resolve([{ id: 'local', ok: false, code: 'cancelled' }]);
+    await pending;
+    t.answer(false); await tick(); await upgrading;
+    assert.deepEqual(t.calls, [], 'the cancelled exit must not stop, quit or install');
+  });
+}
+
 test('C2 shipped exit inventory classifies busy by the real CLI id after a clear rekey', () => {
   const asked = [];
   const context = vm.createContext({
@@ -533,7 +558,7 @@ for (const action of ['cancel-ipc', 'invalidate', 'logoff', 'session-end', 'exte
     if (action === 'cancel-ipc') {
       t.context.ipcMain.emit('exit-background-cancel', { sender: {} }, t.checks().at(-1).args[0], t.detail());
       assert.equal(batch.signal.aborted, false);
-      t.context.ipcMain.emit('exit-background-cancel', { sender: t.wc }, t.checks().at(-1).args[0], { ...t.detail(), version: 0 });
+      t.context.ipcMain.emit('exit-background-cancel', { sender: t.wc }, t.checks().at(-1).args[0], { ...t.detail(), attempt: t.detail().attempt + 1 });
       assert.equal(batch.signal.aborted, false);
       t.context.ipcMain.emit('exit-background-cancel', { sender: t.wc }, t.checks().at(-1).args[0], t.detail());
     } else if (action === 'invalidate') t.guard.invalidate();

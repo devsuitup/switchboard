@@ -264,11 +264,19 @@ retry notice. A re-ask after success keeps marked tabs without attaching;
 `exit-attempt-invalidated` carries `{ reask: true }` for that case. A later
 Cancel recovers those tabs. Non-external upgrades wait for the batch before
 renewing consent; a partial result wins over an upgrade.
+Cancel accepts the original batch version after an upgrade, while checking
+the current uncommitted attempt, check id, window and sender. Starting a batch
+still requires the current version. A re-ask followed by Stop retains the
+checked save requirement for sessions already moved.
 
 Logoff invalidation carries `{ external: true }`; an external upgrade and
 `exit-flush` also mark the batch external. They retain already confirmed marks,
 drop late results, suppress late-event attach and flush unchecked. Pending
 jobs remain under the old id and rely on `continued-in` on the next start.
+The next renderer check clears external batch enrollments, preserving confirmed
+background restore marks, so a cancelled logoff cannot suppress a later typed
+`/bg` re-key, attach or Background/Stay notice. Late results of the old batch
+remain external and cannot start recovery.
 
 Menu items call an explicit `onQuit`: Quit Switchboard with Cmd+Q on macOS,
 Quit with Ctrl+Q on Linux, Exit without an accelerator on Windows. The ☰ menu
@@ -327,7 +335,8 @@ requests return null. The attempt enters the diagnostic `backgrounding` phase
 and owns one active batch; repeated valid calls join its promise. A settled
 batch releases that slot so renewed consent can move newly admitted sessions. Progress goes only
 to that webContents as `exit-background-progress(attemptId, event)`.
-`exit-background-cancel(event, checkId, detail)` has the same ownership checks.
+`exit-background-cancel(event, checkId, detail)` keeps those ownership checks
+but accepts an earlier version of the current attempt so upgrades preserve Cancel.
 
 Invalidation, another window and an updater error on an update attempt abort
 the current batch as user cancellation. Close → quit → update upgrades preserve

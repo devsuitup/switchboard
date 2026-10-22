@@ -1622,6 +1622,17 @@ async function finishExitBackground(attempt, { reask = false, external = false, 
 }
 window.finishExitBackground = finishExitBackground;
 
+function clearExternalExitBackground() {
+  for (const [attempt, batch] of exitBackgroundAttempts) {
+    if (!batch.external) continue;
+    for (const row of batch.entries.values()) {
+      if (exitHandoffs.get(row.id) === row) exitHandoffs.delete(row.id);
+    }
+    exitBackgroundAttempts.delete(attempt);
+  }
+}
+window.clearExternalExitBackground = clearExternalExitBackground;
+
 function initExitBackgroundControl() {
   window.api.onExitBackgroundProgress?.((attempt, event) => {
     const batch = exitBackgroundAttempts.get(attempt);
