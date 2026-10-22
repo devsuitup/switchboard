@@ -24,7 +24,7 @@ const PLACEHOLDER_SESSION = {
   remoteDescriptorSeen: true,
   remoteAttachable: true,
   status: 'busy',
-  statusUpdatedAt: Date.now() - 5000,
+  statusUpdatedAt: Date.parse('2026-09-09T11:59:55Z'),
   placeholder: true,
 };
 
@@ -41,9 +41,10 @@ function register(ctx, sessions) {
   for (const s of sessions) ctx.window.sessionMap.set(s.sessionId, s);
 }
 
-test('a placeholder row renders alive, with a stop control, status text, and no transcript affordance', () => {
+test('a placeholder row renders alive, with a stop control, status text, and no transcript affordance', (t) => {
   const ctx = setupSidebarDom();
   try {
+    t.mock.method(ctx.window.Date, 'now', () => PLACEHOLDER_SESSION.statusUpdatedAt + 5000);
     register(ctx, [PLACEHOLDER_SESSION]);
     ctx.sidebar.renderProjects([projectWithPlaceholder()], true);
 
@@ -56,7 +57,7 @@ test('a placeholder row renders alive, with a stop control, status text, and no 
 
     const statusEl = item.querySelector('.session-status');
     assert.ok(statusEl, 'status + age must be shown');
-    assert.equal(statusEl.textContent, ctx.window.formatStatusAge(PLACEHOLDER_SESSION.statusUpdatedAt));
+    assert.equal(statusEl.textContent, '5s ago');
     assert.match(statusEl.textContent, /ago/);
 
     assert.equal(item.querySelector('.session-jsonl-btn'), null,

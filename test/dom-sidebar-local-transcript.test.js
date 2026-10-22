@@ -122,9 +122,10 @@ for (const withDescriptor of [false, true]) {
   }
 }
 
-test('a local row without a PTY needs head evidence to animate, independently of the age line', () => {
+test('a local row without a PTY needs head evidence to animate, independently of the age line', (t) => {
   const ctx = setupSidebarDom();
   try {
+    t.mock.method(ctx.window.Date, 'now', () => LOCAL_SESSION.statusUpdatedAt + 5000);
     register(ctx, [LOCAL_SESSION]);
     ctx.sidebar.renderProjects([projectWithLocalSession()], true);
 
@@ -146,7 +147,7 @@ test('a local row without a PTY needs head evidence to animate, independently of
 
     const statusEl = item.querySelector('.session-status');
     assert.ok(statusEl, 'the state+age line is rendered independently of the icon slot');
-    assert.equal(statusEl.textContent, ctx.window.formatStatusAge(LOCAL_SESSION.statusUpdatedAt), 'the age line survives the icon decay');
+    assert.equal(statusEl.textContent, '5s ago', 'the age line survives the icon decay');
   } finally { ctx.destroy(); }
 });
 
