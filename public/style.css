@@ -1311,6 +1311,7 @@ body { display: flex; flex-direction: column; }
 }
 
 .session-stop-btn,
+.session-detach-btn,
 .session-send-btn,
 .session-launch-config-btn,
 .session-fork-btn,
@@ -1401,6 +1402,20 @@ body { display: flex; flex-direction: column; }
 .session-item.has-running-pty .session-stop-btn,
 .session-item.is-alive .session-stop-btn {
   display: flex;
+}
+
+.session-detach-btn {
+  display: none;
+  color: var(--text-muted);
+}
+
+.session-item.has-detachable-tab .session-detach-btn {
+  display: flex;
+}
+
+.session-detach-btn:hover {
+  color: inherit;
+  background: var(--hairline);
 }
 
 .session-send-btn {
@@ -1708,6 +1723,25 @@ body { display: flex; flex-direction: column; }
   pointer-events: none;
 }
 
+#terminal-detach-btn {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  width: 26px;
+  height: 26px;
+  color: var(--text-muted);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#terminal-detach-btn:hover {
+  color: inherit;
+  background: var(--hairline);
+}
+
 #terminal-stop-btn:hover {
   color: #e05070;
   background: rgba(224,80,112,0.1);
@@ -1992,6 +2026,31 @@ body { display: flex; flex-direction: column; }
   justify-content: center;
   opacity: 0;
   transition: all 0.15s;
+}
+
+.grid-card-detach-btn {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 3px;
+  line-height: 1;
+  color: var(--text-muted);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: all 0.15s;
+}
+
+.grid-card:hover .grid-card-detach-btn,
+.grid-card-detach-btn:focus-visible {
+  opacity: 1;
+}
+
+.grid-card-detach-btn:hover {
+  color: inherit;
+  background: var(--hairline);
 }
 
 .grid-card:hover .grid-card-stop-btn,

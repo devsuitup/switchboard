@@ -41,6 +41,9 @@ Stop or Close action. See `test/dom-agents-view.test.js` (#566/S5).
    `control.key` are never touched.
 3. Closing an attach tab detaches (`\x1a`, 2 s grace, then kill —
    `detachPty`). `claude stop` is the only stop.
+   Row, grid and header expose separate Stop session and neutral Detach controls.
+   Stop confirms once and runs the job verb before closing its attach client;
+   Detach asks nothing and retains its 10 s Undo.
 4. Job watchers start with the app to keep the sidebar cache current. They
    notify projects only when the job id to state/name/name-source/conversation projection changes;
    token/detail/tempo/fan updates do not notify projects. Automatic roster
@@ -90,7 +93,12 @@ Stop or Close action. See `test/dom-agents-view.test.js` (#566/S5).
     `deleteSessionRefusal` and `liveElsewhereChecked`. The latter includes
     this instance's processes for these verbs: being owned here makes a resume
     a re-attach but does not make a destructive operation safe. Open terminals,
-    live jobs, live descriptor pids and unknown liveness all refuse. The
+    live jobs, live descriptor pids and unknown liveness all refuse. For Stop
+    only, the active-session map excludes `isAttach` clients whose
+    `attachJobId` matches the job (case-insensitively). This guards a race
+    between the renderer's hosted-job lookup and the fresh conversation check.
+    Other clients still refuse with wording ending in `not stopped`, without
+    Delete instructions. `rm` and `respawn` retain the full map and all refusals. The
     refusal for a descriptor names its pid. `stop` on a hosted job
     remains the daemon's stop operation, including missing or unknown job files.
     The check and CLI invocation are separate: a process can start after the
@@ -523,6 +531,15 @@ The changed `hosted` field makes the snapshot differ and updates badge membershi
   before stopping it. The header and exit banner read Stopped without claiming
   the job keeps running. Detached is reserved for a user Detach of the attach
   client. A refused verb keeps the tab open.
+- Row, grid and header Stop use `planSessionStop(..., {jobStop:true})` and
+  preflight `checkBgAgentVerb('stop', jobId)` before the one danger confirmation.
+  An invalid 8-hex job id or an unknown job check is excluded with its reason.
+  When `bgAgentLiveJob` reports `known:true, job:null` for an attached tab,
+  Stop only detaches it and never sets `jobEnding`; the dialog says the daemon
+  does not report the job running and the exit reads Detached. This includes
+  the early handoff window and is not proof that every process has ended.
+  Whether `liveElsewhereChecked` counts the attach client's own descriptor
+  remains a live qualification item; stub tests cannot establish it.
 - Narrow widths: a row's grid columns add up to ~670 px of minimum width.
   Without `min-width: 0` on `#main` that minimum became `#main`'s own, so
   with a narrow window or a wide sidebar `#main` ran past the window edge

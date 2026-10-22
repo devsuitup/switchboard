@@ -5,6 +5,7 @@ const HEADER_CONTROLS = Object.freeze([
   Object.freeze({ id: 'terminal-refresh-btn', kind: 'action' }),
   Object.freeze({ id: 'terminal-bg-btn', kind: 'action' }),
   Object.freeze({ id: 'terminal-stop-btn', kind: 'action' }),
+  Object.freeze({ id: 'terminal-detach-btn', kind: 'action' }),
   Object.freeze({ id: 'terminal-header-sandbox', kind: 'indicator' }),
   Object.freeze({ id: 'ide-emulation-indicator', kind: 'indicator' }),
 ]);

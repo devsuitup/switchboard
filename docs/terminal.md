@@ -19,8 +19,10 @@ On the left, the header above the terminal shows:
   not **Auto**.
 
 Immediately after the session id, **Refresh screen** redraws the terminal and
-**Stop** stops its process (**Detach** leaves an attached background session
-running). The Sandbox and IDE Emulation indicators follow them. The top-right
+**Stop session** stops its process after confirmation, including the agent of
+an attached background session. A separate **Detach (the session keeps
+running)** button follows Stop for an open background attach; it asks nothing
+and offers Undo for about 10 seconds. The Sandbox and IDE Emulation indicators follow them. The top-right
 corner holds the window controls.
 
 ## Session tools

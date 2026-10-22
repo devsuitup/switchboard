@@ -23,7 +23,8 @@ remembered (`localStorage.gridGroupByProject`).
   spinner during a head turn, a static spinner for background work, and
   attention or response-ready indicators. A busy head with running agents
   uses violet. The session's name turns blue while written output is unseen.
-  Its project and a stop button while the process is alive follow the name.
+  Its project and a Stop session button while the process is alive follow the
+  name. An open background attach also has a separate neutral Detach button.
 - **Body**: the session's terminal, live.
 - **Running subagents**, beneath the header: `1 subagent running` or
   `N subagents running`, counting distinct active agent tasks. No line appears
@@ -47,5 +48,7 @@ remembered (`localStorage.gridGroupByProject`).
   the sidebar highlights it and its notifications are cleared.
 - Double-click a header to leave the grid and show that session alone.
 - The stop button asks for confirmation, then ends the process.
+- On a background attach, Stop ends the agent. Detach leaves it running without
+  asking and offers Undo for about 10 seconds.
 - The session-navigation shortcuts move between cards in two dimensions — see
   [Keyboard shortcuts](keyboard-shortcuts.md).

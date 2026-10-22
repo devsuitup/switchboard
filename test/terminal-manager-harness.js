@@ -103,7 +103,7 @@ function makeResizeObserverStub(spies) {
 // and are what public/file-panel.js builds its panel around (opts.filePanel).
 const HARNESS_HTML = `<!DOCTYPE html><html><body>
   <div id="terminal-area"><div id="terminals"></div></div>
-  <div id="terminal-header"><div id="terminal-header-session"><button id="terminal-stop-btn"></button></div></div>
+  <div id="terminal-header"><div id="terminal-header-session"><button id="terminal-stop-btn"></button><button id="terminal-detach-btn"></button></div></div>
 </body></html>`;
 
 // opts.proposeDimensions: (fitAddonInstance) => {cols, rows} | undefined
@@ -233,7 +233,7 @@ function setupTerminalDom(opts = {}) {
   loadAppFunctions(dom.getInternalVMContext(), {
     functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
   });
-  const files = ['app-notices.js', 'utils.js', 'subagent-timing.js', 'task-registry.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-replay-queries.js', 'terminal-manager.js'];
+  const files = ['icons.js', 'stop-session-ui.js', 'app-notices.js', 'utils.js', 'subagent-timing.js', 'task-registry.js', 'terminal-path-links.js', 'terminal-context-menu.js', 'terminal-replay-queries.js', 'terminal-manager.js'];
   if (!opts.dom) {
     if (!opts.filePanel) files.unshift('process-exit.js');
     files.splice(1, 0, 'shortcuts.js');

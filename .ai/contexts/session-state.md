@@ -290,8 +290,8 @@ active because the process is alive, not because a tab is open.
 | stop | kill the PTY (`stop-session`, unchanged) | **new**: `remote-stop-session` IPC (`{alias, sessionId}`) — kills the process on the host itself, same control and same confirmation dialog as local. No session locked by name or role. |
 
 **No new dialog component.** `public/stop-session-ui.js`'s async
-`planSessionStop(row, { attach })` collects local PTYs, remote processes and
-attached background-job tabs. The sidebar passes its whole row; the terminal
+`planSessionStop(row, { attach, retryTargets, backgroundJobs, jobStop = false })`
+collects local PTYs, remote processes and background jobs. The sidebar passes its whole row; the terminal
 header and grid card pass an id and plan only that tab. `resolveSessionStop`
 still selects the IPC for each target and remains available to Archive/Delete.
 Confirmed-dead remote members are filtered out unless their view is still
@@ -301,18 +301,34 @@ IPC retains the alias.
 
 `app.js`'s `confirmAndStopSession` asks once with danger styling, the number
 of processes, each part's id and location, and the consequence: each stopped
-process ends, while the conversation is kept and can be resumed. A background
-part keeps running and is named with its job id and the Agents view as the
-way to stop it. An attached job tab is a detach target, never a job stop.
+process ends, while the conversation is kept and can be resumed. Only Stop
+sets `jobStop:true`: attached and live unattached background parts become job
+targets with a validated 8-hex id. Each hosted job passes
+`checkBgAgentVerb('stop', jobId)` before the dialog. Success calls
+`bgAgentVerb('stop', jobId)`, marks an attached entry `jobEnding = 'stop'`, then
+calls `stopSession` on its attach client and refreshes the roster. The exit
+reads Stopped. A failed job verb retains the tab and the Stop failure notice.
+An attached job reported `known:true, job:null` is only detached after a dialog
+line saying it is not running in the daemon and its tab detaches. This path
+does not set `jobEnding`, never calls the job verb and records Detached.
 Processes outside this window and unreadable background-job ownership are
 excluded and explained before confirmation. With no targets, exclusions are
-shown as a notice without a confirmation. Detach-only plans skip confirmation.
+shown as a notice without a confirmation. An invalid job id or an unknown job
+check is excluded with its reason, never treated as nothing running.
+
+`planSessionDetach(row, {tabOnly})` collects open background attach tabs only;
+remote Detach is deferred to S3b. `detachSession` never confirms, sets
+`detachRequested` and calls `stopSession`. Row, card and header have separate
+neutral eject buttons, with explicit title and accessible name; visibility
+refreshes on sidebar render/running indicators, card activity and header update.
+Only background attaches offer Detach in S3a. Local and remote Stop retain
+their previous routes, and no new shortcut is introduced.
 Each successfully detached tab shows a 10 s Undo notice (`kind: 'undo'`).
 Before detaching, the executor captures that tab's session, job id and attach
 cwd; Undo calls `openSession` with those attach options. Both initial attach
 and background handoff retain the actual cwd as `entry.attachCwd`, falling
-back to the session project path. A mixed plan still confirms the processes
-it stops; Undo reattaches only its successfully detached tabs.
+back to the session project path. A merged-row Detach ignores local parts;
+Undo reattaches only its successfully detached tabs.
 
 The stop IPC accepts detach before the local attach client exits. The executor
 sets `entry.detachComplete` before the IPC; `applyProcessExit` closes the entry
@@ -323,9 +339,10 @@ A failed detach retains Retry without offering Undo.
 Cancel makes no stop calls. The executor attempts every target, clears PTY
 and remote state only after success, and reports all failed parts in one
 persistent notice with Retry. A retry builds a fresh plan. Archive and Delete
-keep their existing `stopBeforeArchive` behavior until their own #565 slices.
-The row's failure notice retains its Stop identity even if a retry has only
-detach targets left, so a successful retry clears the original notice.
+keep their existing `stopBeforeArchive` behavior. Archive calls the planner
+without `jobStop`, preserving its attach detach route and confirmation text
+byte for byte. Stop failures and retries retain their Stop notice identity;
+Detach failures and retries use Detach.
 
 ### Opening a session once
 

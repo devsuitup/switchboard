@@ -87,7 +87,7 @@ function setupCombinedDom() {
   for (const file of ['session-state.js', 'process-exit.js', 'session-activity-dom.js', 'session-activity.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
-  for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'task-registry.js', 'grid-view.js', 'bridge-url.js', 'worktree-nesting.js', 'sidebar.js']) {
+  for (const file of ['utils.js', 'icons.js', 'shortcuts.js', 'subagent-timing.js', 'task-registry.js', 'grid-view.js', 'bridge-url.js', 'worktree-nesting.js', 'stop-session-ui.js', 'sidebar.js']) {
     evalInWindow(dom, path.join(PUBLIC_DIR, file));
   }
 

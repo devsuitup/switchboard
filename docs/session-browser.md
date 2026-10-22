@@ -104,6 +104,7 @@ Hovering a row shows its buttons:
 | Button (tooltip) | Effect |
 |---|---|
 | Stop session | Ends the session's process, after a confirmation |
+| Detach (the session keeps running) | Detaches an open background tab without asking; offers Undo for about 10 seconds |
 | Archive / Unarchive | Hides the session from the normal list (stopping it first if it runs), or brings it back |
 | Fork session | Starts a new session branched from this one — see [Launching sessions](launching-sessions.md#fork) |
 | View messages | Opens the transcript in the read-only viewer |
@@ -280,12 +281,18 @@ session's process after a confirmation. For a session on a remote host the
 dialog names the host, and the process on that host is ended — see
 [Remote hosts](remote-hosts.md#stop-archive-delete).
 
-For a session attached to a [background agent](background-agents.md#attaching)
-the button detaches without asking, and the session goes on running under the
-Claude CLI's daemon; stop it from the Agents view. A notice offers **Undo** for
-about 10 seconds to attach it again in the same working folder. Only the
-terminal header's button says so (**Detach (the session keeps running)**); the
-row and grid card buttons still read **Stop session**.
+For a [background agent](background-agents.md#attaching), **Stop session** ends
+the agent after one confirmation, whether or not it is attached here. A row
+with several parts stops each eligible process, including its background jobs.
+An unknown job or a refused check is explained before the confirmation.
+
+An open background tab also has a separate **Detach (the session keeps
+running)** button on its row, grid card and terminal header. It detaches without
+asking and leaves the agent running under the Claude CLI's daemon. A notice
+offers **Undo** for about 10 seconds to attach it again in the same working
+folder. If Stop finds that the daemon no longer reports the attached job as
+hosted, its confirmation explains that only the tab detaches; the exit reads
+**Detached**.
 
 ## Delete
 
