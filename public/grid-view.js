@@ -115,7 +115,11 @@ function updateGridCardActivity(sessionId, card, row) {
   if (stopBtn) stopBtn.style.display = (running || isSessionAlive(sessionId)) ? '' : 'none';
   const detachBtn = card.querySelector('.grid-card-detach-btn');
   const entry = openSessions.get(sessionId);
-  if (detachBtn) detachBtn.style.display = running && entry?.attach && !entry.closed && !entry.session?.remoteAlias ? '' : 'none';
+  if (detachBtn) {
+    detachBtn.style.display = running && entry && !entry.closed && (entry.attach || entry.session?.remoteAlias) ? '' : 'none';
+    detachBtn.title = entry?.session?.remoteAlias ? `Detach (the session keeps running on ${remoteHostLabel(entry.session.remoteAlias)})` : 'Detach (the session keeps running)';
+    detachBtn.setAttribute('aria-label', detachBtn.title);
+  }
 }
 
 function wrapInGridCard(sessionId) {
@@ -167,10 +171,10 @@ function wrapInGridCard(sessionId) {
 
   const detachBtn = document.createElement('button');
   detachBtn.className = 'grid-card-detach-btn';
-  detachBtn.title = 'Detach (the session keeps running)';
+  detachBtn.title = session.remoteAlias ? `Detach (the session keeps running on ${remoteHostLabel(session.remoteAlias)})` : 'Detach (the session keeps running)';
   detachBtn.setAttribute('aria-label', detachBtn.title);
   detachBtn.innerHTML = ICONS.detach(12);
-  detachBtn.style.display = activePtyIds.has(sessionId) && entry.attach && !entry.closed && !entry.session?.remoteAlias ? '' : 'none';
+  detachBtn.style.display = activePtyIds.has(sessionId) && !entry.closed && (entry.attach || entry.session?.remoteAlias) ? '' : 'none';
   detachBtn.onclick = (e) => {
     e.stopPropagation();
     detachSession(sessionId, detachBtn);

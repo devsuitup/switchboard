@@ -905,7 +905,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     pollActiveSessions();
     return;
   }
-  noteSessionExit(sessionId, exitCode, signal, stopped, !!(stopped && entry?.attach && !entry.jobEnding));
+  noteSessionExit(sessionId, exitCode, signal, stopped, !!(stopped && ((entry?.attach && !entry.jobEnding) || (entry?.session?.remoteAlias && entry.detachRequested))));
   if (typeof setSessionMcpState === 'function' && typeof filePanelState !== 'undefined' && filePanelState.get(sessionId)) setSessionMcpState(sessionId, 'off');
   // see .ai/contexts/session-state.md ("A session main drops")
   activePtyIds.delete(sessionId);
@@ -923,7 +923,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     // terminal before the user could read the error.
     try {
       entry.terminal.write(
-        `\r\n${exitBannerColour(exit)}── session ${exitBannerPhrase(exit)} — ${exit.detached ? 'it keeps running in the background' : 're-click this session in the sidebar to relaunch, or click another to dismiss'} ──\x1b[0m\r\n`
+        `\r\n${exitBannerColour(exit)}── session ${exitBannerPhrase(exit)} — ${exit.detached ? entry.session?.remoteAlias ? `it keeps running on ${remoteHostLabel(entry.session.remoteAlias)}` : 'it keeps running in the background' : 're-click this session in the sidebar to relaunch, or click another to dismiss'} ──\x1b[0m\r\n`
       );
     } catch {}
   }
@@ -1319,7 +1319,8 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
       message: excluded.length ? plan.confirmText : 'Nothing is running to stop.' });
     return;
   }
-  if (!await appConfirm({ title: 'Stop session?', message: plan.confirmText, confirmLabel: 'Stop', danger: true })) return;
+  if (!await appConfirm({ title: plan.attach ? 'Detach tab?' : 'Stop session?', message: plan.confirmText,
+    confirmLabel: plan.attach ? 'Detach' : 'Stop', danger: !plan.attach })) return;
   const failures = [];
   const failedTargets = [];
   const unreachable = new Map();
@@ -1385,11 +1386,12 @@ async function detachSession(sessionOrId, btn, retryTargets) {
     showAppNotice({ id: sessionActionNoticeId('Detach', session), kind: 'info', message: 'Nothing is attached to detach.' });
     return;
   }
-  const reattachments = new Map(plan.targets.filter(target => target.attach).map(target => {
+  const reattachments = new Map(plan.targets.filter(target => target.attach || target.remote).map(target => {
     const entry = openSessions.get(target.sessionId);
     const source = entry?.session || sessionMap.get(target.sessionId) || session;
-    return [target.sessionId, { entry, session: { ...source, sessionId: target.sessionId, mergedMemberIds: [] },
-      options: { type: 'attach', jobId: target.jobId, cwd: entry?.attachCwd || source.projectPath } }];
+    return [target.sessionId, { entry, session: target.remote ? { ...(isRow ? session : sessionMap.get(target.sessionId) || source) }
+      : { ...source, sessionId: target.sessionId, mergedMemberIds: [] },
+      options: target.remote ? null : { type: 'attach', jobId: target.jobId, cwd: entry?.attachCwd || source.projectPath } }];
   }));
   const operation = 'Detach';
   const failures = [];
@@ -1402,8 +1404,9 @@ async function detachSession(sessionOrId, btn, retryTargets) {
       reattach.entry.detachComplete ||= new Promise(resolve => { reattach.entry.completeDetach = resolve; });
     }
     let result;
+    const entry = openSessions.get(id);
+    const previousDetachRequested = entry?.detachRequested;
     try {
-      const entry = openSessions.get(id);
       if (entry) entry.detachRequested = true;
       const backend = window.api.stopSession;
       if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
@@ -1412,6 +1415,7 @@ async function detachSession(sessionOrId, btn, retryTargets) {
         throw new Error(result?.error || 'The stop backend is unavailable or returned no result');
       }
     } catch (error) {
+      if (entry) entry.detachRequested = previousDetachRequested;
       failures.push(`Part ${id} ${target.where}: ${error?.message || error || 'unknown error'}`);
       failedTargets.push(target);
       continue;
@@ -1425,13 +1429,16 @@ async function detachSession(sessionOrId, btn, retryTargets) {
     stopped++;
     if (reattach) {
       const noticeId = sessionActionNoticeId('Detach undo', reattach.session);
-      if (typeof reattach.options.jobId !== 'string' || !/^[0-9a-f]{8}$/.test(reattach.options.jobId)) {
+      const message = `Detached from ${sessionActionDescription(reattach.session)}. ${target.remote
+        ? `The session keeps running on ${remoteHostLabel(target.alias)}.` : 'The background session keeps running.'}`;
+      if (target.remote ? !reattach.session.remoteAttachable
+        : typeof reattach.options.jobId !== 'string' || !/^[0-9a-f]{8}$/.test(reattach.options.jobId)) {
         showAppNotice({ id: noticeId, kind: 'info',
-          message: `Detached from ${sessionActionDescription(reattach.session)}. The background session keeps running.` });
+          message });
         continue;
       }
       showAppNotice({ id: noticeId, kind: 'undo',
-        message: `Detached from ${sessionActionDescription(reattach.session)}. The background session keeps running.`,
+        message,
         actionLabel: 'Undo', onAction: async () => {
           showAppNotice({ id: noticeId, kind: 'info', message: `Reattaching to ${sessionActionDescription(reattach.session)}…` });
           if (reattach.entry && !reattach.entry.closed && result?.error !== 'not running') {
@@ -1451,14 +1458,21 @@ async function detachSession(sessionOrId, btn, retryTargets) {
             return;
           }
           let check;
-          try { check = await window.api.bgAgentLiveJob?.(id); } catch {}
+          try { if (!target.remote) check = await window.api.bgAgentLiveJob?.(id); } catch {}
           if (check?.known === true && !check.job) {
             showAppNotice({ id: noticeId, kind: 'error',
               message: `The background job has ended for ${sessionActionDescription(reattach.session)}; there is nothing to reattach.` });
             return;
           }
           try {
-            const opened = await openSession(reattach.session, reattach.options);
+            const row = sessionMap.get(reattach.session.sessionId) || reattach.session;
+            if (target.remote && !row.remoteAttachable) {
+              showAppNotice({ id: noticeId, kind: 'info', message: `The session is no longer attachable on ${remoteHostLabel(target.alias)}. Open it from the sidebar to view its transcript.` });
+              return;
+            }
+            const opened = target.remote
+              ? await openSession(rowHeadSession(row, row.remoteAttachSessionId || rowHeadId(row)))
+              : await openSession(reattach.session, reattach.options);
             if (opened === false) {
               clearAppNotice(noticeId);
               return false;
@@ -1948,7 +1962,9 @@ function updateTerminalHeader() {
   const detachButton = document.getElementById('terminal-detach-btn');
   if (detachButton) {
     const entry = openSessions.get(activeSessionId);
-    detachButton.style.display = running && entry?.attach && !entry.closed && !entry.session?.remoteAlias ? '' : 'none';
+    detachButton.style.display = running && entry && !entry.closed && (entry.attach || entry.session?.remoteAlias) ? '' : 'none';
+    detachButton.title = entry?.session?.remoteAlias ? `Detach (the session keeps running on ${remoteHostLabel(entry.session.remoteAlias)})` : 'Detach (the session keeps running)';
+    detachButton.setAttribute('aria-label', detachButton.title);
   }
   const refreshButton = document.getElementById('terminal-refresh-btn');
   refreshButton.disabled = !running;

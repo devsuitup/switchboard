@@ -100,6 +100,9 @@ test('A7 a job not hosted by the daemon only detaches and its exit reads Detache
   assert.match(question?.[1].message || '', /background job abcdef12 is not running in the daemon; its tab detaches/);
   assert.doesNotMatch(question?.[1].message || '', /process ends/);
   assert.match(question?.[1].message || '', /^Detach this tab\?/);
+  assert.equal(question[1].title, 'Detach tab?');
+  assert.equal(question[1].confirmLabel, 'Detach');
+  assert.equal(question[1].danger, false);
   assert.deepEqual(h.calls.filter(call => ['check', 'verb'].includes(call[0])), []);
   assert.equal(h.entry.jobEnding, undefined);
   h.w.gridViewActive = false;
@@ -117,6 +120,10 @@ test('A7 mixed hosted and notHosted parts describe stopping one job and detachin
   await h.stop();
   const message = h.calls.find(call => call[0] === 'confirm')?.[1].message || '';
   assert.match(message, /^Stop 1 part\?/);
+  const question = h.calls.find(call => call[0] === 'confirm')[1];
+  assert.equal(question.title, 'Stop session?');
+  assert.equal(question.confirmLabel, 'Stop');
+  assert.equal(question.danger, true);
   assert.match(message, /Part A: background job abcdef12 is not running in the daemon; its tab detaches\./);
   assert.match(message, /Part B: background job 1234abcd; its process ends\./);
   assert.deepEqual(h.calls.filter(call => call[0] === 'verb'), [['verb', 'stop', '1234abcd']]);
@@ -274,6 +281,10 @@ test('Retry after job Stop succeeds only retries the failed tab and retains the 
   assert.deepEqual(h.calls.filter(call => call[0] === 'tab'), [['tab', 'A', 'stop'], ['tab', 'A', 'stop']]);
   assert.equal(h.entry.jobEnding, 'stop');
   assert.equal(h.document.querySelector('[role="alert"]'), null);
+  const question = h.calls.filter(call => call[0] === 'confirm').at(-1)[1];
+  assert.equal(question.title, 'Detach tab?');
+  assert.equal(question.confirmLabel, 'Detach');
+  assert.equal(question.danger, false);
   h.w.gridViewActive = false;
   h.w.activeSessionId = null;
   h.w.applyProcessExit('A', 0, null, true);
@@ -302,4 +313,155 @@ test('Detach with nothing attached explains the empty plan without a dialog', as
   await button.onclick({ stopPropagation() {} });
   assert.deepEqual(h.calls, []);
   assert.match(h.document.querySelector('#app-notices').textContent, /Nothing is attached to detach/);
+});
+
+function remoteSetup(t, options) {
+  const h = setup(t, { attached: false, ...options });
+  Object.assign(h.session, { remoteAlias: 'vps', remoteAttachable: true, remoteAttachSessionId: 'A' });
+  h.w.remoteHostLabel = alias => alias === 'vps' ? 'Build server' : alias;
+  h.w.api.remoteStopSession = async (...args) => { h.calls.push(['remoteStop', ...args]); return { ok: true }; };
+  h.render();
+  return h;
+}
+
+test('B1 remote row Detach is accessible only while attached, including merged members and refresh', t => {
+  const h = remoteSetup(t, { merged: ['B'] });
+  const row = h.document.querySelector('#si-A');
+  assert.equal(row.classList.contains('has-detachable-tab'), true, 'remote attached row exposes Detach');
+  const button = row.querySelector('.session-detach-btn');
+  assert.equal(button.title, 'Detach (the session keeps running on Build server)');
+  assert.equal(button.getAttribute('aria-label'), button.title);
+  h.w.openSessions.set('B', { session: { ...h.session, sessionId: 'B' }, closed: false });
+  h.w.activePtyIds.add('B');
+  h.entry.closed = true;
+  h.w.activePtyIds.delete('A');
+  h.w.renderDefaultStatus = () => {};
+  loadAppFunctions(h.context, { declarations: ['_lastPtySignature'], functions: ['updateRunningIndicators'] });
+  h.w.updateRunningIndicators();
+  assert.equal(row.classList.contains('has-detachable-tab'), true, 'merged member remains detachable');
+  h.w.openSessions.get('B').closed = true;
+  h.w.activePtyIds.delete('B');
+  h.w.updateRunningIndicators();
+  assert.equal(row.classList.contains('has-detachable-tab'), false);
+  h.render();
+  assert.equal(h.document.querySelector('#si-A').classList.contains('has-detachable-tab'), false);
+});
+
+test('B1 remote card and header expose host-labelled Detach and hide after closure', t => {
+  const h = remoteSetup(t);
+  h.evalPublic('shortcuts.js');
+  h.evalPublic('grid-view.js');
+  h.w.wrapInGridCard('A');
+  const card = h.document.querySelector('.grid-card');
+  const button = card.querySelector('.grid-card-detach-btn');
+  assert.equal(button.style.display, '', 'remote card exposes Detach');
+  assert.equal(button.title, 'Detach (the session keeps running on Build server)');
+  assert.equal(button.getAttribute('aria-label'), button.title);
+  const holder = h.document.createElement('div');
+  holder.innerHTML = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
+  const controls = holder.querySelector('#terminal-header-session');
+  h.document.body.append(controls);
+  Object.assign(h.w, { activeSessionId: 'A', terminalStopBtn: controls.querySelector('#terminal-stop-btn'),
+    paintTerminalHeaderStatus() {}, updatePtyTitle() {}, backgroundActionReason: () => null });
+  loadAppFunctions(h.context, { functions: ['initTerminalDetachControl', 'updateTerminalHeader'] });
+  h.w.initTerminalDetachControl();
+  h.w.updateTerminalHeader();
+  const headerButton = controls.querySelector('#terminal-detach-btn');
+  assert.equal(headerButton.style.display, '', 'remote header exposes Detach');
+  assert.equal(headerButton.title, button.title);
+  assert.equal(headerButton.getAttribute('aria-label'), button.title);
+  const detached = [];
+  h.w.detachSession = id => detached.push(id);
+  card.rekeySessionId('B');
+  button.click();
+  headerButton.click();
+  assert.deepEqual(detached, ['B', 'A']);
+  h.entry.closed = true;
+  h.w.updateGridCardActivity('A', card, h.session);
+  h.w.updateTerminalHeader();
+  assert.equal(button.style.display, 'none');
+  assert.equal(headerButton.style.display, 'none');
+});
+
+test('B2 remote Detach calls only stopSession without confirmation and Undo follows the row head', async t => {
+  const h = remoteSetup(t, { merged: ['B'] });
+  Object.assign(h.session, { headSessionId: 'B', remoteAttachSessionId: 'B' });
+  h.w.api.stopSession = async id => {
+    h.calls.push(['tab', id]);
+    h.entry.closed = true;
+    return { ok: true, detached: true };
+  };
+  const opened = [];
+  h.w.openSession = (...args) => { opened.push(args); return true; };
+  h.render();
+  await h.document.querySelector('#si-A .session-detach-btn').onclick({ stopPropagation() {} });
+  assert.deepEqual(h.calls, [['tab', 'A']], 'remote Detach uses the local attach adapter only');
+  assert.equal(h.entry.detachRequested, true);
+  const undo = h.document.querySelector('.app-notice-action');
+  assert.equal(undo?.textContent, 'Undo');
+  assert.match(undo.parentElement.textContent, /keeps running on Build server/);
+  undo.click();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].length, 1, 'remote Undo uses ordinary row opening without background attach options');
+  assert.equal(opened[0][0].sessionId, 'B');
+  assert.equal(opened[0][0].remoteAlias, 'vps');
+});
+
+test('B2 remote Detach without remoteAttachable gives information without Undo', async t => {
+  const h = remoteSetup(t);
+  h.session.remoteAttachable = false;
+  await h.w.detachSession('A');
+  assert.deepEqual(h.calls, [['tab', 'A', undefined]]);
+  assert.equal(h.document.querySelector('.app-notice-action'), null);
+  assert.match(h.document.querySelector('#app-notices').textContent, /keeps running on Build server/);
+});
+
+test('B3 remote detach exit reads Detached with its host, while remote Stop reads Stopped', async t => {
+  const h = remoteSetup(t);
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.w.gridViewActive = false;
+  h.w.activeSessionId = null;
+  h.entry.detachRequested = true;
+  h.w.applyProcessExit('A', 0, null, true);
+  assert.equal(h.w.lastSessionExit('A').detached, true, 'requested remote detach is recorded');
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Detached');
+  assert.match(writes.at(-1), /session detached .*it keeps running on Build server/);
+  h.entry.closed = false;
+  delete h.entry.detachRequested;
+  h.w.activePtyIds.add('A');
+  await h.stop();
+  h.w.applyProcessExit('A', 0, null, true);
+  assert.equal(h.w.lastSessionExit('A').detached, false);
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
+  assert.match(writes.at(-1), /session stopped/);
+  assert.doesNotMatch(writes.at(-1), /keeps running/);
+});
+
+test('B4 remote row Stop confirms once and stops on the host without detaching locally', async t => {
+  const h = remoteSetup(t);
+  await h.stop();
+  assert.deepEqual(h.calls.map(call => call[0]), ['confirm', 'remoteStop']);
+  const question = h.calls[0][1];
+  assert.equal(question.title, 'Stop session?');
+  assert.equal(question.confirmLabel, 'Stop');
+  assert.equal(question.danger, true);
+  assert.match(question.message, /on Build server/);
+  assert.deepEqual(h.calls[1], ['remoteStop', 'vps', 'A']);
+  assert.equal(h.entry.detachRequested, undefined);
+});
+
+test('B3 a failed remote Detach followed by Stop still exits as Stopped', async t => {
+  const h = remoteSetup(t);
+  h.w.api.stopSession = async () => ({ ok: false, error: 'detach transport failed' });
+  await h.w.detachSession('A');
+  assert.equal(h.entry.detachRequested, undefined, 'failed Detach does not mark a later Stop as detached');
+  assert.ok(h.w.activePtyIds.has('A'));
+  assert.equal(h.document.querySelector('[role="alert"] .app-notice-action')?.textContent, 'Retry');
+  await h.stop();
+  h.w.gridViewActive = false;
+  h.w.activeSessionId = null;
+  h.w.applyProcessExit('A', 0, null, true);
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
 });

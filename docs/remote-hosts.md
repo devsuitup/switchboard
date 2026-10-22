@@ -246,7 +246,9 @@ answered. A session open in a tab keeps the terminal's own signals.
   seconds and follow the current local size once this exact attach is the only
   client left. Leaving a solo terminal restores the prior tmux options.
   Leaving the session ends the local ssh client only: the remote session keeps
-  running, and opening it again reattaches.
+  running, and opening it again reattaches. **Detach** on its sidebar row, grid
+  card or terminal header does this without asking. Its label names the host,
+  and the terminal reads **Detached**, with a banner saying where it keeps running.
 - **Any other session** opens its transcript in the read-only viewer.
 
 | Listed client's identity | Action |
@@ -285,6 +287,11 @@ Refresh only redraws the local buffer; it never resizes the ssh PTY.
 
 ## Stop, archive, delete
 
+- **Detach** disconnects an attached terminal without stopping the remote
+  session or asking for confirmation. On a merged row it detaches every open
+  remote part; the grid card and header detach only their own tab. A notice
+  offers **Undo** for 10 seconds when the session is attachable; Undo opens
+  the row's attachable part again. Otherwise the notice is information only.
 - **Stop** confirms once, naming the session and host for a single tab, or the
   count and locations of every running part for a merged row. It says the
   processes end and the conversation is kept and can be resumed. A host that
