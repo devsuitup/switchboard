@@ -117,6 +117,48 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
+for (const [state, hosted, label] of [['working', false, 'Unknown'], ['blocked', false, 'Unknown'], ['working', true, 'Active']]) {
+  test(`[767] ${hosted ? 'hosted' : 'non-hosted'} ${state} job reads ${label} consistently with Finished`, async t => {
+    const h = setup({ storage: { agentsGroupBy: 'state' } });
+    t.after(() => h.destroy());
+    const entry = { ...ROSTER[0], state, hosted };
+    h.setSnapshot({ daemonReachable: true, roster: [entry] });
+    await h.window.showAgentsView();
+    assert.equal(h.document.querySelector('.agents-group-label').textContent, label, 'group label follows hosting');
+    assert.equal(h.document.querySelector('.agents-row-state').textContent.trim().replace(/^\S+\s+/, ''), label);
+    assert.equal(h.window.agentStateMeta(entry).key, hosted ? 'working' : 'unknown');
+    assert.equal(h.document.getElementById('agents-viewer-count').textContent, hosted ? '1 running · 0 finished' : '0 running · 1 finished');
+    if (!hosted) {
+      assert.doesNotMatch(h.document.querySelector('.session-icon').title, /job (working|blocked)/);
+      const detail = h.window.backgroundActivityLabel(entry.sessionId, {}, null, { entry, selection: 'unique-head' });
+      assert.equal(detail.text, 'Unknown');
+      assert.match(detail.title, /job unknown/);
+      assert.doesNotMatch(h.window.agentRowIcon({ ...entry, sessionId: null }).title, /job (working|blocked)/);
+    }
+    const finished = h.document.getElementById('agents-show-finished');
+    finished.checked = false;
+    finished.dispatchEvent(new h.window.Event('change'));
+    assert.equal(h.document.querySelectorAll('.agents-row').length, hosted ? 1 : 0);
+  });
+}
+
+for (const [state, hosted, expected] of [
+  ['working', false, 'Unknown'], ['blocked', false, 'Unknown'],
+  ['working', true, 'working'], ['blocked', true, 'blocked'], ['done', true, 'done'],
+]) {
+  test(`[767b] ${hosted ? 'hosted' : 'non-hosted'} ${state} detail reads ${expected}`, async t => {
+    const h = setup();
+    t.after(() => h.destroy());
+    const entry = { ...ROSTER[0], state, jobState: state, hosted };
+    h.setSnapshot({ daemonReachable: true, roster: [entry] });
+    await h.window.showAgentsView();
+    h.document.querySelector('.agents-row').click();
+    const meta = h.document.querySelector('.agents-detail-meta').textContent;
+    assert.ok(meta.startsWith(`job ${entry.id} · ${expected} ·`), `detail state follows hosting: ${meta}`);
+    if (!hosted) assert.match(h.document.querySelector('.agents-row-state').textContent, /Unknown/);
+  });
+}
+
 test('#563 every AGENT_STATE_META key reads its exact Title Case word', async t => {
   const h = setup();
   t.after(() => h.destroy());

@@ -74,6 +74,7 @@ function normalizeAgentsGroupBy(value) {
 
 function agentStateGroupKey(entry) {
   if (entry.kind === 'interactive') return 'external';
+  if (['working', 'blocked'].includes(entry.state) && !agentJobIsLive(entry)) return 'unknown';
   if (entry.state === 'done' && agentJobIsLive(entry)) return 'idle';
   const known = entry.state && entry.state !== 'external' && entry.state !== 'unknown' && Object.hasOwn(AGENT_STATE_META, entry.state);
   return known ? entry.state : 'unknown';
@@ -174,7 +175,7 @@ function agentRowIcon(entry) {
   let snapshot = typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, ports, row, selection) : { ...ports, headTurn: 'unknown' };
   if (entry.kind === 'background' && !foreground) snapshot = projectBackgroundActivity(entry, snapshot);
   const icon = renderSessionIcon(snapshot);
-  const title = entry.kind === 'background' && entry.state === 'blocked'
+  const title = entry.kind === 'background' && agentStateGroupKey(entry) === 'blocked'
     ? entry.sessionId && backgroundActivityLabel(entry.sessionId, snapshot, row, selection)?.title || `${icon.title} · job blocked` : icon.title;
   return { slotClass: icon.slotClasses[0], live, glyph: icon.glyph, title };
 }
@@ -203,7 +204,10 @@ function selectBackgroundActivity(sessionId, row) {
   row ||= typeof localActivityRow === 'function' ? localActivityRow(sessionId) : null;
   row ||= { sessionId };
   const head = lower(row.headSessionId || row.sessionId || sessionId);
-  const finish = (entry, selection, unavailable = false) => ({ entry: entry || null, selection,
+  const superseded = entry => entry && ['working', 'blocked'].includes(entry.state) && !agentJobIsLive(entry)
+    && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId));
+  const finish = (entry, selection, unavailable = false) => superseded(entry)
+    ? { entry: null, selection: 'none', unavailable: false, source: 'none' } : ({ entry: entry || null, selection,
     unavailable, source: entry ? entry.taskEvidence?.valid === true ? 'job-valid' : 'job-invalid' : unavailable ? 'unavailable' : 'none' });
   const exact = (jobId, target, selection) => {
     const entry = bgActivityEntries.get(lower(jobId));
@@ -220,7 +224,7 @@ function selectBackgroundActivity(sessionId, row) {
   if (attaches.size > 1) return finish(null, 'attach', true);
   if (attaches.size === 1) return attaches.values().next().value;
   if (row.identityJobId && (!row.identitySessionId || lower(row.identitySessionId) === head)) return exact(row.identityJobId, row.identitySessionId || 'missing', 'identity');
-  const entries = [...bgActivityEntries.values()].filter(e => lower(e.sessionId) === head);
+  const entries = [...bgActivityEntries.values()].filter(e => lower(e.sessionId) === head && !superseded(e));
   return entries.length === 1 ? finish(entries[0], 'unique-head') : finish(null, 'none', entries.length > 1);
 }
 
@@ -263,19 +267,19 @@ function backgroundActivityLabel(sessionId, snapshot, row, selection) {
   selection ||= selectBackgroundActivity(sessionId, row);
   const entry = selection.entry;
   if (!entry) {
-    const background = selection.unavailable || row?.bgJobId;
-    return background ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null;
+    return selection.unavailable ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null;
   }
   if (backgroundActivityIsForeground(sessionId, row, selection)) return { text: renderSessionIcon(snapshot).title, title: '' };
+  const state = ['working', 'blocked'].includes(entry.state) ? agentStateGroupKey(entry) : entry.state;
   const valid = entry.taskEvidence?.valid === true;
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const kinds = valid ? (entry.taskEvidence.inFlightKinds || []).map(k => k.label).join(', ') : '';
   const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toLocaleString()} (job metadata)${kinds ? ` · ${kinds}` : ''}` : 'Job activity unavailable';
-  const title = `${renderSessionIcon(snapshot).title} · job ${entry.state || 'unknown'}\n${source}`;
-  if (entry.state === 'done' && agentJobIsLive(entry)) return { text: 'Idle', title };
-  const text = entry.state === 'blocked' ? 'Blocked' : terminal ? `Job ${entry.state}`
-    : entry.state === 'working' && snapshot.attention ? 'Needs attention' : !valid ? 'Activity unavailable'
-    : entry.state === 'working' ? '' : 'Activity unavailable';
+  const title = `${renderSessionIcon(snapshot).title} · job ${state || 'unknown'}\n${source}`;
+  if (state === 'done' && agentJobIsLive(entry)) return { text: 'Idle', title };
+  const text = state === 'unknown' ? 'Unknown' : state === 'blocked' ? 'Blocked' : terminal ? `Job ${state}`
+    : state === 'working' && snapshot.attention ? 'Needs attention' : !valid ? 'Activity unavailable'
+    : state === 'working' ? '' : 'Activity unavailable';
   return { text, title };
 }
 
@@ -475,7 +479,9 @@ function renderAgentDetail(entry) {
   const btn = (verb, label, enabled) =>
     `<button type="button" class="control-btn agents-verb-btn" data-verb="${verb}" title="${agentsEscapeAttr(reason(verb))}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
   const meta = [];
-  if (entry.id) meta.push('job ' + entry.id + (entry.jobState || entry.state ? ' · ' + (entry.jobState || entry.state) : ''));
+  const state = ['working', 'blocked'].includes(entry.state) && agentStateGroupKey(entry) === 'unknown'
+    ? 'Unknown' : entry.jobState || entry.state;
+  if (entry.id) meta.push('job ' + entry.id + (state ? ' · ' + state : ''));
   if (Number.isFinite(entry.tokens)) meta.push(formatTokens(entry.tokens) + ' tokens');
   if (entry.model) meta.push(entry.model);
   if (Number.isFinite(entry.startedAt)) meta.push('started ' + new Date(entry.startedAt).toLocaleString());

@@ -369,6 +369,17 @@ is finished. Busy/head-turn and blocked waiting still follow turn evidence.
 `runVerb`, the fresh conversation check and `liveJobCheck` use the same hosting
 rule, including descriptors that changed after the last snapshot.
 
+A non-hosted working/blocked job is grouped and labelled `Unknown` in Agents,
+including the detail pane's job state, matching its finished count and Finished
+filter (#767). Its labels and tooltip do not claim an active or blocked job.
+Without a PTY here, activity selection ignores these stale jobs through marker,
+identity and unique-head routes. The activity label and initial sidebar paint
+respect that empty selection, so the interactive conversation keeps its normal
+descriptor and transcript activity. A missing marked job still reads
+`Activity unavailable`.
+Owned PTYs retain their existing foreground projection; hosted jobs and
+finished done/stopped/failed activity keep their existing selection rules.
+
 | Display / verb | Hosted (including idle done) | Finished |
 |---|---|---|
 | State label after turn ends | Idle | done |

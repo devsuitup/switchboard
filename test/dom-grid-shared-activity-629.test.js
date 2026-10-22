@@ -40,7 +40,7 @@ test('#563 sidebar and grid distinguish finished jobs from unknown liveness on r
   ctx.window.refreshSidebar = render;
   const card = create();
   for (const [state, title] of [[null, 'Liveness unknown'], ['unrecognized', 'Liveness unknown'],
-    ['working', 'Liveness unknown'], ['blocked', 'Liveness unknown'],
+    ['working', 'Turn state unavailable'], ['blocked', 'Turn state unavailable'],
     ['done', 'Not running'], ['stopped', 'Not running'], ['failed', 'Not running']]) {
     ctx.window.applyAgentsSnapshot({ roster: [{ kind: 'background', id: 'job-629', sessionId: session.sessionId,
       state, hosted: false, status: null }], daemonReachable: true });
@@ -52,8 +52,9 @@ test('#563 sidebar and grid distinguish finished jobs from unknown liveness on r
       }
       const snapshot = ctx.window.storedActivitySnapshot(session.sessionId);
       const projected = ctx.window.backgroundActivitySnapshot(session.sessionId, snapshot);
-      assert.equal(projected.liveness, title === 'Not running' ? 'dead' : 'unknown');
+      assert.equal(projected.liveness, ['working', 'blocked'].includes(state) ? 'alive' : title === 'Not running' ? 'dead' : 'unknown');
       assert.equal(projected.stale, title === 'Not running');
+      if (['working', 'blocked'].includes(state)) assert.equal(ctx.window.selectBackgroundActivity(session.sessionId).entry, null);
     };
     check();
     render();
