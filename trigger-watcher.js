@@ -1377,7 +1377,6 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     return;
   }
 
-  const statusContext = ctx;
   let handle = resolveHandle(sessionEntry);
   if (ctx.pinDelivery && sessionEntry.session) {
     const pinned = ctx.pinDelivery(sessionId, sessionEntry, chain !== undefined);
@@ -1460,13 +1459,15 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   if (hasKey) {
-    const status = readCliStatusRaw({ getCliStatus: () => statusContext.getCliStatus?.(sessionId, delivery) })?.status ?? 'unknown';
-    if (status !== 'waiting') {
-      await writeResult({ ok: false, error: ERROR_NOT_SENT, reason: `session not waiting on a question or permission (status: ${status})`, sessionId });
+    if (!delivery) {
+      await writeResult({ ok: false, error: ERROR_NOT_SENT, reason: 'session not waiting on a dialog (status: unknown)', sessionId });
       return;
     }
-    if (delivery) delivery.beginStep(key);
-    try { handle.write('\x1b'); }
+    try {
+      delivery.prepareKey(key);
+      delivery.beginStep(key);
+      handle.write('\x1b');
+    }
     catch (err) {
       if (!err.deliveryRefusal) throw err;
       await writeResult(deliveryFailure(err));
