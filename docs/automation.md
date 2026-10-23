@@ -192,6 +192,29 @@ clears that schedule's error.
 
 ## Triggers
 
+### Dismiss a question or permission dialog
+
+To send one Escape to a local session waiting on a question or permission,
+write a trigger such as:
+
+```json
+{ "sessionId": "<session-id>", "key": "escape" }
+```
+
+The target must be a live local PTY tab and its CLI status must read `waiting`
+at sending time. Otherwise nothing is written. Remote sessions are unsupported,
+even when open in a tab. Omit `command`, `chain` and `wait`: combining any of
+them with `key` is refused. Only `"escape"` is accepted as a key value. Escape
+inside a `command` string remains forbidden.
+
+The usual `processed/<trigger-id>.result.json` reports
+`{ "ok": true, "sessionId": "<session-id>", "key": "escape", "submitted": "no", "steps_total": 0 }`
+when exactly one Escape byte was written, without Enter. This does not confirm
+that the CLI closed the dialog. `submitted: "no"` means no command was submitted.
+A refusal has `ok: false` and a `reason`, including
+`session not waiting on a question or permission (status: <s>)`,
+`session not found`, or `escape is not supported on remote sessions`.
+
 The trigger watcher lets a script type into an open session's terminal. Drop a
 JSON file into `~/.switchboard/triggers/` (or `SWITCHBOARD_TRIGGERS_DIR`):
 
@@ -206,6 +229,8 @@ JSON file into `~/.switchboard/triggers/` (or `SWITCHBOARD_TRIGGERS_DIR`):
 
 - `sessionId` — the target; it must be open in Switchboard, with a live process.
   Any open session qualifies, plain terminals included.
+- `key` — `"escape"` sends one Escape to a waiting local CLI tab; see above.
+  It cannot be combined with `command`, `chain` or `wait`.
 - `command` — written to the terminal, followed by a separate Enter keypress. At
   most 4 KB, and no CR, LF, NUL or ESC.
 - `wait` — `"none"` (the default) writes now: it does not wait for the session

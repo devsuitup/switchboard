@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- An automation trigger can send one Escape to dismiss a question or permission dialog in a local session tab. The session must still be waiting when the key is sent. (#780)
+
 ### Changed
 - In the Agents view, Attach reads Go to tab when the agent is already open in a tab, and goes to that tab. (#546)
 - A remote session open in a terminal can now be detached: Detach closes the terminal and leaves the session running on its host, and it reads Detached instead of Stopped. (#546)

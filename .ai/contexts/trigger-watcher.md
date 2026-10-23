@@ -14,6 +14,40 @@
 
 ## Public surface
 
+### Escape key trigger
+
+`{ "sessionId": "<id>", "key": "escape" }` sends exactly one `\x1b` byte to
+a live local PTY tab whose CLI descriptor reads `waiting` immediately before
+the write. It sends no Enter, text, retry or composer cleanup. It uses the same
+session FIFO, pinned delivery, tab mutex, liveness and optional `expectedCwd`
+guard as command delivery; it skips command readiness and composer waits.
+Descriptor reads reuse `readCliStatusRaw`, including the pinned effective id,
+without reusing a cached dialog observation. Missing or unreadable status fails
+closed as `unknown`.
+
+`key` and `command` are mutually exclusive. The only supported key value is
+`"escape"`; `chain` and an explicit `wait` (even `"none"`) are refused with a
+reason. Remote sessions are refused, including those attached in a tab. The
+existing ban on control characters, including `\x1b`, in `command` is unchanged.
+
+Success is `{ ok: true, sessionId, key: "escape", submitted: "no", steps_total: 0 }`:
+`ok` means the key was written, while `submitted` and `steps_total` describe
+command submission (no command was submitted). No reaction is observed or
+claimed, and no `left_waiting` field is emitted. Refusals have `ok: false`,
+`submitted: "no"`, `steps_total: 0`, `sessionId`, `error` and an explicit `reason`.
+The principal reasons are:
+
+- `session not waiting on a question or permission (status: <s>)`
+- `session not found`
+- `escape is not supported on remote sessions`
+- `key and command are mutually exclusive`
+- `unsupported key: only "escape" is supported`
+- `key does not support chain`
+- `key does not support wait`
+
+Other admission, liveness, target and ownership failures retain the existing
+delivery errors. Tests: `test/trigger-escape-key.test.js`.
+
 ### `start(ctx)` → `{ close() }`
 
 Starts the watcher.  Call once at app boot.
