@@ -27,8 +27,11 @@ write, before calling the underlying PTY handle. Both checks require
 `writer.status === 'waiting'`, ownership `mine` and a writer session id matching
 the pinned effective target id. They use the observed writer rather than
 `getCliStatus`'s fs.watch-fed cache. Each queued trigger obtains its own fresh
-observation. Missing or unreadable observations fail closed as `unknown`;
-tabs without an observed writer, including attach tabs, are refused. The
+observation. Supported observations without a readable descriptor fail closed
+as `unknown`. Escape triggers are unavailable on macOS, for plain terminals
+and for remote sessions. Unsupported observation and ineligible tabs, including
+attach tabs, return the distinct unsupported-platform-or-tab reason below.
+Neither refusal writes any bytes. The
 descriptor can still change after the final inspection; the check and the CLI
 process are not an atomic operation. Command delivery retains its existing
 ownership and availability behaviour.
@@ -51,6 +54,7 @@ claimed, and no `left_waiting` field is emitted. Refusals have `ok: false`,
 The principal reasons are:
 
 - `session not waiting on a dialog (status: <s>)`
+- `escape needs a session whose state can be observed here (unsupported on this platform or tab)`
 - `session not found`
 - `escape is not supported on remote sessions`
 - `key and command are mutually exclusive`

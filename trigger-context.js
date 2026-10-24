@@ -247,6 +247,9 @@ function createTriggerContext(deps) {
       const outcome = inspect();
       if (boundedWrite && Number.isFinite(binding.deadline) && Date.now() >= binding.deadline) fail('the ownership inspection exhausted the delivery deadline; no further bytes were written', null, true);
       if (binding.key === 'escape') {
+        if (!own || binding.observation?.supported === false) {
+          fail('escape needs a session whose state can be observed here (unsupported on this platform or tab)');
+        }
         const writer = binding.observation?.writer;
         const status = writer?.status ?? 'unknown';
         if (status !== 'waiting') fail(`session not waiting on a dialog (status: ${status})`);

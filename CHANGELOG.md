@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
-- An automation trigger can send one Escape to a local session tab waiting on a dialog: a question, a permission prompt or another CLI dialog. The observed writer must belong to the target session and still be waiting when the key is sent. (#780)
+- An automation trigger can send one Escape to a local session tab waiting on a dialog: a question, a permission prompt or another CLI dialog. The observed writer must belong to the target session and still be waiting when the key is sent; this is unavailable on macOS, for plain terminals or for remote sessions. (#780)
 
 ### Changed
 - In the Agents view, Attach reads Go to tab when the agent is already open in a tab, and goes to that tab. (#546)

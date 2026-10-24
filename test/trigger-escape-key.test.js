@@ -26,7 +26,7 @@ async function run(payload, options = {}) {
     if (options.busyAfterWrite) writerStatus = 'busy';
   } };
   const session = { pty: ptyProcess, cwd: tmp, generation: 1, realSessionId: id,
-    host: options.attachedRemote ? 'vps' : null, isAttach: options.attach };
+    host: options.attachedRemote ? 'vps' : null, isAttach: options.attach, isPlainTerminal: options.plainTerminal };
   const desc = { status: options.status ?? 'waiting', statusUpdatedAt: Date.now() };
   const getCliStatus = () => {
     if (options.descriptorThrows) throw new Error('descriptor unreadable');
@@ -37,7 +37,8 @@ async function run(payload, options = {}) {
     getCliStatus, isPtyAlive: () => !options.dead,
     observeTabWriter: () => {
       if (options.descriptorThrows || options.observationThrows) throw new Error('descriptor unreadable');
-      return { writer: options.noDescriptor || options.noWriter ? null : { sessionId: writerId, status: writerStatus }, identity: 'p:1' };
+      if (options.unsupportedObservation) return { supported: false };
+      return { supported: true, writer: options.noDescriptor || options.noWriter ? null : { sessionId: writerId, status: writerStatus }, identity: 'p:1' };
     },
     cliSessionState: { deliveryPtyStart: () => null, findDeliveryTab: () => ({}), refreshProcessTable: async () => {} },
   }) : {
@@ -94,6 +95,19 @@ test('waiting local session receives exactly one Escape without Enter', async ()
   assert.equal(result.key, 'escape');
   assert.equal(result.sessionId, id);
 });
+
+for (const [name, options] of [
+  ['unsupported observation', { unsupportedObservation: true }],
+  ['plain terminal', { plainTerminal: true }],
+]) {
+  test(`${name} refuses Escape with an unsupported reason and no write`, async () => {
+    const { result, written } = await run({}, options);
+    assert.deepEqual(written, []);
+    assert.equal(result.ok, false);
+    assert.equal(result.submitted, 'no');
+    assert.equal(result.reason, 'escape needs a session whose state can be observed here (unsupported on this platform or tab)');
+  });
+}
 
 for (const status of ['idle', 'busy', 'shell']) {
   test(`${status} session refuses Escape with its current status`, async () => {
@@ -186,7 +200,9 @@ for (const options of [{ noWriter: true }, { observationThrows: true }, { attach
     assert.deepEqual(written, []);
     assert.equal(result.ok, false);
     assert.equal(result.submitted, 'no');
-    assert.equal(result.reason, 'session not waiting on a dialog (status: unknown)');
+    assert.equal(result.reason, options.attach
+      ? 'escape needs a session whose state can be observed here (unsupported on this platform or tab)'
+      : 'session not waiting on a dialog (status: unknown)');
   });
 }
 
