@@ -862,10 +862,11 @@ function deliveryAncestry(raw, ptyPid, snapshot) {
     }
     let parent;
     try { parent = readParentPid(current); } catch { return { state: 'unknown' }; }
-    if (parent == null) return { state: 'unknown' };
+    if (!Number.isInteger(parent)) return { state: 'unknown' };
     if (parent <= 1) return { state: uncertainTree ? 'unknown' : 'outside' };
     if (processTableEnabled) {
       const child = tableEntry(current), above = tableEntry(parent);
+      if (processTableFresh() && child?.created != null && !above) return { state: uncertainTree ? 'unknown' : 'outside' };
       if (!processTableFresh() || !child || !above || child.created == null || above.created == null) { uncertain = true; uncertainTree = true; }
       else if (child.created < above.created) return { state: 'unknown' };
     } else {

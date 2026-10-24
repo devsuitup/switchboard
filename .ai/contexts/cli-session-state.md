@@ -583,6 +583,33 @@ pending row, it is saved in the working set as a fresh entry
 conversation stays in the list as an ordinary, resumable session — it is a
 real transcript on disk.
 
+## Delivery ancestry on Windows
+
+`observeTabWriter` checks every interactive descriptor against the target PTY
+using `deliveryAncestry`. Exactly one `mine` and no `unknown` selects the writer;
+an unrelated tree can reach `outside` without vetoing that selection.
+In a fresh process table, a present row with a valid parent PID whose row is
+absent has reached an exited parent: the walk returns `outside`. This includes
+Switchboard or Explorer keeping the PID of a launcher that has already exited.
+The live target PTY is present in the table, so its own chain reaches `mine`
+before this root. A stale table, a missing or unparsable parent in a present row,
+unknown creation times, reused PID ordering or earlier uncertain ancestry still
+keeps the verdict `unknown`.
+
+This distinction affects command triggers as well as Escape. Direct tab IDs
+allow command delivery with `unknown` ownership; aliases and descriptor fallback
+require proof. With several Windows sessions and an exited launcher, the root
+verdict now lets fallback find the tab and aliases prove `mine`. Direct command
+delivery still works. Escape requires a freshly observed `waiting` writer and
+ownership `mine`; an idle writer reports `status: idle`, and a stale process
+table still refuses it with `status: unknown`.
+
+`test/cli-session-state-windows-tabs.test.js` covers two and three interactive
+descriptors under separate Git Bash PTYs sharing an Electron or Explorer root
+whose parent is absent. It exercises writer lookup, the filesystem trigger
+watcher, pinned command delivery, stale tables and malformed parent rows using
+disposable descriptors and an injected process table.
+
 ## Canary tests
 
 Task lifecycle records are parsed off main by `workers/task-records.js` and
