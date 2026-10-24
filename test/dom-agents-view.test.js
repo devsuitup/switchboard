@@ -86,6 +86,7 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'morphdom', 'dist', 'morphdom-umd.js'), 'utf8'), dom.getInternalVMContext(), { filename: path.join(PUBLIC, '../node_modules/morphdom/dist/morphdom-umd.js') });
   evalFile(dom, path.join(PUBLIC, 'utils.js'));
   evalFile(dom, path.join(PUBLIC, 'session-state.js'));
+  evalFile(dom, path.join(PUBLIC, 'stop-session-ui.js'));
   evalFile(dom, path.join(PUBLIC, 'memory-workfiles-view.js'));
   evalFile(dom, path.join(PUBLIC, 'agents-view.js'));
   if (settingsPanel) {

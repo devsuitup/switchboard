@@ -147,6 +147,9 @@ function renderer(t) {
   window.escapeHtml = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   window.sessionMap = new Map();
   window.openSessions = new Map();
+  loadAppFunctions(dom.getInternalVMContext(), {
+    sourcePath: path.join(__dirname, '..', 'public', 'stop-session-ui.js'), functions: ['runAttachedJobVerb'],
+  });
   window.showJsonlViewer = () => { throw new Error('missing transcript must not open the viewer'); };
   return { window, context: dom.getInternalVMContext(), ...loadAppFunctions(dom.getInternalVMContext(), {
     sourcePath: path.join(__dirname, '..', 'public', 'agents-view.js'),

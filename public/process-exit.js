@@ -47,9 +47,17 @@ function exitBannerColour(exit) {
   return exit.stopped || (exit.exitCode === 0 && !exit.signal) ? '\x1b[2m' : '\x1b[33m';
 }
 
+function writeSessionExitBanner(entry, exit) {
+  try {
+    entry.terminal.write(
+      `\r\n${exitBannerColour(exit)}── session ${exitBannerPhrase(exit)} — ${exit.detached ? entry.session?.remoteAlias ? `it keeps running on ${remoteHostLabel(entry.session.remoteAlias)}` : 'it keeps running in the background' : 're-click this session in the sidebar to relaunch, or click another to dismiss'} ──\x1b[0m\r\n`
+    );
+  } catch {}
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     noteSessionExit, forgetSessionExit, lastSessionExit,
-    processExitLabel, lifecycleLabel, exitBannerPhrase, exitBannerColour,
+    processExitLabel, lifecycleLabel, exitBannerPhrase, exitBannerColour, writeSessionExitBanner,
   };
 }

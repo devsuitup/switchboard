@@ -173,6 +173,79 @@ test('#782 local non-attach Stop keeps its Stopped banner', async t => {
   assert.match(writes.at(-1), /session stopped/);
 });
 
+for (const source of ['sidebar', 'Agents view']) {
+  for (const failure of ['non-ok result', 'rejection', 'missing result']) {
+    test(`#782b ${source} restores an exit recorded during a failed Stop (${failure})`, async t => {
+      const h = setup(t);
+      const writes = [];
+      h.entry.terminal.write = data => writes.push(data);
+      if (source === 'Agents view') h.evalPublic('agents-view.js');
+      h.w.refreshAgentsRoster = async () => {};
+      let duringLabel;
+      h.w.api.bgAgentVerb = async () => {
+        h.w.gridViewActive = false;
+        h.w.activeSessionId = null;
+        h.w.applyProcessExit('A', 7, null, false);
+        duringLabel = h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') });
+        if (failure === 'rejection') throw new Error('job stop rejected');
+        return failure === 'missing result' ? undefined : { ok: false, error: 'job stop refused' };
+      };
+      if (source === 'sidebar') await h.stop();
+      else await h.w.runAgentVerb('stop', { id: 'abcdef12', sessionId: 'A', attachedHere: true });
+      assert.equal(duringLabel, 'Stopped', 'Stop intent applies while awaiting the job verb');
+      assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Exited (code 7)');
+      assert.match(writes.at(-1), /session exited \(code 7\)/);
+      assert.ok(writes.at(-1).startsWith('\r\n\x1b[33m'));
+      assert.equal(h.entry.jobEnding, undefined);
+      assert.equal(h.calls.some(call => call[0] === 'tab'), false);
+    });
+  }
+
+  test(`#782b ${source} refuses Detach while Stop awaits the job verb`, async t => {
+    const h = setup(t);
+    const writes = [];
+    h.entry.terminal.write = data => writes.push(data);
+    if (source === 'Agents view') h.evalPublic('agents-view.js');
+    h.w.refreshAgentsRoster = async () => {};
+    let release, started;
+    const verbStarted = new Promise(resolve => { started = resolve; });
+    h.w.api.bgAgentVerb = () => {
+      started();
+      return new Promise(resolve => { release = resolve; });
+    };
+    const stopping = source === 'sidebar' ? h.stop()
+      : h.w.runAgentVerb('stop', { id: 'abcdef12', sessionId: 'A', attachedHere: true });
+    await verbStarted;
+    await h.w.detachSession('A');
+    const detachedDuringStop = h.calls.some(call => call[0] === 'tab');
+    release({ ok: true });
+    await stopping;
+    assert.equal(detachedDuringStop, false, 'Detach must not close the client while Stop is in flight');
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 0, null, true);
+    assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
+    assert.match(writes.at(-1), /session stopped/);
+  });
+}
+
+test('#782b Agents view Stop labels an early attach exit Stopped', async t => {
+  const h = setup(t);
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.evalPublic('agents-view.js');
+  h.w.refreshAgentsRoster = async () => {};
+  h.w.api.bgAgentVerb = async () => {
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 0, null, false);
+    return { ok: true };
+  };
+  await h.w.runAgentVerb('stop', { id: 'abcdef12', sessionId: 'A', attachedHere: true });
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
+  assert.match(writes.at(-1), /session stopped/);
+});
+
 test('A5 a refused job check leaves a persistent reason without asking or executing', async t => {
   const h = setup(t);
   h.w.api.checkBgAgentVerb = async () => ({ ok: false, error: 'conversation is running outside' });

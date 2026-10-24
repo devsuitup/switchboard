@@ -905,6 +905,11 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     pollActiveSessions();
     return;
   }
+  if (entry?.jobVerbPending) {
+    entry.jobVerbPending.exit = { exitCode, signal,
+      stopped: stopped || entry.jobVerbPending.previousEnding === 'stop',
+      detached: !!(stopped && !entry.jobVerbPending.previousEnding) };
+  }
   stopped ||= !!(entry?.attach && !entry.session?.remoteAlias && entry.jobEnding === 'stop');
   noteSessionExit(sessionId, exitCode, signal, stopped, !!(stopped && ((entry?.attach && !entry.jobEnding) || (entry?.session?.remoteAlias && entry.detachRequested))));
   if (typeof setSessionMcpState === 'function' && typeof filePanelState !== 'undefined' && filePanelState.get(sessionId)) setSessionMcpState(sessionId, 'off');
@@ -922,11 +927,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     // and read any error output it printed (claude / devbox / shell stderr).
     // Without this, a fast-failing pre-launch command would tear down the
     // terminal before the user could read the error.
-    try {
-      entry.terminal.write(
-        `\r\n${exitBannerColour(exit)}── session ${exitBannerPhrase(exit)} — ${exit.detached ? entry.session?.remoteAlias ? `it keeps running on ${remoteHostLabel(entry.session.remoteAlias)}` : 'it keeps running in the background' : 're-click this session in the sidebar to relaunch, or click another to dismiss'} ──\x1b[0m\r\n`
-      );
-    } catch {}
+    writeSessionExitBanner(entry, exit);
   }
 
   // Plain terminal sessions are ephemeral — destroy immediately and remove from
@@ -1330,11 +1331,10 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
     const id = target.sessionId;
     const entry = openSessions.get(id);
     const previousDetachRequested = entry?.detachRequested;
-    const previousJobEnding = entry?.jobEnding;
     try {
       if (target.job && !target.notHosted) {
-        if (target.attachedHere && entry && !entry.closed) entry.jobEnding = 'stop';
-        const result = await window.api.bgAgentVerb('stop', target.jobId);
+        const result = target.attachedHere ? await runAttachedJobVerb('stop', target.jobId, id)
+          : await window.api.bgAgentVerb('stop', target.jobId);
         if (!result?.ok) throw new Error(result?.error || 'The background stop backend is unavailable');
         target.jobStopped = true;
       }
@@ -1358,7 +1358,6 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
       if (target.job && !target.notHosted && typeof refreshAgentsRoster === 'function') refreshAgentsRoster();
     } catch (error) {
       if (target.remote && entry) entry.detachRequested = previousDetachRequested;
-      if (target.job && !target.jobStopped && entry) entry.jobEnding = previousJobEnding;
       failures.push(`Part ${id} ${target.where}: ${error?.message || error || 'unknown error'}`);
       failedTargets.push(target);
       continue;
@@ -1387,6 +1386,11 @@ async function detachSession(sessionOrId, btn, retryTargets) {
   const sessionId = isRow ? sessionOrId.sessionId : sessionOrId;
   const openEntry = openSessions.get(sessionId);
   const session = isRow ? sessionOrId : { ...(sessionMap.get(sessionId) || openEntry?.session), sessionId, mergedMemberIds: [] };
+  if ((isRow ? rowSessionIds(session) : [sessionId]).some(id => openSessions.get(id)?.jobVerbPending)) {
+    showAppNotice({ id: sessionActionNoticeId('Detach', session), kind: 'info',
+      message: 'A background job action is in progress. Wait for it to finish before detaching.' });
+    return;
+  }
   const plan = planSessionDetach(session, { tabOnly: !isRow, retryTargets });
   if (!plan.targets.length) {
     showAppNotice({ id: sessionActionNoticeId('Detach', session), kind: 'info', message: 'Nothing is attached to detach.' });
