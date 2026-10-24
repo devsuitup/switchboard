@@ -243,8 +243,20 @@ function createTriggerContext(deps) {
       if (boundedWrite && Number.isFinite(binding.deadline) && Date.now() >= binding.deadline) fail('the delivery deadline passed; no further bytes were written', null, true);
       if (!valid()) fail('the pinned tab/PTY generation binding changed; no further bytes were written');
       if (!(isPtyAlive ? isPtyAlive(pty) : entry.handle.isAlive())) fail('the pinned tab process exited; no further bytes were written');
+      if (binding.key === 'escape') binding.observation = null;
       const outcome = inspect();
       if (boundedWrite && Number.isFinite(binding.deadline) && Date.now() >= binding.deadline) fail('the ownership inspection exhausted the delivery deadline; no further bytes were written', null, true);
+      if (binding.key === 'escape') {
+        if (!own || binding.observation?.supported === false) {
+          fail('escape needs a session whose state can be observed here (unsupported on this platform or tab)');
+        }
+        const writer = binding.observation?.writer;
+        const status = writer?.status ?? 'unknown';
+        if (status !== 'waiting') fail(`session not waiting on a dialog (status: ${status})`);
+        if (outcome.outcome !== 'mine' || !writer || normalizeSessionId(writer.sessionId) !== binding.effectiveId) {
+          fail('ownership of the Escape target writer is not mine; nothing was written');
+        }
+      }
       if (outcome.outcome === 'other') fail(outcome.reason);
       if (outcome.outcome === 'unknown' && entry.keyKind !== 'direct' && !binding.reset) fail('ownership of the pinned alias writer is unknown; no further bytes were written');
       return outcome;
@@ -280,6 +292,7 @@ function createTriggerContext(deps) {
       check();
     };
     binding.beginStep = command => { binding.resetCompletionObserved = false; binding.step = { command, text_written: false, enter_written: false, written: false }; };
+    binding.prepareKey = key => { binding.key = key; check(); };
     binding.resetCompleted = () => { inspect(); return binding.resetCompletionObserved; };
     binding.readId = () => {
       const observed = inspect();

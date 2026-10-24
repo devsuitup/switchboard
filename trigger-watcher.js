@@ -1175,7 +1175,8 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   // ── 3. Validate shape ─────────────────────────────────────────────────────
-  const { sessionId, command, chain, wait = 'none', timeout_ms, expectedCwd } = trigger;
+  const { sessionId, command, key, chain, wait = 'none', timeout_ms, expectedCwd } = trigger;
+  const hasKey = Object.hasOwn(trigger, 'key');
 
   if (typeof sessionId !== 'string' || !sessionId) {
     await writeResult({ ok: false, error: 'missing required field: sessionId', sessionId: sessionId || null });
@@ -1188,6 +1189,17 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   const budgetStarted = Date.now();
+
+  if (hasKey) {
+    const reason = command !== undefined ? 'key and command are mutually exclusive'
+      : key !== 'escape' ? 'unsupported key: only "escape" is supported'
+        : chain !== undefined ? 'key does not support chain'
+          : trigger.wait !== undefined ? 'key does not support wait' : null;
+    if (reason) {
+      await writeResult({ ok: false, error: ERROR_NOT_SENT, reason, sessionId });
+      return;
+    }
+  }
 
   // An unknown `wait` is refused before anything is written: falling back to
   // 'none' would submit immediately into a session that asked to be waited for.
@@ -1210,7 +1222,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   }
 
   // Must have either command or chain
-  if (command === undefined && chain === undefined) {
+  if (!hasKey && command === undefined && chain === undefined) {
     await writeResult({ ok: false, error: 'missing required field: command or chain', sessionId });
     return;
   }
@@ -1322,6 +1334,10 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     const remote = ctx.remote;
     if (remote) {
       const snapshot = remote.lookup(sessionId);
+      if (hasKey && snapshot) {
+        await writeResult({ ok: false, error: ERROR_NOT_SENT, reason: 'escape is not supported on remote sessions', sessionId });
+        return;
+      }
       const failure = remoteLookupFailure(snapshot, sessionId, false);
       if (snapshot) {
         await writeResult(failure || await processRemoteTrigger(ctx, snapshot, { sessionId, command, chain, wait, expectedCwd, timeoutMs: resolvedTimeoutMs }));
@@ -1351,9 +1367,14 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     }
     if (!sessionEntry) {
       ctx.log.warn('[trigger-watcher] Session not found:', sessionId);
-      await writeResult({ ok: false, error: 'session not found', sessionId });
+      await writeResult({ ok: false, error: 'session not found', ...(hasKey ? { reason: 'session not found' } : {}), sessionId });
       return;
     }
+  }
+
+  if (hasKey && sessionEntry.session?.host != null) {
+    await writeResult({ ok: false, error: ERROR_NOT_SENT, reason: 'escape is not supported on remote sessions', sessionId });
+    return;
   }
 
   let handle = resolveHandle(sessionEntry);
@@ -1400,7 +1421,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   // dead PTY and report ok:true.
   if (!isEntryAlive(ctx, sessionEntry, handle)) {
     ctx.log.warn('[trigger-watcher] Target process not running:', sessionId);
-    await writeResult({ ok: false, error: 'target process not running', sessionId });
+    await writeResult({ ok: false, error: 'target process not running', ...(hasKey ? { reason: 'target process not running' } : {}), sessionId });
     return;
   }
 
@@ -1435,6 +1456,25 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       });
       return;
     }
+  }
+
+  if (hasKey) {
+    if (!delivery) {
+      await writeResult({ ok: false, error: ERROR_NOT_SENT, reason: 'session not waiting on a dialog (status: unknown)', sessionId });
+      return;
+    }
+    try {
+      delivery.prepareKey(key);
+      delivery.beginStep(key);
+      handle.write('\x1b');
+    }
+    catch (err) {
+      if (!err.deliveryRefusal) throw err;
+      await writeResult(deliveryFailure(err));
+      return;
+    }
+    await writeResult({ ok: true, sessionId, key });
+    return;
   }
 
   if (typeof ctx.forgetTranscriptTurn === 'function') forgetTranscript = () => ctx.forgetTranscriptTurn(sessionId);
