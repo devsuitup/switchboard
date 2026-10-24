@@ -162,7 +162,7 @@ async function runAttachedJobVerb(verb, jobId, sessionId) {
   }
   try {
     const result = await window.api.bgAgentVerb(verb, jobId);
-    if (!result?.ok) throw new Error(result?.error || 'The background stop backend is unavailable');
+    if (!result?.ok) throw new Error(result?.error || (verb === 'rm' ? 'unknown error' : 'The background stop backend is unavailable'));
     return result;
   } catch (error) {
     if (pending) {
@@ -170,8 +170,8 @@ async function runAttachedJobVerb(verb, jobId, sessionId) {
       if (pending.exit && openSessions.get(sessionId) === entry) {
         const exit = pending.exit;
         noteSessionExit(sessionId, exit.exitCode, exit.signal, exit.stopped, exit.detached);
-        writeSessionExitBanner(entry, lastSessionExit(sessionId));
-        updateRunningIndicators();
+        writeSessionExitBanner(entry, lastSessionExit(sessionId), { correction: true });
+        if (typeof updateRunningIndicators === 'function') updateRunningIndicators();
         if (typeof updateTerminalHeader === 'function') updateTerminalHeader();
       }
     }

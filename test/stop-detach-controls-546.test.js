@@ -194,8 +194,10 @@ for (const source of ['sidebar', 'Agents view']) {
       else await h.w.runAgentVerb('stop', { id: 'abcdef12', sessionId: 'A', attachedHere: true });
       assert.equal(duringLabel, 'Stopped', 'Stop intent applies while awaiting the job verb');
       assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Exited (code 7)');
-      assert.match(writes.at(-1), /session exited \(code 7\)/);
-      assert.ok(writes.at(-1).startsWith('\r\n\x1b[33m'));
+      assert.equal(writes.length, 2, 'one provisional banner and one explicit correction');
+      assert.match(writes[0], /── session stopped — /);
+      assert.match(writes[1], /── correction: previous exit status superseded; session exited \(code 7\) — /);
+      assert.ok(writes[1].startsWith('\r\n\x1b[33m'));
       assert.equal(h.entry.jobEnding, undefined);
       assert.equal(h.calls.some(call => call[0] === 'tab'), false);
     });
@@ -244,6 +246,38 @@ test('#782b Agents view Stop labels an early attach exit Stopped', async t => {
   await h.w.runAgentVerb('stop', { id: 'abcdef12', sessionId: 'A', attachedHere: true });
   assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
   assert.match(writes.at(-1), /session stopped/);
+});
+
+test('#782c Agents view rm without backend error text reports unknown error', async t => {
+  const h = setup(t);
+  h.evalPublic('agents-view.js');
+  h.w.refreshAgentsRoster = async () => {};
+  h.w.api.bgAgentVerb = async () => ({ ok: false });
+  await h.w.runAgentVerb('rm', { id: 'abcdef12', sessionId: 'A', attachedHere: true });
+  assert.deepEqual(Array.from(h.read('agentsVerbErrors.values()')), ['unknown error']);
+  assert.equal(h.entry.jobEnding, undefined);
+  assert.equal(h.calls.some(call => call[0] === 'tab'), false);
+});
+
+test('#782c failed Stop preserves its original error without optional repaint functions', async t => {
+  const h = setup(t);
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.w.api.bgAgentVerb = async () => {
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 7, null, false);
+    delete h.w.updateRunningIndicators;
+    delete h.w.updateTerminalHeader;
+    throw new Error('job stop rejected');
+  };
+  await assert.rejects(h.w.runAttachedJobVerb('stop', 'abcdef12', 'A'), /job stop rejected/);
+  assert.equal(h.entry.jobEnding, undefined);
+  assert.equal(h.entry.jobVerbPending, undefined);
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Exited (code 7)');
+  assert.equal(writes.length, 2);
+  assert.match(writes[0], /── session stopped — /);
+  assert.match(writes[1], /── correction: previous exit status superseded; session exited \(code 7\) — /);
 });
 
 test('A5 a refused job check leaves a persistent reason without asking or executing', async t => {

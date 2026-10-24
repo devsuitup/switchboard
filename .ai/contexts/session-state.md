@@ -324,6 +324,8 @@ verb is pending it also preserves the original exit code, signal and intent.
 A failed job verb restores the previous mark; if an exit arrived during the
 await, it rewrites the recorded exit and appends its corrected banner through
 the existing `writeSessionExitBanner` formatter (for example, Exited (code 7)).
+The appended banner explicitly says "correction: previous exit status superseded"
+so the earlier provisional Stopped line no longer states the final status (#782c).
 An open tab stays open on failure and the caller shows its failure notice.
 If only closing the client fails after the job stops, the mark stays for its
 eventual exit and the tab-only retry (#782).

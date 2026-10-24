@@ -47,10 +47,10 @@ function exitBannerColour(exit) {
   return exit.stopped || (exit.exitCode === 0 && !exit.signal) ? '\x1b[2m' : '\x1b[33m';
 }
 
-function writeSessionExitBanner(entry, exit) {
+function writeSessionExitBanner(entry, exit, { correction = false } = {}) {
   try {
     entry.terminal.write(
-      `\r\n${exitBannerColour(exit)}── session ${exitBannerPhrase(exit)} — ${exit.detached ? entry.session?.remoteAlias ? `it keeps running on ${remoteHostLabel(entry.session.remoteAlias)}` : 'it keeps running in the background' : 're-click this session in the sidebar to relaunch, or click another to dismiss'} ──\x1b[0m\r\n`
+      `\r\n${exitBannerColour(exit)}── ${correction ? 'correction: previous exit status superseded; ' : ''}session ${exitBannerPhrase(exit)} — ${exit.detached ? entry.session?.remoteAlias ? `it keeps running on ${remoteHostLabel(entry.session.remoteAlias)}` : 'it keeps running in the background' : 're-click this session in the sidebar to relaunch, or click another to dismiss'} ──\x1b[0m\r\n`
     );
   } catch {}
 }
