@@ -77,6 +77,102 @@ test('A4 an unattached live job stops after one confirmation without a tab stop'
   assert.deepEqual(h.calls[2], ['verb', 'stop', 'abcdef12']);
 });
 
+for (const timing of ['before verb resolution', 'after verb resolution']) {
+  test(`#782 confirmed attach Stop reads Stopped when its client exits ${timing} before stopSession`, async t => {
+    const h = setup(t);
+    const writes = [];
+    h.entry.terminal.write = data => writes.push(data);
+    const exit = () => {
+      assert.equal(h.calls.some(call => call[0] === 'tab'), false);
+      h.w.gridViewActive = false;
+      h.w.activeSessionId = null;
+      h.w.applyProcessExit('A', 0, null, false);
+    };
+    h.w.api.bgAgentVerb = (...args) => {
+      h.calls.push(['verb', ...args]);
+      return { then(resolve) {
+        if (timing === 'before verb resolution') exit();
+        resolve({ ok: true });
+        if (timing === 'after verb resolution') exit();
+      } };
+    };
+    await h.stop();
+    assert.match(writes.at(-1), /session stopped/, 'confirmed Stop must label the early attach exit as stopped');
+    assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
+    assert.doesNotMatch(writes.at(-1), /detached|keeps running|exited \(code 0\)/);
+    assert.ok(writes.at(-1).startsWith('\r\n\x1b[2m'));
+  });
+}
+
+for (const [failure, stop] of [
+  ['non-ok result', () => ({ ok: false, error: 'job stop refused' })],
+  ['rejection', () => { throw new Error('job stop rejected'); }],
+  ['missing result', () => undefined],
+]) {
+  test(`#782 failed attach Stop clears intent before an unrelated exit (${failure})`, async t => {
+    const h = setup(t);
+    const writes = [];
+    h.entry.terminal.write = data => writes.push(data);
+    h.w.api.bgAgentVerb = stop;
+    await h.stop();
+    assert.equal(h.entry.jobEnding, undefined);
+    assert.equal(h.calls.some(call => call[0] === 'tab'), false);
+    assert.ok(h.document.querySelector('[role="alert"]'));
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 7, null, false);
+    assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Exited (code 7)');
+    assert.match(writes.at(-1), /session exited \(code 7\)/);
+  });
+}
+
+test('#782 cancelled Stop leaves a later attach exit unsolicited', async t => {
+  const h = setup(t);
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.w.appConfirm = async () => false;
+  await h.stop();
+  assert.equal(h.entry.jobEnding, undefined);
+  assert.equal(h.calls.some(call => call[0] === 'verb'), false);
+  h.w.gridViewActive = false;
+  h.w.activeSessionId = null;
+  h.w.applyProcessExit('A', 0, null, false);
+  assert.match(writes.at(-1), /session exited \(code 0\)/);
+});
+
+test('#782 Detach still reads Detached after a failed job Stop', async t => {
+  const h = setup(t);
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.w.api.bgAgentVerb = async () => ({ ok: false, error: 'job stop refused' });
+  await h.stop();
+  h.w.api.stopSession = async () => {
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 0, null, true);
+    return { ok: true, detached: true };
+  };
+  await h.w.detachSession('A');
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Detached');
+  assert.match(writes.at(-1), /session detached .*it keeps running in the background/);
+});
+
+test('#782 local non-attach Stop keeps its Stopped banner', async t => {
+  const h = setup(t, { attached: false });
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.w.api.stopSession = async () => {
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 0, null, true);
+    return { ok: true };
+  };
+  await h.stop();
+  assert.equal(h.entry.jobEnding, undefined);
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
+  assert.match(writes.at(-1), /session stopped/);
+});
+
 test('A5 a refused job check leaves a persistent reason without asking or executing', async t => {
   const h = setup(t);
   h.w.api.checkBgAgentVerb = async () => ({ ok: false, error: 'conversation is running outside' });

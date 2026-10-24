@@ -313,10 +313,14 @@ of processes, each part's id and location, and the consequence: each stopped
 process ends, while the conversation is kept and can be resumed. Only Stop
 sets `jobStop:true`: attached and live unattached background parts become job
 targets with a validated 8-hex id. Each hosted job passes
-`checkBgAgentVerb('stop', jobId)` before the dialog. Success calls
-`bgAgentVerb('stop', jobId)`, marks an attached entry `jobEnding = 'stop'`, then
-calls `stopSession` on its attach client and refreshes the roster. The exit
-reads Stopped. A failed job verb retains the tab and the Stop failure notice.
+`checkBgAgentVerb('stop', jobId)` before the dialog.
+After confirmation, an attached entry is marked `jobEnding = 'stop'` before
+`bgAgentVerb('stop', jobId)` runs, then `stopSession` closes its attach client
+and the roster refreshes. `applyProcessExit` uses this intent for local attach
+exits even before the stop IPC records an exit as requested, so the banner
+reads Stopped. A failed job verb restores the previous mark, retains the tab
+and shows the Stop failure notice. If only closing the client fails after the
+job stops, the mark stays for its eventual exit and the tab-only retry (#782).
 An attached job reported `known:true, job:null` is only detached after a dialog
 line saying it is not running in the daemon and its tab detaches. This path
 does not set `jobEnding`, never calls the job verb and records Detached.

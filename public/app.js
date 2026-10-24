@@ -905,6 +905,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     pollActiveSessions();
     return;
   }
+  stopped ||= !!(entry?.attach && !entry.session?.remoteAlias && entry.jobEnding === 'stop');
   noteSessionExit(sessionId, exitCode, signal, stopped, !!(stopped && ((entry?.attach && !entry.jobEnding) || (entry?.session?.remoteAlias && entry.detachRequested))));
   if (typeof setSessionMcpState === 'function' && typeof filePanelState !== 'undefined' && filePanelState.get(sessionId)) setSessionMcpState(sessionId, 'off');
   // see .ai/contexts/session-state.md ("A session main drops")
@@ -1327,17 +1328,15 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   let stopped = 0;
   for (const target of targets) {
     const id = target.sessionId;
-    const entry = target.remote ? openSessions.get(id) : null;
+    const entry = openSessions.get(id);
     const previousDetachRequested = entry?.detachRequested;
+    const previousJobEnding = entry?.jobEnding;
     try {
       if (target.job && !target.notHosted) {
+        if (target.attachedHere && entry && !entry.closed) entry.jobEnding = 'stop';
         const result = await window.api.bgAgentVerb('stop', target.jobId);
         if (!result?.ok) throw new Error(result?.error || 'The background stop backend is unavailable');
         target.jobStopped = true;
-        if (target.attachedHere) {
-          const entry = openSessions.get(id);
-          if (entry && !entry.closed) entry.jobEnding = 'stop';
-        }
       }
       if (!target.job || target.attachedHere) {
         if (target.remote && unreachable.has(target.alias)) throw new Error(unreachable.get(target.alias));
@@ -1358,7 +1357,8 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
       }
       if (target.job && !target.notHosted && typeof refreshAgentsRoster === 'function') refreshAgentsRoster();
     } catch (error) {
-      if (entry) entry.detachRequested = previousDetachRequested;
+      if (target.remote && entry) entry.detachRequested = previousDetachRequested;
+      if (target.job && !target.jobStopped && entry) entry.jobEnding = previousJobEnding;
       failures.push(`Part ${id} ${target.where}: ${error?.message || error || 'unknown error'}`);
       failedTargets.push(target);
       continue;
