@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- An automation trigger can send one Escape to a local session tab waiting on a dialog: a question, a permission prompt or another CLI dialog. The observed writer must belong to the target session and still be waiting when the key is sent; this is unavailable on macOS, for plain terminals or for remote sessions. (#780)
+
 ### Changed
 - In the Agents view, Attach reads Go to tab when the agent is already open in a tab, and goes to that tab. (#546)
 - A remote session open in a terminal can now be detached: Detach closes the terminal and leaves the session running on its host, and it reads Detached instead of Stopped. (#546)
@@ -12,6 +15,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Quit (Exit on Windows), Restart to update and window close now name the local sessions, plain terminals and panel shells that will stop, with Stop and Cancel choices. Unsaved edits are handled first; attached background jobs and remote sessions are identified as continuing. (#546, #562)
 
 ### Fixed
+- On Windows, automation commands addressed by an earlier session ID or found through the session's state file reach their tab again when several sessions are open. (#780)
 - Files outside a Git repository open from Touched when the system language is not English. Local Git errors are shown in English, and locked worktrees can be removed in any system language. (#754)
 - Sessions resumed interactively no longer keep a background badge or appear as running background jobs because of an old daemon job file. (#764)
 

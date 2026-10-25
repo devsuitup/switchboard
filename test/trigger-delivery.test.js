@@ -906,6 +906,37 @@ test('ADR classifier: an external descriptor without identity cannot hide a veri
   refused(await f.run({}), f.written);
 });
 
+for (const action of ['command', 'escape']) {
+  test(`ADR uncertainty: a verified foreign writer with an uncertain sibling refuses ${action}`, async t => {
+    const f = fixture(t);
+    f.setWriter('c');
+    f.descriptor('c', 200, 'interactive', { status: 'waiting' });
+    f.descriptor('external', 400, 'interactive', { procStart: null });
+    const trigger = action === 'escape' ? { command: undefined, wait: undefined, key: 'escape' } : {};
+    refused(await f.run(trigger), f.written);
+  });
+}
+
+test('ADR uncertainty: a verified target writer with an uncertain sibling refuses Escape but allows a direct command', async t => {
+  const f = fixture(t);
+  f.descriptor('a', 200, 'interactive', { status: 'waiting' });
+  f.descriptor('external', 400, 'interactive', { procStart: null });
+  const escape = await f.run({ command: undefined, wait: undefined, key: 'escape' });
+  refused(escape, f.written);
+  assert.equal(escape.reason, 'tab writer not proven');
+  const direct = await f.run({});
+  assert.equal(direct.ok, true, JSON.stringify(direct));
+  assert.deepEqual(f.written, ['prompt', '\r']);
+});
+
+test('ADR uncertainty: a verified waiting target writer without uncertainty receives Escape', async t => {
+  const f = fixture(t);
+  f.descriptor('a', 200, 'interactive', { status: 'waiting' });
+  const result = await f.run({ command: undefined, wait: undefined, key: 'escape' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(f.written, ['\x1b']);
+});
+
 test('ADR classifier: unresolved ancestor kind leaves a nested interactive role unknown', async t => {
   const f = fixture(t);
   f.descriptor('a', 200, null); f.descriptor('child', 300, 'interactive');
@@ -1114,4 +1145,41 @@ test('ADR partial write: an Enter I/O failure records known text without claimin
   assert.equal(result.error, 'step not confirmed', JSON.stringify(result));
   assert.equal(result.text_written, true); assert.equal(result.enter_written, false); assert.equal(result.written, false);
   assert.match(result.reason, /partial text/i);
+});
+
+
+test('ADR uncertainty: continuation re-key is not accepted before ownership is proven', async t => {
+  const f = fixture(t);
+  const pinned = f.ctx.pinDelivery('a', { ...f.ctx.getPtyForSession('a'), keyKind: 'historical' });
+  f.continueTo('a', 'b'); f.setWriter('b');
+  f.descriptor('external', 400, 'interactive', { procStart: null });
+  pinned.binding.beginStep('reply');
+  assert.throws(() => pinned.handle.write('reply'), /ownership of the pinned alias writer is unknown/);
+  assert.equal(pinned.binding.observation.writer.sessionId, 'b');
+  assert.equal(pinned.binding.observation.uncertain, true);
+  assert.equal(pinned.binding.effectiveId, 'a');
+  assert.deepEqual(f.written, []);
+  fs.rmSync(path.join(f.dir, '400.json'));
+  assert.equal(pinned.handle.write('reply').outcome, 'mine');
+  assert.equal(pinned.binding.effectiveId, 'b');
+});
+
+test('ADR uncertainty: reset successor is not accepted before ownership is proven', async t => {
+  const f = fixture(t);
+  const pinned = f.ctx.pinDelivery('a', f.ctx.getPtyForSession('a'), true);
+  pinned.binding.beginStep('/clear');
+  assert.equal(pinned.handle.write('/clear').outcome, 'mine');
+  assert.equal(pinned.handle.write('\r').outcome, 'mine');
+  f.setWriter('c');
+  f.descriptor('external', 400, 'interactive', { procStart: null });
+  assert.equal(pinned.binding.readId(), null);
+  assert.equal(pinned.binding.observation.writer.sessionId, 'c');
+  assert.equal(pinned.binding.observation.uncertain, true);
+  assert.equal(pinned.binding.effectiveId, 'a');
+  assert.notEqual(pinned.binding.reset, null);
+  assert.equal(pinned.binding.resetCompleted(), false);
+  assert.deepEqual(f.written, ['/clear', '\r']);
+  fs.rmSync(path.join(f.dir, '400.json'));
+  assert.equal(pinned.binding.readId(), 'c');
+  assert.equal(pinned.binding.reset, null);
 });

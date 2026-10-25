@@ -145,6 +145,10 @@ function processTableFresh() {
   return !!processTable && now() - processTable.at < PROCESS_TABLE_TTL_MS;
 }
 
+function deliveryProcessTableFresh() {
+  return !processTableEnabled || (processTableFresh() && !!processTable.map);
+}
+
 function normaliseProcessTable(read) {
   if (!(read instanceof Map) || read.size === 0) return null;
   const out = new Map();
@@ -862,12 +866,13 @@ function deliveryAncestry(raw, ptyPid, snapshot) {
     }
     let parent;
     try { parent = readParentPid(current); } catch { return { state: 'unknown' }; }
-    if (parent == null) return { state: 'unknown' };
-    if (parent <= 1) return { state: uncertainTree ? 'unknown' : 'outside' };
+    if (!Number.isInteger(parent)) return { state: 'unknown' };
+    if (parent <= 1) return { state: identity !== 'valid' || uncertainTree || parent === ptyPid ? 'unknown' : 'outside' };
     if (processTableEnabled) {
       const child = tableEntry(current), above = tableEntry(parent);
+      if (processTableFresh() && child?.created != null && !above) return { state: identity !== 'valid' || uncertainTree || parent === ptyPid ? 'unknown' : 'outside' };
       if (!processTableFresh() || !child || !above || child.created == null || above.created == null) { uncertain = true; uncertainTree = true; }
-      else if (child.created < above.created) return { state: 'unknown' };
+      else if (child.created < above.created) return { state: identity !== 'valid' || uncertainTree || parent === ptyPid ? 'unknown' : 'outside' };
     } else {
       try {
         const child = readProcStart(current), above = readProcStart(parent);
@@ -894,10 +899,10 @@ function observeTabWriter(ptyPid, snapshot) {
     if (ancestry.state === 'mine') candidates.push({ raw, depth: ancestry.depth });
   }
   candidates.sort((a, b) => a.depth - b.depth);
-  if (uncertain || candidates.length !== 1) return { supported: true };
+  if (candidates.length !== 1) return { supported: true, uncertain };
   const writer = candidates[0].raw;
   const hasBackground = [...snapshot.descriptors.values()].some(raw => raw.kind === 'bg');
-  return { supported: true, writer, identity: `${writer.pid}:${writer.procStart}`, hasBackground };
+  return { supported: true, writer, identity: `${writer.pid}:${writer.procStart}`, hasBackground, uncertain };
 }
 
 function deliveryPtyStart(pid) {
@@ -1069,6 +1074,7 @@ module.exports = {
   observeTabWriter,
   findDeliveryTab,
   deliveryPtyStart,
+  deliveryProcessTableFresh,
   MAX_LIVE_QUERY_IDS,
   MAX_PROBE_PIDS,
   probeProcStartWindows,

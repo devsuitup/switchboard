@@ -14,6 +14,71 @@
 
 ## Public surface
 
+### Escape key trigger
+
+`{ "sessionId": "<id>", "key": "escape" }` sends exactly one `\x1b` byte to
+a live local PTY tab waiting on a dialog: a question, a permission prompt or
+another CLI dialog. It sends no Enter, text, retry or composer cleanup. It
+uses the same session FIFO, pinned delivery, tab mutex, liveness and optional
+`expectedCwd` guard as command delivery; it skips command readiness and composer
+waits. `binding.prepareKey()` awaits the Windows process table refresh within
+the trigger's deadline before checking the fresh writer observation.
+`binding.writeKey()` awaits the same freshness again, then the pinned handle's
+synchronous `check()` re-inspects the writer inside the write, before calling
+the underlying PTY handle. A failed or timed-out refresh refuses with
+`process table not fresh` and writes nothing. Both checks require
+`writer.status === 'waiting'`, ownership `mine` and a writer session id matching
+the pinned effective target id. They use the observed writer rather than
+`getCliStatus`'s fs.watch-fed cache. Each queued trigger obtains its own fresh
+observation. Supported observations without a readable descriptor fail closed
+as `unknown`. Escape triggers are unavailable on macOS, for plain terminals
+and for remote sessions. Unsupported observation and ineligible tabs, including
+attach tabs, return the distinct unsupported-platform-or-tab reason below.
+Neither refusal writes any bytes. The
+descriptor can still change after the final inspection; the check and the CLI
+process are not an atomic operation. Command delivery retains its existing
+ownership and availability behaviour.
+
+Writer observations preserve a single verified writer alongside an `uncertain`
+flag when another descriptor's ancestry is unknown. The pinned binding in
+`trigger-context.js` applies one rule: uncertainty may block an acceptance;
+it must never hide a refusal. A verified foreign writer still refuses commands
+and Escape. A verified target writer with uncertainty keeps ownership `unknown`:
+Escape refuses with `tab writer not proven`, while a command addressed by a direct
+tab ID retains its existing permission to proceed. Historical IDs and descriptor
+fallback still require ownership proof. Without uncertainty, a verified waiting
+target writer receives Escape. Missing writers retain their existing behaviour.
+
+Whether a single ESC written through ConPTY reaches the CLI as an Escape key
+on Windows has not been verified live.
+
+`key` and `command` are mutually exclusive. The only supported key value is
+`"escape"`; `chain` and an explicit `wait` (even `"none"`) are refused with a
+reason. Remote sessions are refused, including those attached in a tab. The
+existing ban on control characters, including `\x1b`, in `command` is unchanged.
+A stray `key` field on a command trigger is deliberately refused instead of
+being ignored, a compatibility change from before key triggers were supported.
+
+Success is `{ ok: true, sessionId, key: "escape", submitted: "no", steps_total: 0 }`:
+`ok` means the key was written, while `submitted` and `steps_total` describe
+command submission (no command was submitted). No reaction is observed or
+claimed, and no `left_waiting` field is emitted. Refusals have `ok: false`,
+`submitted: "no"`, `steps_total: 0`, `sessionId`, `error` and an explicit `reason`.
+The principal reasons are:
+
+- `session not waiting on a dialog (status: <s>)`
+- `tab writer not proven`
+- `escape needs a session whose state can be observed here (unsupported on this platform or tab)`
+- `session not found`
+- `escape is not supported on remote sessions`
+- `key and command are mutually exclusive`
+- `unsupported key: only "escape" is supported`
+- `key does not support chain`
+- `key does not support wait`
+
+Other admission, liveness, target and ownership failures retain the existing
+delivery errors. Tests: `test/trigger-escape-key.test.js`.
+
 ### `start(ctx)` → `{ close() }`
 
 Starts the watcher.  Call once at app boot.
