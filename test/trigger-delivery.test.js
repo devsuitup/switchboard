@@ -906,6 +906,37 @@ test('ADR classifier: an external descriptor without identity cannot hide a veri
   refused(await f.run({}), f.written);
 });
 
+for (const action of ['command', 'escape']) {
+  test(`ADR uncertainty: a verified foreign writer with an uncertain sibling refuses ${action}`, async t => {
+    const f = fixture(t);
+    f.setWriter('c');
+    f.descriptor('c', 200, 'interactive', { status: 'waiting' });
+    f.descriptor('external', 400, 'interactive', { procStart: null });
+    const trigger = action === 'escape' ? { command: undefined, wait: undefined, key: 'escape' } : {};
+    refused(await f.run(trigger), f.written);
+  });
+}
+
+test('ADR uncertainty: a verified target writer with an uncertain sibling refuses Escape but allows a direct command', async t => {
+  const f = fixture(t);
+  f.descriptor('a', 200, 'interactive', { status: 'waiting' });
+  f.descriptor('external', 400, 'interactive', { procStart: null });
+  const escape = await f.run({ command: undefined, wait: undefined, key: 'escape' });
+  refused(escape, f.written);
+  assert.equal(escape.reason, 'tab writer not proven');
+  const direct = await f.run({});
+  assert.equal(direct.ok, true, JSON.stringify(direct));
+  assert.deepEqual(f.written, ['prompt', '\r']);
+});
+
+test('ADR uncertainty: a verified waiting target writer without uncertainty receives Escape', async t => {
+  const f = fixture(t);
+  f.descriptor('a', 200, 'interactive', { status: 'waiting' });
+  const result = await f.run({ command: undefined, wait: undefined, key: 'escape' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(f.written, ['\x1b']);
+});
+
 test('ADR classifier: unresolved ancestor kind leaves a nested interactive role unknown', async t => {
   const f = fixture(t);
   f.descriptor('a', 200, null); f.descriptor('child', 300, 'interactive');

@@ -21,9 +21,12 @@ a live local PTY tab waiting on a dialog: a question, a permission prompt or
 another CLI dialog. It sends no Enter, text, retry or composer cleanup. It
 uses the same session FIFO, pinned delivery, tab mutex, liveness and optional
 `expectedCwd` guard as command delivery; it skips command readiness and composer
-waits. `binding.prepareKey()` first checks the fresh writer observation, then
-the pinned handle's synchronous `check()` re-inspects the writer inside the
-write, before calling the underlying PTY handle. Both checks require
+waits. `binding.prepareKey()` awaits the Windows process table refresh within
+the trigger's deadline before checking the fresh writer observation.
+`binding.writeKey()` awaits the same freshness again, then the pinned handle's
+synchronous `check()` re-inspects the writer inside the write, before calling
+the underlying PTY handle. A failed or timed-out refresh refuses with
+`process table not fresh` and writes nothing. Both checks require
 `writer.status === 'waiting'`, ownership `mine` and a writer session id matching
 the pinned effective target id. They use the observed writer rather than
 `getCliStatus`'s fs.watch-fed cache. Each queued trigger obtains its own fresh
@@ -35,6 +38,16 @@ Neither refusal writes any bytes. The
 descriptor can still change after the final inspection; the check and the CLI
 process are not an atomic operation. Command delivery retains its existing
 ownership and availability behaviour.
+
+Writer observations preserve a single verified writer alongside an `uncertain`
+flag when another descriptor's ancestry is unknown. The pinned binding in
+`trigger-context.js` applies one rule: uncertainty may block an acceptance;
+it must never hide a refusal. A verified foreign writer still refuses commands
+and Escape. A verified target writer with uncertainty keeps ownership `unknown`:
+Escape refuses with `tab writer not proven`, while a command addressed by a direct
+tab ID retains its existing permission to proceed. Historical IDs and descriptor
+fallback still require ownership proof. Without uncertainty, a verified waiting
+target writer receives Escape. Missing writers retain their existing behaviour.
 
 Whether a single ESC written through ConPTY reaches the CLI as an Escape key
 on Windows has not been verified live.
@@ -54,6 +67,7 @@ claimed, and no `left_waiting` field is emitted. Refusals have `ok: false`,
 The principal reasons are:
 
 - `session not waiting on a dialog (status: <s>)`
+- `tab writer not proven`
 - `escape needs a session whose state can be observed here (unsupported on this platform or tab)`
 - `session not found`
 - `escape is not supported on remote sessions`

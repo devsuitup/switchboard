@@ -14,7 +14,7 @@ const { start } = require('../trigger-watcher');
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 
-async function fixture(t, { root = 'Electron', count = 3, parent, malformed = false } = {}) {
+async function fixture(t, { root = 'Electron', count = 3, parent, malformed = false, uncertainParent, missingPty = false } = {}) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-windows-tabs-')));
   const descriptors = path.join(dir, 'sessions');
   const triggers = path.join(dir, 'triggers');
@@ -39,14 +39,22 @@ async function fixture(t, { root = 'Electron', count = 3, parent, malformed = fa
     return { writerPid, status, written, generation: 1, realSessionId: sessionId, cwd: dir, host: null,
       pty: { pid: ptyPid, write: data => written.push(data) } };
   });
-  const table = cli.parseProcessTable(rows.map(([pid, ppid, stamp, command]) => `${pid} ${ppid} ${stamp}\t${command}`).join('\r\n'));
+  if (uncertainParent !== undefined) {
+    rows.push([20000, uncertainParent, created(0), 'notepad.exe']);
+    fs.writeFileSync(path.join(descriptors, '20000.json'), JSON.stringify({ pid: 20000,
+      sessionId: 'uncertain-writer', kind: 'interactive', pidDomain: 'win32:anchor', procStart: created(9),
+      status: 'waiting', statusUpdatedAt: Date.now() }));
+  }
+  const table = cli.parseProcessTable(rows.filter(([pid]) => !missingPty || pid !== tabs[0].pty.pid)
+    .map(([pid, ppid, stamp, command]) => `${pid} ${ppid} ${stamp}\t${command}`).join('\r\n'));
   if (malformed) table.get(rootPid).ppid = parent;
-  let clock = Date.now() + 10000;
+  let clock = Date.now() + (uncertainParent === undefined ? 10000 : -60000);
   let refreshBlocked = false;
+  let refreshReader = async () => table;
   cli.init({ dir: descriptors, platform: 'win32', ownPid: rootPid, now: () => clock,
     isProcessAlive: () => true, readProcessTable: async () => {
       if (refreshBlocked) throw new Error('process table unavailable');
-      return table;
+      return refreshReader();
     } });
   await cli.refreshProcessTable();
   const ctx = createTriggerContext({ activeSessions: new Map(tabs.map(tab => [tab.realSessionId, tab])),
@@ -73,7 +81,79 @@ async function fixture(t, { root = 'Electron', count = 3, parent, malformed = fa
     }
     return JSON.parse(fs.readFileSync(result, 'utf8'));
   }
-  return { tabs, ctx, dispatch, stale() { clock += 3001; refreshBlocked = true; } };
+  return { tabs, ctx, dispatch, stale() { clock += 3001; refreshBlocked = true; },
+    cold(reader) { clock += 3001; refreshReader = () => reader(table); },
+    setStatus(index, status) {
+      const file = path.join(descriptors, `${tabs[index].writerPid}.json`);
+      const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+      fs.writeFileSync(file, JSON.stringify({ ...raw, status }));
+    },
+    beforeKeyWrite(fn) {
+      const pin = ctx.pinDelivery;
+      ctx.pinDelivery = (...args) => {
+        const pinned = pin(...args);
+        const begin = pinned.binding.beginStep;
+        pinned.binding.beginStep = (...stepArgs) => { begin(...stepArgs); fn(); };
+        return pinned;
+      };
+    } };
+}
+
+for (const uncertainParent of [30000, 1]) {
+  test(`Windows uncertain descriptor identity vetoes ownership when parent ${uncertainParent} is outside`, async t => {
+    const f = await fixture(t, { uncertainParent });
+    const observed = cli.observeTabWriter(f.tabs[0].pty.pid);
+    assert.equal(observed.writer?.pid, 10840);
+    assert.equal(observed.uncertain, true, 'uncertain descriptor 20000 must veto ownership acceptance');
+    const direct = f.ctx.pinDelivery(f.tabs[0].realSessionId, f.ctx.getPtyForSession(f.tabs[0].realSessionId));
+    direct.binding.beginStep('hello');
+    assert.equal(direct.handle.write('hello').outcome, 'unknown');
+    const alias = f.ctx.pinDelivery(f.tabs[0].realSessionId,
+      { ...f.ctx.getPtyForSession(f.tabs[0].realSessionId), keyKind: 'historical' });
+    alias.binding.beginStep('hello');
+    assert.throws(() => alias.handle.write('hello'), /ownership of the pinned alias writer is unknown/);
+    const result = await f.dispatch(0, { key: 'escape' });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'tab writer not proven');
+    assert.deepEqual(f.tabs.map(tab => tab.written), [['hello'], [], []]);
+  });
+}
+
+test('Windows missing target PTY row keeps descriptor fallback pending', async t => {
+  const f = await fixture(t, { missingPty: true });
+  assert.equal(cli.observeTabWriter(7432).writer, undefined);
+  assert.equal(cli.findDeliveryTab(f.tabs[0].realSessionId, [f.tabs[0]]).pending, true,
+    'a missing PTY row must remain unknown rather than outside');
+});
+
+for (const phase of ['arrival', 'write']) {
+  for (const status of ['waiting', 'idle', 'timeout', 'failed']) {
+    test(`Windows Escape ${phase} waits for a stale process table: ${status}`, async t => {
+      const f = await fixture(t);
+      const index = status === 'idle' && phase === 'arrival' ? 1 : 0;
+      const cold = () => f.cold(async table => {
+        if (status === 'timeout') return new Promise(() => {});
+        if (status === 'failed') throw new Error('probe failed');
+        await new Promise(resolve => setTimeout(resolve, 40));
+        return table;
+      });
+      if (phase === 'arrival') cold();
+      else f.beforeKeyWrite(() => {
+        cold();
+        if (status === 'idle') f.setStatus(index, 'idle');
+      });
+      const result = await f.dispatch(index, { key: 'escape', timeout_ms: status === 'timeout' ? 200 : 2000 });
+      if (status === 'waiting') {
+        assert.equal(result.ok, true, 'Escape must await the process table before checking the waiting writer');
+        assert.deepEqual(f.tabs.map(tab => tab.written), [['\x1b'], [], []]);
+      } else {
+        assert.equal(result.ok, false);
+        assert.equal(result.reason, status === 'idle'
+          ? 'session not waiting on a dialog (status: idle)' : 'process table not fresh');
+        assert.deepEqual(f.tabs.map(tab => tab.written), [[], [], []]);
+      }
+    });
+  }
 }
 
 for (const root of ['Electron', 'Explorer']) {
@@ -130,17 +210,19 @@ test('Windows multi-session stale table keeps command ownership unknown, allows 
   assert.throws(() => alias.handle.write('hello'), /ownership of the pinned alias writer is unknown/);
   const result = await f.dispatch(0, { key: 'escape' });
   assert.equal(result.ok, false);
-  assert.equal(result.reason, 'session not waiting on a dialog (status: unknown)');
+  assert.equal(result.reason, 'process table not fresh');
   assert.deepEqual(f.tabs.map(tab => tab.written), [[], ['hello'], []]);
 });
 
 for (const parent of [undefined, NaN, 'unparsable']) {
   test(`Windows multi-session root row with parent ${String(parent)} remains unknown`, async t => {
     const f = await fixture(t, { malformed: true, parent });
-    assert.equal(cli.observeTabWriter(f.tabs[0].pty.pid).writer, undefined);
+    const observed = cli.observeTabWriter(f.tabs[0].pty.pid);
+    assert.equal(observed.writer?.pid, f.tabs[0].writerPid);
+    assert.equal(observed.uncertain, true);
     const result = await f.dispatch(0, { key: 'escape' });
     assert.equal(result.ok, false);
-    assert.equal(result.reason, 'session not waiting on a dialog (status: unknown)');
+    assert.equal(result.reason, 'tab writer not proven');
     assert.deepEqual(f.tabs.map(tab => tab.written), [[], [], []]);
   });
 }

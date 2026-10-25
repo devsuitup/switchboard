@@ -586,23 +586,36 @@ real transcript on disk.
 ## Delivery ancestry on Windows
 
 `observeTabWriter` checks every interactive descriptor against the target PTY
-using `deliveryAncestry`. Exactly one `mine` and no `unknown` selects the writer;
-an unrelated tree can reach `outside` without vetoing that selection.
+using `deliveryAncestry`. Exactly one `mine` selects the verified writer, while
+any `unknown` walk sets the observation's separate `uncertain` flag. An unrelated
+tree can reach `outside` without setting that flag. In `trigger-context.js`,
+uncertainty may block an acceptance; it must never hide a refusal. A verified
+writer outside the effective target's conversation still refuses delivery. A
+matching writer proves ownership `mine` only without uncertainty; otherwise
+ownership stays `unknown`, and Escape refuses with `tab writer not proven`.
+This gate also precedes accepting a continuation or reset successor. With no
+verified writer, ownership retains its existing `unknown` behaviour.
 In a fresh process table, a present row with a valid parent PID whose row is
 absent has reached an exited parent: the walk returns `outside`. This includes
 Switchboard or Explorer keeping the PID of a launcher that has already exited.
 The live target PTY is present in the table, so its own chain reaches `mine`
 before this root. A stale table, a missing or unparsable parent in a present row,
 unknown creation times, reused PID ordering or earlier uncertain ancestry still
-keeps the verdict `unknown`.
+keeps the verdict `unknown`. An uncertain descriptor identity also keeps both
+an absent parent row and a parent PID at or below 1 `unknown`; an absent parent
+row that names the target PTY is always `unknown`. A nested CLI whose intermediate
+parent exited while staying on the same console reads `outside`, the same as an
+orphan reparented to pid 1 on Linux.
 
 This distinction affects command triggers as well as Escape. Direct tab IDs
 allow command delivery with `unknown` ownership; aliases and descriptor fallback
 require proof. With several Windows sessions and an exited launcher, the root
 verdict now lets fallback find the tab and aliases prove `mine`. Direct command
 delivery still works. Escape requires a freshly observed `waiting` writer and
-ownership `mine`; an idle writer reports `status: idle`, and a stale process
-table still refuses it with `status: unknown`.
+ownership `mine`; an idle writer reports `status: idle`. Escape waits for a fresh
+process table before its initial check and again before writing, bounded by the
+trigger's deadline. A failed refresh or one that exceeds that deadline refuses
+with `process table not fresh` and writes nothing.
 
 `test/cli-session-state-windows-tabs.test.js` covers two and three interactive
 descriptors under separate Git Bash PTYs sharing an Electron or Explorer root

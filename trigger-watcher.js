@@ -1464,9 +1464,9 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       return;
     }
     try {
-      delivery.prepareKey(key);
+      await delivery.prepareKey(key, deliveryDeadline);
       delivery.beginStep(key);
-      handle.write('\x1b');
+      await delivery.writeKey(deliveryDeadline);
     }
     catch (err) {
       if (!err.deliveryRefusal) throw err;

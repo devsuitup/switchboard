@@ -216,9 +216,20 @@ function createTriggerContext(deps) {
       const writer = observation?.writer;
       if (!writer) return { outcome: 'unknown' };
       const id = normalizeSessionId(writer.sessionId);
+      if (!binding.reset && id !== binding.effectiveId) {
+        const continuation = graph(binding.effectiveId);
+        if (continuation.unresolved || continuation.waitingForIndex) return { outcome: 'unknown' };
+        if (!continuation.reachable?.includes(id)) {
+          if (continuation.incomplete) return { outcome: 'unknown' };
+          return { outcome: 'other', reason: `ownership writer names ${id}, outside conversation ${binding.effectiveId}` };
+        }
+      }
+      if (binding.reset?.identity && observation.identity !== binding.reset.identity) {
+        return { outcome: 'other', reason: 'ownership writer process generation changed after reset' };
+      }
+      if (observation.uncertain) return { outcome: 'unknown', reason: 'tab writer not proven' };
       if (binding.reset) {
         const reset = binding.reset;
-        if (reset.identity && observation.identity !== reset.identity) return { outcome: 'other', reason: 'ownership writer process generation changed after reset' };
         reset.identity ||= observation.identity;
         if (id === reset.preId) return { outcome: 'mine', lag: true };
         binding.effectiveId = id;
@@ -228,15 +239,9 @@ function createTriggerContext(deps) {
         return { outcome: 'mine', writer };
       }
       if (id === binding.effectiveId) return { outcome: 'mine', writer };
-      const continuation = graph(binding.effectiveId);
-      if (continuation.unresolved || continuation.waitingForIndex) return { outcome: 'unknown' };
-      if (continuation.reachable?.includes(id)) {
-        binding.effectiveId = id;
-        forget();
-        return { outcome: 'mine', writer };
-      }
-      if (continuation.incomplete) return { outcome: 'unknown' };
-      return { outcome: 'other', reason: `ownership writer names ${id}, outside conversation ${binding.effectiveId}` };
+      binding.effectiveId = id;
+      forget();
+      return { outcome: 'mine', writer };
     }
     function check(phase) {
       const boundedWrite = phase === 'text';
@@ -254,7 +259,7 @@ function createTriggerContext(deps) {
         const status = writer?.status ?? 'unknown';
         if (status !== 'waiting') fail(`session not waiting on a dialog (status: ${status})`);
         if (outcome.outcome !== 'mine' || !writer || normalizeSessionId(writer.sessionId) !== binding.effectiveId) {
-          fail('ownership of the Escape target writer is not mine; nothing was written');
+          fail(outcome.reason || 'ownership of the Escape target writer is not mine; nothing was written');
         }
       }
       if (outcome.outcome === 'other') fail(outcome.reason);
@@ -292,7 +297,23 @@ function createTriggerContext(deps) {
       check();
     };
     binding.beginStep = command => { binding.resetCompletionObserved = false; binding.step = { command, text_written: false, enter_written: false, written: false }; };
-    binding.prepareKey = key => { binding.key = key; check(); };
+    async function waitKeyProcessTable(deadline) {
+      if (!own || source.deliveryProcessTableFresh?.() !== false) return;
+      if (Date.now() >= deadline) fail('process table not fresh', null, true);
+      try { await bounded(source.refreshProcessTable(), deadline); }
+      catch { fail('process table not fresh'); }
+      if (Date.now() >= deadline || !source.deliveryProcessTableFresh()) fail('process table not fresh', null, Date.now() >= deadline);
+    }
+    binding.prepareKey = async (key, deadline) => {
+      binding.key = key;
+      binding.deadline = deadline;
+      await waitKeyProcessTable(deadline);
+      check();
+    };
+    binding.writeKey = async deadline => {
+      await waitKeyProcessTable(deadline);
+      handle.write('\x1b');
+    };
     binding.resetCompleted = () => { inspect(); return binding.resetCompletionObserved; };
     binding.readId = () => {
       const observed = inspect();
