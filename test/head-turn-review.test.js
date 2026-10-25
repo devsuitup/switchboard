@@ -122,12 +122,13 @@ test('the slot exposes accessible text on initial paint and incremental updates'
   turn('open');
   assert.equal(label(), 'Working · Running elsewhere');
 });
-test('blocked Agents jobs suppress an open head even when the descriptor says busy', t => {
+test('blocked Agents jobs wait when idle and follow a busy descriptor', t => {
   const { ctx, turn } = sidebar(t);
   ctx.evalPublic('agents-view.js'); turn('open');
   ctx.window.taskRegistry.note('root', 'shell', 'cli-task', { kind: 'shell' });
   for (const status of ['idle', null, 'busy']) {
-    assert.equal(ctx.window.agentRowIcon({ sessionId: 'root', kind: 'background', state: 'blocked', hosted: true, status }).slotClass, 'session-icon--waiting');
+    assert.equal(ctx.window.agentRowIcon({ sessionId: 'root', kind: 'background', state: 'blocked', hosted: true, status }).slotClass,
+      status === 'busy' ? 'session-icon--busy' : 'session-icon--waiting');
   }
 });
 test('Agents background idle descriptor cannot close a validated head turn', t => {

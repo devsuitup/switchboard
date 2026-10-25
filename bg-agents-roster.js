@@ -159,6 +159,7 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     });
   }
   if (cliEntry) {
+    e.status = cliEntry.status ?? null;
     e.sessionId = job?.sessionId && !sessionIdField(cliEntry.sessionId) ? job.sessionId : cliEntry.sessionId || e.sessionId;
     e.name = cliEntry.name || e.name;
     e.cwd = cliEntry.cwd || e.cwd;
@@ -167,6 +168,8 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     e.startedAt = cliEntry.startedAt ?? e.startedAt;
   }
   if (descriptor) {
+    e.status = descriptor.status ?? e.status;
+    e.waitingFor = descriptor.waitingFor ?? null;
     e.sessionId = e.sessionId || descriptor.sessionId;
     e.name = e.name || descriptor.name;
     e.cwd = e.cwd || descriptor.cwd;

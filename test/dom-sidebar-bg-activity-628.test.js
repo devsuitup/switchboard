@@ -11,9 +11,9 @@ function roster(state = 'working', kind = 'agent', extra = {}) {
   const job = parseJobState(JSON.stringify({ state, updatedAt: new Date(AT).toISOString(),
     inFlight: { tasks: 0, kinds: [] }, sessionId: SID,
     fan: kind ? [{ id: 'task-1', kind, startedAt: AT - 1000 }] : [], ...extra }));
-  return mergeRoster({ cli: [{ id: 'aaaaaaaa', kind: 'background', sessionId: SID, state: 'working', status: 'busy' }],
+  return mergeRoster({ cli: [{ id: 'aaaaaaaa', kind: 'background', sessionId: SID, state: 'working', status: 'idle' }],
     jobs: new Map([['aaaaaaaa', job]]), descriptors: state === 'done' ? [] : [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID,
-      status: 'busy', statusUpdatedAt: 1, cwd: '/repo', pid: 10 }] });
+      status: 'idle', statusUpdatedAt: 1, cwd: '/repo', pid: 10 }] });
 }
 
 async function setup(t, entries = roster(), active = false) {
@@ -40,13 +40,75 @@ async function setup(t, entries = roster(), active = false) {
   return { ...h, push: s => push(s), subscriptions: () => subscriptions, sidebarRenders: () => sidebarRenders };
 }
 
+for (const [state, status, slot] of [['blocked', 'busy', 'busy'], ['done', 'idle', 'idle'], ['done', 'waiting', 'attention']]) {
+  test(`T6-sidebar: live ${state}/${status} follows its descriptor on render and repaint`, async t => {
+    const entries = roster(state, null);
+    Object.assign(entries[0], { hosted: true, status, waitingFor: status === 'waiting' ? 'dialog open' : null });
+    const h = await setup(t, entries);
+    Object.assign(h.window.sessionMap.get(SID), { status, waitingFor: entries[0].waitingFor });
+    const check = () => assert.ok(h.document.querySelector(`.session-icon--${slot}`));
+    h.window.refreshSidebar();
+    check();
+    h.window.applyStateClasses(SID, h.window.storedActivitySnapshot(SID));
+    check();
+    h.window.paintSessionIcon(h.document.querySelector('.session-icon'), SID);
+    check();
+  });
+}
+
+for (const active of [false, true]) {
+  test(`T5 guard: newer background idle never closes turn evidence, PTY=${active}`, async t => {
+    const entries = roster('working', null);
+    entries[0].status = 'idle';
+    const h = await setup(t, entries, active);
+    const session = h.window.sessionMap.get(SID);
+    session.status = 'idle';
+    session.statusUpdatedAt = 1;
+    if (!active) h.window.localTranscriptState(SID);
+    h.emitHeadTurn(SID, 'open', { lastEntryAt: 100 });
+    session.statusUpdatedAt = 200;
+    h.window.refreshSidebar();
+    assert.ok(h.document.querySelector('.session-icon--busy'));
+    const state = active ? h.window.localPtyState(SID) : h.window.localTranscriptState(SID);
+    assert.equal(state.snapshot().promptHint, false, 'background idle must not enter the adapter state');
+    h.window.paintSessionIcon(h.document.querySelector('.session-icon'), SID);
+    assert.ok(h.document.querySelector('.session-icon--busy'));
+  });
+}
+
+test('T6-sidebar: status-only roster changes repaint without changing hosted membership', async t => {
+  const entries = roster('blocked', null);
+  Object.assign(entries[0], { status: 'idle' });
+  const h = await setup(t, entries);
+  const before = h.sidebarRenders();
+  h.push({ roster: [{ ...entries[0], status: 'waiting', waitingFor: 'permission prompt' }], daemonReachable: true });
+  assert.ok(h.sidebarRenders() > before);
+  assert.ok(h.document.querySelector('.session-icon--attention'));
+});
+
+for (const active of [false, true]) for (const status of ['busy', 'waiting']) {
+  test(`T6-descriptor: local ${status} reaches the background projection, PTY=${active}`, async t => {
+    const entries = roster('working', null);
+    entries[0].status = null;
+    const h = await setup(t, entries, active);
+    Object.assign(h.window.sessionMap.get(SID), { status, waitingFor: 'dialog open' });
+    if (!active) h.window.localTranscriptState(SID);
+    h.window.refreshSidebar();
+    assert.ok(h.document.querySelector(`.session-icon--${status === 'busy' ? 'busy' : 'attention'}`));
+    const snapshot = h.window.storedActivitySnapshot(SID);
+    assert.equal(snapshot.waitingFor, 'dialog open');
+    const state = active ? h.window.localPtyState(SID) : h.window.localTranscriptState(SID);
+    assert.equal(state.snapshot().lastActivitySource, null, 'projection must not apply descriptor status to head state');
+  });
+}
+
 for (const [state, kind, head, hosted, valid, text, activity, foreground = false] of [
   ['working', null, 'open', true, true, '', 'Working'],
   ['working', 'agent', 'closed', true, true, '', 'Background work running'],
   ['working', null, 'closed', true, true, '', 'Waiting for input'],
   ['blocked', null, 'closed', true, true, 'Blocked', 'Waiting for input'],
   ['blocked', null, 'closed', true, false, 'Blocked', 'Waiting for input'],
-  ['done', null, 'closed', true, true, 'Idle', 'Waiting for input'],
+   ['done', null, 'closed', true, true, 'Idle', 'Idle'],
   ['done', null, 'closed', false, true, 'Job done', 'Not running'],
   ['stopped', null, 'closed', false, true, 'Job stopped', 'Not running'],
   ['failed', null, 'closed', false, true, 'Job failed', 'Not running'],
@@ -171,7 +233,7 @@ for (const [state, kind, head, slot, label] of [
     test(`[628c] attached ${state} job with ${kind || 'no task'} and ${head} head keeps job activity in ${surface}`, async t => {
       const entries = roster(state, kind);
       const oldStatusAt = Date.now() - 3_600_000;
-      Object.assign(entries[0], { attachedHere: true, status: 'busy', statusUpdatedAt: oldStatusAt });
+      Object.assign(entries[0], { attachedHere: true, status: 'idle', statusUpdatedAt: oldStatusAt });
       const h = await setup(t, entries, true);
       h.window.sessionMap.get(SID).statusUpdatedAt = oldStatusAt;
       h.emitHeadTurn(SID, head);
@@ -515,8 +577,8 @@ test('hosted done with conversation ownership cannot revive foreground head acti
   const snapshot = h.window.backgroundActivitySnapshot(SID, { headTurn: 'open', liveness: 'alive', busy: true });
   assert.equal(snapshot.headTurn, 'closed');
   assert.equal(snapshot.busy, false);
-  assert.ok(h.document.querySelector('.session-icon--waiting'));
-  assert.equal(h.window.agentRowIcon(entries[0]).slotClass, 'session-icon--waiting');
+  assert.ok(h.document.querySelector('.session-icon--idle'));
+  assert.equal(h.window.agentRowIcon(entries[0]).slotClass, 'session-icon--idle');
 });
 
 for (const hosted of [true, false]) {

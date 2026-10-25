@@ -276,15 +276,16 @@ for (const own of [true, false]) {
   });
 }
 
-test('default state grouping puts hosted done under Idle with its waiting emoji', async () => {
+test('T6: default state grouping puts hosted done under Idle with its idle dot', async () => {
   const h = setup({ storage: {} });
   try {
-    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], id: 'cccccccc', sessionId: 's-c', hosted: true }, ROSTER[1]] });
+    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], id: 'cccccccc', sessionId: 's-c', hosted: true, status: 'idle' }, ROSTER[1]] });
     await h.window.showAgentsView();
     const idle = h.document.querySelector('[data-collapse="state:idle"]');
     assert.ok(idle);
     assert.match(idle.textContent, /💤 Idle/);
     assert.match(idle.nextElementSibling.querySelector('.agents-row-state').textContent, /💤 Idle/);
+    assert.ok(idle.nextElementSibling.querySelector('.session-icon--idle'));
     const done = h.document.querySelector('[data-collapse="state:done"]');
     assert.ok(done);
     assert.equal(done.nextElementSibling.querySelector('.agents-row-state').textContent.trim(), '✅ Done');
@@ -303,7 +304,7 @@ test('hosted done job keeps badge, live row, filter visibility and Attach/Stop o
     await h.window.showAgentsView();
     const row = h.document.querySelector('.agents-row');
     assert.ok(row);
-    assert.ok(row.querySelector('.session-icon--waiting'));
+    assert.ok(row.querySelector('.session-icon--attention'));
     assert.match(row.querySelector('.agents-row-state').textContent, /Idle/);
     assert.match(h.document.getElementById('agents-viewer-count').textContent, /1 running · 0 finished/);
     row.click();
@@ -340,8 +341,7 @@ test('Agents rows supply genuine attention, blocked waiting and finished glyphs 
     ] });
     await window.showAgentsView();
     const blocked = document.querySelector('.agents-row[data-key="bg:waiting"] .session-icon');
-    assert.ok(blocked.classList.contains('session-icon--waiting'));
-    assert.equal(blocked.classList.contains('session-icon--attention'), false);
+    assert.ok(blocked.classList.contains('session-icon--attention'));
     assert.match(blocked.title, /job blocked/);
     const { renderSessionIcon } = require('../public/session-state');
     for (const [rung, snapshot] of [['attention', { attention: true }], ['waiting', { waitingForInput: true }], ['stale', { stale: true }]]) {

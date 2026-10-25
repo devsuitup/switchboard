@@ -146,13 +146,13 @@ test('#714 an attach tab on a live background job is green at rest and shows the
   const at = Date.now() - 10_000;
   const job = parseJobState(JSON.stringify({ state: 'working', updatedAt: new Date(at).toISOString(),
     inFlight: { tasks: 0, kinds: [] }, sessionId: SID, fan: [] }));
-  const entries = mergeRoster({ cli: [{ id: 'aaaaaaaa', kind: 'background', sessionId: SID, state: 'working', status: 'busy' }],
+  const entries = mergeRoster({ cli: [{ id: 'aaaaaaaa', kind: 'background', sessionId: SID, state: 'working', status: 'idle' }],
     jobs: new Map([['aaaaaaaa', job]]), descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID,
-      status: 'busy', statusUpdatedAt: 1, cwd: '/repo', pid: 10 }] });
+      status: 'idle', statusUpdatedAt: 1, cwd: '/repo', pid: 10 }] });
   const h = setupSidebarDom();
   t.after(() => h.destroy());
   h.evalPublic('agents-view.js');
-  const session = { sessionId: SID, bgJobId: 'aaaaaaaa', status: 'busy', statusUpdatedAt: 1, modified: new Date().toISOString() };
+  const session = { sessionId: SID, bgJobId: 'aaaaaaaa', status: 'idle', statusUpdatedAt: 1, modified: new Date().toISOString() };
   h.window.sessionMap.set(SID, session);
   h.window.activePtyIds.add(SID);
   h.window.openSessions.set(SID, { session, attach: true });

@@ -16,7 +16,7 @@ When several states hold at once, the first one in this table wins:
 | Working | Light-blue braille spinner | light blue | Claude is working | Claude stops |
 | Working, with subagents | The same spinner, violet | light blue | Claude is working and subagents run under it | — |
 | Background work running | Static violet ⠿ | — | Claude is at its prompt, background tasks still run under it | The last background task ends |
-| Waiting for input | Orange hollow ring | — | Switchboard saw Claude finish a turn in a session open here, a session running elsewhere is at its prompt, or a background job is blocked (including while attached here) | A new turn starts or the job leaves blocked |
+| Waiting for input | Orange hollow ring | — | Switchboard saw Claude finish a turn in a session open here, a session running elsewhere is at its prompt, or a background job is blocked and idle (including while attached here) | A new turn starts or the session activity changes |
 | Idle, open here | Green dot with a small dot below it | — | A terminal is open here, with no higher activity state | Activity changes or the terminal exits |
 | Idle | Grey dot | — | No higher activity state | Activity changes |
 | Not running | Solid grey dash | — | A finished background job has no live process | Liveness changes |
@@ -29,9 +29,12 @@ tab open here says `Attached here · runs on <alias>`; a session awaiting restor
 says `Not reopened · restores on click`. Job state and CLI details follow
 without repeating the same words. These details stay out of the glyph.
 
-A blocked background job keeps its Blocked label and tooltip. Blocking alone
-does not request attention. When Claude separately asks for your attention,
-such as with a permission prompt, the blinking LED takes priority.
+A live background session reporting busy shows Working, even when its job says
+blocked or done. A waiting descriptor, such as a permission dialog, makes the
+attention LED blink without a separate notification. A blocked idle job keeps
+its Blocked label and waiting ring; a done idle session shows the idle dot.
+This reverses #728's rendering. A background idle descriptor never closes a
+head turn held open by transcript evidence.
 
 Sessions Switchboard does not run itself have no terminal to read signals
 from. Their row shows the working spinner while their transcript is being

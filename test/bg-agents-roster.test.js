@@ -21,6 +21,16 @@ const STATE = JSON.stringify({
   linkScanPath: '/home/u/.claude/projects/-home-u-p/bc3fd129-60bb-4bd2-8f38-63fecd1256e5.jsonl',
 });
 
+for (const cliStatus of [null, 'idle']) {
+  test(`T7: background descriptor status and waiting reason win over CLI ${cliStatus}`, () => {
+    const roster = mergeRoster({ jobs: new Map(),
+      cli: cliStatus ? [{ id: 'aaaaaaaa', sessionId: 's-bg', kind: 'background', status: cliStatus }] : [],
+      descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's-bg', status: 'waiting', waitingFor: 'dialog open' }] });
+    assert.equal(roster[0].status, 'waiting');
+    assert.equal(roster[0].waitingFor, 'dialog open');
+  });
+}
+
 test('parseJobState keeps the fields the view shows and derives agent/model/name/sessionId', () => {
   const job = parseJobState(STATE);
   assert.equal(job.state, 'done');
@@ -118,7 +128,7 @@ test('mergeRoster unions CLI, cached and descriptor-only jobs while live file st
   assert.deepEqual(ids.sort(), ['aaaaaaaa', 'bbbbbbbb', 'cccccccc', 'dddddddd', 's-ext']);
   const a = roster[0];
   assert.equal(a.state, 'done', 'the live state.json wins over the cached CLI state');
-  assert.equal(a.status, null, 'background activity never inherits coarse descriptor or CLI status');
+  assert.equal(a.status, 'busy', 'background projection receives the descriptor status independently of job state');
   assert.equal(a.detail, 'stale detail');
   assert.equal(a.tokens, 5);
   assert.equal(a.agent, 'fleet:em');
@@ -144,13 +154,13 @@ test('mergeRoster without CLI retains cached and descriptor-only candidates with
   assert.equal(a.pid, 10);
 });
 
-test('[628] normalized job evidence wins over an old busy descriptor without losing identity', () => {
+test('[785] normalized job evidence coexists with descriptor activity without losing identity', () => {
   const f = fixture();
   for (const state of ['working', 'blocked', 'done', 'stopped', 'failed', 'future']) {
     f.jobs.set('aaaaaaaa', parseJobState(JSON.stringify({ state, updatedAt: '2026-10-15T12:00:00Z',
       inFlight: { tasks: 0, kinds: [] }, fan: [{ id: 'cron-1', kind: 'cron', startedAt: 1 }] })));
     const row = mergeRoster(f)[0];
-    assert.equal(row.status, null);
+    assert.equal(row.status, 'busy');
     assert.equal(row.pid, 10);
     assert.equal(row.cwd, '/a');
     assert.equal(row.taskEvidence.valid, state !== 'future');

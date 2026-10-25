@@ -34,6 +34,28 @@ function setup(t, kind = 'local-pty', overrides = {}) {
   return { ctx, session, render, create, turn, tasks };
 }
 
+for (const [state, status, slot] of [['blocked', 'busy', 'busy'], ['done', 'idle', 'idle']]) {
+  test(`T6-grid: live ${state}/${status} uses the ${slot} slot on every surface`, t => {
+    const { ctx, session, render, create } = setup(t, 'background', { status });
+    ctx.evalPublic('agents-view.js');
+    ctx.window.refreshSidebar = render;
+    const entry = { kind: 'background', id: 'job-629', sessionId: session.sessionId, state, status, hosted: true };
+    ctx.window.applyAgentsSnapshot({ roster: [entry] });
+    const card = create();
+    const check = () => {
+      const agent = ctx.document.createElement('div');
+      agent.innerHTML = ctx.window.renderAgentRow(entry);
+      for (const icon of [ctx.window.sessionItemEl(session.sessionId).querySelector('.session-icon'), card.querySelector('.grid-card-dot'), agent.querySelector('.session-icon')]) {
+        assert.ok(icon.classList.contains(`session-icon--${slot}`), icon.outerHTML);
+      }
+    };
+    check();
+    render();
+    ctx.window.updateGridSubagentPills(session.sessionId);
+    check();
+  });
+}
+
 test('#563 sidebar and grid distinguish finished jobs from unknown liveness on render and repaint', t => {
   const { ctx, session, render, create } = setup(t, 'background');
   ctx.evalPublic('agents-view.js');
@@ -76,7 +98,7 @@ for (const attached of [false, true]) {
           ctx.window.openSessions.get(session.sessionId).attach = true;
         }
         let entry = { kind: 'background', id: 'job-629', sessionId: session.sessionId,
-          state: 'blocked', hosted: true, attachedHere: attached, status: 'busy',
+          state: 'blocked', hosted: true, attachedHere: attached, status: 'idle',
           taskEvidence: { valid: false } };
         const push = () => {
           ctx.window.applyAgentsSnapshot({ roster: [entry], daemonReachable: true });
@@ -96,7 +118,7 @@ for (const attached of [false, true]) {
             else assert.doesNotMatch(el.title, /blocked/i);
           }
           if (blocked) {
-            assert.equal(sidebar.querySelector('.session-status').textContent, 'Blocked');
+            assert.equal(sidebar.querySelector('.session-status').textContent, slot === 'attention' ? 'Needs attention' : 'Blocked');
             assert.match(agent.querySelector('.agents-row-state').textContent, /blocked/i);
           }
         };

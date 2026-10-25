@@ -75,6 +75,7 @@ function normalizeAgentsGroupBy(value) {
 function agentStateGroupKey(entry) {
   if (entry.kind === 'interactive') return 'external';
   if (['working', 'blocked'].includes(entry.state) && !agentJobIsLive(entry)) return 'unknown';
+  if (agentJobIsLive(entry) && entry.status === 'busy') return 'working';
   if (entry.state === 'done' && agentJobIsLive(entry)) return 'idle';
   const known = entry.state && entry.state !== 'external' && entry.state !== 'unknown' && Object.hasOwn(AGENT_STATE_META, entry.state);
   return known ? entry.state : 'unknown';
@@ -245,16 +246,20 @@ function projectBackgroundActivity(entry, snapshot) {
   const live = agentJobIsLive(entry);
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const blocked = live && entry.state === 'blocked';
-  const turnActive = live && !terminal && !blocked;
-  const headTurn = terminal || blocked ? 'closed' : snapshot.headTurn;
+  const status = entry.status ?? snapshot.descriptorStatus;
+  const descriptorBusy = live && status === 'busy';
+  const doneIdle = live && entry.state === 'done' && status === 'idle';
+  const turnActive = live && (!terminal && !blocked || descriptorBusy);
+  const headTurn = descriptorBusy ? 'open' : terminal || blocked ? 'closed' : snapshot.headTurn;
   return { ...snapshot, headTurn, liveness: live ? 'alive' : terminal ? 'dead' : 'unknown', stale: !live && terminal,
     titleOverride: !live && !terminal ? 'Liveness unknown' : null,
-    attention: live && !terminal && snapshot.attention, busy: turnActive && headTurn === 'open',
-    responseReady: turnActive && snapshot.responseReady,
+    waitingFor: entry.waitingFor ?? snapshot.waitingFor,
+    attention: live && (status === 'waiting' || !!snapshot.attention), busy: turnActive && headTurn === 'open',
+    responseReady: turnActive && !descriptorBusy && snapshot.responseReady,
     agentsBusy: turnActive && snapshot.agentsBusy,
     backgroundWork: turnActive && snapshot.backgroundWork,
-    waitingForInput: blocked || live && headTurn !== 'open'
-      && (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(entry.sessionId)) || !!snapshot.waitingForInput) };
+    waitingForInput: !descriptorBusy && !doneIdle && (blocked || live && headTurn !== 'open'
+      && (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(entry.sessionId)) || !!snapshot.waitingForInput)) };
 }
 
 function backgroundActivitySnapshot(sessionId, snapshot, row, selection) {
@@ -276,6 +281,8 @@ function backgroundActivityLabel(sessionId, snapshot, row, selection) {
   const kinds = valid ? (entry.taskEvidence.inFlightKinds || []).map(k => k.label).join(', ') : '';
   const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toLocaleString()} (job metadata)${kinds ? ` · ${kinds}` : ''}` : 'Job activity unavailable';
   const title = `${renderSessionIcon(snapshot).title} · job ${state || 'unknown'}\n${source}`;
+  if (agentJobIsLive(entry) && snapshot.attention) return { text: 'Needs attention', title };
+  if (agentJobIsLive(entry) && snapshot.busy && ['blocked', 'done'].includes(entry.state)) return { text: '', title };
   if (state === 'done' && agentJobIsLive(entry)) return { text: 'Idle', title };
   const text = state === 'unknown' ? 'Unknown' : state === 'blocked' ? 'Blocked' : terminal ? `Job ${state}`
     : state === 'working' && snapshot.attention ? 'Needs attention' : !valid ? 'Activity unavailable'
@@ -323,7 +330,7 @@ function applyAgentsSnapshot(snapshot) {
   agentsSnapshotRevision++;
   const activityFields = entries => JSON.stringify([...entries].map(([id, entry]) =>
     [id, entry.sessionId, entry.state, entry.taskEvidence?.valid, entry.taskEvidence?.at, entry.taskEvidence?.tasks, entry.taskEvidence?.inFlight,
-      entry.hosted, entry.attachedHere, entry.conversationOwn]).sort(([a], [b]) => a.localeCompare(b)));
+      entry.hosted, entry.attachedHere, entry.conversationOwn, entry.status, entry.waitingFor]).sort(([a], [b]) => a.localeCompare(b)));
   const previous = activityFields(bgActivityEntries);
   const previousJobs = new Map(bgActivityEntries);
   agentsRoster = Array.isArray(snapshot && snapshot.roster) ? snapshot.roster : [];
