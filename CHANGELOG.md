@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.100 — 2026-10-25
+
 ### New
 - An automation trigger can send one Escape to a local session tab waiting on a dialog: a question, a permission prompt or another CLI dialog. The observed writer must belong to the target session and still be waiting when the key is sent; this is unavailable on macOS, for plain terminals or for remote sessions. (#780)
 
