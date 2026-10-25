@@ -88,13 +88,14 @@ for (const host of [null, 'vps']) test(`U1: a live ${host ? 'attached' : 'local'
 
 test('U2: an unattached remote uses the socket and reports assumed only', async () => {
   const s = fixture(); const r = await run(s);
-  assert.equal(r.ok, true); assert.equal(r.submitted, 'assumed'); assert.equal(r.channel, 'socket'); assert.equal(r.host, 'vps');
+  assert.equal(r.ok, true); assert.equal(r.wrote, true); assert.equal(r.submitted, 'assumed'); assert.equal(r.channel, 'socket'); assert.equal(r.host, 'vps');
   assert.equal(r.submit_retries, 0); assert.equal(r.steps_total, 1); assert.equal(r.submit_confirmed, undefined);
   assert.equal(typeof r.sent_at, 'string'); assert.ok(Number.isFinite(Date.parse(r.sent_at)));
   assert.equal(s.calls.length, 1); assert.deepEqual(s.calls[0].args, ['vps', s.descriptor, 'hello']);
 });
 test('U3: multiple hosts refuse the id without sending', async () => {
   const s = fixture(() => ({ aliases: ['vps', 'other'] })); const r = await run(s);
+  assert.equal(r.wrote, false);
   assert.equal(r.error, 'not sent'); assert.match(r.reason, /more than one host.*vps.*other.*nothing was written/); assert.equal(s.calls.length, 0);
 });
 test('U4 GUARD: trigger host fields cannot select the destination', async () => {
@@ -103,7 +104,7 @@ test('U4 GUARD: trigger host fields cannot select the destination', async () => 
 });
 test('U5: a remote chain is refused with its step count', async () => {
   const s = fixture(); const r = await run(s, { command: undefined, chain: [{ command: 'a' }, { command: 'b' }] });
-  assert.equal(r.error, 'not sent'); assert.match(r.reason, /chain cannot be sent.*nothing was written/); assert.equal(r.steps_total, 2); assert.equal(s.calls.length, 0);
+  assert.equal(r.error, 'not sent'); assert.match(r.reason, /chain cannot be sent.*nothing was written/); assert.equal(r.wrote, false); assert.equal(r.steps_total, 2); assert.equal(s.calls.length, 0);
 });
 test('U6: old idle pulls do not count toward the two completed pulls', async () => {
   const s = fixture((n, snap) => ({ ...snap, at: n <= 2 ? 1 : snap.at }));
@@ -123,7 +124,7 @@ for (const [status, reason] of [['waiting', 'the CLI reports a dialog open (wait
   test(`U7/U8: fresh ${status} waits until its own deadline reason`, async (t) => {
     const s = fixture((n, snap) => ({ ...snap, descriptor: { ...snap.descriptor, status } }));
     const r = await run(s, { wait: 'idle', timeout_ms: 350 }, t);
-    assert.equal(r.error, 'not sent'); assert.equal(r.reason, reason); assert.ok(r.waited_ms >= 350); assert.equal(s.calls.length, 0);
+    assert.equal(r.error, 'not sent'); assert.equal(r.reason, reason); assert.equal(r.wrote, false); assert.ok(r.waited_ms >= 350); assert.equal(s.calls.length, 0);
     assert.ok(s.reads() >= 4, 'two post-start pulls must be observed before choosing the status reason');
   });
 }
@@ -138,7 +139,7 @@ for (const status of [undefined, 'unknown']) test(`U8: fresh ${status} status fa
 });
 test('U9: a descriptor vanishing during idle wait reports exit', async () => {
   const s = fixture((n, snap) => n >= 3 ? null : { ...snap, descriptor: { ...snap.descriptor, status: 'busy' } });
-  const r = await run(s, { wait: 'idle' }); assert.equal(r.error, 'session exited during wait'); assert.equal(r.submitted, 'no'); assert.equal(s.calls.length, 0);
+  const r = await run(s, { wait: 'idle' }); assert.equal(r.wrote, false); assert.equal(r.error, 'session exited during wait'); assert.equal(r.submitted, 'no'); assert.equal(s.calls.length, 0);
 });
 test('U10: a mid-wait attachment aborts before another descriptor poll', async () => {
   const s = fixture((n, snap) => ({ ...snap, descriptor: { ...snap.descriptor, status: n >= 8 ? 'idle' : 'busy' } }));
@@ -152,7 +153,7 @@ test('U10: attachment immediately before a none write is refused', async () => {
 });
 for (const [cwd, expectedCwd, key] of [['/srv/App', '/srv/app', 'targetMismatch'], [undefined, '/srv/app', 'targetCwdUnknown']]) test(`U11: cwd guard ${key}`, async () => {
   const s = fixture(); s.descriptor.cwd = cwd; const r = await run(s, { expectedCwd });
-  assert.equal(r.error, 'not sent'); assert.equal(r[key], true); assert.equal(s.calls.length, 0);
+  assert.equal(r.error, 'not sent'); assert.equal(r.wrote, false); assert.equal(r[key], true); assert.equal(s.calls.length, 0);
 });
 test('U11: POSIX normalization accepts a trailing slash and parent segment', async () => {
   const s = fixture(); assert.equal((await run(s, { expectedCwd: '/srv/x/../app/' })).ok, true);
@@ -162,7 +163,7 @@ for (const code of ['invalid', 'windows', 'dedupe', 'rate', 'nc-missing', 'no-so
   const s = fixture(null, { ok: false, code, error: 'adapter reason', ...(ambiguous ? { maybeWritten: true } : {}) });
   const r = await run(s);
   assert.equal(r.error, ambiguous ? 'send unconfirmed' : code === 'not-claude' ? 'target process not running' : 'not sent');
-  assert.equal(r.submitted, 'no'); assert.equal(r.reason, 'adapter reason'); assert.equal(r.written, ambiguous ? 'unknown' : undefined);
+  assert.equal(r.submitted, 'no'); assert.equal(r.reason, 'adapter reason'); assert.equal(r.written, ambiguous ? 'unknown' : undefined); assert.equal(r.wrote, ambiguous);
 });
 test('U13: result snapshots descriptor fields before the send mutates them', async () => {
   const s = fixture(null, (alias, desc) => { desc.status = 'busy'; desc.statusUpdatedAt = 99; return { ok: true }; });
@@ -177,7 +178,7 @@ for (const [command, error] of [['x'.repeat(4097), 'command too long (max 4 KB)'
 });
 for (const off of [true, false]) test(`U15/U22: setting ${off ? 'off' : 'on without descriptor'} preserves not-found result`, async () => {
   const s = fixture(() => null); if (off) delete s.ctx.remote;
-  const r = await run(s); assert.deepEqual(r, { ok: false, error: 'session not found', sessionId: 'remote', submitted: 'no', steps_total: 1 });
+  const r = await run(s); assert.deepEqual(r, { ok: false, error: 'session not found', sessionId: 'remote', submitted: 'no', wrote: false, steps_total: 1 });
 });
 test('U20 GUARD: trigger modules cannot require a process spawner', () => {
   for (const file of ['trigger-watcher.js', 'trigger-context.js']) assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), /require\(['"](?:node:)?child_process['"]\)/);
@@ -362,7 +363,7 @@ for (const midWait of [false, true]) test(`U23: disabling a real indexed host ${
     const ctx = createTriggerContext({ activeSessions: new Map(), log, remote: { indexer, adapter: s.ctx.remote, maxAgeMs: 120000, isEnabled: () => { if (++reads >= 3) enabled = false; return enabled; } } });
     s.ctx = ctx;
     const r = await run(s, midWait ? { wait: 'idle', timeout_ms: 500 } : {});
-    assert.equal(r.error, midWait ? 'session exited during wait' : 'session not found'); assert.equal(s.calls.length, 0);
+    assert.equal(r.error, midWait ? 'session exited during wait' : 'session not found'); assert.equal(r.wrote, false); assert.equal(s.calls.length, 0);
   } finally { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 test('U26: the first post-start idle pull is insufficient, including repeated reads', async () => {

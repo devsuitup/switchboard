@@ -114,8 +114,8 @@ const REASON_REMOTE_BASH = 'a bash-mode command cannot be sent to a remote sessi
 const REASON_REMOTE_MEMORY = 'a memory command cannot be sent to a remote session; nothing was written';
 
 function remoteLookupFailure(snapshot, sessionId, duringWait) {
-  if (!snapshot) return { ok: false, submitted: SUBMITTED_NO, error: duringWait ? 'session exited during wait' : 'session not found', sessionId };
-  if (snapshot.aliases) return { ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: `the session id is listed by more than one host (${snapshot.aliases.join(', ')}); nothing was written`, sessionId };
+  if (!snapshot) return { ok: false, submitted: SUBMITTED_NO, error: duringWait ? 'session exited during wait' : 'session not found', sessionId, wrote: false };
+  if (snapshot.aliases) return { ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: `the session id is listed by more than one host (${snapshot.aliases.join(', ')}); nothing was written`, sessionId, wrote: false };
   return null;
 }
 
@@ -131,19 +131,19 @@ function remoteCwdFailure(snapshot, expectedCwd, sessionId) {
   if (observedCwd === null) return {
     ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT,
     reason: "this session's cwd could not be determined; refusing rather than risk targeting the wrong session",
-    targetCwdUnknown: true, expectedCwd, observedCwd: null, sessionId,
+    targetCwdUnknown: true, expectedCwd, observedCwd: null, sessionId, wrote: false,
   };
   if (normalizeRemoteCwd(expectedCwd) !== observedCwd) return {
     ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT,
     reason: "expectedCwd does not match this session's actual cwd",
-    targetMismatch: true, expectedCwd, observedCwd: snapshot.descriptor.cwd, sessionId,
+    targetMismatch: true, expectedCwd, observedCwd: snapshot.descriptor.cwd, sessionId, wrote: false,
   };
   return null;
 }
 
 async function processRemoteTrigger(ctx, initial, { sessionId, command, chain, wait, expectedCwd, timeoutMs }) {
   const started = Date.now();
-  const refuse = reason => ({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId });
+  const refuse = reason => ({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId, wrote: false });
   if (chain !== undefined) return refuse('a chain cannot be sent to a remote session through the messaging socket; nothing was written');
   if (REMOTE_FORMAT_RE.test(command)) return refuse(REASON_REMOTE_FORMAT);
   const trimmed = command.trim();
@@ -205,6 +205,7 @@ async function processRemoteTrigger(ctx, initial, { sessionId, command, chain, w
     ...refuse(result.error),
     error: result.maybeWritten ? 'send unconfirmed' : result.code === 'not-claude' ? 'target process not running' : ERROR_NOT_SENT,
     ...(result.maybeWritten ? { written: 'unknown' } : {}),
+    wrote: !!result.maybeWritten,
   };
   return { ok: true, submitted: SUBMITTED_ASSUMED, sessionId, command: text, sent_at: new Date(sentAtMs).toISOString(), waited_ms: sentAtMs - started, submit_retries: 0, steps_total: 1, channel: 'socket', host: snapshot.alias, descriptor,
     ...(isCompactCommand(text) ? { compaction_observed: false, submit_confirmed: false,
@@ -1062,6 +1063,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   async function writeResult(result) {
     // Every result carries `submitted`; an unstated one is the safe value.
     if (result.submitted === undefined) result.submitted = SUBMITTED_NO;
+    if (result.wrote === undefined) result.wrote = writeAttempted;
     // see .ai/contexts/trigger-watcher.md, "steps_total"
     if (result.steps_total === undefined) result.steps_total = stepsTotal;
     if (Array.isArray(result.steps)) {
@@ -1098,6 +1100,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   let forgetTranscript = null;
   let stepsTotal = 0;
   let compactStepsTotal = 0;
+  let writeAttempted = false;
 
   try {
 
@@ -1340,6 +1343,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       }
       const failure = remoteLookupFailure(snapshot, sessionId, false);
       if (snapshot) {
+        writeAttempted = true;
         await writeResult(failure || await processRemoteTrigger(ctx, snapshot, { sessionId, command, chain, wait, expectedCwd, timeoutMs: resolvedTimeoutMs }));
         return;
       }
@@ -1398,7 +1402,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     return { ok: false, submitted: current.written ? SUBMITTED_ASSUMED : SUBMITTED_NO,
       error: err.background ? 'background session, not attached here' : err.deadline && chain !== undefined && steps.length && !current.text_written
         ? ERROR_CHAIN_TIMEOUT : anyBytes ? ERROR_UNCONFIRMED : ERROR_NOT_SENT,
-      reason, sessionId, written: !!current.written, text_written: !!current.text_written, enter_written: !!current.enter_written,
+      reason, sessionId, wrote: !!anyBytes, written: !!current.written, text_written: !!current.text_written, enter_written: !!current.enter_written,
       ...(err.background ? { jobId: err.background.jobId || null } : {}),
       ...(chain !== undefined ? { partial: !!anyBytes, steps_completed: idx, steps: current.command
         ? [...steps, { idx, command: current.command, written: !!current.written, text_written: !!current.text_written,
@@ -1466,6 +1470,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     try {
       await delivery.prepareKey(key, deliveryDeadline);
       delivery.beginStep(key);
+      writeAttempted = true;
       await delivery.writeKey(deliveryDeadline);
     }
     catch (err) {
@@ -1598,6 +1603,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     let compactionReason = null;
     try {
       if (delivery) { delivery.beginStep(command); delivery.deadline = commandDeadline; }
+      writeAttempted = true;
       const v = await submitWithVerify(handle, sessionId, command, ctx, isCompactCommand(command) ? commandDeadline : undefined);
       submitRetries     = v.submit_retries;
       submitConfirmed   = v.confirmed;
@@ -1842,6 +1848,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     const ownEntry = {};
     try {
       if (delivery) delivery.deadline = stepDeadline;
+      writeAttempted = true;
       verify = await submitWithVerify(entryHandle, sessionId, step.command, ctx, stepDeadline, { transcriptReaction: true, ownEntry });
     } catch (err) {
       if (err.deliveryRefusal || delivery?.step?.text_written) {

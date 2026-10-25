@@ -275,6 +275,7 @@ for (const platform of ['win32', 'linux', 'sandbox', 'darwin']) {
         refused(result, f.written, expected);
         assert.equal(result.sessionId, key === 'alias' ? 'b' : 'a');
         assert.equal(result.written, boundary === 'recovery Enter');
+    assert.equal(result.wrote, boundary !== 'text', JSON.stringify(result));
         if (boundary !== 'text') {
           assert.equal(result.text_written, true);
           assert.equal(result.enter_written, boundary === 'recovery Enter');
@@ -698,6 +699,7 @@ for (const boundary of ['text', 'Enter', 'recovery Enter']) {
     const expected = boundary === 'text' ? [] : boundary === 'Enter' ? ['prompt'] : ['prompt', '\r'];
     refused(result, f.written, expected);
     assert.equal(result.written, boundary === 'recovery Enter');
+    assert.equal(result.wrote, boundary !== 'text', JSON.stringify(result));
     if (boundary === 'Enter') { assert.equal(result.text_written, true); assert.equal(result.enter_written, false); assert.match(result.reason, /partial|text/i); }
   });
 }
@@ -841,6 +843,7 @@ test('ADR scenario: a writer changes during turn-end wait and preserves the alre
   const result = await f.run({ command: undefined, chain: [{ command: 'first' }, { command: 'tail' }] }, 4500);
   refused(result, f.written, ['first', '\r']);
   assert.equal(result.steps[0].written, true);
+  assert.equal(result.wrote, true, JSON.stringify(result));
 });
 
 test('ADR lock: a late descriptor alias joins the pinned tab while different tabs progress', async t => {

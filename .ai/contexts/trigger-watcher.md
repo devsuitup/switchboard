@@ -1950,6 +1950,28 @@ validation error) carries **no `steps` key at all**. Read it as
 
 Trigger file is **deleted** after processing (success or failure).
 
+### `wrote`
+
+Added 2026-10-25 (#787). Every result carries a boolean `wrote`: false only
+when no byte reached the local PTY or remote socket, true when any byte may
+have reached it. It is independent of `submitted`; `written` still means a
+complete text-plus-Enter pair.
+
+`processTriggerFile()` initializes `writeAttempted = false`, and `writeResult()`
+uses it when `wrote` is absent, next to the `submitted` default. Set it to true
+before each of the four write-capable calls: `processRemoteTrigger`,
+`delivery.writeKey`, and the single-command and chain `submitWithVerify`.
+Setting it before the call preserves uncertainty when a write throws; setting
+it after a call returns would incorrectly permit a retry after possible bytes.
+
+`deliveryFailure` overrides the flag using `anyBytes`: the current step's
+`text_written` or an earlier step's `text_written` / `written`. This proves
+zero bytes for a refusal before the first write, while retaining earlier
+chain writes. `enter_written` implies `text_written`, so no extra Enter term
+is needed. Remote lookup, cwd and other pre-send refusals explicitly set
+`wrote: false`; send failures use `!!result.maybeWritten`. Remote success
+and exceptions retain the conservative true default.
+
 ### Removing the entry
 
 `writeResult()` is the single place a trigger's fate is decided: it writes the
@@ -2280,6 +2302,8 @@ on real timers as smoke tests, per the issue's own suggested direction, since
 observation layer.
 
 ## Change-also checklist
+
+- A new write-capable call must set `writeAttempted = true` before it. A later `wrote: false` requires byte-level proof that nothing was written.
 
 - If you rename `_cliBusy` on `session` in `main.js`, update `isSessionBusy` in `trigger-context.js`.
 - If you rename `session.composerState` or stop feeding it from `terminal-input.js`, `getComposerState` returns `null` and **every trigger renounces with `not sent`** — the safe direction, but the channel goes silent.  Tests for the model live in `test/composer-state.test.js`; the handler and the ctx are exercised in `test/terminal-input-handler.test.js` and `test/trigger-context.test.js`, and `test/main-wiring-source-check.test.js` reads `main.js` as text to check the remaining glue is still written down (source only — it proves nothing at runtime).

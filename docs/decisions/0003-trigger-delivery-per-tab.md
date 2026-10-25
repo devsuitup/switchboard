@@ -440,6 +440,14 @@ existing result contract distinguishes `not sent` from written-but-unconfirmed
 delivery (`docs/automation.md:580`; `.ai/contexts/trigger-watcher.md:1548`,
 `.ai/contexts/trigger-watcher.md:1570`).
 
+**2026-10-25 (#787):** Every trigger result now carries `wrote`, false only
+when no byte reached the target and true when bytes may have reached it.
+Delivery refusals derive it from the same `text_written` / `enter_written`
+accounting, including earlier chain steps; `enter_written` implies
+`text_written`. Possible writes that throw remain true. `written` keeps its
+full text-plus-Enter meaning, and `submitted: "no"` alone does not prove a
+retry safe.
+
 ## Test matrix for the implementation step
 
 The 24 platform/key cells and twelve scenario rows below are required synthetic
