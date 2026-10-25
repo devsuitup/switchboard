@@ -195,11 +195,11 @@ terminal jobs alone may omit `inFlight` entirely.
 
 The shared background projection reads #638's head-turn and #626's unseen-output state:
 an open working head turn animates; a live background descriptor `busy` supplies
-this slot only when the turn is unknown. Agents, shells, monitors and cron at the prompt
+this slot when the turn is open or unknown; a closed turn wins. Agents, shells, monitors and cron at the prompt
 share the static background glyph. Only agent tasks contribute to #627's count.
 A live background descriptor wins over inferred job activity (#785, reversing #728):
-`busy` displays Working even for blocked or done jobs only without head-turn
-evidence. A known closed turn retains response-ready and background work subject
+`busy` displays Working even for blocked or done jobs unless the head turn is
+known closed. A known closed turn retains response-ready and background work subject
 to the job's lifecycle gates; `waiting` displays the
 blinking attention `!` without requiring a separate attention input. A blocked idle
 job keeps the waiting ring, including with a PTY attached here, and suppresses head
@@ -366,7 +366,7 @@ absent at zero, so a roster without external sessions reads as before.
 turn states: `done` means the turn ended, while the daemon may still host the
 session between messages. `working` means an active turn; `blocked` means the
 job parked itself (for example, a quota pause or awaiting a go-ahead). Its live
-descriptor supplies Working for an unknown turn when busy, and joins Active;
+descriptor supplies Working for an open or unknown turn when busy, and joins Active;
 waiting is Needs attention. A done job with waiting joins Active.
 Known head-turn evidence wins over
 busy; idle retains the waiting ring and Blocked label (#785).
@@ -428,7 +428,7 @@ finished done/stopped/failed activity keep their existing selection rules.
 The UI disables the buttons (`agentVerbAvailability`); `runVerb` refuses
 `respawn`/`rm` on a live roster entry with the same rule, so a stale renderer
 cannot bypass it. A blocked idle row draws the static orange waiting ring;
-a busy descriptor supplies Working only for an unknown turn, while a waiting descriptor or genuine
+a busy descriptor supplies Working for an open or unknown turn, while a waiting descriptor or genuine
 attention input displays the blinking attention `!` (#785, reversing #728).
 The shipped IPC adds invariant 10's fresh conversation check; the roster
 state alone cannot authorize a destructive verb. A finished job that matches

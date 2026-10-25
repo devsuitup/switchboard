@@ -314,8 +314,8 @@ a user-named bg head comes first, otherwise the most recently modified user-name
 part supplies the name, with start time and UUID/name breaking ties. Descriptor
 order cannot change the selected name. A matched live background descriptor's
 status reaches the activity projection; the cached CLI list status does not.
-PTY or transcript head-turn evidence wins: descriptor `busy` supplies the busy
-slot only for an unknown turn, so the historical frozen bg descriptor in
+A closed PTY or transcript head turn wins: descriptor `busy` supplies the busy
+slot only for an open or unknown turn, so the historical frozen bg descriptor in
 `audit-indicators.md` cannot reopen a closed turn. A closed working turn retains
 its background-work display. Descriptor `waiting` requests attention, including
 for a hosted done job.
