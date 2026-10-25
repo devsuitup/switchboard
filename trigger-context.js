@@ -299,6 +299,7 @@ function createTriggerContext(deps) {
     binding.beginStep = command => { binding.resetCompletionObserved = false; binding.step = { command, text_written: false, enter_written: false, written: false }; };
     async function waitKeyProcessTable(deadline) {
       if (!own || source.deliveryProcessTableFresh?.() !== false) return;
+      try { if (observe(pid)?.supported === false) return; } catch {}
       if (Date.now() >= deadline) fail('process table not fresh', null, true);
       try { await bounded(source.refreshProcessTable(), deadline); }
       catch { fail('process table not fresh'); }

@@ -1146,3 +1146,40 @@ test('ADR partial write: an Enter I/O failure records known text without claimin
   assert.equal(result.text_written, true); assert.equal(result.enter_written, false); assert.equal(result.written, false);
   assert.match(result.reason, /partial text/i);
 });
+
+
+test('ADR uncertainty: continuation re-key is not accepted before ownership is proven', async t => {
+  const f = fixture(t);
+  const pinned = f.ctx.pinDelivery('a', { ...f.ctx.getPtyForSession('a'), keyKind: 'historical' });
+  f.continueTo('a', 'b'); f.setWriter('b');
+  f.descriptor('external', 400, 'interactive', { procStart: null });
+  pinned.binding.beginStep('reply');
+  assert.throws(() => pinned.handle.write('reply'), /ownership of the pinned alias writer is unknown/);
+  assert.equal(pinned.binding.observation.writer.sessionId, 'b');
+  assert.equal(pinned.binding.observation.uncertain, true);
+  assert.equal(pinned.binding.effectiveId, 'a');
+  assert.deepEqual(f.written, []);
+  fs.rmSync(path.join(f.dir, '400.json'));
+  assert.equal(pinned.handle.write('reply').outcome, 'mine');
+  assert.equal(pinned.binding.effectiveId, 'b');
+});
+
+test('ADR uncertainty: reset successor is not accepted before ownership is proven', async t => {
+  const f = fixture(t);
+  const pinned = f.ctx.pinDelivery('a', f.ctx.getPtyForSession('a'), true);
+  pinned.binding.beginStep('/clear');
+  assert.equal(pinned.handle.write('/clear').outcome, 'mine');
+  assert.equal(pinned.handle.write('\r').outcome, 'mine');
+  f.setWriter('c');
+  f.descriptor('external', 400, 'interactive', { procStart: null });
+  assert.equal(pinned.binding.readId(), null);
+  assert.equal(pinned.binding.observation.writer.sessionId, 'c');
+  assert.equal(pinned.binding.observation.uncertain, true);
+  assert.equal(pinned.binding.effectiveId, 'a');
+  assert.notEqual(pinned.binding.reset, null);
+  assert.equal(pinned.binding.resetCompleted(), false);
+  assert.deepEqual(f.written, ['/clear', '\r']);
+  fs.rmSync(path.join(f.dir, '400.json'));
+  assert.equal(pinned.binding.readId(), 'c');
+  assert.equal(pinned.binding.reset, null);
+});

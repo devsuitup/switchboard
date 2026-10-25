@@ -14,7 +14,8 @@ const { start } = require('../trigger-watcher');
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 
-async function fixture(t, { root = 'Electron', count = 3, parent, malformed = false, uncertainParent, missingPty = false } = {}) {
+async function fixture(t, { root = 'Electron', count = 3, parent, malformed = false, uncertainParent, missingPty = false,
+  siblingRoot, siblingIdentity = true, platform = 'win32', failedTable = false } = {}) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-windows-tabs-')));
   const descriptors = path.join(dir, 'sessions');
   const triggers = path.join(dir, 'triggers');
@@ -45,15 +46,24 @@ async function fixture(t, { root = 'Electron', count = 3, parent, malformed = fa
       sessionId: 'uncertain-writer', kind: 'interactive', pidDomain: 'win32:anchor', procStart: created(9),
       status: 'waiting', statusUpdatedAt: Date.now() }));
   }
+  if (siblingRoot !== undefined) {
+    rows.push([1224, siblingRoot === 'reused' ? 1096 : siblingRoot, created(0), 'wininit.exe'],
+      [1344, 1224, created(1), ''], [1552, 1344, created(2), ''],
+      [21832, 1552, created(3), ''], [7024, 21832, created(4), 'claude.exe']);
+    if (siblingRoot === 'reused') rows.push([1096, 12660, created(30), 'kDrive.exe']);
+    fs.writeFileSync(path.join(descriptors, '7024.json'), JSON.stringify({ pid: 7024,
+      sessionId: 'service-sibling', kind: 'interactive', pidDomain: 'win32:anchor',
+      procStart: siblingIdentity ? created(4) : undefined, status: 'waiting', statusUpdatedAt: Date.now() }));
+  }
   const table = cli.parseProcessTable(rows.filter(([pid]) => !missingPty || pid !== tabs[0].pty.pid)
     .map(([pid, ppid, stamp, command]) => `${pid} ${ppid} ${stamp}\t${command}`).join('\r\n'));
   if (malformed) table.get(rootPid).ppid = parent;
   let clock = Date.now() + (uncertainParent === undefined ? 10000 : -60000);
   let refreshBlocked = false;
   let refreshReader = async () => table;
-  cli.init({ dir: descriptors, platform: 'win32', ownPid: rootPid, now: () => clock,
+  cli.init({ dir: descriptors, platform, ownPid: rootPid, now: () => clock,
     isProcessAlive: () => true, readProcessTable: async () => {
-      if (refreshBlocked) throw new Error('process table unavailable');
+      if (refreshBlocked || failedTable) throw new Error('process table unavailable');
       return refreshReader();
     } });
   await cli.refreshProcessTable();
@@ -98,6 +108,40 @@ async function fixture(t, { root = 'Electron', count = 3, parent, malformed = fa
       };
     } };
 }
+
+for (const siblingRoot of [900, 1, 'reused']) {
+  test(`Windows service sibling with empty command lines and root ${siblingRoot} preserves writers and Escape`, async t => {
+    const f = await fixture(t, { siblingRoot });
+    for (const tab of f.tabs) {
+      const observed = cli.observeTabWriter(tab.pty.pid);
+      assert.equal(observed.writer?.pid, tab.writerPid);
+      assert.equal(observed.uncertain, false, 'a proven sibling outside the PTY must not veto ownership');
+      assert.equal(cli.findDeliveryTab(tab.realSessionId, f.tabs).tab, tab);
+    }
+    const result = await f.dispatch(0, { key: 'escape' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(f.tabs.map(tab => tab.written), [['\x1b'], [], []]);
+  });
+}
+
+test('Windows reused-parent sibling with unproven identity keeps ownership unknown', async t => {
+  const f = await fixture(t, { siblingRoot: 'reused', siblingIdentity: false });
+  const observed = cli.observeTabWriter(f.tabs[0].pty.pid);
+  assert.equal(observed.writer?.pid, f.tabs[0].writerPid);
+  assert.equal(observed.uncertain, true, 'a reused parent cannot prove an unidentified sibling outside');
+  const result = await f.dispatch(0, { key: 'escape' });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'tab writer not proven');
+  assert.deepEqual(f.tabs.map(tab => tab.written), [[], [], []]);
+});
+
+test('macOS failed ps refuses Escape as unsupported', async t => {
+  const f = await fixture(t, { platform: 'darwin', failedTable: true });
+  const result = await f.dispatch(0, { key: 'escape' });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'escape needs a session whose state can be observed here (unsupported on this platform or tab)');
+  assert.deepEqual(f.tabs.map(tab => tab.written), [[], [], []]);
+});
 
 for (const uncertainParent of [30000, 1]) {
   test(`Windows uncertain descriptor identity vetoes ownership when parent ${uncertainParent} is outside`, async t => {

@@ -600,10 +600,15 @@ absent has reached an exited parent: the walk returns `outside`. This includes
 Switchboard or Explorer keeping the PID of a launcher that has already exited.
 The live target PTY is present in the table, so its own chain reaches `mine`
 before this root. A stale table, a missing or unparsable parent in a present row,
-unknown creation times, reused PID ordering or earlier uncertain ancestry still
-keeps the verdict `unknown`. An uncertain descriptor identity also keeps both
-an absent parent row and a parent PID at or below 1 `unknown`; an absent parent
-row that names the target PTY is always `unknown`. A nested CLI whose intermediate
+unknown creation times or an uncertain process tree still keeps the verdict
+`unknown`. A parent PID reused by a newer process also proves an exited parent.
+For an absent parent row, a parent PID at or below 1, or a reused parent PID,
+the verdict is `outside` only with a valid leaf descriptor identity and a certain
+process tree, and when that parent is not the target PTY. Empty intermediate
+command lines or unknown ancestor kinds do not veto this verdict: every step
+already checked for the target PTY. They still make a walk that reaches the PTY
+`unknown`. An unproven leaf identity or a missing parent that names the target
+PTY remains `unknown`. A nested CLI whose intermediate
 parent exited while staying on the same console reads `outside`, the same as an
 orphan reparented to pid 1 on Linux.
 
@@ -615,7 +620,9 @@ delivery still works. Escape requires a freshly observed `waiting` writer and
 ownership `mine`; an idle writer reports `status: idle`. Escape waits for a fresh
 process table before its initial check and again before writing, bounded by the
 trigger's deadline. A failed refresh or one that exceeds that deadline refuses
-with `process table not fresh` and writes nothing.
+with `process table not fresh` and writes nothing. An unsupported observation,
+including macOS when `ps` fails, keeps the unsupported Escape reason without
+waiting for a process-table refresh.
 
 `test/cli-session-state-windows-tabs.test.js` covers two and three interactive
 descriptors under separate Git Bash PTYs sharing an Electron or Explorer root

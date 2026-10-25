@@ -867,12 +867,12 @@ function deliveryAncestry(raw, ptyPid, snapshot) {
     let parent;
     try { parent = readParentPid(current); } catch { return { state: 'unknown' }; }
     if (!Number.isInteger(parent)) return { state: 'unknown' };
-    if (parent <= 1) return { state: uncertain || uncertainTree ? 'unknown' : 'outside' };
+    if (parent <= 1) return { state: identity !== 'valid' || uncertainTree || parent === ptyPid ? 'unknown' : 'outside' };
     if (processTableEnabled) {
       const child = tableEntry(current), above = tableEntry(parent);
-      if (processTableFresh() && child?.created != null && !above) return { state: uncertain || uncertainTree || parent === ptyPid ? 'unknown' : 'outside' };
+      if (processTableFresh() && child?.created != null && !above) return { state: identity !== 'valid' || uncertainTree || parent === ptyPid ? 'unknown' : 'outside' };
       if (!processTableFresh() || !child || !above || child.created == null || above.created == null) { uncertain = true; uncertainTree = true; }
-      else if (child.created < above.created) return { state: 'unknown' };
+      else if (child.created < above.created) return { state: identity !== 'valid' || uncertainTree || parent === ptyPid ? 'unknown' : 'outside' };
     } else {
       try {
         const child = readProcStart(current), above = readProcStart(parent);
