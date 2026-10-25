@@ -368,7 +368,7 @@ session between messages. `working` means an active turn; `blocked` means the
 job parked itself (for example, a quota pause or awaiting a go-ahead). Its live
 descriptor supplies Working for an open or unknown turn when busy, and joins Active;
 waiting is Needs attention. A done job with waiting joins Active.
-Known head-turn evidence wins over
+A known closed turn wins over
 busy; idle retains the waiting ring and Blocked label (#785).
 Leaving `blocked` removes that waiting evidence; the normal head-turn and PTY
 rules apply again. `stopped` and `failed` are finished even with a leftover descriptor.
