@@ -243,7 +243,7 @@ with `key` is refused. Only `"escape"` is accepted as a key value. Escape
 inside a `command` string remains forbidden.
 
 The usual `processed/<trigger-id>.result.json` reports
-`{ "ok": true, "sessionId": "<session-id>", "key": "escape", "submitted": "no", "steps_total": 0 }`
+`{ "ok": true, "sessionId": "<session-id>", "key": "escape", "submitted": "no", "wrote": true, "steps_total": 0 }`
 when exactly one Escape byte was written, without Enter. This does not confirm
 that the CLI closed the dialog. `submitted: "no"` means no command was submitted.
 A refusal has `ok: false` and a `reason`, including
@@ -597,9 +597,15 @@ start, or could not read a name, both logged, no result ever comes. A caller
 that polls for a result needs a bound of its own.
 
 ```json
-{ "ok": true,  "submitted": "activity", "sessionId": "...", "command": "...", "sent_at": "...", "waited_ms": 320, "submit_retries": 0, "steps_total": 1 }
-{ "ok": false, "submitted": "no", "error": "not sent", "reason": "4 byte(s) of input are sitting unsubmitted in the composer" }
+{ "ok": true,  "wrote": true, "submitted": "activity", "sessionId": "...", "command": "...", "sent_at": "...", "waited_ms": 320, "submit_retries": 0, "steps_total": 1 }
+{ "ok": false, "wrote": false, "submitted": "no", "error": "not sent", "reason": "4 byte(s) of input are sitting unsubmitted in the composer" }
 ```
+
+**Every result carries `wrote`.** `wrote: false` proves that no byte reached
+the session, so resending is safe. `wrote: true` means something may have
+reached it; check the session before retrying. `submitted: "no"` alone is
+not that proof: an Escape byte, `send unconfirmed`, `pty write failed`, or a
+partial chain can all carry it after a possible write.
 
 **`submitted` is the field to read, not `ok`.** Text written into a prompt is
 not a message received. Four values, compared by strict equality, ordered
@@ -681,7 +687,7 @@ never in `error`: `not sent: input pending` is not `not sent`.
 | `background session, not attached here` | a live local CLI descriptor identifies a background session, but this instance has no attach tab for it; nothing was written, `submitted` is `no`, and `jobId` and `sessionId` identify the target | attach the job in the Agents view before retrying |
 | `chain timeout` | at least one step **was written**, and the expected effect was not observed before the deadline | assume the written steps landed |
 | `step not confirmed` | text **was written** and nothing more was typed. For a single or chained `/compact`, its boundary evidence was not observed before the deadline; see the [compact evidence contract](#compact-evidence-contract). For an ordinary chain step, submission was not confirmed and recovery Enter was withheld by a busy/waiting descriptor or pending input. A readable local transcript under `busy` allows up to 30 s for the step's own entry, then up to the step deadline for its turn to finish; `reason` identifies the failed wait | inspect the session before retrying: the step may be unsubmitted, queued, running, or completed without readable evidence |
-| anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `submitted` to know whether anything landed |
+| anything else | free text: `session not found`, `target process not running`, `missing required field`, `invalid timeout_ms`, `command and chain are mutually exclusive`, `trigger too large (max 64 KB)`, `command too long (max 4 KB)`, `trigger must be a regular file`, `pty write failed: …` | read `wrote` to know whether anything may have reached the session; `submitted` for whether it was submitted |
 
 A trigger to a live local background session without an attach tab returns
 `{ ok: false, submitted: "no", error: "background session, not attached here", jobId, sessionId }`
@@ -757,6 +763,8 @@ Both count every wait the trigger spent, at different scopes:
   counts in `total_waited_ms` but belongs to no entry.
 
 ### A truncated chain
+
+A partial chain always reports `wrote: true`, even when its final step was not submitted.
 
 `steps_completed` counts steps whose wait **completed**. A step that was written
 and then timed out waiting has an entry in `steps[]` but is not counted: a chain

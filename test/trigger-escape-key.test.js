@@ -92,6 +92,7 @@ test('waiting local session receives exactly one Escape without Enter', async ()
   const { result, written } = await run({});
   assert.deepEqual(written, ['\x1b']);
   assert.equal(result.ok, true);
+  assert.equal(result.wrote, true);
   assert.equal(result.key, 'escape');
   assert.equal(result.sessionId, id);
 });
@@ -104,6 +105,7 @@ for (const [name, options] of [
     const { result, written } = await run({}, options);
     assert.deepEqual(written, []);
     assert.equal(result.ok, false);
+    assert.equal(result.wrote, false);
     assert.equal(result.submitted, 'no');
     assert.equal(result.reason, 'escape needs a session whose state can be observed here (unsupported on this platform or tab)');
   });
@@ -114,6 +116,7 @@ for (const status of ['idle', 'busy', 'shell']) {
     const { result, written } = await run({}, { status });
     assert.deepEqual(written, []);
     assert.equal(result.ok, false);
+    assert.equal(result.wrote, false);
     assert.equal(result.reason, `session not waiting on a dialog (status: ${status})`);
   });
 }
@@ -130,6 +133,7 @@ for (const [name, options, reason] of [
     const { result, written } = await run({}, options);
     assert.deepEqual(written, []);
     assert.equal(result.ok, false);
+    assert.equal(result.wrote, false);
     assert.equal(result.reason, reason);
   });
 }
@@ -146,6 +150,7 @@ for (const [name, payload, reason] of [
     const { result, written } = await run(payload);
     assert.deepEqual(written, []);
     assert.equal(result.ok, false);
+    assert.equal(result.wrote, false);
     assert.equal(result.reason, reason);
   });
 }
@@ -168,12 +173,13 @@ test('fresh waiting writer ignores stale busy cache and preserves the key payloa
   for (const payload of [{}, cwd => ({ timeout_ms: 5000, expectedCwd: cwd })]) {
     const { result, written } = await run(payload, options);
     assert.deepEqual(written, ['\x1b']);
-    assert.deepEqual(result, { ok: true, sessionId: id, key: 'escape', submitted: 'no', steps_total: 0 });
+    assert.deepEqual(result, { ok: true, sessionId: id, key: 'escape', submitted: 'no', wrote: true, steps_total: 0 });
   }
   for (const key of ['Escape', '', 27, '\x1b', ['escape']]) {
     const { result, written } = await run({ key }, options);
     assert.deepEqual(written, []);
     assert.equal(result.ok, false);
+    assert.equal(result.wrote, false);
     assert.equal(result.submitted, 'no');
     assert.equal(result.reason, 'unsupported key: only "escape" is supported');
   }
@@ -188,6 +194,7 @@ for (const status of ['idle', 'busy', 'shell']) {
   test(`fresh ${status} writer refuses Escape despite cached waiting`, async () => {
     const { result, written } = await run({}, { writerStatus: status });
     assert.deepEqual(written, [], 'ESC must not reach a writer whose fresh descriptor is not waiting');
+    assert.equal(result.wrote, false);
     assert.equal(result.ok, false);
     assert.equal(result.submitted, 'no');
     assert.equal(result.reason, `session not waiting on a dialog (status: ${status})`);
@@ -199,6 +206,7 @@ for (const options of [{ noWriter: true }, { observationThrows: true }, { attach
     const { result, written } = await run({}, options);
     assert.deepEqual(written, []);
     assert.equal(result.ok, false);
+    assert.equal(result.wrote, false);
     assert.equal(result.submitted, 'no');
     assert.equal(result.reason, options.attach
       ? 'escape needs a session whose state can be observed here (unsupported on this platform or tab)'
@@ -209,6 +217,7 @@ for (const options of [{ noWriter: true }, { observationThrows: true }, { attach
 test('an unrelated waiting writer cannot receive Escape through a direct session key', async () => {
   const { result, written } = await run({}, { writerId: 'someone-else' });
   assert.deepEqual(written, [], 'ESC requires ownership mine for the observed target writer');
+  assert.equal(result.wrote, false);
   assert.equal(result.ok, false);
   assert.equal(result.submitted, 'no');
   assert.match(result.reason, /ownership/);
@@ -227,6 +236,7 @@ for (const changeBeforeWrite of ['status', 'ownership']) {
   test(`the write re-check refuses a ${changeBeforeWrite} change after the initial key check`, async () => {
     const { result, written } = await run({}, { changeBeforeWrite });
     assert.deepEqual(written, [], 'the write must re-check the fresh writer after the initial key check');
+    assert.equal(result.wrote, false);
     assert.equal(result.ok, false);
     assert.equal(result.submitted, 'no');
     if (changeBeforeWrite === 'status') assert.equal(result.reason, 'session not waiting on a dialog (status: busy)');
