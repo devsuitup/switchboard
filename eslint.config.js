@@ -24,6 +24,9 @@ const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .c
 // public/sidebar.js (and equivalents). Kept readonly so reassignment
 // from another file gets flagged.
 const rendererCrossFileGlobals = {
+  runAttachedJobVerb: 'readonly',
+  writeSessionExitBanner: 'readonly',
+  updateTerminalHeader: 'readonly',
   detachSession: 'readonly',
   planSessionDetach: 'readonly',
   describeSessionStopPlan: 'readonly',

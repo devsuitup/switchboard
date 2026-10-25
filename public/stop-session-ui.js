@@ -151,6 +151,36 @@ async function liveBackgroundJobRefusal(sessionId, backgroundJobs) {
   return null;
 }
 
+async function runAttachedJobVerb(verb, jobId, sessionId) {
+  const entry = openSessions.get(sessionId);
+  const pending = entry?.attach && !entry.closed && !entry.session?.remoteAlias
+    ? { previousEnding: entry.jobEnding, exit: null } : null;
+  if (pending) {
+    if (entry.jobVerbPending) throw new Error('A background job action is already in progress');
+    entry.jobVerbPending = pending;
+    entry.jobEnding = verb;
+  }
+  try {
+    const result = await window.api.bgAgentVerb(verb, jobId);
+    if (!result?.ok) throw new Error(result?.error || (verb === 'rm' ? 'unknown error' : 'The background stop backend is unavailable'));
+    return result;
+  } catch (error) {
+    if (pending) {
+      entry.jobEnding = pending.previousEnding;
+      if (pending.exit && openSessions.get(sessionId) === entry) {
+        const exit = pending.exit;
+        noteSessionExit(sessionId, exit.exitCode, exit.signal, exit.stopped, exit.detached);
+        writeSessionExitBanner(entry, lastSessionExit(sessionId), { correction: true });
+        if (typeof updateRunningIndicators === 'function') updateRunningIndicators();
+        if (typeof updateTerminalHeader === 'function') updateTerminalHeader();
+      }
+    }
+    throw error;
+  } finally {
+    if (pending) delete entry.jobVerbPending;
+  }
+}
+
 async function archiveBackgroundJobRefusal(session, backgroundJobs) {
   if (session.remoteAlias) return null;
   for (const id of rowSessionIds(session)) {

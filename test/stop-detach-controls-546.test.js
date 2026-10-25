@@ -77,6 +77,209 @@ test('A4 an unattached live job stops after one confirmation without a tab stop'
   assert.deepEqual(h.calls[2], ['verb', 'stop', 'abcdef12']);
 });
 
+for (const timing of ['before verb resolution', 'after verb resolution']) {
+  test(`#782 confirmed attach Stop reads Stopped when its client exits ${timing} before stopSession`, async t => {
+    const h = setup(t);
+    const writes = [];
+    h.entry.terminal.write = data => writes.push(data);
+    const exit = () => {
+      assert.equal(h.calls.some(call => call[0] === 'tab'), false);
+      h.w.gridViewActive = false;
+      h.w.activeSessionId = null;
+      h.w.applyProcessExit('A', 0, null, false);
+    };
+    h.w.api.bgAgentVerb = (...args) => {
+      h.calls.push(['verb', ...args]);
+      return { then(resolve) {
+        if (timing === 'before verb resolution') exit();
+        resolve({ ok: true });
+        if (timing === 'after verb resolution') exit();
+      } };
+    };
+    await h.stop();
+    assert.match(writes.at(-1), /session stopped/, 'confirmed Stop must label the early attach exit as stopped');
+    assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
+    assert.doesNotMatch(writes.at(-1), /detached|keeps running|exited \(code 0\)/);
+    assert.ok(writes.at(-1).startsWith('\r\n\x1b[2m'));
+  });
+}
+
+for (const [failure, stop] of [
+  ['non-ok result', () => ({ ok: false, error: 'job stop refused' })],
+  ['rejection', () => { throw new Error('job stop rejected'); }],
+  ['missing result', () => undefined],
+]) {
+  test(`#782 failed attach Stop clears intent before an unrelated exit (${failure})`, async t => {
+    const h = setup(t);
+    const writes = [];
+    h.entry.terminal.write = data => writes.push(data);
+    h.w.api.bgAgentVerb = stop;
+    await h.stop();
+    assert.equal(h.entry.jobEnding, undefined);
+    assert.equal(h.calls.some(call => call[0] === 'tab'), false);
+    assert.ok(h.document.querySelector('[role="alert"]'));
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 7, null, false);
+    assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Exited (code 7)');
+    assert.match(writes.at(-1), /session exited \(code 7\)/);
+  });
+}
+
+test('#782 cancelled Stop leaves a later attach exit unsolicited', async t => {
+  const h = setup(t);
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.w.appConfirm = async () => false;
+  await h.stop();
+  assert.equal(h.entry.jobEnding, undefined);
+  assert.equal(h.calls.some(call => call[0] === 'verb'), false);
+  h.w.gridViewActive = false;
+  h.w.activeSessionId = null;
+  h.w.applyProcessExit('A', 0, null, false);
+  assert.match(writes.at(-1), /session exited \(code 0\)/);
+});
+
+test('#782 Detach still reads Detached after a failed job Stop', async t => {
+  const h = setup(t);
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.w.api.bgAgentVerb = async () => ({ ok: false, error: 'job stop refused' });
+  await h.stop();
+  h.w.api.stopSession = async () => {
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 0, null, true);
+    return { ok: true, detached: true };
+  };
+  await h.w.detachSession('A');
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Detached');
+  assert.match(writes.at(-1), /session detached .*it keeps running in the background/);
+});
+
+test('#782 local non-attach Stop keeps its Stopped banner', async t => {
+  const h = setup(t, { attached: false });
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.w.api.stopSession = async () => {
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 0, null, true);
+    return { ok: true };
+  };
+  await h.stop();
+  assert.equal(h.entry.jobEnding, undefined);
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
+  assert.match(writes.at(-1), /session stopped/);
+});
+
+for (const source of ['sidebar', 'Agents view']) {
+  for (const failure of ['non-ok result', 'rejection', 'missing result']) {
+    test(`#782b ${source} restores an exit recorded during a failed Stop (${failure})`, async t => {
+      const h = setup(t);
+      const writes = [];
+      h.entry.terminal.write = data => writes.push(data);
+      if (source === 'Agents view') h.evalPublic('agents-view.js');
+      h.w.refreshAgentsRoster = async () => {};
+      let duringLabel;
+      h.w.api.bgAgentVerb = async () => {
+        h.w.gridViewActive = false;
+        h.w.activeSessionId = null;
+        h.w.applyProcessExit('A', 7, null, false);
+        duringLabel = h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') });
+        if (failure === 'rejection') throw new Error('job stop rejected');
+        return failure === 'missing result' ? undefined : { ok: false, error: 'job stop refused' };
+      };
+      if (source === 'sidebar') await h.stop();
+      else await h.w.runAgentVerb('stop', { id: 'abcdef12', sessionId: 'A', attachedHere: true });
+      assert.equal(duringLabel, 'Stopped', 'Stop intent applies while awaiting the job verb');
+      assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Exited (code 7)');
+      assert.equal(writes.length, 2, 'one provisional banner and one explicit correction');
+      assert.match(writes[0], /── session stopped — /);
+      assert.match(writes[1], /── correction: previous exit status superseded; session exited \(code 7\) — /);
+      assert.ok(writes[1].startsWith('\r\n\x1b[33m'));
+      assert.equal(h.entry.jobEnding, undefined);
+      assert.equal(h.calls.some(call => call[0] === 'tab'), false);
+    });
+  }
+
+  test(`#782b ${source} refuses Detach while Stop awaits the job verb`, async t => {
+    const h = setup(t);
+    const writes = [];
+    h.entry.terminal.write = data => writes.push(data);
+    if (source === 'Agents view') h.evalPublic('agents-view.js');
+    h.w.refreshAgentsRoster = async () => {};
+    let release, started;
+    const verbStarted = new Promise(resolve => { started = resolve; });
+    h.w.api.bgAgentVerb = () => {
+      started();
+      return new Promise(resolve => { release = resolve; });
+    };
+    const stopping = source === 'sidebar' ? h.stop()
+      : h.w.runAgentVerb('stop', { id: 'abcdef12', sessionId: 'A', attachedHere: true });
+    await verbStarted;
+    await h.w.detachSession('A');
+    const detachedDuringStop = h.calls.some(call => call[0] === 'tab');
+    release({ ok: true });
+    await stopping;
+    assert.equal(detachedDuringStop, false, 'Detach must not close the client while Stop is in flight');
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 0, null, true);
+    assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
+    assert.match(writes.at(-1), /session stopped/);
+  });
+}
+
+test('#782b Agents view Stop labels an early attach exit Stopped', async t => {
+  const h = setup(t);
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.evalPublic('agents-view.js');
+  h.w.refreshAgentsRoster = async () => {};
+  h.w.api.bgAgentVerb = async () => {
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 0, null, false);
+    return { ok: true };
+  };
+  await h.w.runAgentVerb('stop', { id: 'abcdef12', sessionId: 'A', attachedHere: true });
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Stopped');
+  assert.match(writes.at(-1), /session stopped/);
+});
+
+test('#782c Agents view rm without backend error text reports unknown error', async t => {
+  const h = setup(t);
+  h.evalPublic('agents-view.js');
+  h.w.refreshAgentsRoster = async () => {};
+  h.w.api.bgAgentVerb = async () => ({ ok: false });
+  await h.w.runAgentVerb('rm', { id: 'abcdef12', sessionId: 'A', attachedHere: true });
+  assert.deepEqual(Array.from(h.read('agentsVerbErrors.values()')), ['unknown error']);
+  assert.equal(h.entry.jobEnding, undefined);
+  assert.equal(h.calls.some(call => call[0] === 'tab'), false);
+});
+
+test('#782c failed Stop preserves its original error without optional repaint functions', async t => {
+  const h = setup(t);
+  const writes = [];
+  h.entry.terminal.write = data => writes.push(data);
+  h.w.api.bgAgentVerb = async () => {
+    h.w.gridViewActive = false;
+    h.w.activeSessionId = null;
+    h.w.applyProcessExit('A', 7, null, false);
+    delete h.w.updateRunningIndicators;
+    delete h.w.updateTerminalHeader;
+    throw new Error('job stop rejected');
+  };
+  await assert.rejects(h.w.runAttachedJobVerb('stop', 'abcdef12', 'A'), /job stop rejected/);
+  assert.equal(h.entry.jobEnding, undefined);
+  assert.equal(h.entry.jobVerbPending, undefined);
+  assert.equal(h.w.lifecycleLabel({ exit: h.w.lastSessionExit('A') }), 'Exited (code 7)');
+  assert.equal(writes.length, 2);
+  assert.match(writes[0], /── session stopped — /);
+  assert.match(writes[1], /── correction: previous exit status superseded; session exited \(code 7\) — /);
+});
+
 test('A5 a refused job check leaves a persistent reason without asking or executing', async t => {
   const h = setup(t);
   h.w.api.checkBgAgentVerb = async () => ({ ok: false, error: 'conversation is running outside' });

@@ -905,6 +905,12 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     pollActiveSessions();
     return;
   }
+  if (entry?.jobVerbPending) {
+    entry.jobVerbPending.exit = { exitCode, signal,
+      stopped: stopped || entry.jobVerbPending.previousEnding === 'stop',
+      detached: !!(stopped && !entry.jobVerbPending.previousEnding) };
+  }
+  stopped ||= !!(entry?.attach && !entry.session?.remoteAlias && entry.jobEnding === 'stop');
   noteSessionExit(sessionId, exitCode, signal, stopped, !!(stopped && ((entry?.attach && !entry.jobEnding) || (entry?.session?.remoteAlias && entry.detachRequested))));
   if (typeof setSessionMcpState === 'function' && typeof filePanelState !== 'undefined' && filePanelState.get(sessionId)) setSessionMcpState(sessionId, 'off');
   // see .ai/contexts/session-state.md ("A session main drops")
@@ -921,11 +927,7 @@ function applyProcessExit(sessionId, exitCode, signal, stopped) {
     // and read any error output it printed (claude / devbox / shell stderr).
     // Without this, a fast-failing pre-launch command would tear down the
     // terminal before the user could read the error.
-    try {
-      entry.terminal.write(
-        `\r\n${exitBannerColour(exit)}── session ${exitBannerPhrase(exit)} — ${exit.detached ? entry.session?.remoteAlias ? `it keeps running on ${remoteHostLabel(entry.session.remoteAlias)}` : 'it keeps running in the background' : 're-click this session in the sidebar to relaunch, or click another to dismiss'} ──\x1b[0m\r\n`
-      );
-    } catch {}
+    writeSessionExitBanner(entry, exit);
   }
 
   // Plain terminal sessions are ephemeral — destroy immediately and remove from
@@ -1327,17 +1329,14 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   let stopped = 0;
   for (const target of targets) {
     const id = target.sessionId;
-    const entry = target.remote ? openSessions.get(id) : null;
+    const entry = openSessions.get(id);
     const previousDetachRequested = entry?.detachRequested;
     try {
       if (target.job && !target.notHosted) {
-        const result = await window.api.bgAgentVerb('stop', target.jobId);
+        const result = target.attachedHere ? await runAttachedJobVerb('stop', target.jobId, id)
+          : await window.api.bgAgentVerb('stop', target.jobId);
         if (!result?.ok) throw new Error(result?.error || 'The background stop backend is unavailable');
         target.jobStopped = true;
-        if (target.attachedHere) {
-          const entry = openSessions.get(id);
-          if (entry && !entry.closed) entry.jobEnding = 'stop';
-        }
       }
       if (!target.job || target.attachedHere) {
         if (target.remote && unreachable.has(target.alias)) throw new Error(unreachable.get(target.alias));
@@ -1358,7 +1357,7 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
       }
       if (target.job && !target.notHosted && typeof refreshAgentsRoster === 'function') refreshAgentsRoster();
     } catch (error) {
-      if (entry) entry.detachRequested = previousDetachRequested;
+      if (target.remote && entry) entry.detachRequested = previousDetachRequested;
       failures.push(`Part ${id} ${target.where}: ${error?.message || error || 'unknown error'}`);
       failedTargets.push(target);
       continue;
@@ -1387,6 +1386,11 @@ async function detachSession(sessionOrId, btn, retryTargets) {
   const sessionId = isRow ? sessionOrId.sessionId : sessionOrId;
   const openEntry = openSessions.get(sessionId);
   const session = isRow ? sessionOrId : { ...(sessionMap.get(sessionId) || openEntry?.session), sessionId, mergedMemberIds: [] };
+  if ((isRow ? rowSessionIds(session) : [sessionId]).some(id => openSessions.get(id)?.jobVerbPending)) {
+    showAppNotice({ id: sessionActionNoticeId('Detach', session), kind: 'info',
+      message: 'A background job action is in progress. Wait for it to finish before detaching.' });
+    return;
+  }
   const plan = planSessionDetach(session, { tabOnly: !isRow, retryTargets });
   if (!plan.targets.length) {
     showAppNotice({ id: sessionActionNoticeId('Detach', session), kind: 'info', message: 'Nothing is attached to detach.' });

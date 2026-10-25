@@ -610,11 +610,11 @@ async function runAgentVerb(verb, entry) {
     }
     agentsPendingVerbs.add(key);
     if (agentsViewActive) renderAgentsView();
-    const result = await window.api.bgAgentVerb(verb, entry.id);
+    const result = entry.attachedHere && (verb === 'stop' || verb === 'rm')
+      ? await runAttachedJobVerb(verb, entry.id, entry.sessionId)
+      : await window.api.bgAgentVerb(verb, entry.id);
     if (!result || result.ok === false) agentsVerbErrors.set(key, (result && result.error) || 'unknown error');
     else if (entry.attachedHere && (verb === 'stop' || verb === 'rm')) {
-      const opened = openSessions.get(entry.sessionId);
-      if (opened) opened.jobEnding = verb;
       try { await window.api.stopSession(entry.sessionId); } catch {}
     }
   } catch (err) {

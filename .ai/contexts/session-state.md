@@ -313,10 +313,22 @@ of processes, each part's id and location, and the consequence: each stopped
 process ends, while the conversation is kept and can be resumed. Only Stop
 sets `jobStop:true`: attached and live unattached background parts become job
 targets with a validated 8-hex id. Each hosted job passes
-`checkBgAgentVerb('stop', jobId)` before the dialog. Success calls
-`bgAgentVerb('stop', jobId)`, marks an attached entry `jobEnding = 'stop'`, then
-calls `stopSession` on its attach client and refreshes the roster. The exit
-reads Stopped. A failed job verb retains the tab and the Stop failure notice.
+`checkBgAgentVerb('stop', jobId)` before the dialog.
+After confirmation, `runAttachedJobVerb` marks a local attached entry
+`jobEnding = 'stop'` before `bgAgentVerb('stop', jobId)` runs, then
+`stopSession` closes its attach client and the roster refreshes. The Agents
+view uses the same helper for its attached Stop/Delete verbs.
+`applyProcessExit` uses the Stop intent for local attach exits even before the
+stop IPC records an exit as requested, so the banner reads Stopped. While the
+verb is pending it also preserves the original exit code, signal and intent.
+A failed job verb restores the previous mark; if an exit arrived during the
+await, it rewrites the recorded exit and appends its corrected banner through
+the existing `writeSessionExitBanner` formatter (for example, Exited (code 7)).
+The appended banner explicitly says "correction: previous exit status superseded"
+so the earlier provisional Stopped line no longer states the final status (#782c).
+An open tab stays open on failure and the caller shows its failure notice.
+If only closing the client fails after the job stops, the mark stays for its
+eventual exit and the tab-only retry (#782).
 An attached job reported `known:true, job:null` is only detached after a dialog
 line saying it is not running in the daemon and its tab detaches. This path
 does not set `jobEnding`, never calls the job verb and records Detached.
@@ -330,6 +342,11 @@ remote Detach is deferred to S3b. `detachSession` never confirms, sets
 `detachRequested` and calls `stopSession`. Row, card and header have separate
 neutral eject buttons, with explicit title and accessible name; visibility
 refreshes on sidebar render/running indicators, card activity and header update.
+`detachSession` refuses a tab or merged row while any targeted tab has a
+`jobVerbPending` action, with an informational notice to wait. Like the Agents
+view's in-flight verb guard, this refuses a concurrent verb before sending IPC;
+it releases in `finally` on both success and failure. Detach after a failed Stop
+therefore remains available and reads Detached (#782b).
 Only background attaches offer Detach in S3a. Local and remote Stop retain
 their previous routes, and no new shortcut is introduced.
 Each successfully detached tab shows a 10 s Undo notice (`kind: 'undo'`).

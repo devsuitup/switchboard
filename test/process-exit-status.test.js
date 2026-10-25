@@ -328,6 +328,9 @@ for (const verb of ['stop', 'rm']) {
       async function refreshAgentsRoster() {}
     `);
     loadAppFunctions(h.ctx, {
+      functions: ['runAttachedJobVerb'], sourcePath: path.join(ROOT, 'public', 'stop-session-ui.js'),
+    });
+    loadAppFunctions(h.ctx, {
       functions: ['runAgentVerb', 'agentsEntryKey', 'agentDisplayName'],
       sourcePath: path.join(ROOT, 'public', 'agents-view.js'),
     });
