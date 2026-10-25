@@ -159,13 +159,20 @@ Background roster entries retain descriptor identity, pid, cwd and agent. Only
 a matched live background descriptor supplies activity `status` and `waitingFor`;
 the cached CLI list status does not feed the background projection. Descriptor
 `waiting` requests attention, including for a hosted done job, which groups under
-Active. Descriptor `busy` supplies the busy slot only when head-turn evidence is
-unknown. The fallback leaves projected `headTurn` undefined rather than inventing
-an open turn, so repeated projection stays stable. PTY and transcript turn
-evidence wins over descriptor status; a closed
-working turn keeps its static background-work display. Terminal and blocked jobs
-retain their lifecycle gates for lower activity slots. Normalized `taskEvidence`
-feeds the existing task registry.
+Active. Descriptor `busy` supplies the busy slot and Active grouping when the
+head turn is open or unknown, including for blocked and done jobs. A closed turn
+from PTY or transcript evidence wins over descriptor busy; a closed working turn
+keeps its static background-work display. The fallback leaves projected
+`headTurn` undefined rather than inventing an open turn, so repeated projection
+stays stable. Terminal and blocked jobs retain their lifecycle gates for lower
+activity slots. For a lifecycle-gated waiting ring, an unknown projected turn is
+reported as closed for the title, preserving "Waiting for input"; this does not
+write turn state. Normalized `taskEvidence` feeds the existing task registry.
+
+Accepted residual risk: without turn evidence (an unattached background job), or
+with a turn left open by an API error, a frozen busy descriptor still shows
+Working. The descriptor is then the only signal, so this fallback is accepted.
+
 `task-records.js` keeps `IN_FLIGHT_KINDS` for the CLI format canary, including
 `artifact_watch`. Runtime validation accepts future nonempty string kinds:
 `inFlightKinds` retains every kind with its label and `known` flag; unknown

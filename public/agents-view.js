@@ -78,7 +78,7 @@ function agentStateGroupKey(entry) {
   if (agentJobIsLive(entry) && entry.status === 'busy') {
     const snapshot = typeof storedActivitySnapshot === 'function' ? storedActivitySnapshot(entry.sessionId)
       : typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, {}) : null;
-    if (snapshot?.headTurn == null || snapshot.headTurn === 'unknown') return 'working';
+    if ((snapshot?.headTurn ?? 'unknown') !== 'closed') return 'working';
   }
   if (agentJobIsLive(entry) && entry.state === 'done' && entry.status === 'waiting') return 'working';
   if (entry.state === 'done' && agentJobIsLive(entry)) return 'idle';
@@ -252,10 +252,11 @@ function projectBackgroundActivity(entry, snapshot) {
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const blocked = live && entry.state === 'blocked';
   const status = entry.status ?? snapshot.descriptorStatus;
-  const descriptorBusy = live && status === 'busy' && (snapshot.headTurn ?? 'unknown') === 'unknown';
+  const descriptorBusy = live && status === 'busy' && (snapshot.headTurn ?? 'unknown') !== 'closed';
   const doneIdle = live && entry.state === 'done' && status === 'idle';
   const turnActive = live && (!terminal && !blocked || descriptorBusy);
-  const headTurn = descriptorBusy ? undefined : snapshot.headTurn;
+  const lifecycleWaiting = blocked || live && terminal && !doneIdle;
+  const headTurn = descriptorBusy ? undefined : lifecycleWaiting && snapshot.headTurn === 'unknown' ? 'closed' : snapshot.headTurn;
   return { ...snapshot, headTurn, liveness: live ? 'alive' : terminal ? 'dead' : 'unknown', stale: !live && terminal,
     titleOverride: !live && !terminal ? 'Liveness unknown' : null,
     waitingFor: entry.waitingFor ?? snapshot.waitingFor,

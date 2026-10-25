@@ -1440,6 +1440,38 @@ for (const { merged, liveId, accept } of [
   });
 }
 
+for (const state of ['blocked', 'done']) {
+  test(`S3d ${state} busy open turn renders Working under Active`, async t => {
+    const h = setup({ storage: { agentsGroupBy: 'state' } });
+    t.after(() => h.destroy());
+    h.window.taskActivitySnapshot = (_id, ports) => ({ ...ports, headTurn: 'open' });
+    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], state, hosted: true, status: 'busy' }] });
+    await h.window.showAgentsView();
+    const row = h.document.querySelector('.agents-row');
+    const icon = row.querySelector('.session-icon--busy');
+    assert.ok(icon, 'an open turn supports the live busy descriptor');
+    assert.equal(icon.title, 'Working');
+    assert.equal(h.document.querySelector('[data-collapse="state:working"]').nextElementSibling, row);
+  });
+}
+
+for (const [state, status, headTurn] of [
+  ['blocked', 'idle', 'unknown'],
+  ['done', null, 'unknown'],
+  ['done', 'busy', 'closed'],
+]) {
+  test(`S3d ${state} ${status} ${headTurn} rendered waiting ring keeps its title`, async t => {
+    const h = setup();
+    t.after(() => h.destroy());
+    h.window.taskActivitySnapshot = (_id, ports) => ({ ...ports, headTurn });
+    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], state, hosted: true, status }] });
+    await h.window.showAgentsView();
+    const icon = h.document.querySelector('.agents-row .session-icon--waiting');
+    assert.ok(icon);
+    assert.ok(icon.title.startsWith('Waiting for input'), icon.title);
+  });
+}
+
 test('S3b done waiting dialog blinks in the Active group', async t => {
   const h = setup({ storage: { agentsGroupBy: 'state' } });
   t.after(() => h.destroy());

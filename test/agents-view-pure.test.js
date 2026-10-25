@@ -74,11 +74,28 @@ for (const state of ['working', 'blocked', 'done']) {
     test(`S3b ${state} busy descriptor respects ${headTurn} turn evidence`, t => {
       global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn, agentsBusy: true, backgroundWork: true });
       t.after(() => { delete global.taskActivitySnapshot; });
-      const expected = headTurn === 'unknown' || state === 'working' && headTurn === 'open'
+      const expected = headTurn !== 'closed'
         ? 'session-icon--busy' : state === 'working' ? 'session-icon--agents-busy' : 'session-icon--waiting';
-      assert.equal(agentRowIcon(bg({ state, status: 'busy' })).slotClass, expected);
+      const entry = bg({ state, status: 'busy' });
+      assert.equal(agentRowIcon(entry).slotClass, expected);
+      assert.equal(agentStateMeta(entry).label, headTurn !== 'closed' || state === 'working' ? 'Active' : state === 'blocked' ? 'Blocked' : 'Idle');
     });
   }
+}
+
+for (const [state, status, headTurn] of [
+  ['blocked', 'idle', 'unknown'],
+  ['done', null, 'unknown'],
+  ['done', null, 'open'],
+  ['done', 'busy', 'closed'],
+]) {
+  test(`S3d ${state} ${status} ${headTurn} waiting ring keeps its title`, t => {
+    global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn });
+    t.after(() => { delete global.taskActivitySnapshot; });
+    const icon = agentRowIcon(bg({ state, status }));
+    assert.equal(icon.slotClass, 'session-icon--waiting');
+    assert.ok(icon.title.startsWith('Waiting for input'), icon.title);
+  });
 }
 
 test('verb availability follows the state, the kind and the daemon', () => {

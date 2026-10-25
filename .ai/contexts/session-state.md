@@ -76,9 +76,10 @@ verified invalidation. Its task snapshot carries independently revisioned
 `headTurn` evidence. The renderer applies turn evidence before the background
 snapshot, rejects older turn revisions, and repaints on turn-state changes.
 Liveness gates animation: a PTY here or a live descriptor is required. A background
-descriptor `busy` may supply the busy slot only when the row has unknown
-head-turn evidence, without writing head-turn state (#785). PTY and transcript
-turn evidence wins; a closed working turn retains its static background work.
+descriptor `busy` may supply the busy slot when the head turn is open or unknown,
+without writing head-turn state (#785). A closed turn from PTY or transcript
+evidence wins over descriptor busy; a closed working turn retains its static
+background work.
 Job `working`, OSC spinner/progress and transcript touches
 remain hints; they cannot open a head turn. An interactive idle descriptor or explicit OSC idle
 is prompt evidence. Descriptor idle is ordered against the transcript's last
