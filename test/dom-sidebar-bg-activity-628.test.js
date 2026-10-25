@@ -108,7 +108,7 @@ for (const [state, kind, head, hosted, valid, text, activity, foreground = false
   ['working', null, 'closed', true, true, '', 'Waiting for input'],
   ['blocked', null, 'closed', true, true, 'Blocked', 'Waiting for input'],
   ['blocked', null, 'closed', true, false, 'Blocked', 'Waiting for input'],
-   ['done', null, 'closed', true, true, 'Idle', 'Idle'],
+  ['done', null, 'closed', true, true, 'Idle', 'Idle'],
   ['done', null, 'closed', false, true, 'Job done', 'Not running'],
   ['stopped', null, 'closed', false, true, 'Job stopped', 'Not running'],
   ['failed', null, 'closed', false, true, 'Job failed', 'Not running'],
@@ -122,6 +122,7 @@ for (const [state, kind, head, hosted, valid, text, activity, foreground = false
     const entries = roster(state, kind);
     entries[0].hosted = hosted;
     entries[0].taskEvidence.valid = valid;
+    if (hosted && state === 'done') entries[0].status = 'idle';
     const h = await setup(t, entries, foreground);
     h.emitHeadTurn(SID, head);
     h.window.refreshSidebar();
@@ -233,7 +234,7 @@ for (const [state, kind, head, slot, label] of [
     test(`[628c] attached ${state} job with ${kind || 'no task'} and ${head} head keeps job activity in ${surface}`, async t => {
       const entries = roster(state, kind);
       const oldStatusAt = Date.now() - 3_600_000;
-      Object.assign(entries[0], { attachedHere: true, status: 'idle', statusUpdatedAt: oldStatusAt });
+      Object.assign(entries[0], { attachedHere: true, status: 'busy', statusUpdatedAt: oldStatusAt });
       const h = await setup(t, entries, true);
       h.window.sessionMap.get(SID).statusUpdatedAt = oldStatusAt;
       h.emitHeadTurn(SID, head);
@@ -570,12 +571,12 @@ test('[628] learning background identity discards previously seeded descriptor i
 
 test('hosted done with conversation ownership cannot revive foreground head activity', async t => {
   const entries = roster('done', null);
-  Object.assign(entries[0], { hosted: true, conversationOwn: true });
+  Object.assign(entries[0], { hosted: true, conversationOwn: true, status: 'idle' });
   const h = await setup(t, entries);
   h.emitHeadTurn(SID, 'open');
   assert.equal(h.window.backgroundActivityIsForeground(SID), false);
   const snapshot = h.window.backgroundActivitySnapshot(SID, { headTurn: 'open', liveness: 'alive', busy: true });
-  assert.equal(snapshot.headTurn, 'closed');
+  assert.equal(snapshot.headTurn, 'open');
   assert.equal(snapshot.busy, false);
   assert.ok(h.document.querySelector('.session-icon--idle'));
   assert.equal(h.window.agentRowIcon(entries[0]).slotClass, 'session-icon--idle');
@@ -585,6 +586,7 @@ for (const hosted of [true, false]) {
   test(`done hosted=${hosted} shows ${hosted ? 'Idle' : 'Done'} in sidebar and Agents`, async t => {
     const entries = roster('done', null);
     entries[0].hosted = hosted;
+    entries[0].status = 'idle';
     const h = await setup(t, entries);
     assert.equal(h.document.querySelector('.session-status').textContent, hosted ? 'Idle' : 'Job done');
     const row = h.document.createElement('div');

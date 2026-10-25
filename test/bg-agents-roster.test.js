@@ -228,3 +228,27 @@ test('parseJobState and parseCliList keep the failed state the daemon reports fo
   const [s] = parseCliList(JSON.stringify([{ id: 'aaaaaaaa', sessionId: 's1', kind: 'background', state: 'failed' }]));
   assert.equal(s.state, 'failed');
 });
+
+for (const cliStatus of ['busy', 'waiting']) {
+  test('S3b CLI-only ' + cliStatus + ' cannot supply background activity', () => {
+    const sessionId = 'aaaaaaaa-1234-4321-abcd-123456789abc';
+    const cli = parseCliList(JSON.stringify([{ id: 'aaaaaaaa', sessionId, kind: 'background',
+      state: 'blocked', status: cliStatus, waitingFor: 'cached dialog' }]));
+    const job = parseJobState(JSON.stringify({ state: 'blocked', sessionId }));
+    const [entry] = mergeRoster({ cli, jobs: new Map([['aaaaaaaa', job]]), descriptors: [] });
+    assert.equal(entry.state, 'blocked');
+    assert.equal(entry.status, null);
+    assert.equal(entry.waitingFor ?? null, null);
+    const { agentRowIcon } = require('../public/agents-view');
+    global.renderSessionIcon = require('../public/session-state').renderSessionIcon;
+    assert.notEqual(agentRowIcon(entry).slotClass, 'session-icon--busy');
+    assert.notEqual(agentRowIcon(entry).slotClass, 'session-icon--attention');
+  });
+}
+
+test('S3b a mismatched background descriptor cannot supply activity', () => {
+  const [entry] = mergeRoster({ jobs: new Map(), cli: [{ id: 'aaaaaaaa', sessionId: 'listed', kind: 'background', status: 'busy' }],
+    descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 'other', status: 'waiting', waitingFor: 'dialog open' }] });
+  assert.equal(entry.status, null);
+  assert.equal(entry.waitingFor ?? null, null);
+});

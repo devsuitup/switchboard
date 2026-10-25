@@ -29,8 +29,10 @@ tab open here says `Attached here · runs on <alias>`; a session awaiting restor
 says `Not reopened · restores on click`. Job state and CLI details follow
 without repeating the same words. These details stay out of the glyph.
 
-A live background session reporting busy shows Working, even when its job says
-blocked or done. A waiting descriptor, such as a permission dialog, makes the
+A live background session reporting busy supplies Working when its head turn is
+unknown, even when its job says blocked or done. PTY or transcript turn evidence
+wins over that descriptor; a closed working turn keeps its background-work
+display. A waiting descriptor, such as a permission dialog, makes the
 attention LED blink without a separate notification. A blocked idle job keeps
 its Blocked label and waiting ring; a done idle session shows the idle dot.
 This reverses #728's rendering. A background idle descriptor never closes a

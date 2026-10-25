@@ -74,8 +74,9 @@ first (a section left empty is not shown), and the choice is remembered.
 A job is in one of five states: `working`, `blocked` (live, waiting for
 input), `done`, `stopped` or `failed` (ended in error). `working` and
 `blocked` count as hosted. A done job with a matching live background descriptor
-also stays hosted: an idle descriptor displays Idle, busy displays Active, and
-a waiting dialog blinks for attention. Descriptor-free done is finished; stopped
+also stays hosted: an idle descriptor displays Idle, busy groups under Active
+when the turn is unknown, and a waiting dialog blinks for attention under Active.
+Descriptor-free done is finished; stopped
 and failed are always unhosted. A finished job without a live descriptor has
 the activity tooltip Not running, in Agents, the sidebar and the grid. Without
 a terminal job state or a live descriptor, it reads Liveness unknown: missing
@@ -83,8 +84,8 @@ files alone do not establish that a process has ended.
 
 A blocked job has parked itself, for example during a quota pause or while
 awaiting your go-ahead. Its live session descriptor determines what the sidebar,
-grid and Agents view show: busy displays Working and groups under Active, a
-waiting dialog blinks for attention, and idle keeps the orange waiting ring
+grid and Agents view show: busy supplies Working only when the turn is unknown
+and groups under Active; a waiting dialog blinks for attention, and idle keeps the orange waiting ring
 and Blocked label. A separate attention notification also makes it blink.
 These display rules reverse #728; hosting and the available actions still
 follow the job's lifecycle.
@@ -94,7 +95,7 @@ row's state column, whatever the grouping:
 
 | Emoji | State |
 |---|---|
-| ⚙️ | Active (job `working`, or a live background session reporting `busy`) |
+| ⚙️ | Active (job `working`, a live background session reporting `busy` without known turn evidence, or hosted `done` with a waiting dialog) |
 | ✋ | Blocked (waiting for input) |
 | 💤 | Idle (done job with a live background session at rest) |
 | ✅ | Done |

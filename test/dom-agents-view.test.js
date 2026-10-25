@@ -295,7 +295,7 @@ test('T6: default state grouping puts hosted done under Idle with its idle dot',
 test('hosted done job keeps badge, live row, filter visibility and Attach/Stop only', async () => {
   const h = setup({ storage: { agentsGroupBy: 'none', agentsShowFinished: '0' } });
   try {
-    h.window.taskActivitySnapshot = (_id, ports) => ({ ...ports, headTurn: 'open', attention: true,
+    h.window.taskActivitySnapshot = (_id, ports) => ({ ...ports, headTurn: 'open', attention: false,
       agentsBusy: true, backgroundWork: true, responseReady: true });
     const entry = { ...ROSTER[1], hosted: true };
     h.emitChanged({ daemonReachable: true, roster: [entry] });
@@ -304,7 +304,8 @@ test('hosted done job keeps badge, live row, filter visibility and Attach/Stop o
     await h.window.showAgentsView();
     const row = h.document.querySelector('.agents-row');
     assert.ok(row);
-    assert.ok(row.querySelector('.session-icon--attention'));
+    assert.ok(row.querySelector('.session-icon--waiting'));
+    assert.equal(row.querySelectorAll('.session-icon--busy, .session-icon--response-ready, .session-icon--agents-busy, .session-icon--attention').length, 0);
     assert.match(row.querySelector('.agents-row-state').textContent, /Idle/);
     assert.match(h.document.getElementById('agents-viewer-count').textContent, /1 running · 0 finished/);
     row.click();
@@ -1436,5 +1437,44 @@ for (const { merged, liveId, accept } of [
     }
     assert.deepEqual(continuationChecks, [merged ? 's-c' : 's-i']);
     assert.deepEqual([...new Set(liveChecks)].sort(), merged ? ['s-a', 's-c', 's-i'] : ['s-i']);
+  });
+}
+
+test('S3b done waiting dialog blinks in the Active group', async t => {
+  const h = setup({ storage: { agentsGroupBy: 'state' } });
+  t.after(() => h.destroy());
+  h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], hosted: true, status: 'waiting', waitingFor: 'permission dialog' }] });
+  await h.window.showAgentsView();
+  const row = h.document.querySelector('.agents-row');
+  assert.ok(row.querySelector('.session-icon--attention'));
+  const active = h.document.querySelector('[data-collapse="state:working"]');
+  assert.ok(active, 'a done row with a live dialog belongs under Active');
+  assert.equal(active.nextElementSibling, row);
+  assert.equal(h.document.querySelector('[data-collapse="state:idle"]'), null);
+});
+
+test('S3b hosted done with genuine attention keeps the dialog visible', async t => {
+  const h = setup();
+  t.after(() => h.destroy());
+  h.window.taskActivitySnapshot = (_id, ports) => ({ ...ports, headTurn: 'closed', attention: true,
+    responseReady: true, agentsBusy: true, backgroundWork: true });
+  h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], hosted: true }] });
+  await h.window.showAgentsView();
+  const row = h.document.querySelector('.agents-row');
+  assert.ok(row.querySelector('.session-icon--attention'));
+  assert.equal(row.querySelectorAll('.session-icon--busy, .session-icon--response-ready, .session-icon--agents-busy').length, 0);
+});
+
+for (const status of [null, 'busy']) {
+  test('S3b done closed turn suppresses lower rungs without attention, descriptor=' + status, async t => {
+    const h = setup();
+    t.after(() => h.destroy());
+    h.window.taskActivitySnapshot = (_id, ports) => ({ ...ports, headTurn: 'closed', attention: false,
+      busy: true, responseReady: true, agentsBusy: true, backgroundWork: true });
+    h.setSnapshot({ daemonReachable: true, roster: [{ ...ROSTER[1], hosted: true, status }] });
+    await h.window.showAgentsView();
+    const row = h.document.querySelector('.agents-row');
+    assert.ok(row.querySelector('.session-icon--waiting'));
+    assert.equal(row.querySelectorAll('.session-icon--busy, .session-icon--response-ready, .session-icon--agents-busy, .session-icon--attention').length, 0);
   });
 }

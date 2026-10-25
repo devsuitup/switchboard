@@ -75,7 +75,12 @@ function normalizeAgentsGroupBy(value) {
 function agentStateGroupKey(entry) {
   if (entry.kind === 'interactive') return 'external';
   if (['working', 'blocked'].includes(entry.state) && !agentJobIsLive(entry)) return 'unknown';
-  if (agentJobIsLive(entry) && entry.status === 'busy') return 'working';
+  if (agentJobIsLive(entry) && entry.status === 'busy') {
+    const snapshot = typeof storedActivitySnapshot === 'function' ? storedActivitySnapshot(entry.sessionId)
+      : typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, {}) : null;
+    if (snapshot?.headTurn == null || snapshot.headTurn === 'unknown') return 'working';
+  }
+  if (agentJobIsLive(entry) && entry.state === 'done' && entry.status === 'waiting') return 'working';
   if (entry.state === 'done' && agentJobIsLive(entry)) return 'idle';
   const known = entry.state && entry.state !== 'external' && entry.state !== 'unknown' && Object.hasOwn(AGENT_STATE_META, entry.state);
   return known ? entry.state : 'unknown';
@@ -247,18 +252,18 @@ function projectBackgroundActivity(entry, snapshot) {
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const blocked = live && entry.state === 'blocked';
   const status = entry.status ?? snapshot.descriptorStatus;
-  const descriptorBusy = live && status === 'busy';
+  const descriptorBusy = live && status === 'busy' && (snapshot.headTurn ?? 'unknown') === 'unknown';
   const doneIdle = live && entry.state === 'done' && status === 'idle';
   const turnActive = live && (!terminal && !blocked || descriptorBusy);
-  const headTurn = descriptorBusy ? 'open' : terminal || blocked ? 'closed' : snapshot.headTurn;
+  const headTurn = descriptorBusy ? undefined : snapshot.headTurn;
   return { ...snapshot, headTurn, liveness: live ? 'alive' : terminal ? 'dead' : 'unknown', stale: !live && terminal,
     titleOverride: !live && !terminal ? 'Liveness unknown' : null,
     waitingFor: entry.waitingFor ?? snapshot.waitingFor,
-    attention: live && (status === 'waiting' || !!snapshot.attention), busy: turnActive && headTurn === 'open',
+    attention: live && (status === 'waiting' || !!snapshot.attention), busy: turnActive && (descriptorBusy || headTurn === 'open'),
     responseReady: turnActive && !descriptorBusy && snapshot.responseReady,
     agentsBusy: turnActive && snapshot.agentsBusy,
     backgroundWork: turnActive && snapshot.backgroundWork,
-    waitingForInput: !descriptorBusy && !doneIdle && (blocked || live && headTurn !== 'open'
+    waitingForInput: !descriptorBusy && !doneIdle && (blocked || live && (terminal || headTurn !== 'open')
       && (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(entry.sessionId)) || !!snapshot.waitingForInput)) };
 }
 

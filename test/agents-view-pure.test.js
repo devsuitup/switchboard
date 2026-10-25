@@ -63,11 +63,23 @@ test('T8: blocked waiting descriptor requests attention without an attention inp
   assert.equal(agentRowIcon(bg({ state: 'blocked', status: 'waiting' })).slotClass, 'session-icon--attention');
 });
 
-test('T1: a new busy descriptor supersedes response-ready from the previous turn', t => {
+test('T1: closed turn response-ready wins over a busy descriptor', t => {
   global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn: 'closed', responseReady: true });
   t.after(() => { delete global.taskActivitySnapshot; });
-  assert.equal(agentRowIcon(bg({ status: 'busy' })).slotClass, 'session-icon--busy');
+  assert.equal(agentRowIcon(bg({ status: 'busy' })).slotClass, 'session-icon--response-ready');
 });
+
+for (const state of ['working', 'blocked', 'done']) {
+  for (const headTurn of ['open', 'closed', 'unknown']) {
+    test(`S3b ${state} busy descriptor respects ${headTurn} turn evidence`, t => {
+      global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn, agentsBusy: true, backgroundWork: true });
+      t.after(() => { delete global.taskActivitySnapshot; });
+      const expected = headTurn === 'unknown' || state === 'working' && headTurn === 'open'
+        ? 'session-icon--busy' : state === 'working' ? 'session-icon--agents-busy' : 'session-icon--waiting';
+      assert.equal(agentRowIcon(bg({ state, status: 'busy' })).slotClass, expected);
+    });
+  }
+}
 
 test('verb availability follows the state, the kind and the daemon', () => {
   assert.deepEqual(agentVerbAvailability(bg(), true), { transcript: true, resume: false, attach: true, stop: true, respawn: false, rm: false });

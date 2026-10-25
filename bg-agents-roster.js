@@ -159,7 +159,6 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     });
   }
   if (cliEntry) {
-    e.status = cliEntry.status ?? null;
     e.sessionId = job?.sessionId && !sessionIdField(cliEntry.sessionId) ? job.sessionId : cliEntry.sessionId || e.sessionId;
     e.name = cliEntry.name || e.name;
     e.cwd = cliEntry.cwd || e.cwd;

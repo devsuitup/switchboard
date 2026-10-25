@@ -172,14 +172,12 @@ test('an unknown live head exposes degraded information, and owner death gates s
   assert.equal(icon().classList.contains('session-icon--busy'), false);
 });
 
-test('the Agents row projects descriptor busy while an idle descriptor preserves turn and background facts', t => {
+test('the Agents row treats job working and descriptor busy as hints while sharing the same turn and background facts', t => {
   const { ctx, turn } = setup(t);
   ctx.evalPublic('agents-view.js');
   const entry = { kind: 'background', id: 'short', sessionId: 'root', state: 'working', hosted: true, status: 'busy' };
   turn('closed');
   ctx.window.taskRegistry.note('root', 'cron', 'cli-task', { kind: 'cron' });
-  assert.equal(ctx.window.agentRowIcon(entry).slotClass, 'session-icon--busy');
-  entry.status = 'idle';
   assert.equal(ctx.window.agentRowIcon(entry).slotClass, 'session-icon--agents-busy');
   turn('open');
   assert.equal(ctx.window.agentRowIcon(entry).slotClass, 'session-icon--busy');

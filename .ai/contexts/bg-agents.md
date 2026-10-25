@@ -1,4 +1,5 @@
 # Context: bg-agents
+
 **Purpose**: The Agents view — a graphical replacement for the `claude agents`
 TUI. Lists the daemon's `--bg` sessions and the external interactive ones,
 attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
@@ -151,11 +152,20 @@ channel. Every window load runs `claude agents --json --all` once through
 `get-bg-agents` → `reconcile`, including when Agents stays closed. A newer
 push or request invalidates an older pending response.
 Membership still comes from #620's projects payload, with the roster set as
-fallback. Lifecycle/group/header predicates and all verb guards are unchanged.
+fallback. Lifecycle/header predicates and all verb guards are unchanged;
+activity-based grouping follows the projection rules below.
 
-Background roster entries retain descriptor identity, pid, cwd and agent, but
-their `status` is null: neither descriptor nor CLI coarse status is activity
-evidence. Normalized `taskEvidence` feeds the existing task registry.
+Background roster entries retain descriptor identity, pid, cwd and agent. Only
+a matched live background descriptor supplies activity `status` and `waitingFor`;
+the cached CLI list status does not feed the background projection. Descriptor
+`waiting` requests attention, including for a hosted done job, which groups under
+Active. Descriptor `busy` supplies the busy slot only when head-turn evidence is
+unknown. The fallback leaves projected `headTurn` undefined rather than inventing
+an open turn, so repeated projection stays stable. PTY and transcript turn
+evidence wins over descriptor status; a closed
+working turn keeps its static background-work display. Terminal and blocked jobs
+retain their lifecycle gates for lower activity slots. Normalized `taskEvidence`
+feeds the existing task registry.
 `task-records.js` keeps `IN_FLIGHT_KINDS` for the CLI format canary, including
 `artifact_watch`. Runtime validation accepts future nonempty string kinds:
 `inFlightKinds` retains every kind with its label and `known` flag; unknown
@@ -177,11 +187,13 @@ types, empty kind strings and malformed fan evidence still invalidate the snapsh
 terminal jobs alone may omit `inFlight` entirely.
 
 The shared background projection reads #638's head-turn and #626's unseen-output state:
-an open head turn or a live background descriptor `busy` animates; agents, shells, monitors and cron at the prompt
+an open working head turn animates; a live background descriptor `busy` supplies
+this slot only when the turn is unknown. Agents, shells, monitors and cron at the prompt
 share the static background glyph. Only agent tasks contribute to #627's count.
 A live background descriptor wins over inferred job activity (#785, reversing #728):
-`busy` displays Working even for blocked or done jobs and clears prior response-ready
-in the projection; `waiting` displays the
+`busy` displays Working even for blocked or done jobs only without head-turn
+evidence. A known closed turn retains response-ready and background work subject
+to the job's lifecycle gates; `waiting` displays the
 blinking attention `!` without requiring a separate attention input. A blocked idle
 job keeps the waiting ring, including with a PTY attached here, and suppresses head
 busy, background work and response-ready while retaining unseen written output.
@@ -347,8 +359,10 @@ absent at zero, so a roster without external sessions reads as before.
 turn states: `done` means the turn ended, while the daemon may still host the
 session between messages. `working` means an active turn; `blocked` means the
 job parked itself (for example, a quota pause or awaiting a go-ahead). Its live
-descriptor determines the projection: busy is Working and joins Active, waiting
-is Needs attention, and idle retains the waiting ring and Blocked label (#785).
+descriptor supplies Working for an unknown turn when busy, and joins Active;
+waiting is Needs attention. A done job with waiting joins Active.
+Known head-turn evidence wins over
+busy; idle retains the waiting ring and Blocked label (#785).
 Leaving `blocked` removes that waiting evidence; the normal head-turn and PTY
 rules apply again. `stopped` and `failed` are finished even with a leftover descriptor.
 
@@ -407,7 +421,7 @@ finished done/stopped/failed activity keep their existing selection rules.
 The UI disables the buttons (`agentVerbAvailability`); `runVerb` refuses
 `respawn`/`rm` on a live roster entry with the same rule, so a stale renderer
 cannot bypass it. A blocked idle row draws the static orange waiting ring;
-a busy descriptor displays Working, while a waiting descriptor or genuine
+a busy descriptor supplies Working only for an unknown turn, while a waiting descriptor or genuine
 attention input displays the blinking attention `!` (#785, reversing #728).
 The shipped IPC adds invariant 10's fresh conversation check; the roster
 state alone cannot authorize a destructive verb. A finished job that matches
