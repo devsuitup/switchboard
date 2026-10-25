@@ -75,9 +75,13 @@ The existing task-record worker reads a cached 256 KiB transcript tail after a
 verified invalidation. Its task snapshot carries independently revisioned
 `headTurn` evidence. The renderer applies turn evidence before the background
 snapshot, rejects older turn revisions, and repaints on turn-state changes.
-Liveness gates animation: a PTY here or a live descriptor is required. Job
-`working`, descriptor `busy`, OSC spinner/progress and transcript touches remain
-hints; they cannot open a head turn. An idle descriptor or explicit OSC idle
+Liveness gates animation: a PTY here or a live descriptor is required. A background
+descriptor `busy` may supply the busy slot when the head turn is open or unknown,
+without writing head-turn state (#785). A closed turn from PTY or transcript
+evidence wins over descriptor busy; a closed working turn retains its static
+background work.
+Job `working`, OSC spinner/progress and transcript touches
+remain hints; they cannot open a head turn. An interactive idle descriptor or explicit OSC idle
 is prompt evidence. Descriptor idle is ordered against the transcript's last
 entry on the CLI host's clock. OSC idle is ordered against the latest changed
 transcript evidence's arrival time in the renderer, on this machine's clock;
@@ -687,7 +691,9 @@ host, so the descriptor is the only signal an unattached remote row has.
 
 `applyRemoteDescriptor` passes `attention: true` on its `descriptorStatus`
 event. Only the remote adapter does: local callers send the same event without
-it and never get attention from the descriptor. The reducer's rule:
+it and never get attention from the descriptor reducer. Background projections
+separately map a live `waiting` descriptor to attention without applying that
+event to the state machine (#785). The reducer's rule:
 
 - `waiting` with `attention: true` and liveness not dead sets attention,
   clears busy / waitingForInput / responseReady like an `attention` event, and

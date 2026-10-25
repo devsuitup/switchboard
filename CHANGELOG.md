@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Changed
+- Background sessions that are working now show as working, a finished one as idle, and a dialog waiting for you blinks; the orange waiting ring no longer stands for all three. Reverses the rendering of #728. (#785)
+
 ## v0.0.100 — 2026-10-25
 
 ### New

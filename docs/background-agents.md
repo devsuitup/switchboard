@@ -20,7 +20,7 @@ restarts.
 
 One row per background job or external interactive session: an activity glyph shared with the sidebar — an animated
 spinner during a turn, a static spinner for background tasks at the prompt,
-an orange hollow ring while waiting (including blocked jobs), a blinking orange
+an orange hollow ring while waiting (including blocked idle jobs), a blinking orange
 LED with a halo for Needs your attention, a blue dot for a response ready, a green dot for a session open
 in one of Switchboard's own tabs (an attach tab included) at rest, or a dim grey
 dot when finished — its name, its `--agent`, its state emoji and job state (see the
@@ -74,27 +74,30 @@ first (a section left empty is not shown), and the choice is remembered.
 A job is in one of five states: `working`, `blocked` (live, waiting for
 input), `done`, `stopped` or `failed` (ended in error). `working` and
 `blocked` count as hosted. A done job with a matching live background descriptor
-also stays hosted and displays Idle. Descriptor-free done is finished; stopped
+also stays hosted: an idle descriptor displays Idle, busy groups under Active
+unless the turn is known closed, and a waiting dialog blinks for attention under Active.
+Descriptor-free done is finished; stopped
 and failed are always unhosted. A finished job without a live descriptor has
 the activity tooltip Not running, in Agents, the sidebar and the grid. Without
 a terminal job state or a live descriptor, it reads Liveness unknown: missing
 files alone do not establish that a process has ended.
 
 A blocked job has parked itself, for example during a quota pause or while
-awaiting your go-ahead. It shows the static orange waiting ring in the sidebar,
-grid and Agents view, including while attached, and keeps its Blocked label
-and tooltip. A separate attention notification or a live descriptor explicitly
-requesting attention still makes it blink. When the job leaves `blocked`, its
-icon follows its current activity again.
+awaiting your go-ahead. Its live session descriptor determines what the sidebar,
+grid and Agents view show: busy supplies Working unless the turn is known closed
+and groups under Active; a waiting dialog blinks for attention, and idle keeps the orange waiting ring
+and Blocked label. A separate attention notification also makes it blink.
+These display rules reverse #728; hosting and the available actions still
+follow the job's lifecycle.
 
 The same emoji marks a state in the State headers and at the start of every
 row's state column, whatever the grouping:
 
 | Emoji | State |
 |---|---|
-| ⚙️ | Active (job `working`) |
+| ⚙️ | Active (job `working`, a live background session reporting `busy` with no known closed turn, or hosted `done` with a waiting dialog) |
 | ✋ | Blocked (waiting for input) |
-| 💤 | Idle (done job with a live background descriptor) |
+| 💤 | Idle (done job with a live background session at rest) |
 | ✅ | Done |
 | ⏹️ | Stopped |
 | ❌ | Failed |

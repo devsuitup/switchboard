@@ -174,9 +174,10 @@ function storedActivitySnapshot(sessionId, session, selection) {
   if (typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId)) return taskActivitySnapshot(sessionId, local, row, selection);
   const remote = typeof remoteSessionStates !== 'undefined' && remoteSessionStates.get(sessionId)?.snapshot();
   if (remote && !remote.attached) return taskActivitySnapshot(sessionId, remote, row, selection);
-  if (typeof localTranscriptStates !== 'undefined' && localTranscriptStates.has(sessionId)) seedLocalTranscriptDescriptor(sessionId, session, selection);
+  const descriptor = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.has(sessionId)
+    ? seedLocalTranscriptDescriptor(sessionId, session, selection) : null;
   const transcript = typeof localTranscriptStates !== 'undefined' && localTranscriptStates.get(sessionId)?.snapshot();
-  return taskActivitySnapshot(sessionId, transcript ? (local.backgroundJob ? { ...transcript, backgroundJob: true } : transcript) : local, row, selection);
+  return taskActivitySnapshot(sessionId, transcript ? (local.backgroundJob ? { ...transcript, backgroundJob: true, ...descriptor } : transcript) : local, row, selection);
 }
 
 function mergedRowSnapshot(ids, sessionId, snapshot, row) {
@@ -360,7 +361,7 @@ function snapshotForLocal(sessionId, session, selection) {
     state = localPtyState(sessionId);
     state.apply({ type: 'liveness', value: 'unknown' });
   }
-  return background ? { ...state.snapshot(), backgroundJob: true } : state.snapshot();
+  return background ? { ...state.snapshot(), backgroundJob: true, descriptorStatus: sess?.status, waitingFor: sess?.waitingFor } : state.snapshot();
 }
 
 // Paints an icon slot from a snapshot held by another adapter — see .ai/contexts/session-state.md ("Descriptor-owned attention")

@@ -312,10 +312,13 @@ name (including its `name (N)` form). A Switchboard rename always wins, for
 interactive and background rows alike. Names are selected after display merges:
 a user-named bg head comes first, otherwise the most recently modified user-named
 part supplies the name, with start time and UUID/name breaking ties. Descriptor
-order cannot change the selected name. Status vocabulary,
-idle callbacks and the background activity indicator policy remain separate:
-the historical frozen bg descriptor in `audit-indicators.md` is not treated
-as reliable turn evidence by this display projection.
+order cannot change the selected name. A matched live background descriptor's
+status reaches the activity projection; the cached CLI list status does not.
+A closed PTY or transcript head turn wins: descriptor `busy` supplies the busy
+slot only for an open or unknown turn, so the historical frozen bg descriptor in
+`audit-indicators.md` cannot reopen a closed turn. A closed working turn retains
+its background-work display. Descriptor `waiting` requests attention, including
+for a hosted done job.
 
 A descriptor-only row carries `aiTitle: null`, so the renderer's `dedup`
 merge cannot keep the generated title copied from the original conversation

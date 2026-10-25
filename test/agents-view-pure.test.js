@@ -30,22 +30,73 @@ test('sort: a blocked job is live and ranks with the working ones', () => {
   assert.deepEqual(sorted.map(e => e.id), ['b1', 'w1', 's1', 'd1']);
 });
 
-test('row icon: coarse background hints stay static and finished jobs stay stale', () => {
-  assert.equal(agentRowIcon(bg({ status: 'busy' })).slotClass, 'session-icon--waiting');
-  assert.equal(agentRowIcon(bg({ status: 'waiting' })).slotClass, 'session-icon--waiting');
+test('row icon: idle working jobs wait and finished jobs stay stale', () => {
   assert.equal(agentRowIcon(bg({ status: 'idle' })).slotClass, 'session-icon--waiting');
   assert.equal(agentRowIcon(bg({ state: 'done', hosted: false, status: 'busy' })).slotClass, 'session-icon--stale');
   assert.equal(agentRowIcon(bg({ state: 'stopped', hosted: false, status: 'idle' })).slotClass, 'session-icon--stale');
   assert.equal(agentRowIcon({ kind: 'interactive', status: 'busy' }).slotClass, 'session-icon--waiting');
 });
 
-test('row icon: a blocked job waits whatever its descriptor status', t => {
+test('T3-idle guard: a blocked idle job keeps the waiting ring', t => {
   global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn: 'open', busy: true, waitingForInput: false });
   t.after(() => { delete global.taskActivitySnapshot; });
   assert.equal(agentRowIcon(bg({ state: 'blocked', hosted: true, status: 'idle' })).slotClass, 'session-icon--waiting');
   assert.equal(agentRowIcon(bg({ state: 'blocked', hosted: true, status: null })).slotClass, 'session-icon--waiting');
-  assert.equal(agentRowIcon(bg({ state: 'blocked', hosted: true, status: 'busy' })).slotClass, 'session-icon--waiting');
 });
+
+for (const [name, state, status, slot] of [
+  ['T1', 'working', 'busy', 'busy'],
+  ['T2', 'working', 'waiting', 'attention'],
+  ['T3-busy', 'blocked', 'busy', 'busy'],
+  ['T3-waiting', 'blocked', 'waiting', 'attention'],
+  ['T4-idle', 'done', 'idle', 'idle'],
+  ['T4-busy', 'done', 'busy', 'busy'],
+]) {
+  test(`${name}: live ${state} descriptor ${status} supplies the ${slot} slot`, () => {
+    const entry = bg({ state, status, waitingFor: status === 'waiting' ? 'dialog open' : null });
+    assert.equal(agentRowIcon(entry).slotClass, `session-icon--${slot}`);
+    if (status === 'busy') assert.equal(agentStateMeta(entry).key, 'working');
+  });
+}
+
+test('T8: blocked waiting descriptor requests attention without an attention input', () => {
+  assert.equal(agentRowIcon(bg({ state: 'blocked', status: 'waiting' })).slotClass, 'session-icon--attention');
+});
+
+test('T1: closed turn response-ready wins over a busy descriptor', t => {
+  global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn: 'closed', responseReady: true });
+  t.after(() => { delete global.taskActivitySnapshot; });
+  assert.equal(agentRowIcon(bg({ status: 'busy' })).slotClass, 'session-icon--response-ready');
+});
+
+for (const state of ['working', 'blocked', 'done']) {
+  for (const headTurn of ['open', 'closed', 'unknown']) {
+    test(`S3b ${state} busy descriptor respects ${headTurn} turn evidence`, t => {
+      global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn, agentsBusy: true, backgroundWork: true });
+      t.after(() => { delete global.taskActivitySnapshot; });
+      const expected = headTurn !== 'closed'
+        ? 'session-icon--busy' : state === 'working' ? 'session-icon--agents-busy' : 'session-icon--waiting';
+      const entry = bg({ state, status: 'busy' });
+      assert.equal(agentRowIcon(entry).slotClass, expected);
+      assert.equal(agentStateMeta(entry).label, headTurn !== 'closed' || state === 'working' ? 'Active' : state === 'blocked' ? 'Blocked' : 'Idle');
+    });
+  }
+}
+
+for (const [state, status, headTurn] of [
+  ['blocked', 'idle', 'unknown'],
+  ['done', null, 'unknown'],
+  ['done', null, 'open'],
+  ['done', 'busy', 'closed'],
+]) {
+  test(`S3d ${state} ${status} ${headTurn} waiting ring keeps its title`, t => {
+    global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn });
+    t.after(() => { delete global.taskActivitySnapshot; });
+    const icon = agentRowIcon(bg({ state, status }));
+    assert.equal(icon.slotClass, 'session-icon--waiting');
+    assert.ok(icon.title.startsWith('Waiting for input'), icon.title);
+  });
+}
 
 test('verb availability follows the state, the kind and the daemon', () => {
   assert.deepEqual(agentVerbAvailability(bg(), true), { transcript: true, resume: false, attach: true, stop: true, respawn: false, rm: false });
