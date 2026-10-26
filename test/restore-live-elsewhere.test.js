@@ -228,6 +228,79 @@ const SAVED = [
   { sessionId: 'b', projectPath: '/pb', active: true },
 ];
 
+test('C3 a pending background restore does not block a later interactive tab or saves', async t => {
+  const savedSet = [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' },
+    { sessionId: 'a', projectPath: '/pa' }];
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  let release;
+  h.dom.window.api.restoreBackgroundJob = () => new Promise(resolve => { release = resolve; });
+  const restoring = h.restore();
+  try {
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.deepEqual(h.openTerminalCalls, ['a'], 'interactive open is independent of background IPC');
+    assert.equal(vm.runInContext('restoringWorkingSet', h.ctx), false, 'background IPC does not suspend saves');
+    vm.runInContext('openSessions.set("manual", { session: { projectPath: "/manual" } });', h.ctx);
+    await h.persist();
+    assert.deepEqual(h.settings.global.openWorkingSet.map(item => item.sessionId), ['x', 'a', 'manual']);
+    assert.equal(h.settings.global.openWorkingSet[0].attachJobId, '1234abcd');
+  } finally {
+    release({ action: 'refuse', reason: 'unknown' });
+    await restoring;
+  }
+});
+
+test('C3 background preparations overlap and completed tabs retain saved order', async t => {
+  const savedSet = ['x', 'y'].map(sessionId => ({ sessionId, projectPath: '/p', bg: true, attachJobId: '1234abcd' }));
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const calls = [], releases = new Map();
+  h.dom.window.api.restoreBackgroundJob = id => {
+    calls.push(id);
+    return new Promise(resolve => releases.set(id, resolve));
+  };
+  h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/p' });
+  const restoring = h.restore();
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, ['x', 'y'], 'both IPCs begin before either resolves');
+    releases.get('y')({ action: 'attach', sessionId: 'y', jobId: '1234abcd' });
+    await new Promise(resolve => setImmediate(resolve));
+  } finally {
+    releases.get('x')?.({ action: 'attach', sessionId: 'x', jobId: '1234abcd' });
+    await new Promise(resolve => setImmediate(resolve));
+    releases.get('y')?.({ action: 'attach', sessionId: 'y', jobId: '1234abcd' });
+    await restoring;
+  }
+  assert.deepEqual(vm.runInContext('JSON.stringify([...openSessions.keys()])', h.ctx), '["x","y"]');
+});
+
+for (const missing of [true, false]) {
+  test(`C4 ${missing ? 'missing job releases the slot for a guarded later click' : 'GUARD ambiguous job stays held'}`, async t => {
+    const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true }], liveIds: [] });
+    t.after(() => h.dom.window.close());
+    h.dom.window.api.restoreBackgroundJob = async () => ({ action: 'refuse',
+      reason: missing ? 'no background job record for x' : 'multiple background job records for x: aaaaaaaa, bbbbbbbb',
+      ...(missing ? { missing: true } : {}) });
+    await h.restore();
+    assert.equal(vm.runInContext('skippedWorkingSetEntries.has("x")', h.ctx), !missing);
+    await h.persist();
+    assert.equal(h.settings.global.openWorkingSet.some(item => item.bg), !missing);
+    if (missing) {
+      assert.match(h.dom.window.document.querySelector('.app-notice-message').textContent, /background job no longer exists/i);
+      let checked = 0;
+      h.dom.window.api.getSessionLiveElsewhere = async () => { checked++; return LIVE; };
+      h.dom.window.appConfirm = async () => false;
+      await vm.runInContext('openSession(sessionMap.get("x"))', h.ctx);
+      assert.equal(checked, 1, 'later click goes through live-elsewhere guard');
+      assert.deepEqual(h.openTerminalCalls, []);
+      h.dom.window.api.getSessionLiveElsewhere = async () => null;
+      await vm.runInContext('openSession(sessionMap.get("x"))', h.ctx);
+      assert.deepEqual(h.openTerminalCalls, ['x']);
+    }
+  });
+}
+
 test('a session live elsewhere is not resumed, and survives in the persisted working set at its place', async () => {
   const h = setup({ savedSet: SAVED, liveIds: ['x'] });
   await h.restore();

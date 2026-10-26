@@ -81,6 +81,20 @@ test('B-T8 an attached tab saves its job identity and bg marker, then disappears
   assert.deepEqual(h.stored(), ['opened']);
 });
 
+for (const attachJobId of [null, '', 42, undefined]) {
+  test(`C2 ${attachJobId === undefined ? 'GUARD ' : ''}a reattached tab with job id ${attachJobId} saves only the bg marker`, async t => {
+    const h = setup();
+    t.after(() => h.dom.window.close());
+    vm.runInContext('restorePlanner.dismiss();', h.ctx);
+    h.ctx.openSessions.set('bg', { session: { projectPath: '/bg' }, attach: true, attachJobId, closed: false });
+    await h.persistWorkingSet();
+    const saved = await h.dom.window.api.getSetting('global');
+    assert.deepEqual(saved.openWorkingSet.find(item => item.sessionId === 'bg'), {
+      sessionId: 'bg', projectPath: '/bg', active: false, bg: true,
+    });
+  });
+}
+
 test('a persist during a cold restore keeps the saved entries not indexed yet', async () => {
   const h = setup();
   vm.runInContext(`restorePlanner.tick({ sessionMap: new Map([['opened', {}]]), openSessions, indexingDone: false });`, h.ctx);

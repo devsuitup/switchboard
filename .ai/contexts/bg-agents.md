@@ -27,16 +27,24 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 ## Restore of background sessions
 
 `persistWorkingSet` saves every open attach tab with `bg: true` and
-`attachJobId`. The main `restore-background-job(sessionId, { attachOnly })`
+`attachJobId` when the job id is a non-empty string. This includes tabs opened
+from the Agents view. The main `restore-background-job(sessionId, { attachOnly })`
 handler first requires that exact session in `global.openWorkingSet` with
-`bg: true`; renderer requests cannot restore arbitrary jobs. `findRestoreJob`
+`bg: true`; this scopes the restore IPC to saved entries. It is not a capability
+boundary: the renderer already exposes the ordinary checked respawn verb.
+`findRestoreJob`
 reads the saved job record afresh, or searches legacy records by `sessionId`
-or `resumeSessionId`. Missing, unreadable, mismatched or ambiguous identity
-fails closed; ambiguity names every matching id.
+or `resumeSessionId` when the saved job id is absent, null or invalid. Unreadable
+unrelated records are skipped; an unreadable matching or explicitly saved
+record refuses. Mismatched or ambiguous identity refuses; ambiguity names
+every matching id. A missing record releases the held entry, with a notice;
+a later sidebar click follows the ordinary guarded resume path.
 
 `conversationCheck(id, { workerLiveness: 'all' })` requests S1a's classifier
 for terminal states too. Live attaches; dead working/blocked/running/done/failed
-goes through the existing `checkVerb('respawn')` and `runVerb` guards. Dead
+goes through the existing `checkVerb('respawn')` and `runVerb` guards. Only the
+restore check passes its classified worker evidence to `liveJobCheck`, keyed
+by job id; Delete and ordinary Respawn retain their conservative defaults. Dead
 stopped offers explicit Respawn; unknown never respawns. A per-session promise
 coalesces overlapping requests. Descriptor observation subscribes before its
 initial read, matches this job through `liveWorkerDescriptor`, waits at most
@@ -44,11 +52,15 @@ initial read, matches this job through `liveWorkerDescriptor`, waits at most
 descriptor returns `respawned-not-attached`. Attach retries set `attachOnly`
 and cannot respawn. Explicit stopped recovery uses the checked existing verb.
 
-`runRestore` handles background entries before interactive continuation
-resolution; lazy/manual held-entry opens share `prepareBackgroundRestore`.
+`runRestore` prepares background entries concurrently without blocking
+interactive tabs. Each pending item remains held during saves; save suspension
+ends after the interactive loop, before waiting for background preparations.
+Completed tabs retain saved order. Lazy/manual held-entry opens share
+`prepareBackgroundRestore`.
 The remembered active background entry defers to startup policy. Renderer
 rechecks descriptor identity and requires an attach verdict; no interactive
-fallback is allowed. Refusals stay in `skippedWorkingSetEntries`, survive saves
+fallback is allowed during background preparation. Except for missing jobs,
+refusals stay in `skippedWorkingSetEntries`, survive saves
 with their job identity, and use persistent Restore notices. Tests:
 `restore-live-elsewhere`, `restore-lazy`, `restore-pending-persist`,
 `bg-agents-ipc`, `bg-agents-restore`.
@@ -891,9 +903,8 @@ In `open-terminal`, `type: 'attach'` validates `jobId` against `JOB_ID_RE`,
 takes `cwd` from the options, runs `claude attach <jobId>` and skips sandbox,
 pre-launch command and MCP emulation. The session is flagged `isAttach` with
 `attachJobId`, which `isAttachedHere` (passed to `bgAgents.init`) reads to set
-`attachedHere` on the roster entry. Ordinary attach tabs are excluded from the
-working set (`entry.attach`). An attach tab kept by continuation restore
-is saved with `bg: true` while it is open and not closed; closing or
+`attachedHere` on the roster entry. Every open attach tab, including one opened
+from the Agents view, is saved with `bg: true` and a job id when known; closing or
 destroying it drops the mark; the mark survives later saves,
 so restore reattaches the live job at every restart. After a renderer reload
 the tab is reopened through the

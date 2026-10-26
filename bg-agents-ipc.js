@@ -24,13 +24,13 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     bgAgents.start();
     return bgAgents.reconcile();
   });
-  const checkVerb = async (verb, id) => {
+  const checkVerb = async (verb, id, restoring = false) => {
     if (verb === 'rm' || verb === 'respawn' || verb === 'stop') {
       const action = { rm: 'delete', respawn: 'respawn', stop: 'stop' }[verb];
       const declined = { rm: 'not deleted', respawn: 'not respawned', stop: 'not stopped' }[verb];
       let check;
       try {
-        check = await bgAgents.conversationCheck(id, { workerLiveness: verb !== 'stop' });
+        check = await bgAgents.conversationCheck(id, { workerLiveness: restoring ? 'all' : verb !== 'stop' });
         if (verb === 'stop' && (!check.known || check.hosted)) return { ok: true };
         if (!check.known) return { ok: false, error: `cannot tell whether this conversation is running (${check.reason}) — ${declined}` };
         if (verb !== 'stop' && check.state === 'running' && check.workerLiveness === 'unknown') {
@@ -43,7 +43,8 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
           const refusal = await deleteSessionRefusal(sessionId, {
             activeSessions: verb === 'stop' ? new Map([...activeSessions || []].filter(([, session]) =>
               !(session?.isAttach && String(session.attachJobId).toLowerCase() === id.toLowerCase()))) : activeSessions,
-            liveJobCheck: sid => bgAgents.liveJobCheck(sid), describeLiveProcess: true,
+            liveJobCheck: sid => bgAgents.liveJobCheck(sid, restoring
+              ? { workerLiveness: new Map([[id, check.workerLiveness]]) } : undefined), describeLiveProcess: true,
             liveElsewhereChecked: sid => cliSessionState.liveElsewhereChecked(sid, sessionHasPty, ptyPids, { includeOwnProcesses: true }),
           });
           if (refusal) return { ok: false, error: verb === 'stop'
@@ -99,7 +100,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       const item = global?.openWorkingSet?.find(item => item.sessionId === sessionId && item.bg === true);
       if (!item) return refuse('session is not a saved background entry in the working set');
       const lookup = bgAgents.findRestoreJob(sessionId, item.attachJobId);
-      if (!lookup.known || !lookup.job) return refuse(lookup.reason || 'background job record unavailable');
+      if (!lookup.known || !lookup.job) return { ...refuse(lookup.reason || 'background job record unavailable'), ...(lookup.missing ? { missing: true } : {}) };
       job = lookup.job;
       const check = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
       if (!check.known) return refuse(check.reason || 'conversation liveness unknown');
@@ -109,7 +110,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       if (check.workerLiveness === 'dead') {
         if (attachOnly) return refuse('worker is not live — not attached');
         if (check.state === 'stopped') return refuse('stopped job was not respawned automatically', 'respawn');
-        const permission = await checkVerb('respawn', job.id);
+        const permission = await checkVerb('respawn', job.id, true);
         if (!permission.ok) return refuse(permission.error);
         const result = await bgAgents.runVerb('respawn', job.id);
         if (!result?.ok) return refuse(result?.error || 'respawn returned no result');

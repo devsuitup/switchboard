@@ -242,7 +242,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
         sessionId,
         projectPath: entry.session.projectPath,
         active: sessionId === activeSessionId,
-        ...(entry.attach ? { bg: true, attachJobId: entry.attachJobId } : {}),
+        ...(entry.attach ? { bg: true, ...(typeof entry.attachJobId === 'string' && entry.attachJobId ? { attachJobId: entry.attachJobId } : {}) } : {}),
         ...(fresh ? { fresh: true } : {}),
       });
     }
@@ -263,7 +263,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
       const attachJobId = openSessions.get(item.sessionId)?.attachJobId || item.attachJobId;
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(attachJobId ? { attachJobId } : {}) } : {}) });
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(typeof attachJobId === 'string' && attachJobId ? { attachJobId } : {}) } : {}) });
     }
     if (!set.some(e => e.active)) {
       const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
@@ -350,6 +350,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
   for (const item of pending) restoreInFlight.set(item.sessionId, item);
   const skippedNow = [];
   const startedAs = new Map();
+  const backgroundTasks = [];
   try {
     const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
     for (const [position, item] of list.entries()) {
@@ -379,10 +380,20 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         s = { ...s, projectPath: item.projectPath };
         const index = restoreSavedIndex.get(originalId) ?? position;
         skippedWorkingSetEntries.set(originalId, { item, index });
-        try {
-          const background = await prepareBackgroundRestore(s, item);
-          if (background) await openSession(s, undefined, { automatic: true, allowBgAttach: true, continuationResolved: true, ...background });
-        } finally { restoreInFlight.delete(originalId); }
+        const session = s;
+        backgroundTasks.push((async () => {
+          try {
+            const background = await prepareBackgroundRestore(session, item);
+            if (background) await openSession(session, undefined, { automatic: true, allowBgAttach: true, continuationResolved: true, ...background });
+            const order = new Map(list.map((saved, index) => [startedAs.get(saved.sessionId) || saved.sessionId, index]));
+            const entries = [...openSessions].sort(([a], [b]) => (order.get(a) ?? Infinity) - (order.get(b) ?? Infinity));
+            openSessions.clear();
+            for (const [id, entry] of entries) openSessions.set(id, entry);
+          } finally {
+            restoreInFlight.delete(originalId);
+            schedulePersistWorkingSet();
+          }
+        })());
         continue;
       }
       let holdReason = { waitingForIndex: false };
@@ -440,7 +451,12 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
     }
   } finally {
-    for (const item of pending) restoreInFlight.delete(item.sessionId);
+    for (const item of pending) if (!item.bg) restoreInFlight.delete(item.sessionId);
+  }
+  if (backgroundTasks.length) {
+    restoringWorkingSet = false;
+    schedulePersistWorkingSet();
+    await Promise.all(backgroundTasks);
   }
   if (skippedNow.length) showLiveElsewhereNotice(skippedNow);
   // Activate the entry marked active (or the last one)
@@ -480,6 +496,13 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false } = 
     return null;
   }
   if (result?.action === 'respawned-not-attached') report('Respawned, not attached: no live background descriptor within 15 seconds', 'Attach', () => retry(false));
+  else if (result?.missing === true) {
+    skippedWorkingSetEntries.delete(item.sessionId);
+    clearDormantRow(item.sessionId);
+    restoreInFlight.delete(item.sessionId);
+    showAppNotice({ id, kind: 'error', message: `Restore failed for ${sessionActionDescription(session)}: The background job no longer exists. Open the conversation from the sidebar to resume it.` });
+    schedulePersistWorkingSet();
+  }
   else if (result?.recovery === 'respawn') report(result.reason, 'Respawn', () => retry(true));
   else report(result?.reason || 'The background restore backend is unavailable or returned no result');
   return null;

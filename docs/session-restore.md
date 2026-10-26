@@ -39,13 +39,18 @@ opens an interactive `--resume` tab or sends `/bg`. A stopped job is not
 respawned automatically: its notice offers **Respawn**, which checks that the
 conversation can be restarted before doing so.
 
-Unknown worker liveness, a missing record, conflicting records and a refused
+Unknown worker liveness, conflicting records and a refused
 respawn leave the entry saved and display the reason. Entries saved by older
-versions are matched by their conversation id; multiple matches list the job
+versions, or with a null or invalid saved job id, are matched by their conversation id; multiple matches list the job
 ids instead of choosing one. After respawn, Switchboard waits up to 15 seconds
 for the job's live background descriptor. If none appears, **Respawned, not
 attached** offers **Attach**, which retries attachment without respawning again.
 An attachment error displays the backend message and leaves the worker running.
+If the job record no longer exists, its background entry is released with a
+notice; a later sidebar click follows the normal resume checks, including
+protection for a conversation running elsewhere. Background preparations run
+concurrently, keep their saved slots while pending, and do not delay interactive
+tabs or working-set saves.
 
 ### A session with no transcript yet
 

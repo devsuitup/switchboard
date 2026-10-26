@@ -155,7 +155,7 @@ every call, and the absolute path built from it is used and discarded there.
 | `bg-agent-verb` | `(verb, id)` | `{ok, error?}` | `stop` \| `respawn` \| `rm`; id validated against `JOB_ID_RE`; `respawn`/`rm` refused on a live (`working`/`blocked`) job. |
 | `dispatch-bg-agent` | `(fields)` | `{ok, id?, error?}` | `claude --bg …` in `fields.cwd`. |
 | `bg-agent-live-job` | `(sessionId)` | `{known, job} \| {known:false, reason}` | `liveJobCheck`; `stopBeforeArchive` refuses on a live job or an unknown answer. |
-| `restore-background-job` | `(sessionId, {attachOnly?}?)` | `{action:'attach', sessionId, jobId} \| {action:'respawned-not-attached', jobId} \| {action:'refuse', reason, jobId?, recovery?}` | Only a saved `bg: true` working-set member; S1a classification, checked respawn for proven-dead workers, then a live bg descriptor within 15 s. Unknown refuses; stopped offers explicit Respawn. `attachOnly` never respawns. Bridge: `restoreBackgroundJob`. |
+| `restore-background-job` | `(sessionId, {attachOnly?}?)` | `{action:'attach', sessionId, jobId} \| {action:'respawned-not-attached', jobId} \| {action:'refuse', reason, jobId?, recovery?, missing?}` | Scoped to saved `bg: true` working-set members; S1a classification, checked respawn for proven-dead workers, then a live bg descriptor within 15 s. Unknown refuses; stopped offers explicit Respawn. `missing: true` releases the saved background entry for a later ordinary guarded resume. `attachOnly` never respawns. Bridge: `restoreBackgroundJob`. |
 
 `open-terminal` accepts `sessionOptions = {type: 'attach', jobId, cwd}` and runs `claude attach <jobId>`; `stop-session` on such a session detaches (`{ok, detached: true}`).
 

@@ -10,7 +10,7 @@ Switchboard, and acts on them without a terminal.
 ## Restoring saved background tabs
 
 After a restart or reboot, startup restore reopens only background jobs whose
-attach tabs were saved. A live worker is attached; a worker proven dead is
+attach tabs were saved, including tabs opened from the Agents view. A live worker is attached; a worker proven dead is
 respawned as the same job and conversation, retaining its name, then attached.
 Automatic mode does this without a click, Ask waits for Restore, Restore on
 click waits for the saved row, and Don't restore starts nothing.
@@ -22,7 +22,9 @@ ids. A stopped job offers **Respawn** and is never restarted automatically.
 descriptor did not appear within 15 seconds; **Attach** retries attachment
 without another respawn. An attach failure retains the CLI's message and
 leaves the worker running. The saved tab remains available for a later retry;
-check the job in Agents. See [Session Restore](session-restore.md).
+check the job in Agents. If the job record no longer exists, the saved background
+entry is released and a notice explains that the conversation can be opened
+normally from the sidebar. See [Session Restore](session-restore.md).
 
 ## Opening it
 
@@ -245,9 +247,9 @@ leaves, and the session keeps running under the daemon. A notice offers
 **Undo** for about 10 seconds to attach it again in the same working folder.
 If the client is still closing, Undo waits for it to leave before reattaching.
 Stopping the session
-is only offered in the Agents view. Tabs created by Send to background or
-background continuation restore are reopened by [session restore](session-restore.md);
-ordinary attach tabs are not. Quitting Switchboard or closing its
+is only offered in the Agents view. Every attached tab, including one opened
+from the Agents view, is reopened by [session restore](session-restore.md).
+Quitting Switchboard or closing its
 window ends the attach client without the Ctrl+Z; the session still keeps
 running.
 

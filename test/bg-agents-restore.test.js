@@ -17,10 +17,12 @@ function fixture(t) {
   fs.mkdirSync(path.join(home, 'daemon'));
   fs.writeFileSync(path.join(home, 'daemon', 'roster.json'), JSON.stringify({ proto: 1, updatedAt: '2000-01-01T00:00:00Z', workers: {} }));
   t.after(() => { bg.stop(); fs.rmSync(home, { recursive: true, force: true }); });
-  return (id, fields = {}) => {
+  const write = (id, fields = {}) => {
     fs.mkdirSync(path.join(jobsDir, id), { recursive: true });
     fs.writeFileSync(path.join(jobsDir, id, 'state.json'), JSON.stringify({ state: 'working', sessionId: SID, ...fields }));
   };
+  write.jobsDir = jobsDir;
+  return write;
 }
 
 test('B lookup reads saved attachJobId directly and refuses a different conversation', t => {
@@ -30,7 +32,7 @@ test('B lookup reads saved attachJobId directly and refuses a different conversa
   assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa').job.id, 'aaaaaaaa');
   write('aaaaaaaa', { sessionId: OTHER });
   assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa').known, false);
-  assert.equal(bg.findRestoreJob(SID, '../bbbbbbbb').known, false);
+  assert.equal(bg.findRestoreJob(SID, '../bbbbbbbb').job?.id, 'bbbbbbbb', 'invalid saved id falls back to the matching conversation');
   assert.equal(bg.findRestoreJob(SID, 'cccccccc').known, false);
 });
 
@@ -45,9 +47,91 @@ test('B legacy lookup matches either identity field and refuses ambiguous or unr
   assert.equal(ambiguous.known, false);
   assert.match(ambiguous.reason, /aaaaaaaa.*bbbbbbbb/);
   write('bbbbbbbb', { sessionId: OTHER });
-  write('cccccccc', { state: 'future-state', sessionId: null });
+  write('cccccccc', { state: 'future-state', sessionId: SID });
   assert.equal(bg.findRestoreJob(SID).known, false, 'unknown records cannot hide another matching job');
 });
+
+for (const savedId of [null, '', '../invalid', 42]) {
+  test(`C2/C4 absent or invalid saved job id ${savedId} falls back to legacy identity`, t => {
+    const write = fixture(t);
+    write('aaaaaaaa');
+    assert.equal(bg.findRestoreJob(SID, savedId).job?.id, 'aaaaaaaa');
+  });
+}
+
+for (const bad of [{ state: 'future-state', sessionId: OTHER }, null]) {
+  test(`C6 legacy restore skips unrelated ${bad ? 'unknown-state' : 'missing-state'} record`, t => {
+    const write = fixture(t);
+    write('aaaaaaaa');
+    write('bbbbbbbb', bad || {});
+    if (!bad) {
+      fs.unlinkSync(path.join(write.jobsDir, 'bbbbbbbb', 'state.json'));
+    }
+    assert.equal(bg.findRestoreJob(SID).job?.id, 'aaaaaaaa');
+  });
+}
+
+test('C6 GUARD unreadable explicit saved id refuses despite another good match', t => {
+  const write = fixture(t);
+  write('aaaaaaaa');
+  write('bbbbbbbb', { state: 'future-state', sessionId: OTHER });
+  assert.equal(bg.findRestoreJob(SID, 'bbbbbbbb').known, false);
+});
+
+test('C4 GUARD missing record is explicitly distinguished from ambiguity and unreadability', t => {
+  const write = fixture(t);
+  assert.equal(bg.findRestoreJob(SID).missing, true);
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa').missing, true);
+  write('aaaaaaaa', { state: 'future-state' });
+  assert.equal(bg.findRestoreJob(SID).missing, undefined);
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa').missing, undefined);
+});
+
+test('C6 GUARD unknown-state resume identity matching the saved conversation refuses', t => {
+  const write = fixture(t);
+  write('aaaaaaaa');
+  write('bbbbbbbb', { state: 'future-state', sessionId: OTHER, resumeSessionId: SID });
+  assert.equal(bg.findRestoreJob(SID).known, false);
+});
+
+test('C1 GUARD evidence for one job cannot hide another hosted job of the conversation', t => {
+  const write = fixture(t);
+  write('aaaaaaaa'); write('bbbbbbbb');
+  assert.equal(bg.liveJobCheck(SID, { workerLiveness: new Map([['aaaaaaaa', 'dead']]) }).job?.id, 'bbbbbbbb');
+});
+
+for (const state of ['working', 'blocked']) {
+  test(`C1 integration restores dead ${state} through real conversation and deletion guards`, async t => {
+    const write = fixture(t);
+    write('aaaaaaaa', { state });
+    assert.equal((await bg.conversationCheck('aaaaaaaa', { workerLiveness: 'all' })).workerLiveness, 'dead');
+    assert.equal(bg.liveJobCheck(SID).job?.id, 'aaaaaaaa', 'GUARD no-evidence lookup stays conservative');
+    const handlers = new Map();
+    const descriptors = [];
+    const calls = [];
+    t.mock.method(bg, 'runVerb', async (...args) => {
+      calls.push(args);
+      descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID });
+      return { ok: true };
+    });
+    require('../bg-agents-ipc').init({
+      ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
+      getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
+      getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }),
+      sessionHasPty: () => false, ptyPids: () => [],
+      cliSessionState: { readAllDescriptors: () => descriptors, onDescriptorsChanged: () => () => {},
+        liveElsewhereChecked: async () => ({ known: true, live: null }) },
+    });
+    for (const verb of ['rm', 'respawn']) {
+      const ordinary = await handlers.get('bg-agent-verb')({}, verb, 'aaaaaaaa');
+      assert.equal(ordinary.ok, false, `GUARD ordinary ${verb} retains no-evidence refusal`);
+    }
+    assert.deepEqual(calls, []);
+    const result = await handlers.get('restore-background-job')({}, SID);
+    assert.deepEqual(calls, [['respawn', 'aaaaaaaa']]);
+    assert.equal(result.action, 'attach');
+  });
+}
 
 for (const state of ['done', 'failed', 'stopped']) {
   test(`B restore requests S1a worker classification for ${state} as well`, async t => {

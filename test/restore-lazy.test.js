@@ -145,6 +145,32 @@ test('B-T5 lazy background click restores the saved job before opening, with no 
   assert.equal(h.settings.global.openWorkingSet[0].attachJobId, '1234abcd');
 });
 
+test('C2 GUARD lazy renderer reload persists a reattached tab without a null job id', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: PROJECT, bg: true }], livePtys: ['x'],
+    openResult: { ok: true, reattached: true, attach: true } });
+  t.after(() => h.destroy());
+  h.index(['x']);
+  await h.fns.tickRestorePlanner();
+  await h.fns.persistWorkingSet();
+  assert.equal(h.settings.global.openWorkingSet[0].bg, true);
+  assert.equal(Object.hasOwn(h.settings.global.openWorkingSet[0], 'attachJobId'), false);
+});
+
+test('C4 GUARD missing lazy job releases dormant and held entries for a later ordinary click', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: PROJECT, bg: true }] });
+  t.after(() => h.destroy());
+  h.index(['x']);
+  h.window.api.restoreBackgroundJob = async () => ({ action: 'refuse', missing: true, reason: 'no background job record for x' });
+  await h.fns.tickRestorePlanner();
+  await h.open('x');
+  assert.deepEqual(h.dormantIds(), []);
+  assert.equal(h.run('skippedWorkingSetEntries.has("x")'), false);
+  await h.fns.persistWorkingSet();
+  assert.deepEqual(h.savedIds(), []);
+  await h.open('x');
+  assert.deepEqual(h.openTerminalCalls, ['x']);
+});
+
 for (const mode of ['auto', 'ask', 'lazy', 'off']) {
   test(`B ${mode === 'lazy' ? 'GUARD' : 'RED'} remembered active background entry defers to ${mode} startup policy`, async t => {
     const h = setup({ mode, savedSet: [{ sessionId: 'x', projectPath: PROJECT, bg: true }] });
