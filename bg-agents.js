@@ -9,6 +9,7 @@ const {
   dispatchRefusal, isHostedJob,
 } = require('./bg-agents-roster');
 const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('./project-root');
+const { classifyWorkerLiveness, workerTimestamp } = require('./bg-worker-liveness');
 
 const DEFAULT_JOBS_DIR = path.join(os.homedir(), '.claude', 'jobs');
 const FLUSH_MS = 250;
@@ -21,6 +22,7 @@ const ROOT_CONCURRENCY = 4;
 
 let jobsDir = DEFAULT_JOBS_DIR;
 let homeDir = os.homedir();
+let daemonRosterPath = path.join(path.dirname(DEFAULT_JOBS_DIR), 'daemon', 'roster.json');
 let log = { info() {}, warn() {}, error() {}, debug() {} };
 let runClaude = null;
 let cliSessionState = null;
@@ -53,6 +55,7 @@ function init(ctx) {
   stop();
   jobsDir = ctx.jobsDir || DEFAULT_JOBS_DIR;
   homeDir = ctx.homeDir || os.homedir();
+  daemonRosterPath = ctx.daemonRosterPath || path.join(path.dirname(jobsDir), 'daemon', 'roster.json');
   log = ctx.log || log;
   runClaude = ctx.runClaude;
   cliSessionState = ctx.cliSessionState;
@@ -304,8 +307,48 @@ function transcriptAvailable(entry) {
   } catch { return false; }
 }
 
-function conversationCheck(id) {
+async function workerSample(force = false) {
+  const sessionState = cliSessionState;
+  const rosterFile = daemonRosterPath;
+  try { await sessionState?.refreshProcessTable?.({ force }); } catch {}
+  const processEvidence = sessionState?.readWorkerProcessEvidence?.() || {};
+  let daemonRoster = null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(rosterFile, 'utf8'));
+    daemonRoster = { proto: raw.proto, updatedAt: raw.updatedAt, supervisorPid: raw.supervisorPid,
+      workers: Object.fromEntries(Object.entries(raw.workers || {}).map(([key, worker]) => [key, { pid: worker?.pid, procStart: worker?.procStart }])) };
+  } catch {}
+  return { ...processEvidence, roster: daemonRoster, descriptors: sessionState?.readAllDescriptors() || [],
+    bootTime: Date.now() - os.uptime() * 1000, observedAt: Date.now() };
+}
+
+function unchangedWorkerJob(job) {
+  let latest;
+  try { latest = parseJobState(fs.readFileSync(path.join(jobsDir, job.id, 'state.json'), 'utf8')); } catch {}
+  return !!latest && ['state', 'daemonShort', 'updatedAt'].every(field => latest[field] === job[field])
+    && (!latest.sessionId || latest.sessionId === job.sessionId);
+}
+
+async function workerEvidence(job) {
+  if (!['running', 'working', 'blocked'].includes(job.state)) return undefined;
+  const gen = generation;
+  const first = await workerSample();
+  if (gen !== generation) return 'unknown';
+  const evidence = classifyWorkerLiveness(job, first);
+  if (evidence === 'dead') return unchangedWorkerJob(job) ? 'dead' : 'unknown';
+  if (evidence !== 'unknown' || !first.processTableFresh || !first.roster
+    || !Number.isInteger(first.roster.supervisorPid) || first.roster.supervisorPid <= 0
+    || typeof first.tableEntry !== 'function' || first.tableEntry(first.roster.supervisorPid)
+    || !(workerTimestamp(first.roster.updatedAt) >= workerTimestamp(job.updatedAt))) return evidence;
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  if (gen !== generation) return 'unknown';
+  const confirmed = classifyWorkerLiveness(job, first, await workerSample(true));
+  return gen !== generation || confirmed === 'dead' && !unchangedWorkerJob(job) ? 'unknown' : confirmed;
+}
+
+async function conversationCheck(id) {
   if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { known: false, reason: 'invalid background session id' };
+  const gen = generation;
   let job;
   try { job = parseJobState(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch (err) {
     return { known: false, reason: `cannot read job ${id}: ${err.message}` };
@@ -315,13 +358,17 @@ function conversationCheck(id) {
   const sessionIds = [...new Set([job.sessionId, job.bridgeSessionId, entry && entry.sessionId]
     .filter(Boolean))];
   if (!sessionIds.length) return { known: false, reason: `job ${id} does not name its conversation` };
-  return { known: true, sessionIds, state: job.state,
-    hosted: isHostedJob({ ...job, id, sessionId: job.sessionId || entry?.sessionId }, liveDescriptors()) };
+  const identified = { ...job, id, sessionId: job.sessionId || entry?.sessionId };
+  const evidence = await workerEvidence(identified);
+  if (gen !== generation) return { known: false, reason: 'background agent service changed while checking the worker' };
+  return { known: true, sessionIds, state: job.state, workerLiveness: evidence,
+    hosted: isHostedJob(identified, liveDescriptors(), evidence) };
 }
 
 async function runVerb(verb, id) {
   if (!VERBS.has(verb)) return { ok: false, error: `unknown verb: ${String(verb)}` };
   if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { ok: false, error: 'invalid background session id' };
+  const gen = generation;
   if (verb === 'transcript') {
     readJob(id);
     const entry = roster.find(e => e.id === id) || backgroundTranscriptEntry(id);
@@ -331,8 +378,14 @@ async function runVerb(verb, id) {
   const live = roster.find(e => e.kind === 'background' && e.id === id);
   let fresh;
   try { fresh = parseJobState(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch {}
-  if (verb !== 'stop' && isHostedJob({ ...live, ...fresh, id, state: fresh?.state || live?.state,
-    sessionId: fresh?.sessionId || live?.sessionId }, liveDescriptors())) {
+  const job = { ...live, ...fresh, id, state: fresh?.state || live?.state,
+    sessionId: fresh?.sessionId || live?.sessionId };
+  const evidence = verb === 'stop' ? undefined : await workerEvidence(job);
+  if (gen !== generation) return { ok: false, error: 'background agent service changed while checking the worker; retry the action' };
+  if (verb !== 'stop' && job.state === 'running' && evidence === 'unknown') {
+    return { ok: false, error: `cannot tell whether job ${id}'s worker is running — not ${verb === 'rm' ? 'deleted' : 'respawned'}` };
+  }
+  if (verb !== 'stop' && isHostedJob(job, liveDescriptors(), evidence)) {
     return { ok: false, error: `cannot ${verb === 'rm' ? 'delete' : verb} a ${fresh?.state || live?.state || 'hosted'} session; stop it first` };
   }
   const result = await run([verb, id], { cwd: verb === 'rm' ? homeDir : cwdFor(id), timeout: VERB_TIMEOUT_MS });

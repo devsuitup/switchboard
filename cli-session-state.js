@@ -159,9 +159,9 @@ function normaliseProcessTable(read) {
   return out.size > 0 ? out : null;
 }
 
-function refreshProcessTable() {
+function refreshProcessTable({ force = false } = {}) {
   if (!processTableEnabled) return Promise.resolve(null);
-  if (processTableFresh()) return Promise.resolve(processTable.map);
+  if (!force && processTableFresh()) return Promise.resolve(processTable.map);
   if (processTableInFlight) return processTableInFlight;
   const epoch = processTableEpoch;
   const observedAt = now();
@@ -197,6 +197,11 @@ function startProcessTableRefresh() {
 
 function tableEntry(pid) {
   return processTable && processTable.map ? processTable.map.get(pid) : undefined;
+}
+
+function readWorkerProcessEvidence() {
+  const table = processTable?.map;
+  return { processTableFresh: processTableFresh() && !!table, tableEntry: pid => table?.get(pid) };
 }
 
 function chainReaches(pid, isAnchor, strict) {
@@ -1064,6 +1069,7 @@ async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
 }
 
 module.exports = {
+  readWorkerProcessEvidence,
   init,
   trackScheduleRun,
   findLiveProcess,

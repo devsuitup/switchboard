@@ -61,6 +61,7 @@ const AGENT_STATE_META = {
   working: { emoji: '⚙️', label: 'Active' },
   blocked: { emoji: '✋', label: 'Blocked' },
   idle: { emoji: '💤', label: 'Idle' },
+  running: { emoji: '💤', label: 'Idle' },
   done: { emoji: '✅', label: 'Done' },
   stopped: { emoji: '⏹️', label: 'Stopped' },
   failed: { emoji: '❌', label: 'Failed' },
@@ -74,14 +75,14 @@ function normalizeAgentsGroupBy(value) {
 
 function agentStateGroupKey(entry) {
   if (entry.kind === 'interactive') return 'external';
-  if (['working', 'blocked'].includes(entry.state) && !agentJobIsLive(entry)) return 'unknown';
+  if (['working', 'blocked', 'running'].includes(entry.state) && !agentJobIsLive(entry)) return 'unknown';
   if (agentJobIsLive(entry) && entry.status === 'busy') {
     const snapshot = typeof storedActivitySnapshot === 'function' ? storedActivitySnapshot(entry.sessionId)
       : typeof taskActivitySnapshot === 'function' ? taskActivitySnapshot(entry.sessionId, {}) : null;
     if ((snapshot?.headTurn ?? 'unknown') !== 'closed') return 'working';
   }
-  if (agentJobIsLive(entry) && entry.state === 'done' && entry.status === 'waiting') return 'working';
-  if (entry.state === 'done' && agentJobIsLive(entry)) return 'idle';
+  if (agentJobIsLive(entry) && ['done', 'running'].includes(entry.state) && entry.status === 'waiting') return 'working';
+  if (['done', 'running'].includes(entry.state) && agentJobIsLive(entry)) return 'idle';
   const known = entry.state && entry.state !== 'external' && entry.state !== 'unknown' && Object.hasOwn(AGENT_STATE_META, entry.state);
   return known ? entry.state : 'unknown';
 }
@@ -210,7 +211,7 @@ function selectBackgroundActivity(sessionId, row) {
   row ||= typeof localActivityRow === 'function' ? localActivityRow(sessionId) : null;
   row ||= { sessionId };
   const head = lower(row.headSessionId || row.sessionId || sessionId);
-  const superseded = entry => entry && ['working', 'blocked'].includes(entry.state) && !agentJobIsLive(entry)
+  const superseded = entry => entry && ['working', 'blocked', 'running'].includes(entry.state) && !agentJobIsLive(entry)
     && !(typeof activePtyIds !== 'undefined' && activePtyIds.has(sessionId));
   const finish = (entry, selection, unavailable = false) => superseded(entry)
     ? { entry: null, selection: 'none', unavailable: false, source: 'none' } : ({ entry: entry || null, selection,
@@ -250,12 +251,13 @@ function backgroundActivityIsForeground(sessionId, row, selection) {
 function projectBackgroundActivity(entry, snapshot) {
   const live = agentJobIsLive(entry);
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
+  const turnEnded = terminal || entry.state === 'running';
   const blocked = live && entry.state === 'blocked';
   const status = entry.status ?? snapshot.descriptorStatus;
   const descriptorBusy = live && status === 'busy' && (snapshot.headTurn ?? 'unknown') !== 'closed';
-  const doneIdle = live && entry.state === 'done' && status === 'idle';
-  const turnActive = live && (!terminal && !blocked || descriptorBusy);
-  const lifecycleWaiting = blocked || live && terminal && !doneIdle;
+  const doneIdle = live && ['done', 'running'].includes(entry.state) && status === 'idle';
+  const turnActive = live && (!turnEnded && !blocked || descriptorBusy);
+  const lifecycleWaiting = blocked || live && turnEnded && !doneIdle;
   const headTurn = descriptorBusy ? undefined : lifecycleWaiting && snapshot.headTurn === 'unknown' ? 'closed' : snapshot.headTurn;
   return { ...snapshot, headTurn, liveness: live ? 'alive' : terminal ? 'dead' : 'unknown', stale: !live && terminal,
     titleOverride: !live && !terminal ? 'Liveness unknown' : null,
@@ -264,7 +266,7 @@ function projectBackgroundActivity(entry, snapshot) {
     responseReady: turnActive && !descriptorBusy && snapshot.responseReady,
     agentsBusy: turnActive && snapshot.agentsBusy,
     backgroundWork: turnActive && snapshot.backgroundWork,
-    waitingForInput: !descriptorBusy && !doneIdle && (blocked || live && (terminal || headTurn !== 'open')
+    waitingForInput: !descriptorBusy && !doneIdle && (blocked || live && (turnEnded || headTurn !== 'open')
       && (!(typeof activePtyIds !== 'undefined' && activePtyIds.has(entry.sessionId)) || !!snapshot.waitingForInput)) };
 }
 
@@ -281,15 +283,15 @@ function backgroundActivityLabel(sessionId, snapshot, row, selection) {
     return selection.unavailable ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null;
   }
   if (backgroundActivityIsForeground(sessionId, row, selection)) return { text: renderSessionIcon(snapshot).title, title: '' };
-  const state = ['working', 'blocked'].includes(entry.state) ? agentStateGroupKey(entry) : entry.state;
+  const state = ['working', 'blocked', 'running'].includes(entry.state) && !agentJobIsLive(entry) ? agentStateGroupKey(entry) : entry.state;
   const valid = entry.taskEvidence?.valid === true;
   const terminal = ['done', 'stopped', 'failed'].includes(entry.state);
   const kinds = valid ? (entry.taskEvidence.inFlightKinds || []).map(k => k.label).join(', ') : '';
   const source = valid ? `Job updated ${new Date(entry.taskEvidence.at).toLocaleString()} (job metadata)${kinds ? ` · ${kinds}` : ''}` : 'Job activity unavailable';
   const title = `${renderSessionIcon(snapshot).title} · job ${state || 'unknown'}\n${source}`;
   if (agentJobIsLive(entry) && snapshot.attention) return { text: 'Needs attention', title };
-  if (agentJobIsLive(entry) && snapshot.busy && ['blocked', 'done'].includes(entry.state)) return { text: '', title };
-  if (state === 'done' && agentJobIsLive(entry)) return { text: 'Idle', title };
+  if (agentJobIsLive(entry) && snapshot.busy && ['blocked', 'done', 'running'].includes(entry.state)) return { text: '', title };
+  if (['done', 'running'].includes(state) && agentJobIsLive(entry)) return { text: 'Idle', title };
   const text = state === 'unknown' ? 'Unknown' : state === 'blocked' ? 'Blocked' : terminal ? `Job ${state}`
     : state === 'working' && snapshot.attention ? 'Needs attention' : !valid ? 'Activity unavailable'
     : state === 'working' ? '' : 'Activity unavailable';
@@ -492,7 +494,7 @@ function renderAgentDetail(entry) {
   const btn = (verb, label, enabled) =>
     `<button type="button" class="control-btn agents-verb-btn" data-verb="${verb}" aria-label="${agentsEscapeAttr(label)}" title="${agentsEscapeAttr(reason(verb) || (verb === 'attach' ? label : ''))}"${enabled && !pending ? '' : ' disabled'}>${label}</button>`;
   const meta = [];
-  const state = ['working', 'blocked'].includes(entry.state) && agentStateGroupKey(entry) === 'unknown'
+  const state = ['working', 'blocked', 'running'].includes(entry.state) && agentStateGroupKey(entry) === 'unknown'
     ? 'Unknown' : entry.jobState || entry.state;
   if (entry.id) meta.push('job ' + entry.id + (state ? ' · ' + state : ''));
   if (Number.isFinite(entry.tokens)) meta.push(formatTokens(entry.tokens) + ' tokens');

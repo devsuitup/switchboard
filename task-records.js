@@ -17,7 +17,7 @@ function normalizeTaskEvidence(raw) {
   const validFlight = terminal && flight === undefined || flight && typeof flight === 'object' && !Array.isArray(flight) &&
     validCount(flight.tasks) && Array.isArray(flight.kinds) &&
     flight.kinds.every(k => typeof k === 'string' && k.trim().length > 0);
-  if (!Number.isFinite(at) || !validFan || !validFlight || !['working', 'blocked', 'done', 'stopped', 'failed'].includes(raw.state)) {
+  if (!Number.isFinite(at) || !validFan || !validFlight || !['running', 'working', 'blocked', 'done', 'stopped', 'failed'].includes(raw.state)) {
     return { valid: false, at: null, tasks: [], inFlight: null, terminal: false };
   }
   return { valid: true, at, tasks: (raw.fan || []).map(f => ({ id: f.id, kind: TASK_KINDS.get(f.kind), startedAt: f.startedAt, doneAt: f.doneAt ?? null })),

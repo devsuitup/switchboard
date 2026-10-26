@@ -362,7 +362,7 @@ absent at zero, so a roster without external sessions reads as before.
 
 ## Job states
 
-`JOB_STATES` is `working`, `blocked`, `done`, `stopped`, `failed`. These are
+`JOB_STATES` is `running`, `working`, `blocked`, `done`, `stopped`, `failed`. These are
 turn states: `done` means the turn ended, while the daemon may still host the
 session between messages. `working` means an active turn; `blocked` means the
 job parked itself (for example, a quota pause or awaiting a go-ahead). Its live
@@ -373,7 +373,17 @@ busy; idle retains the waiting ring and Blocked label (#785).
 Leaving `blocked` removes that waiting evidence; the normal head-turn and PTY
 rules apply again. `stopped` and `failed` are finished even with a leftover descriptor.
 
-`isHostedJob(job, descriptors)` in `bg-agents-roster.js` is the single hosting
+The M1 measurement (2026-10-25, `.work-files/m1-785-report.md` in the primary
+checkout) found that Respawn writes `running`; that file stays `running` if
+the daemon dies, while the CLI list reports `failed`. A hosted `running` job
+groups as Idle, using the same busy/waiting overrides as a hosted done job.
+Without hosting evidence it groups as Unknown; when the CLI list is available,
+its state wins over a non-hosted `running` record.
+The merge checks hosting against all input descriptors, independently of the
+descriptor retained for activity. A matching job id can prove hosting across
+a session-id change; a descriptor without a job id can use the session fallback.
+
+`isHostedJob(job, descriptors, evidence)` in `bg-agents-roster.js` is the single hosting
 rule: a background job is hosted if a live `kind: bg` descriptor matches its
 job id. Only a descriptor without a job id may match
 its case-insensitive session id; two jobs can share a resumed conversation.
@@ -381,7 +391,29 @@ Without that bg evidence, a live interactive descriptor for the same
 case-insensitive session id overrides a stale working/blocked job file (#764).
 Otherwise working/blocked remains hosted: the original #374 file-only roster
 and CLI fallback need no descriptor, and #682 retained that rule when adding
-hosting between turns. No descriptor or job timestamp expires hosting.
+hosting between turns. `running` requires positive evidence: a matching live
+background descriptor or the worker classifier's `live` result. An explicit
+`dead` result removes working/blocked file-only hosting; a live background
+descriptor still wins. Unknown evidence preserves the #374 fallback.
+
+`bg-worker-liveness.js` is pure. Its caller supplies sanitized roster fields
+(no authentication fields), descriptors, an immutable process-table view,
+observation time and boot time. Workers are keyed by `daemonShort ?? id`.
+A matching Windows FILETIME creation stamp proves a worker live; a roster or
+worker stamp before boot proves it dead. A missing supervisor only proves death
+when the roster is at least as new as the job and a second observation at least
+one second later agrees. Stale/unreadable/unsupported observations, malformed
+stamps and pid reuse without another proof remain unknown. Process-table
+availability requires a successful snapshot, including when probing is disabled.
+The confirming read forces a new process probe despite the shared three-second
+cache. A changed job record or service generation invalidates pending death
+evidence instead of authorizing a verb against its replacement.
+
+`conversationCheck` is asynchronous so the IPC preview and final action await
+that confirmation. Both it and `runVerb` obtain evidence independently; a
+running worker with unknown evidence refuses Delete/Respawn. `liveJobCheck`,
+the roster, sidebar, cache and existing main-process callers retain their
+descriptor-based hosting rules. Restore is unchanged.
 The same override applies to conversation checks, `liveJobCheck` and `runVerb`.
 Delete/Respawn and Stop then refuse through the existing interactive-process
 guard (including processes owned here), naming the live pid rather than saying

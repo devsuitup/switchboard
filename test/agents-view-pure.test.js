@@ -69,7 +69,7 @@ test('T1: closed turn response-ready wins over a busy descriptor', t => {
   assert.equal(agentRowIcon(bg({ status: 'busy' })).slotClass, 'session-icon--response-ready');
 });
 
-for (const state of ['working', 'blocked', 'done']) {
+for (const state of ['working', 'blocked', 'done', 'running']) {
   for (const headTurn of ['open', 'closed', 'unknown']) {
     test(`S3b ${state} busy descriptor respects ${headTurn} turn evidence`, t => {
       global.taskActivitySnapshot = () => ({ liveness: 'alive', headTurn, agentsBusy: true, backgroundWork: true });
@@ -133,7 +133,7 @@ test('group mode: none, state and project are kept; anything else (unset include
 
 test('state meta: one emoji and label per state group, in the group order', () => {
   assert.deepEqual(Object.entries(AGENT_STATE_META).map(([k, m]) => [k, m.emoji, m.label]), [
-    ['working', '⚙️', 'Active'], ['blocked', '✋', 'Blocked'], ['idle', '💤', 'Idle'], ['done', '✅', 'Done'], ['stopped', '⏹️', 'Stopped'],
+    ['working', '⚙️', 'Active'], ['blocked', '✋', 'Blocked'], ['idle', '💤', 'Idle'], ['running', '💤', 'Idle'], ['done', '✅', 'Done'], ['stopped', '⏹️', 'Stopped'],
     ['failed', '❌', 'Failed'], ['external', '🖥️', 'External'], ['unknown', '❓', 'Unknown'],
   ]);
   const every = Object.keys(AGENT_STATE_META).map((k) => (k === 'external' ? ext({ sessionId: k }) : bg({ id: k, state: k === 'unknown' ? null : k, hosted: k !== 'done' })));

@@ -2,8 +2,9 @@
 'use strict';
 const { bridgeSessionKey } = require('./bridge-session-id');
 const { normalizeTaskEvidence } = require('./task-records');
+const { liveWorkerDescriptor } = require('./bg-worker-liveness');
 
-const JOB_STATES = new Set(['working', 'blocked', 'done', 'stopped', 'failed']);
+const JOB_STATES = new Set(['running', 'working', 'blocked', 'done', 'stopped', 'failed']);
 const SESSION_STATUSES = new Set(['busy', 'idle', 'waiting', 'shell']);
 const JOB_ID_RE = /^[0-9a-f]{8}$/;
 const JOB_ID_IN_TEXT_RE = /(?:^|[^0-9a-f])([0-9a-f]{8})(?![0-9a-f])/i;
@@ -44,6 +45,9 @@ function parseJobState(text) {
     }))
     : [];
   return {
+    id: str(raw.id),
+    daemonShort: str(raw.daemonShort),
+    updatedAt: str(raw.updatedAt) || num(raw.updatedAt),
     state: JOB_STATES.has(raw.state) ? raw.state : null,
     detail: str(raw.detail),
     tempo: str(raw.tempo),
@@ -140,7 +144,7 @@ function emptyEntry() {
   };
 }
 
-function backgroundEntry(id, cliEntry, job, descriptor) {
+function backgroundEntry(id, cliEntry, job, descriptor, descriptors) {
   const e = emptyEntry();
   e.id = id;
   e.listed = !!cliEntry;
@@ -162,7 +166,8 @@ function backgroundEntry(id, cliEntry, job, descriptor) {
     e.sessionId = job?.sessionId && !sessionIdField(cliEntry.sessionId) ? job.sessionId : cliEntry.sessionId || e.sessionId;
     e.name = cliEntry.name || e.name;
     e.cwd = cliEntry.cwd || e.cwd;
-    e.state = (job && job.state) || cliEntry.state || e.state;
+    e.state = job?.state === 'running' && !isHostedJob({ ...job, id }, descriptors)
+      ? cliEntry.state || job.state : (job && job.state) || cliEntry.state || e.state;
     e.pid = cliEntry.pid || e.pid;
     e.startedAt = cliEntry.startedAt ?? e.startedAt;
   }
@@ -192,7 +197,7 @@ function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
   const listed = new Map((cli || []).filter(s => s.kind === 'background' && JOB_ID_RE.test(String(s.id || '').toLowerCase())).map(s => [s.id.toLowerCase(), s]));
   const cached = new Map([...(jobs || [])].filter(([id]) => JOB_ID_RE.test(String(id).toLowerCase())).map(([id, job]) => [id.toLowerCase(), job]));
   for (const id of new Set([...listed.keys(), ...cached.keys(), ...byJobId.keys()])) {
-    roster.push(backgroundEntry(id, listed.get(id), cached.get(id), byJobId.get(id)));
+    roster.push(backgroundEntry(id, listed.get(id), cached.get(id), byJobId.get(id), descriptors));
   }
   const matched = new Set();
   for (const e of roster) {
@@ -253,10 +258,11 @@ function dispatchArgs(fields) {
   return { ok: true, args, cwd: f.cwd };
 }
 
-function isHostedJob(job, descriptors = []) {
+function isHostedJob(job, descriptors = [], evidence) {
   if (!job || job.kind && job.kind !== 'background' || job.state === 'stopped' || job.state === 'failed') return false;
-  if ((descriptors || []).some(d => d?.kind === 'bg'
-    && (d.jobId ? d.jobId.toLowerCase() === String(job.id).toLowerCase() : job.sessionId && d.sessionId?.toLowerCase() === job.sessionId.toLowerCase()))) return true;
+  if (liveWorkerDescriptor(job, descriptors || [])) return true;
+  if (evidence === 'dead') return false;
+  if (job.state === 'running' && evidence === 'live') return true;
   if ((descriptors || []).some(d => d?.kind === 'interactive'
     && job.sessionId && d.sessionId?.toLowerCase() === job.sessionId.toLowerCase())) return false;
   return job.state === 'working' || job.state === 'blocked';
