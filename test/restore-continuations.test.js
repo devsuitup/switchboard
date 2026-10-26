@@ -17,7 +17,7 @@ test('B1 a saved background entry reattaches on the next restart and keeps its m
   h.saved[0].projectPath = h.root;
   await h.restore();
   assert.deepEqual(h.spawned.map(call => [call.id, call.options?.type, call.options?.jobId]), [['new', 'attach', '1234abcd']]);
-  assert.deepEqual(h.settings().openWorkingSet, [{ sessionId: 'new', projectPath: h.root, active: true, bg: true }]);
+  assert.deepEqual(h.settings().openWorkingSet, [{ sessionId: 'new', projectPath: h.root, active: true, bg: true, attachJobId: '1234abcd' }]);
 });
 
 test('B2 a saved entry without the background mark is not attached automatically', { timeout: 9000 }, async t => {
@@ -37,7 +37,7 @@ test('B3 a continuation attached at restore is saved with the background mark', 
   });
   await h.restore();
   assert.equal(h.spawned[0].options.type, 'attach');
-  assert.deepEqual(h.settings().openWorkingSet, [{ sessionId: 'new', projectPath: h.root, active: true, bg: true }]);
+  assert.deepEqual(h.settings().openWorkingSet, [{ sessionId: 'new', projectPath: h.root, active: true, bg: true, attachJobId: '1234abcd' }]);
 });
 
 test('B4 a continuation attach tab the user closed is not saved with the background mark', { timeout: 9000 }, async t => {
@@ -56,11 +56,11 @@ test('B5 a continuation attach tab that was destroyed is not saved with the back
   assert.deepEqual(h.settings().openWorkingSet.filter(item => item.bg), []);
 });
 
-test('B6 a plain attach tab is excluded from the saved set', { timeout: 9000 }, async t => {
+test('B6 an ordinary attach tab is saved with its background job identity', { timeout: 9000 }, async t => {
   const h = setup(t, { old: [] }, { savedEntries: [] });
-  vm.runInContext(`openSessions.set('n2', { session: { sessionId: 'n2', projectPath: 'P' }, attach: true });`, h.ctx, { filename: __filename });
+  vm.runInContext(`openSessions.set('n2', { session: { sessionId: 'n2', projectPath: 'P' }, attach: true, attachJobId: '1234abcd' });`, h.ctx, { filename: __filename });
   await h.app.persistWorkingSet();
-  assert.deepEqual(h.settings().openWorkingSet, []);
+  assert.deepEqual(h.settings().openWorkingSet, [{ sessionId: 'n2', projectPath: 'P', active: false, bg: true, attachJobId: '1234abcd' }]);
 });
 
 test('a continuation opens with Enter; only the live-elsewhere warning focuses Cancel', async t => {

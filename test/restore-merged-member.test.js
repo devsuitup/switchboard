@@ -178,7 +178,7 @@ test('saved root A still attaches when head C has a live bg job', async t => {
   assert.deepEqual(h.attached, [{ sessionId: 'C', jobId: 'head-job' }]);
   assert.deepEqual(h.spawned, [], 'attaching must not spawn a resume');
   assert.equal(h.window.openSessions.size, 1);
-  assert.deepEqual(await h.persist(), [{ sessionId: 'C', projectPath: PROJECT, active: true, bg: true }]);
+  assert.deepEqual(await h.persist(), [{ sessionId: 'C', projectPath: PROJECT, active: true, bg: true, attachJobId: 'head-job' }]);
 });
 
 test('ask mode offers saved merged member B, keeps it pending and restores B on consent', async t => {

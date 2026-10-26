@@ -61,6 +61,9 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, 
       ? cache.resolveSessionContinuations(id, { chunkBytes, getSessionLiveElsewhere: async target => ({ known: true, live: live[target] || null }) }) : { candidates: [], unresolved: false },
     getSessionLiveElsewhere: async id => live[id] || null,
     getSessionsLiveElsewhere: async ids => Object.fromEntries(ids.filter(id => live[id]).map(id => [id, live[id]])),
+    restoreBackgroundJob: async id => live[id]?.kind === 'bg'
+      ? { action: 'attach', sessionId: id, jobId: live[id].jobId }
+      : { action: 'refuse', reason: 'fixture has no live background descriptor' },
     openTerminal: async (id, project, isNew, options) => { spawned.push({ id, project, options }); return { ok: true }; },
   };
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/resume-guard.js'), 'utf8'), ctx, { filename: path.join(__dirname, '../public/resume-guard.js') });
@@ -94,7 +97,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, 
   dom.window.SETTING_DEFAULTS = require('../public/setting-defaults').SETTING_DEFAULTS;
   const app = loadAppFunctions(ctx, {
     declarations: ['restoreMode', 'openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting', 'dormantWorkingSet'],
-    functions: ['runRestore', 'openSession', 'openSessionNow', 'persistWorkingSet', 'pendingRestoreEntries', 'showLiveElsewhereNotice', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
+    functions: ['runRestore', 'openSession', 'openSessionNow', 'persistWorkingSet', 'pendingRestoreEntries', 'showLiveElsewhereNotice', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow', 'prepareBackgroundRestore'],
   });
   return {
     spawned, prompts, rows, root, db, folder, ctx,

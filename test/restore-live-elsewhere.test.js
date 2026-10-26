@@ -52,6 +52,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
   const liveQueries = { single: [], batch: [] };
 
   dom.window.api = {
+    restoreBackgroundJob: async () => ({ action: 'attach', sessionId: 'x', jobId: '1234abcd' }),
     getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
     getSetting: async (key) => JSON.parse(JSON.stringify(settings[key] || null)),
     setSetting: async (key, value) => { settings[key] = JSON.parse(JSON.stringify(value)); },
@@ -103,9 +104,8 @@ function setup({ savedSet, liveIds, batchFails = false }) {
   });
   vm.runInContext(topLevelDeclarations(APP_SRC, ['restoreMode', 'LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'openingSessions', 'dormantWorkingSet'])
     .replace(/^const /gm, 'var ').replace(/^let /gm, 'var '), ctx);
-  for (const name of ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow', 'clearDormantRow', 'indexedRowOf']) {
-    vm.runInContext(functionSource(APP_SRC, name), ctx);
-  }
+  loadAppFunctions(ctx, { functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow', 'clearDormantRow', 'indexedRowOf',
+    ...['prepareBackgroundRestore'].filter(name => APP_SRC.includes(`function ${name}(`))] });
   if (APP_SRC.includes('function showLiveElsewhereNotice(')) {
     vm.runInContext(functionSource(APP_SRC, 'showRestoreNotice'), ctx);
     vm.runInContext(functionSource(APP_SRC, 'showLiveElsewhereNotice'), ctx);
@@ -126,6 +126,101 @@ function setup({ savedSet, liveIds, batchFails = false }) {
   const persist = () => vm.runInContext('persistWorkingSet()', ctx);
   return { dom, ctx, settings, openTerminalCalls, liveQueries, restore, persist };
 }
+
+for (const action of ['attach', 'refuse', 'respawned-not-attached']) {
+  test(`B-T${action === 'attach' ? '1' : action === 'refuse' ? '2' : '3'} background restore ${action} never opens an interactive terminal`, async t => {
+    const savedSet = [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }];
+    const h = setup({ savedSet, liveIds: [] });
+    t.after(() => h.dom.window.close());
+    const calls = [];
+    h.dom.window.api.restoreBackgroundJob = async id => {
+      calls.push(['restore', id]);
+      return { action, sessionId: id, jobId: '1234abcd', reason: 'worker liveness unknown' };
+    };
+    h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/px' });
+    h.dom.window.api.openTerminal = async (id, _cwd, _fresh, options) => { calls.push(['open', id, options]); return { ok: true }; };
+    await h.restore();
+    assert.deepEqual(calls[0], ['restore', 'x'], 'background IPC precedes every open');
+    if (action === 'attach') {
+      assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['restore', 'x'], ['open', 'x', { type: 'attach', jobId: '1234abcd', cwd: '/px' }]]);
+      assert.equal(vm.runInContext('openSessions.get("x").attach', h.ctx), true);
+    } else {
+      assert.equal(calls.length, 1, 'no openSession/openTerminal fallback');
+      assert.equal(vm.runInContext('skippedWorkingSetEntries.has("x")', h.ctx), true);
+      const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:local:x"]');
+      assert.ok(notice);
+      assert.match(notice.textContent, /1234abcd/);
+      if (action === 'refuse') assert.match(notice.textContent, /worker liveness unknown/);
+      else assert.equal(notice.querySelector('.app-notice-action')?.textContent, 'Attach');
+      await h.persist();
+      assert.equal(h.settings.global.openWorkingSet[0].attachJobId, '1234abcd');
+    }
+  });
+}
+
+test('B-T4 GUARD a live background descriptor uses the existing attach options', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  h.dom.window.api.getSessionsLiveElsewhere = async () => ({ x: { kind: 'bg', jobId: '1234abcd', cwd: '/px' } });
+  h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/px' });
+  const options = [];
+  h.dom.window.api.openTerminal = async (_id, _cwd, _fresh, opts) => { options.push(opts); return { ok: true }; };
+  await h.restore();
+  assert.deepEqual(JSON.parse(JSON.stringify(options)), [{ type: 'attach', jobId: '1234abcd', cwd: '/px' }]);
+});
+
+test('B-T1 descriptor disappearing after restore permission refuses instead of resuming', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  h.dom.window.api.getSessionLiveElsewhere = async () => null;
+  await h.restore();
+  assert.deepEqual(h.openTerminalCalls, []);
+  assert.equal(vm.runInContext('skippedWorkingSetEntries.has("x")', h.ctx), true);
+});
+
+for (const recovery of ['attach', 'respawn']) {
+  test(`B notice ${recovery} action retries attachment without an interactive fallback`, async t => {
+    const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }], liveIds: [] });
+    t.after(() => h.dom.window.close());
+    const calls = [];
+    let first = true;
+    h.dom.window.api.restoreBackgroundJob = async (id, options) => {
+      calls.push(['restore', id, options]);
+      if (first) { first = false; return recovery === 'attach' ? { action: 'respawned-not-attached', jobId: '1234abcd' }
+        : { action: 'refuse', jobId: '1234abcd', reason: 'stopped', recovery: 'respawn' }; }
+      return { action: 'attach', jobId: '1234abcd', sessionId: id };
+    };
+    h.dom.window.api.bgAgentVerb = async (...args) => { calls.push(['verb', ...args]); return { ok: true }; };
+    h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/px' });
+    h.dom.window.api.openTerminal = async (_id, _cwd, _fresh, options) => { calls.push(['open', options]); return { ok: true }; };
+    await h.restore();
+    const action = h.dom.window.document.querySelector('.app-notice-action');
+    assert.equal(action?.textContent, recovery === 'attach' ? 'Attach' : 'Respawn');
+    action.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(calls.filter(call => call[0] === 'verb').length, recovery === 'respawn' ? 1 : 0);
+    assert.deepEqual(JSON.parse(JSON.stringify(calls.filter(call => call[0] === 'open'))), [['open', { type: 'attach', jobId: '1234abcd', cwd: '/px' }]]);
+    assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:local:x"]'), null);
+  });
+}
+
+test('B a save while background restore waits on main keeps exactly one saved slot', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  let release, entered;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const called = new Promise(resolve => { entered = resolve; });
+  h.dom.window.api.restoreBackgroundJob = async () => { entered(); return waiting; };
+  const restoring = h.restore();
+  await called;
+  try {
+    await h.persist();
+    assert.deepEqual(h.settings.global.openWorkingSet.map(item => item.sessionId), ['x']);
+  } finally {
+    release({ action: 'refuse', jobId: '1234abcd', reason: 'unknown' });
+    await restoring;
+  }
+});
 
 const SAVED = [
   { sessionId: 'a', projectPath: '/pa', active: false },
@@ -199,6 +294,7 @@ for (const failure of ['refusal', 'rejection', 'missing result']) {
       return { ok: false, error: 'background attach unavailable' };
     };
     h.dom.window.api.getSessionsLiveElsewhere = async () => ({ x: { ...LIVE, kind: 'bg', jobId: '1234abcd' } });
+    h.dom.window.api.getSessionLiveElsewhere = async () => ({ ...LIVE, kind: 'bg', jobId: '1234abcd' });
     await h.restore();
     const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:local:x"]');
     assert.ok(notice, 'background restore failure persists');

@@ -96,6 +96,7 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
       'sessionOpenedOutsideRestore', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight',
       'dormantWorkingSet', '_persistChain', 'openingSessions', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting'],
     functions: ['dismissDormantSession', 'persistWorkingSet', 'pendingRestoreEntries', 'tickRestorePlanner', 'openSession', 'openSessionNow',
+      ...['prepareBackgroundRestore'].filter(name => fs.readFileSync(path.join(PUBLIC_DIR, 'app.js'), 'utf8').includes(`function ${name}(`)),
       'reopenActiveSessionAfterReload', 'settleContinuedInFlight', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
   });
   const gridSrc = fs.readFileSync(path.join(PUBLIC_DIR, 'grid-view.js'), 'utf8');
@@ -111,7 +112,7 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
   `);
 
   return {
-    window, settings, openTerminalCalls, openTerminalOptions, confirms, gridFocused, fns, run,
+    window, context, settings, openTerminalCalls, openTerminalOptions, confirms, gridFocused, fns, run,
     index: (ids) => {
       for (const id of ids) {
         const item = savedSet.find((i) => i.sessionId === id);
@@ -126,6 +127,77 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
     row: (id) => window.document.getElementById('si-' + id),
     destroy: () => ctx.destroy(),
   };
+}
+
+test('B-T5 lazy background click restores the saved job before opening, with no startup respawn', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: PROJECT, bg: true, attachJobId: '1234abcd' }] });
+  t.after(() => h.destroy());
+  h.index(['x']);
+  const calls = [];
+  h.window.api.restoreBackgroundJob = async id => { calls.push(['restore', id]); return { action: 'attach', sessionId: id, jobId: '1234abcd' }; };
+  h.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: PROJECT });
+  h.window.api.openTerminal = async (id, _cwd, _fresh, options) => { calls.push(['open', id, options]); return { ok: true }; };
+  await h.fns.tickRestorePlanner();
+  assert.deepEqual(calls, []);
+  await h.open('x');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['restore', 'x'], ['open', 'x', { type: 'attach', jobId: '1234abcd', cwd: PROJECT }]]);
+  await h.fns.persistWorkingSet();
+  assert.equal(h.settings.global.openWorkingSet[0].attachJobId, '1234abcd');
+});
+
+for (const mode of ['auto', 'ask', 'lazy', 'off']) {
+  test(`B ${mode === 'lazy' ? 'GUARD' : 'RED'} remembered active background entry defers to ${mode} startup policy`, async t => {
+    const h = setup({ mode, savedSet: [{ sessionId: 'x', projectPath: PROJECT, bg: true }] });
+    t.after(() => h.destroy());
+    h.index(['x']);
+    h.run('activeSessionId = "x";');
+    await h.fns.reopenActiveSessionAfterReload();
+    assert.deepEqual(h.openTerminalCalls, [], 'remembered active id cannot bypass bg startup consent or open --resume');
+  });
+}
+
+test('B lazy background refusal stays dormant and saved once during and after the IPC', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: PROJECT, bg: true }] });
+  t.after(() => h.destroy());
+  h.index(['x']);
+  await h.fns.tickRestorePlanner();
+  let release, entered;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const called = new Promise(resolve => { entered = resolve; });
+  h.window.api.restoreBackgroundJob = async () => { entered(); return waiting; };
+  const opening = h.open('x');
+  await called;
+  try {
+    await h.fns.persistWorkingSet();
+    assert.deepEqual(h.savedIds(), ['x']);
+  } finally {
+    release({ action: 'refuse', reason: 'unknown worker' });
+    await opening;
+  }
+  assert.deepEqual(h.dormantIds(), ['x']);
+  await h.fns.persistWorkingSet();
+  assert.deepEqual(h.savedIds(), ['x']);
+});
+
+for (const accepted of [true, false]) {
+  test(`B-T6 ask ${accepted ? 'accepted' : 'declined'} background restore respects consent`, async t => {
+    const h = setup({ savedSet: [{ sessionId: 'x', projectPath: PROJECT, bg: true }] });
+    t.after(() => h.destroy());
+    h.index(['x']);
+    h.run("restoreMode = 'ask'; restorePlanner = createRestorePlanner({ savedSet, askOnce: true });");
+    const calls = [];
+    h.window.api.restoreBackgroundJob = async id => { calls.push(id); return { action: 'refuse', reason: 'unknown', jobId: '1234abcd' }; };
+    const restore = loadAppFunctions(h.context, { functions: ['runRestore'] }).runRestore;
+    h.window.runRestore = restore;
+    h.window.liveElsewhereMany = async () => ({});
+    h.window.RESTORE_STAGGER_MS = 0;
+    await h.fns.tickRestorePlanner();
+    const button = h.window.document.querySelector(accepted ? '.restore-toast-restore' : '.restore-toast-dismiss');
+    button.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, accepted ? ['x'] : []);
+    assert.deepEqual(h.openTerminalCalls, []);
+  });
 }
 
 test('lazy: the saved sessions are marked dormant and none is resumed', async () => {

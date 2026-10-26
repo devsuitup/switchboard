@@ -67,6 +67,20 @@ function dispatchToRestore(h) {
   return plan.candidates;
 }
 
+test('B-T8 an attached tab saves its job identity and bg marker, then disappears when closed', async t => {
+  const h = setup();
+  t.after(() => h.dom.window.close());
+  vm.runInContext('restorePlanner.dismiss(); openSessions.set("bg", { session: { projectPath: "/bg" }, attach: true, attachJobId: "1234abcd", closed: false });', h.ctx);
+  await h.persistWorkingSet();
+  const saved = JSON.parse(await vm.runInContext('window.api.getSetting("global").then(JSON.stringify)', h.ctx));
+  assert.deepEqual(saved.openWorkingSet.find(item => item.sessionId === 'bg'), {
+    sessionId: 'bg', projectPath: '/bg', active: false, bg: true, attachJobId: '1234abcd',
+  });
+  vm.runInContext('openSessions.get("bg").closed = true;', h.ctx);
+  await h.persistWorkingSet();
+  assert.deepEqual(h.stored(), ['opened']);
+});
+
 test('a persist during a cold restore keeps the saved entries not indexed yet', async () => {
   const h = setup();
   vm.runInContext(`restorePlanner.tick({ sessionMap: new Map([['opened', {}]]), openSessions, indexingDone: false });`, h.ctx);

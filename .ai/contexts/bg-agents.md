@@ -24,6 +24,42 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 | `public/dialogs.js` | `showDispatchAgentDialog` |
 | `public/shortcuts.js` | The rebindable `agentsToggle` (default Primary+Shift+`A`) |
 
+## Restore of background sessions
+
+`persistWorkingSet` saves every open attach tab with `bg: true` and
+`attachJobId`. The main `restore-background-job(sessionId, { attachOnly })`
+handler first requires that exact session in `global.openWorkingSet` with
+`bg: true`; renderer requests cannot restore arbitrary jobs. `findRestoreJob`
+reads the saved job record afresh, or searches legacy records by `sessionId`
+or `resumeSessionId`. Missing, unreadable, mismatched or ambiguous identity
+fails closed; ambiguity names every matching id.
+
+`conversationCheck(id, { workerLiveness: 'all' })` requests S1a's classifier
+for terminal states too. Live attaches; dead working/blocked/running/done/failed
+goes through the existing `checkVerb('respawn')` and `runVerb` guards. Dead
+stopped offers explicit Respawn; unknown never respawns. A per-session promise
+coalesces overlapping requests. Descriptor observation subscribes before its
+initial read, matches this job through `liveWorkerDescriptor`, waits at most
+15 seconds and always releases the listener. A successful respawn without a
+descriptor returns `respawned-not-attached`. Attach retries set `attachOnly`
+and cannot respawn. Explicit stopped recovery uses the checked existing verb.
+
+`runRestore` handles background entries before interactive continuation
+resolution; lazy/manual held-entry opens share `prepareBackgroundRestore`.
+The remembered active background entry defers to startup policy. Renderer
+rechecks descriptor identity and requires an attach verdict; no interactive
+fallback is allowed. Refusals stay in `skippedWorkingSetEntries`, survive saves
+with their job identity, and use persistent Restore notices. Tests:
+`restore-live-elsewhere`, `restore-lazy`, `restore-pending-persist`,
+`bg-agents-ipc`, `bg-agents-restore`.
+
+M1 evidence: `C:/Serveur/switchboard/.work-files/m1-785-report.md`
+(2026-10-25, CLI 2.1.302) measured dead `working` surviving daemon death,
+respawn cold-starting the daemon, retaining job/session/name, then producing
+a usable background descriptor. This implementation uses those recorded facts;
+it does not repeat the live acceptance run. The stopped policy is Q-E's
+unconfirmed default from the S1b brief.
+
 ## Invariants
 
 Disabled Respawn/Delete titles for an External conversation name its pid and

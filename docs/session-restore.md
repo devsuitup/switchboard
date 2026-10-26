@@ -22,6 +22,31 @@ Each time a session is opened or closed, Switchboard saves the open set — each
 session's id and project, and which one was active — in its global settings
 (`openWorkingSet`).
 
+Attached background tabs also save their background job id. Detaching or closing
+an attached tab removes it from the next saved set; other background jobs are
+never added just because they exist in the Agents view.
+
+### Background sessions
+
+**Restore automatically** restores each saved background tab without a click.
+**Ask on startup** does so only after Restore is accepted; Dismiss starts
+nothing. **Restore on click** waits until the saved row is opened. **Don't
+restore** starts nothing, including for the remembered active background tab.
+
+A live worker is attached. A worker proven dead is respawned as the same job,
+with the same conversation and name, then attached. Background restore never
+opens an interactive `--resume` tab or sends `/bg`. A stopped job is not
+respawned automatically: its notice offers **Respawn**, which checks that the
+conversation can be restarted before doing so.
+
+Unknown worker liveness, a missing record, conflicting records and a refused
+respawn leave the entry saved and display the reason. Entries saved by older
+versions are matched by their conversation id; multiple matches list the job
+ids instead of choosing one. After respawn, Switchboard waits up to 15 seconds
+for the job's live background descriptor. If none appears, **Respawned, not
+attached** offers **Attach**, which retries attachment without respawning again.
+An attachment error displays the backend message and leaves the worker running.
+
 ### A session with no transcript yet
 
 A session started with **+**, or one just cleared with `/clear`, has no
@@ -126,8 +151,8 @@ its own id, checks that member for continuations and processes live elsewhere,
 and shows its running and active state on the shared sidebar row. This applies
 to both automatic restore and the startup Restore prompt.
 
-Restore is a respawn, not a reattach: a session's process is a child of the
-app and ends when the app quits. Each restored Claude session is started again
+An interactive session's process is a child of the app and ends when the app
+quits. Each restored interactive Claude session is started again
 with `claude --resume <id>` and the project's **current** effective settings —
 permission mode, sandbox, pre-launch command and the rest — not the options of
 its previous launch. Sessions reopen one after another, half a second apart.

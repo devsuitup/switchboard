@@ -232,7 +232,8 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
     const set = [];
     for (const [sessionId, entry] of openSessions) {
       if (entry.session.type === 'terminal') continue; // exclude plain shells
-      if (entry.attach) continue;
+      if (entry.attach && (pendingRestoreEntries().some(({ item }) => item.sessionId === sessionId)
+        || skippedWorkingSetEntries.get(sessionId)?.keepAttached)) continue;
       if (entry.closed) continue;
       // see docs/session-restore.md ("A session with no transcript yet")
       const fresh = pendingSessions.has(sessionId);
@@ -241,7 +242,7 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
         sessionId,
         projectPath: entry.session.projectPath,
         active: sessionId === activeSessionId,
-        ...(entry.attach ? { bg: true } : {}),
+        ...(entry.attach ? { bg: true, attachJobId: entry.attachJobId } : {}),
         ...(fresh ? { fresh: true } : {}),
       });
     }
@@ -252,16 +253,17 @@ function persistWorkingSet({ final = false, checked = false } = {}) {
       .map(entry => ({ ...entry, keepAttached: liveAttach(entry.item.sessionId) }));
     const heldActive = notStarted.find(({ item }) => item.active);
     if (heldActive) for (const e of set) e.active = false;
-    const held = [...skippedWorkingSetEntries.values(), ...dormantWorkingSet.values(), ...notStarted]
+    const held = [...new Map([...skippedWorkingSetEntries.values(), ...dormantWorkingSet.values(), ...notStarted]
       .filter(({ item, keepAttached }) => {
         if (keepAttached) return liveAttach(item.sessionId) || (item.bg && failedBgAttach(item.sessionId));
         const open = openSessions.get(item.sessionId);
         return !open || open.closed;
-      })
+      }).map(entry => [entry.item.sessionId, entry])).values()]
       .sort((a, b) => a.index - b.index);
     for (const { item, index, keepAttached } of held) {
       const active = heldActive ? heldActive.item === item : !!keepAttached && item.sessionId === activeSessionId;
-      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true } : {}) });
+      const attachJobId = openSessions.get(item.sessionId)?.attachJobId || item.attachJobId;
+      set.splice(Math.min(index, set.length), 0, { sessionId: item.sessionId, projectPath: item.projectPath, active, ...(item.fresh ? { fresh: true } : {}), ...(item.bg || (keepAttached && liveAttach(item.sessionId)) ? { bg: true, ...(attachJobId ? { attachJobId } : {}) } : {}) });
     }
     if (!set.some(e => e.active)) {
       const opening = set.find(e => pendingSessions.get(e.sessionId)?.openingActive);
@@ -343,7 +345,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       if (!indexedSessions.has(sessionId)) indexedSessions.set(sessionId, rowHeadSession(row, sessionId));
     }
   }
-  const startsFresh = item => item.fresh && !indexedSessions.has(item.sessionId);
+  const startsFresh = item => !item.bg && item.fresh && !indexedSessions.has(item.sessionId);
   const pending = list.filter(item => (startsFresh(item) || indexedSessions.has(item.sessionId)) && !openSessions.has(item.sessionId));
   for (const item of pending) restoreInFlight.set(item.sessionId, item);
   const skippedNow = [];
@@ -373,6 +375,16 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       }
       const originalId = item.sessionId;
       const originalSession = s;
+      if (item.bg === true) {
+        s = { ...s, projectPath: item.projectPath };
+        const index = restoreSavedIndex.get(originalId) ?? position;
+        skippedWorkingSetEntries.set(originalId, { item, index });
+        try {
+          const background = await prepareBackgroundRestore(s, item);
+          if (background) await openSession(s, undefined, { automatic: true, allowBgAttach: true, continuationResolved: true, ...background });
+        } finally { restoreInFlight.delete(originalId); }
+        continue;
+      }
       let holdReason = { waitingForIndex: false };
       let continuationNotice;
       s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api,
@@ -442,10 +454,42 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
   }
 }
 
+async function prepareBackgroundRestore(session, item, { attachOnly = false } = {}) {
+  let result;
+  try { result = await window.api.restoreBackgroundJob(item.sessionId, attachOnly ? { attachOnly: true } : undefined); }
+  catch (err) { result = { action: 'refuse', reason: err.message || String(err) }; }
+  const id = sessionActionNoticeId('Restore', session);
+  const report = (reason, actionLabel, onAction) => showAppNotice({ id, kind: 'error',
+    message: `Restore failed for ${sessionActionDescription(session)}${result?.jobId ? `, job ${result.jobId}` : ''}: ${reason}. Check the background session in the Agents view, then open it from the sidebar to retry attaching.`,
+    actionLabel, onAction, dismissOnAction: false });
+  const retry = async respawn => {
+    if (respawn) {
+      try {
+        const verb = await window.api.bgAgentVerb('respawn', result.jobId);
+        if (!verb?.ok) { report(verb?.error || 'Respawn returned no result', 'Respawn', () => retry(true)); return; }
+      } catch (err) { report(err.message || String(err), 'Respawn', () => retry(true)); return; }
+    }
+    const background = await prepareBackgroundRestore(session, item, { attachOnly: true });
+    if (background) await openSession(session, undefined, { automatic: true, allowBgAttach: true, continuationResolved: true, ...background });
+  };
+  if (result?.action === 'attach' && result.sessionId === item.sessionId && typeof result.jobId === 'string' && result.jobId) {
+    let live;
+    try { live = await window.api.getSessionLiveElsewhere(result.sessionId); } catch {}
+    if (live?.kind === 'bg' && live.jobId === result.jobId) return { live, backgroundRestoreJobId: result.jobId };
+    report('The background descriptor is no longer available — not attached', 'Attach', () => retry(false));
+    return null;
+  }
+  if (result?.action === 'respawned-not-attached') report('Respawned, not attached: no live background descriptor within 15 seconds', 'Attach', () => retry(false));
+  else if (result?.recovery === 'respawn') report(result.reason, 'Respawn', () => retry(true));
+  else report(result?.reason || 'The background restore backend is unavailable or returned no result');
+  return null;
+}
+
 // see .ai/contexts/session-cache.md ("Restore on click")
 async function reopenActiveSessionAfterReload() {
   if (!activeSessionId || openSessions.has(activeSessionId)) return;
   const g = await window.api.getSetting('global');
+  if (g?.openWorkingSet?.some(item => item.sessionId === activeSessionId && item.bg === true)) return;
   let session = indexedSessionById(activeSessionId);
   if (!session) {
     const item = g?.openWorkingSet?.find(entry => entry.sessionId === activeSessionId);
@@ -2429,7 +2473,7 @@ function settleContinuedInFlight(item) {
   schedulePersistWorkingSet();
 }
 
-async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false } = {}, open = null) {
+async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false, backgroundRestoreJobId } = {}, open = null) {
   const restoreNoticeSessions = [session];
   let freshLive = false;
   if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
@@ -2457,6 +2501,18 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
     if (clearDormantRow(openId)) schedulePersistWorkingSet();
     if (mayShow()) showSession(openId);
     return;
+  }
+  const backgroundHeld = !backgroundRestoreJobId && !reattachOnly && customOptions?.type !== 'attach'
+    && (dormantWorkingSet.get(session.sessionId) || skippedWorkingSetEntries.get(session.sessionId));
+  if (backgroundHeld?.item?.bg === true) {
+    skippedWorkingSetEntries.set(session.sessionId, backgroundHeld);
+    const background = await prepareBackgroundRestore(session, backgroundHeld.item);
+    if (!background) return false;
+    live = background.live;
+    backgroundRestoreJobId = background.backgroundRestoreJobId;
+    automatic = true;
+    allowBgAttach = true;
+    continuationResolved = true;
   }
   let continuationNotice;
   if (!continuationResolved && customOptions?.type !== 'attach' && (chooseAgain || !openSessions.has(session.sessionId) || openSessions.get(session.sessionId).closed)) {
@@ -2532,6 +2588,10 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   // see .ai/contexts/cli-session-state.md ("Live elsewhere") and .ai/contexts/bg-agents.md ("Attach")
   const verdict = customOptions?.type === 'attach' ? true : await guardResume(session, { automatic, live, freshLive, allowBgAttach, onBlocked, api: window.api, name: cleanDisplayName(session.name || session.aiTitle || session.summary), confirm: question => appConfirm({ ...question }), notify: notice => showAppNotice(notice) });
   if (verdict === false) return false;
+  if (backgroundRestoreJobId && (!verdict?.attach || verdict.attach !== backgroundRestoreJobId)) {
+    showSessionActionFailure('Restore', session, `Job ${backgroundRestoreJobId} no longer has an attachable background descriptor`, 'Check the background session in the Agents view.');
+    return false;
+  }
   if (verdict && typeof verdict === 'object' && verdict.attach) {
     customOptions = { type: 'attach', jobId: verdict.attach, cwd: verdict.cwd || projectPath };
   }
@@ -2566,7 +2626,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   }
   if (!result.ok) {
     if (automatic || entry.attach) {
-      showSessionActionFailure(automatic ? 'Restore' : 'Attach background', session, result.error,
+      showSessionActionFailure(automatic ? 'Restore' : 'Attach background', session, backgroundRestoreJobId ? `Job ${backgroundRestoreJobId}: ${result.error}` : result.error,
         entry.attach ? 'Check the background session in the Agents view, then open it from the sidebar to retry attaching.'
           : 'Check the transcript and connection, then open the session from the sidebar to retry restoring.');
       const held = skippedWorkingSetEntries.get(sessionId);
@@ -2575,7 +2635,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
       destroySession(sessionId);
       if (automatic || held) {
         skippedWorkingSetEntries.set(sessionId, {
-          item: { sessionId, projectPath, ...(entry.attach ? { bg: true } : {}), ...held?.item },
+          item: { sessionId, projectPath, ...held?.item, ...(entry.attach ? { bg: true, attachJobId: entry.attachJobId } : {}) },
           index: held?.index ?? index,
         });
       }

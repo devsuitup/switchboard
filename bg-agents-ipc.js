@@ -3,8 +3,9 @@
 
 const { deleteSessionRefusal } = require('./delete-session-guard');
 const { JOB_ID_RE } = require('./bg-agents-roster');
+const { liveWorkerDescriptor } = require('./bg-worker-liveness');
 
-function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessionState, sessionHasPty, ptyPids }) {
+function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting }) {
   const push = (snapshot) => {
     const win = getMainWindow();
     if (!win || win.isDestroyed()) return;
@@ -67,6 +68,65 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
   });
   ipcMain.handle('dispatch-bg-agent', (_event, fields) => bgAgents.dispatch(fields));
   ipcMain.handle('bg-agent-live-job', (_event, sessionId) => bgAgents.liveJobCheck(String(sessionId || '')));
+  const restoring = new Map();
+  const waitForDescriptor = job => new Promise(resolve => {
+    let unsubscribe;
+    let timer;
+    let settled = false;
+    const finish = found => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe?.();
+      resolve(found);
+    };
+    const check = () => {
+      try { if (liveWorkerDescriptor(job, cliSessionState.readAllDescriptors())) finish(true); } catch { finish(false); }
+    };
+    try {
+      unsubscribe = cliSessionState.onDescriptorsChanged(check);
+      timer = setTimeout(() => finish(false), 15000);
+      check();
+    } catch { finish(false); }
+  });
+  const restoreBackgroundJob = async (sessionId, { attachOnly = false } = {}) => {
+    let job;
+    const refuse = (reason, recovery) => ({ action: 'refuse', ...(job ? { jobId: job.id } : {}),
+      reason: job ? `Job ${job.id} (${job.state}): ${reason}` : reason, ...(recovery ? { recovery } : {}) });
+    try {
+      if (typeof sessionId !== 'string' || !sessionId) return refuse('invalid saved session id');
+      const global = await getSetting('global');
+      const item = global?.openWorkingSet?.find(item => item.sessionId === sessionId && item.bg === true);
+      if (!item) return refuse('session is not a saved background entry in the working set');
+      const lookup = bgAgents.findRestoreJob(sessionId, item.attachJobId);
+      if (!lookup.known || !lookup.job) return refuse(lookup.reason || 'background job record unavailable');
+      job = lookup.job;
+      const check = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
+      if (!check.known) return refuse(check.reason || 'conversation liveness unknown');
+      job.state = check.state;
+      if (check.workerLiveness !== 'live' && check.workerLiveness !== 'dead') return refuse('worker liveness unknown — not respawned');
+      let respawned = false;
+      if (check.workerLiveness === 'dead') {
+        if (attachOnly) return refuse('worker is not live — not attached');
+        if (check.state === 'stopped') return refuse('stopped job was not respawned automatically', 'respawn');
+        const permission = await checkVerb('respawn', job.id);
+        if (!permission.ok) return refuse(permission.error);
+        const result = await bgAgents.runVerb('respawn', job.id);
+        if (!result?.ok) return refuse(result?.error || 'respawn returned no result');
+        respawned = true;
+      }
+      if (await waitForDescriptor(job)) return { action: 'attach', sessionId, jobId: job.id };
+      return respawned ? { action: 'respawned-not-attached', jobId: job.id }
+        : refuse('live worker has no attachable background descriptor — not attached');
+    } catch (err) { return refuse(err.message || String(err)); }
+  };
+  ipcMain.handle('restore-background-job', (_event, sessionId, options) => {
+    if (restoring.has(sessionId)) return restoring.get(sessionId);
+    const pending = restoreBackgroundJob(sessionId, { attachOnly: options?.attachOnly === true })
+      .finally(() => restoring.delete(sessionId));
+    restoring.set(sessionId, pending);
+    return pending;
+  });
   return unsubscribeView;
 }
 

@@ -7,6 +7,23 @@ lists the sessions the Claude CLI daemon runs in the background
 (`claude --bg`) and the interactive `claude` sessions running outside this
 Switchboard, and acts on them without a terminal.
 
+## Restoring saved background tabs
+
+After a restart or reboot, startup restore reopens only background jobs whose
+attach tabs were saved. A live worker is attached; a worker proven dead is
+respawned as the same job and conversation, retaining its name, then attached.
+Automatic mode does this without a click, Ask waits for Restore, Restore on
+click waits for the saved row, and Don't restore starts nothing.
+
+A persistent Restore notice names the job and reason when its worker cannot
+be classified or a respawn is refused. Conflicting legacy records list their
+ids. A stopped job offers **Respawn** and is never restarted automatically.
+**Respawned, not attached** means the job started but its live background
+descriptor did not appear within 15 seconds; **Attach** retries attachment
+without another respawn. An attach failure retains the CLI's message and
+leaves the worker running. The saved tab remains available for a later retry;
+check the job in Agents. See [Session Restore](session-restore.md).
+
 ## Opening it
 
 The people icon in the sidebar's filter row, or `Ctrl+Shift+A` (`Cmd+Shift+A`
