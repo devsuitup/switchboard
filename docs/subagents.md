@@ -65,11 +65,11 @@ work:
 | The same spinner, violet | The session is working, with subagents running |
 | Static violet ⠿ | The session is at its prompt, with background work running |
 
-The violet spinner says the session is busy while subagents run. A background
-command alone keeps the working spinner light blue. It does not say
+The violet spinner says the session is busy while subagents run. It does not say
 the session is waiting for them: the CLI reports one busy state on its terminal
 title and never signals "waiting for background agents", so the two cannot be
-told apart. The session's higher-priority states — needs attention, response
+told apart. A background command alone keeps the working spinner light blue.
+The session's higher-priority states — needs attention, response
 ready — replace the icon (see [Status indicators](notifications.md)). The three
 shapes show whether the subagent list is expanded or not.
 

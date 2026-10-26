@@ -15,7 +15,7 @@ When several states hold at once, the first one in this table wins:
 | Response ready | Blue dot with a glow | blue | Claude finished working in a session you are not viewing | You open the session |
 | Working | Light-blue braille spinner | light blue | Claude is working | Claude stops |
 | Working, with subagents | The same spinner, violet | light blue | Claude is working and subagents run under it | — |
-| Background work running | Static violet ⠿ | — | Claude is at its prompt, with subagents or a command it started in the background still running in a local session | The last background task ends |
+| Background work running | Static violet ⠿ | — | Claude is at its prompt, with background tasks, such as subagents or a command it started in the background, still running in a local session | The last background task ends |
 | Waiting for input | Orange hollow ring | — | Switchboard saw Claude finish a turn in a session open here, a session running elsewhere is at its prompt, or a background job is blocked and idle (including while attached here) | A new turn starts or the session activity changes |
 | Idle, open here | Green dot with a small dot below it | — | A terminal is open here, with no higher activity state | Activity changes or the terminal exits |
 | Idle | Grey dot | — | No higher activity state | Activity changes |

@@ -190,9 +190,17 @@ cron evidence; those tasks do not increase the subagent count.
 
 A local transcript opens a `bash` task only for a successful user result with
 exactly one tool-result block and a `backgroundTaskId` matching
-`/^[a-z][a-z0-9]+$/`, without `agentId`, paired with a `Bash` tool-use whose
-`run_in_background` is true (#791). Results read before their tool-use are
-held until that launch arrives. Monitor results do not open a Bash task.
+`/^[a-z][a-z0-9]+$/`, without `agentId`, paired with any `Bash` tool-use when
+its input has `run_in_background: true`, its result has
+`backgroundedByUser === true` (Ctrl+B), or its result has a finite numeric
+`timedOutAfterMs` (automatic backgrounding after timeout) (#791).
+A result with `backgroundEndsWithFinalResponse === true` is refused because
+no completion notification can follow. Bash tool-use ids are remembered in
+the call table without consuming the shared pending queue. Results read before
+their tool-use are held until that launch arrives; paired results that fail
+admission are consumed rather than left pending. A plain foreground result
+opens nothing. Monitor results use `taskId`, not `backgroundTaskId`, and do
+not open a Bash task.
 A matching terminal notification (including queued attachments and aggregate
 stops), a successful TaskStop/KillShell result targeting it, owner death or
 terminal job evidence ends it. The descriptor's process start time travels

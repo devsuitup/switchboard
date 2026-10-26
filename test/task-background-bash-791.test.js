@@ -194,7 +194,8 @@ test('only a paired background Bash opens, including when its result is read fir
       const launch = use();
       launch.message.content[0].name = name;
       if (name === 'Bash') launch.message.content[0].input.run_in_background = false;
-      for (const entry of resultFirst ? [result(), launch] : [launch, result()]) r.ingest(id, entry);
+      const output = name === 'Monitor' ? result(undefined, undefined, { backgroundTaskId: undefined, taskId: shellId }) : result();
+      for (const entry of resultFirst ? [output, launch] : [launch, output]) r.ingest(id, entry);
       assert.equal(r.background(id), false, name + ', result first: ' + resultFirst);
       assert.equal(r.snapshot(id).tasks.length, 0);
     }
@@ -207,4 +208,80 @@ test('only a paired background Bash opens, including when its result is read fir
   assert.deepEqual(deferred.snapshot(id).tasks.map(t => [t.id, t.kind]), [[shellId, 'bash']]);
   deferred.ingest(id, done());
   assert.equal(deferred.background(id), false);
+});
+
+for (const [trigger, extra] of [['Ctrl+B', { backgroundedByUser: true }], ['timeout', { timedOutAfterMs: 0 }]]) {
+  for (const resultFirst of [false, true]) {
+    test(trigger + ' backgrounds a foreground Bash, result first: ' + resultFirst, () => {
+      const r = createTaskRegistry();
+      const launch = use();
+      delete launch.message.content[0].input.run_in_background;
+      const output = result(undefined, undefined, extra);
+      for (const entry of resultFirst ? [output, launch] : [launch, output]) r.ingest(id, entry);
+      assert.deepEqual(r.list(id).map(t => [t.id, t.kind]), [[shellId, 'bash']]);
+      assert.equal(r.agents(id).length, 0);
+      r.ingest(id, done());
+      assert.equal(r.background(id), false);
+    });
+  }
+}
+
+for (const resultFirst of [false, true]) {
+  test('a Bash ending with the final response opens nothing, result first: ' + resultFirst, () => {
+    for (const extra of [{}, { backgroundedByUser: true }, { timedOutAfterMs: 1000 }]) {
+      const r = createTaskRegistry();
+      const output = result(undefined, undefined, { ...extra, backgroundEndsWithFinalResponse: true });
+      for (const entry of resultFirst ? [output, use()] : [use(), output]) r.ingest(id, entry);
+      assert.equal(r.background(id), false);
+      assert.deepEqual(r.snapshot(id).tasks, []);
+    }
+  });
+}
+
+test('unpaired backgrounding signals and non-finite or non-numeric timeouts open nothing', () => {
+  for (const extra of [{ backgroundedByUser: true }, { timedOutAfterMs: 1000 }]) {
+    const r = createTaskRegistry();
+    r.ingest(id, result(undefined, undefined, extra));
+    assert.equal(r.background(id), false);
+    assert.deepEqual(r.snapshot(id).tasks, []);
+  }
+  for (const extra of [{}, { backgroundedByUser: 'true' }, { timedOutAfterMs: null }, { timedOutAfterMs: '1000' }, { timedOutAfterMs: Infinity }, { timedOutAfterMs: NaN }]) {
+    for (const resultFirst of [false, true]) {
+      const r = createTaskRegistry();
+      const launch = use();
+      launch.message.content[0].input.run_in_background = false;
+      const output = result(undefined, undefined, { ...extra, backgroundEndsWithFinalResponse: false });
+      for (const entry of resultFirst ? [output, launch] : [launch, output]) r.ingest(id, entry);
+      assert.equal(r.background(id), false);
+      assert.deepEqual(r.snapshot(id).tasks, []);
+    }
+  }
+});
+
+test('Bash uses and paired rejected results do not fill pending or evict an early completion', () => {
+  const maps = [];
+  class ObservedMap extends Map {
+    constructor(...args) { super(...args); maps.push(this); }
+  }
+  const ctx = vm.createContext({ module: { exports: {} }, Map: ObservedMap });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/task-registry.js'), 'utf8'), ctx);
+  for (const resultFirst of [false, true]) {
+    const r = ctx.module.exports.createTaskRegistry({ maxEntries: 4 });
+    r.ingest(id, done());
+    for (let i = 0; i < 12; i++) {
+      const launch = use('rejected' + i);
+      launch.message.content[0].input.run_in_background = false;
+      const output = result('rejected' + i);
+      for (const entry of resultFirst ? [output, launch] : [launch, output]) r.ingest(id, entry);
+    }
+    const pendingKeys = () => maps.flatMap(map => [...map.keys()].filter(key => typeof key === 'string' && /^(result|bash):/.test(key)));
+    assert.deepEqual(pendingKeys(), [], 'paired rejected results leave no pending entries');
+    for (let i = 0; i < 12; i++) r.ingest(id, use('unresolved' + i));
+    assert.deepEqual(pendingKeys(), [], 'Bash uses leave the shared pending queue free');
+    assert.equal(r.background(id), false);
+    r.ingest(id, use());
+    r.ingest(id, result());
+    assert.equal(r.background(id), false, 'the early completion survives the rejected results and Bash uses');
+    assert.equal(r.snapshot(id).tasks.find(t => t.id === shellId)?.terminal, true);
+  }
 });
