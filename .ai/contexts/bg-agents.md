@@ -35,8 +35,10 @@ boundary: the renderer already exposes the ordinary checked respawn verb.
 `findRestoreJob`
 reads the saved job record afresh, or searches legacy records by `sessionId`
 or `resumeSessionId` when the saved job id is absent, null or invalid. Unreadable
-unrelated records are skipped; an unreadable matching or explicitly saved
-record refuses. Mismatched or ambiguous identity refuses; ambiguity names
+unrelated records do not block a unique readable match; an unreadable matching
+or explicitly saved record refuses. A legacy scan without a readable match
+stays unknown if any record is unreadable or lacks state.json; only a fully
+readable scan can prove absence. Mismatched or ambiguous identity refuses; ambiguity names
 every matching id. A missing record releases the held entry, with a notice;
 a later sidebar click follows the ordinary guarded resume path.
 
@@ -55,7 +57,16 @@ and cannot respawn. Explicit stopped recovery uses the checked existing verb.
 `runRestore` prepares background entries concurrently without blocking
 interactive tabs. Each pending item remains held during saves; save suspension
 ends after the interactive loop, before waiting for background preparations.
-Completed tabs retain saved order. Lazy/manual held-entry opens share
+Each background task reports its own rejection immediately, and the batch
+waits for all tasks even when the interactive loop throws. Successful batches
+still show notices, activate the selected tab and retry indexing after a task
+fails. Completed tabs retain order across planner batches using the saved
+indices, while unsaved tabs keep their positions. A successfully restored
+background tab persists in that open-tab order rather than as a held slot.
+Restore callers explicitly pass fromRestore so their opens never cancel the
+planner; a user click does, including during restore. Reopening the active tab
+after renderer reload remains an outside open that cancels automatic planning.
+Lazy/manual held-entry opens share
 `prepareBackgroundRestore`.
 The remembered active background entry defers to startup policy. Renderer
 rechecks descriptor identity and requires an attach verdict; no interactive

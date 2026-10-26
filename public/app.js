@@ -381,19 +381,25 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
         const index = restoreSavedIndex.get(originalId) ?? position;
         skippedWorkingSetEntries.set(originalId, { item, index });
         const session = s;
-        backgroundTasks.push((async () => {
+        const task = (async () => {
           try {
             const background = await prepareBackgroundRestore(session, item);
-            if (background) await openSession(session, undefined, { automatic: true, allowBgAttach: true, continuationResolved: true, ...background });
-            const order = new Map(list.map((saved, index) => [startedAs.get(saved.sessionId) || saved.sessionId, index]));
-            const entries = [...openSessions].sort(([a], [b]) => (order.get(a) ?? Infinity) - (order.get(b) ?? Infinity));
+            if (background) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...background });
+            const order = new Map(restoreSavedIndex);
+            for (const [id, newId] of startedAs) order.set(newId, order.get(id));
+            const entries = [...openSessions];
+            const saved = entries.filter(([id]) => order.has(id)).sort(([a], [b]) => order.get(a) - order.get(b));
+            let savedPosition = 0;
+            const ordered = entries.map(entry => order.has(entry[0]) ? saved[savedPosition++] : entry);
             openSessions.clear();
-            for (const [id, entry] of entries) openSessions.set(id, entry);
+            for (const [id, entry] of ordered) openSessions.set(id, entry);
           } finally {
             restoreInFlight.delete(originalId);
             schedulePersistWorkingSet();
           }
-        })());
+        })();
+        task.catch(err => showSessionActionFailure('Restore', session, err.message || String(err), 'Open it from the sidebar to retry restoring.'));
+        backgroundTasks.push(task);
         continue;
       }
       let holdReason = { waitingForIndex: false };
@@ -428,7 +434,7 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
       let blockedBy;
       try {
         opened = await openSession(s, undefined, {
-          automatic: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true,
+          automatic: true, fromRestore: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true,
           onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
         });
       } finally {
@@ -452,11 +458,11 @@ async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = 
     }
   } finally {
     for (const item of pending) if (!item.bg) restoreInFlight.delete(item.sessionId);
-  }
-  if (backgroundTasks.length) {
-    restoringWorkingSet = false;
-    schedulePersistWorkingSet();
-    await Promise.all(backgroundTasks);
+    if (backgroundTasks.length) {
+      restoringWorkingSet = false;
+      schedulePersistWorkingSet();
+      await Promise.allSettled(backgroundTasks);
+    }
   }
   if (skippedNow.length) showLiveElsewhereNotice(skippedNow);
   // Activate the entry marked active (or the last one)
@@ -486,7 +492,7 @@ async function prepareBackgroundRestore(session, item, { attachOnly = false } = 
       } catch (err) { report(err.message || String(err), 'Respawn', () => retry(true)); return; }
     }
     const background = await prepareBackgroundRestore(session, item, { attachOnly: true });
-    if (background) await openSession(session, undefined, { automatic: true, allowBgAttach: true, continuationResolved: true, ...background });
+    if (background) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...background });
   };
   if (result?.action === 'attach' && result.sessionId === item.sessionId && typeof result.jobId === 'string' && result.jobId) {
     let live;
@@ -611,7 +617,7 @@ async function tickRestorePlanner() {
         const indexed = indexedSessionById(item.sessionId);
         if (item.fresh && !indexed) continue;
         const reattached = live.has(item.sessionId) && indexed
-          && await openSession(indexed, undefined, { automatic: true, reattachOnly: true, continuationResolved: true, activate: false }) !== false
+          && await openSession(indexed, undefined, { automatic: true, fromRestore: true, reattachOnly: true, continuationResolved: true, activate: false }) !== false
           && openSessions.has(item.sessionId) && !openSessions.get(item.sessionId).closed;
         const open = !openingSessions.has(item.sessionId) && openSessions.get(item.sessionId);
         const row = indexedRowOf(item.sessionId);
@@ -2496,10 +2502,10 @@ function settleContinuedInFlight(item) {
   schedulePersistWorkingSet();
 }
 
-async function openSessionNow(session, customOptions, { automatic = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false, backgroundRestoreJobId } = {}, open = null) {
+async function openSessionNow(session, customOptions, { automatic = false, fromRestore = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false, backgroundRestoreJobId } = {}, open = null) {
   const restoreNoticeSessions = [session];
   let freshLive = false;
-  if (!restoringWorkingSet) sessionOpenedOutsideRestore = true;
+  if (!fromRestore) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
   const mayShow = () => activate && (activeFrom === undefined || activeSessionId === activeFrom);
@@ -2676,7 +2682,7 @@ async function openSessionNow(session, customOptions, { automatic = false, live,
   if (continuationNotice) showAppNotice(continuationNotice);
   if (result.reattached) entry.attach = !!result.attach;
   skippedWorkingSetEntries.delete(sessionId);
-  if (allowBgAttach && entry.attach) {
+  if (allowBgAttach && entry.attach && !backgroundRestoreJobId) {
     skippedWorkingSetEntries.set(sessionId, {
       item: { sessionId, projectPath },
       index: restoreSavedIndex.get(sessionId) ?? Number.MAX_SAFE_INTEGER,

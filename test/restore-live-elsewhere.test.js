@@ -228,6 +228,127 @@ const SAVED = [
   { sessionId: 'b', projectPath: '/pb', active: true },
 ];
 
+test('M-A background attachment leaves the cold-cache planner able to restore a later batch', async t => {
+  const savedSet = [{ sessionId: 'x', projectPath: '/px', bg: true }, { sessionId: 'a', projectPath: '/pa' }];
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/px' });
+  vm.runInContext(read('restore-plan.js'), h.ctx);
+  loadAppFunctions(h.ctx, { functions: ['tickRestorePlanner'] });
+  h.ctx.savedSet = savedSet;
+  vm.runInContext('restoreMode = "auto"; sessionMap.delete("a"); restorePlanner = createRestorePlanner({ savedSet });', h.ctx);
+  await vm.runInContext('tickRestorePlanner()', h.ctx);
+  assert.deepEqual(h.openTerminalCalls, ['x']);
+  assert.equal(vm.runInContext('sessionOpenedOutsideRestore', h.ctx), false, 'restore attach must not cancel the planner');
+  vm.runInContext('sessionMap.set("a", { sessionId: "a", projectPath: "/pa" });', h.ctx);
+  await vm.runInContext('tickRestorePlanner()', h.ctx);
+  assert.deepEqual(h.openTerminalCalls, ['x', 'a']);
+  await h.persist();
+  assert.deepEqual(h.settings.global.openWorkingSet.map(item => item.sessionId), ['x', 'a']);
+});
+
+test('M-A GUARD a user click during background preparation cancels automatic planning', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  let release;
+  h.dom.window.api.restoreBackgroundJob = () => new Promise(resolve => { release = resolve; });
+  const restoring = h.restore();
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    vm.runInContext('restoringWorkingSet = true;', h.ctx);
+    await vm.runInContext('openSession({ sessionId: "manual", projectPath: "/manual" })', h.ctx);
+    assert.equal(vm.runInContext('sessionOpenedOutsideRestore', h.ctx), true, 'user intent counts while restore is running');
+  } finally {
+    release({ action: 'refuse', reason: 'unknown' });
+    await restoring;
+  }
+});
+
+for (const first of ['x', 'y']) {
+  test(`m-1 a later background batch preserves saved order and unsaved tab positions after ${first}`, async t => {
+    const savedSet = ['x', 'y'].map(sessionId => ({ sessionId, projectPath: '/p', bg: true }));
+    const h = setup({ savedSet, liveIds: [] });
+    t.after(() => h.dom.window.close());
+    h.dom.window.api.restoreBackgroundJob = async sessionId => ({ action: 'attach', sessionId, jobId: '1234abcd' });
+    h.dom.window.api.getSessionLiveElsewhere = async id => id === 'manual' ? null : { kind: 'bg', jobId: '1234abcd', cwd: '/p' };
+    h.ctx.first = first;
+    await vm.runInContext('runRestore([{ sessionId: first, projectPath: "/p", bg: true }])', h.ctx);
+    await vm.runInContext('openSession({ sessionId: "manual", projectPath: "/manual" })', h.ctx);
+    await vm.runInContext('runRestore([{ sessionId: first === "x" ? "y" : "x", projectPath: "/p", bg: true }])', h.ctx);
+    assert.equal(vm.runInContext('JSON.stringify([...openSessions.keys()])', h.ctx), '["x","manual","y"]');
+    await h.persist();
+    assert.deepEqual(h.settings.global.openWorkingSet.map(item => item.sessionId), ['x', 'manual', 'y']);
+  });
+}
+
+test('m-2 a rejected background task still waits for peers, reports failure and completes the batch', async t => {
+  const savedSet = [{ sessionId: 'x', projectPath: '/p', bg: true },
+    { sessionId: 'y', projectPath: '/p', bg: true, active: true }, { sessionId: 'a', projectPath: '/p' }];
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  let release;
+  h.dom.window.api.restoreBackgroundJob = sessionId => sessionId === 'y'
+    ? new Promise(resolve => { release = resolve; }) : Promise.resolve({ action: 'attach', sessionId, jobId: '1234abcd' });
+  h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/p' });
+  h.dom.window.api.getSessionContinuations = async () => ({ candidates: [], unresolved: true });
+  vm.runInContext(`
+    var realCreateTerminalEntry = createTerminalEntry;
+    createTerminalEntry = session => { if (session.sessionId === 'x') throw new Error('entry creation failed'); return realCreateTerminalEntry(session); };
+    var indexingRetries = 0;
+    async function markRestoreIndexingDone() { indexingRetries++; }
+  `, h.ctx);
+  let settled = false;
+  const restoring = h.restore().then(() => ({ ok: true }), error => ({ error })).then(result => { settled = true; return result; });
+  await new Promise(resolve => setImmediate(resolve));
+  const settledBeforePeer = settled;
+  const failureBeforePeer = h.dom.window.document.querySelector('[data-notice-id="Restore:local:x"]')?.textContent || '';
+  vm.runInContext('restoreIndexingDone = true;', h.ctx);
+  release({ action: 'attach', sessionId: 'y', jobId: '1234abcd' });
+  const result = await restoring;
+  assert.equal(settledBeforePeer, false, 'one failure cannot finish the batch ahead of its peers');
+  assert.equal(result.ok, true, result.error?.message);
+  assert.match(failureBeforePeer, /entry creation failed/, 'failure is reported while a peer is still pending');
+  assert.deepEqual(h.openTerminalCalls, ['y']);
+  assert.equal(vm.runInContext('activeSessionId', h.ctx), 'y');
+  assert.equal(vm.runInContext('indexingRetries', h.ctx), 1);
+  assert.match(h.dom.window.document.querySelector('[data-notice-id="Restore:local:x"]').textContent, /entry creation failed/);
+  assert.ok(h.dom.window.document.querySelector('[data-notice-id="Restore:batch"]'), 'continuation notice still runs');
+});
+
+test('m-2 an interactive exception still drains an outstanding background attachment', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/p', bg: true },
+    { sessionId: 'a', projectPath: '/p' }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  let release;
+  h.dom.window.api.restoreBackgroundJob = () => new Promise(resolve => { release = resolve; });
+  h.dom.window.api.getSessionLiveElsewhere = async () => ({ kind: 'bg', jobId: '1234abcd', cwd: '/p' });
+  vm.runInContext(`
+    resolveResumeSession = async () => { throw new Error('interactive failure'); };
+  `, h.ctx);
+  let settled = false;
+  const restoring = h.restore().then(() => ({ ok: true }), error => ({ error })).then(result => { settled = true; return result; });
+  await new Promise(resolve => setImmediate(resolve));
+  const settledBeforeBackground = settled;
+  release({ action: 'attach', sessionId: 'x', jobId: '1234abcd' });
+  const result = await restoring;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settledBeforeBackground, false, 'interactive failure still waits for background cleanup');
+  assert.match(result.error?.message, /interactive failure/);
+  assert.equal(vm.runInContext('restoreInFlight.size', h.ctx), 0);
+  assert.deepEqual(h.openTerminalCalls, ['x']);
+});
+
+test('s-1 GUARD a different attach job verdict cannot satisfy a background restore', async t => {
+  const h = setup({ savedSet: [], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const opened = await vm.runInContext(`openSession({ sessionId: 'x', projectPath: '/px' }, undefined,
+    { automatic: true, continuationResolved: true, allowBgAttach: true, backgroundRestoreJobId: '1234abcd',
+      live: { kind: 'bg', jobId: 'abcd1234', cwd: '/px' } })`, h.ctx);
+  assert.equal(opened, false);
+  assert.deepEqual(h.openTerminalCalls, []);
+  assert.match(h.dom.window.document.querySelector('.app-notice-message').textContent, /1234abcd.*no longer has an attachable/);
+});
+
 test('C3 a pending background restore does not block a later interactive tab or saves', async t => {
   const savedSet = [{ sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' },
     { sessionId: 'a', projectPath: '/pa' }];

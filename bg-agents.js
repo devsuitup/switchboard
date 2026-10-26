@@ -382,6 +382,7 @@ function findRestoreJob(sessionId, attachJobId) {
         : { known: false, reason: `job ${attachJobId} does not match saved session ${sessionId}` };
     }
     const matches = [];
+    let unreadable = false;
     let names;
     try { names = fs.readdirSync(jobsDir); } catch (err) {
       if (err.code !== 'ENOENT') throw err;
@@ -392,11 +393,13 @@ function findRestoreJob(sessionId, attachJobId) {
         const record = read(id);
         if (record.matches) matches.push(record.job);
       } catch (err) {
+        unreadable = true;
         let raw;
         try { raw = JSON.parse(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch {}
         if (same(raw?.sessionId) || same(raw?.resumeSessionId)) throw err;
       }
     }
+    if (!matches.length && unreadable) return { known: false, reason: `cannot identify background job for ${sessionId}: unreadable job records` };
     if (matches.length !== 1) return { known: false, reason: matches.length
       ? `multiple background job records for ${sessionId}: ${matches.map(job => job.id).join(', ')}`
       : `no background job record for ${sessionId}`, ...(!matches.length ? { missing: true } : {}) };

@@ -78,6 +78,35 @@ test('C6 GUARD unreadable explicit saved id refuses despite another good match',
   assert.equal(bg.findRestoreJob(SID, 'bbbbbbbb').known, false);
 });
 
+for (const unreadable of ['truncated', 'missing-state']) {
+  test(`M-B legacy ${unreadable} record stays unknown rather than missing`, t => {
+    const write = fixture(t);
+    write('aaaaaaaa');
+    const state = path.join(write.jobsDir, 'aaaaaaaa', 'state.json');
+    if (unreadable === 'truncated') fs.writeFileSync(state, `{"state":"working","sessionId":"${SID}"`);
+    else fs.unlinkSync(state);
+    const result = bg.findRestoreJob(SID);
+    assert.equal(result.known, false);
+    assert.equal(result.missing, undefined, 'an unreadable record cannot prove absence');
+    assert.match(result.reason, /unreadable|cannot read/i);
+  });
+}
+
+test('M-B GUARD all readable unrelated records prove the legacy job is missing', t => {
+  const write = fixture(t);
+  write('aaaaaaaa', { sessionId: OTHER });
+  write('bbbbbbbb', { sessionId: OTHER });
+  assert.equal(bg.findRestoreJob(SID).missing, true);
+});
+
+test('M-B GUARD a matching readable record wins over an unrelated truncated record', t => {
+  const write = fixture(t);
+  write('aaaaaaaa');
+  write('bbbbbbbb');
+  fs.writeFileSync(path.join(write.jobsDir, 'bbbbbbbb', 'state.json'), '{"state":');
+  assert.equal(bg.findRestoreJob(SID).job?.id, 'aaaaaaaa');
+});
+
 test('C4 GUARD missing record is explicitly distinguished from ambiguity and unreadability', t => {
   const write = fixture(t);
   assert.equal(bg.findRestoreJob(SID).missing, true);
