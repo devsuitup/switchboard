@@ -11,7 +11,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Background sessions that are working now show as working, a finished one as idle, and a dialog waiting for you blinks; the orange waiting ring no longer stands for all three. Reverses the rendering of #728. (#785)
 
 ### Fixed
-- A background job that was respawned is no longer refused as being in an unknown state, and a refused Respawn no longer tells you to retry Delete. (#785)
+- On Windows, a respawned background job can be respawned again or deleted once Switchboard verifies that it has stopped; on Linux and macOS, an unverified job still refuses these actions with a notice. A refused Respawn no longer tells you to retry Delete. (#785)
 
 ## v0.0.100 — 2026-10-25
 

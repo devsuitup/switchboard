@@ -71,6 +71,62 @@ function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attache
 
 test.afterEach(() => bgAgents.stop());
 
+test('B-F4 Stop on a working job without a descriptor keeps the main shortcut and never probes workers', async () => {
+  const dir = mkTmp();
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'working', sessionId: '11111111-1111-4111-8111-111111111111' });
+    fs.mkdirSync(path.join(dir, 'daemon'));
+    fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
+      updatedAt: '2000-01-01T00:00:00Z', workers: {} }));
+    const sessionState = fakeSessionState();
+    let probes = 0;
+    sessionState.refreshProcessTable = async () => { probes++; };
+    sessionState.readWorkerProcessEvidence = () => ({ processTableFresh: true, tableEntry: () => undefined });
+    const { cli } = boot(dir, { sessionState, homeDir: dir });
+    const handlers = new Map();
+    require('../bg-agents-ipc').init({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
+      bgAgents, getMainWindow: () => null, log: silentLog,
+      activeSessions: new Map([['11111111-1111-4111-8111-111111111111', {}]]) });
+    assert.deepEqual(await handlers.get('check-bg-agent-verb')({}, 'stop', 'aaaaaaaa'), { ok: true });
+    assert.deepEqual(await handlers.get('bg-agent-verb')({}, 'stop', 'aaaaaaaa'), { ok: true });
+    assert.equal(probes, 0);
+    assert.equal(cli.calls.filter(call => call.argv[0] === 'stop').length, 1);
+  } finally { rmTmp(dir); }
+});
+
+test('B-F3 a force scan already in flight before the first sample never authorizes respawn', async () => {
+  const dir = mkTmp();
+  const sessionState = require('../cli-session-state');
+  let finish;
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'running', updatedAt: new Date().toISOString(),
+      sessionId: '11111111-1111-4111-8111-111111111111' });
+    fs.mkdirSync(path.join(dir, 'daemon'));
+    fs.mkdirSync(path.join(dir, 'sessions'));
+    fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
+      updatedAt: new Date(Date.now() + 100).toISOString(), supervisorPid: 43, workers: {} }));
+    let clock = Date.now() - 2000;
+    let probes = 0;
+    sessionState.init({ dir: path.join(dir, 'sessions'), platform: 'win32', log: silentLog,
+      activeSessions: new Map(), now: () => clock, readProcessTable: async () => {
+        if (++probes === 2) await new Promise(resolve => { finish = resolve; });
+        return new Map([[99, { ppid: 1, created: 1n }]]);
+      } });
+    await sessionState.refreshProcessTable();
+    clock += 100;
+    const pending = sessionState.refreshProcessTable({ force: true });
+    const { cli } = boot(dir, { sessionState, homeDir: dir });
+    const result = bgAgents.runVerb('respawn', 'aaaaaaaa');
+    const release = setTimeout(() => finish(), 1100);
+    try {
+      assert.equal((await result).ok, false);
+      await pending;
+      assert.equal(probes, 2);
+      assert.equal(cli.calls.length, 0);
+    } finally { clearTimeout(release); }
+  } finally { finish?.(); sessionState.stop(); rmTmp(dir); }
+});
+
 for (const state of ['running', 'working', 'blocked']) {
   test(`A-T6 ${state} is known and a pre-boot worker is not hosted at either verb boundary`, async () => {
     const dir = mkTmp();
@@ -106,7 +162,7 @@ test('A-T6 supervisor death is confirmed after one second and an intervening spa
     let reads = 0;
     sessionState.readWorkerProcessEvidence = () => {
       reads++;
-      return { processTableFresh: true, tableEntry: () => undefined };
+      return { processTableFresh: true, observedAt: Date.now(), tableEntry: () => undefined };
     };
     const { cli } = boot(dir, { sessionState, homeDir: dir });
     const start = Date.now();
@@ -117,7 +173,7 @@ test('A-T6 supervisor death is confirmed after one second and an intervening spa
     reads = 0;
     sessionState.readWorkerProcessEvidence = () => {
       if (++reads === 2) fs.writeFileSync(rosterFile, JSON.stringify({ ...roster, updatedAt: new Date().toISOString() }));
-      return { processTableFresh: true, tableEntry: () => reads === 2 ? { created: '133000000000000000' } : undefined };
+      return { processTableFresh: true, observedAt: Date.now(), tableEntry: () => reads === 2 ? { created: '133000000000000000' } : undefined };
     };
     const result = await bgAgents.runVerb('respawn', 'aaaaaaaa');
     assert.equal(result.ok, false);
@@ -172,7 +228,7 @@ test('A-T6 stopping the service during evidence collection cancels the verb', as
     const sessionState = fakeSessionState();
     sessionState.readWorkerProcessEvidence = () => {
       bgAgents.stop();
-      return { processTableFresh: true, tableEntry: () => undefined };
+      return { processTableFresh: true, observedAt: Date.now(), tableEntry: () => undefined };
     };
     const { cli } = boot(dir, { sessionState });
     assert.equal((await bgAgents.runVerb('respawn', 'aaaaaaaa')).ok, false);
@@ -192,7 +248,7 @@ test('A-T6 a rewritten job during confirmation invalidates the old death evidenc
     let reads = 0;
     sessionState.readWorkerProcessEvidence = () => {
       if (++reads === 2) writeJob(dir, 'aaaaaaaa', { ...job, updatedAt: new Date(Date.now() + 1000).toISOString() });
-      return { processTableFresh: true, tableEntry: () => undefined };
+      return { processTableFresh: true, observedAt: Date.now(), tableEntry: () => undefined };
     };
     const { cli } = boot(dir, { sessionState });
     assert.equal((await bgAgents.runVerb('respawn', 'aaaaaaaa')).ok, false);
@@ -210,7 +266,7 @@ test('A-T6 numeric timestamps also receive the delayed supervisor confirmation',
     fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
       updatedAt: updatedAt + 1, supervisorPid: 43, workers: {} }));
     const sessionState = fakeSessionState();
-    sessionState.readWorkerProcessEvidence = () => ({ processTableFresh: true, tableEntry: () => undefined });
+    sessionState.readWorkerProcessEvidence = () => ({ processTableFresh: true, observedAt: Date.now(), tableEntry: () => undefined });
     boot(dir, { sessionState });
     assert.equal((await bgAgents.conversationCheck('aaaaaaaa')).workerLiveness, 'dead');
   } finally { rmTmp(dir); }

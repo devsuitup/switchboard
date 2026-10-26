@@ -1,5 +1,7 @@
 'use strict';
 
+const { procStartMatches } = require('./cli-session-state');
+
 const WINDOWS_FILETIME_RE = /^\d{17,19}$/;
 const timestamp = value => typeof value === 'number' && Number.isFinite(value) ? value
   : typeof value === 'string' ? Date.parse(value) : NaN;
@@ -17,16 +19,16 @@ function workerObservation(job, sample) {
     || !Number.isFinite(sample.bootTime)) return 'unknown';
   const updatedAt = timestamp(roster.updatedAt);
   if (!Number.isFinite(updatedAt)) return 'unknown';
-  if (updatedAt < sample.bootTime) return 'dead';
   const worker = roster.workers?.[job.daemonShort ?? job.id];
   if (worker) {
     if (typeof worker.procStart !== 'string' || !WINDOWS_FILETIME_RE.test(worker.procStart)) return 'unknown';
     const startedAt = Number(BigInt(worker.procStart) / 10000n - 11644473600000n);
     if (!Number.isSafeInteger(startedAt) || startedAt < 0) return 'unknown';
-    if (startedAt < sample.bootTime) return 'dead';
     if (Number.isInteger(worker.pid) && worker.pid > 0
-      && sample.tableEntry(worker.pid)?.created?.toString() === worker.procStart) return 'live';
+      && procStartMatches(sample.tableEntry(worker.pid)?.created, worker.procStart)) return 'live';
+    if (startedAt < sample.bootTime) return 'dead';
   }
+  if (updatedAt < sample.bootTime) return 'dead';
   return missingSupervisor(job, sample) ? 'pending' : 'unknown';
 }
 
@@ -44,7 +46,8 @@ function classifyWorkerLiveness(job, sample, confirmation) {
   if (initial === 'live' || initial === 'dead') return initial;
   if (initial !== 'pending' || !confirmation || workerObservation(job, confirmation) !== 'pending') return 'unknown';
   if (!Number.isFinite(sample.observedAt) || !Number.isFinite(confirmation.observedAt)
-    || confirmation.observedAt - sample.observedAt < 1000) return 'unknown';
+    || confirmation.observedAt - sample.observedAt < 1000
+    || confirmation.observedAt <= (sample.sampledAt ?? sample.observedAt)) return 'unknown';
   const sameRoster = sample.roster?.supervisorPid === confirmation.roster?.supervisorPid
     && sample.roster?.updatedAt === confirmation.roster?.updatedAt
     && JSON.stringify(sample.roster?.workers?.[job.daemonShort ?? job.id]) === JSON.stringify(confirmation.roster?.workers?.[job.daemonShort ?? job.id]);

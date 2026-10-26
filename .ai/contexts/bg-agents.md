@@ -399,19 +399,30 @@ descriptor still wins. Unknown evidence preserves the #374 fallback.
 `bg-worker-liveness.js` is pure. Its caller supplies sanitized roster fields
 (no authentication fields), descriptors, an immutable process-table view,
 observation time and boot time. Workers are keyed by `daemonShort ?? id`.
-A matching Windows FILETIME creation stamp proves a worker live; a roster or
-worker stamp before boot proves it dead. A missing supervisor only proves death
-when the roster is at least as new as the job and a second observation at least
+A matching Windows FILETIME creation stamp proves a worker live, using the
+shared 100-tick tolerance for CIM rounding. This live match takes precedence
+over a roster or worker stamp before the computed boot time; only without a
+live match can either pre-boot stamp prove death. A missing supervisor only proves
+death when the roster is at least as new as the job and a second observation at least
 one second later agrees. Stale/unreadable/unsupported observations, malformed
 stamps and pid reuse without another proof remain unknown. Process-table
 availability requires a successful snapshot, including when probing is disabled.
-The confirming read forces a new process probe despite the shared three-second
-cache. A changed job record or service generation invalidates pending death
-evidence instead of authorizing a verb against its replacement.
+The confirming read requests a forced process probe despite the shared three-second
+cache. Worker evidence exposes the probe's start time as `observedAt`; `sampledAt`
+records when the caller took its first sample. The second probe must start
+strictly after that sample and at least one second after the first probe.
+An older in-flight probe therefore cannot confirm death. A changed job record
+or service generation invalidates pending death evidence instead of authorizing
+a verb against its replacement.
+This worker classification supports Windows FILETIME only. Linux and macOS
+retain unknown worker evidence and refuse Respawn/Delete for an unverified
+`running` job, with a notice; live descriptors still prove hosting everywhere.
 
 `conversationCheck` is asynchronous so the IPC preview and final action await
-that confirmation. Both it and `runVerb` obtain evidence independently; a
-running worker with unknown evidence refuses Delete/Respawn. `liveJobCheck`,
+that confirmation for Respawn/Delete. Stop calls `conversationCheck` with
+`workerLiveness: false`, preserving its working/blocked shortcut without a scan
+or the one-second confirmation. Conversation checks and `runVerb` obtain evidence
+independently; a running worker with unknown evidence refuses Delete/Respawn. `liveJobCheck`,
 the roster, sidebar, cache and existing main-process callers retain their
 descriptor-based hosting rules. Restore is unchanged.
 The same override applies to conversation checks, `liveJobCheck` and `runVerb`.

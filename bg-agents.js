@@ -319,7 +319,7 @@ async function workerSample(force = false) {
       workers: Object.fromEntries(Object.entries(raw.workers || {}).map(([key, worker]) => [key, { pid: worker?.pid, procStart: worker?.procStart }])) };
   } catch {}
   return { ...processEvidence, roster: daemonRoster, descriptors: sessionState?.readAllDescriptors() || [],
-    bootTime: Date.now() - os.uptime() * 1000, observedAt: Date.now() };
+    bootTime: Date.now() - os.uptime() * 1000, sampledAt: Date.now() };
 }
 
 function unchangedWorkerJob(job) {
@@ -346,7 +346,7 @@ async function workerEvidence(job) {
   return gen !== generation || confirmed === 'dead' && !unchangedWorkerJob(job) ? 'unknown' : confirmed;
 }
 
-async function conversationCheck(id) {
+async function conversationCheck(id, { workerLiveness = true } = {}) {
   if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { known: false, reason: 'invalid background session id' };
   const gen = generation;
   let job;
@@ -359,7 +359,7 @@ async function conversationCheck(id) {
     .filter(Boolean))];
   if (!sessionIds.length) return { known: false, reason: `job ${id} does not name its conversation` };
   const identified = { ...job, id, sessionId: job.sessionId || entry?.sessionId };
-  const evidence = await workerEvidence(identified);
+  const evidence = workerLiveness ? await workerEvidence(identified) : undefined;
   if (gen !== generation) return { known: false, reason: 'background agent service changed while checking the worker' };
   return { known: true, sessionIds, state: job.state, workerLiveness: evidence,
     hosted: isHostedJob(identified, liveDescriptors(), evidence) };

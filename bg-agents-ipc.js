@@ -29,7 +29,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       const declined = { rm: 'not deleted', respawn: 'not respawned', stop: 'not stopped' }[verb];
       let check;
       try {
-        check = await bgAgents.conversationCheck(id);
+        check = await bgAgents.conversationCheck(id, { workerLiveness: verb !== 'stop' });
         if (verb === 'stop' && (!check.known || check.hosted)) return { ok: true };
         if (!check.known) return { ok: false, error: `cannot tell whether this conversation is running (${check.reason}) — ${declined}` };
         if (verb !== 'stop' && check.state === 'running' && check.workerLiveness === 'unknown') {

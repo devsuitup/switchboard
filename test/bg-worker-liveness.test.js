@@ -21,6 +21,29 @@ test('A-T5 matching process creation proves live, keyed by daemonShort rather th
   s.roster.workers = { [job.id]: s.roster.workers[job.daemonShort] };
   assert.equal(classifyWorkerLiveness({ ...job, daemonShort: null }, s), 'live');
 });
+test('B-F1 rounded CIM creation matches full precision only within the tolerance', () => {
+  const s = sample();
+  s.roster.workers.bbbbbbbb.procStart = String(BigInt(stamp(bootTime + 1000)) + 8n);
+  s.tableEntry = pid => pid === 42 ? { created: BigInt(stamp(bootTime + 1000)) } : { created: 1n };
+  assert.equal(classifyWorkerLiveness(job, s), 'live');
+  s.tableEntry = pid => pid === 42 ? { created: BigInt(s.roster.workers.bbbbbbbb.procStart) - 100n } : { created: 1n };
+  assert.equal(classifyWorkerLiveness(job, s), 'live');
+  s.tableEntry = pid => pid === 42 ? { created: BigInt(s.roster.workers.bbbbbbbb.procStart) - 101n } : { created: 1n };
+  assert.equal(classifyWorkerLiveness(job, s), 'unknown');
+});
+for (const field of ['procStart', 'updatedAt']) {
+  test(`B-F2 live pid and creation wins over a pre-boot ${field}`, () => {
+    const s = sample();
+    if (field === 'procStart') s.bootTime += 2000;
+    else s.roster.updatedAt = new Date(bootTime - 1000).toISOString();
+    assert.equal(classifyWorkerLiveness(job, s), 'live');
+  });
+}
+test('B-F3 a confirmation table started before the first sample cannot prove death', () => {
+  const first = sample({ tableEntry: () => undefined, sampledAt: bootTime + 10000000 + 2000 });
+  const second = sample({ tableEntry: () => undefined, observedAt: first.observedAt + 1000 });
+  assert.equal(classifyWorkerLiveness(job, first, second), 'unknown');
+});
 for (const [name, change] of [
   ['unreadable roster', s => { s.roster = null; }],
   ['proto 2', s => { s.roster.proto = 2; }],
