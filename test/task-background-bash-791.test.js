@@ -61,7 +61,7 @@ for (const [name, entry] of [['with tool-use-id', done()], ['without tool-use-id
 test('a notification recorded before its launch result still ends the Bash', () => {
   const r = createTaskRegistry();
   r.ingest(id, use());
-  r.ingest(id, done());
+  r.ingest(id, done(shellId, 'toolu_bash1', '2026-10-26T10:00:00.500Z'));
   r.ingest(id, result());
   assert.equal(r.background(id), false);
   assert.deepEqual(r.snapshot(id).tasks.map(t => [t.id, t.kind, t.terminal]), [['bx5kzi3xp', 'bash', true]]);
@@ -208,6 +208,134 @@ test('only a paired background Bash opens, including when its result is read fir
   assert.deepEqual(deferred.snapshot(id).tasks.map(t => [t.id, t.kind]), [[shellId, 'bash']]);
   deferred.ingest(id, done());
   assert.equal(deferred.background(id), false);
+});
+
+function observedRegistry(options) {
+  const maps = [];
+  const sets = [];
+  class ObservedMap extends Map {
+    constructor(...args) { super(...args); maps.push(this); }
+  }
+  class ObservedSet extends Set {
+    constructor(...args) { super(...args); sets.push(this); }
+  }
+  const ctx = vm.createContext({ module: { exports: {} }, Map: ObservedMap, Set: ObservedSet });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/task-registry.js'), 'utf8'), ctx);
+  return { registry: ctx.module.exports.createTaskRegistry(options), maps, sets };
+}
+
+test('foreground Bash traffic leaves revisions, tracked calls and agent deduplication unchanged', () => {
+  let changes = 0;
+  const { registry: r, maps, sets } = observedRegistry({ maxEntries: 4, onChange: () => changes++ });
+  const before = r.snapshot(id).revision;
+  for (let i = 0; i < 10000; i++) {
+    const launch = use('foreground' + i);
+    launch.message.content[0].input.run_in_background = false;
+    r.ingest(id, launch);
+    r.ingest(id, result('foreground' + i, undefined, { backgroundTaskId: undefined }));
+  }
+  assert.equal(r.snapshot(id).revision, before, 'foreground Bash does not publish revisions');
+  assert.equal(changes, 0, 'foreground Bash does not notify subscribers');
+  assert.equal(maps.flatMap(map => [...map.values()].filter(value => value?.bash)).length, 0, 'processed Bash calls are released');
+  assert.equal(sets.flatMap(set => [...set].filter(key => typeof key === 'string' && /^(use|result)-foreground/.test(key))).length, 0, 'foreground Bash does not occupy dedup slots');
+  const agent = use('agent-dedup');
+  agent.message.content[0].name = 'Agent';
+  r.ingest(id, agent);
+  const revision = r.snapshot(id).revision;
+  for (let i = 0; i < 12; i++) {
+    const launch = use('after-agent' + i);
+    launch.message.content[0].input.run_in_background = false;
+    r.ingest(id, launch);
+    r.ingest(id, result('after-agent' + i, undefined, { backgroundTaskId: undefined }));
+  }
+  r.ingest(id, agent);
+  assert.equal(r.snapshot(id).revision, revision, 'foreground traffic preserves the agent dedup key');
+});
+
+test('paired rejected Bash results release launch records in either read order', () => {
+  for (const resultFirst of [false, true]) {
+    const { registry: r, maps } = observedRegistry();
+    for (let i = 0; i < 12; i++) {
+      const launch = use('rejected-call' + i);
+      launch.message.content[0].input.run_in_background = false;
+      const output = result('rejected-call' + i);
+      for (const entry of resultFirst ? [output, launch] : [launch, output]) r.ingest(id, entry);
+    }
+    assert.equal(maps.flatMap(map => [...map.values()].filter(value => value?.bash)).length, 0, 'failed background admission releases its Bash call');
+    assert.equal(r.background(id), false);
+  }
+  for (const [extra, block] of [[{ backgroundEndsWithFinalResponse: true }, {}], [{}, { is_error: true }], [{ backgroundTaskId: 'INVALID' }, {}]]) {
+    const { registry: r, maps } = observedRegistry();
+    r.ingest(id, use());
+    r.ingest(id, result(undefined, undefined, extra, block));
+    assert.equal(maps.flatMap(map => [...map.values()].filter(value => value?.bash)).length, 0, 'malformed and rejected results release their Bash call');
+  }
+});
+
+test('completed foreground Bash calls do not accumulate in the call table', () => {
+  const { registry: r, maps } = observedRegistry();
+  for (let i = 0; i < 10000; i++) {
+    r.ingest(id, use('completed' + i));
+    r.ingest(id, result('completed' + i, undefined, { backgroundTaskId: undefined }));
+  }
+  assert.equal(maps.flatMap(map => [...map.values()].filter(value => value?.bash)).length, 0);
+});
+
+test('foreground Bash does not evict an existing agent dedup key', () => {
+  const r = createTaskRegistry({ maxEntries: 4 });
+  const agent = use('retained-agent');
+  agent.message.content[0].name = 'Agent';
+  r.ingest(id, agent);
+  for (let i = 0; i < 12; i++) {
+    r.ingest(id, use('dedup-traffic' + i));
+    r.ingest(id, result('dedup-traffic' + i, undefined, { backgroundTaskId: undefined }));
+  }
+  const before = r.snapshot(id).revision;
+  r.ingest(id, agent);
+  assert.equal(r.snapshot(id).revision, before, 'the agent entry is still deduplicated after foreground traffic');
+});
+
+for (const [name, completion] of [['without tool-use-id', done(shellId, null, '2026-10-26T10:00:00.500Z')], ['as a queued attachment', queued(shellId, '2026-10-26T10:00:00.500Z')]]) {
+  test('an early completion ' + name + ' survives until its Bash result', () => {
+    const { registry: r, maps } = observedRegistry({ maxEntries: 4 });
+    r.ingest(id, use());
+    r.ingest(id, completion);
+    r.ingest(id, result());
+    assert.equal(r.background(id), false);
+    assert.equal(r.snapshot(id).tasks[0]?.terminal, true);
+    assert.equal(maps.flatMap(map => [...map.keys()].filter(key => key === 'notification-task:' + shellId)).length, 0, 'consumed task-id notification is released');
+  });
+}
+
+test('early task-id notifications are bounded and do not close another shell', () => {
+  const { registry: r, maps } = observedRegistry({ maxEntries: 4 });
+  for (let i = 0; i < 12; i++) r.ingest(id, queued('bearly' + i, '2026-10-26T10:00:00.500Z'));
+  const pending = maps.flatMap(map => [...map.keys()].filter(key => typeof key === 'string' && key.startsWith('notification-task:')));
+  assert.equal(pending.length, 4);
+  r.ingest(id, use());
+  r.ingest(id, result());
+  assert.equal(r.background(id), true, 'unrelated early completions do not close this task');
+});
+
+test('owner-start replay guard uses the Bash launch time even when its result is newer', () => {
+  const r = createTaskRegistry();
+  r.ownerAlive(id, { startedAt: Date.parse('2026-10-26T10:00:00.500Z') });
+  r.ingest(id, use());
+  r.ingest(id, result());
+  assert.equal(r.background(id), false);
+});
+
+test('rekey preserves the latest owner start and refuses older Bash launches', () => {
+  const nextId = '22222222-2222-4222-8222-222222222222';
+  for (const [targetStart, launchAt] of [[undefined, undefined], ['2026-10-26T09:00:00.000Z', undefined], ['2026-10-26T10:00:02.000Z', '2026-10-26T10:00:00.750Z']]) {
+    const r = createTaskRegistry();
+    r.ownerAlive(id, { startedAt: Date.parse('2026-10-26T10:00:00.500Z') });
+    if (targetStart) r.ownerAlive(nextId, { startedAt: Date.parse(targetStart) });
+    r.rekey(id, nextId);
+    r.ingest(nextId, use(undefined, launchAt));
+    r.ingest(nextId, result());
+    assert.equal(r.background(nextId), false, 'rekey retains the greater owner start: ' + targetStart);
+  }
 });
 
 for (const [trigger, extra] of [['Ctrl+B', { backgroundedByUser: true }], ['timeout', { timedOutAfterMs: 0 }]]) {

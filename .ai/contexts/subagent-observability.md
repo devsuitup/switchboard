@@ -198,14 +198,20 @@ A result with `backgroundEndsWithFinalResponse === true` is refused because
 no completion notification can follow. Bash tool-use ids are remembered in
 the call table without consuming the shared pending queue. Results read before
 their tool-use are held until that launch arrives; paired results that fail
-admission are consumed rather than left pending. A plain foreground result
-opens nothing. Monitor results use `taskId`, not `backgroundTaskId`, and do
+admission are consumed rather than left pending. Processed Bash launch records
+are removed or replaced by shell correlations. Plain foreground Bash traffic
+opens nothing, publishes no revision and consumes no shared deduplication slot.
+Monitor results use `taskId`, not `backgroundTaskId`, and do
 not open a Bash task.
 A matching terminal notification (including queued attachments and aggregate
 stops), a successful TaskStop/KillShell result targeting it, owner death or
 terminal job evidence ends it. The descriptor's process start time travels
 through main, client and worker; a newer owner ends older transcript Bash tasks
-and prevents their replay. These tasks supply background work, never an agent
+and prevents their replay using the tool-use time, even when the result is newer.
+Early terminal notifications are retained in the bounded pending queue by
+tool-use id or task id and consumed when the shell opens at its tool-use time.
+Rekeying carries the latest owner start time to preserve that replay guard.
+These tasks supply background work, never an agent
 count or the violet working spinner. If no end reaches the transcript while
 the owner remains alive, the static background glyph persists until the owner
 exits or is replaced. Rekeying with the same owner (for example /clear) does

@@ -186,9 +186,17 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         !blocks.some(b => b.type === 'tool_result' && (parents.get(id)?.calls.has(b.tool_use_id) || entry.toolUseResult?.agentId))) return;
     const p = parent(id);
     const key = entry.uuid || `${entry.type}:${entry.timestamp}:${blocks.map(b => b.id || b.tool_use_id).join(',')}:${n?.id || n?.ids?.join(',') || ''}`;
-    if (p.seen.has(key)) return;
-    p.seen.add(key);
-    bound(p.seen);
+    const quietBash = !n && blocks.every(b => {
+      if (b.type === 'tool_use') return b.name === 'Bash';
+      if (b.type !== 'tool_result') return true;
+      const call = p.calls.get(b.tool_use_id);
+      return call?.bash && !(shell && b.tool_use_id === shell.tool && (call.async || shell.backgrounded));
+    });
+    if (!quietBash) {
+      if (p.seen.has(key)) return;
+      p.seen.add(key);
+      bound(p.seen);
+    }
     if (entry.type === 'assistant' && entry.message?.role === 'assistant') {
       for (const b of blocks) {
         const stopped = shellStop(id, b);
@@ -226,18 +234,21 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
       for (const b of blocks) {
         if (b.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue;
         const call = p.calls.get(b.tool_use_id);
+        if (call?.bash) { p.calls.delete(b.tool_use_id); p.pending.delete(`result:${b.tool_use_id}`); }
         if (shell && b.tool_use_id === shell.tool && (!call || call.bash)) {
           if (!call?.bash) { p.pending.set(`result:${b.tool_use_id}`, entry); bound(p.pending); continue; }
           p.pending.delete(`result:${b.tool_use_id}`);
           if (!call?.async && !shell.backgrounded) continue;
-          p.calls.set(b.tool_use_id, { id: shell.id, at, shell: true });
-          if (at > (p.ownerStartedAt ?? -Infinity)) open(id, shell.id, 'bash', at, { origin: 'transcript' });
-          const early = p.pending.get(`notification:${b.tool_use_id}`);
-          if (early && early.id === shell.id) { end(id, shell.id, early.at); p.pending.delete(`notification:${b.tool_use_id}`); }
+          p.calls.set(b.tool_use_id, { id: shell.id, at: call.at, shell: true });
+          if (call.at > (p.ownerStartedAt ?? -Infinity)) open(id, shell.id, 'bash', call.at, { origin: 'transcript' });
+          for (const pendingKey of [`notification:${b.tool_use_id}`, `notification-task:${shell.id}`]) {
+            const early = p.pending.get(pendingKey);
+            if (early && early.id === shell.id) { end(id, shell.id, early.at); p.pending.delete(pendingKey); }
+          }
           continue;
         }
         if (!call) { p.pending.set(`result:${b.tool_use_id}`, entry); bound(p.pending); continue; }
-        if (call.bash) { p.pending.delete(`result:${b.tool_use_id}`); continue; }
+        if (call.bash) continue;
         if (call.shell) continue;
         if (call.stop) { if (b.is_error !== true) end(id, call.id, at); continue; }
         if (call.sendMessage) {
@@ -281,9 +292,10 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         const call = p.calls.get(n.tool);
         if ((n.tool && call && call.id === n.id) || (!n.tool && ['agent', 'bash'].includes(p.tasks.get(n.id)?.kind))) end(id, n.id, at);
         else if (n.tool) { p.pending.set(`notification:${n.tool}`, { ...n, at }); bound(p.pending); }
+        else { p.pending.set(`notification-task:${n.id}`, { ...n, at }); bound(p.pending); }
       }
     }
-    changed(id);
+    if (!quietBash) changed(id);
   }
   function applyJob(id, evidence, { jobId } = {}) {
     if (jobId) {
@@ -429,7 +441,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     }
     next.known ||= old.known;
     next.backgroundUnknown ||= old.backgroundUnknown;
-    for (const field of ['diedAt', 'aliveAt', 'terminalJobAt', 'jobAt']) {
+    for (const field of ['diedAt', 'aliveAt', 'terminalJobAt', 'jobAt', 'ownerStartedAt']) {
       if (old[field] !== undefined) next[field] = Math.max(old[field], next[field] || 0);
     }
     for (const [key, value] of old.calls) next.calls.set(key, value);
