@@ -342,10 +342,21 @@ for (const [trigger, extra] of [['Ctrl+B', { backgroundedByUser: true }], ['time
   for (const resultFirst of [false, true]) {
     test(trigger + ' backgrounds a foreground Bash, result first: ' + resultFirst, () => {
       const r = createTaskRegistry();
+      const renderer = createTaskRegistry();
+      const before = r.snapshot(id);
+      renderer.applySnapshot(before);
       const launch = use();
       delete launch.message.content[0].input.run_in_background;
       const output = result(undefined, undefined, extra);
-      for (const entry of resultFirst ? [output, launch] : [launch, output]) r.ingest(id, entry);
+      const entries = resultFirst ? [output, launch] : [launch, output];
+      r.ingest(id, entries[0]);
+      const pending = r.snapshot(id);
+      renderer.applySnapshot(pending);
+      assert.equal(renderer.background(id), false);
+      r.ingest(id, entries[1]);
+      assert.ok(r.snapshot(id).revision > pending.revision, 'backgrounding publishes a newer snapshot');
+      renderer.applySnapshot(r.snapshot(id));
+      assert.equal(renderer.background(id), true, 'the renderer accepts the backgrounded shell snapshot');
       assert.deepEqual(r.list(id).map(t => [t.id, t.kind]), [[shellId, 'bash']]);
       assert.equal(r.agents(id).length, 0);
       r.ingest(id, done());
@@ -384,6 +395,138 @@ test('unpaired backgrounding signals and non-finite or non-numeric timeouts open
       assert.deepEqual(r.snapshot(id).tasks, []);
     }
   }
+});
+
+test('10000 unresolved Bash launches retain only the newest bounded calls', () => {
+  const { registry: r, maps } = observedRegistry();
+  for (let i = 0; i < 10000; i++) r.ingest(id, use('unresolved-' + i));
+  const calls = maps.flatMap(map => [...map.entries()].filter(([, value]) => value?.bash));
+  assert.equal(calls.length, 2048, 'unresolved calls respect the default cap');
+  assert.equal(calls[0][0], 'unresolved-7952', 'oldest calls are evicted first');
+  assert.equal(calls.at(-1)[0], 'unresolved-9999');
+  r.ingest(id, result('unresolved-9999'));
+  assert.equal(r.background(id), true, 'the newest call still correlates');
+});
+
+test('10000 completed background shells release all shell correlations', () => {
+  const { registry: r, maps } = observedRegistry();
+  for (let i = 0; i < 10000; i++) {
+    const tool = 'completed-background-' + i;
+    const shell = 'bcompleted' + i;
+    r.ingest(id, use(tool));
+    r.ingest(id, result(tool, undefined, { backgroundTaskId: shell }));
+    r.ingest(id, done(shell, tool));
+  }
+  assert.equal(r.background(id), false);
+  assert.equal(maps.flatMap(map => [...map.values()].filter(value => value?.shell || value?.bash)).length, 0, 'terminal shells retain no call records');
+});
+
+test('call bounds cover stop and SendMessage records and merges without removing retained agent calls', () => {
+  const { registry: r, maps } = observedRegistry({ maxEntries: 4 });
+  r.ingest(id, use());
+  r.ingest(id, result());
+  for (let i = 0; i < 12; i++) {
+    const entry = stop('TaskStop', 'task_id', false)[0];
+    entry.uuid += '-' + i;
+    entry.message.content[0].id += '-' + i;
+    r.ingest(id, entry);
+  }
+  assert.equal(maps.flatMap(map => [...map.values()].filter(value => value?.stop)).length, 4, 'stop calls are capped');
+  const agent = use('retained-agent-call');
+  agent.message.content[0].name = 'Agent';
+  r.ingest(id, agent);
+  for (let i = 0; i < 12; i++) {
+    const message = use('message-' + i);
+    message.message.content[0].name = 'SendMessage';
+    message.message.content[0].input = { to: 'tool:retained-agent-call' };
+    r.ingest(id, message);
+  }
+  assert.equal(maps.flatMap(map => [...map.values()].filter(value => value?.sendMessage)).length, 4, 'SendMessage calls are capped');
+  const nextId = '22222222-2222-4222-8222-222222222222';
+  for (const owner of [id, nextId]) for (let i = 0; i < 4; i++) r.ingest(owner, use(owner + '-' + i));
+  r.rekey(id, nextId);
+  assert.equal(maps[0].get(nextId).calls.size, 4, 'merged calls are capped');
+  assert.deepEqual([...maps[0].get(nextId).calls.keys()], Array.from({ length: 4 }, (_, i) => id + '-' + i), 'merge evicts destination entries before the newly appended source entries');
+  r.ingest(nextId, result(id + '-3'));
+  assert.equal(r.background(nextId), true, 'the newest merged source call is retained');
+  const retained = observedRegistry({ maxEntries: 4 });
+  retained.registry.ingest(id, agent);
+  retained.registry.end(id, 'tool:retained-agent-call', Date.parse('2026-10-26T10:05:00Z'));
+  assert.equal(retained.maps.flatMap(map => [...map.keys()].filter(key => key === 'retained-agent-call')).length, 1, 'terminal agent calls retain their existing semantics');
+});
+
+test('shell correlation cleanup covers early completion, owner cutoff and rekeyed terminal tasks', () => {
+  for (const completion of [done(), queued()]) {
+    const { registry: r, maps } = observedRegistry();
+    r.ingest(id, use());
+    r.ingest(id, completion);
+    r.ingest(id, result());
+    assert.equal(r.background(id), false);
+    assert.equal(maps.flatMap(map => [...map.values()].filter(value => value?.shell)).length, 0);
+  }
+  const { registry: replay, maps: replayMaps } = observedRegistry();
+  replay.ownerAlive(id, { startedAt: Date.parse('2026-10-26T11:00:00Z') });
+  replay.ingest(id, use());
+  replay.ingest(id, result());
+  assert.equal(replayMaps.flatMap(map => [...map.values()].filter(value => value?.shell)).length, 0, 'rejected stale launches retain no shell correlation');
+  const { registry: r, maps } = observedRegistry();
+  const nextId = '22222222-2222-4222-8222-222222222222';
+  r.ingest(id, use());
+  r.ingest(id, result());
+  r.ingest(nextId, use('destination-shell'));
+  r.ingest(nextId, result('destination-shell'));
+  r.ingest(nextId, done(shellId, 'destination-shell'));
+  r.rekey(id, nextId);
+  assert.equal(r.background(nextId), false);
+  assert.equal([...maps[0].get(nextId).calls.values()].filter(value => value?.shell).length, 0, 'a terminal destination releases the merged shell correlation');
+  r.ingest(nextId, done());
+  assert.equal(r.background(nextId), false, 'a late tool-id notification remains terminal');
+  assert.equal(maps[0].get(nextId).pending.has('notification:toolu_bash1'), false, 'late terminal notifications do not become pending');
+});
+
+for (const route of ['TaskStop', 'KillShell', 'ownerDied', 'ownerAlive', 'end']) {
+  test(route + ' releases the terminal shell correlation and accepts a late tool-id notification', () => {
+    const { registry: r, maps } = observedRegistry();
+    r.ingest(id, use());
+    r.ingest(id, result());
+    if (route === 'TaskStop' || route === 'KillShell') {
+      for (const entry of stop(route, route === 'TaskStop' ? 'task_id' : 'shell_id', true)) r.ingest(id, entry);
+    } else if (route === 'ownerAlive') r.ownerAlive(id, { startedAt: Date.parse('2026-10-26T10:05:00Z') });
+    else if (route === 'ownerDied') r.ownerDied(id);
+    else r.end(id, shellId, Date.parse('2026-10-26T10:05:00Z'));
+    assert.equal(r.background(id), false);
+    assert.equal(maps[0].get(id).calls.has('toolu_bash1'), false, 'the launch correlation is released');
+    r.ingest(id, done());
+    assert.equal(r.background(id), false);
+    assert.equal(maps[0].get(id).pending.has('notification:toolu_bash1'), false, 'known terminal shells do not queue late notifications');
+  });
+}
+
+test('unrelated task-id notifications cannot evict a deferred Bash result', () => {
+  for (const knownAgent of [false, true]) {
+    const { registry: r, maps } = observedRegistry();
+    r.ingest(id, result());
+    for (let i = 0; i < 3000; i++) {
+      const taskId = knownAgent ? 'agent' + i : 'INVALID-' + i;
+      if (knownAgent) {
+        r.note(id, taskId, 'cli-task');
+        r.end(id, taskId);
+      }
+      r.ingest(id, queued(taskId));
+    }
+    assert.equal(maps.flatMap(map => [...map.keys()].filter(key => key === 'result:toolu_bash1')).length, 1, 'the deferred launch result survives unrelated notifications');
+    r.ingest(id, use());
+    assert.equal(r.background(id), true);
+  }
+});
+
+test('an early tool-id notification for another task cannot end the shell', () => {
+  const r = createTaskRegistry();
+  r.ingest(id, use());
+  r.ingest(id, done('bother1', 'toolu_bash1', '2026-10-26T10:00:00.500Z'));
+  r.ingest(id, result());
+  assert.equal(r.background(id), true);
+  assert.equal(r.snapshot(id).tasks.find(t => t.id === shellId)?.terminal, false);
 });
 
 test('Bash uses and paired rejected results do not fill pending or evict an early completion', () => {

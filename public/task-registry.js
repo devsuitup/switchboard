@@ -80,6 +80,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     t.at = at;
     t.sources.clear();
     delete t.reopenGroup;
+    for (const [key, call] of parent(id).calls) if (call.shell && call.id === taskId) parent(id).calls.delete(key);
     if (notify) changed(id);
   }
   function prune(ttl) {
@@ -200,7 +201,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     if (entry.type === 'assistant' && entry.message?.role === 'assistant') {
       for (const b of blocks) {
         const stopped = shellStop(id, b);
-        if (stopped) { if (!p.calls.has(b.id)) p.calls.set(b.id, { id: stopped, at, stop: true }); continue; }
+        if (stopped) { if (!p.calls.has(b.id)) p.calls.set(b.id, { id: stopped, at, stop: true }); bound(p.calls); continue; }
         if (b.type === 'tool_use' && b.name === 'SendMessage' && typeof b.id === 'string' && p.tasks.get(b.input?.to)?.kind === 'agent') {
           const previous = p.tasks.get(b.input.to);
           const reopenGroup = previous.terminal ? { pending: new Set(), succeeded: false, at } :
@@ -211,6 +212,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
             if (reopenGroup) { reopenGroup.pending.add(b.id); reopenGroup.at = at; }
             active.reopenGroup = reopenGroup;
             p.calls.set(b.id, call);
+            bound(p.calls);
           }
           continue;
         }
@@ -219,7 +221,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         const call = { id: `tool:${b.id}`, at, async: b.input?.run_in_background === true, origin: 'transcript', subagentType: b.input?.subagent_type || null };
         if (b.name === 'Bash') p.calls.set(b.id, { ...call, bash: true });
         else { p.calls.set(b.id, call); open(id, call.id, 'agent', at, call); }
-        bound(p.pending);
+        bound(p.calls);
         const deferred = p.pending.get(`result:${b.id}`);
         if (deferred) {
           p.pending.delete(`result:${b.id}`);
@@ -245,6 +247,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
             const early = p.pending.get(pendingKey);
             if (early && early.id === shell.id) { end(id, shell.id, early.at); p.pending.delete(pendingKey); }
           }
+          if (!p.tasks.get(shell.id) || p.tasks.get(shell.id).terminal) p.calls.delete(b.tool_use_id);
           continue;
         }
         if (!call) { p.pending.set(`result:${b.tool_use_id}`, entry); bound(p.pending); continue; }
@@ -290,9 +293,10 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         for (const taskId of n.ids) if (['agent', 'bash'].includes(p.tasks.get(taskId)?.kind)) end(id, taskId, at);
       } else {
         const call = p.calls.get(n.tool);
-        if ((n.tool && call && call.id === n.id) || (!n.tool && ['agent', 'bash'].includes(p.tasks.get(n.id)?.kind))) end(id, n.id, at);
+        if ((n.tool && call && call.id === n.id) || (!n.tool && ['agent', 'bash'].includes(p.tasks.get(n.id)?.kind)) ||
+            (p.tasks.get(n.id)?.kind === 'bash' && p.tasks.get(n.id).terminal)) end(id, n.id, at);
         else if (n.tool) { p.pending.set(`notification:${n.tool}`, { ...n, at }); bound(p.pending); }
-        else { p.pending.set(`notification-task:${n.id}`, { ...n, at }); bound(p.pending); }
+        else if (/^[a-z][a-z0-9]+$/.test(n.id) && p.tasks.get(n.id)?.kind !== 'agent') { p.pending.set(`notification-task:${n.id}`, { ...n, at }); bound(p.pending); }
       }
     }
     if (!quietBash) changed(id);
@@ -466,6 +470,8 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         }
       }
     }
+    for (const [key, call] of next.calls) if (call.shell && next.tasks.get(call.id)?.terminal) next.calls.delete(key);
+    bound(next.calls);
     parents.delete(oldId);
     changed(oldId);
     changed(newId);

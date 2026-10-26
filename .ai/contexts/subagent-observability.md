@@ -210,7 +210,16 @@ through main, client and worker; a newer owner ends older transcript Bash tasks
 and prevents their replay using the tool-use time, even when the result is newer.
 Early terminal notifications are retained in the bounded pending queue by
 tool-use id or task id and consumed when the shell opens at its tool-use time.
+Only shell-shaped task ids are queued by task id, excluding known agent tasks,
+so unrelated notifications do not evict a deferred launch result. Completion
+correlations are released when their shell becomes terminal, including early
+completion and rekey merges; late notifications for a known terminal shell
+are consumed without creating a pending entry. The call table is bounded
+oldest first on insertion and rekey, without changing agent-call retention
+beyond that cap. Terminal task records retain their existing replay semantics.
 Rekeying carries the latest owner start time to preserve that replay guard.
+Ctrl+B and timeout admission publish a newer revision so a renderer that has
+already applied the previous snapshot receives the background state.
 These tasks supply background work, never an agent
 count or the violet working spinner. If no end reaches the transcript while
 the owner remains alive, the static background glyph persists until the owner
