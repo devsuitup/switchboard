@@ -13,6 +13,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Fixed
 - After a reboot or restart, any tab attached to a background job, including one opened from the Agents view, comes back as the same job, with the same name, and is re-attached; other saved tabs keep restoring as indexing finishes, in their saved order. An unreadable job record or a worker that cannot be classified leaves the tab held with a reason, and a failed attachment lets the other tabs finish restoring. (#785)
 - On Windows, a respawned background job can be respawned again or deleted once Switchboard verifies that it has stopped; on Linux and macOS, an unverified job still refuses these actions with a notice. A refused Respawn no longer tells you to retry Delete. (#785)
+- A session waiting on a command it started in the background now shows the background-work icon instead of the orange waiting ring, and returns to its usual icon when the command ends. Remote sessions are not covered. (#791)
 
 ## v0.0.100 — 2026-10-25
 

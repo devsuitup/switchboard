@@ -82,7 +82,7 @@ function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, on
     job: (parentSessionId, evidence, { jobId } = {}) => send({ type: 'job', parentSessionId, evidence, jobId }),
     child: (file, parentSessionId, agentId) => send({ type: 'child', file, parentSessionId, agentId }),
     ownerDied: parentSessionId => send({ type: 'death', parentSessionId }),
-    ownerAlive: parentSessionId => send({ type: 'alive', parentSessionId }),
+    ownerAlive: (parentSessionId, startedAt) => send({ type: 'alive', parentSessionId, startedAt }),
     rekey: (oldId, newId, { continued = false } = {}) => send({ type: 'rekey', oldId, newId, continued }),
     hasRecord: (id, taskId) => snapshots.get(resolve(id))?.tasks.some(t => t.id === taskId) || false,
     snapshots: () => [...snapshots.values()],

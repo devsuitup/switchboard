@@ -188,6 +188,21 @@ The snapshot carries separate agent entries and
 a background-work boolean, including validated in-flight Bash, Monitor and
 cron evidence; those tasks do not increase the subagent count.
 
+A local transcript opens a `bash` task only for a successful user result with
+exactly one tool-result block and a `backgroundTaskId` matching
+`/^[a-z][a-z0-9]+$/`, without `agentId`, paired with a `Bash` tool-use whose
+`run_in_background` is true (#791). Results read before their tool-use are
+held until that launch arrives. Monitor results do not open a Bash task.
+A matching terminal notification (including queued attachments and aggregate
+stops), a successful TaskStop/KillShell result targeting it, owner death or
+terminal job evidence ends it. The descriptor's process start time travels
+through main, client and worker; a newer owner ends older transcript Bash tasks
+and prevents their replay. These tasks supply background work, never an agent
+count or the violet working spinner. If no end reaches the transcript while
+the owner remains alive, the static background glyph persists until the owner
+exits or is replaced. Rekeying with the same owner (for example /clear) does
+not supply end evidence; no TTL guesses that the command finished.
+
 An assistant `Agent` tool-use opens a provisional task. A correlated structured
 `async_launched` result replaces its provisional id with `agentId` and does not
 end it. A synchronous Agent ends on its matching result. An anchored user
@@ -198,9 +213,9 @@ kind `task-notification`. Both forms use the same strict anchored parser, exactl
 one task-id, a recognized terminal status (completed, failed, stopped or killed)
 and a matching task output filename when present. A stopped notification may
 omit the output filename. With a tool-use-id it must correlate with the launch;
-without one it must identify a known agent. Aggregate stopped envelopes without
-tool-use-id or output-file end every listed known agent; unknown ids and other
-task kinds are ignored. The canary verifies extraction of every aggregate id.
+without one it must identify a known agent or Bash task. Aggregate stopped
+envelopes without tool-use-id or output-file end every listed known agent or
+Bash task; unknown ids and other task kinds are ignored. The canary verifies extraction of every aggregate id.
 Monitor event envelopes without a terminal status are ignored.
 Assistant text, tool output, quoted XML, partial envelopes, unrelated
 ids and unknown terminal statuses do not complete tasks. The records are an
