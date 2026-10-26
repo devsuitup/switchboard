@@ -29,9 +29,12 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       const declined = { rm: 'not deleted', respawn: 'not respawned', stop: 'not stopped' }[verb];
       let check;
       try {
-        check = bgAgents.conversationCheck(id);
+        check = await bgAgents.conversationCheck(id, { workerLiveness: verb !== 'stop' });
         if (verb === 'stop' && (!check.known || check.hosted)) return { ok: true };
         if (!check.known) return { ok: false, error: `cannot tell whether this conversation is running (${check.reason}) — ${declined}` };
+        if (verb !== 'stop' && check.state === 'running' && check.workerLiveness === 'unknown') {
+          return { ok: false, error: `cannot tell whether this conversation's worker is running — ${declined}` };
+        }
         if (check.hosted) {
           return { ok: false, error: `cannot ${action} a ${check.state} session; stop it first` };
         }
@@ -44,7 +47,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
           });
           if (refusal) return { ok: false, error: verb === 'stop'
             ? refusal.replace(/ — [^—]*(?:retry Delete|not deleted)$/, ' — not stopped')
-            : refusal.replace('not deleted', declined) };
+            : refusal.replace('not deleted', declined).replace(/then retry Delete$/, verb === 'respawn' ? 'then retry Respawn' : 'then retry Delete') };
         }
       } catch (err) {
         if (verb === 'stop' && !check) return { ok: true };

@@ -75,6 +75,40 @@ function oneSession(fields = {}) {
 
 test.afterEach(() => cliSessionState.stop());
 
+test('B-F3 worker evidence carries the table probe start time through an in-flight force read', async () => {
+  const dir = mkTmp();
+  let finish;
+  try {
+    let clock = 1000;
+    let probes = 0;
+    cliSessionState.init({ dir, platform: 'win32', log: silentLog, activeSessions: new Map(),
+      now: () => clock, readProcessTable: async () => {
+        if (++probes === 2) await new Promise(resolve => { finish = resolve; });
+        return new Map([[99, { ppid: 1, created: 1n }]]);
+      } });
+    await cliSessionState.refreshProcessTable();
+    const first = cliSessionState.readWorkerProcessEvidence();
+    clock = 1100;
+    const pending = cliSessionState.refreshProcessTable({ force: true });
+    clock = 1200;
+    await cliSessionState.refreshProcessTable();
+    const cached = cliSessionState.readWorkerProcessEvidence();
+    clock = 2200;
+    const confirmation = cliSessionState.refreshProcessTable({ force: true });
+    finish();
+    await Promise.all([pending, confirmation]);
+    const second = cliSessionState.readWorkerProcessEvidence();
+    assert.equal(first.observedAt, 1000);
+    assert.equal(cached.observedAt, 1000);
+    assert.equal(second.observedAt, 1100);
+    assert.equal(probes, 2);
+  } finally {
+    finish?.();
+    cliSessionState.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('parseState carries a non-empty waitingFor string and normalizes other values to null', () => {
   for (const waitingFor of ['permission prompt', 'question', '', null, undefined, 42, {}, []]) {
     const state = cliSessionState.parseState(JSON.stringify({ pid: 4242, sessionId: 'sess-1',

@@ -159,9 +159,9 @@ function normaliseProcessTable(read) {
   return out.size > 0 ? out : null;
 }
 
-function refreshProcessTable() {
+function refreshProcessTable({ force = false } = {}) {
   if (!processTableEnabled) return Promise.resolve(null);
-  if (processTableFresh()) return Promise.resolve(processTable.map);
+  if (!force && processTableFresh()) return Promise.resolve(processTable.map);
   if (processTableInFlight) return processTableInFlight;
   const epoch = processTableEpoch;
   const observedAt = now();
@@ -199,6 +199,18 @@ function tableEntry(pid) {
   return processTable && processTable.map ? processTable.map.get(pid) : undefined;
 }
 
+function procStartMatches(created, procStart) {
+  const value = toCreated(created);
+  return value !== null && typeof procStart === 'string' && WINDOWS_FILETIME_RE.test(procStart)
+    && abs(value - BigInt(procStart)) <= PROC_START_TOLERANCE;
+}
+
+function readWorkerProcessEvidence() {
+  const table = processTable?.map;
+  return { processTableFresh: processTableFresh() && !!table, observedAt: processTable?.observedAt,
+    tableEntry: pid => table?.get(pid) };
+}
+
 function chainReaches(pid, isAnchor, strict) {
   let current = pid;
   for (let depth = 0; depth < 64 && current && current > 1; depth++) {
@@ -226,9 +238,7 @@ function leafIsTheDescriptorWriter(raw) {
   const leaf = tableEntry(raw.pid);
   if (!leaf || leaf.created == null) return false;
   return raw.pidDomain === 'win32:anchor'
-    && typeof raw.procStart === 'string'
-    && WINDOWS_FILETIME_RE.test(raw.procStart)
-    && abs(leaf.created - BigInt(raw.procStart)) <= PROC_START_TOLERANCE;
+    && procStartMatches(leaf.created, raw.procStart);
 }
 
 function conversationOwns(raw, own) {
@@ -1064,6 +1074,8 @@ async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
 }
 
 module.exports = {
+  procStartMatches,
+  readWorkerProcessEvidence,
   init,
   trackScheduleRun,
   findLiveProcess,

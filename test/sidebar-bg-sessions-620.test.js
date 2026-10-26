@@ -16,6 +16,17 @@ const OLD = '11111111-1111-4111-8111-111111111111';
 const MID = '22222222-2222-4222-8222-222222222222';
 const HEAD = '33333333-3333-4333-8333-333333333333';
 
+test('A-T7 running sidebar job needs a live descriptor and accepts its state', t => {
+  const h = setup(t, { state: 'running', indexedHead: true });
+  assert.equal(bgAgents.getCachedJobs().get('33333333').state, 'running');
+  const row = h.projects().flatMap(p => p.sessions).find(s => s.sessionId === HEAD);
+  assert.equal(row.bgJobId, '33333333');
+  assert.equal(h.render().querySelector('.bg-badge')?.textContent, 'bg');
+  h.die();
+  const dead = h.projects().flatMap(p => p.sessions).find(s => s.sessionId === HEAD);
+  assert.equal(dead?.bgJobId ?? null, null);
+});
+
 function setup(t, { graph = {}, indexedHead = false, source = 'user', hidden = false, archived = false, state = 'working' } = {}) {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-620-')));
   const projectPath = path.join(root, 'project');

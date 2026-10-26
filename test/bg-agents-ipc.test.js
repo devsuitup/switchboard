@@ -25,6 +25,22 @@ function fakeBgAgents() {
   };
 }
 
+for (const verb of ['respawn', 'rm', 'stop']) {
+  test(`A-T8 ${verb === 'respawn' ? 'RED' : 'GUARD'} open-window refusal uses ${verb}'s wording`, async () => {
+    const { handlers, ipcMain } = fakeIpc();
+    const bg = fakeBgAgents();
+    bg.conversationCheck = () => ({ known: true, hosted: false, state: 'running', sessionIds: ['s1'] });
+    init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map([['s1', {}]]) });
+    for (const channel of ['check-bg-agent-verb', 'bg-agent-verb']) {
+      const result = await handlers.get(channel)({}, verb, 'abcdef12');
+      assert.equal(result.ok, false);
+      assert.match(result.error, verb === 'stop' ? /not stopped$/ : verb === 'rm' ? /then retry Delete$/ : /then retry Respawn$/);
+      if (verb !== 'rm') assert.doesNotMatch(result.error, /retry Delete/);
+    }
+    assert.deepEqual(bg.calls.filter(call => Array.isArray(call) && call[0] === 'verb'), []);
+  });
+}
+
 for (const verb of ['stop', 'rm', 'respawn']) {
   for (const attachJobId of ['abcdef12', 'ABCDEF12', '00000000']) {
     test(`A11 ${verb} exempts only its own attach client (${attachJobId})`, async () => {

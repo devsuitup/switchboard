@@ -21,6 +21,64 @@ const STATE = JSON.stringify({
   linkScanPath: '/home/u/.claude/projects/-home-u-p/bc3fd129-60bb-4bd2-8f38-63fecd1256e5.jsonl',
 });
 
+test('A-T1 running survives both parsers and retains worker identity and activity', () => {
+  const job = parseJobState(JSON.stringify({ state: 'running', id: 'aaaaaaaa', daemonShort: 'bbbbbbbb',
+    updatedAt: '2026-10-25T12:00:00Z', inFlight: { tasks: 0, kinds: [] } }));
+  assert.equal(job.state, 'running');
+  assert.equal(job.id, 'aaaaaaaa');
+  assert.equal(job.daemonShort, 'bbbbbbbb');
+  assert.equal(job.updatedAt, '2026-10-25T12:00:00Z');
+  assert.equal(job.taskEvidence.valid, true);
+});
+
+test('A-T1 CLI list preserves running', () => {
+  assert.equal(parseCliList(JSON.stringify([{ kind: 'background', sessionId: 's', state: 'running' }]))[0].state, 'running');
+});
+
+test('A-T2 GUARD running without positive evidence is not hosted; #374 stays hosted', () => {
+  for (const state of ['running', 'working', 'blocked']) {
+    assert.equal(isHostedJob(parseJobState(JSON.stringify({ state }))), state !== 'running');
+  }
+});
+
+test('A-T3 running requires live evidence and dead evidence overrides working and blocked', () => {
+  const job = { ...parseJobState('{"state":"running"}'), id: 'aaaaaaaa', sessionId: 's' };
+  assert.equal(isHostedJob(job, [{ kind: 'bg', jobId: job.id, sessionId: 's' }]), true);
+  assert.equal(isHostedJob(job, [], 'live'), true);
+  assert.equal(isHostedJob(job, [{ kind: 'interactive', sessionId: 's' }], 'live'), true);
+  assert.equal(isHostedJob(job, [], 'dead'), false);
+  for (const state of ['working', 'blocked']) assert.equal(isHostedJob({ ...job, state }, [], 'dead'), false);
+});
+
+for (const state of ['running', 'working', 'blocked']) {
+  test(`A-T3 ${state} with dead evidence is not hosted`, () => {
+    assert.equal(isHostedJob({ state, id: 'aaaaaaaa' }, [], 'dead'), false);
+  });
+}
+
+test('A-T4 CLI state wins for a non-hosted running record, live running wins otherwise', () => {
+  const jobs = new Map([['aaaaaaaa', parseJobState('{"state":"running"}')]]);
+  const cli = [{ id: 'aaaaaaaa', sessionId: 's', kind: 'background', state: 'failed' }];
+  assert.equal(mergeRoster({ jobs, cli, descriptors: [] })[0].state, 'failed');
+  const [live] = mergeRoster({ jobs, cli, descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's' }] });
+  assert.equal(live.state, 'running');
+  assert.equal(live.hosted, true);
+});
+
+for (const byJobId of [true, false]) {
+  test(`A-T4 running merge uses all hosting descriptors (${byJobId ? 'job id with changed session' : 'session fallback'})`, () => {
+    const sessionId = '11111111-1111-4111-8111-111111111111';
+    const job = parseJobState(JSON.stringify({ state: 'running', sessionId }));
+    const descriptors = [byJobId ? { kind: 'bg', jobId: 'aaaaaaaa', sessionId: '22222222-2222-4222-8222-222222222222' }
+      : { kind: 'bg', sessionId }];
+    assert.equal(isHostedJob({ ...job, id: 'aaaaaaaa' }, descriptors), true);
+    const [entry] = mergeRoster({ jobs: new Map([['aaaaaaaa', job]]), descriptors,
+      cli: [{ id: 'aaaaaaaa', sessionId, kind: 'background', state: 'failed' }] });
+    assert.equal(entry.state, 'running');
+    assert.equal(entry.hosted, true);
+  });
+}
+
 for (const cliStatus of [null, 'idle']) {
   test(`T7: background descriptor status and waiting reason win over CLI ${cliStatus}`, () => {
     const roster = mergeRoster({ jobs: new Map(),

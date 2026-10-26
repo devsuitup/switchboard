@@ -31,6 +31,48 @@ function evalFile(dom, file) {
   vm.runInContext(fs.readFileSync(file, 'utf8'), dom.getInternalVMContext(), { filename: file });
 }
 
+for (const [hosted, expected] of [[true, 'Idle'], [false, 'Unknown']]) {
+  test(`A-T7 running hosted=${hosted} renders ${expected}`, async t => {
+    const h = setup({ storage: { agentsGroupBy: 'state' } });
+    t.after(() => h.destroy());
+    const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+    const job = parseJobState('{"state":"running"}');
+    const entry = { ...mergeRoster({ jobs: new Map([['aaaaaaaa', job]]), descriptors: hosted
+      ? [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's-a', status: 'idle' }] : [] })[0] };
+    assert.equal(entry.hosted, hosted);
+    h.setSnapshot({ daemonReachable: true, roster: [entry] });
+    await h.window.showAgentsView();
+    assert.equal(h.document.querySelector('.agents-group-label').textContent, expected);
+    if (!hosted) assert.equal(h.window.backgroundActivityLabel('s-a', {}, null, { entry }).text, 'Unknown');
+  });
+}
+
+test('A-T7 dead running displays the CLI failed state', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+  const entry = mergeRoster({ jobs: new Map([['aaaaaaaa', parseJobState('{"state":"running"}')]]), descriptors: [],
+    cli: [{ id: 'aaaaaaaa', sessionId: 's-a', kind: 'background', state: 'failed' }] })[0];
+  assert.equal(entry.hosted, false);
+  h.setSnapshot({ daemonReachable: true, roster: [entry] });
+  await h.window.showAgentsView();
+  assert.equal(h.window.agentStateMeta(entry).label, 'Failed');
+});
+
+test('A-T7 hosted running has the same turn projection and activity labels as hosted done', t => {
+  const h = setup(); t.after(() => h.destroy());
+  for (const status of ['idle', 'busy', 'waiting']) {
+    for (const headTurn of ['open', 'closed', 'unknown']) {
+      const snapshot = { liveness: 'alive', headTurn, agentsBusy: true, backgroundWork: true,
+        busy: status === 'busy', attention: status === 'waiting' };
+      const done = { ...ROSTER[0], state: 'done', hosted: true, status };
+      const running = { ...done, state: 'running' };
+      assert.deepEqual(h.window.projectBackgroundActivity(running, snapshot), h.window.projectBackgroundActivity(done, snapshot));
+      assert.equal(h.window.backgroundActivityLabel('s-a', snapshot, null, { entry: running }).text,
+        h.window.backgroundActivityLabel('s-a', snapshot, null, { entry: done }).text);
+    }
+  }
+});
+
 function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = {}) {
   const dom = new JSDOM(HTML, { url: 'http://localhost/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
@@ -203,11 +245,11 @@ for (const [state, hosted, expected] of [
 test('#563 every AGENT_STATE_META key reads its exact Title Case word', async t => {
   const h = setup();
   t.after(() => h.destroy());
-  const words = { working: 'Active', blocked: 'Blocked', idle: 'Idle', done: 'Done', stopped: 'Stopped', failed: 'Failed', external: 'External', unknown: 'Unknown' };
+  const words = { working: 'Active', blocked: 'Blocked', idle: 'Idle', running: 'Idle', done: 'Done', stopped: 'Stopped', failed: 'Failed', external: 'External', unknown: 'Unknown' };
   assert.deepEqual(Object.keys(words).sort(), Object.keys(h.read('AGENT_STATE_META')).sort());
   const fixtures = {
     working: { state: 'working', hosted: true }, blocked: { state: 'blocked', hosted: true },
-    idle: { state: 'done', hosted: true }, done: { state: 'done', hosted: false },
+    idle: { state: 'done', hosted: true }, running: { state: 'running', hosted: true }, done: { state: 'done', hosted: false },
     stopped: { state: 'stopped', hosted: false }, failed: { state: 'failed', hosted: false },
     external: { kind: 'interactive', state: null, status: 'busy' }, unknown: { state: null, hosted: false },
   };

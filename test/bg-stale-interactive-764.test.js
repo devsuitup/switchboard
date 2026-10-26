@@ -68,7 +68,7 @@ for (const state of ['working', 'blocked']) {
     const snapshot = await bgAgents.reconcile();
     assert.equal(snapshot.roster.find(e => e.id === JOB).hosted, false,
       'a live interactive conversation must override stale job state');
-    assert.equal(bgAgents.conversationCheck(JOB).hosted, false);
+    assert.equal((await bgAgents.conversationCheck(JOB)).hosted, false);
     assert.deepEqual(bgAgents.liveJobCheck(SID), { known: true, job: null });
     const { ctx, row } = sidebar(t, snapshot);
     assert.ok(row);
@@ -101,7 +101,7 @@ for (const state of ['working', 'blocked']) {
       assert.equal(snapshot.roster.find(e => e.id === JOB).hosted, true);
       const { row } = sidebar(t, snapshot);
       assert.ok(row.querySelector('.bg-badge'), 'real bg evidence keeps the badge');
-      assert.equal(bgAgents.conversationCheck(JOB).hosted, true);
+      assert.equal((await bgAgents.conversationCheck(JOB)).hosted, true);
     });
   }
 
@@ -120,7 +120,7 @@ for (const state of ['working', 'blocked']) {
     fixture(t, state, [{ kind: 'interactive' }, { kind: 'bg', jobId: 'bbbbbbbb' }]);
     const snapshot = await bgAgents.reconcile();
     assert.equal(snapshot.roster.find(e => e.id === JOB).hosted, false);
-    assert.equal(bgAgents.conversationCheck(JOB).hosted, false);
+    assert.equal((await bgAgents.conversationCheck(JOB)).hosted, false);
   });
 
   test(`[764] stale ${state} Delete and Stop refuse the live interactive pid, not stale hosting`, async t => {

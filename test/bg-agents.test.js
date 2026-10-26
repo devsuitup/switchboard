@@ -63,13 +63,214 @@ function fakeSessionState(descriptors = []) {
 
 function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attached = () => false, homeDir, resolveProjectRoots = async () => null, dispatchSettings } = {}) {
   bgAgents.init({
-    jobsDir: dir, log: silentLog, runClaude: cli.runClaude, cliSessionState: sessionState, homeDir,
+    jobsDir: dir, daemonRosterPath: path.join(dir, 'daemon', 'roster.json'), log: silentLog, runClaude: cli.runClaude, cliSessionState: sessionState, homeDir,
     makeIsOwnPid: () => () => false, isAttachedHere: attached, resolveProjectRoots, dispatchSettings,
   });
   return { cli, sessionState };
 }
 
 test.afterEach(() => bgAgents.stop());
+
+test('B-F4 Stop on a working job without a descriptor keeps the main shortcut and never probes workers', async () => {
+  const dir = mkTmp();
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'working', sessionId: '11111111-1111-4111-8111-111111111111' });
+    fs.mkdirSync(path.join(dir, 'daemon'));
+    fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
+      updatedAt: '2000-01-01T00:00:00Z', workers: {} }));
+    const sessionState = fakeSessionState();
+    let probes = 0;
+    sessionState.refreshProcessTable = async () => { probes++; };
+    sessionState.readWorkerProcessEvidence = () => ({ processTableFresh: true, tableEntry: () => undefined });
+    const { cli } = boot(dir, { sessionState, homeDir: dir });
+    const handlers = new Map();
+    require('../bg-agents-ipc').init({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
+      bgAgents, getMainWindow: () => null, log: silentLog,
+      activeSessions: new Map([['11111111-1111-4111-8111-111111111111', {}]]) });
+    assert.deepEqual(await handlers.get('check-bg-agent-verb')({}, 'stop', 'aaaaaaaa'), { ok: true });
+    assert.deepEqual(await handlers.get('bg-agent-verb')({}, 'stop', 'aaaaaaaa'), { ok: true });
+    assert.equal(probes, 0);
+    assert.equal(cli.calls.filter(call => call.argv[0] === 'stop').length, 1);
+  } finally { rmTmp(dir); }
+});
+
+test('B-F3 a force scan already in flight before the first sample never authorizes respawn', async () => {
+  const dir = mkTmp();
+  const sessionState = require('../cli-session-state');
+  let finish;
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'running', updatedAt: new Date().toISOString(),
+      sessionId: '11111111-1111-4111-8111-111111111111' });
+    fs.mkdirSync(path.join(dir, 'daemon'));
+    fs.mkdirSync(path.join(dir, 'sessions'));
+    fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
+      updatedAt: new Date(Date.now() + 100).toISOString(), supervisorPid: 43, workers: {} }));
+    let clock = Date.now() - 2000;
+    let probes = 0;
+    sessionState.init({ dir: path.join(dir, 'sessions'), platform: 'win32', log: silentLog,
+      activeSessions: new Map(), now: () => clock, readProcessTable: async () => {
+        if (++probes === 2) await new Promise(resolve => { finish = resolve; });
+        return new Map([[99, { ppid: 1, created: 1n }]]);
+      } });
+    await sessionState.refreshProcessTable();
+    clock += 100;
+    const pending = sessionState.refreshProcessTable({ force: true });
+    const { cli } = boot(dir, { sessionState, homeDir: dir });
+    const result = bgAgents.runVerb('respawn', 'aaaaaaaa');
+    const release = setTimeout(() => finish(), 1100);
+    try {
+      assert.equal((await result).ok, false);
+      await pending;
+      assert.equal(probes, 2);
+      assert.equal(cli.calls.length, 0);
+    } finally { clearTimeout(release); }
+  } finally { finish?.(); sessionState.stop(); rmTmp(dir); }
+});
+
+for (const state of ['running', 'working', 'blocked']) {
+  test(`A-T6 ${state} is known and a pre-boot worker is not hosted at either verb boundary`, async () => {
+    const dir = mkTmp();
+    try {
+      const sessionId = '11111111-1111-4111-8111-111111111111';
+      writeJob(dir, 'aaaaaaaa', { state, sessionId, daemonShort: 'bbbbbbbb', updatedAt: new Date().toISOString() });
+      fs.mkdirSync(path.join(dir, 'daemon'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
+        updatedAt: '2000-01-01T00:00:00Z', supervisorPid: 43, workers: {} }));
+      const sessionState = fakeSessionState();
+      sessionState.readWorkerProcessEvidence = () => ({ processTableFresh: true, tableEntry: () => undefined });
+      const { cli } = boot(dir, { homeDir: dir, sessionState });
+      const check = await bgAgents.conversationCheck('aaaaaaaa');
+      assert.equal(check.known, true);
+      assert.equal(check.state, state);
+      assert.equal(check.hosted, false);
+      assert.equal((await bgAgents.runVerb('respawn', 'aaaaaaaa')).ok, true);
+      assert.ok(cli.calls.some(call => call.argv[0] === 'respawn'));
+    } finally { rmTmp(dir); }
+  });
+}
+
+test('A-T6 supervisor death is confirmed after one second and an intervening spawn is refused', async () => {
+  const dir = mkTmp();
+  try {
+    const sessionId = '11111111-1111-4111-8111-111111111111';
+    writeJob(dir, 'aaaaaaaa', { state: 'running', sessionId, updatedAt: new Date().toISOString() });
+    fs.mkdirSync(path.join(dir, 'daemon'), { recursive: true });
+    const rosterFile = path.join(dir, 'daemon', 'roster.json');
+    const roster = { proto: 1, updatedAt: new Date(Date.now() + 100).toISOString(), supervisorPid: 43, workers: {} };
+    fs.writeFileSync(rosterFile, JSON.stringify(roster));
+    const sessionState = fakeSessionState();
+    let reads = 0;
+    sessionState.readWorkerProcessEvidence = () => {
+      reads++;
+      return { processTableFresh: true, observedAt: Date.now(), tableEntry: () => undefined };
+    };
+    const { cli } = boot(dir, { sessionState, homeDir: dir });
+    const start = Date.now();
+    const check = await bgAgents.conversationCheck('aaaaaaaa');
+    assert.ok(Date.now() - start >= 1000);
+    assert.equal(check.workerLiveness, 'dead');
+    assert.equal(reads, 2);
+    reads = 0;
+    sessionState.readWorkerProcessEvidence = () => {
+      if (++reads === 2) fs.writeFileSync(rosterFile, JSON.stringify({ ...roster, updatedAt: new Date().toISOString() }));
+      return { processTableFresh: true, observedAt: Date.now(), tableEntry: () => reads === 2 ? { created: '133000000000000000' } : undefined };
+    };
+    const result = await bgAgents.runVerb('respawn', 'aaaaaaaa');
+    assert.equal(result.ok, false);
+    assert.match(result.error, /cannot tell/);
+    assert.equal(cli.calls.length, 0);
+  } finally { rmTmp(dir); }
+});
+
+test('A-T6 unknown worker evidence never authorizes a running respawn', async () => {
+  const dir = mkTmp();
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'running', sessionId: '11111111-1111-4111-8111-111111111111' });
+    const { cli } = boot(dir);
+    const result = await bgAgents.runVerb('respawn', 'aaaaaaaa');
+    assert.equal(result.ok, false);
+    assert.equal(cli.calls.length, 0);
+  } finally { rmTmp(dir); }
+});
+
+test('A-T6 delayed confirmation probes processes again inside the table TTL', async () => {
+  const dir = mkTmp();
+  const sessionState = require('../cli-session-state');
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'running', updatedAt: new Date().toISOString(),
+      sessionId: '11111111-1111-4111-8111-111111111111' });
+    fs.mkdirSync(path.join(dir, 'daemon'));
+    fs.mkdirSync(path.join(dir, 'sessions'));
+    fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
+      updatedAt: new Date(Date.now() + 100).toISOString(), supervisorPid: 43, workers: {} }));
+    let probes = 0;
+    sessionState.init({ dir: path.join(dir, 'sessions'), platform: 'win32', log: silentLog,
+      activeSessions: new Map(), onIdle() {}, isProcessAlive: () => false, now: () => 1_000_000,
+      readProcessTable: async () => {
+        probes++;
+        return new Map([[probes === 1 ? 99 : 43, { ppid: 1, created: '133000000000000000' }]]);
+      } });
+    const { cli } = boot(dir, { sessionState });
+    const result = await bgAgents.runVerb('respawn', 'aaaaaaaa');
+    assert.equal(result.ok, false, 'a newly present supervisor invalidates the original absence');
+    assert.equal(probes, 2);
+    assert.equal(cli.calls.length, 0);
+  } finally { sessionState.stop(); rmTmp(dir); }
+});
+
+test('A-T6 stopping the service during evidence collection cancels the verb', async () => {
+  const dir = mkTmp();
+  try {
+    writeJob(dir, 'aaaaaaaa', { state: 'running', sessionId: '11111111-1111-4111-8111-111111111111' });
+    fs.mkdirSync(path.join(dir, 'daemon'));
+    fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
+      updatedAt: '2000-01-01T00:00:00Z', workers: {} }));
+    const sessionState = fakeSessionState();
+    sessionState.readWorkerProcessEvidence = () => {
+      bgAgents.stop();
+      return { processTableFresh: true, observedAt: Date.now(), tableEntry: () => undefined };
+    };
+    const { cli } = boot(dir, { sessionState });
+    assert.equal((await bgAgents.runVerb('respawn', 'aaaaaaaa')).ok, false);
+    assert.equal(cli.calls.length, 0);
+  } finally { rmTmp(dir); }
+});
+
+test('A-T6 a rewritten job during confirmation invalidates the old death evidence', async () => {
+  const dir = mkTmp();
+  try {
+    const job = { state: 'running', sessionId: '11111111-1111-4111-8111-111111111111', updatedAt: new Date().toISOString() };
+    writeJob(dir, 'aaaaaaaa', job);
+    fs.mkdirSync(path.join(dir, 'daemon'));
+    fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
+      updatedAt: new Date(Date.now() + 100).toISOString(), supervisorPid: 43, workers: {} }));
+    const sessionState = fakeSessionState();
+    let reads = 0;
+    sessionState.readWorkerProcessEvidence = () => {
+      if (++reads === 2) writeJob(dir, 'aaaaaaaa', { ...job, updatedAt: new Date(Date.now() + 1000).toISOString() });
+      return { processTableFresh: true, observedAt: Date.now(), tableEntry: () => undefined };
+    };
+    const { cli } = boot(dir, { sessionState });
+    assert.equal((await bgAgents.runVerb('respawn', 'aaaaaaaa')).ok, false);
+    assert.equal(cli.calls.length, 0);
+  } finally { rmTmp(dir); }
+});
+
+test('A-T6 numeric timestamps also receive the delayed supervisor confirmation', async () => {
+  const dir = mkTmp();
+  try {
+    const updatedAt = Date.now();
+    writeJob(dir, 'aaaaaaaa', { state: 'running', updatedAt,
+      sessionId: '11111111-1111-4111-8111-111111111111' });
+    fs.mkdirSync(path.join(dir, 'daemon'));
+    fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
+      updatedAt: updatedAt + 1, supervisorPid: 43, workers: {} }));
+    const sessionState = fakeSessionState();
+    sessionState.readWorkerProcessEvidence = () => ({ processTableFresh: true, observedAt: Date.now(), tableEntry: () => undefined });
+    boot(dir, { sessionState });
+    assert.equal((await bgAgents.conversationCheck('aaaaaaaa')).workerLiveness, 'dead');
+  } finally { rmTmp(dir); }
+});
 
 test('job and descriptor churn keeps the job cache current without rebuilding an unsubscribed roster', async () => {
   const dir = mkTmp();

@@ -142,10 +142,17 @@ Switchboard checks again before Respawn or Delete, and before Stop on a
 finished job. Stop ignores this window's attach client of that same job; a
 different open terminal or another live process still refuses it. Respawn and
 Delete refuse every open terminal, including the job's own attach client.
-If the process or job files
-cannot be read, the action is refused with a reason. Stop remains available
-for a working or blocked daemon job, including when its job file is missing or
-its fresh state is unknown. A refused Stop keeps an attached tab open.
+
+If the process or job files cannot be read, the action is refused with a reason.
+Stop remains available for a working or blocked daemon job, including when its
+job file is missing or its fresh state is unknown. A refused Stop keeps an
+attached tab open.
+
+On Windows, Switchboard can verify whether a respawned job is still running,
+even if the job has stopped reporting its activity. If it has stopped, Respawn
+and Delete become available. On Linux and macOS, these actions remain refused
+with a notice when Switchboard cannot verify that the job has stopped.
+A refused Respawn tells you to retry Respawn after resolving the refusal.
 
 Stop and Delete check whether they can proceed before asking for confirmation.
 A refusal appears in the detail pane without a dialog. Cancel stops or deletes
