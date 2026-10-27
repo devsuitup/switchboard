@@ -366,3 +366,146 @@ for (const failure of ['throw', 'false']) {
     assert.deepEqual(h.writes, ['/bg', '\r']);
   });
 }
+
+const S2_SID = '11111111-1111-4111-8111-111111111111';
+function respawnSetup(respawnResult) {
+  const h = setup();
+  h.deps.decideRoute = async () => ({ route: 'respawn', jobId: 'aaaaaaaa', job: { id: 'aaaaaaaa', sessionId: 'old' } });
+  h.deps.write = (_, text) => { h.writes.push(text); if (text === '\r') h.session.exited = true; return true; };
+  h.deps.respawnJob = async () => respawnResult;
+  return h;
+}
+
+test('S2-T5b a refused respawn and a failed respawn after /exit read differently', async () => {
+  const refused = await sendToBackground('old', respawnSetup({ ok: false, refused: true, error: 'r' }).deps);
+  assert.equal(refused.code, 'respawn-failed');
+  assert.match(refused.error, /was not relaunched: r\./);
+  const failed = await sendToBackground('old', respawnSetup({ ok: false, error: 't' }).deps);
+  assert.equal(failed.code, 'respawn-failed');
+  assert.match(failed.error, /failed or timed out: t\./);
+});
+
+test('S2-T7 (owned rows) respawnRoute refuses an unknown or held owner and respawns otherwise', () => {
+  const { respawnRoute } = require('../bg-handoff');
+  const base = { oldId: S2_SID, lookup: { known: true, job: { id: 'aaaaaaaa', resumeTarget: S2_SID } },
+    check: { known: true, state: 'stopped', workerLiveness: 'dead', sessionIds: [S2_SID] }, elsewhere: [{ known: true, live: null }] };
+  assert.equal(respawnRoute({ ...base, owned: { known: true, job: null } }).route, 'respawn');
+  const unknown = respawnRoute({ ...base, owned: { known: false, reason: 'job cccccccc has an unreadable state' } });
+  assert.equal(unknown.route, 'refuse');
+  assert.match(unknown.error, /unreadable state/);
+  const held = respawnRoute({ ...base, owned: { known: true, job: { id: 'bbbbbbbb', state: 'working' } } });
+  assert.equal(held.route, 'refuse');
+  assert.match(held.error, /bbbbbbbb/);
+});
+
+
+test('S2-T1 respawn waits for source exit and preserves the conversation without a kill', async () => {
+  const h = respawnSetup({ ok: true });
+  const calls = [];
+  h.deps.write = (_, text) => { h.writes.push(text); return true; };
+  const wait = h.deps.waitForChange;
+  h.deps.waitForChange = async ms => {
+    await wait(ms);
+    h.session.exited = true;
+    holdBackgroundExit(h.session, suppress => h.exits.push(suppress));
+  };
+  h.deps.respawnJob = async job => { calls.push({ job, exited: h.session.exited === true }); return { ok: true, attached: false }; };
+  h.deps.onConfirmed = () => assert.fail('respawn has no new continuation');
+  const result = await sendToBackground('old', h.deps);
+  assert.deepEqual(h.writes, ['/exit', '\r']);
+  assert.deepEqual(calls, [{ job: { id: 'aaaaaaaa', sessionId: 'old' }, exited: true }]);
+  assert.equal(result.ok, true);
+  assert.equal(result.respawned, true);
+  assert.equal(result.sessionId, 'old');
+  assert.equal(result.jobId, 'aaaaaaaa');
+  assert.equal(result.attached, false);
+  assert.deepEqual(h.exits, [true]);
+  assert.deepEqual(h.scheduled, []);
+  assert.deepEqual(h.kills, []);
+});
+
+test('S2-T2 GUARD explicit bg route keeps existing confirmation', async () => {
+  const h = setup();
+  h.deps.decideRoute = async () => ({ route: 'bg' });
+  assert.equal((await sendToBackground('old', h.deps)).ok, true);
+  assert.deepEqual(h.writes, ['/bg', '\r']);
+});
+
+test('S2-T3 refused route preserves reason and writes nothing', async () => {
+  const h = setup();
+  h.deps.decideRoute = async () => ({ route: 'refuse', error: 'Job aaaaaaaa is unreadable. Check the Agents view, then try again.' });
+  const result = await sendToBackground('old', h.deps);
+  assert.equal(result.code, 'refused');
+  assert.match(result.error, /Job aaaaaaaa is unreadable/);
+  assert.deepEqual(h.writes, []);
+});
+
+test('S2-T4 source that never exits times out without respawn or kill', async () => {
+  const h = setup();
+  h.deps.decideRoute = async () => ({ route: 'respawn', job: { id: 'aaaaaaaa' } });
+  const calls = [];
+  h.deps.respawnJob = async job => { calls.push(job); return { ok: true }; };
+  const result = await sendToBackground('old', h.deps);
+  assert.equal(result.code, 'exit-timeout');
+  assert.equal(h.deps.now(), 600);
+  assert.deepEqual(h.writes, ['/exit', '\r']);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(h.kills, []);
+});
+
+test('S2-T5 failure after exit releases held exit without suppression', async () => {
+  const h = respawnSetup({ ok: false, error: 'boom' });
+  const write = h.deps.write;
+  h.deps.write = (...args) => {
+    const result = write(...args);
+    if (h.session.exited) holdBackgroundExit(h.session, suppress => h.exits.push(suppress));
+    return result;
+  };
+  const result = await sendToBackground('old', h.deps);
+  assert.equal(result.code, 'respawn-failed');
+  assert.match(result.error, /aaaaaaaa.*boom/);
+  assert.deepEqual(h.exits, [false]);
+  assert.notEqual(h.session.backgrounded, true);
+});
+
+test('S2-T6 changed composer during exit gap withholds Enter and respawn', async () => {
+  const h = respawnSetup({ ok: true });
+  const calls = [];
+  h.deps.delay = async () => noteUserInput(h.session.composerState, 'x', 1);
+  h.deps.respawnJob = async job => { calls.push(job); return { ok: true }; };
+  const result = await sendToBackground('old', h.deps);
+  assert.equal(result.code, 'write-failed');
+  assert.deepEqual(h.writes, ['/exit']);
+  assert.deepEqual(calls, []);
+});
+
+const routeBase = () => ({ oldId: S2_SID,
+  lookup: { known: true, job: { id: 'aaaaaaaa', resumeTarget: S2_SID } },
+  check: { known: true, state: 'stopped', workerLiveness: 'dead' },
+  owned: { known: true, job: null }, elsewhere: [{ known: true, live: null }] });
+
+for (const [label, overrides, expected, reason] of [
+  ['missing', { lookup: { known: false, missing: true } }, 'bg'],
+  ['ambiguous', { lookup: { known: false, reason: 'multiple records' } }, 'refuse', /multiple records/],
+  ['unreadable matching record', { lookup: { known: false, reason: 'unreadable matching record' } }, 'refuse', /unreadable matching record/],
+  ['resume mismatch', { lookup: { known: true, job: { id: 'aaaaaaaa', resumeTarget: 'other' } } }, 'refuse', /would resume.*other/],
+  ['unknown resume target', { lookup: { known: true, job: { id: 'aaaaaaaa', resumeTarget: null } } }, 'refuse', /unknown/],
+  ['unknown conversation', { check: { known: false, reason: 'unreadable conversation' } }, 'refuse', /unreadable conversation/],
+  ['done live', { check: { known: true, state: 'done', workerLiveness: 'live' } }, 'refuse', /worker is running/],
+  ...['running', 'working', 'blocked'].map(state => [state + ' unknown', { check: { known: true, state, workerLiveness: 'unknown' } }, 'refuse', /may still be running/]),
+  ...['stopped', 'failed', 'done'].map(state => [state + ' unknown', { check: { known: true, state, workerLiveness: 'unknown' } }, 'respawn']),
+  ...['running', 'working', 'blocked'].map(state => [state + ' dead', { check: { known: true, state, workerLiveness: 'dead' } }, 'respawn']),
+  ['outside unknown', { elsewhere: [{ known: false, reason: 'process table unreadable' }] }, 'refuse', /process table unreadable/],
+  ['outside live', { elsewhere: [{ known: true, live: { pid: 777 } }] }, 'refuse', /pid 777/],
+]) {
+  test('S2-T7 route row: ' + label, () => {
+    const { respawnRoute } = require('../bg-handoff');
+    const result = respawnRoute({ ...routeBase(), ...overrides });
+    assert.equal(result.route, expected);
+    if (reason) {
+      assert.match(result.error, reason);
+      assert.match(result.error, /^[A-Z].*\.$/);
+    }
+    if (expected === 'respawn') assert.equal(result.jobId, 'aaaaaaaa');
+  });
+}

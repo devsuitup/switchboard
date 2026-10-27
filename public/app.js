@@ -933,7 +933,7 @@ function rekeySessionTab(oldId, newId, kind, background, rekeyActivity, { spawnA
   if (activeSessionId === oldId) setActiveSession(newId);
 
   if (kind === 'background') {
-    const rekeyedEntries = [...openSessions].filter(([id]) => id !== newId).map(([id, value]) => [id === oldId ? newId : id, value]);
+    const rekeyedEntries = [...openSessions].filter(([id]) => id === oldId || id !== newId).map(([id, value]) => [id === oldId ? newId : id, value]);
     openSessions.clear();
     for (const [id, value] of rekeyedEntries) openSessions.set(id, value);
   } else {

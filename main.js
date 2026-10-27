@@ -1781,7 +1781,7 @@ ipcMain.handle('get-active-terminals', () => {
 });
 
 // --- IPC: stop-session ---
-const { sendToBackground, createContinuationReader, holdBackgroundExit, cancellationIn } = require('./bg-handoff');
+const { sendToBackground, respawnRoute, createContinuationReader, holdBackgroundExit, cancellationIn } = require('./bg-handoff');
 
 const backgroundHandoffs = new WeakMap();
 
@@ -1868,9 +1868,24 @@ async function handleSendToBackground(_event, sessionId) {
     },
     schedule: (fn, ms) => { const timer = setTimeout(fn, ms); if (typeof timer.unref === 'function') timer.unref(); },
     kill: entry => killPty(entry, sessionId),
+    decideRoute: async (id, entry) => {
+      const lookup = bgAgents.findRestoreJob(id);
+      if (!lookup.known || !lookup.job) return respawnRoute({ oldId: id, lookup });
+      const check = await bgAgents.conversationCheck(lookup.job.id, { workerLiveness: 'all' });
+      if (!check.known) return respawnRoute({ oldId: id, lookup, check });
+      let owned = { known: true, job: null };
+      for (const sid of new Set([id, ...check.sessionIds].map(s => s.toLowerCase()))) {
+        owned = bgAgents.liveJobCheck(sid, { workerLiveness: new Map([[lookup.job.id, check.workerLiveness]]) });
+        if (!owned.known || owned.job) break;
+      }
+      const elsewhere = [];
+      for (const sid of check.sessionIds) elsewhere.push(await cliSessionState.liveElsewhereChecked(sid, () => false, () => [entry.pty.pid]));
+      return respawnRoute({ oldId: id, lookup, check, owned, elsewhere });
+    },
+    respawnJob: job => unsubscribeBgAgents.respawnForHandoff(job),
   });
-  if (result.ok && session?.projectFolder) detectSessionTransitions(session.projectFolder);
-  if (result.ok) {
+  if (result.ok && !result.respawned && session?.projectFolder) detectSessionTransitions(session.projectFolder);
+  if (result.ok && !result.respawned) {
     persistBackgroundHandoff({ session, sourceKey: sessionId, sourceId: oldId,
       targetId: result.sessionId, jobId: result.jobId, projectFolder, exitDrain });
   }

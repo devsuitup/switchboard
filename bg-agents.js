@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, stripShellNoise, JOB_ID_RE,
-  dispatchRefusal, isHostedJob,
+  dispatchRefusal, isHostedJob, SESSION_ID_RE,
 } = require('./bg-agents-roster');
 const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('./project-root');
 const { classifyWorkerLiveness, workerTimestamp } = require('./bg-worker-liveness');
@@ -372,7 +372,9 @@ function findRestoreJob(sessionId, attachJobId) {
     const raw = JSON.parse(text);
     const job = parseJobState(text);
     if (!job?.state || (raw.id && raw.id !== id)) throw new Error(`job ${id} has an unknown or unreadable state`);
-    return { job: { ...job, id }, matches: same(raw.sessionId) || same(raw.resumeSessionId) || same(job.sessionId) };
+    const rawTarget = raw.resumeSessionId ?? raw.sessionId;
+    const resumeTarget = typeof rawTarget === 'string' && SESSION_ID_RE.test(rawTarget) ? rawTarget.toLowerCase() : null;
+    return { job: { ...job, id, resumeTarget }, matches: same(raw.sessionId) || same(raw.resumeSessionId) || same(job.sessionId) };
   };
   try {
     if (typeof attachJobId === 'string' && JOB_ID_RE.test(attachJobId)) {

@@ -938,6 +938,64 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 
 ## Send to background
 
+### Reusing the conversation's job (#785, S2)
+
+Before writing, main calls the fresh legacy `findRestoreJob(oldId)` lookup.
+The job exposes `resumeTarget`: the validated, lowercased raw
+`resumeSessionId ?? sessionId`, independent of the link-scan identity.
+`conversationCheck(job.id, { workerLiveness: 'all' })` classifies every state.
+Main checks `liveJobCheck` over the lowercased union of the source id and
+all `check.sessionIds`, using the same job-specific worker evidence as the
+checked respawn verb. It scans every checked session id for other processes,
+bypassing the has-PTY shortcut and excluding only the source PTY's tree.
+Another live tab in this window is therefore an outside owner for this move.
+
+| Evidence | Route |
+| --- | --- |
+| Fully readable lookup with no matching record (`missing`) | Existing `/bg` path |
+| Unknown lookup, ambiguous records or unreadable matching record | Refuse with lookup reason |
+| Raw resume target differs from the source, including an invalid target | Refuse and direct to the job in Agents |
+| Conversation classification or any owner check unknown | Refuse with its reason |
+| Any owner check names a hosted job | Refuse and name that job |
+| Worker live in any state, including done | Refuse and direct to Attach |
+| Running, working or blocked with liveness other than dead | Refuse and direct to Stop/check |
+| Elsewhere scan unknown or a live process found | Refuse, naming the pid when available |
+| Stopped/failed/done not live, or a dead worker in any state | `/exit` then checked respawn |
+
+An unrelated unreadable or unknown-state record can leave a unique lookup
+usable but makes the owner check unknown; without a readable match it also
+prevents proving absence. Both cases refuse before any write. These checks
+predict the deterministic guards of the verb. A race between reads, or a
+working/blocked record whose session id comes only from the CLI list and is
+hidden by the interactive descriptor until exit, can still cause a refusal
+after exit.
+
+The route runs under the existing tab input lock, followed by a bound-tab and
+eligibility recheck. The same command-parameterized composer/300 ms/Enter guard
+handles `/bg` and `/exit`. The respawn path waits up to 15 seconds for
+`session.exited`, never kills the source and never confirms a continuation.
+The helper exposed as `unsubscribeBgAgents.respawnForHandoff(job)` is shared
+with S1b's restore IPC: checked respawn, runVerb, then descriptor wait using the
+full job identity (including descriptors without jobId). Restore's action
+shapes and stopped-job policy stay the same.
+
+Success sets `backgrounded` and returns the same conversation id with
+`respawned:true` and `attached`. Main skips transition detection and
+continuation persistence. The held source exit removes the active session
+before the handler resolves. The toolbar replaces it with one attach tab;
+the exit-batch same-id rekey keeps the entry so `markExitBackground` saves
+`bg:true` at its position.
+
+A pre-write refusal uses `refused`; a post-exit checked refusal or verb
+failure uses `respawn-failed` and releases the held exit unsuppressed. The
+exit batch counts that row as started and leaves other unwritten rows eligible.
+The checked-refusal notice says the job was not relaunched; a verb failure or
+60-second timeout says it may still start and directs the user to check Agents
+before respawning again. An exit timeout uses `exit-timeout` and never
+relaunches anything. No rename-back workaround or pending-restore trigger wait
+(S4) is part of this slice.
+
+
 ### Exit handoff batch (#546, H1)
 
 `runExitHandoffs(ids, deps)` in `session-exit.js` is the main-owned batch
@@ -971,7 +1029,7 @@ when its signal aborts, including cancellation from another row's pre-write fail
 The binding is assigned inside `startApplication`; its initial value
 resolves an empty array. Preload exposes `exitBackground`,
 `exitBackgroundCancel` and `onExitBackgroundProgress` to the renderer.
-The existing single-tab refusal, re-key and attach behaviour is unchanged.
+The batch shares the single-tab routing and pre-write refusals described above.
 
 The exit renderer enrolls old ids in `exitHandoffs`, retaining the entry object
 and attempt id. Both `session-forked` and the IPC result call `rekeySessionTab`
@@ -1000,7 +1058,7 @@ cancel writes nothing. Composer input, busy or a dialog appearing during the
 300 ms text-to-Enter gap withholds Enter and names the residue to check. No
 recovery Enter is sent.
 
-The written `/bg` is recorded in `session.composerState` through
+On the no-job route, the written `/bg` is recorded in `session.composerState` through
 `noteUserInput` before the write, and the Enter after it, as
 `terminal-input.js` does for typed keys. A dangling lone-Esc partial is discarded
 before noting the plain `/bg` write, so a previous Esc (including Esc Esc)

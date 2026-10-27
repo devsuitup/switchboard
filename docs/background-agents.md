@@ -198,7 +198,13 @@ attach tab remains a separate attachment behavior.
 
 Use **Send to background** in a running session's header or its sidebar
 right-click menu to move it to the Claude daemon. The tab becomes an attached
-tab under the continuing conversation's new id. Closing it detaches it;
+tab. If this conversation already has a background job that resumes the same
+conversation, Switchboard types `/exit`, waits for the terminal to exit, then
+relaunches that job and attaches it in the same tab position. Its job id,
+conversation id and job name stay the same, without a new `(2)` suffix.
+A conversation with no job record still uses `/bg` and a new continuation id;
+that path can still gain a name suffix when another record holds the name.
+Closing the attached tab detaches it;
 the session keeps running. While the tab stays open it is saved for restore,
 so Switchboard reattaches it after each restart.
 
@@ -210,6 +216,19 @@ is working: send it to the background once it is idle. If subagents are running,
 Switchboard asks before sending: Claude may stop them during the move.
 If Claude asks for confirmation in the terminal, answer Background or Stay
 there; Switchboard does not answer that dialog for you.
+
+Before typing, Switchboard refuses an ambiguous or unreadable job lookup,
+a job that would resume another conversation, an unknown conversation or job
+owner, a worker that is live (or may be live in a running, working or blocked
+job), or a conversation running elsewhere. The notice names the reason and
+what to check. A stopped, failed or finished job can be relaunched unless its
+worker is live. An unreadable unrelated job record can also prevent this check.
+
+If `/exit` does not close the terminal within 15 seconds, nothing is relaunched
+and the terminal is not killed. If the checked respawn is refused after exit,
+the notice says the terminal has exited and the job was not relaunched; use
+Respawn in Agents or open the conversation from the sidebar. A failed or timed
+out respawn may still start, so check Agents before trying Respawn again.
 
 An unconfirmed move displays a notice with what to check. If the terminal
 has exited, open the conversation from the sidebar to check where it runs.

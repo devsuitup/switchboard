@@ -70,6 +70,46 @@ function cancellationIn(text) {
   return stripVTControlCharacters(text).match(/Backgrounding cancelled\s*[—–-]\s*([^\r\n]+)/)?.[1] || null;
 }
 
+const HELD_STATES = new Set(['running', 'working', 'blocked']);
+function respawnRoute({ oldId, lookup, check, owned, elsewhere = [] }) {
+  const refuse = error => ({ route: 'refuse', error });
+  if (lookup?.missing) return { route: 'bg' };
+  if (!lookup?.known || !lookup.job) return refuse('Cannot tell which background job holds this conversation (' + (lookup?.reason || 'background job record unavailable') + '). Check the Agents view, then try again.');
+  const job = lookup.job;
+  const target = job.resumeTarget || null;
+  if (target !== oldId.toLowerCase()) return refuse('Job ' + job.id + ' would resume conversation ' + (target || 'unknown') + ', not this one. Open that job from the Agents view instead.');
+  if (!check?.known) return refuse('Cannot tell whether job ' + job.id + ' is running (' + (check?.reason || 'conversation liveness unknown') + '). Check the Agents view, then try again.');
+  if (!owned?.known) return refuse('Cannot tell which job runs this conversation (' + (owned?.reason || 'unknown') + '). Check the Agents view, then try again.');
+  if (owned.job) return refuse('Job ' + owned.job.id + ' still runs this conversation. Stop it from the Agents view, then try again.');
+  if (check.workerLiveness === 'live') return refuse('Job ' + job.id + "'s worker is running. Attach it from the Agents view.");
+  if (HELD_STATES.has(check.state) && check.workerLiveness !== 'dead') return refuse('Job ' + job.id + "'s worker may still be running. Stop it from the Agents view, then try again.");
+  for (const entry of elsewhere) {
+    if (!entry || entry.known === false) return refuse('Cannot tell whether this conversation runs elsewhere (' + (entry?.reason || 'unknown') + '). Check where it is open, then try again.');
+    if (entry.live) return refuse('This conversation is running in another process' + (entry.live.pid ? ' (pid ' + entry.live.pid + ')' : '') + '. Close it there, then try again.');
+  }
+  return { route: 'respawn', jobId: job.id, job };
+}
+
+async function respawnHandoff(session, sessionId, oldId, job, deps) {
+  const jobId = job.id;
+  const exitTimeoutMs = deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS;
+  const exitBy = deps.now() + exitTimeoutMs;
+  while (!session.exited) {
+    if (deps.now() >= exitBy) return { ok: false, code: 'exit-timeout', jobId, error: 'Sent /exit, but the terminal did not exit within ' + (exitTimeoutMs / 1000) + ' s; nothing was relaunched. Check the terminal.' };
+    await deps.waitForChange(Math.max(0, Math.min(100, exitBy - deps.now())));
+  }
+  let result;
+  try { result = await deps.respawnJob(job); }
+  catch (err) { result = { ok: false, error: err.message || String(err) }; }
+  if (!result?.ok) {
+    return { ok: false, code: 'respawn-failed', jobId, error: result?.refused
+      ? 'The session left its terminal, but job ' + jobId + ' was not relaunched: ' + result.error + '. Respawn it from the Agents view, or open the conversation from the sidebar.'
+      : 'The session left its terminal, and relaunching job ' + jobId + ' failed or timed out: ' + (result?.error || 'no result') + '. It may still start; check the Agents view before respawning it.' };
+  }
+  session.backgrounded = true;
+  return { ok: true, oldSessionId: sessionId, jobId, sessionId: oldId, cwd: result.cwd || session.cwd, respawned: true, attached: result.attached === true };
+}
+
 // see .ai/contexts/bg-agents.md ("Send to background")
 function holdBackgroundExit(session, finish) {
   if (session.backgrounded) { finish(true); return true; }
@@ -96,25 +136,31 @@ async function sendToBackground(sessionId, deps) {
     const previous = new Set(snapshot.map(id => id.toLowerCase()));
     const recheck = backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId));
     if (recheck || !bound() || deps.now() >= deadline) return { ok: false, code: 'refused', error: recheck || 'The tab changed or its handoff deadline passed. Check the terminal, then try again.' };
+    const route = deps.decideRoute ? await deps.decideRoute(oldId, session) : { route: 'bg' };
+    const afterRoute = backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId));
+    if (afterRoute || !bound() || deps.now() >= deadline) return { ok: false, code: 'refused', error: afterRoute || 'The tab changed or its handoff deadline passed. Check the terminal, then try again.' };
+    if (route.route === 'refuse') return { ok: false, code: 'refused', error: route.error };
+    const command = route.route === 'respawn' ? '/exit' : '/bg';
     dispose = deps.tapOutput(session, text => { output = (output + text).slice(-16384); });
     const composer = session.composerState;
     const previousComposer = composer && { ...composer };
     if (composer) {
       if (composer.partial === '\x1b') composer.partial = '';
-      noteUserInput(composer, '/bg', deps.now());
+      noteUserInput(composer, command, deps.now());
     }
     const inputAt = composer?.lastInputAt;
     let written = false;
-    try { written = deps.write(session, '/bg'); }
+    try { written = deps.write(session, command); }
     finally { if (!written && composer) Object.assign(composer, previousComposer); }
     if (!written) return { ok: false, code: 'write-failed', error: 'Could not write to the terminal. Try again when it is running.' };
     await deps.delay(300);
     const status = deps.getStatus(oldId);
-    if (!bound() || session.exited || status === 'waiting' || status === 'shell' || status === 'busy' || !status || (composer && (composer.text !== '/bg' || composer.inPaste)) || session.composerState?.lastInputAt !== inputAt) {
-      return { ok: false, code: 'write-failed', error: 'The terminal changed after /bg was typed, so Enter was withheld. Check the terminal and clear the command before trying again.' };
+    if (!bound() || session.exited || status === 'waiting' || status === 'shell' || status === 'busy' || !status || (composer && (composer.text !== command || composer.inPaste)) || session.composerState?.lastInputAt !== inputAt) {
+      return { ok: false, code: 'write-failed', error: 'The terminal changed after ' + command + ' was typed, so Enter was withheld. Check the terminal and clear the command before trying again.' };
     }
-    if (!deps.write(session, '\r')) return { ok: false, code: 'write-failed', error: 'Could not submit /bg to the terminal. Check the terminal before trying again.' };
+    if (!deps.write(session, '\r')) return { ok: false, code: 'write-failed', error: 'Could not submit ' + command + ' to the terminal. Check the terminal before trying again.' };
     if (composer) noteUserInput(composer, '\r', deps.now());
+    if (route.route === 'respawn') return await respawnHandoff(session, sessionId, oldId, route.job, deps);
     for (;;) {
       if (session.exited && exitDeadline === Infinity) exitDeadline = deps.now() + (deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS);
       if (deps.now() >= Math.min(deadline, exitDeadline)) {
@@ -156,4 +202,4 @@ async function sendToBackground(sessionId, deps) {
   }
 }
 
-module.exports = { backgroundRefusal, createContinuationReader, findHandoff, cancellationIn, holdBackgroundExit, sendToBackground, BG_HANDOFF_TIMEOUT_MS, BG_HANDOFF_EXIT_TIMEOUT_MS };
+module.exports = { respawnRoute, backgroundRefusal, createContinuationReader, findHandoff, cancellationIn, holdBackgroundExit, sendToBackground, BG_HANDOFF_TIMEOUT_MS, BG_HANDOFF_EXIT_TIMEOUT_MS };

@@ -160,3 +160,14 @@ test('C3 B2 a refused send cancels unwritten rows because the primitive wrote no
   assert.deepEqual(result?.map(row => row.code), ['refused', 'cancelled']);
   assert.deepEqual(h.sends, ['a']);
 });
+
+
+test('S2-T10 GUARD respawn-failed counts as started and leaves an unwritten row eligible', async () => {
+  const h = setup(['a', 'b']); h.states.set('a', 'idle');
+  const pending = runExitHandoffs(['a', 'b'], h.deps);
+  h.releases.get('a')({ ok: false, code: 'respawn-failed' }); await tick();
+  h.states.set('b', 'idle'); await h.wake();
+  assert.deepEqual(h.sends, ['a', 'b']);
+  h.releases.get('b')({ ok: true });
+  assert.deepEqual((await pending).map(row => row.code || row.ok), ['respawn-failed', true]);
+});
