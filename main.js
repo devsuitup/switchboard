@@ -1209,7 +1209,7 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath, opts) => {
       const pair = await gitChangesFile.readTouchedChangesFile({ absolutePath: resolved, maxBytes: PANEL_FILE_MAX_BYTES });
       if (!pair.ok || pair.git) return pair;
       const current = gitChangesFile.toLf(content);
-      return { ok: true, git: false, original: current, current, readOnly: !!pair.readOnly };
+      return { ok: true, git: false, original: current, current, version: gitChangesFile.versionOf(buf), readOnly: !!pair.readOnly };
     }
     return { ok: true, content };
   } catch (err) {
@@ -1237,7 +1237,7 @@ ipcMain.handle('save-file-for-panel', async (_event, filePath, content, expected
     if (fs.lstatSync(filePath).isSymbolicLink()) return { ok: false, error: 'symbolic links are read-only', reason: 'symlink' };
     if (isSensitivePath(path.resolve(filePath))) return { ok: false, error: 'access to sensitive path denied' };
     if (gitChangesFile.decodeUtf8(fs.readFileSync(filePath)) === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
-    if (!opts?.git) return panelSaves.saveFileForPanel(filePath, content, expected);
+    if (!opts?.git) return panelSaves.saveFileForPanel(filePath, content, expected, { version: opts?.version });
     const result = await gitChangesFile.writeTouchedChangesFile({ absolutePath: filePath, content, version: opts.version, maxBytes: PANEL_FILE_MAX_BYTES });
     if (!result.ok) return result;
     if (/[\\/]\.work-files[\\/]/.test(result.savedPath)) invalidateFtsSignature('work-file', result.savedPath);

@@ -1446,7 +1446,7 @@ async function syncOpenChangesFile(sessionId, tab) {
   tab.fileError = null;
 
   if (isChangesBufferDirty(tab)) {
-    tab.externalChange = tab.absolutePath && !tab.gitFile
+    tab.externalChange = tab.absolutePath && !tab.gitFile && !tab.version
       ? result.current !== tab.savedContent
       : result.version !== tab.version;
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);

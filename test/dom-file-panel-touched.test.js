@@ -1366,6 +1366,24 @@ test('Touched edits participate in the existing unsaved-file close prompt', asyn
   } finally { ctx.destroy(); }
 });
 
+test('#803: non-git watcher reports EOL-only byte changes without replacing edits', async () => {
+  let reads = 0;
+  const ctx = setupDom({ readImpl: () => ({ ok: true, git: false, original: 'one\n', current: 'one\n', version: reads++ ? 'crlf-bytes' : 'lf-bytes' }) });
+  try {
+    await openTab(ctx);
+    clickRow(ctx, '/work/a.txt');
+    await flush();
+    ctx.editors.at(-1).setText('typing\n');
+    ctx.changed('/work/a.txt');
+    await flush();
+    assert.equal(ctx.calls.readFile.length, 2);
+    assert.equal(ctx.editors.at(-1).current, 'typing\n');
+    assert.equal(ctx.stateOf('s1').currentTab.version, 'lf-bytes');
+    assert.equal(ctx.stateOf('s1').currentTab.externalChange, true);
+    assert.match(ctx.document.getElementById('changes-diff-view').textContent, /changed on disk/);
+  } finally { ctx.destroy(); }
+});
+
 for (const [dirty, git] of [[true, true], [false, true], [true, false], [false, false]]) {
   test('Touched file watcher rereads its absolute path and protects dirty text (dirty=' + dirty + ', git=' + git + ')', async () => {
     let reads = 0;

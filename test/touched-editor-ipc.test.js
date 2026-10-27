@@ -429,6 +429,70 @@ function fixture(t) {
 }
 
 for (const inGit of [true, false]) {
+  for (const eol of ['\r\n', '\r']) {
+    test('#803: shipped editor preserves sole EOL and BOM on save (git=' + inGit + ', eol=' + JSON.stringify(eol) + ')', async t => {
+      const { dir, git } = fixture(t);
+      if (inGit) git('init', '-q');
+      const target = path.join(dir, 'eol.txt');
+      const before = Buffer.from('\ufeffone' + eol + 'two' + eol);
+      fs.writeFileSync(target, before);
+      const api = panelHandlers();
+      const pair = await api.read(target, { editor: true });
+      assert.equal(pair.ok, true, pair.error);
+      assert.equal(pair.git, inGit);
+      const saved = await api.save(target, '\ufeffedited\ntext\n', pair.current, { git: pair.git, version: pair.version });
+      assert.equal(saved.ok, true, saved.error);
+      const after = fs.readFileSync(target);
+      t.diagnostic('before=' + before.toString('hex') + ' after=' + after.toString('hex'));
+      assert.deepEqual(after, Buffer.from('\ufeffedited' + eol + 'text' + eol));
+      assert.equal(saved.version, gitChangesFile.versionOf(after));
+      const reloaded = await api.read(target, { editor: true });
+      assert.equal(reloaded.version, saved.version);
+      assert.equal((await api.save(target, 'again\n', reloaded.current, { git: reloaded.git, version: reloaded.version })).ok, true);
+      assert.deepEqual(fs.readFileSync(target), Buffer.from('\ufeffagain' + eol));
+    });
+  }
+}
+
+for (const [before, external] of [['one\n', 'one\r\n'], ['one\r\n', 'one\n']]) {
+  test('#803: shipped non-git editor refuses an EOL-only external change ' + JSON.stringify(before), async t => {
+    const { dir } = fixture(t);
+    const target = path.join(dir, 'eol.txt');
+    fs.writeFileSync(target, before);
+    const api = panelHandlers();
+    const pair = await api.read(target, { editor: true });
+    assert.equal(pair.ok, true, pair.error);
+    assert.equal(pair.git, false);
+    fs.writeFileSync(target, external);
+    const saved = await api.save(target, 'mine\n', pair.current, { git: pair.git, version: pair.version });
+    t.diagnostic('opened=' + Buffer.from(before).toString('hex') + ' external=' + Buffer.from(external).toString('hex') + ' after=' + fs.readFileSync(target).toString('hex'));
+    assert.equal(saved.reason, 'stale');
+    assert.deepEqual(fs.readFileSync(target), Buffer.from(external));
+  });
+}
+
+for (const mixed of [false, true]) {
+  test('#803: non-git hardlinks and mixed EOL remain writable (mixed=' + mixed + ')', async t => {
+    const { dir } = fixture(t);
+    const target = path.join(dir, 'linked.txt');
+    const alias = path.join(dir, 'alias.txt');
+    fs.writeFileSync(target, mixed ? 'one\r\ntwo\n' : 'one\r\ntwo\r\n');
+    fs.linkSync(target, alias);
+    const api = panelHandlers();
+    const pair = await api.read(target, { editor: true });
+    assert.equal(pair.ok, true, pair.error);
+    assert.equal(pair.git, false);
+    assert.equal(pair.readOnly, false);
+    const saved = await api.save(target, 'edited\ntext\n', pair.current, { git: pair.git, version: pair.version });
+    assert.equal(saved.ok, true, saved.error);
+    const expected = Buffer.from(mixed ? 'edited\ntext\n' : 'edited\r\ntext\r\n');
+    assert.deepEqual(fs.readFileSync(target), expected);
+    assert.deepEqual(fs.readFileSync(alias), expected);
+    assert.equal(fs.statSync(target).nlink, 2);
+  });
+}
+
+for (const inGit of [true, false]) {
   test('shipped panel IPC opens, saves, reloads and rejects stale Touched text (git=' + inGit + ')', async t => {
     const { dir, git } = fixture(t);
     const target = path.join(dir, 'file.txt');
