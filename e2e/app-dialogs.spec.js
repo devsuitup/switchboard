@@ -5,7 +5,9 @@ test('background Delete is a designed confirmation: Escape cancels and Delete pr
   const { app, page } = await launch();
   const native = [];
   page.on('dialog', dialog => { native.push(dialog.type()); dialog.dismiss(); });
-  await app.evaluate(({ ipcMain }) => {
+  await app.evaluate(({ app: electronApp, ipcMain }) => {
+    const load = process.mainModule.require;
+    load(load('path').join(electronApp.getAppPath(), 'bg-agents.js')).stop();
     globalThis.dialogDeletes = [];
     ipcMain.removeHandler('get-bg-agents');
     ipcMain.handle('get-bg-agents', () => ({ daemonReachable: true, roster: [
