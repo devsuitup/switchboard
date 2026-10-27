@@ -262,7 +262,7 @@ for (const race of ['identity', 'short read']) {
       const snapshot = reader.read(file);
       fs.appendFileSync(file, jsonl([{ ...systemEntry(2000, 'compact_boundary'), compactMetadata: { trigger: 'manual' } }]));
       reader.read(file);
-      if (race === 'identity') fs.fstatSync = (...args) => ({ ...realFstat(...args), ino: -1 });
+      if (race === 'identity') fs.fstatSync = (...args) => ({ ...realFstat(...args), ino: -1n });
       else fs.readSync = () => 0;
       assert.equal(reader.read(file, snapshot.compactionCursor), null);
     } finally {
