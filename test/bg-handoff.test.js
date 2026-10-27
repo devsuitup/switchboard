@@ -509,3 +509,25 @@ for (const [label, overrides, expected, reason] of [
     if (expected === 'respawn') assert.equal(result.jobId, 'aaaaaaaa');
   });
 }
+
+test('S2b composer input during decideRoute refuses before writing', async () => {
+  const h = setup();
+  h.deps.decideRoute = async () => {
+    await Promise.resolve();
+    noteUserInput(h.session.composerState, 'x', 1);
+    return { route: 'bg' };
+  };
+  assert.equal((await sendToBackground('old', h.deps)).code, 'refused');
+  assert.deepEqual(h.writes, []);
+});
+
+test('S2b a replaced tab during decideRoute refuses before writing', async () => {
+  const h = setup();
+  h.deps.decideRoute = async () => {
+    await Promise.resolve();
+    h.deps.getSession = () => ({ kind: 'local-pty' });
+    return { route: 'bg' };
+  };
+  assert.equal((await sendToBackground('old', h.deps)).code, 'refused');
+  assert.deepEqual(h.writes, []);
+});

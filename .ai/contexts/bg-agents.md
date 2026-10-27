@@ -940,7 +940,9 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 
 ### Reusing the conversation's job (#785, S2)
 
-Before writing, main calls the fresh legacy `findRestoreJob(oldId)` lookup.
+Before writing, main calls the fresh `findRestoreJob(oldId, undefined,
+{ ignoreUnrelatedInvalid: true })` lookup. S1b restore keeps the default lookup
+semantics unchanged.
 The job exposes `resumeTarget`: the validated, lowercased raw
 `resumeSessionId ?? sessionId`, independent of the link-scan identity.
 `conversationCheck(job.id, { workerLiveness: 'all' })` classifies every state.
@@ -952,7 +954,7 @@ Another live tab in this window is therefore an outside owner for this move.
 
 | Evidence | Route |
 | --- | --- |
-| Fully readable lookup with no matching record (`missing`) | Existing `/bg` path |
+| No matching record after ignoring parsable unrelated invalid records (`missing`) | Existing `/bg` path |
 | Unknown lookup, ambiguous records or unreadable matching record | Refuse with lookup reason |
 | Raw resume target differs from the source, including an invalid target | Refuse and direct to the job in Agents |
 | Conversation classification or any owner check unknown | Refuse with its reason |
@@ -962,11 +964,16 @@ Another live tab in this window is therefore an outside owner for this move.
 | Elsewhere scan unknown or a live process found | Refuse, naming the pid when available |
 | Stopped/failed/done not live, or a dead worker in any state | `/exit` then checked respawn |
 
-An unrelated unreadable or unknown-state record can leave a unique lookup
-usable but makes the owner check unknown; without a readable match it also
-prevents proving absence. Both cases refuse before any write. These checks
-predict the deterministic guards of the verb. A race between reads, or a
-working/blocked record whose session id comes only from the CLI list and is
+The S2 lookup ignores a parsable unknown-state or otherwise invalid record only
+when none of its raw sessionId, resumeSessionId or linkScanPath-derived ids
+matches the source conversation. A matching raw id, unreadable/unparsable
+state.json or job directory without state.json refuses before any write,
+because the record may be this conversation's. With no matching record after
+that filtering, the route types /bg. This option does not relax liveJobCheck:
+when a job exists, an unrelated unknown-state record can still make the owner
+check unknown, so the respawn route refuses before /exit, just as the verb
+would after exit. These checks predict the deterministic guards of the verb.
+A race between reads, or a working/blocked record whose session id comes only from the CLI list and is
 hidden by the interactive descriptor until exit, can still cause a refusal
 after exit.
 

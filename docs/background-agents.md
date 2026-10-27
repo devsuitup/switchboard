@@ -222,7 +222,15 @@ a job that would resume another conversation, an unknown conversation or job
 owner, a worker that is live (or may be live in a running, working or blocked
 job), or a conversation running elsewhere. The notice names the reason and
 what to check. A stopped, failed or finished job can be relaunched unless its
-worker is live. An unreadable unrelated job record can also prevent this check.
+worker is live.
+
+When there is no matching job, a record that parses but has an unknown state or
+fails validation is ignored when none of its session id, resume id or
+transcript-path id matches this conversation. Switchboard still refuses if any of those ids
+matches this conversation, if the record cannot be read or parsed, or if a job
+directory has no state file: it may belong to this session. When relaunching an
+existing job, an unrelated unreadable or unknown-state record can still block
+the owner check, so Switchboard refuses before typing /exit.
 
 If `/exit` does not close the terminal within 15 seconds, nothing is relaunched
 and the terminal is not killed. If the checked respawn is refused after exit,

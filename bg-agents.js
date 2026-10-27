@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, stripShellNoise, JOB_ID_RE,
-  dispatchRefusal, isHostedJob, SESSION_ID_RE,
+  dispatchRefusal, isHostedJob, SESSION_ID_RE, sessionIdFromLinkScanPath,
 } = require('./bg-agents-roster');
 const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('./project-root');
 const { classifyWorkerLiveness, workerTimestamp } = require('./bg-worker-liveness');
@@ -365,7 +365,7 @@ async function conversationCheck(id, { workerLiveness = true } = {}) {
     hosted: isHostedJob(identified, liveDescriptors(), evidence) };
 }
 
-function findRestoreJob(sessionId, attachJobId) {
+function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false } = {}) {
   const same = value => typeof value === 'string' && value.toLowerCase() === sessionId.toLowerCase();
   const read = id => {
     const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
@@ -401,10 +401,15 @@ function findRestoreJob(sessionId, attachJobId) {
         const record = read(id);
         if (record.matches) matches.push(record.job);
       } catch (err) {
+        let raw, parsed = false;
+        try { raw = JSON.parse(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); parsed = true; } catch {}
+        if (same(raw?.sessionId) || same(raw?.resumeSessionId)
+          || (ignoreUnrelatedInvalid && same(sessionIdFromLinkScanPath(raw?.linkScanPath)))) throw err;
+        if (ignoreUnrelatedInvalid) {
+          if (!parsed) throw err;
+          continue;
+        }
         unreadable = true;
-        let raw;
-        try { raw = JSON.parse(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch {}
-        if (same(raw?.sessionId) || same(raw?.resumeSessionId)) throw err;
       }
     }
     if (!matches.length && unreadable) return { known: false, reason: `cannot identify background job for ${sessionId}: unreadable job records` };

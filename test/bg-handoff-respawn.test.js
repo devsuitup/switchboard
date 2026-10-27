@@ -66,7 +66,7 @@ function setup(t, { jobs = {}, outside = [], others = [] } = {}) {
   });
   const { handleSendToBackground } = loadAppFunctions(ctx, { declarations: ['backgroundHandoffs'],
     functions: ['handleSendToBackground', 'persistBackgroundHandoff', 'readBackgroundHandoffStamp'], sourcePath: path.join(__dirname, '../main.js') });
-  return { send: () => handleSendToBackground({}, 'tab'), writes, respawned, exitedAtRespawn, session };
+  return { send: () => handleSendToBackground({}, 'tab'), writes, respawned, exitedAtRespawn, session, jobsDir };
 }
 
 test('S2-T1 a stopped job of this conversation is relaunched by respawn after /exit, never /bg', { timeout: 20000 }, async t => {
@@ -122,6 +122,56 @@ test('S2-T12b an outside pid that belongs to another live tab of this window is 
   const result = await h.send();
   assert.equal(result.code, 'refused');
   assert.match(result.error, /pid 777/);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(h.respawned, []);
+});
+
+for (const [label, record] of [
+  ['unknown state', { state: 'paused-new', sessionId: OTHER }],
+  ['invalid job id', { id: 'cccccccc', state: 'stopped', sessionId: OTHER }],
+  ['unrelated link scan', { state: 'paused-new', linkScanPath: '/fixture/' + OTHER + '.jsonl' }],
+]) {
+  test('S2b no matching job plus a parsable unrelated record uses /bg: ' + label, async t => {
+    const h = setup(t, { jobs: { bbbbbbbb: record } });
+    const result = await h.send();
+    assert.deepEqual(h.writes, ['/bg', '\r']);
+    assert.equal(result.code, 'timeout');
+    assert.deepEqual(h.respawned, []);
+  });
+}
+
+for (const [label, fields] of [
+  ['sessionId', { sessionId: SID.toUpperCase() }],
+  ['resumeSessionId', { sessionId: OTHER, resumeSessionId: SID }],
+  ['linkScanPath', { sessionId: OTHER, linkScanPath: '/fixture/' + SID + '.jsonl' }],
+]) {
+  test('S2b an invalid record matching raw ' + label + ' refuses before writing', async t => {
+    const h = setup(t, { jobs: { bbbbbbbb: { state: 'paused-new', ...fields } } });
+    assert.equal((await h.send()).code, 'refused');
+    assert.deepEqual(h.writes, []);
+    assert.deepEqual(h.respawned, []);
+  });
+}
+
+for (const damaged of ['unparsable', 'missing']) {
+  test('S2b a job with ' + damaged + ' state.json refuses before writing', async t => {
+    const h = setup(t, { jobs: { bbbbbbbb: { state: 'stopped', sessionId: OTHER } } });
+    const stateFile = path.join(h.jobsDir, 'bbbbbbbb', 'state.json');
+    if (damaged === 'unparsable') fs.writeFileSync(stateFile, '{');
+    else fs.unlinkSync(stateFile);
+    assert.equal((await h.send()).code, 'refused');
+    assert.deepEqual(h.writes, []);
+    assert.deepEqual(h.respawned, []);
+  });
+}
+
+test('S2b a matching stopped job plus a directory without state.json refuses before /exit', async t => {
+  const h = setup(t, { jobs: {
+    aaaaaaaa: { state: 'stopped', sessionId: SID, resumeSessionId: SID },
+    bbbbbbbb: { state: 'stopped', sessionId: OTHER },
+  } });
+  fs.unlinkSync(path.join(h.jobsDir, 'bbbbbbbb', 'state.json'));
+  assert.equal((await h.send()).code, 'refused');
   assert.deepEqual(h.writes, []);
   assert.deepEqual(h.respawned, []);
 });

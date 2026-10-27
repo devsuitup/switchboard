@@ -1869,7 +1869,7 @@ async function handleSendToBackground(_event, sessionId) {
     schedule: (fn, ms) => { const timer = setTimeout(fn, ms); if (typeof timer.unref === 'function') timer.unref(); },
     kill: entry => killPty(entry, sessionId),
     decideRoute: async (id, entry) => {
-      const lookup = bgAgents.findRestoreJob(id);
+      const lookup = bgAgents.findRestoreJob(id, undefined, { ignoreUnrelatedInvalid: true });
       if (!lookup.known || !lookup.job) return respawnRoute({ oldId: id, lookup });
       const check = await bgAgents.conversationCheck(lookup.job.id, { workerLiveness: 'all' });
       if (!check.known) return respawnRoute({ oldId: id, lookup, check });
