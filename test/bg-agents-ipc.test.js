@@ -34,7 +34,7 @@ function restoreFixture(t, { saved = [{ sessionId: 's1', bg: true, attachJobId: 
   bg.conversationCheck = (_id, options) => { seen.push(['check', options]); return { known: true, state, workerLiveness: liveness, hosted: liveness === 'live', sessionIds: ['s1'] }; };
   bg.runVerb = async (...args) => { seen.push(args); return verbResult; };
   const live = { value: descriptors };
-  init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} }, getSetting: () => ({ openWorkingSet: saved }),
+  const unsubscribe = init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} }, getSetting: () => ({ openWorkingSet: saved }),
     activeSessions: new Map(), sessionHasPty: () => false, ptyPids: () => [],
     cliSessionState: { readAllDescriptors: () => live.value,
       onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
@@ -44,7 +44,7 @@ function restoreFixture(t, { saved = [{ sessionId: 's1', bg: true, attachJobId: 
   t.after(() => assert.equal(listeners.size, 0, 'descriptor listener released'));
   const restore = handlers.get('restore-background-job');
   assert.equal(typeof restore, 'function', 'B-T7 restore IPC registered');
-  return { restore: (id = 's1', options) => restore({}, id, options), bg, seen, live, listeners,
+  return { handoff: job => unsubscribe.respawnForHandoff(job), restore: (id = 's1', options) => restore({}, id, options), bg, seen, live, listeners,
     publish: value => { live.value = value; for (const fn of listeners) fn(); } };
 }
 
@@ -356,4 +356,61 @@ test('PR6 preload forwards the check-only verb and id without invoking execution
   assert.equal(typeof api.restoreBackgroundJob, 'function');
   await api.restoreBackgroundJob('s1', { attachOnly: true });
   assert.deepEqual(calls[1], ['restore-background-job', 's1', { attachOnly: true }]);
+});
+
+
+test('S2 shared checked respawn matches a descriptor without jobId using full job identity', async t => {
+  const h = restoreFixture(t, { state: 'stopped', descriptors: [{ kind: 'bg', sessionId: 's1' }] });
+  assert.deepEqual(await h.handoff({ id: 'aaaaaaaa', sessionId: 's1' }), { ok: true, attached: true });
+  assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), [['respawn', 'aaaaaaaa']]);
+});
+
+for (const failure of ['refuse', 'fail', 'throw']) {
+  test('S2 shared checked respawn preserves failure kind: ' + failure, async t => {
+    const h = restoreFixture(t, { state: 'stopped', verbResult: { ok: false, error: 'verb failed' } });
+    if (failure === 'refuse') h.bg.conversationCheck = () => ({ known: false, reason: 'unknown owner' });
+    if (failure === 'throw') h.bg.runVerb = async () => { throw new Error('verb threw'); };
+    const result = await h.handoff({ id: 'aaaaaaaa', sessionId: 's1' });
+    assert.equal(result.ok, false);
+    assert.equal(result.refused === true, failure === 'refuse');
+    assert.match(result.error, failure === 'refuse' ? /unknown owner/ : failure === 'fail' ? /verb failed/ : /verb threw/);
+    if (failure === 'refuse') assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), []);
+  });
+}
+
+for (const verb of ['rm', 'respawn']) {
+  test('S2d GUARD Agents-view ' + verb + ' keeps its conversationCheck ids', async () => {
+    const { handlers, ipcMain } = fakeIpc();
+    const bg = fakeBgAgents();
+    const checked = [];
+    bg.conversationCheck = () => ({ known: true, state: 'stopped', hosted: false, workerLiveness: 'dead',
+      sessionIds: ['listed-id'], resumeTarget: 'extra-id' });
+    init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
+      sessionHasPty: () => false, ptyPids: () => [],
+      cliSessionState: { liveElsewhereChecked: async sid => {
+        checked.push(sid);
+        return { known: true, live: sid === 'extra-id' ? { pid: 777 } : null };
+      } },
+    });
+    assert.equal((await handlers.get('check-bg-agent-verb')({}, verb, 'aaaaaaaa', ['extra-id'])).ok, true);
+    assert.equal((await handlers.get('bg-agent-verb')({}, verb, 'aaaaaaaa', ['extra-id'])).ok, true);
+    assert.deepEqual(checked, ['listed-id', 'listed-id']);
+    assert.deepEqual(bg.calls.filter(call => call[0] === 'verb'), [['verb', verb, 'aaaaaaaa']]);
+  });
+}
+
+test('S2d checked handoff lowercases and deduplicates extra conversation ids', async () => {
+  const { ipcMain } = fakeIpc();
+  const bg = fakeBgAgents();
+  const checked = [];
+  bg.conversationCheck = () => ({ known: true, state: 'stopped', hosted: false, workerLiveness: 'dead', sessionIds: ['S-1'] });
+  const unsubscribe = init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
+    sessionHasPty: () => false, ptyPids: () => [],
+    cliSessionState: { readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's-1' }],
+      onDescriptorsChanged: () => () => {},
+      liveElsewhereChecked: async sid => { checked.push(sid); return { known: true, live: null }; } },
+  });
+  assert.deepEqual(await unsubscribe.respawnForHandoff({ id: 'aaaaaaaa', sessionId: 's-1' }, ['s-1', 'EXTRA-ID', 'extra-id']),
+    { ok: true, attached: true });
+  assert.deepEqual(checked, ['s-1', 'extra-id']);
 });

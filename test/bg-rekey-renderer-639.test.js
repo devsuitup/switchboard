@@ -203,3 +203,12 @@ test('a late attach response cannot change a replacement tabs pending generation
   assert.equal(h.inCtx("pendingOpens.get('bg')"), pending);
   assert.equal(h.inCtx("ptyGenerations.get('bg')"), 9);
 });
+
+test('R-S2b an exit-batch result under the same id keeps the tab and saves it bg:true', t => {
+  const h = fixture(t);
+  h.inCtx("var rs2bRow = { attempt: 1, entry: openSessions.get('old'), id: 'old' }; var rs2bResult = { ok: true, id: 'old', sessionId: 'old', jobId: 'aaaaaaaa', cwd: '/project' };");
+  h.inCtx("rekeySessionTab(rs2bRow.id, rs2bResult.sessionId, 'background', rs2bResult, () => {}, { spawnAttach: false }); markExitBackground(rs2bRow, rs2bResult.sessionId, rs2bResult);");
+  assert.equal(h.w.openSessions.get('old'), h.entry);
+  assert.equal(h.entry.attach, true);
+  assert.equal(h.inCtx("skippedWorkingSetEntries.get('old')?.item.bg"), true);
+});

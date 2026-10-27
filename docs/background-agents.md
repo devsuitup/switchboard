@@ -198,7 +198,13 @@ attach tab remains a separate attachment behavior.
 
 Use **Send to background** in a running session's header or its sidebar
 right-click menu to move it to the Claude daemon. The tab becomes an attached
-tab under the continuing conversation's new id. Closing it detaches it;
+tab. If this conversation already has a background job that resumes the same
+conversation, Switchboard types `/exit`, waits for the terminal to exit, then
+relaunches that job and attaches it in the same tab position. Its job id,
+conversation id and job name stay the same, without a new `(2)` suffix.
+A conversation with no job record still uses `/bg` and a new continuation id;
+that path can still gain a name suffix when another record holds the name.
+Closing the attached tab detaches it;
 the session keeps running. While the tab stays open it is saved for restore,
 so Switchboard reattaches it after each restart.
 
@@ -210,6 +216,40 @@ is working: send it to the background once it is idle. If subagents are running,
 Switchboard asks before sending: Claude may stop them during the move.
 If Claude asks for confirmation in the terminal, answer Background or Stay
 there; Switchboard does not answer that dialog for you.
+
+Before typing, Switchboard refuses an ambiguous or unreadable job lookup,
+a job that would resume another conversation, an unknown conversation or job
+owner, a worker that is live (or may be live in a running, working or blocked
+job), or a conversation running elsewhere. The notice names the reason and
+what to check. A stopped, failed or finished job can be relaunched unless its
+worker is live.
+
+When there is no matching job, Switchboard identifies each readable record by
+its session id, resume id and transcript-path id, plus the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses — open the Agents view, then retry.
+This uses the cached roster and makes no CLI call on the decision path.
+A valid or invalid record identified only as another
+conversation's is ignored. An invalid record naming this conversation, or any
+readable record with no identity even after consulting the list, refuses before
+writing. A record that cannot be read or parsed, including a job directory with
+no state file, also refuses when no readable match exists; the notice says that
+a job record could not be read.
+
+When relaunching an existing job, an unidentifiable directory without a readable
+state file does not block a unique readable match at lookup. A missing state
+file also passes the owner check, so the existing job can be relaunched. An
+unparsable or unknown-state record can still make that owner check unknown, so
+Switchboard refuses before typing /exit, just as the respawn command would.
+A valid record identified by the cached Agents-view list is treated as an existing job, but
+relaunch still requires a valid session or resume id in the job file naming
+this conversation; the list alone does not authorize a resume target.
+The source conversation, raw resume target and all checked conversation ids
+are checked for other processes before /exit and again before relaunching.
+
+If `/exit` does not close the terminal within 15 seconds, nothing is relaunched
+and the terminal is not killed. If the checked respawn is refused after exit,
+the notice says the terminal has exited and the job was not relaunched; use
+Respawn in Agents or open the conversation from the sidebar. A failed or timed
+out respawn may still start, so check Agents before trying Respawn again.
 
 An unconfirmed move displays a notice with what to check. If the terminal
 has exited, open the conversation from the sidebar to check where it runs.

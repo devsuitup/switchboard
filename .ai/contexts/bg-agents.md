@@ -35,8 +35,10 @@ boundary: the renderer already exposes the ordinary checked respawn verb.
 `findRestoreJob`
 reads the saved job record afresh, or searches legacy records by `sessionId`
 or `resumeSessionId` when the saved job id is absent, null or invalid. Unreadable
-unrelated records do not block a unique readable match; an unreadable matching
-or explicitly saved record refuses. A legacy scan without a readable match
+unrelated records, including unidentifiable missing or unparsable state files,
+do not block a unique readable match; an unreadable record whose raw session or
+resume id matches, or an explicitly saved unreadable record, refuses. Default
+S1b matching does not add S2's raw link-scan or listed-id checks. A legacy scan without a readable match
 stays unknown if any record is unreadable or lacks state.json; only a fully
 readable scan can prove absence. An explicit saved id uses stat checks; only
 ENOENT proves absence. Other stat errors or a jobs path that is not a directory
@@ -938,6 +940,88 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 
 ## Send to background
 
+### Reusing the conversation's job (#785, S2)
+
+Before writing, main calls the fresh `findRestoreJob(oldId, undefined,
+{ ignoreUnrelatedInvalid: true })` lookup. Only this opt-in lookup completes
+each record's raw sessionId, resumeSessionId and linkScanPath-derived identities
+with the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses — open the Agents view, then retry.
+This is the cached background roster, using the same `listed(id)` source as
+liveJobCheck; the decision path makes no CLI call. The roster fills after a
+subscription (opening Agents), a verb or dispatch. S1b restore keeps the
+default lookup semantics unchanged.
+The job exposes `resumeTarget`: the validated, lowercased raw
+`resumeSessionId ?? sessionId`, independent of the link-scan identity.
+`conversationCheck(job.id, { workerLiveness: 'all' })` classifies every state.
+Main checks `liveJobCheck` over the lowercased union of the source id and
+all `check.sessionIds`, using the same job-specific worker evidence as the
+checked respawn verb. For other processes it scans the lowercased, deduplicated
+union of the source id, raw resumeTarget and every check.sessionIds entry,
+bypassing the has-PTY shortcut and excluding only the source PTY's tree.
+Another live tab in this window is therefore an outside owner for this move.
+
+| Evidence | Route |
+| --- | --- |
+| No matching record after excluding readable records with nonempty unrelated completed identities (`missing`) | Existing `/bg` path |
+| Unknown lookup, ambiguous records or unreadable matching record | Refuse with lookup reason |
+| Raw resume target differs from the source, including an invalid target | Refuse and direct to the job in Agents |
+| Conversation classification or any owner check unknown | Refuse with its reason |
+| Any owner check names a hosted job | Refuse and name that job |
+| Worker live in any state, including done | Refuse and direct to Attach |
+| Running, working or blocked with liveness other than dead | Refuse and direct to Stop/check |
+| Elsewhere scan unknown or a live process found | Refuse, naming the pid when available |
+| Stopped/failed/done not live, or a dead worker in any state | `/exit` then checked respawn |
+
+The S2 lookup uses that completed identity for valid and invalid records alike.
+A readable record with no completed identity refuses because it cannot be
+excluded. An invalid record with a matching completed id also refuses; one
+whose completed ids all name other conversations is ignored. A valid match
+follows the existing-job checks. In particular, an id-less stopped record
+listed for the source is found, but its absent raw resumeTarget still refuses
+without writing; cached roster identity does not replace the raw resume-target guard.
+
+An unreadable/unparsable state.json or directory without state.json does not
+block a unique readable match at lookup. With no readable match, it refuses
+with a notice that a background job record could not be read, never the raw
+read/parse error or path. Ambiguous readable matches still refuse. With no
+matching record and no unidentifiable records, the route types /bg.
+This option does not relax liveJobCheck: a missing state file is skipped there,
+so a unique stopped match can respawn; an unparsable or unknown-state record
+can still make the owner check unknown and refuse before /exit, just as the
+verb would after exit. These checks predict the deterministic guards of the
+verb. A race between reads, or a working/blocked record whose session id comes
+only from the cached Agents-view list and is hidden by the interactive descriptor until exit,
+can still cause a refusal after exit.
+
+The route runs under the existing tab input lock, followed by a bound-tab and
+eligibility recheck. The same command-parameterized composer/300 ms/Enter guard
+handles `/bg` and `/exit`. The respawn path waits up to 15 seconds for
+`session.exited`, never kills the source and never confirms a continuation.
+The helper exposed as `unsubscribeBgAgents.respawnForHandoff(job, extraSessionIds)`
+is shared with S1b's restore IPC: checked respawn, runVerb, then descriptor wait
+using the full job identity (including descriptors without jobId). S2 passes
+the source id and raw resumeTarget as extra ids; after exit, the verb checks
+their lowercased, deduplicated union with fresh check.sessionIds. The optional
+extra ids default to empty, preserving ordinary Agents-view Respawn/Delete
+and S1b restore guards. Restore's action shapes and stopped-job policy stay the same.
+
+Success sets `backgrounded` and returns the same conversation id with
+`respawned:true` and `attached`. Main skips transition detection and
+continuation persistence. The held source exit removes the active session
+before the handler resolves. The toolbar replaces it with one attach tab;
+the exit-batch same-id rekey keeps the entry so `markExitBackground` saves
+`bg:true` at its position.
+
+A pre-write refusal uses `refused`; a post-exit checked refusal or verb
+failure uses `respawn-failed` and releases the held exit unsuppressed. The
+exit batch counts that row as started and leaves other unwritten rows eligible.
+The checked-refusal notice says the job was not relaunched; a verb failure or
+60-second timeout says it may still start and directs the user to check Agents
+before respawning again. An exit timeout uses `exit-timeout` and never
+relaunches anything. No rename-back workaround or pending-restore trigger wait
+(S4) is part of this slice.
+
+
 ### Exit handoff batch (#546, H1)
 
 `runExitHandoffs(ids, deps)` in `session-exit.js` is the main-owned batch
@@ -971,7 +1055,7 @@ when its signal aborts, including cancellation from another row's pre-write fail
 The binding is assigned inside `startApplication`; its initial value
 resolves an empty array. Preload exposes `exitBackground`,
 `exitBackgroundCancel` and `onExitBackgroundProgress` to the renderer.
-The existing single-tab refusal, re-key and attach behaviour is unchanged.
+The batch shares the single-tab routing and pre-write refusals described above.
 
 The exit renderer enrolls old ids in `exitHandoffs`, retaining the entry object
 and attempt id. Both `session-forked` and the IPC result call `rekeySessionTab`
@@ -1000,7 +1084,7 @@ cancel writes nothing. Composer input, busy or a dialog appearing during the
 300 ms text-to-Enter gap withholds Enter and names the residue to check. No
 recovery Enter is sent.
 
-The written `/bg` is recorded in `session.composerState` through
+On the no-job route, the written `/bg` is recorded in `session.composerState` through
 `noteUserInput` before the write, and the Enter after it, as
 `terminal-input.js` does for typed keys. A dangling lone-Esc partial is discarded
 before noting the plain `/bg` write, so a previous Esc (including Esc Esc)

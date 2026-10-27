@@ -24,7 +24,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     bgAgents.start();
     return bgAgents.reconcile();
   });
-  const checkVerb = async (verb, id, restoring = false) => {
+  const checkVerb = async (verb, id, restoring = false, extraSessionIds = []) => {
     if (verb === 'rm' || verb === 'respawn' || verb === 'stop') {
       const action = { rm: 'delete', respawn: 'respawn', stop: 'stop' }[verb];
       const declined = { rm: 'not deleted', respawn: 'not respawned', stop: 'not stopped' }[verb];
@@ -39,7 +39,9 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
         if (check.hosted) {
           return { ok: false, error: `cannot ${action} a ${check.state} session; stop it first` };
         }
-        for (const sessionId of check.sessionIds) {
+        const sessionIds = extraSessionIds.length
+          ? new Set([...check.sessionIds, ...extraSessionIds].map(s => s.toLowerCase())) : check.sessionIds;
+        for (const sessionId of sessionIds) {
           const refusal = await deleteSessionRefusal(sessionId, {
             activeSessions: verb === 'stop' ? new Map([...activeSessions || []].filter(([, session]) =>
               !(session?.isAttach && String(session.attachJobId).toLowerCase() === id.toLowerCase()))) : activeSessions,
@@ -90,6 +92,15 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       check();
     } catch { finish(false); }
   });
+  const respawnForHandoff = async (job, extraSessionIds = []) => {
+    try {
+      const permission = await checkVerb('respawn', job.id, true, extraSessionIds);
+      if (!permission.ok) return { ok: false, refused: true, error: permission.error };
+      const result = await bgAgents.runVerb('respawn', job.id);
+      if (!result?.ok) return { ok: false, error: result?.error || 'respawn returned no result' };
+      return { ok: true, attached: await waitForDescriptor(job) };
+    } catch (err) { return { ok: false, error: err.message || String(err) }; }
+  };
   const restoreBackgroundJob = async (sessionId, { attachOnly = false } = {}) => {
     let job;
     const refuse = (reason, recovery) => ({ action: 'refuse', ...(job ? { jobId: job.id } : {}),
@@ -106,19 +117,16 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       if (!check.known) return refuse(check.reason || 'conversation liveness unknown');
       job.state = check.state;
       if (check.workerLiveness !== 'live' && check.workerLiveness !== 'dead') return refuse('worker liveness unknown — not respawned');
-      let respawned = false;
       if (check.workerLiveness === 'dead') {
         if (attachOnly) return refuse('worker is not live — not attached');
         if (check.state === 'stopped') return refuse('stopped job was not respawned automatically', 'respawn');
-        const permission = await checkVerb('respawn', job.id, true);
-        if (!permission.ok) return refuse(permission.error);
-        const result = await bgAgents.runVerb('respawn', job.id);
-        if (!result?.ok) return refuse(result?.error || 'respawn returned no result');
-        respawned = true;
+        const result = await respawnForHandoff(job);
+        if (!result.ok) return refuse(result.error);
+        return result.attached ? { action: 'attach', sessionId, jobId: job.id }
+          : { action: 'respawned-not-attached', jobId: job.id };
       }
       if (await waitForDescriptor(job)) return { action: 'attach', sessionId, jobId: job.id };
-      return respawned ? { action: 'respawned-not-attached', jobId: job.id }
-        : refuse('live worker has no attachable background descriptor — not attached');
+      return refuse('live worker has no attachable background descriptor — not attached');
     } catch (err) { return refuse(err.message || String(err)); }
   };
   ipcMain.handle('restore-background-job', (_event, sessionId, options) => {
@@ -128,6 +136,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     restoring.set(sessionId, pending);
     return pending;
   });
+  unsubscribeView.respawnForHandoff = respawnForHandoff;
   return unsubscribeView;
 }
 

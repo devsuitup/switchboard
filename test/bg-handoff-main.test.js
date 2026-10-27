@@ -107,6 +107,7 @@ function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = ()
     },
     log: { warn: (...args) => warned.push(args.join(' ')) },
     sessionHasPty: () => false, ptyPids: () => [],
+    bgAgents: { findRestoreJob: () => ({ known: false, missing: true, reason: 'no background job record' }) },
     activeSessions: new Map([['tab', session]]),
     mainWindow: { isDestroyed: () => false, webContents: { send() {} } },
     writePty: (entry, text) => {
@@ -128,7 +129,7 @@ function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = ()
   });
   const { handleSendToBackground } = loadAppFunctions(ctx, { declarations: ['backgroundHandoffs'],
     functions: ['handleSendToBackground', 'persistBackgroundHandoff', 'readBackgroundHandoffStamp'], sourcePath: path.join(__dirname, '../main.js') });
-  return { handleSendToBackground, session, writes, kills, listeners, statusAsked, taps, events, warned, untilNotified,
+  return { ctx, handleSendToBackground, session, writes, kills, listeners, statusAsked, taps, events, warned, untilNotified,
     exit: () => exited(), root, folder, transcript, descriptors: () => descriptors };
 }
 
@@ -354,3 +355,35 @@ for (const external of [false, true]) {
     assert.deepEqual(sends, []);
   });
 }
+
+
+test('S2-T9 shipped respawn handler releases the real PTY exit without persisting a continuation', { timeout: 20000 }, async t => {
+  const h = ipcSetup(t);
+  const calls = [];
+  let exit;
+  Object.assign(h.ctx, {
+    sendToBackground: (id, deps) => require('../bg-handoff').sendToBackground(id, { ...deps, timeoutMs: 1000, exitTimeoutMs: 300 }),
+    ptyGenerationCounter: 0, TRACE: { on: false }, ptyExitSignalName: () => null,
+    shutdownMcpServer() {}, appQuitting: false, exitedRemoteSessionIds: new Set(),
+    activityReporter: { sessionEnded() {} }, taskRecords: { ownerDied() {} },
+    resolveExitDrain() {},
+    bgAgents: {
+      findRestoreJob: () => ({ known: true, job: { id: 'aaaaaaaa', resumeTarget: 'old', sessionId: 'OLD' } }),
+      conversationCheck: async () => ({ known: true, state: 'stopped', workerLiveness: 'dead', sessionIds: ['OLD'] }),
+      liveJobCheck: () => ({ known: true, job: null }),
+    },
+    unsubscribeBgAgents: { respawnForHandoff: async job => { calls.push(job.id); assert.equal(h.session.exited, true); return { ok: true, attached: true }; } },
+    detectSessionTransitions: () => assert.fail('respawn must not detect a new continuation'),
+    persistBackgroundHandoff: () => assert.fail('respawn must not persist a continuation'),
+    writePty: (_, text) => { h.writes.push(text); if (text === '\r') setTimeout(() => exit({ exitCode: 0 }), 10); return true; },
+  });
+  h.ctx.writer.releaseLiveSession = async () => false;
+  const { wireSessionPty } = loadAppFunctions(h.ctx, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
+  wireSessionPty(h.session, 'tab', { onData() {}, onExit: fn => { exit = fn; } });
+  const result = await h.handleSendToBackground({}, 'tab');
+  assert.equal(result.ok, true);
+  assert.equal(result.respawned, true);
+  assert.equal(h.ctx.activeSessions.has('tab'), false);
+  assert.deepEqual(calls, ['aaaaaaaa']);
+  assert.deepEqual(h.writes, ['/exit', '\r']);
+});

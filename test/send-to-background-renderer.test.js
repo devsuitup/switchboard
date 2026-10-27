@@ -286,3 +286,16 @@ test('R15: the attach tab takes the original tab position in openSessions', asyn
   await h.app.sendSessionToBackground('old');
   assert.deepEqual([...h.ctx.openSessions.keys()], ['a', 'new', 'b']);
 });
+
+
+test('R-S2 GUARD same-id handoff attaches once at original tab position', async t => {
+  const h = handoff(t, { result: { ok: true, sessionId: 'old', jobId: 'aaaaaaaa', cwd: '/bg' } });
+  const before = [...h.ctx.openSessions.keys()];
+  await h.app.sendSessionToBackground('old');
+  assert.deepEqual(h.destroyed, ['old']);
+  assert.equal(h.spawned.length, 1);
+  assert.equal(h.spawned[0].id, 'old');
+  assert.equal(h.spawned[0].options.type, 'attach');
+  assert.equal(h.spawned[0].options.jobId, 'aaaaaaaa');
+  assert.deepEqual([...h.ctx.openSessions.keys()], before);
+});

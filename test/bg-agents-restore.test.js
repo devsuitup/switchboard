@@ -180,3 +180,26 @@ for (const state of ['done', 'failed', 'stopped']) {
     assert.equal(result.workerLiveness, 'dead');
   });
 }
+
+
+test('S2-T8 resumeTarget uses validated raw identity rather than link scan identity', t => {
+  const write = fixture(t);
+  for (const [fields, target] of [
+    [{ sessionId: SID, resumeSessionId: 'ABCDEFAB-ABCD-4ABC-8ABC-ABCDEFABCDEF' }, 'abcdefab-abcd-4abc-8abc-abcdefabcdef'],
+    [{ sessionId: SID.toUpperCase() }, SID],
+    [{ sessionId: SID, resumeSessionId: OTHER, linkScanPath: '/fixture/' + SID + '.jsonl' }, OTHER],
+    [{ sessionId: SID, resumeSessionId: 'not-a-uuid' }, null],
+    [{ sessionId: SID, resumeSessionId: '' }, null],
+  ]) {
+    write('aaaaaaaa', fields);
+    assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa').job.resumeTarget, target);
+  }
+});
+
+test('S2c GUARD default lookup keeps unrelated invalid raw identity despite a matching link-scan id', t => {
+  const write = fixture(t);
+  write('aaaaaaaa');
+  write('bbbbbbbb', { state: 'future-state', sessionId: OTHER, linkScanPath: '/fixture/' + SID + '.jsonl' });
+  assert.equal(bg.findRestoreJob(SID).job?.id, 'aaaaaaaa');
+  assert.equal(bg.findRestoreJob(SID, undefined, { ignoreUnrelatedInvalid: true }).known, false);
+});
