@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### Fixed
+- A conversation chain now stays grouped in the sidebar when an old continuation points to a missing part alongside its single existing successor. Grouping waits for the initial scan to finish; conversations with two existing successors remain separate. (#789)
+
 ## v0.0.101 — 2026-10-27
 
 ### New

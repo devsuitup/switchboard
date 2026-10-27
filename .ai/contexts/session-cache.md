@@ -2180,7 +2180,7 @@ The graph rules are:
 2. Edges require format 3, complete, resolved indexes matching the row's `fileMtime`.
 3. A target sharing the source's non-null `bridgeSessionId` is ignored, including for branch counting.
 4. A mirror's edges lift to its representative; edges within that representative are ignored.
-5. A sole dangling target ends a chain; a dangling sibling is a branch.
+5. A sole dangling target ends a chain; dangling siblings remain branches until `isInitialScanComplete()` is explicitly true. After that bound, dangling siblings are ignored only beside exactly one present successor, after mirror edges lift to their representative; every interior part still needs its proven index (#789). Two present successors, or multiple dangling targets without a present successor, remain branches. `initial_scan_complete` is a persisted marker, not a per-launch absence proof, and "present" means a local, non-subagent cache row with a project path: a successor not indexed yet (created while the app was closed, or a respawned job before its first record) can briefly let a branch group until its row is written; click-time resolution still inventories the disk and live descriptors, so it shows the chooser rather than opening the wrong head.
 6. Walk from a root without incoming edges, with one successor and one predecessor per next node, in the same folder and project, at most 32 hops. Branches and convergence stay separate.
 7. Every part of an interior node, mirrors included, needs a proven index. A final node may have a null or stale index, including one naming a sole missing target; rule 9 still blocks any raw target present in the chain.
 8. Cycles have no root; rho shapes fail the single-predecessor rule. There is no redundant cycle-membership guard.

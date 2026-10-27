@@ -932,7 +932,8 @@ function localBackgroundState() {
 
 function conversationMemberIds(rows, id) {
   const { localDescriptors, localJobs } = localBackgroundState();
-  return resolveConversationMemberIds(rows, id, localDescriptors, localJobs, { projectsDir: PROJECTS_DIR, folderMeta: getAllFolderMeta(), activeSessions });
+  return resolveConversationMemberIds(rows, id, localDescriptors, localJobs, { projectsDir: PROJECTS_DIR, folderMeta: getAllFolderMeta(), activeSessions,
+    initialScanComplete: isInitialScanComplete?.() === true });
 }
 
 /** Build projects response from cached data */
@@ -967,7 +968,7 @@ function buildProjectsFromCache(showArchived) {
     mergedChildrenByParent.get(row.mergedIntoSessionId).push(row);
   }
 
-  const rollup = continuationRollup(cachedRows);
+  const rollup = continuationRollup(cachedRows, { initialScanComplete: isInitialScanComplete?.() === true });
   for (const row of cachedRows) {
     const rootId = rollup.get(row.mergedIntoSessionId || row.sessionId);
     if (!rootId) continue;
@@ -1720,7 +1721,8 @@ async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024
     const cachedRows = getAllCached();
     const { localDescriptors, localJobs } = localBackgroundState();
     const conversations = conversationGroups(cachedRows, localDescriptors, localJobs, undefined,
-      { projectsDir: PROJECTS_DIR, folderMeta: getAllFolderMeta(), activeSessions });
+      { projectsDir: PROJECTS_DIR, folderMeta: getAllFolderMeta(), activeSessions,
+        initialScanComplete: isInitialScanComplete?.() === true });
     const metaMap = getAllMeta(true);
     result.candidates = result.candidates.map(candidate => {
       const row = getCachedSession(candidate.sessionId);

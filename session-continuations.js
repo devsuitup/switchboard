@@ -159,7 +159,7 @@ function resolveContinuationsSync(sessionId, getNode, options) {
 }
 
 // see .ai/contexts/session-cache.md ("Continuation rows (#564)")
-function continuationRollup(rows) {
+function continuationRollup(rows, { initialScanComplete = false } = {}) {
   const result = new Map();
   result.proofs = new Map();
   const candidates = [];
@@ -209,6 +209,13 @@ function continuationRollup(rows) {
       const nextId = targetId || String(id).toLowerCase();
       source.next.add(nextId);
       if (proven && targetId) nodes.get(targetId)?.incoming.add(source.row.sessionId);
+    }
+  }
+  if (initialScanComplete) {
+    for (const node of nodes.values()) {
+      if (node.next.size < 2) continue;
+      const present = [...node.next].filter(id => nodes.has(id));
+      if (present.length === 1) node.next = new Set([present[0]]);
     }
   }
   for (const [rootId, root] of nodes) {

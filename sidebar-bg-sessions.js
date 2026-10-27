@@ -135,7 +135,7 @@ function backgroundPath(head, { indexes, predecessors }) {
 
 function conversationGroups(cachedRows, descriptors = [], jobs = new Map(), rollup, options = {}) {
   cachedRows = scopedConversationRows(cachedRows);
-  rollup ||= continuationRollup(cachedRows);
+  rollup ||= continuationRollup(cachedRows, options);
   const groups = new Map();
   for (const row of cachedRows) {
     const representative = row.mergedIntoSessionId || row.sessionId;

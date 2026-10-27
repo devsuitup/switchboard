@@ -6,7 +6,7 @@ const { continuationRollup } = require('../session-continuations');
 const index = (ids, extra = {}) => JSON.stringify({ format: 3, complete: true, unresolved: false, mtime: 'now', ids, ...extra });
 const row = (sessionId, ids = [], extra = {}) => ({ sessionId, folder: 'project', projectPath: '/project',
   fileMtime: 'now', continuationIndex: index(ids), ...extra });
-const roll = rows => Object.fromEntries(continuationRollup(rows));
+const roll = (rows, options) => Object.fromEntries(continuationRollup(rows, options));
 
 test('1: a linear chain rolls every later part into its root', () => {
   assert.deepEqual(roll([row('a', ['b']), row('b', ['c']), row('c')]), { b: 'a', c: 'a' });
@@ -37,6 +37,39 @@ test('7: an edge into the same non-null bridge is not a branch', () => {
 });
 test('8: a dangling sibling counts as a branch', () => {
   assert.deepEqual(roll([row('a', ['missing', 'b']), row('b')]), {});
+});
+
+const danglingMirrorChain = () => [
+  row('r', ['m', 'd'], { bridgeSessionId: 'bridge' }),
+  row('m', ['b'], { bridgeSessionId: 'bridge', mergedIntoSessionId: 'r' }),
+  row('b', ['c']), row('c'),
+];
+
+test('#789: a proven dangling sibling beside a lifted mirror edge rolls the chain', () => {
+  assert.deepEqual(roll(danglingMirrorChain(), { initialScanComplete: true }), { b: 'r', c: 'r' });
+});
+
+test('#789: an incomplete initial scan keeps the dangling mirror chain split', () => {
+  assert.deepEqual(roll(danglingMirrorChain(), { initialScanComplete: false }), {});
+});
+
+test('#789: two present successors stay split after the initial scan', () => {
+  for (const ids of [['b', 'c'], ['d', 'b', 'c']]) {
+    assert.deepEqual(roll([row('r', ids), row('b'), row('c')], { initialScanComplete: true }), {});
+  }
+});
+
+test('#789: dangling-only successors retain their chain-ending and branch rules', () => {
+  assert.deepEqual(roll([row('r', ['b']), row('b', ['d'])], { initialScanComplete: true }), { b: 'r' });
+  assert.deepEqual(roll([row('r', ['b']), row('b', ['d1', 'd2'])], { initialScanComplete: true }), {});
+});
+
+test('#789: dangling exemption still requires proof from every source part', () => {
+  for (const extra of [{ mtime: 'old' }, { complete: false }, { unresolved: true }, { format: 2 }]) {
+    const rows = danglingMirrorChain();
+    rows[1].continuationIndex = index(['b'], extra);
+    assert.deepEqual(roll(rows, { initialScanComplete: true }), {});
+  }
 });
 test('9: a single dangling tail ends the chain', () => {
   assert.deepEqual(roll([row('a', ['b']), row('b', ['missing'])]), { b: 'a' });
