@@ -115,7 +115,7 @@ function setup(t, { sandbox = false } = {}) {
   });
   const app = loadAppFunctions(ctx, {
     functions: ['openSession', 'openSessionNow', 'runRestore', 'pendingRestoreEntries', 'persistWorkingSet', 'showRestoreNotice', 'showLiveElsewhereNotice', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow', 'prepareBackgroundRestore'],
-    declarations: ['restoreMode', 'LIVE_ELSEWHERE_NOTICE_MS', 'openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting', 'dormantWorkingSet'],
+    declarations: ['restoreRunDepth', 'restoreMode', 'LIVE_ELSEWHERE_NOTICE_MS', 'openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting', 'dormantWorkingSet'],
   });
   ctx.sessionMap.set(SID, session);
   t.after(() => {

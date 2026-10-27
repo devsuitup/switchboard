@@ -376,7 +376,13 @@ function findRestoreJob(sessionId, attachJobId) {
   };
   try {
     if (typeof attachJobId === 'string' && JOB_ID_RE.test(attachJobId)) {
-      if (!fs.existsSync(path.join(jobsDir, attachJobId))) return { known: false, missing: true, reason: `no background job record for ${sessionId}` };
+      try {
+        if (!fs.statSync(jobsDir).isDirectory()) throw new Error('background jobs path is not a directory');
+        fs.statSync(path.join(jobsDir, attachJobId));
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+        return { known: false, missing: true, reason: `no background job record for ${sessionId}` };
+      }
       const record = read(attachJobId);
       return record.matches ? { known: true, job: record.job }
         : { known: false, reason: `job ${attachJobId} does not match saved session ${sessionId}` };

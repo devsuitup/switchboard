@@ -76,6 +76,7 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     var localMergedMemberRows = new Map();
     var activeSessionId = null;
     var restoringWorkingSet = false;
+    var restoreRunDepth = 0;
     var restorePlanner = null;
     var sessionOpenedOutsideRestore = false;
     var _persistChain = Promise.resolve();
@@ -247,7 +248,7 @@ test('M-A background attachment leaves the cold-cache planner able to restore a 
   assert.deepEqual(h.settings.global.openWorkingSet.map(item => item.sessionId), ['x', 'a']);
 });
 
-test('M-A GUARD a user click during background preparation cancels automatic planning', async t => {
+test('M-A GUARD a user click during background preparation keeps automatic planning', async t => {
   const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/px', bg: true }], liveIds: [] });
   t.after(() => h.dom.window.close());
   let release;
@@ -255,13 +256,147 @@ test('M-A GUARD a user click during background preparation cancels automatic pla
   const restoring = h.restore();
   try {
     await new Promise(resolve => setImmediate(resolve));
-    vm.runInContext('restoringWorkingSet = true;', h.ctx);
     await vm.runInContext('openSession({ sessionId: "manual", projectPath: "/manual" })', h.ctx);
-    assert.equal(vm.runInContext('sessionOpenedOutsideRestore', h.ctx), true, 'user intent counts while restore is running');
+    assert.equal(vm.runInContext('sessionOpenedOutsideRestore', h.ctx), false, 'all opens during the background drain remain exempt');
   } finally {
     release({ action: 'refuse', reason: 'unknown' });
     await restoring;
   }
+});
+
+test('S1e MAJOR a user click during an interactive batch preserves later indexed saved tabs', async t => {
+  const savedSet = ['a', 'b'].map(sessionId => ({ sessionId, projectPath: '/p' }));
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  vm.runInContext(read('restore-plan.js'), h.ctx);
+  loadAppFunctions(h.ctx, { functions: ['tickRestorePlanner'] });
+  h.ctx.savedSet = savedSet;
+  vm.runInContext('restoreMode = "auto"; sessionMap.delete("b"); restorePlanner = createRestorePlanner({ savedSet });', h.ctx);
+  let release;
+  h.dom.window.api.openTerminal = id => {
+    h.openTerminalCalls.push(id);
+    return id === 'a' ? new Promise(resolve => { release = resolve; }) : Promise.resolve({ ok: true });
+  };
+  const first = vm.runInContext('tickRestorePlanner()', h.ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  try {
+    assert.equal(typeof release, 'function');
+    await vm.runInContext('openSession({ sessionId: "manual", projectPath: "/manual" })', h.ctx);
+  } finally {
+    release?.({ ok: true });
+    await first;
+  }
+  vm.runInContext('sessionMap.set("b", { sessionId: "b", projectPath: "/p" });', h.ctx);
+  await vm.runInContext('tickRestorePlanner()', h.ctx);
+  assert.deepEqual(h.openTerminalCalls, ['a', 'manual', 'b']);
+  await h.persist();
+  assert.deepEqual(h.settings.global.openWorkingSet.map(item => item.sessionId), ['a', 'manual', 'b']);
+  await vm.runInContext('openSession({ sessionId: "outside", projectPath: "/outside" })', h.ctx);
+  assert.equal(vm.runInContext('sessionOpenedOutsideRestore', h.ctx), true, 'outside opens still cancel the planner');
+});
+
+test('S1e ticks defer overlapping batches without resuming saves inside the next interactive batch', async t => {
+  const savedSet = [{ sessionId: 'x', projectPath: '/p', bg: true }, { sessionId: 'a', projectPath: '/p' }];
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  vm.runInContext(read('restore-plan.js'), h.ctx);
+  loadAppFunctions(h.ctx, { functions: ['tickRestorePlanner'] });
+  loadAppFunctions(h.ctx, { functions: ['schedulePersistWorkingSet'], declarations: ['savedWorkingSetRead', 'persistWorkingSetTimer'] });
+  vm.runInContext('savedWorkingSetRead = true;', h.ctx);
+  h.ctx.savedSet = savedSet;
+  vm.runInContext('restoreMode = "auto"; sessionMap.delete("a"); restorePlanner = createRestorePlanner({ savedSet });', h.ctx);
+  let releaseBg, releaseInteractive;
+  h.dom.window.api.restoreBackgroundJob = () => new Promise(resolve => { releaseBg = resolve; });
+  h.dom.window.api.getSessionLiveElsewhere = async id => id === 'x' ? { kind: 'bg', jobId: '1234abcd', cwd: '/p' } : null;
+  h.dom.window.api.openTerminal = id => {
+    h.openTerminalCalls.push(id);
+    return id === 'a' ? new Promise(resolve => { releaseInteractive = resolve; }) : Promise.resolve({ ok: true });
+  };
+  const writes = [];
+  const setSetting = h.dom.window.api.setSetting;
+  h.dom.window.api.setSetting = async (key, value) => { writes.push(value.openWorkingSet.map(item => item.sessionId)); await setSetting(key, value); };
+  const first = vm.runInContext('tickRestorePlanner()', h.ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  vm.runInContext('sessionMap.set("a", { sessionId: "a", projectPath: "/p" });', h.ctx);
+  const second = vm.runInContext('tickRestorePlanner()', h.ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  releaseBg({ action: 'attach', sessionId: 'x', jobId: '1234abcd' });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const suspended = vm.runInContext('restoringWorkingSet', h.ctx);
+  await vm.runInContext('_persistChain', h.ctx);
+  const before = writes.length;
+  vm.runInContext('clearTimeout(persistWorkingSetTimer); persistWorkingSetTimer = null; schedulePersistWorkingSet();', h.ctx);
+  const timerArmed = vm.runInContext('persistWorkingSetTimer !== null', h.ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  const after = writes.length;
+  const startedSecond = typeof releaseInteractive === 'function';
+  releaseInteractive?.({ ok: true });
+  await Promise.all([first, second]);
+  assert.equal(startedSecond, true, 'queued batch starts after the background drain');
+  assert.equal(suspended, true, 'first tick cannot resume saves inside batch two');
+  assert.equal(timerArmed, false, 'suspended saves cannot arm a persistence timer');
+  assert.equal(after, before, 'persist remains suspended while batch two is opening');
+  await h.persist();
+  assert.equal(vm.runInContext('JSON.stringify([...openSessions.keys()])', h.ctx), '["x","a"]');
+  assert.deepEqual(h.settings.global.openWorkingSet.map(item => item.sessionId), ['x', 'a']);
+});
+
+test('S1e continuation indexing retry starts before an unrelated background drain completes', async t => {
+  const h = setup({ savedSet: [{ sessionId: 'x', projectPath: '/p', bg: true }, { sessionId: 'a', projectPath: '/p' }], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  let release;
+  h.dom.window.api.restoreBackgroundJob = () => new Promise(resolve => { release = resolve; });
+  h.dom.window.api.getSessionContinuations = async () => {
+    vm.runInContext('restoreIndexingDone = true;', h.ctx);
+    return { candidates: [], unresolved: true };
+  };
+  vm.runInContext('var retries = 0; async function markRestoreIndexingDone() { retries++; }', h.ctx);
+  const restoring = h.restore();
+  await new Promise(resolve => setImmediate(resolve));
+  vm.runInContext('restoreIndexingDone = true;', h.ctx);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const retriesBeforeDrain = vm.runInContext('retries', h.ctx);
+  release({ action: 'refuse', reason: 'unknown' });
+  await restoring;
+  assert.equal(retriesBeforeDrain, 1, 'indexing retry is independent of background descriptor wait');
+});
+
+test('S1e GUARD a click outside any restore run cancels later automatic batches', async t => {
+  const savedSet = ['a', 'b'].map(sessionId => ({ sessionId, projectPath: '/p' }));
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  vm.runInContext(read('restore-plan.js'), h.ctx);
+  loadAppFunctions(h.ctx, { functions: ['tickRestorePlanner'] });
+  h.ctx.savedSet = savedSet;
+  vm.runInContext('restoreMode = "auto"; sessionMap.delete("b"); restorePlanner = createRestorePlanner({ savedSet });', h.ctx);
+  await vm.runInContext('tickRestorePlanner()', h.ctx);
+  await vm.runInContext('openSession({ sessionId: "manual", projectPath: "/manual" })', h.ctx);
+  vm.runInContext('sessionMap.set("b", { sessionId: "b", projectPath: "/p" });', h.ctx);
+  await vm.runInContext('tickRestorePlanner()', h.ctx);
+  assert.deepEqual(h.openTerminalCalls, ['a', 'manual']);
+  assert.equal(vm.runInContext('restorePlanner.isSettled()', h.ctx), true);
+});
+
+test('S1e GUARD overlapping restore runs retain the exemption until the final drain ends', async t => {
+  const savedSet = ['x', 'y'].map(sessionId => ({ sessionId, projectPath: '/p', bg: true }));
+  const h = setup({ savedSet, liveIds: [] });
+  t.after(() => h.dom.window.close());
+  const releases = new Map();
+  h.dom.window.api.restoreBackgroundJob = id => new Promise(resolve => releases.set(id, resolve));
+  const first = vm.runInContext('runRestore([{ sessionId: "x", projectPath: "/p", bg: true }])', h.ctx);
+  const second = vm.runInContext('runRestore([{ sessionId: "y", projectPath: "/p", bg: true }])', h.ctx);
+  await new Promise(resolve => setImmediate(resolve));
+  releases.get('x')({ action: 'refuse', reason: 'unknown' });
+  await first;
+  try {
+    await vm.runInContext('openSession({ sessionId: "manual", projectPath: "/manual" })', h.ctx);
+    assert.equal(vm.runInContext('sessionOpenedOutsideRestore', h.ctx), false, 'a peer drain still exempts the click');
+  } finally {
+    releases.get('y')({ action: 'refuse', reason: 'unknown' });
+    await second;
+  }
+  await vm.runInContext('openSession({ sessionId: "outside", projectPath: "/outside" })', h.ctx);
+  assert.equal(vm.runInContext('sessionOpenedOutsideRestore', h.ctx), true);
 });
 
 for (const first of ['x', 'y']) {
@@ -335,6 +470,7 @@ test('m-2 an interactive exception still drains an outstanding background attach
   assert.equal(settledBeforeBackground, false, 'interactive failure still waits for background cleanup');
   assert.match(result.error?.message, /interactive failure/);
   assert.equal(vm.runInContext('restoreInFlight.size', h.ctx), 0);
+  assert.equal(vm.runInContext('restoreRunDepth', h.ctx), 0, 'an exception releases the run exemption');
   assert.deepEqual(h.openTerminalCalls, ['x']);
 });
 

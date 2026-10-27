@@ -151,6 +151,7 @@ window._applyTerminalRightClick = (mode) => { terminalRightClickMode = mode || S
 // --- Working-set persistence (open sessions → global.openWorkingSet) ---
 // Guard: while restoring, suppress incremental persist calls.
 let restoringWorkingSet = false;
+let restoreRunDepth = 0;
 let persistWorkingSetTimer = null;
 const RESTORE_STAGGER_MS = 500;
 const LIVE_ELSEWHERE_NOTICE_MS = 15000;
@@ -339,142 +340,153 @@ window.releaseExitState = releaseExitState;
 if (window.api.onExitAttemptInvalidated) window.api.onExitAttemptInvalidated(() => releaseExitState());
 
 async function runRestore(list, { retryAfterIndexing = !restoreIndexingDone } = {}) {
-  const indexedSessions = new Map(sessionMap);
-  for (const row of sessionMap.values()) {
-    for (const sessionId of row.mergedMemberIds || []) {
-      if (!indexedSessions.has(sessionId)) indexedSessions.set(sessionId, rowHeadSession(row, sessionId));
-    }
-  }
-  const startsFresh = item => !item.bg && item.fresh && !indexedSessions.has(item.sessionId);
-  const pending = list.filter(item => (startsFresh(item) || indexedSessions.has(item.sessionId)) && !openSessions.has(item.sessionId));
-  for (const item of pending) restoreInFlight.set(item.sessionId, item);
-  const skippedNow = [];
-  const startedAs = new Map();
+  restoreRunDepth++;
   const backgroundTasks = [];
   try {
-    const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
-    for (const [position, item] of list.entries()) {
-      if (startsFresh(item)) {
-        if (!restoreInFlight.has(item.sessionId)) continue;
-        try {
-          const project = { projectPath: item.projectPath };
-          const options = await resolveDefaultSessionOptions(project);
-          delete options.worktree;
-          delete options.worktreeName;
-          const newId = await launchNewSession(project, options, item.sessionId);
-          if (newId) startedAs.set(item.sessionId, newId);
-        } finally {
+    const indexedSessions = new Map(sessionMap);
+    for (const row of sessionMap.values()) {
+      for (const sessionId of row.mergedMemberIds || []) {
+        if (!indexedSessions.has(sessionId)) indexedSessions.set(sessionId, rowHeadSession(row, sessionId));
+      }
+    }
+    const startsFresh = item => !item.bg && item.fresh && !indexedSessions.has(item.sessionId);
+    const pending = list.filter(item => (startsFresh(item) || indexedSessions.has(item.sessionId)) && !openSessions.has(item.sessionId));
+    for (const item of pending) restoreInFlight.set(item.sessionId, item);
+    const skippedNow = [];
+    const startedAs = new Map();
+    try {
+      const liveById = await liveElsewhereMany(pending.filter(item => !startsFresh(item)).map(item => item.sessionId), { api: window.api });
+      for (const [position, item] of list.entries()) {
+        if (startsFresh(item)) {
+          if (!restoreInFlight.has(item.sessionId)) continue;
+          try {
+            const project = { projectPath: item.projectPath };
+            const options = await resolveDefaultSessionOptions(project);
+            delete options.worktree;
+            delete options.worktreeName;
+            const newId = await launchNewSession(project, options, item.sessionId);
+            if (newId) startedAs.set(item.sessionId, newId);
+          } finally {
+            restoreInFlight.delete(item.sessionId);
+          }
+          await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
+          continue;
+        }
+        let s = indexedSessions.get(item.sessionId);
+        if (!s || openSessions.has(item.sessionId)) {
           restoreInFlight.delete(item.sessionId);
+          continue;
+        }
+        const originalId = item.sessionId;
+        const originalSession = s;
+        if (item.bg === true) {
+          s = { ...s, projectPath: item.projectPath };
+          const index = restoreSavedIndex.get(originalId) ?? position;
+          skippedWorkingSetEntries.set(originalId, { item, index });
+          const session = s;
+          const task = (async () => {
+            try {
+              const background = await prepareBackgroundRestore(session, item);
+              if (background) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...background });
+              const order = new Map(restoreSavedIndex);
+              for (const [id, newId] of startedAs) order.set(newId, order.get(id));
+              const entries = [...openSessions];
+              const saved = entries.filter(([id]) => order.has(id)).sort(([a], [b]) => order.get(a) - order.get(b));
+              let savedPosition = 0;
+              const ordered = entries.map(entry => order.has(entry[0]) ? saved[savedPosition++] : entry);
+              openSessions.clear();
+              for (const [id, entry] of ordered) openSessions.set(id, entry);
+            } finally {
+              restoreInFlight.delete(originalId);
+              schedulePersistWorkingSet();
+            }
+          })();
+          task.catch(err => showSessionActionFailure('Restore', session, err.message || String(err), 'Open it from the sidebar to retry restoring.'));
+          backgroundTasks.push(task);
+          continue;
+        }
+        let holdReason = { waitingForIndex: false };
+        let continuationNotice;
+        s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api,
+          choices: (window._continuationChoices ||= new Map()), rowKey: indexedRowOf(s.sessionId)?.sessionId || s.sessionId,
+          memoryNotify: notice => showAppNotice(notice),
+          resolveRow: candidate => {
+            const row = indexedRowOf(candidate.sessionId);
+            return row ? rowHeadSession(row) : { ...s, projectPath: item.projectPath, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] };
+          },
+          notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
+          onHold: reason => { holdReason = reason; } });
+        if (!s) {
+          const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
+          skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
+          skippedNow.push({ session: originalSession, continuation: true, ...holdReason, retryAfterIndexing });
+          restoreInFlight.delete(originalId);
+          continue;
+        }
+        if (s.sessionId === originalId && s.headSessionId && s.headSessionId !== originalId) s = rowHeadSession(s);
+        if (s.sessionId !== originalId) {
+          restoreSavedIndex.set(s.sessionId, restoreSavedIndex.get(originalId) ?? position);
+          skippedWorkingSetEntries.delete(originalId);
+          item.sessionId = s.sessionId;
+        }
+        let live = liveById[originalId] || null;
+        if (s.sessionId !== originalId) {
+          try { live = await window.api.getSessionLiveElsewhere(s.sessionId); } catch { live = null; }
+        }
+        let opened;
+        let blockedBy;
+        try {
+          opened = await openSession(s, undefined, {
+            automatic: true, fromRestore: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true,
+            onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
+          });
+        } finally {
+          restoreInFlight.delete(originalId);
+        }
+        if (opened === false) {
+          const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
+          skippedWorkingSetEntries.set(item.sessionId, { item, index });
+          if (blockedBy) skippedNow.push(blockedBy);
+          else if (live) skippedNow.push({ session: s, live });
+          continue;
+        }
+        if (openSessions.has(s.sessionId) && !openSessions.get(s.sessionId).closed) {
+          clearAppNotice(sessionActionNoticeId('Restore', originalSession));
+          if (continuationNotice) showAppNotice(continuationNotice);
+        }
+        if (s.sessionId !== originalId && openSessions.get(s.sessionId)?.attach) {
+          skippedWorkingSetEntries.set(s.sessionId, { item, index: restoreSavedIndex.get(s.sessionId), keepAttached: true });
         }
         await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
-        continue;
       }
-      let s = indexedSessions.get(item.sessionId);
-      if (!s || openSessions.has(item.sessionId)) {
-        restoreInFlight.delete(item.sessionId);
-        continue;
+    } finally {
+      for (const item of pending) if (!item.bg) restoreInFlight.delete(item.sessionId);
+      if (backgroundTasks.length) {
+        restoringWorkingSet = false;
+        schedulePersistWorkingSet();
       }
-      const originalId = item.sessionId;
-      const originalSession = s;
-      if (item.bg === true) {
-        s = { ...s, projectPath: item.projectPath };
-        const index = restoreSavedIndex.get(originalId) ?? position;
-        skippedWorkingSetEntries.set(originalId, { item, index });
-        const session = s;
-        const task = (async () => {
-          try {
-            const background = await prepareBackgroundRestore(session, item);
-            if (background) await openSession(session, undefined, { automatic: true, fromRestore: true, allowBgAttach: true, continuationResolved: true, ...background });
-            const order = new Map(restoreSavedIndex);
-            for (const [id, newId] of startedAs) order.set(newId, order.get(id));
-            const entries = [...openSessions];
-            const saved = entries.filter(([id]) => order.has(id)).sort(([a], [b]) => order.get(a) - order.get(b));
-            let savedPosition = 0;
-            const ordered = entries.map(entry => order.has(entry[0]) ? saved[savedPosition++] : entry);
-            openSessions.clear();
-            for (const [id, entry] of ordered) openSessions.set(id, entry);
-          } finally {
-            restoreInFlight.delete(originalId);
-            schedulePersistWorkingSet();
-          }
-        })();
-        task.catch(err => showSessionActionFailure('Restore', session, err.message || String(err), 'Open it from the sidebar to retry restoring.'));
-        backgroundTasks.push(task);
-        continue;
-      }
-      let holdReason = { waitingForIndex: false };
-      let continuationNotice;
-      s = await resolveResumeSession({ ...s, projectPath: item.projectPath }, { automatic: true, api: window.api,
-        choices: (window._continuationChoices ||= new Map()), rowKey: indexedRowOf(s.sessionId)?.sessionId || s.sessionId,
-        memoryNotify: notice => showAppNotice(notice),
-        resolveRow: candidate => {
-          const row = indexedRowOf(candidate.sessionId);
-          return row ? rowHeadSession(row) : { ...s, projectPath: item.projectPath, sessionId: candidate.sessionId, headSessionId: candidate.sessionId, mergedMemberIds: [] };
-        },
-        notify: notice => { continuationNotice = notice; }, resolutions: window._startupResumeResolutions,
-        onHold: reason => { holdReason = reason; } });
-      if (!s) {
-        const index = restoreSavedIndex.has(originalId) ? restoreSavedIndex.get(originalId) : position;
-        skippedWorkingSetEntries.set(originalId, { item, index, retryContinuation: retryAfterIndexing });
-        skippedNow.push({ session: originalSession, continuation: true, ...holdReason, retryAfterIndexing });
-        restoreInFlight.delete(originalId);
-        continue;
-      }
-      if (s.sessionId === originalId && s.headSessionId && s.headSessionId !== originalId) s = rowHeadSession(s);
-      if (s.sessionId !== originalId) {
-        restoreSavedIndex.set(s.sessionId, restoreSavedIndex.get(originalId) ?? position);
-        skippedWorkingSetEntries.delete(originalId);
-        item.sessionId = s.sessionId;
-      }
-      let live = liveById[originalId] || null;
-      if (s.sessionId !== originalId) {
-        try { live = await window.api.getSessionLiveElsewhere(s.sessionId); } catch { live = null; }
-      }
-      let opened;
-      let blockedBy;
-      try {
-        opened = await openSession(s, undefined, {
-          automatic: true, fromRestore: true, live, continuationResolved: true, allowBgAttach: s.sessionId !== originalId || item.bg === true,
-          onBlocked: part => { blockedBy = { session: part.sessionId === s.sessionId ? s : { sessionId: part.sessionId, projectPath: part.live?.cwd }, live: part.live }; },
-        });
-      } finally {
-        restoreInFlight.delete(originalId);
-      }
-      if (opened === false) {
-        const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
-        skippedWorkingSetEntries.set(item.sessionId, { item, index });
-        if (blockedBy) skippedNow.push(blockedBy);
-        else if (live) skippedNow.push({ session: s, live });
-        continue;
-      }
-      if (openSessions.has(s.sessionId) && !openSessions.get(s.sessionId).closed) {
-        clearAppNotice(sessionActionNoticeId('Restore', originalSession));
-        if (continuationNotice) showAppNotice(continuationNotice);
-      }
-      if (s.sessionId !== originalId && openSessions.get(s.sessionId)?.attach) {
-        skippedWorkingSetEntries.set(s.sessionId, { item, index: restoreSavedIndex.get(s.sessionId), keepAttached: true });
-      }
-      await new Promise(r => setTimeout(r, RESTORE_STAGGER_MS));
+    }
+    if (skippedNow.length) showLiveElsewhereNotice(skippedNow);
+    let indexingRetried = false;
+    if (retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation)) {
+      indexingRetried = true;
+      await markRestoreIndexingDone();
+    }
+    await Promise.allSettled(backgroundTasks);
+    if (!indexingRetried && retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation)) {
+      await markRestoreIndexingDone();
+    }
+    const activeItem = list.find(i => i.active) || list[list.length - 1];
+    const activeId = activeItem && (startedAs.get(activeItem.sessionId) || activeItem.sessionId);
+    if (activeId && openSessions.has(activeId)) {
+      showSession(activeId);
     }
   } finally {
-    for (const item of pending) if (!item.bg) restoreInFlight.delete(item.sessionId);
-    if (backgroundTasks.length) {
-      restoringWorkingSet = false;
-      schedulePersistWorkingSet();
-      await Promise.allSettled(backgroundTasks);
-    }
-  }
-  if (skippedNow.length) showLiveElsewhereNotice(skippedNow);
-  // Activate the entry marked active (or the last one)
-  const activeItem = list.find(i => i.active) || list[list.length - 1];
-  const activeId = activeItem && (startedAs.get(activeItem.sessionId) || activeItem.sessionId);
-  if (activeId && openSessions.has(activeId)) {
-    showSession(activeId);
-  }
-  if (retryAfterIndexing && restoreIndexingDone && skippedNow.some(item => item.continuation)) {
-    await markRestoreIndexingDone();
+    try { await Promise.allSettled(backgroundTasks); }
+    finally { restoreRunDepth--; }
   }
 }
+
 
 async function prepareBackgroundRestore(session, item, { attachOnly = false } = {}) {
   let result;
@@ -587,95 +599,109 @@ async function restoreWorkingSet() {
 }
 
 async function tickRestorePlanner() {
-  if (!restorePlanner) return;
-
-  const plan = restorePlanner.tick({
-    sessionMap,
-    openSessions,
-    indexingDone: restoreIndexingDone,
-    sessionOpenedOutsideRestore: restoreMode !== 'lazy' && sessionOpenedOutsideRestore,
-  });
-
-  if (plan.action === 'wait') {
-    if (restoreMode === 'ask') showColdCacheNotice(plan.remaining);
+  if (tickRestorePlanner.running) {
+    tickRestorePlanner.queued = true;
     return;
   }
+  tickRestorePlanner.running = true;
+  try {
+    if (!restorePlanner) return;
 
-  document.getElementById('restore-cold-toast')?.remove();
-  if (plan.unavailable.length) showNotRestoredNotice(plan.unavailable);
+    const plan = restorePlanner.tick({
+      sessionMap,
+      openSessions,
+      indexingDone: restoreIndexingDone,
+      sessionOpenedOutsideRestore: restoreMode !== 'lazy' && sessionOpenedOutsideRestore,
+    });
 
-  if (plan.action === 'nothing') return;
+    if (plan.action === 'wait') {
+      if (restoreMode === 'ask') showColdCacheNotice(plan.remaining);
+      return;
+    }
 
-  const candidates = plan.candidates;
+    document.getElementById('restore-cold-toast')?.remove();
+    if (plan.unavailable.length) showNotRestoredNotice(plan.unavailable);
 
-  if (restoreMode === 'lazy') {
-    for (const item of candidates) restoreInFlight.set(item.sessionId, item);
-    try {
-      const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
-      for (const [position, item] of candidates.entries()) {
-        if (!restoreInFlight.has(item.sessionId)) continue;
-        const indexed = indexedSessionById(item.sessionId);
-        if (item.fresh && !indexed) continue;
-        const reattached = live.has(item.sessionId) && indexed
-          && await openSession(indexed, undefined, { automatic: true, fromRestore: true, reattachOnly: true, continuationResolved: true, activate: false }) !== false
-          && openSessions.has(item.sessionId) && !openSessions.get(item.sessionId).closed;
-        const open = !openingSessions.has(item.sessionId) && openSessions.get(item.sessionId);
-        const row = indexedRowOf(item.sessionId);
-        const rowOpen = row && rowSessionIds(row).some(id => !openingSessions.has(id) && openSessions.has(id) && !openSessions.get(id).closed);
-        if (!reattached && rowOpen) {
-          clearDormantRow(item.sessionId);
-          restoreInFlight.delete(item.sessionId);
-        } else if (!reattached && (!open || open.closed)) {
-          const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
-          dormantWorkingSet.set(item.sessionId, { item, index });
-          restoreInFlight.delete(item.sessionId);
+    if (plan.action === 'nothing') return;
+
+    const candidates = plan.candidates;
+
+    if (restoreMode === 'lazy') {
+      for (const item of candidates) restoreInFlight.set(item.sessionId, item);
+      try {
+        const live = new Set((await window.api.getActiveSessions().catch(() => [])).map(e => e.sessionId));
+        for (const [position, item] of candidates.entries()) {
+          if (!restoreInFlight.has(item.sessionId)) continue;
+          const indexed = indexedSessionById(item.sessionId);
+          if (item.fresh && !indexed) continue;
+          const reattached = live.has(item.sessionId) && indexed
+            && await openSession(indexed, undefined, { automatic: true, fromRestore: true, reattachOnly: true, continuationResolved: true, activate: false }) !== false
+            && openSessions.has(item.sessionId) && !openSessions.get(item.sessionId).closed;
+          const open = !openingSessions.has(item.sessionId) && openSessions.get(item.sessionId);
+          const row = indexedRowOf(item.sessionId);
+          const rowOpen = row && rowSessionIds(row).some(id => !openingSessions.has(id) && openSessions.has(id) && !openSessions.get(id).closed);
+          if (!reattached && rowOpen) {
+            clearDormantRow(item.sessionId);
+            restoreInFlight.delete(item.sessionId);
+          } else if (!reattached && (!open || open.closed)) {
+            const index = restoreSavedIndex.has(item.sessionId) ? restoreSavedIndex.get(item.sessionId) : position;
+            dormantWorkingSet.set(item.sessionId, { item, index });
+            restoreInFlight.delete(item.sessionId);
+          }
         }
+      } finally {
+        for (const item of candidates) restoreInFlight.delete(item.sessionId);
       }
-    } finally {
-      for (const item of candidates) restoreInFlight.delete(item.sessionId);
+      refreshSidebar();
+      revealDormantSessions();
+      return;
     }
-    refreshSidebar();
-    revealDormantSessions();
-    return;
+
+    if (restoreMode === 'auto') {
+      restoringWorkingSet = true;
+      try {
+        await runRestore(candidates);
+      } finally {
+        restoringWorkingSet = false;
+      }
+      persistWorkingSet();
+      return;
+    }
+
+    // restoreMode === 'ask': non-modal toast; askOnce means it never re-asks mid-index
+    const toast = document.createElement('div');
+    toast.id = 'restore-toast';
+    toast.className = 'restore-toast';
+    toast.innerHTML = `<span class="restore-toast-msg">Restore ${candidates.length} session${candidates.length !== 1 ? 's' : ''} from last time?</span>` +
+      `<button class="restore-toast-btn restore-toast-restore">Restore</button>` +
+      `<button class="restore-toast-btn restore-toast-dismiss">Dismiss</button>`;
+    document.body.appendChild(toast);
+    restoreAwaitingConsent = candidates;
+
+    toast.querySelector('.restore-toast-restore').addEventListener('click', async () => {
+      toast.remove();
+      restoreAwaitingConsent = [];
+      restoringWorkingSet = true;
+      try {
+        await runRestore(candidates);
+      } finally {
+        restoringWorkingSet = false;
+      }
+      persistWorkingSet();
+    });
+    toast.querySelector('.restore-toast-dismiss').addEventListener('click', () => {
+      toast.remove();
+      restoreAwaitingConsent = [];
+    });
+  } finally {
+    tickRestorePlanner.running = false;
+    if (tickRestorePlanner.queued) {
+      tickRestorePlanner.queued = false;
+      await tickRestorePlanner();
+    }
   }
-
-  if (restoreMode === 'auto') {
-    restoringWorkingSet = true;
-    try {
-      await runRestore(candidates);
-    } finally {
-      restoringWorkingSet = false;
-    }
-    persistWorkingSet();
-    return;
-  }
-
-  // restoreMode === 'ask': non-modal toast; askOnce means it never re-asks mid-index
-  const toast = document.createElement('div');
-  toast.id = 'restore-toast';
-  toast.className = 'restore-toast';
-  toast.innerHTML = `<span class="restore-toast-msg">Restore ${candidates.length} session${candidates.length !== 1 ? 's' : ''} from last time?</span>` +
-    `<button class="restore-toast-btn restore-toast-restore">Restore</button>` +
-    `<button class="restore-toast-btn restore-toast-dismiss">Dismiss</button>`;
-  document.body.appendChild(toast);
-  restoreAwaitingConsent = candidates;
-
-  toast.querySelector('.restore-toast-restore').addEventListener('click', async () => {
-    toast.remove();
-    restoreAwaitingConsent = [];
-    restoringWorkingSet = true;
-    try {
-      await runRestore(candidates);
-    } finally {
-      restoringWorkingSet = false;
-    }
-    persistWorkingSet();
-  });
-  toast.querySelector('.restore-toast-dismiss').addEventListener('click', () => {
-    toast.remove();
-    restoreAwaitingConsent = [];
-  });
 }
+
 
 function showColdCacheNotice(count) {
   document.getElementById('restore-cold-toast')?.remove();
@@ -2505,7 +2531,7 @@ function settleContinuedInFlight(item) {
 async function openSessionNow(session, customOptions, { automatic = false, fromRestore = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false, backgroundRestoreJobId } = {}, open = null) {
   const restoreNoticeSessions = [session];
   let freshLive = false;
-  if (!fromRestore) sessionOpenedOutsideRestore = true;
+  if (!fromRestore && !restoreRunDepth) sessionOpenedOutsideRestore = true;
   if (!automatic) continuationRetryCancelled = true;
   if (open?.after) await open.after;
   const mayShow = () => activate && (activeFrom === undefined || activeSessionId === activeFrom);

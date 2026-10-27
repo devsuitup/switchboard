@@ -92,7 +92,7 @@ function setup({ savedSet = SAVED, liveElsewhere = {}, confirmAnswer = false, op
   });
 
   const fns = loadAppFunctions(context, {
-    declarations: ['restoringWorkingSet', 'restorePlanner', 'restoreMode', 'restoreIndexingDone',
+    declarations: ['restoreRunDepth', 'restoringWorkingSet', 'restorePlanner', 'restoreMode', 'restoreIndexingDone',
       'sessionOpenedOutsideRestore', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight',
       'dormantWorkingSet', '_persistChain', 'openingSessions', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting'],
     functions: ['dismissDormantSession', 'persistWorkingSet', 'pendingRestoreEntries', 'tickRestorePlanner', 'openSession', 'openSessionNow',

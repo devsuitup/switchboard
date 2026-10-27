@@ -222,7 +222,7 @@ for (const ownOpen of [false, true]) {
     open(ctx, 'B');
     open(ctx, 'C');
     if (ownOpen) open(ctx, 'A');
-    const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession', 'openSessionNow', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'], declarations: ['openingSessions', 'dormantWorkingSet'] });
+    const { openSession } = loadAppFunctions(ctx.context, { functions: ['openSession', 'openSessionNow', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'], declarations: ['restoreRunDepth', 'openingSessions', 'dormantWorkingSet'] });
     await openSession(session);
     assert.deepEqual(shown, ['C']);
   });

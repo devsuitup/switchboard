@@ -56,7 +56,7 @@ function setup(t, { id = 'B', ids = [id], members = ['B'], headSessionId = membe
   h.evalPublic('resume-guard.js');
   const functions = loadAppFunctions(h.context, {
     declarations: [
-      'restoringWorkingSet', 'restorePlanner', 'restoreMode', 'restoreIndexingDone',
+      'restoreRunDepth', 'restoringWorkingSet', 'restorePlanner', 'restoreMode', 'restoreIndexingDone',
       'sessionOpenedOutsideRestore', 'continuationRetryCancelled', 'skippedWorkingSetEntries',
       'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', '_persistChain',
       'exitingApp', 'savedWorkingSetRead', 'RESTORE_STAGGER_MS', 'LIVE_ELSEWHERE_NOTICE_MS', 'openingSessions', 'dormantWorkingSet',

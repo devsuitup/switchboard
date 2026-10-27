@@ -48,7 +48,7 @@ function setup(t, { session = row, live = {}, candidates = [], confirm = false }
   });
   const app = loadAppFunctions(ctx.context, {
     functions: ['indexedRowOf', 'openSession', 'openSessionNow', 'beginPtyOpen', 'settlePtyOpen', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
-    declarations: ['openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex',
+    declarations: ['restoreRunDepth', 'openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex',
       'continuationRetryCancelled', 'ptyGenerations', 'pendingOpens', 'dormantWorkingSet', 'restoreMode', 'restoreInFlight'],
   });
   ctx.window.sessionMap.set(session.sessionId, session);

@@ -38,7 +38,9 @@ or `resumeSessionId` when the saved job id is absent, null or invalid. Unreadabl
 unrelated records do not block a unique readable match; an unreadable matching
 or explicitly saved record refuses. A legacy scan without a readable match
 stays unknown if any record is unreadable or lacks state.json; only a fully
-readable scan can prove absence. Mismatched or ambiguous identity refuses; ambiguity names
+readable scan can prove absence. An explicit saved id uses stat checks; only
+ENOENT proves absence. Other stat errors or a jobs path that is not a directory
+remain unknown and held. Mismatched or ambiguous identity refuses; ambiguity names
 every matching id. A missing record releases the held entry, with a notice;
 a later sidebar click follows the ordinary guarded resume path.
 
@@ -59,13 +61,20 @@ interactive tabs. Each pending item remains held during saves; save suspension
 ends after the interactive loop, before waiting for background preparations.
 Each background task reports its own rejection immediately, and the batch
 waits for all tasks even when the interactive loop throws. Successful batches
-still show notices, activate the selected tab and retry indexing after a task
-fails. Completed tabs retain order across planner batches using the saved
+still show notices and activate the selected tab after a task fails. Continuation
+indexing retries run before the background drain when indexing is already done,
+or after it if indexing finishes during the drain. Planner ticks are serialized;
+overlapping ticks coalesce into a deferred tick after the active tick finishes,
+so its caller cannot resume saves inside the next interactive batch.
+Completed tabs retain order across planner batches using the saved
 indices, while unsaved tabs keep their positions. A successfully restored
 background tab persists in that open-tab order rather than as a held slot.
 Restore callers explicitly pass fromRestore so their opens never cancel the
-planner; a user click does, including during restore. Reopening the active tab
-after renderer reload remains an outside open that cancels automatic planning.
+planner. A separate restoreRunDepth counter covers each runRestore call through
+its background drain, independently of save suspension. Every open during a run,
+including a user click, remains exempt, matching ordinary Automatic restore.
+A user click outside any run still cancels planning. Reopening the active tab
+after renderer reload outside a run remains an outside open that cancels planning.
 Lazy/manual held-entry opens share
 `prepareBackgroundRestore`.
 The remembered active background entry defers to startup policy. Renderer

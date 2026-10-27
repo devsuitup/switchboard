@@ -51,6 +51,16 @@ test('B legacy lookup matches either identity field and refuses ambiguous or unr
   assert.equal(bg.findRestoreJob(SID).known, false, 'unknown records cannot hide another matching job');
 });
 
+test('S1e explicit saved id stays unknown when jobsDir is a file', t => {
+  const write = fixture(t);
+  fs.rmdirSync(write.jobsDir);
+  fs.writeFileSync(write.jobsDir, 'not a directory');
+  const result = bg.findRestoreJob(SID, 'aaaaaaaa');
+  assert.equal(result.known, false);
+  assert.equal(result.missing, undefined, 'a stat error cannot prove the saved job is missing');
+  assert.match(result.reason, /cannot identify/);
+});
+
 for (const savedId of [null, '', '../invalid', 42]) {
   test(`C2/C4 absent or invalid saved job id ${savedId} falls back to legacy identity`, t => {
     const write = fixture(t);

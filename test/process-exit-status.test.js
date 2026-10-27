@@ -44,6 +44,7 @@ const PRELUDE = `
   let activePtyIds = new Set();
   let gridViewActive = false;
   let restoringWorkingSet = false;
+  let restoreRunDepth = 0;
   let sessionOpenedOutsideRestore = false;
   const openSessions = new Map();
   const sessionMap = new Map();

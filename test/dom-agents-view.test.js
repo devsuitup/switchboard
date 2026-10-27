@@ -1461,7 +1461,7 @@ for (const { merged, liveId, accept } of [
     });
     const app = loadAppFunctions(h.ctx, {
       functions: ['openSession', 'openSessionNow'],
-      declarations: ['openingSessions', 'dormantWorkingSet', 'continuationRetryCancelled', 'skippedWorkingSetEntries'],
+      declarations: ['restoreRunDepth', 'openingSessions', 'dormantWorkingSet', 'continuationRetryCancelled', 'skippedWorkingSetEntries'],
     });
     let finished;
     w.openSession = (...args) => { finished = app.openSession(...args); return finished; };
