@@ -224,13 +224,23 @@ job), or a conversation running elsewhere. The notice names the reason and
 what to check. A stopped, failed or finished job can be relaunched unless its
 worker is live.
 
-When there is no matching job, a record that parses but has an unknown state or
-fails validation is ignored when none of its session id, resume id or
-transcript-path id matches this conversation. Switchboard still refuses if any of those ids
-matches this conversation, if the record cannot be read or parsed, or if a job
-directory has no state file: it may belong to this session. When relaunching an
-existing job, an unrelated unreadable or unknown-state record can still block
-the owner check, so Switchboard refuses before typing /exit.
+When there is no matching job, Switchboard identifies each readable record by
+its session id, resume id and transcript-path id, plus the session id listed for
+that job by the CLI. A valid or invalid record identified only as another
+conversation's is ignored. An invalid record naming this conversation, or any
+readable record with no identity even after consulting the list, refuses before
+writing. A record that cannot be read or parsed, including a job directory with
+no state file, also refuses when no readable match exists; the notice says that
+a job record could not be read.
+
+When relaunching an existing job, an unidentifiable directory without a readable
+state file does not block a unique readable match at lookup. A missing state
+file also passes the owner check, so the existing job can be relaunched. An
+unparsable or unknown-state record can still make that owner check unknown, so
+Switchboard refuses before typing /exit, just as the respawn command would.
+A valid record identified by the CLI list is treated as an existing job, but
+relaunch still requires a valid session or resume id in the job file naming
+this conversation; the list alone does not authorize a resume target.
 
 If `/exit` does not close the terminal within 15 seconds, nothing is relaunched
 and the terminal is not killed. If the checked respawn is refused after exit,

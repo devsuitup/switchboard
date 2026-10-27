@@ -195,3 +195,11 @@ test('S2-T8 resumeTarget uses validated raw identity rather than link scan ident
     assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa').job.resumeTarget, target);
   }
 });
+
+test('S2c GUARD default lookup keeps unrelated invalid raw identity despite a matching link-scan id', t => {
+  const write = fixture(t);
+  write('aaaaaaaa');
+  write('bbbbbbbb', { state: 'future-state', sessionId: OTHER, linkScanPath: '/fixture/' + SID + '.jsonl' });
+  assert.equal(bg.findRestoreJob(SID).job?.id, 'aaaaaaaa');
+  assert.equal(bg.findRestoreJob(SID, undefined, { ignoreUnrelatedInvalid: true }).known, false);
+});

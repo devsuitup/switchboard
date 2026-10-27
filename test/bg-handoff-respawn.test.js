@@ -9,11 +9,11 @@ const vm = require('node:vm');
 const { loadAppFunctions } = require('./app-source');
 const bg = require('../bg-agents');
 
-const SID = '11111111-1111-4111-8111-111111111111';
+const SID = 'abcdefab-abcd-4abc-8abc-abcdefabcdef';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const SOURCE_PID = 4242;
 
-function setup(t, { jobs = {}, outside = [], others = [] } = {}) {
+function setup(t, { jobs = {}, outside = [], others = [], listed = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-s2-respawn-'));
   t.after(() => { bg.stop(); fs.rmSync(root, { recursive: true, force: true }); });
   const jobsDir = path.join(root, 'jobs');
@@ -24,7 +24,7 @@ function setup(t, { jobs = {}, outside = [], others = [] } = {}) {
     fs.mkdirSync(path.join(jobsDir, id));
     fs.writeFileSync(path.join(jobsDir, id, 'state.json'), JSON.stringify(fields));
   }
-  bg.init({ jobsDir, homeDir: root, cliSessionState: { readAllDescriptors: () => [],
+  bg.init({ jobsDir, homeDir: root, runClaude: async () => ({ code: 0, stdout: JSON.stringify(listed) }), cliSessionState: { readAllDescriptors: () => [], onDescriptorsChanged: () => () => {}, ensureWatching() {},
     refreshProcessTable: async () => {}, readWorkerProcessEvidence: () => ({ processTableFresh: true, tableEntry: () => undefined }) } });
   const folder = 'folder';
   fs.mkdirSync(path.join(root, folder));
@@ -159,19 +159,86 @@ for (const damaged of ['unparsable', 'missing']) {
     const stateFile = path.join(h.jobsDir, 'bbbbbbbb', 'state.json');
     if (damaged === 'unparsable') fs.writeFileSync(stateFile, '{');
     else fs.unlinkSync(stateFile);
-    assert.equal((await h.send()).code, 'refused');
+    const result = await h.send();
+    assert.equal(result.code, 'refused');
+    assert.match(result.error, /job record could not be read/i);
+    assert.doesNotMatch(result.error, /ENOENT|state\.json|sb-s2-respawn-/);
     assert.deepEqual(h.writes, []);
     assert.deepEqual(h.respawned, []);
   });
 }
 
-test('S2b a matching stopped job plus a directory without state.json refuses before /exit', async t => {
+test('S2c a matching stopped job plus a directory without state.json respawns after /exit', async t => {
   const h = setup(t, { jobs: {
     aaaaaaaa: { state: 'stopped', sessionId: SID, resumeSessionId: SID },
     bbbbbbbb: { state: 'stopped', sessionId: OTHER },
   } });
   fs.unlinkSync(path.join(h.jobsDir, 'bbbbbbbb', 'state.json'));
+  const result = await h.send();
+  assert.equal(result.ok, true);
+  assert.deepEqual(h.writes, ['/exit', '\r']);
+  assert.deepEqual(h.respawned, ['aaaaaaaa']);
+  assert.deepEqual(h.exitedAtRespawn, [true]);
+});
+
+for (const state of ['paused-new', 'stopped']) {
+  test('S2c an id-less ' + state + ' record without CLI identity refuses without writing', async t => {
+    const h = setup(t, { jobs: { bbbbbbbb: { state } } });
+    assert.equal((await h.send()).code, 'refused');
+    assert.deepEqual(h.writes, []);
+    assert.deepEqual(h.respawned, []);
+  });
+
+  test('S2c an id-less ' + state + ' record listed for another conversation uses /bg', async t => {
+    const h = setup(t, { jobs: { bbbbbbbb: { state } }, listed: [
+      { id: 'bbbbbbbb', kind: 'background', sessionId: OTHER, state: 'stopped' },
+    ] });
+    bg.start();
+    await bg.reconcile();
+    assert.equal(bg.getSnapshot().roster.find(e => e.id === 'bbbbbbbb').sessionId, OTHER);
+    assert.equal((await h.send()).code, 'timeout');
+    assert.deepEqual(h.writes, ['/bg', '\r']);
+    assert.deepEqual(h.respawned, []);
+  });
+}
+
+test('S2c an id-less invalid record listed for this conversation refuses without writing', async t => {
+  const h = setup(t, { jobs: { bbbbbbbb: { state: 'paused-new' } }, listed: [
+    { id: 'bbbbbbbb', kind: 'background', sessionId: SID.toUpperCase(), state: 'stopped' },
+  ] });
+  bg.start();
+  await bg.reconcile();
   assert.equal((await h.send()).code, 'refused');
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(h.respawned, []);
+});
+
+test('S2c an id-less stopped record listed for this conversation is found and reaches the respawn target guard', async t => {
+  const h = setup(t, { jobs: { bbbbbbbb: { state: 'stopped' } }, listed: [
+    { id: 'bbbbbbbb', kind: 'background', sessionId: SID.toUpperCase(), state: 'stopped' },
+  ] });
+  bg.start();
+  await bg.reconcile();
+  const lookup = bg.findRestoreJob(SID, undefined, { ignoreUnrelatedInvalid: true });
+  assert.equal(lookup.known, true);
+  assert.equal(lookup.job.id, 'bbbbbbbb');
+  const result = await h.send();
+  assert.equal(result.code, 'refused');
+  assert.match(result.error, /Job bbbbbbbb would resume conversation unknown/);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(h.respawned, []);
+});
+
+test('S2c a unique readable match wins the lookup over an unparsable record but keeps the strict owner check', async t => {
+  const h = setup(t, { jobs: {
+    aaaaaaaa: { state: 'stopped', sessionId: SID, resumeSessionId: SID },
+    bbbbbbbb: { state: 'stopped', sessionId: OTHER },
+  } });
+  fs.writeFileSync(path.join(h.jobsDir, 'bbbbbbbb', 'state.json'), '{');
+  assert.equal(bg.findRestoreJob(SID, undefined, { ignoreUnrelatedInvalid: true }).job?.id, 'aaaaaaaa');
+  const result = await h.send();
+  assert.equal(result.code, 'refused');
+  assert.match(result.error, /which job runs this conversation/);
   assert.deepEqual(h.writes, []);
   assert.deepEqual(h.respawned, []);
 });

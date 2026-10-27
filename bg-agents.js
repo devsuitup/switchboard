@@ -367,14 +367,18 @@ async function conversationCheck(id, { workerLiveness = true } = {}) {
 
 function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false } = {}) {
   const same = value => typeof value === 'string' && value.toLowerCase() === sessionId.toLowerCase();
+  const listed = id => roster.find(e => e.kind === 'background' && e.id === id) || null;
+  const identity = (raw, id) => [raw?.sessionId, raw?.resumeSessionId,
+    sessionIdFromLinkScanPath(raw?.linkScanPath), listed(id)?.sessionId].filter(value => typeof value === 'string' && value);
   const read = id => {
     const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
     const raw = JSON.parse(text);
     const job = parseJobState(text);
+    if (ignoreUnrelatedInvalid && !identity(raw, id).length) throw new Error(`job ${id} does not name its conversation`);
     if (!job?.state || (raw.id && raw.id !== id)) throw new Error(`job ${id} has an unknown or unreadable state`);
     const rawTarget = raw.resumeSessionId ?? raw.sessionId;
     const resumeTarget = typeof rawTarget === 'string' && SESSION_ID_RE.test(rawTarget) ? rawTarget.toLowerCase() : null;
-    return { job: { ...job, id, resumeTarget }, matches: same(raw.sessionId) || same(raw.resumeSessionId) || same(job.sessionId) };
+    return { job: { ...job, id, resumeTarget }, matches: ignoreUnrelatedInvalid ? identity(raw, id).some(same) : same(raw.sessionId) || same(raw.resumeSessionId) || same(job.sessionId) };
   };
   try {
     if (typeof attachJobId === 'string' && JOB_ID_RE.test(attachJobId)) {
@@ -403,16 +407,17 @@ function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false
       } catch (err) {
         let raw, parsed = false;
         try { raw = JSON.parse(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); parsed = true; } catch {}
-        if (same(raw?.sessionId) || same(raw?.resumeSessionId)
-          || (ignoreUnrelatedInvalid && same(sessionIdFromLinkScanPath(raw?.linkScanPath)))) throw err;
         if (ignoreUnrelatedInvalid) {
-          if (!parsed) throw err;
-          continue;
-        }
+          if (parsed) {
+            const ids = identity(raw, id);
+            if (!ids.length || ids.some(same)) throw err;
+            continue;
+          }
+        } else if (same(raw?.sessionId) || same(raw?.resumeSessionId)) throw err;
         unreadable = true;
       }
     }
-    if (!matches.length && unreadable) return { known: false, reason: `cannot identify background job for ${sessionId}: unreadable job records` };
+    if (!matches.length && unreadable) return { known: false, reason: ignoreUnrelatedInvalid ? 'a background job record could not be read' : `cannot identify background job for ${sessionId}: unreadable job records` };
     if (matches.length !== 1) return { known: false, reason: matches.length
       ? `multiple background job records for ${sessionId}: ${matches.map(job => job.id).join(', ')}`
       : `no background job record for ${sessionId}`, ...(!matches.length ? { missing: true } : {}) };

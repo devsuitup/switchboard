@@ -35,8 +35,10 @@ boundary: the renderer already exposes the ordinary checked respawn verb.
 `findRestoreJob`
 reads the saved job record afresh, or searches legacy records by `sessionId`
 or `resumeSessionId` when the saved job id is absent, null or invalid. Unreadable
-unrelated records do not block a unique readable match; an unreadable matching
-or explicitly saved record refuses. A legacy scan without a readable match
+unrelated records, including unidentifiable missing or unparsable state files,
+do not block a unique readable match; an unreadable record whose raw session or
+resume id matches, or an explicitly saved unreadable record, refuses. Default
+S1b matching does not add S2's raw link-scan or listed-id checks. A legacy scan without a readable match
 stays unknown if any record is unreadable or lacks state.json; only a fully
 readable scan can prove absence. An explicit saved id uses stat checks; only
 ENOENT proves absence. Other stat errors or a jobs path that is not a directory
@@ -941,7 +943,10 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 ### Reusing the conversation's job (#785, S2)
 
 Before writing, main calls the fresh `findRestoreJob(oldId, undefined,
-{ ignoreUnrelatedInvalid: true })` lookup. S1b restore keeps the default lookup
+{ ignoreUnrelatedInvalid: true })` lookup. Only this opt-in lookup completes
+each record's raw sessionId, resumeSessionId and linkScanPath-derived identities
+with the background roster entry's sessionId for that job id, using the same
+`listed(id)` source as liveJobCheck. S1b restore keeps the default lookup
 semantics unchanged.
 The job exposes `resumeTarget`: the validated, lowercased raw
 `resumeSessionId ?? sessionId`, independent of the link-scan identity.
@@ -954,7 +959,7 @@ Another live tab in this window is therefore an outside owner for this move.
 
 | Evidence | Route |
 | --- | --- |
-| No matching record after ignoring parsable unrelated invalid records (`missing`) | Existing `/bg` path |
+| No matching record after excluding readable records with nonempty unrelated completed identities (`missing`) | Existing `/bg` path |
 | Unknown lookup, ambiguous records or unreadable matching record | Refuse with lookup reason |
 | Raw resume target differs from the source, including an invalid target | Refuse and direct to the job in Agents |
 | Conversation classification or any owner check unknown | Refuse with its reason |
@@ -964,18 +969,26 @@ Another live tab in this window is therefore an outside owner for this move.
 | Elsewhere scan unknown or a live process found | Refuse, naming the pid when available |
 | Stopped/failed/done not live, or a dead worker in any state | `/exit` then checked respawn |
 
-The S2 lookup ignores a parsable unknown-state or otherwise invalid record only
-when none of its raw sessionId, resumeSessionId or linkScanPath-derived ids
-matches the source conversation. A matching raw id, unreadable/unparsable
-state.json or job directory without state.json refuses before any write,
-because the record may be this conversation's. With no matching record after
-that filtering, the route types /bg. This option does not relax liveJobCheck:
-when a job exists, an unrelated unknown-state record can still make the owner
-check unknown, so the respawn route refuses before /exit, just as the verb
-would after exit. These checks predict the deterministic guards of the verb.
-A race between reads, or a working/blocked record whose session id comes only from the CLI list and is
-hidden by the interactive descriptor until exit, can still cause a refusal
-after exit.
+The S2 lookup uses that completed identity for valid and invalid records alike.
+A readable record with no completed identity refuses because it cannot be
+excluded. An invalid record with a matching completed id also refuses; one
+whose completed ids all name other conversations is ignored. A valid match
+follows the existing-job checks. In particular, an id-less stopped record
+listed for the source is found, but its absent raw resumeTarget still refuses
+without writing; CLI identity does not replace the raw resume-target guard.
+
+An unreadable/unparsable state.json or directory without state.json does not
+block a unique readable match at lookup. With no readable match, it refuses
+with a notice that a background job record could not be read, never the raw
+read/parse error or path. Ambiguous readable matches still refuse. With no
+matching record and no unidentifiable records, the route types /bg.
+This option does not relax liveJobCheck: a missing state file is skipped there,
+so a unique stopped match can respawn; an unparsable or unknown-state record
+can still make the owner check unknown and refuse before /exit, just as the
+verb would after exit. These checks predict the deterministic guards of the
+verb. A race between reads, or a working/blocked record whose session id comes
+only from the CLI list and is hidden by the interactive descriptor until exit,
+can still cause a refusal after exit.
 
 The route runs under the existing tab input lock, followed by a bound-tab and
 eligibility recheck. The same command-parameterized composer/300 ms/Enter guard
