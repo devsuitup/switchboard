@@ -161,9 +161,15 @@ main for explicit guarded panel reads/saves; neither list handler calls it.
 
 Cold population shares one in-flight promise through scan-worker termination.
 Folder read errors are reported individually and do not stop other folders.
-If scanning or writing a folder fails, the completeness marker stays unset and
-subsequent population requests retry only failed folders after 30 seconds,
-2 minutes and 10 minutes. Further requests do not retry until the next startup.
+If scanning or writing a folder fails, population schedules its own failed-folder
+retries after 30 seconds, 2 minutes and 10 minutes, even for a startup scan with
+the completeness marker already set. Exhausted retries wait for startup or a
+forced rebuild; shutdown or a new scan cancels the pending timer. The timer
+bypasses only the deadline check so an early wake or clock rollback cannot
+drop a retry; its synchronous and rejected-promise errors use the existing logger.
+Failure status names the first failed folder with that folder's reason plus
+the count of others, and a successful retry uses the existing done status and
+five-second clear.
 An enumeration failure or worker crash with unknown remaining folders retries
 the previous scope under the same backoff. A successful subset retry marks the
 whole initial scan complete because earlier successful folders remain committed.

@@ -13,6 +13,8 @@ class Worker extends NativeWorker {
 }
 async function shutdownProducers() {
   stopping = true;
+  clearTimeout(populateRetryTimer);
+  populateRetryTimer = null;
   clearTimeout(_activityTimer);
   clearTimeout(_notifyTimer);
   _activityTimer = null;
@@ -183,6 +185,8 @@ function init(ctx) {
   continuationFiles.clear();
   deferredContinuationFiles.clear();
   stopping = false;
+  clearTimeout(populateRetryTimer);
+  populateRetryTimer = null;
   populateRetry = null;
   populateNow = ctx.now || Date.now;
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -1500,13 +1504,16 @@ function scanFoldersViaWorkerInternal({ projectsDir, folderPrefix, folders, file
 // can await it instead of seeing an empty list.
 let populatePromise = null;
 let populateRetry = null;
+let populateRetryTimer = null;
 let populateNow = Date.now;
 
-function populateCacheViaWorker({ force = false } = {}) {
+function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false) {
   if (stopping) return Promise.resolve();
   if (populatePromise) return populatePromise;
   if (force) populateRetry = null;
-  if (populateRetry && populateNow() < populateRetry.at) return Promise.resolve();
+  if (!retryTimerFired && populateRetry && populateNow() < populateRetry.at) return Promise.resolve();
+  clearTimeout(populateRetryTimer);
+  populateRetryTimer = null;
   const retryFolders = populateRetry?.folders;
   const retryAttempt = populateRetry?.attempt || 0;
 
@@ -1573,6 +1580,19 @@ function populateCacheViaWorker({ force = false } = {}) {
       }
       Promise.resolve(workerExited ? undefined : worker.terminate()).catch(() => {}).finally(() => {
         populatePromise = null;
+        if (!stopping && populateRetry && Number.isFinite(populateRetry.at)) {
+          populateRetryTimer = setTimeout(() => {
+            populateRetryTimer = null;
+            try {
+              return populateCacheViaWorker({}, true).catch(err => {
+                log && log.error('[session-cache] scan retry failed:', err);
+              });
+            } catch (err) {
+              log && log.error('[session-cache] scan retry failed:', err);
+            }
+          }, Math.max(0, populateRetry.at - populateNow()));
+          populateRetryTimer?.unref?.();
+        }
         resolve();
       });
     };
@@ -1598,8 +1618,8 @@ function populateCacheViaWorker({ force = false } = {}) {
             if (msg.error) throw new Error(msg.error);
             written = await writer.writeScannedFolder(msg.result, msg.unverifiedLocalFolder);
           } catch (err) {
-            writeError = err.message;
             const folder = msg.folder || msg.result?.folder || msg.unverifiedLocalFolder;
+            if (!writeError || (folder && !failedFolders.size)) writeError = err.message;
             if (folder) failedFolders.add(folder);
             else unknownFailure = true;
             log && log.error('[session-cache] folder write failed:', err.message);
@@ -1621,7 +1641,9 @@ function populateCacheViaWorker({ force = false } = {}) {
           if (!msg.ok && !msg.failedFolders?.length) unknownFailure = true;
           const error = writeError || msg.error;
           console.error('Worker scan error:', error);
-          sendStatus('Scan failed: ' + error, 'error');
+          const folder = failedFolders.values().next().value;
+          const scope = folder ? ` for ${folder}${failedFolders.size > 1 ? ` (+${failedFolders.size - 1})` : ''}` : '';
+          sendStatus(`Scan failed${scope}: ${error}`, 'error');
           reportProgress(true, error);
           settle();
           return;
