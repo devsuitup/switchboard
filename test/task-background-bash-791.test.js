@@ -816,24 +816,93 @@ test('rekey merges and bounds deferred Bash results separately from Agent pendin
   assert.equal(p.shellResults.size, 3);
 });
 
+function agentSnapshot(r) {
+  return JSON.parse(JSON.stringify({
+    tasks: r.snapshot(id).tasks.filter(t => t.kind === 'agent'),
+    agents: r.agents(id).map(t => ({ id: t.id, terminal: t.terminal, at: t.at, subagentType: t.subagentType, sources: [...t.sources] })),
+    count: r.runningAgentCount([id]),
+  }));
+}
+
+function asyncAgent(tool, taskId) {
+  const launch = use(tool);
+  launch.message.content[0].name = 'Agent';
+  return [launch, result(tool, undefined, { backgroundTaskId: undefined, agentId: taskId, isAsync: true, status: 'async_launched' })];
+}
+
+test('Bash notification floods preserve a completed Agent notification key and snapshots on offset-zero replay', () => {
+  for (const toolId of [false, true]) {
+    const quiet = createTaskRegistry({ maxEntries: 8 });
+    const { registry: noisy, maps } = observedRegistry({ maxEntries: 8 });
+    const transcript = [...asyncAgent('replayed-agent', 'areplayed'), done('areplayed', 'replayed-agent')];
+    for (let i = 0; i < 16; i++) {
+      transcript.push(use('notify-' + i), result('notify-' + i, undefined, { backgroundTaskId: 'bnotify' + i }), done('bnotify' + i, toolId ? 'notify-' + i : null));
+    }
+    for (let replay = 0; replay < 3; replay++) {
+      for (const [index, entry] of transcript.entries()) {
+        noisy.ingest(id, entry);
+        if (index < 3) quiet.ingest(id, entry);
+        assert.deepEqual(agentSnapshot(noisy), agentSnapshot(quiet), `tool id=${toolId} replay=${replay} uuid=${entry.uuid}`);
+      }
+      assert.equal(maps[0].get(id).seen.has(transcript[2].uuid), true, 'Bash notifications must retain the completed Agent notification dedup key');
+    }
+  }
+});
+
+test('tool-id Bash notifications after call eviction cannot evict an early Agent result', () => {
+  const quiet = createTaskRegistry({ maxEntries: 8 });
+  const noisy = createTaskRegistry({ maxEntries: 8 });
+  const [agent, output] = asyncAgent('deferred-agent', 'adeferred');
+  for (const r of [quiet, noisy]) r.ingest(id, output);
+  for (let i = 0; i < 16; i++) noisy.ingest(id, use('evicted-notify-' + i));
+  for (let i = 0; i < 8; i++) {
+    noisy.ingest(id, result('evicted-notify-' + i, undefined, { backgroundTaskId: 'bevictednotify' + i }));
+    noisy.ingest(id, done('bevictednotify' + i, 'evicted-notify-' + i));
+  }
+  for (const r of [quiet, noisy]) r.ingest(id, agent);
+  assert.deepEqual(agentSnapshot(noisy), agentSnapshot(quiet), 'the early Agent result survives known-shell tool notifications');
+});
+
+test('shell tool notifications are bounded, consumed after a late call, merged and cleared', () => {
+  const { registry: r, maps } = observedRegistry({ maxEntries: 4 });
+  for (let i = 0; i < 12; i++) {
+    r.ingest(id, result('late-notify-' + i, undefined, { backgroundTaskId: 'blatenotify' + i }));
+    r.ingest(id, done('blatenotify' + i, 'late-notify-' + i));
+  }
+  const p = maps[0].get(id);
+  assert.equal(p.pending.size, 0, 'known shell notifications never enter Agent pending');
+  assert.equal(p.taskNotifications.size, 4, 'tool-id notifications share the small shell-only cap');
+  r.ingest(id, use('late-notify-11'));
+  assert.equal(r.snapshot(id).tasks.find(t => t.id === 'blatenotify11')?.terminal, true);
+  assert.equal(p.taskNotifications.size, 3, 'late call consumes its tool-id notification');
+  const nextId = '22222222-2222-4222-8222-222222222222';
+  for (let i = 0; i < 4; i++) {
+    r.ingest(nextId, use('destination-' + i));
+    r.ingest(nextId, done('bdestination' + i, 'destination-' + i));
+  }
+  r.rekey(id, nextId);
+  const merged = maps[0].get(nextId);
+  assert.equal(merged.taskNotifications.size, 4, 'rekey bounds mixed task/tool notifications');
+  r.ingest(nextId, use('late-notify-10'));
+  assert.equal(r.snapshot(nextId).tasks.find(t => t.id === 'blatenotify10')?.terminal, true, 'rekey retains and consumes shell completions');
+  r.ownerDied(nextId);
+  assert.equal(merged.taskNotifications.size, 0);
+});
+
 function seededAgentTraffic(seed, maxEntries, quietFactory = createTaskRegistry) {
   let state = seed;
   const random = n => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state % n; };
   const options = { maxEntries, now: () => Date.parse('2026-10-26T11:00:00Z') };
   const quiet = quietFactory(options);
   const noisy = createTaskRegistry(options);
-  const normalize = value => JSON.parse(JSON.stringify(value));
-  const agents = r => normalize({
-    tasks: r.snapshot(id).tasks.filter(t => t.kind === 'agent'),
-    agents: r.agents(id).map(t => ({ id: t.id, terminal: t.terminal, at: t.at, subagentType: t.subagentType, sources: [...t.sources] })),
-    count: r.runningAgentCount([id]),
-  });
+  const transcript = [];
   let step = 0;
   const feed = (entry, shell = false) => {
     step++;
+    transcript.push([entry, shell]);
     noisy.ingest(id, entry);
     if (!shell) quiet.ingest(id, entry);
-    assert.deepEqual(agents(noisy), agents(quiet), `seed=${seed} maxEntries=${maxEntries} step=${step}`);
+    assert.deepEqual(agentSnapshot(noisy), agentSnapshot(quiet), `seed=${seed} maxEntries=${maxEntries} step=${step}`);
   };
   for (let round = 0; round < 6; round++) {
     const tool = 'seed-agent-' + round;
@@ -860,7 +929,7 @@ function seededAgentTraffic(seed, maxEntries, quietFactory = createTaskRegistry)
         entries[1].message.content[0].tool_use_id += calls[i];
         for (const entry of entries) feed(entry, true);
       }
-      feed(done(bashId, null), true);
+      feed(done(bashId, calls[i]), true);
     }
     feed(early ? agent : output);
     if (random(2)) feed(done(taskId, tool));
@@ -869,12 +938,17 @@ function seededAgentTraffic(seed, maxEntries, quietFactory = createTaskRegistry)
     message.message.content[0].input = { to: taskId };
     feed(message);
     feed(result('seed-message-' + round, undefined, { backgroundTaskId: undefined }, { is_error: random(2) === 0 }));
+    for (const [entry, shell] of [...transcript]) {
+      noisy.ingest(id, entry);
+      if (!shell) quiet.ingest(id, entry);
+      assert.deepEqual(agentSnapshot(noisy), agentSnapshot(quiet), `seed=${seed} maxEntries=${maxEntries} round=${round} replay uuid=${entry.uuid}`);
+    }
   }
 }
 
-test('200 fixed seeds preserve Agent snapshots with interleaved Bash noise at capacities 4 and 8', t => {
+test('220 fixed seeds preserve Agent snapshots with tool-id Bash notifications and offset-zero replays at capacities 4 and 8', t => {
   const failures = [];
-  for (const maxEntries of [4, 8]) for (let seed = 1; seed <= 200; seed++) {
+  for (const maxEntries of [4, 8]) for (let seed = 1; seed <= 220; seed++) {
     try { seededAgentTraffic(seed, maxEntries); }
     catch (error) {
       if (error.code !== 'ERR_ASSERTION') throw error;

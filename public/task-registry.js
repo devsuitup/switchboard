@@ -188,6 +188,8 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         !blocks.some(b => b.type === 'tool_result' && (callFor(parents.get(id), b.tool_use_id) || entry.toolUseResult?.agentId))) return;
     const p = parent(id);
     const key = entry.uuid || `${entry.type}:${entry.timestamp}:${blocks.map(b => b.id || b.tool_use_id).join(',')}:${n?.id || n?.ids?.join(',') || ''}`;
+    const shellNotification = n && (n.ids ? n.ids.every(taskId => p.tasks.get(taskId)?.kind === 'bash') :
+      p.tasks.get(n.id)?.kind === 'bash' || p.shellCalls.has(n.tool) || p.shellSeen.has(`result:${n.tool}`) || p.shellResults.has(`result:${n.tool}`));
     const quietBash = !n && blocks.every(b => {
       if (b.type === 'tool_use') return b.name === 'Bash';
       if (b.type !== 'tool_result') return true;
@@ -195,7 +197,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
       return call?.bash && !(shell && b.tool_use_id === shell.tool && (call.async || shell.backgrounded));
     });
     if (!quietBash) {
-      const agentEntry = n || blocks.some(b => b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'SendMessage' && p.tasks.get(b.input?.to)?.kind === 'agent')) ||
+      const agentEntry = n && !shellNotification || blocks.some(b => b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'SendMessage' && p.tasks.get(b.input?.to)?.kind === 'agent')) ||
         blocks.some(b => b.type === 'tool_result' && (p.calls.has(b.tool_use_id) || entry.toolUseResult?.agentId));
       const seen = agentEntry ? p.seen : p.shellSeen;
       const seenKey = !agentEntry && shell ? `result:${shell.tool}` : key;
@@ -248,7 +250,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
           if (!call?.async && !shell.backgrounded) continue;
           p.shellCalls.set(b.tool_use_id, { id: shell.id, at: call.at, shell: true });
           if (call.at > (p.ownerStartedAt ?? -Infinity)) open(id, shell.id, 'bash', call.at, { origin: 'transcript' });
-          for (const [pending, pendingKey] of [[p.pending, `notification:${b.tool_use_id}`], [p.taskNotifications, `notification-task:${shell.id}`]]) {
+          for (const [pending, pendingKey] of [[p.pending, `notification:${b.tool_use_id}`], [p.taskNotifications, `notification:${b.tool_use_id}`], [p.taskNotifications, `notification-task:${shell.id}`]]) {
             const early = pending.get(pendingKey);
             if (early && early.id === shell.id) { end(id, shell.id, early.at); pending.delete(pendingKey); }
           }
@@ -301,7 +303,11 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         if ((n.tool && call && call.id === n.id) || (!n.tool && ['agent', 'bash'].includes(p.tasks.get(n.id)?.kind)) ||
             (n.tool && !call && p.tasks.get(n.id)?.kind === 'bash' && !p.tasks.get(n.id).terminal) ||
             (p.tasks.get(n.id)?.kind === 'bash' && p.tasks.get(n.id).terminal)) end(id, n.id, at);
-        else if (n.tool) { p.pending.set(`notification:${n.tool}`, { ...n, at }); bound(p.pending); }
+        else if (n.tool) {
+          const pending = shellNotification ? p.taskNotifications : p.pending;
+          pending.set(`notification:${n.tool}`, { ...n, at });
+          bound(pending, shellNotification ? Math.min(256, maxEntries) : maxEntries);
+        }
         else if (/^[a-z][a-z0-9]+$/.test(n.id)) { p.taskNotifications.set(`notification-task:${n.id}`, { ...n, at }); bound(p.taskNotifications, Math.min(256, maxEntries)); }
       }
     }
