@@ -10,12 +10,14 @@ const { EventEmitter } = require('node:events');
 
 function fixture({ complete = true, folders = ['broken', 'healthy'] } = {}) {
   let now = 0, nextTimer = 0;
-  const timers = new Map(), workers = [], statuses = [], written = [];
+  const timers = new Map(), workers = [], statuses = [], written = [], errors = [];
+  const faults = {};
   const failing = new Set(['broken']);
   const reasons = new Map();
   class ScanWorker extends EventEmitter {
     constructor(_filename, { workerData }) {
       super();
+      if (faults.worker) throw faults.worker;
       workers.push(workerData);
       setImmediate(() => {
         const scope = workerData.folders || folders;
@@ -46,8 +48,11 @@ function fixture({ complete = true, folders = ['broken', 'healthy'] } = {}) {
     getMainWindow: () => ({ isDestroyed: () => false, webContents: {
       send(channel, message, level) { if (channel === 'status-update') statuses.push({ message, level }); },
     } }),
-    log: { error() {}, warn() {}, info() {} },
-    db: { getSetting: () => null, isInitialScanComplete: () => complete, setInitialScanComplete() {} },
+    log: { error(...args) { errors.push(args); }, warn() {}, info() {} },
+    db: { getSetting: () => null, isInitialScanComplete() {
+      if (faults.initialScan) throw faults.initialScan;
+      return complete;
+    }, setInitialScanComplete() {} },
     writer: {
       async writeScannedFolder({ folder }) {
         written.push(folder);
@@ -70,8 +75,59 @@ function fixture({ complete = true, folders = ['broken', 'healthy'] } = {}) {
     }
     now = end;
   }
-  return { cache, failing, reasons, workers, statuses, written, advance, complete: () => complete };
+  async function fireRetryEarly(by = 1) {
+    const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
+    assert.ok(next, 'a retry timer must be armed');
+    const [id, timer] = next;
+    timers.delete(id);
+    now = timer.at - by;
+    assert.doesNotThrow(() => timer.callback(), 'the timer must contain synchronous errors');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  return { cache, failing, reasons, workers, statuses, written, advance, fireRetryEarly,
+    errors, faults, complete: () => complete };
 }
+
+for (const earlyBy of [1, 60000]) {
+  test(`a retry timer waking ${earlyBy} ms before its deadline runs and clears the error`, async () => {
+    const f = fixture();
+    await f.cache.populateCacheViaWorker();
+    await f.advance(29999);
+    await f.cache.populateCacheViaWorker();
+    assert.equal(f.workers.length, 1, 'ordinary callers must respect backoff');
+    f.failing.clear();
+    await f.fireRetryEarly(earlyBy);
+    assert.equal(f.workers.length, 2, 'an early timer must not lose the retry');
+    assert.equal(f.statuses.at(-1).level, 'done');
+    await f.advance(5000);
+    assert.equal(f.statuses.at(-1).message, '');
+  });
+}
+
+for (const fault of ['initialScan', 'worker']) {
+  test(`a retry timer logs a ${fault} error without an uncaught exception or rejection`, async () => {
+    const f = fixture();
+    await f.cache.populateCacheViaWorker();
+    const error = new Error(`${fault} failed during retry`);
+    f.faults[fault] = error;
+    f.errors.length = 0;
+    await assert.doesNotReject(f.advance(30000), 'timer errors must not escape');
+    assert.equal(f.errors.length, 1, 'the timer failure must reach the existing logger');
+    assert.equal(f.errors[0][1], error);
+    assert.equal(f.workers.length, 1);
+  });
+}
+
+test('a named folder failure supplies its own reason after an unknown-folder failure', async () => {
+  const f = fixture({ folders: [undefined, 'broken', 'healthy'] });
+  f.failing.add(undefined);
+  f.failing.add('healthy');
+  f.reasons.set(undefined, 'unknown failure');
+  f.reasons.set('broken', 'named failure');
+  f.reasons.set('healthy', 'later named failure');
+  await f.cache.populateCacheViaWorker();
+  assert.equal(f.statuses.at(-1).message, 'Scan failed for broken (+1): named failure');
+});
 
 for (const complete of [true, false]) {
   test(`a failed startup scan (initial marker ${complete}) retries only failed folders and clears its status`, async () => {

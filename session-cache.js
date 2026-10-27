@@ -1507,11 +1507,11 @@ let populateRetry = null;
 let populateRetryTimer = null;
 let populateNow = Date.now;
 
-function populateCacheViaWorker({ force = false } = {}) {
+function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false) {
   if (stopping) return Promise.resolve();
   if (populatePromise) return populatePromise;
   if (force) populateRetry = null;
-  if (populateRetry && populateNow() < populateRetry.at) return Promise.resolve();
+  if (!retryTimerFired && populateRetry && populateNow() < populateRetry.at) return Promise.resolve();
   clearTimeout(populateRetryTimer);
   populateRetryTimer = null;
   const retryFolders = populateRetry?.folders;
@@ -1583,7 +1583,13 @@ function populateCacheViaWorker({ force = false } = {}) {
         if (!stopping && populateRetry && Number.isFinite(populateRetry.at)) {
           populateRetryTimer = setTimeout(() => {
             populateRetryTimer = null;
-            return populateCacheViaWorker();
+            try {
+              return populateCacheViaWorker({}, true).catch(err => {
+                log && log.error('[session-cache] scan retry failed:', err);
+              });
+            } catch (err) {
+              log && log.error('[session-cache] scan retry failed:', err);
+            }
           }, Math.max(0, populateRetry.at - populateNow()));
           populateRetryTimer?.unref?.();
         }
@@ -1612,8 +1618,8 @@ function populateCacheViaWorker({ force = false } = {}) {
             if (msg.error) throw new Error(msg.error);
             written = await writer.writeScannedFolder(msg.result, msg.unverifiedLocalFolder);
           } catch (err) {
-            writeError ||= err.message;
             const folder = msg.folder || msg.result?.folder || msg.unverifiedLocalFolder;
+            if (!writeError || (folder && !failedFolders.size)) writeError = err.message;
             if (folder) failedFolders.add(folder);
             else unknownFailure = true;
             log && log.error('[session-cache] folder write failed:', err.message);
