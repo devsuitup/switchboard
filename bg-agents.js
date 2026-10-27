@@ -374,7 +374,7 @@ function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false
     const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
     const raw = JSON.parse(text);
     const job = parseJobState(text);
-    if (ignoreUnrelatedInvalid && !identity(raw, id).length) throw new Error(`job ${id} does not name its conversation`);
+    if (ignoreUnrelatedInvalid && !identity(raw, id).length) throw new Error(`job ${id} does not name its conversation; Switchboard uses the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses — open the Agents view, then retry`);
     if (!job?.state || (raw.id && raw.id !== id)) throw new Error(`job ${id} has an unknown or unreadable state`);
     const rawTarget = raw.resumeSessionId ?? raw.sessionId;
     const resumeTarget = typeof rawTarget === 'string' && SESSION_ID_RE.test(rawTarget) ? rawTarget.toLowerCase() : null;

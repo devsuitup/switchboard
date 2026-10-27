@@ -945,15 +945,18 @@ id) in attributes through `agentsEscapeAttr`, which also escapes `"` and `'`:
 Before writing, main calls the fresh `findRestoreJob(oldId, undefined,
 { ignoreUnrelatedInvalid: true })` lookup. Only this opt-in lookup completes
 each record's raw sessionId, resumeSessionId and linkScanPath-derived identities
-with the background roster entry's sessionId for that job id, using the same
-`listed(id)` source as liveJobCheck. S1b restore keeps the default lookup
-semantics unchanged.
+with the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses — open the Agents view, then retry.
+This is the cached background roster, using the same `listed(id)` source as
+liveJobCheck; the decision path makes no CLI call. The roster fills after a
+subscription (opening Agents), a verb or dispatch. S1b restore keeps the
+default lookup semantics unchanged.
 The job exposes `resumeTarget`: the validated, lowercased raw
 `resumeSessionId ?? sessionId`, independent of the link-scan identity.
 `conversationCheck(job.id, { workerLiveness: 'all' })` classifies every state.
 Main checks `liveJobCheck` over the lowercased union of the source id and
 all `check.sessionIds`, using the same job-specific worker evidence as the
-checked respawn verb. It scans every checked session id for other processes,
+checked respawn verb. For other processes it scans the lowercased, deduplicated
+union of the source id, raw resumeTarget and every check.sessionIds entry,
 bypassing the has-PTY shortcut and excluding only the source PTY's tree.
 Another live tab in this window is therefore an outside owner for this move.
 
@@ -975,7 +978,7 @@ excluded. An invalid record with a matching completed id also refuses; one
 whose completed ids all name other conversations is ignored. A valid match
 follows the existing-job checks. In particular, an id-less stopped record
 listed for the source is found, but its absent raw resumeTarget still refuses
-without writing; CLI identity does not replace the raw resume-target guard.
+without writing; cached roster identity does not replace the raw resume-target guard.
 
 An unreadable/unparsable state.json or directory without state.json does not
 block a unique readable match at lookup. With no readable match, it refuses
@@ -987,17 +990,20 @@ so a unique stopped match can respawn; an unparsable or unknown-state record
 can still make the owner check unknown and refuse before /exit, just as the
 verb would after exit. These checks predict the deterministic guards of the
 verb. A race between reads, or a working/blocked record whose session id comes
-only from the CLI list and is hidden by the interactive descriptor until exit,
+only from the cached Agents-view list and is hidden by the interactive descriptor until exit,
 can still cause a refusal after exit.
 
 The route runs under the existing tab input lock, followed by a bound-tab and
 eligibility recheck. The same command-parameterized composer/300 ms/Enter guard
 handles `/bg` and `/exit`. The respawn path waits up to 15 seconds for
 `session.exited`, never kills the source and never confirms a continuation.
-The helper exposed as `unsubscribeBgAgents.respawnForHandoff(job)` is shared
-with S1b's restore IPC: checked respawn, runVerb, then descriptor wait using the
-full job identity (including descriptors without jobId). Restore's action
-shapes and stopped-job policy stay the same.
+The helper exposed as `unsubscribeBgAgents.respawnForHandoff(job, extraSessionIds)`
+is shared with S1b's restore IPC: checked respawn, runVerb, then descriptor wait
+using the full job identity (including descriptors without jobId). S2 passes
+the source id and raw resumeTarget as extra ids; after exit, the verb checks
+their lowercased, deduplicated union with fresh check.sessionIds. The optional
+extra ids default to empty, preserving ordinary Agents-view Respawn/Delete
+and S1b restore guards. Restore's action shapes and stopped-job policy stay the same.
 
 Success sets `backgrounded` and returns the same conversation id with
 `respawned:true` and `attached`. Main skips transition detection and

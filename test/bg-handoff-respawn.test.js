@@ -13,7 +13,7 @@ const SID = 'abcdefab-abcd-4abc-8abc-abcdefabcdef';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const SOURCE_PID = 4242;
 
-function setup(t, { jobs = {}, outside = [], others = [], listed = [] } = {}) {
+function setup(t, { jobs = {}, outside = [], others = [], listed = [], checkedRespawn = false, afterExitOutside = [] } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-s2-respawn-'));
   t.after(() => { bg.stop(); fs.rmSync(root, { recursive: true, force: true }); });
   const jobsDir = path.join(root, 'jobs');
@@ -24,7 +24,8 @@ function setup(t, { jobs = {}, outside = [], others = [], listed = [] } = {}) {
     fs.mkdirSync(path.join(jobsDir, id));
     fs.writeFileSync(path.join(jobsDir, id, 'state.json'), JSON.stringify(fields));
   }
-  bg.init({ jobsDir, homeDir: root, runClaude: async () => ({ code: 0, stdout: JSON.stringify(listed) }), cliSessionState: { readAllDescriptors: () => [], onDescriptorsChanged: () => () => {}, ensureWatching() {},
+  const cliCalls = [];
+  bg.init({ jobsDir, homeDir: root, runClaude: async (...args) => { cliCalls.push(args); return { code: 0, stdout: JSON.stringify(listed) }; }, cliSessionState: { readAllDescriptors: () => [], onDescriptorsChanged: () => () => {}, ensureWatching() {},
     refreshProcessTable: async () => {}, readWorkerProcessEvidence: () => ({ processTableFresh: true, tableEntry: () => undefined }) } });
   const folder = 'folder';
   fs.mkdirSync(path.join(root, folder));
@@ -44,7 +45,7 @@ function setup(t, { jobs = {}, outside = [], others = [], listed = [] } = {}) {
     mainWindow: { isDestroyed: () => false, webContents: { send() {} } },
     writePty: (entry, text) => {
       writes.push(text);
-      if (text === '\r') setTimeout(() => { session.exited = true; for (const fn of [...listeners]) fn(); }, 10);
+      if (text === '\r') setTimeout(() => { session.exited = true; outside.push(...afterExitOutside); for (const fn of [...listeners]) fn(); }, 10);
       return true;
     },
     killPty() {},
@@ -66,7 +67,13 @@ function setup(t, { jobs = {}, outside = [], others = [], listed = [] } = {}) {
   });
   const { handleSendToBackground } = loadAppFunctions(ctx, { declarations: ['backgroundHandoffs'],
     functions: ['handleSendToBackground', 'persistBackgroundHandoff', 'readBackgroundHandoffStamp'], sourcePath: path.join(__dirname, '../main.js') });
-  return { send: () => handleSendToBackground({}, 'tab'), writes, respawned, exitedAtRespawn, session, jobsDir };
+  if (checkedRespawn) ctx.unsubscribeBgAgents = require('../bg-agents-ipc').init({
+    ipcMain: { handle() {} }, getMainWindow: () => null, log: { warn() {} }, activeSessions,
+    bgAgents: { ...bg, runVerb: async (verb, id) => { respawned.push(id); exitedAtRespawn.push(session.exited === true); return { ok: true }; } },
+    cliSessionState: { ...ctx.cliSessionState, readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID }] },
+    sessionHasPty: ctx.sessionHasPty, ptyPids: ctx.ptyPids,
+  });
+  return { send: () => handleSendToBackground({}, 'tab'), writes, respawned, exitedAtRespawn, session, jobsDir, cliCalls };
 }
 
 test('S2-T1 a stopped job of this conversation is relaunched by respawn after /exit, never /bg', { timeout: 20000 }, async t => {
@@ -239,6 +246,47 @@ test('S2c a unique readable match wins the lookup over an unparsable record but 
   const result = await h.send();
   assert.equal(result.code, 'refused');
   assert.match(result.error, /which job runs this conversation/);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(h.respawned, []);
+});
+
+test('S2d a different session id cannot hide an outside owner of the resume target before exit', async t => {
+  const h = setup(t, { jobs: { aaaaaaaa: { state: 'stopped', sessionId: OTHER, resumeSessionId: SID.toUpperCase() } },
+    outside: [{ sessionId: SID, pid: SOURCE_PID }, { sessionId: SID, pid: 777 }] });
+  const result = await h.send();
+  assert.equal(result.code, 'refused');
+  assert.match(result.error, /pid 777/);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(h.respawned, []);
+});
+
+test('S2d an owner appearing on the resume target after exit prevents checked respawn', async t => {
+  const h = setup(t, { jobs: { aaaaaaaa: { state: 'stopped', sessionId: OTHER, resumeSessionId: SID.toUpperCase() } },
+    checkedRespawn: true, afterExitOutside: [{ sessionId: SID, pid: 777 }] });
+  const result = await h.send();
+  assert.equal(result.code, 'respawn-failed');
+  assert.match(result.error, /not relaunched.*pid 777/);
+  assert.deepEqual(h.writes, ['/exit', '\r']);
+  assert.deepEqual(h.respawned, []);
+});
+
+test('S2d GUARD a different session id with no outside resume owner relaunches after exit', async t => {
+  const h = setup(t, { jobs: { aaaaaaaa: { state: 'stopped', sessionId: OTHER, resumeSessionId: SID } }, checkedRespawn: true });
+  const result = await h.send();
+  assert.equal(result.ok, true);
+  assert.deepEqual(h.writes, ['/exit', '\r']);
+  assert.deepEqual(h.respawned, ['aaaaaaaa']);
+  assert.deepEqual(h.exitedAtRespawn, [true]);
+});
+
+test('S2d before the Agents view subscribes an id-less record refuses with roster recovery guidance', async t => {
+  const h = setup(t, { jobs: { bbbbbbbb: { state: 'stopped' } }, listed: [
+    { id: 'bbbbbbbb', kind: 'background', sessionId: OTHER, state: 'stopped' },
+  ] });
+  const result = await h.send();
+  assert.equal(result.code, 'refused');
+  assert.deepEqual(h.cliCalls, [], 'the handoff decision does not fetch the CLI list');
+  assert.match(result.error, /the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses \u2014 open the Agents view, then retry/);
   assert.deepEqual(h.writes, []);
   assert.deepEqual(h.respawned, []);
 });

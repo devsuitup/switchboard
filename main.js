@@ -1879,10 +1879,11 @@ async function handleSendToBackground(_event, sessionId) {
         if (!owned.known || owned.job) break;
       }
       const elsewhere = [];
-      for (const sid of check.sessionIds) elsewhere.push(await cliSessionState.liveElsewhereChecked(sid, () => false, () => [entry.pty.pid]));
+      const elsewhereIds = new Set([id, lookup.job.resumeTarget, ...check.sessionIds].filter(Boolean).map(s => s.toLowerCase()));
+      for (const sid of elsewhereIds) elsewhere.push(await cliSessionState.liveElsewhereChecked(sid, () => false, () => [entry.pty.pid]));
       return respawnRoute({ oldId: id, lookup, check, owned, elsewhere });
     },
-    respawnJob: job => unsubscribeBgAgents.respawnForHandoff(job),
+    respawnJob: job => unsubscribeBgAgents.respawnForHandoff(job, [oldId, job.resumeTarget].filter(Boolean)),
   });
   if (result.ok && !result.respawned && session?.projectFolder) detectSessionTransitions(session.projectFolder);
   if (result.ok && !result.respawned) {

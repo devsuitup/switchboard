@@ -24,7 +24,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     bgAgents.start();
     return bgAgents.reconcile();
   });
-  const checkVerb = async (verb, id, restoring = false) => {
+  const checkVerb = async (verb, id, restoring = false, extraSessionIds = []) => {
     if (verb === 'rm' || verb === 'respawn' || verb === 'stop') {
       const action = { rm: 'delete', respawn: 'respawn', stop: 'stop' }[verb];
       const declined = { rm: 'not deleted', respawn: 'not respawned', stop: 'not stopped' }[verb];
@@ -39,7 +39,9 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
         if (check.hosted) {
           return { ok: false, error: `cannot ${action} a ${check.state} session; stop it first` };
         }
-        for (const sessionId of check.sessionIds) {
+        const sessionIds = extraSessionIds.length
+          ? new Set([...check.sessionIds, ...extraSessionIds].map(s => s.toLowerCase())) : check.sessionIds;
+        for (const sessionId of sessionIds) {
           const refusal = await deleteSessionRefusal(sessionId, {
             activeSessions: verb === 'stop' ? new Map([...activeSessions || []].filter(([, session]) =>
               !(session?.isAttach && String(session.attachJobId).toLowerCase() === id.toLowerCase()))) : activeSessions,
@@ -90,9 +92,9 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       check();
     } catch { finish(false); }
   });
-  const respawnForHandoff = async job => {
+  const respawnForHandoff = async (job, extraSessionIds = []) => {
     try {
-      const permission = await checkVerb('respawn', job.id, true);
+      const permission = await checkVerb('respawn', job.id, true, extraSessionIds);
       if (!permission.ok) return { ok: false, refused: true, error: permission.error };
       const result = await bgAgents.runVerb('respawn', job.id);
       if (!result?.ok) return { ok: false, error: result?.error || 'respawn returned no result' };

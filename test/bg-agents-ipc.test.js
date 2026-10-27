@@ -377,3 +377,40 @@ for (const failure of ['refuse', 'fail', 'throw']) {
     if (failure === 'refuse') assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), []);
   });
 }
+
+for (const verb of ['rm', 'respawn']) {
+  test('S2d GUARD Agents-view ' + verb + ' keeps its conversationCheck ids', async () => {
+    const { handlers, ipcMain } = fakeIpc();
+    const bg = fakeBgAgents();
+    const checked = [];
+    bg.conversationCheck = () => ({ known: true, state: 'stopped', hosted: false, workerLiveness: 'dead',
+      sessionIds: ['listed-id'], resumeTarget: 'extra-id' });
+    init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
+      sessionHasPty: () => false, ptyPids: () => [],
+      cliSessionState: { liveElsewhereChecked: async sid => {
+        checked.push(sid);
+        return { known: true, live: sid === 'extra-id' ? { pid: 777 } : null };
+      } },
+    });
+    assert.equal((await handlers.get('check-bg-agent-verb')({}, verb, 'aaaaaaaa', ['extra-id'])).ok, true);
+    assert.equal((await handlers.get('bg-agent-verb')({}, verb, 'aaaaaaaa', ['extra-id'])).ok, true);
+    assert.deepEqual(checked, ['listed-id', 'listed-id']);
+    assert.deepEqual(bg.calls.filter(call => call[0] === 'verb'), [['verb', verb, 'aaaaaaaa']]);
+  });
+}
+
+test('S2d checked handoff lowercases and deduplicates extra conversation ids', async () => {
+  const { ipcMain } = fakeIpc();
+  const bg = fakeBgAgents();
+  const checked = [];
+  bg.conversationCheck = () => ({ known: true, state: 'stopped', hosted: false, workerLiveness: 'dead', sessionIds: ['S-1'] });
+  const unsubscribe = init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
+    sessionHasPty: () => false, ptyPids: () => [],
+    cliSessionState: { readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's-1' }],
+      onDescriptorsChanged: () => () => {},
+      liveElsewhereChecked: async sid => { checked.push(sid); return { known: true, live: null }; } },
+  });
+  assert.deepEqual(await unsubscribe.respawnForHandoff({ id: 'aaaaaaaa', sessionId: 's-1' }, ['s-1', 'EXTRA-ID', 'extra-id']),
+    { ok: true, attached: true });
+  assert.deepEqual(checked, ['s-1', 'extra-id']);
+});

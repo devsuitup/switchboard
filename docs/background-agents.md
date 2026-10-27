@@ -225,8 +225,9 @@ what to check. A stopped, failed or finished job can be relaunched unless its
 worker is live.
 
 When there is no matching job, Switchboard identifies each readable record by
-its session id, resume id and transcript-path id, plus the session id listed for
-that job by the CLI. A valid or invalid record identified only as another
+its session id, resume id and transcript-path id, plus the session id the Agents view last listed for that job; if Switchboard has no such list yet, a record that does not name its conversation refuses — open the Agents view, then retry.
+This uses the cached roster and makes no CLI call on the decision path.
+A valid or invalid record identified only as another
 conversation's is ignored. An invalid record naming this conversation, or any
 readable record with no identity even after consulting the list, refuses before
 writing. A record that cannot be read or parsed, including a job directory with
@@ -238,9 +239,11 @@ state file does not block a unique readable match at lookup. A missing state
 file also passes the owner check, so the existing job can be relaunched. An
 unparsable or unknown-state record can still make that owner check unknown, so
 Switchboard refuses before typing /exit, just as the respawn command would.
-A valid record identified by the CLI list is treated as an existing job, but
+A valid record identified by the cached Agents-view list is treated as an existing job, but
 relaunch still requires a valid session or resume id in the job file naming
 this conversation; the list alone does not authorize a resume target.
+The source conversation, raw resume target and all checked conversation ids
+are checked for other processes before /exit and again before relaunching.
 
 If `/exit` does not close the terminal within 15 seconds, nothing is relaunched
 and the terminal is not killed. If the checked respawn is refused after exit,
