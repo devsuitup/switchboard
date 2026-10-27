@@ -29,6 +29,32 @@ function rolledRow(h) {
 }
 
 for (const initialScanComplete of [true, false]) {
+  test(`#789: operation membership obeys scan completion=${initialScanComplete}`, t => {
+    const h = setup(t, { old: ['mirror', 'gone'], mirror: ['b'], b: ['c'], c: [] }, { initialScanComplete });
+    h.rows.get('old').bridgeSessionId = 'bridge';
+    Object.assign(h.rows.get('mirror'), { bridgeSessionId: 'bridge', mergedIntoSessionId: 'old' });
+    const rows = [...h.rows.values()];
+    assert.deepEqual(cache.conversationMemberIds(rows, 'b').sort(), initialScanComplete ? ['c', 'mirror', 'old'] : []);
+    assert.deepEqual(cache.conversationMemberIds(rows, 'old').sort(), initialScanComplete ? ['b', 'c', 'mirror'] : ['mirror']);
+  });
+
+  test(`#789: click candidate title obeys scan completion=${initialScanComplete}`, async t => {
+    const h = setup(t, { old: ['mirror', 'gone'], mirror: ['b'], b: ['c'], c: [] }, {
+      initialScanComplete,
+      metadata: {
+        old: { name: 'Whole conversation', nameSource: 'user', nameRevision: 7 },
+        c: { name: 'Head part', nameSource: 'user', nameRevision: 3 },
+      },
+    });
+    h.rows.get('old').bridgeSessionId = 'bridge';
+    Object.assign(h.rows.get('mirror'), { bridgeSessionId: 'bridge', mergedIntoSessionId: 'old' });
+    h.rows.get('c').messageCount = 7;
+    const resolved = await h.ctx.api.getSessionContinuations('old');
+    assert.deepEqual(resolved.candidates.map(({ sessionId, title, messageCount }) => ({ sessionId, title, messageCount })),
+      [{ sessionId: 'c', title: initialScanComplete ? 'Whole conversation' : 'Head part', messageCount: 7 }]);
+    assert.equal(resolved.unresolved, false);
+  });
+
   test(`#789: mirror chain sidebar and click resolution with scan complete=${initialScanComplete}`, async t => {
     const h = setup(t, { old: ['mirror', 'gone'], mirror: ['b'], b: ['c'], c: [] }, { initialScanComplete });
     h.rows.get('old').bridgeSessionId = 'bridge';

@@ -35,7 +35,8 @@ function projectsWorker(h, { onMessage = () => {}, onYield = callback => setImme
       if (!resolved.startsWith(root + path.sep) || resolved.includes(path.sep + 'node_modules' + path.sep) || !resolved.endsWith('.js')) return local(name);
       return load(resolved);
     };
-    const wrapper = vm.runInContext('(function(require,module,exports,__filename,__dirname){\n' + fs.readFileSync(file, 'utf8') + '\n})', context, { filename: file });
+    const wrapper = vm.compileFunction(fs.readFileSync(file, 'utf8'), ['require', 'module', 'exports', '__filename', '__dirname'],
+      { parsingContext: context, filename: file });
     wrapper(requireModule, module, module.exports, file, path.dirname(file));
     return module.exports;
   }
