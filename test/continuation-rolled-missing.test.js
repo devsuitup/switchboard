@@ -28,6 +28,34 @@ function rolledRow(h) {
   return row;
 }
 
+for (const initialScanComplete of [true, false]) {
+  test(`#789: mirror chain sidebar and click resolution with scan complete=${initialScanComplete}`, async t => {
+    const h = setup(t, { old: ['mirror', 'gone'], mirror: ['b'], b: ['c'], c: [] }, { initialScanComplete });
+    h.rows.get('old').bridgeSessionId = 'bridge';
+    Object.assign(h.rows.get('mirror'), { bridgeSessionId: 'bridge', mergedIntoSessionId: 'old' });
+    for (const [i, id] of ['old', 'mirror', 'b', 'c'].entries()) {
+      h.rows.get(id).modified = `2026-10-19T10:00:0${i}.000Z`;
+    }
+    const rows = cache.buildProjectsFromCache(false).flatMap(project => project.sessions);
+    if (!initialScanComplete) {
+      assert.deepEqual(rows.map(row => row.sessionId).sort(), ['b', 'c', 'old']);
+      return;
+    }
+    assert.deepEqual(rows.map(row => row.sessionId), ['old']);
+    const row = rows[0];
+    assert.equal(row.headSessionId, 'c');
+    assert.deepEqual([...row.mergedMemberIds].sort(), ['b', 'c', 'mirror']);
+    assert.deepEqual(cache.conversationMemberIds([...h.rows.values()], 'b').sort(), ['c', 'mirror', 'old']);
+    const resolved = await h.ctx.api.getSessionContinuations('old');
+    assert.equal(resolved.unresolved, false);
+    assert.deepEqual(resolved.candidates.map(candidate => candidate.sessionId), [row.headSessionId]);
+    installRows(h, rows);
+    await h.app.openSession(h.ctx.rowHeadSession(row));
+    assert.deepEqual(h.spawned.map(call => call.id), ['c']);
+    assert.deepEqual(h.prompts, []);
+  });
+}
+
 for (const automatic of [false, true]) {
   test(`rolled old -> mid -> gone ${automatic ? 'restore' : 'click'} opens the head with a missing notice and no prompt`, async t => {
     const h = setup(t, { old: ['mid'], mid: ['gone'] });

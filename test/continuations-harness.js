@@ -9,7 +9,7 @@ const { loadAppFunctions } = require('./app-source');
 const cache = require('../session-cache');
 const { encodeProjectPath } = require('../encode-project-path');
 
-function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, metadata = {}, choice, active = new Map() } = {}) {
+function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, metadata = {}, choice, active = new Map(), initialScanComplete = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-continuations-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const folder = encodeProjectPath(root);
@@ -24,6 +24,7 @@ function setup(t, graph, { live = {}, answer = false, savedEntries, chunkBytes, 
   }
   const rows = new Map(), folderMeta = new Map();
   const db = {
+    isInitialScanComplete: () => initialScanComplete,
     getSetting: () => ({}), getAllFolderMeta: () => folderMeta, getFolderMeta: id => folderMeta.get(id), getAllMeta: () => new Map(Object.entries(metadata)),
     getAllCached: () => [...rows.values()],
     getCachedByFolder: () => [...rows.values()], getCachedSession: id => rows.has(id) ? { ...rows.get(id) } : undefined,
