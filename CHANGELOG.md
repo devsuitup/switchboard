@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.102 — 2026-10-27
+
 ### Fixed
 - Files opened from Touched or a terminal link outside a Git repository keep their line endings and UTF-8 BOM when saved, and detect external changes that only affect line endings. (#803)
 - A failed project scan now retries automatically, including after startup, and clears its error when the retry succeeds. The error names the first failed project folder and counts any others. (#790)
