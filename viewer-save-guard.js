@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { versionOf, soleEol } = require('./git-changes-file');
 
 function asEditorText(text) {
   return typeof text === 'string' ? text.replace(/\r\n?/g, '\n') : '';
@@ -27,7 +28,21 @@ function refuseIfMoved(resolvedPath, expected, deps = {}) {
  * The write behind save-memory and save-file-for-panel: checks, writes, then
  * runs `afterWrite`. Returns what the handler returns.
  */
-function writeIfUnmoved(resolvedPath, content, expected, { afterWrite, readFile, writeFile } = {}) {
+function writeIfUnmoved(resolvedPath, content, expected, { afterWrite, readFile, writeFile, version } = {}) {
+  if (version !== undefined) {
+    if (typeof version !== 'string' || !version) return { ok: false, error: 'missing version token', reason: 'invalid-version' };
+    const onDisk = (readFile || fs.readFileSync)(resolvedPath);
+    const decoded = onDisk.toString('utf8');
+    if (versionOf(onDisk) !== version) {
+      return { ok: false, error: 'this file changed on disk since it was opened', reason: 'stale', disk: asEditorText(decoded) };
+    }
+    const eol = soleEol(decoded) || '\n';
+    const prefix = decoded.startsWith('\ufeff') ? '\ufeff' : '';
+    const bytes = Buffer.from(prefix + asEditorText(content.replace(/^\ufeff/, '')).replace(/\n/g, eol), 'utf8');
+    (writeFile || fs.writeFileSync)(resolvedPath, bytes);
+    if (afterWrite) afterWrite();
+    return { ok: true, version: versionOf(bytes) };
+  }
   const refused = refuseIfMoved(resolvedPath, expected, { readFile });
   if (refused) return refused;
   (writeFile || ((p, c) => fs.writeFileSync(p, c, 'utf8')))(resolvedPath, content);
@@ -43,13 +58,14 @@ function createPanelSaveHandlers(deps) {
   const existsSync = deps.existsSync || fs.existsSync;
   const io = { readFile: deps.readFile, writeFile: deps.writeFile };
 
-  function saveFileForPanel(filePath, content, expected) {
+  function saveFileForPanel(filePath, content, expected, { version } = {}) {
     try {
       const resolved = path.resolve(filePath);
       if (deps.isSensitivePath(resolved)) return { ok: false, error: 'access to sensitive path denied' };
       if (!existsSync(resolved)) return { ok: false, error: 'File does not exist' };
       return writeIfUnmoved(resolved, content, expected, {
         ...io,
+        version,
         afterWrite: () => {
           if (/[\\/]\.work-files[\\/]/.test(resolved)) deps.invalidateFtsSignature('work-file', resolved);
           if (resolved.endsWith('.md')) deps.invalidateFtsSignature('memory', resolved);

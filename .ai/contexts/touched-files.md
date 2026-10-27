@@ -390,8 +390,8 @@ that preference and the same merge factories as Changes.
 
 `save-file-for-panel` accepts an optional `{git, version}` argument. A Git
 file uses `writeTouchedChangesFile`, which rediscovers its repository and
-reuses `writeChangesFile` and its byte-version check. Other files retain the
-existing expected-content save guard. Saving after deletion returns
+reuses `writeChangesFile` and its byte-version check. Other local editor pairs carry `versionOf` of the opened bytes; their saves use the panel guard's byte-version check, preserve the sole EOL and UTF-8 BOM, and return the written version for subsequent saves and watcher comparisons.
+Hardlinks remain writable in place, and mixed-EOL files retain the existing LF save behavior instead of gaining a refusal; legacy viewer saves without a version retain the expected-content guard. Saving after deletion returns
 "File does not exist" without recreating the file. Refresh, Save and Reload reread this
 absolute file, without fetching either list. Watching uses the existing
 absolute-path `watch-file` registry and `file-changed` event; closing the
