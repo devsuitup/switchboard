@@ -197,7 +197,10 @@ its input has `run_in_background: true`, its result has
 A result with `backgroundEndsWithFinalResponse === true` is refused because
 no completion notification can follow. Bash tool-use ids are remembered in
 the call table without consuming the shared pending queue. Results read before
-their tool-use are held until that launch arrives; paired results that fail
+their tool-use are held in a separate shell-result map capped at the smaller of
+256 and maxEntries, including results whose calls were evicted. This map is
+merged and bounded on rekey, cleared on owner death, and never consumes Agent
+pending capacity. Deferred replay chooses the map by tool name; paired results that fail
 admission are consumed rather than left pending. Processed Bash launch records
 are removed or replaced by shell correlations. Plain foreground Bash traffic
 opens nothing, publishes no revision and consumes no shared deduplication slot.
@@ -205,6 +208,9 @@ Entries admitted only for Bash and shell stops use a separate deduplication set,
 bounded by maxEntries, merged and bounded on rekey, and cleared on owner death.
 The agent deduplication set admits exactly the entries admitted on main, including
 task notifications. Deferred Bash results leave their deduplication set before replay.
+Background Bash results use their tool-use id as the shell replay key, leaving
+Agent entry keys unchanged. A replayed Bash call is skipped while its result
+key is retained, unless a deferred shell result still needs that call.
 Monitor results use `taskId`, not `backgroundTaskId`, and do
 not open a Bash task.
 A matching terminal notification (including queued attachments and aggregate

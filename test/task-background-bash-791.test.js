@@ -599,7 +599,7 @@ test('rekey bounds task-id notifications separately and consumes the retained ea
   const p = maps[0].get(nextId);
   assert.equal(p.taskNotifications.size, 4, 'the merged task-id queue respects the configured small cap');
   assert.deepEqual([...p.taskNotifications.keys()], ['bsource0', 'bsource1', 'bsource2', shellId].map(key => 'notification-task:' + key));
-  assert.equal(p.pending.has('result:toolu_bash1'), true, 'the separately merged result survives');
+  assert.equal(p.shellResults?.has('result:toolu_bash1'), true, 'the separately merged Bash result survives');
   r.ingest(nextId, use());
   assert.equal(r.snapshot(nextId).tasks.find(t => t.id === shellId)?.terminal, true, 'the merged early completion is applied');
   assert.equal(r.background(nextId), false);
@@ -757,9 +757,130 @@ test('rekey merges and bounds shell deduplication independently of agent keys', 
   r.rekey(id, nextId);
   const p = maps[0].get(nextId);
   assert.equal(p.shellSeen?.size, 4, 'merged shell replay keys respect the configured cap');
-  assert.deepEqual([...p.shellSeen], Array.from({ length: 4 }, (_, i) => 'result-' + id + '-dedup-' + i));
+  assert.deepEqual([...p.shellSeen], Array.from({ length: 4 }, (_, i) => 'result:' + id + '-dedup-' + i));
   assert.equal(p.seen.size, 0);
   const before = r.snapshot(nextId).revision;
   r.ingest(nextId, result(id + '-dedup-3', undefined, { backgroundTaskId: 'bmerge3' }));
   assert.equal(r.snapshot(nextId).revision, before, 'a replayed source result is deduplicated after rekey');
+});
+
+test('4200 unresolved Bash calls and 2100 evicted results preserve an early Agent result', () => {
+  const r = createTaskRegistry();
+  const agent = use('agentTool');
+  agent.message.content[0].name = 'Agent';
+  r.ingest(id, result('agentTool', undefined, { backgroundTaskId: undefined, agentId: 'a1b2c3', isAsync: true, status: 'async_launched' }));
+  for (let i = 0; i < 4200; i++) r.ingest(id, use('evicted-' + i));
+  for (let i = 0; i < 2100; i++) r.ingest(id, result('evicted-' + i, undefined, { backgroundTaskId: 'bevicted' + i }));
+  r.ingest(id, agent);
+  assert.deepEqual(r.agents(id).map(t => t.id), ['a1b2c3'], 'shell results must not evict the deferred Agent result');
+});
+
+test('replaying a completed Bash transcript twice leaves the shell-call table unchanged', () => {
+  const { registry: r, maps } = observedRegistry();
+  const transcript = [use(), result(), done()];
+  for (const entry of transcript) r.ingest(id, entry);
+  const p = maps[0].get(id);
+  assert.equal(p.shellCalls.size, 0);
+  for (const entry of transcript) r.ingest(id, entry);
+  assert.equal(p.shellCalls.size, 0, 'a deduplicated result must not leave a replayed call orphaned');
+  assert.equal(r.background(id), false);
+});
+
+test('deferred Bash results have a separate small bound and owner-death cleanup', () => {
+  const { registry: r, maps } = observedRegistry({ maxEntries: 4 });
+  r.ingest(id, result('early-agent', undefined, { backgroundTaskId: undefined, agentId: 'aearly', isAsync: true, status: 'async_launched' }));
+  for (let i = 0; i < 12; i++) r.ingest(id, result('early-bash-' + i, undefined, { backgroundTaskId: 'bearly' + i }));
+  const p = maps[0].get(id);
+  assert.deepEqual([...p.pending.keys()], ['result:early-agent'], 'shell results never occupy the Agent pending map');
+  assert.equal(p.shellResults?.size, 4);
+  r.ingest(id, use('early-bash-11'));
+  assert.deepEqual(Array.from(r.list(id), t => t.id), ['bearly11'], 'the retained deferred result is replayed');
+  assert.equal(p.shellResults.size, 3, 'consumed results leave their own map');
+  r.ownerDied(id);
+  assert.equal(p.shellResults.size, 0);
+});
+
+test('rekey merges and bounds deferred Bash results separately from Agent pending entries', () => {
+  const { registry: r, maps } = observedRegistry({ maxEntries: 4 });
+  const nextId = '22222222-2222-4222-8222-222222222222';
+  for (const owner of [nextId, id]) for (let i = 0; i < 4; i++) {
+    r.ingest(owner, result(owner + '-early-' + i, undefined, { backgroundTaskId: 'bmerged' + i }));
+  }
+  r.ingest(nextId, result('merge-agent', undefined, { backgroundTaskId: undefined, agentId: 'amerge', isAsync: true, status: 'async_launched' }));
+  r.rekey(id, nextId);
+  const p = maps[0].get(nextId);
+  assert.deepEqual([...p.pending.keys()], ['result:merge-agent']);
+  assert.equal(p.shellResults?.size, 4);
+  r.ingest(nextId, use(id + '-early-3'));
+  assert.deepEqual(Array.from(r.list(nextId), t => t.id), ['bmerged3']);
+  assert.equal(p.shellResults.size, 3);
+});
+
+function seededAgentTraffic(seed, maxEntries, quietFactory = createTaskRegistry) {
+  let state = seed;
+  const random = n => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state % n; };
+  const options = { maxEntries, now: () => Date.parse('2026-10-26T11:00:00Z') };
+  const quiet = quietFactory(options);
+  const noisy = createTaskRegistry(options);
+  const normalize = value => JSON.parse(JSON.stringify(value));
+  const agents = r => normalize({
+    tasks: r.snapshot(id).tasks.filter(t => t.kind === 'agent'),
+    agents: r.agents(id).map(t => ({ id: t.id, terminal: t.terminal, at: t.at, subagentType: t.subagentType, sources: [...t.sources] })),
+    count: r.runningAgentCount([id]),
+  });
+  let step = 0;
+  const feed = (entry, shell = false) => {
+    step++;
+    noisy.ingest(id, entry);
+    if (!shell) quiet.ingest(id, entry);
+    assert.deepEqual(agents(noisy), agents(quiet), `seed=${seed} maxEntries=${maxEntries} step=${step}`);
+  };
+  for (let round = 0; round < 6; round++) {
+    const tool = 'seed-agent-' + round;
+    const taskId = 'aseed' + round;
+    const agent = use(tool);
+    agent.message.content[0].name = 'Agent';
+    const async = random(2) === 0;
+    agent.message.content[0].input.run_in_background = async;
+    const output = result(tool, undefined, { backgroundTaskId: undefined, agentId: taskId, isAsync: async, status: async ? 'async_launched' : 'completed' });
+    const early = random(3) !== 0;
+    feed(early ? output : agent);
+    const calls = Array.from({ length: random(maxEntries * 3 + 1) }, (_, i) => 'seed-bash-' + round + '-' + i);
+    for (const call of calls) feed(use(call), true);
+    const returned = random(calls.length + 1);
+    for (let i = 0; i < returned; i++) {
+      const bashId = 'bseed' + round + 'x' + i;
+      feed(result(calls[i], undefined, { backgroundTaskId: bashId }), true);
+      if (random(2)) {
+        const entries = stop(i % 2 ? 'KillShell' : 'TaskStop', i % 2 ? 'shell_id' : 'task_id', random(3) !== 0);
+        entries[0].uuid += calls[i];
+        entries[0].message.content[0].id += calls[i];
+        entries[0].message.content[0].input = { task_id: bashId };
+        entries[1].uuid += calls[i];
+        entries[1].message.content[0].tool_use_id += calls[i];
+        for (const entry of entries) feed(entry, true);
+      }
+      feed(done(bashId, null), true);
+    }
+    feed(early ? agent : output);
+    if (random(2)) feed(done(taskId, tool));
+    const message = use('seed-message-' + round);
+    message.message.content[0].name = 'SendMessage';
+    message.message.content[0].input = { to: taskId };
+    feed(message);
+    feed(result('seed-message-' + round, undefined, { backgroundTaskId: undefined }, { is_error: random(2) === 0 }));
+  }
+}
+
+test('200 fixed seeds preserve Agent snapshots with interleaved Bash noise at capacities 4 and 8', t => {
+  const failures = [];
+  for (const maxEntries of [4, 8]) for (let seed = 1; seed <= 200; seed++) {
+    try { seededAgentTraffic(seed, maxEntries); }
+    catch (error) {
+      if (error.code !== 'ERR_ASSERTION') throw error;
+      failures.push({ seed, maxEntries, message: error.message });
+    }
+  }
+  t.diagnostic(JSON.stringify(failures.map(({ seed, maxEntries }) => ({ seed, maxEntries }))));
+  assert.equal(failures.length, 0, failures[0]?.message);
 });
