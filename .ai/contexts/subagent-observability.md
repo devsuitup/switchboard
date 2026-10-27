@@ -208,15 +208,19 @@ stops), a successful TaskStop/KillShell result targeting it, owner death or
 terminal job evidence ends it. The descriptor's process start time travels
 through main, client and worker; a newer owner ends older transcript Bash tasks
 and prevents their replay using the tool-use time, even when the result is newer.
-Early terminal notifications are retained in the bounded pending queue by
-tool-use id or task id and consumed when the shell opens at its tool-use time.
-Only shell-shaped task ids are queued by task id, excluding known agent tasks,
-so unrelated notifications do not evict a deferred launch result. Completion
+Early terminal notifications are retained by tool-use id in the bounded pending
+queue, or by shell-shaped task id in a separate queue capped at the smaller of
+256 and maxEntries. Known tasks consume their task-id notifications directly.
+The separate queue cannot evict deferred launch results or tool-use-id completions;
+it is merged and bounded on rekey, cleared on owner death, and consumed when the
+shell opens at its tool-use time. Completion
 correlations are released when their shell becomes terminal, including early
 completion and rekey merges; late notifications for a known terminal shell
-are consumed without creating a pending entry. The call table is bounded
-oldest first on insertion and rekey, without changing agent-call retention
-beyond that cap. Terminal task records retain their existing replay semantics.
+are consumed without creating a pending entry. Bash launch, shell and stop calls
+have their own table, bounded oldest first on insertion and rekey. Agent and
+SendMessage calls retain main's unbounded correlation semantics. Ending an
+agent does not scan call correlations; ending a Bash scans only the bounded
+shell-call table. Terminal task records retain their existing replay semantics.
 Rekeying carries the latest owner start time to preserve that replay guard.
 Ctrl+B and timeout admission publish a newer revision so a renderer that has
 already applied the previous snapshot receives the background state.
