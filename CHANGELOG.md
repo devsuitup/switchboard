@@ -4,6 +4,8 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.101 — 2026-10-27
+
 ### New
 - Automation trigger results now say whether anything was typed into the session: `wrote` is false only when Switchboard can prove nothing reached it, so a script knows when a retry is safe. (#787)
 
