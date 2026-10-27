@@ -52,7 +52,7 @@ function setup() {
   `, ctx);
   const fns = loadAppFunctions(ctx, {
     functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'indexedRowOf'],
-    declarations: ['skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'exitingApp', 'persistSkippedWhileExiting', 'dormantWorkingSet'],
+    declarations: ['restoreRunDepth', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'exitingApp', 'persistSkippedWhileExiting', 'dormantWorkingSet'],
   });
   vm.runInContext(`restoreSavedIndex = new Map(${JSON.stringify(SAVED.map((item, i) => [item.sessionId, i]))});`, ctx);
   const stored = () => settings.global.openWorkingSet.map(i => i.sessionId);
@@ -65,6 +65,34 @@ function dispatchToRestore(h) {
   const plan = vm.runInContext('restorePlanner.tick({ sessionMap, openSessions, indexingDone: false })', h.ctx);
   assert.equal(plan.action, 'restore');
   return plan.candidates;
+}
+
+test('B-T8 an attached tab saves its job identity and bg marker, then disappears when closed', async t => {
+  const h = setup();
+  t.after(() => h.dom.window.close());
+  vm.runInContext('restorePlanner.dismiss(); openSessions.set("bg", { session: { projectPath: "/bg" }, attach: true, attachJobId: "1234abcd", closed: false });', h.ctx);
+  await h.persistWorkingSet();
+  const saved = JSON.parse(await vm.runInContext('window.api.getSetting("global").then(JSON.stringify)', h.ctx));
+  assert.deepEqual(saved.openWorkingSet.find(item => item.sessionId === 'bg'), {
+    sessionId: 'bg', projectPath: '/bg', active: false, bg: true, attachJobId: '1234abcd',
+  });
+  vm.runInContext('openSessions.get("bg").closed = true;', h.ctx);
+  await h.persistWorkingSet();
+  assert.deepEqual(h.stored(), ['opened']);
+});
+
+for (const attachJobId of [null, '', 42, undefined]) {
+  test(`C2 ${attachJobId === undefined ? 'GUARD ' : ''}a reattached tab with job id ${attachJobId} saves only the bg marker`, async t => {
+    const h = setup();
+    t.after(() => h.dom.window.close());
+    vm.runInContext('restorePlanner.dismiss();', h.ctx);
+    h.ctx.openSessions.set('bg', { session: { projectPath: '/bg' }, attach: true, attachJobId, closed: false });
+    await h.persistWorkingSet();
+    const saved = await h.dom.window.api.getSetting('global');
+    assert.deepEqual(saved.openWorkingSet.find(item => item.sessionId === 'bg'), {
+      sessionId: 'bg', projectPath: '/bg', active: false, bg: true,
+    });
+  });
 }
 
 test('a persist during a cold restore keeps the saved entries not indexed yet', async () => {

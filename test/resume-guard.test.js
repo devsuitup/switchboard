@@ -225,5 +225,4 @@ test('app.js turns the attach verdict into attach options and skips the guard fo
   assert.match(app, /if \(verdict === false\) return false;/);
   assert.match(app, /customOptions = \{ type: 'attach', jobId: verdict\.attach, cwd: verdict\.cwd \|\| projectPath \};/);
   assert.match(app, /entry\.attach = resumeOptions\.type === 'attach';/);
-  assert.match(app, /if \(entry\.attach\) continue;/);
 });

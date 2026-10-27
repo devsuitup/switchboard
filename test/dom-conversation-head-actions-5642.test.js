@@ -73,7 +73,7 @@ function resumeSetup(t) {
   });
   loadAppFunctions(ctx.context, {
     functions: ['openSession', 'openSessionNow', 'beginPtyOpen', 'settlePtyOpen', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow', 'indexedRowOf'],
-    declarations: ['openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'continuationRetryCancelled',
+    declarations: ['restoreRunDepth', 'openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'continuationRetryCancelled',
       'ptyGenerations', 'pendingOpens', 'dormantWorkingSet', 'restoreMode', 'restoreInFlight'],
   });
   return { ctx, checked, spawned, shown, resume: async () => {

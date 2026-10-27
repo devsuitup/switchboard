@@ -329,8 +329,8 @@ function unchangedWorkerJob(job) {
     && (!latest.sessionId || latest.sessionId === job.sessionId);
 }
 
-async function workerEvidence(job) {
-  if (!['running', 'working', 'blocked'].includes(job.state)) return undefined;
+async function workerEvidence(job, allStates = false) {
+  if (!allStates && !['running', 'working', 'blocked'].includes(job.state)) return undefined;
   const gen = generation;
   const first = await workerSample();
   if (gen !== generation) return 'unknown';
@@ -359,10 +359,60 @@ async function conversationCheck(id, { workerLiveness = true } = {}) {
     .filter(Boolean))];
   if (!sessionIds.length) return { known: false, reason: `job ${id} does not name its conversation` };
   const identified = { ...job, id, sessionId: job.sessionId || entry?.sessionId };
-  const evidence = workerLiveness ? await workerEvidence(identified) : undefined;
+  const evidence = workerLiveness ? await workerEvidence(identified, workerLiveness === 'all') : undefined;
   if (gen !== generation) return { known: false, reason: 'background agent service changed while checking the worker' };
   return { known: true, sessionIds, state: job.state, workerLiveness: evidence,
     hosted: isHostedJob(identified, liveDescriptors(), evidence) };
+}
+
+function findRestoreJob(sessionId, attachJobId) {
+  const same = value => typeof value === 'string' && value.toLowerCase() === sessionId.toLowerCase();
+  const read = id => {
+    const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
+    const raw = JSON.parse(text);
+    const job = parseJobState(text);
+    if (!job?.state || (raw.id && raw.id !== id)) throw new Error(`job ${id} has an unknown or unreadable state`);
+    return { job: { ...job, id }, matches: same(raw.sessionId) || same(raw.resumeSessionId) || same(job.sessionId) };
+  };
+  try {
+    if (typeof attachJobId === 'string' && JOB_ID_RE.test(attachJobId)) {
+      try {
+        if (!fs.statSync(jobsDir).isDirectory()) throw new Error('background jobs path is not a directory');
+        fs.statSync(path.join(jobsDir, attachJobId));
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+        return { known: false, missing: true, reason: `no background job record for ${sessionId}` };
+      }
+      const record = read(attachJobId);
+      return record.matches ? { known: true, job: record.job }
+        : { known: false, reason: `job ${attachJobId} does not match saved session ${sessionId}` };
+    }
+    const matches = [];
+    let unreadable = false;
+    let names;
+    try { names = fs.readdirSync(jobsDir); } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      names = [];
+    }
+    for (const id of names.filter(id => JOB_ID_RE.test(id)).sort()) {
+      try {
+        const record = read(id);
+        if (record.matches) matches.push(record.job);
+      } catch (err) {
+        unreadable = true;
+        let raw;
+        try { raw = JSON.parse(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch {}
+        if (same(raw?.sessionId) || same(raw?.resumeSessionId)) throw err;
+      }
+    }
+    if (!matches.length && unreadable) return { known: false, reason: `cannot identify background job for ${sessionId}: unreadable job records` };
+    if (matches.length !== 1) return { known: false, reason: matches.length
+      ? `multiple background job records for ${sessionId}: ${matches.map(job => job.id).join(', ')}`
+      : `no background job record for ${sessionId}`, ...(!matches.length ? { missing: true } : {}) };
+    return { known: true, job: matches[0] };
+  } catch (err) {
+    return { known: false, reason: `cannot identify background job for ${sessionId}: ${err.message}` };
+  }
 }
 
 async function runVerb(verb, id) {
@@ -415,7 +465,7 @@ async function dispatch(fields) {
   return { ok: true, id };
 }
 
-function liveJobCheck(sessionId) {
+function liveJobCheck(sessionId, { workerLiveness = new Map() } = {}) {
   const key = typeof sessionId === 'string' ? sessionId.toLowerCase() : '';
   if (!key) return { known: true, job: null };
   const sameSession = (sid) => typeof sid === 'string' && sid.toLowerCase() === key;
@@ -424,7 +474,7 @@ function liveJobCheck(sessionId) {
   let names;
   try { names = fs.readdirSync(jobsDir); } catch (err) {
     if (!(err && err.code === 'ENOENT')) return { known: false, reason: `cannot read ${jobsDir}: ${err && err.message}` };
-    const cached = roster.find(e => isHostedJob(e, descriptors) && sameSession(e.sessionId));
+    const cached = roster.find(e => isHostedJob(e, descriptors, workerLiveness.get(e.id)) && sameSession(e.sessionId));
     return { known: true, job: cached ? { id: cached.id, state: cached.state } : null };
   }
   let unknown = null;
@@ -440,16 +490,16 @@ function liveJobCheck(sessionId) {
     if (!parsed) { unknown = unknown || `job ${id} has an unreadable state`; continue; }
     if (!parsed.state) { unknown = unknown || `job ${id} is in a state this version does not know`; continue; }
     const sid = parsed.sessionId || (listed(id) && listed(id).sessionId);
-    if (!isHostedJob({ ...parsed, id, sessionId: sid }, descriptors)) continue;
+    if (!isHostedJob({ ...parsed, id, sessionId: sid }, descriptors, workerLiveness.get(id))) continue;
     if (!sid) { unknown = unknown || `live job ${id} does not name its session`; continue; }
     if (sameSession(sid)) return { known: true, job: { id, state: parsed.state } };
   }
-  const cached = roster.find(e => !read.has(e.id) && isHostedJob(e, descriptors) && sameSession(e.sessionId));
+  const cached = roster.find(e => !read.has(e.id) && isHostedJob(e, descriptors, workerLiveness.get(e.id)) && sameSession(e.sessionId));
   if (cached) return { known: true, job: { id: cached.id, state: cached.state } };
   return unknown ? { known: false, reason: unknown } : { known: true, job: null };
 }
 
 module.exports = {
-  init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck,
+  init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck, findRestoreJob,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };

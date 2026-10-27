@@ -3526,7 +3526,7 @@ bgAgents.init({
   },
 });
 const unsubscribeBgAgents = require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
-  activeSessions, cliSessionState, sessionHasPty, ptyPids });
+  activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting: key => getSetting(key) });
 bgAgents.onJobsChanged(() => notifyRendererProjectsChanged('bg-jobs'));
 bgAgents.onJobsChanged(() => {
   sessionTransitions.detectPendingBackgroundContinuations();

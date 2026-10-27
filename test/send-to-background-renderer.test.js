@@ -27,7 +27,7 @@ for (const failure of ['refusal', 'rejection', 'missing result']) {
 test('failed automatic background restore and failed manual retry retain the saved slot', async t => {
   const saved = [
     { sessionId: 'a', projectPath: '/a', active: true },
-    { sessionId: 'z', projectPath: '/z', active: false, bg: true },
+    { sessionId: 'z', projectPath: '/z', active: false, bg: true, attachJobId: 'job-z' },
   ];
   const h = setup(t, { a: [], z: [] }, { savedEntries: saved, live: { z: { kind: 'bg', jobId: 'job-z' } } });
   const open = h.dom.window.api.openTerminal;

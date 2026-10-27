@@ -24,6 +24,74 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 | `public/dialogs.js` | `showDispatchAgentDialog` |
 | `public/shortcuts.js` | The rebindable `agentsToggle` (default Primary+Shift+`A`) |
 
+## Restore of background sessions
+
+`persistWorkingSet` saves every open attach tab with `bg: true` and
+`attachJobId` when the job id is a non-empty string. This includes tabs opened
+from the Agents view. The main `restore-background-job(sessionId, { attachOnly })`
+handler first requires that exact session in `global.openWorkingSet` with
+`bg: true`; this scopes the restore IPC to saved entries. It is not a capability
+boundary: the renderer already exposes the ordinary checked respawn verb.
+`findRestoreJob`
+reads the saved job record afresh, or searches legacy records by `sessionId`
+or `resumeSessionId` when the saved job id is absent, null or invalid. Unreadable
+unrelated records do not block a unique readable match; an unreadable matching
+or explicitly saved record refuses. A legacy scan without a readable match
+stays unknown if any record is unreadable or lacks state.json; only a fully
+readable scan can prove absence. An explicit saved id uses stat checks; only
+ENOENT proves absence. Other stat errors or a jobs path that is not a directory
+remain unknown and held. Mismatched or ambiguous identity refuses; ambiguity names
+every matching id. A missing record releases the held entry, with a notice;
+a later sidebar click follows the ordinary guarded resume path.
+
+`conversationCheck(id, { workerLiveness: 'all' })` requests S1a's classifier
+for terminal states too. Live attaches; dead working/blocked/running/done/failed
+goes through the existing `checkVerb('respawn')` and `runVerb` guards. Only the
+restore check passes its classified worker evidence to `liveJobCheck`, keyed
+by job id; Delete and ordinary Respawn retain their conservative defaults. Dead
+stopped offers explicit Respawn; unknown never respawns. A per-session promise
+coalesces overlapping requests. Descriptor observation subscribes before its
+initial read, matches this job through `liveWorkerDescriptor`, waits at most
+15 seconds and always releases the listener. A successful respawn without a
+descriptor returns `respawned-not-attached`. Attach retries set `attachOnly`
+and cannot respawn. Explicit stopped recovery uses the checked existing verb.
+
+`runRestore` prepares background entries concurrently without blocking
+interactive tabs. Each pending item remains held during saves; save suspension
+ends after the interactive loop, before waiting for background preparations.
+Each background task reports its own rejection immediately, and the batch
+waits for all tasks even when the interactive loop throws. Successful batches
+still show notices and activate the selected tab after a task fails. Continuation
+indexing retries run before the background drain when indexing is already done,
+or after it if indexing finishes during the drain. Planner ticks are serialized;
+overlapping ticks coalesce into a deferred tick after the active tick finishes,
+so its caller cannot resume saves inside the next interactive batch.
+Completed tabs retain order across planner batches using the saved
+indices, while unsaved tabs keep their positions. A successfully restored
+background tab persists in that open-tab order rather than as a held slot.
+Restore callers explicitly pass fromRestore so their opens never cancel the
+planner. A separate restoreRunDepth counter covers each runRestore call through
+its background drain, independently of save suspension. Every open during a run,
+including a user click, remains exempt, matching ordinary Automatic restore.
+A user click outside any run still cancels planning. Reopening the active tab
+after renderer reload outside a run remains an outside open that cancels planning.
+Lazy/manual held-entry opens share
+`prepareBackgroundRestore`.
+The remembered active background entry defers to startup policy. Renderer
+rechecks descriptor identity and requires an attach verdict; no interactive
+fallback is allowed during background preparation. Except for missing jobs,
+refusals stay in `skippedWorkingSetEntries`, survive saves
+with their job identity, and use persistent Restore notices. Tests:
+`restore-live-elsewhere`, `restore-lazy`, `restore-pending-persist`,
+`bg-agents-ipc`, `bg-agents-restore`.
+
+M1 evidence: `C:/Serveur/switchboard/.work-files/m1-785-report.md`
+(2026-10-25, CLI 2.1.302) measured dead `working` surviving daemon death,
+respawn cold-starting the daemon, retaining job/session/name, then producing
+a usable background descriptor. This implementation uses those recorded facts;
+it does not repeat the live acceptance run. The stopped policy is Q-E's
+unconfirmed default from the S1b brief.
+
 ## Invariants
 
 Disabled Respawn/Delete titles for an External conversation name its pid and
@@ -855,9 +923,8 @@ In `open-terminal`, `type: 'attach'` validates `jobId` against `JOB_ID_RE`,
 takes `cwd` from the options, runs `claude attach <jobId>` and skips sandbox,
 pre-launch command and MCP emulation. The session is flagged `isAttach` with
 `attachJobId`, which `isAttachedHere` (passed to `bgAgents.init`) reads to set
-`attachedHere` on the roster entry. Ordinary attach tabs are excluded from the
-working set (`entry.attach`). An attach tab kept by continuation restore
-is saved with `bg: true` while it is open and not closed; closing or
+`attachedHere` on the roster entry. Every open attach tab, including one opened
+from the Agents view, is saved with `bg: true` and a job id when known; closing or
 destroying it drops the mark; the mark survives later saves,
 so restore reattaches the live job at every restart. After a renderer reload
 the tab is reopened through the

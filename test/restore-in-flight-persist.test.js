@@ -116,7 +116,7 @@ test('quitting while a continuation attaches keeps the resolved background sessi
   try {
     await h.app.flushStateForExit();
     assert.deepEqual(h.settings().openWorkingSet, [
-      { sessionId: 'new', projectPath: '/project', active: true, bg: true },
+      { sessionId: 'new', projectPath: '/project', active: true, bg: true, attachJobId: '1234abcd' },
       { sessionId: 'later', projectPath: '/project', active: false },
     ]);
   } finally {
@@ -151,7 +151,7 @@ test('quitting while a fresh active entry opens after an attached continuation k
     await h.app.flushStateForExit();
     const set = h.settings().openWorkingSet;
     assert.equal(set.filter(entry => entry.active).length, 1);
-    assert.deepEqual(set.find(entry => entry.sessionId === 'new'), { sessionId: 'new', projectPath: '/project', active: true, bg: true });
+    assert.deepEqual(set.find(entry => entry.sessionId === 'new'), { sessionId: 'new', projectPath: '/project', active: true, bg: true, attachJobId: '1234abcd' });
     assert.equal(set.find(entry => entry.sessionId === newId).active, false);
   } finally {
     release();

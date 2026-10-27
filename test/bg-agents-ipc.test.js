@@ -25,6 +25,123 @@ function fakeBgAgents() {
   };
 }
 
+function restoreFixture(t, { saved = [{ sessionId: 's1', bg: true, attachJobId: 'aaaaaaaa' }], state = 'working', liveness = 'dead', descriptors = [], verbResult = { ok: true } } = {}) {
+  const { handlers, ipcMain } = fakeIpc();
+  const bg = fakeBgAgents();
+  const listeners = new Set();
+  const seen = [];
+  bg.findRestoreJob = (sid, jobId) => { seen.push(['lookup', sid, jobId]); return { known: true, job: { id: 'aaaaaaaa', sessionId: sid, state } }; };
+  bg.conversationCheck = (_id, options) => { seen.push(['check', options]); return { known: true, state, workerLiveness: liveness, hosted: liveness === 'live', sessionIds: ['s1'] }; };
+  bg.runVerb = async (...args) => { seen.push(args); return verbResult; };
+  const live = { value: descriptors };
+  init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} }, getSetting: () => ({ openWorkingSet: saved }),
+    activeSessions: new Map(), sessionHasPty: () => false, ptyPids: () => [],
+    cliSessionState: { readAllDescriptors: () => live.value,
+      onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+      liveElsewhereChecked: async () => ({ known: true, live: null }),
+    },
+  });
+  t.after(() => assert.equal(listeners.size, 0, 'descriptor listener released'));
+  const restore = handlers.get('restore-background-job');
+  assert.equal(typeof restore, 'function', 'B-T7 restore IPC registered');
+  return { restore: (id = 's1', options) => restore({}, id, options), bg, seen, live, listeners,
+    publish: value => { live.value = value; for (const fn of listeners) fn(); } };
+}
+
+for (const saved of [[], [{ sessionId: 's1' }]]) {
+  test(`B-T7 refuses ${saved.length ? 'non-bg' : 'absent'} saved entry before reading jobs`, async t => {
+    const h = restoreFixture(t, { saved });
+    const result = await h.restore();
+    assert.equal(result.action, 'refuse');
+    assert.match(result.reason, /saved.*background|background.*working set/i);
+    assert.deepEqual(h.seen, []);
+  });
+}
+
+test('B-T7 ambiguous legacy lookup names both matching job ids without invoking a verb', async t => {
+  const h = restoreFixture(t, { saved: [{ sessionId: 's1', bg: true }] });
+  h.bg.findRestoreJob = () => ({ known: false, reason: 'multiple records: aaaaaaaa, bbbbbbbb' });
+  const result = await h.restore();
+  assert.equal(result.action, 'refuse');
+  assert.match(result.reason, /aaaaaaaa.*bbbbbbbb/);
+  assert.deepEqual(h.seen, []);
+});
+
+for (const state of ['working', 'blocked', 'running', 'done', 'failed', 'stopped']) {
+  for (const liveness of ['live', 'dead', 'unknown']) {
+    test(`B main restore ${state}/${liveness} follows the classifier and checked verb`, async t => {
+      const h = restoreFixture(t, { state, liveness, descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }] });
+      const result = await h.restore();
+      const shouldRespawn = liveness === 'dead' && state !== 'stopped';
+      const shouldAttach = liveness === 'live' || shouldRespawn;
+      assert.equal(result.action, shouldAttach ? 'attach' : 'refuse');
+      assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), shouldRespawn ? [['respawn', 'aaaaaaaa']] : []);
+      assert.ok(h.seen.some(call => call[0] === 'check' && call[1]?.workerLiveness === 'all'), 'S1a classifies every restore state');
+      if (state === 'stopped' && liveness === 'dead') assert.equal(result.recovery, 'respawn');
+      if (!shouldAttach) assert.match(result.reason, new RegExp(`aaaaaaaa.*${state}`));
+    });
+  }
+}
+
+test('B dead worker respawn repeats the existing conversation guard', async t => {
+  const h = restoreFixture(t);
+  let checks = 0;
+  h.bg.conversationCheck = () => (++checks === 1
+    ? { known: true, state: 'working', workerLiveness: 'dead', hosted: false, sessionIds: ['s1'] }
+    : { known: false, reason: 'interactive process now owns conversation' });
+  const result = await h.restore();
+  assert.equal(result.action, 'refuse');
+  assert.match(result.reason, /aaaaaaaa.*working.*interactive process/);
+  assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), []);
+});
+
+test('B respawn waits for its own bg descriptor then releases its listener', async t => {
+  const h = restoreFixture(t);
+  let started;
+  const invoked = new Promise(resolve => { started = resolve; });
+  h.bg.runVerb = async () => { started(); return { ok: true }; };
+  const result = h.restore();
+  await invoked;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.listeners.size, 1);
+  h.publish([{ kind: 'interactive', sessionId: 's1' }, { kind: 'bg', jobId: 'bbbbbbbb', sessionId: 's1' }]);
+  assert.equal(h.listeners.size, 1, 'neither interactive nor another job is attachment proof');
+  h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }]);
+  assert.deepEqual(await result, { action: 'attach', sessionId: 's1', jobId: 'aaaaaaaa' });
+});
+
+test('B missing descriptor after 15 seconds reports respawned-not-attached', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = restoreFixture(t);
+  const result = h.restore();
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(14999);
+  assert.equal(h.listeners.size, 1);
+  t.mock.timers.tick(1);
+  assert.deepEqual(await result, { action: 'respawned-not-attached', jobId: 'aaaaaaaa' });
+});
+
+test('B CLI refusal is visible and never waits for attachment', async t => {
+  const h = restoreFixture(t, { verbResult: { ok: false, error: 'cannot open: running in another terminal' } });
+  const result = await h.restore();
+  assert.equal(result.action, 'refuse');
+  assert.match(result.reason, /aaaaaaaa.*working.*running in another terminal/);
+});
+
+test('B GUARD overlapping restore requests share one respawn', async t => {
+  const h = restoreFixture(t, { descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }] });
+  const results = await Promise.all([h.restore(), h.restore()]);
+  assert.equal(results[0].action, 'attach');
+  assert.equal(results[1].action, 'attach');
+  assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), [['respawn', 'aaaaaaaa']]);
+});
+
+test('B GUARD attach-only retry cannot respawn a dead worker', async t => {
+  const h = restoreFixture(t);
+  assert.equal((await h.restore('s1', { attachOnly: true })).action, 'refuse');
+  assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), []);
+});
+
 for (const verb of ['respawn', 'rm', 'stop']) {
   test(`A-T8 ${verb === 'respawn' ? 'RED' : 'GUARD'} open-window refusal uses ${verb}'s wording`, async () => {
     const { handlers, ipcMain } = fakeIpc();
@@ -236,4 +353,7 @@ test('PR6 preload forwards the check-only verb and id without invoking execution
   assert.equal(typeof api.checkBgAgentVerb, 'function');
   assert.deepEqual(await api.checkBgAgentVerb('rm', 'aaaaaaaa'), { ok: true });
   assert.deepEqual(calls, [['check-bg-agent-verb', 'rm', 'aaaaaaaa']]);
+  assert.equal(typeof api.restoreBackgroundJob, 'function');
+  await api.restoreBackgroundJob('s1', { attachOnly: true });
+  assert.deepEqual(calls[1], ['restore-background-job', 's1', { attachOnly: true }]);
 });

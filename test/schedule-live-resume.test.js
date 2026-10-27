@@ -74,6 +74,7 @@ function setup(t, { sandbox = false } = {}) {
     getSessionContinuations: async () => ({ candidates: [], unresolved: false, continued: false }),
     getSessionLiveElsewhere: (id) => handlers.get('session-live-elsewhere')(null, id),
     getSessionsLiveElsewhere: (ids) => handlers.get('sessions-live-elsewhere')(null, ids),
+    restoreBackgroundJob: async () => ({ action: 'refuse', reason: 'background job id unavailable' }),
     openTerminal: async (...args) => { openTerminalCalls.push(args); return { ok: true }; },
     getSetting: async (key) => settings[key],
     setSetting: async (key, value) => { settings[key] = value; },
@@ -113,8 +114,8 @@ function setup(t, { sandbox = false } = {}) {
     functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(ROOT, 'public/session-activity-dom.js'),
   });
   const app = loadAppFunctions(ctx, {
-    functions: ['openSession', 'openSessionNow', 'runRestore', 'pendingRestoreEntries', 'persistWorkingSet', 'showRestoreNotice', 'showLiveElsewhereNotice', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow'],
-    declarations: ['restoreMode', 'LIVE_ELSEWHERE_NOTICE_MS', 'openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting', 'dormantWorkingSet'],
+    functions: ['openSession', 'openSessionNow', 'runRestore', 'pendingRestoreEntries', 'persistWorkingSet', 'showRestoreNotice', 'showLiveElsewhereNotice', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow', 'prepareBackgroundRestore'],
+    declarations: ['restoreRunDepth', 'restoreMode', 'LIVE_ELSEWHERE_NOTICE_MS', 'openingSessions', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'exitingApp', 'persistSkippedWhileExiting', 'dormantWorkingSet'],
   });
   ctx.sessionMap.set(SID, session);
   t.after(() => {
@@ -189,7 +190,7 @@ test('background restore without a job id shows only the restore notice', async 
   assert.equal(h.messages.length, 0);
   const notices = h.dom.window.document.querySelectorAll('[data-notice-id]');
   assert.equal(notices.length, 1, 'one skipped entry gets only its restore notice');
-  assert.equal(notices[0].dataset.noticeId, 'Restore:batch');
+  assert.equal(notices[0].dataset.noticeId, `Restore:local:${SID}`);
   assert.match(notices[0].textContent, /Scheduled task/);
   assert.equal(h.dom.window.document.querySelector('[data-notice-id^="resume-background:"]'), null);
   assert.equal(h.settings.global.openWorkingSet[0].sessionId, SID);
