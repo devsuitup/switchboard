@@ -110,7 +110,10 @@ hold PTYs here, the row waits after one of those parts' observed ends,
 whatever the head's descriptor says; an open head prevents the ring. The head
 keeps the spinner, response-ready state and its turn.
 `taskRegistry.background` is the source of background work, including non-agent
-kinds. A live head outside an open turn uses the waiting glyph only if its
+kinds. For local interactive sessions, those include background Bash commands
+paired with their transcript launch and result (#791); remote rows supply
+turn state only and do not ingest transcript tasks. A live head outside an open
+turn uses the waiting glyph only if its
 PTY is elsewhere or Switchboard has observed a turn end since this PTY started.
 A PTY-here row at rest otherwise shows the green running dot. Background work
 keeps the static full-braille glyph. Attention owns the one slot first,

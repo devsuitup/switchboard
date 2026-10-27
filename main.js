@@ -3458,7 +3458,7 @@ cliSessionState.onStatusesChanged(() => {
     observed.add(id);
     if (taskOwnerLiveness.get(id) !== identity) {
       taskOwnerLiveness.set(id, identity);
-      taskRecords.ownerAlive(id);
+      taskRecords.ownerAlive(id, descriptor.startedAt);
     }
   }
   for (const id of taskOwnerLiveness.keys()) if (!observed.has(id)) taskOwnerLiveness.delete(id);

@@ -48,7 +48,7 @@ parentPort.on('message', message => {
     }
     else if (type === 'job') registry.applyJob(parentSessionId, message.evidence, { jobId: message.jobId });
     else if (type === 'death') registry.ownerDied(parentSessionId);
-    else if (type === 'alive') registry.ownerAlive(parentSessionId);
+    else if (type === 'alive') registry.ownerAlive(parentSessionId, { startedAt: message.startedAt });
     else if (type === 'rekey') {
       registry.rekey(message.oldId, message.newId, { continued: message.continued });
       const turn = turns.get(message.oldId);

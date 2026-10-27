@@ -3,8 +3,8 @@
 function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRekey = () => {}, maxEntries = 2048 } = {}) {
   const parents = new Map();
   const redirects = new Map();
-  function bound(collection) {
-    while (collection.size > maxEntries) collection.delete(collection.keys().next().value);
+  function bound(collection, limit = maxEntries) {
+    while (collection.size > limit) collection.delete(collection.keys().next().value);
   }
   function resolve(id) {
     const seen = new Set();
@@ -12,9 +12,10 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     return id;
   }
   function parent(id) {
-    if (!parents.has(id)) parents.set(id, { tasks: new Map(), calls: new Map(), pending: new Map(), seen: new Set(), revision: 0, known: false, backgroundUnknown: false });
+    if (!parents.has(id)) parents.set(id, { tasks: new Map(), calls: new Map(), shellCalls: new Map(), shellResults: new Map(), pending: new Map(), taskNotifications: new Map(), seen: new Set(), shellSeen: new Set(), revision: 0, known: false, backgroundUnknown: false });
     return parents.get(id);
   }
+  function callFor(p, toolId) { return p?.calls.get(toolId) || p?.shellCalls.get(toolId); }
   function changed(id) {
     const p = parent(id);
     p.revision++;
@@ -80,6 +81,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     t.at = at;
     t.sources.clear();
     delete t.reopenGroup;
+    if (t.kind === 'bash') for (const [key, call] of parent(id).shellCalls) if (call.shell && call.id === taskId) parent(id).shellCalls.delete(key);
     if (notify) changed(id);
   }
   function prune(ttl) {
@@ -157,6 +159,19 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     if (previousId !== agentId) p.tasks.delete(previousId);
     return true;
   }
+  function backgroundShell(entry, blocks) {
+    const taskId = entry.toolUseResult?.backgroundTaskId;
+    const results = blocks.filter(b => b.type === 'tool_result');
+    if (entry.type !== 'user' || entry.message?.role !== 'user' || typeof taskId !== 'string' || !/^[a-z][a-z0-9]+$/.test(taskId) ||
+        entry.toolUseResult?.agentId !== undefined || entry.toolUseResult?.backgroundEndsWithFinalResponse === true || results.length !== 1 || typeof results[0].tool_use_id !== 'string' || results[0].is_error === true) return null;
+    return { id: taskId, tool: results[0].tool_use_id,
+      backgrounded: entry.toolUseResult.backgroundedByUser === true || Number.isFinite(entry.toolUseResult.timedOutAfterMs) };
+  }
+  function shellStop(id, b) {
+    const target = b.input?.task_id ?? b.input?.shell_id;
+    return b.type === 'tool_use' && (b.name === 'TaskStop' || b.name === 'KillShell') && typeof b.id === 'string' &&
+      typeof target === 'string' && parents.get(id)?.tasks.get(target)?.kind === 'bash' ? target : null;
+  }
   function ingest(id, entry) {
     if (!entry || entry.isSidechain) return;
     const at = Date.parse(entry.timestamp);
@@ -168,15 +183,30 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     }
     const blocks = Array.isArray(entry.message?.content) ? entry.message.content : [];
     const n = notification(entry);
-    if (!n && !blocks.some(b => b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'SendMessage' && parents.get(id)?.tasks.get(b.input?.to)?.kind === 'agent')) &&
-        !blocks.some(b => b.type === 'tool_result' && (parents.get(id)?.calls.has(b.tool_use_id) || entry.toolUseResult?.agentId))) return;
+    const shell = backgroundShell(entry, blocks);
+    if (!n && !shell && !blocks.some(b => shellStop(id, b)) && !blocks.some(b => b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'Bash' || b.name === 'SendMessage' && parents.get(id)?.tasks.get(b.input?.to)?.kind === 'agent')) &&
+        !blocks.some(b => b.type === 'tool_result' && (callFor(parents.get(id), b.tool_use_id) || entry.toolUseResult?.agentId))) return;
     const p = parent(id);
     const key = entry.uuid || `${entry.type}:${entry.timestamp}:${blocks.map(b => b.id || b.tool_use_id).join(',')}:${n?.id || n?.ids?.join(',') || ''}`;
-    if (p.seen.has(key)) return;
-    p.seen.add(key);
-    bound(p.seen);
+    const quietBash = !n && blocks.every(b => {
+      if (b.type === 'tool_use') return b.name === 'Bash';
+      if (b.type !== 'tool_result') return true;
+      const call = callFor(p, b.tool_use_id);
+      return call?.bash && !(shell && b.tool_use_id === shell.tool && (call.async || shell.backgrounded));
+    });
+    if (!quietBash) {
+      const agentEntry = n || blocks.some(b => b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'SendMessage' && p.tasks.get(b.input?.to)?.kind === 'agent')) ||
+        blocks.some(b => b.type === 'tool_result' && (p.calls.has(b.tool_use_id) || entry.toolUseResult?.agentId));
+      const seen = agentEntry ? p.seen : p.shellSeen;
+      const seenKey = !agentEntry && shell ? `result:${shell.tool}` : key;
+      if (seen.has(seenKey)) return;
+      seen.add(seenKey);
+      bound(seen);
+    }
     if (entry.type === 'assistant' && entry.message?.role === 'assistant') {
       for (const b of blocks) {
+        const stopped = shellStop(id, b);
+        if (stopped) { if (!callFor(p, b.id)) p.shellCalls.set(b.id, { id: stopped, at, stop: true }); bound(p.shellCalls); continue; }
         if (b.type === 'tool_use' && b.name === 'SendMessage' && typeof b.id === 'string' && p.tasks.get(b.input?.to)?.kind === 'agent') {
           const previous = p.tasks.get(b.input.to);
           const reopenGroup = previous.terminal ? { pending: new Set(), succeeded: false, at } :
@@ -190,17 +220,19 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
           }
           continue;
         }
-        if (b.type !== 'tool_use' || b.name !== 'Agent' || typeof b.id !== 'string') continue;
-        if (p.calls.has(b.id)) continue;
+        if (b.type !== 'tool_use' || (b.name !== 'Agent' && b.name !== 'Bash') || typeof b.id !== 'string') continue;
+        if (callFor(p, b.id)) continue;
+        if (b.name === 'Bash' && p.shellSeen.has(`result:${b.id}`) && !p.shellResults.has(`result:${b.id}`)) continue;
         const call = { id: `tool:${b.id}`, at, async: b.input?.run_in_background === true, origin: 'transcript', subagentType: b.input?.subagent_type || null };
-        p.calls.set(b.id, call);
-        open(id, call.id, 'agent', at, call);
-        const deferred = p.pending.get(`result:${b.id}`);
+        if (b.name === 'Bash') { p.shellCalls.set(b.id, { ...call, bash: true }); bound(p.shellCalls); }
+        else { p.calls.set(b.id, call); open(id, call.id, 'agent', at, call); }
+        const pending = b.name === 'Bash' ? p.shellResults : p.pending;
+        const deferred = pending.get(`result:${b.id}`);
         if (deferred) {
-          p.pending.delete(`result:${b.id}`);
+          pending.delete(`result:${b.id}`);
           const deferredBlocks = deferred.message.content;
-          const deferredKey = deferred.uuid || `${deferred.type}:${deferred.timestamp}:${deferredBlocks.map(b => b.id || b.tool_use_id).join(',')}:`;
-          p.seen.delete(deferredKey);
+          const deferredKey = b.name === 'Bash' ? `result:${b.id}` : deferred.uuid || `${deferred.type}:${deferred.timestamp}:${deferredBlocks.map(b => b.id || b.tool_use_id).join(',')}:`;
+          (b.name === 'Bash' ? p.shellSeen : p.seen).delete(deferredKey);
           ingest(id, deferred);
         }
       }
@@ -208,8 +240,25 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     if (entry.type === 'user' && entry.message?.role === 'user') {
       for (const b of blocks) {
         if (b.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue;
-        const call = p.calls.get(b.tool_use_id);
+        const call = callFor(p, b.tool_use_id);
+        if (call?.bash) { p.shellCalls.delete(b.tool_use_id); p.shellResults.delete(`result:${b.tool_use_id}`); }
+        if (shell && b.tool_use_id === shell.tool && (!call || call.bash)) {
+          if (!call?.bash) { p.shellResults.set(`result:${b.tool_use_id}`, entry); bound(p.shellResults, Math.min(256, maxEntries)); continue; }
+          p.shellResults.delete(`result:${b.tool_use_id}`);
+          if (!call?.async && !shell.backgrounded) continue;
+          p.shellCalls.set(b.tool_use_id, { id: shell.id, at: call.at, shell: true });
+          if (call.at > (p.ownerStartedAt ?? -Infinity)) open(id, shell.id, 'bash', call.at, { origin: 'transcript' });
+          for (const [pending, pendingKey] of [[p.pending, `notification:${b.tool_use_id}`], [p.taskNotifications, `notification-task:${shell.id}`]]) {
+            const early = pending.get(pendingKey);
+            if (early && early.id === shell.id) { end(id, shell.id, early.at); pending.delete(pendingKey); }
+          }
+          if (!p.tasks.get(shell.id) || p.tasks.get(shell.id).terminal) p.shellCalls.delete(b.tool_use_id);
+          continue;
+        }
         if (!call) { p.pending.set(`result:${b.tool_use_id}`, entry); bound(p.pending); continue; }
+        if (call.bash) continue;
+        if (call.shell) continue;
+        if (call.stop) { p.shellCalls.delete(b.tool_use_id); if (b.is_error !== true) end(id, call.id, at); continue; }
         if (call.sendMessage) {
           const active = p.tasks.get(call.id);
           const group = call.reopenGroup;
@@ -246,14 +295,17 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     }
     if (n) {
       if (n.ids) {
-        for (const taskId of n.ids) if (p.tasks.get(taskId)?.kind === 'agent') end(id, taskId, at);
+        for (const taskId of n.ids) if (['agent', 'bash'].includes(p.tasks.get(taskId)?.kind)) end(id, taskId, at);
       } else {
-        const call = p.calls.get(n.tool);
-        if ((n.tool && call && call.id === n.id) || (!n.tool && p.tasks.get(n.id)?.kind === 'agent')) end(id, n.id, at);
+        const call = callFor(p, n.tool);
+        if ((n.tool && call && call.id === n.id) || (!n.tool && ['agent', 'bash'].includes(p.tasks.get(n.id)?.kind)) ||
+            (n.tool && !call && p.tasks.get(n.id)?.kind === 'bash' && !p.tasks.get(n.id).terminal) ||
+            (p.tasks.get(n.id)?.kind === 'bash' && p.tasks.get(n.id).terminal)) end(id, n.id, at);
         else if (n.tool) { p.pending.set(`notification:${n.tool}`, { ...n, at }); bound(p.pending); }
+        else if (/^[a-z][a-z0-9]+$/.test(n.id)) { p.taskNotifications.set(`notification-task:${n.id}`, { ...n, at }); bound(p.taskNotifications, Math.min(256, maxEntries)); }
       }
     }
-    changed(id);
+    if (!quietBash) changed(id);
   }
   function applyJob(id, evidence, { jobId } = {}) {
     if (jobId) {
@@ -319,12 +371,23 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     p.backgroundUnknown = false;
     for (const t of p.tasks.values()) end(id, t.id);
     p.pending.clear();
+    p.shellResults.clear();
+    p.taskNotifications.clear();
     p.seen.clear();
+    p.shellSeen.clear();
     changed(id);
   }
-  function ownerAlive(id) {
+  function ownerAlive(id, { startedAt } = {}) {
     id = resolve(id);
     const p = parent(id);
+    if (Number.isFinite(startedAt) && startedAt > (p.ownerStartedAt ?? -Infinity)) {
+      p.ownerStartedAt = startedAt;
+      let ended = false;
+      for (const t of p.tasks.values()) {
+        if (t.kind === 'bash' && t.origins.has('transcript') && !t.terminal && t.at < startedAt) { end(id, t.id, startedAt, false); ended = true; }
+      }
+      if (ended) changed(id);
+    }
     if (p.aliveAt !== undefined && (p.diedAt === undefined || p.aliveAt > p.diedAt)) return;
     p.aliveAt = now();
     changed(id);
@@ -391,14 +454,21 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     }
     next.known ||= old.known;
     next.backgroundUnknown ||= old.backgroundUnknown;
-    for (const field of ['diedAt', 'aliveAt', 'terminalJobAt', 'jobAt']) {
+    for (const field of ['diedAt', 'aliveAt', 'terminalJobAt', 'jobAt', 'ownerStartedAt']) {
       if (old[field] !== undefined) next[field] = Math.max(old[field], next[field] || 0);
     }
     for (const [key, value] of old.calls) next.calls.set(key, value);
+    for (const [key, value] of old.shellCalls) next.shellCalls.set(key, value);
+    for (const [key, value] of old.shellResults) next.shellResults.set(key, value);
     for (const [key, value] of old.pending) next.pending.set(key, value);
+    for (const [key, value] of old.taskNotifications) next.taskNotifications.set(key, value);
     for (const key of old.seen) next.seen.add(key);
+    for (const key of old.shellSeen) next.shellSeen.add(key);
     bound(next.pending);
+    bound(next.shellResults, Math.min(256, maxEntries));
+    bound(next.taskNotifications, Math.min(256, maxEntries));
     bound(next.seen);
+    bound(next.shellSeen);
     if (old.receivedRevisions) {
       next.receivedRevisions ||= new Map();
       for (const [key, value] of old.receivedRevisions) next.receivedRevisions.set(key, Math.max(value, next.receivedRevisions.get(key) || 0));
@@ -416,6 +486,8 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         }
       }
     }
+    for (const [key, call] of next.shellCalls) if (call.shell && next.tasks.get(call.id)?.terminal) next.shellCalls.delete(key);
+    bound(next.shellCalls);
     parents.delete(oldId);
     changed(oldId);
     changed(newId);
