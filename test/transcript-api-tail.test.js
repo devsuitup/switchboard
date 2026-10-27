@@ -158,7 +158,7 @@ test('i730c: a growing same-inode rewrite in the old middle discards the cached 
   const prefix = JSON.stringify({ type: 'api-request', params: 'x'.repeat(1000) }) + '\n';
   const suffix = JSON.stringify({ type: 'api-request', params: 'x'.repeat(1000) }) + '\n';
   fs.writeFileSync(file, prefix + middle + suffix);
-  const before = fs.statSync(file);
+  const before = fs.statSync(file, { bigint: true });
   assert.equal(reader.read(file).prompts[0].text, 'OLD');
   const fd = fs.openSync(file, 'r+');
   try {
@@ -166,7 +166,7 @@ test('i730c: a growing same-inode rewrite in the old middle discards the cached 
     fs.writeSync(fd, replacement, 0, replacement.length, Buffer.byteLength(prefix));
   } finally { fs.closeSync(fd); }
   fs.appendFileSync(file, '{}\n');
-  assert.equal(fs.statSync(file).ino, before.ino);
+  assert.equal(fs.statSync(file, { bigint: true }).ino, before.ino);
   assert.deepEqual(reader.read(file).prompts, [{ at: 2000, text: 'NEW' }]);
 });
 

@@ -121,9 +121,9 @@ test('setScheduleEnabled: replaces the file rather than writing into it', () => 
   const r = rig();
   try {
     const filePath = writeSchedule(r, 'cron: * * * * *\nenabled: true');
-    const before = fs.statSync(filePath).ino;
+    const before = fs.statSync(filePath, { bigint: true }).ino;
     assert.equal(setScheduleEnabled(filePath, false, { projectRoot: r.project }).ok, true);
-    assert.notEqual(fs.statSync(filePath).ino, before);
+    assert.notEqual(fs.statSync(filePath, { bigint: true }).ino, before);
   } finally { r.cleanup(); }
 });
 
