@@ -650,3 +650,116 @@ test('Bash uses and paired rejected results do not fill pending or evict an earl
     assert.equal(r.snapshot(id).tasks.find(t => t.id === shellId)?.terminal, true);
   }
 });
+
+function stoppedShellTraffic(r, count) {
+  for (let i = 0; i < count; i++) {
+    const tool = 'noise-shell-' + i;
+    const taskId = 'bnoise' + i;
+    r.ingest(id, use(tool));
+    r.ingest(id, result(tool, undefined, { backgroundTaskId: taskId }));
+    const name = i % 2 ? 'KillShell' : 'TaskStop';
+    const entries = stop(name, name === 'TaskStop' ? 'task_id' : 'shell_id', true);
+    entries[0].uuid += '-' + i;
+    entries[0].message.content[0].id += '-' + i;
+    entries[0].message.content[0].input = { [name === 'TaskStop' ? 'task_id' : 'shell_id']: taskId };
+    entries[1].uuid += '-' + i;
+    entries[1].message.content[0].tool_use_id += '-' + i;
+    for (const entry of entries) r.ingest(id, entry);
+  }
+}
+
+test('2100 background shells and stops cannot evict an async Agent result dedup key', () => {
+  const r = createTaskRegistry();
+  const launch = use('dedup-agent');
+  launch.message.content[0].name = 'Agent';
+  const output = result('dedup-agent', undefined, { backgroundTaskId: undefined, isAsync: true, status: 'async_launched', agentId: 'along' });
+  r.ingest(id, launch);
+  r.ingest(id, output);
+  r.ingest(id, done('along', 'dedup-agent'));
+  stoppedShellTraffic(r, 2100);
+  const before = r.snapshot(id).revision;
+  r.ingest(id, output);
+  assert.equal(r.snapshot(id).revision, before, 'Bash noise must not evict the async_launched entry main retains');
+  assert.deepEqual(r.agents(id), [], 'replay must not resurrect the finished agent');
+  assert.equal(r.snapshot(id).tasks.find(t => t.id === 'along')?.terminal, true);
+});
+
+test('a long shell completes by tool id after 2100 background shells are launched and stopped', () => {
+  const r = createTaskRegistry();
+  r.ingest(id, use());
+  r.ingest(id, result());
+  stoppedShellTraffic(r, 2100);
+  assert.deepEqual(r.list(id).map(t => t.id), [shellId]);
+  r.ingest(id, done());
+  assert.equal(r.background(id), false, 'P4: the original shell must accept its tool-id completion');
+  assert.equal(r.snapshot(id).tasks.find(t => t.id === shellId)?.terminal, true);
+});
+
+for (const [name, field] of [['TaskStop', 'task_id'], ['KillShell', 'shell_id']]) {
+  for (const ok of [false, true]) {
+    test(name + ' releases its stop correlation after a result, successful: ' + ok, () => {
+      const { registry: r, maps } = observedRegistry();
+      r.ingest(id, use());
+      r.ingest(id, result());
+      for (const entry of stop(name, field, ok)) r.ingest(id, entry);
+      assert.equal(r.background(id), !ok);
+      assert.equal(maps[0].get(id).shellCalls.has('toolu_' + name), false, 'finished stop calls release their correlation on success and error');
+    });
+  }
+}
+
+test('an evicted live shell correlation still accepts its task id in a tool-id notification', () => {
+  const { registry: r, maps } = observedRegistry();
+  r.ingest(id, use());
+  r.ingest(id, result());
+  for (let i = 0; i < 2100; i++) r.ingest(id, use('unresolved-eviction-' + i));
+  assert.equal(maps[0].get(id).shellCalls.has('toolu_bash1'), false);
+  r.ingest(id, done());
+  assert.equal(r.background(id), false, 'a known Bash task can complete after losing its bounded correlation');
+  assert.equal(maps[0].get(id).pending.has('notification:toolu_bash1'), false, 'the fallback consumes the completion');
+});
+
+test('an unknown tool id cannot complete a known agent by task id alone', () => {
+  const r = createTaskRegistry();
+  const entry = use('known-agent');
+  entry.message.content[0].name = 'Agent';
+  r.ingest(id, entry);
+  r.ingest(id, result('known-agent', undefined, { backgroundTaskId: undefined, isAsync: true, status: 'async_launched', agentId: 'along' }));
+  r.ingest(id, done('along', 'missing-tool'));
+  assert.equal(r.agents(id).length, 1, 'main requires the agent tool correlation when a tool id is present');
+});
+
+test('a shell launched exactly at the new owner start remains running', () => {
+  const r = launched();
+  r.ownerAlive(id, { startedAt: Date.parse('2026-10-26T10:00:00.000Z') });
+  assert.equal(r.background(id), true, 'ownerAlive ends only launches strictly older than startedAt');
+  assert.equal(r.snapshot(id).tasks.find(t => t.id === shellId)?.terminal, false);
+});
+
+test('shell deduplication is bounded separately and cleared on owner death', () => {
+  const { registry: r, maps } = observedRegistry({ maxEntries: 4 });
+  stoppedShellTraffic(r, 12);
+  const p = maps[0].get(id);
+  assert.equal(p.shellSeen?.size, 4, 'shell entries use their own bounded deduplication set');
+  assert.equal(p.seen.size, 0, 'main admits none of these Bash and stop records');
+  r.ownerDied(id);
+  assert.equal(p.shellSeen.size, 0, 'owner death clears shell replay keys');
+});
+
+test('rekey merges and bounds shell deduplication independently of agent keys', () => {
+  const { registry: r, maps } = observedRegistry({ maxEntries: 4 });
+  const nextId = '22222222-2222-4222-8222-222222222222';
+  for (const owner of [nextId, id]) for (let i = 0; i < 4; i++) {
+    const tool = owner + '-dedup-' + i;
+    r.ingest(owner, use(tool));
+    r.ingest(owner, result(tool, undefined, { backgroundTaskId: 'bmerge' + i }));
+  }
+  r.rekey(id, nextId);
+  const p = maps[0].get(nextId);
+  assert.equal(p.shellSeen?.size, 4, 'merged shell replay keys respect the configured cap');
+  assert.deepEqual([...p.shellSeen], Array.from({ length: 4 }, (_, i) => 'result-' + id + '-dedup-' + i));
+  assert.equal(p.seen.size, 0);
+  const before = r.snapshot(nextId).revision;
+  r.ingest(nextId, result(id + '-dedup-3', undefined, { backgroundTaskId: 'bmerge3' }));
+  assert.equal(r.snapshot(nextId).revision, before, 'a replayed source result is deduplicated after rekey');
+});

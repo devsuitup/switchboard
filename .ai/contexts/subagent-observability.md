@@ -201,6 +201,10 @@ their tool-use are held until that launch arrives; paired results that fail
 admission are consumed rather than left pending. Processed Bash launch records
 are removed or replaced by shell correlations. Plain foreground Bash traffic
 opens nothing, publishes no revision and consumes no shared deduplication slot.
+Entries admitted only for Bash and shell stops use a separate deduplication set,
+bounded by maxEntries, merged and bounded on rekey, and cleared on owner death.
+The agent deduplication set admits exactly the entries admitted on main, including
+task notifications. Deferred Bash results leave their deduplication set before replay.
 Monitor results use `taskId`, not `backgroundTaskId`, and do
 not open a Bash task.
 A matching terminal notification (including queued attachments and aggregate
@@ -217,7 +221,10 @@ shell opens at its tool-use time. Completion
 correlations are released when their shell becomes terminal, including early
 completion and rekey merges; late notifications for a known terminal shell
 are consumed without creating a pending entry. Bash launch, shell and stop calls
-have their own table, bounded oldest first on insertion and rekey. Agent and
+have their own table, bounded oldest first on insertion and rekey. Stop
+correlations are released on success and error. A tool-id notification
+whose correlation was evicted can still end a known Bash task by task id; agents
+continue to require their tool correlation. Agent and
 SendMessage calls retain main's unbounded correlation semantics. Ending an
 agent does not scan call correlations; ending a Bash scans only the bounded
 shell-call table. Terminal task records retain their existing replay semantics.

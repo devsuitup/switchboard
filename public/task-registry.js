@@ -12,7 +12,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     return id;
   }
   function parent(id) {
-    if (!parents.has(id)) parents.set(id, { tasks: new Map(), calls: new Map(), shellCalls: new Map(), pending: new Map(), taskNotifications: new Map(), seen: new Set(), revision: 0, known: false, backgroundUnknown: false });
+    if (!parents.has(id)) parents.set(id, { tasks: new Map(), calls: new Map(), shellCalls: new Map(), pending: new Map(), taskNotifications: new Map(), seen: new Set(), shellSeen: new Set(), revision: 0, known: false, backgroundUnknown: false });
     return parents.get(id);
   }
   function callFor(p, toolId) { return p?.calls.get(toolId) || p?.shellCalls.get(toolId); }
@@ -195,9 +195,12 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
       return call?.bash && !(shell && b.tool_use_id === shell.tool && (call.async || shell.backgrounded));
     });
     if (!quietBash) {
-      if (p.seen.has(key)) return;
-      p.seen.add(key);
-      bound(p.seen);
+      const agentEntry = n || blocks.some(b => b.type === 'tool_use' && (b.name === 'Agent' || b.name === 'SendMessage' && p.tasks.get(b.input?.to)?.kind === 'agent')) ||
+        blocks.some(b => b.type === 'tool_result' && (p.calls.has(b.tool_use_id) || entry.toolUseResult?.agentId));
+      const seen = agentEntry ? p.seen : p.shellSeen;
+      if (seen.has(key)) return;
+      seen.add(key);
+      bound(seen);
     }
     if (entry.type === 'assistant' && entry.message?.role === 'assistant') {
       for (const b of blocks) {
@@ -227,6 +230,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
           const deferredBlocks = deferred.message.content;
           const deferredKey = deferred.uuid || `${deferred.type}:${deferred.timestamp}:${deferredBlocks.map(b => b.id || b.tool_use_id).join(',')}:`;
           p.seen.delete(deferredKey);
+          p.shellSeen.delete(deferredKey);
           ingest(id, deferred);
         }
       }
@@ -252,7 +256,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
         if (!call) { p.pending.set(`result:${b.tool_use_id}`, entry); bound(p.pending); continue; }
         if (call.bash) continue;
         if (call.shell) continue;
-        if (call.stop) { if (b.is_error !== true) end(id, call.id, at); continue; }
+        if (call.stop) { p.shellCalls.delete(b.tool_use_id); if (b.is_error !== true) end(id, call.id, at); continue; }
         if (call.sendMessage) {
           const active = p.tasks.get(call.id);
           const group = call.reopenGroup;
@@ -293,6 +297,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
       } else {
         const call = callFor(p, n.tool);
         if ((n.tool && call && call.id === n.id) || (!n.tool && ['agent', 'bash'].includes(p.tasks.get(n.id)?.kind)) ||
+            (n.tool && !call && p.tasks.get(n.id)?.kind === 'bash' && !p.tasks.get(n.id).terminal) ||
             (p.tasks.get(n.id)?.kind === 'bash' && p.tasks.get(n.id).terminal)) end(id, n.id, at);
         else if (n.tool) { p.pending.set(`notification:${n.tool}`, { ...n, at }); bound(p.pending); }
         else if (/^[a-z][a-z0-9]+$/.test(n.id)) { p.taskNotifications.set(`notification-task:${n.id}`, { ...n, at }); bound(p.taskNotifications, Math.min(256, maxEntries)); }
@@ -366,6 +371,7 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     p.pending.clear();
     p.taskNotifications.clear();
     p.seen.clear();
+    p.shellSeen.clear();
     changed(id);
   }
   function ownerAlive(id, { startedAt } = {}) {
@@ -453,9 +459,11 @@ function createTaskRegistry({ now = () => Date.now(), onChange = () => {}, onRek
     for (const [key, value] of old.pending) next.pending.set(key, value);
     for (const [key, value] of old.taskNotifications) next.taskNotifications.set(key, value);
     for (const key of old.seen) next.seen.add(key);
+    for (const key of old.shellSeen) next.shellSeen.add(key);
     bound(next.pending);
     bound(next.taskNotifications, Math.min(256, maxEntries));
     bound(next.seen);
+    bound(next.shellSeen);
     if (old.receivedRevisions) {
       next.receivedRevisions ||= new Map();
       for (const [key, value] of old.receivedRevisions) next.receivedRevisions.set(key, Math.max(value, next.receivedRevisions.get(key) || 0));
