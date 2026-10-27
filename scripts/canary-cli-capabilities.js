@@ -507,7 +507,7 @@ function descriptor(ctx, proc) {
         }
         if (candidates.length === 1) {
           const p = candidates[0];
-          const current = fs.statSync(dir);
+          const current = fs.statSync(dir, { bigint: true });
           if (current.dev !== proc.directoryIdentity.dev || current.ino !== proc.directoryIdentity.ino) return null;
           if (proc.writerPid && (proc.writerPid !== p.pid || proc.procStart !== p.start || proc.namespace !== p.namespace)) return null;
           proc.writerPid = p.pid; proc.namespace = p.namespace;
@@ -607,7 +607,7 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
       child.onData(observe);
     } catch { throw new Unverified('node-pty spawn/ABI failure; use a matching Node or Electron runtime; backend fallback is forbidden'); }
   }
-  const ds = fs.statSync(sessions);
+  const ds = fs.statSync(sessions, { bigint: true });
   const proc = { child, isPty: !!ctx.ptyFactory || !ctx.opts.dryRun, pid: child.pid, sessions, sandbox, directoryIdentity: { dev: ds.dev, ino: ds.ino },
     preexisting, spawnedAt, requestedId: cliArgs.includes('--session-id') ? cliArgs[cliArgs.indexOf('--session-id') + 1] : null,
     procStart: ctx.opts.dryRun ? fixtureStart : null, envKeys: Object.keys(env), osc, exited: false, id: null };
@@ -642,7 +642,7 @@ async function launch(ctx, { cwd = ctx.repo, args = [], sandbox = false, setting
   record.sessionId = proc.id; record.cwd = proc.cwd;
   record.descriptorSource = path.relative(ctx.run, sessions).replaceAll('\\', '/');
   record.namespace = proc.namespace || null; record.innerPid = proc.innerPid || null; record.procStart = proc.procStart || null;
-  record.writerHostPid = proc.writerPid || proc.pid; record.directoryIdentity = proc.directoryIdentity;
+  record.writerHostPid = proc.writerPid || proc.pid; record.directoryIdentity = { dev: String(ds.dev), ino: String(ds.ino) };
   return proc;
 }
 
