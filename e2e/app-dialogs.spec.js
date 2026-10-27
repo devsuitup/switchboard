@@ -22,6 +22,8 @@ test('background Delete is a designed confirmation: Escape cancels and Delete pr
   await page.locator('#agents-toggle-btn').click();
   await page.locator('.agents-row[data-key="bg:aaaaaaaa"]').click();
   const opener = page.locator('#agents-detail [data-verb="rm"]');
+  await app.evaluate(() => process.mainModule.require('./bg-agents').reconcile());
+  await expect(opener).toBeVisible();
   await opener.focus();
   await page.keyboard.press('Enter');
   const dialog = page.locator('.choice-dialog-overlay');
