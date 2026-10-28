@@ -178,10 +178,13 @@ test('GIVEN a contaminated process.env WHEN postinstall spawns build tools THEN 
   const envs = [];
   const source = fs.readFileSync(path.join(ROOT, 'scripts/postinstall.js'), 'utf8');
   const localRequire = createRequire(path.join(ROOT, 'scripts/postinstall.js'));
+  const scriptModule = { exports: {} };
+  const scriptRequire = name => name === 'child_process'
+    ? { execSync: (_command, options) => envs.push({ ...(options.env || process.env) }) }
+    : localRequire(name);
+  scriptRequire.main = scriptModule;
   vm.runInNewContext(source, {
-    require: name => name === 'child_process'
-      ? { execSync: (_command, options) => envs.push({ ...(options.env || process.env) }) }
-      : localRequire(name),
+    require: scriptRequire, module: scriptModule, exports: scriptModule.exports,
     process: { env: process.env, platform: 'win32' }, console,
   });
   assert.equal(envs.length, 1);

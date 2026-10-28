@@ -50,6 +50,10 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Test postinstall helpers
+        if: matrix.platform == 'mac'
+        run: node --test --test-timeout=120000 test/postinstall.test.js
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
