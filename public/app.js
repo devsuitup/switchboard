@@ -1237,11 +1237,14 @@ searchTitlesToggle.addEventListener('click', async () => {
   searchGeneration++;
   searchTitlesOnly = !searchTitlesOnly;
   searchTitlesToggle.classList.toggle('active', searchTitlesOnly);
-  await window.api.setSetting('searchTitlesOnly', searchTitlesOnly);
-  // Re-run current search if there's a query
-  const query = searchInput.value.trim();
-  if (query) {
-    searchInput.dispatchEvent(new Event('input'));
+  try {
+    await window.api.setSetting('searchTitlesOnly', searchTitlesOnly);
+  } finally {
+    // Re-run current search if there's a query
+    const query = searchInput.value.trim();
+    if (query) {
+      searchInput.dispatchEvent(new Event('input'));
+    }
   }
 });
 
