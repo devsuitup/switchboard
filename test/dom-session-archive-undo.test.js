@@ -74,17 +74,20 @@ for (const state of ['job', 'unknown', 'throws']) {
     const ctx = setup(t, [{ sessionId: 'A', mergedMemberIds: ['B'] }]);
     ctx.window.activePtyIds.add('A');
     ctx.window.activePtyIds.add('B');
+    if (state === 'job') ctx.window.openSessions.set('B', { attach: true, attachJobId: '1234abcd' });
     ctx.window.api.bgAgentLiveJob = async id => {
       if (id === 'A') return { known: true, job: null };
       if (state === 'throws') throw new Error('daemon offline');
-      return state === 'job' ? { known: true, job: { id: 'job-B' } } : { known: false, reason: 'daemon offline' };
+      return state === 'job' ? { known: true, job: { id: '1234abcd' } } : { known: false, reason: 'daemon offline' };
     };
     const refused = archive(ctx);
     await settle();
     assert.equal(ctx.document.querySelector('.modal-overlay'), null);
     await refused;
     assert.deepEqual(ctx.calls, []);
-    assert.match(ctx.document.querySelector('[role="alert"]').textContent, state === 'job' ? /job-B.*Agents view/ : /cannot tell.*daemon offline/);
+    const message = ctx.document.querySelector('[role="alert"]').textContent;
+    assert.match(message, state === 'job' ? /1234abcd.*use Stop session on its sidebar row first/ : /cannot tell.*daemon offline/);
+    if (state === 'job') assert.doesNotMatch(message, /Agents view/);
     ctx.window.api.bgAgentLiveJob = async () => ({ known: true, job: null });
     const retry = archive(ctx);
     await settle();

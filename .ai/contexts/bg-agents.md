@@ -1262,7 +1262,11 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 - Archiving or deleting a session that a live daemon job runs is refused by
   `stopBeforeArchive` (IPC `bg-agent-live-job`, the same `liveJobCheck`,
   failing closed) before anything is detached; a folder archive (#482) that
-  holds one archives nothing. Stop the job from the Agents view first. With
+  holds one archives nothing. Use **Stop session** on its sidebar row first
+  when `planSessionStop` with `jobStop: true` can target the daemon job. An
+  invalid job id, an unidentified or mismatched attachment, or an interactive
+  tab that Stop would target instead retains the Agents view recovery. Remote
+  rows bypass the local daemon refusal and retain their host stop path.
   Folder Archive checks every local part before its options dialog, even when
   the remembered "Archive the sessions" option is unchecked; a live job or an
   unknown answer refuses the action before configuration. Once allowed, with

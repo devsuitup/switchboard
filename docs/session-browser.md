@@ -229,7 +229,9 @@ when the whole conversation is archived.
   confirmation names what stops and where, including remote hosts. Cancel
   stops and archives nothing. With nothing running, Archive happens at once.
   A live background job, or a job state that cannot be checked, refuses the
-  whole action before a dialog; stop the job from the Agents view first.
+  whole action before a dialog. For an identified local job, use **Stop session**
+  on its sidebar row first; if the row cannot stop that job, find and
+  stop it in the Agents view. An unavailable job check still refuses with its reason.
   A group skips and reports a session whose stop or archive then fails.
   Either way a notice offers **Undo** for about ten seconds, restoring only
   the rows this click archived. Stopped processes stay stopped. Archived

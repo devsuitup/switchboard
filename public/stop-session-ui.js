@@ -8,7 +8,7 @@ function resolveSessionStop(session, { attach = false } = {}) {
     return { remote: true, alias, attach: false, confirmText: `Stop this session on ${label}?` };
   }
   if (attach) {
-    return { remote: false, alias: null, attach: true, confirmText: 'Detach from this background session. It keeps running; the Agents view can stop it.' };
+    return { remote: false, alias: null, attach: true, confirmText: 'Detach from this background session. It keeps running.' };
   }
   return { remote: false, alias: null, attach: false, confirmText: 'Stop this session?' };
 }
@@ -76,7 +76,9 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
           targets.push({ sessionId: id, job: true, jobId: check.job.id, attachedHere: false, where: 'in the background' });
         }
       } else {
-        excluded.push({ sessionId: id, reason: `background job ${check.job.id} keeps running; stop it from the Agents view` });
+        const recovery = typeof check.job.id === 'string' && /^[0-9a-f]{8}$/.test(check.job.id)
+          ? 'use Stop session on its sidebar row' : 'stop it from the Agents view';
+        excluded.push({ sessionId: id, reason: `background job ${check.job.id} keeps running; ${recovery}` });
       }
     } else if (storedActivitySnapshot(id, row)?.liveness === 'alive') {
       excluded.push({ sessionId: id, reason: 'a process outside this window keeps running; stop it in its own terminal' });
@@ -97,11 +99,11 @@ function describeSessionStopPlan(row, targets, excluded) {
     ? `${label(target.sessionId)}: background job ${target.jobId} is not running in the daemon; its tab detaches.`
     : target.job ? `${label(target.sessionId)}: background job ${target.jobId}; its process ends.`
     : target.attach
-    ? `${label(target.sessionId)}: detach its tab in this window; background job ${target.jobId || (single ? 'for this session' : target.sessionId)} keeps running; stop it from the Agents view.`
+    ? `${label(target.sessionId)}: detach its tab in this window; background job ${target.jobId || (single ? 'for this session' : target.sessionId)} keeps running.`
     : `${label(target.sessionId)}${target.possiblyLive ? ' (possibly running)' : ''} ${target.where}.`);
   const confirmText = [attachOnly ? targets.some(target => target.notHosted || target.jobStopped)
     ? single ? 'Detach this tab?' : `Detach ${targets.length} tabs?`
-    : 'Detach from this background session. It keeps running; the Agents view can stop it.'
+    : 'Detach from this background session. It keeps running.'
     : stopping.length ? single ? 'Stop this session?' : `Stop ${stopping.length} part${stopping.length === 1 ? '' : 's'}?`
       : single ? 'This session cannot be stopped here.' : 'No parts can be stopped here.', ...lines,
     ...(stopping.length ? [single ? 'Its process ends; the conversation is kept and can be resumed.'
@@ -144,10 +146,15 @@ async function checkBackgroundJob(sessionId, backgroundJobs) {
   return check;
 }
 
-async function liveBackgroundJobRefusal(sessionId, backgroundJobs) {
+async function liveBackgroundJobRefusal(sessionId, backgroundJobs = new Map()) {
   const check = await checkBackgroundJob(sessionId, backgroundJobs);
   if (check && check.known === false) return `cannot tell whether a background job is running this session (${check.reason || 'unknown'})`;
-  if (check && check.job) return `background job ${check.job.id} is still running this session — stop it from the Agents view first`;
+  if (check && check.job) {
+    const plan = await planSessionStop({ sessionId }, { backgroundJobs, jobStop: true });
+    const recovery = plan.targets.some(target => target.job && !target.notHosted)
+      ? 'use Stop session on its sidebar row first' : 'stop it from the Agents view first';
+    return `background job ${check.job.id} is still running this session — ${recovery}`;
+  }
   return null;
 }
 
