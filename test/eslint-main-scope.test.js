@@ -12,7 +12,7 @@ function javascriptFiles(dir) {
   if (!fs.existsSync(path.join(root, dir))) return [];
   return fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap(entry => {
     const file = path.posix.join(dir, entry.name);
-    return entry.isDirectory() ? javascriptFiles(file) : file.endsWith('.js') ? [file] : [];
+    return entry.isDirectory() ? javascriptFiles(file) : /.c?js$/.test(file) ? [file] : [];
   });
 }
 

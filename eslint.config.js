@@ -770,7 +770,7 @@ module.exports = [
     files: [
       '*.js',
       'workers/**/*.js',
-      'scripts/**/*.js',
+      'scripts/**/*.{js,cjs}',
       'src/main/**/*.js',
     ],
     ignores: ['*.config.js'],

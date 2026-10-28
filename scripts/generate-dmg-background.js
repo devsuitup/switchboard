@@ -7,6 +7,8 @@ const WIDTH = 660;
 const HEIGHT = 400;
 const OUTPUT_DIR = path.join(__dirname, '..', 'build');
 
+// Coordinates below follow build.dmg.contents and build.dmg.iconSize in package.json.
+
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 /**
