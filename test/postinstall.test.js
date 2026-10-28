@@ -11,7 +11,7 @@ const source = fs.readFileSync(filename, 'utf8');
 const realRequire = createRequire(filename);
 const SPECIAL_NAMES = ['some file.node', 'some"file.node', 'native\\addon.node', '$(touch injected).node'];
 
-function loadPostinstall({ main = false, platform = 'darwin', failInstall = false, failFallback = false, failSign = false } = {}) {
+function loadPostinstall({ main = false, platform = 'darwin', failInstall = false, failFallback = false, failSign = false, realFs = false } = {}) {
   const calls = [];
   const env = { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'test-session', PATH: 'test-path' };
   const module = { exports: {} };
@@ -37,7 +37,7 @@ function loadPostinstall({ main = false, platform = 'darwin', failInstall = fals
         if (failSign) throw new Error('sign failed');
       },
     };
-    if (id === 'fs') return fakeFs;
+    if (id === 'fs') return realFs ? fs : fakeFs;
     return realRequire(id);
   }
   requireStub.main = main ? module : {};
@@ -86,14 +86,13 @@ for (const name of SPECIAL_NAMES) {
   test(`findFiles preserves the exact filename: ${name}`, {
     skip: process.platform === 'win32' && /["\\]/.test(name),
   }, () => {
-    const { exports: { findFiles } } = loadPostinstall();
+    const { exports: { findFiles } } = loadPostinstall({ realFs: true });
     assert.equal(typeof findFiles, 'function');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'postinstall-test-'));
     try {
       const expected = path.join(dir, name);
       fs.writeFileSync(expected, '');
-      const production = require('../scripts/postinstall');
-      assert.deepEqual(production.findFiles(dir, '.node'), [expected]);
+      assert.deepEqual([...findFiles(dir, '.node')], [expected]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -118,7 +117,8 @@ test('findFiles descends into directories containing a backslash', { skip: proce
     fs.mkdirSync(subdir);
     const expected = path.join(subdir, 'addon.node');
     fs.writeFileSync(expected, '');
-    assert.deepEqual(require('../scripts/postinstall').findFiles(dir, '.node'), [expected]);
+    const { exports: { findFiles } } = loadPostinstall({ realFs: true });
+    assert.deepEqual([...findFiles(dir, '.node')], [expected]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
