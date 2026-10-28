@@ -24,11 +24,12 @@ function fixture(t, mainOnly = false) {
   const target = mainOnly ? root : path.join(root, 'work tree é');
   if (!mainOnly) git(root, ['worktree', 'add', '-qb', 'topic', target]);
   const removes = [];
-  const runGit = async args => {
+  const runGit = async (args, consume) => {
     if (args.includes('remove')) {
       assert.equal(mainOnly, false, 'never remove the main working tree');
       removes.push(args);
     }
+    if (consume) return deletion.streamGit(args, consume, { env });
     return git(root, args);
   };
   const read = () => deletion.readStatus(target, root, runGit);
@@ -119,3 +120,46 @@ test('real git snapshot detects content changes with unchanged dirty status', as
   assert.deepEqual(fresh.dirty, shown.dirty);
   assert.notEqual(fresh.fingerprint, shown.fingerprint);
 });
+
+test('real git previews an uninitialised gitlink directory without recursing into its parent', async t => {
+  const f = fixture(t, true);
+  const head = f.git(['rev-parse', 'HEAD']).trim();
+  f.git(['update-index', '--add', '--cacheinfo', `160000,${head},sm`]);
+  fs.mkdirSync(path.join(f.target, 'sm'));
+  const shown = await f.read();
+  assert.deepEqual(shown.submodules, ['sm']);
+  assert.deepEqual(shown.dirty, ['A  sm']);
+});
+
+for (const kind of ['junction', 'dir']) {
+  for (const name of ['node_modules', 'lnk']) {
+    for (const mainOnly of [true, false]) {
+      test(`real git refuses directory ${kind} link ${name} without touching its target (${mainOnly ? 'main snapshot' : 'linked worktree'})`, {
+        skip: kind === 'junction' && process.platform !== 'win32' ? 'Windows junction regression; POSIX symlink case runs here' : false,
+      }, async t => {
+        const f = fixture(t, mainOnly);
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-delete-link-target-'));
+        t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+        const precious = path.join(outside, 'precious');
+        fs.writeFileSync(precious, 'keep');
+        const shown = await f.read();
+        const link = path.join(f.target, name);
+        try { fs.symlinkSync(outside, link, kind); }
+        catch (error) {
+          if (kind === 'dir' && process.platform === 'win32' && ['EPERM', 'EACCES'].includes(error.code)) {
+            t.skip('Windows directory symlinks require Developer Mode or privilege; junction case remains enabled');
+            return;
+          }
+          throw error;
+        }
+        try {
+          await assert.rejects(f.read(), /directory link.*(?:node_modules|lnk)|(?:node_modules|lnk).*directory link/is);
+          await assert.rejects(f.remove(shown), /directory link/is);
+          assert.equal(f.removes.length, 0);
+          assert.equal(fs.existsSync(precious), true);
+          assert.equal(fs.readFileSync(precious, 'utf8'), 'keep');
+        } finally { fs.unlinkSync(link); }
+      });
+    }
+  }
+}

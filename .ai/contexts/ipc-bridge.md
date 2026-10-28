@@ -77,18 +77,35 @@ local IPC and directs the user to git on the host. Project-folder Delete (#474)
 still never offers deletion of the project's own directory. Agents Delete uses
 `claude rm` without force; it does not call the worktree IPC or escalate refusals.
 
-The SHA-256 fingerprint includes worktree metadata, full index stage records,
+The SHA-256 fingerprint includes worktree metadata, a streamed hash of full index stage records,
 dirty/untracked paths, both rename paths, file modes and streamed SHA-256 file
 contents. Streaming bounds memory and detects same-size edits with restored
 timestamps; symlinks hash their link targets and absent files have a missing
-marker. Dirty submodules recurse through the same status/index/content snapshot,
+marker. Initialised dirty submodules recurse through the same status/index/content snapshot,
 up to 16 levels. Index gitlinks identify submodules, including clean ones, so
-the user can explicitly consent to the force Git requires. Untracked embedded
+the user can explicitly consent to the force Git requires. Gitlinks without a
+`.git` entry are marked uninitialised and never run Git in the child directory,
+where it would otherwise discover the parent repository. Untracked embedded
 repositories or other unexpected dirty directories refuse with instructions to
 review or move them, rather than recursively reading arbitrary directory trees.
 Ignored paths/counts are compared, but ignored contents are intentionally not
-hashed or expanded. Each Git call retains a 16 MiB maxBuffer and a preview
-refuses above 100,000 dirty records; exceeding a bound fails closed. This is a
+hashed or expanded into status rows. Index stage output streams directly into SHA-256 with
+bounded record parsing, bypassing the 16 MiB buffer used for other Git calls.
+The whole snapshot, including nested submodules and index data, has a 512 MiB
+hash budget; an over-budget refusal names the biggest files encountered.
+Preview refuses above 100,000 dirty records and translates maxBuffer/timeout
+errors into actionable refusals. An interrupted removal preserves killed/signal
+metadata and warns that the folder may be partly deleted, without rereading a
+potentially missing folder or claiming Git refused it.
+
+Directory scans use lstat without traversing directory links, before and after
+the snapshot and again immediately before removal. Directory symlinks and Windows
+junctions, including links inside ignored directories, refuse preview/deletion;
+the message names up to ten plus the total and instructs removal of the link
+first (`rmdir <path>` for Windows junctions, never recursive deletion; POSIX
+`rm <link>` without `-r`). File hashing resolves on disk with `resolveOnDisk`,
+checks realpath containment and reads that returned path; file symlinks hash
+only their link text after checking the resolved parent. This is a
 fresh comparison before removal, not an atomic filesystem lock: edits after the
 final snapshot remain possible.
 

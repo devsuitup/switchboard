@@ -30,6 +30,7 @@ function fixture() {
         `worktree ${target}\nHEAD abc\nbranch refs/heads/topic\n${state.lock === null ? '' : `locked${state.lock ? ' ' + state.lock : ''}\n`}\n`, '');
       if (args.includes('ls-files')) return cb(null, '', '');
       state.removes.push(Array.from(args));
+      if (state.removeError) return cb(state.removeError, '', '');
       if (state.failRemove) {
         state.dirty = '?? late.txt\0';
         return cb(new Error('dirty'), '', 'fatal: contains modified or untracked files');
@@ -207,4 +208,15 @@ test('absent lock files are unlocked but unreadable lock metadata fails closed',
   await assert.rejects(read('EACCES'), /lock metadata EACCES/);
   const locked = await deletion.readStatus(target, '/repo', git, async () => 'backup');
   assert.notEqual((await read('ENOENT')).fingerprint, locked.fingerprint);
+});
+
+test('the IPC preserves removal interruption metadata and warns about partial deletion', async () => {
+  const f = fixture();
+  const shown = await f.preview();
+  f.state.removeError = Object.assign(new Error('process killed'), { killed: true, signal: 'SIGTERM' });
+  const result = await f.remove(shown);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /removal was interrupted; the folder may be partly deleted/i);
+  assert.equal(f.state.removes.length, 1);
+  assert.equal(f.state.cleaned, 0);
 });

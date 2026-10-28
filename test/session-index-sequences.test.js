@@ -23,6 +23,7 @@ function handler(name, deps) {
   assert.ok(registration, name);
   let captured;
   const context = vm.createContext({ ...deps, writer: memoryWriter(deps),
+    spawnChild: require('./project-action-harness').spawnFromExec(deps.execFile),
     worktreeDelete: require('../worktree-delete'),
     activeSessions: new Map(), cliSessionState: { getSidebarDescriptors: () => [] },
     os: { homedir: () => '/home/test' },

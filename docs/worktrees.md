@@ -79,14 +79,16 @@ every changed or untracked file against the preview. Untracked files are listed
 individually even if your Git configuration normally hides them. A clean
 worktree without submodules or a lock is removed without force. Dirty files
 permit force only while their paths and contents still match the preview.
-Ignored directory contents are neither expanded nor compared; their warning
-covers everything inside them. A changed snapshot or a Git refusal leaves
+Ignored files (including an edited `.env`) and ignored directory contents are
+not compared; edits to them are deleted without another review. Ignored
+directories are not expanded in the dialog. A changed snapshot or a Git refusal leaves
 a persistent notice and reopens the dialog with the fresh status, requiring
 another confirmation. A locked worktree shows its lock reason and requires
 checking **Delete this locked worktree, overriding its lock** before deletion;
 there is no automatic double-force retry. Worktrees containing submodules also
 require checking **Delete this worktree and its submodules with force**;
-changes inside dirty submodules are rechecked too. The branch is kept. The
+changes inside initialised dirty submodules are rechecked too. An uninitialised
+submodule is not read as though it were the parent repository. The branch is kept. The
 worktree's sessions move under the repository's header, at once or at the
 next refresh, since their transcripts are still on disk. Deleting a
 finished background session in the [Agents view](background-agents.md) delegates
@@ -95,6 +97,15 @@ with force. Both surfaces require fresh checks and never silently escalate a
 refusal into forced removal. The sidebar's remote worktree headers share the
 local button code, but cannot use the local deletion backend: their notice
 directs you to review and remove the worktree with git on its host.
+
+Preview and deletion refuse while the worktree contains directory symlinks or
+Windows junctions, including inside ignored folders. The refusal names up to
+ten links and gives the total count. Remove each link first: for a Windows
+junction use `rmdir <path>` without recursive deletion; on POSIX use `rm <link>`
+without `-r`. Then retry Delete. A preview above 512 MiB of total hashed data
+refuses with instructions to review or move the largest files it encountered.
+If removal is interrupted, its notice warns that the folder may be partly
+deleted: review the remaining folder and Git registration before retrying.
 
 **With git**, from the repository:
 
