@@ -1043,6 +1043,7 @@ ipcMain.handle('remap-project', async (_event, oldPath, newPath) => {
 });
 
 // --- IPC: delete-worktree ---
+const worktreeDelete = require('./worktree-delete');
 // Validated path pattern: <project>/.<segment>/[worktrees/]<name>
 // Matches .claude/worktrees/<n>, .claude-worktrees/<n>, .worktrees/<n>
 const WORKTREE_PATH_RE = /^(.+?)\/\.(?:claude\/worktrees|claude-worktrees|worktrees)\/([^/]+)\/?$/;
@@ -1071,59 +1072,47 @@ ipcMain.handle('check-delete-worktree', (_event, worktreePath) => {
   return result.ok ? { ok: true } : result;
 });
 
-ipcMain.handle('delete-worktree', (_event, worktreePath) => {
-  return new Promise((resolve) => {
-    const check = checkDeleteWorktree(worktreePath);
-    if (!check.ok) return resolve(check);
-    const { normalizedPath, parentRepo } = check;
-
-    // Helper: run git worktree remove, optionally double-force
-    function runRemove(doubleForce, callback) {
-      const args = ['-C', parentRepo, 'worktree', 'remove', '-f'];
-      if (doubleForce) args.push('-f');
-      args.push('--', normalizedPath);
-      execFile('git', args, { env: localGitEnv() }, (err, _stdout, stderr) => callback(err, stderr));
-    }
-
-    runRemove(false, async (err, stderr) => {
-      if (err && /locked/i.test(stderr || err.message || '')) {
-        // Retry with double force for locked worktrees
-        runRemove(true, async (err2, stderr2) => {
-          if (err2) return resolve({ ok: false, error: (stderr2 || err2.message || String(err2)).trim() });
-          await afterRemove();
-        });
-      } else if (err) {
-        return resolve({ ok: false, error: (stderr || err.message || String(err)).trim() });
-      } else {
-        await afterRemove();
-      }
+function worktreeGit(args) {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { env: localGitEnv(), timeout: 15000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) reject(new Error((stderr || err.message || String(err)).trim()));
+      else resolve(stdout);
     });
-
-    async function afterRemove() {
-      const removed = await writer.cleanupWorktree(normalizedPath, log);
-
-      log.info(`[delete-worktree] removed=${normalizedPath} sessions=${removed}`);
-      notifyRendererProjectsChanged('worktree-deleted');
-      resolve({ ok: true, removed });
-    }
   });
+}
+
+async function worktreeDeletionStatus(normalizedPath, parentRepo) {
+  const status = await worktreeDelete.readStatus(normalizedPath, parentRepo, worktreeGit);
+  return { ...status, homeDir: os.homedir(),
+    sessions: worktreeDelete.runningSessions(normalizedPath, activeSessions, cliSessionState.getSidebarDescriptors()) };
+}
+
+ipcMain.handle('delete-worktree', async (_event, worktreePath, shown) => {
+  const check = checkDeleteWorktree(worktreePath);
+  if (!check.ok) return check;
+  const { normalizedPath, parentRepo } = check;
+  try {
+    const result = await worktreeDelete.removeWorktree(normalizedPath, parentRepo, shown,
+      () => worktreeDeletionStatus(normalizedPath, parentRepo), worktreeGit);
+    if (!result.ok) return result;
+    const removed = await writer.cleanupWorktree(normalizedPath, log);
+    log.info(`[delete-worktree] removed=${normalizedPath} sessions=${removed}`);
+    notifyRendererProjectsChanged('worktree-deleted');
+    return { ok: true, removed };
+  } catch (error) {
+    return { ok: false, error: `${error.message} Review the folder and try Delete again; Cancel keeps it on disk.` };
+  }
 });
 
 // --- IPC: worktree-status ---
-ipcMain.handle('worktree-status', (_event, worktreePath) => {
-  return new Promise((resolve) => {
-    const check = checkDeleteWorktree(worktreePath);
-    if (!check.ok) return resolve(check);
-    const { normalizedPath, parentRepo } = check;
-
-    execFile('git', ['-C', parentRepo, '-C', normalizedPath, 'status', '--porcelain'], { env: localGitEnv() }, (err, stdout, stderr) => {
-      if (err) {
-        return resolve({ ok: false, error: (stderr || err.message || String(err)).trim() });
-      }
-      const dirty = stdout.split('\n').map(l => l.trimEnd()).filter(Boolean);
-      resolve({ ok: true, dirty, total: dirty.length });
-    });
-  });
+ipcMain.handle('worktree-status', async (_event, worktreePath) => {
+  const check = checkDeleteWorktree(worktreePath);
+  if (!check.ok) return check;
+  try {
+    return await worktreeDeletionStatus(check.normalizedPath, check.parentRepo);
+  } catch (error) {
+    return { ok: false, error: `${error.message} Review the folder and try Delete again; Cancel keeps it on disk.` };
+  }
 });
 
 // --- IPC: get-projects ---

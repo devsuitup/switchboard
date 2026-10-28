@@ -76,7 +76,7 @@ for (const agree of [false, true]) {
     } finally { ctx.destroy(); }
   });
 }
-test('a failed worktree delete reports the error through appAlert', async () => {
+test('a failed worktree delete reports the error through a persistent notice', async () => {
   const ctx = setupSidebarDom();
   try {
     const parent = makeSampleProject({ projectPath: '/p' });
@@ -90,6 +90,7 @@ test('a failed worktree delete reports the error through appAlert', async () => 
     ctx.window.appAlert = async ({ message }) => { alerts.push(message); };
     ctx.sidebar.renderProjects([parent, child], true);
     await ctx.document.querySelector('.worktree-delete-btn').onclick(new ctx.window.MouseEvent('click'));
-    assert.deepEqual(alerts, ['Failed to delete worktree: busy']);
+    assert.deepEqual(alerts, []);
+    assert.match(ctx.document.querySelector('[role="alert"]').textContent, /busy/);
   } finally { ctx.destroy(); }
 });

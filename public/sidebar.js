@@ -1156,6 +1156,7 @@ function renderProjects(projects, resort) {
       const wtHeader = document.createElement('div');
       wtHeader.className = 'worktree-header js-stateful';
       wtHeader.id = 'ph-' + wtFId;
+      wtHeader.dataset.remoteAlias = wt.remoteAlias || '';
       wtHeader.innerHTML = `<span class="worktree-branch-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8c0-2.76-2.46-5-5.5-5S2 5.24 2 8h2l1-1 1 1h4"/><path d="M13 7.14A5.82 5.82 0 0 1 16.5 6c3.04 0 5.5 2.24 5.5 5h-3l-1-1-1 1h-3"/><path d="M5.89 9.71c-2.15 2.15-2.3 5.47-.35 7.43l4.24-4.25.7-.7.71-.71 2.12-2.12c-1.95-1.96-5.27-1.8-7.42.35"/><path d="M11 15.5c.5 2.5-.17 4.5-1 6.5h4c2-5.5-.5-12-1-14"/></svg></span> <span class="worktree-name">${escapeHtml(wtName)}</span>`;
 
       const wtHideBtn = document.createElement('button');
@@ -1595,7 +1596,8 @@ function rebindSidebarEvents(projects) {
   // Bind worktree header events
   sidebarContent.querySelectorAll('.worktree-header').forEach(wtHeader => {
     const wtFId = wtHeader.id.replace('ph-', '');
-    const wtProject = projects.find(p => folderId(p.projectPath) === wtFId);
+    const wtProject = projects.find(p => folderId(p.projectPath) === wtFId
+      && (p.remoteAlias || '') === wtHeader.dataset.remoteAlias);
     if (!wtProject) return;
 
     const wtNewBtn = wtHeader.querySelector('.worktree-new-btn');
@@ -1627,6 +1629,11 @@ function rebindSidebarEvents(projects) {
     if (wtDeleteBtn) {
       wtDeleteBtn.onclick = async (e) => {
         e.stopPropagation();
+        if (wtProject.remoteAlias) {
+          showSessionActionFailure('Delete worktree', wtProject,
+            new Error('Remote worktree deletion is unavailable here. Review and remove the worktree with git on its host.'));
+          return;
+        }
         if (deletingWorktreePaths.has(wtProject.projectPath)) return;
         deletingWorktreePaths.add(wtProject.projectPath);
         try {
@@ -1638,15 +1645,23 @@ function rebindSidebarEvents(projects) {
             return;
           }
           const name = wtProject.projectPath.split('/').pop();
-          const confirmed = await showDeleteWorktreeDialog(name, wtProject.projectPath);
-          if (!confirmed) return;
-          const result = await window.api.deleteWorktree(wtProject.projectPath);
-          if (result && result.ok) {
-            Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
-          } else {
-            const msg = (result && result.error) ? result.error : 'Unknown error';
-            await appAlert({ title: 'Switchboard', message: `Failed to delete worktree: ${msg}` });
+          let freshStatus;
+          for (;;) {
+            const shown = await showDeleteWorktreeDialog(name, wtProject.projectPath, freshStatus);
+            if (!shown) return;
+            const result = await window.api.deleteWorktree(wtProject.projectPath, shown);
+            if (result?.ok) {
+              Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
+              return;
+            }
+            showSessionActionFailure('Delete worktree', wtProject,
+              new Error(result?.error || 'Deletion failed. Review the folder and try Delete again.'));
+            if (!result?.refresh || !result.status?.ok) return;
+            freshStatus = result.status;
           }
+        } catch (error) {
+          showSessionActionFailure('Delete worktree', wtProject,
+            new Error(`${error.message} Review the folder and try Delete again.`));
         } finally {
           deletingWorktreePaths.delete(wtProject.projectPath);
         }
@@ -2449,11 +2464,7 @@ async function showDeleteSessionDialog(session) {
 }
 
 // --- Delete worktree confirmation dialog ---
-// Returns a Promise<boolean> — true if the user confirmed deletion.
-async function showDeleteWorktreeDialog(name, worktreePath) {
-  // Fetch worktree status (dirty files) while the dialog is shown
-  const statusPromise = window.api.worktreeStatus(worktreePath);
-
+async function showDeleteWorktreeDialog(name, worktreePath, freshStatus) {
   return enqueueModalQuestion(() => new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'new-session-overlay';
@@ -2467,12 +2478,13 @@ async function showDeleteWorktreeDialog(name, worktreePath) {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         <span>Any uncommitted changes in this worktree will be permanently lost.</span>
       </div>
+      <div class="dwt-dirty-list" id="dwt-path" title="${escapeHtml(worktreePath)}">${escapeHtml(worktreePath)}</div>
       <div class="delete-worktree-status" id="dwt-status">
         <span class="dwt-loading">Checking worktree status…</span>
       </div>
       <div class="new-session-actions">
         <button class="new-session-cancel-btn" id="dwt-cancel">Cancel</button>
-        <button class="delete-worktree-confirm-btn" id="dwt-confirm">Delete anyway</button>
+        <button class="delete-worktree-confirm-btn" id="dwt-confirm" disabled>Delete worktree</button>
       </div>
     `;
 
@@ -2480,27 +2492,47 @@ async function showDeleteWorktreeDialog(name, worktreePath) {
     document.body.appendChild(overlay);
 
     const statusEl = dialog.querySelector('#dwt-status');
+    const confirmBtn = dialog.querySelector('#dwt-confirm');
+    let shown;
 
-    // Populate status once the IPC resolves
-    statusPromise.then((status) => {
-      if (!overlay.isConnected) return; // dialog already closed
-      if (!status || !status.ok) {
-        const errMsg = (status && status.error) ? escapeHtml(status.error) : 'Unknown error';
-        statusEl.innerHTML = `<span class="dwt-error">Unable to read worktree status: ${errMsg}</span>`;
-        return;
+    Promise.resolve().then(() => freshStatus || window.api.worktreeStatus(worktreePath)).then((status) => {
+      if (!overlay.isConnected) return;
+      if (!status?.ok || !Array.isArray(status.dirty) || typeof status.fingerprint !== 'string') {
+        throw new Error(status?.error || 'The preview is unavailable');
       }
+      shown = { fingerprint: status.fingerprint, confirmLocked: false };
+      const fullPath = worktreePath.replace(/\\/g, '/');
+      const home = (status.homeDir || '').replace(/\\/g, '/').replace(/\/$/, '');
+      const homePrefix = home && (fullPath === home || fullPath.startsWith(home + '/'));
+      dialog.querySelector('#dwt-path').textContent = homePrefix ? '~' + fullPath.slice(home.length) : worktreePath;
+      const details = `<div>Branch: ${escapeHtml(status.branch || '(detached HEAD)')}</div>`
+        + `<div>Running sessions: ${(status.sessions || []).length ? status.sessions.map(session =>
+          `<div>${escapeHtml(session.sessionId)} — ${escapeHtml(session.cwd)}</div>`).join('') : 'none'}</div>`
+        + (status.ignoredCount > 0 ? `<div>${status.ignoredCount} ignored file or directory entries will also be deleted (including any .env or node_modules). Contents of ignored directories are not counted individually.</div>` : '');
+      let changes;
       if (status.total === 0) {
-        statusEl.innerHTML = `<span class="dwt-clean">Worktree is clean — no uncommitted changes.</span>`;
-        return;
+        changes = '<span class="dwt-clean">Worktree is clean — no uncommitted changes.</span>';
+      } else {
+        const visible = status.dirty.slice(0, 10);
+        const overflow = status.total - visible.length;
+        const lines = visible.map(line => escapeHtml(line)).join('\n');
+        const extra = overflow > 0 ? `\n+ ${overflow} more…` : '';
+        changes = `<div class="dwt-dirty-label">${status.total} uncommitted file${status.total !== 1 ? 's' : ''}:</div><pre class="dwt-dirty-list">${lines}${extra}</pre>`;
       }
-      const shown = status.dirty.slice(0, 10);
-      const overflow = status.total - shown.length;
-      const lines = shown.map(l => escapeHtml(l)).join('\n');
-      const extra = overflow > 0 ? `\n+ ${overflow} more…` : '';
-      statusEl.innerHTML = `<div class="dwt-dirty-label">${status.total} uncommitted file${status.total !== 1 ? 's' : ''}:</div><pre class="dwt-dirty-list">${lines}${extra}</pre>`;
+      statusEl.innerHTML = details + changes + (status.locked
+        ? `<div class="dwt-error">Locked${status.lockReason ? ': ' + escapeHtml(status.lockReason) : ''}</div><label><input type="checkbox" id="dwt-lock-confirm"> Delete this locked worktree, overriding its lock</label>` : '');
+      confirmBtn.disabled = !!status.locked;
+      const lockConfirm = dialog.querySelector('#dwt-lock-confirm');
+      if (lockConfirm) lockConfirm.onchange = () => {
+        shown.confirmLocked = lockConfirm.checked;
+        confirmBtn.disabled = !lockConfirm.checked;
+      };
     }).catch((err) => {
       if (!overlay.isConnected) return;
-      statusEl.innerHTML = `<span class="dwt-error">Unable to read worktree status: ${escapeHtml(String(err))}</span>`;
+      confirmBtn.disabled = true;
+      statusEl.innerHTML = '<span class="dwt-error">Unable to read worktree status. Cancel, review the folder, then try Delete again.</span>';
+      showSessionActionFailure('Delete worktree', { projectPath: worktreePath },
+        new Error(`${err.message} Cancel, review the folder, then try Delete again.`));
     });
 
     function close(confirmed) {
@@ -2510,7 +2542,7 @@ async function showDeleteWorktreeDialog(name, worktreePath) {
     }
 
     dialog.querySelector('#dwt-cancel').onclick = () => close(false);
-    dialog.querySelector('#dwt-confirm').onclick = () => close(true);
+    confirmBtn.onclick = () => { if (shown && !confirmBtn.disabled) close(shown); };
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
 
     const unregister = registerModal({ overlay, cancel: () => close(false) });

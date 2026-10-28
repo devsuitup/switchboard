@@ -197,6 +197,11 @@ Stop's danger confirmation names the job's display name and id and says its
 process ends while the conversation is kept. Cancel sends no verb and leaves
 an attached tab open. Delete retains its conversation/worktree loss wording.
 
+Agents Delete delegates to `claude rm <job>` with no force flag; it has no
+direct Git worktree-removal code or forced retry. The sidebar uses the separate
+preview-bound worktree removal described in `ipc-bridge.md` (#841). Both paths
+recheck before effects and never turn a refusal into a silent forced deletion.
+
 The detail uses morphdom, retaining verb button nodes across roster polls and
 state changes while updating their disabled state. Equal-roster polls also
 retain focus; that retention already existed at the PR6 base. A pending job

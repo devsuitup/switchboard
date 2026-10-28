@@ -104,7 +104,7 @@ contextBridge.exposeInMainWorld('api', {
   unarchiveProject: (entry) => ipcRenderer.invoke('unarchive-project', entry),
   remapProject: (oldPath, newPath) => ipcRenderer.invoke('remap-project', oldPath, newPath),
   checkRemapProject: (oldPath) => ipcRenderer.invoke('check-remap-project', oldPath),
-  deleteWorktree: (worktreePath) => ipcRenderer.invoke('delete-worktree', worktreePath),
+  deleteWorktree: (worktreePath, shown) => ipcRenderer.invoke('delete-worktree', worktreePath, shown),
   checkDeleteWorktree: (worktreePath) => ipcRenderer.invoke('check-delete-worktree', worktreePath),
   worktreeStatus: (worktreePath) => ipcRenderer.invoke('worktree-status', worktreePath),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),

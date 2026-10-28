@@ -11,6 +11,7 @@ function loadProjectActionHandlers(overrides = {}) {
   const end = source.indexOf('// --- IPC: get-projects ---', start);
   const context = vm.createContext({
     fs, path, encodeProjectPath, isPanelShellSession,
+    require: require('node:module').createRequire(path.join(__dirname, '../main.js')),
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     activeSessions: new Map(),
     getKnownProjectPaths: () => new Set(['/repo']),
