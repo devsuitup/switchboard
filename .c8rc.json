@@ -7,6 +7,7 @@
     "e2e/**",
     "scripts/**",
     "workers/**",
+    "**/workers/**",
     "public/codemirror-bundle.js",
     "public/codemirror-setup.js",
     "public/mermaid-bundle.js",
@@ -14,9 +15,13 @@
     "public/terminal-manager.js",
     "public/app.js",
     "main.js",
+    "**/main.js",
     "preload.js",
+    "**/preload.js",
     "mcp-bridge.js",
+    "**/mcp-bridge.js",
     "claude-auth.js",
+    "**/claude-auth.js",
     ".work-files/**",
     "node_modules/**"
   ]

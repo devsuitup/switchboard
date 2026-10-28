@@ -12,7 +12,8 @@ const { isAppPath, checkChangelog, parseLabels } = require('../scripts/check-cha
 
 test('app code is what electron-builder ships: root scripts, public/, workers/, the sandbox wrapper', () => {
   for (const file of ['main.js', 'preload.js', 'git-changes.js', 'public/app.js', 'public/style.css',
-    'public/index.html', 'workers/search-worker.js', 'scripts/claude-sandbox.sh']) {
+    'public/index.html', 'workers/search-worker.js', 'scripts/claude-sandbox.sh',
+    'src/main/viewer/file-lists-path.js', 'src/preload/preload.js']) {
     assert.equal(isAppPath(file), true, file);
   }
 });
