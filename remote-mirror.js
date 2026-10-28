@@ -91,14 +91,12 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
 
   // pass 1: full vs incremental per file — see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
   const seenThisCycle = new Set();
-  let skippedTooLarge = 0;
   const candidates = [];
   for (const [rel, meta] of want) {
     // The inventory already carries the size; scp is bounded in time only, so
     // this is the only place a single oversized transcript can be refused
     // before it lands. See .ai/contexts/session-cache.md, "Remote hosts".
     if (meta.size > MAX_FILE_BYTES) {
-      skippedTooLarge++;
       seenThisCycle.add(rel);
       const { count, shouldLog } = bumpStreak(manifestPath, rel);
       if (shouldLog && log && log.warn) {
@@ -134,8 +132,6 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
   const toFetchFull = [];
   const toFetchIncremental = [];
   let cycleBytes = 0;
-  let deferredFiles = 0;
-  let deferredBytes = 0;
   for (const c of candidates) {
     const wouldExceedCount = (toFetchFull.length + toFetchIncremental.length) >= MAX_CYCLE_FILES;
     const wouldExceedBytes = cycleBytes + c.transferSize > MAX_CYCLE_BYTES;
@@ -144,8 +140,6 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
       else toFetchFull.push(c.rel);
       cycleBytes += c.transferSize;
     } else {
-      deferredFiles++;
-      deferredBytes += c.transferSize;
       seenThisCycle.add(c.rel);
       const { count, shouldLog } = bumpStreak(manifestPath, c.rel);
       if (shouldLog && log && log.warn) {
