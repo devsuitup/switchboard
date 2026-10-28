@@ -1215,6 +1215,7 @@ addProjectBtn.addEventListener('click', () => {
 const MIN_SEARCH_CHARS = 3;
 
 let searchDebounceTimer = null;
+let searchGeneration = 0;
 // Pending rAF handle for clearSearch / resetSearchFilter.
 // Cancelled before scheduling a new frame so rapid boundary-crossings
 // (e.g. typing 3→2→1 chars) queue only one full-tree rebuild.
@@ -1233,17 +1234,22 @@ let searchTitlesOnly = false;
 })();
 
 searchTitlesToggle.addEventListener('click', async () => {
+  searchGeneration++;
   searchTitlesOnly = !searchTitlesOnly;
   searchTitlesToggle.classList.toggle('active', searchTitlesOnly);
-  await window.api.setSetting('searchTitlesOnly', searchTitlesOnly);
-  // Re-run current search if there's a query
-  const query = searchInput.value.trim();
-  if (query) {
-    searchInput.dispatchEvent(new Event('input'));
+  try {
+    await window.api.setSetting('searchTitlesOnly', searchTitlesOnly);
+  } finally {
+    // Re-run current search if there's a query
+    const query = searchInput.value.trim();
+    if (query) {
+      searchInput.dispatchEvent(new Event('input'));
+    }
   }
 });
 
 function clearSearch() {
+  searchGeneration++;
   // Clear the input and badge immediately so the user sees feedback at once.
   searchInput.value = '';
   searchBar.classList.remove('has-query');
@@ -1270,6 +1276,7 @@ function clearSearch() {
 // typing — we want no results filter applied, but we must not wipe the
 // partially-typed text.
 function resetSearchFilter() {
+  searchGeneration++;
   if (activeTab === 'sessions') {
     searchMatchIds = null;
     searchMatchProjectPaths = null;
@@ -1308,9 +1315,11 @@ async function runSearchQuery() {
     resetSearchFilter();
     return;
   }
+  const generation = ++searchGeneration;
   try {
     if (activeTab === 'sessions') {
       const results = await window.api.search('session', query, searchTitlesOnly);
+      if (generation !== searchGeneration) return;
       searchMatchIds = new Set(results.map(r => r.id));
       searchMatchProjectPaths = null;
       if (searchTitlesOnly) {
@@ -1326,14 +1335,17 @@ async function runSearchQuery() {
       refreshSidebar({ resort: true });
     } else if (activeTab === 'memory') {
       const results = await window.api.search('memory', query, searchTitlesOnly);
+      if (generation !== searchGeneration) return;
       const matchIds = new Set(results.map(r => r.id));
       renderMemories(matchIds);
     } else if (activeTab === 'work-files') {
       const results = await window.api.search('work-file', query, searchTitlesOnly);
+      if (generation !== searchGeneration) return;
       const matchIds = new Set(results.map(r => r.id));
       renderWorkFiles(matchIds);
     }
   } catch {
+    if (generation !== searchGeneration) return;
     if (activeTab === 'sessions') {
       searchMatchIds = null;
       searchMatchProjectPaths = null;
@@ -1347,6 +1359,7 @@ async function runSearchQuery() {
 // a word before searching. Explicit triggers (Enter, refresh button) bypass
 // the debounce.
 searchInput.addEventListener('input', () => {
+  searchGeneration++;
   searchBar.classList.toggle('has-query', searchInput.value.length > 0);
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
   searchDebounceTimer = setTimeout(() => {
@@ -2748,6 +2761,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     const tabName = tab.dataset.tab;
     if (tabName === activeTab) return;
+    searchGeneration++;
     activeTab = tabName;
     document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
 

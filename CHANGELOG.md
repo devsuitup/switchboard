@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- Clearing or changing a search, switching its title filter, or leaving its tab no longer lets an older reply replace the current results. (#840)
 - Archive and Delete refusals for a running background job now point to **Stop session** on its sidebar row when the job can be stopped there. (#835)
 - Copying and pasting accented characters works in sessions and terminals launched without a locale on macOS and Linux. Quota tooltips now say "tomorrow" when a reset falls on the next day. (#818)
 - A project scan that fails to start now shows its error and retries automatically instead of staying on "Scanning projects…" until restart. (#809)

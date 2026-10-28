@@ -56,7 +56,7 @@ async function withSearch(fn) {
       for (const cb of pending) cb();
     };
     const fns = loadAppFunctions(ctx.context, {
-      declarations: ['MIN_SEARCH_CHARS', 'searchDebounceTimer', 'clearRenderRaf'],
+      declarations: ['MIN_SEARCH_CHARS', 'searchDebounceTimer', 'searchGeneration', 'clearRenderRaf'],
       functions: ['clearSearch', 'resetSearchFilter', 'runSearchQuery'],
     });
     await fn({ ...fns, state, inputEl, window, flushFrames });
