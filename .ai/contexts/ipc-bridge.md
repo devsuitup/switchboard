@@ -64,9 +64,62 @@ consent and avoid recovery during a system exit. See window-frame.md.
 | `remove-project` | `(projectPath, folderKey)` | Destructive Delete Project: drop settings, cache/search and schedule registration; no disk deletion. Bridge: `deleteProject`. |
 | `remap-project` | `(oldPath, newPath)` | **Atomic JSONL `cwd` rewrite**, refuses if active sessions exist. See PR #20. |
 | `check-remap-project` | `(oldPath)` | Read-only `{ ok, error? }`; bridge `checkRemapProject`. Runs `remapProjectRefusal`, also used by the action: any non-exited, non-panel PTY with the same encoded folder refuses. The renderer checks before the folder picker and confirmation, and shows a notice on refusal or check failure. |
-| `delete-worktree` | `(worktreePath)` | `git worktree remove` |
+| `delete-worktree` | `(worktreePath, shown)` | `shown: { fingerprint, confirmLocked, confirmSubmodules }` from the successful preview. Rechecks path guards and Git state through `worktree-delete.js`; no force for clean status without submodules or a lock, one force for matching dirty status or explicitly confirmed submodules, two only for an explicitly confirmed matching lock. Submodule consent is required even with lock consent. Changed state / Git refusal returns `{ ok: false, refresh: true, status, error }`; renderer shows a persistent notice and asks again. Cleanup happens only after successful removal. Removal has a 120 s timeout; preview calls retain 15 s. |
 | `check-delete-worktree` | `(worktreePath)` | Read-only `{ ok, error? }`; bridge `checkDeleteWorktree`. Shares `checkDeleteWorktree` with Delete and status: string input, recognized layout and disk-resolved known parent. The renderer awaits it before the dialog or status request; refusal or failure shows a notice. No git command or cleanup runs in the check. |
-| `worktree-status` | `(worktreePath)` | Dirty-file count |
+| `worktree-status` | `(worktreePath)` | `{ ok, path, homeDir, branch, dirty, total, ignoredCount, submodules, locked, lockReason, fingerprint, sessions }`. Line-delimited `worktree list --porcelain` works on Git 2.24 and recent Git; C-quoted paths decode octal UTF-8 and escaped characters. NUL-delimited status explicitly uses `--untracked-files=all --ignore-submodules=none`; a separate `--ignored --untracked-files=normal` status counts collapsed ignored directories. Sessions include non-exited local PTYs and live sidebar descriptors whose cwd is in the worktree; remote records are excluded. |
+
+The sidebar deletion dialog displays the full path (`~` for home, absolute on
+hover), branch, running session ids/cwds and ignored-entry warning. Confirmation
+stays disabled until a successful preview; locks and submodules each require a
+separate checkbox. Preview and removal failures use the persistent session-action notice.
+Remote nested headers share the renderer path, so Delete refuses before any
+local IPC and directs the user to git on the host. Project-folder Delete (#474)
+still never offers deletion of the project's own directory. Agents Delete uses
+`claude rm` without force; it does not call the worktree IPC or escalate refusals.
+
+The SHA-256 fingerprint includes worktree metadata, a streamed hash of full index stage records,
+dirty/untracked paths, both rename paths, file modes and streamed SHA-256 file
+contents. Streaming bounds memory and detects same-size edits with restored
+timestamps; symlinks hash their link targets and absent files have a missing
+marker. Initialised dirty submodules recurse through the same status/index/content snapshot,
+up to 16 levels. Index gitlinks identify submodules, including clean ones, so
+the user can explicitly consent to the force Git requires. Gitlinks without a
+`.git` entry are marked uninitialised and never run Git in the child directory,
+where it would otherwise discover the parent repository. Untracked embedded
+repositories or other unexpected dirty directories refuse with instructions to
+review or move them, rather than recursively reading arbitrary directory trees.
+Ignored paths/counts are compared, but ignored contents are intentionally not
+hashed or expanded into status rows. Index stage output streams directly into SHA-256 with
+bounded record parsing, bypassing the 16 MiB buffer used for other Git calls.
+The whole snapshot, including nested submodules and index data, has a 512 MiB
+hash budget; an over-budget refusal names the biggest files encountered.
+Preview refuses above 100,000 dirty records and translates maxBuffer/timeout
+errors into actionable refusals. An interrupted removal preserves killed/signal
+metadata and warns that the folder may be partly deleted, without rereading a
+potentially missing folder or claiming Git refused it.
+If an ordinary Git removal failure is followed by a failed fresh preview,
+the response preserves Git's original error and warns that registration may
+already be gone and the folder partly deleted.
+
+Directory scans use a root lstat and Dirents without traversing directory links,
+once before the snapshot and exactly once again immediately before removal.
+Nested submodule snapshots do not repeat the tree scan. Up to 32 directory reads
+run in each batch, with a shared 200,000-directory cap and five-second budget
+per scan; exceeding either refuses with an actionable message. The root and link
+targets use the same native resolver (`fs.promises.realpath`). Windows refuses
+every directory link, including inside-pointing junctions and directory symlinks;
+POSIX permits inside-pointing links and refuses outside or unresolved targets.
+These rules include ignored directories. A directory whose realpath is its own
+absolute path is walked as an ordinary directory, including reparse placeholders;
+the message names up to ten plus the total and instructs removal of the link
+first (`rmdir <path>` for Windows junctions, never recursive deletion; POSIX
+`rm <link>` without `-r`). File hashing resolves on disk with `resolveOnDisk`,
+checks realpath containment and reads that returned path; file symlinks hash
+only their link text after checking the resolved parent. This is a
+fresh comparison before removal, not an atomic filesystem lock: edits after the
+final scan remain possible, including newly created or retargeted directory links.
+Every index gitlink is checked even when absent from dirty status: a nonempty
+uninitialised submodule refuses preview/deletion before force can hide its files.
 
 ### Tabs (Memory / .work-files / Stats)
 

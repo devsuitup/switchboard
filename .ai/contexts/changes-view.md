@@ -927,9 +927,9 @@ forcing `LC_ALL=C`, `LC_MESSAGES=C`, `LANG=C`, with `LANGUAGE` deleted. Neither
 the supplied object nor the Electron process environment is mutated. Discovery
 limits are preserved and shared with the bounded filesystem corroboration.
 
-The six main-process launch sites are `defaultLocalExec`, `defaultRunGit`,
-`gitCommonDirOf`, both worktree IPC launches (`delete-worktree`, including its
-double-force locked retry, and `worktree-status`), and `project-root.gitEnv`.
+The main-process launch sites are `defaultLocalExec`, `defaultRunGit`,
+`gitCommonDirOf`, the worktree IPC Git adapter (`worktreeGit`, shared by
+`delete-worktree` and `worktree-status`), and `project-root.gitEnv`.
 Project-root first strips **all** `GIT_*`, including discovery limits, then
 normalizes the filtered injected environment without ambient merging.
 
@@ -940,8 +940,9 @@ non-UTF-8 filenames, filters, textconv or external diff tools.
 Remote Git keeps its host locale: `buildRemoteGitCommand` has no locale prefix.
 The sandbox shell-bootstrap Git calls discard diagnostics and remain outside
 this main-process policy, as do tooling, test fixtures and user/session commands.
-The local locked-worktree retry still matches English `locked`; remote Touched
-still matches English HEAD-missing text, a separate remaining locale limitation.
+Worktree lock state and its reason come from `worktree list --porcelain -z`;
+double force requires explicit preview consent, without an automatic retry.
+Remote Touched still matches English HEAD-missing text, a remaining locale limitation.
 
 ## A capped read waits for git to exit
 

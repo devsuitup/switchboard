@@ -68,14 +68,61 @@ disk**).
 Before opening the dialog, Switchboard checks that the path uses a recognized
 worktree layout and its parent repository is a known project. A refusal appears
 in a notice, without a confirmation. These checks run again when deleting.
-The dialog warns that uncommitted changes are lost and lists the worktree's
-uncommitted files, ten at most. **Delete anyway** runs
-`git worktree remove -f` from the repository, with a second `-f` when the
-worktree is locked, so those changes go with it. The branch is kept. The
+The dialog shows the full folder path (your home as `~`, the absolute path on
+hover), branch, and local running sessions whose working directory is inside
+the worktree, including open terminals and live sessions outside this window.
+It warns that uncommitted changes are lost and lists their paths, ten at most.
+When ignored entries exist, it counts them and warns that they are deleted too;
+an ignored directory such as `node_modules` counts as one entry, not each file.
+**Delete worktree** rechecks Git's status, staged contents and the contents of
+every changed or untracked file against the preview. Untracked files are listed
+individually even if your Git configuration normally hides them. A clean
+worktree without submodules or a lock is removed without force. Dirty files
+permit force only while their paths and contents still match the preview.
+Ignored files (including an edited `.env`) and ignored directory contents are
+not compared; edits to them are deleted without another review. Ignored
+directories are not expanded in the dialog. A changed snapshot or a Git refusal leaves
+a persistent notice and reopens the dialog with the fresh status, requiring
+another confirmation. A locked worktree shows its lock reason and requires
+checking **Delete this locked worktree, overriding its lock** before deletion;
+there is no automatic double-force retry. Worktrees containing submodules also
+require checking **Delete this worktree and its submodules with force**;
+changes inside initialised submodules are rechecked too. A nonempty uninitialised
+submodule directory refuses deletion and asks you to review or move its files;
+it is not read as though it were the parent repository. The branch is kept. The
 worktree's sessions move under the repository's header, at once or at the
 next refresh, since their transcripts are still on disk. Deleting a
-finished background session in the [Agents view](background-agents.md) also
-removes its worktree when that is safe.
+finished background session in the [Agents view](background-agents.md) delegates
+to `claude rm <job>` without any force option; Switchboard does not retry it
+with force. Both surfaces require fresh checks and never silently escalate a
+refusal into forced removal. The sidebar's remote worktree headers share the
+local button code, but cannot use the local deletion backend: their notice
+directs you to review and remove the worktree with git on its host.
+
+Registration is matched by the on-disk path of the parent folder; a worktree path that is itself a link, or the main checkout, is refused.
+
+On Windows, preview and deletion refuse every directory link, including
+junctions and directory symlinks whose targets are inside the worktree. Git for
+Windows can follow junctions during removal and leave a partly deleted folder
+after unregistering the worktree. On POSIX, links resolving inside the worktree
+are allowed; outside or unresolved directory links are refused. These rules
+also cover ignored folders. Self-resolving reparse directories are walked as
+ordinary directories. The refusal names up to
+ten unsafe links and gives the total count. Remove each unsafe link first: for a Windows
+junction use `rmdir <path>` without recursive deletion; on POSIX use `rm <link>`
+without `-r`. Then retry Delete. Each link scan has a 200,000-directory limit
+and a five-second budget; exceeding either refuses with instructions to review
+or reduce the tree. Preview scans once; Delete checks the fresh status and then
+scans once more immediately before asking Git to remove the folder. There is a
+known race after that last scan: filesystem changes, including a newly created
+or retargeted directory link, can occur before or during Git's removal. These
+checks do not lock the filesystem or make removal atomic.
+A preview above 512 MiB of total hashed data
+refuses with instructions to review or move the largest files it encountered.
+If removal is interrupted, its notice warns that the folder may be partly
+deleted: review the remaining folder and Git registration before retrying.
+If Git refuses removal and a fresh preview fails, the notice preserves Git's
+error and warns that registration may be gone and the folder partly deleted.
 
 **With git**, from the repository:
 

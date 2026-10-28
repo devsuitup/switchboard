@@ -21,13 +21,22 @@ function handler(name, deps) {
     && node.expression.callee?.object?.name === 'ipcMain'
     && node.expression.arguments[0]?.value === name);
   assert.ok(registration, name);
-  const callback = registration.expression.arguments[1];
-  const context = vm.createContext({ ...deps, writer: memoryWriter(deps) });
+  let captured;
+  const context = vm.createContext({ ...deps, writer: memoryWriter(deps),
+    spawnChild: require('./project-action-harness').spawnFromExec(deps.execFile),
+    worktreeDelete: require('../worktree-delete'),
+    activeSessions: new Map(), cliSessionState: { getSidebarDescriptors: () => [] },
+    os: { homedir: () => '/home/test' },
+    ipcMain: { handle: (_name, fn) => { captured = fn; } },
+  });
   if (name === 'delete-worktree') {
-    const check = nodes.find(node => node.type === 'FunctionDeclaration' && node.id.name === 'checkDeleteWorktree');
-    vm.runInContext(source.slice(...check.range), context, { filename: path.join(__dirname, '../main.js') });
+    for (const functionName of ['checkDeleteWorktree', 'worktreeGit', 'worktreeDeletionStatus']) {
+      const fn = nodes.find(node => node.type === 'FunctionDeclaration' && node.id.name === functionName);
+      vm.runInContext(source.slice(...fn.range), context, { filename: path.join(__dirname, '../main.js') });
+    }
   }
-  return vm.runInContext(`(${source.slice(...callback.range)})`, context, { filename: path.join(__dirname, '../main.js') });
+  vm.runInContext(source.slice(...registration.range), context, { filename: path.join(__dirname, '../main.js') });
+  return captured;
 }
 
 function settings(initial) {
@@ -69,7 +78,11 @@ test('worktree cleanup selects matching rows, preserves unrelated settings and r
     WORKTREE_PATH_RE: /^(.+?)\/\.(?:claude\/worktrees|claude-worktrees|worktrees)\/([^/]+)\/?$/,
     isKnownProjectRoot: () => true,
     localGitEnv: () => ({ LC_ALL: 'C' }),
-    execFile: (_exe, _args, opts, cb) => { assert.equal(opts.env.LC_ALL, 'C'); cb(null, '', ''); },
+    execFile: (_exe, args, opts, cb) => {
+      assert.equal(opts.env.LC_ALL, 'C');
+      cb(null, args.includes('list') ? `worktree /repo\nHEAD def\n\nworktree ${project}\nHEAD abc\nbranch refs/heads/topic\n\n`
+        : args.includes('rev-parse') ? project + '/.git/locked\n' : '', '');
+    },
     getAllCached: () => [{ sessionId: 'a', projectPath: project }, { sessionId: 'b', projectPath: '/other' }],
     deleteCachedSession: id => deleted.push(['cache', id]),
     deleteSearchSession: id => deleted.push(['search', id]),
@@ -78,7 +91,10 @@ test('worktree cleanup selects matching rows, preserves unrelated settings and r
     deleteSearchFolder: folder => deleted.push(['fts-folder', folder]),
     log: { info() {}, warn() {} }, notifyRendererProjectsChanged() {},
   });
-  assert.deepEqual(JSON.parse(JSON.stringify(await remove(null, project))), { ok: true, removed: 1 });
+  const shown = await require('../worktree-delete').readStatus(project, '/repo', async args =>
+    args.includes('list') ? `worktree /repo\nHEAD def\n\nworktree ${project}\nHEAD abc\nbranch refs/heads/topic\n\n`
+      : args.includes('rev-parse') ? project + '/.git/locked\n' : '');
+  assert.deepEqual(JSON.parse(JSON.stringify(await remove(null, project, shown))), { ok: true, removed: 1 });
   assert.deepEqual(deleted, [['cache', 'a'], ['search', 'a'], ['folder', encodeProjectPath(project)], ['fts-folder', encodeProjectPath(project)]]);
   assert.deepEqual(state.values.global, { hiddenProjects: ['/other'], hiddenProjectKinds: { '/other': 'delete' }, openWorkingSet: ['kept'] });
   assert.deepEqual(state.values.archivedProjects, {});
