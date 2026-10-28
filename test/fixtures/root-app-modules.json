@@ -102,5 +102,6 @@
     "unsaved-guard.js",
     "viewer-file-watch.js",
     "viewer-save-guard.js",
-    "window-frame.js"
+    "window-frame.js",
+    "worktree-delete.js"
 ]
