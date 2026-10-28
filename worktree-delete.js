@@ -28,47 +28,54 @@ async function refuseDirectoryLinks(root) {
   }
   const links = [];
   let count = 0;
-  async function checkLink(directory) {
+  async function checkLink(directory, expectedPath) {
     let stat, target;
     try {
       stat = await fs.promises.stat(directory);
       if (stat.isFile()) return;
       target = await fs.promises.realpath(directory);
     } catch { target = null; }
-    if (stat?.isDirectory() && target === path.resolve(directory)) return true;
+    if (stat?.isDirectory() && target === expectedPath) return true;
     if (process.platform === 'win32' || !stat?.isDirectory() || !target || (target !== realRoot && !within(realRoot, target))) {
       count++;
-      if (links.length < 10) links.push(path.relative(root, directory) || directory);
+      if (links.length < 10) links.push(path.resolve(directory));
     }
   }
   const stat = await fs.promises.lstat(root);
   const pending = [];
   let directories = 1;
   if (stat.isSymbolicLink()) {
-    await checkLink(root);
-    if (!count) pending.push(realRoot);
+    const realParent = await fs.promises.realpath(path.dirname(root));
+    await checkLink(root, path.join(realParent, path.basename(root)));
+    if (!count) pending.push({ directory: root, realDirectory: realRoot });
   }
-  else if (stat.isDirectory()) pending.push(root);
+  else if (stat.isDirectory()) pending.push({ directory: root, realDirectory: realRoot });
   while (pending.length) {
     checkTime();
     const batch = pending.splice(Math.max(0, pending.length - 32));
-    const results = await Promise.allSettled(batch.map(directory => fs.promises.readdir(directory, { withFileTypes: true })));
+    const results = await Promise.allSettled(batch.map(({ directory }) => fs.promises.readdir(directory, { withFileTypes: true })));
     checkTime();
     for (let i = 0; i < results.length; i++) {
       const result = results[i];
       if (result.status === 'rejected') throw result.reason;
       for (const entry of result.value) {
         checkTime();
-        const candidate = path.join(batch[i], entry.name);
-        if (entry.isSymbolicLink() ? await checkLink(candidate) : entry.isDirectory()) {
+        const candidate = path.join(batch[i].directory, entry.name);
+        const realCandidate = path.join(batch[i].realDirectory, entry.name);
+        if (entry.isSymbolicLink() ? await checkLink(candidate, realCandidate) : entry.isDirectory()) {
           if (++directories > DIRECTORY_LIMIT) throw new Error('Directory link scan exceeds the 200,000 directory limit. Review or reduce the worktree directories before trying Delete again.');
-          pending.push(candidate);
+          pending.push({ directory: candidate, realDirectory: realCandidate });
         }
       }
     }
   }
   checkTime();
-  if (count) throw new Error(`Deletion refused: ${count} directory link(s): ${links.join(', ')}${count > 10 ? `; ${count - 10} more` : ''}. Remove the link first: for a Windows junction use rmdir <path>, never a recursive delete; on POSIX use rm <link> without -r. Then try Delete again.`);
+  if (count) {
+    const instruction = process.platform === 'win32'
+      ? 'Git for Windows can follow links while removing. Remove the link first: use rmdir <path>, never a recursive delete.'
+      : 'Remove the link first: use rm <link> without -r.';
+    throw new Error(`Deletion refused: ${count} directory link(s): ${links.join(', ')}${count > 10 ? `; ${count - 10} more` : ''}. ${instruction} Then try Delete again.`);
+  }
 }
 
 function hashBytes(budget, bytes) {
@@ -264,8 +271,11 @@ async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promis
   };
   const list = await runGit(['-C', parentRepo, 'worktree', 'list', '--porcelain']);
   const records = list.split(/\r?\n\r?\n/).map(record => record.split(/\r?\n/));
-  const fields = records.find(record => record[0]?.startsWith('worktree ')
-    && comparablePath(unquote(record[0].slice(9))) === comparablePath(worktreePath));
+  const registered = records.filter(record => record[0]?.startsWith('worktree '));
+  const canonicalPath = async value => comparablePath(await fs.promises.realpath(value).catch(() => value));
+  const requestedPath = await canonicalPath(worktreePath);
+  const registeredPaths = await Promise.all(registered.map(record => canonicalPath(unquote(record[0].slice(9)))));
+  const fields = registered[registeredPaths.indexOf(requestedPath)];
   if (!fields) throw new Error('This path is no longer a registered worktree. Refresh the project list before trying Delete again.');
   const branch = fields.find(line => line.startsWith('branch '))?.slice(7).replace(/^refs\/heads\//, '') || '(detached HEAD)';
   const lock = fields.find(line => line === 'locked' || line.startsWith('locked '));

@@ -10,7 +10,7 @@ const { localGitEnv } = require('../git-changes-runner');
 const deletion = require('../worktree-delete');
 
 function fixture(t, mainOnly = false) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-delete-real-'));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-delete-real-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { ...localGitEnv(), GIT_CONFIG_GLOBAL: path.join(root, 'no-global-config'), GIT_CONFIG_NOSYSTEM: '1',
     GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.invalid',
@@ -36,6 +36,33 @@ function fixture(t, mainOnly = false) {
   return { root, target, git: args => git(target, args), removes, read,
     remove: shown => deletion.removeWorktree(target, root, shown, read, runGit) };
 }
+
+test('real git previews a registered worktree through a noncanonical ancestor and refuses an unregistered path', async t => {
+  const f = fixture(t, true);
+  const aliases = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-delete-alias-')));
+  const link = path.join(aliases, 'parent');
+  t.after(() => {
+    fs.unlinkSync(link);
+    fs.rmSync(aliases, { recursive: true, force: true });
+  });
+  fs.symlinkSync(path.dirname(f.root), link, process.platform === 'win32' ? 'junction' : 'dir');
+  const aliasRoot = path.join(link, path.basename(f.root));
+  assert.notEqual(aliasRoot, f.root);
+  assert.equal(fs.realpathSync.native(aliasRoot), f.root);
+  const runGit = args => Promise.resolve(f.git(args));
+  const shown = await deletion.readStatus(aliasRoot, f.root, runGit);
+  assert.equal(shown.ok, true);
+  assert.deepEqual(shown.dirty, []);
+  const shortRoot = path.join(os.tmpdir(), path.basename(f.root));
+  assert.equal((await deletion.readStatus(shortRoot, f.root, runGit)).ok, true);
+  const aliasList = args => args.includes('list') ? Promise.resolve(`worktree ${JSON.stringify(aliasRoot)}\nHEAD abc\n\n`) : runGit(args);
+  assert.equal((await deletion.readStatus(f.root, f.root, aliasList)).ok, true);
+  const unregistered = path.join(f.root, 'unregistered');
+  fs.mkdirSync(unregistered);
+  await assert.rejects(deletion.readStatus(unregistered, f.root, runGit), /no longer a registered worktree/);
+  assert.equal(fs.existsSync(f.root), true);
+  assert.equal(f.removes.length, 0);
+});
 
 test('real git removes a confirmed clean worktree without force', async t => {
   const f = fixture(t);

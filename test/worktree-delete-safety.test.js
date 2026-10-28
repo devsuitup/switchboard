@@ -9,7 +9,8 @@ const deletion = require('../worktree-delete');
 const vm = require('node:vm');
 
 function fixture(t, options = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-delete-safety-'));
+  const created = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-delete-safety-'));
+  const root = options.preserveSpelling ? created : fs.realpathSync.native(created);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 't'), 'dirty one');
   const state = { removes: [], calls: [], paths: ['t'], submodule: false, ignored: ['!! node_modules/'], ...options };
@@ -343,7 +344,14 @@ for (const platform of ['win32', 'linux']) test(`inside-pointing directory links
   fs.symlinkSync(path.join(f.root, 'node_modules/pkg'), link, process.platform === 'win32' ? 'junction' : 'dir');
   try {
     if (platform === 'win32') {
-      await assert.rejects(read(), /directory link.*zz-alias.*remove the link first/is);
+      await assert.rejects(read(), error => {
+        assert.match(error.message, /directory link.*zz-alias.*remove the link first/is);
+        assert.ok(error.message.includes(link), 'name the absolute link inside this worktree');
+        assert.match(error.message, /Git for Windows can follow links while removing/);
+        assert.match(error.message, /rmdir <path>/);
+        assert.doesNotMatch(error.message, /POSIX|rm <link>/);
+        return true;
+      });
       await assert.rejects(instrumented.removeWorktree(f.root, f.root, shown, async () => shown, f.runGit), /directory link/is);
       assert.equal(f.state.removes.length, 0);
     } else {
@@ -370,19 +378,36 @@ test('a Git removal failure preserves its error when registration disappeared', 
 });
 
 for (const platform of ['win32', 'linux']) test(`self-resolving reparse directories are walked on ${platform}`, async t => {
-  const f = fixture(t, { paths: [] });
-  const placeholder = path.join(f.root, 'placeholder');
-  fs.mkdirSync(placeholder);
+  const f = fixture(t, { paths: [], preserveSpelling: true });
+  const parent = path.join(f.root, 'ordinary');
+  const placeholder = path.join(parent, 'placeholder');
+  fs.mkdirSync(placeholder, { recursive: true });
   const visited = [];
   const instrumented = instrumentDeletion({
     readdir: async (directory, options) => {
       visited.push(directory);
-      if (directory === f.root) return [{ name: 'placeholder', isSymbolicLink: () => true, isDirectory: () => false }];
+      if (directory === parent) return [{ name: 'placeholder', isSymbolicLink: () => true, isDirectory: () => false }];
       return fs.promises.readdir(directory, options);
     },
   }, { process: { platform } });
   assert.equal((await instrumented.readStatus(f.root, f.root, f.runGit)).ok, true);
   assert.equal(visited.filter(directory => directory === placeholder).length, 1, 'walk the self-resolving directory instead of skipping its contents');
+});
+
+for (const platform of ['win32', 'linux']) test(`outside link refusal names the worktree and only the ${platform} removal command`, async t => {
+  const f = fixture(t, { paths: [] });
+  const link = path.join(f.root, 'outside');
+  fs.symlinkSync(path.dirname(f.root), link, process.platform === 'win32' ? 'junction' : 'dir');
+  const instrumented = instrumentDeletion({}, { process: { platform } });
+  try {
+    await assert.rejects(instrumented.readStatus(f.root, f.root, f.runGit), error => {
+      assert.ok(error.message.includes(link));
+      assert.match(error.message, platform === 'win32' ? /Git for Windows can follow links while removing.*rmdir <path>/ : /rm <link> without -r/);
+      assert.doesNotMatch(error.message, platform === 'win32' ? /POSIX|rm <link>/ : /Windows|rmdir/);
+      return true;
+    });
+    assert.equal(f.state.removes.length, 0);
+  } finally { fs.unlinkSync(link); }
 });
 
 test('link containment resolves the root and targets with the same native resolver', async t => {
@@ -402,7 +427,7 @@ test('link containment resolves the root and targets with the same native resolv
   let shown;
   await assert.doesNotReject(async () => { shown = await instrumented.readStatus(f.root, f.root, f.runGit); });
   assert.equal(shown.ok, true);
-  assert.equal(rootResolutions, 1);
+  assert.equal(rootResolutions, 3, 'resolve the requested path, registration and scan root with the native resolver');
 });
 
 test('nonempty uninitialised gitlinks refuse even when status does not list the gitlink', async t => {
