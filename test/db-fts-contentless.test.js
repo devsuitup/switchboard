@@ -7,7 +7,7 @@ const path = require('path');
 // Static-analysis tests (native-module-free) — verify db.js source text for
 // the contentless FTS5 schema, body truncation, and migration wiring.
 // better-sqlite3 is compiled against Electron's Node ABI and cannot be
-// required from plain node:test (same constraint as db-daily-activity.test.js).
+// required from plain node:test.
 // ---------------------------------------------------------------------------
 
 const root = path.join(__dirname, '..');

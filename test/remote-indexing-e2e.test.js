@@ -6,10 +6,10 @@
 // exactly as before.
 //
 // better-sqlite3 is compiled against Electron's ABI and cannot be required
-// under plain node:test (see test/db-daily-activity.test.js), so the DB layer
+// under plain node:test, so the DB layer
 // is the usual capture fake. The heatmap is asserted at that boundary: its
-// queries (db.js getDailyActivity / getDailyMetrics) read session_cache and
-// session_metrics with no folder predicate, so a row written there is counted.
+// query (db.js getDailyMetrics) reads session_metrics with no folder
+// predicate, so a row written there is counted.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');

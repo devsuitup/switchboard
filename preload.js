@@ -2,7 +2,6 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   // Invoke (request-response)
-  getStats: () => ipcRenderer.invoke('get-stats'),
   getStatsFromDb: () => ipcRenderer.invoke('get-stats-from-db'),
   refreshStats: () => ipcRenderer.invoke('refresh-stats'),
   getUsage: () => ipcRenderer.invoke('get-usage'),

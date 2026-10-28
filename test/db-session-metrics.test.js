@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 // The session_metrics aggregates in db.js are powered by better-sqlite3, which
 // is compiled against Electron's Node ABI and cannot be required from plain
 // node:test. These tests validate the aggregation LOGIC by running pure-JS
-// mirrors of the SQL (same pattern as db-daily-activity.test.js) on fixture
+// mirrors of the SQL on fixture
 // rows, so regressions in the GROUP BY shape surface in CI.
 
 // Mirror of getDailyMetrics:
