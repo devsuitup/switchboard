@@ -543,7 +543,10 @@ for (const error of ['disk', 'unread', 'timeout']) test(`checked save ${error} r
     }
     const checking = ctx.calls.check(306, 'quit', detail); await clickMove(ctx);
     ctx.calls.finishBatch([moved('one'), moved('two')]);
+    const recoveryStarted = performance.now();
     await checking;
+    const recoveryMs = performance.now() - recoveryStarted;
+    assert.ok(recoveryMs < 1500, `checked save ${error} recovery must finish within 1500 ms, took ${recoveryMs.toFixed(1)} ms`);
     assert.equal(ctx.calls.answers.at(-1)?.proceed, false);
     assert.equal(ctx.calls.attaches.length, 2);
     assert.equal(vm.runInContext('exitingApp', ctx.context), false, 'recovery must release the 10 second hold');
