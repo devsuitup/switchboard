@@ -20,7 +20,7 @@ async function refuseDirectoryLinks(root) {
   const checkTime = () => {
     if (Date.now() - started >= DIRECTORY_SCAN_MS) throw new Error('Directory link scan exceeded its 5 second time budget. Review or reduce the worktree directories before trying Delete again.');
   };
-  const realRoot = resolveOnDisk(root);
+  const realRoot = await fs.promises.realpath(root).catch(() => null);
   if (!realRoot) {
     try { await fs.promises.lstat(root); }
     catch (error) { if (error.code === 'ENOENT') return; throw error; }
@@ -35,7 +35,8 @@ async function refuseDirectoryLinks(root) {
       if (stat.isFile()) return;
       target = await fs.promises.realpath(directory);
     } catch { target = null; }
-    if (!stat?.isDirectory() || !target || (target !== realRoot && !within(realRoot, target))) {
+    if (stat?.isDirectory() && target === path.resolve(directory)) return true;
+    if (process.platform === 'win32' || !stat?.isDirectory() || !target || (target !== realRoot && !within(realRoot, target))) {
       count++;
       if (links.length < 10) links.push(path.relative(root, directory) || directory);
     }
@@ -59,8 +60,7 @@ async function refuseDirectoryLinks(root) {
       for (const entry of result.value) {
         checkTime();
         const candidate = path.join(batch[i], entry.name);
-        if (entry.isSymbolicLink()) await checkLink(candidate);
-        else if (entry.isDirectory()) {
+        if (entry.isSymbolicLink() ? await checkLink(candidate) : entry.isDirectory()) {
           if (++directories > DIRECTORY_LIMIT) throw new Error('Directory link scan exceeds the 200,000 directory limit. Review or reduce the worktree directories before trying Delete again.');
           pending.push(candidate);
         }
@@ -312,8 +312,12 @@ async function removeWorktree(worktreePath, parentRepo, shown, read, runGit) {
     return { ok: true };
   } catch (error) {
     if (error.killed || error.signal) return { ok: false, error: 'Worktree removal was interrupted; the folder may be partly deleted. Review the remaining folder and Git worktree registration before trying again.' };
-    const fresh = await read();
-    return changed(fresh, `Git refused to remove the worktree: ${error.message}`);
+    try {
+      const fresh = await read();
+      return changed(fresh, `Git refused to remove the worktree: ${error.message}`);
+    } catch {
+      return { ok: false, error: `Git refused to remove the worktree: ${error.message}. Its registration may already be gone and the folder may be partly deleted; review it on disk.` };
+    }
   }
 }
 

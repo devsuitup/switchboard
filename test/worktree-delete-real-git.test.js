@@ -165,14 +165,25 @@ for (const kind of ['junction', 'dir']) {
 }
 
 for (const mainOnly of [true, false]) {
-  test(`real git permits an inside-pointing directory link (${mainOnly ? 'main snapshot' : 'linked worktree removal'})`, async t => {
+  test(`real git applies the platform rule to an inside link sorting after its target (${mainOnly ? 'main snapshot' : 'linked worktree removal'})`, async t => {
     const f = fixture(t, mainOnly);
     const target = path.join(f.target, 'node_modules/pkg');
     fs.mkdirSync(target, { recursive: true });
     fs.writeFileSync(path.join(target, 'contents'), 'internal');
-    const link = path.join(f.target, 'node_modules/alias');
+    const shownBeforeLink = await f.read();
+    const registration = f.git(['worktree', 'list', '--porcelain']);
+    const link = path.join(f.target, 'node_modules/zz-alias');
     fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
     try {
+      if (process.platform === 'win32') {
+        await assert.rejects(f.read(), /directory link.*zz-alias.*remove the link first/is);
+        await assert.rejects(f.remove(shownBeforeLink), /directory link/is);
+        assert.equal(f.removes.length, 0);
+        assert.equal(fs.readFileSync(path.join(target, 'contents'), 'utf8'), 'internal');
+        assert.equal(fs.existsSync(path.join(f.target, '.git')), true);
+        assert.equal(f.git(['worktree', 'list', '--porcelain']), registration);
+        return;
+      }
       let shown;
       await assert.doesNotReject(async () => { shown = await f.read(); });
       assert.deepEqual(shown.dirty, []);
@@ -182,6 +193,25 @@ for (const mainOnly of [true, false]) {
         assert.equal(fs.existsSync(f.target), false);
       }
     } finally { if (fs.existsSync(link)) fs.unlinkSync(link); }
+  });
+
+  test(`real git refuses a Windows junction to the worktree root (${mainOnly ? 'main snapshot' : 'linked worktree removal'})`, {
+    skip: process.platform !== 'win32' ? 'Windows junction regression' : false,
+  }, async t => {
+    const f = fixture(t, mainOnly);
+    fs.mkdirSync(path.join(f.target, 'node_modules'));
+    const shown = await f.read();
+    const registration = f.git(['worktree', 'list', '--porcelain']);
+    const link = path.join(f.target, 'node_modules/J');
+    fs.symlinkSync(f.target, link, 'junction');
+    try {
+      await assert.rejects(f.read(), /directory link.*node_modules[\\/]J/is);
+      await assert.rejects(f.remove(shown), /directory link/is);
+      assert.equal(f.removes.length, 0);
+      assert.equal(fs.readFileSync(path.join(f.target, 't'), 'utf8'), 'base\n');
+      assert.equal(fs.existsSync(path.join(f.target, '.git')), true);
+      assert.equal(f.git(['worktree', 'list', '--porcelain']), registration);
+    } finally { fs.unlinkSync(link); }
   });
 
   test(`real git refuses stray files in a clean uninitialised gitlink (${mainOnly ? 'main snapshot' : 'linked worktree removal'})`, async t => {

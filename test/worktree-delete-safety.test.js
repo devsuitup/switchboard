@@ -32,7 +32,7 @@ function fixture(t, options = {}) {
     return '';
   };
   const read = () => deletion.readStatus(root, root, runGit);
-  return { root, state, read, remove: shown => deletion.removeWorktree(root, root, shown, read, runGit) };
+  return { root, state, read, runGit, remove: shown => deletion.removeWorktree(root, root, shown, read, runGit) };
 }
 
 test('Git 2.24 preview accepts quoted worktree paths without list -z', async t => {
@@ -297,7 +297,7 @@ function instrumentDeletion(overrides = {}, extra = {}) {
   const module = { exports: {} };
   const productionRequire = require('node:module').createRequire(filename);
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
-    module, Buffer, setTimeout, clearTimeout, ...extra,
+    module, Buffer, setTimeout, clearTimeout, process, ...extra,
     require: id => id === 'node:fs' ? { ...fs, promises: { ...fs.promises, ...overrides } } : productionRequire(id),
   }, { filename });
   return module.exports;
@@ -333,17 +333,76 @@ test('preview walks each directory once and Delete adds exactly one fresh pre-re
   for (const count of visits.values()) assert.equal(count, 2, 'one status walk and one final safety walk');
 });
 
-test('inside-pointing directory links are allowed without traversing the link', async t => {
+for (const platform of ['win32', 'linux']) test(`inside-pointing directory links follow the ${platform} rule at preview and removal`, async t => {
   const f = fixture(t, { paths: [] });
   fs.mkdirSync(path.join(f.root, 'node_modules/pkg'), { recursive: true });
-  const link = path.join(f.root, 'node_modules/alias');
+  const link = path.join(f.root, 'node_modules/zz-alias');
+  const instrumented = instrumentDeletion({}, { process: { platform } });
+  const read = () => instrumented.readStatus(f.root, f.root, f.runGit);
+  const shown = await read();
   fs.symlinkSync(path.join(f.root, 'node_modules/pkg'), link, process.platform === 'win32' ? 'junction' : 'dir');
   try {
-    let shown;
-    await assert.doesNotReject(async () => { shown = await f.read(); });
-    assert.equal((await f.remove(shown)).ok, true);
-    assert.equal(f.state.removes.length, 1);
+    if (platform === 'win32') {
+      await assert.rejects(read(), /directory link.*zz-alias.*remove the link first/is);
+      await assert.rejects(instrumented.removeWorktree(f.root, f.root, shown, async () => shown, f.runGit), /directory link/is);
+      assert.equal(f.state.removes.length, 0);
+    } else {
+      assert.equal((await read()).ok, true);
+      assert.equal((await instrumented.removeWorktree(f.root, f.root, shown, read, f.runGit)).ok, true);
+      assert.equal(f.state.removes.length, 1);
+    }
   } finally { fs.unlinkSync(link); }
+});
+
+test('a Git removal failure preserves its error when registration disappeared', async t => {
+  const f = fixture(t, { paths: [] });
+  const shown = await f.read();
+  let reads = 0;
+  let result;
+  await assert.doesNotReject(async () => {
+    result = await deletion.removeWorktree(f.root, f.root, shown, async () => {
+      if (++reads === 1) return shown;
+      throw new Error('This path is no longer a registered worktree.');
+    }, async () => { throw new Error('Directory not empty'); });
+  });
+  assert.equal(reads, 2);
+  assert.deepEqual(result, { ok: false, error: 'Git refused to remove the worktree: Directory not empty. Its registration may already be gone and the folder may be partly deleted; review it on disk.' });
+});
+
+for (const platform of ['win32', 'linux']) test(`self-resolving reparse directories are walked on ${platform}`, async t => {
+  const f = fixture(t, { paths: [] });
+  const placeholder = path.join(f.root, 'placeholder');
+  fs.mkdirSync(placeholder);
+  const visited = [];
+  const instrumented = instrumentDeletion({
+    readdir: async (directory, options) => {
+      visited.push(directory);
+      if (directory === f.root) return [{ name: 'placeholder', isSymbolicLink: () => true, isDirectory: () => false }];
+      return fs.promises.readdir(directory, options);
+    },
+  }, { process: { platform } });
+  assert.equal((await instrumented.readStatus(f.root, f.root, f.runGit)).ok, true);
+  assert.equal(visited.filter(directory => directory === placeholder).length, 1, 'walk the self-resolving directory instead of skipping its contents');
+});
+
+test('link containment resolves the root and targets with the same native resolver', async t => {
+  const f = fixture(t, { paths: [] });
+  const alias = path.join(f.root, 'alias');
+  const nativeRoot = path.join(path.dirname(f.root), 'expanded-native-root');
+  let rootResolutions = 0;
+  const instrumented = instrumentDeletion({
+    realpath: async directory => {
+      if (directory === f.root) { rootResolutions++; return nativeRoot; }
+      if (directory === alias) return path.join(nativeRoot, 'pkg');
+      return fs.promises.realpath(directory);
+    },
+    stat: async directory => directory === alias ? { isFile: () => false, isDirectory: () => true } : fs.promises.stat(directory),
+    readdir: async directory => directory === f.root ? [{ name: 'alias', isSymbolicLink: () => true }] : [],
+  }, { process: { platform: 'linux' } });
+  let shown;
+  await assert.doesNotReject(async () => { shown = await instrumented.readStatus(f.root, f.root, f.runGit); });
+  assert.equal(shown.ok, true);
+  assert.equal(rootResolutions, 1);
 });
 
 test('nonempty uninitialised gitlinks refuse even when status does not list the gitlink', async t => {

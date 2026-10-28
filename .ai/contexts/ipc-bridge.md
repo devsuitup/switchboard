@@ -97,15 +97,20 @@ Preview refuses above 100,000 dirty records and translates maxBuffer/timeout
 errors into actionable refusals. An interrupted removal preserves killed/signal
 metadata and warns that the folder may be partly deleted, without rereading a
 potentially missing folder or claiming Git refused it.
+If an ordinary Git removal failure is followed by a failed fresh preview,
+the response preserves Git's original error and warns that registration may
+already be gone and the folder partly deleted.
 
 Directory scans use a root lstat and Dirents without traversing directory links,
 once before the snapshot and exactly once again immediately before removal.
 Nested submodule snapshots do not repeat the tree scan. Up to 32 directory reads
 run in each batch, with a shared 200,000-directory cap and five-second budget
-per scan; exceeding either refuses with an actionable message. Only link targets
-need realpath during this walk. Directory symlinks and Windows junctions resolving
-outside the real worktree root, or dangling/unresolvable links, including links
-inside ignored directories, refuse preview/deletion; inside-pointing links are allowed;
+per scan; exceeding either refuses with an actionable message. The root and link
+targets use the same native resolver (`fs.promises.realpath`). Windows refuses
+every directory link, including inside-pointing junctions and directory symlinks;
+POSIX permits inside-pointing links and refuses outside or unresolved targets.
+These rules include ignored directories. A directory whose realpath is its own
+absolute path is walked as an ordinary directory, including reparse placeholders;
 the message names up to ten plus the total and instructs removal of the link
 first (`rmdir <path>` for Windows junctions, never recursive deletion; POSIX
 `rm <link>` without `-r`). File hashing resolves on disk with `resolveOnDisk`,

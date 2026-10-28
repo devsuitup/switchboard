@@ -99,10 +99,13 @@ refusal into forced removal. The sidebar's remote worktree headers share the
 local button code, but cannot use the local deletion backend: their notice
 directs you to review and remove the worktree with git on its host.
 
-Preview and deletion refuse directory symlinks or Windows junctions that point
-outside the worktree, or whose targets cannot be resolved, including inside
-ignored folders. Links resolving inside the worktree are allowed and their
-targets are removed by Git with the rest of the folder. The refusal names up to
+On Windows, preview and deletion refuse every directory link, including
+junctions and directory symlinks whose targets are inside the worktree. Git for
+Windows can follow junctions during removal and leave a partly deleted folder
+after unregistering the worktree. On POSIX, links resolving inside the worktree
+are allowed; outside or unresolved directory links are refused. These rules
+also cover ignored folders. Self-resolving reparse directories are walked as
+ordinary directories. The refusal names up to
 ten unsafe links and gives the total count. Remove each unsafe link first: for a Windows
 junction use `rmdir <path>` without recursive deletion; on POSIX use `rm <link>`
 without `-r`. Then retry Delete. Each link scan has a 200,000-directory limit
@@ -116,6 +119,8 @@ A preview above 512 MiB of total hashed data
 refuses with instructions to review or move the largest files it encountered.
 If removal is interrupted, its notice warns that the folder may be partly
 deleted: review the remaining folder and Git registration before retrying.
+If Git refuses removal and a fresh preview fails, the notice preserves Git's
+error and warns that registration may be gone and the folder partly deleted.
 
 **With git**, from the repository:
 
