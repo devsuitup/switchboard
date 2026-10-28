@@ -45,7 +45,7 @@ const KEPT = [
 
 for (const name of SESSION_MARKERS) {
   test(`GIVEN ${name} in the parent env WHEN the env is cleaned THEN it is gone`, () => {
-    const out = cleanEnv({ [name]: 'x', PATH: '/bin' });
+    const out = cleanEnv({ [name]: 'x', PATH: '/bin' }, { locale: false });
     assert.ok(!(name in out), `${name} survived`);
     assert.strictEqual(out.PATH, '/bin');
   });
@@ -53,17 +53,17 @@ for (const name of SESSION_MARKERS) {
 
 test('GIVEN user configuration WHEN the env is cleaned THEN it survives', () => {
   const env = Object.fromEntries(KEPT.map((k) => [k, `v-${k}`]));
-  assert.deepStrictEqual(cleanEnv(env), env);
+  assert.deepStrictEqual(cleanEnv(env, { locale: false }), env);
 });
 
 test('GIVEN mixed-case session markers WHEN cleaned THEN Windows cannot inherit an alias', () => {
   const env = { Claude_Code_Session_Id: 'parent', claude_job_dir: 'parent-job', TraceParent: 'parent-trace', tracestate: 'parent-state', Path: '/bin' };
-  assert.deepStrictEqual(cleanEnv(env), { Path: '/bin' });
+  assert.deepStrictEqual(cleanEnv(env, { locale: false }), { Path: '/bin' });
   assert.strictEqual(env.Claude_Code_Session_Id, 'parent');
 });
 
 test('GIVEN Electron internals WHEN the env is cleaned THEN they are still stripped', () => {
-  const out = cleanEnv({ ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--x', WT_SESSION: 'a', HOME: '/h' });
+  const out = cleanEnv({ ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--x', WT_SESSION: 'a', HOME: '/h' }, { locale: false });
   assert.deepStrictEqual(out, { HOME: '/h' });
 });
 

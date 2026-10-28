@@ -31,8 +31,8 @@ function scrubSessionEnv(env) {
   return env;
 }
 
-function cleanEnv(env) {
-  return Object.fromEntries(
+function cleanEnv(env, { locale = true } = {}) {
+  const cleaned = Object.fromEntries(
     Object.entries(scrubSessionEnv({ ...env })).filter(([k]) =>
       !k.startsWith('ELECTRON_') &&
       !k.startsWith('GOOGLE_API_KEY') &&
@@ -41,6 +41,11 @@ function cleanEnv(env) {
       k !== 'WT_SESSION'
     )
   );
+  if (locale && !['LC_ALL', 'LC_CTYPE', 'LANG'].some(k => cleaned[k])) {
+    if (process.platform === 'darwin') cleaned.LC_CTYPE = 'UTF-8';
+    else if (process.platform === 'linux') cleaned.LC_CTYPE = 'C.UTF-8';
+  }
+  return cleaned;
 }
 
 module.exports = { cleanEnv, scrubSessionEnv, SESSION_MARKERS };
