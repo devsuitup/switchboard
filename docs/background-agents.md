@@ -90,9 +90,12 @@ restarts. A selected session in a folded section stays selected.
 Rows keep their usual order inside a section, the Finished filter applies
 first (a section left empty is not shown), and the choice is remembered.
 
-A job is in one of five states: `working`, `blocked` (live, waiting for
-input), `done`, `stopped` or `failed` (ended in error). `working` and
-`blocked` count as hosted. A done job with a matching live background descriptor
+A job is in one of six states: `working`, `blocked` (live, waiting for
+input), `running` (written by Respawn), `done`, `stopped` or `failed` (ended
+in error). `working` and `blocked` count as hosted. A `running` job counts as
+hosted only with a live background descriptor or a worker proven live, and
+then reads Idle; without that evidence it reads Unknown, or the state the
+CLI list reports. A done job with a matching live background descriptor
 also stays hosted: an idle descriptor displays Idle, busy groups under Active
 unless the turn is known closed, and a waiting dialog blinks for attention under Active.
 Descriptor-free done is finished; stopped
@@ -116,7 +119,7 @@ row's state column, whatever the grouping:
 |---|---|
 | ⚙️ | Active (job `working`, a live background session reporting `busy` with no known closed turn, or hosted `done` with a waiting dialog) |
 | ✋ | Blocked (waiting for input) |
-| 💤 | Idle (done job with a live background session at rest) |
+| 💤 | Idle (done or respawned `running` job with a live background session at rest) |
 | ✅ | Done |
 | ⏹️ | Stopped |
 | ❌ | Failed |
@@ -281,13 +284,13 @@ header or on a button does nothing extra.
 
 An attach tab is an ordinary terminal tab running `claude attach`. Its row shows
 the green dot until Switchboard sees a turn end in that tab, then the orange
-ring. Its stop
-button reads **Detach**: it sends Ctrl+Z without asking, the attach client
+ring. Its
+**Detach** button sends Ctrl+Z without asking, the attach client
 leaves, and the session keeps running under the daemon. A notice offers
 **Undo** for about 10 seconds to attach it again in the same working folder.
 If the client is still closing, Undo waits for it to leave before reattaching.
-Stopping the session
-is only offered in the Agents view. Every attached tab, including one opened
+**Stop session** on the same tab stops the agent itself, as described
+above. Every attached tab, including one opened
 from the Agents view, is reopened by [session restore](session-restore.md).
 Quitting Switchboard or closing its
 window ends the attach client without the Ctrl+Z; the session still keeps

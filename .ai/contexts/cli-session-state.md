@@ -5,8 +5,8 @@ immediate subagent rescan, so a subagent that finished right before its parent's
 turn ended is marked complete in seconds instead of waiting for the next
 stabilisation tick.
 
-**Files**: `cli-session-state.js`, wired in `main.js` (three call sites, plus
-the `session-live-elsewhere` and `sessions-live-elsewhere` IPCs),
+**Files**: `cli-session-state.js`, wired in `main.js` (several call sites,
+including the `session-live-elsewhere` and `sessions-live-elsewhere` IPCs),
 `public/resume-guard.js`, `test/cli-session-state.test.js`,
 `test/canary-cli-session-state.test.js`,
 `test/cli-session-live-elsewhere.test.js`, `test/cli-session-process-table.test.js`,
@@ -358,9 +358,11 @@ index in the saved set, and `persistWorkingSet()` splices those back in at that
 index (clamped, `active: false`), so the next restart tries it again. The entry
 leaves that map once `openSession` opens the session — after that it is an open
 session like any other, and closing it drops it from the set. The skip is
-reported by `showLiveElsewhereNotice` as one line in the restore toast style
-(`Not reopened: <name> is live in pid N`, or a count and the pids), dismissible
-and removed after 15 s.
+reported by `showLiveElsewhereNotice` in one persistent `Restore:batch` error
+notice (`Restore failed for …`), one member per skipped session naming its
+location, the pid it is live in and how to retry; it stays until dismissed or
+cleared (`public/app-notices.js`). Entries held for indexing use the
+`Restore:pending` info notice instead (see session-state.md).
 
 For a merged row, `guardResume` also checks its head. Its optional `onBlocked`
 callback reports the exact live part and descriptor through `openSessionNow`

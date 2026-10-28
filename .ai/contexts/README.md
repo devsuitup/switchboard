@@ -1,8 +1,8 @@
 # Context engineering — Switchboard
 
-Twelve sub-system docs (76 to 526 lines as of 2026-09, most have grown well past
-their original size), written for AI agents who need to make a focused change
-without re-reading `main.js`, now ~2600 LOC.
+Twenty-two sub-system docs (35 to about 2400 lines as of 2026-10, most have grown
+well past their original size), written for AI agents who need to make a focused
+change without re-reading `main.js`, now ~4100 LOC.
 
 ## When to read which
 
@@ -24,6 +24,12 @@ without re-reading `main.js`, now ~2600 LOC.
 | What the right mouse button does in a terminal: the four modes, and keeping the press from the application | [terminal-right-click](terminal-right-click.md) |
 | The frameless window: the strip that replaces the title bar, its drag regions, the window controls, the menu's accelerators | [window-frame](window-frame.md) |
 | The Agents view, the daemon's job files, attach/detach, dispatch | [bg-agents](bg-agents.md) |
+| The session index's writer worker (ADR 0004) | [session-index-writer](session-index-writer.md) |
+| The renderer's modal stack and its question dialogs (`appConfirm`, `appChoose`) | [app-dialogs](app-dialogs.md) |
+| The session tool bar, ownership, Diff parking, shortcuts, overflow | [tool-bar](tool-bar.md) |
+| What is reported to ActivityWatch: the two buckets, focus, the Settings section | [activitywatch](activitywatch.md) |
+| Screen refresh on return, the Refresh controls, the PTY resize nudge | [terminal-refresh](terminal-refresh.md) |
+| The Linux updater restart, environment, lock retry, manual restart notice | [updater-relaunch](updater-relaunch.md) |
 
 ## Reading order for a new contributor (~30 min)
 

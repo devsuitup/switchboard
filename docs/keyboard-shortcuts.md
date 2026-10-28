@@ -72,8 +72,9 @@ views (CodeMirror):
 | `F11` | `Ctrl+Cmd+F` | Toggle full screen |
 | `Ctrl+Shift+I` | `Alt+Cmd+I` | Developer tools |
 
-The other menu items — Quit, Hide, Undo, Redo, Cut, Copy, Paste, Select All —
-carry Electron's default keys for their roles. There is no reload shortcut: `Cmd+R` and `Ctrl+Shift+R` are blocked. See
+Quit is `Cmd+Q` on macOS and `Ctrl+Q` on Linux; on Windows the item reads
+**Exit** and has no key. The other menu items — Hide, Undo, Redo, Cut, Copy,
+Paste, Select All — carry Electron's default keys for their roles. There is no reload shortcut: `Cmd+R` and `Ctrl+Shift+R` are blocked. See
 [Window](window.md).
 
 ## Dialogs

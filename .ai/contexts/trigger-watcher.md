@@ -6,11 +6,12 @@
 
 | File | LOC | Role |
 |---|---|---|
-| `trigger-watcher.js` | ~1050 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
-| `trigger-context.js` | ~35 | `createTriggerContext({ activeSessions, log })` — builds the whole `ctx` object out of `main.js`'s session map. |
-| `transcript-turn.js` | ~140 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
-| `terminal-input.js` | ~20 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
-| `main.js` (wiring) | 3 | `require('./trigger-watcher').start(createTriggerContext({ activeSessions, log }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
+| `trigger-watcher.js` | ~2170 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
+| `trigger-context.js` | ~420 | `createTriggerContext({ activeSessions, log, getCliStatus, projectsDir, getLiveDescriptor, resolveSessionId, remote })` — builds the whole `ctx` object out of `main.js`'s session map, including the pinned per-tab delivery binding (`pinDelivery`) and the descriptor fallback lookup (`lookupDeliveryFallback`). |
+| `transcript-turn.js` | ~230 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
+| `terminal-input.js` | ~35 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
+| `tab-input-lock.js` | ~35 | The per-tab mutex (`acquireTabInput`), shared with the Send to background action (`tryAcquireTabInput`; see "Re-keyed sessions"). |
+| `main.js` (wiring) | ~20 | `require('./trigger-watcher').start(createTriggerContext({ … }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
 
 ## Public surface
 
@@ -59,11 +60,11 @@ existing ban on control characters, including `\x1b`, in `command` is unchanged.
 A stray `key` field on a command trigger is deliberately refused instead of
 being ignored, a compatibility change from before key triggers were supported.
 
-Success is `{ ok: true, sessionId, key: "escape", submitted: "no", steps_total: 0 }`:
-`ok` means the key was written, while `submitted` and `steps_total` describe
+Success is `{ ok: true, sessionId, key: "escape", submitted: "no", wrote: true, steps_total: 0 }`:
+`ok` and `wrote` mean the key was written, while `submitted` and `steps_total` describe
 command submission (no command was submitted). No reaction is observed or
 claimed, and no `left_waiting` field is emitted. Refusals have `ok: false`,
-`submitted: "no"`, `steps_total: 0`, `sessionId`, `error` and an explicit `reason`.
+`submitted: "no"`, `wrote: false`, `steps_total: 0`, `sessionId`, `error` and an explicit `reason`.
 The principal reasons are:
 
 - `session not waiting on a dialog (status: <s>)`
@@ -85,15 +86,25 @@ Starts the watcher.  Call once at app boot.
 
 ```js
 // main.js
-require('./trigger-watcher').start(createTriggerContext({ activeSessions, log }));
+require('./trigger-watcher').start(createTriggerContext({
+  activeSessions, log, getCliStatus, projectsDir: PROJECTS_DIR,
+  getLiveDescriptor, resolveSessionId, get remote() { /* remoteTriggers gate */ },
+}));
 
 // trigger-context.js builds the ctx:
 {
-  log,                          // electron-log compatible
-  getPtyForSession(sessionId),  // → { ptyProcess, cwd, handle } | null
-  isSessionBusy(sessionId),     // → boolean
-  getComposerState(sessionId),  // → { pending, lastInputAt } | null
-  isPtyAlive(ptyProcess),       // optional; only present when supplied
+  log,                                   // electron-log compatible
+  resolveSessionId(id),                  // re-key resolution, lowercased
+  getPtyForSession(sessionId),           // → { session, generation, ptyProcess, cwd, keyKind, handle } | null
+  isSessionBusy(sessionId, binding),     // → boolean
+  getComposerState(sessionId),           // → { pending, lastInputAt } | null
+  lookupDeliveryFallback(id, deadline),  // descriptor → local tab, or { background } / { ambiguous }
+  pinDelivery(requestedId, entry, chain),// → { binding, ctx, handle } — see "Re-keyed sessions"
+  isPtyAlive(ptyProcess),                // optional; only present when supplied
+  getLiveDescriptor(sessionId),          // optional
+  remote,                                // optional getter; see "Remote socket targets"
+  getTranscriptTurn, forgetTranscriptTurn, // when projectsDir is given
+  getCliStatus(sessionId, binding),      // when getCliStatus is given
 }
 ```
 
@@ -184,7 +195,7 @@ The FIFO wait remains outside `timeout_ms`; descriptor lookup, tab mutex and
 pre-text ownership waits consume the remaining command/chain budget. Different
 tabs progress independently. The mutex remains held through verification and
 result production, and canceled waiters cannot erase a still-held queue.
-The FIFO implementation is shared through `tab-input-lock.js` with the Send
+The tab mutex is shared through `tab-input-lock.js` with the Send
 to background action. That action refuses while automation owns the tab;
 new triggers wait behind a pending handoff and revalidate their pinned binding
 after acquiring it. See bg-agents.md, "Send to background".
@@ -256,8 +267,8 @@ probes liveness through a `handle` — `{ write(data), isAlive() }` — that
 
 - `activeSessions` entries now carry `host` (`null` for a local `node-pty`
   session; a non-null hostname would mark a session whose process lives
-  elsewhere) and `kind` (`'local-pty'` today; descriptive metadata, not yet
-  read by anything).
+  elsewhere) and `kind` (`'local-pty'` for a local session, `'remote-attach'`
+  for a tmux attach, which `main.js` reads; the trigger watcher does not).
 - `trigger-context.js`'s `createLocalSessionHandle(ptyProcess)` builds the
   local handle: `write` calls `ptyProcess.write`, `isAlive` is the same
   signal-0 probe (`process.kill(pid, 0)`, `EPERM` counts as alive) that used
@@ -284,7 +295,8 @@ Live local and tmux-attached entries retain precedence over `ctx.remote`, so
 terminal input still respects the composer. An exited pane returns no entry
 and may resolve to a remote socket. The optional context dependency is a
 getter: the global `remoteTriggers` setting defaults to false in
-`SETTING_DEFAULTS`, and is read at trigger time rather than startup. There is
+`SETTING_DEFAULTS` (`public/setting-defaults.js`), and is read at trigger time rather than startup, from
+`db.js`'s cached settings (an edit made outside the app is not seen until restart). There is
 no UI. Remote reach is opt-in because a writer with access to the triggers
 directory may otherwise gain access to unattached sessions; the sandbox bind
 policy is owned separately.
@@ -394,12 +406,9 @@ submitted.  `waitForComposerFree(sessionId, ctx, deadlineMs)` polls every
 `IDLE_POLL_INTERVAL` and calls the composer free only when `pending === 0` **and**
 `now - lastInputAt >= quietMs` (`SWITCHBOARD_TRIGGER_QUIET_MS`, default 3000 ms).
 It gates every PTY write: the single-`command` path, every `chain` step, and the
-bare recovery `
-` inside `submitWithVerify` — that last one is the sharp edge,
-since a lone `
-` on somebody's half-typed sentence submits the sentence.  Every
-wait is bounded by the deadline already in force; the recovery `
-` is bounded by
+bare recovery `\r` inside `submitWithVerify` — that last one is the sharp edge,
+since a lone `\r` on somebody's half-typed sentence submits the sentence.  Every
+wait is bounded by the deadline already in force; the recovery `\r` is bounded by
 the shorter of that deadline and one verify window.
 
 Two consequences beyond hygiene, both measured on Claude Code v2.1.258: a
@@ -611,8 +620,9 @@ at the cost of a reachable regression.
 
 **Two blind spots the exemption does not close**, both written up in the
 "Politeness" section of `docs/automation.md`. xterm.js puts more than reports on
-that channel — the OSC colour reply, the XTWINOPS size replies, DA1 and CPR —
-and those still push the quiet clock; their periodicity is unverified, so
+that channel — the OSC colour reply, the XTWINOPS size replies and DA1 —
+and those still push the quiet clock (CPR in its DECXCPR form no longer does;
+see "Found it — CPR" below); their periodicity is unverified, so
 "solicited, therefore one-off" is a reserve rather than a fact. Worse: in the
 alternate buffer with mouse tracking off, the wheel becomes arrow keys, and a
 bare `ESC [ A` reads as a history recall here, so three notches put `pending` at
@@ -674,8 +684,8 @@ cursor-position query the CLI issues on its own roughly every 240 ms — against
 495 (20%) SGR mouse reports, which PR #160 already excluded correctly and which
 were not the cause. `reportLength()` did not recognise CPR, so every one of
 those chunks kept resetting the quiet clock, and any session left open on
-screen could keep the 3000 ms window from ever opening. See PR #170 (open at
-the time of writing) for the fix and the full breakdown.
+screen could keep the 3000 ms window from ever opening. See PR #170 (merged
+2026-09-04) for the fix and the full breakdown.
 
 One reading pitfall worth flagging for whoever re-runs this: `pty.input`'s `cp`
 field is capped at 10 code points (see `docs/activity-trace.md`), so a longer
@@ -780,7 +790,11 @@ payload) is then walked byte-by-byte as literal text — a DCS reply, if one
 ever arrived, would be typed into the composer. Not fixed here: zero measured
 occurrences, and the fix is a `matchEscape` change (recognising and
 discarding a whole DCS sequence), not a `reportLength` addition — a
-different, larger piece of work than this PR's scope.
+different, larger piece of work than this PR's scope. **Since #172:**
+`matchEscape` returns kind `dcs` for `ESC P` followed by a DCS introducer and
+holds an unterminated one back like OSC, so a DCS reply no longer reaches the
+composer text; like OSC it still pushes `lastInputAt`. A bare `ESC P` with no
+introducer stays a keystroke (Alt+Shift+P).
 
 **`submitted`.** Every result carries it, compared by strict equality, in this
 total order — `SUBMITTED_RANK` in `trigger-watcher.js`, exported for any
@@ -946,7 +960,8 @@ each closing a concrete gap:
    below, and kept because it closes a real hole, not because it explains the
    field data. **Scope: both the single-`command` path and the chain path**,
    not chain-only — `submitToPty`/`submitWithVerify` are the same function
-   called from both (`trigger-watcher.js:869` and `:1024`); a bare, non-chain
+   called from both (the single-`command` path and the chain loop of
+`processTriggerFile`); a bare, non-chain
    trigger runs the identical race. Proven in `test/trigger-watcher.test.js`,
    "submitted: busy observed between a step's text write and its own Enter
    must not confirm it, on a bare command (no chain)". This is unlike the
@@ -997,7 +1012,7 @@ window).
 
 **A second cost, not just latency: the settle window can turn an existing
 success into a `chain timeout`.** `waitForBusyFall`'s deadline check runs
-before its settle check (trigger-watcher.js:417-419), so a settle window that
+before its settle check (`waitForBusyFall` in `trigger-watcher.js`), so a settle window that
 starts but has not finished continuously when a step's own `timeout_ms`
 arrives resolves as `timedOut`, never as the success it would have been
 pre-settle-window. A turn ending with less than `settleMs` (300ms default) of
@@ -1163,7 +1178,7 @@ session, which has no local descriptor). No new watcher: it reuses the cache
   the CLI reacted. `idle` alone covers a turn too fast for a poll to see
   `busy`; `waiting` is a permission dialog our Enter opened. A spinner on the
   level probe, or a status that began earlier, proves nothing. Otherwise the
-  existing recovery applies (one bare ``, only into a free composer, same
+  existing recovery applies (one bare `\r`, only into a free composer, same
   window), and the reaction is looked for again. Still nothing:
   `confirmed: false`.
 - **The recovery Enter is never written while the descriptor reads `waiting`
@@ -1622,7 +1637,7 @@ already assumes success regardless of outcome).
 
 It would also reintroduce a fixed defect from the other end. `noteUserInput`
 stamps `lastInputAt`, and `waitForComposerFree` requires `pending === 0 AND
-(now - lastInputAt) >= quietMs` (3000ms default, `trigger-watcher.js:222`) —
+(now - lastInputAt) >= quietMs` (3000ms default, `DEFAULT_QUIET_MS` in `trigger-watcher.js`) —
 so routing our own writes through the same clock would make every trigger
 self-block the *next* trigger on that session for a full `quietMs` after
 itself, the identical "a non-human signal holds the quiet clock open" shape
@@ -1862,7 +1877,8 @@ Drop a file at `SWITCHBOARD_TRIGGERS_DIR/<uuid>.json` (default `~/.switchboard/t
 ```
 
 Fields:
-- `sessionId` — must match a key in `activeSessions` (`main.js`)
+- `sessionId` — must match a key in `activeSessions` (`main.js`), or reach a tab or remote target through the paths in "Re-keyed sessions" and "Remote socket targets"
+- `key` — `"escape"` only; see "Escape key trigger". Mutually exclusive with `command`, `chain` and `wait`.
 - `command` — written to the PTY, then Enter is sent as a SEPARATE write (discrete submit; a `\r` concatenated onto the text can be absorbed by the composer). Mutually exclusive with `chain`.
 - `chain` — array of up to 20 `{command, ...}` steps (`MAX_CHAIN_LENGTH`), injected sequentially; each step's submission is verified (busy-rise) with one bare-Enter retry before the next step is sent. Mutually exclusive with `command`; exactly one of the two is required.
 - `wait` — `"none"` (default) | `"idle"`.  `"idle"` polls `isSessionBusy` every 100 ms until the session goes idle or the timeout fires.
@@ -1874,8 +1890,8 @@ Fields:
 Result written to `SWITCHBOARD_TRIGGERS_DIR/processed/<uuid>.result.json`:
 
 ```json
-{ "ok": true,  "submitted": "activity", "sessionId": "...", "command": "...", "sent_at": "...", "waited_ms": 320 }
-{ "ok": false, "submitted": "no", "error": "not sent", "reason": "timeout waiting for idle; nothing was written", "sessionId": "..." }
+{ "ok": true,  "wrote": true, "submitted": "activity", "sessionId": "...", "command": "...", "sent_at": "...", "waited_ms": 320, "steps_total": 1 }
+{ "ok": false, "wrote": false, "submitted": "no", "error": "not sent", "reason": "timeout waiting for idle; nothing was written", "sessionId": "...", "steps_total": 1 }
 ```
 
 A `chain` result also carries `steps` and `total_waited_ms` — see
@@ -1993,7 +2009,7 @@ that gap, rather than validating every field defensively before use.
 
 That outer `try`/`catch`, however, only catches a throw from the *synchronous*
 call into `processTriggerFile()`'s body. `waitForComposerFree`,
-`pollForBusyRise`, `waitForBusyFall` and `waitForIdle` all poll on a
+`pollForBusyObserved`, `waitForBusyFall` and `waitForIdle` all poll on a
 recursive `setTimeout` — every tick after the first runs from inside a timer
 callback, a stack frame the outer `try`/`catch` never sees. All four share one
 `pollLoop(check)` helper whose `tick()` wraps every call to `check` (first and
@@ -2073,21 +2089,21 @@ and nothing prunes them.
 ## Invariants
 
 - **Never throws out of the watcher callback** — `processTriggerFile()`'s body runs inside one `try`/`catch`; any exception, anticipated or not, lands in the result file via `writeResult()` before the function returns. `dispatch()`'s own `.catch()` is a backstop for the case that should no longer occur.
-- **Poll loops must reject, not throw** — `waitForComposerFree`, `pollForBusyRise`, `waitForBusyFall` and `waitForIdle` all share `pollLoop()`, which converts a throw from *any* tick (including the ones run from inside `setTimeout`, not just the first synchronous one) into that promise's rejection. Without this, a throw on a deferred tick has no `try`/`catch` above it — see "Removing the entry".
+- **Poll loops must reject, not throw** — `waitForComposerFree`, `pollForBusyObserved`, `waitForBusyFall` and `waitForIdle` all share `pollLoop()`, which converts a throw from *any* tick (including the ones run from inside `setTimeout`, not just the first synchronous one) into that promise's rejection. Without this, a throw on a deferred tick has no `try`/`catch` above it — see "Removing the entry".
 - **`writeResult()` never throws** — both of its internal `try`/`catch` blocks route their own logging through `safeLogError()`, which cannot itself throw, and the unlink branch records `onEntryRetained()` before logging. A broken `ctx.log` cannot skip either guarantee.
 - **A broken `ctx.log` cannot crash the process from either backstop** — the generic catch's own log line and `dispatch()`'s own `.catch()` log line are both `safeLogError()`-guarded. An unguarded log call throwing there would otherwise become an `unhandledRejection`, which terminates the process by default under Node — see "Removing the entry".
 - **Deduplication via `inFlight` Set** — noisy `rename` events for the same file (common on Linux inotify) are coalesced; a file is processed at most once per appearance.
 - **A processed trigger never runs twice** — normally because it was deleted; when the deletion fails, because its name is in `retained`. A trigger that threw internally is not exempt from this: it still gets a result and a deletion, so it is not "retained" on that account.
 - **`accessSync` guard** — the `rename` event fires both on file creation and deletion; the existence check prevents processing a deletion event.
 - **Directories ignored** — non-`*.json` filenames and any name containing `/` or `path.sep` are skipped.
-- **Invalid `timeout_ms` releases the semaphore** — validation happens before the session look-up and before acquiring an idle-wait slot; a bad value produces a result file and returns without counting against `MAX_INFLIGHT`.
+- **Invalid `timeout_ms` releases the semaphore** — validation happens before the session look-up and before any wait (only the same-session FIFO precedes it); a bad value produces a result file and returns at once, so its `MAX_INFLIGHT` slot is freed immediately.
 
 ## Non-obvious behaviors
 
 - **OSC-title-based busy detection**: `session._cliBusy` is set to `true` by the OSC 0 handler in `main.js` when `classifyTitleActivity()` reads the title as a spinner frame, and back to `false` when the ✳ idle char (U+2733) appears.  The glyph set is not fixed — see `.ai/contexts/ipc-bridge.md`, "The OSC 0 title is the primary busy channel".  The trigger watcher reuses this flag directly via `isSessionBusy`.
 - **Politeness is not `wait`** — `wait` is about the CLI being busy; the politeness guard is about the human's composer.  `wait:"none"` still cannot write over typed input.
 - **`wait:"none"` sends even if busy** — it is the caller's responsibility to choose the right wait strategy. The harness should use `"idle"` for `/compact` to avoid injecting into a mid-response stream.
-- **Timeout env var for tests** — `SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS` lets tests use a 200 ms timeout instead of 30 s, making the idle-timeout test fast.
+- **Timeout env var for tests** — `SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS` lets tests use a 200 ms timeout instead of the 300 s default, making the idle-timeout test fast.
 - **`persistent: true` on `fs.watch`** — the watcher keeps the Node event loop alive, matching the pattern of all other persistent watchers in `main.js` (projects watcher, subagent watcher).
 
 ## Target guard (`expectedCwd`)
@@ -2285,8 +2301,8 @@ several timing-sensitive tests still failed:
   `SWITCHBOARD_TEST_TIME_SCALE=3 node --test test/trigger-watcher.test.js`.
 
 **What a real clock injection would take** (out of scope for issue #260;
-`trigger-watcher.js` has 29 `setTimeout`/`Date.now()` call sites across
-~1384 lines): thread a clock object (`{ now(), setTimeout(), clearTimeout() }`,
+`trigger-watcher.js` had 29 `setTimeout`/`Date.now()` call sites across
+~1384 lines at the time; it is ~2170 lines today): thread a clock object (`{ now(), setTimeout(), clearTimeout() }`,
 the pattern already used in `remote-watch.js`, `remote-index.js`, and
 `remote-activity.js`) through `pollLoop`, `waitForIdle`, `waitForComposerFree`,
 `submitWithVerify`, and `waitForBusyFall` — the five functions that own a

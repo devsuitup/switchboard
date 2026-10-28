@@ -22,7 +22,7 @@ menu under the button. On macOS the same menu is in the system menu bar and
 
 | Menu | Items |
 |---|---|
-| Switchboard | About, Hide, Hide Others, Unhide, Quit |
+| Switchboard | About, Hide, Hide Others, Unhide, Quit (Exit on Windows) |
 | Edit | Undo, Redo, Cut, Copy, Paste, Select All |
 | View | Toggle Developer Tools, Actual Size, Zoom In, Zoom Out, Toggle Full Screen |
 | Help | What's new: the [changelog](changelog.md#whats-new-in-the-app) section of the running version |

@@ -3,7 +3,7 @@
 Issue #506, including the shell order fix from #503.
 
 The session header contains the status, name, PTY title, id and shell badge,
-then `#terminal-header-session`: Refresh, Send to background, Stop/Detach, Sandbox and IDE Emulation.
+then `#terminal-header-session`: Refresh, Send to background, Stop, Detach, Sandbox and IDE Emulation.
 Its remaining right side is the window drag area. Caption overlay padding is
 unchanged. The info group uses `flex: 0 1 auto`, the header aligns from the
 left, and the name limit is `30vw`, keeping Refresh beside the id. Both titles

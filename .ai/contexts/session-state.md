@@ -293,7 +293,7 @@ active because the process is alive, not because a tab is open.
 
 | verb | local-pty | remote-ssh |
 |---|---|---|
-| detach | not offered — closing a session's view is a stop (unchanged) | `stop-session`'s pre-existing behavior: `killPty` → the tmux adapter's `detach()` (`remote-attach.js`) — ends the local ssh client, optionally restores tmux options (solo attach, #256). Still reachable today wherever `activeSessions` cleanup calls `killPty` on a `kind: 'remote-attach'` session without a preceding `remote-stop-session` call, and via `close-terminal`'s ordinary detach (marks `rendererAttached=false`, kills nothing). |
+| detach | not offered — closing a session's view is a stop (unchanged) | `stop-session`'s pre-existing behavior: `killPty` → the tmux adapter's `detach()` (`remote-attach.js`) — ends the local ssh client, optionally restores tmux options (solo attach, #256). Offered by the Detach control on an attached remote row, grid card and terminal header (#778), and still reached wherever `activeSessions` cleanup calls `killPty` on a `kind: 'remote-attach'` session without a preceding `remote-stop-session` call, and via `close-terminal`'s ordinary detach (marks `rendererAttached=false`, kills nothing). |
 | stop | kill the PTY (`stop-session`, unchanged) | **new**: `remote-stop-session` IPC (`{alias, sessionId}`) — kills the process on the host itself, same control and same confirmation dialog as local. No session locked by name or role. |
 
 **No new dialog component.** `public/stop-session-ui.js`'s async
@@ -344,8 +344,8 @@ excluded and explained before confirmation. With no targets, exclusions are
 shown as a notice without a confirmation. An invalid job id or an unknown job
 check is excluded with its reason, never treated as nothing running.
 
-`planSessionDetach(row, {tabOnly})` collects open background attach tabs only;
-remote Detach is deferred to S3b. `detachSession` never confirms, sets
+`planSessionDetach(row, {tabOnly})` collects open background attach tabs and
+open remote attach tabs (#778). `detachSession` never confirms, sets
 `detachRequested` and calls `stopSession`. Row, card and header have separate
 neutral eject buttons, with explicit title and accessible name; visibility
 refreshes on sidebar render/running indicators, card activity and header update.
@@ -354,11 +354,13 @@ refreshes on sidebar render/running indicators, card activity and header update.
 view's in-flight verb guard, this refuses a concurrent verb before sending IPC;
 it releases in `finally` on both success and failure. Detach after a failed Stop
 therefore remains available and reads Detached (#782b).
-Only background attaches offer Detach in S3a. Local and remote Stop retain
-their previous routes, and no new shortcut is introduced.
+Background and remote attaches offer Detach; a plain local PTY does not. Local
+and remote Stop retain their previous routes, and no new shortcut is introduced.
 Each successfully detached tab shows a 10 s Undo notice (`kind: 'undo'`).
 Before detaching, the executor captures that tab's session, job id and attach
-cwd; Undo calls `openSession` with those attach options. Both initial attach
+cwd; Undo calls `openSession` with those attach options. A remote tab's Undo
+reopens the captured row through the ordinary open path, and only when it is
+`remoteAttachable`; otherwise the notice is information only, naming the host. Both initial attach
 and background handoff retain the actual cwd as `entry.attachCwd`, falling
 back to the session project path. A merged-row Detach ignores local parts;
 Undo reattaches only its successfully detached tabs.
@@ -1125,7 +1127,7 @@ watch-channel descriptor list to poll; its only inputs are:
   They supply verified closure and unread response evidence to the shared
   projection. Adapter touches and silence remain activity hints.
 
-**Registration waits for `app.js`.** The adapter script loads before `app.js`, and its handler reads `activePtyIds` (declared in `app.js`), so the script does not register the listener itself: `app.js` calls `initLocalTranscriptAdapter()` right after its own state exists, next to the other `window.api.on*` listeners (`test/local-transcript-adapter.test.js` pins the order). A `session-transcript-activity` message sent before that point reaches no listener and is dropped, which loses at most one busy signal: the main-process tracker emits at most once per second per session, has no trailing emission, and re-emits on the next transcript write, so a session still writing is marked busy within about a second of `app.js` loading. Before this, such a message threw `activePtyIds is not defined` in the renderer (issue #415). The other `window.api.on*` registrations in scripts loaded before `app.js` read only state owned by those scripts or by earlier ones, so none needed the same change.
+**Registration waits for `app.js`.** The adapter script loads before `app.js`, and its handler reads `activePtyIds` (declared in `app.js`), so the script does not register the listener itself: `app.js` calls `initLocalTranscriptAdapter()` right after its own state exists, next to the other `window.api.on*` listeners (`test/local-transcript-adapter.test.js` pins the order). A `session-transcript-activity` message sent before that point reaches no listener and is dropped, which loses at most one busy signal: the main-process tracker emits at most once per second per session, delivers a throttled write in a trailing emission (#621), and re-emits on the next transcript write, so a session still writing is marked busy within about a second of `app.js` loading. Before this, such a message threw `activePtyIds is not defined` in the renderer (issue #415). The other `window.api.on*` registrations in scripts loaded before `app.js` read only state owned by those scripts or by earlier ones, so none needed the same change.
 
 **The main-process half has its own two guards, in `local-transcript-activity.js`
 (a pure factory, `createLocalTranscriptTracker`, unit-tested without Electron —
@@ -1493,7 +1495,7 @@ the others assert on the dot/slot element itself, only on row classes and
 |---|---|---|---|
 | `busy` / `attention` (OSC 0 / 9) | yes — `setActivity`/`setAttention` | never | wired via the watch channel (transcript writes), not OSC — OSC-while-attached is not wired |
 | `transcriptTouched(at)` | no adapter touch; independent head-turn reads still apply | yes (activity hint) — `onLocalTranscriptActivity` | yes (activity hint) — `onRemoteActivityEvent`/`markRemoteBusy` |
-| `descriptorStatus(status, at)` / `liveness` | yes — `snapshotForLocal`'s seed from `session.status`/`statusUpdatedAt`, same two calls the other kinds make | yes — `seedLocalTranscriptDescriptor`, from `sessionMap`'s `status`/`statusUpdatedAt` (see "The local-transcript adapter" above for why this widens the issue's original "no (no live CLI)") | yes (`main.js:539` → `applyRemoteDescriptor`) |
+| `descriptorStatus(status, at)` / `liveness` | yes — `snapshotForLocal`'s seed from `session.status`/`statusUpdatedAt`, same two calls the other kinds make | yes — `seedLocalTranscriptDescriptor`, from `sessionMap`'s `status`/`statusUpdatedAt` (see "The local-transcript adapter" above for why this widens the issue's original "no (no live CLI)") | yes (`seedRemoteActivity` → `applyRemoteDescriptor`, `public/remote-activity-ui.js`) |
 | `attached` | reserved, unused | reserved, unused | yes — `setRemoteAttached`, driven by the per-row `activePtyIds` transition; also the row-ownership arbiter since #273 (see "Row ownership" above) |
 | `subagentSpawned` / `subagentCompleted` | yes — `syncLocalPtyAgentsBusy`, mirroring `activeSubagentsByParent` (fed by `detectSubagentTransitions()` IPC) rather than a second IPC feed — see "The local-pty adapter" above | yes (issue #247) — `onLocalTranscriptSubagentActivity`, gated on the parent having no PTY | yes (issue #247) — `onRemoteActivityEvent({kind:'subagent'})`, attributed by `subagentParentFromParts()` |
 

@@ -11,7 +11,7 @@ the same strip across the rest of the window.
 
 | File | Role |
 |---|---|
-| `window-frame.js` | `windowFrameOptions(platform)` (the `BrowserWindow` options), `applicationMenuTemplate(appName, { onWhatsNew })` (the menu; Help → What's new calls `onWhatsNew`, see `docs/changelog.md`), `KEYBOARD_ROLES`, `STRIP_HEIGHT`, `zoomKey()` and `nextZoomLevel()` (the zoom keys), `menuPopupPoint()` (where the menu button pops the menu up). |
+| `window-frame.js` | `windowFrameOptions(platform)` (the `BrowserWindow` options), `applicationMenuTemplate(appName, { onWhatsNew, onQuit, platform })` (the menu; Help → What's new calls `onWhatsNew`, see `docs/changelog.md`; Quit/Exit calls `onQuit`, see "Closing the window"), `KEYBOARD_ROLES`, `STRIP_HEIGHT`, `zoomKey()` and `nextZoomLevel()` (the zoom keys), `menuPopupPoint()` (where the menu button pops the menu up). |
 | `main.js` | Spreads `windowFrameOptions(process.platform)` into the `BrowserWindow`; `buildMenu()` installs the template; the `popup-app-menu` IPC opens it under the menu button. |
 | `preload.js` | `window.api.popupAppMenu(x, y)`. |
 | `public/window-strip.js` | Marks `<body>` with `window-frameless`, `platform-<os>` and, while full screen, `window-full-screen`; wires `#app-menu-btn`. Dual-mode: a classic `<script>`, `require()`-d by the test. |
@@ -78,7 +78,7 @@ inside a drag region never receives the mouse. `no-drag` is therefore set on:
   every session-header control (`#terminal-header-session [data-header-kind]`),
   `#jsonl-viewer-session-id`, `.viewer-toolbar-path`;
 - every overlay that can open over the strip: `.new-session-popover`,
-  `.terminal-context-menu`, `.new-session-overlay`, `.add-project-overlay`, `.whats-new-overlay`,
+  `.terminal-context-menu`, `.new-session-overlay`, `.add-project-overlay`, `.whats-new-overlay`, `.modal-overlay`,
   `.jsonl-screenshot-fullscreen`, `#update-toast`, `.restore-toast`. A new
   popover, menu or dialog that can reach the top 32 pixels belongs in this list.
 
@@ -88,7 +88,7 @@ listener) placed in a drag region needs `no-drag` of its own.
 ## The session header's controls
 
 Immediately after `#terminal-header-info`, `#terminal-header-session` holds
-Refresh, Send to background, Stop/Detach, Sandbox and IDE Emulation, in that order. The action ids,
+Refresh, Send to background, Stop, Detach, Sandbox and IDE Emulation, in that order. The action ids,
 disabled logic, red Stop styling and divider are retained. The indicators are
 state only: coloured dots and words, with tooltips and no click action.
 `HEADER_CONTROLS` declares this order; `placeHeaderControl` inserts a declared
@@ -406,9 +406,11 @@ A native `alert()`, `confirm()` or `prompt()` blocks the page's main thread
 until it is answered, and the preload's listeners run on that thread, so a page
 showing one can neither acknowledge a check nor answer a ping. The check's own
 path shows none (the close question and the unsaved-edits dialog are in-page,
-and their saves report failures in the dialog), but other code does: the
-sidebar's delete and hide confirms, the resume guard, the viewer's overwrite
-and delete confirms.
+and their saves report failures in the dialog), and since #589 no renderer code
+does either: every question goes through `public/app-dialogs.js`
+(`appConfirm`, `appAlert`; see [app-dialogs.md](app-dialogs.md)), and
+`eslint.config.js` refuses a bare `confirm`, `alert` or `prompt`. The reporting
+below stays in place for a native dialog that still reaches the page.
 
 So the page reports them. `reportNativeDialogs` (`file-panel.js`, run by
 `initFilePanel`) wraps `window.alert`, `window.confirm` and `window.prompt`

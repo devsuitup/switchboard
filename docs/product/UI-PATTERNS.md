@@ -82,7 +82,7 @@ keeps reason plus age, or age alone.
 | Grid card | `.grid-card-dot.session-icon` (`public/grid-view.js`, `updateGridCardActivity`) | activity and lifecycle in icon labels; ranked lifecycle in footer; Stop depends separately on liveness |
 | Terminal header | `#terminal-header-status.session-icon` (`public/session-activity-dom.js`, `paintTerminalHeaderStatus`) | activity and lifecycle in tooltip and accessible name, no visible text; repaints with the active row, including merged-member updates, without waiting for a poll; also works when that row is filtered out |
 | Terminal banner | text (`public/app.js`, `applyProcessExit`) | recorded Stopped, Exited (code N) or Killed (SIG); Detach says the session keeps running in the background |
-| Agents group/header | emoji and Title Case label; counts (`public/agents-view.js`) | Active/Blocked/Idle/Done/Stopped/Failed/External/Unknown groups; N live · N finished · N external |
+| Agents group/header | emoji and Title Case label; counts (`public/agents-view.js`) | Active/Blocked/Idle/Done/Stopped/Failed/External/Unknown groups; N running · N finished · N external |
 | Status bar/filter | text (`public/app.js`, `public/index.html`) | N open here · N sessions · N projects; Show sessions open here only |
 | Slug-group header | `.slug-group-dot` (`public/sidebar.js`) | separate pulsing green mark when any child has a PTY; N sessions and time |
 | Remote host | `.remote-host-dot` (`public/style.css`) | separate reachability mark: green, red error, amber unknown, pulsing amber connecting |
@@ -90,8 +90,8 @@ keeps reason plus age, or age alone.
 **Convergence delivered (#563).** The four session surfaces share the activity
 slot. Lifecycle/location is a separate label, CLI words stay in the tooltip,
 and Detach has its own exit wording. M5 and the grid's Stopped-with-Stop
-incoherence m3 are resolved. Separate Detach/Stop controls remain owned by
-#546 slice 3 (M2); the remaining reduced-motion and host/group indicator
+incoherence m3 are resolved. Separate Detach/Stop controls followed in #546
+(M2 resolved, §2.1); the remaining reduced-motion and host/group indicator
 questions are outside this change.
 
 **Open divergence — WCAG 1.4.1 (Use of Color).** The slug-group dot is
@@ -162,7 +162,7 @@ The Changes badge is the one place that already meets "never colour alone".
 | Worktree Archive project | `sidebar.js` (`worktree-hide-btn`) | `Archive Project` | removes the row, keeps settings and cache, suspends schedules; reversible from Settings | no confirmation; 10-second Undo notice |
 | Project Archive | `settings-panel.js` (`sv-archive-btn`) | `Archive Project` | same | no confirmation; 10-second Undo notice |
 | Project Delete | `settings-panel.js` (`sv-delete-btn`) | `Delete Project` | drops settings, cache, search index and schedule registration; no file on disk is deleted | `showChoiceDialog`, danger style, focus on Cancel |
-| File delete (Agent Files / Work Files) | `viewer-panel.js:283` | — | delete file | `confirm('Delete "<name>"?\n\nThis cannot be undone.')` |
+| File delete (Agent Files / Work Files) | `viewer-panel.js:284` | — | delete file | danger `appConfirm`, `Delete "<name>"?` / `This cannot be undone.`, button `Delete` |
 | Trace file delete | `activity-trace-panel.js:120` | — | delete file | same wording |
 
 **Divergences.**
@@ -173,9 +173,9 @@ The Changes badge is the one place that already meets "never colour alone".
    dialog has no Undo. Empty-options Archive runs immediately with Undo.
    After stopping processes, Undo restores the folder, this click's sessions
    and schedules disabled; stopped processes stay stopped.
-2. Three delete confirmations: custom modal with preview (session, worktree),
-   OS `confirm` (Agents, files). The confirm button says `Delete permanently`,
-   `Delete anyway`, or `OK`.
+2. Two delete confirmations: custom modal with preview (session, worktree),
+   and `appConfirm` (Agents, files; the OS `confirm` is banned since #589).
+   The confirm button says `Delete permanently`, `Delete anyway`, or `Delete`.
 
 **Proposed convergence.**
 - Row and slug-group Archive use B5 for planned stops and B8 for Undo;
@@ -193,7 +193,7 @@ The Changes badge is the one place that already meets "never colour alone".
 | | `click to read its transcript` | `sidebar.js:1736-1737` (remote badge) |
 | Delete | `Delete session (…)` / `Delete permanently` | `sidebar.js:1800, 1905` |
 | | `Delete` | `agents-view.js:340` |
-| Stop | `Stop session` / `Stop process` / `Stop` | `sidebar.js:1766`, `app.js:1457`, `agents-view.js:340` |
+| Stop | `Stop session` / `Stop` | `sidebar.js:1766`, `app.js` (`terminalStopBtn`), `agents-view.js:340` |
 | Resume with options | `Resume with config` | `sidebar.js:1805` |
 | Fork | `Fork session` | `sidebar.js:1785` |
 | Respawn | `Respawn` | `agents-view.js:340` |
@@ -246,6 +246,16 @@ control.
 ---
 
 ## 3. Feedback
+
+Since #589 (after this document's baseline) the renderer has no native
+`confirm`, `alert` or `prompt`: ESLint forbids them (`eslint.config.js`,
+`no-restricted-globals`) and every question goes through `appConfirm`,
+`appAlert` or `appChoose` (`public/app-dialogs.js`) over `showChoiceDialog`.
+Hand-built modals register with the modal stack (`registerModal`,
+`public/modal-stack.js`), which gives them initial focus, a Tab trap, Escape
+and return focus. The `window.alert` and `window.confirm` rows below, and §4's
+focus notes, record the v0.0.94 baseline; see `.ai/contexts/app-dialogs.md`
+for the current dialogs.
 
 **Shared notices (#566, S3).** `public/app-notices.js` provides B8 through
 `showAppNotice({ id, kind, message, actionLabel, onAction })` and
@@ -309,7 +319,7 @@ share one flash helper that colours by class, not by outcome.
 | `window.confirm` | **17**: `app.js:1054`; `resume-guard.js:33, 42, 56, 62, 68, 72`; `agents-view.js:421`; `sidebar.js:1302, 1332`; `settings-panel.js:704`; `viewer-panel.js:283, 473, 594`; `file-panel.js:438, 1456`; `activity-trace-panel.js:120` | OS dialog, buttons always OK / Cancel |
 | `.new-session-overlay` hand-built modals | `dialogs.js:180, 334, 425, 555, 717`; `sidebar.js:1888, 1955` | no `role="dialog"`, no initial focus, no focus trap, no return focus; Escape via a document listener (`dialogs.js:314, 415, 546, 614, 684, 892`; `sidebar.js:1942, 2012`); overlay click closes |
 | `.add-project-overlay` | `dialogs.js:624`; `file-panel.js:642` | same |
-| `showChoiceDialog` | **1 use**: folder Archive (`sidebar.js:1190`) | `role="dialog"`, `aria-modal`, `aria-labelledby`, focus trap, Escape, Enter, return focus, `danger` variant, verb-labelled confirm, remembered checkboxes (`choice-dialog.js:15-135`) |
+| `showChoiceDialog` | **1 use** at v0.0.94: folder Archive (`sidebar.js:1190`); since #589 also every `appConfirm` / `appAlert` / `appChoose` (`app-dialogs.js`) | `role="dialog"`, `aria-modal`, `aria-labelledby`, focus trap, Escape, Enter, return focus, `danger` variant, verb-labelled confirm, remembered checkboxes (`choice-dialog.js:15-135`) |
 | `.modal-overlay` | Touched info (`touched-files-view.js:133-134`), What's new (`whats-new.js:60`) | `role="dialog"`, `aria-modal` |
 | Popover menu | session context menu (`sidebar.js:1620-1644`), terminal context menu | `role="menu"` / `menuitem`, Escape, outside click |
 | New session popover | project and worktree + buttons (`dialogs.js`, `showNewSessionPopover`) | `role="menu"` / `menuitem`; opener has `aria-haspopup="menu"` and `aria-expanded`; first item focused on open; Up/Down wrap, Home/End select edges, Enter/Space activate; Escape closes and refocuses +; focusout to outside and outside click close |

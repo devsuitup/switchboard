@@ -41,7 +41,8 @@ run `npm run bundle:mermaid` again.
 | `task install:lint` | installs `eslint` and `jsdom` if missing |
 | `task build` | `npm run build:linux` — see [Building](#building) |
 | `task test-pr PR=<n>` | a PR's code, isolated — see [Testing a PR live](testing-a-pr.md) |
-| `task test-pr:clean PR=<n>` | removes that PR's worktree and data directory |
+| `task test-pr:clean PR=<n>` | removes that PR's dependency link, worktree and data directory |
+| `task e2e` | bundles both viewers, then the Playwright journeys (under `xvfb-run` when there is no display) — see [End-to-end journeys](e2e.md) |
 | `task db:reset:dev` | deletes `~/.switchboard-dev/switchboard.db` |
 | `task db:reset` | deletes `~/.switchboard/switchboard.db` — the **installed app's** database — without asking |
 | `task clean` | deletes `dist/`, both generated viewer bundles and the installed app's database, after typing `YES` |
@@ -49,14 +50,16 @@ run `npm run bundle:mermaid` again.
 Other npm scripts: `npm run electron` (`electron .`), `npm run electron-dev`
 (the same with `SWITCHBOARD_DATA_DIR=~/.switchboard-dev`), `npm run build:mac`,
 `build:mac:arm64`, `build:win`, `build:linux`, `npm run release`,
-`npm run generate-icons`.
+`npm run generate-icons`, `npm run test:canary` (the CLI capability canary's
+tests, `test/canary/`, which `npm test` does not run).
 
 ### Tests
 
 `npm test` runs `scripts/run-tests.js` in two stages: every file in `test/`
-except `trigger-watcher.test.js`, with at most 4 workers
-(`SWITCHBOARD_TEST_CONCURRENCY=N` to change it), then `trigger-watcher.test.js`
-alone, serially, because its timings use real clocks. Renderer files are tested
+except `trigger-watcher.test.js`, `trigger-delivery.test.js` and
+`trigger-continuation-delivery.test.js`, with at most 4 workers
+(`SWITCHBOARD_TEST_CONCURRENCY=N` to change it), then those three alone,
+serially, because their timings use real clocks. Renderer files are tested
 under jsdom (`test/dom-setup.js`).
 
 The pre-commit hook (husky) runs `task check`, or, without `task`, `npm run lint`
@@ -65,8 +68,10 @@ and `npm test` (`SKIP_TESTS=1` skips the tests in that case only).
 CI (`.github/workflows/test.yml`) runs ESLint, and the suite under coverage on
 Node 20 and 22, on Ubuntu and Windows. On pull requests, lines a change adds or
 modifies must be 80 % covered (`diff-cover`), `main.js`, `preload.js`, the MCP
-bridge, `public/app.js`, `public/terminal-manager.js`, the CodeMirror files,
-workers, scripts and tests excepted.
+bridge, `claude-auth.js`, `public/app.js`, `public/terminal-manager.js`, the
+CodeMirror and Mermaid files, workers, scripts, tests and `e2e/` excepted. The
+same workflow runs the [changelog check](changelog.md#the-ci-check) on pull
+requests and the [end-to-end journeys](e2e.md).
 
 ## Running from source next to an installed copy
 
@@ -129,7 +134,7 @@ npm run build:mac     # dmg and zip, arm64 and x64
 npm run build:win     # NSIS installer, x64 and arm64
 ```
 
-Each bundles CodeMirror first, then runs electron-builder; output goes to
+Each bundles CodeMirror and Mermaid first, then runs electron-builder; output goes to
 `dist/`. CI builds Linux x64 and arm64 on separate runners, since one
 electron-builder run for several architectures can pack native modules built for
 the wrong one.
@@ -166,7 +171,7 @@ trigger-watcher.js  The file-based trigger API
 remote-*.js         Remote hosts: inventory, mirror, watch, attach, stop
 mcp-bridge.js       The IDE emulation MCP server
 window-frame.js     Window options, the application menu, zoom keys
-workers/            Worker threads (indexing, search)
+workers/            Worker threads (indexing, the session index writer, search, file lists, task records)
 public/             Renderer (HTML, CSS, JS); app.js is the entry point
 scripts/            Postinstall, test runner, sandbox wrapper, build helpers
 test/               node:test suites

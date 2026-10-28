@@ -209,10 +209,13 @@ at it.
 
 ## Quitting
 
-`before-quit` holds the quit, bounded at 1.5 s, while the reporter has pending
-work: a span still open, or a running event written and not yet acknowledged.
-With reporting off, or nothing pending, the quit is not delayed at all. An app
-that is killed rather than quit writes nothing after its last checkpoint.
+`before-quit` always holds the quit for the bounded shutdown drain
+(`shutdownForExit` in `main.js`, 1.5 s shared by every step). The reporter's
+flush is one of those steps, run after the PTYs are killed and their exits
+drained, and only waits while the reporter has pending work: a span still open,
+or a running event written and not yet acknowledged. With reporting off, or
+nothing pending, the flush adds no delay. An app that is killed rather than
+quit writes nothing after its last checkpoint.
 
 **An update install drains for up to 1.5 s before `quitAndInstall`.** The
 shared deadline covers pending settings, index and activity writes. Rejection

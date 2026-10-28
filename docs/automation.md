@@ -104,6 +104,9 @@ runs under its slug; open it to read the result.
   own or in a git checkout (a directory with a `.git`): the list is seeded, on
   first use, with those projects. A project outside both is not in it. See [Sandbox](sandbox.md#schedules).
 - The Pre-launch Command and IDE emulation do not apply to scheduled runs.
+- A schedule in a project archived with **Archive Project** is suspended: the
+  scheduler skips the project, and its files are not changed — see
+  [Projects](session-browser.md#projects).
 
 ### Catching up a missed run
 
@@ -175,7 +178,7 @@ session.
 The **Agent Files** tab lists the schedule files with a clock icon and a **Run
 now** button, which starts a run at once. **Run now** ignores `cron` and
 `enabled`, and does not wait for a run of the same schedule that is still going.
-The button shows a check mark and **Launched!** only after the configured shell
+The button shows a check mark (tooltip **Launched!**) only after the configured shell
 process starts. This acknowledges the shell launch, not that Claude has started
 or that the task has completed successfully. A command failure after that point
 (including a missing `claude` command or bubblewrap failure) is recorded in the
@@ -366,6 +369,8 @@ on one machine took from under a second to 332 s from the Enter, median
 | `SWITCHBOARD_PENDING_OWN_ENTRY_MS` | How long a chain step written while the CLI reads `busy` may take to show in the transcript (not `/compact`) | 30 000 |
 | `SWITCHBOARD_SUBMIT_VERIFY_MS` | How long a submission is watched for a turn | 2 000 |
 | `SWITCHBOARD_BUSY_FALL_SETTLE_MS` | How long "not busy" must hold between chain steps | 300 |
+| `SWITCHBOARD_BUSY_RISE_WAIT_MS` | How long the wait for a step's turn to end first waits for it to start | `SWITCHBOARD_SUBMIT_VERIFY_MS` |
+| `SWITCHBOARD_TRANSCRIPT_QUIET_MS` | How long the transcript must stay unchanged before it can show a turn over while the CLI still reads `busy` | 3 000 |
 
 The triggers directory does not move with `SWITCHBOARD_DATA_DIR`: an instance
 run from source watches the same directory as an installed one unless
@@ -402,7 +407,7 @@ code points.
 | bare Up (`ESC [ A`, `ESC O A`), Ctrl+V, an unparseable escape | insert one opaque placeholder — the content is unknown, so it counts as one |
 | kitty Enter **with** a modifier (`ESC [ 13;2 u`, `ESC [ 13;5 u`) | inserts a line break |
 | kitty Enter **without** one (`ESC [ 13 u`), modified Up, OSC, other escapes | nothing |
-| SGR mouse reports (`ESC [ < b ; x ; y M`/`m`), focus reports (`ESC [ I`, `ESC [ O`) | nothing, **and the quiet clock does not move**: these are the terminal talking, not the user |
+| SGR mouse reports (`ESC [ < b ; x ; y M`/`m`), focus reports (`ESC [ I`, `ESC [ O`), cursor-position reports with the `?` (`ESC [ ? row ; col R`) | nothing, **and the quiet clock does not move**: these are the terminal talking, not the user |
 
 An escape sequence split across two IPC chunks is joined before it is read, so
 half a sequence never counts as text. A sequence that cannot be parsed counts
@@ -424,11 +429,12 @@ the model while the CLI refills the prompt.
 - Ctrl+U is taken to clear the whole prompt, which holds with the cursor at the
   end. Used mid-line, where the CLI may clear only up to the cursor, it would
   under-count.
-- Only SGR mouse reports and parameterless focus reports are exempt from the
-  quiet clock. A near-miss — a parameter too many or too few, another final
-  byte, a report cut by a chunk boundary — counts as input. xterm.js's own
-  replies (OSC colour replies, XTWINOPS size replies, DA1, CPR) count as input
-  too, and each can cost a trigger up to one quiet window.
+- Only SGR mouse reports, parameterless focus reports and `?`-prefixed
+  cursor-position reports are exempt from the quiet clock. A near-miss — a
+  parameter too many or too few, another final byte, a cursor-position report
+  without the `?`, a report cut by a chunk boundary — counts as input. xterm.js's
+  other replies (OSC colour replies, XTWINOPS size replies, DA1, DCS replies)
+  count as input too, and each can cost a trigger up to one quiet window.
 - In the alternate screen with mouse tracking off, xterm.js turns the wheel into
   arrow keys: each notch up is a bare Up, one placeholder. Three notches put
   `pending` at 3, and every trigger for that session gives up until the next
@@ -495,7 +501,9 @@ no UI yet; enabling it is maintainer-only for now. The value is the JSON
 property `"remoteTriggers": true` in the SQLite `settings` table's row whose
 `key` is `global`; the row's `value` holds the global settings object
 (`db.js`, `getSetting`/`setSetting`). Preserve its other properties when
-changing it. Changes take effect without a restart. With it off, an unattached
+changing it. The setting is read at trigger time, but a running instance reads
+its own cached copy of the settings rows (`db.js`), which an edit made outside
+the app does not update: edit the row while Switchboard is closed. With it off, an unattached
 remote id gives `session not found`.
 
 Use the same `sessionId`, `command`, `wait` (`none` or `idle`), `timeout_ms`

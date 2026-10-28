@@ -2,6 +2,8 @@
 
 **Status**: Decided (2026-10-14), following the maintainer decisions for #616 and the review of PR #640. Implementation, performance acceptance and packaged-build qualification remain pending.
 
+**Status note (2026-10-28)**: step 1 of slice 1b is implemented — every session index write goes through one writer worker (`session-index-writer.js`, `workers/session-index-writer.js`; #643, #646), while main keeps a readonly connection; see [session-index-writer.md](../../.ai/contexts/session-index-writer.md). The `file:line` references below point at the code as it stood when this decision was taken.
+
 ## Context
 
 The local database must be updated in place. The display should read existing durable state and refresh only changed records; indexing must not hold terminal input. Issue #616 sets a main event-loop p99 target below **30 ms** while sessions stream, including navigation. Slices #619 and #635 moved reads/parsing into workers but left SQLite mutations on main.

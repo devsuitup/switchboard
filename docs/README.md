@@ -29,7 +29,7 @@ links are in the [README](../README.md#download).
 | [ActivityWatch](activitywatch.md) | Opt-in reporting of session time to a local ActivityWatch server |
 | [Activity trace](activity-trace.md) | Debug mode: the trace behind the activity indicators |
 | [Settings reference](settings.md) | Every setting, its default, its scope, and where it is explained |
-| [Keyboard shortcuts](keyboard-shortcuts.md) | Every shortcut, and how to rebind the four that can be |
+| [Keyboard shortcuts](keyboard-shortcuts.md) | Every shortcut, and how to rebind the eight that can be |
 | [Customizing colors](customizing-colors.md) | Community guide, in French, to editing the CSS inside `app.asar` (written against v0.0.30) |
 
 ## Working on the app

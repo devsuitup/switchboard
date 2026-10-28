@@ -36,11 +36,11 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 
 ## Runner interface (`git-changes-runner.js`)
 
-`createGitChangesRunner({kind, cwd, alias, exec, timeoutMs, fsOps, countLimits})` → `{status(), diff(path, {staged, untracked}), isWorkTree()}`. `status()` runs three commands in parallel (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`), counts the untracked files on a local session (see "Untracked line counts"), merges them, and reports `untrackedCollapsed` (see "Untracked files"). `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
+`createGitChangesRunner({kind, cwd, alias, exec, timeoutMs, fsOps, countLimits})` → `{status(), diff(path, {staged, untracked}), isWorkTree()}`. `status()` runs three commands (`git status --porcelain=v2 --branch -uall -z`, `git diff --numstat -z`, `git diff --cached --numstat -z`) — one after the other on a local session, in parallel on a remote one (see "Local reads run one at a time") — counts the untracked files on a local session (see "Untracked line counts"), merges them, and reports `untrackedCollapsed` (see "Untracked files"). `diff()` runs `git diff [--cached] -- <path>` — or, with `untracked: true`, `git diff --no-index -- /dev/null <path>` (see "Untracked files") — capped at 512 KB (`MAX_DIFF_BYTES`) measured in UTF-8 bytes and cut on a line boundary, with a `truncated` flag.
 
 - **Local** (`kind: 'local'`): `runToExit('git', args, {cwd, timeoutMs, maxBuffer})` (`run-to-exit.js`, a `child_process.spawn` with no shell) — cwd is the spawn's own option, never a `-C` argument. No shell is invoked, so argument content cannot be interpreted as a command regardless of what it contains; timeout 10s. See "A capped read waits for git to exit".
 - **Remote** (`kind: 'remote'`): the same ssh transport `remote-attach.js` already uses for the tmux probe/restore calls (`buildRemoteCommandArgs`, `defaultRunRemoteCommand`) — `ssh -o BatchMode=yes -o ConnectTimeout=5 -n <alias> "git -C '<cwd>' '--literal-pathspecs' 'diff' '--' '<path>' ..."`. Timeout 20s. This command string DOES run through a shell on the far end.
-- **`invoke(args, remoteOpts)`** is the single choke point both `status()` and `diff()` go through: it prepends `--literal-pathspecs` (`buildGitArgs`, see "Quoting rule") to every argv/command, and threads `remoteOpts.maxStdoutBytes` to the remote transport only (the local path's `execFile` `maxBuffer` already bounds it).
+- **`invoke(args, remoteOpts)`** is the single choke point both `status()` and `diff()` go through: it prepends `--literal-pathspecs` (`buildGitArgs`, see "Quoting rule") to every argv/command, and threads `remoteOpts.maxStdoutBytes` to the remote transport only (the local path's `runToExit` `maxBuffer`, `LOCAL_MAX_BUFFER`, already bounds it).
 
 ### Paths are relative to the repository root
 
@@ -730,9 +730,10 @@ two chances for a symlink swap in between, one resolution reused cannot
 diverge from itself. A symlink inside the repository pointing outside it is
 refused by exactly that check (measured, both for the read and for the write).
 
-`save-file-for-panel`, the neighbouring write handler, has no containment check
-at all — it takes an absolute path from an OSC 8 terminal hyperlink and checks
-only `isSensitivePath`. A handler whose entire input is a *relative* path from
+`save-file-for-panel`, the neighbouring write handler, has no repository
+containment check — it takes an absolute path the Touched editor opened and
+checks `.git` segments, symbolic links, `isSensitivePath` and UTF-8 validity
+(`main.js`). A handler whose entire input is a *relative* path from
 the renderer has no such excuse, so it does not inherit that shape.
 
 ### Saving over a file that moved
@@ -826,7 +827,7 @@ the only one.
 
 ## Renderer: two ways to show a file
 
-`public/file-panel.js`'s Changes mode is a third tab type (`'changes'`), alongside the pre-existing `'file'` and `'diff'` (MCP) types, on the same per-session `filePanelState`. Opening one replaces whatever the other was showing. It does not route anything through `ViewerPanel`, which owns one file and one path; a Changes tab owns a list, a selection, and a session.
+`public/file-panel.js`'s Changes mode is a tab type (`'changes'`), alongside `'touched'` and the MCP `'diff'` type (the former `'file'` tab was folded into Touched by #472), on the same per-session `filePanelState`. Opening one replaces whatever the other was showing. It does not route anything through `ViewerPanel`, which owns one file and one path; a Changes tab owns a list, a selection, and a session.
 
 A **local** session's selected file is a live editor over the content pair from `git-changes-file` — `createMergeViewer` (side-by-side, original read-only on the left, working tree editable on the right), `createUnifiedMergeViewer` (inline) or `createEditableViewer` (plain, no diff decoration), cycled by one button and persisted under `localStorage.changesDiffMode`. CodeMirror recomputes the diff on every keystroke by construction, so "live update" is a property of using the merge view at all, not a feature built on top of it.
 
@@ -836,8 +837,10 @@ A **remote** session, and any file the main process refuses to open for editing 
 
 Touched now shares the Changes list/editor splitter and sizing code. Its ratio is stored in `localStorage.touchedListRatio`; Changes retains its desired pixel height. The resize observer watches both list containers as well as the panel content, so opening the shell or dragging its splitter reapplies the split against the available height and preserves the editor's 120px minimum.
 
-The panel has one shared **Back to list** button for Touched and Changes
-(#444). Escape with focus inside either viewer uses the same control. For
+The panel has one **Back to list** button (#444), shown for a Changes file
+only: a Touched editor has none since #450, and its Close and Escape return to
+the list. Escape with focus inside either viewer goes through the same
+`returnToPanelList`. For
 Changes it closes the selected diff through the existing dirty-buffer guard
 and unwatch/editor cleanup; it makes no git status or content request. The
 list DOM is reused while its data, loading/error state and count revision are
@@ -897,7 +900,7 @@ Saving is `gitChangesSave(sessionId, path, content, version)` from the Save butt
 
 The buffer is read back from `view.b.state.doc` for side-by-side and from `view.state.doc` for inline and plain — the same asymmetry the MCP diff tab navigates.
 
-Back, closing the tab and closing the panel all ask before discarding unsaved edits (`window.confirm`, as `ViewerPanel` already does for its own destructive action). `confirmDiscardChangesEdits` asks and does nothing else; what happens to the buffer is decided by the exit. The exit that tears down through `destroyCurrentTab` passes `{stash: false}`, so a confirmed discard cannot hand the buffer to the stash below and get it back on the next open; the other two tear down inline and never stash.
+Back, closing the tab and closing the panel all ask before discarding unsaved edits (`appConfirm`, as `ViewerPanel` does for its own destructive action). `confirmDiscardChangesEdits` asks and does nothing else; what happens to the buffer is decided by the exit. The exit that tears down through `destroyCurrentTab` passes `{stash: false}`, so a confirmed discard cannot hand the buffer to the stash below and get it back on the next open; the other two tear down inline and never stash.
 
 Nothing else clears the stash, deliberately. A stash exists only while a non-Changes tab is showing — it is created when a Changes tab is replaced and consumed the moment one is opened — so an exit reached *from* the Changes tab always sees a null stash, and an exit reached from the session's own tab (the panel's close button) has asked the user nothing and has no instruction to act on. Clearing there is what turns "your edits are kept" into silent loss. The two failures are mirror images and both come from deciding the stash's lifetime somewhere other than at the user's answer: keeping work against an explicit discard, and discarding work nobody was asked about.
 

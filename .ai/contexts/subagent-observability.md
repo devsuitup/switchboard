@@ -10,8 +10,8 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 
 | File | Role |
 |---|---|
-| `session-cache.js` | `enumerateSessionFiles(folderPath)` walks `<folder>/*.jsonl` AND `<folder>/<parentSessionId>/subagents/*.jsonl` (+ legacy `<folder>/<parentSessionId>/*.jsonl`). Sets `subagentType` from JSONL metadata. |
-| `db.js` | `session_cache` row has `parentSessionId`, `agentId`, `subagentType` columns. `getCachedByParent(parentSessionId)` returns all children. |
+| `session-cache.js` | Calls `enumerateSessionFiles(folderPath)` (`read-session-file.js`), which walks `<folder>/*.jsonl` AND `<folder>/<parentSessionId>/subagents/*.jsonl` (+ legacy `<folder>/<parentSessionId>/*.jsonl`). Sets `subagentType` from JSONL metadata. |
+| `db.js` (read side of `session-index-store.js`) | `session_cache` row has `parentSessionId`, `agentId`, `subagentType` columns. `getCachedByParent(parentSessionId)` returns all children. |
 | `read-session-file.js` | `readSessionDisplayHeader()` extracts `agentId` + `isSidechain` flags from the first 256 KB. |
 
 ### IPC bridge (main ↔ renderer)
@@ -48,8 +48,8 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 ## Non-obvious behaviors
 
 - **The parent JSONL doesn't contain the subagent's text** — it just records a `subagent-spawn` event. The actual conversation lives in the child JSONL. The viewer pieces them together via `mergeLocalCommandEntries`.
-- **Orphan subagents** (no findable parent in cache) are surfaced in a dedicated `.orphan-subagents` group in the sidebar, **collapsed by default**. State is persisted per-project in `localStorage['orphanExpanded:' + projectPath]`.
-- **Subagent status badges**: derived from the most recent JSONL line — `isSidechain: true` means active, completion is inferred from mtime stability (see PR #48 observability follow-up).
+- **Orphan subagents** (no findable parent in cache) are surfaced in a dedicated `.sidebar-orphan-subagents` group in the sidebar, **collapsed by default**. State is persisted per-project in `localStorage['orphanExpanded:' + projectPath]`.
+- **Subagent status badges**: originally (PR #48) derived from the most recent JSONL line — `isSidechain: true` meant active, completion was inferred from mtime stability. Since #624/#627 the shared task registry decides, and the parent row shows a running count instead of per-child badges (see below).
 - **The "Resume in terminal anyway" button** in the transcript view bypasses the routing and calls the original `openSession` opener. This is intentional — for the rare debugging case where a user genuinely wants to re-enter the subagent's session.
 
 ## Running subagent count (#627)
@@ -114,9 +114,10 @@ retain their state checks and assert the new presentation.
   `detectSubagentTransitions()` only polls subagents of `!exited` sessions —
   if the parent's PTY dies before a subagent goes 30s quiet, the matching
   `subagent-completed` never fires and the entry would be stuck forever.
-  `pruneStaleSubagents()` runs at the top of every `renderProjects()` — a
-  render-time prune, not a standalone timer (ADR 0002: no added steady-state
-  cost).
+  `pruneStaleSubagents()` runs at the top of every `renderProjects()`, and
+  since #624 also from a one-shot timer armed at the oldest fallback deadline
+  (see "The renderer safety nets had no clock either") — never a polling
+  interval (ADR 0002: no added steady-state cost).
 - **Collapsed parents**: the numeric count lives in the parent's `.session-info`,
   outside `childrenContainer`. The former child and caret green dots were
   removed in #627.
@@ -207,7 +208,8 @@ opens nothing, publishes no revision and consumes no shared deduplication slot.
 Entries admitted only for Bash and shell stops use a separate deduplication set,
 bounded by maxEntries, merged and bounded on rekey, and cleared on owner death.
 The agent deduplication set admits exactly the entries admitted on main, including
-task notifications. Deferred Bash results leave their deduplication set before replay.
+agent task notifications; a notification whose task, tool-use id or result
+belongs to a known Bash shell uses the shell deduplication set instead (#800). Deferred Bash results leave their deduplication set before replay.
 Background Bash results use their tool-use id as the shell replay key, leaving
 Agent entry keys unchanged. A replayed Bash call is skipped while its result
 key is retained, unless a deferred shell result still needs that call.
@@ -219,9 +221,9 @@ terminal job evidence ends it. The descriptor's process start time travels
 through main, client and worker; a newer owner ends older transcript Bash tasks
 and prevents their replay using the tool-use time, even when the result is newer.
 Early terminal notifications are retained by tool-use id in the bounded pending
-queue, or by shell-shaped task id in a separate queue capped at the smaller of
-256 and maxEntries. Known tasks consume their task-id notifications directly.
-The separate queue cannot evict deferred launch results or tool-use-id completions;
+queue, or, for a known Bash shell's tool-use id or a shell-shaped task id, in a
+separate queue capped at the smaller of 256 and maxEntries (#800). Known tasks consume their task-id notifications directly.
+The separate queue cannot evict deferred launch results or Agent tool-use-id completions;
 it is merged and bounded on rekey, cleared on owner death, and consumed when the
 shell opens at its tool-use time. Completion
 correlations are released when their shell becomes terminal, including early
@@ -805,11 +807,12 @@ what the eight standing warnings on `shortcuts.js` are.
 `pruneStaleSubagents()` only from `renderProjects()` — both render-driven, so a
 stale entry survived exactly in the idle case the TTL exists to cover. Since
 #624, `scheduleSubagentTtlTick` arms one shared one-shot timer for fallback
-contributions; `scheduleGridSubagentTtlTick` delegates to it. It is scheduled
+contributions; the grid's `scheduleGridSubagentTtlTick` delegated to it until
+#629 removed it. It is scheduled
 **at the oldest fallback contribution's deadline** rather than on a polling interval:
 one wakeup per TTL period while agents are tracked, none at all when the map is
-empty, and a targeted refresh (`updateGridSubagentPills` /
-`reflectSubagentRunningState`) only for the entries the prune actually removed.
+empty, and a targeted refresh (`reflectSubagentRunningState`) only for the
+entries tracked before the prune that are no longer active.
 That satisfies ADR 0002 — no steady-state cost, no render on an empty tick.
 
 The deadline arithmetic is `Math.max(1, oldest + TTL + 1 - now)`, and the tests
@@ -967,8 +970,8 @@ past the `continue`.
 
 The guard therefore carries `keepForOrphanSubagents = subagentIndex.size > 0 &&
 !showStarredOnly && !showRunningOnly && !showTodayOnly`. When `filtered` is
-empty, every indexed subagent is by definition an orphan (`allTopLevelIds` is
-built from the rendered items, which are none), so the existing orphan bucket
+empty, every indexed subagent is by definition an orphan (`topLevelIds` comes
+from `project.sessions`, which holds no top-level session), so the existing orphan bucket
 renders them under a surviving header. The three named filters are
 load-bearing: without excluding them, `showStarredOnly` / `showRunningOnly` /
 `showTodayOnly` would resurrect every project that merely owns a subagent,
@@ -1060,7 +1063,7 @@ invariant enforced anywhere.
   the resurrection guards above
 - `test/dom-grid-subagent-pills.test.js` — pins the canonical IPC handler arity
   (`preload.js` passes the payload as the callback's only argument)
-- `public/sidebar.js:1082` (the routing branch) — the one-line decision that makes the whole feature work
+- `public/sidebar.js`, the routing branch in `rebindSidebarEvents`'s `item.onclick` (`item.dataset.subagent && session.parentSessionId`) — the one-line decision that makes the whole feature work
 - IPC handler security: `read-subagent-jsonl` MUST validate that `agentId` and `parentSessionId` are filename-safe (see `resolveJsonlPath` calls in main.js — fixed in PR #8 hardening)
 
 ## History

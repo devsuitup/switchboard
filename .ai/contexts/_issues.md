@@ -4,7 +4,7 @@ Captured 2026-05-30 while writing the .ai/contexts/*.md files. None are blockers
 
 ## Architecture
 
-- **`main.js` is 1849 LOC**, vs upstream's ~350. It mixes IPC handlers (the bulk), app-lifecycle wiring, scheduling glue, MCP bridge, native-module instantiation, and updater integration. A modest refactor would split it into:
+- **`main.js` was 1849 LOC at capture time** (4082 at v0.0.102), vs upstream's ~350. It mixes IPC handlers (the bulk), app-lifecycle wiring, scheduling glue, MCP bridge, native-module instantiation, and updater integration. A modest refactor would split it into:
   - `ipc/sessions.js`, `ipc/projects.js`, `ipc/work-files.js`, `ipc/stats.js`, `ipc/updater.js`
   - `lifecycle.js` (app.on, BrowserWindow, single-instance lock, requestSingleInstanceLock)
   - `mcp-bridge.js` (already partial)
@@ -24,7 +24,7 @@ Captured 2026-05-30 while writing the .ai/contexts/*.md files. None are blockers
 
 - **`get-stats` legacy**: kept for backward compat ("fallback") but no caller uses it since PR #7. Could be removed.
 
-- **`updaterEvent` polymorphism**: one event type covers 5+ subtypes. Different from the per-event `onSubagentSpawned/Completed` pattern. Inconsistency tax with no migration cost — fix when next touching the updater.
+- **`updater-event` polymorphism** (`onUpdaterEvent` in `preload.js`): one event channel covers 5+ subtypes. Different from the per-event `onSubagentSpawned/Completed` pattern. Inconsistency tax with no migration cost — fix when next touching the updater.
 
 ## session-cache
 
@@ -32,7 +32,7 @@ Captured 2026-05-30 while writing the .ai/contexts/*.md files. None are blockers
 
 - **`refreshFolder(folder, opts)` does NOT take a "force header-only" knob** — it picks header-only vs full read per file based on whether the file was already cached. For most paths this is right, but a manual cache-bust would need a way to force full read.
 
-- **No tests for `enumerateSessionFiles` directly** — it's exercised transitively via `derive-project-path.test.js` and `remap-project.test.js`. A dedicated unit test for the file enumeration would be cheap and prevent future regressions.
+- **~~No tests for `enumerateSessionFiles` directly~~** — resolved: `test/read-session-file.test.js` now tests it directly ("enumerateSessionFiles discovers top-level sessions plus subagents and ignores junk").
 
 - **FTS `'work-file'` entries include the full file body** for files ≤ 64 KB and non-`.jsonl`. No per-file gzip or content-hash; if a 60 KB markdown changes on every byte, the FTS table churns. Acceptable for personal use; not for large monorepos.
 
@@ -66,8 +66,8 @@ Captured 2026-05-30 while writing the .ai/contexts/*.md files. None are blockers
 
 ## Tests
 
-- **No `enumerateSessionFiles` unit test** (see session-cache section).
-- **No integration test for the full schedule-fire pathway** — `scanSchedules` is tested, `cronMatches` is tested, but the wired-up `setInterval + runScheduleCommand` path is not.
+- ~~**No `enumerateSessionFiles` unit test**~~ — resolved (see session-cache section).
+- **No integration test for the full schedule-fire pathway** — at capture time only `scanSchedules` and `cronMatches` were tested. Since then `startScheduler` is driven with a stub `runCommand` in `test/schedule-catch-up.test.js`, and `main.js`'s `runScheduleCommand` is checked by source-level tests (e.g. `test/run-schedule-now-result.test.js`, `test/schedule-live-resume.test.js`).
 - **Worktree node_modules can have missing native modules** (morphdom-umd.js encountered 2026-05-30) — confused a code-reviewer agent into reporting false "pre-existing fails". Could be fixed by `npm install` after worktree creation as a harness step.
 
 ## Build pitfalls
@@ -83,11 +83,13 @@ Captured 2026-05-30 while writing the .ai/contexts/*.md files. None are blockers
 
   **The `cp` step itself is safe** — confirmed by replacing the file while the process kept running (mtime 17:36, PID 2620410 still alive). The running AppImage is fully extracted to `/tmp/.mount_*` at launch and does not page back from the on-disk file.
 
+  **Superseded:** a later incident showed the `cp` to `~/Applications/` can terminate the running instance through `appimagelauncherd`; [shared-guidelines.md](../shared-guidelines.md) invariant #2 is the current rule.
+
 ## Security
 
 - **`clipboard-write-text` accepts any string from any renderer** — fine given the single-renderer, single-user threat model, but worth a sentence in the security model doc if one exists.
 - **`remap-project` validates `newPath` via `lstatSync` (no symlink follow)** — correct since PR #20 fix. Worth a code comment noting why `lstatSync` (not `statSync`).
-- **No CSP on the renderer** — likely fine for a local desktop app that doesn't load remote content, but worth a thought if the file-panel ever displays untrusted HTML.
+- ~~**No CSP on the renderer**~~ — resolved: `main.js` sets a `Content-Security-Policy` header on every response in `app.whenReady()` (`default-src 'self'`, `script-src 'self'`).
 
 ---
 

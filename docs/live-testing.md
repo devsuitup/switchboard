@@ -30,6 +30,10 @@ directory, and deleted with it.
 - **No inherited Claude variables.** Run from inside a Claude session, the
   environment carries `CLAUDE_CODE_SSE_PORT` and other `CLAUDE*` variables,
   which would reach every shell the instance starts; drop them.
+- **On Windows, `USERPROFILE` as well as `HOME`.** Node's `os.homedir()` reads
+  `USERPROFILE` there. The [end-to-end fixture](e2e.md#writing-one) sets both,
+  and also drops inherited `GIT_*` variables (a `GIT_DIR` or `GIT_WORK_TREE`
+  would point git at another repository), `HISTFILE` and `ELECTRON_RUN_AS_NODE`.
 - **Never open the fixture's session row.** It would run `claude --resume` on a
   session that exists nowhere else. Open a plain terminal from the project's
   `+` → **Terminal** instead. Inside it, `claude` is a function that refuses to
@@ -91,8 +95,9 @@ async function main(appDir) {
     const data = path.join(home, '.switchboard-test');
     const env = {
       // Drop the variables of any Claude session this script runs under.
-      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('CLAUDE'))),
+      ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CLAUDE|GIT_)/.test(k))),
       HOME: home,
+      USERPROFILE: home,
       XDG_CONFIG_HOME: path.join(home, '.config'),
       SWITCHBOARD_DATA_DIR: data,
       SWITCHBOARD_TRIGGERS_DIR: path.join(data, 'triggers'),
@@ -125,7 +130,8 @@ main(path.resolve(process.argv[2])).catch((err) => { console.error(err); process
 ```
 
 Run it against a checkout whose `node_modules` is installed and whose CodeMirror
-bundle is built (`npm run bundle:codemirror`):
+and Mermaid bundles are built (`npm run bundle:codemirror`,
+`npm run bundle:mermaid`):
 
 ```bash
 nice -n 10 node live.js /path/to/checkout

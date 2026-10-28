@@ -120,7 +120,7 @@ Narrow windows shrink the terminal, then the panel to 280, then the sidebar
 to 200, then the panel below 280; widths restore without storage writes. See
 [tool-bar.md](tool-bar.md) for the CSS thresholds and keyboard contract.
 
-`.terminal-container` is `position: absolute; inset: -5px 20px 0 0` inside
+`.terminal-container` is `position: absolute; inset: 0 20px 0 0` inside
 `#terminals` (`position: relative`); it does not flow. `#panel-terminal-region`
 is therefore its own positioning context (`position: relative`, explicit pixel
 height) and `.terminal-container.panel-terminal` overrides the inset to `0`.
@@ -282,7 +282,9 @@ helper on the third occurrence is the point; rewriting two working, differently
 persisted splitters is a separate, independently reviewable refactor with no
 behaviour change to show for it — and `file-panel.js` is concurrently edited on
 another branch, where a rewritten `setupPanelResizeHandle()` would be a rebase
-conflict bought for nothing. They are the helper's next callers.
+conflict bought for nothing. They are the helper's next callers. A later
+splitter uses it already: the Changes list/editor splitter,
+`setupChangesListSplitter()` in `file-panel.js` (#302).
 
 ## Not in scope
 

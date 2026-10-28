@@ -18,7 +18,8 @@ is remembered per session. Under it, each subagent row shows:
 - its description, or its summary;
 - its message count.
 
-The first 10 subagents of a session are listed, then `+ N more`.
+The 10 most recently modified subagents of a session, and any still running,
+are listed; the others are behind `+ N more`.
 
 A subagent follows its parent's archive state without being archived itself:
 while the parent is archived its subagents are hidden with it, **Show archived

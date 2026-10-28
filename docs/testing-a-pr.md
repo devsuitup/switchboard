@@ -131,8 +131,10 @@ It:
    `version` and `packages[""].version`, and warns on other changes;
 3. links the checkout's `node_modules` into the worktree: a junction on
    Windows, a directory symlink on Linux/macOS, without copying dependencies;
-4. rebuilds the CodeMirror bundle in the worktree, stopping if the build fails;
-5. runs the worktree's local Electron binary with `. --no-sandbox`, with
+4. rebuilds the CodeMirror bundle, and the Mermaid bundle when the PR's
+   `package.json` declares it, in the worktree, stopping if a build fails;
+5. runs the worktree's local Electron binary with the worktree's absolute path
+   and `--no-sandbox`, from a temporary working directory, with
    `SWITCHBOARD_DATA_DIR` and
    `SWITCHBOARD_TRIGGERS_DIR` set to `~/.switchboard-dev-pr122` and
    `~/.switchboard-dev-pr122/triggers`.
@@ -226,15 +228,10 @@ path. Read the PR diff before either mode.
 
 `public/codemirror-bundle.js` is generated, not committed, so a fresh worktree
 has none, and without it the editors — Agent Files, Work Files, the file panel,
-the Changes editor — do not load. After the first `task test-pr` has created the
-worktree, stop it, build the bundle there, and run the task again (it reuses the
-worktree, and the bundle, being gitignored, survives the checkout):
-
-```bash
-(cd .worktrees/pr-122-test && npm run bundle:codemirror && npm run bundle:mermaid)
-```
-
-Rebuild it whenever the PR changes `public/codemirror-setup.js`.
+the Changes editor — do not load. `task test-pr` builds it, and
+`public/mermaid-bundle.js` when declared, before every launch (see
+[From source, not a build](#from-source-not-a-build)), so no manual build is
+needed, including after the PR changes `public/codemirror-setup.js`.
 
 ### The `node_modules` link
 
@@ -297,12 +294,14 @@ with a small fixture set and needs no database copy.
 ### Launching from inside a Claude session
 
 In the default mode, the instance inherits the shell's environment and passes it to the sessions it
-starts — only `ELECTRON_*`, `NODE_OPTIONS`, `GOOGLE_API_KEY*`,
-`ORIGINAL_XDG_CURRENT_DESKTOP` and `WT_SESSION` are removed. Launched from a
-shell inside an existing session, every session it starts carries that
-session's `CLAUDE_CODE_*` variables (`CLAUDE_CODE_SSE_PORT`,
-`CLAUDE_CODE_CHILD_SESSION`, …). Launch from a plain terminal, or clear them.
-`ISOLATED=1` clears these inherited variables automatically.
+starts. Both `task test-pr` and the app itself drop the parent session's
+identity first — the `SESSION_MARKERS` list in `clean-env.js`
+(`CLAUDECODE`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_CHILD_SESSION`,
+`CLAUDE_CODE_SESSION_ID`, …) — and the sessions' environment also loses
+`ELECTRON_*`, `NODE_OPTIONS`, `GOOGLE_API_KEY*`,
+`ORIGINAL_XDG_CURRENT_DESKTOP` and `WT_SESSION`. Any other variable of the
+launching shell, including a `CLAUDE_*` outside that list, reaches every session.
+`ISOLATED=1` removes all inherited `CLAUDE*` variables.
 
 ### The reloader and this repository
 

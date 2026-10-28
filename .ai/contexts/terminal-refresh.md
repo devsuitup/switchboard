@@ -1,6 +1,6 @@
 # Terminal screen refresh
 
-Issue #446 adds **Refresh screen** immediately after the session id, beside Stop in `#terminal-header-session` and in
+Issue #446 adds **Refresh screen** as the first control of `#terminal-header-session`, before Send to background and Stop, and in
 the sidebar session context menu. Both apply to open local and remote
 terminals. The header disables the button when the selected process is not
 running, with `aria-disabled` and a tooltip explaining why. The sidebar menu
@@ -169,11 +169,13 @@ live reveal trace is the evidence.
 
 The chosen remote mechanism is the solo resize nudge; shared Refresh is a
 local repaint. The shipped renderer, handler and attach adapter are composed
-with fake external discovery and PTY ports in `.work-files/r2-measure.cjs`.
+with fake external discovery and PTY ports in a scratch script
+(`.work-files/r2-measure.cjs`, gitignored and not in the repository).
 Five quick requests yield one refresh IPC and the trace
 `120x40 -> 119x40 -> 120x40` for solo. A shared fixture yields one local repaint,
 zero refresh IPC and zero raw resize calls. A dropped solo restoration is
-retried. `.work-files/r2-measure.log` records current timings and traces.
+retried. Its log, `.work-files/r2-measure.log` (also not committed), recorded
+the timings and traces of that run.
 The earlier shared-resize measurements describe the superseded behavior.
 
 A local ConPTY/plain-shell Refresh requests two size changes 300 ms apart;

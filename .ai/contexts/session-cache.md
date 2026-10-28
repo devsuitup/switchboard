@@ -11,21 +11,22 @@ scan; automatic `get-projects` calls retain the failed-folder retry policy.
 
 | File | LOC | Role |
 |---|---|---|
-| `db.js` | ~895 | SQLite (better-sqlite3) schema + prepared statements. Owns `session_cache`, `session_meta`, `cache_meta`, `settings`, `search_fts` (FTS5 + trigram tokenizer). |
-| `session-cache.js` | ~690 | Indexer + watcher. Reads `~/.claude/projects/<folder>/*.jsonl` (+ subagents subdir), populates rows, emits projects-changed events. |
-| `read-session-file.js` | ~420 | Streaming JSONL reader. `readSessionFile()` (full) + `readSessionDisplayHeader()` (256 KB / 500 lines of head plus a 256 KB tail for titles). |
-| `encode-project-path.js` | 28 | `/path/to/project` → `-path-to-project` folder name. Mirrors Claude CLI's encoding. |
-| `derive-project-path.js` | ~155 | Inverse: read `cwd` field from JSONL, derive original projectPath. **Collapses worktrees back to parent repo** via `resolveWorktreePath`. |
+| `session-index-store.js` | ~945 | SQLite (better-sqlite3) schema + prepared statements, opened writable only by the writer worker ([session-index-writer](session-index-writer.md)). Owns `session_cache`, `session_meta`, `cache_meta`, `settings`, `search_fts` (FTS5 + trigram tokenizer). |
+| `db.js` | 16 | Main's readonly connection: `openSessionIndexStore({ readonly: true })` plus a settings mirror. Re-exports the store's API. |
+| `session-cache.js` | ~1800 | Indexer + watcher. Reads `~/.claude/projects/<folder>/*.jsonl` (+ subagents subdir), populates rows, emits projects-changed events. |
+| `read-session-file.js` | ~770 | Streaming JSONL reader. `readSessionFile()` (full) + `readSessionDisplayHeader()` (256 KB / 500 lines of head plus a 256 KB tail for titles). |
+| `encode-project-path.js` | ~60 | `/path/to/project` → `-path-to-project` folder name. Mirrors Claude CLI's encoding. |
+| `derive-project-path.js` | ~290 | Inverse: read `cwd` field from JSONL, derive original projectPath. **Collapses worktrees back to parent repo** via `resolveWorktreePath`. |
 
 ## Public surface
 
-From `db.js`:
+From `db.js` (the store's API, re-exported):
 
 - **Sessions**: `getAllCached`, `getCachedByFolder(folder)`, `getCachedByParent(parentSessionId)`, `getCachedSession(sessionId)`, `upsertCachedSessions(rows[])`, `deleteCachedSession`, `deleteCachedFolder`
 - **Meta**: `getMeta`, `getAllMeta`, `setName`, `toggleStar`, `setStarred`, `setArchived` (session-level user state)
 - **Folder meta**: `getFolderMeta`, `setFolderMeta(folder, projectPath, indexMtimeMs)` — tracks index freshness
 - **Search**: `searchByType(type, query, limit, titleOnly)`, `upsertSearchEntries`, `deleteSearchType/Session/Folder`
-- **Stats**: `getDailyActivity()` — `GROUP BY substr(modified, 1, 10)`, returns `[{date, messageCount, sessionCount}]` (heatmap source)
+- **Stats**: `getDailyMetrics()` — `session_metrics` grouped by message date, returns `[{date, messageCount, toolCallCount, tokens, sessionCount}]` (the Stats tab's heatmap and daily bars, through `buildStatsFromDb` in `main.js`); also `getDailyModelTokens`, `getModelUsage`, `getTotalCounts`. `getDailyActivity()` (`GROUP BY substr(modified, 1, 10)` over `session_cache`) is still exported but has no caller.
 - **Settings**: `getSetting`, `setSetting`, `deleteSetting`
 - **Misc**: `touchCachedModified(sessionId)` — 1-column UPDATE, cheap
 
@@ -33,12 +34,12 @@ From `session-cache.js`:
 
 - `init(ctx)` — wire main process → cache (mainWindow ref for IPC events)
 - `refreshFolder(folder, opts)` — opts `{files: Set<string>}` for targeted refresh (watcher payload). Defaults to full folder walk. Returns a boolean indicating a sidebar-relevant change, after computing the cache writes; the writer facade resolves it after those writes are acknowledged.
-- `populateCacheFromFilesystem()` / `populateCacheViaWorker()` — initial scan / re-scan. The worker (`workers/scan-projects.js`) streams one `{type:'folder', result, current, total}` message per on-disk folder (plus a final `{type:'done'}`) instead of buffering the whole tree, so each folder is written to the DB and pushed to the renderer as soon as it's read — a large history no longer leaves the sidebar empty for the entire scan.
+- `populateCacheViaWorker()` — initial scan / re-scan. The worker (`workers/scan-projects.js`) streams one `{type:'folder', result, current, total}` message per on-disk folder (plus a final `{type:'done'}`) instead of buffering the whole tree, so each folder is written to the DB and pushed to the renderer as soon as it's read — a large history no longer leaves the sidebar empty for the entire scan.
 - `buildProjectsFromCache(showArchived)` — produces the sidebar payload (sorted, grouped by project, missing flag computed here). It also injects every live plain-terminal PTY from `activeSessions` as a synthetic row, so a terminal sorts among the cached sessions even though it has no JSONL; the row's `summary` is the hard-coded string `Terminal`, which is what the sidebar displays — the renderer's own session object is never the one shown. A panel shell is a plain terminal too and is excluded here by `isPanelShellSession` (`panel-terminal-target.js`); see `.ai/contexts/panel-terminal.md` for the full list of places that have to skip one.
 - `notifyRendererProjectsChanged(cause)` — structural pushes use a 1.5s leading-edge/trailing throttle; activity-only pushes coalesce for at least 30s.
 - `sendIndexingProgress()` (internal) — emits the `indexing-progress` IPC event, gated on `coldStart` (captured once at the top of `populateCacheViaWorker()` via `!isInitialScanComplete()`) and throttled to ~4 events/s (the first event and every `done:true` always pass). Feeds the renderer's first-run banner; see `.ai/contexts/ipc-bridge.md`. A `done:true` payload carrying `error` keeps the banner visible with the failure message instead of hiding it.
 
-From `derive-project-path.js`: `deriveProjectPath(folderPath)`, `resolveWorktreePath(cwd)`.
+From `derive-project-path.js`: `deriveProjectPath(folderPath, folderName, opts)`, `resolveWorktreePath(cwd)`.
 
 ## Watcher notification rules
 
@@ -131,11 +132,11 @@ the deferred path; the other labels identify structural notification producers.
 
 ## Projects query worker
 
-Issue #616 slice 1 routes get-projects through projects-worker-client.js to workers/projects-query.js. The worker opens its own readonly, fileMustExist better-sqlite3 connection to DB_PATH; main already enables WAL. It materialises session_cache, session_meta, cache_meta and settings in one short read transaction, releasing the snapshot before filesystem work. Reconciliation's stat sweep, incremental header reads, bridge computation and both project builds reuse session-cache.js with an in-memory DB adapter. The adapter collects ordered effects instead of writing SQLite. The original synchronous helpers remain for explicit archive operations and tests.
+Issue #616 slice 1 routes get-projects through projects-worker-client.js to workers/projects-query.js. The worker opens its own readonly, fileMustExist better-sqlite3 connection to DB_PATH; the writer worker enables WAL. It materialises session_cache, session_meta, cache_meta and settings in one short read transaction, releasing the snapshot before filesystem work. Reconciliation's stat sweep, incremental header reads, bridge computation and both project builds reuse session-cache.js with an in-memory DB adapter. The adapter collects ordered effects instead of writing SQLite. The original synchronous helpers remain for explicit archive operations and tests.
 
 Async reconciliation logs a missing projects directory and resolves, matching the synchronous entry point. Each folder has its own error boundary so a failed refresh does not prevent later folders from reconciling. Deleted deferred transcripts are accounted for even in full refreshes; vanished folders and folders without a project path clear deferred work after the writer acknowledges the effects. The final synchronous refresh checks filesystem stamps before applying its batch; no intervening await or cache-index write can change the cached continuation index there.
 
-Main remains the only writer. Before applying effects without an intervening await, the relay checks the request token against SQLite total_changes/data_version and the current projected activeSessions/remoteRoots. The worker sends ordered effects after each completed folder only when effects exist or retained live rows changed; unchanged folders send no progress message. Main validates the version before each batch and refreshes the token after its own writes; a watcher/scan/settings/live-session change stops further writes from that snapshot and retries with a fresh snapshot. Worker reconciles bypass the synchronous helper's throttle because main owns their five-second throttle. A read-only reply with no retained-row changes and no reconciliation may publish its partial snapshot during cold-scan writes, so first paint never waits for the background scan to settle. Retained live rows are copied back for releaseLiveSession on exit. The worker skips reconciliation while the completeness marker is absent and excludes pending repair folders. Only an accepted reconciliation advances main's five-second throttle. Cold-start population stays fire-and-forget; the existing entrypoint backfill, archive state persistence, remote placeholders and attachability annotation stay on main.
+The projects worker never writes: main relays its effects to the writer worker ([session-index-writer.md](session-index-writer.md)). Before applying effects without an intervening await, the relay checks the request token against SQLite total_changes/data_version, the writer's `_writer_revision` and the current projected activeSessions/remoteRoots. The worker sends ordered effects after each completed folder only when effects exist or retained live rows changed; unchanged folders send no progress message. Main validates the version before each batch and refreshes the token after its own writes; a watcher/scan/settings/live-session change stops further writes from that snapshot and retries with a fresh snapshot. Worker reconciles bypass the synchronous helper's throttle because main owns their five-second throttle. A read-only reply with no retained-row changes and no reconciliation may publish its partial snapshot during cold-scan writes, so first paint never waits for the background scan to settle. Retained live rows are copied back for releaseLiveSession on exit. The worker skips reconciliation while the completeness marker is absent and excludes pending repair folders. Only an accepted reconciliation advances main's five-second throttle. Cold-start population stays fire-and-forget; the existing entrypoint backfill, archive state persistence, remote placeholders and attachability annotation stay on main.
 
 There is one in-flight job and at most one pending job. Each dispatch owns its callers; a valid result resolves them even when newer callers are pending. Pending options retain reconcile and byte-measurement requests with logical OR. Each caller has a fixed 30-second deadline from registration, including queue and retries. The third conflicting dispatch rejects with PROJECTS_SNAPSHOT_CONFLICT and no arrays or remaining effects. Main emits the existing throttled projects-changed notification with cause conflict; the renderer debounce recovers without an unrelated event. Already accepted folder batches remain valid. Errors/exits reject waiters and reset the worker. An expired build with no remaining callers resets the worker; a reconcile keeps running after caller deadlines so completed folders persist and successful completion advances main's throttle. Each reconciliation retains its five-minute hard ceiling across retries (RECONCILE_TIMEOUT_MS). At that ceiling main rejects all outstanding waiters and resets the worker; a later request starts a fresh worker. Already applied folder batches remain in SQLite. The hard timer is cleared on completion, retry, error and shutdown. There is no synchronous main-thread fallback. Quit rejects pending work and terminates the worker. Structured-clone costs and actual main-side DB writes remain. External data-directory sharing is still forbidden.
 
@@ -177,7 +178,7 @@ The retry clock is injectable through `init({now})`; retry state resets at start
 
 - **`modified` is always ISO8601 string** (`2026-05-22T20:59:33.000Z`). `substr(modified, 1, 10)` is the canonical "day" derivation. Don't switch to epoch ms without migrating.
 - **`session_cache.folder` is the encoded form** (`-home-jean-baptiste-workspace`). Use `encodeProjectPath()` to derive it from an absolute path.
-- **WAL mode is enabled on SQLite open** — multiple readers OK; serialise writes. Concurrent writers will fail with `SQLITE_BUSY`.
+- **WAL mode is enabled on SQLite open** — multiple readers OK; writes go through the one writer worker (ADR 0004, [session-index-writer](session-index-writer.md)). Main's `db.js` connection is readonly: a mutation there throws `SQLITE_READONLY`.
 - **`refreshFolder` is idempotent** — calling it twice with the same `opts.files` is safe; the `filePathToDbId` inverted index makes lookups O(1).
 - **Header-only refresh** (via `readSessionDisplayHeader`) merges with the cached row to preserve `textContent`, `aiTitle`, etc. Don't overwrite cached fields with `null` from a partial read. For `scheduleSlug`, a visible marker replaces the cached one; a null clears it only when `scheduleSlugComplete` confirms the entire transcript was read within the 256 KB / 500-line bounds with no JSON parse failure. An incomplete negative read preserves the cached marker, including when a later user record may carry it. A failed header read keeps the existing mtime-only fallback.
 - **FTS entries follow `{id, type, folder, title, body}`** shape. `type` is one of `'session'`, `'subagent'`, `'memory'`, `'work-file'`. Mixing types within one upsert is fine.
@@ -226,20 +227,20 @@ When a session started at a repository's root enters a worktree (`EnterWorktree`
 
 `dropFolderRows(folder, { search })` (`session-cache.js`) deletes a folder's `session_cache` rows except those of a session with a live, non-plain PTY in `activeSessions` (`exited` false), and deletes the whole folder only when no row is kept. It is the path for every deletion that follows from the disk: a folder that has vanished (`refreshFolder`'s first branch and the watcher's `flushChanges` in `main.js`), a folder that stops resolving to a project, and a cold-scan folder with no verifiable transcript. `refreshFolder` applies the same rule to a single transcript missing from its folder (full walk and targeted). Deliberate deletions (hide or remove a project, drop a remote host) still use `deleteCachedFolder`.
 
-A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiveSession` for both ids after removing them from `activeSessions`; it refreshes that folder again, which drops the row if its transcript is still gone. That call is the exit handler's only database access and is wrapped in a `try`: at quit, `before-quit` kills the PTYs and `will-quit` closes the database, so a late exit event can meet a closed connection. A transcript that leaves a folder while its session runs therefore leaves the session in the sidebar until it reappears elsewhere, where the upsert on the same `sessionId` replaces the row's folder.
+A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiveSession` for both ids after removing them from `activeSessions`; it refreshes that folder again, which drops the row if its transcript is still gone. That call goes through the writer (`writer.releaseLiveSession`) and is wrapped in a `try`. At quit, `shutdownForExit` kills the PTYs, awaits their exit drains, releases every session through the writer, and only then closes the database. A transcript that leaves a folder while its session runs therefore leaves the session in the sidebar until it reappears elsewhere, where the upsert on the same `sessionId` replaces the row's folder.
 
 ## Non-obvious behaviors
 
-- **`resolveWorktreePath` collapses `<repo>/.worktrees/<name>` → `<repo>`** when the parent dir exists. Consequence: many `~/.claude/projects/-home-...workspace-myproject--worktrees-X` folders derive to the same projectPath. Callers must dedupe (see `get-work-files` IPC for the pattern).
+- **`resolveWorktreePath` collapses `<repo>/.worktrees/<name>`, `<repo>/.claude-worktrees/<name>` and `<repo>/.claude/worktrees/<name>` → `<repo>`** when the parent dir exists. Consequence: many `~/.claude/projects/-home-...workspace-myproject--worktrees-X` folders derive to the same projectPath. Callers must dedupe (see `get-work-files` IPC for the pattern).
 - **Two-table sidebar payload**: projects are aggregated, but each session row has its own `subagentType` field. A `null`/empty `subagentType` means it's a parent session; anything else (e.g. `'general-purpose'`, `'researcher'`) marks a subagent.
-- **`fs.watch` debouncing**: the watcher batches per-folder events in a `pendingChanges = Map<folder, Set<filename> | true>` for ~200 ms before flushing to `refreshFolder`. A `true` value means "full walk needed" (rare path).
+- **`fs.watch` debouncing**: the watcher batches per-folder events in a `pendingChanges = Map<folder, Set<filename> | true>` for 500 ms (debounced, in `main.js`) before flushing to `refreshFolder`. A `true` value means "full walk needed" (rare path).
 - **The same raw watcher callback also feeds a second, lighter-weight signal that bypasses this debounce entirely** (issue #246 step 4): for a top-level session transcript with no live PTY in `activeSessions`, it sends `session-transcript-activity` straight to the renderer, coalesced to ≤1/s per session by `local-transcript-activity.js`. This exists so a session launched outside Switchboard gets a busy indicator without waiting on the cache refresh — see `.ai/contexts/session-state.md` ("The local-transcript adapter") and `.ai/contexts/ipc-bridge.md`.
 - **A session's title comes from its first *real* user turn, and a transcript without one is not indexed.** `classifyUserText()` in `read-session-file.js` sorts each user record into `prompt` / `command` / `skip`. `skip` is local-command bookkeeping (`<bash-input>`, `<bash-stdout>`, `<local-command-caveat>`, `<local-command-stdout>` — the CLI writes a command's own output back as a `user` record too); `command` is a bare slash-command record, recognised by a `<command-name>` tag next to a `<command-message>` or `<command-args>` one — the CLI writes both orders (`<command-name>` first for `/clear`, `<command-message>` first for `/auto-compact` and `/pre-compact`), so neither tag can be required to come first. The `skip` test is anchored to the start of the record: a real prompt that *quotes* `<local-command-stdout>` (a pasted transcript excerpt) is a turn, and skipping it can leave a session with no indexable prompt at all. This matters because **`/clear` opens a NEW jsonl and writes only that bookkeeping into it**; `/model`, by contrast, is written into the transcript that is already open, so it is a summary candidate only when it lands before any real prompt. Taking a `command` record as the summary therefore (a) titled every session started by `/clear` "`/clear clear </com…`" (the raw tags survive `cleanDisplayName`'s tag strip as a truncated fragment) and (b) indexed the bookkeeping-only transcript as a phantom sidebar session that the user never started. A `command` record is now a *fallback* title, used only when the transcript also holds an assistant turn (`/code-review high` → a real headless-command session); with no assistant turn both readers return `null` and nothing is indexed, matching how a brand-new session stays out of the sidebar until its first prompt. Rows written by the pre-fix parser cannot self-heal — the phantom ones sit on a file that never changes again, and the real ones keep the bad title because the header-only refresh path only overwrites a summary it can re-derive — so `db.js` migration **v9** purges rows whose summary starts with `<command-name>`, `<command-message>` or `<local-command-stdout>` — from `session_cache`, the three search tables and `session_metrics` (a phantom's file is never re-read, so its metrics would inflate the heatmap and the totals forever) — plus the `cache_meta` gate of their folders, which makes the next reconcile re-read exactly those files. The whole purge runs in one transaction: it cannot be resumed, since the relaunch that follows an interrupted run is already at db_version 9 and no longer matches the rows it dropped.
-- **Stats `firstSessionDate`** is computed from `MIN(modified)`, not `MIN(created)`. Old sessions touched by recent reads keep their original `created` but their `modified` reflects the latest indexing — by design (the heatmap measures activity, not creation).
+- **Stats `firstSessionDate`** is the first date of `getDailyMetrics()` (`buildStatsFromDb` in `main.js`), i.e. the earliest message timestamp in `session_metrics`, not `MIN(created)` — by design (the heatmap measures activity, not creation).
 
 - **The async write facade owns production cache injection (ADR 0004 slice 1a).** `main.js` calls `writer.initializeCache`; the facade injects the existing synchronous `db.js` backend into cache algorithms, and its asynchronous commands into worker/backfill producers. `test/main-ctx-db-wiring.test.js` checks the exported backend dependencies through this actual initialization boundary. Main retains its connection for reads. Writer inventory, aggregate command boundaries, ordering, lifecycle and the deliberately direct background-continuation metadata writer are documented in [session-index-writer.md](session-index-writer.md).
 
-- **`search` IPC is routed through a dedicated worker thread, with a bounded query.** Historically `ipcMain.handle('search', ...)` ran the `better-sqlite3` FTS5 `MATCH` query synchronously on the Electron main process — a long pasted string (e.g. a GitLab MR URL) became a ~58-trigram phrase intersect that pinned the main thread for up to ~60 s and froze the whole app (witnessed 2026-06-22). Two guards now exist: (1) `searchByType()` in `db.js` truncates the query to `FTS_QUERY_MAX_CHARS` (48) before building the MATCH expression; (2) the `search` IPC goes through `searchViaWorker` (`search-worker-client.js` + `workers/search-query.js`) so even a slow query can't block IPC dispatch. The client falls back to the synchronous main-thread `searchByType` only when the worker isn't ready (first-launch race, or circuit-breaker open after repeated worker failures) — the length cap makes that fallback safe. Protocol logic (correlation IDs, drain, backoff, restart storm guard) is unit-tested in `test/search-worker-protocol.test.js`; the cap in `test/db-search-query-bound.test.js`.
+- **`search` IPC is routed through a dedicated worker thread, with a bounded query.** Historically `ipcMain.handle('search', ...)` ran the `better-sqlite3` FTS5 `MATCH` query synchronously on the Electron main process — a long pasted string (e.g. a GitLab MR URL) became a ~58-trigram phrase intersect that pinned the main thread for up to ~60 s and froze the whole app (witnessed 2026-06-22). Two guards now exist: (1) `buildFtsMatch()` in `fts-match.js`, which `searchByType()` uses, truncates the query to `FTS_QUERY_MAX_CHARS` (48) before building the MATCH expression; (2) the `search` IPC goes through `searchViaWorker` (`search-worker-client.js` + `workers/search-query.js`) so even a slow query can't block IPC dispatch. The client falls back to the synchronous main-thread `searchByType` only when the worker isn't ready (first-launch race, or circuit-breaker open after repeated worker failures) — the length cap makes that fallback safe. Protocol logic (correlation IDs, drain, backoff, restart storm guard) is unit-tested in `test/search-worker-protocol.test.js`; the cap in `test/db-search-query-bound.test.js`.
 
 - **A manual `/compact` leaves a second transcript ("mirror") for the same session; it is merged on `bridgeSessionId`, not on file order, and NEITHER file is discarded (issue #197).** The CLI writes a `{"type":"bridge-session","bridgeSessionId":"cse_..."}` bookkeeping record into a transcript once bridging is established; both the pre-compaction file and the mirror it continues into carry the SAME `bridgeSessionId`. Measured on a real pair (16 MB parent + 3.1 MB mirror, same folder): **neither size nor first-event date tells them apart** — the mirror is *smaller* (it starts fresh at the compaction point) and *looks newer* (its first event is the compaction timestamp, later than the parent's). The parent's very last line is a `{"type":"continued-in","continuedInSessionId":"<mirror>"}` marker, after which the parent file goes quiet; the mirror keeps receiving new lines afterward — **the CLI keeps writing to the mirror, not the parent, once compaction happens.** `continued-in` is NOT a safe merge signal by itself: the same parent file carried a *second* `continued-in` record earlier, pointing at a transcript with a completely different `bridgeSessionId` (a genuinely independent session) — only a `bridgeSessionId` match is trustworthy.
   - **First cut of this fix kept the earliest file and dropped the mirror outright — wrong, caught in review before merge.** Given the CLI keeps writing to the mirror, discarding it forever would make every post-compaction message invisible to the cache: a session that compacts and keeps working loses all *later* activity, which is a worse failure mode than the double-count it replaces (double-count is a visible cost anomaly; silent loss of live activity is not visible at all, and this machine compacts routinely — nominal case, not an edge case). The design below is a real union instead.
@@ -264,7 +265,7 @@ A kept row is recorded with its folder. On PTY exit, `main.js` calls `releaseLiv
 - **`session_cache.scheduleSlug` holds nullable schedule provenance.** The runner writes the schedule identity on its pre-seeded user record. Schema reconciliation adds this column without a reindex or cache wipe; runs indexed before the marker stay null unless their transcript supplies it on a later read. A prompt prefix or matching CLI slug does not establish provenance. Only a non-empty `scheduleSlug` creates a sidebar group; interactive conversations keep separate rows even when their CLI slugs match. Group Archive continues to stop and archive scheduled runs. See `.ai/contexts/schedule-runner.md` for grouping and historical-run limits.
 - **SDK-launched sessions are hidden from the project list, not from the index.** Programs driving Claude through the Agent SDK (the brain-runner's `claude -p` episodes, a Python review tool spawning one session per file batch, strap's developers) write ordinary top-level transcripts in the project's folder: `isSidechain: false`, no `subagents/` directory, and no record pointing back at the session that started them. They cannot be nested under a parent the way Task subagents are; the only reliable marker is the `entrypoint` field the CLI stamps on every record (`cli` when typed in a terminal, `sdk-cli` / `sdk-py` / `sdk-ts` for the SDK; measured 2026-10-07: ~4 500 SDK transcripts against ~540 interactive ones on one machine). Rows stay in `session_cache`, `session_metrics` and FTS, so the heatmap and token totals still count that activity.
   - **What `session_cache.entrypoint` holds.** The first `type: 'user'` record's `entrypoint`, or `cli` as soon as any user record says `cli` (an SDK session someone resumed and typed into is theirs again — 5 strap developer transcripts measured). `''` when the first user record carries none: a scheduled run is pre-seeded by `createScheduleSession` without one, then resumed by `claude --resume -p` whose records say `sdk-cli`, and must stay visible. A non-string value counts as none. `NULL` means not read yet.
-  - **The column is added without a cache wipe.** Unlike the other reconciliation columns it does not set `mustReindex`: `db.js` runs before `requestSingleInstanceLock` in `main.js`, so a refused second launch would empty the running instance's cache, and a scan failing after the wipe would leave the app empty. Existing rows keep `NULL`, which `buildProjectsFromCache` treats as visible, and `backfillEntrypoints()` (started from `get-projects`, once per process, 200 rows per `setImmediate` tick) fills them with `readSessionEntrypoint`.
+  - **The column is added without a cache wipe.** Unlike the other reconciliation columns it does not set `mustReindex`: when it was added, `db.js` ran before `requestSingleInstanceLock` in `main.js`, so a refused second launch would have emptied the running instance's cache, and a scan failing after the wipe would leave the app empty. (`main.js` now acquires the lock through `acquireInstanceLock` before it starts the writer; see [session-index-writer.md](session-index-writer.md).) Existing rows keep `NULL`, which `buildProjectsFromCache` treats as visible, and `backfillEntrypoints()` (started from `get-projects`, once per process, 200 rows per `setImmediate` tick) fills them with `readSessionEntrypoint`.
   - **`readSessionEntrypoint` avoids reading interactive transcripts.** It reads 256 KB chunks until the first user turn (an SDK prompt is first written as a `queue-operation` line that can exceed 256 KB on its own: 190 of ~4 500 SDK transcripts measured); a non-SDK one is returned as is (so a session pre-seeded without an entrypoint and later typed into stores `''` here but `cli` from `readSessionFile`; both are visible, only `sdk-*` matters), and only an `sdk-*` one is scanned further for a `cli` user turn, in full up to 2 MB, and beyond that only its first and last 256 KB on the live path (`refreshFolder` runs it at every watcher flush, and the turn just typed is at the end; a full read of a 14 MB transcript costs ~250 ms of main thread), but in full from `backfillEntrypoints`, which runs once per row (sizes measured over 4 495 SDK transcripts: p50 44 KB, p99 711 KB, max 13 MB). `refreshFolder` calls it on the header-only branch for a cached `sdk-*` row, because a turn typed in a terminal lands at the end of the file, beyond the header.
   - **What stays listed.** `hiddenSdkSessionIds` hides `sdk-*` rows while the global `hideSdkSessions` setting (default on) is set, except a session open in a terminal (`activeSessions`, not exited) or in the saved working set (`global.openWorkingSet`), so neither disappears from under the user nor fails to restore, and except a parent whose compaction mirror (`mergedIntoSessionId`) or rolled continuation part is not SDK or is itself open or saved. Visibility is decided at the row's root and applied to every part and its subagents. Subagent rows of a hidden session are dropped too (they would otherwise land in "Orphan subagents"), and a project left with only hidden rows gets no empty header from the on-disk folder pass. Because `activeSessions` is read when the list is built, opening an SDK session afterwards (a resume from search, a trigger, a remote attach) calls `revealIfSdkSession`, which sends `projects-changed` so the renderer reloads the list with it. The saved-working-set exemption only holds while the entry stays in `openWorkingSet`: `persistWorkingSet` (`public/app.js`) re-adds the entries the restore has not resolved yet (`restorePlanner.pending()`, and `restoreAwaitingConsent` while the restore toast is unanswered), so a persist in the middle of a cold restore does not drop a saved SDK session that is not indexed yet.
 
@@ -479,7 +480,7 @@ At database open, `bridge_uuid_index_version = 1` records a one-time transaction
 that removes only bridged top-level cache rows, their metrics and their FTS
 entries, and clears the affected folder gates. Subagents, unrelated rows,
 settings and user names/stars/archive state remain. Errors roll back the entire
-transaction, emit a warning and allow `db.js` to load; the version stays unset
+transaction, emit a warning and let the writer's store open; the version stays unset
 and the next database open retries. Successful subsequent opens are no-ops.
 
 The repair transaction also saves exactly the affected folder keys in
@@ -554,7 +555,7 @@ or deleted from here.
   and a `sync` that throw on any call) and `test/remote-indexing-e2e.test.js`.
 
 - **Folder keys are `<alias>::<folder>`.** `encodeProjectPath` emits only
-  `[a-zA-Z0-9-]` (`encode-project-path.js:5`), so `::` cannot occur in a local
+  `[a-zA-Z0-9-]` (`sanitizeProjectPath` in `encode-project-path.js`), so `::` cannot occur in a local
   key and a remote key can never collide with one. `parseFolderKey`
   (`remote-hosts.js`) refuses a prefix that is not a valid alias, so a local
   folder whose name happens to contain `::` still reads as local. Local rows keep
@@ -562,7 +563,7 @@ or deleted from here.
 
 - **The primary key is NOT namespaced, and that risk is accepted here in
   writing.** `session_meta.sessionId` and `session_cache.sessionId` stay global
-  PKs (`db.js:51`, `db.js:60`). Two hosts whose CLIs generate the same session id
+  PKs (their `CREATE TABLE` statements, now in `session-index-store.js`). Two hosts whose CLIs generate the same session id
   would overwrite each other's star, title and archive state, and one host's row
   would shadow the other's in the sidebar. The ids are CLI-generated UUIDv4 and no
   collision exists in the measured data (255 transcripts on the probed host, 2026-09-07).
@@ -658,7 +659,8 @@ the exact remote command, and the mutation proofs are in
 
 - **Every child process is bounded and reaped.** Each `ssh`/`scp` gets a timeout
   that `SIGKILL`s it, every child is registered in a live set, and
-  `remoteIndexer.stop()` (wired to `before-quit`) kills whatever is left. On
+  `remoteIndexer.dispose()` (called by `stopNonDatabaseResources` at shutdown)
+  kills whatever is left. On
   Windows a child outlives the death of its launcher — on 2026-09-06 an unbounded
   load left 24 orphans at 100% CPU on this machine.
   **That kill timer must never be `unref()`'d.** It was, in the first cut: a
@@ -1063,7 +1065,7 @@ created the `.jsonl`; a manual host refresh did not help.
 - **Switchboard never stores, reads or displays an SSH credential.** A host row
   is an alias and a label. Resolution (user, port, key, agent, proxy) stays in the
   user's `~/.ssh/config`, which is already on the sensitive-path denylist
-  (`ipc-path-validator.js:38`, `main.js:732`) and stays there. The alias is passed
+  (`SENSITIVE_PATH_PATTERNS` in `ipc-path-validator.js`, checked through `isSensitivePath` in `main.js`) and stays there. The alias is passed
   as its own argv element, never concatenated into a shell string; a remote
   relative path is validated by `isSafeRelPath` before it is joined onto a local
   directory or handed to `scp` (OpenSSH 9 runs scp over SFTP, where quoting would
@@ -1073,7 +1075,7 @@ created the `.jsonl`; a manual host refresh did not help.
   — never a second connection.** The CLI writes one descriptor file per live
   session to `~/.claude/sessions/<pid>.json` on the remote host, alongside
   unrelated `*.key` secret files (mode 600) in the same directory.
-  `remote-transport.js`'s `LIST_COMMAND` (`remote-transport.js:25-29`) is a
+  `remote-transport.js`'s `LIST_COMMAND` is a
   single shell command: the existing `find .claude/projects`
   inventory, then a `printf` of a marker line, then a bounded pull of
   `.claude/sessions`. `listFiles(alias)` still spawns exactly one `ssh` — the
@@ -1404,16 +1406,19 @@ Launching a new remote session (#222) and injection over the messaging socket
 
 - **The probe and the attach are two separate ssh calls, deliberately not
   combined with the mirror's own inventory ssh.** The probe
-  (`buildProbeCommand`) runs `tmux -L <socket> display-message -p -t <target>
-  '#{window_width}x#{window_height}'`, then a `PROBE_SEP` control-byte separator, then `tmux
-  -L <socket> show-options -A -t <socket> status` — one non-interactive ssh
-  round trip, parsed by `parseProbeOutput`. The attach itself
-  (`buildAttachCommand`) is `tmux -L <socket> attach -t <target>`, run over a
+  (`buildProbeCommand`) reads the socket from the process's `TMUX` variable
+  (see "Corrected 2026-09-08" below), then runs `tmux -S "$sock"
+  display-message -p -t <target> '#{window_width}x#{window_height}'`, then,
+  each after a `PROBE_SEP` control-byte separator, `show-options -A -t <target>`
+  for `status` and the other options it restores, the client count and a
+  `/proc/<pid>/cmdline` check — one non-interactive ssh round trip, parsed by
+  `parseProbeOutput`. The attach itself (`buildAttachCommand`) is
+  `tmux -S <socket> attach -t <target>`, run over a
   **second**, interactive `ssh -tt <alias> …` that becomes the actual PTY —
   it cannot be the same call as the probe because the probe must complete and
   return a size before the interactive PTY is even spawned.
 
-- **The `tmux` field's own shape is treated as the socket name too.** The CLI
+- **Superseded by "Corrected 2026-09-08" below: the `tmux` field's own shape was first treated as the socket name too.** The CLI
   writes e.g. `"main:@0.%0"` — a `session:window.pane` target string. This
   adapter reads the part before `:` (`"main"`) as both the tmux socket
   (`-L main`) and the session to query status on, on the assumption the CLI
@@ -1432,14 +1437,16 @@ Launching a new remote session (#222) and injection over the messaging socket
   escaped. Descriptor content besides `pid`/`sessionId` is otherwise
   untyped — see "Session descriptors ride the same ssh call…" above.
 
-- **Detach sends Ctrl-B d before ending the local ssh client — it does not
-  just kill the connection.** `ptyProcess.kill()` on the returned wrapper
-  writes `DETACH_KEYS` (`\x02d`, tmux's default prefix + detach) to the
-  attach PTY, waits `DETACH_GRACE_MS` (150 ms) for tmux to process it, then
-  kills the local `ssh -tt` client. Killing immediately, without the
-  keystroke, races tmux's own cleanup and risks the same window-corruption
-  failure mode the sizing rule fixes on the other end. No new IPC or
-  `main.js` call site was added for this — `stop-session` already calls
+- **Detach ends the local ssh client — it sends no tmux prefix keystroke.**
+  `ptyProcess.kill()` on the returned wrapper (`detach()` in
+  `remote-attach.js`) stops the size polling, then `restoreOnDetach()` kills the
+  local `ssh -tt` client: the remote tmux client loses its pty and tmux drops
+  it, leaving the session running. A `Ctrl-B d` keystroke (the original
+  `DETACH_KEYS` design, removed in #236) assumed this host's prefix and landed
+  as literal text in the session on any host that remapped it. After the kill,
+  the window options the attach changed are restored by a separate ssh call
+  (titles only when no other client is still attached, issue #290). No new IPC
+  or `main.js` call site was added for this — `stop-session` already calls
   `killPty(session, sessionId)` → `session.pty.kill()` through the existing
   `pty-ops.js` seam, so the clean detach is just what that seam now reaches.
 
@@ -2146,7 +2153,7 @@ lists never cross the writer transport. See `session-index-writer.md` for orderi
 - `dom-sidebar-remote-session.test.js` — covers the remote badge and the read-only click routing
 - `dom-sidebar-remote-placeholder.test.js` — covers the placeholder row (issue #278): renders `.is-alive`, a stop control and status/age, has no transcript affordance, and an attachable placeholder opens a terminal rather than the transcript viewer
 - `derive-project-path.test.js` — covers the worktree-collapse + cwd extraction paths
-- `db-daily-activity.test.js` — covers heatmap aggregation
+- `db-daily-activity.test.js` — covers `getDailyActivity` (the former heatmap aggregation, now uncalled)
 - `read-session-file.test.js` — covers header parsing
 - `read-session-file-slash-command.test.js` — covers the `/clear` bookkeeping transcript and slash-command titles
 - `db-purge-command-summaries.test.js` — covers migration v9's surgical purge
@@ -2159,20 +2166,28 @@ lists never cross the writer transport. See `session-index-writer.md` for orderi
 - `session-cache-bridge-dedup.test.js` — covers the compaction-mirror union merge through `refreshFolder()`, `readFolderFromFilesystem()` and `buildProjectsFromCache()`'s rollup, using the real fixture's shape
 - `db-session-metrics.test.js` — covers the `getTotalCounts` pure-JS mirror's `mergedIntoSessionId` exclusion (kept in sync with the real SQL by the SQL-level test above)
 - IPC consumers of cached payloads: `get-projects`, `get-active-sessions`, `search`, `get-stats-from-db`, `get-work-files`, `list-subagents`, `read-session-jsonl`
-- Renderer: `public/sidebar.js` (consumes `buildProjectsFromCache` output), `public/stats-view.js` (consumes `getDailyActivity`)
+- Renderer: `public/sidebar.js` (consumes `buildProjectsFromCache` output), `public/stats-view.js` (consumes `get-stats-from-db`, built from `getDailyMetrics` and the other `session_metrics` queries)
 - If you add a new `session_cache` column, update the SELECT in `getCachedByFolder` — it's `SELECT *` so additions land automatically, but the renderer needs to know about them.
 
 ## Schema reference
+
+Created and migrated in `session-index-store.js` (by the writer only).
 
 ```
 session_cache(sessionId PK, folder, projectPath, summary, firstPrompt,
               created, modified, messageCount, slug, aiTitle,
               parentSessionId, agentId, subagentType, description,
-              fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug)
-session_meta(sessionId PK, customTitle, starred, archived)
+              fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint,
+              scheduleSlug, continuationIndex, customTitle)
+session_meta(sessionId PK, name, starred, archived)
+session_meta_fields(sessionId, field, revision, source, transcriptTitle; PK (sessionId, field))
+session_metrics(sessionId, date, model, messageCount, toolCallCount,
+                inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens;
+                PK (sessionId, date, model))
 cache_meta(folder PK, projectPath, indexMtimeMs)
-search_fts USING fts5(id, type, folder, title, body, tokenize='trigram')
-search_map(id PK, type, folder)   -- backref for FTS delete
+search_content(rowid PK, title, body)
+search_fts USING fts5(title, body, content='search_content', tokenize='trigram case_sensitive 0')
+search_map(rowid PK, id, type, folder)   -- backref for FTS delete
 settings(key PK, value JSON)
 ```
 

@@ -24,12 +24,14 @@ remembered (`localStorage.gridGroupByProject`).
   attention or response-ready indicators. A busy head with running agents
   uses violet. The session's name turns blue while written output is unseen.
   Its project and a Stop session button while the process is alive follow the
-  name. An open background attach also has a separate neutral Detach button.
+  name. An open background or remote attach also has a separate neutral Detach
+  button.
 - **Body**: the session's terminal, live.
 - **Running subagents**, beneath the header: `1 subagent running` or
   `N subagents running`, counting distinct active agent tasks. No line appears
-  when the count is zero or unknown. Local, remote and background sessions use
-  the same task snapshots as the sidebar.
+  when the count is zero or unknown. Local and background sessions use the same
+  task snapshots as the sidebar; remote sessions never show a count (see
+  [Subagents](subagents.md#live-status)).
 - **Footer**: `Open here` for a local PTY, `Attached here · keeps running in the
   background` for an attached background session, or `Attached here · runs on
   <alias>` for an attached remote session. Without a PTY here, a finished job
@@ -48,7 +50,7 @@ remembered (`localStorage.gridGroupByProject`).
   the sidebar highlights it and its notifications are cleared.
 - Double-click a header to leave the grid and show that session alone.
 - The stop button asks for confirmation, then ends the process.
-- On a background attach, Stop ends the agent. Detach leaves it running without
-  asking and offers Undo for about 10 seconds.
+- On a background or remote attach, Stop ends the session. Detach leaves it
+  running without asking and offers Undo for about 10 seconds.
 - The session-navigation shortcuts move between cards in two dimensions — see
   [Keyboard shortcuts](keyboard-shortcuts.md).

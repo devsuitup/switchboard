@@ -13,7 +13,7 @@ independent comparison with §5.10 remains a first-live-run prerequisite.
 - test/fixtures/session-capabilities/fake-cli.js: emulated interactive CLI.
 - test/fixtures/session-capabilities/isolated-account.js: test-only account and
   ancestor-instruction boundary; never loaded by an operator's harness command.
-- test/canary-cli-capabilities.test.js: the only test file to execute.
+- test/canary-cli-capabilities-fast.test.js and test/canary/cli-capabilities.test.js: the only test files to execute.
 - test/fixtures/session-capabilities/lint.config.cjs: isolated harness lint rules.
 - .work-files/380p0c/ and .work-files/380p0d-*.log: implementation logs and dry-run output.
 - windows-bundled/: the operator's first live C1 result, retained unchanged.
@@ -426,8 +426,8 @@ Use the preinstalled Node 22; do not install it if missing:
 $env:TMP = 'C:/Users/Jean-Baptiste/AppData/Local/Temp'
 $env:TEMP = $env:TMP
 $canaryNode = 'C:/Users/Jean-Baptiste/AppData/Local/Temp/node22/node_modules/node/bin/node.exe'
-& $canaryNode --test-concurrency=1 --test-timeout=120000 test/canary-cli-capabilities.test.js
-& $canaryNode node_modules/eslint/bin/eslint.js --no-ignore --config test/fixtures/session-capabilities/lint.config.cjs scripts/canary-cli-capabilities.js test/canary-cli-capabilities.test.js test/fixtures/session-capabilities/fake-cli.js test/fixtures/session-capabilities/isolated-account.js
+& $canaryNode --test-concurrency=1 --test-timeout=120000 test/canary-cli-capabilities-fast.test.js test/canary/cli-capabilities.test.js
+& $canaryNode node_modules/eslint/bin/eslint.js --no-ignore --config test/fixtures/session-capabilities/lint.config.cjs scripts/canary-cli-capabilities.js test/canary-cli-capabilities-fast.test.js test/canary/cli-capabilities.test.js test/fixtures/session-capabilities/fake-cli.js test/fixtures/session-capabilities/isolated-account.js
 & $canaryNode scripts/canary-cli-capabilities.js --dry-run --canary all --home C:/Temp/empty-prepared-home --runtime-root C:/Temp/canary-runtime --out .work-files/canary-dry-local --platform-label fixture-only
 $env:ELECTRON_RUN_AS_NODE = '1'
 & 'C:/path/to/matching/electron.exe' scripts/canary-cli-capabilities.js --canary all --oauth-token-file C:/canary380-secrets/oauth-token.txt --home C:/Temp/prepared-home --runtime-root C:/Temp/canary-runtime --cli C:/path/to/claude.exe --out docs/evidence/session-capabilities/windows-bundled --platform-label windows-conpty-bundled
