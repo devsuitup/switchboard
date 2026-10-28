@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const { loadProjectActionHandlers } = require('./project-action-harness');
 const { localGitEnv } = require('../git-changes-runner');
 const deletion = require('../worktree-delete');
@@ -23,9 +24,11 @@ function fixture() {
       ['remote', { cwd: target, host: 'server', exited: false }],
     ]),
     execFile(_cmd, args, _options, cb) {
+      if (args.includes('rev-parse')) return cb(null, target + '/.git/locked\n', '');
       if (args.includes('status')) return cb(null, state.dirty, '');
       if (args.includes('list')) return cb(null,
-        `worktree ${target}\0HEAD abc\0branch refs/heads/topic\0${state.lock === null ? '' : `locked${state.lock ? ' ' + state.lock : ''}\0`}\0`, '');
+        `worktree ${target}\nHEAD abc\nbranch refs/heads/topic\n${state.lock === null ? '' : `locked${state.lock ? ' ' + state.lock : ''}\n`}\n`, '');
+      if (args.includes('ls-files')) return cb(null, '', '');
       state.removes.push(Array.from(args));
       if (state.failRemove) {
         state.dirty = '?? late.txt\0';
@@ -122,7 +125,7 @@ test('missing preview and changed ignored paths both refuse before removal', asy
 test('preview parses detached HEAD, unnamed lock, renames, and filenames containing newlines', async () => {
   const output = 'R  new\nname\0old name\0!! cache/\0';
   const result = await deletion.readStatus(target, '/home/jb/repo', async args => args.includes('list')
-    ? `worktree /other\0HEAD def\0\0worktree ${target}\0HEAD abc\0detached\0locked\0\0` : output);
+    ? `worktree /other\nHEAD def\n\nworktree ${target}\nHEAD abc\ndetached\nlocked\n\n` : args.includes('ls-files') ? '' : output);
   assert.equal(result.branch, '(detached HEAD)');
   assert.equal(result.locked, true);
   assert.equal(result.lockReason, '');
@@ -132,7 +135,7 @@ test('preview parses detached HEAD, unnamed lock, renames, and filenames contain
 
 test('fingerprint preserves both rename paths even when display text is ambiguous', async () => {
   const read = output => deletion.readStatus(target, '/home/jb/repo', async args => args.includes('list')
-    ? `worktree ${target}\0HEAD abc\0\0` : output);
+    ? `worktree ${target}\nHEAD abc\n\n` : args.includes('rev-parse') ? target + '/.git/locked\n' : args.includes('ls-files') ? '' : output);
   const a = await read('R  c\0a -> b\0');
   const b = await read('R  b -> c\0a\0');
   assert.deepEqual(a.dirty, b.dirty);
@@ -142,7 +145,7 @@ test('fingerprint preserves both rename paths even when display text is ambiguou
 test('unregistered worktrees, incomplete renames, and Git errors fail closed', async () => {
   await assert.rejects(deletion.readStatus(target, '/repo', async () => ''), /no longer a registered worktree/);
   await assert.rejects(deletion.readStatus(target, '/repo', async args => args.includes('list')
-    ? `worktree ${target}\0HEAD abc\0\0` : 'R  destination\0'), /incomplete rename/);
+    ? `worktree ${target}\nHEAD abc\n\n` : args.includes('rev-parse') ? target + '/.git/locked\n' : 'R  destination\0'), /incomplete rename/);
   await assert.rejects(deletion.readStatus(target, '/repo', async () => { throw new Error('denied'); }), /denied/);
 });
 
@@ -155,4 +158,53 @@ test('Windows cwd matching handles separators, case, descendants and duplicate l
   const result = deletion.runningSessions('c:/Repo/.worktrees/task/', pty,
     [{ sessionId: 'live', cwd: 'c:/repo/.worktrees/task/sub' }]);
   assert.deepEqual(result, [{ sessionId: 'live', cwd: 'c:/repo/.worktrees/task/sub' }]);
+});
+
+test('old Git lock-file resolution detects locks and binds consent to their current reason', async () => {
+  const root = path.resolve('virtual-worktree');
+  for (const gitPath of ['../common.git/worktrees/task/locked', path.resolve('common.git/worktrees/task/locked')]) {
+    const calls = [], reads = [];
+    let reason = ' backup disk\n';
+    const read = () => deletion.readStatus(root, '/repo', async args => {
+      calls.push(args);
+      if (args.includes('list')) return `worktree ${root}\nHEAD abc\nbranch refs/heads/topic\n\n`;
+      if (args.includes('rev-parse')) return gitPath + '\n';
+      return '';
+    }, async (file, encoding) => {
+      reads.push([file, encoding]);
+      return reason;
+    });
+    const shown = await read();
+    assert.equal(shown.locked, true);
+    assert.equal(shown.lockReason, 'backup disk');
+    assert.deepEqual(reads, [[path.resolve(root, gitPath), 'utf8']]);
+    assert.deepEqual(calls.find(args => args.includes('rev-parse')), ['-C', root, 'rev-parse', '--git-path', 'locked']);
+    const removes = [];
+    const remove = consent => deletion.removeWorktree(root, '/repo', consent, read, async args => removes.push(args));
+    assert.equal((await remove(shown)).refresh, true);
+    assert.equal(removes.length, 0);
+    reason = 'another owner\n';
+    assert.equal((await remove({ ...shown, confirmLocked: true })).refresh, true);
+    assert.equal(removes.length, 0);
+    const fresh = await read();
+    assert.equal((await remove({ ...fresh, confirmLocked: true })).ok, true);
+    assert.equal(removes[0].filter(arg => arg === '-f').length, 2);
+    reason = '';
+    const unnamed = await read();
+    assert.equal(unnamed.locked, true);
+    assert.equal(unnamed.lockReason, '');
+    assert.notEqual(unnamed.fingerprint, fresh.fingerprint);
+  }
+});
+
+test('absent lock files are unlocked but unreadable lock metadata fails closed', async () => {
+  const git = async args => args.includes('list') ? `worktree ${target}\nHEAD abc\n\n`
+    : args.includes('rev-parse') ? '.git/locked\n' : '';
+  const read = code => deletion.readStatus(target, '/repo', git, async () => {
+    throw Object.assign(new Error('lock metadata ' + code), { code });
+  });
+  assert.equal((await read('ENOENT')).locked, false);
+  await assert.rejects(read('EACCES'), /lock metadata EACCES/);
+  const locked = await deletion.readStatus(target, '/repo', git, async () => 'backup');
+  assert.notEqual((await read('ENOENT')).fingerprint, locked.fingerprint);
 });

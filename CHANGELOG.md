@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
-- Deleting a worktree now shows its full path, branch, running sessions and ignored entries. Changes since confirmation require another review, and removing a locked worktree requires explicit consent. (#841)
+- Deleting a worktree now shows its full path, branch, running sessions and ignored entries; added non-ignored files or changed uncommitted contents require another review. Locks and submodules require explicit consent to force removal; ignored directory contents are not compared. (#841)
 - Clearing or changing a search, switching its title filter, or leaving its tab no longer lets an older reply replace the current results. (#840)
 - Archive and Delete refusals for a running background job now point to **Stop session** on its sidebar row when the job can be stopped there. (#835)
 - Copying and pasting accented characters works in sessions and terminals launched without a locale on macOS and Linux. Quota tooltips now say "tomorrow" when a reset falls on the next day. (#818)

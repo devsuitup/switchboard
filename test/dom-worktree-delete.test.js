@@ -79,6 +79,26 @@ test('changed status keeps a persistent notice and reopens for fresh confirmatio
   }
 });
 
+test('submodule force consent and lock consent must both be checked', async t => {
+  const ctx = setup(t);
+  ctx.window.api.worktreeStatus = async () => ({ ...preview, submodules: ['vendor/lib'], locked: true });
+  const pending = ctx.window.showDeleteWorktreeDialog('task', target);
+  await tick();
+  try {
+    const box = ctx.document.querySelector('#dwt-submodules-confirm');
+    assert.ok(box, 'submodule removal needs an explicit consent checkbox');
+    assert.match(ctx.document.querySelector('#dwt-status').textContent, /vendor\/lib/);
+    ctx.document.querySelector('#dwt-lock-confirm').click();
+    assert.equal(ctx.document.querySelector('#dwt-confirm').disabled, true);
+    box.click();
+    assert.equal(ctx.document.querySelector('#dwt-confirm').disabled, false);
+    ctx.document.querySelector('#dwt-confirm').click();
+    const shown = await pending;
+    assert.equal(shown.confirmSubmodules, true);
+    assert.equal(shown.confirmLocked, true);
+  } finally { ctx.document.querySelector('#dwt-cancel')?.click(); await pending; }
+});
+
 test('a failed preview disables Delete and reports a persistent actionable notice', async t => {
   const ctx = setup(t);
   ctx.window.api.worktreeStatus = async () => { throw new Error('Git unavailable'); };

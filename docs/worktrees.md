@@ -74,13 +74,19 @@ the worktree, including open terminals and live sessions outside this window.
 It warns that uncommitted changes are lost and lists their paths, ten at most.
 When ignored entries exist, it counts them and warns that they are deleted too;
 an ignored directory such as `node_modules` counts as one entry, not each file.
-**Delete worktree** rechecks Git's status against the preview. A clean worktree
-is removed without force. Dirty files permit force only while the reported
-dirty set still matches the preview. A changed status or a Git refusal leaves
+**Delete worktree** rechecks Git's status, staged contents and the contents of
+every changed or untracked file against the preview. Untracked files are listed
+individually even if your Git configuration normally hides them. A clean
+worktree without submodules or a lock is removed without force. Dirty files
+permit force only while their paths and contents still match the preview.
+Ignored directory contents are neither expanded nor compared; their warning
+covers everything inside them. A changed snapshot or a Git refusal leaves
 a persistent notice and reopens the dialog with the fresh status, requiring
 another confirmation. A locked worktree shows its lock reason and requires
 checking **Delete this locked worktree, overriding its lock** before deletion;
-there is no automatic double-force retry. The branch is kept. The
+there is no automatic double-force retry. Worktrees containing submodules also
+require checking **Delete this worktree and its submodules with force**;
+changes inside dirty submodules are rechecked too. The branch is kept. The
 worktree's sessions move under the repository's header, at once or at the
 next refresh, since their transcripts are still on disk. Deleting a
 finished background session in the [Agents view](background-agents.md) delegates

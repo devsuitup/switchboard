@@ -2500,7 +2500,7 @@ async function showDeleteWorktreeDialog(name, worktreePath, freshStatus) {
       if (!status?.ok || !Array.isArray(status.dirty) || typeof status.fingerprint !== 'string') {
         throw new Error(status?.error || 'The preview is unavailable');
       }
-      shown = { fingerprint: status.fingerprint, confirmLocked: false };
+      shown = { fingerprint: status.fingerprint, confirmLocked: false, confirmSubmodules: false };
       const fullPath = worktreePath.replace(/\\/g, '/');
       const home = (status.homeDir || '').replace(/\\/g, '/').replace(/\/$/, '');
       const homePrefix = home && (fullPath === home || fullPath.startsWith(home + '/'));
@@ -2519,14 +2519,20 @@ async function showDeleteWorktreeDialog(name, worktreePath, freshStatus) {
         const extra = overflow > 0 ? `\n+ ${overflow} more…` : '';
         changes = `<div class="dwt-dirty-label">${status.total} uncommitted file${status.total !== 1 ? 's' : ''}:</div><pre class="dwt-dirty-list">${lines}${extra}</pre>`;
       }
-      statusEl.innerHTML = details + changes + (status.locked
+      statusEl.innerHTML = details + changes + (status.submodules?.length
+        ? `<div>Submodules: ${status.submodules.slice(0, 10).map(escapeHtml).join(', ')}${status.submodules.length > 10 ? ` (+ ${status.submodules.length - 10} more)` : ''}</div><label><input type="checkbox" id="dwt-submodules-confirm"> Delete this worktree and its submodules with force</label>` : '') + (status.locked
         ? `<div class="dwt-error">Locked${status.lockReason ? ': ' + escapeHtml(status.lockReason) : ''}</div><label><input type="checkbox" id="dwt-lock-confirm"> Delete this locked worktree, overriding its lock</label>` : '');
-      confirmBtn.disabled = !!status.locked;
-      const lockConfirm = dialog.querySelector('#dwt-lock-confirm');
-      if (lockConfirm) lockConfirm.onchange = () => {
-        shown.confirmLocked = lockConfirm.checked;
-        confirmBtn.disabled = !lockConfirm.checked;
+      const updateConsent = () => {
+        shown.confirmLocked = !!dialog.querySelector('#dwt-lock-confirm')?.checked;
+        shown.confirmSubmodules = !!dialog.querySelector('#dwt-submodules-confirm')?.checked;
+        confirmBtn.disabled = (!!status.locked && !shown.confirmLocked)
+          || (!!status.submodules?.length && !shown.confirmSubmodules);
       };
+      updateConsent();
+      const lockConfirm = dialog.querySelector('#dwt-lock-confirm');
+      if (lockConfirm) lockConfirm.onchange = updateConsent;
+      const submodulesConfirm = dialog.querySelector('#dwt-submodules-confirm');
+      if (submodulesConfirm) submodulesConfirm.onchange = updateConsent;
     }).catch((err) => {
       if (!overlay.isConnected) return;
       confirmBtn.disabled = true;

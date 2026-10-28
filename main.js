@@ -1074,7 +1074,7 @@ ipcMain.handle('check-delete-worktree', (_event, worktreePath) => {
 
 function worktreeGit(args) {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { env: localGitEnv(), timeout: 15000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('git', args, { env: localGitEnv(), timeout: args.includes('remove') ? 120000 : 15000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) reject(new Error((stderr || err.message || String(err)).trim()));
       else resolve(stdout);
     });

@@ -64,18 +64,33 @@ consent and avoid recovery during a system exit. See window-frame.md.
 | `remove-project` | `(projectPath, folderKey)` | Destructive Delete Project: drop settings, cache/search and schedule registration; no disk deletion. Bridge: `deleteProject`. |
 | `remap-project` | `(oldPath, newPath)` | **Atomic JSONL `cwd` rewrite**, refuses if active sessions exist. See PR #20. |
 | `check-remap-project` | `(oldPath)` | Read-only `{ ok, error? }`; bridge `checkRemapProject`. Runs `remapProjectRefusal`, also used by the action: any non-exited, non-panel PTY with the same encoded folder refuses. The renderer checks before the folder picker and confirmation, and shows a notice on refusal or check failure. |
-| `delete-worktree` | `(worktreePath, shown)` | `shown: { fingerprint, confirmLocked }` from the successful preview. Rechecks path guards and Git state through `worktree-delete.js`; no force for clean status, one force for matching dirty status, two only for an explicitly confirmed matching lock. Changed state / Git refusal returns `{ ok: false, refresh: true, status, error }`; renderer shows a persistent notice and asks again. Cleanup happens only after successful removal. |
+| `delete-worktree` | `(worktreePath, shown)` | `shown: { fingerprint, confirmLocked, confirmSubmodules }` from the successful preview. Rechecks path guards and Git state through `worktree-delete.js`; no force for clean status without submodules or a lock, one force for matching dirty status or explicitly confirmed submodules, two only for an explicitly confirmed matching lock. Submodule consent is required even with lock consent. Changed state / Git refusal returns `{ ok: false, refresh: true, status, error }`; renderer shows a persistent notice and asks again. Cleanup happens only after successful removal. Removal has a 120 s timeout; preview calls retain 15 s. |
 | `check-delete-worktree` | `(worktreePath)` | Read-only `{ ok, error? }`; bridge `checkDeleteWorktree`. Shares `checkDeleteWorktree` with Delete and status: string input, recognized layout and disk-resolved known parent. The renderer awaits it before the dialog or status request; refusal or failure shows a notice. No git command or cleanup runs in the check. |
-| `worktree-status` | `(worktreePath)` | `{ ok, path, homeDir, branch, dirty, total, ignoredCount, locked, lockReason, fingerprint, sessions }`. NUL-delimited Git worktree metadata and porcelain status including ignored entries; ignored directories count as one entry. SHA-256 fingerprint covers path, Git metadata, complete dirty records (including both rename paths), and ignored paths. Sessions include non-exited local PTYs and live sidebar descriptors whose cwd is in the worktree; remote records are excluded. |
+| `worktree-status` | `(worktreePath)` | `{ ok, path, homeDir, branch, dirty, total, ignoredCount, submodules, locked, lockReason, fingerprint, sessions }`. Line-delimited `worktree list --porcelain` works on Git 2.24 and recent Git; C-quoted paths decode octal UTF-8 and escaped characters. NUL-delimited status explicitly uses `--untracked-files=all --ignore-submodules=none`; a separate `--ignored --untracked-files=normal` status counts collapsed ignored directories. Sessions include non-exited local PTYs and live sidebar descriptors whose cwd is in the worktree; remote records are excluded. |
 
 The sidebar deletion dialog displays the full path (`~` for home, absolute on
 hover), branch, running session ids/cwds and ignored-entry warning. Confirmation
-stays disabled until a successful preview; locked worktrees require a separate
-checkbox. Preview and removal failures use the persistent session-action notice.
+stays disabled until a successful preview; locks and submodules each require a
+separate checkbox. Preview and removal failures use the persistent session-action notice.
 Remote nested headers share the renderer path, so Delete refuses before any
 local IPC and directs the user to git on the host. Project-folder Delete (#474)
 still never offers deletion of the project's own directory. Agents Delete uses
 `claude rm` without force; it does not call the worktree IPC or escalate refusals.
+
+The SHA-256 fingerprint includes worktree metadata, full index stage records,
+dirty/untracked paths, both rename paths, file modes and streamed SHA-256 file
+contents. Streaming bounds memory and detects same-size edits with restored
+timestamps; symlinks hash their link targets and absent files have a missing
+marker. Dirty submodules recurse through the same status/index/content snapshot,
+up to 16 levels. Index gitlinks identify submodules, including clean ones, so
+the user can explicitly consent to the force Git requires. Untracked embedded
+repositories or other unexpected dirty directories refuse with instructions to
+review or move them, rather than recursively reading arbitrary directory trees.
+Ignored paths/counts are compared, but ignored contents are intentionally not
+hashed or expanded. Each Git call retains a 16 MiB maxBuffer and a preview
+refuses above 100,000 dirty records; exceeding a bound fails closed. This is a
+fresh comparison before removal, not an atomic filesystem lock: edits after the
+final snapshot remain possible.
 
 ### Tabs (Memory / .work-files / Stats)
 
