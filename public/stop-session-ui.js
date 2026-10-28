@@ -152,7 +152,7 @@ async function liveBackgroundJobRefusal(sessionId, backgroundJobs = new Map()) {
   if (check && check.job) {
     const plan = await planSessionStop({ sessionId }, { backgroundJobs, jobStop: true });
     const recovery = plan.targets.some(target => target.job && !target.notHosted)
-      ? 'use Stop session on its sidebar row first' : 'stop it from the Agents view first';
+      ? 'use Stop session on its sidebar row, or stop it from the Agents view, first' : 'stop it from the Agents view first';
     return `background job ${check.job.id} is still running this session — ${recovery}`;
   }
   return null;

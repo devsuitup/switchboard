@@ -35,8 +35,8 @@ for (const attached of [false, true]) {
     const result = await w.stopBeforeArchive({ sessionId: 'A' });
     assert.equal(result.ok, false);
     assert.match(result.error, /background job abcdef12 is still running this session/);
-    assert.match(result.error, /use Stop session on its sidebar row first/);
-    assert.doesNotMatch(result.error, /Agents view/);
+    assert.match(result.error, /use Stop session on its sidebar row, or stop it from the Agents view, first/);
+    assert.doesNotMatch(result.error, /— stop it from the Agents view first/);
     assert.deepEqual(calls, ['A'], 'reuse the refusal check when planning recovery');
   });
 }
@@ -66,7 +66,7 @@ test('a group refusal names Stop session for a live older member without stoppin
   const result = await w.planSessionArchive([{ sessionId: 'A', mergedMemberIds: ['B'] }]);
   assert.equal(result.ok, false);
   assert.match(result.error, /Stop session/);
-  assert.doesNotMatch(result.error, /Agents view/);
+  assert.doesNotMatch(result.error, /— stop it from the Agents view first/);
 });
 
 test('remote Archive keeps its host stop plan and never checks local daemon jobs', async t => {

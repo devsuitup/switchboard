@@ -86,8 +86,8 @@ for (const state of ['job', 'unknown', 'throws']) {
     await refused;
     assert.deepEqual(ctx.calls, []);
     const message = ctx.document.querySelector('[role="alert"]').textContent;
-    assert.match(message, state === 'job' ? /1234abcd.*use Stop session on its sidebar row first/ : /cannot tell.*daemon offline/);
-    if (state === 'job') assert.doesNotMatch(message, /Agents view/);
+    assert.match(message, state === 'job' ? /1234abcd.*use Stop session on its sidebar row, or stop it from the Agents view, first/ : /cannot tell.*daemon offline/);
+    if (state === 'job') assert.doesNotMatch(message, /— stop it from the Agents view first/);
     ctx.window.api.bgAgentLiveJob = async () => ({ known: true, job: null });
     const retry = archive(ctx);
     await settle();
