@@ -1085,7 +1085,7 @@ function worktreeGit(args, consume) {
 async function worktreeDeletionStatus(normalizedPath, parentRepo) {
   const status = await worktreeDelete.readStatus(normalizedPath, parentRepo, worktreeGit);
   return { ...status, homeDir: os.homedir(),
-    sessions: worktreeDelete.runningSessions(normalizedPath, activeSessions, cliSessionState.getSidebarDescriptors()) };
+    sessions: await worktreeDelete.runningSessions(normalizedPath, activeSessions, cliSessionState.getSidebarDescriptors()) };
 }
 
 ipcMain.handle('delete-worktree', async (_event, worktreePath, shown) => {

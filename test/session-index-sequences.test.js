@@ -80,7 +80,7 @@ test('worktree cleanup selects matching rows, preserves unrelated settings and r
     localGitEnv: () => ({ LC_ALL: 'C' }),
     execFile: (_exe, args, opts, cb) => {
       assert.equal(opts.env.LC_ALL, 'C');
-      cb(null, args.includes('list') ? `worktree ${project}\nHEAD abc\nbranch refs/heads/topic\n\n`
+      cb(null, args.includes('list') ? `worktree /repo\nHEAD def\n\nworktree ${project}\nHEAD abc\nbranch refs/heads/topic\n\n`
         : args.includes('rev-parse') ? project + '/.git/locked\n' : '', '');
     },
     getAllCached: () => [{ sessionId: 'a', projectPath: project }, { sessionId: 'b', projectPath: '/other' }],
@@ -92,7 +92,7 @@ test('worktree cleanup selects matching rows, preserves unrelated settings and r
     log: { info() {}, warn() {} }, notifyRendererProjectsChanged() {},
   });
   const shown = await require('../worktree-delete').readStatus(project, '/repo', async args =>
-    args.includes('list') ? `worktree ${project}\nHEAD abc\nbranch refs/heads/topic\n\n`
+    args.includes('list') ? `worktree /repo\nHEAD def\n\nworktree ${project}\nHEAD abc\nbranch refs/heads/topic\n\n`
       : args.includes('rev-parse') ? project + '/.git/locked\n' : '');
   assert.deepEqual(JSON.parse(JSON.stringify(await remove(null, project, shown))), { ok: true, removed: 1 });
   assert.deepEqual(deleted, [['cache', 'a'], ['search', 'a'], ['folder', encodeProjectPath(project)], ['fts-folder', encodeProjectPath(project)]]);

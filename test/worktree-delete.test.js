@@ -27,7 +27,7 @@ function fixture() {
       if (args.includes('rev-parse')) return cb(null, target + '/.git/locked\n', '');
       if (args.includes('status')) return cb(null, state.dirty, '');
       if (args.includes('list')) return cb(null,
-        `worktree ${target}\nHEAD abc\nbranch refs/heads/topic\n${state.lock === null ? '' : `locked${state.lock ? ' ' + state.lock : ''}\n`}\n`, '');
+        `worktree /main-checkout\nHEAD def\n\nworktree ${target}\nHEAD abc\nbranch refs/heads/topic\n${state.lock === null ? '' : `locked${state.lock ? ' ' + state.lock : ''}\n`}\n`, '');
       if (args.includes('ls-files')) return cb(null, '', '');
       state.removes.push(Array.from(args));
       if (state.removeError) return cb(state.removeError, '', '');
@@ -126,7 +126,7 @@ test('missing preview and changed ignored paths both refuse before removal', asy
 test('preview parses detached HEAD, unnamed lock, renames, and filenames containing newlines', async () => {
   const output = 'R  new\nname\0old name\0!! cache/\0';
   const result = await deletion.readStatus(target, '/home/jb/repo', async args => args.includes('list')
-    ? `worktree /other\nHEAD def\n\nworktree ${target}\nHEAD abc\ndetached\nlocked\n\n` : args.includes('ls-files') ? '' : output);
+    ? `worktree /other\nHEAD def\n\nworktree /main-checkout\nHEAD def\n\nworktree ${target}\nHEAD abc\ndetached\nlocked\n\n` : args.includes('ls-files') ? '' : output);
   assert.equal(result.branch, '(detached HEAD)');
   assert.equal(result.locked, true);
   assert.equal(result.lockReason, '');
@@ -136,7 +136,7 @@ test('preview parses detached HEAD, unnamed lock, renames, and filenames contain
 
 test('fingerprint preserves both rename paths even when display text is ambiguous', async () => {
   const read = output => deletion.readStatus(target, '/home/jb/repo', async args => args.includes('list')
-    ? `worktree ${target}\nHEAD abc\n\n` : args.includes('rev-parse') ? target + '/.git/locked\n' : args.includes('ls-files') ? '' : output);
+    ? `worktree /main-checkout\nHEAD def\n\nworktree ${target}\nHEAD abc\n\n` : args.includes('rev-parse') ? target + '/.git/locked\n' : args.includes('ls-files') ? '' : output);
   const a = await read('R  c\0a -> b\0');
   const b = await read('R  b -> c\0a\0');
   assert.deepEqual(a.dirty, b.dirty);
@@ -146,19 +146,35 @@ test('fingerprint preserves both rename paths even when display text is ambiguou
 test('unregistered worktrees, incomplete renames, and Git errors fail closed', async () => {
   await assert.rejects(deletion.readStatus(target, '/repo', async () => ''), /no longer a registered worktree/);
   await assert.rejects(deletion.readStatus(target, '/repo', async args => args.includes('list')
-    ? `worktree ${target}\nHEAD abc\n\n` : args.includes('rev-parse') ? target + '/.git/locked\n' : 'R  destination\0'), /incomplete rename/);
+    ? `worktree /main-checkout\nHEAD def\n\nworktree ${target}\nHEAD abc\n\n` : args.includes('rev-parse') ? target + '/.git/locked\n' : 'R  destination\0'), /incomplete rename/);
   await assert.rejects(deletion.readStatus(target, '/repo', async () => { throw new Error('denied'); }), /denied/);
 });
 
-test('Windows cwd matching handles separators, case, descendants and duplicate live ids', () => {
+test('Windows cwd matching handles separators, case, descendants and duplicate live ids', async () => {
   const pty = new Map([
     ['handle', { realSessionId: 'live', cwd: 'C:\\repo\\.worktrees\\task' }],
     ['other', { cwd: 'C:/repo/.worktrees/task-sibling' }],
     ['empty', {}],
   ]);
-  const result = deletion.runningSessions('c:/Repo/.worktrees/task/', pty,
+  const result = await deletion.runningSessions('c:/Repo/.worktrees/task/', pty,
     [{ sessionId: 'live', cwd: 'c:/repo/.worktrees/task/sub' }]);
   assert.deepEqual(result, [{ sessionId: 'live', cwd: 'c:/repo/.worktrees/task/sub' }]);
+});
+
+test('running sessions match an alias ancestor in either the requested path or recorded cwd', async t => {
+  const fs = require('node:fs');
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sb-delete-sessions-'));
+  const link = path.join(root, 'alias');
+  t.after(() => { fs.unlinkSync(link); fs.rmSync(root, { recursive: true, force: true }); });
+  const target = path.join(root, 'worktrees/task');
+  fs.mkdirSync(path.join(target, 'nested'), { recursive: true });
+  fs.symlinkSync(path.dirname(target), link, process.platform === 'win32' ? 'junction' : 'dir');
+  const alias = path.join(link, 'task');
+  for (const [requested, cwd] of [[alias, target], [target, alias]]) {
+    const result = await deletion.runningSessions(requested,
+      new Map([['pty', { cwd }]]), [{ sessionId: 'descriptor', cwd: path.join(cwd, 'nested') }]);
+    assert.deepEqual(result.map(s => s.sessionId).sort(), ['descriptor', 'pty']);
+  }
 });
 
 test('old Git lock-file resolution detects locks and binds consent to their current reason', async () => {
@@ -168,7 +184,7 @@ test('old Git lock-file resolution detects locks and binds consent to their curr
     let reason = ' backup disk\n';
     const read = () => deletion.readStatus(root, '/repo', async args => {
       calls.push(args);
-      if (args.includes('list')) return `worktree ${root}\nHEAD abc\nbranch refs/heads/topic\n\n`;
+      if (args.includes('list')) return `worktree /main-checkout\nHEAD def\n\nworktree ${root}\nHEAD abc\nbranch refs/heads/topic\n\n`;
       if (args.includes('rev-parse')) return gitPath + '\n';
       return '';
     }, async (file, encoding) => {
@@ -199,7 +215,7 @@ test('old Git lock-file resolution detects locks and binds consent to their curr
 });
 
 test('absent lock files are unlocked but unreadable lock metadata fails closed', async () => {
-  const git = async args => args.includes('list') ? `worktree ${target}\nHEAD abc\n\n`
+  const git = async args => args.includes('list') ? `worktree /main-checkout\nHEAD def\n\nworktree ${target}\nHEAD abc\n\n`
     : args.includes('rev-parse') ? '.git/locked\n' : '';
   const read = code => deletion.readStatus(target, '/repo', git, async () => {
     throw Object.assign(new Error('lock metadata ' + code), { code });

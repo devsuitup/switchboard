@@ -20,7 +20,7 @@ function fixture(t, options = {}) {
     if (args.includes('list')) {
       if (options.oldGit) assert.equal(args.includes('-z'), false, 'Git 2.24 cannot list worktrees with -z');
       const fields = [`worktree ${args.includes('-z') ? root : JSON.stringify(root)}`, 'HEAD abc', 'branch refs/heads/topic'];
-      return fields.join(args.includes('-z') ? '\0' : '\n') + (args.includes('-z') ? '\0\0' : '\n\n');
+      return 'worktree /main-checkout\nHEAD def\n\n' + fields.join(args.includes('-z') ? '\0' : '\n') + (args.includes('-z') ? '\0\0' : '\n\n');
     }
     if (args.includes('ls-files')) return state.submodule ? '160000 abc 0\tsub\0' : '';
     if (args.includes('status')) {
@@ -121,7 +121,7 @@ test('Git C-quoted paths decode octal UTF-8 and escaped control characters', asy
   let shown;
   await assert.doesNotReject(async () => {
     shown = await deletion.readStatus(target, '/repo', async args => args.includes('list')
-      ? `worktree ${listed}\nHEAD abc\nbranch refs/heads/topic\n\n` : args.includes('rev-parse') ? '.git/locked\n' : '');
+      ? `worktree /main-checkout\nHEAD def\n\nworktree ${listed}\nHEAD abc\nbranch refs/heads/topic\n\n` : args.includes('rev-parse') ? '.git/locked\n' : '');
   });
   assert.equal(shown.branch, 'topic');
 });
@@ -130,7 +130,7 @@ test('a rename source beginning with !! is not counted as ignored', async t => {
   const f = fixture(t);
   const shown = await deletion.readStatus(f.root, f.root, async args => {
     if (args.includes('rev-parse')) return path.join(f.root, '.git', 'locked') + '\n';
-    if (args.includes('list')) return `worktree ${f.root}\nHEAD abc\n\n`;
+    if (args.includes('list')) return `worktree /main-checkout\nHEAD def\n\nworktree ${f.root}\nHEAD abc\n\n`;
     if (args.includes('ls-files')) return '';
     return 'R  destination\0!! source\0';
   });
@@ -140,7 +140,7 @@ test('a rename source beginning with !! is not counted as ignored', async t => {
 test('a staged content change invalidates confirmation even when working bytes stay identical', async t => {
   const f = fixture(t);
   let index = '100644 abc 0\tt\0';
-  const runGit = async args => args.includes('list') ? `worktree ${f.root}\nHEAD abc\n\n`
+  const runGit = async args => args.includes('list') ? `worktree /main-checkout\nHEAD def\n\nworktree ${f.root}\nHEAD abc\n\n`
     : args.includes('rev-parse') ? path.join(f.root, '.git', 'locked') + '\n' : args.includes('ls-files') ? index : 'MM t\0';
   const read = () => deletion.readStatus(f.root, f.root, runGit);
   const shown = await read();
@@ -156,7 +156,7 @@ test('content changes inside a dirty submodule invalidate explicit force consent
   fs.writeFileSync(path.join(sub, 't'), 'before');
   const runGit = async args => {
     if (args.includes('rev-parse')) return path.join(f.root, '.git', 'locked') + '\n';
-    if (args.includes('list')) return `worktree ${f.root}\nHEAD abc\n\n`;
+    if (args.includes('list')) return `worktree /main-checkout\nHEAD def\n\nworktree ${f.root}\nHEAD abc\n\n`;
     const nested = args[1] === sub;
     if (args.includes('ls-files')) return nested ? '100644 abc 0\tt\0' : '160000 abc 0\tsub\0';
     return nested ? ' M t\0' : ' M sub\0';
@@ -221,7 +221,7 @@ test('index output can be streamed beyond maxBuffer without buffering its conten
       for (let i = 0; i < 130; i++) consume(chunk);
       return;
     }
-    if (args.includes('list')) return `worktree ${f.root}\nHEAD abc\n\n`;
+    if (args.includes('list')) return `worktree /main-checkout\nHEAD def\n\nworktree ${f.root}\nHEAD abc\n\n`;
     if (args.includes('rev-parse')) return path.join(f.root, '.git', 'locked') + '\n';
     return '';
   };
@@ -261,7 +261,7 @@ test('on-disk containment blocks a directory link created after the initial scan
   fs.writeFileSync(path.join(outside, 'precious'), 'keep');
   const link = path.join(f.root, 'lnk');
   const git = async args => {
-    if (args.includes('list')) return `worktree ${f.root}\nHEAD abc\n\n`;
+    if (args.includes('list')) return `worktree /main-checkout\nHEAD def\n\nworktree ${f.root}\nHEAD abc\n\n`;
     if (args.includes('rev-parse')) return path.join(f.root, '.git', 'locked') + '\n';
     if (args.includes('status')) {
       if (!fs.existsSync(link)) fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
@@ -304,6 +304,64 @@ function instrumentDeletion(overrides = {}, extra = {}) {
   return module.exports;
 }
 
+for (const platform of ['win32', 'linux']) {
+  test(`a linked worktree is previewed through an alias ancestor on ${platform}`, async t => {
+    const f = fixture(t, { paths: [] });
+    const alias = path.join(path.dirname(f.root), path.basename(f.root) + '-ancestor');
+    fs.symlinkSync(path.dirname(f.root), alias, process.platform === 'win32' ? 'junction' : 'dir');
+    t.after(() => fs.unlinkSync(alias));
+    const requested = path.join(alias, path.basename(f.root));
+    const instrumented = instrumentDeletion({}, { process: { platform } });
+    assert.equal((await instrumented.readStatus(requested, f.root, f.runGit)).branch, 'topic');
+    const aliasList = async args => args.includes('list')
+      ? `worktree /main-checkout\nHEAD def\n\nworktree ${JSON.stringify(requested)}\nHEAD abc\n\n` : f.runGit(args);
+    assert.equal((await instrumented.readStatus(f.root, f.root, aliasList)).ok, true);
+    assert.equal(f.state.removes.length, 0);
+  });
+
+  for (const kind of ['main checkout', 'registered worktree']) {
+    test(`a path that is itself an alias of the ${kind} is refused on ${platform}`, async t => {
+      const f = fixture(t, { paths: [] });
+      const alias = path.join(path.dirname(f.root), path.basename(f.root) + '-alias');
+      fs.symlinkSync(f.root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+      t.after(() => fs.unlinkSync(alias));
+      const runGit = async args => args.includes('list')
+        ? `${kind === 'main checkout' ? '' : 'worktree /main-checkout\nHEAD def\n\n'}worktree ${JSON.stringify(f.root)}\nHEAD abc\n\n`
+        : f.runGit(args);
+      const instrumented = instrumentDeletion({}, { process: { platform } });
+      const read = () => instrumented.readStatus(alias, f.root, runGit);
+      await assert.rejects(read(), /no longer a registered worktree/);
+      await assert.rejects(instrumented.removeWorktree(alias, f.root, { fingerprint: 'old' }, read, runGit), /no longer a registered worktree/);
+      assert.equal(f.state.removes.length, 0);
+    });
+  }
+
+  test(`alias-of-main through an ancestor refuses explicitly on ${platform}`, async t => {
+    const f = fixture(t, { paths: [] });
+    const alias = path.join(path.dirname(f.root), path.basename(f.root) + '-ancestor');
+    fs.symlinkSync(path.dirname(f.root), alias, process.platform === 'win32' ? 'junction' : 'dir');
+    t.after(() => fs.unlinkSync(alias));
+    const requested = path.join(alias, path.basename(f.root));
+    const runGit = async args => args.includes('list') ? `worktree ${JSON.stringify(f.root)}\nHEAD abc\n\n` : f.runGit(args);
+    const instrumented = instrumentDeletion({}, { process: { platform } });
+    const read = () => instrumented.readStatus(requested, f.root, runGit);
+    await assert.rejects(read(), /main worktree.*cannot be deleted/i);
+    await assert.rejects(instrumented.removeWorktree(requested, f.root, { fingerprint: 'old' }, read, runGit), /main worktree.*cannot be deleted/i);
+    assert.equal(f.state.removes.length, 0);
+  });
+
+  test(`a worktree root link is refused by the final scan on ${platform}`, async t => {
+    const f = fixture(t, { paths: [] });
+    const shown = await f.read();
+    const alias = path.join(path.dirname(f.root), path.basename(f.root) + '-root');
+    fs.symlinkSync(f.root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+    t.after(() => fs.unlinkSync(alias));
+    const instrumented = instrumentDeletion({}, { process: { platform } });
+    await assert.rejects(instrumented.removeWorktree(alias, f.root, shown, async () => shown, f.runGit), /worktree path itself.*directory link/i);
+    assert.equal(f.state.removes.length, 0);
+  });
+}
+
 test('preview walks each directory once and Delete adds exactly one fresh pre-removal walk, including submodules', async t => {
   const f = fixture(t, { paths: [], submodule: true });
   fs.mkdirSync(path.join(f.root, 'sub/.git'), { recursive: true });
@@ -315,7 +373,7 @@ test('preview walks each directory once and Delete adds exactly one fresh pre-re
     readdir: async (...args) => { if (args[1]?.withFileTypes) record(args[0]); return fs.promises.readdir(...args); },
   });
   const git = async args => {
-    if (args.includes('list')) return `worktree ${f.root}\nHEAD abc\n\n`;
+    if (args.includes('list')) return `worktree /main-checkout\nHEAD def\n\nworktree ${f.root}\nHEAD abc\n\n`;
     if (args.includes('rev-parse')) return path.join(f.root, '.git/locked') + '\n';
     if (args.includes('ls-files')) return args[1] === f.root ? '160000 abc 0\tsub\0' : '';
     if (args.includes('remove')) {
@@ -427,7 +485,7 @@ test('link containment resolves the root and targets with the same native resolv
   let shown;
   await assert.doesNotReject(async () => { shown = await instrumented.readStatus(f.root, f.root, f.runGit); });
   assert.equal(shown.ok, true);
-  assert.equal(rootResolutions, 3, 'resolve the requested path, registration and scan root with the native resolver');
+  assert.equal(rootResolutions, 1, 'resolve the scan root with the same native resolver as its link targets');
 });
 
 test('nonempty uninitialised gitlinks refuse even when status does not list the gitlink', async t => {
@@ -448,7 +506,7 @@ test('link walk refuses explicitly at its directory cap before opening excess di
   let opened = 0;
   const instrumented = instrumentDeletion({ readdir: async () => { opened++; return dirs; } });
   await assert.rejects(instrumented.readStatus(f.root, f.root, async args => {
-    if (args.includes('list')) return `worktree ${f.root}\nHEAD abc\n\n`;
+    if (args.includes('list')) return `worktree /main-checkout\nHEAD def\n\nworktree ${f.root}\nHEAD abc\n\n`;
     if (args.includes('rev-parse')) return path.join(f.root, '.git/locked') + '\n';
     return '';
   }), /directory.*200[,.]?000.*review/is);
@@ -461,7 +519,7 @@ test('link walk time budget refuses preview and the final removal scan with an a
   let clock = 0;
   const instrumented = instrumentDeletion({}, { Date: { now: () => { clock += 6000; return clock; } } });
   await assert.rejects(instrumented.readStatus(f.root, f.root, async args => {
-    if (args.includes('list')) return `worktree ${f.root}\nHEAD abc\n\n`;
+    if (args.includes('list')) return `worktree /main-checkout\nHEAD def\n\nworktree ${f.root}\nHEAD abc\n\n`;
     if (args.includes('rev-parse')) return path.join(f.root, '.git/locked') + '\n';
     return '';
   }), /directory.*time budget.*review/is);

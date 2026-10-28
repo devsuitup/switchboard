@@ -19,7 +19,7 @@ test('local worktree IPCs pass the C environment on every Git attempt', async t 
       const cb = typeof options === 'function' ? options : callback;
       calls.push({cmd,args:Array.from(args),options:typeof options === 'function' ? undefined : options});
       if (args.includes('status')) cb(null,' M file\0','');
-      else if (args.includes('list')) cb(null, `worktree ${target}\nHEAD abc\nbranch refs/heads/topic\nlocked backup\n\n`, '');
+      else if (args.includes('list')) cb(null, `worktree /main-checkout\nHEAD def\n\nworktree ${target}\nHEAD abc\nbranch refs/heads/topic\nlocked backup\n\n`, '');
       else if (args.includes('ls-files')) cb(null, '', '');
       else if (mode === 'error') cb(new Error('denied'),'', 'fatal: denied');
       else cb(null,'','');

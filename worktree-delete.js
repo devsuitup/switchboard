@@ -16,6 +16,10 @@ function within(root, candidate) {
 }
 
 async function refuseDirectoryLinks(root) {
+  let stat;
+  try { stat = await fs.promises.lstat(root); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  if (stat.isSymbolicLink()) throw new Error(`Deletion refused: the worktree path itself is a directory link: ${root}. Remove the link first without recursive deletion, then select the registered worktree.`);
   const started = Date.now();
   const checkTime = () => {
     if (Date.now() - started >= DIRECTORY_SCAN_MS) throw new Error('Directory link scan exceeded its 5 second time budget. Review or reduce the worktree directories before trying Delete again.');
@@ -41,15 +45,9 @@ async function refuseDirectoryLinks(root) {
       if (links.length < 10) links.push(path.resolve(directory));
     }
   }
-  const stat = await fs.promises.lstat(root);
   const pending = [];
   let directories = 1;
-  if (stat.isSymbolicLink()) {
-    const realParent = await fs.promises.realpath(path.dirname(root));
-    await checkLink(root, path.join(realParent, path.basename(root)));
-    if (!count) pending.push({ directory: root, realDirectory: realRoot });
-  }
-  else if (stat.isDirectory()) pending.push({ directory: root, realDirectory: realRoot });
+  if (stat.isDirectory()) pending.push({ directory: root, realDirectory: realRoot });
   while (pending.length) {
     checkTime();
     const batch = pending.splice(Math.max(0, pending.length - 32));
@@ -139,12 +137,22 @@ function comparablePath(value) {
   return /^[a-z]:\//i.test(normalized) ? path.posix.normalize(normalized).toLowerCase() : path.posix.normalize(normalized);
 }
 
-function runningSessions(worktreePath, activeSessions, descriptors) {
-  const root = comparablePath(worktreePath);
+async function canonicalPath(value) {
+  return comparablePath(await fs.promises.realpath(value).catch(() => value));
+}
+
+async function registeredPath(value) {
+  const absolute = path.resolve(value);
+  const parent = path.dirname(absolute);
+  return comparablePath(path.join(await fs.promises.realpath(parent).catch(() => parent), path.basename(absolute)));
+}
+
+async function runningSessions(worktreePath, activeSessions, descriptors) {
+  const root = await canonicalPath(worktreePath);
   const sessions = new Map();
   for (const [key, session] of [...activeSessions, ...descriptors.map(s => [s.sessionId, s])]) {
     if (!session || session.exited || session.host || !session.cwd) continue;
-    const cwd = comparablePath(session.cwd);
+    const cwd = await canonicalPath(session.cwd);
     if (cwd !== root && !cwd.startsWith(root + '/')) continue;
     const sessionId = session.realSessionId || session.sessionId || key;
     sessions.set(sessionId, { sessionId, cwd: session.cwd });
@@ -272,11 +280,11 @@ async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promis
   const list = await runGit(['-C', parentRepo, 'worktree', 'list', '--porcelain']);
   const records = list.split(/\r?\n\r?\n/).map(record => record.split(/\r?\n/));
   const registered = records.filter(record => record[0]?.startsWith('worktree '));
-  const canonicalPath = async value => comparablePath(await fs.promises.realpath(value).catch(() => value));
-  const requestedPath = await canonicalPath(worktreePath);
-  const registeredPaths = await Promise.all(registered.map(record => canonicalPath(unquote(record[0].slice(9)))));
+  const requestedPath = await registeredPath(worktreePath);
+  const registeredPaths = await Promise.all(registered.map(record => registeredPath(unquote(record[0].slice(9)))));
   const fields = registered[registeredPaths.indexOf(requestedPath)];
   if (!fields) throw new Error('This path is no longer a registered worktree. Refresh the project list before trying Delete again.');
+  if (requestedPath === registeredPaths[0]) throw new Error('The main worktree cannot be deleted. Select a linked worktree instead.');
   const branch = fields.find(line => line.startsWith('branch '))?.slice(7).replace(/^refs\/heads\//, '') || '(detached HEAD)';
   const lock = fields.find(line => line === 'locked' || line.startsWith('locked '));
   let locked = lock !== undefined;

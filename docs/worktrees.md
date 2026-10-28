@@ -99,6 +99,8 @@ refusal into forced removal. The sidebar's remote worktree headers share the
 local button code, but cannot use the local deletion backend: their notice
 directs you to review and remove the worktree with git on its host.
 
+Registration is matched by the on-disk path of the parent folder; a worktree path that is itself a link, or the main checkout, is refused.
+
 On Windows, preview and deletion refuse every directory link, including
 junctions and directory symlinks whose targets are inside the worktree. Git for
 Windows can follow junctions during removal and leave a partly deleted folder
