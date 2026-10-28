@@ -7,13 +7,6 @@ const WIDTH = 660;
 const HEIGHT = 400;
 const OUTPUT_DIR = path.join(__dirname, '..', 'build');
 
-// Icon positions must match build.dmg.contents in package.json, and iconSize
-// must match build.dmg.iconSize — they decide where Finder puts the labels,
-// which is what the plates below are sized around.
-const ICON_X = [170, 490];
-const ICON_Y = 170;
-const ICON_SIZE = 100;
-
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 /**

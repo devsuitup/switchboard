@@ -51,7 +51,7 @@ function parseMainThread(text) {
     const line = raw.trim();
     if (!line) continue;
     let entry;
-    try { entry = JSON.parse(line); } catch (_) { continue; }
+    try { entry = JSON.parse(line); } catch { continue; }
     if (!entry || typeof entry !== 'object' || entry.isSidechain) continue;
     entries.push(entry);
   }
@@ -196,13 +196,13 @@ function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
         const exact = fs.statSync(filePath, { bigint: true });
         stat = { dev: exact.dev, ino: exact.ino, size: Number(exact.size),
           mtimeMs: Number(exact.mtimeNs / 1_000_000_000n) * 1000 + Number(exact.mtimeNs % 1_000_000_000n) / 1e6 };
-      } catch (_) { return null; }
+      } catch { return null; }
       const hit = cache.get(filePath);
       let cached = hit;
       if (!hit || hit.mtimeMs !== stat.mtimeMs || hit.size !== stat.size || hit.ino !== stat.ino || hit.dev !== stat.dev
         || !hit.complete || !compactionCursor && !hit.writtenComplete) {
         let tail;
-        try { tail = tails.read(filePath, stat, compactionCursor ? tailBytes : undefined); } catch (_) { return null; }
+        try { tail = tails.read(filePath, stat, compactionCursor ? tailBytes : undefined); } catch { return null; }
         const turn = { ...classifyTranscriptTail(tail.text), mtimeMs: stat.mtimeMs,
           writtenOutput: latestWrittenOutput(tail.writtenText) ?? hit?.turn.writtenOutput ?? '' };
         cached = { mtimeMs: stat.mtimeMs, size: stat.size, dev: stat.dev, ino: stat.ino,
@@ -212,7 +212,7 @@ function createTranscriptTurnReader({ tailBytes = DEFAULT_TAIL_BYTES } = {}) {
       }
       const turn = { ...cached.turn };
       if (compactionCursor) {
-        try { turn.compactBoundaries = readCompactChunk(filePath, stat, compactionCursor); } catch (_) { return null; }
+        try { turn.compactBoundaries = readCompactChunk(filePath, stat, compactionCursor); } catch { return null; }
       }
       return { ...turn, compactionCursor: { filePath, dev: stat.dev, ino: stat.ino,
         offset: stat.size, pending: Buffer.alloc(0), skipLine: cached.skipLine } };

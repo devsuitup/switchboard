@@ -301,7 +301,7 @@ function normalizeCwd(p) {
   let n;
   try {
     n = path.normalize(p);
-  } catch (_) {
+  } catch {
     return null;
   }
   if (process.platform === 'win32') {
@@ -439,7 +439,7 @@ function readTranscriptTurn(ctx, sessionId, compactionCursor) {
   if (typeof ctx.getTranscriptTurn !== 'function') return null;
   try {
     return ctx.getTranscriptTurn(sessionId, compactionCursor) || null;
-  } catch (_) {
+  } catch {
     return null;
   }
 }
@@ -558,7 +558,7 @@ function readCliStatusRaw(ctx, sessionId) {
   try {
     const s = ctx.getCliStatus(sessionId);
     return s && typeof s.status === 'string' ? s : null;
-  } catch (_) {
+  } catch {
     return null;
   }
 }
@@ -1036,7 +1036,7 @@ function validateTimeoutMs(value) {
 function safeLogError(ctx, ...args) {
   try {
     ctx.log.error(...args);
-  } catch (_) { /* swallow */ }
+  } catch {}
 }
 
 /**
@@ -2010,7 +2010,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   } finally {
     if (releaseTabLock) releaseTabLock();
     if (forgetTranscript) {
-      try { forgetTranscript(); } catch (_) { /* swallow */ }
+      try { forgetTranscript(); } catch {}
     }
     if (releaseSessionLock) releaseSessionLock();
   }
