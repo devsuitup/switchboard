@@ -22,8 +22,6 @@ Captured 2026-05-30 while writing the .ai/contexts/*.md files. None are blockers
   
   Standardising would be a sweep-style PR; touchable by Sonnet in a couple of hours.
 
-- **`get-stats` legacy**: kept for backward compat ("fallback") but no caller uses it since PR #7. Could be removed.
-
 - **`updater-event` polymorphism** (`onUpdaterEvent` in `preload.js`): one event channel covers 5+ subtypes. Different from the per-event `onSubagentSpawned/Completed` pattern. Inconsistency tax with no migration cost — fix when next touching the updater.
 
 ## session-cache

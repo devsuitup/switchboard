@@ -795,20 +795,6 @@ function setInitialScanComplete() {
   setSetting(INITIAL_SCAN_COMPLETE_KEY, true);
 }
 
-function getDailyActivity() {
-  return db.prepare(`
-    SELECT
-      substr(modified, 1, 10) AS date,
-      SUM(messageCount)       AS messageCount,
-      COUNT(*)                AS sessionCount
-    FROM session_cache
-    WHERE modified IS NOT NULL
-      AND length(modified) >= 10
-    GROUP BY date
-    ORDER BY date ASC
-  `).all();
-}
-
 let dailyMetricsStmt;
 function getDailyMetrics() {
   dailyMetricsStmt ??= db.prepare(`
@@ -931,7 +917,6 @@ return {
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting, listSettingKeys,
   isInitialScanComplete, setInitialScanComplete,
-  getDailyActivity,
   getDailyMetrics, getDailyModelTokens, getModelUsage, getTotalCounts,
   closeDb,
 

@@ -76,10 +76,9 @@ consent and avoid recovery during a system exit. See window-frame.md.
 | `read-memory` / `save-memory` | content / `{ok}` |
 | `get-work-files` | `{projects: WorkFilesProject[]}` — **dedupes by projectPath** since PR #15. Walks `<projectPath>/.work-files/` recursively, capped at 200 files per project. |
 | `read-work-file` / `delete-work-file` | content (with `.work-files/` path guard) / `{ok}` |
-| `get-stats-from-db` | `{dailyActivity, totalMessages, totalSessions, firstSessionDate, lastComputedDate}` — heatmap source since PR #7 |
-| `refresh-stats` | `{stats, usage}` — combined; calls `getDailyActivity` + `fetchAndTransformUsage` |
+| `get-stats-from-db` | `buildStatsFromDb()`: `{dailyActivity, dailyModelTokens, modelUsage, totalMessages, totalSessions, totalToolCalls, totalTokens, firstSessionDate, lastComputedDate}` from `session_metrics` — heatmap source since PR #7 |
+| `refresh-stats` | `{stats, usage}` — combined; calls `buildStatsFromDb` (using `getDailyMetrics`) + `fetchAndTransformUsage` |
 | `get-usage` | rate-limits payload from Claude `/usage` |
-| `get-stats` | `~/.claude/stats-cache.json` raw (legacy; kept for fallback) |
 
 ### Search
 

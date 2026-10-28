@@ -9,7 +9,7 @@ const { parse } = require('espree');
 const reads = new Set(['getMeta', 'getAllMeta', 'isCachePopulated', 'getAllCached', 'getCachedByFolder',
   'getCachedByParent', 'getCachedFolder', 'getCachedSession', 'getCachedMissingEntrypoint', 'getCachedMissingCustomTitle',
   'getFolderMeta', 'getAllFolderMeta', 'getSearchFileIds', 'searchByType', 'isSearchIndexPopulated',
-  'searchFtsRecreated', 'getSetting', 'listSettingKeys', 'isInitialScanComplete', 'getDailyActivity',
+  'searchFtsRecreated', 'getSetting', 'listSettingKeys', 'isInitialScanComplete',
   'getDailyMetrics', 'getDailyModelTokens', 'getModelUsage', 'getTotalCounts', 'DB_PATH', 'getProjectsRevision', 'applySettingsAcknowledgment', 'closeDb']);
 
 const cacheWriters = new Set(['deleteCachedFolder', 'upsertCachedSessions', 'deleteCachedSession',

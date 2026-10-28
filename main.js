@@ -294,7 +294,6 @@ const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 const PANEL_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const TERMINAL_PATH_BATCH_MAX = 64;
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
-const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 // MAX_BUFFER_SIZE imported from output-buffer.js (single source of truth)
 
 // Active PTY sessions
@@ -1340,18 +1339,6 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
     }
     console.error('Error listing projects:', err);
     throw err;
-  }
-});
-
-// --- IPC: get-stats ---
-ipcMain.handle('get-stats', () => {
-  try {
-    if (!fs.existsSync(STATS_CACHE_PATH)) return null;
-    const raw = fs.readFileSync(STATS_CACHE_PATH, 'utf8');
-    return JSON.parse(raw);
-  } catch (err) {
-    console.error('Error reading stats cache:', err);
-    return null;
   }
 });
 
