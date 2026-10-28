@@ -256,7 +256,8 @@ test('A-T6 a rewritten job during confirmation invalidates the old death evidenc
   } finally { rmTmp(dir); }
 });
 
-test('A-T6 numeric timestamps also receive the delayed supervisor confirmation', async () => {
+test('A-T6 numeric timestamps also receive the delayed supervisor confirmation', { timeout: 10000 }, async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   const dir = mkTmp();
   try {
     const updatedAt = Date.now();
@@ -266,9 +267,20 @@ test('A-T6 numeric timestamps also receive the delayed supervisor confirmation',
     fs.writeFileSync(path.join(dir, 'daemon', 'roster.json'), JSON.stringify({ proto: 1,
       updatedAt: updatedAt + 1, supervisorPid: 43, workers: {} }));
     const sessionState = fakeSessionState();
-    sessionState.readWorkerProcessEvidence = () => ({ processTableFresh: true, observedAt: Date.now(), tableEntry: () => undefined });
+    let reads = 0;
+    sessionState.readWorkerProcessEvidence = () => {
+      reads++;
+      return { processTableFresh: true, observedAt: Date.now(), tableEntry: () => undefined };
+    };
     boot(dir, { sessionState });
-    assert.equal((await bgAgents.conversationCheck('aaaaaaaa')).workerLiveness, 'dead');
+    const checking = bgAgents.conversationCheck('aaaaaaaa');
+    await new Promise(resolve => setImmediate(resolve));
+    t.mock.timers.tick(999);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reads, 1, 'supervisor confirmation must wait a full second');
+    t.mock.timers.tick(1);
+    assert.equal((await checking).workerLiveness, 'dead');
+    assert.equal(reads, 2, 'supervisor absence must be observed again');
   } finally { rmTmp(dir); }
 });
 

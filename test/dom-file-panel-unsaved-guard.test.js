@@ -530,7 +530,7 @@ for (const ok of [false, true]) test(`C9c upgrade during a batch ${ok ? 'renews 
   } finally { ctx.destroy(); }
 });
 
-for (const error of ['disk', 'unread', 'timeout']) test(`checked save ${error} recovers immediately and releases the exit hold`, async () => {
+for (const error of ['disk', 'unread', 'timeout']) test(`checked save ${error} recovers immediately and releases the exit hold`, { timeout: 10000 }, async () => {
   const ctx = setup();
   try {
     const detail = exitRuntime(ctx);
@@ -541,9 +541,9 @@ for (const error of ['disk', 'unread', 'timeout']) test(`checked save ${error} r
       const timeout = ctx.window.setTimeout.bind(ctx.window);
       ctx.window.setTimeout = (fn, ms) => timeout(fn, ms === 2000 ? 10 : ms);
     }
-    ctx.calls.check(306, 'quit', detail); await clickMove(ctx);
+    const checking = ctx.calls.check(306, 'quit', detail); await clickMove(ctx);
     ctx.calls.finishBatch([moved('one'), moved('two')]);
-    await new Promise(resolve => setTimeout(resolve, error === 'timeout' ? 25 : 5));
+    await checking;
     assert.equal(ctx.calls.answers.at(-1)?.proceed, false);
     assert.equal(ctx.calls.attaches.length, 2);
     assert.equal(vm.runInContext('exitingApp', ctx.context), false, 'recovery must release the 10 second hold');
