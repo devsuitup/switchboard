@@ -29,3 +29,4 @@ coverage/
 e2e/playwright-report/
 
 public/mermaid-bundle.js
+*.stackdump

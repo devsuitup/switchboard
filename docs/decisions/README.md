@@ -11,3 +11,4 @@ Format: lightweight — Status, Context, Decision, Consequences. No fixed templa
 - [0003 — Deliver triggers under one tab lock and a per-write ownership check](0003-trigger-delivery-per-tab.md)
 - [0004 — Update the session index incrementally through one writer and bind the display with deltas](0004-session-index-single-writer.md)
   - [Supporting study — session index reads, writes and display refreshes](0004-session-index-study.md), including local CLI title-record structure and read-then-write command inventory. The decision uses title-value changes for rename precedence, keeps unread in renderer memory, and separates projection parity (3a) from bounded delta transport (3b).
+- [0005 — Move main-process modules into flat contexts](0005-main-process-context-layout.md)

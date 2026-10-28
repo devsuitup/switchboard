@@ -11,6 +11,7 @@ const { EventEmitter } = require('events');
 const { Readable } = require('stream');
 const espree = require('espree');
 const eslintScope = require('eslint-scope');
+const { walk } = require('../scripts/module-paths');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -50,12 +51,24 @@ const EXPECTED_RESOLVER_SITES = {
   'remote-watch.js': ['resolveSshPath()'],
 };
 
-function mainProcessFiles() {
+function mainProcessFiles(root = ROOT) {
   return [
-    ...fs.readdirSync(ROOT).filter((f) => f.endsWith('.js') && f !== 'remote-ssh-binary.js'),
-    ...fs.readdirSync(path.join(ROOT, 'workers')).filter((f) => f.endsWith('.js')).map((f) => `workers/${f}`),
-  ].sort();
+    ...fs.readdirSync(root).filter((f) => f.endsWith('.js')),
+    ...walk(root, 'workers'),
+    ...walk(root, 'src'),
+  ].filter((f) => path.basename(f) !== 'remote-ssh-binary.js').sort();
 }
+
+test('spawn-site enumeration reaches nested workers and src modules', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spawn-inventory-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const file of ['main.js', 'workers/nested/a.js', 'src/main/remote/adapters/b.js',
+    'src/main/remote/remote-ssh-binary.js']) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), '');
+  }
+  assert.deepEqual(mainProcessFiles(root), ['main.js', 'src/main/remote/adapters/b.js', 'workers/nested/a.js']);
+});
 
 function analyse(file, source) {
   const ast = espree.parse(source, { ecmaVersion: 'latest', sourceType: 'script', loc: true, range: true });

@@ -8,7 +8,7 @@
   "scopes": {
     "main": {
       "description": "Electron main process — IPC handlers, native module bridges, schedule runner",
-      "paths": ["main.js", "preload.js", "db.js", "schedule-*.js", "session-cache.js", "read-session-file.js"]
+      "paths": ["src/main/**/*.js", "src/preload/**/*.js", "main.js", "preload.js", "db.js", "schedule-*.js", "session-cache.js", "read-session-file.js"]
     },
     "renderer": {
       "description": "Browser-side UI — sidebar, terminal, viewer panels, tabs",
