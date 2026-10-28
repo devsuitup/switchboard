@@ -59,6 +59,63 @@ test('a genuine conflicting require-stub key is refused', () => {
   }), /ambiguous vm stub/);
 });
 
+test('a shared stub key is refused when only one loaded source moves, in either load order', () => {
+  const sources = Object.fromEntries(['main.js', 'schedule-runner.js'].map(file =>
+    [file, fs.readFileSync(path.join(__dirname, '..', file), 'utf8')]));
+  for (const order of [['main.js', 'schedule-runner.js'], ['schedule-runner.js', 'main.js']]) {
+    const input = order.map(file => `path.join(ROOT, '${file}');`).join('\n')
+      + "\nconst stubs = { './encode-project-path': 1 };";
+    assert.throws(() => rewrite('test/shared.test.js', input,
+      { 'schedule-runner.js': 'src/main/schedules/schedule-runner.js' }, { sources }),
+    /ambiguous vm stub \.\/encode-project-path/);
+  }
+});
+
+test('helper-loaded sources with unassociated stub keys produce a listed warning', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'git-changes-file-paths.test.js'), 'utf8');
+  const warnings = [];
+  rewrite('test/git-changes-file-paths.test.js', source,
+    { 'git-changes-file.js': 'src/main/changes/git-changes-file.js' }, {
+      sources: { 'git-changes-file.js': fs.readFileSync(path.join(__dirname, '..', 'git-changes-file.js'), 'utf8') },
+      onWarning: warning => warnings.push(warning),
+    });
+  assert.ok(warnings.some(warning => /git-changes-file-paths.*unassociated vm stub.*resolve-path-on-disk/.test(warning)), warnings.join('\n'));
+});
+
+test('the CLI rewrites cjs and mjs consumers in every scanned JavaScript scope', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'move-extensions-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'src/main/viewer'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'scripts/source-map.json'), JSON.stringify({ 'a.js': map['a.js'] }));
+  fs.writeFileSync(path.join(root, map['a.js']), "module.exports = require('./c');");
+  fs.writeFileSync(path.join(root, 'c.js'), 'module.exports = 1;');
+  const consumers = [];
+  for (const dir of ['', 'workers', 'src', 'scripts', 'public', 'test/fixtures', 'e2e']) {
+    for (const extension of ['cjs', 'mjs']) {
+      const file = path.posix.join(dir, `consumer.${extension}`);
+      const prefix = dir ? '../'.repeat(dir.split('/').length) : './';
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), `require('${prefix}a');`);
+      const relative = path.posix.relative(dir || '.', 'src/main/viewer/a');
+      consumers.push([file, `require('${relative.startsWith('.') ? relative : `./${relative}`}');`]);
+    }
+  }
+  fs.writeFileSync(path.join(root, 'test/helper.test.cjs'),
+    "function load(filename) { return path.join(ROOT, filename); } const stubs = { './c': 1 };");
+  const run = (...args) => spawnSync(process.execPath,
+    [path.join(__dirname, '../scripts/move-modules.js'), '--root', root, ...args], { encoding: 'utf8', timeout: 120000 });
+  const check = run('--check');
+  assert.equal(check.status, 1, check.stderr);
+  assert.match(check.stdout, /test\/fixtures\/consumer.cjs/);
+  assert.match(check.stderr, /WARNING test\/helper.test.cjs: unassociated vm stub \.\/c/);
+  assert.equal(run().status, 0);
+  for (const [file, expected] of consumers) assert.equal(fs.readFileSync(path.join(root, file), 'utf8'), expected, file);
+  const final = run('--check');
+  assert.equal(final.status, 0);
+  assert.match(final.stderr, /WARNING test\/helper.test.cjs: unassociated vm stub \.\/c/);
+});
+
 test('require.resolve follows an unmoved target from a moved source', () => {
   const input = "const worker = require.resolve('./c.js');";
   const output = rewrite(map['a.js'], input, map);

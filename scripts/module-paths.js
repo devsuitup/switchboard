@@ -4,7 +4,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const espree = require('espree');
 
-function walk(root, directory, accept = (file) => file.endsWith('.js')) {
+function isJavaScript(file) {
+  return /\.(?:js|cjs|mjs)$/.test(file);
+}
+
+function walk(root, directory, accept = isJavaScript) {
   const absolute = path.join(root, directory);
   if (!fs.existsSync(absolute)) return [];
   return fs.readdirSync(absolute, { withFileTypes: true }).flatMap((entry) => {
@@ -17,7 +21,7 @@ function walk(root, directory, accept = (file) => file.endsWith('.js')) {
 
 function appFiles(root) {
   return [
-    ...fs.readdirSync(root).filter((f) => f.endsWith('.js')),
+    ...fs.readdirSync(root).filter(isJavaScript),
     ...walk(root, 'workers'), ...walk(root, 'src'), ...walk(root, 'scripts'),
   ].sort();
 }
@@ -61,4 +65,4 @@ function staticDirnameJoins(source) {
     .map(({ node }) => node);
 }
 
-module.exports = { walk, appFiles, nodes, relativeRequires, requireCalls, staticDirnameJoins };
+module.exports = { isJavaScript, walk, appFiles, nodes, relativeRequires, requireCalls, staticDirnameJoins };

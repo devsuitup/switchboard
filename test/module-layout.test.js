@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createRequire } = require('node:module');
-const { appFiles, relativeRequires, requireCalls, staticDirnameJoins, walk } = require('../scripts/module-paths');
+const { isJavaScript, appFiles, relativeRequires, requireCalls, staticDirnameJoins, walk } = require('../scripts/module-paths');
 const allowed = require('./fixtures/root-app-modules.json');
 
 const ROOT = path.join(__dirname, '..');
@@ -48,7 +48,7 @@ function unresolved(root) {
       try {
         const target = resolve(spec.value);
         const rel = path.relative(root, target).replace(/\\/g, '/');
-        if (rel.startsWith('public/') && rel.endsWith('.js')) pending.push(rel);
+        if (rel.startsWith('public/') && isJavaScript(rel)) pending.push(rel);
       } catch (error) {
         failures.push(`${file}:${spec.loc.start.line}: ${spec.value}: ${error.code}`);
       }
@@ -58,7 +58,7 @@ function unresolved(root) {
 }
 
 function rootModules(root) {
-  return fs.readdirSync(root).filter((f) => f.endsWith('.js') && f !== 'eslint.config.js').sort();
+  return fs.readdirSync(root).filter((f) => isJavaScript(f) && f !== 'eslint.config.js').sort();
 }
 
 test('every literal relative require in app code resolves, including lazy calls and shared public modules', () => {
@@ -91,6 +91,24 @@ test('the root inventory detects an added module and ignores context modules', (
   fs.mkdirSync(path.join(root, 'src/main/viewer'), { recursive: true });
   fs.writeFileSync(path.join(root, 'src/main/viewer/context.js'), '');
   assert.deepEqual(rootModules(root), ['new-module.js']);
+});
+
+test('the guard resolves cjs and mjs requires at root, in nested scopes and required public modules', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'extension-layout-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const files = [];
+  for (const dir of ['', 'workers', 'src/main/context', 'scripts', 'public']) {
+    for (const extension of ['cjs', 'mjs']) {
+      const file = path.posix.join(dir, `consumer.${extension}`);
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), "require('./missing');");
+      files.push(file);
+    }
+  }
+  fs.writeFileSync(path.join(root, 'entry.js'), "require('./public/consumer.cjs'); require('./public/consumer.mjs');");
+  const failures = unresolved(root);
+  assert.equal(failures.length, files.length, failures.join('\n'));
+  for (const file of files) assert.ok(failures.some(failure => failure.startsWith(`${file}:`) && failure.includes('MODULE_NOT_FOUND')), file);
 });
 
 test('the layout guard detects broken static worker, preload, HTML and shell paths after a move', (t) => {

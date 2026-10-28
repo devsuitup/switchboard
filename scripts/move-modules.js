@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { walk, appFiles, nodes, relativeRequires } = require('./module-paths');
+const { isJavaScript, walk, appFiles, nodes, relativeRequires } = require('./module-paths');
 const p = path.posix;
 
 function validateMap(map) {
@@ -106,9 +106,27 @@ function rewrite(file, source, map, options = {}) {
         const target = moduleTarget(from, spec.value, map, options.root);
         let next = relative(currentFile, map[target] || target);
         if (!spec.value.endsWith('.js')) next = next.replace(/\.js$/, '');
-        if (next === spec.value) continue;
         if (stubs.has(spec.value) && stubs.get(spec.value) !== next) throw new Error(`${file}: ambiguous vm stub ${spec.value}`);
         stubs.set(spec.value, next);
+      }
+    }
+    const loadedApp = [...loaded].some(old => !old.startsWith('test/') && isJavaScript(old) && options.sources?.[old]);
+    if (file.startsWith('test/') && !loadedApp && stubValues.size) {
+      const affected = new Set();
+      for (const old of Object.keys(map)) {
+        affected.add(`./${p.basename(old, '.js')}`);
+        affected.add(`./${p.basename(old)}`);
+        for (const spec of relativeRequires(options.sources?.[old] || '')) {
+          affected.add(spec.value);
+          const currentFile = map[old];
+          const from = alreadyRewritten(currentFile, spec.value, map, options.root) ? currentFile : old;
+          const target = originalFile(moduleTarget(from, spec.value, map, options.root), map);
+          const originalSpec = relative(old, target);
+          affected.add(spec.value.endsWith('.js') ? originalSpec : originalSpec.replace(/\.js$/, ''));
+        }
+      }
+      for (const value of stubValues) {
+        if (affected.has(value)) options.onWarning?.(`${file}: unassociated vm stub ${value}; helper/computed source loader requires manual review`);
       }
     }
     const requires = new Set(relativeRequires(source).map((n) => n.range[0]));
@@ -157,13 +175,13 @@ function run(argv) {
     ...walk(root, 'e2e'), ...walk(root, '.ai', (f) => /\.(md|json)$/.test(f)),
     ...walk(root, 'docs', (f) => f.endsWith('.md'))])];
   const sources = {};
-  for (const file of files.filter((f) => f.endsWith('.js'))) {
+  for (const file of files.filter(isJavaScript)) {
     sources[originalFile(file, map)] = fs.readFileSync(path.join(root, file), 'utf8');
   }
   const changes = [];
   for (const file of files) {
     const source = fs.readFileSync(path.join(root, file), 'utf8');
-    const output = rewrite(file, source, map, { root, sources, onEdits(edits) {
+    const output = rewrite(file, source, map, { root, sources, onWarning: warning => console.warn(`WARNING ${warning}`), onEdits(edits) {
       for (const edit of edits) {
         const line = source.slice(0, edit.start).split('\n').length;
         console.log(`${file}:${line}: ${edit.old} -> ${edit.value}`);

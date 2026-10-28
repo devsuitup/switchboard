@@ -24,16 +24,26 @@ It plans all edits before writing and rejects invalid maps, renames and ambiguou
 Keep the map for the move until verification finishes; a second apply must produce no changes.
 Use `--root <repository>` to exercise a disposable copy without modifying the working checkout.
 
-The scanner reads root JavaScript, workers, src, scripts, public, test (including fixtures), e2e,
+The scanner reads `.js`, `.cjs` and `.mjs` sources at root and in workers, src, scripts, public, test (including fixtures), e2e,
 and Markdown/JSON context documents under .ai and docs. It updates literal relative requires
 (including `require.resolve`),
 static `path.join(__dirname, ...)` and `path.join(ROOT, ...)` expressions, literal file paths and
 VM stub keys/comparisons inferred from the source files the test loads. Only stub literals
 actually present in the test participate in ambiguity checks. Loaded source requires are resolved
 from their current location once rewritten, so repeated apply/check runs preserve the stubs.
+Shared stub keys must agree across loaded sources, including sources that keep their original location.
+The inference is conservative across separate VM contexts or source excerpts; resolve such ambiguities manually.
 Qualified documentation paths
 change; bare filenames remain valid. It does not evaluate code or computed path expressions.
 Review dynamic paths manually, especially interpolated worker paths and source strings inside tests.
+Source-text assertions such as `"} = require('./db');"` are not parsed as executable requires and
+remain unchanged; review and update them manually after a move. Helper loaders such as
+`loadShipped(filename)` with `path.join(__dirname, '..', filename)` do not associate a loaded source
+with its VM stubs. If no static loaded application source is detected and a stub-shaped literal matches a moved
+module or one of its relative dependencies, both apply and check print an explicit `WARNING` listing
+the file and key. These warnings require manual review and do not change the exit status; a clean
+check proves only that no supported rewrites or moves remain. This heuristic cannot identify every
+computed loader or stub and may also flag ordinary comparisons.
 The layout guard rejects non-literal requires unless explicitly allowed with a reason and checks
 every static `path.join(__dirname, <string literals>)` target on disk. Optional dependency paths
 are listed with reasons in `test/module-layout.test.js`.
