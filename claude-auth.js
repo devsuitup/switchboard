@@ -66,7 +66,6 @@ function formatResetTime(value) {
   }
   if (isNaN(resetDate.getTime())) return null;
   const now = new Date();
-  const diffMs = resetDate - now;
 
   const hours = resetDate.getHours();
   const minutes = resetDate.getMinutes();
@@ -77,8 +76,10 @@ function formatResetTime(value) {
   const tz = Intl.DateTimeFormat('en', { timeZoneName: 'short' }).formatToParts(resetDate)
     .find(p => p.type === 'timeZoneName')?.value || '';
 
-  if (diffMs < 0) return `${timeStr} (${tz})`;
-  if (diffMs < 24 * 60 * 60 * 1000) return `${timeStr} (${tz})`;
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if (resetDate.toDateString() === now.toDateString()) return `${timeStr} (${tz})`;
+  if (resetDate.toDateString() === tomorrow.toDateString()) return `tomorrow at ${timeStr} (${tz})`;
 
   const month = resetDate.toLocaleString('en', { month: 'short' });
   const day = resetDate.getDate();

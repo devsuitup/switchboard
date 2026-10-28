@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- Copying and pasting accented characters works in sessions and terminals launched without a locale on macOS and Linux. Quota tooltips now say "tomorrow" when a reset falls on the next day. (#818)
 - A project scan that fails to start now shows its error and retries automatically instead of staying on "Scanning projects…" until restart. (#809)
 
 ## v0.0.102 — 2026-10-27

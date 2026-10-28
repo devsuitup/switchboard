@@ -668,7 +668,7 @@ function restartWatcherForAlias(alias) {
 // see .ai/contexts/session-cache.md ("Remote hosts — tmux attach")
 const remoteAttachAdapter = createTmuxAttachAdapter({
   profileId: loadAttachProfileId(app.getPath('userData'), log),
-  spawnPty: (file, args, ptyOpts) => spawnPty(file, args, { ...ptyOpts, cwd: os.homedir(), env: cleanPtyEnv }),
+  spawnPty: (file, args, ptyOpts) => spawnPty(file, args, { ...ptyOpts, cwd: os.homedir(), env: cleanEnv(process.env, { locale: false }) }),
   log,
 });
 
