@@ -10,13 +10,14 @@ const { EventEmitter } = require('node:events');
 
 function fixture({ complete = true, folders = ['broken', 'healthy'] } = {}) {
   let now = 0, nextTimer = 0;
-  const timers = new Map(), workers = [], statuses = [], written = [], errors = [];
+  const timers = new Map(), workers = [], workerAttempts = [], statuses = [], written = [], errors = [];
   const faults = {};
   const failing = new Set(['broken']);
   const reasons = new Map();
   class ScanWorker extends EventEmitter {
     constructor(_filename, { workerData }) {
       super();
+      workerAttempts.push(workerData);
       if (faults.worker) throw faults.worker;
       workers.push(workerData);
       setImmediate(() => {
@@ -49,7 +50,10 @@ function fixture({ complete = true, folders = ['broken', 'healthy'] } = {}) {
       send(channel, message, level) { if (channel === 'status-update') statuses.push({ message, level }); },
     } }),
     log: { error(...args) { errors.push(args); }, warn() {}, info() {} },
-    db: { getSetting: () => null, isInitialScanComplete() {
+    db: { getSetting() {
+      if (faults.remaps) throw faults.remaps;
+      return null;
+    }, isInitialScanComplete() {
       if (faults.initialScan) throw faults.initialScan;
       return complete;
     }, setInitialScanComplete() {} },
@@ -84,7 +88,7 @@ function fixture({ complete = true, folders = ['broken', 'healthy'] } = {}) {
     assert.doesNotThrow(() => timer.callback(), 'the timer must contain synchronous errors');
     await new Promise(resolve => setImmediate(resolve));
   }
-  return { cache, failing, reasons, workers, statuses, written, advance, fireRetryEarly,
+  return { cache, failing, reasons, workers, workerAttempts, statuses, written, advance, fireRetryEarly,
     errors, faults, complete: () => complete };
 }
 
@@ -104,7 +108,7 @@ for (const earlyBy of [1, 60000]) {
   });
 }
 
-for (const fault of ['initialScan', 'worker']) {
+for (const fault of ['initialScan']) {
   test(`a retry timer logs a ${fault} error without an uncaught exception or rejection`, async () => {
     const f = fixture();
     await f.cache.populateCacheViaWorker();
@@ -117,6 +121,69 @@ for (const fault of ['initialScan', 'worker']) {
     assert.equal(f.workers.length, 1);
   });
 }
+
+for (const fault of ['worker', 'remaps']) {
+  test(`a synchronous ${fault} failure resolves and permits a successful forced scan`, async () => {
+    const f = fixture({ complete: false });
+    f.failing.clear();
+    f.faults[fault] = new Error(`${fault} unavailable`);
+    await assert.doesNotReject(f.cache.populateCacheViaWorker());
+    assert.equal(f.statuses.at(-1).message, `Scan failed: ${fault} unavailable`);
+    assert.equal(f.statuses.at(-1).level, 'error');
+    assert.equal(f.cache.isIndexingFinished(), true);
+    assert.equal(f.complete(), false);
+    assert.equal(f.workers.length, 0);
+    delete f.faults[fault];
+    await f.cache.populateCacheViaWorker({ force: true });
+    assert.equal(f.workers.length, 1, 'the failed promise must be released');
+    assert.equal(f.complete(), true);
+    assert.equal(f.statuses.at(-1).level, 'done');
+    await f.advance(5000);
+    assert.equal(f.statuses.at(-1).message, '');
+    await f.advance(1000000);
+    assert.equal(f.workers.length, 1, 'forced success must cancel the retry');
+  });
+
+  test(`a synchronous ${fault} failure recovers on the scheduled retry`, async () => {
+    const f = fixture();
+    f.failing.clear();
+    f.faults[fault] = new Error(`${fault} unavailable`);
+    await assert.doesNotReject(f.cache.populateCacheViaWorker());
+    assert.equal(f.statuses.at(-1).message, `Scan failed: ${fault} unavailable`);
+    delete f.faults[fault];
+    await f.advance(29999);
+    await f.cache.populateCacheViaWorker();
+    assert.equal(f.workers.length, 0, 'ordinary callers must respect the backoff');
+    await f.advance(1);
+    assert.equal(f.workers.length, 1, 'the retry must recover without a caller');
+    assert.equal(f.workers[0].folders, undefined, 'an unknown failure retries the full scan');
+    assert.equal(f.statuses.at(-1).level, 'done');
+    await f.advance(5000);
+    assert.equal(f.statuses.at(-1).message, '');
+    await f.advance(1000000);
+    assert.equal(f.workers.length, 1);
+  });
+}
+
+test('persistent worker construction failure uses only the existing three delayed retries', async () => {
+  const f = fixture();
+  f.faults.worker = new Error('worker unavailable');
+  await assert.doesNotReject(f.cache.populateCacheViaWorker());
+  assert.equal(f.workerAttempts.length, 1);
+  for (const [index, delay] of [30000, 120000, 600000].entries()) {
+    await f.advance(delay - 1);
+    await f.cache.populateCacheViaWorker();
+    assert.equal(f.workerAttempts.length, index + 1);
+    await f.advance(1);
+    assert.equal(f.workerAttempts.length, index + 2);
+    assert.equal(f.statuses.at(-1).message, 'Scan failed: worker unavailable');
+  }
+  await f.advance(10000000);
+  await f.cache.populateCacheViaWorker();
+  assert.equal(f.workerAttempts.length, 4, 'exhausted backoff must not restart');
+  assert.equal(f.workers.length, 0);
+  assert.equal(f.statuses.some(status => status.message === '' || status.level === 'done'), false);
+});
 
 test('a named folder failure supplies its own reason after an unknown-folder failure', async () => {
   const f = fixture({ folders: [undefined, 'broken', 'healthy'] });

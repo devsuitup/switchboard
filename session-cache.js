@@ -1566,6 +1566,7 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
   populatePromise = new Promise((resolve) => {
     let settled = false;
     let workerExited = false;
+    let worker;
     const settle = () => {
       if (settled) return;
       settled = true;
@@ -1578,7 +1579,7 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
           at: backoff === undefined ? Infinity : populateNow() + backoff,
         };
       }
-      Promise.resolve(workerExited ? undefined : worker.terminate()).catch(() => {}).finally(() => {
+      Promise.resolve(workerExited ? undefined : worker?.terminate()).catch(() => {}).finally(() => {
         populatePromise = null;
         if (!stopping && populateRetry && Number.isFinite(populateRetry.at)) {
           populateRetryTimer = setTimeout(() => {
@@ -1597,9 +1598,17 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
       });
     };
 
-    const worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
-      workerData: { projectsDir: PROJECTS_DIR, remaps: remappedProjectsSetting(), ...(retryFolders ? { folders: retryFolders } : {}) },
-    });
+    try {
+      worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
+        workerData: { projectsDir: PROJECTS_DIR, remaps: remappedProjectsSetting(), ...(retryFolders ? { folders: retryFolders } : {}) },
+      });
+    } catch (err) {
+      unknownFailure = true;
+      sendStatus('Scan failed: ' + err.message, 'error');
+      reportProgress(true, err.message);
+      settle();
+      return;
+    }
 
     let writes = Promise.resolve();
     worker.on('message', (msg) => {
