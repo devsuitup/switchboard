@@ -318,8 +318,9 @@ the sandbox and without the pre-launch command. The dialog says so and Start
 stays disabled; start a session in that project instead.
 
 A session that a background job is still running cannot be archived or
-deleted from the sidebar: stop the job from the Agents view first. Archiving
-a folder that holds one is refused when **Archive the sessions** is checked.
+deleted from the sidebar: use **Stop session** on its sidebar row first when
+that row can stop the job. Otherwise, find and stop it in the Agents view.
+Archiving a folder that holds one is refused when **Archive the sessions** is checked.
 Unchecked, the folder is only hidden: no session is archived or detached, and
 the job keeps running and stays in the Agents view. A session live in another
 process cannot be deleted either. When Switchboard cannot tell, for example because `~/.claude/jobs`

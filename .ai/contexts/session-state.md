@@ -20,6 +20,11 @@ followed by a second recovery instruction. Remote Delete never stops a process
 before the read-only refusal (#271: remote Delete). Remote rows do not append
 the Delete button, and the row context menu offers no Delete. Main retains
 `REMOTE_READ_ONLY` as a guard for direct requests. Confirmations remain questions.
+Local live-background-job Archive/Delete refusals name **Stop session** on the
+sidebar row when `planSessionStop` with `jobStop: true` targets that job. The
+refusal reuses its cached job check. If Stop cannot identify that job or would
+stop another process instead, recovery points to the Agents view. Detach
+confirmations say the job keeps running without directing a stop elsewhere.
 After successful Delete, pendingSessions is cleared before reloading so its
 temporary row cannot be reinjected. An open tab is destroyed so it cannot remain
 selectable after its transcript and sidebar row are removed.

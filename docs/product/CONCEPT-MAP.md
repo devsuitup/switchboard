@@ -300,7 +300,7 @@ row text `<state> · <status>` (`:227`); row icon from the session-state ladder
 | Transcript | **Transcript** | transcript exists | none | row **View messages** |
 | Stop | **Stop** (`claude stop`) | live and reachable | After the fresh check: job name and id; its process ends, the conversation is kept | row, card and header **Stop session** stop the job too after the same check; **Detach** leaves it running (#777) |
 | Respawn | **Respawn** | finished, no live conversation | none | Send to background on a session with a job; restore of a saved background tab whose worker is dead (#785) |
-| Delete | **Delete** (`claude rm`) | finished, no live conversation | After the fresh check: "Delete this background session? Its conversation goes, and its worktree when that is safe." | row **Delete session** refused: "background job <id> is still running this session — stop it from the Agents view first" (`public/stop-session-ui.js:34`) |
+| Delete | **Delete** (`claude rm`) | finished, no live conversation | After the fresh check: "Delete this background session? Its conversation goes, and its worktree when that is safe." | row **Delete session** refused: "background job <id> is still running this session — use Stop session on its sidebar row first"; if the row cannot stop that job, "stop it from the Agents view first" (`liveBackgroundJobRefusal`, `public/stop-session-ui.js`) |
 | New | **New agent** (`public/index.html:91`) | — | — | — |
 | View options | **Finished**, Group **None / State / Project**, **Worktrees** (`public/index.html:82-90`) | — | — | Primary+Shift+A toggles the view |
 
