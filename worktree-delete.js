@@ -7,6 +7,8 @@ const { StringDecoder } = require('node:string_decoder');
 const { resolveOnDisk } = require('./resolve-path-on-disk');
 
 const HASH_LIMIT = 512 * 1024 * 1024;
+const DIRECTORY_LIMIT = 200000;
+const DIRECTORY_SCAN_MS = 5000;
 
 function within(root, candidate) {
   const relative = path.relative(root, candidate);
@@ -14,6 +16,10 @@ function within(root, candidate) {
 }
 
 async function refuseDirectoryLinks(root) {
+  const started = Date.now();
+  const checkTime = () => {
+    if (Date.now() - started >= DIRECTORY_SCAN_MS) throw new Error('Directory link scan exceeded its 5 second time budget. Review or reduce the worktree directories before trying Delete again.');
+  };
   const realRoot = resolveOnDisk(root);
   if (!realRoot) {
     try { await fs.promises.lstat(root); }
@@ -22,29 +28,46 @@ async function refuseDirectoryLinks(root) {
   }
   const links = [];
   let count = 0;
-  async function walk(directory) {
-    const stat = await fs.promises.lstat(directory);
-    if (stat.isSymbolicLink()) {
-      let directoryLink = true;
-      try { directoryLink = (await fs.promises.stat(directory)).isDirectory(); }
-      catch (error) { if (!['ENOENT', 'ELOOP'].includes(error.code)) throw error; }
-      if (directoryLink) {
-        count++;
-        if (links.length < 10) links.push(path.relative(root, directory) || directory);
-      }
-      return;
-    }
-    if (!stat.isDirectory()) return;
-    const real = resolveOnDisk(directory);
-    if (!real || (real !== realRoot && !within(realRoot, real))) {
-      throw new Error('A path resolves outside the worktree. Review its directory links before deleting.');
-    }
-    const handle = await fs.promises.opendir(real);
-    for await (const entry of handle) {
-      if (entry.isDirectory() || entry.isSymbolicLink()) await walk(path.join(real, entry.name));
+  async function checkLink(directory) {
+    let stat, target;
+    try {
+      stat = await fs.promises.stat(directory);
+      if (stat.isFile()) return;
+      target = await fs.promises.realpath(directory);
+    } catch { target = null; }
+    if (!stat?.isDirectory() || !target || (target !== realRoot && !within(realRoot, target))) {
+      count++;
+      if (links.length < 10) links.push(path.relative(root, directory) || directory);
     }
   }
-  await walk(root);
+  const stat = await fs.promises.lstat(root);
+  const pending = [];
+  let directories = 1;
+  if (stat.isSymbolicLink()) {
+    await checkLink(root);
+    if (!count) pending.push(realRoot);
+  }
+  else if (stat.isDirectory()) pending.push(root);
+  while (pending.length) {
+    checkTime();
+    const batch = pending.splice(Math.max(0, pending.length - 32));
+    const results = await Promise.allSettled(batch.map(directory => fs.promises.readdir(directory, { withFileTypes: true })));
+    checkTime();
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === 'rejected') throw result.reason;
+      for (const entry of result.value) {
+        checkTime();
+        const candidate = path.join(batch[i], entry.name);
+        if (entry.isSymbolicLink()) await checkLink(candidate);
+        else if (entry.isDirectory()) {
+          if (++directories > DIRECTORY_LIMIT) throw new Error('Directory link scan exceeds the 200,000 directory limit. Review or reduce the worktree directories before trying Delete again.');
+          pending.push(candidate);
+        }
+      }
+    }
+  }
+  checkTime();
   if (count) throw new Error(`Deletion refused: ${count} directory link(s): ${links.join(', ')}${count > 10 ? `; ${count - 10} more` : ''}. Remove the link first: for a Windows junction use rmdir <path>, never a recursive delete; on POSIX use rm <link> without -r. Then try Delete again.`);
 }
 
@@ -162,7 +185,14 @@ async function fileFingerprint(root, name, submodules, runGit, depth, budget) {
   if (stat.isDirectory()) {
     if (submodules.includes(name)) {
       try { await fs.promises.lstat(path.join(candidate, '.git')); }
-      catch (error) { if (error.code === 'ENOENT') return ['submodule', 'uninitialised']; throw error; }
+      catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        const directory = await fs.promises.opendir(candidate);
+        try {
+          if (await directory.read()) throw new Error(`Uninitialised submodule ${name} is not empty. Review or move its files before trying Delete again.`);
+        } finally { await directory.close(); }
+        return ['submodule', 'uninitialised'];
+      }
       return ['submodule', await statusSnapshot(candidate, runGit, depth + 1, budget)];
     }
     if (await fs.promises.lstat(path.join(candidate, '.git')).then(() => true, error => {
@@ -181,7 +211,6 @@ async function fileFingerprint(root, name, submodules, runGit, depth, budget) {
 
 async function statusSnapshot(worktreePath, runGit, depth = 0, budget = { used: 0, files: new Map() }) {
   if (depth > 16) throw new Error('Too many nested submodules to preview. Review the worktree with Git before deleting.');
-  await refuseDirectoryLinks(worktreePath);
   const args = ['-C', worktreePath];
   const output = await runGit([...args, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=none']);
   const ignoredOutput = await runGit([...args, 'status', '--porcelain=v1', '-z', '--ignored', '--untracked-files=normal', '--ignore-submodules=none']);
@@ -196,11 +225,12 @@ async function statusSnapshot(worktreePath, runGit, depth = 0, budget = { used: 
   ignored.sort();
   const entries = output.split('\0').filter(Boolean);
   if (entries.length > 100000) throw new Error('Too many changed files to preview. Review the worktree with Git before deleting.');
-  const dirty = [], recordsForFingerprint = [];
+  const dirty = [], recordsForFingerprint = [], previewed = new Set();
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
     if (entry.startsWith('!! ')) continue;
     const name = entry.slice(3);
+    previewed.add(name);
     const content = await fileFingerprint(worktreePath, name, submodules, runGit, depth, budget);
     if (/^[RC]|^.[RC]/.test(entry)) {
       const source = entries[++i];
@@ -213,7 +243,10 @@ async function statusSnapshot(worktreePath, runGit, depth = 0, budget = { used: 
       dirty.push(entry);
     }
   }
-  await refuseDirectoryLinks(worktreePath);
+  for (const name of submodules) {
+    if (!previewed.has(name)) recordsForFingerprint.push(JSON.stringify(['gitlink', name,
+      await fileFingerprint(worktreePath, name, submodules, runGit, depth, budget)]));
+  }
   return { dirty, ignored, submodules, index, records: recordsForFingerprint.sort() };
 }
 
@@ -248,6 +281,7 @@ async function readStatus(worktreePath, parentRepo, runGit, readFile = fs.promis
       if (error.code !== 'ENOENT') throw error;
     }
   }
+  await refuseDirectoryLinks(worktreePath);
   const snapshot = await statusSnapshot(worktreePath, runGit);
   const { dirty, ignored, submodules } = snapshot;
   const fingerprint = createHash('sha256').update(JSON.stringify([

@@ -291,3 +291,121 @@ test('the last check before removal refuses links even when the supplied reader 
     assert.equal(fs.existsSync(path.join(outside, 'precious')), true);
   } finally { for (const link of links) fs.unlinkSync(link); }
 });
+
+function instrumentDeletion(overrides = {}, extra = {}) {
+  const filename = path.join(__dirname, '../worktree-delete.js');
+  const module = { exports: {} };
+  const productionRequire = require('node:module').createRequire(filename);
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    module, Buffer, setTimeout, clearTimeout, ...extra,
+    require: id => id === 'node:fs' ? { ...fs, promises: { ...fs.promises, ...overrides } } : productionRequire(id),
+  }, { filename });
+  return module.exports;
+}
+
+test('preview walks each directory once and Delete adds exactly one fresh pre-removal walk, including submodules', async t => {
+  const f = fixture(t, { paths: [], submodule: true });
+  fs.mkdirSync(path.join(f.root, 'sub/.git'), { recursive: true });
+  fs.mkdirSync(path.join(f.root, 'node_modules/pkg'), { recursive: true });
+  const visits = new Map();
+  const record = name => visits.set(name, (visits.get(name) || 0) + 1);
+  const instrumented = instrumentDeletion({
+    opendir: async (...args) => { record(args[0]); return fs.promises.opendir(...args); },
+    readdir: async (...args) => { if (args[1]?.withFileTypes) record(args[0]); return fs.promises.readdir(...args); },
+  });
+  const git = async args => {
+    if (args.includes('list')) return `worktree ${f.root}\nHEAD abc\n\n`;
+    if (args.includes('rev-parse')) return path.join(f.root, '.git/locked') + '\n';
+    if (args.includes('ls-files')) return args[1] === f.root ? '160000 abc 0\tsub\0' : '';
+    if (args.includes('remove')) {
+      assert.equal(visits.get(f.root), 2, 'fresh status walk plus exactly one walk immediately before remove');
+      assert.equal(visits.get(path.join(f.root, 'sub')), 2, 'nested snapshot must not repeat the walk');
+    }
+    return '';
+  };
+  const read = () => instrumented.readStatus(f.root, f.root, git);
+  const shown = await read();
+  assert.equal(visits.size, 5);
+  for (const count of visits.values()) assert.equal(count, 1, 'one walk per preview');
+  visits.clear();
+  assert.equal((await instrumented.removeWorktree(f.root, f.root,
+    { ...shown, confirmSubmodules: true }, read, git)).ok, true);
+  for (const count of visits.values()) assert.equal(count, 2, 'one status walk and one final safety walk');
+});
+
+test('inside-pointing directory links are allowed without traversing the link', async t => {
+  const f = fixture(t, { paths: [] });
+  fs.mkdirSync(path.join(f.root, 'node_modules/pkg'), { recursive: true });
+  const link = path.join(f.root, 'node_modules/alias');
+  fs.symlinkSync(path.join(f.root, 'node_modules/pkg'), link, process.platform === 'win32' ? 'junction' : 'dir');
+  try {
+    let shown;
+    await assert.doesNotReject(async () => { shown = await f.read(); });
+    assert.equal((await f.remove(shown)).ok, true);
+    assert.equal(f.state.removes.length, 1);
+  } finally { fs.unlinkSync(link); }
+});
+
+test('nonempty uninitialised gitlinks refuse even when status does not list the gitlink', async t => {
+  const f = fixture(t, { paths: [], submodule: true });
+  fs.mkdirSync(path.join(f.root, 'sub'));
+  const shown = await f.read();
+  fs.writeFileSync(path.join(f.root, 'sub/stray.txt'), 'keep');
+  await assert.rejects(f.read(), /uninitialised submodule.*sub.*not empty.*review/is);
+  await assert.rejects(f.remove({ ...shown, confirmSubmodules: true }), /uninitialised submodule/is);
+  assert.equal(f.state.removes.length, 0);
+  assert.equal(fs.readFileSync(path.join(f.root, 'sub/stray.txt'), 'utf8'), 'keep');
+});
+
+test('link walk refuses explicitly at its directory cap before opening excess directories', async t => {
+  const f = fixture(t, { paths: [] });
+  const dirs = Array.from({ length: 200001 }, (_, i) => ({ name: 'd' + i,
+    isDirectory: () => true, isSymbolicLink: () => false }));
+  let opened = 0;
+  const instrumented = instrumentDeletion({ readdir: async () => { opened++; return dirs; } });
+  await assert.rejects(instrumented.readStatus(f.root, f.root, async args => {
+    if (args.includes('list')) return `worktree ${f.root}\nHEAD abc\n\n`;
+    if (args.includes('rev-parse')) return path.join(f.root, '.git/locked') + '\n';
+    return '';
+  }), /directory.*200[,.]?000.*review/is);
+  assert.equal(opened, 1);
+});
+
+test('link walk time budget refuses preview and the final removal scan with an actionable error', async t => {
+  const f = fixture(t, { paths: [] });
+  const shown = await f.read();
+  let clock = 0;
+  const instrumented = instrumentDeletion({}, { Date: { now: () => { clock += 6000; return clock; } } });
+  await assert.rejects(instrumented.readStatus(f.root, f.root, async args => {
+    if (args.includes('list')) return `worktree ${f.root}\nHEAD abc\n\n`;
+    if (args.includes('rev-parse')) return path.join(f.root, '.git/locked') + '\n';
+    return '';
+  }), /directory.*time budget.*review/is);
+  await assert.rejects(instrumented.removeWorktree(f.root, f.root, shown, async () => shown,
+    async () => assert.fail('must not remove')), /directory.*time budget.*review/is);
+});
+
+test('deep ignored outside junctions and dangling junctions refuse while file links remain safe', async t => {
+  const f = fixture(t, { paths: [] });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-delete-deep-target-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(outside, 'precious'), 'keep');
+  const deep = path.join(f.root, 'node_modules/a/b/c/d/e/f');
+  fs.mkdirSync(deep, { recursive: true });
+  const link = path.join(deep, 'lnk');
+  const shown = await f.read();
+  fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+  try {
+    await assert.rejects(f.read(), /directory link/);
+    await assert.rejects(deletion.removeWorktree(f.root, f.root, shown, async () => shown,
+      async () => assert.fail('must not remove')), /directory link/);
+    assert.equal(fs.readFileSync(path.join(outside, 'precious'), 'utf8'), 'keep');
+  } finally { fs.unlinkSync(link); }
+  fs.symlinkSync(path.join(outside, 'missing'), link, process.platform === 'win32' ? 'junction' : 'dir');
+  try { await assert.rejects(f.read(), /directory link/); }
+  finally { fs.unlinkSync(link); }
+  fs.symlinkSync(path.join(outside, 'precious'), link, 'file');
+  try { await assert.doesNotReject(f.read()); }
+  finally { fs.unlinkSync(link); }
+  assert.equal(fs.readFileSync(path.join(outside, 'precious'), 'utf8'), 'keep');
+});

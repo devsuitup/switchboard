@@ -98,16 +98,23 @@ errors into actionable refusals. An interrupted removal preserves killed/signal
 metadata and warns that the folder may be partly deleted, without rereading a
 potentially missing folder or claiming Git refused it.
 
-Directory scans use lstat without traversing directory links, before and after
-the snapshot and again immediately before removal. Directory symlinks and Windows
-junctions, including links inside ignored directories, refuse preview/deletion;
+Directory scans use a root lstat and Dirents without traversing directory links,
+once before the snapshot and exactly once again immediately before removal.
+Nested submodule snapshots do not repeat the tree scan. Up to 32 directory reads
+run in each batch, with a shared 200,000-directory cap and five-second budget
+per scan; exceeding either refuses with an actionable message. Only link targets
+need realpath during this walk. Directory symlinks and Windows junctions resolving
+outside the real worktree root, or dangling/unresolvable links, including links
+inside ignored directories, refuse preview/deletion; inside-pointing links are allowed;
 the message names up to ten plus the total and instructs removal of the link
 first (`rmdir <path>` for Windows junctions, never recursive deletion; POSIX
 `rm <link>` without `-r`). File hashing resolves on disk with `resolveOnDisk`,
 checks realpath containment and reads that returned path; file symlinks hash
 only their link text after checking the resolved parent. This is a
 fresh comparison before removal, not an atomic filesystem lock: edits after the
-final snapshot remain possible.
+final scan remain possible, including newly created or retargeted directory links.
+Every index gitlink is checked even when absent from dirty status: a nonempty
+uninitialised submodule refuses preview/deletion before force can hide its files.
 
 ### Tabs (Memory / .work-files / Stats)
 

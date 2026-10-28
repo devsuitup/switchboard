@@ -163,3 +163,40 @@ for (const kind of ['junction', 'dir']) {
     }
   }
 }
+
+for (const mainOnly of [true, false]) {
+  test(`real git permits an inside-pointing directory link (${mainOnly ? 'main snapshot' : 'linked worktree removal'})`, async t => {
+    const f = fixture(t, mainOnly);
+    const target = path.join(f.target, 'node_modules/pkg');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'contents'), 'internal');
+    const link = path.join(f.target, 'node_modules/alias');
+    fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    try {
+      let shown;
+      await assert.doesNotReject(async () => { shown = await f.read(); });
+      assert.deepEqual(shown.dirty, []);
+      if (!mainOnly) {
+        assert.equal((await f.remove(shown)).ok, true);
+        assert.equal(fs.existsSync(target), false, 'Git normally deletes the target inside the removed worktree');
+        assert.equal(fs.existsSync(f.target), false);
+      }
+    } finally { if (fs.existsSync(link)) fs.unlinkSync(link); }
+  });
+
+  test(`real git refuses stray files in a clean uninitialised gitlink (${mainOnly ? 'main snapshot' : 'linked worktree removal'})`, async t => {
+    const f = fixture(t, mainOnly);
+    const head = f.git(['rev-parse', 'HEAD']).trim();
+    f.git(['update-index', '--add', '--cacheinfo', `160000,${head},sm`]);
+    f.git(['commit', '-qm', 'add gitlink']);
+    fs.mkdirSync(path.join(f.target, 'sm'));
+    const shown = await f.read();
+    assert.deepEqual(shown.dirty, []);
+    fs.writeFileSync(path.join(f.target, 'sm/stray.txt'), 'keep');
+    assert.equal(f.git(['status', '--porcelain=v1', '--ignore-submodules=none']), '', 'Git itself hides the stray file');
+    await assert.rejects(f.read(), /uninitialised submodule sm is not empty.*review/is);
+    await assert.rejects(f.remove({ ...shown, confirmSubmodules: true }), /uninitialised submodule sm is not empty/is);
+    assert.equal(f.removes.length, 0);
+    assert.equal(fs.readFileSync(path.join(f.target, 'sm/stray.txt'), 'utf8'), 'keep');
+  });
+}

@@ -87,8 +87,9 @@ another confirmation. A locked worktree shows its lock reason and requires
 checking **Delete this locked worktree, overriding its lock** before deletion;
 there is no automatic double-force retry. Worktrees containing submodules also
 require checking **Delete this worktree and its submodules with force**;
-changes inside initialised dirty submodules are rechecked too. An uninitialised
-submodule is not read as though it were the parent repository. The branch is kept. The
+changes inside initialised submodules are rechecked too. A nonempty uninitialised
+submodule directory refuses deletion and asks you to review or move its files;
+it is not read as though it were the parent repository. The branch is kept. The
 worktree's sessions move under the repository's header, at once or at the
 next refresh, since their transcripts are still on disk. Deleting a
 finished background session in the [Agents view](background-agents.md) delegates
@@ -98,11 +99,20 @@ refusal into forced removal. The sidebar's remote worktree headers share the
 local button code, but cannot use the local deletion backend: their notice
 directs you to review and remove the worktree with git on its host.
 
-Preview and deletion refuse while the worktree contains directory symlinks or
-Windows junctions, including inside ignored folders. The refusal names up to
-ten links and gives the total count. Remove each link first: for a Windows
+Preview and deletion refuse directory symlinks or Windows junctions that point
+outside the worktree, or whose targets cannot be resolved, including inside
+ignored folders. Links resolving inside the worktree are allowed and their
+targets are removed by Git with the rest of the folder. The refusal names up to
+ten unsafe links and gives the total count. Remove each unsafe link first: for a Windows
 junction use `rmdir <path>` without recursive deletion; on POSIX use `rm <link>`
-without `-r`. Then retry Delete. A preview above 512 MiB of total hashed data
+without `-r`. Then retry Delete. Each link scan has a 200,000-directory limit
+and a five-second budget; exceeding either refuses with instructions to review
+or reduce the tree. Preview scans once; Delete checks the fresh status and then
+scans once more immediately before asking Git to remove the folder. There is a
+known race after that last scan: filesystem changes, including a newly created
+or retargeted directory link, can occur before or during Git's removal. These
+checks do not lock the filesystem or make removal atomic.
+A preview above 512 MiB of total hashed data
 refuses with instructions to review or move the largest files it encountered.
 If removal is interrupted, its notice warns that the folder may be partly
 deleted: review the remaining folder and Git registration before retrying.
