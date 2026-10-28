@@ -95,8 +95,11 @@ A row shows, from left to right:
 - the **pin**;
 - the status icon — see [Status indicators](notifications.md);
 - the session's name, then its age, message count, the first segment of its
-  latest-modified part's id, and, while the `claude` CLI reports one, its status (`busy`, `idle`,
-  `waiting`) and how long ago it changed;
+  latest-modified part's id, and, while the `claude` CLI reports a status, what
+  the session waits for when that status is `waiting` and how long ago the
+  status changed (a background job shows its activity instead). The CLI's own
+  status word (`busy`, `idle`, `waiting`, `shell`) is in the status icon's
+  tooltip;
 - a host badge for a remote session, a terminal badge for a plain terminal.
 
 Hovering a row shows its buttons:
@@ -115,7 +118,7 @@ Clicking a row opens the session in the terminal: it attaches to the running
 process, or resumes the session with `claude --resume`. A subagent row opens its
 transcript instead — see [Subagents](subagents.md).
 
-A compacted conversation or a proven linear continuation can have several transcripts on one row. A continuation stays together only when its cached links prove a single local path; branching, remote and cross-project conversations remain separate. `/clear` starts a new row. Clicking it
+A compacted conversation or a proven linear continuation can have several transcripts on one row. A continuation stays together only when its cached links prove a single local path; branching, remote and cross-project conversations remain separate. Once the initial scan has finished, a link to a missing part beside a single existing successor does not split the chain. `/clear` starts a new row. Clicking it
 first shows the open tab of its latest-modified part, then another open part
 from newest to oldest, then the original transcript's tab. If no part is open,
 it resumes the latest-modified part, including the original transcript if it
@@ -157,7 +160,8 @@ then pinned ones, then the rest by modification time.
 
 Each project shows at most **Max Visible Sessions** (default 10) sessions
 modified within **Session Max Age** (default 3 days); the others sit behind a
-`+ N older` link. Running and pinned sessions are always shown. Both limits are
+`+ N older` link. Running and pinned sessions, and sessions waiting to be
+restored, are always shown. Both limits are
 in [Global Settings](settings.md#application).
 
 ### Sessions started by a program
@@ -202,6 +206,12 @@ Search starts at 3 characters, 350 ms after the last keystroke. Only the first
 reindex button rereads every session for the index; pressing Enter in the field
 does the same. The search runs in a worker thread, so a long query does not
 freeze the window.
+
+When indexing a project folder fails, the status bar reads
+`Scan failed for <folder> (+N): <error>`, naming the first failed folder and
+counting the others. The scan retries on its own after 30 seconds, 2 minutes
+and 10 minutes, then waits for a reindex; the error clears when a retry
+succeeds. Since #815, a scan worker that fails to start shows `Scan failed: <error>` with no folder name and retries on the same 30 seconds / 2 minutes / 10 minutes backoff.
 
 ## Pin and archive
 

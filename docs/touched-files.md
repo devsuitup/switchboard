@@ -64,6 +64,9 @@ Refresh and closing Touched, up to the 50 most recent.
 - Unsaved edits to a file that another view replaced are kept and come back
   when you open that file again, with a notice; quitting asks about them.
 - A symbolic link opens read-only.
+- Saving keeps the file's line endings (CRLF stays CRLF) and its UTF-8
+  byte-order mark, whether or not the file is in a git repository. A file
+  outside a repository that mixes line endings is saved with LF.
 - The panel's checks apply to every file: credential paths, binary files, files
   that are not UTF-8 and files over 2 MB are refused, with the reason above the
   list.

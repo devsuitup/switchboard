@@ -9,8 +9,8 @@ Issue [#304](https://github.com/devsuitup/switchboard/issues/304).
 ## Running them
 
 ```bash
-task e2e          # Linux: builds the CodeMirror bundle, wraps the run in xvfb-run when there is no display
-npm run e2e       # any platform, with a display, once the bundle is built
+task e2e          # Linux: builds the CodeMirror and Mermaid bundles, wraps the run in xvfb-run when there is no display
+npm run e2e       # any platform, with a display, once the bundles are built
 ```
 
 They need an installed `node_modules` whose native modules are built for
@@ -35,8 +35,8 @@ HTML report as the `e2e-results` artifact.
 Open a trace with `npx playwright show-trace trace.zip`. It has the DOM and a
 screenshot for each step.
 
-Whether the job is a required check is a repository setting. It is not set
-here.
+The job is a required check of the `main-protection` ruleset, a repository
+setting outside this file (read from the GitHub API on 2026-10-28).
 
 ## The journeys
 
@@ -50,8 +50,17 @@ here.
 | Changes on a project with no git work tree says so, with no git output | `panel.spec.js` | the not-a-repository note instead of git's raw output |
 | Refresh beside Stop redraws a plain terminal and restores its fitted size | `terminal-refresh.spec.js` | visible header geometry, one refresh IPC, actual PTY size events, and final fitted size |
 | A window close asks first: Cancel keeps the window and its terminal, Close exits | `close-window.spec.js` | the guard holding the real `close` event, the in-page question, a terminal that still runs commands after Cancel, the exit (code 0) after Close |
-| Quit from the menu exits without asking | `close-window.spec.js` | the `quit` role reaching `before-quit`, the guard not asking a quit a second time, and exit code 0 |
+| Quit from the menu asks first: Cancel keeps the app and its terminal, Stop exits | `close-window.spec.js` | the question naming the plain terminal it would stop (#562), a terminal that still runs commands after Cancel, the exit (code 0) after Stop |
 | Closing a window whose page hangs, then closing it again, still ends the app | `hung-window.spec.js` | the close question never shown, the second close after the 2.5 s bound destroying the window, and exit code 0 |
+| A Touched modified file shows the shared diff below its list, and Close restores the full list | `changes.spec.js` | the Touched diff parking |
+| Background Delete is a designed confirmation: Escape cancels, Delete proceeds | `app-dialogs.spec.js` | the modal stack's keys on the Delete dialog |
+| New agent rows contain their controls and align their columns, at several window sizes | `dispatch-dialog.spec.js` | the dispatch dialog's layout |
+| Keyboard focus: Configure, the New session menu, F6 / Shift+F6, Tab order, row Archive reveal | `keyboard-focus.spec.js` | focus moves and native tab order |
+| Electron confines relative native writes to the disposable home | `launch-isolation.spec.js` | the launch fixture's working directory (see below) |
+| Markdown Mermaid loads once under the CSP, isolates details and fits a narrow Gantt preview | `mermaid-preview.spec.js` | the lazy Mermaid bundle in the real renderer |
+| A transcript-driven row state survives a sidebar re-render | `state-survives-rerender.spec.js` | the row state kept across a re-render |
+| The themed file panel shows a long Touched list and scrollable file contents | `theme-controls.spec.js` | the file panel's scroll regions under a theme |
+| E1–E8: the session tool bar | `tool-bar.spec.js` | see [Session tool bar](#session-tool-bar-506) |
 
 The issue's fifth journey expected the Changes control to disappear. #310 made
 it unconditional, so the journey checks what the panel says instead (see

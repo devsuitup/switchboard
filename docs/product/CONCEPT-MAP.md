@@ -65,12 +65,12 @@ newest user rename on any part, otherwise the original part's name
 | Action | Row | Row menu | Header | Card | Agents | Keyboard |
 |---|---|---|---|---|---|---|
 | Open (show / attach / resume) | click (`public/sidebar.js:1430-1438`) | — | — | click / double-click header (`public/grid-view.js:264`) | **Attach**, double-click | Primary+Shift+arrows, `[` `]` |
-| Stop | **Stop session** (`:1766`) | — | **Stop process** / **Detach (the session keeps running)** (`public/app.js:1457`) | **Stop session** (`public/grid-view.js:192`) | **Stop** (`public/agents-view.js:340`) | — |
+| Stop | **Stop session** (`:1766`) | — | **Stop session** (`public/app.js`, `terminalStopBtn`); **Detach (the session keeps running)** is a separate button (`#terminal-detach-btn`) | **Stop session** (`public/grid-view.js:192`) | **Stop** (`public/agents-view.js:340`) | — |
 | Send a prompt (remote) | **Send a prompt…** (`:1771`) | — | — | — | — | — |
 | Fork | **Fork session** (`:1785`) | — | — | — | — | — |
 | Read transcript | **View messages** (`:1790`) | — | — | — | **Transcript** | — |
 | Open on claude.ai | **Open on claude.ai** (`:1795`), only with a bridge id | — | — | — | — | — |
-| Archive / Unarchive | **Archive** / **Unarchive** (`:1780`), no confirm | — | — | — | — | — |
+| Archive / Unarchive | **Archive** / **Unarchive** (`:1780`); asks only when it would stop something, then offers Undo (#565) | — | — | — | — | — |
 | Resume with options | **Resume with config** (`:1805`), hidden while a PTY runs (`public/style.css:1283`) | — | — | — | — | — |
 | Delete | **Delete session (removes the transcript from disk)** (`:1800`) → dialog **Delete permanently** (`:1905`) | — | — | — | **Delete** (job) | — |
 | Rename | double-click the name (`:1462`) | — | — | — | — | — |
@@ -99,8 +99,10 @@ Plain-terminal rows show Stop only; subagent rows have no buttons
   `rebindSidebarEvents`, `public/app.js` `openSessionNow`).
 - R1.4 Stop on a row stops every running part after one confirmation naming
   the count, locations and process loss; the conversation is kept. Grid and
-  header Stop target only their tab. Attached job tabs detach; background jobs
-  and processes outside this window stay running and are named. Retry confirms
+  header Stop target only their tab. A background job running a part, attached
+  here or not, is stopped through the daemon once its job id is checked; a job
+  the daemon no longer hosts only detaches its tab. Processes outside this
+  window stay running and are named (#777, #778). Retry confirms
   only the failed targets (V, `public/stop-session-ui.js` `planSessionStop`,
   `public/app.js` `confirmAndStopSession`, `public/sidebar.js`).
 - R1.5 Archive stops first; a failure refuses the archive. On a remote row it
@@ -158,8 +160,8 @@ No row-level concept unifies these; each follows its own rule (M4).
 `public/sidebar.js:514-516`).
 
 **Actions**: expand/collapse (click header); **Archive all sessions in group**
-(`public/sidebar.js:549`), **no confirmation**: it stops then archives each
-member in turn (V, `public/sidebar.js:1362-1380`); a member that fails to stop
+(`public/sidebar.js:549`): it asks once when it would stop running members,
+then stops and archives each member in turn and offers Undo (#565); a member that fails to stop
 is skipped and flashes **Failed** on its row (`docs/session-browser.md:172-176`).
 
 **Rules**: R4.1 only scheduled runs are grouped, using the same non-empty
@@ -234,7 +236,7 @@ keeps running in the background" (`public/app.js`, `applyProcessExit`).
 
 | Action | Header | Tool bar | Keyboard | Terminal menu |
 |---|---|---|---|---|
-| Stop / Detach | **Stop process** or **Detach (the session keeps running)** (`public/app.js:1457`); hidden when not running (`:1218`) | — | — | — |
+| Stop / Detach | **Stop session** (`public/app.js`, `terminalStopBtn`) and, as a separate button, **Detach (the session keeps running)** (`#terminal-detach-btn`); hidden when not running (`:1218`) | — | — | — |
 | Refresh screen | **Refresh screen** (`public/index.html:111`), disabled when not running | — | — | — |
 | Changes / Diff / Touched / Shell | — | **Changes**, **Diff**, **Touched**, **Shell** (`public/tool-bar.js:5-8`) | Primary+Shift+E / D / T / S | — |
 | Copy / paste / links | — | — | Primary+F find | **Copy**, **Paste**, **Select all**, **Open in panel**, **Open in system editor**, **Copy path**, **Open in browser**, **Copy link** (`public/terminal-context-menu.js:48-58`) |
@@ -246,9 +248,10 @@ keeps running in the background" (`public/app.js`, `applyProcessExit`).
   terminal is destroyed and its row removed (V, `public/app.js:686-707`).
 - R7.2 An open session is identified by one transcript id; a merged row can
   have several open at once (V\*, m6).
-- R7.3 Quitting the app kills every local PTY with no confirmation beyond
-  unsaved editor edits; background and remote processes survive
-  (V, `main.js:3517-3550`) (M1).
+- R7.3 Quit, Restart, an update and a window close name the local processes
+  they would end and ask first; eligible sessions can move to the background
+  instead. Background and remote processes survive (`session-exit.js`; the exit
+  question in `public/file-panel.js`; #562, #546; M1 resolved).
 
 ## 8. Grid card
 
@@ -283,8 +286,8 @@ plain terminal's shell exits (`public/app.js:689-690`).
 
 ## 10. Background agent (job)
 
-**States** (`public/agents-view.js:46-54`): ⚙️ **Working** · ✋ **Blocked** ·
-✅ **Done** · ⏹️ **Stopped** · ❌ **Failed** · 🖥️ **External** · ❓ **Unknown**;
+**States** (`public/agents-view.js`, `AGENT_STATE_META`): ⚙️ **Active** · ✋ **Blocked** ·
+💤 **Idle** · ✅ **Done** · ⏹️ **Stopped** · ❌ **Failed** · 🖥️ **External** · ❓ **Unknown**;
 row text `<state> · <status>` (`:227`); row icon from the session-state ladder
 (`:140-149`). Header "N running · N finished · N external" (`:365`). Banner
 "The daemon is not answering; state comes from files only." (`:367`).
@@ -293,10 +296,10 @@ row text `<state> · <status>` (`:227`); row icon from the session-state ladder
 
 | Action | Agents label | Available | Confirm | Elsewhere |
 |---|---|---|---|---|
-| Attach | **Attach**, or double-click row | live and daemon reachable | none | row click on a `bg` row; header then reads **Detach (the session keeps running)** |
+| Attach | **Attach** (**Go to tab** when already open here, #779), or double-click row | live and daemon reachable | none | row click on a `bg` row; the header then offers the separate **Detach (the session keeps running)** button next to **Stop session** |
 | Transcript | **Transcript** | transcript exists | none | row **View messages** |
-| Stop | **Stop** (`claude stop`) | live and reachable | After the fresh check: job name and id; its process ends, the conversation is kept | row / card **Stop session** on an attached tab = detach, not stop |
-| Respawn | **Respawn** | finished, no live conversation | none | — |
+| Stop | **Stop** (`claude stop`) | live and reachable | After the fresh check: job name and id; its process ends, the conversation is kept | row, card and header **Stop session** stop the job too after the same check; **Detach** leaves it running (#777) |
+| Respawn | **Respawn** | finished, no live conversation | none | Send to background on a session with a job; restore of a saved background tab whose worker is dead (#785) |
 | Delete | **Delete** (`claude rm`) | finished, no live conversation | After the fresh check: "Delete this background session? Its conversation goes, and its worktree when that is safe." | row **Delete session** refused: "background job <id> is still running this session — stop it from the Agents view first" (`public/stop-session-ui.js:34`) |
 | New | **New agent** (`public/index.html:91`) | — | — | — |
 | View options | **Finished**, Group **None / State / Project**, **Worktrees** (`public/index.html:82-90`) | — | — | Primary+Shift+A toggles the view |
@@ -306,9 +309,13 @@ row text `<state> · <status>` (`:227`); row icon from the session-state ladder
 - R10.1 A live job's session id gets the `bg` badge on its sidebar row once the
   Agents view has loaded the roster (`public/agents-view.js:186-196`;
   `docs/background-agents.md:132-136`).
-- R10.2 Attach views are not restored (`docs/background-agents.md:128`).
-- R10.3 Stop on an attached tab detaches (`main.js:1788-1793`); stopping the
-  job is only in the Agents view (`docs/background-agents.md:126-128`).
+- R10.2 Saved background tabs are restored: a live worker is attached, a dead
+  one respawned as the same job and then attached (`docs/session-restore.md`,
+  "Background sessions"; #785).
+- R10.3 Stop on a row, card or header stops the job through the daemon
+  (`confirmAndStopSession`, `planSessionStop` with `jobStop`); a job no longer
+  hosted only detaches the tab. Detach is the separate control that leaves the
+  job running (#777, #778).
 
 ## 11. External session and live elsewhere
 
@@ -344,7 +351,7 @@ tooltip says which, `public/sidebar.js:1733-1739`); **Stop session** → "Stop
 this session on <alias>?" then kill on host (`public/stop-session-ui.js:6-7`;
 `docs/remote-hosts.md:274-278`); **Send a prompt…** → dialog "Send a prompt —
 <alias>", **Send** / **Close**, "Sent. The session reads it when it is next
-free." (`public/dialogs.js:561-603`); Archive stops first; Delete refused.
+free." (`public/dialogs.js:561-603`); Archive stops first; no Delete (m2).
 
 **Rules**: R12.1 Detach on an attached remote row, grid card or terminal header
 ends the local ssh client only; the session keeps running on the named host.
@@ -362,8 +369,9 @@ automatically** (`docs/session-restore.md:8-14`).
 (`public/app.js:480-481`).
 
 **Rules**: R13.1 one entry per open session, plus *fresh* entries for sessions
-with no transcript yet (`docs/session-restore.md:18-38`). R13.2 restore is a
-resume, never an attach; sessions live elsewhere are skipped
+with no transcript yet (`docs/session-restore.md:18-38`). R13.2 restore
+resumes an ordinary session and attaches a saved background tab, respawning a
+dead job first (#785); other sessions live elsewhere are skipped
 (`docs/session-restore.md:90`; `.ai/contexts/session-cache.md`, "Neither the
 working-set restore…").
 
@@ -399,8 +407,9 @@ unsubmitted input (`docs/automation.md:291`).
 1. A row's state is the OR of its members; its identity is its
    representative's (R1.1, R1.2).
 2. The square stop control's effect depends on where the process runs: kill
-   locally, kill on the host, detach from a job (`public/stop-session-ui.js:4-13`;
-   `main.js:1784-1797`).
+   locally, kill on the host, or stop the background job through the daemon
+   (`public/stop-session-ui.js`, `resolveSessionStop`, `planSessionStop`).
+   Detach is a separate control (#777).
 3. The word "Running" covers two populations: a local PTY (`activePtyIds`) in
    the sidebar, the grid and the status bar; a live job in the Agents header.
    A third, a process alive anywhere (`is-alive`), decides whether the Stop
@@ -410,8 +419,8 @@ unsubmitted input (`docs/automation.md:291`).
    including the representative, before its dialog and never stops it. Both
    check background jobs before asking (`public/stop-session-ui.js`,
    `delete-session-guard.js`, `public/sidebar.js`).
-5. Quitting ends local processes and leaves background and remote ones running
-   (R7.3).
+5. Quitting asks before ending local processes, can move eligible sessions to
+   the background, and leaves background and remote ones running (R7.3).
 
 ## Known incoherences
 
@@ -427,7 +436,7 @@ result; **minor** = confusing but recoverable.
 | M4 | major | No definition of a row; `/compact`, `/clear`, continuations and slug groups follow four rules; verbs act on representative or one member | §1, §2, §3, §4 |
 | M5 | resolved (#563) | Sidebar, grid, terminal header and Agents share the activity slot; labels distinguish activity from ranked lifecycle. The CLI word is in the tooltip; Agents uses Title Case job states and counts live jobs, while the status bar counts terminals open here. Waiting, Idle, Idle open here and Not running have distinct shapes. | §1, §7, §8, §10, GLOSSARY "State words" |
 | M6 | resolved (#568) | Project Archive is reversible through Settings and preserves settings/cache while suspending schedules; destructive Delete is separate. Archive folder still returns on new activity. | §6 |
-| m1 | minor | Delete means transcript, job+worktree, or worktree, with three different confirmations; remote Delete refused after its dialog | §1, §6, §10 |
+| m1 | minor | Delete means transcript, job+worktree, or worktree, with three different confirmations; remote rows no longer offer Delete (m2) | §1, §6, §10 |
 | m2 | resolved (#566) | Refusals name Stop on the sidebar row here, or ending the other process; remote rows offer no Delete | §1 R1.6, §11 |
 | m3 | resolved (#647, #563) | An alive unattached grid card describes where it runs; Stopped requires a recorded Stop, and Detach reads Detached while the job keeps running. | §8 |
 | m4 | minor | Two permission-mode lists ("Plan Mode" vs "Plan", `public/utils.js:26-33` vs `public/dialogs.js:691-696`) and two Additional Directories formats | — |

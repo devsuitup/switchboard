@@ -111,10 +111,10 @@ under Electron's Node mode. The normal CI test runner discovers these files.
 
 | File | LOC | Role |
 |---|---|---|
-| `public/viewer-panel.js` | ~415 | The `ViewerPanel` class. Owns CodeMirror state, toolbar wiring, file watch lifecycle, save/format/delete logic. |
-| `public/viewer-toolbar.js` | ~265 | Pure factory `createViewerToolbar(opts)` — builds the toolbar DOM + returns API. No state of its own. |
+| `public/viewer-panel.js` | ~660 | The `ViewerPanel` class. Owns CodeMirror state, toolbar wiring, file watch lifecycle, save/format/delete logic. |
+| `public/viewer-toolbar.js` | ~710 | Pure factory `createViewerToolbar(opts)` — builds the toolbar DOM + returns API. No state of its own. Also holds the shared preview helpers: `renderMarkdownPreview` (frontmatter, Mermaid) and `setViewerPath`. |
 | `viewer-file-watch.js` | ~140 | Main-side `createViewerWatchRegistry` / `watchFileForViewer` behind the `watch-file` IPC — "Watching the file". |
-| `viewer-save-guard.js` | ~100 | Main-side `createMainPanelSaves` (the handlers `main.js` registers for `save-memory` and `save-file-for-panel`, with the path checks from `ipc-path-validator.js`), the `createPanelSaveHandlers` it builds on, and `refuseIfMoved` — "Saving over a file that moved". |
+| `viewer-save-guard.js` | ~115 | Main-side `createMainPanelSaves` (the handlers `main.js` registers for `save-memory` and `save-file-for-panel`, with the path checks from `ipc-path-validator.js`), the `createPanelSaveHandlers` it builds on, and `refuseIfMoved` — "Saving over a file that moved". |
 
 ## Public surface
 
@@ -127,7 +127,7 @@ const panel = new ViewerPanel(container, {
   storageKey: string,     // localStorage key for preview-mode persistence
   format: bool,           // show JSON/JSONL prettify button (auto-hidden for non-json files)
   onSave: async (filePath, content, expected) => result,  // shows Save button; expected is required, see "Saving over a file that moved"
-  onDelete: async (filePath) => result,         // shows Delete button (with window.confirm)
+  onDelete: async (filePath) => result,         // shows Delete button (with appConfirm)
   onClose: () => void,    // shows Close button
 });
 
@@ -137,7 +137,7 @@ panel.getContent();                    // current editor content
 panel.destroy();                       // tear down (rare; usually open() replaces)
 ```
 
-Used at `public/app.js:31-55` for the two panel instances.
+Used at `public/app.js:31-57` for the two panel instances, and at `public/activity-trace-panel.js:24`.
 
 ## Toolbar buttons (visibility rules)
 
@@ -205,6 +205,8 @@ toggle/refresh paths while verifying the editor retains the complete source.
 - The file on disk, line endings folded to `\n`, differs from `expected` → refused, `reason: 'stale'`, with **`disk`: the text it compared**, folded the same way.
 - Otherwise the content is written and the FTS signature invalidated.
 
+A `save-file-for-panel` call that also passes a version token (`{version}`, the Touched editor's local file outside Git, #803) is checked on bytes instead: `versionOf` of the file on disk must equal the token, or the save is refused `stale` with the folded `disk`; the content is written with the file's sole line ending (`soleEol`, LF for a mixed file) and its UTF-8 BOM kept, and the answer carries the new `version`. A Git file goes through `writeTouchedChangesFile` instead; see `.ai/contexts/touched-files.md`. `ViewerPanel`'s own saves (`save-memory`) send no version and keep the `expected` compare above.
+
 The compare and the write are not atomic: a write landing between the read and `writeFileSync` is still replaced, the same window the Changes panel's version token has.
 
 ### The agreed base
@@ -227,14 +229,14 @@ A re-read while the buffer is **dirty never moves it**; it only updates `_lastSe
 
 ### A stale refusal
 
-Main returns the disk text it compared. The panel shows the "not saved" notice, then asks `confirm('This file changed on disk since you opened it. Overwrite it with your edits?')` — worded like the diff tab's, because a refusal can be the first the user hears of the other write (nothing raised "changed on disk" before it):
+Main returns the disk text it compared. The panel shows the "not saved" notice, then asks `appConfirm` ("This file changed on disk since you opened it. Overwrite it with your edits?") — worded like the diff tab's, because a refusal can be the first the user hears of the other write (nothing raised "changed on disk" before it):
 - On yes, that text becomes `_agreedBase` and the save is retried with it. If the retry is refused too, the disk moved while the confirm was open: the panel asks again with the new text, and never writes without a compare.
 - If the panel was switched to another file while the save or the confirm was pending (`_openGen`), nothing is retried and nothing is asked about the new file.
 - On no, nothing is written and the notice says "This file changed on disk since you opened it — your edits were not saved", with **Reload** and **Overwrite**. **Overwrite** is a plain save that goes through the same check and confirm.
 
 A plain save while the "changed on disk" notice is up is refused the same way, because the dirty re-read did not move the base, and asks the same confirm. **Keep my edits** is the agreement given ahead of time: the next save carries the disk the notice described and goes out without asking, and a further write nobody has read is still refused.
 
-The MCP diff tab follows the same rule. Its base is the diff's `oldContent`, which `mcp-bridge.js` read from disk when the diff opened. It moves to what was written after each save, and to main's returned `disk` on a confirmed `confirm('This file changed on disk since the diff opened. Overwrite it with your edits?')`; a refused retry asks again. Any other refusal, or a rejected IPC, is reported with `window.alert`, the same channel `ViewerPanel`'s Delete uses; a declined confirm is the end of it.
+The MCP diff tab follows the same rule. Its base is the diff's `oldContent`, which `mcp-bridge.js` read from disk when the diff opened. It moves to what was written after each save, and to main's returned `disk` on a confirmed `appConfirm` ("This file changed on disk since the diff opened. Overwrite it with your edits?"); a refused retry asks again. Any other refusal, or a rejected IPC, is reported with `appAlert`, the same channel `ViewerPanel`'s Delete uses; a declined confirm is the end of it.
 
 ### What the rest is for
 
@@ -252,7 +254,7 @@ Everything below is presentation; none of it carries the rule.
   | missing (`ENOENT`) | buffer untouched; "This file no longer exists on disk", and that the edits are kept when there are any |
   | unreadable | buffer untouched; the reason |
 
-  **Reload** asks `window.confirm('This file has unsaved edits. Discard them?')` when the buffer is dirty, as the Changes panel does. `read-file-for-panel` returns the error's `code`, which is how the renderer tells `ENOENT` apart. A re-read that resolves after `open()` has moved to another file is dropped (`_openGen`).
+  **Reload** asks `appConfirm` ("This file has unsaved edits. Discard them?") when the buffer is dirty, as the Changes panel does. `read-file-for-panel` returns the error's `code`, which is how the renderer tells `ENOENT` apart. A re-read that resolves after `open()` has moved to another file is dropped (`_openGen`).
 - **Notice after a save.** A successful save clears the notice unless a re-read raised "changed on disk" while it was in flight (`_noticeSeq`); the base has moved to what was written, so the next save against that later write is refused and asks.
 - **The queue.** One save is in flight at a time (`_pendingSave`). A save requested meanwhile is queued, and sent once the first returns ok, carrying the base that save left; if the session wrote in between, main refuses it and the panel asks. It is dropped if the first save fails. `open()` resets the pending save and the queue, so a save of the newly opened file goes out on its own, and the previous file's save touches neither when it resolves. The MCP diff tab queues a click during a save the same way (`tab.saving`), and drops it once the tab has lost its editor.
 - **An answered diff.** Once a diff is answered (Accept or Reject, `tab.resolved`), the session writes the file itself and the base no longer describes the disk. Save is refused, and the shared diff Save button is disabled with a title saying why, until the session closes the tab. The button's state is set on each render of a diff tab, so a diff opened after an answered one has Save enabled again.
@@ -277,7 +279,7 @@ Keying by path would hand one showing's result to another on the same file, whic
 
 | Route | Over a dirty Touched editor on another file | Over a clean one |
 |---|---|---|
-| a clicked file (`'link'`) | `confirm('This file has unsaved edits. Discard them?')`; a no keeps the editor and reads nothing | replaced |
+| a clicked file (`'link'`) | `appConfirm` ("This file has unsaved edits. Discard them?"); a no keeps the editor and reads nothing | replaced |
 | `openFile` (`'mcp'`) | not replaced; the file is read and listed as opened | replaced, no question |
 | either, the file already in the editor | kept as it is, not re-read; a line is revealed | the same |
 | `openDiff` | the editor is stashed and comes back when the session closes the diff | replaced; closing the diff closes the panel |
@@ -355,7 +357,7 @@ The Changes panel's registry (`git-changes-watch.js`) solves the same problem di
 - **Markdown preview mode is persisted per-storageKey** in `localStorage`. Memory uses `'markdownPreviewMode'`; .work-files uses `'workFilesPreviewMode'`.
 - **Line-wrap default depends on file type**: markdown wraps, code doesn't. Wrap state is NOT persisted — resets per file.
 - **`format` for `.jsonl` is intentionally non-standard**: each line is pretty-printed and joined with `\n---\n`. This produces human-readable output but is no longer valid JSON. The button is for *viewing*, not for converting files to a different format.
-- **Cmd/Ctrl+S keybinding**: CodeMirror dispatches a `cm-save` custom event which the ViewerPanel listens for. Chromium's "Save Page" default is blocked globally in `viewer-toolbar.js:256` (`keydown` listener with `preventDefault`).
+- **Cmd/Ctrl+S keybinding**: CodeMirror dispatches a `cm-save` custom event which the ViewerPanel listens for. Chromium's "Save Page" default is blocked globally in `viewer-toolbar.js:699` (`keydown` listener with `preventDefault`).
 - **The editor's surface is the app's, not the CodeMirror theme's**: `public/style.css` puts `.viewer-panel-editor .cm-editor`, its gutters and its active-line gutter on `--surface-sunken`, with a `--hairline` rule after the gutter. The same rule covers the file panel's editor hosts, so the Memory viewer, the Work Files viewer, the MCP diff and the Changes and Touched editors share one surface. See `.ai/contexts/changes-view.md` ("Look and feel").
 - **The toolbar API exposes button refs directly** (`toolbar.saveBtn`, `toolbar.formatBtn`, …). The ViewerPanel reads `null` checks instead of asking the toolbar — slightly leaky encapsulation, but harmless.
 

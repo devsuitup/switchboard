@@ -90,7 +90,7 @@ only migrates forward.
 | Setting | Key | Default | Effect |
 |---|---|---|---|
 | SSH hosts to observe | `remoteHosts` | none | `{alias, label, enabled}` per host — see [Remote hosts](remote-hosts.md) |
-| Refresh every | `remoteRefreshMs` | 5 minutes (minimum 1) | Time between full pulls |
+| Refresh every | `remoteRefreshMs` | 5 minutes (minimum 1; the field offers up to 1440) | Time between full pulls |
 
 ### Activity Reporting
 
@@ -120,6 +120,10 @@ only migrates forward.
 - `dangerouslySkipPermissions` (default off): launches with
   `--dangerously-skip-permissions`; no settings field sets it, the dialogs'
   **Dangerous Skip** applies to one launch.
+- `remoteTriggers` (default off): lets a trigger reach a session of an enabled
+  remote host — see [Automation](automation.md#remote-trigger-targets).
+- `lastSeenVersion` (default none): the last version whose **What's new** was
+  shown — see [Changelog](changelog.md#whats-new-in-the-app).
 
 ## Project Settings
 

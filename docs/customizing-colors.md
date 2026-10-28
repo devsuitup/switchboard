@@ -102,7 +102,7 @@ Cette transformation touche des dizaines de couleurs ; le plus simple et le plus
 
 ## 7. Script automatique (recommandé)
 
-Le script `…_Switchboard-Personnalisation.ps1` (fourni avec ce guide) gère trois modes :
+Le script `…_Switchboard-Personnalisation.ps1` (fourni avec ce guide ; dans ce dépôt : [`scripts/apply-theme.ps1`](../scripts/apply-theme.ps1)) gère trois modes :
 
 | Mode | Effet |
 |------|-------|

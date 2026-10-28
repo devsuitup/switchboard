@@ -83,7 +83,8 @@ without buffered entries. There is no timer, polling or work at idle.
 is an array of distinct caller labels: `watcher`, `bg-jobs`, `cli-status`,
 `remote`, `archive`, `project-added`, `project-deleted`, `project-remap`,
 `worktree-deleted`, `session-exit`, `session-attach`, `entrypoint-backfill`,
-`title-backfill`, `sdk-reveal`, `bridge-repair`, `scan`, or `activity`. Structural
+`title-backfill`, `sdk-reveal`, `bridge-repair`, `scan`, `conflict`,
+`background-handoff`, or `activity`. Structural
 changes use a 1.5-second leading/trailing throttle; calls within that window are deduplicated
 into the trailing emission's array, in arrival order. The leading cause belongs
 to its own emission. The IPC carries the same array. Notification conditions

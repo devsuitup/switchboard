@@ -17,11 +17,11 @@ app was not run. The patterns these bricks serve are in
 | Id | Brick | Exists today as | Status |
 |---|---|---|---|
 | B1 | State mark | `renderSessionIcon` + `.session-icon` | exists, partial (4 rungs unstyled), 4 duplicates |
-| B2 | State label | — | missing (4 vocabularies) |
+| B2 | State label | rung titles + `lifecycleLabel` | partly delivered by #563 (one activity vocabulary, ranked lifecycle) |
 | B3 | Session row | `buildSessionItem` | exists, 2 near-duplicates |
 | B4 | Action button | `.session-*-btn`, `.icon-btn`, `.control-btn`, … | exists in ≥6 styles |
-| B5 | Confirmation dialog | `showChoiceDialog` | exists, used once |
-| B6 | Chooser dialog | `appChoose` / `openChoiceDialog` | exists, no production caller yet |
+| B5 | Confirmation dialog | `showChoiceDialog`, `appConfirm` / `appAlert` | exists, every in-app question since #589 |
+| B6 | Chooser dialog | `appChoose` / `openChoiceDialog` | exists, used by the continuation part chooser |
 | B7 | Form dialog | `.new-session-overlay` family | exists, no dialog semantics |
 | B8 | Notice | `app-notices.js` | exists, shared error/info/Undo notices; restore/update remain separate |
 | B9 | Inline error | `.agents-detail-error`, `.dwt-error`, dialog error lines | exists, ad hoc |
@@ -148,9 +148,11 @@ the button.
 - **Behaviour.** `role="dialog"`, `aria-modal`, `aria-labelledby` (`32-34`);
   Tab trapped (`111-117`); Escape cancels, Enter accepts (`106-123`);
   overlay click cancels (`129`); focus returned (`93`); one at a time (`25`).
-- **Used.** Folder Archive only (`sidebar.js:1190`).
-- **Duplicates.** 17 `window.confirm` calls (UI-PATTERNS §4);
-  `showDeleteSessionDialog` (`sidebar.js:1881-1945`) and
+- **Used.** Folder Archive at v0.0.94; since #589 every question goes through
+  it via `appConfirm` / `appAlert` (`public/app-dialogs.js`), and ESLint bans
+  native `confirm`, `alert` and `prompt` (`eslint.config.js`).
+- **Duplicates.** The 17 `window.confirm` calls of v0.0.94 (UI-PATTERNS §4),
+  since migrated; `showDeleteSessionDialog` (`sidebar.js:1881-1945`) and
   `showDeleteWorktreeDialog` (`1949-2017`), which add a live status/preview
   area B5 does not have.
 - **Borrowed classes.** `whats-new-header`, `whats-new-body`,
@@ -178,8 +180,9 @@ own class names.
 - **Keyboard.** Enter accepts the current selection; Escape cancels. Tab
   leaves the radio group for Cancel, Shift+Tab returns to its checked radio;
   arrows use native browser navigation.
-- **Current uses.** None yet. The continuation confirmation loop in
-  `resume-guard.js` will migrate separately; this change only adds the brick.
+- **Current uses.** The continuation part chooser on manual opens
+  (`public/app.js`, `choose: question => appChoose(question)`;
+  `.ai/contexts/app-dialogs.md`).
 
 ## B7. Form dialog
 
@@ -189,9 +192,11 @@ own class names.
   (`dialogs.js:624`, `file-panel.js:642`).
 - **Anatomy.** `h3` title, fields, error line (`dialogs.js:647-665`,
   `803-875`), actions row (`new-session-actions`).
-- **Behaviour.** Escape via a document `keydown` listener (`dialogs.js:314,
-  415, 546, 614, 684, 892`); overlay click closes; **no** `role="dialog"`,
-  initial focus, focus trap or return focus.
+- **Behaviour.** At v0.0.94: Escape via a document `keydown` listener; no
+  initial focus, focus trap or return focus. Since #589 each dialog registers
+  with the modal stack (`registerModal`, `public/modal-stack.js`), which gives
+  it initial focus, a Tab trap, Escape and return focus; overlay click closes;
+  still **no** `role="dialog"` in `dialogs.js`.
 - **Divergences.** The Send prompt dialog says `Close` (`dialogs.js:573`);
   others `Cancel`. Additional Directories is comma-separated in three
   dialogs and one-per-line in New agent (CONCEPT-MAP m4).
@@ -344,7 +349,7 @@ remote, elsewhere) and the merged-row member count use B15, not state colour.
 ## Missing bricks, in order of user impact
 
 1. **B2 state label** — one vocabulary for the state the four surfaces show.
-2. **B6 chooser** — replaces the continuation `confirm` loop.
-3. **A Detach control** — a B4 variant (neutral, eject icon, no confirm)
-   distinct from Stop; today Detach borrows Stop's red square
-   (`index.html:112`, `app.js:1457`).
+2. **B6 chooser** — delivered: the continuation part chooser uses `appChoose`.
+3. **A Detach control** — delivered (#546): a neutral eject button, no
+   confirm, distinct from Stop (`.session-detach-btn`, the grid card and
+   terminal header detach buttons).

@@ -13,7 +13,10 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 | `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobCheck`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
 | `project-root.js` | `resolveProjectRoots(cwd)`: the `.claude/worktrees` pattern, else one `git rev-parse`; never throws |
 | `delete-session-guard.js` | `deleteSessionRefusal`: the fail-closed liveness check `delete-session` runs first |
-| `bg-agents-ipc.js` | `get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, the `bg-agents-changed` push |
+| `bg-agents-ipc.js` | `get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`, the `bg-agents-changed` push; `respawnForHandoff` on the returned unsubscribe function |
+| `bg-worker-liveness.js` | Pure: `classifyWorkerLiveness`, `liveWorkerDescriptor` (see "Job states") |
+| `sidebar-bg-sessions.js` | `mergeLocalBackgroundSessions`: local background rows and continuation merging for the sidebar |
+| `session-exit.js` | `runExitHandoffs`, `EXIT_BUSY_WAIT_MS` (see "Exit handoff batch") |
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
 | `bridge-session-id.js` | Shared case-sensitive suffix for job `cse_` and descriptor `session_` bridge ids |
 | `pty-ops.js` | `detachPty` |
@@ -87,8 +90,8 @@ with their job identity, and use persistent Restore notices. Tests:
 `restore-live-elsewhere`, `restore-lazy`, `restore-pending-persist`,
 `bg-agents-ipc`, `bg-agents-restore`.
 
-M1 evidence: `C:/Serveur/switchboard/.work-files/m1-785-report.md`
-(2026-10-25, CLI 2.1.302) measured dead `working` surviving daemon death,
+M1 evidence (2026-10-25, CLI 2.1.302; untracked scratch notes in the
+primary checkout's `.work-files/m1-785-report.md`, not in the repository) measured dead `working` surviving daemon death,
 respawn cold-starting the daemon, retaining job/session/name, then producing
 a usable background descriptor. This implementation uses those recorded facts;
 it does not repeat the live acceptance run. The stopped policy is Q-E's
@@ -443,8 +446,8 @@ busy; idle retains the waiting ring and Blocked label (#785).
 Leaving `blocked` removes that waiting evidence; the normal head-turn and PTY
 rules apply again. `stopped` and `failed` are finished even with a leftover descriptor.
 
-The M1 measurement (2026-10-25, `.work-files/m1-785-report.md` in the primary
-checkout) found that Respawn writes `running`; that file stays `running` if
+The M1 measurement (2026-10-25, untracked `.work-files/m1-785-report.md` in the
+primary checkout) found that Respawn writes `running`; that file stays `running` if
 the daemon dies, while the CLI list reports `failed`. A hosted `running` job
 groups as Idle, using the same busy/waiting overrides as a hosted done job.
 Without hosting evidence it groups as Unknown; when the CLI list is available,
@@ -569,7 +572,7 @@ turn transitions. A live bg descriptor also supplies a descriptor-only row when
 its job metadata is absent, before the job watcher fills or beyond `MAX_JOBS`.
 Hosting and conversation identity use separate facts. The attach fallback
 supplies a synthetic descriptor only for working/blocked. Cached jobs in all
-five known states can retain an indexed continuation's exact target, scoped by
+six `JOB_STATES` can retain an indexed continuation's exact target, scoped by
 its cached row or lexical transcript folder and current folder metadata. An
 unscoped cached row cannot establish a merge. Every descriptor, cached, indexed
 and bridge path keeps the same project, folder and host boundary. A conflicting
@@ -623,13 +626,17 @@ The changed `hosted` field makes the snapshot differ and updates badge membershi
 
 - `reconcile()` is a no-op until `start()`: it returns the current (empty)
   snapshot without spawning the CLI.
-- The first `get-bg-agents` calls `start()`, which arms the jobs-directory
-  watcher, one watcher per job directory, and the descriptor subscription.
-  Later calls find `started` already true and only reconcile.
+- `main.js` calls `start()` at app startup (after `createWindow()`), which
+  arms the jobs-directory watcher, one watcher per job directory, and the
+  descriptor subscription. `get-bg-agents` calls `start()` too; it finds
+  `started` already true and only reconciles.
 - Every `get-bg-agents` also re-subscribes the `bg-agents-changed` push
-  (`subscribe()` in `bg-agents-ipc.js`). `stop()` clears the listener set; on
-  macOS the app outlives its window, the `closed` handler calls `stop()`, and
-  the window created next would otherwise never receive an update.
+  (`subscribe()` in `bg-agents-ipc.js`). On macOS the app outlives its
+  window: the window's `closed` handler only releases that push subscription
+  (`unsubscribeBgAgents`, the function `bg-agents-ipc.init` returns), so the
+  watchers keep running and the window created next re-subscribes on its
+  first `get-bg-agents`. `stop()`, which clears every listener, runs on app
+  quit.
 - A `reconcile()` in flight when `stop()` runs is dropped: `stop()` bumps
   `generation`, and the reconcile compares the value it captured before
   awaiting the CLI and returns without touching the (now reset) state.
@@ -1097,7 +1104,7 @@ politeness check, and a retry is refused as unsent text instead of typing
 `lastInputAt` to the value our own write set, so any keystroke in the gap
 withholds Enter even when it nets out.
 
-Measured on Windows, CLI 2.1.296, 2026-10-13 (`.work-files/live-m1m2/`): `/bg`,
+Measured on Windows, CLI 2.1.296, 2026-10-13 (untracked scratch notes, `.work-files/live-m1m2/`): `/bg`,
 300 ms, then CR runs `/background` through its completion menu. The original
 descriptor becomes `waiting` / `waitingFor: "dialog open"` at +65 ms and is
 deleted at +252 ms. A `continued-in` record names a new conversation at about
@@ -1162,7 +1169,9 @@ onto the new conversation; a source closed or replaced during IPC reports the
 completed move without reopening a tab or changing replacement liveness.
 The success notice says the session now runs in the background and closing the tab detaches it. Attach
 failure says where to retry from the sidebar. A `/bg` typed by hand is not
-followed by this action; quit/update and grid actions remain separate slices.
+followed by this action. Quit, Restart and window close reuse it through the
+exit batch ("Exit handoff batch" above); the grid has no Send to background
+action.
 
 The IPC handler is the named `handleSendToBackground` in `main.js`, so
 `test/bg-handoff-main.test.js` loads it through `loadAppFunctions`.
@@ -1195,9 +1204,12 @@ leaves the session running), wait `graceMs` (2000), then
 A detach already pending (`session.detaching`, `session.stopRequested`) makes
 every further Stop a no-op: a second kill of a ConPTY on Windows is a heap
 double free (#405). The write goes through `writePty`.
-The header's stop button is labelled **Detach** for such a tab
-(`terminalStopBtn.title`). The job is stopped only by `claude stop`, from the
-Agents view.
+For such a tab the header shows a separate **Detach (the session keeps
+running)** button (`#terminal-detach-btn`) next to **Stop session**
+(`terminalStopBtn.title`); row and grid card carry the same pair (#777).
+Stop session runs the job's `claude stop` first, as described in invariant 3
+and "Non-obvious behaviors"; only Detach reaches `detachPty` without stopping
+the job.
 
 An attach-only Stop plan detaches without confirmation and shows a 10 s Undo
 notice. The renderer captures the session, `attachJobId` and `attachCwd`
@@ -1323,7 +1335,7 @@ the client is killed. The call resolves on `close` so stdout is drained, or
 
 ## If you change this, also check
 
-- `.ai/contexts/ipc-bridge.md` (the three handlers, the event)
+- `.ai/contexts/ipc-bridge.md` (the bg-agents handlers, the event)
 - `.ai/contexts/cli-session-state.md` (the descriptor hooks)
 - `docs/background-agents.md`, `docs/keyboard-shortcuts.md`
 

@@ -280,8 +280,9 @@ concept. Each entry gives:
 - **Code**: `resumeOptions` (`public/app.js:1551-1553`); **Resume with config**
   (`public/sidebar.js:1805`, `showResumeSessionDialog`
   `public/dialogs.js:421`).
-- **Today**: restore is documented as "a respawn, not a reattach"
-  (`docs/session-restore.md:90`) — a third verb for the same resume.
+- **Today**: restore resumes an ordinary saved session, but a saved
+  background tab is attached, or respawned as the same job and then attached
+  (`docs/session-restore.md`, "Background sessions"; #785).
 
 ### Attach
 
@@ -295,8 +296,8 @@ concept. Each entry gives:
   (`public/agents-view.js:340`); elsewhere attach is what a row click does,
   announced only by tooltips: "Background session run by the claude daemon —
   click to attach" (`public/sidebar.js:1746`), "Live session on <alias> —
-  click to attach" (`public/sidebar.js:1734`). Attach on an already-attached
-  job goes to the open view, without saying so.
+  click to attach" (`public/sidebar.js:1734`). On a job already open here the
+  Agents button reads **Go to tab** and shows that view (#779).
 
 ### Detach
 
@@ -314,8 +315,8 @@ concept. Each entry gives:
   (`public/process-exit.js`, `public/app.js`, `applyProcessExit`). New liveness
   or job evidence replaces Detached in the footer: **Running in background**,
   **Job done**, **Job stopped**, **Job failed**, or **Not running**. A remote attach
-  has a detach in the protocol (`docs/remote-hosts.md:234`) but no control
-  (M2).
+  has the same control, "Detach (the session keeps running on <alias>)"; the
+  session keeps running on its host (#778; M2 resolved).
 
 ### Stop
 
@@ -327,7 +328,8 @@ concept. Each entry gives:
 - **Today**: "Stop session" on row, card and header; "Stop" in Agents. Each
   checks job refusals before one confirmation naming what ends and keeping
   the conversation. An attached job no longer reported hosted by the daemon
-  only detaches its tab, as explained in the confirmation; it reads Detached.
+  only detaches its tab: the confirmation is then titled "Detach tab?"
+  (`describeSessionStopPlan`, #778); it reads Detached.
   Unknown job identities and checks are excluded with a reason. Archive keeps
   its existing detach route through the planner's default `jobStop:false`.
 
@@ -336,9 +338,10 @@ concept. Each entry gives:
 - **Definition**: not a user verb; the result shown when a process ended on a
   signal: "Killed (SIGNAL)".
 - **Code**: `killPty`; `processExitLabel` (`public/process-exit.js:18-23`).
-- **Today**: quitting the app kills every local PTY with no confirmation
-  beyond unsaved editor edits (`unsavedGuard.beforeQuit`, `main.js:3518`;
-  kill loop `main.js:3545-3550`) (M1).
+- **Today**: quit, Restart, an update and a window close name the local
+  processes they would end and ask first; eligible sessions can move to the
+  background instead (`session-exit.js`; the exit question in
+  `public/file-panel.js`; #562, #546; M1 resolved).
 
 ### Archive / Unarchive
 
@@ -371,10 +374,10 @@ concept. Each entry gives:
 - **Today**: three objects — a transcript ("Delete session (removes the
   transcript from disk)", dialog **Delete permanently**,
   `public/sidebar.js:1800`, `1905`), a background job with its conversation
-  and worktree ("Delete", native confirm "Delete this background session?
+  and worktree ("Delete", in-app confirmation "Delete this background session?
   Its conversation goes, and its worktree when that is safe.",
-  `public/agents-view.js:421`), and a worktree ("Delete worktree from disk",
-  `public/sidebar.js:994`). Remote rows show the dialog then refuse (m1).
+  `public/agents-view.js`, `appConfirm`), and a worktree ("Delete worktree from disk",
+  `public/sidebar.js:994`). Remote rows offer no Delete (m2).
 
 ### Archive project / Delete project
 
@@ -397,7 +400,21 @@ concept. Each entry gives:
 
 - **Definition**: restart a finished background job (`claude respawn <id>`).
 - **Code**: `public/agents-view.js:155-161`, `340`.
-- **Today**: Agents view only. Kept separate from Fork and Resume on purpose.
+- **Today**: **Respawn** is an Agents view button. Send to background on a
+  session that already has a job, and the restore of a saved background tab
+  whose worker is dead, respawn that same job too (#785). Kept separate from
+  Fork and Resume on purpose.
+
+### Send to background
+
+- **Definition**: move a running session to the claude daemon and keep it in
+  the same position as an attached tab.
+- **Code**: `bgButton` (`public/app.js`, `public/sidebar.js`);
+  `docs/background-agents.md`, "Send to background".
+- **Today**: in the terminal header and the row's right-click menu. A session
+  with a background job already relaunches that job (Respawn) instead of
+  typing `/bg` (#785). Quit, Restart and window close offer the same move for
+  eligible sessions (#546).
 
 ### Send a prompt
 
@@ -462,8 +479,8 @@ concept. Each entry gives:
   `docs/remote-hosts.md`.
 - **Today**: host status dot (green / grey / amber / red, pulsing amber;
   `docs/remote-hosts.md:149-157`); Stop kills on the host after "Stop this
-  session on <alias>?" (`public/stop-session-ui.js:6-7`); Delete refused after
-  the dialog (m1).
+  session on <alias>?" (`public/stop-session-ui.js:6-7`); remote rows offer no Delete
+  (m2).
 
 ---
 
@@ -480,8 +497,9 @@ concept. Each entry gives:
 - **Today**: "working set" is internal; the UI says "Restore N session(s) from
   last time?" with **Restore** / **Dismiss** (`public/app.js:420-421`) and
   "Not restored: …" (`public/app.js:480-481`). It saves one entry per open
-  terminal, not per row (V\*, audit). Attach views are not restored
-  (`docs/background-agents.md:128`).
+  terminal, not per row (V\*, audit). A saved background tab is restored by
+  attaching its job, or respawning it as the same job first when its worker is
+  dead (`docs/session-restore.md`, "Background sessions"; #785).
 
 ### Schedule (scheduled task)
 
@@ -539,7 +557,7 @@ names its evidence and the surfaces that show it.
 | **Stopped** | terminal header; grid footer; exit banner "session stopped" | recorded user Stop of an ordinary process, or local attach client exit after a successful Agents Stop/Delete | neither a Detach nor missing exit evidence (`public/process-exit.js`, `processExitLabel`; `public/agents-view.js`, `runAgentVerb`) |
 | **Exited (code N)** / **Killed (SIG)** / **Exited** | terminal header; grid footer; exit banner | recorded process exit | preserved ahead of dead liveness (`public/process-exit.js`, `processExitLabel`, `lifecycleLabel`) |
 | **Not reopened · restores on click** | dormant sidebar icon labels; grid footer | dormant entry with no stronger lifecycle evidence | restoring it is a separate action (`public/process-exit.js`, `lifecycleLabel`) |
-| `live` / `finished` / `external` | Agents header count | job liveness | "N live · N finished · N external" (`public/agents-view.js`, `renderAgentsView`) |
+| `running` / `finished` / `external` | Agents header count | job liveness | "N running · N finished · N external" (`public/agents-view.js`, `renderAgentsView`) |
 
 Use the shared icon words for activity. The grid footer uses the ranked
 lifecycle words above; Stopped requires a recorded Stop. Row and terminal header

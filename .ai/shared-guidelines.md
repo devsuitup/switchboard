@@ -11,6 +11,9 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Run / build the app | [docs/development.md](../docs/development.md) (task commands) |
 | Change Electron main / IPC | [contexts/ipc-bridge.md](contexts/ipc-bridge.md), then `main.js`, `preload.js` |
 | Change SQLite, indexing, watcher, FTS, heatmap | [contexts/session-cache.md](contexts/session-cache.md) |
+| Change the session index's writer worker (ADR 0004) | [contexts/session-index-writer.md](contexts/session-index-writer.md) |
+| Change trigger files (command injection into open PTYs, results) | [contexts/trigger-watcher.md](contexts/trigger-watcher.md) |
+| Change the renderer's modal stack or its question dialogs (`appConfirm`, `appChoose`) | [contexts/app-dialogs.md](contexts/app-dialogs.md) |
 | Change schedule cron / `.md` files / schedule spawn | [contexts/schedule-runner.md](contexts/schedule-runner.md) |
 | Change subagent grouping, transcript view, parent→child | [contexts/subagent-observability.md](contexts/subagent-observability.md) |
 | Change busy/attention/response-ready state or the session-state domain module | [contexts/session-state.md](contexts/session-state.md) |
@@ -84,7 +87,7 @@ The new code takes effect on **next launch only** (after the user fully quits an
 
 Two agents in the same git checkout will race on branch checkouts and the working tree. Symptom: file edits from one agent leak into the other's commits. Use `isolation: "worktree"` when spawning subagents that touch overlapping files.
 
-After the agent completes, **remove the worktree manually** — `git worktree remove --force .claude/worktrees/agent-<id>`. The harness does not auto-clean.
+After the agent completes, **remove the worktree manually** — `git worktree remove --force .claude/worktrees/agent-<id>`. The harness does not auto-clean. On this machine agent worktrees live under `.work-files/worktrees`, managed by the harness (`harness worktree ensure/release`), and each has a `node_modules` junction to the primary checkout: remove the junction first (`rmdir` on Windows, never a recursive delete), because `git worktree remove --force` traverses it and empties the primary `node_modules`.
 
 ### 4. `.work-files/` is gitignored scratch space
 
@@ -141,7 +144,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 | Walk all JSONLs (parents + subagents + legacy layouts) | `enumerateSessionFiles(folderPath)` in `read-session-file.js` |
 | Encode `/path/to/project` → `-path-to-project` folder | `encodeProjectPath()` in `encode-project-path.js` |
 | Resolve worktree path back to repo root | `resolveWorktreePath()` in `derive-project-path.js` |
-| Default value for a setting | `SETTING_DEFAULTS` in `setting-defaults.js` — never a literal at the call site |
+| Default value for a setting | `SETTING_DEFAULTS` in `public/setting-defaults.js` — never a literal at the call site |
 | Escape HTML in renderer | `escapeHtml()` (cross-file global) |
 | Open a file in a CodeMirror panel | `new ViewerPanel(container, opts)` |
 | Optional toolbar button | `opts.format`, `opts.onDelete`, `opts.onSave`, `opts.onClose` on ViewerPanel |
@@ -175,7 +178,7 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
 The fork has features upstream maintainers might want. When adapting a fork-only feature for upstream:
 
 1. Branch off `upstream/main` (NOT fork main), name `upstream/<topic>`.
-2. Cherry-pick the relevant commit(s). Expect manual merges — our `main.js` is ~2600 LOC (measured 2026-09) vs upstream's ~350; insertion points exist but contexts differ.
+2. Cherry-pick the relevant commit(s). Expect manual merges — our `main.js` is ~4100 LOC (measured 2026-10) vs upstream's ~2200; insertion points exist but contexts differ.
 3. Strip fork-specific dependencies (subagent groups, work-files IPC, etc.) — keep the patch minimally scoped.
 4. PR against `doctly/switchboard:main`. Link the originating fork PR.
 

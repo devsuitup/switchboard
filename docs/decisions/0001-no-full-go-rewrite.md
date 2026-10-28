@@ -28,5 +28,5 @@ There's a second, easy-to-miss cost: a full rewrite **breaks fork↔upstream ali
 ## Consequences
 
 - No Go rewrite ticket should be scoped as "port the whole app." A Go-related proposal should default to the sidecar shape (option 2) unless it explicitly argues for abandoning upstream sync.
-- The native-module segfault risk (build-while-running) is mitigated today by `--config.npmRebuild=false`, not by a rewrite — see the "Safe build while running" guidance in [`../../.ai/shared-guidelines.md`](../../.ai/shared-guidelines.md).
+- The native-module segfault risk (build-while-running) is mitigated today by `--config.npmRebuild=false`, not by a rewrite — see Critical invariant #2 ("Running `npm run build:linux` CAN kill the running instance") in [`../../.ai/shared-guidelines.md`](../../.ai/shared-guidelines.md).
 - Revisit this decision if `xterm.js` or CodeMirror gain a maintained Go/WASM-native equivalent, or if the product goal shifts away from staying close to `doctly/switchboard` upstream.

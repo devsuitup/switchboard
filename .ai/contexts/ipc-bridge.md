@@ -8,10 +8,11 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 
 | File | LOC | Role |
 |---|---|---|
-| `preload.js` | ~150 | The `contextBridge.exposeInMainWorld('api', {...})` block. Every renderer-facing function. |
-| `main.js` | ~2600 | The `ipcMain.handle('<name>', ...)` and `ipcMain.on('<name>', ...)` handlers, scattered throughout. |
+| `preload.js` | ~270 | The `contextBridge.exposeInMainWorld('api', {...})` block. Every renderer-facing function. |
+| `main.js` | ~4100 | The `ipcMain.handle('<name>', ...)` and `ipcMain.on('<name>', ...)` handlers, scattered throughout. |
 | `schedule-ipc.js` | ~220 | **Also registers IPC handlers** (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`) — `init()` is called from `main.js`, but a `main.js`-only search for `ipcMain.handle` misses these three. Audit both files. |
 | `bg-agents-ipc.js` | ~130 | **Also registers IPC handlers** (`get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`) and sends `bg-agents-changed` — `init()` is called from `main.js`, so a `main.js`-only search for `ipcMain.handle` misses these six. Audit both files. |
+| `unsaved-guard.js` | ~440 | **Also registers IPC handlers** for the exit flow (`exit-attempt-snapshot`, `exit-background`, `exit-background-cancel`, `unsaved-check-phase`, `unsaved-pong`, `unsaved-dialog`, `unsaved-ready`, `unsaved-check-ack`, `unsaved-check-result`, `unsaved-check-reason-done`) through the `ipcMain` it is handed by `createUnsavedGuard`. See window-frame.md. |
 
 ## Public surface (IPC inventory)
 
@@ -34,7 +35,7 @@ consent and avoid recovery during a system exit. See window-frame.md.
 | `get-active-sessions` | — | `{sessionId, busy}[]` | Currently open PTY sessions plus each one's live `_cliBusy` flag — see "Busy-state reconciliation" below. |
 | `get-active-terminals` | — | `Terminal[]` | Active PTY identifiers |
 | `open-terminal` | `(id, projectPath, isNew, sessionOptions)` | `{ok, error?, mcpState, mcpError?}` | Spawn or attach a PTY. |
-| `send-session-to-background` | `(id)` | `{ok, oldSessionId?, sessionId?, jobId?, cwd?, code?, error?}` | One local handoff, fresh continuation plus live bg descriptor proof; holds the original PTY exit. `bg-handoff-notice(id, message)` pushes the terminal confirmation notice. See bg-agents.md. |
+| `send-session-to-background` | `(id)` | `{ok, oldSessionId?, sessionId?, jobId?, cwd?, respawned?, attached?, code?, error?}` | One local handoff, fresh continuation plus live bg descriptor proof; holds the original PTY exit. A session whose conversation is already held by its own stopped background job is not sent through `/bg`: it gets `/exit`, then that job is respawned (`respawned: true`; `bg-handoff.js`'s `respawnRoute`, #785). `bg-handoff-notice(id, message)` pushes the terminal confirmation notice. See bg-agents.md. |
 | `session-live-elsewhere` | `(id)` | `{pid, cwd, startedAt} \| null` | Whether another process (another Switchboard, a CLI in a terminal) is running session `id`: a live pid in `~/.claude/sessions/` and no PTY for it in this instance. Called by `openSession` before a resume; see `.ai/contexts/cli-session-state.md` ("Live elsewhere"). |
 | `sessions-live-elsewhere` | `(ids)` | `{[id]: {pid, cwd, startedAt}}` | The same check for a working-set restore batch, answered from one scan of `~/.claude/sessions/`; ids that are not live are absent, and at most 200 ids are looked up. Called once by `runRestore`; see `.ai/contexts/cli-session-state.md` ("Live elsewhere"). |
 | `stop-session` | `(id)` | `{ok}` | Kill the PTY for `id`. Local only — a remote-attach session's PTY is the local ssh attach client, so this only detaches it; see `remote-stop-session` for the real remote "stop". |
@@ -182,6 +183,14 @@ An unknown remote target never falls back to local disk IO.
 | `get-app-version` | From package.json |
 | `whats-new-startup` / `whats-new-dismissed` | The What's new dialog: the `CHANGELOG.md` sections to show on startup (or `null`), and recording the running version as `lastSeenVersion` when it closes. Help → What's new sends `show-whats-new` with the running version's section. See `docs/changelog.md` |
 | `updater-check` / `updater-download` / `updater-install` | electron-updater |
+| `read-clipboard` / `clipboard-has-image` | Main-process clipboard reads (text; whether an image is on it) |
+| `toggle-full-screen` / `popup-app-menu` | The frameless window's strip and ☰ menu — see window-frame.md |
+| `get-indexing-state` | `{finished}` — whether the first index pass is done; `indexing-finished` pushes the same news. See session-cache.md |
+| `get-task-snapshots` | The task registry's snapshots for live sessions; pushes follow on `task-snapshot` / `task-rekey`. See session-state.md |
+| `get-activity-trace-state` | Debug-mode state for Settings → Diagnostics; `activity-trace-state` pushes changes. See `docs/activity-trace.md` |
+| `get-activity-reporting-state` / `set-activity-reporting-enabled` | ActivityWatch reporting — see activitywatch.md |
+| `get-project-archive-plan` / `reenable-project-schedules` / `dismiss-schedule-reenable-offer` | Archive project planning and the schedule re-enable offer — see session-cache.md |
+| `remote-hosts-apply` / `remote-hosts-refresh` / `remote-host-refresh` / `remote-host-enrol-check` / `remote-launch-session` / `remote-send-prompt` | Remote hosts — see session-cache.md and `docs/remote-hosts.md` |
 
 ### Send (fire-and-forget, renderer → main)
 
@@ -192,10 +201,13 @@ An unknown remote target never falls back to local disk IO.
 | `close-terminal` | Renderer signals tab closed |
 | `mcp-diff-response` | Diff accept/reject from MCP IDE mode |
 | `activity-trace` | Renderer probe → the trace file. Registered **only** when `SWITCHBOARD_ACTIVITY_TRACE` is set (see below) |
+| `activity-focus` / `activity-titles` | Focused session and running-session titles for ActivityWatch — see activitywatch.md |
+| `updater-close` | The updater window closed |
+| `exit-background-cancel` / `unsaved-check-phase` / `unsaved-pong` / `unsaved-dialog` / `unsaved-ready` / `unsaved-check-ack` / `unsaved-check-result` / `unsaved-check-reason-done` | The exit flow's unsaved-edits handshake, handled in `unsaved-guard.js` — see window-frame.md |
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`
+`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
 
 `remote-resize-allowed(sessionId)` is emitted once when a live remote attach
 promotes from shared to solo. `preload.onRemoteResizeAllowed` forwards the id
@@ -203,8 +215,8 @@ to the renderer, which enables solo sizing and schedules a fitted resize.
 Initial solo attaches and failed promotions emit no event; there is no reverse
 notification. See `.ai/contexts/terminal-refresh.md`.
 
-`session-transcript-activity` and (not listed above; see
-`.ai/contexts/session-cache.md`, "Remote hosts — busy spinner") `remote-activity`
+`session-transcript-activity` and `remote-activity` (see
+`.ai/contexts/session-cache.md`, "Remote hosts — busy spinner")
 each carry one of two payload shapes on the same channel — a subagent write is
 never a second event (issue #247): `{ sessionId, at }` for a top-level
 transcript, or `{ parentSessionId, agentId, at, kind: 'subagent' }` (plus
@@ -422,7 +434,7 @@ session object exists.
 
 `cli-busy-state` is emitted **strictly on transitions** (`main.js` OSC 0 / OSC 9;4 handlers only send when `session._cliBusy` flips). A renderer that misses one — reload, mis-keyed id, a `session-forked` re-key — stays wrong forever, because no further event is coming. That is why `get-active-sessions` carries `busy`: `pollActiveSessions()` (3s while any PTY runs, 30s otherwise) hands the snapshot to `reconcileBusyState()` in `public/session-activity.js`, which realigns `sessionBusyState` and the sidebar classes.
 
-> `session-detected` (tempId → realId) has a preload bridge and an `app.js` listener but **no emitter in main today** — `session-transitions.js:427` only sends `session-forked`. The `rekeyActivityState` call in `onSessionDetected` is therefore unreachable; it is kept so the handler stays correct if the channel comes back, not because it runs.
+> `session-detected` (tempId → realId) has a preload bridge and an `app.js` listener but **no emitter in main today** — `session-transitions.js` only sends `session-forked`. The `rekeyActivityState` call in `onSessionDetected` is therefore unreachable; it is kept so the handler stays correct if the channel comes back, not because it runs.
 
 Three things make that safe:
 

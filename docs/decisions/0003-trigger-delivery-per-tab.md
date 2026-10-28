@@ -1,6 +1,8 @@
 # 0003 — Deliver triggers under one tab lock and a per-write ownership check
 
-**Status**: Accepted (2026-10-13). The maintainer's decisions on the four open questions (13/10) are recorded under "Maintainer decisions". No implementation exists yet.
+**Status**: Accepted (2026-10-13). The maintainer's decisions on the four open questions (13/10) are recorded under "Maintainer decisions". No implementation existed at acceptance.
+
+**2026-10-13:** implemented by PR #610 (`trigger-context.js`, `pinDelivery`); the current behaviour is described in `.ai/contexts/trigger-watcher.md`, "Re-keyed sessions". Line references below remain those of the verified HEAD named under Context.
 
 ## Context
 
