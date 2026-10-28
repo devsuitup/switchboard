@@ -38,12 +38,27 @@ function nodes(source) {
   return result;
 }
 
-function relativeRequires(source) {
+function requireCalls(source) {
   return nodes(source).filter(({ node }) => node.type === 'CallExpression'
-    && node.callee.type === 'Identifier' && node.callee.name === 'require'
-    && node.arguments[0]?.type === 'Literal' && typeof node.arguments[0].value === 'string'
-    && node.arguments[0].value.startsWith('.'))
-    .map(({ node }) => node.arguments[0]);
+    && ((node.callee.type === 'Identifier' && node.callee.name === 'require')
+      || (node.callee.type === 'MemberExpression' && node.callee.object.name === 'require'
+        && (node.callee.computed ? node.callee.property.value : node.callee.property.name) === 'resolve')))
+    .map(({ node }) => node);
 }
 
-module.exports = { walk, appFiles, nodes, relativeRequires };
+function relativeRequires(source) {
+  return requireCalls(source).filter((node) => node.arguments[0]?.type === 'Literal'
+    && typeof node.arguments[0].value === 'string' && node.arguments[0].value.startsWith('.'))
+    .map((node) => node.arguments[0]);
+}
+
+function staticDirnameJoins(source) {
+  return nodes(source).filter(({ node }) => node.type === 'CallExpression'
+    && node.callee.type === 'MemberExpression' && node.callee.object.name === 'path'
+    && node.callee.property.name === 'join' && node.arguments[0]?.name === '__dirname'
+    && node.arguments.length > 1
+    && node.arguments.slice(1).every((part) => part.type === 'Literal' && typeof part.value === 'string'))
+    .map(({ node }) => node);
+}
+
+module.exports = { walk, appFiles, nodes, relativeRequires, requireCalls, staticDirnameJoins };

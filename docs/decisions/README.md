@@ -6,10 +6,9 @@ Format: lightweight — Status, Context, Decision, Consequences. No fixed templa
 
 ## Index
 
-- [0005 — Move main-process modules into flat contexts](0005-main-process-context-layout.md)
-
 - [0001 — No full Go rewrite; Go backend sidecar only, if ever](0001-no-full-go-rewrite.md)
 - [0002 — Steady-state indicator animations must be discrete (`steps()`), never smooth 60fps](0002-discrete-steps-sidebar-animations.md)
 - [0003 — Deliver triggers under one tab lock and a per-write ownership check](0003-trigger-delivery-per-tab.md)
 - [0004 — Update the session index incrementally through one writer and bind the display with deltas](0004-session-index-single-writer.md)
   - [Supporting study — session index reads, writes and display refreshes](0004-session-index-study.md), including local CLI title-record structure and read-then-write command inventory. The decision uses title-value changes for rename precedence, keeps unread in renderer memory, and separates projection parity (3a) from bounded delta transport (3b).
+- [0005 — Move main-process modules into flat contexts](0005-main-process-context-layout.md)

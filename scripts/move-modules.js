@@ -64,6 +64,13 @@ function rewrite(file, source, map, options = {}) {
     const tree = nodes(source);
     const handled = new Set();
     const loaded = new Set();
+    const stubNodes = new Set(tree.filter(({ node, parent }) => node.type === 'Literal'
+      && typeof node.value === 'string' && node.value.startsWith('.')
+      && ((parent?.type === 'Property' && parent.key === node && !parent.computed)
+        || (parent?.type === 'BinaryExpression' && ['===', '!==', '==', '!='].includes(parent.operator))
+        || (parent?.type === 'SwitchCase' && parent.test === node)))
+      .map(({ node }) => node));
+    const stubValues = new Set([...stubNodes].map(node => node.value));
     const quote = (node, value) => `${source[node.range[0]]}${value}${source[node.range[0]]}`;
     for (const { node } of tree) {
       if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression'
@@ -91,8 +98,13 @@ function rewrite(file, source, map, options = {}) {
       const content = options.sources?.[old];
       if (!content) continue;
       for (const spec of relativeRequires(content)) {
-        const target = moduleTarget(old, spec.value, map, options.root);
-        let next = relative(map[old] || old, map[target] || target);
+        if (!stubValues.has(spec.value)) continue;
+        const currentFile = map[old] || old;
+        const oldTarget = moduleTarget(old, spec.value, map, options.root);
+        const from = alreadyRewritten(currentFile, spec.value, map, options.root)
+          || oldTarget.startsWith('../') ? currentFile : old;
+        const target = moduleTarget(from, spec.value, map, options.root);
+        let next = relative(currentFile, map[target] || target);
         if (!spec.value.endsWith('.js')) next = next.replace(/\.js$/, '');
         if (next === spec.value) continue;
         if (stubs.has(spec.value) && stubs.get(spec.value) !== next) throw new Error(`${file}: ambiguous vm stub ${spec.value}`);
@@ -111,7 +123,7 @@ function rewrite(file, source, map, options = {}) {
           next = relative(file, map[target] || target);
           if (!value.endsWith('.js')) next = next.replace(/\.js$/, '');
         }
-      } else if (stubs.has(value)) {
+      } else if (stubNodes.has(node) && stubs.has(value)) {
         next = stubs.get(value);
       } else if (map[value]) {
         next = map[value];

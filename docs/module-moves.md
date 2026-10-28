@@ -25,11 +25,23 @@ Keep the map for the move until verification finishes; a second apply must produ
 Use `--root <repository>` to exercise a disposable copy without modifying the working checkout.
 
 The scanner reads root JavaScript, workers, src, scripts, public, test (including fixtures), e2e,
-and Markdown/JSON context documents under .ai and docs. It updates literal relative requires,
+and Markdown/JSON context documents under .ai and docs. It updates literal relative requires
+(including `require.resolve`),
 static `path.join(__dirname, ...)` and `path.join(ROOT, ...)` expressions, literal file paths and
-VM stub specifiers inferred from the source files the test loads. Qualified documentation paths
+VM stub keys/comparisons inferred from the source files the test loads. Only stub literals
+actually present in the test participate in ambiguity checks. Loaded source requires are resolved
+from their current location once rewritten, so repeated apply/check runs preserve the stubs.
+Qualified documentation paths
 change; bare filenames remain valid. It does not evaluate code or computed path expressions.
 Review dynamic paths manually, especially interpolated worker paths and source strings inside tests.
+The layout guard rejects non-literal requires unless explicitly allowed with a reason and checks
+every static `path.join(__dirname, <string literals>)` target on disk. Optional dependency paths
+are listed with reasons in `test/module-layout.test.js`.
+
+Review `.ai/project.json` scopes manually: bare paths such as `db.js`, `session-cache.js` and the
+glob `schedule-*.js` are not qualified documentation references and are not rewritten by this
+codemod. Replace or remove stale scope entries after moves; `src/main/**/*.js` already covers the
+destination contexts. This manual check is part of each move PR's configuration review.
 
 Shrink `test/fixtures/root-app-modules.json` manually after a move. Root inventory equality rejects
 both new root modules and stale allow-list entries. Run the resolver and affected tests, lint, the

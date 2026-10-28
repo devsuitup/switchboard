@@ -46,12 +46,22 @@ Migration order from the 2026-10-28 architecture audit:
 
 See [the codemod guide](../module-moves.md). Packaging includes `src/**/*`; coverage exclusions match
 entry-point basenames and nested worker directories. Static require resolution covers lazy calls and
-main-required public modules. The root module allow-list shrinks with each context move.
+main-required public modules, including literal `require.resolve` calls. Static
+`path.join(__dirname, <string literals>)` targets must exist, including worker entries, preload,
+HTML and shell scripts; optional dependency paths have reasoned exceptions in the layout test.
+Non-literal require calls fail unless explicitly allowed with a reason.
+The root module allow-list shrinks with each context move.
 
 Every move requires lint, the full test suite, the CI matrix, diff coverage, the leftover check and e2e
 in the appropriate CI environment. JB verifies a packaged build when worker paths, build.files or the
 package entry point change. #832's local verification follows its stricter brief: Node-only tests,
 no Electron, Playwright, e2e or packaged builds.
+
+The leftover check is `node scripts/move-modules.js --check` with the move's source map still
+present. It reports every pending literal reference rewrite and any source file awaiting its
+move, exits 1 if either remains, and never writes files. Exit 0 means the scanner has no pending
+edits or moves; computed paths, bare documentation names and manual configuration scopes still
+need the review described in the guide.
 
 ## Consequences
 
