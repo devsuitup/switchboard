@@ -82,20 +82,27 @@ Only classified agent transcripts enter that cached list, so a remaining
 journal cannot prevent collection of a deleted agent. Missing run directories
 still participate in targeted deletion detection.
 
-Startup reconciliation forces a full refresh of any local folder containing
-a root row whose id starts with `agent-`, even when targeted flushes have
-advanced its index freshness. The existing cache effects delete those old
-ghost rows and index canonical workflow children through the writer worker;
-the reader does not write SQLite directly.
+Local reconciliation runs at startup and on projects requests, throttled to
+five seconds. It stats each root `agent-*` candidate once; only a missing
+root JSONL forces a full folder refresh despite fresh index metadata. A real
+legacy root file is preserved and does not cause repeated refreshes; deleting
+the ghost row clears the repair condition. Remote indexed folders receive
+subset scans: processing a workflow transcript's upsert or deletion also
+removes an old root `agent-<id>` row if its root JSONL is absent from the mirror,
+while preserving real root files even outside the subset. The existing cache
+effects apply deletions and canonical workflow children through the writer
+worker; the reader does not write SQLite directly.
 
 `buildProjectsFromCache` projects `workflowRunId` and `workflowName`, reading
 `<parent>/workflows/<run>.json` with a worker-lifetime cache keyed by file path,
 mtimeMs and size, reused across both views and subsequent queries (including
 cache reinitialization). Missing, malformed or
 empty titles fall back to the run id. Remote mirrors without run snapshots
-use that same fallback. Snapshot JSON watcher events queue the existing
-debounced folder refresh and force a projects notification even when no
-transcript row changed, so a completed run's title reaches the sidebar.
+use that same fallback. Snapshot JSON watcher events queue a debounced projects
+notification without a transcript refresh or widening pending targeted scans.
+The watcher compares titles observed in snapshot events, so later status-only
+changes with the same title do not notify. The first event notifies because
+the watcher has no title baseline yet. The title is read when building projects.
 The sidebar nests one block per parent/run under the
 existing subagent container (and groups orphan workflows in the orphan bucket).
 It reuses the existing caret, child container, preview cap and

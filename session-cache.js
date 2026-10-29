@@ -768,7 +768,10 @@ function reconciliationFolders(throttle) {
   if (throttle && now - lastReconcileAt < RECONCILE_THROTTLE_MS) return [];
   lastReconcileAt = now;
   const metaMap = getAllFolderMeta();
-  const ghostFolders = new Set(getAllCached().filter(row => !row.parentSessionId && row.sessionId.startsWith('agent-')).map(row => row.folder));
+  const ghostFolders = new Set(getAllCached().filter(row => {
+    if (row.parentSessionId || !row.sessionId.startsWith('agent-') || parseFolderKey(row.folder).alias !== null) return false;
+    try { fs.statSync(path.join(PROJECTS_DIR, row.folder, row.sessionId + '.jsonl')); return false; } catch { return true; }
+  }).map(row => row.folder));
   return fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
     .filter(d => d.isDirectory() && d.name !== '.git')
     .map(d => {

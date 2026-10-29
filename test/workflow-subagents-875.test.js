@@ -214,6 +214,29 @@ test('startup repairs a pre-fix ghost despite fresh folder metadata through writ
   assert.equal(snapshotReads, 1, 'the shipped query worker reuses names across both views and separate messages');
 });
 
+for (const ghost of [false, true]) {
+  test(`reconciliation repairs a ghost exactly once and preserves real legacy agent roots: ghost=${ghost}`, async t => {
+    const h = workflowFixture(t);
+    const id = 'agent-1a2b3c4d';
+    if (!ghost) h.write(id);
+    cache.refreshFolder(h.folder);
+    if (ghost) h.rows.set(id, { sessionId: id, folder: h.folder, projectPath: h.root, parentSessionId: null });
+    const writes = [];
+    const setFolderMeta = h.db.setFolderMeta;
+    h.db.setFolderMeta = (...args) => { writes.push(args); return setFolderMeta(...args); };
+    h.init();
+    const counts = [];
+    for (let i = 0; i < 3; i++) {
+      const before = writes.length;
+      await cache.reconcileCacheFromFilesystemAsync({ throttle: false });
+      counts.push(writes.length - before);
+    }
+    assert.deepEqual(counts, ghost ? [1, 0, 0] : [0, 0, 0], 'only a missing root file warrants one full repair');
+    assert.equal(h.rows.has(id), !ghost);
+    assert.ok(h.rows.has(ID));
+  });
+}
+
 test('workflow snapshot names are cached across builds and refreshed by mtime and size', t => {
   const h = workflowFixture(t);
   const initialTime = new Date('2026-01-01T00:00:00.000Z');
@@ -270,9 +293,22 @@ test('projects watcher refreshes workflow snapshot titles when a run ends', asyn
   watch('change', path.relative(h.root, h.snapshot));
   assert.equal(typeof flush, 'function', 'snapshot event must schedule a projects refresh');
   await flush();
-  assert.equal(refreshes.length, 1);
+  assert.equal(refreshes.length, 0, 'a title event must not walk or refresh transcript rows');
   assert.ok(notifications.includes('watcher'), 'title-only changes must reach the renderer even without changed transcript rows');
   assert.equal(cache.buildProjectsFromCache(false)[0].sessions.find(row => row.sessionId === ID).workflowName, 'Final workflow name');
+  notifications.length = 0;
+  fs.writeFileSync(h.snapshot, JSON.stringify({ workflowName: 'Final workflow name', status: 'running' }));
+  watch('change', path.relative(h.root, h.snapshot));
+  await flush();
+  assert.equal(notifications.length, 0, 'an observed unchanged title needs no projects notification');
+  watch('change', path.join(h.folder, h.relative));
+  fs.writeFileSync(h.snapshot, JSON.stringify({ workflowName: 'Renamed again' }));
+  watch('change', path.relative(h.root, h.snapshot));
+  await flush();
+  assert.equal(refreshes.length, 1);
+  assert.ok(refreshes[0].opts?.files, 'title changes cannot upgrade pending targeted files to a full walk');
+  assert.deepEqual([...refreshes[0].opts.files], [h.relative]);
+  assert.ok(notifications.includes('watcher'));
 });
 
 test('workflow paths attribute live writes to the parent and ignore the journal', () => {
@@ -282,11 +318,11 @@ test('workflow paths attribute live writes to the parent and ignore the journal'
   assert.equal(subagentParentFromParts(['folder', P, 'subagents', 'workflows', 'bad', 'agent-child.jsonl']), null);
 });
 
-async function scan(h, subset) {
+async function scan(h, subset, existingRows = []) {
   const messages = [];
   const worker = new Worker(path.join(__dirname, '../workers/scan-projects.js'), {
     workerData: { projectsDir: h.root, folderPrefix: 'vps',
-      ...(subset ? { folders: [], targets: [{ folder: h.folder, files: [h.relative.split(path.sep).join('/'), h.journal.split(path.sep).join('/')], existingRows: [] }] }
+      ...(subset ? { folders: [], targets: [{ folder: h.folder, files: [h.relative.split(path.sep).join('/'), h.journal.split(path.sep).join('/'), ...(h.scanExtra || [])], existingRows }] }
         : { folders: [h.folder] }) },
   });
   worker.on('message', message => messages.push(message));
@@ -296,6 +332,23 @@ async function scan(h, subset) {
   });
   assert.equal(messages.at(-1).ok, true);
   return messages.find(message => message.type === 'folder').result;
+}
+
+for (const deleted of [false, true]) {
+  for (const root of ['absent', 'present', 'scanned']) {
+    test(`remote workflow subset repairs an old ghost on upsert or deletion: deleted=${deleted}, root=${root}`, async t => {
+      const h = workflowFixture(t);
+      h.relative = path.join(P, 'subagents', 'workflows', RUN, 'agent-x1.jsonl');
+      h.writeAgent(h.relative, 'x1');
+      if (deleted) fs.unlinkSync(path.join(h.dir, h.relative));
+      if (root !== 'absent') h.write('agent-x1');
+      if (root === 'scanned') h.scanExtra = ['agent-x1.jsonl'];
+      const result = await scan(h, true, [{ sessionId: 'agent-x1', parentSessionId: null }]);
+      assert.equal(result.toDelete.includes('agent-x1'), root === 'absent', 'only a missing root file is a ghost');
+      assert.equal(result.toDelete.includes(`sub:${P}:x1`), deleted);
+      assert.equal(result.sessions.some(row => row.sessionId === `sub:${P}:x1`), !deleted);
+    });
+  }
 }
 
 for (const subset of [false, true]) {

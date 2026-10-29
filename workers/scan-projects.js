@@ -66,6 +66,11 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
   for (const rel of scanFiles) {
     const classified = classifyTranscriptPath(rel);
     if (!classified) continue;
+    if (classified.workflowRunId) {
+      const rootId = 'agent-' + classified.agentId;
+      if ((existingRows || []).some(row => row.sessionId === rootId && !row.parentSessionId)
+        && !fs.existsSync(path.join(folderPath, rootId + '.jsonl')) && !goneIds.includes(rootId)) goneIds.push(rootId);
+    }
     const parts = rel.split(/[\\/]/);
     const filePath = path.join(folderPath, ...parts);
 

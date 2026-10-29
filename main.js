@@ -3572,6 +3572,7 @@ function startProjectsWatcher() {
   // subagent appending JSONL we can stat one file instead of thousands.
   const pendingChanges = new Map();
   const pendingWorkflowTitles = new Set();
+  const workflowTitles = new Map();
   let debounceTimer = null;
 
   flushProjectsBeforeExit = async () => {
@@ -3649,8 +3650,13 @@ function startProjectsWatcher() {
         // out-of-band signal for the local-transcript adapter — see .ai/contexts/session-state.md
         localTranscriptTracker.record(parts);
       } else if (parts.length === 4 && parts[2] === 'workflows' && /^wf_[a-z0-9-]{6,}\.json$/.test(basename)) {
-        pendingWorkflowTitles.add(folder);
-        recordChange(folder, null);
+        let title = basename.slice(0, -5);
+        try {
+          const snapshot = JSON.parse(fs.readFileSync(path.join(PROJECTS_DIR, filename), 'utf8'));
+          if (typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()) title = snapshot.workflowName.trim();
+        } catch {}
+        if (workflowTitles.get(filename) !== title) pendingWorkflowTitles.add(folder);
+        workflowTitles.set(filename, title);
       } else {
         return;
       }

@@ -72,9 +72,17 @@ back to the same cached file without rereading its body every watcher flush.
 The projects payload includes the run id and a run title cached across builds
 by snapshot path, mtimeMs and size from `<parent>/workflows/<run>.json`, falling
 back to the id. Snapshot changes route through the debounced watcher to a
-projects notification even without a changed transcript. Reconciliation
-forces a full refresh of folders with old root `agent-*` rows regardless of
-index freshness; deletion and regrouping use existing writer effects. See
+projects notification without refreshing transcripts or widening pending targeted
+scans. The watcher compares titles observed in snapshot events and suppresses
+repeat notifications when only status changes; the first event has no known
+title baseline and notifies. Local reconciliation runs at startup and on
+projects requests (throttled to five seconds). It stats each root `agent-*`
+candidate once and forces a full folder refresh only if its root JSONL is
+missing, regardless of index freshness. Repair clears the condition; legitimate
+legacy root files never trigger it. Remote subset scans remove an old root
+`agent-<id>` row when processing a workflow transcript's upsert or deletion,
+provided the root file is absent from the mirror. Existing root files are
+preserved even outside the subset. Deletion and regrouping use existing writer effects. See
 [subagent-observability](subagent-observability.md#workflow-agent-transcripts-875).
 
 These are the inputs to `buildProjectsFromCache` and
