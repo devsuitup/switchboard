@@ -134,6 +134,7 @@ test('notification: reordering continuation ids does not refresh the sidebar', t
     ...['b', 'm'].map(id => ({ type: 'continued-in', sessionId: 'a', continuedInSessionId: id })),
   ].map(JSON.stringify).join('\n') + '\n');
   r.fileMtime = fs.statSync(file).mtime.toISOString();
+  r.fileSize = fs.statSync(file).size;
   r.continuationIndex = JSON.stringify({ format: 3, complete: true, mtime: r.fileMtime, ids: ['m', 'b'], stamp: { size: '0' } });
   assert.equal(cache.refreshFolder(h.folder, { files: new Set(['a.jsonl']) }), 'activity');
   assert.deepEqual(JSON.parse(r.continuationIndex).ids, ['b', 'm']);

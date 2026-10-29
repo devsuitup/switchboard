@@ -15,7 +15,7 @@ const reads = new Set(['getMeta', 'getAllMeta', 'isCachePopulated', 'getAllCache
 const cacheWriters = new Set(['deleteCachedFolder', 'upsertCachedSessions', 'deleteCachedSession',
   'replaceSessionMetrics', 'touchCachedModified', 'deleteSearchFolder', 'deleteSearchSession',
   'upsertSearchEntries', 'setFolderMeta', 'setSetting', 'setName', 'setInitialScanComplete',
-  'setCachedEntrypoints', 'setCachedContinuationIndex', 'setCachedCustomTitles']);
+  'setCachedEntrypoints', 'setCachedContinuationIndex', 'setCachedCustomTitles', 'setCachedFileSize']);
 const cacheCommands = new Set(['init', 'refreshFolder', 'dropFolderRows', 'releaseLiveSession',
   'writeScannedFolder', 'writeScannedFolderPartial', 'applyProjectsWorkerEffects', 'buildProjectsFromCache', 'reconcileCacheFromFilesystem', 'reconcileCacheFromFilesystemAsync']);
 const cacheWriteOwners = new Set([...cacheCommands, 'setTranscriptName']);

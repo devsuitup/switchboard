@@ -185,6 +185,41 @@ The retry clock is injectable through `init({now})`; retry state resets at start
 - **`get-projects` never awaits the cold-start scan.** `main.js`'s handler fires `populateCacheViaWorker()` without `await` when the cache is empty, returning whatever's cached right now (still non-empty for project *names* — the projects query worker lists on-disk directories even with zero indexed sessions). Progressive fill-in relies entirely on `notifyRendererProjectsChanged()` firing per folder. Don't reintroduce the `await` — it's what caused the multi-minute blocking "Loading…" on a large `~/.claude/projects/`.
 - **"Cache has rows" does not mean "initial scan finished".** The worker streams one DB write per folder, so killing the app mid-first-scan leaves `session_cache` partially populated. The authoritative signal is the `initial_scan_complete` settings key: written by `session-cache.js` only on the worker's final successful `done` message, backfilled once by migration v8 for pre-marker installs (their populated caches could only come from completed batch-write scans), cleared whenever the schema-reconciliation pass wipes the cache. `get-projects` treats "rows present but marker absent" as an interrupted scan: it resumes the background worker (safe — each folder message is delete-then-insert, so re-scanned folders never duplicate) and must NOT run the synchronous `reconcileCacheFromFilesystem()` sweep, which would re-parse every missing folder on the main thread. While the marker is absent, `buildProjectsFromCache`'s empty-dir fallback also skips `deriveProjectPath()` (per-folder readdir + 256 KB read) in favor of a zero-I/O best-effort decode of the folder name (`decodeProjectFolderBestEffort`), never persisted to `cache_meta`.
 
+## Transcript size freshness (#740)
+
+Refresh compares the already-statted byte size with persisted `fileSize` in both
+unchanged-row guards, alongside `fileMtime`. Full reads (including scan-worker
+and subagent reads) and header refreshes carry that size. An absent legacy size
+is adopted through a size-only writer effect; it does not invalidate the content,
+trigger a full read, or change `modified` on an otherwise idle row, including a
+linked continuation. An unchanged size and mtime skip again after the write is
+acknowledged. Size alone is not a sidebar notification field. Growth that happened
+before the first size observation cannot be inferred from an unknown size.
+
+For an unlinked or subagent row whose size changes while its mtime stays equal,
+refresh uses the full-read/bridge-merge publication path only when the total file
+size fits the remaining shared per-refresh synchronous continuation byte budget
+(`CONTINUATION_BYTE_BUDGET`, initially 1 MiB), updating counts, titles, message
+timestamps for top-level rows, FTS and metrics together. This full read consumes
+the remaining budget, matching the existing continuation scan reservation. Later
+changed known linked rows defer in full if they cannot reach verified EOF;
+prepared continuations retain their separate budget and targeted retry scope.
+If the file exceeds the remaining budget, refresh uses the bounded header path and records the size:
+counts, FTS body and metrics may remain stale until the next cold full scan,
+while display fields refresh. Subagents retain their existing filesystem
+timestamp semantics. The same cap applies to a size change downward; ordinary
+advancing-mtime writes keep the bounded header path and its existing count/body
+trade-off. Linked continuations retain
+their stamp validation, preparation budget and race deferral. A failed exceptional
+full read keeps the previous row/size so a later refresh can retry.
+
+The writer store adds nullable `fileSize INTEGER` through its existing
+version-independent schema reconciliation, without wiping cached rows. Existing
+rows acquire the size on refresh. Size adoption uses the recorded
+`setCachedFileSize` effect (a one-column UPDATE); full/header reads use recorded
+upserts. Both run through the writer worker, including Projects query effects;
+no additional writable connection exists.
+
 ## Transcript cwd trust (issue #385)
 
 A transcript's `cwd` is trusted for a filesystem decision only if it encodes back to the name of the folder holding the transcript: `verifiedTranscriptCwd(cwd, folderName)` in `encode-project-path.js` returns the resolved absolute cwd when `encodeProjectPath(path.resolve(cwd)) === folderName`, else `null`. The seed of the schedule registry uses the same function.

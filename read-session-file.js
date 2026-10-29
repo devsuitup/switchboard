@@ -343,6 +343,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         firstPrompt: summary,
         created: stat.birthtime.toISOString(),
         modified: stat.mtime.toISOString(),
+        fileMtime: stat.mtime.toISOString(),
+        fileSize: stat.size,
         messageCount, textContent, slug, customTitle: customTitle || '', aiTitle,
         parentSessionId: opts.parentSessionId,
         agentId,
@@ -363,6 +365,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       created: firstTimestamp || stat.birthtime.toISOString(),
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime: stat.mtime.toISOString(),
+      fileSize: stat.size,
       messageCount, textContent, slug, scheduleSlug, customTitle: customTitle || '', aiTitle,
       continuationIndex: matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }))
         ? JSON.stringify({ format: 3, version: 3, ids: [...continuationIds], stamp,

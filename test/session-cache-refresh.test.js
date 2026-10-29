@@ -164,9 +164,11 @@ test('refreshFolder: only the changed-mtime file gets upserted; unchanged files 
     // C is not in cache at all → it's NEW and must be upserted
     const cachedRows = [
       { sessionId: 'session-a', folder, projectPath, fileMtime: statA,
+        fileSize: fs.statSync(fileA).size,
         modified: '2024-01-01T00:00:00.000Z', filePath: fileA,
         parentSessionId: null, agentId: null },
       { sessionId: 'session-b', folder, projectPath, fileMtime: statB,
+        fileSize: fs.statSync(fileB).size,
         modified: '2024-01-01T00:00:00.000Z', filePath: fileB,
         parentSessionId: null, agentId: null },
     ];

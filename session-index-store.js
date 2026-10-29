@@ -319,6 +319,7 @@ if (migrations.length > currentDbVersion) {
 
     mustReindex = true;
   }
+  if (!cols.has('fileSize')) db.exec('ALTER TABLE session_cache ADD COLUMN fileSize INTEGER');
   if (mustReindex) {
     db.exec('DELETE FROM session_cache');
     db.exec('DELETE FROM cache_meta');
@@ -382,14 +383,15 @@ const stmts = {
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex, customTitle)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex, customTitle, fileSize)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
       aiTitle = excluded.aiTitle, fileMtime = excluded.fileMtime,
+      fileSize = excluded.fileSize,
       parentSessionId = excluded.parentSessionId, agentId = excluded.agentId,
       subagentType = excluded.subagentType, description = excluded.description,
       bridgeSessionId = excluded.bridgeSessionId,
@@ -403,6 +405,7 @@ const stmts = {
   cacheGetMissingEntrypoint: db.prepare('SELECT sessionId, folder FROM session_cache WHERE entrypoint IS NULL AND parentSessionId IS NULL'),
   cacheSetEntrypoint: db.prepare('UPDATE session_cache SET entrypoint = ? WHERE sessionId = ?'),
   cacheSetContinuationIndex: db.prepare('UPDATE session_cache SET continuationIndex = ? WHERE sessionId = ?'),
+  cacheSetFileSize: db.prepare('UPDATE session_cache SET fileSize = ? WHERE sessionId = ?'),
   cacheSetCustomTitle: db.prepare('UPDATE session_cache SET customTitle = ? WHERE sessionId = ? AND customTitle IS NULL AND fileMtime IS ?'),
   cacheGetMissingCustomTitle: db.prepare('SELECT sessionId, folder, fileMtime FROM session_cache WHERE customTitle IS NULL AND parentSessionId IS NULL'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
@@ -568,7 +571,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.subagentType || null, s.description || null,
       s.fileMtime || null, s.bridgeSessionId || null, s.mergedIntoSessionId || null,
       typeof s.entrypoint === 'string' ? s.entrypoint : null,
-      s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null
+      s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null, s.fileSize ?? null
     );
     if (next !== previous) metaFieldSet.run(s.sessionId, 'name', previous.nameRevision ?? 0, 'user', next.nameTranscriptTitle);
   }
@@ -908,6 +911,7 @@ return {
   isCachePopulated, getAllCached, getCachedByFolder, getCachedMissingEntrypoint, setCachedEntrypoints, getCachedByParent, getCachedFolder, getCachedSession, upsertCachedSessions,
   touchCachedModified: (sessionId, modified, fileMtime = modified) => stmts.cacheTouchModified.run(modified, fileMtime, sessionId),
   setCachedContinuationIndex: (sessionId, index) => stmts.cacheSetContinuationIndex.run(index, sessionId),
+  setCachedFileSize: (sessionId, fileSize) => stmts.cacheSetFileSize.run(fileSize, sessionId),
   setCachedCustomTitles, getCachedMissingCustomTitle,
   deleteCachedSession, deleteCachedFolder,
   replaceSessionMetrics,

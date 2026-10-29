@@ -50,6 +50,7 @@ async function build(message) {
     deleteCachedSession: id => rows.delete(id),
     deleteCachedFolder: folder => { for (const row of rows.values()) if (row.folder === folder) rows.delete(row.sessionId); },
     touchCachedModified: (id, modified) => { const row = rows.get(id); if (row) Object.assign(row, { modified, fileMtime: modified }); },
+    setCachedFileSize: (id, fileSize) => { const row = rows.get(id); if (row) row.fileSize = fileSize; },
     setFolderMeta: (folder, projectPath, indexMtimeMs) => folders.set(folder, { folder, projectPath, indexMtimeMs }),
     setName: (id, name, source = 'user') => {
       const previous = meta.get(id);

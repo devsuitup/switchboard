@@ -70,6 +70,36 @@ test('B5/B7 raw exhausted refresh defers the whole row, targeted OTHER retries i
   assert.equal(cache.continuationRefreshScope(h.folder, { files: new Set([OTHER + '.jsonl']) }).files.has(OLD + '.jsonl'), false);
 });
 
+test('B5/B7 pinned OTHER spends the shared budget and defers OLD until targeted retry', { timeout: 9000 }, async t => {
+  const h = fixture(t); h.write(OLD, h.padding + h.link()); h.write(OTHER);
+  const pinned = new Date('2030-01-01T00:00:00.000Z');
+  fs.utimesSync(h.file(OTHER), pinned, pinned);
+  cache.refreshFolder(h.folder); h.init();
+  const before = structuredClone(h.rows.get(OLD));
+  const otherBefore = fs.statSync(h.file(OTHER));
+  h.append(OLD); h.append(OTHER); h.effects.length = 0;
+  fs.utimesSync(h.file(OTHER), otherBefore.atime, otherBefore.mtime);
+  assert.equal(fs.statSync(h.file(OTHER)).mtimeMs, otherBefore.mtimeMs);
+  const changedAt = new Date(Date.parse(before.fileMtime) + 1000);
+  fs.utimesSync(h.file(OLD), changedAt, changedAt);
+  cache.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', OLD + '.jsonl']) });
+  assert.deepEqual(h.rows.get(OLD), before, 'pinned OTHER must spend the shared budget before OLD');
+  assert.equal(h.folders.get(h.folder).indexMtimeMs, 0);
+  assert.equal(h.folders.get(h.folder).projectPath, h.root);
+  assert.equal(h.views().length, 1);
+  const opts = { files: new Set([OTHER + '.jsonl']) };
+  assert.ok(cache.continuationRefreshScope(h.folder, opts).files.has(OLD + '.jsonl'));
+  const preparedContinuations = await cache.prepareContinuationRefresh(h.folder, opts);
+  cache.refreshFolder(h.folder, { ...opts, preparedContinuations });
+  const row = h.rows.get(OLD), index = JSON.parse(row.continuationIndex);
+  assert.notEqual(row.fileMtime, before.fileMtime);
+  assert.deepEqual(index.ids, [HEAD]); assert.equal(index.complete, true);
+  assert.equal(index.bytes, fs.statSync(h.file(OLD)).size);
+  assert.deepEqual(index.stamp, continuationStamp(fs.statSync(h.file(OLD), { bigint: true })));
+  assert.ok(h.folders.get(h.folder).indexMtimeMs > 0);
+  assert.equal(cache.continuationRefreshScope(h.folder, opts).files.has(OLD + '.jsonl'), false);
+});
+
 test('B5/B7 linked growth with pinned mtime defers then refreshes through its continuation stamp', { timeout: 9000 }, async t => {
   const h = fixture(t); h.write(OLD, h.padding + h.link()); h.write(OTHER);
   const pinned = new Date('2030-01-01T00:00:00.000Z');
