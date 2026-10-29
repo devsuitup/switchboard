@@ -22,6 +22,7 @@ a closed tab immediately releases older-session Archive eligibility (#876).
 The per-row older-archive keep reason uses the same predicate as the button,
 including head/member remote liveness and descriptor fallbacks; row-level
 liveness alone does not capture every eligibility change.
+The keep-reason in the #543 skip key re-enables the older-archive button when eligibility changes; the open-tab key is a safety net (#893).
 Storage is restricted to `expandedSubagents`, `expandedSubagentRest`,
 `orphanExpanded:*` and the result of `getExpandedSlugs`.
 

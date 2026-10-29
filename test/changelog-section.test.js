@@ -23,6 +23,12 @@ test('the notes of a tag are its section, without the version heading', () => {
   assert.equal(releaseNotes(TEXT, '0.0.2'), '### Fixed\n- Two. (#2)');
 });
 
+test('unknown Unreleased groups do not prevent extracting released notes', () => {
+  let notes;
+  assert.doesNotThrow(() => { notes = releaseNotes(TEXT.replace('### New', '### Added'), 'v0.0.2'); });
+  assert.equal(notes, '### Fixed\n- Two. (#2)');
+});
+
 test('a tag with no section is an error that says what to do', () => {
   assert.throws(() => releaseNotes(TEXT, 'v0.0.3'), /no "## v0\.0\.3 — YYYY-MM-DD" section/);
 });

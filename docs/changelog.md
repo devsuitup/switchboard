@@ -41,10 +41,14 @@ Older versions: see [GitHub Releases](…).
 - A second-level heading of any other shape makes the file unreadable to the
   app, which then shows no dialog. `test/changelog.test.js` parses the
   repository's file and fails first.
-- Under `## Unreleased`, the parser rejects third-level headings other than
-  `### New`, `### Changed` and `### Fixed`, including `### Added`.
+- Under `## Unreleased`, only `### New`, `### Changed` and `### Fixed` are
+  allowed. `test/changelog.test.js` enforces this on the repository file in
+  CI's test job using `parseChangelog(text, { strict: true })`, rejecting
+  headings such as `### Added`. The app and release-note extraction use the
+  default lenient parser: unknown third-level Unreleased headings do not hide
+  released sections or prevent the What's new dialog from opening.
   Historical version bodies and text after the closing rule retain their
-  existing interpretation. `test/changelog.test.js` guards this in the test job.
+  existing interpretation.
 
 ## Writing an entry
 
