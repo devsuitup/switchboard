@@ -7,15 +7,21 @@ the current payload, pending-session reconciliation and activity poll. Explicit
 refreshes and `resort: true` still render. Only the sidebar build/morphdom/event
 rebinding is skipped; cache updates, notices, diagnostics and timer pruning run.
 
-`renderProjects.unchanged` compares a detached JSON render key captured only after
-a successful render. It includes the input projects (before preserved-order
-sorting), all-project metadata, filters/search/archived mode, sort order, limits,
-active/pending sessions, selection, remote host labels, archive operations,
-expanded groups, hidden-project settings and storage. Per-row inputs include activity snapshots for all
-conversation members and the head, remote attention, unread output, subagent
-activity/counts, dormant sessions, background labels/badges and detach targets.
-Changes to payload fields in place are detected because the key retains no
-mutable session references. New payload fields are automatically included.
+`renderProjects.unchanged` compares detached JSON fields captured only after
+a successful render. The input payload (before preserved-order sorting) is
+compared first and returns immediately on a change, before computing activity
+overlays. All-project metadata has a separate JSON field. The overlay key
+includes filters/search/archived mode, sort order, limits, active/pending sessions,
+selection, remote host labels, archive operations, expanded groups and hidden
+settings. Storage is restricted to `expandedSubagents`, `expandedSubagentRest`,
+`orphanExpanded:*` and the result of `getExpandedSlugs`.
+
+Per-row overlays contain the projected icon, row booleans, subagent activity/counts,
+background labels/badges, descriptor labels, detach availability and lifecycle
+label, including exit corrections. Raw snapshots, write watermarks and hint
+timestamps are not serialized: they invalidate only when their projection
+changes. Payload fields changed in place are still detected, including new fields;
+no mutable session references are retained in the key.
 
 A MutationObserver conservatively invalidates the key for sidebar DOM changes,
 including expansion controls whose state lives only in the DOM. This preserves
@@ -28,7 +34,15 @@ construction must be represented in `sidebarRenderInputs` or invalidate the DOM.
 
 Evidence: `test/dom-sidebar-unchanged-543.test.js` loads the shipped sidebar and
 `refreshSidebar` through the standard jsdom helpers and spies on both the render
-and morphdom boundaries. Performance measurements are in the issue #543 report;
+and morphdom boundaries. Its IPC-reply path also runs the actual staged poll,
+busy reconciliation and running-indicator update. The 30-second label ticker
+updates descriptor ages, including merged heads, without a sidebar rebuild and
+preserves background activity labels. `refreshSidebar.counters` tracks completed
+renders and skips for the renderer lifetime; when debug tracing is enabled,
+`sidebar.refresh` records `skipped`, `renders` and `skips`. Differences between
+two counter samples give the skip rate over that interval, even after enabling
+tracing at runtime. No trace event is sent while tracing is disabled.
+Performance measurements are in the issue #543 report;
 jsdom timings do not establish Electron performance on a real session cache.
 
 ## Persistent row action failures (#566)

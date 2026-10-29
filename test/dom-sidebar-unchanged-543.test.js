@@ -2,6 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 
 function setup(t) {
   const ctx = setupSidebarDom();
@@ -25,6 +28,17 @@ function setup(t) {
   w.morphdom = (...args) => { morphs++; return morph(...args); };
   const refresh = options => refreshSidebar({ skipUnchanged: true, ...options });
   return { ...ctx, w, projects, refresh, counts: () => [renders, morphs] };
+}
+
+function ticker(ctx) {
+  let tick;
+  ctx.w.setInterval = (fn, ms) => { assert.equal(ms, 30000); tick = fn; };
+  const filename = path.join(__dirname, '../public/app.js');
+  const src = fs.readFileSync(filename, 'utf8');
+  const start = src.indexOf('// Refresh sidebar timeago labels every 30s');
+  const end = src.indexOf('// Shared session map', start);
+  vm.runInContext(src.slice(start, end), ctx.context, { filename });
+  return () => tick();
 }
 
 test('identical cloned payload skips the sidebar build and morphdom', t => {
@@ -126,8 +140,14 @@ test('real loadProjects skips identical replies while committing changed fields 
   const settings = {};
   w.api.getSetting = async () => settings;
   w.api.getActiveTerminals = async () => [];
-  w.pollActiveSessions = async () => undefined;
-  const { loadProjects } = loadAppFunctions(ctx.context, { functions: ['loadProjects', 'dedup'] });
+  let entries = [];
+  let polls = 0;
+  w.api.getActiveSessions = async () => { polls++; return entries; };
+  w.scheduleActiveSessionsPoll = () => {};
+  const { loadProjects } = loadAppFunctions(ctx.context, {
+    functions: ['loadProjects', 'dedup', 'pollActiveSessions', 'updateRunningIndicators', 'updateTerminalHeader'],
+    declarations: ['_lastPtySignature'],
+  });
   await loadProjects();
   await loadProjects();
   assert.deepEqual(ctx.counts(), [1, 1]);
@@ -142,6 +162,14 @@ test('real loadProjects skips identical replies while committing changed fields 
   settings.hiddenProjects = ['/hidden'];
   await loadProjects();
   assert.deepEqual(ctx.counts(), [4, 4]);
+  entries = [{ sessionId: 's-top-1', busy: true }];
+  await loadProjects();
+  assert.equal(ctx.sessionBusyState.get('s-top-1'), true);
+  assert.equal(ctx.document.querySelector('#si-s-top-1').classList.contains('has-running-pty'), true);
+  const count = ctx.counts();
+  await loadProjects();
+  assert.deepEqual(ctx.counts(), count);
+  assert.equal(polls, 7);
 });
 
 test('completed render stays skippable after mutation observer delivery', async t => {
@@ -161,4 +189,123 @@ test('failed render cannot leave an earlier key eligible for skipping', t => {
   ctx.w.morphdom = morph;
   ctx.refresh();
   assert.deepEqual(ctx.counts(), [3, 2]);
+});
+
+test('changed payload returns before reading activity overlays', t => {
+  const ctx = setup(t);
+  ctx.refresh();
+  ctx.projects[0].sessions[0].name = 'Changed';
+  let reads = 0;
+  const snapshot = ctx.w.storedActivitySnapshot;
+  ctx.w.storedActivitySnapshot = (...args) => { reads++; return snapshot(...args); };
+  assert.equal(ctx.w.renderProjects.unchanged(ctx.projects), false);
+  assert.equal(reads, 0);
+});
+
+test('activity timestamp and watermark writes with identical projection still skip', t => {
+  const ctx = setup(t);
+  let version = 1;
+  const snapshot = ctx.w.storedActivitySnapshot;
+  ctx.w.storedActivitySnapshot = (...args) => ({ ...snapshot(...args),
+    lastActivityAt: version, writtenWatermark: version, idleHintAt: version, promptHintAt: version });
+  ctx.refresh();
+  version++;
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
+
+test('unrelated local and session storage writes still skip', t => {
+  const ctx = setup(t);
+  ctx.refresh();
+  ctx.w.localStorage.setItem('terminalFontSize', '18');
+  ctx.w.sessionStorage.setItem('unrelated-panel', 'open');
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
+
+for (const key of ['expandedSubagentRest', 'orphanExpanded:/home/dev/myproj']) {
+  test(`sidebar storage ${key} still invalidates`, t => {
+    const ctx = setup(t);
+    ctx.refresh();
+    ctx.w.localStorage.setItem(key, '1');
+    ctx.refresh();
+    assert.deepEqual(ctx.counts(), [2, 2]);
+  });
+}
+
+test('exit correction invalidates and repaints the lifecycle title and aria label', t => {
+  const ctx = setup(t);
+  ctx.refresh();
+  const icon = () => ctx.document.querySelector('#si-s-top-1 .session-icon');
+  assert.match(icon().title, /Liveness unknown/);
+  ctx.w.noteSessionExit('s-top-1', 1, null, false, false);
+  ctx.refresh();
+  assert.match(icon().title, /Exited \(code 1\)/);
+  assert.match(icon().getAttribute('aria-label'), /Exited \(code 1\)/);
+  ctx.w.noteSessionExit('s-top-1', 1, null, true, false);
+  ctx.refresh();
+  assert.match(icon().title, /Stopped/);
+  assert.match(icon().getAttribute('aria-label'), /Stopped/);
+  assert.deepEqual(ctx.counts(), [3, 3]);
+});
+
+test('30-second ticker updates waiting ages without rebuilding or replacing background labels', t => {
+  const ctx = setup(t);
+  let now = ctx.w.Date.now();
+  ctx.w.Date.now = () => now;
+  Object.assign(ctx.projects[0].sessions[0], { status: 'waiting', waitingFor: 'approval', statusUpdatedAt: now - 1000 });
+  ctx.refresh();
+  const tick = ticker(ctx);
+  const status = () => ctx.document.querySelector('#si-s-top-1 .session-status');
+  assert.equal(status().textContent, 'approval · 1s ago');
+  now += 30000;
+  tick();
+  assert.equal(status().textContent, 'approval · 31s ago');
+  const label = { text: 'Working in background', title: 'Background' };
+  ctx.w.backgroundActivityLabel = () => label;
+  tick();
+  assert.equal(status().textContent, label.text);
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
+
+test('ticker retains the unavailable background label without an activity provider', t => {
+  const ctx = setup(t);
+  ctx.projects[0].sessions[0].bgJobId = 'job';
+  ctx.w.backgroundActivityLabel = undefined;
+  ctx.refresh();
+  const status = ctx.document.querySelector('#si-s-top-1 .session-status');
+  assert.equal(status.textContent, 'Activity unavailable');
+  ticker(ctx)();
+  assert.equal(status.textContent, 'Activity unavailable');
+});
+
+test('ticker ages the merged head descriptor even without a modified timestamp', t => {
+  const ctx = setup(t);
+  let now = ctx.w.Date.now();
+  ctx.w.Date.now = () => now;
+  const row = ctx.projects[0].sessions[0];
+  Object.assign(row, { headSessionId: 'head', mergedMemberIds: ['head'],
+    mergedMemberStatuses: { head: { status: 'waiting', waitingFor: 'head approval', statusUpdatedAt: now - 2000 } } });
+  ctx.refresh();
+  delete row.modified;
+  now += 30000;
+  ticker(ctx)();
+  assert.equal(ctx.document.querySelector('#si-s-top-1 .session-status').textContent, 'head approval · 32s ago');
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
+
+test('debug trace reports cumulative sidebar renders and skips', t => {
+  const ctx = setup(t);
+  const records = [];
+  ctx.w.ATRACE = true;
+  ctx.w.atrace = (category, sessionId, fields) => { if (category === 'sidebar.refresh') records.push(fields); };
+  ctx.refresh();
+  ctx.refresh();
+  ctx.refresh();
+  ctx.refresh({ resort: true });
+  assert.deepEqual(records.map(r => [r.skipped, r.renders, r.skips]),
+    [[false, 1, 0], [true, 1, 1], [true, 1, 2], [false, 2, 2]]);
+  ctx.w.ATRACE = false;
+  ctx.refresh();
+  assert.equal(records.length, 4);
 });

@@ -217,6 +217,7 @@ const rendererCrossFileGlobals = {
   syncLocalPtyAgentsBusy: 'readonly',
   sessionItemEl: 'readonly',
   rowSessionIds: 'readonly',
+  rowLifecycleLabel: 'readonly',
   rowHeadId: 'readonly',
   rowHeadSession: 'readonly',
   rowOpenId: 'readonly',
