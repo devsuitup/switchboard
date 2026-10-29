@@ -65,11 +65,16 @@ Workflow agents (#875) also carry nullable `workflowRunId`, reconciled with
 `cols.has` without reindexing and included in the structural field comparison.
 The shared `subagent-attribution.js` classifier admits their five-part
 relative paths while excluding journals and unknown depths. The cold walker
-and targeted readers skip symlink/junction run directories. Full and header
+and targeted readers skip symlinks/junctions at every workflow path segment
+from the parent to the run directory. Full and header
 reads preserve the run id, so `resolveJsonlPath` maps each synthetic child id
 back to the same cached file without rereading its body every watcher flush.
-The projects payload includes the run id and a run title read once per run per
-build from `<parent>/workflows/<run>.json`, falling back to the id; see
+The projects payload includes the run id and a run title cached across builds
+by snapshot path, mtimeMs and size from `<parent>/workflows/<run>.json`, falling
+back to the id. Snapshot changes route through the debounced watcher to a
+projects notification even without a changed transcript. Reconciliation
+forces a full refresh of folders with old root `agent-*` rows regardless of
+index freshness; deletion and regrouping use existing writer effects. See
 [subagent-observability](subagent-observability.md#workflow-agent-transcripts-875).
 
 These are the inputs to `buildProjectsFromCache` and

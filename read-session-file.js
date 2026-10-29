@@ -585,7 +585,10 @@ function workflowRunDirectories(subagentsDir) {
   const workflows = path.join(subagentsDir, 'workflows');
   try {
     return fs.readdirSync(workflows, { withFileTypes: true })
-      .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && isWorkflowRunId(entry.name))
+      .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && isWorkflowRunId(entry.name)
+        && isCanonicalWorkflowPath(path.dirname(path.dirname(subagentsDir)), {
+          parentSessionId: path.basename(path.dirname(subagentsDir)), workflowRunId: entry.name,
+        }))
       .map(entry => path.join(workflows, entry.name));
   } catch { return []; }
 }
@@ -593,8 +596,13 @@ function workflowRunDirectories(subagentsDir) {
 function isCanonicalWorkflowPath(folderPath, classified) {
   if (!classified.workflowRunId) return true;
   try {
-    const stat = fs.lstatSync(path.join(folderPath, classified.parentSessionId, 'subagents', 'workflows', classified.workflowRunId));
-    return stat.isDirectory() && !stat.isSymbolicLink();
+    let directory = folderPath;
+    for (const part of [classified.parentSessionId, 'subagents', 'workflows', classified.workflowRunId]) {
+      directory = path.join(directory, part);
+      const stat = fs.lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    }
+    return true;
   } catch (error) { return error.code === 'ENOENT'; }
 }
 

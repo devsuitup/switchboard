@@ -12,6 +12,10 @@ const { subagentParentFromParts } = require('../subagent-attribution');
 const cache = require('../session-cache');
 const openStore = require('./fixtures/conversation-store.cjs');
 const { setupSidebarDom } = require('./dom-setup');
+const { loadAppFunctions } = require('./app-source');
+const { createCacheEffects } = require('../cache-effects');
+const { EventEmitter } = require('node:events');
+const { createRequire } = require('node:module');
 
 const RUN = 'wf_abcdef-123';
 const ID = `sub:${P}:workflow-child`;
@@ -97,6 +101,178 @@ test('targeted deletion of an entire workflow run removes its cached child', t =
   fs.rmdirSync(path.dirname(h.file));
   cache.refreshFolder(h.folder, { files: new Set([h.relative]) });
   assert.equal(h.rows.has(ID), false, 'deleted run cannot retain its workflow child');
+});
+
+function linkedWorkflow(t, segment = 'run') {
+  const h = workflowFixture(t);
+  const fork = '44444444-4444-4444-8444-444444444444';
+  const relative = path.join(fork, 'subagents', 'workflows', RUN, 'agent-workflow-child.jsonl');
+  const parts = segment === 'run' ? ['subagents', 'workflows', RUN]
+    : segment === 'workflows' ? ['subagents', 'workflows'] : segment === 'parent' ? [] : ['subagents'];
+  const link = path.join(h.dir, fork, ...parts);
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(path.join(h.dir, P, ...parts), link, process.platform === 'win32' ? 'junction' : 'dir');
+  t.after(() => { if (fs.existsSync(link)) fs.unlinkSync(link); });
+  return { ...h, relative, fork };
+}
+
+test('targeted refresh skips a workflow run junction under a fork', t => {
+  const h = linkedWorkflow(t);
+  cache.refreshFolder(h.folder, { files: new Set([h.relative]) });
+  assert.equal(h.rows.has(`sub:${h.fork}:workflow-child`), false);
+});
+
+test('remote subset skips a workflow run junction under a fork', async t => {
+  const h = linkedWorkflow(t);
+  const result = await scan(h, true);
+  assert.equal(result.sessions.some(row => row.sessionId === `sub:${h.fork}:workflow-child`), false);
+});
+
+for (const segment of ['parent', 'subagents', 'workflows']) {
+  test(`cold and targeted scans skip a junctioned workflow ancestor: ${segment}`, async t => {
+    const h = linkedWorkflow(t, segment);
+    assert.equal(enumerateSessionFiles(h.dir).some(row => row.parentSessionId === h.fork && row.workflowRunId), false,
+      'linked ancestor must not duplicate workflow agents during cold discovery');
+    cache.refreshFolder(h.folder, { files: new Set([h.relative]) });
+    assert.equal(h.rows.has(`sub:${h.fork}:workflow-child`), false);
+    const result = await scan(h, true);
+    assert.equal(result.sessions.some(row => row.sessionId === `sub:${h.fork}:workflow-child`), false);
+  });
+}
+
+test('startup repairs a pre-fix ghost despite fresh folder metadata through writer effects', storeOptions, async t => {
+  const h = workflowFixture(t);
+  const previous = process.env.SWITCHBOARD_DATA_DIR;
+  const dataDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sb-875b-db-'));
+  process.env.SWITCHBOARD_DATA_DIR = dataDir;
+  let db = openStore();
+  t.after(() => {
+    db.closeDb();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR;
+    else process.env.SWITCHBOARD_DATA_DIR = previous;
+  });
+  const ghost = 'agent-workflow-child';
+  db.upsertCachedSessions([{ sessionId: ghost, folder: h.folder, projectPath: h.root, summary: 'Old ghost',
+    firstPrompt: null, created: null, modified: null }]);
+  db.setInitialScanComplete();
+  cache.init({ PROJECTS_DIR: h.root, activeSessions: new Map(), getMainWindow: () => null, log: h.log, db });
+  cache.refreshFolder(h.folder, { files: new Set([P + '.jsonl']) });
+  assert.ok(db.getCachedSession(ghost), 'targeted flush leaves the old ghost but advances freshness');
+  db.closeDb();
+  db = openStore();
+  const recorder = createCacheEffects(db);
+  recorder.begin();
+  cache.init({ PROJECTS_DIR: h.root, activeSessions: new Map(), getMainWindow: () => null, log: h.log, db: recorder.adapter });
+  recorder.finish();
+  recorder.begin();
+  await cache.reconcileCacheFromFilesystemAsync({ throttle: false });
+  const revision = recorder.revision();
+  const effects = recorder.finish();
+  assert.ok(effects.some(effect => effect.name === 'deleteCachedSession' && effect.args[0] === ghost),
+    'startup must emit deletion of the stale ghost even with current indexMtimeMs');
+  assert.ok(db.getCachedSession(ghost), 'the reader computation has not written to SQLite');
+  const port = new EventEmitter();
+  const reply = new Promise(resolve => { port.postMessage = message => { if (message.id === 1 && !message.started) resolve(message); }; });
+  const filename = require.resolve('../workers/session-index-writer');
+  const nativeRequire = createRequire(filename);
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    require: name => name === 'node:worker_threads' ? { parentPort: port }
+      : name === '../session-index-store' ? { openSessionIndexStore: () => db } : nativeRequire(name),
+    setInterval: () => ({ unref() {} }),
+  }, { filename });
+  port.emit('message', { id: 1, command: 'effects', args: [effects, revision] });
+  assert.equal((await reply).error, undefined);
+  assert.equal(db.getCachedSession(ghost), null);
+  assertRows(db.getCachedByFolder(h.folder));
+  assert.equal(db.isInitialScanComplete(), true);
+  const queryPort = new EventEmitter();
+  const pending = new Map();
+  queryPort.postMessage = message => pending.get(message.id)?.(message);
+  const queryFile = require.resolve('../workers/projects-query');
+  const queryRequire = createRequire(queryFile);
+  vm.runInNewContext(fs.readFileSync(queryFile, 'utf8'), {
+    require: name => name === 'node:worker_threads' ? { parentPort: queryPort, workerData: { projectsDir: h.root } }
+      : name === 'better-sqlite3' ? function () { return db.connection; } : queryRequire(name),
+    Buffer, console,
+  }, { filename: queryFile });
+  const originalRead = fs.readFileSync;
+  let snapshotReads = 0;
+  t.mock.method(fs, 'readFileSync', function (file, ...args) {
+    if (String(file) === h.snapshot) snapshotReads++;
+    return originalRead.call(this, file, ...args);
+  });
+  for (const id of [1, 2]) {
+    const response = new Promise(resolve => pending.set(id, resolve));
+    queryPort.emit('message', { id, reconcile: false });
+    const message = await response;
+    assert.equal(message.error, undefined);
+    for (const projects of [message.result.defaultProjects, message.result.allProjects]) {
+      assert.equal(projects[0].sessions.find(row => row.sessionId === ID).workflowName, 'Research <topic>');
+    }
+  }
+  assert.equal(snapshotReads, 1, 'the shipped query worker reuses names across both views and separate messages');
+});
+
+test('workflow snapshot names are cached across builds and refreshed by mtime and size', t => {
+  const h = workflowFixture(t);
+  const initialTime = new Date('2026-01-01T00:00:00.000Z');
+  fs.utimesSync(h.snapshot, initialTime, initialTime);
+  cache.refreshFolder(h.folder);
+  const originalRead = fs.readFileSync;
+  let reads = 0;
+  t.mock.method(fs, 'readFileSync', function (file, ...args) {
+    if (String(file) === h.snapshot) reads++;
+    return originalRead.call(this, file, ...args);
+  });
+  const name = () => cache.buildProjectsFromCache(false)[0].sessions.find(row => row.sessionId === ID).workflowName;
+  assert.equal(name(), 'Research <topic>');
+  assert.equal(name(), 'Research <topic>');
+  cache.buildProjectsFromCache(true);
+  h.init();
+  assert.equal(name(), 'Research <topic>');
+  assert.equal(reads, 1, 'second query and cache reinitialization must reuse the snapshot title');
+  const stamp = fs.statSync(h.snapshot);
+  fs.writeFileSync(h.snapshot, JSON.stringify({ workflowName: 'New title' }));
+  fs.utimesSync(h.snapshot, stamp.atime, stamp.mtime);
+  assert.equal(name(), 'New title', 'size invalidates even with the original mtime');
+  fs.writeFileSync(h.snapshot, JSON.stringify({ workflowName: 'End title' }));
+  const later = new Date(stamp.mtimeMs + 20000);
+  fs.utimesSync(h.snapshot, later, later);
+  assert.equal(name(), 'End title', 'mtime invalidates an equal-size snapshot');
+  assert.equal(reads, 3);
+  fs.unlinkSync(h.snapshot);
+  assert.equal(name(), RUN);
+  fs.writeFileSync(h.snapshot, '{partial');
+  assert.equal(name(), RUN);
+  assert.equal(name(), RUN);
+  assert.equal(reads, 4, 'unchanged malformed snapshots are cached too');
+});
+
+test('projects watcher refreshes workflow snapshot titles when a run ends', async t => {
+  const h = workflowFixture(t);
+  cache.refreshFolder(h.folder);
+  assert.equal(cache.buildProjectsFromCache(false)[0].sessions.find(row => row.sessionId === ID).workflowName, 'Research <topic>');
+  let watch, flush;
+  const notifications = [], refreshes = [];
+  const context = vm.createContext({ fs: { ...fs, watch: (_dir, _opts, callback) => { watch = callback; return { on() {} }; } },
+    path, PROJECTS_DIR: h.root, projectsWatcher: null, console,
+    detectSessionTransitions() {}, localTranscriptTracker: { record() {} },
+    writer: { refreshFolder: async (folder, opts) => { refreshes.push({ folder, opts }); return cache.refreshFolder(folder, opts); } },
+    notifyRendererProjectsChanged: cause => notifications.push(cause),
+    log: h.log, setTimeout: callback => { flush = callback; return 1; }, clearTimeout() {},
+  });
+  const { startProjectsWatcher } = loadAppFunctions(context, { sourcePath: require.resolve('../main'), functions: ['startProjectsWatcher'] });
+  startProjectsWatcher();
+  watch('change', path.join(h.folder, P, 'workflows', 'unrelated.json'));
+  assert.equal(flush, undefined, 'unrelated JSON does not queue a refresh');
+  fs.writeFileSync(h.snapshot, JSON.stringify({ workflowName: 'Final workflow name', status: 'completed' }));
+  watch('change', path.relative(h.root, h.snapshot));
+  assert.equal(typeof flush, 'function', 'snapshot event must schedule a projects refresh');
+  await flush();
+  assert.equal(refreshes.length, 1);
+  assert.ok(notifications.includes('watcher'), 'title-only changes must reach the renderer even without changed transcript rows');
+  assert.equal(cache.buildProjectsFromCache(false)[0].sessions.find(row => row.sessionId === ID).workflowName, 'Final workflow name');
 });
 
 test('workflow paths attribute live writes to the parent and ignore the journal', () => {

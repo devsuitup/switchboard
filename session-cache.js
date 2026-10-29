@@ -768,11 +768,12 @@ function reconciliationFolders(throttle) {
   if (throttle && now - lastReconcileAt < RECONCILE_THROTTLE_MS) return [];
   lastReconcileAt = now;
   const metaMap = getAllFolderMeta();
+  const ghostFolders = new Set(getAllCached().filter(row => !row.parentSessionId && row.sessionId.startsWith('agent-')).map(row => row.folder));
   return fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
     .filter(d => d.isDirectory() && d.name !== '.git')
     .map(d => {
       const folder = d.name, meta = metaMap.get(folder);
-      const refresh = !meta || getFolderIndexMtimeMs(path.join(PROJECTS_DIR, folder)) > (meta.indexMtimeMs || 0)
+      const refresh = ghostFolders.has(folder) || !meta || getFolderIndexMtimeMs(path.join(PROJECTS_DIR, folder)) > (meta.indexMtimeMs || 0)
         || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder));
       return { folder, refresh: refresh && !pendingRepairFolders().includes(folder) };
     });
@@ -949,6 +950,7 @@ function conversationMemberIds(rows, id) {
 
 /** Build projects response from cached data */
 let projectsProjection = { removedInputs: {} };
+const workflowNames = new Map();
 
 function getProjectsProjection() { return projectsProjection; }
 
@@ -956,21 +958,23 @@ function buildProjectsFromCache(showArchived) {
   projectsProjection = { removedInputs: {} };
   const metaMap = getAllMeta(true);
   const cachedRows = scopedConversationRows(getAllCached());
-  const workflowNames = new Map();
   const workflowName = row => {
     if (!row.parentSessionId || !isWorkflowRunId(row.workflowRunId)) return null;
     const folderPath = resolveFolderDir(row.folder);
     if (!folderPath) return row.workflowRunId;
     const file = path.join(folderPath, row.parentSessionId, 'workflows', row.workflowRunId + '.json');
-    if (!workflowNames.has(file)) {
+    let stat;
+    try { stat = fs.statSync(file); } catch { workflowNames.delete(file); return row.workflowRunId; }
+    const cached = workflowNames.get(file);
+    if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
       let title = row.workflowRunId;
       try {
         const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
         if (typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()) title = snapshot.workflowName.trim();
       } catch {}
-      workflowNames.set(file, title);
+      workflowNames.set(file, { title, mtimeMs: stat.mtimeMs, size: stat.size });
     }
-    return workflowNames.get(file);
+    return workflowNames.get(file).title;
   };
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);

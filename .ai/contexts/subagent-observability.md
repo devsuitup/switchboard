@@ -60,9 +60,16 @@ subagent and workflow agent paths. Workflow transcripts live at
 match `/^wf_[a-z0-9-]{6,}$/`. Run journals, sidecars and unrecognized nesting
 are ignored. The cold enumerator and local/remote targeted scans share this
 classification, as does live attribution through `subagent-attribution.js`.
-The enumerator and targeted readers skip run directories that are symlinks
-or Windows junctions, so a resumed workflow linked to another parent is not
-indexed a second time. They do not deduplicate by realpath.
+The enumerator and targeted readers lstat every segment from the parent
+directory through `subagents`, `workflows` and the run directory. A symlink
+or Windows junction at any segment excludes the workflow path. They do not
+deduplicate by realpath.
+
+A workflow resumed in a fork writes through a junction into the original
+parent's run directory. Its agents are therefore listed under the original
+parent; the fork gets no transition-based busy signal. This change covers
+canonical workflow discovery, grouping and original-parent transitions; it
+does not attribute a resumed workflow's activity to the fork.
 
 The cache identity remains `sub:<parent>:<agentId>`. The nullable
 `workflowRunId` column is reconciled additively without clearing the cache or
@@ -75,10 +82,21 @@ Only classified agent transcripts enter that cached list, so a remaining
 journal cannot prevent collection of a deleted agent. Missing run directories
 still participate in targeted deletion detection.
 
+Startup reconciliation forces a full refresh of any local folder containing
+a root row whose id starts with `agent-`, even when targeted flushes have
+advanced its index freshness. The existing cache effects delete those old
+ghost rows and index canonical workflow children through the writer worker;
+the reader does not write SQLite directly.
+
 `buildProjectsFromCache` projects `workflowRunId` and `workflowName`, reading
-`<parent>/workflows/<run>.json` once per run per build. Missing, malformed or
+`<parent>/workflows/<run>.json` with a worker-lifetime cache keyed by file path,
+mtimeMs and size, reused across both views and subsequent queries (including
+cache reinitialization). Missing, malformed or
 empty titles fall back to the run id. Remote mirrors without run snapshots
-use that same fallback. The sidebar nests one block per parent/run under the
+use that same fallback. Snapshot JSON watcher events queue the existing
+debounced folder refresh and force a projects notification even when no
+transcript row changed, so a completed run's title reaches the sidebar.
+The sidebar nests one block per parent/run under the
 existing subagent container (and groups orphan workflows in the orphan bucket).
 It reuses the existing caret, child container, preview cap and
 `expandedSubagents`/`expandedSubagentRest` persistence with a workflow-scoped

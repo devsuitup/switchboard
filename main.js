@@ -3571,6 +3571,7 @@ function startProjectsWatcher() {
   // The watcher reports the specific filename, so for the common case of a
   // subagent appending JSONL we can stat one file instead of thousands.
   const pendingChanges = new Map();
+  const pendingWorkflowTitles = new Set();
   let debounceTimer = null;
 
   flushProjectsBeforeExit = async () => {
@@ -3591,7 +3592,8 @@ function startProjectsWatcher() {
     const work = new Map(pendingChanges);
     pendingChanges.clear();
 
-    let changed = false;
+    let changed = pendingWorkflowTitles.size > 0;
+    pendingWorkflowTitles.clear();
     let activityChanged = false;
     for (const [folder, scope] of work) {
       const folderPath = path.join(PROJECTS_DIR, folder);
@@ -3646,6 +3648,9 @@ function startProjectsWatcher() {
         recordChange(folder, rel);
         // out-of-band signal for the local-transcript adapter — see .ai/contexts/session-state.md
         localTranscriptTracker.record(parts);
+      } else if (parts.length === 4 && parts[2] === 'workflows' && /^wf_[a-z0-9-]{6,}\.json$/.test(basename)) {
+        pendingWorkflowTitles.add(folder);
+        recordChange(folder, null);
       } else {
         return;
       }
