@@ -24,8 +24,11 @@ the normal dependency packaging. No native rebuild is introduced.
 
 Issue #740 adds nullable `session_cache.fileSize INTEGER` in writable schema
 reconciliation. Existing rows and metadata remain intact; missing sizes are
-filled by refresh. The size travels through the existing cache upsert effects
-and positional SQL binding, including scan-worker and subagent rows. Main and
+filled by refresh. The size travels through cache upsert effects
+and positional SQL binding, including scan-worker and subagent rows. Idle legacy
+rows adopt an unknown size via `setCachedFileSize`, a one-column writer UPDATE
+that preserves content and display recency. Both cache-effects and the Projects
+query adapter record and locally apply this effect before writer admission. Main and
 Projects workers retain their readonly connections.
 
 ## Wire contract and failure

@@ -12,7 +12,7 @@ const rawCommands = new Set(['setSetting', 'deleteSetting', 'toggleStar', 'setSt
   'upsertCachedSessions', 'deleteCachedSession', 'deleteCachedFolder', 'replaceSessionMetrics',
   'touchCachedModified', 'setFolderMeta', 'deleteSearchFolder', 'deleteSearchSession', 'deleteSearchType',
   'upsertSearchEntries', 'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles',
-  'setCachedContinuationIndex', 'setInitialScanComplete']);
+  'setCachedContinuationIndex', 'setCachedFileSize', 'setInitialScanComplete']);
 const settings = () => db.listSettingKeys('').map(key => [key, db.getSetting(key)]);
 const queue = [];
 let running = false, interactiveBurst = 0;

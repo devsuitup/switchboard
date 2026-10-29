@@ -282,7 +282,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
   };
   for (const name of ['setSetting', 'deleteSetting', 'toggleStar', 'setStarred', 'setArchived', 'deleteCachedSession',
     'deleteSearchSession', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'applySearchFileBatch',
-    'setCachedEntrypoints', 'setCachedCustomTitles', 'setCachedContinuationIndex', 'setInitialScanComplete',
+    'setCachedEntrypoints', 'setCachedCustomTitles', 'setCachedContinuationIndex', 'setCachedFileSize', 'setInitialScanComplete',
     'clearArchivedEntry', 'hideProject', 'unhideProject', 'revealAddedProject', 'dropRemoteFolder',
     'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries', 'setName']) writer[name] = (...args) => request(name, ...args);
   for (const [name, fn] of Object.entries(writer)) {

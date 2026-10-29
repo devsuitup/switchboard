@@ -46,7 +46,7 @@ const { state: TRACE, trace } = require('./activity-trace');
  * Call init(ctx) once with the shared context object.
  */
 let PROJECTS_DIR, activeSessions, getMainWindow, log, writer;
-let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, touchCachedModified, replaceSessionMetrics;
+let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession, touchCachedModified, setCachedFileSize, replaceSessionMetrics;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName;
 let isInitialScanComplete, setInitialScanComplete;
@@ -58,6 +58,7 @@ let setCachedCustomTitles, getCachedMissingCustomTitle;
 let customTitleBackfill = null;
 const continuationFiles = new Map();
 const deferredContinuationFiles = new Map();
+const CONTINUATION_BYTE_BUDGET = 1024 * 1024;
 
 function continuationRefreshScope(folder, opts = {}) {
   if (!(opts.files instanceof Set) || !opts.files.size) return opts;
@@ -89,9 +90,9 @@ function changedContinuation(row, file, stat) {
     : row.fileMtime !== new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString();
 }
 
-async function scanContinuationFile(file, id, previous, chunkBytes = 1024 * 1024) {
+async function scanContinuationFile(file, id, previous, chunkBytes = CONTINUATION_BYTE_BUDGET) {
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new RangeError('chunkBytes must be a positive integer');
-  chunkBytes = Math.min(chunkBytes, 1024 * 1024);
+  chunkBytes = Math.min(chunkBytes, CONTINUATION_BYTE_BUDGET);
   let serialized = previous, index, stat, grew;
   do {
     serialized = scanCachedContinuation(file, id, serialized, chunkBytes);
@@ -203,6 +204,7 @@ function init(ctx) {
   getCachedByFolder = ctx.db.getCachedByFolder;
   upsertCachedSessions = ctx.db.upsertCachedSessions;
   touchCachedModified = ctx.db.touchCachedModified;
+  setCachedFileSize = ctx.db.setCachedFileSize;
   deleteCachedSession = ctx.db.deleteCachedSession;
   replaceSessionMetrics = ctx.db.replaceSessionMetrics;
   deleteSearchFolder = ctx.db.deleteSearchFolder;
@@ -280,7 +282,7 @@ function getProjectsWorkerRetainedRows() { return [...keptLiveRows]; }
 // see .ai/contexts/session-cache.md ("Projects query worker")
 function applyProjectsWorkerEffects(result) {
   const writers = { upsertCachedSessions, deleteCachedSession, deleteCachedFolder,
-    touchCachedModified, setFolderMeta, setName, replaceSessionMetrics,
+    touchCachedModified, setCachedFileSize, setFolderMeta, setName, replaceSessionMetrics,
     deleteSearchFolder, deleteSearchSession, upsertSearchEntries };
   for (const { name, args } of result.effects) writers[name](...args);
   for (const [id, folder] of result.keptLiveRows) keptLiveRows.set(id, folder);
@@ -471,7 +473,7 @@ function refreshFolder(folder, opts = {}) {
   for (const file of deferredContinuationFiles.get(folder) || []) {
     if (!fs.existsSync(path.join(folderPath, file))) collector.accounted.add(file);
   }
-  let continuationBytesLeft = 1024 * 1024;
+  let continuationBytesLeft = CONTINUATION_BYTE_BUDGET;
   const currentIds = new Set();
   let sidebarChanged = (knownMeta?.projectPath ?? null) !== projectPath;
   let activityChanged = false;
@@ -482,6 +484,7 @@ function refreshFolder(folder, opts = {}) {
   const namesToSet = [];
   const sessionsToDelete = [];
   const sessionsToTouch = [];
+  const sizesToAdopt = [];
   const metricsToReplace = [];
   const linkedVersions = new Map();
   // Full reads only (the "NEW file" branch below) -- kept separate from
@@ -514,7 +517,8 @@ function refreshFolder(folder, opts = {}) {
     const cachedDbId = filePathToDbId.get(filePath) || null;
     const cachedEntry = cachedDbId ? cachedMap.get(cachedDbId) : null;
     const fileSize = Number(stat.size);
-    const changedSize = cachedEntry && cachedEntry.fileSize !== fileSize;
+    const changedSize = cachedEntry && cachedEntry.fileSize != null && cachedEntry.fileSize !== fileSize;
+    if (cachedEntry && cachedEntry.fileSize == null) sizesToAdopt.push({ sessionId: cachedDbId, fileSize });
 
     if (cachedDbId !== null) currentIds.add(cachedDbId);
     const relativeFile = path.relative(folderPath, filePath);
@@ -546,7 +550,7 @@ function refreshFolder(folder, opts = {}) {
       continue; // unchanged, skip
     }
 
-    if (cachedEntry && !(changedSize && !linked && cachedEntry.fileMtime === fileMtime)) {
+    if (cachedEntry && !(changedSize && !linked && cachedEntry.fileMtime === fileMtime && fileSize <= CONTINUATION_BYTE_BUDGET)) {
       let continuationIndex = cachedEntry.continuationIndex;
       if (validPlan) continuationIndex = plan.serialized;
       else if (opts.preparedContinuations?.has(cachedDbId) && changedLinked) { defer(); continue; }
@@ -719,6 +723,9 @@ function refreshFolder(folder, opts = {}) {
   if (sessionsToUpsert.length > 0) {
     stripBridgeEvidence(sessionsToUpsert);
     upsertCachedSessions(sessionsToUpsert);
+  }
+  for (const { sessionId, fileSize } of sizesToAdopt) {
+    if (!racedRows.has(sessionId) && !updatedRows.has(sessionId) && !sessionsToDelete.includes(sessionId)) setCachedFileSize(sessionId, fileSize);
   }
   for (const { sessionId, fileMtime } of sessionsToTouch) {
     if (racedRows.has(sessionId)) continue;
@@ -1707,7 +1714,7 @@ function populateCacheViaWorker({ force = false } = {}, retryTimerFired = false)
   return populatePromise;
 }
 
-async function resolveSessionContinuations(sessionId, { chunkBytes = 1024 * 1024, getSessionLiveElsewhere } = {}) {
+async function resolveSessionContinuations(sessionId, { chunkBytes = CONTINUATION_BYTE_BUDGET, getSessionLiveElsewhere } = {}) {
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new RangeError('chunkBytes must be a positive integer');
   let diskEntries;
   const result = await resolveContinuations(sessionId, async id => {

@@ -26,6 +26,7 @@ function fixture(t) {
     getProjectsRevision: () => 'fixture', isInitialScanComplete: () => true,
     upsertCachedSessions: entries => { effects.push(['upsert', entries]); for (const row of entries) rows.set(row.sessionId, { ...row }); },
     setCachedContinuationIndex: (id, index) => { if (rows.has(id)) rows.set(id, { ...rows.get(id), continuationIndex: index }); },
+    setCachedFileSize: (id, fileSize) => { effects.push(['size', id]); if (rows.has(id)) rows.set(id, { ...rows.get(id), fileSize }); },
     setFolderMeta: (f, projectPath, indexMtimeMs) => folders.set(f, { folder: f, projectPath, indexMtimeMs }),
     touchCachedModified: (id, modified) => { effects.push(['touch', id]); Object.assign(rows.get(id), { modified, fileMtime: modified }); },
     deleteCachedSession: id => { effects.push(['delete', id]); rows.delete(id); },

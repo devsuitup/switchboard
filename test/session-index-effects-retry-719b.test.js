@@ -58,4 +58,12 @@ test('F8 an interleaved write rejects the remaining effect chunks and fresh admi
   assert.equal(accepted.result.committedRevision, db.getSetting('_writer_revision'));
   assert.ok(db.getCachedSession('last'));
   assert.equal(db.getMeta('first').name, 'JB rename', 'fresh source refresh preserves the interleaved user metadata');
+  const beforeAdoption = { ...db.getCachedSession('first') };
+  port.emit('message', { id: 4, command: 'effects', args: [[{ name: 'setCachedFileSize', args: ['first', 123] }], db.getSetting('_writer_revision')] });
+  const adopted = await reply(4);
+  assert.equal(adopted.error, undefined, 'writer admits the size-only effect');
+  assert.deepEqual({ ...db.getCachedSession('first') }, { ...beforeAdoption, fileSize: 123 });
+  assert.equal(adopted.result.committedRevision, db.getSetting('_writer_revision'));
+  assert.ok(adopted.result.committedRevision > accepted.result.committedRevision);
+  assert.equal(db.getMeta('first').name, 'JB rename');
 });
