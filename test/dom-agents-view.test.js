@@ -161,6 +161,99 @@ const ROSTER = [
   { id: null, sessionId: 's-i', name: 'lvds-1b', cwd: '/w/l', kind: 'interactive', state: null, status: 'busy', pid: 30, startedAt: Date.now() - 10_000, agent: null, model: null, detail: null, tempo: null, tokens: null, fan: [], children: [], result: null, attachedHere: false },
 ];
 
+test('882 selected background job retains selection when promoted to interactive', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+  const jobs = new Map([['aaaaaaaa', parseJobState(JSON.stringify({ state: 'stopped', sessionId: '11111111-1111-4111-8111-111111111111' }))]]);
+  h.setSnapshot({ roster: mergeRoster({ jobs, descriptors: [] }), daemonReachable: true });
+  await h.window.showAgentsView();
+  h.document.querySelector('.agents-row').click();
+  h.emitChanged({ roster: mergeRoster({ jobs, descriptors: [{ kind: 'interactive', sessionId: '11111111-1111-4111-8111-111111111111', name: 'promoted', pid: 42 }] }), daemonReachable: true });
+  assert.equal(h.document.querySelector('.agents-row.selected')?.dataset.key, 'bg:aaaaaaaa');
+  assert.equal(h.document.querySelector('.agents-detail-name').textContent, 'promoted');
+  assert.ok(h.document.querySelector('[data-verb="resume"]'));
+});
+
+test('882 selected external conversation follows its unique job after merging', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+  const descriptors = [{ kind: 'interactive', sessionId: '11111111-1111-4111-8111-111111111111', name: 'external', pid: 42 }];
+  h.setSnapshot({ roster: mergeRoster({ jobs: new Map(), descriptors }), daemonReachable: true });
+  await h.window.showAgentsView();
+  h.document.querySelector('.agents-row').click();
+  const jobs = new Map([['aaaaaaaa', parseJobState(JSON.stringify({ state: 'stopped', sessionId: '11111111-1111-4111-8111-111111111111' }))]]);
+  h.emitChanged({ roster: mergeRoster({ jobs, descriptors }), daemonReachable: true });
+  assert.equal(h.document.querySelector('.agents-row.selected')?.dataset.key, 'bg:aaaaaaaa');
+  assert.equal(h.document.querySelector('.agents-detail-name').textContent, 'external');
+});
+
+test('882 external selection is cleared when multiple jobs share its conversation', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+  const sessionId = 'aaaaaaaa-1111-4111-8111-111111111111';
+  const descriptors = [{ kind: 'interactive', sessionId, name: 'external', pid: 42 }];
+  h.setSnapshot({ roster: mergeRoster({ jobs: new Map(), descriptors }), daemonReachable: true });
+  await h.window.showAgentsView();
+  h.document.querySelector('.agents-row').click();
+  const job = parseJobState(JSON.stringify({ state: 'stopped', sessionId }));
+  const jobs = new Map([['aaaaaaaa', job], ['bbbbbbbb', job]]);
+  h.emitChanged({ roster: mergeRoster({ jobs, descriptors }), daemonReachable: true });
+  assert.equal(h.document.querySelector('.agents-row.selected'), null);
+  assert.match(h.document.querySelector('#agents-detail').textContent, /Select an agent/);
+});
+
+test('882 jobs without a previous session do not describe a pre-compaction transcript', t => {
+  const h = setup(); t.after(() => h.destroy());
+  const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+  const [entry] = mergeRoster({ jobs: new Map([['aaaaaaaa', parseJobState(JSON.stringify({ state: 'stopped', bridgeSessionId: 'cse_bridge' }))]]),
+    descriptors: [{ kind: 'interactive', bridgeSessionId: 'session_bridge', sessionId: 's-a' }] });
+  assert.equal(entry.kind, 'interactive');
+  assert.doesNotMatch(h.window.renderAgentDetail(entry), /pre-compaction/);
+});
+
+test('882 committed index data enables the selected Transcript button through a roster push', async t => {
+  const h = setup(); t.after(() => h.destroy());
+  const bg = require('../bg-agents');
+  const { createSessionIndexWriter } = require('../session-index-writer');
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'agents-index-882-'));
+  t.after(() => { bg.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const file = path.join(dir, 's-a.jsonl');
+  const rows = new Map();
+  let adapter;
+  const writer = createSessionIndexWriter({
+    readonlyBackend: { getSetting: () => 0, getCachedSession: id => rows.get(id), getMeta: () => null },
+    client: { ready: Promise.resolve(), async request(_name, effects) {
+      for (const effect of effects) if (effect.name === 'upsertCachedSessions') for (const row of effect.args[0]) rows.set(row.sessionId, row);
+    } },
+    onSessionsChanged: (...args) => bg.invalidateTranscripts(...args),
+  }, { init: ctx => { adapter = ctx.db; }, refreshFolder: () => { adapter.upsertCachedSessions([{ sessionId: 's-a', folder: dir }]); return true; } });
+  await writer.ready;
+  writer.initializeCache({});
+  bg.init({ jobsDir: path.join(dir, 'jobs'), homeDir: dir,
+    runClaude: async () => ({ code: 0, stdout: '[]' }),
+    resolveTranscriptPath: id => rows.has(id) ? file : null,
+    resolveProjectRoots: async () => null,
+    cliSessionState: { readAllDescriptors: () => [{ kind: 'interactive', sessionId: 's-a' }],
+      ensureWatching() {}, onDescriptorsChanged: () => () => {} },
+  });
+  bg.start();
+  h.setSnapshot(await bg.reconcile());
+  await h.window.showAgentsView();
+  h.document.querySelector('.agents-row').click();
+  const button = h.document.querySelector('[data-verb="transcript"]');
+  assert.equal(button.disabled, true);
+  const pushed = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('index roster push timed out')), 3000);
+    const off = bg.onChange(snapshot => { off(); clearTimeout(timer); h.emitChanged(snapshot); resolve(); });
+    t.after(off);
+  });
+  fs.writeFileSync(file, 'new transcript');
+  await writer.refreshFolder(dir);
+  await pushed;
+  assert.equal(h.document.querySelector('[data-verb="transcript"]'), button);
+  assert.equal(button.disabled, false);
+});
+
 test('C1 Attach becomes Go to tab on the same button across roster renders', async t => {
   const h = setup(); t.after(() => h.destroy());
   h.setSnapshot({ roster: [ROSTER[0]], daemonReachable: true });

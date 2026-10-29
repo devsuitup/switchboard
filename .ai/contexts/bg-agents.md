@@ -574,7 +574,10 @@ including a promoted interactive row. An external row without a job keeps
 suffix; each retains its metadata, selection, pending action and errors under
 its own key. This avoids choosing an arbitrary winning job and keeps a job's
 selection stable when its conversation changes between background and interactive.
-When promotion changes the UUID, detail says "Transcript opens the live session,
+When a selected external conversation becomes a unique job row, selection follows
+its session UUID (case-insensitively) to that job. Multiple matching jobs remain
+ambiguous, so no arbitrary job receives the external selection.
+When promotion changes a previously present UUID, detail says "Transcript opens the live session,
 not the job's pre-compaction file." The old transcript path is cleared so it
 cannot accidentally establish availability for the live UUID.
 
@@ -606,20 +609,53 @@ is not a descriptor's UUID. `liveElsewhereChecked(..., { includeOwnProcesses:
 true })` explicitly bypasses both the has-PTY shortcut and own-process filtering
 for destructive-verb checks. Ordinary resume checks keep excluding own processes.
 
-Roster rebuilds set `transcriptAvailable` using the existing `transcriptExists`
-callback: main resolves the session's cached folder and stats its known JSONL
-path, without reading the transcript or scanning directories. Without the callback,
-the service stats the job's known transcript path. Missing paths, directories and
-lookup/stat errors return false. The renderer disables Transcript with its missing
-file tooltip; the next roster rebuild refreshes availability. For a job or a
-merged row, Transcript calls `runVerb('transcript', id)` through the shipped IPC;
-main repeats that check and returns the UUID or a clear missing/unindexed-file
-error without spawning. The IPC can see a newly indexed file immediately, while
-the disabled renderer button waits for a roster refresh. External rows with no job id
+Roster rebuilds memoize `transcriptAvailable` by session UUID and the job's
+transcript-path input. Main's `resolveTranscriptPath` resolves the cached folder
+only on a memo miss; the service stats that resolved JSONL path with
+`throwIfNoEntry: false`. Without that resolver, the service stats the job's known
+path. Missing paths,
+directories and lookup/stat errors return false. Unchanged descriptor/job rebuilds
+repeat neither the SQLite lookup nor the stat, including while Agents is closed.
+Changed UUID/path inputs get new entries; disappeared rows are evicted, and
+`reconcile()` and `stop()` clear the memo.
+
+The index writer calls `onSessionsChanged` after successful cache effects or
+direct cache writes are acknowledged, and after final continuation apply for
+computed effects. Upserts invalidate matching unavailable entries only, using
+`{ upsertOnly: true }`; session deletions invalidate matching entries regardless
+of availability. Matching is case-insensitive. Folder deletion, worktree cleanup
+and remote-folder removal invalidate all entries with `null`. Size and modified-time
+effects send no notification or roster rebuild. Mixed batches keep upsert and
+deletion notifications separate. Observer exceptions are logged without rejecting
+committed writes. This covers watcher refresh, scan and Projects worker
+effects, including reindex. A memo invalidation schedules the ordinary 250 ms
+roster push, enabling a disabled Transcript button without the 30 s CLI poll.
+The existing projects watcher feeds `writer.refreshFolder` after its 500 ms
+debounce; scan results also pass through the writer. A filesystem event alone is
+too early because SQLite may not contain the path yet. Commit notifications are
+cheaper than new hover/click IPC and reliable for disabled buttons, which do not
+dispatch clicks. Failed index commits leave the memo untouched.
+
+A running session whose JSONL disappears can retain its indexed row through
+`keepIfRunning`. Without a row-deletion notification, its Transcript button can
+stay enabled until the next explicit/periodic reconcile clears the memo. Clicking
+Transcript rechecks the file without the memo and reports its absence. This gap
+also applies when the surviving row is upserted, since already available entries
+are intentionally retained on upserts.
+
+The renderer disables Transcript with its missing-file tooltip. For a job row,
+Transcript calls `runVerb('transcript', id)` through the shipped IPC; main repeats
+an uncached check and returns the UUID or a clear missing/unindexed-file error
+without spawning. External rows with no job id
 use the ordinary read-only viewer directly, with the same availability flag. The ordinary
 `read-session-jsonl` handler catches file-read errors if a file disappears
 after the roster snapshot. `test/bg-agents-522.test.js` exercises the shipped
 IPC and renderer functions against disposable job/descriptor/transcript files.
+`test/bg-agents-882.test.js` counts lookups/stats across repeated rebuilds and
+checks invalidation and missing files. `test/session-index-writer-882.test.js`
+checks the post-commit notification boundary. `test/dom-agents-view.test.js`
+covers both selection transitions, no-previous-session wording, and a writer
+commit enabling the same selected Transcript button through a real roster push.
 
 ## Data flow
 

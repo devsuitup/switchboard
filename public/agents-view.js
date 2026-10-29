@@ -341,7 +341,12 @@ function applyAgentsSnapshot(snapshot) {
       entry.hosted, entry.attachedHere, entry.conversationOwn, entry.status, entry.waitingFor]).sort(([a], [b]) => a.localeCompare(b)));
   const previous = activityFields(bgActivityEntries);
   const previousJobs = new Map(bgActivityEntries);
+  const selected = agentsSelectedEntry();
   agentsRoster = Array.isArray(snapshot && snapshot.roster) ? snapshot.roster : [];
+  if (selected && !selected.id && !agentsRoster.some(e => agentsEntryKey(e) === agentsSelectedKey)) {
+    const matches = agentsRoster.filter(e => e.id && e.sessionId?.toLowerCase() === selected.sessionId?.toLowerCase());
+    if (matches.length === 1) agentsSelectedKey = agentsEntryKey(matches[0]);
+  }
   agentsDaemonReachable = !snapshot || snapshot.daemonReachable !== false;
   agentsCliAvailable = snapshot?.cliAvailable === true;
   agentsCliEntryCount = snapshot?.cliEntryCount || 0;

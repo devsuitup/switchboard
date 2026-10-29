@@ -22,6 +22,26 @@ The worker path uses path.join(__dirname,'workers',...). package.json already sh
 root *.js and workers/**/* and unpacks better-sqlite3 and node-pty through
 the normal dependency packaging. No native rebuild is introduced.
 
+The optional `onSessionsChanged(ids, change)` observer runs after the write ACK
+and, for a cache computation, after the final continuation apply. Observer
+exceptions are caught and logged through the facade's `log.warn` (console by
+default); they neither reject committed commands nor trigger stale-write retries.
+Direct `upsertCachedSessions` commands and recorded upsert effects report their
+deduplicated session ids with `{ upsertOnly: true }`. Direct `deleteCachedSession`
+commands and recorded session-delete effects report deduplicated ids without an
+upsert flag. A mixed batch reports deletions first, then upserts in a separate
+call, so available upserted sessions keep their memo. Direct `deleteCachedFolder`,
+`cleanupWorktree` and `dropRemoteFolder` commands, or a recorded `deleteCachedFolder`
+effect, report `null` once for full invalidation instead of per-session calls.
+Other commands/effects do not notify, including `touchCachedModified` and
+`setCachedFileSize`. Computations (`refreshFolder`, `releaseLiveSession`,
+`dropFolderRows`, `buildProjectsFromCache`, scanned-folder writes and Projects
+worker effect application) notify only according to the effects they record.
+Main forwards both arguments to Agents to invalidate transcript availability
+after the indexed path is readable. Rejected commands do not notify; a rejected
+multi-chunk command may already have committed earlier chunks, as described below.
+See `bg-agents.md` and `test/session-index-writer-882.test.js` (#882).
+
 Issue #740 adds nullable `session_cache.fileSize INTEGER` in writable schema
 reconciliation. Existing rows and metadata remain intact; missing sizes are
 filled by refresh. The size travels through cache upsert effects

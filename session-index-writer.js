@@ -15,6 +15,21 @@ const { createCacheEffects } = require('./cache-effects');
 // see .ai/contexts/session-index-writer.md
 function createSessionIndexWriter(options = {}, cache = require('./session-cache')) {
   const mirror = new Map();
+  const notify = (ids, change) => {
+    try { options.onSessionsChanged?.(ids, change); }
+    catch (error) { (options.log || console).warn('[session-index-writer] sessions observer failed: ' + error.message); }
+  };
+  const notifySessionsChanged = effects => {
+    if (!options.onSessionsChanged) return;
+    if (effects.some(effect => ['deleteCachedFolder', 'cleanupWorktree', 'dropRemoteFolder'].includes(effect.name))) { notify(null); return; }
+    const upserts = new Set(), deletions = new Set();
+    for (const { name, args } of effects) {
+      if (name === 'upsertCachedSessions') for (const row of args[0]) upserts.add(row.sessionId);
+      else if (name === 'deleteCachedSession') deletions.add(args[0]);
+    }
+    if (deletions.size) notify([...deletions]);
+    if (upserts.size) notify([...upserts], { upsertOnly: true });
+  };
   const client = options.client || createWriterWorkerClient({
     workerFactory: options.workerFactory || (() => new Worker(path.join(__dirname, 'workers', 'session-index-writer.js'))),
     onSettings: entries => { mirror.clear(); for (const [key, value] of entries) mirror.set(key, value); if (backend) backend.applySettingsAcknowledgment(entries); },
@@ -33,7 +48,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     recorder = createCacheEffects(backend);
   });
   ready.catch(() => {});
-  const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(() => client.request(name, ...args)));
+  const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(() => client.request(name, ...args)).then(value => {
+    notifySessionsChanged([{ name, args }]);
+    return value;
+  }));
   const compute = (name, ...args) => {
     if (!admitted()) return Promise.reject(new Error('writer is closing'));
     const sourceVersion = backend?.getProjectsRevision?.();
@@ -60,18 +78,23 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           effects = recorder.finish();
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector);
         }
+        let acknowledgment;
         try {
-          const acknowledgment = effects.length ? await client.request('effects', effects, revision) : null;
+          acknowledgment = effects.length ? await client.request('effects', effects, revision) : null;
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector, true);
-          combinedResult = combinedResult === true || result === true ? true : combinedResult === 'activity' || result === 'activity' ? 'activity' : result;
-          if (continuationCollector.deferred.size && !continuationRetry) {
-            continuationRetry = true;
-            attempt--;
-            continue;
-          }
-          return name === 'applyProjectsWorkerEffects' && acknowledgment?.committedRevision !== undefined ? acknowledgment : combinedResult;
         }
-        catch (error) { if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects') throw error; }
+        catch (error) {
+          if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects') throw error;
+          continue;
+        }
+        notifySessionsChanged(effects);
+        combinedResult = combinedResult === true || result === true ? true : combinedResult === 'activity' || result === 'activity' ? 'activity' : result;
+        if (continuationCollector.deferred.size && !continuationRetry) {
+          continuationRetry = true;
+          attempt--;
+          continue;
+        }
+        return name === 'applyProjectsWorkerEffects' && acknowledgment?.committedRevision !== undefined ? acknowledgment : combinedResult;
       }
     });
     cacheTail = work.catch(() => {});
