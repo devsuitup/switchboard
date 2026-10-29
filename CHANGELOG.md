@@ -8,6 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Mark a conversation as unread from its sidebar row, archive eligible sessions under **older** with one confirmation, and find text in **View messages** with Ctrl+F. Open, active, live-elsewhere and remote sessions alive on their host are kept; message search keeps your place during live updates and supports Enter, Shift+Enter and Escape. (#819)
 
 ### Fixed
+- In Agents, finished jobs sharing a live conversation keep separate selections and action errors. Transcript is disabled when its file is unavailable, and a merged row explains when it opens the live session instead of the job's pre-compaction file. (#530)
 - The sessions sidebar skips rebuilding when a background refresh brings back identical data and its display state has not changed. Changed data is checked faster, exit labels stay current, and waiting ages advance every 30 seconds. (#543)
 - Remote hosts stay connected and keep refreshing when a local session-state read fails. (#701)
 - Failed scheduled runs now leave a persistent notice with the schedule name, exit code and what to check, even after Run now has shown its launch check mark. While the app window exists, repeated cron failures share one notice with a count and the latest error. (#707)

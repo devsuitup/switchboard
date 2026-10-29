@@ -568,6 +568,16 @@ Any descriptor holding a row's session id supplies `conversationPid`, even
 when its kind is `bg` and the job file already says finished. Such a row keeps
 its job state but cannot offer destructive verbs while that pid is live.
 
+Roster keys follow job identity: every row with a job id uses `bg:<job-id>`,
+including a promoted interactive row. An external row without a job keeps
+`int:<session-id>`. Multiple finished jobs may share the live UUID or bridge
+suffix; each retains its metadata, selection, pending action and errors under
+its own key. This avoids choosing an arbitrary winning job and keeps a job's
+selection stable when its conversation changes between background and interactive.
+When promotion changes the UUID, detail says "Transcript opens the live session,
+not the job's pre-compaction file." The old transcript path is cleared so it
+cannot accidentally establish availability for the live UUID.
+
 The job watcher starts with the app so the sidebar can read `getCachedJobs`
 without opening Agents or scanning job files on project loads. A done job with
 a live bg descriptor retains the roster's sidebar bg marker. The local projects
@@ -596,12 +606,17 @@ is not a descriptor's UUID. `liveElsewhereChecked(..., { includeOwnProcesses:
 true })` explicitly bypasses both the has-PTY shortcut and own-process filtering
 for destructive-verb checks. Ordinary resume checks keep excluding own processes.
 
-Roster rebuilds do not query SQLite or stat transcript files. For a job or a
+Roster rebuilds set `transcriptAvailable` using the existing `transcriptExists`
+callback: main resolves the session's cached folder and stats its known JSONL
+path, without reading the transcript or scanning directories. Without the callback,
+the service stats the job's known transcript path. Missing paths, directories and
+lookup/stat errors return false. The renderer disables Transcript with its missing
+file tooltip; the next roster rebuild refreshes availability. For a job or a
 merged row, Transcript calls `runVerb('transcript', id)` through the shipped IPC;
-main lazily checks the same cached folder/path as `read-session-jsonl` and returns
-the UUID or a clear missing/unindexed-file error without spawning. A retry sees
-newly indexed files without rebuilding the roster. External rows with no job id
-use the ordinary read-only viewer directly. The ordinary
+main repeats that check and returns the UUID or a clear missing/unindexed-file
+error without spawning. The IPC can see a newly indexed file immediately, while
+the disabled renderer button waits for a roster refresh. External rows with no job id
+use the ordinary read-only viewer directly, with the same availability flag. The ordinary
 `read-session-jsonl` handler catches file-read errors if a file disappears
 after the roster snapshot. `test/bg-agents-522.test.js` exercises the shipped
 IPC and renderer functions against disposable job/descriptor/transcript files.

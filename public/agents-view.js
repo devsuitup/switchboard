@@ -27,7 +27,7 @@ function agentsEscapeAttr(value) {
 }
 
 function agentsEntryKey(entry) {
-  return entry.kind === 'background' ? 'bg:' + entry.id : 'int:' + entry.sessionId;
+  return entry.id ? 'bg:' + entry.id : 'int:' + entry.sessionId;
 }
 
 function agentDisplayName(entry) {
@@ -518,6 +518,7 @@ function renderAgentDetail(entry) {
       </span>
     </div>
     ${entry.detail ? `<div class="agents-detail-line">${escapeHtml(entry.detail)}</div>` : ''}
+    ${entry.transcriptSource === 'live-session' ? `<div class="agents-detail-line">Transcript opens the live session, not the job's pre-compaction file.</div>` : ''}
     ${meta.length ? `<div class="agents-detail-meta">${escapeHtml(meta.join(' · '))}</div>` : ''}
     ${entry.kind === 'interactive' ? `<div class="agents-detail-meta">${escapeHtml(entry.cwd || '')}${entry.status ? ' · ' + escapeHtml(entry.status) : ''}</div>` : ''}
     ${fan ? `<div class="agents-detail-section">Subagents<ul>${fan}</ul></div>` : ''}
