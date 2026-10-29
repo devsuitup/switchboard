@@ -51,10 +51,13 @@ signal terminations include the signal. The payload carries `name`, `projectPath
 plain schedule name and an optional fifth argument `{ manual: true }` from Run
 now; cron defaults to `manual: false`. `failure` is `claude-path` for code 127
 or a shell lookup diagnostic naming exactly `claude` (bash/sh command-not-found,
-zsh/fish command-last forms, env missing-executable, Windows spawn ENOENT /
+including shell paths such as `/bin/bash`, zsh/fish command-last forms including
+`zsh:1:`, quoted or unquoted env missing-executable, Windows spawn ENOENT /
 English not recognized and PowerShell command lookup diagnostics).
-`sandbox` requires a sandboxed run and a line beginning `bwrap:` or
-`claude-sandbox:` other than the script's `claude not found in PATH` diagnostic;
+`sandbox` requires a sandboxed run and either a line beginning `bwrap:` at any
+exit code, or a line beginning `claude-sandbox:` at exit code 125, other than
+the script's `claude not found in PATH` diagnostic. Wrapper warnings, skipped
+binds and debug lines at other exit codes do not establish a sandbox failure;
 all other failures receive `exit`, including API overloads inside the sandbox.
 Stderr stays in the main log and is not sent to the renderer. Sandbox diagnostics
 take precedence over code 127 or another lookup diagnostic; the script's exact
@@ -64,7 +67,7 @@ dependencies do not establish a missing Claude command, nor do application
 errors such as `Agent 'claude' not found` or `model claude not found`.
 Localized cmd.exe lookup errors with exit 1 receive the log hint.
 
-The launcher derives `Manual run: <name>` for Run now's log lines, ActivityWatch
+The launcher derives `Manual run <name>` for Run now's log lines, ActivityWatch
 name and tracked live schedule name. `public/resume-guard.js` therefore retains
 that marker when it names a running schedule in its confirmation. The exit IPC
 continues to carry the plain schedule name and the separate `manual` flag.
@@ -221,7 +224,7 @@ Scheduled runs from before v0.0.90 are listed one per row. They have no `schedul
 `cliSessionState.trackScheduleRun(sessionId, child, cwd, runName)`, using the `--resume`
 id from the scheduler's argv. Cron and Run now therefore share the same guard.
 The in-memory entry carries `kind: 'schedule'`, the shell child's pid, cwd and
-launch time, plus the schedule name (prefixed `Manual run: ` for Run now).
+launch time, plus the schedule name (prefixed `Manual run ` for Run now).
 It is released on the child's `exit` or `error`; a refused spawn never creates
 an entry. No CLI descriptor is written and no polling is added.
 

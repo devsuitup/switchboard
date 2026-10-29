@@ -3785,7 +3785,7 @@ if (!app.isPackaged) {
     // Shared runCommand for cron scheduler and "run now" — takes argv, not a shell string
     const { spawn: cpSpawn } = require('child_process');
     async function runScheduleCommand(claudeArgv, cwd, name, onDone, { manual = false } = {}) {
-      const runName = manual ? `Manual run: ${name}` : name;
+      const runName = manual ? `Manual run ${name}` : name;
       const globalSettings = getSetting('global') || {};
       if (isProjectSettingsArchived(cwd)) {
         log.info(`[schedule] ${runName} suspended: project is archived`);

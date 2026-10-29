@@ -227,13 +227,14 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
 function reportRunExit(window, { name, projectPath, sessionId, manual = false, code, signal, sandbox, stderr }) {
   if (code === 0 || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
   const sandboxPath = /^\s*claude-sandbox: claude not found in PATH(?:\s|$)/m.test(stderr || '');
-  const sandboxFailure = sandbox && /^\s*(?:bwrap:|claude-sandbox:(?! claude not found in PATH(?:\s|$)))/m.test(stderr || '');
+  const sandboxFailure = sandbox && (/^\s*bwrap:/m.test(stderr || '') ||
+    code === 125 && /^\s*claude-sandbox:(?! claude not found in PATH(?:\s|$))/m.test(stderr || ''));
   const missingClaude = !sandboxFailure && (sandboxPath || code === 127 || [
     /^\s*spawn\s+claude\s+ENOENT\b/im,
-    /^\s*(?:(?:bash|sh|dash|ksh|zsh)(?::\s*(?:line\s+)?\d+)?:\s*)?claude:\s*(?:command not found|not found)\s*$/im,
-    /^\s*zsh: command not found: claude\s*$/im,
+    /^\s*(?:(?:\/[^\s:]+\/)?(?:bash|sh|dash|ksh|zsh)(?::\s*(?:line\s+)?\d+)?:\s*)?claude:\s*(?:command not found|not found)\s*$/im,
+    /^\s*zsh:\s*(?:\d+:\s*)?command not found: claude\s*$/im,
     /^\s*fish: Unknown command: claude\s*$/im,
-    /^\s*(?:\/[^\s:]+\/)?env: ['"‘]claude['"’]: No such file or directory\s*$/im,
+    /^\s*(?:\/[^\s:]+\/)?env: (?:['"‘]claude['"’]|claude): No such file or directory\s*$/im,
     /^\s*['"]claude['"] is not recognized as an internal or external command\b/im,
     /^\s*claude\s*:\s*The term ['"]claude['"] is not recognized as (?:a|the) name of a cmdlet\b/im,
     /^\s*\+?\s*CategoryInfo\s*:\s*ObjectNotFound:\s*\(claude:String\)\s*\[\],\s*CommandNotFoundException\b/im,

@@ -167,10 +167,10 @@ test('a click during a scheduled run asks Resume anyway and opens when accepted'
 test('a click during Run now retains the manual marker in the resume question', async t => {
   const h = setup(t);
   await h.start({ manual: true });
-  assert.equal((await h.query()).scheduleName, 'Manual run: Scheduled task');
+  assert.equal((await h.query()).scheduleName, 'Manual run Scheduled task');
   await h.open();
   assert.equal(h.openTerminalCalls.length, 1);
-  assert.match(h.confirmations[0].message[0], /in a scheduled run of "Manual run: Scheduled task"/);
+  assert.match(h.confirmations[0].message[0], /in a scheduled run of "Manual run Scheduled task"/);
 });
 
 test('automatic reload during a scheduled run skips the resume without prompting', async (t) => {
