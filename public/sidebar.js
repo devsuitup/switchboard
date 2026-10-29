@@ -901,11 +901,13 @@ function sidebarRenderInputs(projects) {
     isSubagentActive(session.parentSessionId, session.agentId),
     window.taskRegistry?.runningAgentCount(rowSessionIds(session)) || 0,
     planSessionDetach(session).targets.length > 0,
+    olderArchiveKeepReason(session),
     label && [label.title, label.text],
     descriptor && [descriptor.status, descriptor.waitingFor],
     new Date(session.modified).getTime() >= now - sessionMaxAgeDays * 86400000];
   }));
   return [activity, renderProjects.hiddenSettings, activeSessionId, [...activePtyIds], [...pendingSessions.keys()],
+    [...openSessions].map(([id, entry]) => [id, !!entry.closed]),
     sortedOrder, searchMatchIds && [...searchMatchIds], searchMatchProjectPaths && [...searchMatchProjectPaths],
     showStarredOnly, showRunningOnly, showTodayOnly, visibleSessionCount, sessionMaxAgeDays,
     typeof showArchived !== 'undefined' && showArchived,

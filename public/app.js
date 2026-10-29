@@ -2107,7 +2107,8 @@ setInterval(() => {
     const timeEl = item.querySelector('.session-time');
     if (timeEl && session.modified) {
       const msgSuffix = session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '';
-      timeEl.textContent = formatDate(new Date(session.modified)) + msgSuffix;
+      const text = formatDate(new Date(session.modified)) + msgSuffix;
+      if (timeEl.textContent !== text) timeEl.textContent = text;
     }
     const status = item.querySelector('.session-status');
     if (!status) continue;

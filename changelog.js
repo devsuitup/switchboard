@@ -49,6 +49,9 @@ function parseChangelog(text) {
     } else if (line.trim() === '---') {
       close();
     } else if (current) {
+      if (!current.version && /^###(?:\s|$)/.test(line) && !['### New', '### Changed', '### Fixed'].includes(line)) {
+        throw new Error(`malformed Unreleased group: ${line}`);
+      }
       current.lines.push(line);
     }
   }

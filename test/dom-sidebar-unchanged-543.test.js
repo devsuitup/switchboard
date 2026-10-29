@@ -41,6 +41,112 @@ function ticker(ctx) {
   return () => tick();
 }
 
+function olderProject(ctx, extra = {}) {
+  ctx.w.visibleSessionCount = 1;
+  const project = ctx.projects[0];
+  project.sessions = [
+    { sessionId: 'recent', modified: '2026-10-29T11:00:00Z' },
+    { sessionId: 'older', modified: '2026-01-01T00:00:00Z', ...extra },
+  ];
+  ctx.w.sessionMap.clear();
+  for (const session of project.sessions) ctx.w.sessionMap.set(session.sessionId, session);
+  return () => ctx.document.querySelector('.sessions-older-archive-btn');
+}
+
+test('older archive becomes eligible immediately after a closed tab is evicted', t => {
+  const ctx = setup(t);
+  const button = olderProject(ctx);
+  ctx.w.openSessions.set('older', { closed: true });
+  ctx.refresh();
+  assert.equal(button().disabled, true);
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [1, 1]);
+  ctx.w.openSessions.delete('older');
+  ctx.refresh();
+  assert.equal(button().disabled, false, 'eviction enables Archive without waiting for a clock bucket');
+  assert.deepEqual(ctx.counts(), [2, 2]);
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [2, 2]);
+  ctx.w.openSessions.set('older', { closed: false });
+  ctx.refresh();
+  assert.equal(button().disabled, true, 'opening a tab protects the older row again');
+  assert.deepEqual(ctx.counts(), [3, 3]);
+});
+
+test('changing only the closed flag of an open tab invalidates the skip key', t => {
+  const ctx = setup(t);
+  ctx.w.openSessions.set('s-top-1', { closed: false });
+  ctx.refresh();
+  ctx.w.openSessions.get('s-top-1').closed = true;
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [2, 2]);
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [2, 2]);
+});
+
+test('remote member liveness can change older archive eligibility with an identical row projection', t => {
+  const ctx = setup(t);
+  const button = olderProject(ctx, { remoteAlias: 'vps', headSessionId: 'head', mergedMemberIds: ['head'] });
+  const state = ctx.w.createSessionState('remote-ssh');
+  state.apply({ type: 'attached', value: true });
+  state.apply({ type: 'liveness', value: 'alive' });
+  ctx.remoteSessionStates.set('head', state);
+  ctx.refresh();
+  assert.equal(button().disabled, true);
+  const row = ctx.projects[0].sessions[1];
+  const projection = JSON.stringify(ctx.w.mergedRowSnapshot(ctx.w.rowSessionIds(row), row.sessionId,
+    ctx.w.storedActivitySnapshot(row.sessionId, row), row));
+  state.apply({ type: 'liveness', value: 'dead' });
+  assert.equal(ctx.w.isRemoteSessionAlive(row), false, 'row-level liveness stays false');
+  assert.equal(JSON.stringify(ctx.w.mergedRowSnapshot(ctx.w.rowSessionIds(row), row.sessionId,
+    ctx.w.storedActivitySnapshot(row.sessionId, row), row)), projection);
+  ctx.refresh();
+  assert.equal(button().disabled, false, 'dead member enables Archive even though the row projection did not change');
+  assert.deepEqual(ctx.counts(), [2, 2]);
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [2, 2]);
+});
+
+test('mark unread renders, identical refresh skips, and mark read renders through the skip path', t => {
+  const ctx = setup(t);
+  ctx.refresh();
+  const button = () => ctx.document.querySelector('#si-s-top-1 .session-unread-btn');
+  button().click();
+  ctx.refresh();
+  assert.equal(button().getAttribute('aria-label'), 'Mark as read');
+  assert.ok(ctx.document.querySelector('#si-s-top-1 .session-icon--response-ready'));
+  assert.deepEqual(ctx.counts(), [2, 2]);
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [2, 2]);
+  button().click();
+  ctx.refresh();
+  assert.equal(button().getAttribute('aria-label'), 'Mark as unread');
+  assert.equal(ctx.document.querySelector('#si-s-top-1 .session-icon--response-ready'), null);
+  assert.deepEqual(ctx.counts(), [3, 3]);
+});
+
+test('ticker leaves unchanged time labels untouched so an identical refresh can skip', t => {
+  const ctx = setup(t);
+  ctx.refresh();
+  const time = ctx.document.querySelector('#si-s-top-1 .session-time');
+  const text = time.firstChild;
+  ticker(ctx)();
+  assert.equal(time.firstChild, text, 'unchanged text does not replace the text node');
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
+
+test('ticker still updates a changed time label and retains the message count', t => {
+  const ctx = setup(t);
+  ctx.refresh();
+  const time = ctx.document.querySelector('#si-s-top-1 .session-time');
+  const before = time.textContent;
+  ctx.projects[0].sessions[0].modified = new Date(ctx.w.Date.now()).toISOString();
+  ticker(ctx)();
+  assert.notEqual(time.textContent, before);
+  assert.equal(time.textContent, ctx.w.formatDate(new ctx.w.Date(ctx.projects[0].sessions[0].modified)) + ' · 12 msgs');
+});
+
 test('identical cloned payload skips the sidebar build and morphdom', t => {
   const ctx = setup(t);
   ctx.refresh();
