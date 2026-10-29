@@ -1,5 +1,36 @@
 # Session state — one domain module, one icon slot
 
+## Unchanged sidebar refreshes (#543)
+
+`loadProjects` opts into `refreshSidebar({ skipUnchanged: true })` after committing
+the current payload, pending-session reconciliation and activity poll. Explicit
+refreshes and `resort: true` still render. Only the sidebar build/morphdom/event
+rebinding is skipped; cache updates, notices, diagnostics and timer pruning run.
+
+`renderProjects.unchanged` compares a detached JSON render key captured only after
+a successful render. It includes the input projects (before preserved-order
+sorting), all-project metadata, filters/search/archived mode, sort order, limits,
+active/pending sessions, selection, remote host labels, archive operations,
+expanded groups, hidden-project settings and storage. Per-row inputs include activity snapshots for all
+conversation members and the head, remote attention, unread output, subagent
+activity/counts, dormant sessions, background labels/badges and detach targets.
+Changes to payload fields in place are detected because the key retains no
+mutable session references. New payload fields are automatically included.
+
+A MutationObserver conservatively invalidates the key for sidebar DOM changes,
+including expansion controls whose state lives only in the DOM. This preserves
+the existing morphdom rules on the next render. A 30-second clock bucket, local
+date and each session's age-cutoff membership prevent time-sensitive filters
+from freezing. Keys are not compared across an unsuccessful render. Remote
+seeding and subagent pruning still run on every actual render; their independent
+decay/TTL timers continue between renders. Additional state that affects row
+construction must be represented in `sidebarRenderInputs` or invalidate the DOM.
+
+Evidence: `test/dom-sidebar-unchanged-543.test.js` loads the shipped sidebar and
+`refreshSidebar` through the standard jsdom helpers and spies on both the render
+and morphdom boundaries. Performance measurements are in the issue #543 report;
+jsdom timings do not establish Electron performance on a real session cache.
+
 ## Persistent row action failures (#566)
 
 Stop/Detach, Delete and Archive use `showSessionActionFailure` in

@@ -770,7 +770,49 @@ function buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleSc
   return group;
 }
 
+let sidebarRenderKey = null;
+let sidebarRenderDirty = true;
+const sidebarRenderObserver = new MutationObserver(() => { sidebarRenderDirty = true; });
+sidebarRenderObserver.observe(sidebarContent, { subtree: true, childList: true, attributes: true, characterData: true });
+
+function sidebarRenderInputs(projects) {
+  const now = Date.now();
+  const storageEntries = storage => Object.keys(storage).sort().map(key => [key, storage.getItem(key)]);
+  const activity = projects.map(project => project.sessions.map(session => {
+    const ids = [...new Set([...rowSessionIds(session), rowHeadId(session)])];
+    const snapshot = mergedRowSnapshot(rowSessionIds(session), session.sessionId,
+      storedActivitySnapshot(session.sessionId, session), session);
+    return [snapshot, ids.map(id => [storedActivitySnapshot(id, session), remoteAttentionSnapshot(id),
+      attentionSessions.has(id), responseReadySessions.has(id), sessionBusyState.get(id),
+      parentHasActiveSubagent(id), isDormantSession(id),
+      typeof bgAgentSessionIds !== 'undefined' && bgAgentSessionIds.has(String(id).toLowerCase())]),
+    isSubagentActive(session.parentSessionId, session.agentId),
+    window.taskRegistry?.runningAgentCount(rowSessionIds(session)) || 0,
+    planSessionDetach(session).targets,
+    typeof backgroundActivityLabel === 'function' ? backgroundActivityLabel(rowHeadId(session), snapshot, session) : null,
+    localSessionForStatus(rowHeadId(session), session),
+    new Date(session.modified).getTime() >= now - sessionMaxAgeDays * 86400000];
+  }));
+  return [projects, cachedAllProjects, activity, renderProjects.hiddenSettings, activeSessionId, [...activePtyIds], [...pendingSessions.keys()],
+    sortedOrder, searchMatchIds && [...searchMatchIds], searchMatchProjectPaths && [...searchMatchProjectPaths],
+    showStarredOnly, showRunningOnly, showTodayOnly, visibleSessionCount, sessionMaxAgeDays,
+    typeof showArchived !== 'undefined' && showArchived,
+    typeof searchInput !== 'undefined' ? searchInput.value : '',
+    [...getExpandedSlugs()], storageEntries(localStorage), storageEntries(sessionStorage),
+    projects.map(project => remoteHostLabel(project.remoteAlias)),
+    [...archivingSessionIds], [...archivingGroupIds],
+    Math.floor(now / 30000), new Date(now).toDateString()];
+}
+
+renderProjects.unchanged = projects => {
+  if (sidebarRenderObserver.takeRecords().length) sidebarRenderDirty = true;
+  return !sidebarRenderDirty && sidebarRenderKey === JSON.stringify(sidebarRenderInputs(projects));
+};
+
 function renderProjects(projects, resort) {
+  const inputProjects = projects;
+  sidebarRenderKey = null;
+  sidebarRenderDirty = true;
   pruneStaleSubagents();
   pendingSubagentRest.clear();
   const legacyScheduleScopes = new Map();
@@ -1290,6 +1332,9 @@ function renderProjects(projects, resort) {
   if (activeSessionId && openSessions.has(activeSessionId) && !isUserTyping) {
     openSessions.get(activeSessionId).terminal.focus();
   }
+  sidebarRenderKey = JSON.stringify(sidebarRenderInputs(inputProjects));
+  sidebarRenderObserver.takeRecords();
+  sidebarRenderDirty = false;
 }
 
 // see .ai/contexts/session-cache.md ("Archived projects", re-enable offers)

@@ -1114,7 +1114,8 @@ window.api.onCliBusyState((sessionId, busy) => {
 // --- Single entry point for all sidebar renders ---
 // resort=true: re-sort items by priority+time (use for user-initiated actions)
 // resort=false (default): preserve existing DOM order, new items go to top
-function refreshSidebar({ resort = false } = {}) {
+function refreshSidebar({ resort = false, skipUnchanged = false, hiddenSettings } = {}) {
+  if (hiddenSettings) renderProjects.hiddenSettings = hiddenSettings;
   // When searching, always use all projects (search ignores archive filter)
   let projects = (searchMatchIds !== null)
     ? cachedAllProjects
@@ -1133,7 +1134,7 @@ function refreshSidebar({ resort = false } = {}) {
     }).filter(Boolean);
   }
 
-  renderProjects(projects, resort);
+  if (!skipUnchanged || resort || !renderProjects.unchanged?.(projects)) renderProjects(projects, resort);
   pruneRemoteActivityTimers();
   pruneLocalTranscriptTimers();
 }
@@ -2259,7 +2260,8 @@ async function loadProjects({ resort = false } = {}) {
       scheduleActiveSessionsPoll();
     }
     if (typeof observeSessionProjection === 'function') observeSessionProjection({ generation: job.generation, cause: 'projects', provenance: response.projection });
-    refreshSidebar({ resort: job.resort });
+    refreshSidebar({ resort: job.resort, skipUnchanged: true,
+      hiddenSettings: [globalSettings?.hiddenProjects, globalSettings?.hiddenProjectKinds] });
     renderDefaultStatus();
     return state.outcome;
   };
