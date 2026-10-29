@@ -543,6 +543,7 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 // --- Session cache helpers ---
 
 const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
+const { getHarness } = require('./harnesses');
 const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -2498,8 +2499,7 @@ function sandboxScriptPath() {
 // point so the claude `--add-dir` args and the sandbox bind list can never
 // disagree about what the user typed.
 function parseAddDirs(value) {
-  if (!value) return [];
-  return String(value).split(',').map(d => d.trim()).filter(Boolean);
+  return getHarness().parseAddDirs(value);
 }
 
 // SWITCHBOARD_SANDBOX_BINDS is colon-separated (env vars cannot carry NUL), so
@@ -2978,50 +2978,12 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
           log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
         }
-        if (sessionOptions?.forkFrom) {
-          claudeArgs.push('--resume', String(sessionOptions.forkFrom), '--fork-session');
-        } else if (startsFresh) {
-          claudeArgs.push('--session-id', String(sessionId));
-        } else {
-          claudeArgs.push('--resume', String(sessionId));
+        let launchOptions = sessionOptions;
+        if (startsFresh && sessionOptions?.worktree && !isGitRepo(spawnCwd)) {
+          log.warn(`[open-terminal] ${spawnCwd} is not a git repository — launching without --worktree`);
+          launchOptions = { ...sessionOptions, worktree: false };
         }
-
-        if (sessionOptions) {
-          if (sessionOptions.dangerouslySkipPermissions) {
-            claudeArgs.push('--dangerously-skip-permissions');
-          } else if (sessionOptions.permissionMode) {
-            claudeArgs.push('--permission-mode', String(sessionOptions.permissionMode));
-          }
-          // --worktree only applies when STARTING a session — it creates a fresh
-          // isolated git worktree. Resuming (isNew === false) must reuse the
-          // session's existing directory, so ignore the worktree option on resume
-          // regardless of which call site supplied it (sidebar click, schedule
-          // creator, fork, …). Otherwise a resume tries to spin up a new worktree
-          // and fails to attach.
-          if (startsFresh && sessionOptions.worktree && !isGitRepo(spawnCwd)) {
-            // Worktree is commonly enabled globally, but plenty of projects are
-            // not git repos. Passing --worktree there makes claude refuse to start
-            // at all ("Can only use --worktree in a git repository"), which turns
-            // one global convenience toggle into a broken project. Drop the flag
-            // and run unisolated rather than fail the launch.
-            log.warn(`[open-terminal] ${spawnCwd} is not a git repository — launching without --worktree`);
-          } else if (startsFresh && sessionOptions.worktree) {
-            claudeArgs.push('--worktree');
-            if (sessionOptions.worktreeName) {
-              claudeArgs.push(String(sessionOptions.worktreeName));
-            }
-          }
-          if (sessionOptions.chrome) {
-            claudeArgs.push('--chrome');
-          }
-          for (const dir of parseAddDirs(sessionOptions.addDirs)) {
-            claudeArgs.push('--add-dir', dir);
-          }
-        }
-
-        if (sessionOptions?.appendSystemPrompt) {
-          claudeArgs.push('--append-system-prompt', String(sessionOptions.appendSystemPrompt));
-        }
+        claudeArgs.push(...getHarness().buildLaunchArgs({ sessionId, isNew: startsFresh, options: launchOptions }));
       }
 
       let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs);

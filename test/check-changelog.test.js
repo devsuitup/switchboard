@@ -13,7 +13,7 @@ const { isAppPath, checkChangelog, parseLabels } = require('../scripts/check-cha
 test('app code is what electron-builder ships: root scripts, public/, workers/, the sandbox wrapper', () => {
   for (const file of ['main.js', 'preload.js', 'git-changes.js', 'public/app.js', 'public/style.css',
     'public/index.html', 'workers/search-worker.js', 'scripts/claude-sandbox.sh',
-    'src/main/viewer/file-lists-path.js', 'src/preload/preload.js']) {
+    'src/main/viewer/file-lists-path.js', 'src/preload/preload.js', 'harnesses/claude.js', 'harnesses/codex.js']) {
     assert.equal(isAppPath(file), true, file);
   }
 });
@@ -127,6 +127,15 @@ test('end to end: an app change with an entry passes', (t) => {
   const repo = makeRepo(t);
   const head = repo.commit({ 'main.js': 'b\n', 'CHANGELOG.md': '# Changelog\n\n- x\n' }, 'app');
   assert.equal(check(repo, ['--base', repo.base, '--head', head, '--labels', '[]']).status, 0);
+});
+
+test('end to end: a harness-only change requires an entry or an explicit waiver', (t) => {
+  const repo = makeRepo(t);
+  const head = repo.commit({ 'harnesses/codex.js': 'module.exports = {};\n' }, 'harness');
+  const r = check(repo, ['--base', repo.base, '--head', head, '--labels', '[]']);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /harnesses\/codex\.js/);
+  assert.equal(check(repo, ['--base', repo.base, '--head', head, '--labels', '["no-changelog"]']).status, 0);
 });
 
 test('end to end: an app change with the no-changelog label passes', (t) => {

@@ -67,16 +67,13 @@ test('main.js: a session with no transcript is started, not resumed', () => {
   assert.match(src, /const startsFresh = isNew/, 'launch path must decide start-vs-resume explicitly');
   assert.match(src, /sessionTranscriptExists\(PROJECTS_DIR, sessionId\)/,
     'the decision must be based on the transcript actually existing');
-  assert.match(src, /} else if \(startsFresh\) \{\s*\n\s*claudeArgs\.push\('--session-id'/,
-    'a fresh start must pass --session-id, reusing the id the sidebar shows');
-  // A fork resumes its source by design and must not be diverted.
-  assert.match(src, /sessionOptions\?\.forkFrom\) \{\s*\n\s*claudeArgs\.push\('--resume'/,
-    'forking must still resume its source');
+  assert.match(src, /getHarness\(\)\.buildLaunchArgs\(\{ sessionId, isNew: startsFresh, options: launchOptions \}\)/,
+    'the characterized builder receives the resolved start-vs-resume decision and options');
 });
 
 test('main.js: --worktree is dropped in a non-git directory instead of failing the launch', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  assert.match(src, /sessionOptions\.worktree && !isGitRepo\(spawnCwd\)/,
+  assert.match(src, /sessionOptions\?\.worktree && !isGitRepo\(spawnCwd\)/,
     'the flag must be gated on the spawn directory being a git repo');
   const idx = src.indexOf('!isGitRepo(spawnCwd)');
   const block = src.slice(idx, idx + 600);

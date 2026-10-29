@@ -285,8 +285,9 @@ test('main.js: sandbox defaults to off and wraps the claude command with the asa
   // Additional Directories is parsed once, so the --add-dir args and the
   // sandbox bind list can't disagree about what the user typed.
   assert.match(src, /function parseAddDirs/, 'the shared addDirs parser must exist');
-  assert.equal((src.match(/parseAddDirs\(sessionOptions\.addDirs\)/g) || []).length, 2,
-    'both the --add-dir args and the sandbox bind list must go through parseAddDirs');
+  assert.match(src, /return getHarness\(\)\.parseAddDirs\(value\)/, 'the sandbox uses the adapter shared parser');
+  assert.equal((src.match(/parseAddDirs\(sessionOptions\.addDirs\)/g) || []).length, 1,
+    'the sandbox bind list must use the same parser as the characterized argv builder');
 
   // Scheduled (headless) runs must honor the effective sandbox setting too,
   // not just interactive sessions — they share the wrapper via the helper.
