@@ -7,8 +7,9 @@ const path = require('node:path');
 const cache = require('../session-cache');
 const { subagentSessionId } = require('../read-session-file');
 const { memoryWriter } = require('./fixtures/writer-memory.cjs');
-const { fixture, OLD, HEAD, line } = require('./fixtures/continuation-718.cjs');
+const { fixture, OLD, HEAD, OTHER, line } = require('./fixtures/continuation-718.cjs');
 const openStore = require('./fixtures/conversation-store.cjs');
+const storeOptions = { skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22' };
 
 for (const kind of ['unlinked', 'subagent', 'linked']) {
   for (const targeted of [false, true]) {
@@ -153,7 +154,55 @@ for (const subagent of [false, true]) {
   }
 }
 
-test('writer persists transcript sizes across reopen and upgrades legacy rows without a cache wipe', async t => {
+for (const subagent of [false, true]) {
+  for (const scanFirst of [false, true]) {
+    test(`pinned growth shares the refresh budget: subagent=${subagent}, scanFirst=${scanFirst}`, async t => {
+      const h = fixture(t);
+      const relative = subagent ? path.join(OLD, 'subagents', 'agent-child.jsonl') : OLD + '.jsonl';
+      const second = path.join(h.dir, relative);
+      const id = subagent ? subagentSessionId(OLD, 'child') : OLD;
+      const files = [h.file(OTHER), second];
+      const pinned = new Date('2030-01-01T00:00:00.000Z');
+      for (const file of files) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, line({ type: 'user', cwd: h.root, isSidechain: subagent && file === second,
+          timestamp: '2026-10-19T08:00:00.000Z', message: { content: 'hello' } }));
+        fs.utimesSync(file, pinned, pinned);
+      }
+      const writer = memoryWriter(h.db, cache);
+      await writer.ready;
+      writer.initializeCache({ PROJECTS_DIR: h.root, activeSessions: h.activeSessions, getMainWindow: () => null, log: h.log });
+      await writer.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', relative]) });
+      assert.equal(h.rows.get(id).messageCount, 1);
+      for (const file of files) {
+        const suffix = line({ type: 'assistant', timestamp: '2026-10-19T10:00:00.000Z', message: { content: 'answer' } })
+          + line({ type: 'custom-title', customTitle: 'Shared budget title' });
+        const padding = 600 * 1024 - fs.statSync(file).size - Buffer.byteLength(suffix);
+        fs.appendFileSync(file, ' '.repeat(padding - 1) + '\n' + suffix);
+        fs.utimesSync(file, pinned, pinned);
+      }
+      if (scanFirst) {
+        const changedAt = new Date(pinned.getTime() + 1000);
+        fs.utimesSync(files[0], changedAt, changedAt);
+      }
+      const readFile = fs.readFileSync, fullReads = [];
+      t.mock.method(fs, 'readFileSync', function (file, ...args) {
+        if (files.includes(file)) fullReads.push(file);
+        return readFile.call(this, file, ...args);
+      });
+      await writer.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', relative]) });
+      assert.deepEqual(fullReads, scanFirst ? [] : [files[0]], 'all files share one synchronous byte budget');
+      assert.equal(h.rows.get(OTHER).messageCount, scanFirst ? 1 : 2);
+      assert.equal(h.rows.get(id).messageCount, 1, 'the second row keeps cached counts through the bounded header path');
+      for (const sessionId of [OTHER, id]) {
+        assert.equal(h.rows.get(sessionId).customTitle, 'Shared budget title');
+        assert.equal(h.rows.get(sessionId).fileSize, 600 * 1024);
+      }
+    });
+  }
+}
+
+test('writer persists transcript sizes across reopen and upgrades legacy rows without a cache wipe', storeOptions, async t => {
   let store;
   t.after(() => store?.closeDb());
   const h = fixture(t);
@@ -184,13 +233,9 @@ test('writer persists transcript sizes across reopen and upgrades legacy rows wi
   process.env.SWITCHBOARD_DATA_DIR = path.join(h.root, 'data');
   store = open();
   assert.equal(store.getCachedSession(OLD).fileSize, size, 'size survives reopening');
-  const dbPath = store.DB_PATH;
   store.setName(OLD, 'Keep my name');
+  store.connection.exec('ALTER TABLE session_cache DROP COLUMN fileSize');
   store.closeDb();
-  const { DatabaseSync } = require('node:sqlite');
-  const legacy = new DatabaseSync(dbPath);
-  legacy.exec('ALTER TABLE session_cache DROP COLUMN fileSize');
-  legacy.close();
   process.env.SWITCHBOARD_DATA_DIR = path.join(h.root, 'data');
   store = open();
   assert.equal(store.getCachedSession(OLD).fileSize, null, 'new column starts unknown on existing rows');

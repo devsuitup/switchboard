@@ -550,7 +550,9 @@ function refreshFolder(folder, opts = {}) {
       continue; // unchanged, skip
     }
 
-    if (cachedEntry && !(changedSize && !linked && cachedEntry.fileMtime === fileMtime && fileSize <= CONTINUATION_BYTE_BUDGET)) {
+    const fullReadPinned = changedSize && !linked && cachedEntry.fileMtime === fileMtime && fileSize <= continuationBytesLeft;
+    if (fullReadPinned) continuationBytesLeft = 0;
+    if (cachedEntry && !fullReadPinned) {
       let continuationIndex = cachedEntry.continuationIndex;
       if (validPlan) continuationIndex = plan.serialized;
       else if (opts.preparedContinuations?.has(cachedDbId) && changedLinked) { defer(); continue; }

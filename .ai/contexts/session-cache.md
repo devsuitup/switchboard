@@ -197,10 +197,14 @@ acknowledged. Size alone is not a sidebar notification field. Growth that happen
 before the first size observation cannot be inferred from an unknown size.
 
 For an unlinked or subagent row whose size changes while its mtime stays equal,
-refresh uses the full-read/bridge-merge publication path up to the existing
-continuation byte budget (`CONTINUATION_BYTE_BUDGET`, 1 MiB), updating counts,
-titles, message timestamps for top-level rows, FTS and metrics together. Above
-that total file size, refresh uses the bounded header path and records the size:
+refresh uses the full-read/bridge-merge publication path only when the total file
+size fits the remaining shared per-refresh synchronous continuation byte budget
+(`CONTINUATION_BYTE_BUDGET`, initially 1 MiB), updating counts, titles, message
+timestamps for top-level rows, FTS and metrics together. This full read consumes
+the remaining budget, matching the existing continuation scan reservation. Later
+changed known linked rows defer in full if they cannot reach verified EOF;
+prepared continuations retain their separate budget and targeted retry scope.
+If the file exceeds the remaining budget, refresh uses the bounded header path and records the size:
 counts, FTS body and metrics may remain stale until the next cold full scan,
 while display fields refresh. Subagents retain their existing filesystem
 timestamp semantics. The same cap applies to a size change downward; ordinary
