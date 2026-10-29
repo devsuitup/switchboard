@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const {
   enabledHosts,
   normalizeRefreshMs,
@@ -288,7 +289,13 @@ function createRemoteIndexer(ctx) {
       `${result.removed} removed, ${result.failed} failed, ${toScan.size} folders indexed`);
 
     const toolsChanged = await probeHostTools(host.alias);
-    if (ctx.refreshHeadTurns) await ctx.refreshHeadTurns(host.alias);
+    if (ctx.refreshHeadTurns) {
+      try {
+        await ctx.refreshHeadTurns(host.alias);
+      } catch (err) {
+        log.warn(`[remote:${host.alias}] head-turn refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     return toScan.size > 0 || toolsChanged;
   }
 
@@ -479,4 +486,28 @@ function createRemoteIndexer(ctx) {
   };
 }
 
-module.exports = { createRemoteIndexer, PROBE_INTERVAL_MS, PROBE_RETRY_MS, backoffDelayMs, buildPlaceholderSession, placeholderTitle, sanitizeWaitingFor };
+async function refreshRemoteHeadTurns(ctx, hostAlias) {
+  const rows = [];
+  const liveByHost = new Map();
+  if (hostAlias) {
+    const sessions = ctx.getRemoteSessions(hostAlias).sessions;
+    if (sessions.length === 0) return;
+    liveByHost.set(hostAlias, new Set(sessions.map(d => d.sessionId)));
+  }
+  const meta = ctx.getAllMeta();
+  for (const row of ctx.getAllCached()) {
+    if (row.parentSessionId || meta.get(row.sessionId)?.archived) continue;
+    const folder = row.folder;
+    const { alias } = parseFolderKey(folder);
+    if (!alias || (hostAlias && alias !== hostAlias)) continue;
+    if (!liveByHost.has(alias)) {
+      liveByHost.set(alias, new Set(ctx.getRemoteSessions(alias).sessions.map(d => d.sessionId)));
+    }
+    if (!liveByHost.get(alias).has(row.sessionId)) continue;
+    const dir = ctx.projectsDirForFolder(folder);
+    if (dir) rows.push({ file: path.join(dir, row.sessionId + '.jsonl'), parentSessionId: row.sessionId, turnOnly: true });
+  }
+  if (rows.length) await ctx.readBatch(rows);
+}
+
+module.exports = { createRemoteIndexer, refreshRemoteHeadTurns, PROBE_INTERVAL_MS, PROBE_RETRY_MS, backoffDelayMs, buildPlaceholderSession, placeholderTitle, sanitizeWaitingFor };

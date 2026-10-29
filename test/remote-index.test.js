@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createRemoteIndexer } = require('../remote-index');
+const { createRemoteIndexer, refreshRemoteHeadTurns } = require('../remote-index');
 const { MIN_REFRESH_MS } = require('../remote-hosts');
 
 test('U18/U23: all enabled aliases resolve dynamically while singular lookup stays unchanged', async () => {
@@ -59,6 +59,95 @@ function fakeClock(start = 0) {
   fn.advance = (ms) => { t += ms; };
   return fn;
 }
+
+for (const mode of ['all', 'single']) {
+  for (const asynchronous of [false, true]) {
+    test(`${mode}: a ${asynchronous ? 'rejected' : 'thrown'} head-turn refresh leaves the host healthy`, async t => {
+      const dataDir = tmp('idx-head-turn');
+      const now = fakeClock(1000);
+      const warnings = [];
+      let syncCalls = 0;
+      let headCalls = 0;
+      const descriptor = { sessionId: 'live', pid: 42 };
+      const indexer = createRemoteIndexer({
+        dataDir, now, getHosts: () => [{ alias: 'vps' }],
+        log: { info() {}, warn: message => warnings.push(message) },
+        sync: async () => {
+          syncCalls++;
+          return { fetched: 0, unchanged: 0, removed: 0, failed: 0,
+            changedFolders: new Set(), sessions: [descriptor] };
+        },
+        refreshHeadTurns: alias => {
+          assert.equal(alias, 'vps');
+          headCalls++;
+          const error = new Error('local SQLite read failed');
+          if (asynchronous) return Promise.reject(error);
+          throw error;
+        },
+      });
+      t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+      const refresh = () => mode === 'all' ? indexer.refreshNow() : indexer.refreshHostNow('vps');
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const result = await refresh();
+        assert.deepEqual(mode === 'all' ? result.errors : result.error, mode === 'all' ? [] : null);
+        assert.deepEqual(indexer.getRemoteHostState('vps'), {
+          consecutiveFailures: 0, lastError: null, lastErrorTransport: false, attempts: attempt, nextAttemptAt: 0,
+        });
+        assert.deepEqual(indexer.getRemoteSessions('vps'), { sessions: [descriptor], at: now(), error: null });
+        now.advance(1);
+      }
+      assert.equal(syncCalls, 2, 'the next automatic refresh must not back off');
+      assert.equal(headCalls, 2);
+      assert.equal(warnings.length, 2);
+      assert.match(warnings[0], /\[remote:vps\].*head.turn.*local SQLite read failed/);
+    });
+  }
+}
+
+test('a host without live descriptors does not scan cached sessions or metadata', async () => {
+  const calls = [];
+  await refreshRemoteHeadTurns({
+    getRemoteSessions: alias => { calls.push(alias); return { sessions: [] }; },
+    getAllCached: () => { calls.push('cache'); return []; },
+    getAllMeta: () => { calls.push('meta'); return new Map(); },
+    projectsDirForFolder: () => { calls.push('dir'); },
+    readBatch: async () => { calls.push('batch'); },
+  }, 'idle');
+  assert.deepEqual(calls, ['idle'], 'an idle host must return before either SQLite scan');
+});
+
+test('head-turn batches retain only live remote parent rows and reread archive metadata', async () => {
+  const cached = [
+    { sessionId: 'live', folder: 'vps::-p' },
+    { sessionId: 'child', folder: 'vps::-p', parentSessionId: 'live' },
+    { sessionId: 'archived', folder: 'vps::-p' },
+    { sessionId: 'dead', folder: 'vps::-p' },
+    { sessionId: 'local', folder: '-p' },
+    { sessionId: 'other', folder: 'peer::-p' },
+    { sessionId: 'missing', folder: 'vps::-missing' },
+  ];
+  const meta = new Map([['archived', { archived: true }]]);
+  const batches = [];
+  const ctx = {
+    getAllCached: () => cached, getAllMeta: () => meta,
+    getRemoteSessions: alias => ({ sessions: (alias === 'vps'
+      ? ['live', 'child', 'archived', 'local', 'missing'] : ['other']).map(sessionId => ({ sessionId })) }),
+    projectsDirForFolder: folder => folder.endsWith('missing') ? null : path.join('mirror', folder),
+    readBatch: async rows => batches.push(rows),
+  };
+  await refreshRemoteHeadTurns(ctx, 'vps');
+  assert.deepEqual(batches.pop(), [{
+    file: path.join('mirror', 'vps::-p', 'live.jsonl'), parentSessionId: 'live', turnOnly: true,
+  }]);
+  await refreshRemoteHeadTurns(ctx);
+  assert.deepEqual(batches.pop().map(row => row.parentSessionId), ['live', 'other']);
+  meta.set('live', { archived: true });
+  await refreshRemoteHeadTurns(ctx, 'vps');
+  assert.deepEqual(batches, []);
+  meta.delete('live');
+  await refreshRemoteHeadTurns(ctx, 'vps');
+  assert.equal(batches.pop()[0].parentSessionId, 'live');
+});
 
 test('no host declared: no timer, no transport call, no mirror directory', async () => {
   const dataDir = tmp('idx-none');

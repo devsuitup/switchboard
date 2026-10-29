@@ -226,6 +226,7 @@ test('real cached rows batch only live remote heads, excluding local, archived, 
     const batches = [];
     const hosts = [];
     const context = vm.createContext({ path, ...store, parseFolderKey,
+      refreshRemoteHeadTurnsFromCache: require('./remote-index').refreshRemoteHeadTurns,
       remoteIndexer: { getRemoteSessions: alias => {
         hosts.push(alias);
         return { sessions: (alias === 'dev' ? ['live', 'child', 'archived', 'local'] : ['other']).map(sessionId => ({ sessionId })) };
