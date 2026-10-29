@@ -197,6 +197,11 @@ function clearHeadUnread(sessionId) {
   if (turn?.ready) headTurns.set(sessionId, { ...turn, ready: false });
 }
 
+function markUnread(sessionId) {
+  localPtyState(sessionId).apply({ type: 'markUnread' });
+  applyStateClasses(sessionId, storedActivitySnapshot(sessionId));
+}
+
 function clearUnread(sessionId, via, watermark = writtenActivitySnapshot(sessionId).writtenWatermark) {
   markWrittenActivitySeen(sessionId, watermark);
   clearHeadUnread(sessionId);

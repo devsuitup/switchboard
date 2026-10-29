@@ -186,6 +186,23 @@ The Changes badge is the one place that already meets "never colour alone".
 
 ### 2.3 Other verbs
 
+**Mark as unread** / **Mark as read** is a native sidebar row button targeting
+the conversation's head. It toggles the existing Response ready activity slot
+without a confirmation, persists through sidebar rebuilds in renderer memory,
+and is reachable with Tab through the existing focus-visible action strip.
+
+**Archive all older sessions**, beside `+ N older`, always asks once through
+`appConfirm`. The question names the number of unarchived conversation rows
+(including slug-group members, excluding subagents) and defines older using
+the current visible-item limit and age cutoff. Running targets make the
+question dangerous. Refused rows keep persistent errors while eligible rows
+archive; unreachable hosts keep the archive-without-stop notice. Undo restores
+successful rows and leaves stopped processes stopped.
+
+**Find in messages** belongs to the focused message viewer: Ctrl+F (Cmd+F on
+macOS), a live counter, Previous/Next, Enter/Shift+Enter to wrap, Escape to close
+and return focus to messages. Leaving the viewer clears its search highlights.
+
 | Job | Names in use | Where |
 |---|---|---|
 | Read a transcript | `View messages` | `sidebar.js:1790` |

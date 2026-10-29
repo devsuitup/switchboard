@@ -150,6 +150,12 @@ concept. Each entry gives:
 - **Today**: click opens the transcript; no pin, rename, stop, fork, archive
   or delete (`docs/subagents.md:30-32`).
 
+### Mark as unread / Mark as read
+
+**Mark as unread** / **Mark as read** changes the head's renderer-only
+Response ready state. It is independent of Pin and uses the existing activity
+icon slot; it survives sidebar rebuilding but not an app restart (#819).
+
 ### Pin
 
 - **Definition**: a per-row flag that sorts the row first and keeps it out of
@@ -537,7 +543,7 @@ names its evidence and the surfaces that show it.
 | Word (exact) | Surface | Source | Meaning |
 |---|---|---|---|
 | **Needs your attention** | shared activity icon tooltip and accessible name | OSC 9 notification text, or a remote descriptor dialog | Claude asked for approval / attention (`public/session-state.js`, `ICON_BY_RUNG`; `docs/notifications.md`) |
-| **Response ready** | shared activity icon tooltip and accessible name | working ended while another session was on screen | an unseen result (`public/session-state.js`, `ICON_BY_RUNG`) |
+| **Response ready** | shared activity icon tooltip and accessible name | working ended while another session was on screen, or the user chose Mark as unread | an unseen result or a manual reminder (`public/session-state.js`, `ICON_BY_RUNG`) |
 | **Working** | activity icon tooltip | OSC 0 spinner / OSC 9;4, or shared head-turn evidence | Claude is producing a turn (`public/session-state.js`, `renderSessionIcon`) |
 | **Active** | Agents state and group (⚙️) | job `working` | the job is active; its turn activity is shown separately by the glyph (`public/agents-view.js`, `AGENT_STATE_META`) |
 | **Background work running** | activity icon tooltip | shared task evidence | at the prompt, background tasks still run (`public/session-state.js`, `ICON_BY_RUNG.agentsBusy`) |

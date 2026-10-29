@@ -29,6 +29,16 @@ Surfaces named in the tables:
 
 ## 1. Sidebar row
 
+Update #819: the row gains **Mark as unread** / **Mark as read**, targeting its
+head and using the existing Response ready icon slot. This choice is kept only
+in renderer memory. The older-list header gains **Archive all older sessions**:
+one confirmation states the current visible-item and age rules, then shared
+per-row stop/archive rules apply. Slug groups participate in one locked batch;
+refusals stay visible while other eligible rows archive.
+
+The **View messages** surface gains focused Ctrl+F (Cmd+F on macOS) search,
+literal case-insensitive matching, a counter, Previous/Next and Escape to close.
+
 A row stands for one conversation: an original transcript plus
 `mergedMemberIds`. Its head (`headSessionId`) is its newest-modified part;
 the original part owns the row identity. The conversation is pinned when any

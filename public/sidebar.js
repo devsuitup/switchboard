@@ -51,7 +51,7 @@ function setArchiveBusy(sessionId, busy) {
 function setGroupArchiveBusy(domId, busy) {
   if (busy) archivingGroupIds.add(domId); else archivingGroupIds.delete(domId);
   const el = document.getElementById(domId);
-  const btn = el && el.querySelector('.slug-group-archive-btn, .project-archive-btn');
+  const btn = el && el.querySelector('.slug-group-archive-btn, .project-archive-btn, .sessions-older-archive-btn');
   if (btn) btn.disabled = busy;
 }
 
@@ -118,13 +118,13 @@ function showSessionArchiveUndo(rows, didStop) {
   notice.didStop = didStop;
 }
 
-async function confirmSessionArchivePlan(rows, prepared, ask) {
+async function confirmSessionArchivePlan(rows, prepared, ask, prepare = window.planSessionArchive) {
   while (prepared.ok) {
     const targets = prepared.plans.flatMap(({ plan }) => plan.targets);
     const result = await ask(prepared);
     if (!result) return null;
     if (!result.archiveSessions) return { prepared, result };
-    const latest = await window.planSessionArchive(rows);
+    const latest = await prepare(rows);
     if (!latest.ok) return { prepared: latest, result };
     const added = latest.plans.some(({ plan }) => plan.targets.some(target => !targets.some(confirmed =>
       confirmed.sessionId === target.sessionId && confirmed.alias === target.alias && confirmed.attach === target.attach)));
@@ -134,19 +134,35 @@ async function confirmSessionArchivePlan(rows, prepared, ask) {
   return { prepared };
 }
 
-async function archiveSessionRows(rows) {
-  const confirmed = await confirmSessionArchivePlan(rows, await window.planSessionArchive(rows), async prepared => {
+async function prepareOlderArchive(rows) {
+  const plans = [];
+  for (const session of rows) {
+    try {
+      const prepared = await window.planSessionArchive([session]);
+      if (prepared.ok) plans.push(...prepared.plans);
+      else surfaceStopFailure(null, prepared.error, session);
+    } catch (error) {
+      surfaceStopFailure(null, error.message, session);
+    }
+  }
+  return { ok: true, plans };
+}
+
+async function archiveSessionRows(rows, olderRule) {
+  const prepare = olderRule ? prepareOlderArchive : window.planSessionArchive;
+  const confirmed = await confirmSessionArchivePlan(rows, await prepare(rows), async prepared => {
     const targets = prepared.plans.flatMap(({ plan }) => plan.targets);
-    if (!targets.length) return { archiveSessions: true };
+    if (!targets.length && !olderRule) return { archiveSessions: true };
     const running = targets.filter(target => !target.attach).length;
-    const question = rows.length === 1 ? 'Archive this session?' : `Archive ${rows.length} sessions?`;
+    const question = olderRule ? `Archive ${rows.length} older session${rows.length === 1 ? '' : 's'}?`
+      : rows.length === 1 ? 'Archive this session?' : `Archive ${rows.length} sessions?`;
     if (!await appConfirm({
-      title: question, confirmLabel: 'Archive', danger: true,
-      message: [question, ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
+      title: question, confirmLabel: 'Archive', danger: targets.length > 0,
+      message: [question, ...(olderRule ? [olderRule, 'Refused sessions stay unarchived. Undo restores archived rows; stopped processes stay stopped.'] : []), ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
         ...prepared.plans.filter(({ plan }) => plan.targets.length).map(({ plan }) => plan.confirmText.split('\n').slice(1).join('\n'))].join('\n'),
     })) return null;
     return { archiveSessions: true };
-  });
+  }, prepare);
   if (!confirmed) return;
   const { prepared } = confirmed;
   if (!prepared.ok) {
@@ -1024,7 +1040,17 @@ function renderProjects(projects, resort) {
       const moreBtn = document.createElement('div');
       moreBtn.className = 'sessions-more-toggle js-stateful';
       moreBtn.id = 'older-' + fId;
-      moreBtn.textContent = `+ ${older.length} older`;
+      const moreLabel = document.createElement('button');
+      moreLabel.className = 'sessions-more-label';
+      moreLabel.setAttribute('aria-expanded', 'false');
+      moreLabel.setAttribute('aria-controls', 'older-list-' + fId);
+      const archiveOlderBtn = document.createElement('button');
+      archiveOlderBtn.className = 'sessions-older-archive-btn';
+      archiveOlderBtn.title = 'Archive all older sessions';
+      archiveOlderBtn.setAttribute('aria-label', archiveOlderBtn.title);
+      archiveOlderBtn.innerHTML = ICONS.archive(14);
+      archiveOlderBtn.disabled = archivingGroupIds.has(moreBtn.id);
+      moreBtn.append(moreLabel, archiveOlderBtn);
       const olderList = document.createElement('div');
       olderList.className = 'sessions-older js-stateful';
       olderList.id = 'older-list-' + fId;
@@ -1034,6 +1060,7 @@ function renderProjects(projects, resort) {
         const sid = item.element.dataset && item.element.dataset.sessionId;
         if (sid) appendSubagentChildren(item.element, sid, subagentIndex);
       }
+      moreLabel.textContent = `+ ${olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)').length} older`;
       sessionsList.appendChild(moreBtn);
       sessionsList.appendChild(olderList);
     }
@@ -1319,7 +1346,9 @@ function renderProjects(projects, resort) {
       }
       if (fromEl.classList.contains('sessions-more-toggle') && fromEl.classList.contains('expanded')) {
         toEl.classList.add('expanded');
-        toEl.textContent = '- hide older';
+        const label = toEl.querySelector('.sessions-more-label');
+        label.textContent = '- hide older';
+        label.setAttribute('aria-expanded', 'true');
       }
       if (fromEl.classList.contains('slug-group-older') && fromEl.style.display !== 'none') {
         toEl.style.display = '';
@@ -1775,12 +1804,39 @@ function rebindSidebarEvents(projects) {
   sidebarContent.querySelectorAll('.sessions-more-toggle').forEach(moreBtn => {
     const olderList = moreBtn.nextElementSibling;
     if (!olderList || !olderList.classList.contains('sessions-older')) return;
-    const count = olderList.children.length;
-    moreBtn.onclick = () => {
+    const count = olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)').length;
+    const label = moreBtn.querySelector('.sessions-more-label');
+    moreBtn.onclick = (event) => {
+      if (event.target.closest('.sessions-older-archive-btn')) return;
       const showing = olderList.style.display !== 'none';
       olderList.style.display = showing ? 'none' : '';
       moreBtn.classList.toggle('expanded', !showing);
-      moreBtn.textContent = showing ? `+ ${count} older` : '- hide older';
+      label.textContent = showing ? `+ ${count} older` : '- hide older';
+      label.setAttribute('aria-expanded', String(!showing));
+    };
+    const archiveBtn = moreBtn.querySelector('.sessions-older-archive-btn');
+    archiveBtn.onclick = async event => {
+      event.stopPropagation();
+      if (archivingGroupIds.has(moreBtn.id)) return;
+      const rows = [...olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)')]
+        .map(item => sessionMap.get(item.dataset.sessionId)).filter(session => session && !session.archived);
+      if (!rows.length) return;
+      const groupIds = [moreBtn.id, ...[...olderList.querySelectorAll('.slug-group')].map(group => group.id)];
+      if (groupIds.some(id => archivingGroupIds.has(id)) || rows.some(row => archivingSessionIds.has(row.sessionId))) {
+        showSessionActionFailure('Archive', rows[0], 'An archive is still in progress', 'Try again when it finishes.');
+        return;
+      }
+      for (const id of groupIds) setGroupArchiveBusy(id, true);
+      for (const row of rows) setArchiveBusy(row.sessionId, true);
+      const rule = `Older means rows or slug groups outside the first ${visibleSessionCount} visible items, or last modified more than ${sessionMaxAgeDays} days ago. Pinned sessions, sessions open here and sessions waiting to restore stay visible.`;
+      try {
+        await archiveSessionRows(rows, rule);
+      } catch (error) {
+        for (const row of rows.filter(row => !row.archived)) surfaceStopFailure(null, error.message, row);
+      } finally {
+        for (const row of rows) setArchiveBusy(row.sessionId, false);
+        for (const id of groupIds) setGroupArchiveBusy(id, false);
+      }
     };
   });
 
@@ -1902,6 +1958,14 @@ function rebindSidebarEvents(projects) {
         showJsonlViewer(rowHeadSession(session));
       };
     }
+
+    const unreadBtn = item.querySelector('.session-unread-btn');
+    if (unreadBtn) unreadBtn.onclick = event => {
+      event.stopPropagation();
+      const head = rowHeadId(session);
+      if (storedActivitySnapshot(head, session).responseReady) clearUnread(head, 'markRead');
+      else markUnread(head);
+    };
 
     const deleteBtn = item.querySelector('.session-delete-btn');
     if (deleteBtn) {
@@ -2378,6 +2442,12 @@ function buildSessionItem(session) {
   jsonlBtn.title = 'View messages';
   jsonlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>';
 
+  const unreadBtn = document.createElement('button');
+  unreadBtn.className = 'session-unread-btn';
+  unreadBtn.title = snapshot.responseReady ? 'Mark as read' : 'Mark as unread';
+  unreadBtn.setAttribute('aria-label', unreadBtn.title);
+  unreadBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 5 9 7 9-7"/></svg>';
+
   const bridgeBtn = document.createElement('button');
   bridgeBtn.className = 'session-bridge-btn';
   bridgeBtn.title = 'Open on claude.ai';
@@ -2400,6 +2470,7 @@ function buildSessionItem(session) {
     actions.appendChild(forkBtn);
     // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
     if (!session.placeholder) actions.appendChild(jsonlBtn);
+    actions.appendChild(unreadBtn);
     if (bridgeSessionUrl(session.bridgeSessionId)) actions.appendChild(bridgeBtn);
     actions.appendChild(archiveBtn);
     actions.appendChild(launchConfigBtn);

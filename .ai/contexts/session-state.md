@@ -45,6 +45,36 @@ tracing at runtime. No trace event is sent while tracing is disabled.
 Performance measurements are in the issue #543 report;
 jsdom timings do not establish Electron performance on a real session cache.
 
+## Manual unread and older-session Archive (#819)
+
+The native row button toggles **Mark as unread** / **Mark as read** on the
+conversation's head. `markUnread` is a reducer event: it sets `responseReady`
+and `manualUnread`, without changing liveness or recorded turn evidence.
+The head projection includes the local adapter's manual flag even when a
+transcript or remote adapter supplies its other facts. Reading clears it;
+fresh busy/attention events and a new open head clear it through the reducer. It uses the existing
+Response ready slot, stays in renderer memory, and survives sidebar rebuilds
+but not renderer reloads. The button is a normal Tab stop and uses the existing
+focus-visible action strip (#574).
+
+**Archive all older sessions** sits beside the keyboard-operable older-list
+toggle. Its count includes unarchived conversation rows inside slug groups,
+excluding subagent rows. It captures the currently rendered older rows and
+always asks through `appConfirm`, naming their count and the current visible
+item/age settings. Pinned, open-here and dormant rows/groups remain outside
+older. Filters that show every item have no older action.
+
+The older batch locks its toggle id, every nested slug group through
+`archivingGroupIds`, and every row through `archivingSessionIds`, including
+during confirmation and sidebar reconstruction. It shares the archive
+confirmation recheck, stop-before-persist, refusal wording, remote
+archive-without-stop notices, per-row persistence errors and Undo. Its
+preparation checks rows individually so a refused background job leaves its
+persistent failure notice while other rows can still archive. Folder and
+ordinary slug-group preparation retain their existing all-or-nothing preflight.
+
+Evidence: `test/sidebar-features-819.test.js`.
+
 ## Persistent row action failures (#566)
 
 Stop/Detach, Delete and Archive use `showSessionActionFailure` in

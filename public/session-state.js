@@ -23,6 +23,7 @@ function createSessionState(kind) {
   let attention = false;
   let attentionFromDescriptor = false;
   let responseReady = false;
+  let manualUnread = false;
   let agentsBusy = false;
   let lastActivityAt = null;
   let lastActivitySource = null;
@@ -43,6 +44,7 @@ function createSessionState(kind) {
     busy = false;
     waitingForInput = false;
     responseReady = false;
+    manualUnread = false;
   }
 
   function releaseDescriptorAttention() {
@@ -98,8 +100,13 @@ function createSessionState(kind) {
       case 'releaseDescriptorAttention':
         releaseDescriptorAttention();
         break;
+      case 'markUnread':
+        responseReady = true;
+        manualUnread = true;
+        break;
       case 'clearUnread':
         responseReady = false;
+        manualUnread = false;
         break;
       case 'turnEndForgotten':
         waitingForInput = false;
@@ -171,6 +178,7 @@ function createSessionState(kind) {
       waitingForInput,
       attention,
       responseReady,
+      manualUnread,
       agentsBusy,
       lastActivityAt,
       lastActivitySource,
