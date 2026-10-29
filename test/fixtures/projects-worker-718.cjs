@@ -4,7 +4,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 
-function projectsWorker(h, { onMessage = () => {}, onYield = callback => setImmediate(callback), beforeSnapshot = () => {} } = {}) {
+function projectsWorker(h, { onMessage = () => {}, onYield = callback => setImmediate(callback), beforeSnapshot = () => {}, log = console } = {}) {
   const filename = path.join(__dirname, '../../workers/projects-query.js'), root = path.resolve(__dirname, '../..');
   const modules = new Map(), replies = [];
   let handle;
@@ -23,7 +23,7 @@ function projectsWorker(h, { onMessage = () => {}, onYield = callback => setImme
   const parentPort = { on: (_event, callback) => { handle = callback; }, postMessage: value => {
     const copy = structuredClone(value); replies.push(copy); onMessage(copy);
   } };
-  const context = vm.createContext({ console, process, Buffer, setTimeout, clearTimeout, setInterval, clearInterval, setImmediate: onYield, structuredClone, Map, Set });
+  const globals = { console: log, process, Buffer, setTimeout, clearTimeout, setInterval, clearInterval, setImmediate: onYield, structuredClone, Map, Set };
   function load(file) {
     if (modules.has(file)) return modules.get(file).exports;
     const module = { exports: {} }; modules.set(file, module);
@@ -35,9 +35,8 @@ function projectsWorker(h, { onMessage = () => {}, onYield = callback => setImme
       if (!resolved.startsWith(root + path.sep) || resolved.includes(path.sep + 'node_modules' + path.sep) || !resolved.endsWith('.js')) return local(name);
       return load(resolved);
     };
-    const wrapper = vm.compileFunction(fs.readFileSync(file, 'utf8'), ['require', 'module', 'exports', '__filename', '__dirname'],
-      { parsingContext: context, filename: file });
-    wrapper(requireModule, module, module.exports, file, path.dirname(file));
+    vm.runInNewContext(fs.readFileSync(file, 'utf8'),
+      { ...globals, require: requireModule, module, exports: module.exports, __filename: file, __dirname: path.dirname(file) }, { filename: file });
     return module.exports;
   }
   load(filename);

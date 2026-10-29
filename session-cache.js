@@ -564,11 +564,6 @@ function refreshFolder(folder, opts = {}) {
         && continuationIndex === cachedEntry.continuationIndex) { collector.accounted.add(relativeFile); continue; }
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId, workflowRunId });
-      if (linked) {
-        let after;
-        try { after = fs.statSync(filePath, { bigint: true }); } catch { defer(); continue; }
-        if (!sameContinuationStamp(stat, after)) { defer(); continue; }
-      }
       collector.accounted.add(relativeFile);
       if (linked) linkedVersions.set(cachedDbId, { stat, filePath, relativeFile });
       if (h) {

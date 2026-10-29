@@ -68,16 +68,28 @@ test('D1 no recorder scope spans any yielded preparation', { timeout: 9000 }, as
   await writer.refreshFolder(h.folder); assert.equal(checked, 1);
 });
 
-for (const zero of [false, true]) test('D2 shipped readonly worker awaits cold preparation and progress, zero marker=' + zero, { timeout: 9000 }, async t => {
-  const h = fixture(t); h.write(OLD, h.padding + h.link()); h.write(OTHER); cache.refreshFolder(h.folder); h.init();
+for (const zero of [false, true]) test('D2 shipped readonly worker awaits cold preparation and progress, zero marker=' + zero, { timeout: 120000 }, async t => {
+  const h = fixture(t); h.write(OLD, h.link()); h.write(OTHER); cache.refreshFolder(h.folder); h.init();
   h.append(OLD, h.padding); h.append(OTHER);
   if (zero) h.folders.get(h.folder).indexMtimeMs = 0;
   else {
     const changedAt = new Date(h.folders.get(h.folder).indexMtimeMs + 1000);
     fs.utimesSync(h.file(OLD), changedAt, changedAt);
   }
-  const worker = projectsWorker(h);
-  await worker.handle({ id: 71, reconcile: true, localDescriptors: h.descriptors });
+  const entered = barrier(), gate = barrier();
+  let yields = 0;
+  const worker = projectsWorker(h, { onYield: callback => {
+    if (++yields === 1) { entered.resolve(); gate.promise.then(callback); }
+    else setImmediate(callback);
+  } });
+  t.after(() => gate.resolve());
+  const pending = worker.handle({ id: 71, reconcile: true, localDescriptors: h.descriptors });
+  try {
+    await Promise.race([entered.promise, pending]);
+    assert.equal(yields, 1, 'cold preparation must reach its first chunk yield');
+    assert.equal(worker.replies.length, 0, 'neither progress nor result may escape the held preparation');
+  } finally { gate.resolve(); await pending; }
+  assert.ok(yields > 1, 'the changed suffix crosses the ordinary scan budget');
   const final = worker.replies.find(r => r.result);
   assert.equal(final.id, 71); assert.ok(worker.replies.some(r => r.progress));
   for (const view of [final.result.defaultProjects, final.result.allProjects]) {
@@ -97,6 +109,31 @@ test('D2 asynchronous build error keeps request id and next request succeeds', {
   assert.deepEqual(worker.replies, [{ id: 72, error: 'snapshot gone' }]); fail = false;
   await worker.handle({ id: 73, reconcile: true });
   assert.ok(worker.replies.some(r => r.id === 73 && r.result));
+});
+
+test('D2 ENOENT after a scan yield replies and admits the next readonly build', { timeout: 120000 }, async t => {
+  const h = fixture(t); h.write(OLD, h.link()); h.write(OTHER); cache.refreshFolder(h.folder); h.init();
+  h.append(OLD, h.padding); h.folders.get(h.folder).indexMtimeMs = 0;
+  let yields = 0;
+  const worker = projectsWorker(h, { log: h.log, onYield: callback => {
+    if (++yields === 1) fs.unlinkSync(h.file(OLD));
+    setImmediate(callback);
+  } });
+  await worker.handle({ id: 75, reconcile: true, localDescriptors: h.descriptors });
+  assert.equal(yields, 1, 'a missing transcript does not restart a yielded scan indefinitely');
+  assert.ok(h.logs.some(([level, message, error]) => level === 'warn'
+    && message.includes('continuation read failed') && error.code === 'ENOENT'));
+  assert.ok(worker.replies.some(reply => reply.id === 75 && reply.progress));
+  assert.ok(worker.replies.some(reply => reply.id === 75 && reply.result));
+  assert.equal(worker.replies.some(reply => reply.error), false);
+  const effects = worker.replies.flatMap(reply => (reply.progress || reply.result).effects);
+  assert.equal(effects.some(effect => effect.name === 'upsertCachedSessions'
+    && effect.args[0].some(row => row.sessionId === OLD)), false, 'no stale source row is published');
+  h.write(OLD, h.link()); h.append(OLD, h.padding);
+  await worker.handle({ id: 76, reconcile: true, localDescriptors: h.descriptors });
+  const final = worker.replies.find(reply => reply.id === 76 && reply.result);
+  assert.ok(final, 'the next request completes after the ENOENT');
+  assert.equal(final.result.defaultProjects.flatMap(project => project.sessions).some(row => row.sessionId === HEAD), true);
 });
 
 test('D3 actual client serializes VM worker requests paused at scan yield and resets after error', { timeout: 9000 }, async t => {
