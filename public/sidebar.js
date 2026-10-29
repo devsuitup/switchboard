@@ -770,7 +770,64 @@ function buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleSc
   return group;
 }
 
+let sidebarRenderKey = null;
+let sidebarRenderPayload = null;
+let sidebarRenderAllProjects = null;
+let sidebarRenderDirty = true;
+const sidebarRenderObserver = new MutationObserver(() => { sidebarRenderDirty = true; });
+sidebarRenderObserver.observe(sidebarContent, { subtree: true, childList: true, attributes: true, characterData: true });
+
+function sidebarRenderInputs(projects) {
+  const now = Date.now();
+  const storageEntries = Object.keys(localStorage)
+    .filter(key => key === 'expandedSubagents' || key === 'expandedSubagentRest' || key.startsWith('orphanExpanded:'))
+    .sort().map(key => [key, localStorage.getItem(key)]);
+  const activity = projects.map(project => project.sessions.map(session => {
+    const ids = [...new Set([...rowSessionIds(session), rowHeadId(session)])];
+    const snapshot = mergedRowSnapshot(rowSessionIds(session), session.sessionId,
+      storedActivitySnapshot(session.sessionId, session), session);
+    const remoteAttention = !session.parentSessionId && ids.map(remoteAttentionSnapshot).find(Boolean);
+    const label = typeof backgroundActivityLabel === 'function' ? backgroundActivityLabel(rowHeadId(session), snapshot, session)
+      : session.bgJobId ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null;
+    const descriptor = localSessionForStatus(rowHeadId(session), session);
+    return [renderSessionIcon(remoteAttention || snapshot),
+    !!snapshot.attention || !!remoteAttention, !!snapshot.responseReady, !!snapshot.unseenWrittenActivity,
+    !!snapshot.busy, snapshot.liveness === 'alive' || !!(session.remoteAlias && isRemoteSessionAlive(session)),
+    ids.some(parentHasActiveSubagent), ids.some(isDormantSession),
+    typeof bgAgentSessionIds !== 'undefined' && ids.some(id => bgAgentSessionIds.has(String(id).toLowerCase())),
+    session.parentSessionId ? [attentionSessions.has(session.sessionId), responseReadySessions.has(session.sessionId),
+      !!sessionBusyState.get(session.sessionId)] : rowLifecycleLabel(session.sessionId, remoteAttention || snapshot, session),
+    isSubagentActive(session.parentSessionId, session.agentId),
+    window.taskRegistry?.runningAgentCount(rowSessionIds(session)) || 0,
+    planSessionDetach(session).targets.length > 0,
+    label && [label.title, label.text],
+    descriptor && [descriptor.status, descriptor.waitingFor],
+    new Date(session.modified).getTime() >= now - sessionMaxAgeDays * 86400000];
+  }));
+  return [activity, renderProjects.hiddenSettings, activeSessionId, [...activePtyIds], [...pendingSessions.keys()],
+    sortedOrder, searchMatchIds && [...searchMatchIds], searchMatchProjectPaths && [...searchMatchProjectPaths],
+    showStarredOnly, showRunningOnly, showTodayOnly, visibleSessionCount, sessionMaxAgeDays,
+    typeof showArchived !== 'undefined' && showArchived,
+    typeof searchInput !== 'undefined' ? searchInput.value : '',
+    [...getExpandedSlugs()], storageEntries,
+    projects.map(project => remoteHostLabel(project.remoteAlias)),
+    [...archivingSessionIds], [...archivingGroupIds],
+    Math.floor(now / 30000), new Date(now).toDateString()];
+}
+
+renderProjects.unchanged = projects => {
+  if (sidebarRenderPayload !== JSON.stringify(projects)) return false;
+  if (sidebarRenderAllProjects !== JSON.stringify(cachedAllProjects)) return false;
+  if (sidebarRenderObserver.takeRecords().length) sidebarRenderDirty = true;
+  return !sidebarRenderDirty && sidebarRenderKey === JSON.stringify(sidebarRenderInputs(projects));
+};
+
 function renderProjects(projects, resort) {
+  const inputProjects = projects;
+  sidebarRenderKey = null;
+  sidebarRenderPayload = null;
+  sidebarRenderAllProjects = null;
+  sidebarRenderDirty = true;
   pruneStaleSubagents();
   pendingSubagentRest.clear();
   const legacyScheduleScopes = new Map();
@@ -1290,6 +1347,11 @@ function renderProjects(projects, resort) {
   if (activeSessionId && openSessions.has(activeSessionId) && !isUserTyping) {
     openSessions.get(activeSessionId).terminal.focus();
   }
+  sidebarRenderKey = JSON.stringify(sidebarRenderInputs(inputProjects));
+  sidebarRenderPayload = JSON.stringify(inputProjects);
+  sidebarRenderAllProjects = JSON.stringify(cachedAllProjects);
+  sidebarRenderObserver.takeRecords();
+  sidebarRenderDirty = false;
 }
 
 // see .ai/contexts/session-cache.md ("Archived projects", re-enable offers)
@@ -2211,9 +2273,6 @@ function buildSessionItem(session) {
   summaryEl.className = 'session-summary';
   summaryEl.textContent = displayName;
 
-  // Compact meta line: time + msgs on the left, first UUID segment on the right
-  // (replaces the full-width session-id line). The 30s label ticker in app.js
-  // updates .session-time only, so it must stay its own span.
   const metaEl = document.createElement('div');
   metaEl.className = 'session-meta';
   const timeEl = document.createElement('span');

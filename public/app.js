@@ -1114,7 +1114,8 @@ window.api.onCliBusyState((sessionId, busy) => {
 // --- Single entry point for all sidebar renders ---
 // resort=true: re-sort items by priority+time (use for user-initiated actions)
 // resort=false (default): preserve existing DOM order, new items go to top
-function refreshSidebar({ resort = false } = {}) {
+function refreshSidebar({ resort = false, skipUnchanged = false, hiddenSettings } = {}) {
+  if (hiddenSettings) renderProjects.hiddenSettings = hiddenSettings;
   // When searching, always use all projects (search ignores archive filter)
   let projects = (searchMatchIds !== null)
     ? cachedAllProjects
@@ -1133,7 +1134,12 @@ function refreshSidebar({ resort = false } = {}) {
     }).filter(Boolean);
   }
 
-  renderProjects(projects, resort);
+  const skipped = !!(skipUnchanged && !resort && renderProjects.unchanged?.(projects));
+  if (!skipped) renderProjects(projects, resort);
+  const counters = refreshSidebar.counters ||= { renders: 0, skips: 0 };
+  if (skipped) counters.skips++;
+  else counters.renders++;
+  if (window.ATRACE) window.atrace('sidebar.refresh', null, { skipped, ...counters });
   pruneRemoteActivityTimers();
   pruneLocalTranscriptTimers();
 }
@@ -2096,13 +2102,23 @@ scheduleActiveSessionsPoll();
 // Refresh sidebar timeago labels every 30s so "just now" ticks forward
 setInterval(() => {
   for (const [sessionId, session] of sessionMap) {
-    if (!session.modified) continue;
     const item = document.getElementById('si-' + sessionId);
     if (!item) continue;
     const timeEl = item.querySelector('.session-time');
-    if (!timeEl) continue;
-    const msgSuffix = session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '';
-    timeEl.textContent = formatDate(new Date(session.modified)) + msgSuffix;
+    if (timeEl && session.modified) {
+      const msgSuffix = session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '';
+      timeEl.textContent = formatDate(new Date(session.modified)) + msgSuffix;
+    }
+    const status = item.querySelector('.session-status');
+    if (!status) continue;
+    const snapshot = mergedRowSnapshot(rowSessionIds(session), sessionId, storedActivitySnapshot(sessionId, session), session);
+    const label = typeof backgroundActivityLabel === 'function' ? backgroundActivityLabel(rowHeadId(session), snapshot, session)
+      : session.bgJobId ? { text: 'Activity unavailable' } : null;
+    const descriptor = localSessionForStatus(rowHeadId(session), session);
+    const age = formatStatusAge(descriptor?.statusUpdatedAt);
+    const why = descriptor?.status === 'waiting' ? descriptor.waitingFor : '';
+    const text = label ? label.text : descriptor?.status ? [why, age].filter(Boolean).join(' · ') : '';
+    if (status.textContent !== text) status.textContent = text;
   }
 }, 30000);
 
@@ -2259,7 +2275,8 @@ async function loadProjects({ resort = false } = {}) {
       scheduleActiveSessionsPoll();
     }
     if (typeof observeSessionProjection === 'function') observeSessionProjection({ generation: job.generation, cause: 'projects', provenance: response.projection });
-    refreshSidebar({ resort: job.resort });
+    refreshSidebar({ resort: job.resort, skipUnchanged: true,
+      hiddenSettings: [globalSettings?.hiddenProjects, globalSettings?.hiddenProjectKinds] });
     renderDefaultStatus();
     return state.outcome;
   };

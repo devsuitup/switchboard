@@ -131,6 +131,7 @@ function setupDom({ readSubagentJsonlResult = { entries: SAMPLE_ENTRIES }, readS
     forkSession: () => {},
     loadProjects: () => {},
     launchScheduleCreator: () => {},
+    getExpandedSlugs: () => new Set(),
     setActiveSession: () => {},
     // hideAllViewers is defined in memory-workfiles-view.js in the real app; stub it here.
     hideAllViewers: () => {},
