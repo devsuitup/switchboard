@@ -108,6 +108,68 @@ for (const failure of ['metadata', 'cache-once', 'cache-persistent']) {
   });
 }
 
+test('get-task-snapshots skips failing child cache rows, warns once per call and returns all available snapshots', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'main-tasks-885-'));
+  const ids = [fixture.parentSessionId, '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'];
+  const retained = '44444444-4444-4444-8444-444444444444';
+  for (const id of [...ids, retained]) {
+    fs.writeFileSync(path.join(dir, `${id}.jsonl`), [fixture.use, fixture.launch].map(e => JSON.stringify(e) + '\n').join(''));
+  }
+  const synchronousUse = structuredClone(fixture.use);
+  synchronousUse.message.content[0].input.run_in_background = false;
+  fs.writeFileSync(path.join(dir, `${ids[2]}.jsonl`), JSON.stringify(synchronousUse) + '\n');
+  const childrenDir = path.join(dir, ids[2], 'subagents');
+  fs.mkdirSync(childrenDir, { recursive: true });
+  fs.writeFileSync(path.join(childrenDir, `agent-${fixture.agentId}.meta.json`), JSON.stringify(fixture.childMeta));
+  const warnings = [];
+  const childReads = [];
+  let failing = true;
+  let handler;
+  const ctx = vm.createContext({
+    require: name => name === './task-records-client' ? require('../task-records-client') : null,
+    refreshRemoteHeadTurnsFromCache: require('../remote-index').refreshRemoteHeadTurns,
+    path, resolveJsonlPath: require('../read-session-file').resolveJsonlPath, mainWindow: null, log: { warn: message => warnings.push(message) },
+    ipcMain: { handle: (channel, callback) => { assert.equal(channel, 'get-task-snapshots'); handler = callback; } },
+    cliSessionState: { getSidebarDescriptors: () => ids.map(sessionId => ({ sessionId })), readAllDescriptors: () => [] },
+    activeSessions: new Map(), bgAgents: { getSnapshot: () => ({ roster: [] }) },
+    getAllCached: () => ids.map(sessionId => ({ sessionId, folder: 'folder' })),
+    getAllMeta: () => new Map(), parseFolderKey,
+    remoteIndexer: { getRemoteSessions: () => ({ sessions: [] }) },
+    projectsDirForFolder: () => dir,
+    getCachedByParent: id => {
+      childReads.push(id);
+      if (failing && id !== ids[2]) throw new Error(`child cache unavailable for ${id}`);
+      return id === ids[2] ? [{ agentId: fixture.agentId, parentSessionId: id }] : [];
+    },
+  });
+  const start = source.indexOf("const { createTaskRecordsClient } = require('./task-records-client');");
+  const end = source.indexOf('const sessionTransitions =', start);
+  assert.ok(start >= 0 && end > start);
+  vm.runInContext(source.slice(start, end), ctx, {
+    filename: path.join(__dirname, '../main.js'), lineOffset: source.slice(0, start).split('\n').length - 1,
+  });
+  const client = vm.runInContext('taskRecords', ctx);
+  t.after(async () => { await client.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  await client.read(path.join(dir, `${retained}.jsonl`), retained);
+  for (let call = 1; call <= 2; call++) {
+    let snapshots;
+    await assert.doesNotReject(async () => { snapshots = await handler(); }, 'a per-row child cache failure must not reject the IPC call');
+    assert.deepEqual(snapshots.map(s => s.parentSessionId).sort(), [...ids, retained].sort());
+    for (const snapshot of snapshots) {
+      assert.equal(snapshot.tasks.length, 1, 'initial task pills and existing worker tasks remain available');
+      assert.equal(snapshot.headTurn.state, 'open', 'initial head-turn spinner evidence remains available');
+    }
+    assert.equal(snapshots.find(s => s.parentSessionId === ids[2]).tasks[0].id, fixture.agentId,
+      'a readable later row still correlates child metadata through the real worker');
+    assert.deepEqual(childReads.slice((call - 1) * ids.length), ids, 'later rows are still visited');
+    assert.equal(warnings.length, call, 'multiple failing rows warn only once per IPC call');
+    assert.match(warnings.at(-1), /\[task-records\].*child.*cache.*child cache unavailable/);
+  }
+  failing = false;
+  await handler();
+  assert.equal(warnings.length, 2, 'recovered child reads do not warn');
+});
+
 test('status changes notify task liveness only for a changed owner identity', () => {
   const start = source.indexOf('cliSessionState.onStatusesChanged(');
   const end = source.indexOf('\n});', start) + '\n});'.length;

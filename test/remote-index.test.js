@@ -147,6 +147,77 @@ for (const method of ['refreshNow', 'refreshHostNow']) {
   });
 }
 
+for (const method of ['refreshNow', 'refreshHostNow']) {
+  for (const identity of ['code', 'name']) {
+    test(`${method}: head-turn warnings deduplicate alternating normalised messages by error ${identity}`, async t => {
+      const dataDir = tmp('idx-head-turn-dedup');
+      const warnings = [];
+      let error;
+      const indexer = createRemoteIndexer({
+        dataDir, getHosts: () => [{ alias: 'vps' }],
+        log: { info() {}, warn: message => warnings.push(message) },
+        sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+        refreshHeadTurns: async () => { throw error; },
+      });
+      t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+      const refresh = () => method === 'refreshNow' ? indexer.refreshNow() : indexer.refreshHostNow('vps');
+      const messages = [
+        'read 12 failed at "/tmp/cache alpha/session-123.jsonl"',
+        'read 34 failed at "C:\\Temp\\cache beta\\session-456.jsonl"',
+        'read 12 failed at "/tmp/cache alpha/session-123.jsonl"',
+        'read 56 failed at \\\\server\\cache\\session-789.jsonl',
+      ];
+      for (const message of messages) {
+        error = Object.assign(new Error(message), { [identity]: 'SQLITE_BUSY' });
+        if (identity === 'code') error.name = `VariableError${warnings.length}`;
+        await refresh();
+      }
+      assert.equal(warnings.length, 1, 'A, B, A and variable digits/absolute paths of the same failure warn once');
+      assert.ok(warnings[0].endsWith(messages[0]), 'the warning retains the original diagnostic');
+      error = Object.assign(new Error(messages[0]), { [identity]: 'SQLITE_IOERR' });
+      await refresh();
+      assert.equal(warnings.length, 2, 'a different error code/name warns again even with the same message');
+      error = Object.assign(new Error(messages[0]), { [identity]: 'SQLITE_BUSY' });
+      await refresh();
+      assert.equal(warnings.length, 2, 'alternating failure identities retain their own dedup entries');
+      error = Object.assign(new Error('cache schema unavailable'), { [identity]: 'SQLITE_BUSY' });
+      await refresh();
+      assert.equal(warnings.length, 3, 'a distinct normalised message with the same code/name warns once');
+      error = Object.assign(new Error(messages[0]), { [identity]: 'SQLITE_BUSY' });
+      await refresh();
+      assert.equal(warnings.length, 3, 'returning to an earlier message does not warn again');
+    });
+  }
+}
+
+for (const remaining of [[], [{ alias: 'peer' }]]) {
+  test(`restart prunes head-turn dedup for a removed alias with ${remaining.length} remaining hosts`, async t => {
+    const dataDir = tmp('idx-head-turn-prune');
+    const warnings = [];
+    let hosts = [{ alias: 'vps' }];
+    const indexer = createRemoteIndexer({
+      dataDir, getHosts: () => hosts, timers: fakeTimers(),
+      listIndexedFolderKeys: () => [], dropFolder: async () => {},
+      log: { info() {}, warn: message => warnings.push(message) },
+      sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+      refreshHeadTurns: async alias => { if (alias === 'vps') throw Object.assign(new Error('cache unavailable'), { code: 'SQLITE_BUSY' }); },
+    });
+    t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+    await indexer.refreshHostNow('vps');
+    await indexer.refreshHostNow('vps');
+    assert.equal(warnings.length, 1);
+    hosts = remaining;
+    indexer.restart();
+    await indexer.refreshNow();
+    assert.equal(warnings.length, 1, 'removing an alias does not manufacture a warning');
+    hosts = [{ alias: 'vps' }];
+    indexer.restart();
+    await new Promise(resolve => setImmediate(resolve));
+    await indexer.refreshHostNow('vps');
+    assert.equal(warnings.length, 2, 'the same failure warns again when the removed host is re-added');
+  });
+}
+
 test('a host without live descriptors does not scan cached sessions or metadata', async () => {
   const calls = [];
   await refreshRemoteHeadTurns({

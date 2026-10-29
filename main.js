@@ -3387,13 +3387,24 @@ ipcMain.handle('get-task-snapshots', async () => {
   } catch (err) {
     log.warn(`[task-records] local snapshot cache read failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+  let childCacheWarned = false;
   for (const row of cached) {
     if (row.parentSessionId || !live.has(row.sessionId)) continue;
     const folder = row.folder;
     const dir = folder && !parseFolderKey(folder).alias && projectsDirForFolder(folder);
     if (dir) {
       await taskRecords.read(path.join(dir, row.sessionId + '.jsonl'), row.sessionId);
-      for (const child of getCachedByParent(row.sessionId)) {
+      let children;
+      try {
+        children = getCachedByParent(row.sessionId);
+      } catch (err) {
+        if (!childCacheWarned) {
+          log.warn(`[task-records] child snapshot cache read failed: ${err instanceof Error ? err.message : String(err)}`);
+          childCacheWarned = true;
+        }
+        continue;
+      }
+      for (const child of children) {
         if (child.agentId) await taskRecords.child(resolveJsonlPath(dir, { ...child, folder: '.' }), row.sessionId, child.agentId);
       }
     }
