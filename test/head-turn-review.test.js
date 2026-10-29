@@ -235,7 +235,11 @@ test('real cached rows batch only live remote heads, excluding local, archived, 
       taskRecords: { readBatch: async rows => batches.push(Array.from(rows, r => ({ ...r }))) },
     });
     const source = fs.readFileSync('./main.js', 'utf8');
-    vm.runInContext(extractFunction(source, 'refreshRemoteHeadTurns'), context);
+    const slice = extractFunction(source, 'refreshRemoteHeadTurns');
+    vm.runInContext(slice, context, {
+      filename: path.resolve('./main.js'),
+      lineOffset: source.slice(0, source.indexOf(slice)).split('\\n').length - 1,
+    });
     (async () => {
       try {
         await context.refreshRemoteHeadTurns('dev');

@@ -56,6 +56,58 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
   assert.equal(renderer.agents(next).length, 0);
 });
 
+for (const failure of ['metadata', 'cache-once', 'cache-persistent']) {
+  test(`get-task-snapshots retains worker snapshots and reads available local tasks after ${failure} failure`, async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'main-tasks-873-'));
+    const id = fixture.parentSessionId;
+    fs.writeFileSync(path.join(dir, `${id}.jsonl`), [fixture.use, fixture.launch].map(e => JSON.stringify(e) + '\n').join(''));
+    const warnings = [];
+    let handler;
+    let failing = false;
+    let failedOnce = false;
+    const ctx = vm.createContext({
+      require: name => name === './task-records-client' ? require('../task-records-client') : null,
+      refreshRemoteHeadTurnsFromCache: require('../remote-index').refreshRemoteHeadTurns,
+      path, mainWindow: null, log: { warn: message => warnings.push(message) },
+      ipcMain: { handle: (channel, callback) => { assert.equal(channel, 'get-task-snapshots'); handler = callback; } },
+      cliSessionState: { getSidebarDescriptors: () => [{ sessionId: id }], readAllDescriptors: () => [] },
+      activeSessions: new Map(), bgAgents: { getSnapshot: () => ({ roster: [] }) },
+      getAllCached: () => {
+        if (failing && failure.startsWith('cache') && (!failedOnce || failure === 'cache-persistent')) {
+          failedOnce = true;
+          throw new Error('local cache read failed');
+        }
+        return [{ sessionId: id, folder: 'folder' }];
+      },
+      getAllMeta: () => { if (failing && failure === 'metadata') throw new Error('local metadata read failed'); return new Map(); },
+      parseFolderKey, remoteIndexer: { getRemoteSessions: () => ({ sessions: [] }) },
+      projectsDirForFolder: () => dir, getCachedByParent: () => [],
+    });
+    const start = source.indexOf("const { createTaskRecordsClient } = require('./task-records-client');");
+    const end = source.indexOf('const sessionTransitions =', start);
+    assert.ok(start >= 0 && end > start);
+    const slice = source.slice(start, end);
+    vm.runInContext(slice, ctx, {
+      filename: path.join(__dirname, '../main.js'), lineOffset: source.slice(0, source.indexOf(slice)).split('\n').length - 1,
+    });
+    const client = vm.runInContext('taskRecords', ctx);
+    t.after(async () => { await client.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const existing = await handler();
+    assert.equal(existing.find(s => s.parentSessionId === id).tasks.length, 1);
+    fs.writeFileSync(path.join(dir, `${id}.jsonl`), JSON.stringify(fixture.notification) + '\n');
+    failing = true;
+    let snapshots;
+    await assert.doesNotReject(async () => { snapshots = await handler(); }, 'a head-turn cache failure must not reject the IPC call');
+    assert.equal(snapshots.find(s => s.parentSessionId === id).tasks.filter(task => !task.terminal).length, failure === 'cache-persistent' ? 1 : 0,
+      'readable local tasks refresh; an unavailable cache retains the previous worker snapshot');
+    assert.ok(warnings.some(message => /head-turn.*local (metadata|cache) read failed/.test(message)), 'the remote head-turn failure is logged');
+    if (failure === 'cache-persistent') assert.ok(warnings.some(message => /local.*cache read failed/.test(message)));
+    failing = false;
+    const recovered = await handler();
+    assert.equal(recovered.find(s => s.parentSessionId === id).tasks.filter(task => !task.terminal).length, 0);
+  });
+}
+
 test('status changes notify task liveness only for a changed owner identity', () => {
   const start = source.indexOf('cliSessionState.onStatusesChanged(');
   const end = source.indexOf('\n});', start) + '\n});'.length;

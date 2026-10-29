@@ -98,10 +98,53 @@ for (const mode of ['all', 'single']) {
       }
       assert.equal(syncCalls, 2, 'the next automatic refresh must not back off');
       assert.equal(headCalls, 2);
-      assert.equal(warnings.length, 2);
+      assert.equal(warnings.length, 1, 'identical head-turn failures warn only once per host');
       assert.match(warnings[0], /\[remote:vps\].*head.turn.*local SQLite read failed/);
     });
   }
+}
+
+for (const method of ['refreshNow', 'refreshHostNow']) {
+  test(`${method}: head-turn warnings track each host error and log recovery once`, async t => {
+    const dataDir = tmp('idx-head-turn-log');
+    const warnings = [];
+    const recoveries = [];
+    const errors = new Map([['vps', 'cache unavailable'], ['peer', 'cache unavailable']]);
+    const indexer = createRemoteIndexer({
+      dataDir, getHosts: () => [{ alias: 'vps' }, { alias: 'peer' }],
+      log: { info: message => { if (message.includes('head-turn')) recoveries.push(message); }, warn: message => warnings.push(message) },
+      sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+      refreshHeadTurns: async alias => { if (errors.has(alias)) throw new Error(errors.get(alias)); },
+    });
+    t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+    const refresh = async () => {
+      if (method === 'refreshNow') await indexer.refreshNow();
+      else for (const alias of ['vps', 'peer']) await indexer.refreshHostNow(alias);
+    };
+    await refresh();
+    await refresh();
+    assert.equal(warnings.length, 2, 'the same error is logged once for each host');
+    assert.match(warnings[0], /\[remote:vps\].*cache unavailable/);
+    assert.match(warnings[1], /\[remote:peer\].*cache unavailable/);
+    errors.set('vps', 'cache corrupt');
+    await refresh();
+    await refresh();
+    assert.equal(warnings.length, 3, 'a changed error warns again only on the affected host');
+    assert.match(warnings[2], /\[remote:vps\].*cache corrupt/);
+    errors.delete('vps');
+    await refresh();
+    await refresh();
+    assert.equal(recoveries.length, 1, 'a successful refresh logs recovery once');
+    assert.match(recoveries[0], /\[remote:vps\].*head-turn.*recovered/);
+    errors.set('vps', 'cache corrupt');
+    await refresh();
+    assert.equal(warnings.length, 4, 'success rearms warnings even for the same error');
+    assert.match(warnings[3], /\[remote:vps\].*cache corrupt/);
+    errors.clear();
+    await refresh();
+    await refresh();
+    assert.equal(recoveries.length, 3, 'each remaining failure recovers exactly once');
+  });
 }
 
 test('a host without live descriptors does not scan cached sessions or metadata', async () => {

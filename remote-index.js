@@ -112,6 +112,7 @@ function createRemoteIndexer(ctx) {
   const hostBackoff = new Map(); // alias -> { failures, lastError, nextAttemptAt }
   const hostInFlight = new Set();
   const hostTools = new Map(); // alias -> { tools: { tmux, inotifywait } | null, nextProbeAt }
+  const headTurnErrors = new Map();
 
   function backoffState(alias) {
     let s = hostBackoff.get(alias);
@@ -193,6 +194,9 @@ function createRemoteIndexer(ctx) {
     }
     for (const alias of [...hostBackoff.keys()]) {
       if (!known.has(alias)) hostBackoff.delete(alias);
+    }
+    for (const alias of [...headTurnErrors.keys()]) {
+      if (!known.has(alias)) headTurnErrors.delete(alias);
     }
     return dropped;
   }
@@ -292,8 +296,15 @@ function createRemoteIndexer(ctx) {
     if (ctx.refreshHeadTurns) {
       try {
         await ctx.refreshHeadTurns(host.alias);
+        if (headTurnErrors.delete(host.alias)) {
+          log.info(`[remote:${host.alias}] head-turn refresh recovered`);
+        }
       } catch (err) {
-        log.warn(`[remote:${host.alias}] head-turn refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+        const message = err instanceof Error ? err.message : String(err);
+        if (headTurnErrors.get(host.alias) !== message) {
+          headTurnErrors.set(host.alias, message);
+          log.warn(`[remote:${host.alias}] head-turn refresh failed: ${message}`);
+        }
       }
     }
     return toScan.size > 0 || toolsChanged;

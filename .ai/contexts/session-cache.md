@@ -553,12 +553,20 @@ for that lazy fallback. Evidence is deleted before persistence or worker message
 ### Head-turn refresh failures (issue #701)
 
 Remote head-turn refresh is best-effort after a successful mirror/index cycle.
-`remote-index.js` logs a warning if it fails; both `refreshNow` and
+`remote-index.js` logs a warning on the first failure or a changed error message
+per host, then one recovery message on the next successful head-turn refresh
+(#873). Both `refreshNow` and
 `refreshHostNow` still clear host errors/backoff and advance descriptor freshness.
 `main.js` delegates head-turn selection to `refreshRemoteHeadTurns` in
 `remote-index.js`. For a specific alias with no live descriptors, it returns
 before `getAllMeta` or `getAllCached`; live hosts still scan individually.
 The unscoped snapshot refresh continues to select live heads across aliases.
+`get-task-snapshots` warns if that refresh fails and continues refreshing local
+tasks from readable cache rows. If the local row read also fails, it warns and
+returns the worker's existing snapshots; remote turn evidence can remain stale
+until a successful refresh. The renderer silently catches snapshot IPC rejections
+(`public/task-registry.js`), so this guard adds no new visible error or panel UI.
+The VM-loaded handler regressions are in `test/main-task-records-wiring.test.js`.
 `test/remote-index.test.js` exercises the shipped helper and both refresh APIs.
 
 ### Host display names (issue #677)
