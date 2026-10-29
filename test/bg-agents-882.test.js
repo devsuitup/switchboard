@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const bg = require('../bg-agents');
+const { createSessionIndexWriter } = require('../session-index-writer');
 
 function fixture(t, indexed = true) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'bg-882-')));
@@ -24,7 +25,6 @@ function fixture(t, indexed = true) {
     runClaude: async () => ({ code: 0, stdout: '[]' }),
     resolveProjectRoots: async () => ({ projectRoot: dir, worktreeRoot: dir }),
     resolveTranscriptPath: resolveFile,
-    transcriptExists: () => { const p = resolveFile(); return !!p && fs.statSync(p).isFile(); },
     cliSessionState: { readAllDescriptors: () => descriptors, ensureWatching() {},
       onDescriptorsChanged: cb => { descriptorChanged = cb; return () => {}; } },
   });
@@ -90,4 +90,45 @@ test('882 fallback path changes recheck and missing transcripts never throw', as
   const result = await nextPush(() => changed());
   assert.equal(result.roster[0].transcriptAvailable, false);
   assert.equal(f.counts().throws, 0);
+});
+
+test('882b committed upserts keep available memos and deletions recheck them', async t => {
+  const f = fixture(t);
+  assert.equal((await bg.reconcile()).roster[0].transcriptAvailable, true);
+  let db, metadataOnly = false, scheduled = 0;
+  const writer = createSessionIndexWriter({
+    readonlyBackend: { getSetting: () => 0, getCachedSession: () => ({ sessionId: 'session-a' }), getMeta: () => null },
+    onSessionsChanged: (...args) => bg.invalidateTranscripts(...args),
+    client: { ready: Promise.resolve(), request: async () => {} },
+  }, { init: ctx => { db = ctx.db; }, refreshFolder() {
+    if (!metadataOnly) db.upsertCachedSessions([{ sessionId: 'session-a', folder: 'folder' }]);
+    db.touchCachedModified('session-a', 1);
+    db.setCachedFileSize('session-a', 10);
+  } });
+  await writer.ready;
+  writer.initializeCache({});
+  const off = bg.onChange(() => {});
+  t.after(off);
+  await nextPush(() => { f.descriptors[0].name = 'settled'; f.change(); });
+  const before = f.counts();
+  const realTimeout = setTimeout;
+  const timerMock = t.mock.method(global, 'setTimeout', (callback, ms, ...args) => {
+    if (ms === bg.FLUSH_MS) scheduled++;
+    return realTimeout(callback, ms, ...args);
+  });
+  await writer.refreshFolder('folder');
+  await writer.upsertCachedSessions([{ sessionId: 'SESSION-A', folder: 'folder' }]);
+  assert.equal(scheduled, 0, 'upserts cannot flip an already available transcript');
+  assert.deepEqual(f.counts(), before);
+  metadataOnly = true;
+  await writer.refreshFolder('folder');
+  await writer.setCachedFileSize('session-a', 20);
+  assert.equal(scheduled, 0, 'touch/size effects must schedule no rebuild');
+  timerMock.mock.restore();
+  fs.unlinkSync(f.file);
+  const pushed = nextPush(() => {}, true);
+  await writer.deleteCachedSession('SESSION-A');
+  const snapshot = await pushed;
+  assert.equal(snapshot.roster[0].transcriptAvailable, false, 'deletions must evict previously available entries');
+  assert.equal(f.counts().lookups, before.lookups + 1);
 });

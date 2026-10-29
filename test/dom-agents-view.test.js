@@ -225,7 +225,7 @@ test('882 committed index data enables the selected Transcript button through a 
     client: { ready: Promise.resolve(), async request(_name, effects) {
       for (const effect of effects) if (effect.name === 'upsertCachedSessions') for (const row of effect.args[0]) rows.set(row.sessionId, row);
     } },
-    onSessionsChanged: ids => bg.invalidateTranscripts(ids),
+    onSessionsChanged: (...args) => bg.invalidateTranscripts(...args),
   }, { init: ctx => { adapter = ctx.db; }, refreshFolder: () => { adapter.upsertCachedSessions([{ sessionId: 's-a', folder: dir }]); return true; } });
   await writer.ready;
   writer.initializeCache({});

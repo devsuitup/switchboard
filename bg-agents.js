@@ -30,7 +30,6 @@ let makeIsOwnPid = () => () => false;
 let isAttachedHere = () => false;
 let resolveRoots = resolveProjectRoots;
 let dispatchSettings = () => ({});
-let transcriptExists = null;
 let resolveTranscriptPath = null;
 const transcriptMemo = new Map();
 const rootCache = new Map();
@@ -65,7 +64,6 @@ function init(ctx) {
   isAttachedHere = ctx.isAttachedHere || (() => false);
   resolveRoots = ctx.resolveProjectRoots || resolveProjectRoots;
   dispatchSettings = ctx.dispatchSettings || (() => ({}));
-  transcriptExists = ctx.transcriptExists || null;
   resolveTranscriptPath = ctx.resolveTranscriptPath || null;
 }
 
@@ -191,11 +189,12 @@ function scheduleRebuild() {
   if (typeof flushTimer.unref === 'function') flushTimer.unref();
 }
 
-function invalidateTranscripts(sessionIds) {
+function invalidateTranscripts(sessionIds, { upsertOnly = false } = {}) {
   const ids = sessionIds && new Set(sessionIds.map(id => id.toLowerCase()));
   let changed = false;
   for (const [key, entry] of transcriptMemo) {
     if (ids && !ids.has(entry.sessionId)) continue;
+    if (ids && upsertOnly && entry.available) continue;
     transcriptMemo.delete(key);
     changed = true;
   }
@@ -329,7 +328,6 @@ function transcriptAvailable(entry) {
       const file = resolveTranscriptPath(entry.sessionId);
       return !!file && !!fs.statSync(file, { throwIfNoEntry: false })?.isFile();
     }
-    if (transcriptExists) return !!transcriptExists(entry.sessionId);
     return !!entry.transcriptPath && !!fs.statSync(entry.transcriptPath, { throwIfNoEntry: false })?.isFile();
   } catch { return false; }
 }

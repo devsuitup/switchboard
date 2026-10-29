@@ -612,17 +612,22 @@ for destructive-verb checks. Ordinary resume checks keep excluding own processes
 Roster rebuilds memoize `transcriptAvailable` by session UUID and the job's
 transcript-path input. Main's `resolveTranscriptPath` resolves the cached folder
 only on a memo miss; the service stats that resolved JSONL path with
-`throwIfNoEntry: false`. Without that resolver, the service supports the legacy
-`transcriptExists` callback or stats the job's known path. Missing paths,
+`throwIfNoEntry: false`. Without that resolver, the service stats the job's known
+path. Missing paths,
 directories and lookup/stat errors return false. Unchanged descriptor/job rebuilds
 repeat neither the SQLite lookup nor the stat, including while Agents is closed.
 Changed UUID/path inputs get new entries; disappeared rows are evicted, and
 `reconcile()` and `stop()` clear the memo.
 
 The index writer calls `onSessionsChanged` after successful cache effects or
-direct cache writes are acknowledged. Upsert, size, modified-time and deletion
-effects invalidate only their session UUIDs (case-insensitively); a folder deletion
-invalidates all entries. This covers watcher refresh, scan and Projects worker
+direct cache writes are acknowledged, and after final continuation apply for
+computed effects. Upserts invalidate matching unavailable entries only, using
+`{ upsertOnly: true }`; session deletions invalidate matching entries regardless
+of availability. Matching is case-insensitive. Folder deletion, worktree cleanup
+and remote-folder removal invalidate all entries with `null`. Size and modified-time
+effects send no notification or roster rebuild. Mixed batches keep upsert and
+deletion notifications separate. Observer exceptions are logged without rejecting
+committed writes. This covers watcher refresh, scan and Projects worker
 effects, including reindex. A memo invalidation schedules the ordinary 250 ms
 roster push, enabling a disabled Transcript button without the 30 s CLI poll.
 The existing projects watcher feeds `writer.refreshFolder` after its 500 ms
@@ -630,6 +635,13 @@ debounce; scan results also pass through the writer. A filesystem event alone is
 too early because SQLite may not contain the path yet. Commit notifications are
 cheaper than new hover/click IPC and reliable for disabled buttons, which do not
 dispatch clicks. Failed index commits leave the memo untouched.
+
+A running session whose JSONL disappears can retain its indexed row through
+`keepIfRunning`. Without a row-deletion notification, its Transcript button can
+stay enabled until the next explicit/periodic reconcile clears the memo. Clicking
+Transcript rechecks the file without the memo and reports its absence. This gap
+also applies when the surviving row is upserted, since already available entries
+are intentionally retained on upserts.
 
 The renderer disables Transcript with its missing-file tooltip. For a job row,
 Transcript calls `runVerb('transcript', id)` through the shipped IPC; main repeats

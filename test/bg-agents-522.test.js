@@ -20,7 +20,7 @@ const OTHER_SID = 'bbbbbbbb-1234-4321-abcd-123456789abc';
 const JOB = 'aaaaaaaa';
 const PID = 987654;
 
-function fixture(t, { state = 'stopped', live = true, own = false, ownDescriptor = false, bridge = false, unknown = false, transcriptExists } = {}) {
+function fixture(t, { state = 'stopped', live = true, own = false, ownDescriptor = false, bridge = false, unknown = false, resolveTranscriptPath } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-522-'));
   const jobs = path.join(dir, 'jobs');
   const sessions = path.join(dir, 'sessions');
@@ -40,7 +40,7 @@ function fixture(t, { state = 'stopped', live = true, own = false, ownDescriptor
   cliSessionState.init({ dir: sessions, activeSessions, onIdle() {}, isProcessAlive: () => live, readProcStartMany: async () => new Map(), platform: 'win32' });
   const calls = [];
   bgAgents.init({
-    jobsDir: jobs, homeDir: dir, cliSessionState, resolveProjectRoots: async () => null, transcriptExists,
+    jobsDir: jobs, homeDir: dir, cliSessionState, resolveProjectRoots: async () => null, resolveTranscriptPath,
     makeIsOwnPid: () => pid => ownDescriptor && pid === PID,
     runClaude: async (args) => {
       calls.push(args);
@@ -114,7 +114,8 @@ for (const verb of ['rm', 'respawn']) {
 test('[530] roster exposes transcript availability and the IPC rechecks a newly indexed file', { timeout: 9000 }, async (t) => {
   let indexed = false;
   let checks = 0;
-  const f = fixture(t, { live: false, transcriptExists: () => { checks++; return indexed; } });
+  const f = fixture(t, { live: false, resolveTranscriptPath: () => { checks++; return indexed ? f.transcript : null; } });
+  fs.writeFileSync(f.transcript, 'indexed transcript');
   const missing = await f.handlers.get('get-bg-agents')({});
   assert.equal(missing.roster[0].transcriptAvailable, false);
   const beforeClick = checks;
@@ -197,7 +198,7 @@ test('[530] real missing transcript disables the button, appearance enables it, 
 
 test('[530] bridge merged row explains and opens the live transcript rather than the old job file', async (t) => {
   let livePath;
-  const f = fixture(t, { bridge: true, transcriptExists: id => fs.existsSync(path.join(livePath, id.toLowerCase() + '.jsonl')) });
+  const f = fixture(t, { bridge: true, resolveTranscriptPath: id => path.join(livePath, id.toLowerCase() + '.jsonl') });
   livePath = f.dir;
   fs.writeFileSync(f.transcript, 'old pre-compaction transcript');
   let snapshot = await f.handlers.get('get-bg-agents')({});

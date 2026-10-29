@@ -187,7 +187,8 @@ if (!await acquireInstanceLock(app, { log })) { app.quit(); return; }
 const privilegeNotice = readNoNewPrivs({ log });
 const bgAgents = require('./bg-agents');
 const writer = require('./session-index-writer').createSessionIndexWriter({
-  onSessionsChanged: ids => bgAgents.invalidateTranscripts(ids),
+  log,
+  onSessionsChanged: (...args) => bgAgents.invalidateTranscripts(...args),
 });
 let bootstrapQuit;
 const holdBootstrapQuit = event => {
