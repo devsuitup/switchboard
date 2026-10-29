@@ -34,7 +34,7 @@ const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-p
 const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
-const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp, continuationRollup } = require('./session-continuations');
+const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp, continuationMtime, continuationRollup } = require('./session-continuations');
 const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds: resolveConversationMemberIds, scopedConversationRows } = require('./sidebar-bg-sessions');
 const { projectionScope } = require('./public/session-projection-diagnostics');
 const { conversationMeta } = require('./conversation-meta');
@@ -88,13 +88,14 @@ function changedContinuation(row, file, stat) {
   let stamp;
   try { stamp = JSON.parse(row.continuationIndex)?.stamp; } catch {}
   return stamp ? !matchesContinuationStamp(stamp, stat)
-    : row.fileMtime !== new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString();
+    : row.fileMtime !== continuationMtime(stat);
 }
 
 async function scanContinuationFile(file, id, previous, chunkBytes = CONTINUATION_BYTE_BUDGET) {
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new RangeError('chunkBytes must be a positive integer');
   chunkBytes = Math.min(chunkBytes, CONTINUATION_BYTE_BUDGET);
   let serialized = previous, index, stat, grew;
+  let bytes = 0;
   do {
     serialized = scanCachedContinuation(file, id, serialized, chunkBytes);
     if (serialized === null) return null;
@@ -107,6 +108,11 @@ async function scanContinuationFile(file, id, previous, chunkBytes = CONTINUATIO
       continuationFiles.delete(file);
       return null;
     }
+    if (index.bytes <= bytes && (grew || (!index.complete && index.bytes < index.size))) {
+      continuationFiles.delete(file);
+      return null;
+    }
+    bytes = index.bytes;
   } while (grew || (!index.complete && index.bytes < index.size));
   return { serialized, stat };
 }
@@ -178,7 +184,7 @@ function scanCachedContinuation(file, id, previous, maxBytes, stat = fs.statSync
   const after = fs.statSync(file, { bigint: true });
   if (!sameContinuationStamp(stat, after)) { continuationFiles.delete(file); return null; }
   serialized = JSON.stringify({ ...JSON.parse(serialized), stamp: continuationStamp(stat), head,
-    mtime: new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString() });
+    mtime: continuationMtime(stat) });
   rememberContinuation(file, stat, head, serialized);
   return serialized;
 }
