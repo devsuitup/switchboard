@@ -31,6 +31,99 @@ function key(ctx, element, value, extra = {}) {
   return event;
 }
 
+function searchFor(ctx, viewer, body, query = 'alpha') {
+  ctx.window.createMessageSearch(viewer, body).open();
+  const input = viewer.querySelector('input');
+  input.value = query;
+  input.dispatchEvent(new ctx.window.Event('input'));
+  key(ctx, input, 'Enter');
+  return input;
+}
+
+function refreshAfter(ctx, viewer, change) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { observer.disconnect(); reject(new Error('Search counter did not refresh')); }, 2000);
+    const observer = new ctx.window.MutationObserver(() => {
+      clearTimeout(timer);
+      observer.disconnect();
+      resolve();
+    });
+    observer.observe(viewer.querySelector('.terminal-search-count'), { childList: true });
+    change();
+  });
+}
+
+test('streaming and expansion keep the active range without scrolling; replacement keeps the nearest index', async () => {
+  const { ctx, viewer, body } = setup();
+  try {
+    const input = searchFor(ctx, viewer, body);
+    key(ctx, input, 'Enter');
+    let scrolls = 0;
+    body.scrollBy = () => { scrolls++; };
+    const before = [...ctx.window.CSS.highlights.get('message-find-active')][0];
+    await refreshAfter(ctx, viewer, () => body.insertAdjacentHTML('beforeend', '<div class="jsonl-entry">alpha</div>'));
+    assert.equal(viewer.querySelector('.terminal-search-count').textContent, '2 of 4');
+    await refreshAfter(ctx, viewer, () => body.insertAdjacentHTML('afterbegin', '<div class="jsonl-entry">alpha</div>'));
+    assert.equal(viewer.querySelector('.terminal-search-count').textContent, '3 of 5');
+    const after = [...ctx.window.CSS.highlights.get('message-find-active')][0];
+    assert.equal(after.startContainer, before.startContainer);
+    assert.equal(after.startOffset, before.startOffset);
+    await refreshAfter(ctx, viewer, () => body.querySelector('.jsonl-tool-body').append(ctx.document.createElement('span')));
+    assert.equal(viewer.querySelector('.terminal-search-count').textContent, '3 of 5');
+    await refreshAfter(ctx, viewer, () => body.innerHTML = '<div class="jsonl-entry">alpha alpha alpha alpha</div>');
+    assert.equal(viewer.querySelector('.terminal-search-count').textContent, '3 of 4');
+    await refreshAfter(ctx, viewer, () => body.innerHTML = '<div class="jsonl-entry">alpha alpha</div>');
+    assert.equal(viewer.querySelector('.terminal-search-count').textContent, '2 of 2');
+    assert.equal(scrolls, 0, 'observer refresh never scrolls');
+    input.value = 'alpha alpha';
+    input.dispatchEvent(new ctx.window.Event('input'));
+    key(ctx, input, 'Enter');
+    assert.equal(viewer.querySelector('.terminal-search-count').textContent, '1 of 1');
+    assert.equal(scrolls, 1, 'a new query navigates');
+  } finally { ctx.destroy(); }
+});
+
+test('message search caps StaticRange highlights at 10000 and counts the cap visibly', () => {
+  const { ctx, viewer, body } = setup();
+  try {
+    body.innerHTML = '<div class="jsonl-entry">' + 'alpha '.repeat(10001) + '</div>';
+    searchFor(ctx, viewer, body);
+    const ranges = ctx.window.CSS.highlights.get('message-find');
+    assert.equal(ranges.size, 10000);
+    assert.ok([...ranges].every(range => range instanceof ctx.window.StaticRange));
+    assert.equal(viewer.querySelector('.terminal-search-count').textContent, '1 of 10000+');
+    viewer.querySelector('.terminal-search-prev').click();
+    assert.equal(viewer.querySelector('.terminal-search-count').textContent, '10000 of 10000+');
+  } finally { ctx.destroy(); }
+});
+
+test('configured shortcuts take precedence over message Find', () => {
+  const { ctx, viewer, body } = setup();
+  try {
+    ctx.evalPublic('shortcuts.js');
+    ctx.window.appShortcuts = { gridToggle: { primary: true, shift: false, alt: false, key: 'f' } };
+    ctx.window.createMessageSearch(viewer, body);
+    body.focus();
+    assert.equal(key(ctx, body, 'f', { ctrlKey: true }).defaultPrevented, false);
+    assert.equal(viewer.querySelector('.message-search-bar').style.display, 'none');
+    ctx.window.appShortcuts = {};
+    assert.equal(key(ctx, body, 'f', { ctrlKey: true }).defaultPrevented, true);
+  } finally { ctx.destroy(); }
+});
+
+test('reopening Find with an unchanged query keeps the current match without scrolling', () => {
+  const { ctx, viewer, body } = setup();
+  try {
+    const input = searchFor(ctx, viewer, body);
+    key(ctx, input, 'Enter');
+    let scrolls = 0;
+    body.scrollBy = () => { scrolls++; };
+    key(ctx, input, 'f', { ctrlKey: true });
+    assert.equal(viewer.querySelector('.terminal-search-count').textContent, '2 of 3');
+    assert.equal(scrolls, 0);
+  } finally { ctx.destroy(); }
+});
+
 test('message search owns Ctrl+F only in its focused viewer, counts literal matches and wraps navigation', () => {
   const { ctx, viewer, body } = setup();
   try {

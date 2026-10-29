@@ -1,5 +1,9 @@
 # Session state — one domain module, one icon slot
 
+**Purpose**: `public/session-state.js` owns activity and unread transitions for
+local PTY, local transcript and remote adapters. Shared projections select one
+activity icon for each conversation head across sidebar, grid and terminal.
+
 ## Unchanged sidebar refreshes (#543)
 
 `loadProjects` opts into `refreshSidebar({ skipUnchanged: true })` after committing
@@ -52,25 +56,38 @@ conversation's head. `markUnread` is a reducer event: it sets `responseReady`
 and `manualUnread`, without changing liveness or recorded turn evidence.
 The head projection includes the local adapter's manual flag even when a
 transcript or remote adapter supplies its other facts. Reading clears it;
-fresh busy/attention events and a new open head clear it through the reducer. It uses the existing
+every busy event (including idle with `armReady: false`), attention and a new
+open head clear it through the reducer. The PTY adapter forwards idle events
+when a manual reminder is set; duplicate idle still preserves an observed
+response-ready closure. It uses the existing
 Response ready slot, stays in renderer memory, and survives sidebar rebuilds
 but not renderer reloads. The button is a normal Tab stop and uses the existing
 focus-visible action strip (#574).
 
 **Archive all older sessions** sits beside the keyboard-operable older-list
-toggle. Its count includes unarchived conversation rows inside slug groups,
-excluding subagent rows. It captures the currently rendered older rows and
-always asks through `appConfirm`, naming their count and the current visible
-item/age settings. Pinned, open-here and dormant rows/groups remain outside
-older. Filters that show every item have no older action.
+toggle. The older count includes the conversation rows actually listed inside
+slug groups, excluding subagent rows. The batch captures unarchived older rows
+and keeps the active session, every tab open here (including a closed tab),
+sessions live elsewhere and remote sessions alive on their host. Membership
+checks include the head and merged parts. Pinned, PTY-here and dormant rows
+are also kept. Single-row Archive retains its existing stop policy.
+
+The `appConfirm` title counts only eligible rows. Its body names eligible,
+kept and refused sessions with reasons, caps each list at ten and adds
+`+N more`. Local liveness and archive plans are checked before and after the
+question and again per row; newly eligible rows require another confirmation.
+Preparation never publishes errors. Refusals become notices only after a
+confirmed run. With no eligible rows, a click shows one notice without asking;
+the archive button is disabled when preflight finds no eligible rows. Filters
+that show every item have no older action.
 
 The older batch locks its toggle id, every nested slug group through
 `archivingGroupIds`, and every row through `archivingSessionIds`, including
 during confirmation and sidebar reconstruction. It shares the archive
-confirmation recheck, stop-before-persist, refusal wording, remote
-archive-without-stop notices, per-row persistence errors and Undo. Its
-preparation checks rows individually so a refused background job leaves its
-persistent failure notice while other rows can still archive. Folder and
+confirmation recheck, refusal wording, per-row persistence errors and Undo.
+Running or attached sessions are kept by the bulk action. Its preparation
+checks rows individually so a refused background job stays unarchived while
+other rows can still archive. Folder and
 ordinary slug-group preparation retain their existing all-or-nothing preflight.
 
 Evidence: `test/sidebar-features-819.test.js`.

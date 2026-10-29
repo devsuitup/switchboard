@@ -268,8 +268,9 @@ function applyStateClasses(sessionId, snapshot) {
   setNeedsAttention(item, attention);
   setResponseReady(item, ready);
   const unreadButton = item.querySelector('.session-unread-btn');
-  if (unreadButton) {
-    unreadButton.title = ready ? 'Mark as read' : 'Mark as unread';
+  const unreadTitle = ready ? 'Mark as read' : 'Mark as unread';
+  if (unreadButton && unreadButton.title !== unreadTitle) {
+    unreadButton.title = unreadTitle;
     unreadButton.setAttribute('aria-label', unreadButton.title);
   }
   setCliBusy(item, busy);

@@ -36,6 +36,9 @@ const archivingGroupIds = new Set();
 const remappingProjectPaths = new Set();
 const deletingWorktreePaths = new Set();
 const ARCHIVE_CHECKING_TITLE = 'Checking the host before archiving…';
+const unreadButtonTemplate = document.createElement('button');
+unreadButtonTemplate.className = 'session-unread-btn';
+unreadButtonTemplate.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 5 9 7 9-7"/></svg>';
 
 // see .ai/contexts/session-state.md ("Archive/delete are stop-then-archive/delete")
 function setArchiveBusy(sessionId, busy) {
@@ -126,45 +129,93 @@ async function confirmSessionArchivePlan(rows, prepared, ask, prepare = window.p
     if (!result.archiveSessions) return { prepared, result };
     const latest = await prepare(rows);
     if (!latest.ok) return { prepared: latest, result };
-    const added = latest.plans.some(({ plan }) => plan.targets.some(target => !targets.some(confirmed =>
-      confirmed.sessionId === target.sessionId && confirmed.alias === target.alias && confirmed.attach === target.attach)));
+    const added = latest.plans.some(({ session, plan }) => prepare === prepareOlderArchive
+      ? !prepared.plans.some(confirmed => confirmed.session.sessionId === session.sessionId)
+      : plan.targets.some(target => !targets.some(confirmed =>
+        confirmed.sessionId === target.sessionId && confirmed.alias === target.alias && confirmed.attach === target.attach)));
     prepared = latest;
     if (!added) return { prepared, result };
   }
   return { prepared };
 }
 
+function olderArchiveKeepReason(session) {
+  const ids = [...new Set([...rowSessionIds(session), rowHeadId(session)])];
+  if (ids.includes(activeSessionId)) return 'active session on screen';
+  if (ids.some(id => openSessions.has(id))) return 'tab open here';
+  if (ids.some(id => activePtyIds.has(id))) return 'running here';
+  if (ids.some(id => pendingSessions.has(id) || isDormantSession(id))) return 'waiting to restore';
+  if (session.starred) return 'pinned';
+  if (session.remoteAlias && ids.some(id => isRemoteSessionAlive({ ...session, sessionId: id,
+    remoteDescriptorSeen: session.remoteMemberDescriptorSeen?.[id] ?? session.remoteDescriptorSeen }))) return 'alive on its host';
+  return null;
+}
+
+function olderArchiveList(title, rows) {
+  if (!rows.length) return '';
+  return [title, ...rows.slice(0, 10).map(({ session, reason }) => `${cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId}${reason ? ': ' + reason : ''}`),
+    ...(rows.length > 10 ? [`+${rows.length - 10} more`] : [])].join('\n');
+}
+
 async function prepareOlderArchive(rows) {
   const plans = [];
+  const refusals = [];
+  const kept = [];
   for (const session of rows) {
+    if (session.archived) continue;
     try {
+      let reason = olderArchiveKeepReason(session);
+      if (!reason && !session.remoteAlias) {
+        for (const id of new Set([...rowSessionIds(session), rowHeadId(session)])) {
+          if (await window.api.getSessionLiveElsewhere(id)) {
+            reason = 'live elsewhere';
+            break;
+          }
+        }
+      }
+      reason ||= olderArchiveKeepReason(session);
+      if (reason) {
+        kept.push({ session, reason });
+        continue;
+      }
       const prepared = await window.planSessionArchive([session]);
-      if (prepared.ok) plans.push(...prepared.plans);
-      else surfaceStopFailure(null, prepared.error, session);
+      if (prepared.ok) {
+        reason = olderArchiveKeepReason(session);
+        if (reason || prepared.plans.some(({ plan }) => plan.targets.length)) kept.push({ session, reason: reason || 'running or attached' });
+        else plans.push(...prepared.plans);
+      } else refusals.push({ session, reason: prepared.error });
     } catch (error) {
-      surfaceStopFailure(null, error.message, session);
+      refusals.push({ session, reason: error.message });
     }
   }
-  return { ok: true, plans };
+  return { ok: true, plans, refusals, kept };
 }
 
 async function archiveSessionRows(rows, olderRule) {
   const prepare = olderRule ? prepareOlderArchive : window.planSessionArchive;
   const confirmed = await confirmSessionArchivePlan(rows, await prepare(rows), async prepared => {
+    if (olderRule && !prepared.plans.length) {
+      showAppNotice({ id: 'archive-older-empty', kind: 'error', message: ['Nothing eligible to archive.',
+        olderArchiveList('Kept:', prepared.kept), olderArchiveList('Refused:', prepared.refusals)].filter(Boolean).join('\n') });
+      return null;
+    }
     const targets = prepared.plans.flatMap(({ plan }) => plan.targets);
     if (!targets.length && !olderRule) return { archiveSessions: true };
     const running = targets.filter(target => !target.attach).length;
-    const question = olderRule ? `Archive ${rows.length} older session${rows.length === 1 ? '' : 's'}?`
+    const question = olderRule ? `Archive ${prepared.plans.length} older session${prepared.plans.length === 1 ? '' : 's'}?`
       : rows.length === 1 ? 'Archive this session?' : `Archive ${rows.length} sessions?`;
     if (!await appConfirm({
       title: question, confirmLabel: 'Archive', danger: targets.length > 0,
-      message: [question, ...(olderRule ? [olderRule, 'Refused sessions stay unarchived. Undo restores archived rows; stopped processes stay stopped.'] : []), ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
+      message: [question, ...(olderRule ? [olderRule, olderArchiveList('To archive:', prepared.plans),
+        olderArchiveList('Kept:', prepared.kept), olderArchiveList('Refused:', prepared.refusals),
+        'Kept and refused sessions stay unarchived. Undo restores archived rows.'] : []), ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
         ...prepared.plans.filter(({ plan }) => plan.targets.length).map(({ plan }) => plan.confirmText.split('\n').slice(1).join('\n'))].join('\n'),
     })) return null;
     return { archiveSessions: true };
   }, prepare);
   if (!confirmed) return;
   const { prepared } = confirmed;
+  for (const { session, reason } of prepared.refusals || []) surfaceStopFailure(null, reason, session);
   if (!prepared.ok) {
     surfaceStopFailure(null, prepared.error, prepared.session);
     return;
@@ -174,6 +225,11 @@ async function archiveSessionRows(rows, olderRule) {
   const archived = [];
   let stoppedAny = false;
   for (const { session, plan } of prepared.plans) {
+    if (olderRule) {
+      const latest = await prepareOlderArchive([session]);
+      for (const { session: refused, reason } of latest.refusals) surfaceStopFailure(null, reason, refused);
+      if (!latest.plans.length) continue;
+    }
     const result = await stopForArchive(session, unreachable, plan);
     stoppedAny ||= !!result.didStop;
     if (!result.ok) {
@@ -1060,7 +1116,10 @@ function renderProjects(projects, resort) {
         const sid = item.element.dataset && item.element.dataset.sessionId;
         if (sid) appendSubagentChildren(item.element, sid, subagentIndex);
       }
-      moreLabel.textContent = `+ ${olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)').length} older`;
+      const olderRows = [...olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)')]
+        .map(item => sessionMap.get(item.dataset.sessionId)).filter(Boolean);
+      archiveOlderBtn.disabled ||= !olderRows.some(session => !olderArchiveKeepReason(session));
+      moreLabel.textContent = `+ ${olderList.querySelectorAll('.session-item:not([data-subagent])').length} older`;
       sessionsList.appendChild(moreBtn);
       sessionsList.appendChild(olderList);
     }
@@ -1804,7 +1863,7 @@ function rebindSidebarEvents(projects) {
   sidebarContent.querySelectorAll('.sessions-more-toggle').forEach(moreBtn => {
     const olderList = moreBtn.nextElementSibling;
     if (!olderList || !olderList.classList.contains('sessions-older')) return;
-    const count = olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)').length;
+    const count = olderList.querySelectorAll('.session-item:not([data-subagent])').length;
     const label = moreBtn.querySelector('.sessions-more-label');
     moreBtn.onclick = (event) => {
       if (event.target.closest('.sessions-older-archive-btn')) return;
@@ -1815,11 +1874,22 @@ function rebindSidebarEvents(projects) {
       label.setAttribute('aria-expanded', String(!showing));
     };
     const archiveBtn = moreBtn.querySelector('.sessions-older-archive-btn');
+    const olderRows = () => [...olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)')]
+      .map(item => sessionMap.get(item.dataset.sessionId)).filter(session => session && !session.archived);
+    const updateArchiveButton = async () => {
+      const candidates = olderRows().filter(session => !olderArchiveKeepReason(session));
+      if (!candidates.length) {
+        archiveBtn.disabled = true;
+        return;
+      }
+      const prepared = await prepareOlderArchive(candidates);
+      if (moreBtn.isConnected && !archivingGroupIds.has(moreBtn.id)) archiveBtn.disabled = !prepared.plans.length;
+    };
+    void updateArchiveButton();
     archiveBtn.onclick = async event => {
       event.stopPropagation();
       if (archivingGroupIds.has(moreBtn.id)) return;
-      const rows = [...olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)')]
-        .map(item => sessionMap.get(item.dataset.sessionId)).filter(session => session && !session.archived);
+      const rows = olderRows();
       if (!rows.length) return;
       const groupIds = [moreBtn.id, ...[...olderList.querySelectorAll('.slug-group')].map(group => group.id)];
       if (groupIds.some(id => archivingGroupIds.has(id)) || rows.some(row => archivingSessionIds.has(row.sessionId))) {
@@ -1828,7 +1898,7 @@ function rebindSidebarEvents(projects) {
       }
       for (const id of groupIds) setGroupArchiveBusy(id, true);
       for (const row of rows) setArchiveBusy(row.sessionId, true);
-      const rule = `Older means rows or slug groups outside the first ${visibleSessionCount} visible items, or last modified more than ${sessionMaxAgeDays} days ago. Pinned sessions, sessions open here and sessions waiting to restore stay visible.`;
+      const rule = `Older means rows or slug groups outside the first ${visibleSessionCount} visible items, or last modified more than ${sessionMaxAgeDays} days ago. Active sessions, tabs open here (including closed tabs), sessions live elsewhere and remote sessions alive on their host are kept. Pinned sessions and sessions waiting to restore are kept.`;
       try {
         await archiveSessionRows(rows, rule);
       } catch (error) {
@@ -1836,6 +1906,7 @@ function rebindSidebarEvents(projects) {
       } finally {
         for (const row of rows) setArchiveBusy(row.sessionId, false);
         for (const id of groupIds) setGroupArchiveBusy(id, false);
+        await updateArchiveButton();
       }
     };
   });
@@ -2442,11 +2513,9 @@ function buildSessionItem(session) {
   jsonlBtn.title = 'View messages';
   jsonlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>';
 
-  const unreadBtn = document.createElement('button');
-  unreadBtn.className = 'session-unread-btn';
+  const unreadBtn = unreadButtonTemplate.cloneNode(true);
   unreadBtn.title = snapshot.responseReady ? 'Mark as read' : 'Mark as unread';
   unreadBtn.setAttribute('aria-label', unreadBtn.title);
-  unreadBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 5 9 7 9-7"/></svg>';
 
   const bridgeBtn = document.createElement('button');
   bridgeBtn.className = 'session-bridge-btn';

@@ -6,16 +6,23 @@ The JSONL message viewer uses `public/message-search.js`, loaded before
 `jsonl-viewer.js`; this is separate from CodeMirror file search. Opening a
 session or subagent transcript focuses its message body unless a modal owns
 focus. Ctrl+F (Cmd+F on macOS) belongs to that viewer only while focus is inside
-it and the viewer is visible. The viewer consumes that event before global
-shortcuts; terminal Find keeps its existing owner and binding.
+it and the viewer is visible. User-configured shortcut bindings take precedence:
+the viewer checks `matchShortcut` for every configurable action before claiming
+Find. Otherwise the viewer consumes the event before global handlers;
+terminal Find keeps its existing owner and binding.
 
 The search bar has a labelled input, a live match counter, Previous/Next and
 Close buttons. Enter and Shift+Enter wrap through literal, case-insensitive
 matches; Escape closes and returns focus to the message body. Ranges can span
 inline Markdown within an entry, but never cross entries. Navigating to a
 collapsed tool result expands it. CSS Highlights leave the rendered Markdown,
-links and handlers intact. An observer refreshes an open search after live
-subagent content changes. Switching viewers or returning to the grid closes
+links and handlers intact. A two-index sweep maps matches to `StaticRange`
+highlights, capped at 10,000 with `10000+` in the counter when more exist.
+Only navigation allocates a live Range for scroll geometry. Observer refresh
+after live subagent content changes or expansion preserves the same connected
+range, or the nearest prior index after replacement, and never scrolls or
+expands a block. A new query selects and scrolls to the first match.
+Switching viewers or returning to the grid closes
 search, disconnects the observer and removes highlights without moving focus.
 
 Evidence: `test/message-search-819.test.js`; jsdom verifies behavior, not native

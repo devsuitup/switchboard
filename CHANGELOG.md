@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Added
-- Mark a conversation as unread from its sidebar row, archive all sessions under **older** with one confirmation, and find text in **View messages** with Ctrl+F. Message search shows a match counter and supports Enter, Shift+Enter and Escape. (#819)
+- Mark a conversation as unread from its sidebar row, archive eligible sessions under **older** with one confirmation, and find text in **View messages** with Ctrl+F. Open, active, live-elsewhere and remote sessions alive on their host are kept; message search keeps your place during live updates and supports Enter, Shift+Enter and Escape. (#819)
 
 ### Fixed
 - The sessions sidebar skips rebuilding when a background refresh brings back identical data and its display state has not changed. Changed data is checked faster, exit labels stay current, and waiting ages advance every 30 seconds. (#543)

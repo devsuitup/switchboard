@@ -72,6 +72,7 @@ function createSessionState(kind) {
         if (Number.isSafeInteger(event.watermark) && event.watermark >= 0) seenWrittenWatermark = Math.max(seenWrittenWatermark, Math.min(writtenWatermark, event.watermark));
         break;
       case 'busy':
+        manualUnread = false;
         if (event.active) {
           clearExclusive();
           busy = true;

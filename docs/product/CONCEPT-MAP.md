@@ -29,16 +29,6 @@ Surfaces named in the tables:
 
 ## 1. Sidebar row
 
-Update #819: the row gains **Mark as unread** / **Mark as read**, targeting its
-head and using the existing Response ready icon slot. This choice is kept only
-in renderer memory. The older-list header gains **Archive all older sessions**:
-one confirmation states the current visible-item and age rules, then shared
-per-row stop/archive rules apply. Slug groups participate in one locked batch;
-refusals stay visible while other eligible rows archive.
-
-The **View messages** surface gains focused Ctrl+F (Cmd+F on macOS) search,
-literal case-insensitive matching, a counter, Previous/Next and Escape to close.
-
 A row stands for one conversation: an original transcript plus
 `mergedMemberIds`. Its head (`headSessionId`) is its newest-modified part;
 the original part owns the row identity. The conversation is pinned when any
@@ -79,6 +69,9 @@ newest user rename on any part, otherwise the original part's name
 | Send a prompt (remote) | **Send a prompt…** (`:1771`) | — | — | — | — | — |
 | Fork | **Fork session** (`:1785`) | — | — | — | — | — |
 | Read transcript | **View messages** (`:1790`) | — | — | — | **Transcript** | — |
+| Toggle unread reminder | **Mark as unread** / **Mark as read**, targeting the head's Response ready slot; renderer memory only | — | — | — | — | — |
+| Archive older rows | **Archive all older sessions** beside the older-list toggle; eligible count and names, kept/refused names with reasons, lists capped at ten plus `+N more` | — | — | — | — | — |
+| Find in messages | — | — | **View messages**: literal case-insensitive matches, counter capped at 10000+, Previous/Next, Escape to close; streaming keeps the active match without scrolling | — | — | Ctrl+F / Cmd+F when the viewer owns focus; configured shortcuts take precedence |
 | Open on claude.ai | **Open on claude.ai** (`:1795`), only with a bridge id | — | — | — | — | — |
 | Archive / Unarchive | **Archive** / **Unarchive** (`:1780`); asks only when it would stop something, then offers Undo (#565) | — | — | — | — | — |
 | Resume with options | **Resume with config** (`:1805`), hidden while a PTY runs (`public/style.css:1283`) | — | — | — | — | — |
@@ -115,7 +108,7 @@ Plain-terminal rows show Stop only; subagent rows have no buttons
   window stay running and are named (#777, #778). Retry confirms
   only the failed targets (V, `public/stop-session-ui.js` `planSessionStop`,
   `public/app.js` `confirmAndStopSession`, `public/sidebar.js`).
-- R1.5 Archive stops first; a failure refuses the archive. On a remote row it
+- R1.5 Single-row Archive stops first; a failure refuses the archive. On a remote row it
   stops every open or live member on its host; on a local row it stops every
   member with a local PTY or an open tab, and refuses up front when a
   background job is live on any member (V, `public/sidebar.js:1572-1585`;
@@ -131,6 +124,17 @@ Plain-terminal rows show Stop only; subagent rows have no buttons
   A remote row opened as a transcript uses the head too
   (`public/sidebar.js` `rebindSidebarEvents`). Agents Transcript opens the
   job's own transcript: a job is not a sidebar row.
+- R1.9 **Mark as unread** sets a head reminder until reading or fresh activity,
+  including idle, attention or a new open head. It survives sidebar rebuilding
+  in renderer memory, using the existing Response ready slot.
+- R1.10 The older-list count includes displayed conversation rows inside slug
+  groups and excludes subagents. Its bulk Archive keeps active sessions, every
+  tab open here including closed tabs, sessions live elsewhere and remote
+  sessions alive on their host, including merged parts. The confirmation
+  counts only eligible rows and names kept/refused rows with reasons. Cancel
+  produces no preflight notice; with nothing eligible there is one notice and
+  no confirmation, and the archive action is disabled. Slug groups and rows
+  remain locked through confirmation and execution.
 
 ## 2. Merged web-session row
 

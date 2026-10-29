@@ -152,9 +152,38 @@ concept. Each entry gives:
 
 ### Mark as unread / Mark as read
 
-**Mark as unread** / **Mark as read** changes the head's renderer-only
-Response ready state. It is independent of Pin and uses the existing activity
-icon slot; it survives sidebar rebuilding but not an app restart (#819).
+- **Definition**: a sidebar action that sets or clears the conversation head's
+  Response ready reminder.
+- **Don't say**: Pin, or a persisted unread flag.
+- **Code**: `markUnread` / `clearUnread` in `public/session-state.js`;
+  `.session-unread-btn` in `public/sidebar.js`.
+- **Today**: stored only in renderer memory; survives sidebar rebuilding but
+  not reload or restart. Reading, busy/idle activity, attention or a new open
+  head clears the reminder (#819).
+
+### Older
+
+- **Definition**: the collapsible sidebar list of rows or slug groups outside
+  the visible-item limit or older than the configured age cutoff.
+- **Don't say**: all inactive sessions, or all sessions before a fixed date.
+- **Code**: `.sessions-older`, `visibleSessionCount`, `sessionMaxAgeDays` in
+  `public/sidebar.js`.
+- **Today**: `+ N older` counts listed conversation rows, excluding subagents.
+  **Archive all older sessions** confirms eligible names and lists kept and
+  refused rows with reasons. Active sessions, all open tabs including closed
+  ones, sessions live elsewhere and remote sessions alive on their host stay
+  unarchived; an empty eligible set disables the archive action (#819).
+
+### Find in messages
+
+- **Definition**: literal case-insensitive search inside the focused message
+  viewer, with match highlights and wrapping Previous/Next navigation.
+- **Don't say**: global search, or file search.
+- **Code**: `createMessageSearch` in `public/message-search.js`.
+- **Today**: Ctrl+F (Cmd+F on macOS) opens it unless a configured shortcut owns
+  the binding; Enter/Shift+Enter navigate and Escape closes. Streaming keeps
+  the active match without scrolling. The counter caps highlights at 10000+
+  when more matches exist (#819).
 
 ### Pin
 

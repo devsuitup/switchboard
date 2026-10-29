@@ -13,7 +13,9 @@ function createMessageSearch(viewer, body) {
   let matches = [];
   let active = -1;
   let timer = null;
-  const changes = new MutationObserver(() => schedule());
+  let query = '';
+  let capped = false;
+  const changes = new MutationObserver(() => schedule(false));
 
   function clear() {
     window.CSS?.highlights?.delete('message-find');
@@ -22,31 +24,39 @@ function createMessageSearch(viewer, body) {
     active = -1;
   }
 
-  function go(index) {
+  function go(index, scroll = true) {
     if (!matches.length) return;
     active = (index + matches.length) % matches.length;
     const range = matches[active];
-    for (let element = range.startContainer.parentElement; element && element !== body; element = element.parentElement) {
+    for (let element = scroll && range.startContainer.parentElement; element && element !== body; element = element.parentElement) {
       if (element.classList.contains('jsonl-tool-body') && element.style.display === 'none') {
         element.style.display = '';
         element.previousElementSibling?.classList.add('expanded');
       }
     }
     CSS.highlights.set('message-find-active', new Highlight(range));
-    counter.textContent = `${active + 1} of ${matches.length}`;
-    const rect = range.getBoundingClientRect();
+    counter.textContent = `${active + 1} of ${matches.length}${capped ? '+' : ''}`;
+    if (!scroll) return;
+    const geometry = document.createRange();
+    geometry.setStart(range.startContainer, range.startOffset);
+    geometry.setEnd(range.endContainer, range.endOffset);
+    const rect = geometry.getBoundingClientRect();
     const bounds = body.getBoundingClientRect();
     body.scrollBy({ top: rect.top - bounds.top - bounds.height / 2, behavior: 'instant' });
   }
 
-  function refresh() {
+  function refresh(newQuery = input.value !== query) {
     clearTimeout(timer);
     timer = null;
+    const previous = matches[active];
+    const previousIndex = active;
     clear();
+    query = input.value;
+    capped = false;
     counter.textContent = '';
     if (bar.style.display === 'none' || !input.value) return;
     const pattern = new RegExp(input.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    for (const entry of body.querySelectorAll('.jsonl-entry')) {
+    entries: for (const entry of body.querySelectorAll('.jsonl-entry')) {
       const nodes = [];
       let text = '';
       const walker = document.createTreeWalker(entry, NodeFilter.SHOW_TEXT);
@@ -55,32 +65,44 @@ function createMessageSearch(viewer, body) {
         nodes.push({ node, start: text.length });
         text += node.nodeValue;
       }
+      let startIndex = 0;
+      let endIndex = 0;
       for (const match of text.matchAll(pattern)) {
+        if (matches.length === 10000) {
+          capped = true;
+          break entries;
+        }
         const end = match.index + match[0].length;
-        const startNode = nodes.findLast(part => part.start <= match.index);
-        const endNode = nodes.findLast(part => part.start < end);
-        const range = document.createRange();
-        range.setStart(startNode.node, match.index - startNode.start);
-        range.setEnd(endNode.node, end - endNode.start);
-        matches.push(range);
+        while (startIndex + 1 < nodes.length && nodes[startIndex + 1].start <= match.index) startIndex++;
+        while (endIndex + 1 < nodes.length && nodes[endIndex + 1].start < end) endIndex++;
+        matches.push(new StaticRange({
+          startContainer: nodes[startIndex].node, startOffset: match.index - nodes[startIndex].start,
+          endContainer: nodes[endIndex].node, endOffset: end - nodes[endIndex].start,
+        }));
       }
     }
     const highlight = new Highlight();
     for (const range of matches) highlight.add(range);
     CSS.highlights.set('message-find', highlight);
     counter.textContent = matches.length ? `${matches.length} found` : 'No results';
-    if (matches.length) go(0);
+    if (matches.length) {
+      const same = !newQuery && previous?.startContainer.isConnected && previous?.endContainer.isConnected
+        ? matches.findIndex(range => range.startContainer === previous.startContainer && range.startOffset === previous.startOffset
+          && range.endContainer === previous.endContainer && range.endOffset === previous.endOffset) : -1;
+      go(newQuery ? 0 : same >= 0 ? same : Math.max(0, Math.min(previousIndex, matches.length - 1)), newQuery);
+    }
   }
 
-  function schedule() {
+  function schedule(newQuery = true) {
     clearTimeout(timer);
-    timer = setTimeout(refresh, 100);
+    timer = setTimeout(() => refresh(newQuery || input.value !== query), 100);
   }
 
   function next(direction) {
     if (timer !== null) {
+      const changed = input.value !== query;
       refresh();
-      if (direction > 0) return;
+      if (changed && direction > 0) return;
     }
     go(active + direction);
   }
@@ -92,6 +114,7 @@ function createMessageSearch(viewer, body) {
     clear();
     bar.style.display = 'none';
     input.value = '';
+    query = '';
     counter.textContent = '';
     if (focus) body.focus({ preventScroll: true });
   }
@@ -106,7 +129,7 @@ function createMessageSearch(viewer, body) {
     changes.observe(body, { childList: true, characterData: true, subtree: true });
   }
 
-  input.addEventListener('input', schedule);
+  input.addEventListener('input', () => schedule(true));
   viewer.addEventListener('keydown', event => {
     if (event.defaultPrevented || event._handled || typeof hasOpenModal === 'function' && hasOpenModal()) return;
     if (!viewer.contains(document.activeElement)) return;
@@ -115,6 +138,9 @@ function createMessageSearch(viewer, body) {
     }
     const primary = typeof isMac !== 'undefined' && isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
     if (event.key.toLowerCase() === 'f' && primary && !event.shiftKey && !event.altKey) {
+      if (typeof matchShortcut === 'function' && typeof SHORTCUT_DEFS !== 'undefined'
+          && SHORTCUT_DEFS.some(def => matchShortcut(def.id, event, typeof isMac !== 'undefined' && isMac,
+            typeof appShortcuts === 'undefined' ? {} : appShortcuts))) return;
       event.preventDefault();
       event.stopPropagation();
       event._handled = true;
