@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- A legacy session name carried across successive session id changes no longer overwrites a newer name you chose. (#696)
 - Sessions keep their buffered terminal output, file-panel shell and grid controls when their session id changes. Switching sessions quickly also keeps the active session's shell label in the header. (#529)
 - Deleting a worktree now shows its full path, branch, running sessions and ignored entries; changed non-ignored files require another review, and locks and submodules need explicit consent to force removal. Unsafe directory links and nonempty uninitialised submodules refuse deletion; ignored contents are deleted without comparison, and on Windows every directory link or junction inside the worktree (including node_modules) must be removed first. (#841)
 - Clearing or changing a search, switching its title filter, or leaving its tab no longer lets an older reply replace the current results. (#840)
