@@ -23,7 +23,7 @@ let panelTerminalOwnerId = null; // the session the panel is currently showing
 let panelTerminalDesiredHeight = 0; // the height the user asked for, before any clamp
 
 function panelTerminalSessionId(ownerSessionId) {
-  return PANEL_TERMINAL_ID_PREFIX + ownerSessionId;
+  return panelTerminals.get(ownerSessionId)?.panelSessionId || PANEL_TERMINAL_ID_PREFIX + ownerSessionId;
 }
 
 function rekeyPanelTerminalState(oldId, newId) {

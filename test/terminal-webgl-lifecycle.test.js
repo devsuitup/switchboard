@@ -5,6 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 const { loadAppFunctions } = require('./app-source');
 
@@ -73,12 +74,15 @@ function loadShippedListener(f, listener) {
   f.w.pendingSessions = new Map();
   f.w.terminalHeaderId = f.w.document.createElement('span');
   f.w.terminalHeaderName = f.w.document.createElement('span');
-  if (listener === 'onSessionForked') loadAppFunctions(f.context, { declarations: ['exitHandoffs'], functions: ['markExitBackground', 'rekeySessionTab'] });
+  loadAppFunctions(f.context, {
+    declarations: ['exitHandoffs', 'lastActivityTime', 'sandboxedSessions', 'ptyGenerations', 'pendingOpens', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'openingSessions'],
+    functions: ['markExitBackground', 'rekeySessionTab', 'rekeySessionEnvironment'],
+  });
   const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
   const start = src.indexOf(`window.api.${listener}(`);
   assert.ok(start >= 0, `${listener} found in app.js`);
   const end = src.indexOf('\n});', start) + '\n});'.length;
-  f.inCtx(src.slice(start, end));
+  vm.runInContext(src.slice(start, end), f.context, { filename: path.join(__dirname, '../public/app.js') });
   return receive;
 }
 

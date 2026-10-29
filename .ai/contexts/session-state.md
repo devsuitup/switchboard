@@ -1565,6 +1565,24 @@ the shared activity portion and assert the suffix count separately.
 
 ## Proven continuation re-key
 
+All renderer identity changes (initial detection, fork, /clear, continuation and
+background handoff) enter `rekeySessionTab`. Its `rekeySessionEnvironment` call
+moves the file panel, written activity, session metadata, PTY generation/open
+state, restore bookkeeping, panel-shell ownership, terminal buffers and grid
+card before selecting the new id. Activity keeps the event-specific reset or
+preservation policy. The terminal's write buffer is rescheduled under the new
+id; hidden replay data and LRU position survive unchanged.
+
+`test/session-rekey-renderer.test.js` loads the shipped event handlers and
+renderer modules, exercises all five transitions, and enumerates top-level
+terminal/panel containers with an AST. A new Map, Set or array needs an explicit
+policy in that inventory; WebGL warmth holds entry objects, and redraw markers
+are immutable configuration rather than session keys.
+
+`showTerminalHeader` captures the session id before awaiting settings/profiles.
+It checks active ownership after each await and in the error path before writing
+the shell label, including the automatic-profile hide operation.
+
 For a proven background move, capture map key/object, effective source id,
 target/job, folder and exit drain before invoking metadata or the confirmation
 callback. Metadata ACK precedes publication; the independent callback requests
