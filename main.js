@@ -2010,6 +2010,7 @@ ipcMain.handle('remote-send-prompt', (_event, payload) => handleSendRequest(payl
 function gitChangesTargetDeps() {
   return {
     getCachedFolder,
+    getCachedSession,
     isRemoteFolder,
     parseFolderKey,
     getRemoteSessions: (alias) => remoteIndexer.getRemoteSessions(alias),
@@ -3393,7 +3394,7 @@ ipcMain.handle('get-task-snapshots', async () => {
     if (dir) {
       await taskRecords.read(path.join(dir, row.sessionId + '.jsonl'), row.sessionId);
       for (const child of getCachedByParent(row.sessionId)) {
-        if (child.agentId) await taskRecords.child(path.join(dir, row.sessionId, 'subagents', 'agent-' + child.agentId + '.jsonl'), row.sessionId, child.agentId);
+        if (child.agentId) await taskRecords.child(resolveJsonlPath(dir, { ...child, folder: '.' }), row.sessionId, child.agentId);
       }
     }
   }
@@ -3570,6 +3571,8 @@ function startProjectsWatcher() {
   // The watcher reports the specific filename, so for the common case of a
   // subagent appending JSONL we can stat one file instead of thousands.
   const pendingChanges = new Map();
+  const pendingWorkflowTitles = new Set();
+  const workflowTitles = new Map();
   let debounceTimer = null;
 
   flushProjectsBeforeExit = async () => {
@@ -3590,7 +3593,8 @@ function startProjectsWatcher() {
     const work = new Map(pendingChanges);
     pendingChanges.clear();
 
-    let changed = false;
+    let changed = pendingWorkflowTitles.size > 0;
+    pendingWorkflowTitles.clear();
     let activityChanged = false;
     for (const [folder, scope] of work) {
       const folderPath = path.join(PROJECTS_DIR, folder);
@@ -3645,6 +3649,14 @@ function startProjectsWatcher() {
         recordChange(folder, rel);
         // out-of-band signal for the local-transcript adapter — see .ai/contexts/session-state.md
         localTranscriptTracker.record(parts);
+      } else if (parts.length === 4 && parts[2] === 'workflows' && /^wf_[a-z0-9-]{6,}\.json$/.test(basename)) {
+        let title = basename.slice(0, -5);
+        try {
+          const snapshot = JSON.parse(fs.readFileSync(path.join(PROJECTS_DIR, filename), 'utf8'));
+          if (typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()) title = snapshot.workflowName.trim();
+        } catch {}
+        if (workflowTitles.get(filename) !== title) pendingWorkflowTitles.add(folder);
+        workflowTitles.set(filename, title);
       } else {
         return;
       }

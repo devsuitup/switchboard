@@ -3,6 +3,7 @@
 'use strict';
 
 const path = require('path');
+const { resolveJsonlPath } = require('./read-session-file');
 
 // Accepted sessionId shapes — see .ai/contexts/changes-view.md ("cwd resolution").
 const PLAIN_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
@@ -73,9 +74,10 @@ function worktreeFromMeta(meta) {
   return { ok: true, worktree };
 }
 
-function subagentJsonlPath(id, folder, deps) {
+function subagentJsonlPath(id, folder, deps, cachedRow) {
   const { parentId, agentId } = parseSubagentId(id);
-  return path.join(deps.projectsDir, folder, parentId, 'subagents', `agent-${agentId}.jsonl`);
+  const row = cachedRow || deps.getCachedSession?.(id);
+  return resolveJsonlPath(deps.projectsDir, { ...row, folder, parentSessionId: parentId, agentId });
 }
 
 function readSubagentWorktree(id, deps) {
@@ -200,7 +202,7 @@ async function listSubagentWorktrees(parentId, deps) {
     let folder = null;
     try { folder = deps.getCachedFolder(row.sessionId); } catch {}
     if (!folder || deps.isRemoteFolder(folder)) continue;
-    items.push({ row, parsed, key: 'sidecar:' + subagentJsonlPath(row.sessionId, folder, deps) });
+    items.push({ row, parsed, key: 'sidecar:' + subagentJsonlPath(row.sessionId, folder, deps, row) });
   }
 
   await mapLimit(items, SIDECAR_READ_CONCURRENCY, async (item) => {

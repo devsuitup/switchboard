@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
-const { readSubagentMeta, classifyUserText } = require('./read-session-file');
+const { readSubagentMeta, classifyUserText, workflowRunDirectories } = require('./read-session-file');
+const { classifyTranscriptPath } = require('./subagent-attribution');
 const { scanContinuationIndex } = require('./session-continuations');
 const { state: TRACE, trace } = require('./activity-trace');
 const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
@@ -162,6 +163,11 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
   }
 
   const isBootstrap = !session.knownSubagents;
+  const runDirs = workflowRunDirectories(subagentsDir);
+  const workflowStamp = runDirs.map(dir => {
+    try { return [dir, fs.statSync(dir).mtimeMs]; } catch { return [dir, null]; }
+  });
+  const workflowsChanged = JSON.stringify(workflowStamp) !== session._workflowStamp;
 
   // dirChanged: true when dir mtime moved or we have no prior scan yet.
   // Also true when the prior scan returned 0 files: the dir mtime may not
@@ -169,6 +175,7 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
   // must rescan until we see at least one file to avoid missing arrivals.
   const prevFileList = session._subFileList;
   const dirChanged = isBootstrap
+    || workflowsChanged
     || session._prevDirMtime !== dirMtime
     || !prevFileList
     || prevFileList.length === 0;
@@ -177,10 +184,19 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
   if (dirChanged) {
     try {
       files = fs.readdirSync(subagentsDir).filter(f => f.endsWith('.jsonl'));
+      for (const dir of runDirs) {
+        try {
+          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(path.relative(subagentsDir, path.join(dir, entry.name)));
+          }
+        } catch {}
+      }
+      files = files.filter(file => classifyTranscriptPath(path.join(sessionId, 'subagents', file))?.agentId);
     } catch {
       return;
     }
     session._prevDirMtime = dirMtime;
+    session._workflowStamp = JSON.stringify(workflowStamp);
     session._subFileList = files;
   } else {
     // Dir mtime unchanged and we saw files before — reuse cached list; no
@@ -215,10 +231,9 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
   if (TRACE.on && isBootstrap) { historyCount = 0; newestAgeMs = null; }
 
   for (const file of files) {
-    // agent-<agentId>.jsonl
-    const m = file.match(/^agent-(.+)\.jsonl$/);
-    if (!m) continue;
-    const agentId = m[1];
+    const classified = classifyTranscriptPath(path.join(sessionId, 'subagents', file));
+    if (!classified?.agentId) continue;
+    const agentId = classified.agentId;
     if (hasTaskRecord(sessionId, agentId)) {
       const entry = session.knownSubagents.get(agentId);
       if (entry) entry._cliTask = true;
@@ -375,8 +390,8 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
   if (dirChanged && session.knownSubagents.size > files.length) {
     const onDisk = new Set();
     for (const file of files) {
-      const m = file.match(/^agent-(.+)\.jsonl$/);
-      if (m) onDisk.add(m[1]);
+      const classified = classifyTranscriptPath(path.join(sessionId, 'subagents', file));
+      if (classified?.agentId) onDisk.add(classified.agentId);
     }
     for (const agentId of session.knownSubagents.keys()) {
       if (!onDisk.has(agentId)) session.knownSubagents.delete(agentId);

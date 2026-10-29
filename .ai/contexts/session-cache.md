@@ -61,6 +61,30 @@ Compared cache fields: `sessionId`, `folder`, `projectPath`, `summary`,
 derived from `entrypoint`. Compared metadata: `name`, `starred`, `archived`,
 `nameSource`, `nameRevision`. Empty optional values are normalized.
 
+Workflow agents (#875) also carry nullable `workflowRunId`, reconciled with
+`cols.has` without reindexing and included in the structural field comparison.
+The shared `subagent-attribution.js` classifier admits their five-part
+relative paths while excluding journals and unknown depths. The cold walker
+and targeted readers skip symlinks/junctions at every workflow path segment
+from the parent to the run directory. Full and header
+reads preserve the run id, so `resolveJsonlPath` maps each synthetic child id
+back to the same cached file without rereading its body every watcher flush.
+The projects payload includes the run id and a run title cached across builds
+by snapshot path, mtimeMs and size from `<parent>/workflows/<run>.json`, falling
+back to the id. Snapshot changes route through the debounced watcher to a
+projects notification without refreshing transcripts or widening pending targeted
+scans. The watcher compares titles observed in snapshot events and suppresses
+repeat notifications when only status changes; the first event has no known
+title baseline and notifies. Local reconciliation runs at startup and on
+projects requests (throttled to five seconds). It stats each root `agent-*`
+candidate once and forces a full folder refresh only if its root JSONL is
+missing, regardless of index freshness. Repair clears the condition; legitimate
+legacy root files never trigger it. Remote subset scans remove an old root
+`agent-<id>` row when processing a workflow transcript's upsert or deletion,
+provided the root file is absent from the mirror. Existing root files are
+preserved even outside the subset. Deletion and regrouping use existing writer effects. See
+[subagent-observability](subagent-observability.md#workflow-agent-transcripts-875).
+
 These are the inputs to `buildProjectsFromCache` and
 `mergeLocalBackgroundSessions`: they determine names, timestamps, message
 counts, schedule/slug and parent grouping, archive/SDK visibility, bridge heads

@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const { StringDecoder } = require('string_decoder');
 const { continuationId, continuationStamp, matchesContinuationStamp } = require('./session-continuations');
+const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
 
 /** Subagent transcripts land under <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl.
  *  We surface them as first-class rows with a synthetic sessionId so they're addressable
@@ -18,6 +19,9 @@ function subagentSessionId(parentSessionId, agentId) {
 function resolveJsonlPath(projectsDir, row) {
   if (!row || !row.folder) return null;
   if (row.parentSessionId && row.agentId) {
+    if (isWorkflowRunId(row.workflowRunId)) {
+      return path.join(projectsDir, row.folder, row.parentSessionId, 'subagents', 'workflows', row.workflowRunId, `agent-${row.agentId}.jsonl`);
+    }
     return path.join(projectsDir, row.folder, row.parentSessionId, 'subagents', `agent-${row.agentId}.jsonl`);
   }
   return path.join(projectsDir, row.folder, row.sessionId + '.jsonl');
@@ -347,6 +351,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         fileSize: stat.size,
         messageCount, textContent, slug, customTitle: customTitle || '', aiTitle,
         parentSessionId: opts.parentSessionId,
+        workflowRunId: opts.workflowRunId || null,
         agentId,
         subagentType,
         description,
@@ -531,14 +536,15 @@ function enumerateSessionFiles(folderPath) {
     topEntries = fs.readdirSync(folderPath, { withFileTypes: true });
   } catch { return out; }
 
+  const add = filePath => {
+    const classified = classifyTranscriptPath(path.relative(folderPath, filePath));
+    if (classified) out.push({ filePath, sessionId: path.basename(filePath, '.jsonl'), ...classified });
+  };
+
   // Top-level .jsonl files = ordinary sessions
   for (const e of topEntries) {
     if (e.isFile() && e.name.endsWith('.jsonl')) {
-      out.push({
-        filePath: path.join(folderPath, e.name),
-        sessionId: path.basename(e.name, '.jsonl'),
-        parentSessionId: null,
-      });
+      add(path.join(folderPath, e.name));
     }
   }
 
@@ -553,11 +559,12 @@ function enumerateSessionFiles(folderPath) {
       if (fs.statSync(subagentsDir).isDirectory()) {
         for (const f of fs.readdirSync(subagentsDir)) {
           if (!f.endsWith('.jsonl')) continue;
-          out.push({
-            filePath: path.join(subagentsDir, f),
-            sessionId: path.basename(f, '.jsonl'),
-            parentSessionId,
-          });
+          add(path.join(subagentsDir, f));
+        }
+        for (const runDir of workflowRunDirectories(subagentsDir)) {
+          for (const f of fs.readdirSync(runDir, { withFileTypes: true })) {
+            if (f.isFile()) add(path.join(runDir, f.name));
+          }
         }
         continue;
       }
@@ -566,16 +573,37 @@ function enumerateSessionFiles(folderPath) {
     try {
       for (const f of fs.readdirSync(subDir)) {
         if (!f.endsWith('.jsonl')) continue;
-        out.push({
-          filePath: path.join(subDir, f),
-          sessionId: path.basename(f, '.jsonl'),
-          parentSessionId,
-        });
+        add(path.join(subDir, f));
       }
     } catch {}
   }
 
   return out;
+}
+
+function workflowRunDirectories(subagentsDir) {
+  const workflows = path.join(subagentsDir, 'workflows');
+  try {
+    return fs.readdirSync(workflows, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && isWorkflowRunId(entry.name)
+        && isCanonicalWorkflowPath(path.dirname(path.dirname(subagentsDir)), {
+          parentSessionId: path.basename(path.dirname(subagentsDir)), workflowRunId: entry.name,
+        }))
+      .map(entry => path.join(workflows, entry.name));
+  } catch { return []; }
+}
+
+function isCanonicalWorkflowPath(folderPath, classified) {
+  if (!classified.workflowRunId) return true;
+  try {
+    let directory = folderPath;
+    for (const part of [classified.parentSessionId, 'subagents', 'workflows', classified.workflowRunId]) {
+      directory = path.join(directory, part);
+      const stat = fs.lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    }
+    return true;
+  } catch (error) { return error.code === 'ENOENT'; }
 }
 
 // see .ai/contexts/session-cache.md ("Session names and transcript refreshes")
@@ -672,6 +700,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
         modified: stat.mtime.toISOString(),
         slug, customTitle, headTitle, tailTitle, aiTitle,
         parentSessionId: opts.parentSessionId,
+        workflowRunId: opts.workflowRunId || null,
         agentId,
         subagentType: meta.agentType || null,
         description: meta.description || null,
@@ -768,4 +797,4 @@ function readSessionEntrypoint(filePath, { full = false } = {}) {
   }
 }
 
-module.exports = { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, classifyUserText, subagentSessionId, resolveJsonlPath, readSubagentMeta, enumerateSessionFiles, extractDailyMetrics, isToolResultOnly, mergeBridgeGroups };
+module.exports = { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, classifyUserText, subagentSessionId, resolveJsonlPath, readSubagentMeta, enumerateSessionFiles, workflowRunDirectories, isCanonicalWorkflowPath, extractDailyMetrics, isToolResultOnly, mergeBridgeGroups };
