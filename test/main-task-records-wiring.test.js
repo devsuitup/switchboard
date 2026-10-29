@@ -23,6 +23,7 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
   const renderer = createTaskRegistry();
   let handler;
   const ctx = vm.createContext({ require: name => name === './task-records-client' ? require('../task-records-client') : null,
+    refreshRemoteHeadTurnsFromCache: require('../remote-index').refreshRemoteHeadTurns,
     path, mainWindow: { isDestroyed: () => false, webContents: { send: (channel, payload) => {
       if (channel === 'task-snapshot') renderer.applySnapshot(payload);
       if (channel === 'task-rekey') renderer.rekey(payload.oldId, payload.newId, { continued: payload.continued });
@@ -38,7 +39,7 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
   const start = source.indexOf("const { createTaskRecordsClient } = require('./task-records-client');");
   const end = source.indexOf('const sessionTransitions =', start);
   assert.ok(start >= 0 && end > start);
-  vm.runInContext(source.slice(start, end), ctx);
+  vm.runInContext(source.slice(start, end), ctx, { filename: path.join(__dirname, '../main.js') });
   const client = vm.runInContext('taskRecords', ctx);
   t.after(async () => { await client.dispose(); assert.equal(path.dirname(fs.realpathSync.native(dir)), fs.realpathSync.native(os.tmpdir())); fs.rmSync(dir, { recursive: true, force: true }); assert.equal(fs.existsSync(dir), false); });
   const snapshots = await handler();

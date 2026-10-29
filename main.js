@@ -600,7 +600,7 @@ const { handleEnrolRequest } = require('./remote-enrol');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
 const { createSshTransport } = require('./remote-transport');
 require('./remote-ssh-binary').setResolverLog(log);
-const { createRemoteIndexer } = require('./remote-index');
+const { createRemoteIndexer, refreshRemoteHeadTurns: refreshRemoteHeadTurnsFromCache } = require('./remote-index');
 const { createRemoteWatcher } = require('./remote-watch');
 const { createRemoteActivityTracker } = require('./remote-activity');
 const { createLocalTranscriptTracker } = require('./local-transcript-activity');
@@ -3360,22 +3360,11 @@ const taskRecords = createTaskRecordsClient({
   },
 });
 async function refreshRemoteHeadTurns(hostAlias) {
-  const rows = [];
-  const liveByHost = new Map();
-  const meta = getAllMeta();
-  for (const row of getAllCached()) {
-    if (row.parentSessionId || meta.get(row.sessionId)?.archived) continue;
-    const folder = row.folder;
-    const { alias } = parseFolderKey(folder);
-    if (!alias || (hostAlias && alias !== hostAlias)) continue;
-    if (!liveByHost.has(alias)) {
-      liveByHost.set(alias, new Set(remoteIndexer.getRemoteSessions(alias).sessions.map(d => d.sessionId)));
-    }
-    if (!liveByHost.get(alias).has(row.sessionId)) continue;
-    const dir = projectsDirForFolder(folder);
-    if (dir) rows.push({ file: path.join(dir, row.sessionId + '.jsonl'), parentSessionId: row.sessionId, turnOnly: true });
-  }
-  if (rows.length) await taskRecords.readBatch(rows);
+  await refreshRemoteHeadTurnsFromCache({
+    getAllCached, getAllMeta, projectsDirForFolder,
+    getRemoteSessions: alias => remoteIndexer.getRemoteSessions(alias),
+    readBatch: rows => taskRecords.readBatch(rows),
+  }, hostAlias);
 }
 ipcMain.handle('get-task-snapshots', async () => {
   const live = new Set(cliSessionState.getSidebarDescriptors().map(d => d.sessionId));

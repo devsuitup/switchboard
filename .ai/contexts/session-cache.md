@@ -550,6 +550,17 @@ for that lazy fallback. Evidence is deleted before persistence or worker message
 
 ## Remote SSH hosts (issue #201)
 
+### Head-turn refresh failures (issue #701)
+
+Remote head-turn refresh is best-effort after a successful mirror/index cycle.
+`remote-index.js` logs a warning if it fails; both `refreshNow` and
+`refreshHostNow` still clear host errors/backoff and advance descriptor freshness.
+`main.js` delegates head-turn selection to `refreshRemoteHeadTurns` in
+`remote-index.js`. For a specific alias with no live descriptors, it returns
+before `getAllMeta` or `getAllCached`; live hosts still scan individually.
+The unscoped snapshot refresh continues to select live heads across aliases.
+`test/remote-index.test.js` exercises the shipped helper and both refresh APIs.
+
 ### Host display names (issue #677)
 
 `public/utils.js` owns `remoteHostLabel(alias, hosts)` and the renderer's
