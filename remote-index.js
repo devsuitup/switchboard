@@ -301,8 +301,12 @@ function createRemoteIndexer(ctx) {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (headTurnErrors.get(host.alias) !== message) {
-          headTurnErrors.set(host.alias, message);
+        const normalised = message.replace(/(["'])(?:[A-Za-z]:[\\/]|\\\\|\/).*?\1|(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s"'<>),;]*/g, '<path>').replace(/\d+/g, '#');
+        const signature = JSON.stringify([err?.code || err?.name, normalised]);
+        let seen = headTurnErrors.get(host.alias);
+        if (!seen) headTurnErrors.set(host.alias, seen = new Set());
+        if (!seen.has(signature)) {
+          seen.add(signature);
           log.warn(`[remote:${host.alias}] head-turn refresh failed: ${message}`);
         }
       }
@@ -392,6 +396,9 @@ function createRemoteIndexer(ctx) {
     stopped = false;
     const list = hosts();
     publishRoots(list);
+    for (const alias of headTurnErrors.keys()) {
+      if (!list.some(host => host.alias === alias)) headTurnErrors.delete(alias);
+    }
     // No host declared: no timer, and the transport is never touched.
     if (list.length === 0) return false;
     pruneUnknownAliases(list).catch(err => log.warn('[remote] alias prune failed:', err.message));
