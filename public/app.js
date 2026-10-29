@@ -894,33 +894,7 @@ initLocalTranscriptAdapter();
 
 window.api.onSessionDetected((tempId, realId) => {
   if (window.ATRACE) window.atrace('recv.session-detected', realId, { tempId });
-  const entry = openSessions.get(tempId);
-  if (!entry) return;
-
-  entry.session.sessionId = realId;
-  if (activeSessionId === tempId) setActiveSession(realId);
-
-  // Re-key in openSessions
-  openSessions.delete(tempId);
-  openSessions.set(realId, entry);
-  if (typeof syncToolBar === 'function') syncToolBar();
-
-  rekeyActivityState(tempId, realId);
-
-  terminalHeaderId.textContent = realId;
-  terminalHeaderName.textContent = 'New session';
-
-  // Refresh sidebar to show the new session, then select it
-  loadProjects().then(async outcome => {
-    if (typeof followProjectsSettlement === 'function') await followProjectsSettlement(outcome);
-    if (activeSessionId !== realId) return;
-    const item = sessionItemEl(realId);
-    if (item) {
-      document.querySelectorAll('.session-item.active').forEach(el => el.classList.remove('active'));
-      item.classList.add('active');
-    }
-  }).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
-  pollActiveSessions();
+  rekeySessionTab(tempId, realId, 'detected', null, () => rekeyActivityState(tempId, realId));
 });
 
 function rekeySessionTab(oldId, newId, kind, background, rekeyActivity, { spawnAttach = true } = {}) {
@@ -928,8 +902,7 @@ function rekeySessionTab(oldId, newId, kind, background, rekeyActivity, { spawnA
   if (!entry) return;
 
   entry.session.sessionId = newId;
-  if (typeof rekeyFilePanelState === 'function') rekeyFilePanelState(oldId, newId);
-  if ((kind === 'background' || kind === 'continuation') && typeof rekeySessionEnvironment === 'function') rekeySessionEnvironment(oldId, newId);
+  if (typeof rekeySessionEnvironment === 'function') rekeySessionEnvironment(oldId, newId);
   if (activeSessionId === oldId) setActiveSession(newId);
 
   if (kind === 'background') {
@@ -965,7 +938,10 @@ function rekeySessionTab(oldId, newId, kind, background, rekeyActivity, { spawnA
     if (spawnAttach) entry.backgroundAttach = attachBackgroundContinuation(entry, background);
   }
 
-  terminalHeaderId.textContent = newId;
+  if (activeSessionId === newId) {
+    terminalHeaderId.textContent = newId;
+    if (kind === 'detected') terminalHeaderName.textContent = 'New session';
+  }
 
   loadProjects().then(async outcome => {
     if (typeof followProjectsSettlement === 'function') await followProjectsSettlement(outcome);
@@ -1631,6 +1607,7 @@ function backgroundActionReason(sessionId) {
 
 function rekeySessionEnvironment(oldId, newId) {
   if (oldId === newId) return;
+  if (typeof rekeyFilePanelState === 'function') rekeyFilePanelState(oldId, newId);
   if (typeof rekeyWrittenActivity === 'function') rekeyWrittenActivity(oldId, newId);
   const terminalSession = openSessions.get(oldId)?.session;
   if (terminalSession?.headSessionId === oldId) terminalSession.headSessionId = newId;
@@ -2481,6 +2458,7 @@ function openNewSession(project) {
 }
 
 async function showTerminalHeader(session) {
+  const sessionId = session.sessionId;
   const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary);
   terminalHeaderName.textContent = displayName;
   terminalHeaderId.textContent = session.sessionId;
@@ -2493,16 +2471,19 @@ async function showTerminalHeader(session) {
   // Show active shell profile
   try {
     const effective = await window.api.getEffectiveSettings(session.projectPath);
+    if (activeSessionId !== sessionId) return;
     const profileId = effective.shellProfile || SETTING_DEFAULTS.shellProfile;
     if (profileId === 'auto') {
       terminalHeaderShell.style.display = 'none';
     } else {
       const profiles = await window.api.getShellProfiles();
+      if (activeSessionId !== sessionId) return;
       const profile = profiles.find(p => p.id === profileId);
       terminalHeaderShell.textContent = profile ? profile.name : profileId;
       terminalHeaderShell.style.display = '';
     }
   } catch {
+    if (activeSessionId !== sessionId) return;
     terminalHeaderShell.style.display = 'none';
   }
 }

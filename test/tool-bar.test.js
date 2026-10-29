@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 const { loadAppFunctions } = require('./app-source');
@@ -246,7 +247,10 @@ test('R3 N1: forking with Changes open keeps panel visibility and pressed state 
       terminalHeaderId: window.document.createElement('span'),
       terminalHeaderName: window.document.createElement('span'),
     });
-    loadAppFunctions(ctx.context, { declarations: ['exitHandoffs'], functions: ['markExitBackground', 'setActiveSession', 'rekeySessionTab'] });
+    loadAppFunctions(ctx.context, {
+      declarations: ['exitHandoffs', 'lastActivityTime', 'sandboxedSessions', 'ptyGenerations', 'pendingOpens', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'openingSessions'],
+      functions: ['markExitBackground', 'setActiveSession', 'rekeySessionTab', 'rekeySessionEnvironment'],
+    });
     window.setActiveSession('s1');
     await window.openChangesTab('s1');
     const panel = window.document.getElementById('file-panel');
@@ -258,7 +262,7 @@ test('R3 N1: forking with Changes open keeps panel visibility and pressed state 
     const start = src.indexOf('window.api.onSessionForked(');
     assert.ok(start >= 0);
     const end = src.indexOf('\n});', start) + '\n});'.length;
-    ctx.inCtx(src.slice(start, end));
+    vm.runInContext(src.slice(start, end), ctx.context, { filename: path.join(__dirname, '../public/app.js') });
     receive('s1', 'forked');
     await flush();
     assert.equal(ctx.inCtx("filePanelState.get('forked')"), state);
@@ -367,12 +371,15 @@ for (const listener of ['onSessionDetected', 'onSessionForked']) {
       window.pendingSessions = new Map();
       window.terminalHeaderId = window.document.createElement('span');
       window.terminalHeaderName = window.document.createElement('span');
-      if (listener === 'onSessionForked') loadAppFunctions(ctx.context, { declarations: ['exitHandoffs'], functions: ['markExitBackground', 'rekeySessionTab'] });
+      loadAppFunctions(ctx.context, {
+        declarations: ['exitHandoffs', 'lastActivityTime', 'sandboxedSessions', 'ptyGenerations', 'pendingOpens', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'openingSessions'],
+        functions: ['markExitBackground', 'rekeySessionTab', 'rekeySessionEnvironment'],
+      });
       const src = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
       const start = src.indexOf(`window.api.${listener}(`);
       assert.ok(start >= 0);
       const end = src.indexOf('\n});', start) + '\n});'.length;
-      ctx.inCtx(src.slice(start, end));
+      vm.runInContext(src.slice(start, end), ctx.context, { filename: path.join(__dirname, '../public/app.js') });
       receive('s1', 'real');
       await flush();
       assert.deepEqual(order, [['activate', false], ['register', 'real']]);

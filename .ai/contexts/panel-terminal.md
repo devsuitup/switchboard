@@ -184,6 +184,14 @@ rather than a fresh UUID. That is what makes `open-terminal`'s existing reattach
 branch do the right thing: a shell whose renderer entry is gone (a reload) is
 reattached, never respawned.
 
+When the owner is re-keyed, the shell keeps its existing main-process PTY id.
+The owner map, `ownerSessionId`, pending-spawn/reopen sets and current panel owner
+move together through `rekeySessionTab` for every transition kind.
+`panelTerminalSessionId(owner)` first resolves that stored PTY id, so input,
+resize, close and a late spawn refusal still address the existing shell. Only a
+new shell derives `panel:<current owner>`; renaming an existing renderer entry
+alone would disconnect it from main-process output and stop routing.
+
 | Event | The shell |
 |---|---|
 | Session switch | Kept running. The container is unmounted (`.visible` off, `panelMounted` false), output accumulates, and replays in one write on return. |
