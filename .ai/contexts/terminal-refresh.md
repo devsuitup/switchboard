@@ -46,6 +46,29 @@ No tmux sizing option is changed by refresh.
 
 ## Fitting and coalescing
 
+Window resize events use `scheduleOpenTerminalsRefit` with the same
+`CONTAINER_RESIZE_DEBOUNCE_MS` as container observers (80 ms). Focus and a
+visibility return still refit immediately and cancel a pending window refit.
+In grid view, `refitVisibleGridTerminal` checks connected, nonzero terminal
+geometry and the card's intersection with the grid scroll viewport, clipped
+to the window, before calling `fitAndScroll` (fit, atlas clear and repaint).
+Partially visible cards count; offscreen, hidden and detached cards do no
+fitting or repainting through these window handlers. Bounds are read when the
+refit runs rather than relying on potentially stale observer state, and checked
+again before the deferred fit so a card that has since left view is skipped.
+
+The existing grid IntersectionObserver also calls this guarded fit when a
+card enters view, so a card skipped during a resize gets its current size and
+a repaint when scrolled into view. A near-zero positive threshold also detects
+the transition from an intersecting zero-area edge to a partial reveal,
+without waiting for the existing 99% output-seen threshold.
+The observer continues to own WebGL suspension and
+restoration. This reuses its existing observe/unobserve lifecycle without an
+extra observer or scroll listener. Single-view refitting keeps its existing
+active-terminal behavior. These guarantees are exercised with shipped
+renderer code in `test/terminal-grid-refit.test.js`; real browser layout and
+GPU cost require a separate live measurement.
+
 `requestTerminalRefresh` marks the entry and calls `scheduleTerminalFit` in
 `public/terminal-manager.js`. Container ResizeObserver callbacks share this
 entry timer at `CONTAINER_RESIZE_DEBOUNCE_MS` (80 ms). Quick returns and size

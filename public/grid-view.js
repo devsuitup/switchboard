@@ -486,12 +486,13 @@ function initGridObservers() {
         e.target.dataset.outputVisible = String(e.isIntersecting && e.intersectionRatio >= 0.99);
         if (e.isIntersecting) {
           restoreTerminalWebgl(sid);
+          if (gridViewActive) refitVisibleGridTerminal(openSessions.get(sid));
           if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(openSessions.get(sid));
         } else {
           suspendTerminalWebgl(sid);
         }
       }
-    }, { threshold: [0, 0.99] });
+    }, { threshold: [0, Number.EPSILON, 0.99] });
   }
 }
 

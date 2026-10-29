@@ -303,11 +303,12 @@ function safeFit(entry) {
 
 // Fit a terminal that just became visible (from display:none or reparent).
 // Defers to requestAnimationFrame so the container has dimensions.
-function fitAndScroll(entry, tr, wantedGen = 0) {
+function fitAndScroll(entry, tr, wantedGen = 0, shouldFit = null) {
   const wasAtBottom = isAtBottom(entry.terminal);
   const frames = entry.frames || (entry.frames = new Set());
   const id = requestAnimationFrame(() => {
     frames.delete(id);
+    if (shouldFit && !shouldFit()) return;
     const t = tr && !tr.abandoned ? tr : null;
     let finished = false;
     try {
@@ -463,13 +464,37 @@ function observeContainerResize(entry) {
   };
 }
 
-// Re-fit whatever is currently on screen. Wired to window resize, page
-// visibilitychange and window focus in app.js. Thanks to ptySizeChanged, a call
-// that finds nothing changed sends no IPC at all.
+// see .ai/contexts/terminal-refresh.md
+let openTerminalsRefitTimer = null;
+
+function scheduleOpenTerminalsRefit() {
+  clearTimeout(openTerminalsRefitTimer);
+  openTerminalsRefitTimer = setTimeout(refitOpenTerminals, CONTAINER_RESIZE_DEBOUNCE_MS);
+}
+
+function isGridTerminalVisible(entry, viewport = terminalsEl.getBoundingClientRect()) {
+  if (!entry || document.hidden || !entry.element.isConnected || !entry.element.clientHeight) return false;
+  const card = gridCards.get(entry.session.sessionId);
+  if (!card || !card.isConnected) return false;
+  const rect = card.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0
+    && Math.min(rect.bottom, viewport.bottom, window.innerHeight) > Math.max(rect.top, viewport.top, 0)
+    && Math.min(rect.right, viewport.right, window.innerWidth) > Math.max(rect.left, viewport.left, 0);
+}
+
+function refitVisibleGridTerminal(entry, viewport) {
+  if (isGridTerminalVisible(entry, viewport)) {
+    fitAndScroll(entry, null, 0, () => gridViewActive && isGridTerminalVisible(entry));
+  }
+}
+
 function refitOpenTerminals() {
+  clearTimeout(openTerminalsRefitTimer);
+  openTerminalsRefitTimer = null;
   if (gridViewActive) {
+    const viewport = terminalsEl.getBoundingClientRect();
     for (const entry of openSessions.values()) {
-      fitAndScroll(entry);
+      refitVisibleGridTerminal(entry, viewport);
     }
     return;
   }

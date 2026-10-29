@@ -2725,7 +2725,7 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
 // No polling: these are pure event handlers and cost nothing while idle.
 
 // Window resize — the historical hook (window drag, sidebar drag, maximise).
-window.addEventListener('resize', refitOpenTerminals);
+window.addEventListener('resize', scheduleOpenTerminalsRefit);
 
 // Safety net for the geometry changes that fire no 'resize' on this window:
 // returning from sleep, the window being moved to a screen with a different
