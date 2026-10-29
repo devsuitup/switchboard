@@ -5,12 +5,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const supported = Number(process.versions.node.split('.')[0]) >= 22;
-const DatabaseSync = supported ? require('node:sqlite').DatabaseSync : null;
-const loadStore = supported ? require('./fixtures/harness-store.cjs') : null;
+const openStore = require('./fixtures/conversation-store.cjs');
 
 test('writer reconcile adds runtime/sessionFile without losing old rows or scan state; readonly never migrates',
-  { skip: !supported && 'node:sqlite requires Node 22' }, t => {
+  { skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22' }, t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-schema-'));
   const previous = process.env.SWITCHBOARD_DATA_DIR;
   process.env.SWITCHBOARD_DATA_DIR = root;
@@ -19,18 +17,15 @@ test('writer reconcile adds runtime/sessionFile without losing old rows or scan 
     else process.env.SWITCHBOARD_DATA_DIR = previous;
     fs.rmSync(root, { recursive: true, force: true });
   });
-  const openStore = loadStore();
   let db = openStore({ readonly: false });
   db.upsertCachedSessions([{ sessionId: 'old', folder: 'folder', summary: 'kept', messageCount: 3 }]);
   db.setFolderMeta('folder', '/project', 42);
   db.setSetting('initial_scan_complete', true);
-  db.closeDb();
-  const file = path.join(root, 'switchboard.db');
-  const old = new DatabaseSync(file);
+  const old = db.connection;
   const names = old.prepare('PRAGMA table_info(session_cache)').all().map(c => c.name);
   for (const name of ['runtime', 'sessionFile']) if (names.includes(name)) old.exec(`ALTER TABLE session_cache DROP COLUMN ${name}`);
   const before = old.prepare('SELECT * FROM session_cache').get();
-  old.close();
+  db.closeDb();
   db = openStore({ readonly: true });
   assert.equal(db.connection.prepare('PRAGMA table_info(session_cache)').all().some(c => c.name === 'runtime'), false);
   db.closeDb();

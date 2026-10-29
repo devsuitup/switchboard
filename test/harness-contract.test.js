@@ -15,7 +15,8 @@ test('every registered adapter conforms and invalid ports are rejected', () => {
     assert.equal(assertHarness(adapter), adapter);
     for (const name of CAPABILITIES) assert.equal(typeof adapter.capabilities[name], 'boolean', name);
     for (const key of ['sessionsRoot', 'listFolders', 'folderPath', 'folderForProject', 'listTranscripts', 'transcriptPath',
-      'readSessionFile', 'deriveProjectPath', 'resolveWorktreePath', 'buildLaunchArgs', 'classifyTitleActivity']) {
+      'readSessionFile', 'deriveProjectPath', 'resolveWorktreePath', 'buildLaunchArgs', 'classifyTitleActivity',
+      'sessionIdFromPath', 'needsIdDetection']) {
       assert.throws(() => assertHarness({ ...adapter, [key]: null }), /harness/i, key);
     }
     assert.throws(() => assertHarness({ ...adapter, capabilities: {} }), /capabilit/i);
@@ -40,6 +41,37 @@ test('every registered adapter conforms and invalid ports are rejected', () => {
     assert.deepEqual(availableHarnesses(), [fake]);
     assert.equal(transcriptPath({ runtime: 'test', sessionFile: '/authoritative.jsonl' }), '/authoritative.jsonl');
   } finally { delete HARNESSES.test; HARNESSES.claude = original; }
+});
+
+for (const method of ['sessionIdFromPath', 'needsIdDetection']) {
+  test(`the contract rejects a missing ${method} method`, () => {
+    const { assertHarness } = require('../harnesses/contract');
+    const claude = require('../harnesses/claude');
+    assert.throws(() => assertHarness({ ...claude, [method]: undefined }), new RegExp(method));
+  });
+}
+
+test('the contract requires project grouping metadata and accepts an ungrouped store', () => {
+  const { assertHarness } = require('../harnesses/contract');
+  const claude = require('../harnesses/claude');
+  for (const groupsByProject of [undefined, null, 'true', 1]) {
+    assert.throws(() => assertHarness({ ...claude, groupsByProject }), /groupsByProject/);
+  }
+  const ungrouped = { ...claude, groupsByProject: false, folderForProject: () => null,
+    sessionIdFromPath: () => null, needsIdDetection: ({ isNew }) => !!isNew };
+  assert.equal(assertHarness(ungrouped), ungrouped);
+  assert.equal(ungrouped.folderForProject('/project'), null);
+});
+
+test('Claude exposes upstream grouping, filename identity and launch detection semantics', () => {
+  const claude = require('../harnesses/claude');
+  assert.equal(claude.groupsByProject, true);
+  assert.equal(claude.sessionIdFromPath(path.join('project', 'parent.jsonl')), 'parent');
+  assert.equal(claude.sessionIdFromPath(path.join('project', 'parent', 'subagents', 'agent-child.jsonl')), 'agent-child');
+  assert.equal(claude.needsIdDetection({ isNew: true }), false);
+  assert.equal(claude.needsIdDetection({ isNew: false }), false);
+  assert.equal(claude.needsIdDetection({ isNew: true, options: { forkFrom: 'parent' } }), true);
+  assert.equal(claude.needsIdDetection({ isNew: false, options: { forkFrom: 'parent' } }), true);
 });
 
 test('Claude delegates fork transcript, continuation, state, job and binary contracts', () => {
@@ -88,7 +120,7 @@ test('Claude store enumerates parent, preferred and legacy subagents under an is
   assert.equal(claude.sessionsRoot(), root);
   assert.equal(claude.available(), true);
   assert.deepEqual(claude.listFolders(), [folder]);
-  assert.deepEqual(claude.listTranscripts(folder).sort(), files.sort());
+  assert.deepEqual(claude.listTranscripts(dir).sort(), files.sort());
   assert.equal(claude.transcriptPath({ folder, sessionId: 'parent' }), path.join(dir, 'parent.jsonl'));
   assert.equal(claude.transcriptPath({ folder, sessionId: 'sub:parent:child', parentSessionId: 'parent', agentId: 'child' }), path.join(dir, 'parent/subagents/agent-child.jsonl'));
   assert.equal(claude.transcriptPath({ sessionFile: files[2] }), files[2]);
@@ -100,5 +132,5 @@ test('Claude store enumerates parent, preferred and legacy subagents under an is
   const missing = createClaudeHarness({ projectsDir: path.join(root, 'absent') });
   assert.equal(missing.available(), false);
   assert.deepEqual(missing.listFolders(), []);
-  assert.deepEqual(missing.listTranscripts(folder), []);
+  assert.deepEqual(missing.listTranscripts(missing.folderPath(folder)), []);
 });

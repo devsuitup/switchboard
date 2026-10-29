@@ -7,6 +7,35 @@ the fork's transcript and lifecycle implementations remain in place.
 
 The contract defines TranscriptStore, TranscriptParser, Launcher and
 ActivityClassifier on one flat adapter, with optional UsageProvider.
+Store arguments follow upstream: `listFolders()` returns folder keys,
+`folderPath(key)` resolves a key to an absolute directory, and
+`listTranscripts(dir)` takes that directory and returns absolute transcript
+paths. This replaces the initial fork's key-taking signature so #821 can port
+the upstream Codex enumerator without an argument translation. Claude still
+enumerates parent, preferred subagent and legacy subagent transcripts through
+the fork helper. `folderForProject(projectPath)` may return null when a store
+does not group by project.
+
+`groupsByProject` is a required boolean (Claude: true),
+`sessionIdFromPath(filePath)` is a required filename-identity extractor
+(Claude: basename without `.jsonl`), and `needsIdDetection({isNew, options})`
+is a required launch predicate. Claude returns true only for `options.forkFrom`,
+as upstream does: a fresh ordinary launch accepts `--session-id`, while a fork
+mints its own id. Filename identity does not replace the fork parser's synthetic
+subagent ids. `assertHarness()` checks the boolean and both method types;
+semantic conformance is exercised against isolated storage in contract tests.
+
+#821 must provide Codex's false `groupsByProject`, nullable
+`folderForProject`/`deriveProjectPath`, rollout filename `sessionIdFromPath`,
+directory-taking `listTranscripts`, authoritative `sessionFile`, and
+`needsIdDetection({isNew})` returning true for fresh launches (including forks).
+Its launcher must ignore a temporary/pre-assigned id for a fresh Codex launch,
+while using the real id for resume. It must also provide the remaining fork
+contract methods and capability flags. Main's existing Claude launch behavior
+is unchanged here: routing the detection predicate, transcript matching and
+identity reconciliation into the lifecycle remains work for #821 before Codex
+can be launched. Merely passing `assertHarness()` does not implement that flow.
+
 `assertHarness()` validates metadata, methods, boolean capability flags and
 the optional usage provider. Features use `capabilities` (`subagents`,
 `continuations`, `liveElsewhere`, `bgJobs`, `ideBridge`, `sandbox`, `schedule`,
@@ -54,7 +83,11 @@ from other runtimes belongs to a later phase.
 
 Tests: `harness-contract.test.js`, `harness-launch.test.js`,
 `harness-schema.test.js`, `module-layout.test.js`, `session-launch-guards.test.js`.
-The schema test runs unwrapped production source with a filename and a
-`node:sqlite` compatibility fixture because the local better-sqlite3 binary
-targets Electron. It tests real SQLite and the writable-store reconciliation,
-not the worker transport or the Electron native binding. It skips on Node 20.
+The schema test uses `test/fixtures/conversation-store.cjs`, loading unwrapped
+production source with a filename. The fixture tries native SQLite and falls
+back to `node:sqlite` when the local better-sqlite3 binary targets Electron.
+It accepts readonly opens so the schema regression can verify that they never
+migrate. Tests skip when neither backend is supported, including Node 20 with
+an incompatible native ABI. The SDK-entrypoint migration also uses this fixture
+instead of launching Electron. These tests exercise real SQLite and the
+writable-store reconciliation, not the worker transport or Electron's binding.

@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 
-module.exports = function openStore() {
+module.exports = function openStore({ readonly = false } = {}) {
   const filename = path.join(__dirname, '../../session-index-store.js');
   const nativeRequire = createRequire(filename);
   let Database;
@@ -14,9 +14,15 @@ module.exports = function openStore() {
     if (error.code !== 'ERR_DLOPEN_FAILED' && !error.message.includes('NODE_MODULE_VERSION')) throw error;
     const { DatabaseSync } = require('node:sqlite');
     Database = class {
-      constructor(file) { this.raw = new DatabaseSync(file); this.sequence = 0; }
+      constructor(file, options = {}) { this.raw = new DatabaseSync(file, { readOnly: !!options.readonly }); this.sequence = 0; }
       get open() { return this.raw.isOpen; }
-      prepare(sql) { return this.raw.prepare(sql); }
+      prepare(sql) {
+        const statement = this.raw.prepare(sql);
+        return new Proxy(statement, { get(target, key) {
+          const value = target[key];
+          return typeof value === 'function' ? (...args) => value.apply(target, args.map(arg => arg === undefined ? null : arg)) : value;
+        } });
+      }
       exec(sql) { this.raw.exec(sql); }
       close() { this.raw.close(); }
       pragma(sql, options) {
@@ -36,10 +42,11 @@ module.exports = function openStore() {
     };
   }
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'),
-    { process, performance, Buffer, console, module, exports: module.exports,
-      require: id => id === 'better-sqlite3' ? Database : nativeRequire(id) }, { filename });
-  return module.exports.openSessionIndexStore({ readonly: false });
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+    process, performance, Buffer, console, module, exports: module.exports,
+    require: id => id === 'better-sqlite3' ? Database : nativeRequire(id),
+  }, { filename });
+  return module.exports.openSessionIndexStore({ readonly });
 };
 
 module.exports.supported = (() => {

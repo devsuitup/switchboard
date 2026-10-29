@@ -37,7 +37,7 @@ function buildLaunchArgs({ sessionId, isNew, options }) {
 function createClaudeHarness({ projectsDir = path.join(os.homedir(), '.claude', 'projects') } = {}) {
   const folderPath = folder => path.join(projectsDir, folder);
   return {
-    id: 'claude', label: 'Claude', binary: 'claude', folderPrefix: null,
+    id: 'claude', label: 'Claude', binary: 'claude', folderPrefix: null, groupsByProject: true,
     capabilities: Object.freeze({ subagents: true, continuations: true, liveElsewhere: true, bgJobs: true,
       ideBridge: true, sandbox: true, schedule: true, remote: true }),
     sessionsRoot: () => projectsDir,
@@ -49,7 +49,8 @@ function createClaudeHarness({ projectsDir = path.join(os.homedir(), '.claude', 
     },
     folderPath,
     folderForProject: encodeProjectPath,
-    listTranscripts: folder => transcripts.enumerateSessionFiles(folderPath(folder)).map(entry => entry.filePath),
+    listTranscripts: dir => transcripts.enumerateSessionFiles(dir).map(entry => entry.filePath),
+    sessionIdFromPath: filePath => path.basename(filePath, '.jsonl'),
     transcriptPath: row => row.sessionFile || transcripts.resolveJsonlPath(projectsDir, row),
     readSessionFile: transcripts.readSessionFile,
     deriveProjectPath: projects.deriveProjectPath,
@@ -57,6 +58,7 @@ function createClaudeHarness({ projectsDir = path.join(os.homedir(), '.claude', 
     enumerateSessionFiles: transcripts.enumerateSessionFiles,
     resolveContinuations, resolveContinuationsSync, liveElsewhere, getCachedJobs,
     resolveWindowsLaunch: resolveWindowsClaude,
+    needsIdDetection: ({ options }) => !!options?.forkFrom,
     classifyTitleActivity, buildLaunchArgs, parseAddDirs,
   };
 }
