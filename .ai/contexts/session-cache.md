@@ -2319,10 +2319,39 @@ stored fileMtime; missing stamp alone never selects it. Its next mtime change
 upgrades the cursor. Remote rows, subagents and unknown links are not selected.
 
 Prepared proof is consumed before the unchanged/budget branches only if both the
-previous serialized index and final stat still match. Header work rechecks that
-version. A changed known linked row which cannot reach verified EOF defers its
-entire row and related effects; parser-level partial/malformed tails and new
+previous serialized index and final stat still match. Header work records that
+version for the final pre-write stamp check. A changed known linked row which
+cannot reach verified EOF defers its entire row and related effects;
+parser-level partial/malformed tails and new
 branches are published as observed. No old proof is attached to fresh fileMtime.
+
+Issue #879 removes the redundant stat immediately after the display-header read.
+Both successful headers and the null-header fallback register the original stamp
+in `linkedVersions` before collecting effects. No database write occurs between
+that registration and the final stamp check. That check removes raced rows from
+upserts, names, metrics, search and deletions; touches and file-size adoption also
+exclude them, and the collector retains their retry scope with folder mtime zero.
+It also catches changes while later files and bridge merges are read. Removing
+only the intermediate check passes the continuation refresh suite; removing both
+checks fails the header-race and later-file-race row assertions. The later-file
+test triggers on reading OTHER after OLD, independently of the number of stats.
+
+The readonly-worker D2 tests gate the first preparation yield and assert that no
+progress or result escapes it, then release the gate and check the completed
+index and both views. Their deadline matches the 120-second test process cap,
+also bounding the cases when CI invokes its runner without a process timeout,
+rather than imposing a separate 9-second scheduling assumption. A real-file
+ENOENT injected after the yield logs a warning, returns a null preparation, completes reconciliation
+and the reply, and admits the next request. The two-attempt refresh loop is
+bounded; the missing file is accounted/deleted by refresh rather than leaving an
+unresolved promise. This path uses no SQLite or Node-22-only API. Node 22 load
+loops with both Windows TEMP spellings did not reproduce the reported CI timeout,
+and its cause is not established. A plausible cause is the continuation-scan
+loop of #891: when the stored `index.mtime` and `stat.mtime` round to different
+milliseconds, the cursor is never reused and the scan never ends. The CI stack
+stopped inside that scan. The ENOENT warning itself does not hang.
+The VM fixture evaluates unwrapped production modules with their real filenames
+and isolated module globals so coverage keeps the shipped source locations.
 
 The cache owns `deferredContinuationFiles`; targeted preparation and raw refresh
 union it into their scope, including an OTHER-only request. Writer computations

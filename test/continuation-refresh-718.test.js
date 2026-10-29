@@ -133,7 +133,8 @@ test('B5/B7 linked growth with pinned mtime defers then refreshes through its co
 });
 
 for (const growAfterSave of [false, true]) test('#733 watcher between index save and targeted refresh retains a coherent row, growAfterSave=' + growAfterSave, { timeout: 9000 }, async t => {
-  const h = fixture(t); h.write(OLD, h.padding); h.write(OTHER);
+  const h = fixture(t);
+  h.write(OLD, line({ type: 'ai-title', aiTitle: 'Saved AI title', slug: 'saved-slug' }) + h.padding); h.write(OTHER);
   const pinned = new Date('2026-10-19T08:00:00.000Z');
   fs.utimesSync(h.file(OLD), pinned, pinned);
   cache.refreshFolder(h.folder); h.init();
@@ -152,14 +153,20 @@ for (const growAfterSave of [false, true]) test('#733 watcher between index save
     fs.utimesSync(h.file(OLD), pinned, pinned);
   }
   h.append(OTHER);
-  cache.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', OLD + '.jsonl']) });
+  const files = new Set([OTHER + '.jsonl', OLD + '.jsonl']);
+  assert.equal([...files][0], OTHER + '.jsonl', 'OTHER must be scanned first to spend the shared budget');
+  assert.ok(fs.statSync(h.file(OTHER)).size > h.rows.get(OTHER).fileSize, 'OTHER has changed and requires a scan');
+  cache.refreshFolder(h.folder, { files });
+  assert.equal(JSON.parse(h.rows.get(OTHER).continuationIndex).bytes, fs.statSync(h.file(OTHER)).size,
+    'OTHER spent the ordinary shared continuation budget before OLD');
   const refreshed = h.rows.get(OLD);
-  if (growAfterSave) assert.deepEqual(refreshed, before, 'a stale saved index must defer the whole row');
+  if (growAfterSave) assert.deepEqual(refreshed, before, 'OTHER spent the shared budget, so the stale saved index defers the whole row');
   else {
     assert.equal(refreshed.fileSize, Number(savedStat.size));
-    for (const field of ['sessionId', 'folder', 'projectPath', 'summary', 'firstPrompt', 'created', 'modified', 'fileMtime', 'messageCount', 'textContent', 'dailyMetrics', 'continuationIndex']) {
+    for (const field of ['sessionId', 'folder', 'projectPath', 'summary', 'firstPrompt', 'created', 'modified', 'fileMtime', 'messageCount', 'textContent', 'dailyMetrics', 'continuationIndex', 'aiTitle', 'slug']) {
       assert.deepEqual(refreshed[field], before[field], field);
     }
+    assert.equal(refreshed.customTitle || '', before.customTitle || '', 'customTitle');
   }
   const preparedContinuations = await cache.prepareContinuationRefresh(h.folder, { files: new Set([OLD + '.jsonl']) });
   cache.refreshFolder(h.folder, { files: new Set([OLD + '.jsonl']), preparedContinuations });
@@ -370,15 +377,16 @@ for (const missing of ['file', 'folder', 'project-path']) test('718b deleted def
 });
 
 test('718b final stamp check defers a source changed after its header was accepted', async t => {
-  const h = fixture(t); h.write(OLD, h.link()); cache.refreshFolder(h.folder); h.append(OLD, h.padding);
+  const h = fixture(t); h.write(OLD, h.link()); h.write(OTHER); cache.refreshFolder(h.folder);
+  h.append(OLD, h.padding); h.append(OTHER);
   const preparedContinuations = await cache.prepareContinuationRefresh(h.folder);
-  const before = structuredClone(h.rows.get(OLD)), stat = fs.statSync; let checks = 0;
-  const hook = t.mock.method(fs, 'statSync', (file, options) => {
-    if (file === h.file(OLD) && options?.bigint && ++checks === 3) h.append(OLD);
-    return stat(file, options);
+  const before = structuredClone(h.rows.get(OLD)), open = fs.openSync; let raced = false;
+  const hook = t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (file === h.file(OTHER) && !raced) { raced = true; h.append(OLD); }
+    return open(file, ...args);
   });
-  cache.refreshFolder(h.folder, { preparedContinuations }); hook.mock.restore();
-  assert.equal(checks, 3, 'the race reaches the final pre-commit stamp check');
+  cache.refreshFolder(h.folder, { files: new Set([OLD + '.jsonl', OTHER + '.jsonl']), preparedContinuations }); hook.mock.restore();
+  assert.equal(raced, true, 'reading the next file changes OLD after its header was accepted');
   assert.deepEqual(h.rows.get(OLD), before, 'a late file change must not publish a stale row');
   assert.equal(h.folders.get(h.folder).indexMtimeMs, 0);
   assert.ok(cache.continuationRefreshScope(h.folder, { files: new Set([OTHER + '.jsonl']) }).files.has(OLD + '.jsonl'));
