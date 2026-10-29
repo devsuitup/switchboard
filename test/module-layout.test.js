@@ -72,14 +72,14 @@ test('new app modules cannot be added at root; move PRs must shrink the allow-li
 test('the resolver guard detects lazy broken requires at root, in workers/src/scripts and required public modules', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'module-layout-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  for (const file of ['entry.js', 'workers/w.js', 'src/main/nested/a.js', 'scripts/s.js', 'public/shared.js']) {
+  for (const file of ['entry.js', 'workers/w.js', 'src/main/nested/a.js', 'scripts/s.js', 'harnesses/claude.js', 'public/shared.js']) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), "function lazy() { return require('./missing'); }");
   }
   fs.appendFileSync(path.join(root, 'entry.js'), "\nrequire('./public/shared'); // require('./comment')");
   fs.writeFileSync(path.join(root, 'public/browser-only.js'), "require('./not-main-code');");
   const failures = unresolved(root);
-  assert.equal(failures.length, 5, failures.join('\n'));
+  assert.equal(failures.length, 6, failures.join('\n'));
   assert.ok(failures.every((f) => f.includes('./missing')));
   assert.deepEqual(walk(root, 'src'), ['src/main/nested/a.js']);
 });

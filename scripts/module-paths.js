@@ -22,7 +22,7 @@ function walk(root, directory, accept = isJavaScript) {
 function appFiles(root) {
   return [
     ...fs.readdirSync(root).filter(isJavaScript),
-    ...walk(root, 'workers'), ...walk(root, 'src'), ...walk(root, 'scripts'),
+    ...walk(root, 'workers'), ...walk(root, 'src'), ...walk(root, 'scripts'), ...walk(root, 'harnesses'),
   ].sort();
 }
 
