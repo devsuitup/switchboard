@@ -128,7 +128,7 @@ test('get-task-snapshots skips failing child cache rows, warns once per call and
   const ctx = vm.createContext({
     require: name => name === './task-records-client' ? require('../task-records-client') : null,
     refreshRemoteHeadTurnsFromCache: require('../remote-index').refreshRemoteHeadTurns,
-    path, mainWindow: null, log: { warn: message => warnings.push(message) },
+    path, resolveJsonlPath: require('../read-session-file').resolveJsonlPath, mainWindow: null, log: { warn: message => warnings.push(message) },
     ipcMain: { handle: (channel, callback) => { assert.equal(channel, 'get-task-snapshots'); handler = callback; } },
     cliSessionState: { getSidebarDescriptors: () => ids.map(sessionId => ({ sessionId })), readAllDescriptors: () => [] },
     activeSessions: new Map(), bgAgents: { getSnapshot: () => ({ roster: [] }) },
@@ -139,7 +139,7 @@ test('get-task-snapshots skips failing child cache rows, warns once per call and
     getCachedByParent: id => {
       childReads.push(id);
       if (failing && id !== ids[2]) throw new Error(`child cache unavailable for ${id}`);
-      return id === ids[2] ? [{ agentId: fixture.agentId }] : [];
+      return id === ids[2] ? [{ agentId: fixture.agentId, parentSessionId: id }] : [];
     },
   });
   const start = source.indexOf("const { createTaskRecordsClient } = require('./task-records-client');");
