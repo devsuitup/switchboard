@@ -169,7 +169,7 @@ function rebuild({ onlyIfChanged = false } = {}) {
     descriptors,
     isOwnPid: makeIsOwnPid(),
     isAttachedHere,
-  }).map(e => ({ ...e, ...rootsFor(e.cwd) }));
+  }).map(e => ({ ...e, ...rootsFor(e.cwd), transcriptAvailable: transcriptAvailable(e) }));
   if (onlyIfChanged && JSON.stringify(previous) === JSON.stringify(roster)) return;
   emit();
   resolveMissingRoots(roster);
