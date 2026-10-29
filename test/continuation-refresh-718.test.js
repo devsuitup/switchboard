@@ -132,16 +132,46 @@ test('B5/B7 linked growth with pinned mtime defers then refreshes through its co
   assert.equal(cache.continuationRefreshScope(h.folder, opts).files.has(OLD + '.jsonl'), false);
 });
 
-test('#733 watcher between index save and targeted refresh retains a coherent row', { timeout: 9000 }, async t => {
-  const h = fixture(t); h.write(OLD, h.padding); h.write(OTHER); cache.refreshFolder(h.folder); h.init();
+for (const growAfterSave of [false, true]) test('#733 watcher between index save and targeted refresh retains a coherent row, growAfterSave=' + growAfterSave, { timeout: 9000 }, async t => {
+  const h = fixture(t); h.write(OLD, h.padding); h.write(OTHER);
+  const pinned = new Date('2026-10-19T08:00:00.000Z');
+  fs.utimesSync(h.file(OLD), pinned, pinned);
+  cache.refreshFolder(h.folder); h.init();
   h.append(OLD, h.link());
+  fs.utimesSync(h.file(OLD), pinned, pinned);
   await cache.resolveSessionContinuations(OLD, { getSessionLiveElsewhere: async () => ({ known: true, live: {} }) });
-  const before = structuredClone(h.rows.get(OLD)); h.append(OTHER);
+  const before = structuredClone(h.rows.get(OLD));
+  const savedStat = fs.statSync(h.file(OLD), { bigint: true });
+  const savedIndex = JSON.parse(before.continuationIndex);
+  assert.equal(before.fileMtime, pinned.toISOString());
+  assert.equal(Number(savedStat.size) - before.fileSize, Buffer.byteLength(h.link()));
+  assert.equal(savedIndex.bytes, Number(savedStat.size));
+  assert.deepEqual(savedIndex.stamp, continuationStamp(savedStat));
+  if (growAfterSave) {
+    h.append(OLD);
+    fs.utimesSync(h.file(OLD), pinned, pinned);
+  }
+  h.append(OTHER);
   cache.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', OLD + '.jsonl']) });
-  assert.ok(h.rows.get(OLD).continuationIndex);
-  if (h.rows.get(OLD).fileMtime === before.fileMtime) assert.deepEqual(h.rows.get(OLD), before);
+  const refreshed = h.rows.get(OLD);
+  if (growAfterSave) assert.deepEqual(refreshed, before, 'a stale saved index must defer the whole row');
+  else {
+    assert.equal(refreshed.fileSize, Number(savedStat.size));
+    for (const field of ['sessionId', 'folder', 'projectPath', 'summary', 'firstPrompt', 'created', 'modified', 'fileMtime', 'messageCount', 'textContent', 'dailyMetrics', 'continuationIndex']) {
+      assert.deepEqual(refreshed[field], before[field], field);
+    }
+  }
   const preparedContinuations = await cache.prepareContinuationRefresh(h.folder, { files: new Set([OLD + '.jsonl']) });
   cache.refreshFolder(h.folder, { files: new Set([OLD + '.jsonl']), preparedContinuations });
+  const row = h.rows.get(OLD), index = JSON.parse(row.continuationIndex);
+  const finalStat = fs.statSync(h.file(OLD), { bigint: true });
+  assert.equal(row.fileSize, Number(finalStat.size));
+  assert.equal(row.fileMtime, pinned.toISOString());
+  assert.equal(index.mtime, row.fileMtime);
+  assert.equal(index.bytes, row.fileSize);
+  assert.deepEqual(index.stamp, continuationStamp(finalStat));
+  assert.deepEqual(index.ids, [HEAD]);
+  assert.equal(index.complete, true);
   assert.equal(h.views().length, 1);
 });
 
