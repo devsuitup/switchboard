@@ -212,7 +212,7 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
       const { sessionId } = createScheduleSession(schedule);
       const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
-      const result = await runCommand(claudeArgs, projectPath, `Manual run ${schedule.name}`, () => {});
+      const result = await runCommand(claudeArgs, projectPath, schedule.name, () => {}, { manual: true });
       if (!result?.ok) return { ok: false, error: result?.error || 'The schedule launcher returned no result. Check the shell settings and project folder, then try Run now again.' };
 
       log.info(`[schedule] Manual run triggered: ${schedule.name} (session ${sessionId})`);
@@ -224,4 +224,15 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
   });
 }
 
-module.exports = { ensureScheduleCreatorCommand, init };
+function reportRunExit(window, { name, projectPath, sessionId, manual = false, code, signal, sandbox, stderr }) {
+  if (code === 0 || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+  const sandboxPath = /^\s*claude-sandbox: claude not found in PATH(?:\s|$)/m.test(stderr || '');
+  const sandboxFailure = sandbox && /^\s*claude-sandbox:/m.test(stderr || '') && !sandboxPath;
+  const missingClaude = sandboxPath || (!sandboxFailure && (code === 127 || /\bspawn\s+claude\s+ENOENT\b|(^|[\s'"‘«:])claude['"’»]?\s*:?\s*(?:command not found|not found|is not recognized|CommandNotFoundException)\b/im.test(stderr || '')));
+  window.webContents.send('schedule-run-exit', {
+    name, projectPath, sessionId, manual, code, signal: signal || null,
+    failure: missingClaude ? 'claude-path' : sandbox ? 'sandbox' : 'exit',
+  });
+}
+
+module.exports = { ensureScheduleCreatorCommand, init, reportRunExit };

@@ -10,6 +10,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Fixed
 - The sessions sidebar skips rebuilding when a background refresh brings back identical data and its display state has not changed. Changed data is checked faster, exit labels stay current, and waiting ages advance every 30 seconds. (#543)
 - Remote hosts stay connected and keep refreshing when a local session-state read fails. (#701)
+- Failed scheduled runs now leave a persistent notice with the schedule name, exit code and what to check, even after Run now has shown its launch check mark. While the app window exists, repeated cron failures share one notice with a count and the latest error. (#707)
 - A legacy session name carried across successive session id changes no longer overwrites a newer name you chose. (#696)
 - Sessions keep their buffered terminal output, file-panel shell and grid controls when their session id changes. Switching sessions quickly also keeps the active session's shell label in the header. (#529)
 - Resizing the window in grid view waits for the resize to settle and refreshes only visible cards; single view keeps resizing live. Cards refresh once as they scroll into view, and returning to the window updates offscreen terminal sizes too. (#545)

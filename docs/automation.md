@@ -180,9 +180,19 @@ now** button, which starts a run at once. **Run now** ignores `cron` and
 `enabled`, and does not wait for a run of the same schedule that is still going.
 The button shows a check mark (tooltip **Launched!**) only after the configured shell
 process starts. This acknowledges the shell launch, not that Claude has started
-or that the task has completed successfully. A command failure after that point
-(including a missing `claude` command or bubblewrap failure) is recorded in the
-main log; it does not change the button or create a later failure notice.
+or that the task has completed successfully. Any non-zero exit after that point,
+even much later in the run, leaves a persistent error notice naming the schedule
+and exit code. A missing `claude` command points to installation and PATH in the
+configured shell profile; a sandbox failure points to Linux bubblewrap and the
+sandbox settings; other failures point to the main log. The PATH hint relies on
+exit 127, English command lookup diagnostics or PowerShell diagnostics. A localized
+Windows cmd.exe message (for example, French "n'est pas reconnu") with exit 1
+instead receives the log hint. Signal terminations name the signal. Cron-triggered
+runs show notices when the app window exists, without a modal; repeated failures
+replace the notice for that project and schedule, showing the failure count since
+the window loaded and the latest exit or signal. Run now keeps a separate notice
+per run, labelled as a manual run. Successful exits stay silent. The launch check
+mark does not change when a later failure arrives; dismiss the notice after reviewing it.
 A refused launch, an unavailable backend or a missing reply restores the Run
 now button and leaves a notice until you dismiss it. The notice names the
 schedule and reason, and asks you to check the schedule file and try Run now
@@ -191,7 +201,9 @@ settings; refused `add-dirs` name the paths to remove or change in the schedule.
 Shell spawn errors, including asynchronous errors before the shell starts,
 return a failure with a reminder to check shell settings and the project folder.
 A project archived before launch must be unarchived first. A successful retry
-clears that schedule's error.
+clears that schedule's launch error. Failures after launch belong to their own
+run and remain until dismissed, including when a fast failure arrives before
+the launch acknowledgement or another run is launched successfully.
 
 ## Triggers
 

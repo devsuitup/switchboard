@@ -3774,7 +3774,7 @@ if (!app.isPackaged) {
 
     // Shared runCommand for cron scheduler and "run now" — takes argv, not a shell string
     const { spawn: cpSpawn } = require('child_process');
-    async function runScheduleCommand(claudeArgv, cwd, name, onDone) {
+    async function runScheduleCommand(claudeArgv, cwd, name, onDone, { manual = false } = {}) {
       const globalSettings = getSetting('global') || {};
       if (isProjectSettingsArchived(cwd)) {
         log.info(`[schedule] ${name} suspended: project is archived`);
@@ -3835,9 +3835,13 @@ if (!app.isPackaged) {
       let stderr = '';
       child.stderr.on('data', (data) => { stderr += data.toString(); });
 
-      child.on('exit', (code) => {
+      child.on('exit', (code, signal) => {
         if (stderr.trim()) log.error(`[schedule] ${name} stderr:\n${stderr.trim()}`);
         log.info(`[schedule] ${name} finished (exit ${code})`);
+        scheduleIpc.reportRunExit(mainWindow, {
+          name, projectPath: cwd, sessionId: claudeArgv[claudeArgv.indexOf('--resume') + 1],
+          manual, code, signal, sandbox, stderr,
+        });
         activityReporter.sessionEnded(activityId);
         if (onDone) onDone();
       });

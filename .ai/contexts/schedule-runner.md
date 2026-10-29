@@ -42,11 +42,47 @@ is quoted for the configured login shell so its profile can initialise PATH.
 Sandbox resolution follows global and project settings and never downgrades
 silently; schedule add-dirs supply both CLI flags and sandbox binds.
 
-This acknowledgement confirms only shell creation. Claude lookup, bubblewrap
-startup and command exit failures after `spawn` remain in the main log, without
-a later renderer notice. Tests: `test/run-schedule-now-result.test.js` loads the
+This acknowledgement confirms only shell creation. The shared launcher's `exit`
+handler also calls `schedule-ipc.js`'s `reportRunExit(window, result)` for both
+manual and cron runs. Any non-zero exit, regardless of elapsed time, sends
+`schedule-run-exit` while the window and its web contents exist. Exit 0 is silent;
+signal terminations include the signal. The payload carries `name`, `projectPath`,
+`sessionId`, `manual`, `code`, `signal` and `failure`. The launcher receives the
+plain schedule name and an optional fifth argument `{ manual: true }` from Run
+now; cron defaults to `manual: false`. `failure` is `claude-path` for code 127
+or a lookup diagnostic anchored to the `claude` command word (including Windows
+ENOENT / English not recognized and PowerShell diagnostics),
+`sandbox` for other sandboxed failures, or `exit` otherwise. Stderr stays in the
+main log and is not sent to the renderer. A sandboxed run with a line beginning
+`claude-sandbox:` receives the sandbox diagnosis even with code 127 or another
+lookup diagnostic, except the script's exact `claude not found in PATH` diagnostic,
+which receives `claude-path`. Paths containing `.claude` and missing sandbox
+dependencies do not establish a missing Claude command. Localized cmd.exe lookup
+errors with exit 1 receive the log hint. A sandbox hint asks the user to check
+bubblewrap and settings; it does not assert that bubblewrap caused every failure
+of a sandboxed run.
+
+No existing schedule event could carry asynchronous completion: `run-schedule-now`
+is a request/reply that has already acknowledged spawn and is never invoked by
+cron. The new event stays in the existing schedule IPC module and is exposed as
+`onScheduleRunExit` in preload. `public/memory-workfiles-view.js` subscribes once
+at script load, independently of whether Agent Files is open, and shows a
+persistent B8 error with the schedule name, code (or signal) and recovery hint.
+Manual notices use `ScheduleRun:<sessionId>` and say "Manual run of schedule".
+Cron notices use `ScheduleRun:<projectPath>:<name>`: each failure replaces the
+previous notice for that project and name, with a cumulative failure count since
+the renderer loaded and the latest exit/signal and hint. Dismissing a notice or a
+successful exit does not reset that count. Both ids differ from the launch-refusal
+id `RunSchedule:<filePath>`: a fast exit arriving before the launch reply, or a
+later retry, cannot clear an exit failure. No modal or exit-success toast is used.
+With no live window the exit is logged only, without queuing a notice for restart.
+
+Tests: `test/run-schedule-now-result.test.js` loads the
 shipped launcher and IPC handler with disposable schedule files and a simulated
 child event boundary, without starting Electron or a real Claude process.
+`test/dom-schedule-run-exit.test.js` connects the shipped preload subscription
+to the renderer in jsdom, including persistent notices, recovery text and the
+fast-exit/launch-reply ordering.
 
 ## Schedule project registry
 

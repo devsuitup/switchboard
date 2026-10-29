@@ -27,6 +27,7 @@ function setup(t, { sandbox = false } = {}) {
   const done = [];
   const main = vm.createContext({
     cliSessionState,
+    scheduleIpc: require('../schedule-ipc'), mainWindow: null,
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     sessionHasPty: () => false,
     ptyPids: () => [],
