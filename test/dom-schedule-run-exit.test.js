@@ -70,11 +70,50 @@ test('a fast failure survives the later successful launch acknowledgement', asyn
   assert.match(h.document.querySelector('[role="alert"]')?.textContent || '', /Nightly.*127.*PATH/);
 });
 
-test('separate runs retain separate failures and signal exits name their signal', t => {
+test('manual runs retain separate failures and signal exits name their signal', t => {
   const h = setup(t);
-  h.exit({ name: 'Nightly', sessionId: 'first', code: 1, failure: 'exit' });
-  h.exit({ name: 'Nightly', sessionId: 'second', code: null, signal: 'SIGTERM', failure: 'exit' });
+  h.exit({ name: 'Nightly', projectPath: '/p', manual: true, sessionId: 'first', code: 1, failure: 'exit' });
+  h.exit({ name: 'Nightly', projectPath: '/p', manual: true, sessionId: 'second', code: null, signal: 'SIGTERM', failure: 'exit' });
   const alerts = h.document.querySelectorAll('[role="alert"]');
   assert.equal(alerts.length, 2);
+  assert.equal(alerts[0].dataset.noticeId, 'ScheduleRun:first');
+  assert.equal(alerts[1].dataset.noticeId, 'ScheduleRun:second');
   assert.match(alerts[1].textContent, /SIGTERM.*log/i);
+});
+
+test('cron failures replace the schedule notice with a count and the latest failure', t => {
+  const h = setup(t);
+  for (const [sessionId, code, failure] of [['first', 127, 'claude-path'], ['second', 42, 'exit'], ['third', 1, 'exit']]) {
+    h.exit({ name: 'Nightly', projectPath: '/p', manual: false, sessionId, code, failure });
+  }
+  const alerts = h.document.querySelectorAll('[role="alert"]');
+  assert.equal(alerts.length, 1, 'repeated cron failures must replace the previous notice');
+  assert.equal(alerts[0].dataset.noticeId, 'ScheduleRun:/p:Nightly');
+  assert.match(alerts[0].textContent, /Schedule Nightly failed 3 times, last: exited with code 1.*log/i);
+  assert.doesNotMatch(alerts[0].textContent, /PATH|127|42/);
+});
+
+test('cron notice keys distinguish projects and schedule names from manual runs', t => {
+  const h = setup(t);
+  const payload = { name: 'Nightly', projectPath: '/p', manual: false, code: 1, failure: 'exit' };
+  h.exit({ ...payload, sessionId: 'first' });
+  h.exit({ ...payload, sessionId: 'second' });
+  h.exit({ ...payload, projectPath: '/other', sessionId: 'other-project' });
+  h.exit({ ...payload, name: 'Weekly', sessionId: 'other-name' });
+  h.exit({ ...payload, manual: true, sessionId: 'manual' });
+  const alerts = [...h.document.querySelectorAll('[role="alert"]')];
+  assert.equal(alerts.length, 4);
+  assert.deepEqual(alerts.map(alert => alert.dataset.noticeId), [
+    'ScheduleRun:/p:Nightly', 'ScheduleRun:/other:Nightly', 'ScheduleRun:/p:Weekly', 'ScheduleRun:manual',
+  ]);
+  assert.match(alerts[0].textContent, /failed 2 times/);
+  for (const alert of alerts.slice(1)) assert.doesNotMatch(alert.textContent, /failed 2 times/);
+});
+
+test('manual run wording uses the plain schedule name and the manual flag', t => {
+  const h = setup(t);
+  h.exit({ name: 'nightly', projectPath: '/p', manual: true, sessionId: 'manual', code: 1, failure: 'exit' });
+  const alert = h.document.querySelector('[role="alert"]');
+  assert.match(alert.textContent, /^Manual run of schedule nightly exited with code 1/);
+  assert.doesNotMatch(alert.textContent, /Schedule Manual run/);
 });

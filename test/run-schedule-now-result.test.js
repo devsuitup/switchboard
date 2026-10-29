@@ -44,7 +44,10 @@ function setup(t, { sandbox = false, platform = 'linux', refused = [], spawnErro
     cliSessionState: { trackScheduleRun() {} }, activityReporter: { sessionStarted() {}, sessionEnded() {} }, log,
   });
   const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  vm.runInContext(extractFunction(main.replace(/^    (async )?function runScheduleCommand/m, '$1function runScheduleCommand'), 'runScheduleCommand'), ctx, { filename: path.join(__dirname, '../main.js') });
+  const source = main.replace(/^    (async )?function runScheduleCommand/m, '$1function runScheduleCommand');
+  const slice = extractFunction(source, 'runScheduleCommand');
+  const lineOffset = source.slice(0, source.indexOf(slice)).split('\n').length - 1;
+  vm.runInContext(slice, ctx, { filename: path.join(__dirname, '../main.js'), lineOffset, columnOffset: 0 });
   const localRequire = createRequire(path.join(__dirname, '../schedule-ipc.js'));
   const ipc = vm.createContext({
     require: name => name === 'electron' ? { ipcMain: { handle: (name, handler) => handlers.set(name, handler) } }
@@ -135,7 +138,7 @@ test('Run now exit 127 sends its schedule, exit code and PATH diagnosis after la
   const [channel, payload] = h.messages[0];
   assert.equal(channel, 'schedule-run-exit');
   assert.deepEqual(JSON.parse(JSON.stringify(payload)), {
-    name: 'Manual run test', projectPath: h.root, sessionId: 'manual-session',
+    name: 'test', manual: true, projectPath: h.root, sessionId: 'manual-session',
     code: 127, signal: null, failure: 'claude-path',
   });
 });
@@ -168,6 +171,7 @@ test('cron sandbox failure sends the same exit IPC with a sandbox diagnosis', as
   assert.equal(h.messages.length, 1);
   assert.equal(h.messages[0][1].name, 'Nightly cron');
   assert.equal(h.messages[0][1].sessionId, 'cron-session');
+  assert.equal(h.messages[0][1].manual, false);
   assert.equal(h.messages[0][1].failure, 'sandbox');
 });
 
@@ -184,6 +188,24 @@ for (const stderr of [
     h.children[0].emit('exit', 1);
     assert.equal(h.messages.length, 1);
     assert.equal(h.messages[0][1].failure, 'claude-path');
+  });
+}
+
+for (const [stderr, sandbox, code, failure] of [
+  ['claude-sandbox: bwrap not found — install bubblewrap', true, 125, 'sandbox'],
+  ['/home/u/.claude/hooks/pre.sh: line 2: jq: command not found', false, 1, 'exit'],
+  ['Error: settings file /home/u/.claude/settings.json not found', false, 1, 'exit'],
+  ['claude-sandbox: claude not found in PATH (/usr/bin)', true, 125, 'claude-path'],
+  ['claude-sandbox: setup failed\nclaude: command not found', true, 127, 'sandbox'],
+  ["'claude' n'est pas reconnu en tant que commande interne ou externe", false, 1, 'exit'],
+]) {
+  test(`exit diagnosis targets the command, not a path or sandbox dependency: ${stderr}`, async t => {
+    const h = setup(t, { sandbox });
+    await h.cron();
+    h.children[0].stderr.emit('data', Buffer.from(stderr));
+    h.children[0].emit('exit', code);
+    assert.equal(h.messages.length, 1);
+    assert.equal(h.messages[0][1].failure, failure);
   });
 }
 
