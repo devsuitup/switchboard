@@ -44,12 +44,11 @@ test('vm stubs stay unchanged when rewritten loaded sources are fed back in', ()
   assert.deepEqual(edits, []);
 });
 
-test('moving schedule-runner apart from db does not invent a stub ambiguity in project-settings-archive', () => {
-  const moves = { 'schedule-runner.js': 'src/main/schedules/schedule-runner.js', 'db.js': 'src/main/shared/db.js' };
-  const source = fs.readFileSync(path.join(__dirname, 'project-settings-archive.test.js'), 'utf8');
-  const sources = Object.fromEntries(['main.js', 'schedule-runner.js', 'db.js'].map(file =>
-    [file, fs.readFileSync(path.join(__dirname, '..', file), 'utf8')]));
-  assert.doesNotThrow(() => rewrite('test/project-settings-archive.test.js', source, moves, { sources }));
+test('moving a loader apart from its dependency does not invent a stub ambiguity', () => {
+  const source = "path.join(ROOT, 'a.js'); const stubs = { './b': 1 };";
+  const sources = { 'entry.js': "require('./b')", 'a.js': "require('./b')", 'b.js': '' };
+  assert.equal(rewrite('test/archive.test.js', source, map, { sources }),
+    "path.join(ROOT, 'src/main/viewer/a.js'); const stubs = { '../shared/b': 1 };");
 });
 
 test('a genuine conflicting require-stub key is refused', () => {
@@ -60,26 +59,216 @@ test('a genuine conflicting require-stub key is refused', () => {
 });
 
 test('a shared stub key is refused when only one loaded source moves, in either load order', () => {
-  const sources = Object.fromEntries(['main.js', 'schedule-runner.js'].map(file =>
-    [file, fs.readFileSync(path.join(__dirname, '..', file), 'utf8')]));
-  for (const order of [['main.js', 'schedule-runner.js'], ['schedule-runner.js', 'main.js']]) {
+  const sources = { 'entry.js': "require('./c')", 'a.js': "require('./c')" };
+  for (const order of [['entry.js', 'a.js'], ['a.js', 'entry.js']]) {
     const input = order.map(file => `path.join(ROOT, '${file}');`).join('\n')
-      + "\nconst stubs = { './encode-project-path': 1 };";
+      + "\nconst stubs = { './c': 1 };";
     assert.throws(() => rewrite('test/shared.test.js', input,
-      { 'schedule-runner.js': 'src/main/schedules/schedule-runner.js' }, { sources }),
-    /ambiguous vm stub \.\/encode-project-path/);
+      { 'a.js': map['a.js'] }, { sources }),
+    /ambiguous vm stub \.\/c/);
   }
 });
 
 test('helper-loaded sources with unassociated stub keys produce a listed warning', () => {
-  const source = fs.readFileSync(path.join(__dirname, 'git-changes-file-paths.test.js'), 'utf8');
+  const source = "function load(filename) { return fs.readFileSync(path.join(ROOT, filename)); } const stubs = { './c': 1 };";
   const warnings = [];
-  rewrite('test/git-changes-file-paths.test.js', source,
-    { 'git-changes-file.js': 'src/main/changes/git-changes-file.js' }, {
-      sources: { 'git-changes-file.js': fs.readFileSync(path.join(__dirname, '..', 'git-changes-file.js'), 'utf8') },
+  rewrite('test/helper.test.js', source,
+    { 'a.js': map['a.js'] }, {
+      sources: { 'a.js': "require('./c')" },
       onWarning: warning => warnings.push(warning),
     });
-  assert.ok(warnings.some(warning => /git-changes-file-paths.*unassociated vm stub.*resolve-path-on-disk/.test(warning)), warnings.join('\n'));
+  assert.ok(warnings.some(warning => /helper.*unassociated vm stub.*\.\/c/.test(warning)), warnings.join('\n'));
+});
+
+test('excerpt-only reads in projects-changed and run-schedule-now-result warn without conflicting with a full source', () => {
+  const sources = { 'entry.js': "require('./c')", 'a.js': "require('./c')" };
+  for (const excerpt of [
+    "const file = path.join(ROOT, 'entry.js'); const text = fs.readFileSync(file, 'utf8'); const start = text.indexOf('function f'); vm.runInContext(text.slice(start), ctx);",
+    "const text = fs.readFileSync(path.join(ROOT, 'entry.js'), 'utf8'); vm.runInContext(text.replace(/x/, 'y').substring(1), ctx);",
+  ]) {
+    const warnings = [];
+    const input = `${excerpt}\nvm.runInContext(fs.readFileSync(path.join(ROOT, 'a.js'), 'utf8'), ctx); const stubs = { './c': 1 };`;
+    let output;
+    assert.doesNotThrow(() => {
+      output = rewrite('test/excerpt.test.js', input, { 'a.js': map['a.js'] }, { sources, onWarning: warning => warnings.push(warning) });
+    });
+    assert.match(output, /'\.\.\/\.\.\/\.\.\/c': 1/);
+    assert.ok(warnings.some(warning => /excerpt.test.js.*excerpt-only.*entry.js.*manual review/.test(warning)), warnings.join('\n'));
+    assert.equal(rewrite('test/excerpt.test.js', output, { 'a.js': map['a.js'] }, { sources }), output);
+  }
+});
+
+test('a full source evaluation still participates in conflicts even when the source is also sliced', () => {
+  const input = "const text = fs.readFileSync(path.join(ROOT, 'entry.js')); text.indexOf('x'); text.slice(1); vm.runInContext(text, ctx); path.join(ROOT, 'a.js'); const stubs = { './c': 1 };";
+  assert.throws(() => rewrite('test/mixed.test.js', input, { 'a.js': map['a.js'] }, {
+    sources: { 'entry.js': "require('./c')", 'a.js': "require('./c')" },
+  }), /ambiguous vm stub/);
+});
+
+test('path.join trailing segments are never rewritten as bare module filenames', () => {
+  const moves = { 'writer.js': 'src/main/sessions/writer.js' };
+  for (const input of [
+    "path.join(__dirname, 'workers', 'writer.js');",
+    "path.join(ROOT, 'workers', 'writer.js');",
+    "path.join(base, 'workers', 'writer.js');",
+    "path.join(__dirname, directory, 'writer.js');",
+    "path.join('workers', 'writer.js');",
+    "path.join(base, 'writer.js');",
+  ]) assert.equal(rewrite('entry.js', input, moves), input);
+  const relocated = rewrite('entry.js', "path.join(__dirname, 'workers', 'writer.js');", {
+    'workers/writer.js': 'src/main/sessions/writer.js',
+  });
+  assert.equal(relocated, "path.join(__dirname, 'src/main/sessions/writer.js');");
+  assert.equal(rewrite('entry.js', relocated, moves), relocated);
+});
+
+test('source-text assertions warn for embedded requires and quoted relative paths without altering text', () => {
+  const input = `const start = source.indexOf("const x = require('./a');"); const other = source.indexOf("'./b'");`;
+  const warnings = [];
+  assert.equal(rewrite('test/assertions.test.js', input, map, { onWarning: warning => warnings.push(warning) }), input);
+  assert.ok(warnings.some(warning => /assertions.test.js:1:.*source-text.*\.\/a/.test(warning)), warnings.join('\n'));
+  assert.ok(warnings.some(warning => /assertions.test.js:1:.*source-text.*\.\/b/.test(warning)), warnings.join('\n'));
+});
+
+test('prototype-named literals stay byte-identical with a nonempty move map', () => {
+  const input = "const names = ['toString', 'constructor', 'valueOf', 'hasOwnProperty'];";
+  assert.equal(rewrite('consumer.js', input, map), input);
+  assert.equal(rewrite('consumer.js', input, validateMap(map)), input);
+});
+
+for (const [kind, input] of [
+  ['regex', String.raw`const re = /require\('\.\/a'\)/;`],
+  ['template', "const text = `require('./a')`;"],
+]) test(`${kind} source assertions warn without changing their text`, () => {
+  const warnings = [];
+  assert.equal(rewrite('test/assertions.test.js', input, map, { onWarning: w => warnings.push(w) }), input);
+  assert.ok(warnings.some(w => /:1: source-text reference \.\/a;/.test(w)), warnings.join('\n'));
+});
+
+test('unsupported path.join anchors warn for moved keys and basenames only', () => {
+  const input = "path.join(root, 'a.js');\npath.join(base, 'workers', 'child.js');\npath.join(base, 'other.js');";
+  const warnings = [];
+  assert.equal(rewrite('test/joins.test.js', input, { ...map, 'workers/child.js': 'src/workers/child.js' }, {
+    onWarning: w => warnings.push(w),
+  }), input);
+  assert.deepEqual(warnings, [
+    'test/joins.test.js:1: path.join segment a.js names a moved module; review manually',
+    'test/joins.test.js:2: path.join segment child.js names a moved module; review manually',
+  ]);
+});
+
+test('excerpt warnings require a moved dependency or a matching local stub', () => {
+  const input = "const text = fs.readFileSync(path.join(ROOT, 'entry.js')); text.slice(1);";
+  for (const [content, suffix, expected] of [
+    ["require('./unrelated')", '', false],
+    ["require('./a')", '', true],
+    ["require('./unrelated')", "const stubs = { './unrelated': 1 };", true],
+  ]) {
+    const warnings = [];
+    rewrite('test/excerpts.test.js', input + suffix, map, {
+      sources: { 'entry.js': content }, onWarning: w => warnings.push(w),
+    });
+    assert.equal(warnings.some(w => w.includes('excerpt-only')), expected, content);
+  }
+});
+
+test('excerpt warnings still resolve moved dependencies after applying the move', () => {
+  const input = "const text = fs.readFileSync(path.join(ROOT, 'a.js')); text.slice(1);";
+  const firstWarnings = [];
+  const output = rewrite('test/excerpts.test.js', input, map, {
+    sources: { 'a.js': "require('./b')" }, onWarning: w => firstWarnings.push(w),
+  });
+  assert.ok(firstWarnings.some(w => w.includes('excerpt-only')), firstWarnings.join('\n'));
+  const warnings = [];
+  assert.equal(rewrite('test/excerpts.test.js', output, map, {
+    sources: { 'a.js': "require('../shared/b')" }, onWarning: w => warnings.push(w),
+  }), output);
+  assert.ok(warnings.some(w => w.includes('excerpt-only')), 'moved source must retain its affected-excerpt warning');
+});
+
+for (const expression of ['text.slice(0)', 'text.substring(0)', 'extractFunction(text)', 'extractAndRun(text)']) {
+  test(`${expression} remains a full source load`, () => {
+    const input = `const text = fs.readFileSync(path.join(ROOT, 'entry.js')); vm.runInContext(${expression}, ctx); path.join(ROOT, 'a.js'); const stubs = { './c': 1 };`;
+    assert.throws(() => rewrite('test/full.test.js', input, { 'a.js': map['a.js'] }, {
+      sources: { 'entry.js': "require('./c')", 'a.js': "require('./c')" },
+    }), /ambiguous vm stub/, expression);
+  });
+}
+test('extractAndRun calling vm internally remains a full source load', () => {
+  const input = "function extractAndRun(text) { vm.runInContext(text, ctx); } const text = fs.readFileSync(path.join(ROOT, 'entry.js')); extractAndRun(text); path.join(ROOT, 'a.js'); const stubs = { './c': 1 };";
+  assert.throws(() => rewrite('test/full.test.js', input, { 'a.js': map['a.js'] }, {
+    sources: { 'entry.js': "require('./c')", 'a.js': "require('./c')" },
+  }), /ambiguous vm stub/);
+});
+
+test('the CLI preserves its own script and helper bytes across repeated applies', t => {
+  const { root, write } = cliFixture(t, 'move-self-');
+  const protectedFiles = ['scripts/move-modules.js', 'scripts/module-paths.js'];
+  const originals = new Map(protectedFiles.map(file => [file, fs.readFileSync(path.join(__dirname, '..', file))]));
+  for (const [file, bytes] of originals) write(file, bytes);
+  write('scripts/source-map.json', JSON.stringify({ 'a.js': map['a.js'] }));
+  write(map['a.js'], 'module.exports = 1;');
+  write('consumer.js', "require('./a');");
+  for (let i = 0; i < 2; i++) {
+    const result = spawnSync(process.execPath, [path.join(root, 'scripts/move-modules.js')], {
+      env: { ...process.env, NODE_PATH: [path.join(__dirname, '../node_modules'), process.env.NODE_PATH].filter(Boolean).join(path.delimiter) },
+      encoding: 'utf8', timeout: 120000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    for (const [file, bytes] of originals) assert.ok(fs.readFileSync(path.join(root, file)).equals(bytes), `${file} must stay byte-identical`);
+  }
+  assert.equal(fs.readFileSync(path.join(root, 'consumer.js'), 'utf8'), "require('./src/main/viewer/a');");
+});
+
+function cliFixture(t, prefix) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  t.after(() => {
+    assert.equal(path.dirname(fs.realpathSync.native(root)), fs.realpathSync.native(os.tmpdir()));
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const write = (file, content) => {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), content);
+  };
+  const run = (...args) => spawnSync(process.execPath,
+    [path.join(__dirname, '../scripts/move-modules.js'), '--root', root, ...args], { encoding: 'utf8', timeout: 120000 });
+  return { root, write, run };
+}
+
+test('the CLI refuses apply before moves without changing any file and allows check to list pending moves', t => {
+  const { root, write, run } = cliFixture(t, 'move-pending-');
+  write('scripts/source-map.json', JSON.stringify({ 'a.js': map['a.js'] }));
+  write('a.js', 'module.exports = 1;');
+  const input = "require('./a'); path.join(__dirname, 'workers', 'a.js');";
+  write('consumer.js', input);
+  const check = run('--check');
+  assert.equal(check.status, 1, check.stderr);
+  assert.match(check.stdout, /pending git mv/);
+  const apply = run();
+  assert.equal(apply.status, 2, apply.stderr);
+  assert.match(apply.stderr, /pending.*git mv|git mv.*pending/);
+  assert.equal(fs.readFileSync(path.join(root, 'consumer.js'), 'utf8'), input);
+  assert.equal(fs.readFileSync(path.join(root, 'a.js'), 'utf8'), 'module.exports = 1;');
+});
+
+test('the CLI lists every ambiguous stub in every file and refuses all writes', t => {
+  const { root, write, run } = cliFixture(t, 'move-conflicts-');
+  const moves = { ...map, 'b.js': 'src/main/shared/adapters/b.js' };
+  write('scripts/source-map.json', JSON.stringify(moves));
+  write(map['a.js'], "require('./c'); require('./d');");
+  write(moves['b.js'], "require('./c'); require('./d');");
+  const input = "path.join(ROOT, 'a.js'); path.join(ROOT, 'b.js'); const stubs = { './c': 1, './d': 2 };";
+  for (const file of ['test/first.test.js', 'test/last.test.js']) write(file, input);
+  write('consumer.js', "require('./a');");
+  for (const args of [['--check'], []]) {
+    const result = run(...args);
+    assert.equal(result.status, 2, result.stderr);
+    for (const file of ['first', 'last']) {
+      for (const key of ['c', 'd']) assert.ok(result.stderr.includes(`test/${file}.test.js: ambiguous vm stub ./${key}`), result.stderr);
+    }
+    assert.equal(fs.readFileSync(path.join(root, 'consumer.js'), 'utf8'), "require('./a');");
+    assert.equal(fs.readFileSync(path.join(root, 'test/first.test.js'), 'utf8'), input);
+  }
 });
 
 test('the CLI rewrites cjs and mjs consumers in every scanned JavaScript scope', (t) => {

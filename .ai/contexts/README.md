@@ -8,6 +8,7 @@ change without re-reading `main.js`, now ~4100 LOC.
 
 | Touching this area | Read |
 |---|---|
+| Module-move codemod, VM stub inference and layout checks | [module-moves](module-moves.md) |
 | SQLite, indexing, search, heatmap aggregation, fs.watch | [session-cache](session-cache.md) |
 | Cron schedules, schedule `.md` files, `claude --resume -p` spawn | [schedule-runner](schedule-runner.md) |
 | Subagent sidebar grouping, transcript view, parent→child wiring | [subagent-observability](subagent-observability.md) |
