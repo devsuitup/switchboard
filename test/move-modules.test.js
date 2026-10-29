@@ -84,7 +84,7 @@ test('excerpt-only reads in projects-changed and run-schedule-now-result warn wi
   const sources = { 'entry.js': "require('./c')", 'a.js': "require('./c')" };
   for (const excerpt of [
     "const file = path.join(ROOT, 'entry.js'); const text = fs.readFileSync(file, 'utf8'); const start = text.indexOf('function f'); vm.runInContext(text.slice(start), ctx);",
-    "const text = fs.readFileSync(path.join(ROOT, 'entry.js'), 'utf8'); vm.runInContext(extractFunction(text.replace(/x/, 'y'), 'f'), ctx);",
+    "const text = fs.readFileSync(path.join(ROOT, 'entry.js'), 'utf8'); vm.runInContext(text.replace(/x/, 'y').substring(1), ctx);",
   ]) {
     const warnings = [];
     const input = `${excerpt}\nvm.runInContext(fs.readFileSync(path.join(ROOT, 'a.js'), 'utf8'), ctx); const stubs = { './c': 1 };`;
@@ -128,6 +128,96 @@ test('source-text assertions warn for embedded requires and quoted relative path
   assert.equal(rewrite('test/assertions.test.js', input, map, { onWarning: warning => warnings.push(warning) }), input);
   assert.ok(warnings.some(warning => /assertions.test.js:1:.*source-text.*\.\/a/.test(warning)), warnings.join('\n'));
   assert.ok(warnings.some(warning => /assertions.test.js:1:.*source-text.*\.\/b/.test(warning)), warnings.join('\n'));
+});
+
+test('prototype-named literals stay byte-identical with a nonempty move map', () => {
+  const input = "const names = ['toString', 'constructor', 'valueOf', 'hasOwnProperty'];";
+  assert.equal(rewrite('consumer.js', input, map), input);
+  assert.equal(rewrite('consumer.js', input, validateMap(map)), input);
+});
+
+for (const [kind, input] of [
+  ['regex', String.raw`const re = /require\('\.\/a'\)/;`],
+  ['template', "const text = `require('./a')`;"],
+]) test(`${kind} source assertions warn without changing their text`, () => {
+  const warnings = [];
+  assert.equal(rewrite('test/assertions.test.js', input, map, { onWarning: w => warnings.push(w) }), input);
+  assert.ok(warnings.some(w => /:1: source-text reference \.\/a;/.test(w)), warnings.join('\n'));
+});
+
+test('unsupported path.join anchors warn for moved keys and basenames only', () => {
+  const input = "path.join(root, 'a.js');\npath.join(base, 'workers', 'child.js');\npath.join(base, 'other.js');";
+  const warnings = [];
+  assert.equal(rewrite('test/joins.test.js', input, { ...map, 'workers/child.js': 'src/workers/child.js' }, {
+    onWarning: w => warnings.push(w),
+  }), input);
+  assert.deepEqual(warnings, [
+    'test/joins.test.js:1: path.join segment a.js names a moved module; review manually',
+    'test/joins.test.js:2: path.join segment child.js names a moved module; review manually',
+  ]);
+});
+
+test('excerpt warnings require a moved dependency or a matching local stub', () => {
+  const input = "const text = fs.readFileSync(path.join(ROOT, 'entry.js')); text.slice(1);";
+  for (const [content, suffix, expected] of [
+    ["require('./unrelated')", '', false],
+    ["require('./a')", '', true],
+    ["require('./unrelated')", "const stubs = { './unrelated': 1 };", true],
+  ]) {
+    const warnings = [];
+    rewrite('test/excerpts.test.js', input + suffix, map, {
+      sources: { 'entry.js': content }, onWarning: w => warnings.push(w),
+    });
+    assert.equal(warnings.some(w => w.includes('excerpt-only')), expected, content);
+  }
+});
+
+test('excerpt warnings still resolve moved dependencies after applying the move', () => {
+  const input = "const text = fs.readFileSync(path.join(ROOT, 'a.js')); text.slice(1);";
+  const firstWarnings = [];
+  const output = rewrite('test/excerpts.test.js', input, map, {
+    sources: { 'a.js': "require('./b')" }, onWarning: w => firstWarnings.push(w),
+  });
+  assert.ok(firstWarnings.some(w => w.includes('excerpt-only')), firstWarnings.join('\n'));
+  const warnings = [];
+  assert.equal(rewrite('test/excerpts.test.js', output, map, {
+    sources: { 'a.js': "require('../shared/b')" }, onWarning: w => warnings.push(w),
+  }), output);
+  assert.ok(warnings.some(w => w.includes('excerpt-only')), 'moved source must retain its affected-excerpt warning');
+});
+
+for (const expression of ['text.slice(0)', 'text.substring(0)', 'extractFunction(text)', 'extractAndRun(text)']) {
+  test(`${expression} remains a full source load`, () => {
+    const input = `const text = fs.readFileSync(path.join(ROOT, 'entry.js')); vm.runInContext(${expression}, ctx); path.join(ROOT, 'a.js'); const stubs = { './c': 1 };`;
+    assert.throws(() => rewrite('test/full.test.js', input, { 'a.js': map['a.js'] }, {
+      sources: { 'entry.js': "require('./c')", 'a.js': "require('./c')" },
+    }), /ambiguous vm stub/, expression);
+  });
+}
+test('extractAndRun calling vm internally remains a full source load', () => {
+  const input = "function extractAndRun(text) { vm.runInContext(text, ctx); } const text = fs.readFileSync(path.join(ROOT, 'entry.js')); extractAndRun(text); path.join(ROOT, 'a.js'); const stubs = { './c': 1 };";
+  assert.throws(() => rewrite('test/full.test.js', input, { 'a.js': map['a.js'] }, {
+    sources: { 'entry.js': "require('./c')", 'a.js': "require('./c')" },
+  }), /ambiguous vm stub/);
+});
+
+test('the CLI preserves its own script and helper bytes across repeated applies', t => {
+  const { root, write } = cliFixture(t, 'move-self-');
+  const protectedFiles = ['scripts/move-modules.js', 'scripts/module-paths.js'];
+  const originals = new Map(protectedFiles.map(file => [file, fs.readFileSync(path.join(__dirname, '..', file))]));
+  for (const [file, bytes] of originals) write(file, bytes);
+  write('scripts/source-map.json', JSON.stringify({ 'a.js': map['a.js'] }));
+  write(map['a.js'], 'module.exports = 1;');
+  write('consumer.js', "require('./a');");
+  for (let i = 0; i < 2; i++) {
+    const result = spawnSync(process.execPath, [path.join(root, 'scripts/move-modules.js')], {
+      env: { ...process.env, NODE_PATH: [path.join(__dirname, '../node_modules'), process.env.NODE_PATH].filter(Boolean).join(path.delimiter) },
+      encoding: 'utf8', timeout: 120000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    for (const [file, bytes] of originals) assert.ok(fs.readFileSync(path.join(root, file)).equals(bytes), `${file} must stay byte-identical`);
+  }
+  assert.equal(fs.readFileSync(path.join(root, 'consumer.js'), 'utf8'), "require('./src/main/viewer/a');");
 });
 
 function cliFixture(t, prefix) {

@@ -14,11 +14,11 @@ function validateMap(map) {
         || /^[A-Za-z]:/.test(value) || value.split('/').some((s) => !s || s === '.' || s === '..')
         || !value.endsWith('.js')) throw new Error(`Invalid module path: ${value}`);
     }
-    if (p.basename(old) !== p.basename(target) || old === target || map[target]
+    if (p.basename(old) !== p.basename(target) || old === target || Object.hasOwn(map, target)
       || destinations.has(target)) throw new Error(`Invalid move: ${old} -> ${target}`);
     destinations.add(target);
   }
-  return map;
+  return Object.assign(Object.create(null), map);
 }
 
 function originalFile(file, map) {
@@ -76,17 +76,20 @@ function excerptOnly(join, tree) {
       const call = parents.get(parent);
       if (call?.type !== 'CallExpression' || call.callee !== parent) return false;
       const method = parent.computed ? parent.property.value : parent.property.name;
+      if (['slice', 'substring'].includes(method) && call.arguments.length === 1
+        && call.arguments[0].type === 'Literal' && call.arguments[0].value === 0) return extracted(call);
       if (['indexOf', 'slice', 'substring', 'substr'].includes(method)) return true;
       if (['replace', 'replaceAll', 'toString'].includes(method)) return extracted(call);
     }
     if (parent?.type === 'CallExpression' && parent.arguments.includes(node)
-      && parent.callee.type === 'Identifier' && /^extract/.test(parent.callee.name)) return true;
+      && parent.callee.type === 'Identifier' && /^extract/.test(parent.callee.name)) return extracted(parent);
     return false;
   }
   return reads.length > 0 && reads.every(extracted);
 }
 
 function rewrite(file, source, map, options = {}) {
+  map = validateMap(map);
   const edits = [];
   const before = originalFile(file, map);
   const add = (start, end, value, old) => {
@@ -113,24 +116,45 @@ function rewrite(file, source, map, options = {}) {
       .map(({ node }) => node));
     const stubValues = new Set([...stubNodes].map(node => node.value));
     const quote = (node, value) => `${source[node.range[0]]}${value}${source[node.range[0]]}`;
+    const movedNames = new Set(Object.keys(map).flatMap(old => [old, p.basename(old)]));
+    const warnSegments = parts => {
+      for (const part of parts) {
+        if (part.type === 'Literal' && movedNames.has(part.value)) {
+          options.onWarning?.(`${file}:${part.loc.start.line}: path.join segment ${part.value} names a moved module; review manually`);
+        }
+      }
+    };
     for (const { node } of tree) {
       if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression'
         || node.callee.object.name !== 'path' || node.callee.property.name !== 'join') continue;
       const [anchor, ...parts] = node.arguments;
       parts.forEach(n => handled.add(n));
       if (anchor?.type !== 'Identifier' || !['__dirname', 'ROOT'].includes(anchor.name)
-        || !parts.length || !parts.every((n) => n.type === 'Literal' && typeof n.value === 'string')) continue;
+        || !parts.length || !parts.every((n) => n.type === 'Literal' && typeof n.value === 'string')) {
+        warnSegments(parts);
+        continue;
+      }
       const base = anchor.name === 'ROOT' ? '' : p.dirname(before);
       const old = p.join(base, ...parts.map((n) => n.value));
       const currentBase = anchor.name === 'ROOT' ? '' : p.dirname(file);
       const current = p.join(currentBase, ...parts.map((n) => n.value));
       const loadedFile = originalFile(Object.values(map).includes(current) ? current : old, map);
       if (excerptOnly(node, tree)) {
-        if (Object.keys(map).length && options.sources?.[loadedFile]) {
+        const affected = relativeRequires(options.sources?.[loadedFile] || '').some(spec => {
+          const currentFile = map[loadedFile] || loadedFile;
+          const from = currentFile !== loadedFile && alreadyRewritten(currentFile, spec.value, map, options.root) ? currentFile : loadedFile;
+          const target = moduleTarget(from, spec.value, map, options.root);
+          return stubValues.has(spec.value) || map[target] || Object.values(map).includes(target);
+        });
+        if (affected) {
           options.onWarning?.(`${file}: excerpt-only source ${loadedFile}; VM stubs require manual review`);
         }
       } else loaded.add(loadedFile);
-      if (Object.values(map).includes(current) || old.startsWith('../')) continue;
+      if (Object.values(map).includes(current)) continue;
+      if (old.startsWith('../')) {
+        warnSegments(parts);
+        continue;
+      }
       if (map[old] || before !== file) {
         const nextBase = anchor.name === 'ROOT' ? '' : p.dirname(file);
         const dest = map[old] || old;
@@ -138,7 +162,7 @@ function rewrite(file, source, map, options = {}) {
         const value = quote(parts[0], next);
         add(parts[0].range[0], parts.at(-1).range[1], value, parts.map((n) => n.value).join('/'));
         parts.forEach((n) => handled.add(n));
-      }
+      } else warnSegments(parts);
     }
     const stubs = new Map();
     const ambiguities = new Set();
@@ -182,9 +206,7 @@ function rewrite(file, source, map, options = {}) {
       }
     }
     const requires = new Set(relativeRequires(source).map((n) => n.range[0]));
-    for (const { node } of tree) {
-      if (node.type !== 'Literal' || typeof node.value !== 'string' || handled.has(node)) continue;
-      const value = node.value;
+    const warnSourceText = (node, value) => {
       for (const match of value.matchAll(/(['"])(\.[^'"\s]*)\1/g)) {
         const target = [moduleTarget(before, match[2], map, options.root), moduleTarget('', match[2], map, options.root)]
           .find(candidate => map[candidate]);
@@ -192,6 +214,13 @@ function rewrite(file, source, map, options = {}) {
           options.onWarning?.(`${file}:${node.loc.start.line}: source-text reference ${match[2]}; review manually after moving ${target}`);
         }
       }
+    };
+    for (const { node } of tree) {
+      if (node.regex) warnSourceText(node, node.regex.pattern.replace(/\\([.\/()'"])/g, '$1'));
+      if (node.type === 'TemplateElement') warnSourceText(node, node.value.cooked ?? node.value.raw);
+      if (node.type !== 'Literal' || typeof node.value !== 'string' || handled.has(node)) continue;
+      const value = node.value;
+      warnSourceText(node, value);
       let next = value;
       if (requires.has(node.range[0])) {
         const target = moduleTarget(before, value, map, options.root);
@@ -238,7 +267,8 @@ function run(argv) {
   }
   const files = [...new Set([...appFiles(root), ...walk(root, 'public'), ...walk(root, 'test'),
     ...walk(root, 'e2e'), ...walk(root, '.ai', (f) => /\.(md|json)$/.test(f)),
-    ...walk(root, 'docs', (f) => f.endsWith('.md'))])];
+    ...walk(root, 'docs', (f) => f.endsWith('.md'))])]
+    .filter(file => !['scripts/move-modules.js', 'scripts/module-paths.js'].includes(file));
   const sources = {};
   for (const file of files.filter(isJavaScript)) {
     sources[originalFile(file, map)] = fs.readFileSync(path.join(root, file), 'utf8');
