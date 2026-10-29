@@ -3785,9 +3785,10 @@ if (!app.isPackaged) {
     // Shared runCommand for cron scheduler and "run now" — takes argv, not a shell string
     const { spawn: cpSpawn } = require('child_process');
     async function runScheduleCommand(claudeArgv, cwd, name, onDone, { manual = false } = {}) {
+      const runName = manual ? `Manual run: ${name}` : name;
       const globalSettings = getSetting('global') || {};
       if (isProjectSettingsArchived(cwd)) {
-        log.info(`[schedule] ${name} suspended: project is archived`);
+        log.info(`[schedule] ${runName} suspended: project is archived`);
         if (onDone) onDone();
         return { ok: false, error: 'Project is archived; unarchive it before running schedules.' };
       }
@@ -3800,7 +3801,7 @@ if (!app.isPackaged) {
 
       const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
       if (sandbox && process.platform !== 'linux') {
-        log.error(`[schedule] ${name}: skipped — sandbox is enabled but requires Linux (bubblewrap)`);
+        log.error(`[schedule] ${runName}: skipped — sandbox is enabled but requires Linux (bubblewrap)`);
         if (onDone) onDone();
         return { ok: false, error: 'The schedule sandbox requires Linux (bubblewrap). Run it on Linux with bubblewrap, or disable Sandbox in the project or global settings and try Run now again.' };
       }
@@ -3813,7 +3814,7 @@ if (!app.isPackaged) {
         // see docs/sandbox.md ("Schedules")
         const refused = scheduleBindRefusals(addDirs, await scheduleProjects().list(), os.homedir(), cwd);
         if (refused.length) {
-          log.error(`[schedule] ${name}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
+          log.error(`[schedule] ${runName}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
           if (onDone) onDone();
           return { ok: false, error: `Sandbox add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}. Remove or change these add-dirs in the schedule file, then try Run now again.` };
         }
@@ -3833,21 +3834,21 @@ if (!app.isPackaged) {
           env,
         });
       } catch (err) {
-        log.error(`[schedule] ${name} error:`, err.message);
+        log.error(`[schedule] ${runName} error:`, err.message);
         if (onDone) onDone();
         return spawnFailure(err);
       }
-      cliSessionState.trackScheduleRun(claudeArgv[claudeArgv.indexOf('--resume') + 1], child, cwd, name);
+      cliSessionState.trackScheduleRun(claudeArgv[claudeArgv.indexOf('--resume') + 1], child, cwd, runName);
       // see .ai/contexts/activitywatch.md ("Running")
-      const activityId = `schedule:${name}:${Date.now()}`;
-      activityReporter.sessionStarted({ sessionId: activityId, project: cwd, name: `Scheduled: ${name}` });
+      const activityId = `schedule:${runName}:${Date.now()}`;
+      activityReporter.sessionStarted({ sessionId: activityId, project: cwd, name: `Scheduled: ${runName}` });
 
       let stderr = '';
       child.stderr.on('data', (data) => { stderr += data.toString(); });
 
       child.on('exit', (code, signal) => {
-        if (stderr.trim()) log.error(`[schedule] ${name} stderr:\n${stderr.trim()}`);
-        log.info(`[schedule] ${name} finished (exit ${code})`);
+        if (stderr.trim()) log.error(`[schedule] ${runName} stderr:\n${stderr.trim()}`);
+        log.info(`[schedule] ${runName} finished (exit ${code})`);
         scheduleIpc.reportRunExit(mainWindow, {
           name, projectPath: cwd, sessionId: claudeArgv[claudeArgv.indexOf('--resume') + 1],
           manual, code, signal, sandbox, stderr,
@@ -3859,7 +3860,7 @@ if (!app.isPackaged) {
       return new Promise(resolve => {
         child.once('spawn', () => resolve({ ok: true }));
         child.on('error', (err) => {
-          log.error(`[schedule] ${name} error:`, err.message);
+          log.error(`[schedule] ${runName} error:`, err.message);
           activityReporter.sessionEnded(activityId);
           if (onDone) onDone();
           resolve(spawnFailure(err));

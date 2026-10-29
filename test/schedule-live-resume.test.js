@@ -128,9 +128,9 @@ function setup(t, { sandbox = false } = {}) {
   return {
     get child() { return children[0]; },
     spawns, done, messages, confirmations, openTerminalCalls, session, ctx, settings, dom,
-    start: async () => {
+    start: async ({ manual = false } = {}) => {
       const { claudeArgs } = buildScheduleCommand(SID, { name: 'Scheduled task', cli: {} });
-      (await main.runScheduleCommand(claudeArgs, dir, 'Scheduled task', () => done.push(true)));
+      (await main.runScheduleCommand(claudeArgs, dir, 'Scheduled task', () => done.push(true), { manual }));
       return children.at(-1);
     },
     open: (options) => app.openSession(session, undefined, options),
@@ -162,6 +162,15 @@ test('a click during a scheduled run asks Resume anyway and opens when accepted'
   await h.open();
   assert.equal(h.openTerminalCalls.length, 2, 'the completed scheduled transcript becomes resumable');
   assert.equal(h.done.length, 1);
+});
+
+test('a click during Run now retains the manual marker in the resume question', async t => {
+  const h = setup(t);
+  await h.start({ manual: true });
+  assert.equal((await h.query()).scheduleName, 'Manual run: Scheduled task');
+  await h.open();
+  assert.equal(h.openTerminalCalls.length, 1);
+  assert.match(h.confirmations[0].message[0], /in a scheduled run of "Manual run: Scheduled task"/);
 });
 
 test('automatic reload during a scheduled run skips the resume without prompting', async (t) => {

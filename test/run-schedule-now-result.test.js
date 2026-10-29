@@ -16,8 +16,8 @@ function setup(t, { sandbox = false, platform = 'linux', refused = [], spawnErro
   const file = path.join(root, '.claude', 'commands', 'schedule-test.md');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, '---\nname: test\n---\nDo the task');
-  const handlers = new Map(), children = [], events = [], messages = [];
-  const log = { info() {}, warn() {}, error() {} };
+  const handlers = new Map(), children = [], events = [], messages = [], logs = [], activities = [];
+  const log = { info: (...args) => logs.push(args), warn: (...args) => logs.push(args), error: (...args) => logs.push(args) };
   const ctx = vm.createContext({
     getSetting: () => ({}), isProjectSettingsArchived: () => archived, Date,
     mainWindow: windowState === 'absent' ? null : {
@@ -41,7 +41,8 @@ function setup(t, { sandbox = false, platform = 'linux', refused = [], spawnErro
       });
       return child;
     },
-    cliSessionState: { trackScheduleRun() {} }, activityReporter: { sessionStarted() {}, sessionEnded() {} }, log,
+    cliSessionState: { trackScheduleRun() {} },
+    activityReporter: { sessionStarted: entry => activities.push(entry), sessionEnded() {} }, log,
   });
   const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   const source = main.replace(/^    (async )?function runScheduleCommand/m, '$1function runScheduleCommand');
@@ -63,7 +64,7 @@ function setup(t, { sandbox = false, platform = 'linux', refused = [], spawnErro
   ipc.module.exports.init(log, noReply ? async () => undefined : ctx.runScheduleCommand, () => true, () => false);
   return { run: () => handlers.get('run-schedule-now')(null, file),
     cron: () => ctx.runScheduleCommand(['--resume', 'cron-session'], root, 'Nightly cron', () => {}),
-    children, events, messages, root };
+    children, events, messages, logs, activities, root };
 }
 
 test('Run now returns a Linux sandbox refusal with recovery and never spawns', async t => {
@@ -163,40 +164,58 @@ test('successful Run now and cron exits stay silent', async t => {
   assert.deepEqual(h.messages, []);
 });
 
-test('cron sandbox failure sends the same exit IPC with a sandbox diagnosis', async t => {
-  const h = setup(t, { sandbox: true });
-  await h.cron();
-  h.children[0].stderr.emit('data', Buffer.from('bwrap: creating new namespace failed'));
-  h.children[0].emit('exit', 1);
-  assert.equal(h.messages.length, 1);
-  assert.equal(h.messages[0][1].name, 'Nightly cron');
-  assert.equal(h.messages[0][1].sessionId, 'cron-session');
-  assert.equal(h.messages[0][1].manual, false);
-  assert.equal(h.messages[0][1].failure, 'sandbox');
-});
-
-for (const stderr of [
-  'spawn claude ENOENT',
-  "'claude' is not recognized as an internal or external command",
-  "claude: The term 'claude' is not recognized as a name of a cmdlet",
-  'claude: command not found',
+for (const [stderr, failure] of [
+  ['bwrap: creating new namespace failed', 'sandbox'],
+  ['claude-sandbox: setup failed', 'sandbox'],
+  ['API Error: 529 overloaded', 'exit'],
+  ['', 'exit'],
 ]) {
-  test(`shell lookup failure includes a PATH diagnosis: ${stderr}`, async t => {
-    const h = setup(t, { platform: 'win32' });
-    await h.run();
+  test(`cron sandbox exit diagnoses the actual failure: ${stderr || '(no stderr)'}`, async t => {
+    const h = setup(t, { sandbox: true });
+    await h.cron();
     h.children[0].stderr.emit('data', Buffer.from(stderr));
     h.children[0].emit('exit', 1);
     assert.equal(h.messages.length, 1);
-    assert.equal(h.messages[0][1].failure, 'claude-path');
+    assert.equal(h.messages[0][1].name, 'Nightly cron');
+    assert.equal(h.messages[0][1].sessionId, 'cron-session');
+    assert.equal(h.messages[0][1].manual, false);
+    assert.equal(h.messages[0][1].failure, failure);
   });
 }
 
 for (const [stderr, sandbox, code, failure] of [
+  ['spawn claude ENOENT', false, 1, 'claude-path'],
+  ["'claude' is not recognized as an internal or external command", false, 1, 'claude-path'],
+  ["claude: The term 'claude' is not recognized as a name of a cmdlet", false, 1, 'claude-path'],
+  ["claude : The term 'claude' is not recognized as the name of a cmdlet, function, script file, or operable program.\n    + FullyQualifiedErrorId : CommandNotFoundException", false, 1, 'claude-path'],
+  ['claude: command not found', false, 1, 'claude-path'],
+  ['bash: claude: command not found', false, 1, 'claude-path'],
+  ['sh: 1: claude: not found', false, 1, 'claude-path'],
+  ['zsh: command not found: claude', false, 1, 'claude-path'],
+  ['fish: Unknown command: claude', false, 1, 'claude-path'],
+  ["/usr/bin/env: 'claude': No such file or directory", false, 1, 'claude-path'],
+  ["/usr/bin/env: ‘claude’: No such file or directory", false, 1, 'claude-path'],
+  ['    + CategoryInfo : ObjectNotFound: (claude:String) [], CommandNotFoundException', false, 1, 'claude-path'],
+  ['', false, 127, 'claude-path'],
+  ['', true, 127, 'claude-path'],
   ['claude-sandbox: bwrap not found — install bubblewrap', true, 125, 'sandbox'],
   ['/home/u/.claude/hooks/pre.sh: line 2: jq: command not found', false, 1, 'exit'],
   ['Error: settings file /home/u/.claude/settings.json not found', false, 1, 'exit'],
   ['claude-sandbox: claude not found in PATH (/usr/bin)', true, 125, 'claude-path'],
   ['claude-sandbox: setup failed\nclaude: command not found', true, 127, 'sandbox'],
+  ['bwrap: creating new namespace failed\nclaude: command not found', true, 127, 'sandbox'],
+  ["Error: Agent 'claude' not found", false, 1, 'exit'],
+  ['Error: model claude not found', false, 1, 'exit'],
+  ['Error: model claude not found', true, 1, 'exit'],
+  ['claude-code not found', false, 1, 'exit'],
+  ['/opt/claude/bin/hook: not found', false, 1, 'exit'],
+  ['bash: claude-code: command not found', false, 1, 'exit'],
+  ['zsh: command not found: claude-code', false, 1, 'exit'],
+  ['fish: Unknown command: claude-code', false, 1, 'exit'],
+  ["/usr/bin/env: 'claude-code': No such file or directory", false, 1, 'exit'],
+  ['    + CategoryInfo : ObjectNotFound: (claude-code:String) [], CommandNotFoundException', false, 1, 'exit'],
+  ["Error: Agent 'claude' not found\nCommandNotFoundException", false, 1, 'exit'],
+  ['API Error: 529 overloaded (bwrap: retry later)', true, 1, 'exit'],
   ["'claude' n'est pas reconnu en tant que commande interne ou externe", false, 1, 'exit'],
 ]) {
   test(`exit diagnosis targets the command, not a path or sandbox dependency: ${stderr}`, async t => {
@@ -206,6 +225,27 @@ for (const [stderr, sandbox, code, failure] of [
     h.children[0].emit('exit', code);
     assert.equal(h.messages.length, 1);
     assert.equal(h.messages[0][1].failure, failure);
+  });
+}
+
+for (const manual of [false, true]) {
+  test(`${manual ? 'manual' : 'cron'} run keeps its label in activity`, async t => {
+    const h = setup(t);
+    await (manual ? h.run() : h.cron());
+    const name = manual ? 'Manual run: test' : 'Nightly cron';
+    assert.equal(h.activities[0].name, `Scheduled: ${name}`);
+  });
+
+  test(`${manual ? 'manual' : 'cron'} run keeps its label in completion logs and its plain notice name`, async t => {
+    const h = setup(t);
+    await (manual ? h.run() : h.cron());
+    const name = manual ? 'Manual run: test' : 'Nightly cron';
+    h.children[0].stderr.emit('data', Buffer.from('API Error: 529 overloaded'));
+    h.children[0].emit('exit', 1);
+    assert.ok(h.logs.some(([line]) => line === `[schedule] ${name} finished (exit 1)`));
+    assert.ok(h.logs.some(([line]) => line === `[schedule] ${name} stderr:\nAPI Error: 529 overloaded`));
+    assert.equal(h.messages[0][1].name, manual ? 'test' : 'Nightly cron');
+    assert.equal(h.messages[0][1].manual, manual);
   });
 }
 

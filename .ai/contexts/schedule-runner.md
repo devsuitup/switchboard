@@ -50,17 +50,24 @@ signal terminations include the signal. The payload carries `name`, `projectPath
 `sessionId`, `manual`, `code`, `signal` and `failure`. The launcher receives the
 plain schedule name and an optional fifth argument `{ manual: true }` from Run
 now; cron defaults to `manual: false`. `failure` is `claude-path` for code 127
-or a lookup diagnostic anchored to the `claude` command word (including Windows
-ENOENT / English not recognized and PowerShell diagnostics),
-`sandbox` for other sandboxed failures, or `exit` otherwise. Stderr stays in the
-main log and is not sent to the renderer. A sandboxed run with a line beginning
-`claude-sandbox:` receives the sandbox diagnosis even with code 127 or another
-lookup diagnostic, except the script's exact `claude not found in PATH` diagnostic,
-which receives `claude-path`. Paths containing `.claude` and missing sandbox
-dependencies do not establish a missing Claude command. Localized cmd.exe lookup
-errors with exit 1 receive the log hint. A sandbox hint asks the user to check
-bubblewrap and settings; it does not assert that bubblewrap caused every failure
-of a sandboxed run.
+or a shell lookup diagnostic naming exactly `claude` (bash/sh command-not-found,
+zsh/fish command-last forms, env missing-executable, Windows spawn ENOENT /
+English not recognized and PowerShell command lookup diagnostics).
+`sandbox` requires a sandboxed run and a line beginning `bwrap:` or
+`claude-sandbox:` other than the script's `claude not found in PATH` diagnostic;
+all other failures receive `exit`, including API overloads inside the sandbox.
+Stderr stays in the main log and is not sent to the renderer. Sandbox diagnostics
+take precedence over code 127 or another lookup diagnostic; the script's exact
+`claude not found in PATH` diagnostic alone receives `claude-path`.
+Paths containing `.claude` and missing sandbox
+dependencies do not establish a missing Claude command, nor do application
+errors such as `Agent 'claude' not found` or `model claude not found`.
+Localized cmd.exe lookup errors with exit 1 receive the log hint.
+
+The launcher derives `Manual run: <name>` for Run now's log lines, ActivityWatch
+name and tracked live schedule name. `public/resume-guard.js` therefore retains
+that marker when it names a running schedule in its confirmation. The exit IPC
+continues to carry the plain schedule name and the separate `manual` flag.
 
 No existing schedule event could carry asynchronous completion: `run-schedule-now`
 is a request/reply that has already acknowledged spawn and is never invoked by
@@ -211,11 +218,12 @@ Scheduled runs from before v0.0.90 are listed one per row. They have no `schedul
 ## Opening a running scheduled session (#484)
 
 `main.js`'s shared `runScheduleCommand` registers each spawned child with
-`cliSessionState.trackScheduleRun(sessionId, child, cwd, name)`, using the `--resume`
+`cliSessionState.trackScheduleRun(sessionId, child, cwd, runName)`, using the `--resume`
 id from the scheduler's argv. Cron and Run now therefore share the same guard.
 The in-memory entry carries `kind: 'schedule'`, the shell child's pid, cwd and
-launch time, plus the schedule name. It is released on the child's `exit` or `error`; a refused spawn
-never creates an entry. No CLI descriptor is written and no polling is added.
+launch time, plus the schedule name (prefixed `Manual run: ` for Run now).
+It is released on the child's `exit` or `error`; a refused spawn never creates
+an entry. No CLI descriptor is written and no polling is added.
 
 The live-elsewhere queries consult these entries independently of CLI files and
 the own-process ancestry filter, which otherwise excludes a scheduled child on
