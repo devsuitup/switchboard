@@ -22,6 +22,13 @@ The worker path uses path.join(__dirname,'workers',...). package.json already sh
 root *.js and workers/**/* and unpacks better-sqlite3 and node-pty through
 the normal dependency packaging. No native rebuild is introduced.
 
+The optional `onSessionsChanged(ids)` observer runs after acknowledged cache
+effects and direct cache writes. It reports deduplicated session ids for cache
+upserts, modified/size changes and session deletion; folder deletion reports
+`null` for broad invalidation. Main uses it to invalidate Agents transcript
+availability after the indexed path is readable. Failed commits do not notify.
+See `bg-agents.md` and `test/session-index-writer-882.test.js` (#882).
+
 Issue #740 adds nullable `session_cache.fileSize INTEGER` in writable schema
 reconciliation. Existing rows and metadata remain intact; missing sizes are
 filled by refresh. The size travels through cache upsert effects

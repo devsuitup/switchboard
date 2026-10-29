@@ -31,6 +31,8 @@ let isAttachedHere = () => false;
 let resolveRoots = resolveProjectRoots;
 let dispatchSettings = () => ({});
 let transcriptExists = null;
+let resolveTranscriptPath = null;
+const transcriptMemo = new Map();
 const rootCache = new Map();
 const rootPending = new Set();
 const rootQueue = [];
@@ -64,6 +66,7 @@ function init(ctx) {
   resolveRoots = ctx.resolveProjectRoots || resolveProjectRoots;
   dispatchSettings = ctx.dispatchSettings || (() => ({}));
   transcriptExists = ctx.transcriptExists || null;
+  resolveTranscriptPath = ctx.resolveTranscriptPath || null;
 }
 
 function onChange(listener) {
@@ -163,13 +166,20 @@ function rebuild({ onlyIfChanged = false } = {}) {
   const previous = roster;
   let descriptors = [];
   try { descriptors = cliSessionState ? cliSessionState.readAllDescriptors() : []; } catch {}
+  const transcriptKeys = new Set();
   roster = mergeRoster({
     cli: daemonReachable ? cliList : null,
     jobs,
     descriptors,
     isOwnPid: makeIsOwnPid(),
     isAttachedHere,
-  }).map(e => ({ ...e, ...rootsFor(e.cwd), transcriptAvailable: transcriptAvailable(e) }));
+  }).map(e => {
+    const key = JSON.stringify([e.sessionId, e.transcriptPath]);
+    transcriptKeys.add(key);
+    if (!transcriptMemo.has(key)) transcriptMemo.set(key, { sessionId: e.sessionId?.toLowerCase(), available: transcriptAvailable(e) });
+    return { ...e, ...rootsFor(e.cwd), transcriptAvailable: transcriptMemo.get(key).available };
+  });
+  for (const key of transcriptMemo.keys()) if (!transcriptKeys.has(key)) transcriptMemo.delete(key);
   if (onlyIfChanged && JSON.stringify(previous) === JSON.stringify(roster)) return;
   emit();
   resolveMissingRoots(roster);
@@ -179,6 +189,17 @@ function scheduleRebuild() {
   if (!started || !listeners.size || flushTimer) return;
   flushTimer = setTimeout(() => { flushTimer = null; rebuild({ onlyIfChanged: true }); }, FLUSH_MS);
   if (typeof flushTimer.unref === 'function') flushTimer.unref();
+}
+
+function invalidateTranscripts(sessionIds) {
+  const ids = sessionIds && new Set(sessionIds.map(id => id.toLowerCase()));
+  let changed = false;
+  for (const [key, entry] of transcriptMemo) {
+    if (ids && !ids.has(entry.sessionId)) continue;
+    transcriptMemo.delete(key);
+    changed = true;
+  }
+  if (changed) scheduleRebuild();
 }
 
 function readJob(id) {
@@ -260,6 +281,7 @@ function stop() {
   cliList = null;
   daemonReachable = false;
   roster = [];
+  transcriptMemo.clear();
   rootCache.clear();
   rootPending.clear();
   rootQueue.length = 0;
@@ -280,6 +302,7 @@ async function reconcile() {
   const result = await run(['agents', '--json', '--all'], { cwd: homeDir, timeout: LIST_TIMEOUT_MS });
   if (gen !== generation || !started) return getSnapshot();
   const list = result.code === 0 ? parseCliList(result.stdout) : null;
+  transcriptMemo.clear();
   if (list) {
     cliList = list;
     daemonReachable = true;
@@ -302,8 +325,12 @@ function cwdFor(id) {
 function transcriptAvailable(entry) {
   try {
     if (!entry || !entry.sessionId) return false;
+    if (resolveTranscriptPath) {
+      const file = resolveTranscriptPath(entry.sessionId);
+      return !!file && !!fs.statSync(file, { throwIfNoEntry: false })?.isFile();
+    }
     if (transcriptExists) return !!transcriptExists(entry.sessionId);
-    return !!entry.transcriptPath && fs.statSync(entry.transcriptPath).isFile();
+    return !!entry.transcriptPath && !!fs.statSync(entry.transcriptPath, { throwIfNoEntry: false })?.isFile();
   } catch { return false; }
 }
 
@@ -512,6 +539,7 @@ function liveJobCheck(sessionId, { workerLiveness = new Map() } = {}) {
 }
 
 module.exports = {
+  invalidateTranscripts,
   init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck, findRestoreJob,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };

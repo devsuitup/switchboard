@@ -215,7 +215,7 @@ function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
     if (own(d.pid)) continue;
     Object.assign(e, {
       kind: 'interactive', state: null, jobState: e.state,
-      transcriptSource: e.sessionId?.toLowerCase() !== d.sessionId.toLowerCase() ? 'live-session' : null,
+      transcriptSource: e.sessionId && e.sessionId.toLowerCase() !== d.sessionId.toLowerCase() ? 'live-session' : null,
       transcriptPath: e.sessionId?.toLowerCase() === d.sessionId.toLowerCase() ? e.transcriptPath : null,
       sessionId: d.sessionId,
       name: d.name || e.name, cwd: d.cwd || e.cwd, status: d.status,

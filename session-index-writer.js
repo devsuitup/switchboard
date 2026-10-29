@@ -15,6 +15,16 @@ const { createCacheEffects } = require('./cache-effects');
 // see .ai/contexts/session-index-writer.md
 function createSessionIndexWriter(options = {}, cache = require('./session-cache')) {
   const mirror = new Map();
+  const notifySessionsChanged = effects => {
+    if (!options.onSessionsChanged) return;
+    if (effects.some(effect => effect.name === 'deleteCachedFolder')) { options.onSessionsChanged(null); return; }
+    const ids = new Set();
+    for (const { name, args } of effects) {
+      if (name === 'upsertCachedSessions') for (const row of args[0]) ids.add(row.sessionId);
+      else if (['deleteCachedSession', 'touchCachedModified', 'setCachedFileSize'].includes(name)) ids.add(args[0]);
+    }
+    if (ids.size) options.onSessionsChanged([...ids]);
+  };
   const client = options.client || createWriterWorkerClient({
     workerFactory: options.workerFactory || (() => new Worker(path.join(__dirname, 'workers', 'session-index-writer.js'))),
     onSettings: entries => { mirror.clear(); for (const [key, value] of entries) mirror.set(key, value); if (backend) backend.applySettingsAcknowledgment(entries); },
@@ -33,7 +43,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     recorder = createCacheEffects(backend);
   });
   ready.catch(() => {});
-  const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(() => client.request(name, ...args)));
+  const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(() => client.request(name, ...args)).then(value => {
+    notifySessionsChanged([{ name, args }]);
+    return value;
+  }));
   const compute = (name, ...args) => {
     if (!admitted()) return Promise.reject(new Error('writer is closing'));
     const sourceVersion = backend?.getProjectsRevision?.();
@@ -62,6 +75,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         }
         try {
           const acknowledgment = effects.length ? await client.request('effects', effects, revision) : null;
+          notifySessionsChanged(effects);
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector, true);
           combinedResult = combinedResult === true || result === true ? true : combinedResult === 'activity' || result === 'activity' ? 'activity' : result;
           if (continuationCollector.deferred.size && !continuationRetry) {

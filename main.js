@@ -185,7 +185,10 @@ function resetUpdateAttempt() {
 async function startApplication() {
 if (!await acquireInstanceLock(app, { log })) { app.quit(); return; }
 const privilegeNotice = readNoNewPrivs({ log });
-const writer = require('./session-index-writer').createSessionIndexWriter();
+const bgAgents = require('./bg-agents');
+const writer = require('./session-index-writer').createSessionIndexWriter({
+  onSessionsChanged: ids => bgAgents.invalidateTranscripts(ids),
+});
 let bootstrapQuit;
 const holdBootstrapQuit = event => {
   event.preventDefault();
@@ -3504,15 +3507,14 @@ ipcMain.handle('session-continuations', (_event, sessionId) => sessionCache.reso
 ipcMain.handle('sessions-live-elsewhere', (_event, sessionIds) => cliSessionState.liveElsewhereMany(sessionIds, sessionHasPty, ptyPids));
 
 // see .ai/contexts/bg-agents.md
-const bgAgents = require('./bg-agents');
 bgAgents.init({
   log,
   runClaude: runClaudeCommand,
   cliSessionState,
-  transcriptExists: (sessionId) => {
+  resolveTranscriptPath: (sessionId) => {
     const folder = getCachedFolder(sessionId);
     const dir = folder && projectsDirForFolder(folder);
-    try { return !!dir && fs.statSync(path.join(dir, sessionId + '.jsonl')).isFile(); } catch { return false; }
+    return dir ? path.join(dir, sessionId + '.jsonl') : null;
   },
   makeIsOwnPid: () => cliSessionState.ownProcessFilter(ptyPids),
   dispatchSettings: (cwd) => {
