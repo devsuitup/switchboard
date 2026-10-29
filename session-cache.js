@@ -513,6 +513,8 @@ function refreshFolder(folder, opts = {}) {
 
     const cachedDbId = filePathToDbId.get(filePath) || null;
     const cachedEntry = cachedDbId ? cachedMap.get(cachedDbId) : null;
+    const fileSize = Number(stat.size);
+    const changedSize = cachedEntry && cachedEntry.fileSize !== fileSize;
 
     if (cachedDbId !== null) currentIds.add(cachedDbId);
     const relativeFile = path.relative(folderPath, filePath);
@@ -538,13 +540,13 @@ function refreshFolder(folder, opts = {}) {
     }
     const changedIndex = snapshot ? !sameContinuationStamp(snapshot, stat)
       : persistedStamp && !matchesContinuationStamp(persistedStamp, stat);
-    if (!changedLinked && cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
+    if (!changedLinked && !changedSize && cachedEntry && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
       && (!cachedEntry.continuationIndex || !changedIndex || parentSessionId || cachedEntry.parentSessionId)) {
       collector.accounted.add(relativeFile);
       continue; // unchanged, skip
     }
 
-    if (cachedEntry) {
+    if (cachedEntry && !(changedSize && !linked && cachedEntry.fileMtime === fileMtime)) {
       let continuationIndex = cachedEntry.continuationIndex;
       if (validPlan) continuationIndex = plan.serialized;
       else if (opts.preparedContinuations?.has(cachedDbId) && changedLinked) { defer(); continue; }
@@ -558,7 +560,7 @@ function refreshFolder(folder, opts = {}) {
         try { index = JSON.parse(continuationIndex); } catch {}
         if (!index || index.bytes !== Number(stat.size) || !matchesContinuationStamp(index.stamp, stat)) { defer(); continue; }
       }
-      if (cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
+      if (!changedSize && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
         && continuationIndex === cachedEntry.continuationIndex) { collector.accounted.add(relativeFile); continue; }
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId });
@@ -585,6 +587,7 @@ function refreshFolder(folder, opts = {}) {
           // Same class of trade-off as the stale-FTS-body note above.
           modified: fileMtime,
           fileMtime,
+          fileSize,
           slug: h.slug || cachedEntry.slug,
           scheduleSlug: h.scheduleSlugComplete ? h.scheduleSlug : h.scheduleSlug || cachedEntry.scheduleSlug,
           aiTitle: h.aiTitle || cachedEntry.aiTitle,
@@ -606,8 +609,8 @@ function refreshFolder(folder, opts = {}) {
         // Header read couldn't extract signal -- just bump mtime so sort order
         // stays current. fileMtime has to move too, otherwise this file stays
         // permanently "dirty" and gets re-read on every watcher flush.
-        if (continuationIndex !== cachedEntry.continuationIndex) {
-          sessionsToUpsert.push({ ...cachedEntry, continuationIndex, modified: fileMtime, fileMtime });
+        if (changedSize || continuationIndex !== cachedEntry.continuationIndex) {
+          sessionsToUpsert.push({ ...cachedEntry, continuationIndex, modified: fileMtime, fileMtime, fileSize });
         } else sessionsToTouch.push({ sessionId: cachedDbId, fileMtime });
       }
       continue;

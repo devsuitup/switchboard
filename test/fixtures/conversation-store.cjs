@@ -36,8 +36,9 @@ module.exports = function openStore() {
     };
   }
   const module = { exports: {} };
-  vm.runInNewContext('(function(require,module,exports){' + fs.readFileSync(filename, 'utf8') + '\n})',
-    { process, performance, Buffer, console }, { filename })(id => id === 'better-sqlite3' ? Database : nativeRequire(id), module, module.exports);
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'),
+    { process, performance, Buffer, console, module, exports: module.exports,
+      require: id => id === 'better-sqlite3' ? Database : nativeRequire(id) }, { filename });
   return module.exports.openSessionIndexStore({ readonly: false });
 };
 

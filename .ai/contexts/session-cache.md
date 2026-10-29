@@ -43,6 +43,28 @@ From `derive-project-path.js`: `deriveProjectPath(folderPath, folderName, opts)`
 
 ## Watcher notification rules
 
+### Transcript size freshness (#740)
+
+Refresh compares the already-statted byte size with persisted `fileSize` in both
+unchanged-row guards, alongside `fileMtime`. Full reads (including scan-worker
+and subagent reads) and header refreshes carry that size. An absent legacy size
+is unknown and causes a refresh; an unchanged size and mtime skip again after
+the write is acknowledged. Size alone is not a sidebar notification field.
+
+For an unlinked or subagent row whose size changes while its mtime stays equal,
+refresh uses the full-read/bridge-merge publication path, updating counts, titles,
+message timestamps for top-level rows, FTS and metrics together. Subagents retain
+their existing filesystem timestamp semantics. This exceptional full read also
+handles a size change downward; ordinary advancing-mtime writes keep the bounded
+header path and its existing count/body trade-off. Linked continuations retain
+their stamp validation, preparation budget and race deferral. A failed exceptional
+full read keeps the previous row/size so a later refresh can retry.
+
+The writer store adds nullable `fileSize INTEGER` through its existing
+version-independent schema reconciliation, without wiping cached rows. Existing
+rows acquire the size on refresh. All size persistence uses existing recorded
+upsert effects and the writer worker; no additional writable connection exists.
+
 The local projects watcher awaits `writer.refreshFolder` for existing dirty
 folders and `writer.dropFolderRows` for vanished folders. `refreshFolder`
 returns true for structural changes, `'activity'` for activity-only changes,

@@ -22,6 +22,12 @@ The worker path uses path.join(__dirname,'workers',...). package.json already sh
 root *.js and workers/**/* and unpacks better-sqlite3 and node-pty through
 the normal dependency packaging. No native rebuild is introduced.
 
+Issue #740 adds nullable `session_cache.fileSize INTEGER` in writable schema
+reconciliation. Existing rows and metadata remain intact; missing sizes are
+filled by refresh. The size travels through the existing cache upsert effects
+and positional SQL binding, including scan-worker and subagent rows. Main and
+Projects workers retain their readonly connections.
+
 ## Wire contract and failure
 
 Requests are {id,command,args}; replies are {id,result,settings} or
