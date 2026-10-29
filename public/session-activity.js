@@ -156,7 +156,7 @@ function setActivity(sessionId, active, via, opts) {
   const before = state.snapshot();
 
   // response-ready-holds-idle: a duplicate/late idle signal is not a transition — see .ai/contexts/session-state.md
-  if (!active && before.responseReady) {
+  if (!active && before.responseReady && !before.busy) {
     if (window.ATRACE) window.atrace('store.skip', sessionId, { map: 'sessionBusyState', reason: 'response-ready-holds-idle', fn: 'setActivity', via });
     return;
   }
@@ -195,6 +195,11 @@ function forgetObservedTurnEnd(sessionId, { busy = false } = {}) {
 function clearHeadUnread(sessionId) {
   const turn = headTurns.get(sessionId);
   if (turn?.ready) headTurns.set(sessionId, { ...turn, ready: false });
+}
+
+function markUnread(sessionId) {
+  localPtyState(sessionId).apply({ type: 'markUnread' });
+  applyStateClasses(sessionId, storedActivitySnapshot(sessionId));
 }
 
 function clearUnread(sessionId, via, watermark = writtenActivitySnapshot(sessionId).writtenWatermark) {

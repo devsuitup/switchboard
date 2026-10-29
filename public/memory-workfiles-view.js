@@ -16,6 +16,7 @@ function hideAllViewers() {
   if (traceViewer) traceViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
+  jsonlViewer.messageSearch?.close(false);
   if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
   terminalArea.style.display = '';
   // Stop any subagent file-watches kept alive by Agent blocks that the user

@@ -1317,6 +1317,7 @@ body { display: flex; flex-direction: column; }
 .session-fork-btn,
 .session-jsonl-btn,
 .session-bridge-btn,
+.session-unread-btn,
 .session-delete-btn,
 .session-archive-btn {
   cursor: pointer;
@@ -1369,6 +1370,49 @@ body { display: flex; flex-direction: column; }
 
 .session-archive-btn {
   color: #6068b0;
+}
+
+.session-unread-btn {
+  color: #6068b0;
+}
+
+.session-unread-btn:hover {
+  color: var(--accent);
+  background: rgba(120,130,255,0.1);
+}
+
+.sessions-more-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sessions-more-label,
+.sessions-older-archive-btn {
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.sessions-older-archive-btn:disabled {
+  opacity: 0.4;
+  cursor: wait;
+}
+
+.message-search-bar {
+  top: 42px;
+}
+
+::highlight(message-find) {
+  background: #735b16;
+  color: #fff;
+}
+
+::highlight(message-find-active) {
+  background: #b07918;
+  color: #fff;
 }
 
 .session-delete-btn {

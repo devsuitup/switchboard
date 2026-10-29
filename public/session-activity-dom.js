@@ -56,6 +56,10 @@ function applyHeadTurnSnapshot(turn) {
     }
   }
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
+  if (turn.state === 'open' && previous?.state !== 'open') {
+    const state = localPtyStates.get(turn.sessionId);
+    if (state?.snapshot().manualUnread) state.apply({ type: 'clearUnread' });
+  }
   const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
   const observedAt = changed ? Date.now() : previous.observedAt;
   const ended = turn.state === 'closed' && (!!previous?.endArmed || !!previous?.ended);
@@ -84,7 +88,7 @@ function headActivitySnapshot(sessionId, snapshot, row, selection) {
     || turn?.state === 'open' && Number.isFinite(s.promptHintAt) && Number.isFinite(turn?.observedAt) && s.promptHintAt > turn.observedAt;
   const headTurn = idleNewer || (promptHint && (!turn || turn.state === 'unknown')) ? 'closed' : turn?.state || 'unknown';
   return { ...s, ...writtenActivitySnapshot(sessionId), headTurn, busy: alive && headTurn === 'open',
-    responseReady: !s.attention && !!turn?.ready, waitingForInput: alive && headTurn !== 'open' && (!ptyHere || !!s.waitingForInput || !!turn?.ended),
+    responseReady: !s.attention && (!!turn?.ready || !!localPtyStates.get(sessionId)?.snapshot().manualUnread), waitingForInput: alive && headTurn !== 'open' && (!ptyHere || !!s.waitingForInput || !!turn?.ended),
     liveness: alive ? 'alive' : s.liveness };
 }
 
@@ -235,7 +239,11 @@ function isSessionAlive(sessionId) {
 
 // Snapshot-driven projection — the one path for all three kinds — see .ai/contexts/session-state.md ("The local-pty adapter")
 function applyStateClasses(sessionId, snapshot) {
-  if (snapshot?.attention && typeof clearHeadUnread === 'function') clearHeadUnread(sessionId);
+  if (snapshot?.attention && typeof clearHeadUnread === 'function') {
+    clearHeadUnread(sessionId);
+    const state = localPtyStates.get(sessionId);
+    if (state?.snapshot().manualUnread) state.apply({ type: 'clearUnread' });
+  }
   const item = sessionItemEl(sessionId);
   if (!item) {
     paintTerminalHeaderStatus(sessionId, snapshot);
@@ -263,6 +271,12 @@ function applyStateClasses(sessionId, snapshot) {
   const alive = !!(snapshot && snapshot.liveness === 'alive');
   setNeedsAttention(item, attention);
   setResponseReady(item, ready);
+  const unreadButton = item.querySelector('.session-unread-btn');
+  const unreadTitle = ready ? 'Mark as read' : 'Mark as unread';
+  if (unreadButton && unreadButton.title !== unreadTitle) {
+    unreadButton.title = unreadTitle;
+    unreadButton.setAttribute('aria-label', unreadButton.title);
+  }
   setCliBusy(item, busy);
   setHasBusyAgents(item, agentsBusy);
   setIsAlive(item, alive);

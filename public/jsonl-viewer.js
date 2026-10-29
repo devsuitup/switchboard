@@ -760,6 +760,7 @@ async function showJsonlViewer(session) {
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   jsonlViewer.style.display = 'flex';
+  focusMessageViewer();
 
   // Set viewer context for Agent block expansion
   currentViewerSessionId = session.sessionId;
@@ -834,6 +835,7 @@ async function showSubagentTranscript(session) {
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   jsonlViewer.style.display = 'flex';
+  focusMessageViewer();
 
   // Set viewer context for nested Agent block expansion
   currentViewerSessionId = session.sessionId;

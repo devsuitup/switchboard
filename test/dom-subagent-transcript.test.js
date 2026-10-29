@@ -160,6 +160,7 @@ function setupDom({ readSubagentJsonlResult = { entries: SAMPLE_ENTRIES }, readS
   // jsonl-viewer.js defines showSubagentTranscript — eval'd here so the real
   // implementation is available when tests exercise it directly. For routing
   // tests (tests 1-2) we install spies AFTER this eval to override.
+  evalInWindow(dom, path.join(PUBLIC_DIR, 'message-search.js'));
   evalInWindow(dom, path.join(PUBLIC_DIR, 'jsonl-viewer.js'));
 
   // Spy captures — installed after JS eval so they override any function
