@@ -490,7 +490,7 @@ const rekeySessionMeta = db.transaction((oldId, newId, title) => {
     const keepTarget = field !== 'name' || (to ? to.source === 'user' : target?.name !== stmts.cacheGetSession.get(newId)?.customTitle);
     const useOriginal = copy && (!target || !keepTarget || (from?.revision || 0) > (to?.revision || 0));
     values[field] = useOriginal ? original[field] : (keepTarget ? target?.[field] : null) ?? (field === 'name' ? null : 0);
-    if (useOriginal) metaFieldSet.run(newId, field, from?.revision ?? metaFieldNext.get().revision, from?.source || 'user', from?.transcriptTitle ?? null);
+    if (useOriginal) metaFieldSet.run(newId, field, from?.revision ?? 0, from?.source || 'user', from?.transcriptTitle ?? null);
   }
   db.prepare(`INSERT INTO session_meta (sessionId, name, starred, archived) VALUES (?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET name = excluded.name, starred = excluded.starred, archived = excluded.archived`)

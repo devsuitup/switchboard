@@ -424,7 +424,7 @@ test('re-keying a user name carries its transcript baseline to the continued ses
   `);
 });
 
-test('re-keying legacy metadata assigns new fields a positive revision', t => {
+test('re-keying legacy metadata preserves its missing revision as zero', t => {
   run(temp(t), fixture + `
     refresh();
     commands.renameSession(id, 'Y');
@@ -434,7 +434,7 @@ test('re-keying legacy metadata assigns new fields a positive revision', t => {
     sql.close();
     const next = '22222222-2222-4222-8222-222222222222';
     db.rekeySessionMeta(id, next, 'X');
-    assert.ok(db.getMeta(next, true).nameRevision > 0);
+    assert.equal(db.getMeta(next, true).nameRevision, 0);
     assert.equal(db.getMeta(next).name, 'Y');
     db.closeDb();
   `);

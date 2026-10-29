@@ -371,7 +371,11 @@ stores 0, older than any minted revision. The revision index and MAX(revision)
 allocator accept 0; actual name, star and archive edits still mint positive
 revisions. Rekey comparisons and background sidebar name selection treat a
 missing revision as 0 and prefer any positive revision; rekeying preserves an
-existing 0.
+existing revision and copies a field without one as 0, without minting an edit.
+Thus a two-hop legacy rekey cannot displace a newer user rename, whether or not
+the legacy name's baseline was hydrated first. Positive revisions minted for
+legacy baselines under v0.0.96 are not migrated: they cannot be distinguished
+from real user edits.
 Collision-named jobs and descriptors still suppress transcript name promotion.
 
 The version-2 title backfill invalidates old cached titles once on writable
