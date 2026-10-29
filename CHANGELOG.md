@@ -7,6 +7,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Fixed
 - A legacy session name carried across successive session id changes no longer overwrites a newer name you chose. (#696)
 - Sessions keep their buffered terminal output, file-panel shell and grid controls when their session id changes. Switching sessions quickly also keeps the active session's shell label in the header. (#529)
+- Resizing the window in grid view waits for the resize to settle and refreshes only visible cards; single view keeps resizing live. Cards refresh once as they scroll into view, and returning to the window updates offscreen terminal sizes too. (#545)
 - Deleting a worktree now shows its full path, branch, running sessions and ignored entries; changed non-ignored files require another review, and locks and submodules need explicit consent to force removal. Unsafe directory links and nonempty uninitialised submodules refuse deletion; ignored contents are deleted without comparison, and on Windows every directory link or junction inside the worktree (including node_modules) must be removed first. (#841)
 - Clearing or changing a search, switching its title filter, or leaving its tab no longer lets an older reply replace the current results. (#840)
 - Archive and Delete refusals for a running background job now point to **Stop session** on its sidebar row when the job can be stopped there. (#835)

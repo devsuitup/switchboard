@@ -388,6 +388,8 @@ const rendererCrossFileGlobals = {
   safeFit: 'readonly',
   proposeFittedDimensions: 'readonly',
   refitOpenTerminals: 'readonly',
+  scheduleOpenTerminalsRefit: 'readonly',
+  refitVisibleGridTerminal: 'readonly',
   syncPtySizeAfterOpen: 'readonly',
   ptySizeChanged: 'readonly',
   observeContainerResize: 'readonly',

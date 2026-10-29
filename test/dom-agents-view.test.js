@@ -122,6 +122,7 @@ function setup({ storage = { agentsGroupBy: 'none' }, settingsPanel = false } = 
     showJsonlViewer: (session) => calls.jsonl.push(session),
     refreshSidebar: () => { calls.sidebarRefreshes++; },
     fitAndScroll: () => {},
+    refitOpenTerminals: () => {},
     appConfirm: async () => true,
   };
   for (const [k, v] of Object.entries(g)) Object.defineProperty(window, k, { value: v, writable: true, configurable: true });

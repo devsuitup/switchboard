@@ -46,6 +46,40 @@ No tmux sizing option is changed by refresh.
 
 ## Fitting and coalescing
 
+In grid mode, window resize events use `scheduleOpenTerminalsRefit` with the same
+`CONTAINER_RESIZE_DEBOUNCE_MS` as container observers (80 ms). Single view refits
+its active terminal on each resize event. Focus and a visibility return refit
+immediately and cancel a pending window refit.
+In grid view, `refitVisibleGridTerminal` checks connected, nonzero terminal
+geometry and the card's intersection with the grid scroll viewport, clipped
+to the window, before calling `fitAndScroll` (fit, atlas clear and repaint).
+Partially visible cards count. On focus and visibility return, connected,
+nonzero offscreen entries receive a `safeFit` pass without atlas clearing or
+explicit repaint, so changed cell metrics after a DPI/monitor change update
+their columns and rows too. `ptySizeChanged` suppresses unchanged PTY sizes.
+Window resize and grid-return paths leave offscreen entries to the observer;
+hidden, detached and closed entries are skipped. Bounds are read when the
+refit runs rather than relying on potentially stale observer state, and checked
+again before the deferred fit so a card that has since left view is skipped.
+
+The existing grid IntersectionObserver calls this guarded fit only on the first
+positive-area intersection after a nonintersection or zero-area edge. Crossing
+the 99% output-seen threshold in either direction adds no fit or repaint.
+A card skipped during a resize gets its current size and a repaint when
+scrolled into view. A near-zero positive threshold also detects
+the transition from an intersecting zero-area edge to a partial reveal,
+without waiting for the existing 99% output-seen threshold.
+The observer owns offscreen WebGL suspension; grid refit frames restore the
+context after fitting. A newly created context skips texture-atlas clearing;
+a retained context clears its atlas before repainting. Grid entry, the Sessions
+tab return and the Agents return share `refitOpenTerminals`. A per-card reveal
+flag prevents a subsequent positive observer callback from duplicating that
+return fit, and an entry pending-frame flag coalesces requests before the frame.
+This reuses the existing observe/unobserve lifecycle without an extra observer
+or scroll listener. These guarantees are exercised with shipped
+renderer code in `test/terminal-grid-refit.test.js`; real browser layout and
+GPU cost require a separate live measurement.
+
 `requestTerminalRefresh` marks the entry and calls `scheduleTerminalFit` in
 `public/terminal-manager.js`. Container ResizeObserver callbacks share this
 entry timer at `CONTAINER_RESIZE_DEBOUNCE_MS` (80 ms). Quick returns and size

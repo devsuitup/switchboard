@@ -103,6 +103,7 @@ function setupGridDom({ stored = null } = {}) {
     SCROLLBACK_SINGLE: 10000,
     replayHiddenBuffer: noop,
     fitAndScroll: noop,
+    refitOpenTerminals: noop,
     showSession: noop,
     setActiveSession: noop,
     clearNotifications: noop,
