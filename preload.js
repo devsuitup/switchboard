@@ -95,6 +95,7 @@ contextBridge.exposeInMainWorld('api', {
   getScheduleCreatorCommand: () => ipcRenderer.invoke('get-schedule-creator-command'),
   createScheduleSession: (projectPath) => ipcRenderer.invoke('create-schedule-session', projectPath),
   runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),
+  onScheduleRunExit: callback => ipcRenderer.on('schedule-run-exit', (_event, result) => callback(result)),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
   browseFolder: () => ipcRenderer.invoke('browse-folder'),

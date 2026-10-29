@@ -224,4 +224,13 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
   });
 }
 
-module.exports = { ensureScheduleCreatorCommand, init };
+function reportRunExit(window, { name, projectPath, sessionId, code, signal, sandbox, stderr }) {
+  if (code === 0 || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
+  const missingClaude = code === 127 || /spawn\s+claude[^\r\n]*\bENOENT\b|claude[^\r\n]*(?:(?:command )?not found|not recognized|CommandNotFoundException)/i.test(stderr || '');
+  window.webContents.send('schedule-run-exit', {
+    name, projectPath, sessionId, code, signal: signal || null,
+    failure: missingClaude ? 'claude-path' : sandbox ? 'sandbox' : 'exit',
+  });
+}
+
+module.exports = { ensureScheduleCreatorCommand, init, reportRunExit };

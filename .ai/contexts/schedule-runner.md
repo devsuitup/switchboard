@@ -42,11 +42,35 @@ is quoted for the configured login shell so its profile can initialise PATH.
 Sandbox resolution follows global and project settings and never downgrades
 silently; schedule add-dirs supply both CLI flags and sandbox binds.
 
-This acknowledgement confirms only shell creation. Claude lookup, bubblewrap
-startup and command exit failures after `spawn` remain in the main log, without
-a later renderer notice. Tests: `test/run-schedule-now-result.test.js` loads the
+This acknowledgement confirms only shell creation. The shared launcher's `exit`
+handler also calls `schedule-ipc.js`'s `reportRunExit(window, result)` for both
+manual and cron runs. Any non-zero exit, regardless of elapsed time, sends
+`schedule-run-exit` while the window and its web contents exist. Exit 0 is silent;
+signal terminations include the signal. The payload carries `name`, `projectPath`,
+`sessionId`, `code`, `signal` and `failure`. `failure` is `claude-path` for code 127
+or a Claude lookup diagnostic (including Windows ENOENT / not recognized),
+`sandbox` for other sandboxed failures, or `exit` otherwise. Stderr stays in the
+main log and is not sent to the renderer. A sandbox hint asks the user to check
+bubblewrap and settings; it does not assert that bubblewrap caused every failure
+of a sandboxed run.
+
+No existing schedule event could carry asynchronous completion: `run-schedule-now`
+is a request/reply that has already acknowledged spawn and is never invoked by
+cron. The new event stays in the existing schedule IPC module and is exposed as
+`onScheduleRunExit` in preload. `public/memory-workfiles-view.js` subscribes once
+at script load, independently of whether Agent Files is open, and shows a
+persistent B8 error with the schedule name, code (or signal) and recovery hint.
+Each notice uses `ScheduleRun:<sessionId>`, distinct from the launch-refusal id
+`RunSchedule:<filePath>`: a fast exit arriving before the launch reply, or a later
+retry, cannot clear that run's failure. No modal or exit-success toast is used.
+With no live window the exit is logged only, without queuing a notice for restart.
+
+Tests: `test/run-schedule-now-result.test.js` loads the
 shipped launcher and IPC handler with disposable schedule files and a simulated
 child event boundary, without starting Electron or a real Claude process.
+`test/dom-schedule-run-exit.test.js` connects the shipped preload subscription
+to the renderer in jsdom, including persistent notices, recovery text and the
+fast-exit/launch-reply ordering.
 
 ## Schedule project registry
 

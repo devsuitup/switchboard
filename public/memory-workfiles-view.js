@@ -8,6 +8,19 @@ let currentMemoryFilePath = null;
 let currentMemoryContent = "";
 const memoryCollapsedState = new Map();
 
+function showScheduleRunExit({ name, sessionId, code, signal, failure }) {
+  if (code === 0) return;
+  const result = signal ? `terminated by ${signal}` : `exited with code ${code}`;
+  const hint = failure === 'claude-path'
+    ? 'claude not found on the shell PATH. Check that Claude Code is installed and on PATH in the configured shell profile, then try Run now again.'
+    : failure === 'sandbox'
+      ? 'Check Linux bubblewrap and the sandbox settings; see the log for details, then try Run now again.'
+      : 'See the log for details, then try Run now again.';
+  showAppNotice({ id: `ScheduleRun:${sessionId}`, kind: 'error', message: `Schedule ${name} ${result}: ${hint}` });
+}
+
+window.api.onScheduleRunExit?.(showScheduleRunExit);
+
 function hideAllViewers() {
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';

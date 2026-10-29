@@ -180,9 +180,14 @@ now** button, which starts a run at once. **Run now** ignores `cron` and
 `enabled`, and does not wait for a run of the same schedule that is still going.
 The button shows a check mark (tooltip **Launched!**) only after the configured shell
 process starts. This acknowledges the shell launch, not that Claude has started
-or that the task has completed successfully. A command failure after that point
-(including a missing `claude` command or bubblewrap failure) is recorded in the
-main log; it does not change the button or create a later failure notice.
+or that the task has completed successfully. Any non-zero exit after that point,
+even much later in the run, leaves a persistent error notice naming the schedule
+and exit code. A missing `claude` command points to installation and PATH in the
+configured shell profile; a sandbox failure points to Linux bubblewrap and the
+sandbox settings; other failures point to the main log. Signal terminations name
+the signal. Cron-triggered runs show the same notices when the app window exists,
+without a modal. Successful exits stay silent. The launch check mark does not
+change when a later failure arrives; dismiss that run's notice after reviewing it.
 A refused launch, an unavailable backend or a missing reply restores the Run
 now button and leaves a notice until you dismiss it. The notice names the
 schedule and reason, and asks you to check the schedule file and try Run now
@@ -191,7 +196,9 @@ settings; refused `add-dirs` name the paths to remove or change in the schedule.
 Shell spawn errors, including asynchronous errors before the shell starts,
 return a failure with a reminder to check shell settings and the project folder.
 A project archived before launch must be unarchived first. A successful retry
-clears that schedule's error.
+clears that schedule's launch error. Failures after launch belong to their own
+run and remain until dismissed, including when a fast failure arrives before
+the launch acknowledgement or another run is launched successfully.
 
 ## Triggers
 

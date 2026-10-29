@@ -3835,9 +3835,13 @@ if (!app.isPackaged) {
       let stderr = '';
       child.stderr.on('data', (data) => { stderr += data.toString(); });
 
-      child.on('exit', (code) => {
+      child.on('exit', (code, signal) => {
         if (stderr.trim()) log.error(`[schedule] ${name} stderr:\n${stderr.trim()}`);
         log.info(`[schedule] ${name} finished (exit ${code})`);
+        scheduleIpc.reportRunExit(mainWindow, {
+          name, projectPath: cwd, sessionId: claudeArgv[claudeArgv.indexOf('--resume') + 1],
+          code, signal, sandbox, stderr,
+        });
         activityReporter.sessionEnded(activityId);
         if (onDone) onDone();
       });
