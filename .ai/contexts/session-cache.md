@@ -2345,12 +2345,11 @@ ENOENT injected after the yield logs a warning, returns a null preparation, comp
 and the reply, and admits the next request. The two-attempt refresh loop is
 bounded; the missing file is accounted/deleted by refresh rather than leaving an
 unresolved promise. This path uses no SQLite or Node-22-only API. Node 22 load
-loops with both Windows TEMP spellings did not reproduce the reported CI timeout;
-the original Node 20 failure's scheduling cause remains unverified. The original
-CI log records the timeout before the ENOENT warning; fixture cleanup after a
-timed-out async test can itself cause a resumed scan to log ENOENT. The same SHA's
-second attempt passed both D2 cases. These observations support a scheduling
-flake rather than an ENOENT-induced hang, without measuring the original stall.
+loops with both Windows TEMP spellings did not reproduce the reported CI timeout,
+and its cause is not established. A plausible cause is the continuation-scan
+loop of #891: when the stored `index.mtime` and `stat.mtime` round to different
+milliseconds, the cursor is never reused and the scan never ends. The CI stack
+stopped inside that scan. The ENOENT warning itself does not hang.
 The VM fixture evaluates unwrapped production modules with their real filenames
 and isolated module globals so coverage keeps the shipped source locations.
 
