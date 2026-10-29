@@ -421,19 +421,14 @@ function showGridView() {
   const btn = document.getElementById('grid-toggle-btn');
   if (btn) btn.classList.add('active');
 
-  // Fit all terminals after layout resolves. Grid cards also drop to the
-  // thumbnail scrollback budget: xterm trims the buffer immediately when the
-  // new limit is below the current row count, so content scrolled past
-  // SCROLLBACK_GRID rows is lost on entering the grid — accepted trade-off,
-  // the full budget is restored (for future output) when a session returns
-  // to single view (see showSession).
+  // see .ai/contexts/terminal-refresh.md
   for (const sid of sessionIds) {
     const entry = openSessions.get(sid);
     if (entry) {
       entry.terminal.options.scrollback = SCROLLBACK_GRID;
-      fitAndScroll(entry);
     }
   }
+  refitOpenTerminals();
   // Focus active or first (deferred so fitAndScroll's rAF runs first)
   requestAnimationFrame(() => {
     const toFocus = activeSessionId && sessionIds.includes(activeSessionId) ? activeSessionId : sessionIds[0];
@@ -484,9 +479,15 @@ function initGridObservers() {
         const sid = e.target.dataset.sessionId;
         if (!sid) continue;
         e.target.dataset.outputVisible = String(e.isIntersecting && e.intersectionRatio >= 0.99);
+        if (!e.isIntersecting || e.intersectionRatio === 0) e.target.dataset.refitVisible = 'false';
         if (e.isIntersecting) {
-          restoreTerminalWebgl(sid);
-          if (gridViewActive) refitVisibleGridTerminal(openSessions.get(sid));
+          if (gridViewActive) {
+            if (e.intersectionRatio > 0 && e.target.dataset.refitVisible !== 'true') {
+              refitVisibleGridTerminal(openSessions.get(sid));
+            }
+          } else {
+            restoreTerminalWebgl(sid);
+          }
           if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(openSessions.get(sid));
         } else {
           suspendTerminalWebgl(sid);

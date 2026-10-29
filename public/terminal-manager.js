@@ -303,7 +303,7 @@ function safeFit(entry) {
 
 // Fit a terminal that just became visible (from display:none or reparent).
 // Defers to requestAnimationFrame so the container has dimensions.
-function fitAndScroll(entry, tr, wantedGen = 0, shouldFit = null) {
+function fitAndScroll(entry, tr, wantedGen = 0, shouldFit = null, restoreGridWebgl = false) {
   const wasAtBottom = isAtBottom(entry.terminal);
   const frames = entry.frames || (entry.frames = new Set());
   const id = requestAnimationFrame(() => {
@@ -315,7 +315,9 @@ function fitAndScroll(entry, tr, wantedGen = 0, shouldFit = null) {
       if (t) revealLap(t, 'rafWaitMs');
       safeFit(entry);
       if (t) revealLap(t, 'fitMs');
-      const created = loadWantedWebgl(entry, wantedGen);
+      const previousWebgl = entry.webglAddon;
+      if (restoreGridWebgl) restoreTerminalWebgl(entry.session.sessionId);
+      const created = loadWantedWebgl(entry, wantedGen) || (!!entry.webglAddon && entry.webglAddon !== previousWebgl);
       if (t) { revealLap(t, 'webglMs'); t.webglCreated = created; }
       forceRepaint(entry, created);
       if (wasAtBottom) {
@@ -468,6 +470,10 @@ function observeContainerResize(entry) {
 let openTerminalsRefitTimer = null;
 
 function scheduleOpenTerminalsRefit() {
+  if (!gridViewActive) {
+    refitOpenTerminals();
+    return;
+  }
   clearTimeout(openTerminalsRefitTimer);
   openTerminalsRefitTimer = setTimeout(refitOpenTerminals, CONTAINER_RESIZE_DEBOUNCE_MS);
 }
@@ -483,18 +489,25 @@ function isGridTerminalVisible(entry, viewport = terminalsEl.getBoundingClientRe
 }
 
 function refitVisibleGridTerminal(entry, viewport) {
-  if (isGridTerminalVisible(entry, viewport)) {
-    fitAndScroll(entry, null, 0, () => gridViewActive && isGridTerminalVisible(entry));
-  }
+  if (!entry || entry.closed || !isGridTerminalVisible(entry, viewport)) return;
+  gridCards.get(entry.session.sessionId).dataset.refitVisible = 'true';
+  if (entry.gridRefitPending) return;
+  entry.gridRefitPending = true;
+  fitAndScroll(entry, null, 0, () => {
+    entry.gridRefitPending = false;
+    return gridViewActive && !entry.closed && isGridTerminalVisible(entry);
+  }, true);
 }
 
-function refitOpenTerminals() {
+function refitOpenTerminals({ fitOffscreen = false } = {}) {
   clearTimeout(openTerminalsRefitTimer);
   openTerminalsRefitTimer = null;
   if (gridViewActive) {
     const viewport = terminalsEl.getBoundingClientRect();
     for (const entry of openSessions.values()) {
-      refitVisibleGridTerminal(entry, viewport);
+      if (entry.closed) continue;
+      if (isGridTerminalVisible(entry, viewport)) refitVisibleGridTerminal(entry, viewport);
+      else if (fitOffscreen && !document.hidden && entry.element.isConnected && entry.element.clientHeight) safeFit(entry);
     }
     return;
   }

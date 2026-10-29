@@ -2733,9 +2733,9 @@ window.addEventListener('resize', scheduleOpenTerminalsRefit);
 // used to leave xterm and the PTY disagreeing on the width until the user
 // happened to resize the window or switch session.
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) refitOpenTerminals();
+  if (!document.hidden) refitOpenTerminals({ fitOffscreen: true });
 });
-window.addEventListener('focus', refitOpenTerminals);
+window.addEventListener('focus', () => refitOpenTerminals({ fitOffscreen: true }));
 
 // --- Tab switching ---
 document.querySelectorAll('.sidebar-tab').forEach(tab => {
@@ -2772,9 +2772,7 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
         placeholder.style.display = 'none';
         terminalHeader.style.display = 'none';
         gridViewer.style.display = 'block';
-        for (const entry of openSessions.values()) {
-          if (!entry.closed) fitAndScroll(entry);
-        }
+        refitOpenTerminals();
       } else if (activeSessionId && openSessions.has(activeSessionId)) {
         showSession(activeSessionId);
       } else {

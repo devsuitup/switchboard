@@ -24,6 +24,27 @@ function setup(t) {
   window.gridViewActive = true;
   window.ResizeObserver = class { observe() {} };
   window.MutationObserver = class { observe() {} };
+  window.WebglAddon = { WebglAddon: class {
+    onContextLoss() {}
+    onChangeTextureAtlas() {}
+    onAddTextureAtlasCanvas() {}
+    clearTextureAtlas() { this.calls.clears++; }
+    dispose() {}
+  } };
+  for (const name of ['placeholder', 'terminalHeader', 'statsViewer', 'memoryViewer',
+    'settingsViewer', 'jsonlViewer', 'terminalArea', 'gridViewer', 'gridViewerCount',
+    'workFilesContent', 'sessionFilters', 'searchBar', 'searchInput']) {
+    window[name] = document.createElement('div');
+    document.body.append(window[name]);
+  }
+  const sessionsTab = document.createElement('button');
+  sessionsTab.className = 'sidebar-tab';
+  sessionsTab.dataset.tab = 'sessions';
+  document.body.append(sessionsTab);
+  window.activeTab = 'stats';
+  window.searchGeneration = 0;
+  window.projectsChangedWhileAway = false;
+  window.hideAllViewers = () => { window.terminalArea.style.display = ''; };
   let intersection;
   let thresholds;
   window.IntersectionObserver = class {
@@ -34,11 +55,12 @@ function setup(t) {
   ctx.evalPublic('shortcuts.js');
   ctx.evalPublic('terminal-manager.js');
   ctx.evalPublic('grid-view.js');
+  ctx.evalPublic('agents-view.js');
   window.initGridObservers();
   const appPath = path.resolve(__dirname, '../public/app.js');
   const source = fs.readFileSync(appPath, 'utf8');
   const start = source.indexOf('// --- Terminal geometry re-sync ---');
-  const end = source.indexOf('// --- Tab switching ---', start);
+  const end = source.indexOf('\n// Grid view', start);
   assert.ok(start >= 0 && end > start);
   vm.runInContext(source.slice(start, end), ctx.context, { filename: appPath });
   function flushFrames() {
@@ -65,8 +87,9 @@ function setup(t) {
       session: { sessionId: sid }, element,
       fitAddon: { proposeDimensions: () => undefined, fit: () => calls.fits++ },
       terminal: {
-        rows: 24, buffer: { active: { viewportY: 0, baseY: 0 } },
+        rows: 24, options: {}, buffer: { active: { viewportY: 0, baseY: 0 } },
         refresh: () => calls.repaints++, scrollToBottom() {},
+        loadAddon(addon) { addon.calls = calls; },
       },
       webglAddon: { clearTextureAtlas: () => calls.clears++, dispose() {} },
     };
@@ -122,7 +145,10 @@ test('focus repaints only cards intersecting the grid scroll viewport', t => {
   h.flushFrames();
   assert.equal(visible.calls.repaints, 1);
   assert.equal(partial.calls.repaints, 1);
-  for (const card of [below, right, hidden, detached]) {
+  for (const card of [below, right]) {
+    assert.deepEqual(card.calls, { fits: 1, repaints: 0, clears: 0 });
+  }
+  for (const card of [hidden, detached]) {
     assert.deepEqual(card.calls, { fits: 0, repaints: 0, clears: 0 });
   }
 });
@@ -177,3 +203,115 @@ test('a queued grid fit skips a card that leaves view before the animation frame
   h.flushFrames();
   assert.deepEqual(card.calls, { fits: 0, repaints: 0, clears: 0 });
 });
+
+test('a full scroll-through fits and repaints once, then rearms after leaving', t => {
+  const h = setup(t);
+  const card = h.card('scroll-through', rect(0, 500, 250, 200));
+  h.cross(card, 0, false);
+  for (const [ratio, top] of [[0.25, 350], [1, 100], [0.75, -50]]) {
+    card.move(rect(0, top, 250, 200));
+    h.cross(card, ratio, true);
+    h.flushFrames();
+  }
+  card.move(rect(0, -200, 250, 200));
+  h.cross(card, 0, false);
+  h.flushFrames();
+  assert.deepEqual(card.calls, { fits: 1, repaints: 1, clears: 0 });
+  card.move(rect(0, 350, 250, 200));
+  h.cross(card, 0.25, true);
+  h.flushFrames();
+  assert.deepEqual(card.calls, { fits: 2, repaints: 2, clears: 0 });
+});
+
+test('an intersecting zero-area edge rearms an already revealed card', t => {
+  const h = setup(t);
+  const card = h.card('edge-reentry', rect(0, 398, 250, 200));
+  h.cross(card, 0.01, true);
+  h.flushFrames();
+  card.move(rect(0, 400, 250, 200));
+  h.cross(card, 0, true);
+  h.flushFrames();
+  card.move(rect(0, 398, 250, 200));
+  h.cross(card, 0.01, true);
+  h.flushFrames();
+  assert.equal(card.calls.fits, 2);
+});
+
+test('single view refits the active terminal on every resize event', t => {
+  const h = setup(t);
+  const active = h.card('active', rect(0, 0, 250, 200));
+  const background = h.card('background', rect(0, 500, 250, 200));
+  h.window.gridViewActive = false;
+  h.window.activeSessionId = 'active';
+  for (let i = 1; i <= 3; i++) {
+    h.emit('resize');
+    assert.equal(active.calls.fits, i, 'live reflow must not wait for the debounce');
+  }
+  h.tick(100);
+  assert.deepEqual(active.calls, { fits: 3, repaints: 0, clears: 0 });
+  assert.equal(background.calls.fits, 0);
+});
+
+for (const event of ['focus', 'visibilitychange']) {
+  test(`${event} updates offscreen cell metrics without repaint or redundant PTY resize`, t => {
+    const h = setup(t);
+    const card = h.card('offscreen', rect(0, 500, 250, 200));
+    const closed = h.card('closed', rect(0, 500, 250, 200));
+    closed.entry.closed = true;
+    let cols = 100;
+    const sizes = [];
+    card.entry.terminal.cols = 80;
+    card.entry.lastPtySize = { cols: 80, rows: 24 };
+    card.entry.fitAddon.proposeDimensions = () => ({ cols, rows: 24 });
+    card.entry.terminal.resize = (nextCols, rows) => {
+      card.calls.fits++;
+      card.entry.terminal.cols = nextCols;
+      card.entry.terminal.rows = rows;
+      if (h.window.ptySizeChanged(card.entry, nextCols, rows)) sizes.push([nextCols, rows]);
+    };
+    const emit = () => event === 'focus' ? h.emit(event)
+      : h.document.dispatchEvent(new h.window.Event(event));
+    emit();
+    h.flushFrames();
+    assert.equal(card.entry.terminal.cols, 100, 'DPI return must refit even outside the viewport');
+    assert.deepEqual(sizes, [[100, 24]]);
+    emit();
+    h.flushFrames();
+    assert.deepEqual(sizes, [[100, 24]], 'unchanged geometry sends no extra size');
+    cols = 120;
+    emit();
+    h.flushFrames();
+    assert.deepEqual(sizes, [[100, 24], [120, 24]]);
+    assert.equal(card.calls.repaints, 0);
+    assert.equal(card.calls.clears, 0);
+    assert.equal(closed.calls.fits, 0);
+  });
+}
+
+for (const route of ['agents', 'sessions-tab', 'show-grid']) {
+  for (const observerFirst of [false, true]) {
+    test(`${route} return and observer fit each visible card once (observer first: ${observerFirst})`, t => {
+      const h = setup(t);
+      const visible = h.card('visible', rect(0, 0, 250, 200));
+      const below = h.card('below', rect(0, 500, 250, 200));
+      if (route === 'show-grid') {
+        h.window.layoutGridCards = () => ['visible', 'below'];
+        h.window.focusGridCard = () => {};
+      }
+      const deliver = () => { h.intersect(visible, true); h.intersect(below, false); };
+      if (observerFirst) deliver();
+      if (route === 'agents') {
+        h.read('agentsViewActive = true');
+        h.window.hideAgentsView();
+      } else if (route === 'sessions-tab') {
+        h.document.querySelector('.sidebar-tab').click();
+      } else {
+        h.window.showGridView();
+      }
+      h.flushFrames();
+      if (!observerFirst) { deliver(); h.flushFrames(); }
+      assert.deepEqual(visible.calls, { fits: 1, repaints: 1, clears: 1 });
+      assert.deepEqual(below.calls, { fits: 0, repaints: 0, clears: 0 });
+    });
+  }
+}

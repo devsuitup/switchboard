@@ -678,7 +678,7 @@ function hideAgentsView({ restore = true } = {}) {
     placeholder.style.display = 'none';
     terminalHeader.style.display = 'none';
     gridViewer.style.display = 'block';
-    for (const entry of openSessions.values()) if (!entry.closed) fitAndScroll(entry);
+    refitOpenTerminals();
   } else if (activeSessionId && openSessions.has(activeSessionId)) {
     showSession(activeSessionId);
   } else {
