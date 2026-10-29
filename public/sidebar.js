@@ -343,16 +343,20 @@ let _expandedSubagentsGCDone = false;
 function _gcExpandedSubagentsOnce() {
   if (_expandedSubagentsGCDone) return;
   _expandedSubagentsGCDone = true;
+  const groups = new Set(sessionMap.keys());
+  for (const session of sessionMap.values()) {
+    if (session.parentSessionId && session.workflowRunId) groups.add('workflow:' + session.parentSessionId + ':' + session.workflowRunId);
+  }
   try {
     const raw = new Set(JSON.parse(localStorage.getItem('expandedSubagents') || '[]'));
-    const pruned = new Set([...raw].filter(id => sessionMap.has(id)));
+    const pruned = new Set([...raw].filter(id => groups.has(id)));
     if (pruned.size !== raw.size) {
       localStorage.setItem('expandedSubagents', JSON.stringify([...pruned]));
     }
   } catch {} // eslint: allowEmptyCatch
   try {
     const raw = new Set(JSON.parse(localStorage.getItem('expandedSubagentRest') || '[]'));
-    const pruned = new Set([...raw].filter(k => !k.startsWith('p:') || sessionMap.has(k.slice(2))));
+    const pruned = new Set([...raw].filter(k => !k.startsWith('p:') || groups.has(k.slice(2))));
     if (pruned.size !== raw.size) {
       localStorage.setItem('expandedSubagentRest', JSON.stringify([...pruned]));
     }
@@ -670,6 +674,34 @@ function appendSubagentRestToggle(container, domKey, stateKey, rest) {
 function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
   const children = subagentIndex && subagentIndex.get(parentSessionId);
   if (!children || children.length === 0) return;
+  parentEl.after(buildSubagentGroup(parentSessionId, children));
+}
+
+function appendSubagentRows(container, children, domKey, restKey, inWorkflow = false) {
+  const workflows = new Map();
+  const ordinary = [];
+  for (const child of children) {
+    if (!inWorkflow && child.workflowRunId) {
+      const key = child.parentSessionId + ':' + child.workflowRunId;
+      if (!workflows.has(key)) workflows.set(key, []);
+      workflows.get(key).push(child);
+    } else ordinary.push(child);
+  }
+  const restExpanded = searchMatchIds !== null || getExpandedSubagentRest().has(restKey);
+  const { shown, rest } = restExpanded ? { shown: ordinary, rest: [] } : splitSubagentsForPreview(ordinary);
+  for (const child of shown) container.appendChild(buildSubagentItem(child));
+  appendSubagentRestToggle(container, domKey, restKey, rest);
+  for (const [key, members] of workflows) {
+    const group = document.createElement('div');
+    group.className = 'sidebar-workflow-group';
+    group.id = 'workflow-' + key;
+    group.dataset.workflowRunId = members[0].workflowRunId;
+    group.appendChild(buildSubagentGroup('workflow:' + key, members, members[0].workflowName || members[0].workflowRunId));
+    container.appendChild(group);
+  }
+}
+
+function buildSubagentGroup(parentSessionId, children, title) {
 
   const expandedSet = getExpandedSubagents();
   const caretId = caretIdFor(parentSessionId);
@@ -679,7 +711,7 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
   caret.className = 'sidebar-children-caret js-stateful';
   caret.id = caretId;
   if (isExpanded) caret.classList.add('expanded');
-  caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${children.length} subagent${children.length !== 1 ? 's' : ''}`;
+  caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${title ? escapeHtml(title) + ' · ' : ''}${children.length} subagent${children.length !== 1 ? 's' : ''}`;
 
   const domKey = parentSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const childrenContainer = document.createElement('div');
@@ -688,15 +720,7 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
   childrenContainer.style.display = isExpanded ? '' : 'none';
 
   const restKey = 'p:' + parentSessionId;
-  const restExpanded = searchMatchIds !== null || getExpandedSubagentRest().has(restKey);
-  const { shown, rest } = restExpanded
-    ? { shown: children, rest: [] }
-    : splitSubagentsForPreview(children);
-
-  for (const child of shown) {
-    childrenContainer.appendChild(buildSubagentItem(child));
-  }
-  appendSubagentRestToggle(childrenContainer, domKey, restKey, rest);
+  appendSubagentRows(childrenContainer, children, domKey, restKey, !!title);
 
   caret.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -708,8 +732,9 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
     saveExpandedSubagents(set);
   });
 
-  parentEl.after(caret);
-  caret.after(childrenContainer);
+  const fragment = document.createDocumentFragment();
+  fragment.append(caret, childrenContainer);
+  return fragment;
 }
 
 function rowHeadSession(session, head = rowHeadId(session)) {
@@ -1161,15 +1186,7 @@ function renderProjects(projects, resort) {
         orphanGroup.appendChild(orphanLabel);
 
         const restKey = 'o:' + projectPath;
-        const restExpanded = searchMatchIds !== null || getExpandedSubagentRest().has(restKey);
-        const { shown, rest } = restExpanded
-          ? { shown: orphans, rest: [] }
-          : splitSubagentsForPreview(orphans);
-
-        for (const orphan of shown) {
-          orphanGroup.appendChild(buildSubagentItem(orphan));
-        }
-        appendSubagentRestToggle(orphanGroup, fId, restKey, rest);
+        appendSubagentRows(orphanGroup, orphans, fId, restKey);
         sessionsList.appendChild(orphanGroup);
       }
     }

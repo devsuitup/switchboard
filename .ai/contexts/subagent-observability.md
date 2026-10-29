@@ -10,8 +10,8 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 
 | File | Role |
 |---|---|
-| `session-cache.js` | Calls `enumerateSessionFiles(folderPath)` (`read-session-file.js`), which walks `<folder>/*.jsonl` AND `<folder>/<parentSessionId>/subagents/*.jsonl` (+ legacy `<folder>/<parentSessionId>/*.jsonl`). Sets `subagentType` from JSONL metadata. |
-| `db.js` (read side of `session-index-store.js`) | `session_cache` row has `parentSessionId`, `agentId`, `subagentType` columns. `getCachedByParent(parentSessionId)` returns all children. |
+| `session-cache.js` | Calls `enumerateSessionFiles(folderPath)` (`read-session-file.js`), which walks root, ordinary/legacy subagent and workflow agent transcripts. Sets `subagentType` from JSONL metadata. |
+| `db.js` (read side of `session-index-store.js`) | `session_cache` row has `parentSessionId`, `agentId`, `subagentType`, `workflowRunId` columns. `getCachedByParent(parentSessionId)` returns all children. |
 | `read-session-file.js` | `readSessionDisplayHeader()` extracts `agentId` + `isSidechain` flags from the first 256 KB. |
 
 ### IPC bridge (main ↔ renderer)
@@ -41,7 +41,7 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 
 - **A subagent click MUST NOT spawn `claude --resume`.** The opener routing in `sidebar.js` checks `item.dataset.subagent && session.parentSessionId` and dispatches to `showSubagentTranscript` instead of `openSession`. **If you add a new sidebar opener path, replicate this discriminator.**
 - **`subagentType` is the canonical "is-subagent" signal**: non-null/non-empty string. The agent type itself (e.g. `'frontend-implementer'`, `'researcher'`) is human-meaningful but the *presence* of the value is what matters for routing.
-- **Subagent JSONLs are at `<folder>/<parentSessionId>/subagents/<agentId>.jsonl`**, NOT at `<folder>/<agentId>.jsonl`. There's also a legacy layout `<folder>/<parentSessionId>/<agentId>.jsonl`. **Always use `enumerateSessionFiles()` to walk both layouts.**
+- **Subagent JSONLs belong beneath their parent**, including `<parent>/subagents/agent-<id>.jsonl`, legacy `<parent>/agent-<id>.jsonl`, and `<parent>/subagents/workflows/<run>/agent-<id>.jsonl`. Use `enumerateSessionFiles()` to discover them and `resolveJsonlPath()` with the cached row to reopen them.
 - **Watchers are scoped per `(parentSessionId, agentId)`**: don't share a watcher across subagents — `start-subagent-watch` returns a `watchId` that's unique per call.
 - **Watch cleanup is mandatory** when the transcript view is closed. `drainViewerWatches()` (in `jsonl-viewer.js`) walks `activeViewerWatches` and calls `stopSubagentWatch` for each. Forgetting this leaks `fs.watch` handles.
 
@@ -51,6 +51,45 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 - **Orphan subagents** (no findable parent in cache) are surfaced in a dedicated `.sidebar-orphan-subagents` group in the sidebar, **collapsed by default**. State is persisted per-project in `localStorage['orphanExpanded:' + projectPath]`.
 - **Subagent status badges**: originally (PR #48) derived from the most recent JSONL line — `isSidechain: true` meant active, completion was inferred from mtime stability. Since #624/#627 the shared task registry decides, and the parent row shows a running count instead of per-child badges (see below).
 - **The "Resume in terminal anyway" button** in the transcript view bypasses the routing and calls the original `openSession` opener. This is intentional — for the rare debugging case where a user genuinely wants to re-enter the subagent's session.
+
+## Workflow agent transcripts (#875)
+
+`classifyTranscriptPath` in `subagent-attribution.js` classifies project-relative root, ordinary/legacy
+subagent and workflow agent paths. Workflow transcripts live at
+`<parent>/subagents/workflows/<wf_runId>/agent-<agentId>.jsonl`; run ids must
+match `/^wf_[a-z0-9-]{6,}$/`. Run journals, sidecars and unrecognized nesting
+are ignored. The cold enumerator and local/remote targeted scans share this
+classification, as does live attribution through `subagent-attribution.js`.
+The enumerator and targeted readers skip run directories that are symlinks
+or Windows junctions, so a resumed workflow linked to another parent is not
+indexed a second time. They do not deduplicate by realpath.
+
+The cache identity remains `sub:<parent>:<agentId>`. The nullable
+`workflowRunId` column is reconciled additively without clearing the cache or
+its initial-scan marker. Full and header reads carry it; `resolveJsonlPath`
+uses it for cached refresh matching, transcript viewing, Changes sidecars and
+task snapshot hydration. Transition discovery includes workflow run-directory
+mtimes in its directory-list cache, so a new agent inside an existing run is
+visible even when the ordinary `subagents` directory has not changed.
+Only classified agent transcripts enter that cached list, so a remaining
+journal cannot prevent collection of a deleted agent. Missing run directories
+still participate in targeted deletion detection.
+
+`buildProjectsFromCache` projects `workflowRunId` and `workflowName`, reading
+`<parent>/workflows/<run>.json` once per run per build. Missing, malformed or
+empty titles fall back to the run id. Remote mirrors without run snapshots
+use that same fallback. The sidebar nests one block per parent/run under the
+existing subagent container (and groups orphan workflows in the orphan bucket).
+It reuses the existing caret, child container, preview cap and
+`expandedSubagents`/`expandedSubagentRest` persistence with a workflow-scoped
+key. Ordinary children retain their own preview; each workflow has its own.
+Titles are escaped. The #543 skip guard already compares the projected
+payload, including the new run id and title; its logic is unchanged.
+
+`test/workflow-subagents-875.test.js` exercises disposable on-disk layouts,
+full and targeted local/remote scans, journal exclusion, linked runs,
+targeted deletion, cached header reads, additive SQLite reconciliation,
+parent attribution, Changes sidecars and shipped sidebar code under jsdom.
 
 ## Running subagent count (#627)
 

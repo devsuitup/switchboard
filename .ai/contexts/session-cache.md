@@ -61,6 +61,17 @@ Compared cache fields: `sessionId`, `folder`, `projectPath`, `summary`,
 derived from `entrypoint`. Compared metadata: `name`, `starred`, `archived`,
 `nameSource`, `nameRevision`. Empty optional values are normalized.
 
+Workflow agents (#875) also carry nullable `workflowRunId`, reconciled with
+`cols.has` without reindexing and included in the structural field comparison.
+The shared `subagent-attribution.js` classifier admits their five-part
+relative paths while excluding journals and unknown depths. The cold walker
+and targeted readers skip symlink/junction run directories. Full and header
+reads preserve the run id, so `resolveJsonlPath` maps each synthetic child id
+back to the same cached file without rereading its body every watcher flush.
+The projects payload includes the run id and a run title read once per run per
+build from `<parent>/workflows/<run>.json`, falling back to the id; see
+[subagent-observability](subagent-observability.md#workflow-agent-transcripts-875).
+
 These are the inputs to `buildProjectsFromCache` and
 `mergeLocalBackgroundSessions`: they determine names, timestamps, message
 counts, schedule/slug and parent grouping, archive/SDK visibility, bridge heads

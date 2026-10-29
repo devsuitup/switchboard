@@ -28,7 +28,8 @@ async function shutdownProducers() {
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { setRemappedProjectReader } = require('./encode-project-path');
 const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
-const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups } = require('./read-session-file');
+const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups, isCanonicalWorkflowPath } = require('./read-session-file');
+const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
 const { isPanelShellSession } = require('./panel-terminal-target');
@@ -348,8 +349,8 @@ function readFolderFromFilesystem(folder) {
   if (!projectPath) return { projectPath: null, sessions: [] };
   const sessions = [];
 
-  for (const { filePath, parentSessionId } of enumerateSessionFiles(folderPath)) {
-    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
+  for (const { filePath, parentSessionId, workflowRunId } of enumerateSessionFiles(folderPath)) {
+    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
     if (s) sessions.push(s);
   }
 
@@ -365,7 +366,7 @@ function readFolderFromFilesystem(folder) {
 // see .ai/contexts/session-cache.md ("Watcher notification rules")
 const PROJECT_ROW_FIELDS = ['sessionId', 'folder', 'projectPath', 'summary', 'firstPrompt',
   'created', 'slug', 'scheduleSlug', 'aiTitle', 'customTitle',
-  'parentSessionId', 'agentId', 'subagentType', 'description', 'bridgeSessionId',
+  'parentSessionId', 'agentId', 'subagentType', 'description', 'workflowRunId', 'bridgeSessionId',
   'mergedIntoSessionId', 'entrypoint'];
 const PROJECT_META_FIELDS = ['name', 'starred', 'archived', 'nameSource', 'nameRevision'];
 const PROJECT_ACTIVITY_FIELDS = ['modified', 'fileMtime', 'messageCount'];
@@ -454,17 +455,10 @@ function refreshFolder(folder, opts = {}) {
   if (targeted) {
     filesToScan = [];
     for (const rel of opts.files) {
-      const filePath = path.join(folderPath, rel);
-      // Derive parentSessionId for subagent paths: <folder>/<parent>/subagents/agent-X.jsonl
-      const parts = rel.split(path.sep);
-      let parentSessionId = null;
-      if (parts.length === 3 && parts[1] === 'subagents') {
-        parentSessionId = parts[0];
-      } else if (parts.length === 2) {
-        // legacy <folder>/<parent>/agent-X.jsonl layout (no subagents/ subdir)
-        parentSessionId = parts[0];
-      }
-      filesToScan.push({ filePath, parentSessionId });
+      const classified = classifyTranscriptPath(rel);
+      if (!classified || !isCanonicalWorkflowPath(folderPath, classified)) continue;
+      const filePath = path.join(folderPath, ...rel.split(/[\\/]/));
+      filesToScan.push({ filePath, ...classified });
     }
   } else {
     filesToScan = enumerateSessionFiles(folderPath);
@@ -504,7 +498,7 @@ function refreshFolder(folder, opts = {}) {
   //   - Header read failing (truncated chunk, partial JSON): fall back to a
   //     mtime-only DB touch so the sidebar still reflects activity.
 
-  for (const { filePath, parentSessionId } of filesToScan) {
+  for (const { filePath, parentSessionId, workflowRunId } of filesToScan) {
     let stat, fileMtime;
     try {
       stat = fs.statSync(filePath, { bigint: true });
@@ -569,7 +563,7 @@ function refreshFolder(folder, opts = {}) {
       if (!changedSize && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
         && continuationIndex === cachedEntry.continuationIndex) { collector.accounted.add(relativeFile); continue; }
       // EXISTING -- header-only refresh.
-      const h = readSessionDisplayHeader(filePath, { parentSessionId });
+      const h = readSessionDisplayHeader(filePath, { parentSessionId, workflowRunId });
       if (linked) {
         let after;
         try { after = fs.statSync(filePath, { bigint: true }); } catch { defer(); continue; }
@@ -599,6 +593,7 @@ function refreshFolder(folder, opts = {}) {
           aiTitle: h.aiTitle || cachedEntry.aiTitle,
           customTitle: h.tailTitle || cachedEntry.customTitle || h.headTitle,
           parentSessionId: h.parentSessionId || cachedEntry.parentSessionId,
+          workflowRunId: h.workflowRunId || cachedEntry.workflowRunId,
           agentId: h.agentId || cachedEntry.agentId,
           subagentType: h.subagentType || cachedEntry.subagentType,
           description: h.description || cachedEntry.description,
@@ -626,7 +621,7 @@ function refreshFolder(folder, opts = {}) {
     // entry / metrics / name are built AFTER merge resolution below, from
     // whatever object actually survives (a compaction mirror's raw read here
     // may still be replaced by a cutoff-filtered re-derivation, or dropped).
-    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
+    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
     if (s) {
       if (!parentSessionId && s.continuationIndex) {
         const head = continuationHead(filePath, stat.size);
@@ -961,6 +956,22 @@ function buildProjectsFromCache(showArchived) {
   projectsProjection = { removedInputs: {} };
   const metaMap = getAllMeta(true);
   const cachedRows = scopedConversationRows(getAllCached());
+  const workflowNames = new Map();
+  const workflowName = row => {
+    if (!row.parentSessionId || !isWorkflowRunId(row.workflowRunId)) return null;
+    const folderPath = resolveFolderDir(row.folder);
+    if (!folderPath) return row.workflowRunId;
+    const file = path.join(folderPath, row.parentSessionId, 'workflows', row.workflowRunId + '.json');
+    if (!workflowNames.has(file)) {
+      let title = row.workflowRunId;
+      try {
+        const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()) title = snapshot.workflowName.trim();
+      } catch {}
+      workflowNames.set(file, title);
+    }
+    return workflowNames.get(file);
+  };
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
 
@@ -1064,6 +1075,8 @@ function buildProjectsFromCache(showArchived) {
       scheduleSlug: row.scheduleSlug || null,
       aiTitle: row.aiTitle || null,
       parentSessionId: row.parentSessionId || null,
+      workflowRunId: row.workflowRunId || null,
+      workflowName: workflowName(row),
       agentId: row.agentId || null,
       subagentType: row.subagentType || null,
       description: row.description || null,

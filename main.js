@@ -2010,6 +2010,7 @@ ipcMain.handle('remote-send-prompt', (_event, payload) => handleSendRequest(payl
 function gitChangesTargetDeps() {
   return {
     getCachedFolder,
+    getCachedSession,
     isRemoteFolder,
     parseFolderKey,
     getRemoteSessions: (alias) => remoteIndexer.getRemoteSessions(alias),
@@ -3393,7 +3394,7 @@ ipcMain.handle('get-task-snapshots', async () => {
     if (dir) {
       await taskRecords.read(path.join(dir, row.sessionId + '.jsonl'), row.sessionId);
       for (const child of getCachedByParent(row.sessionId)) {
-        if (child.agentId) await taskRecords.child(path.join(dir, row.sessionId, 'subagents', 'agent-' + child.agentId + '.jsonl'), row.sessionId, child.agentId);
+        if (child.agentId) await taskRecords.child(resolveJsonlPath(dir, { ...child, folder: '.' }), row.sessionId, child.agentId);
       }
     }
   }
