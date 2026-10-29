@@ -45,6 +45,47 @@ function alreadyRewritten(file, spec, map, root) {
     || (root && !map[current] && fs.existsSync(path.join(root, current)));
 }
 
+function excerptOnly(join, tree) {
+  const parents = new Map(tree.map(({ node, parent }) => [node, parent]));
+  const paths = new Set([join]);
+  const names = new Set();
+  for (let size = -1; size !== names.size;) {
+    size = names.size;
+    for (const { node } of tree) {
+      if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier'
+        && (paths.has(node.init) || (node.init?.type === 'Identifier' && names.has(node.init.name)))) names.add(node.id.name);
+    }
+  }
+  for (const { node } of tree) if (node.type === 'Identifier' && names.has(node.name)) paths.add(node);
+  const reads = tree.map(({ node }) => node).filter(node => node.type === 'CallExpression'
+    && node.callee.type === 'MemberExpression' && node.callee.property.name === 'readFileSync'
+    && paths.has(node.arguments[0]));
+  const visited = new Set();
+  function extracted(node) {
+    if (visited.has(node)) return true;
+    visited.add(node);
+    const parent = parents.get(node);
+    if (parent?.type === 'VariableDeclarator' && parent.init === node && parent.id.type === 'Identifier') {
+      const uses = tree.filter(({ node: ref, parent: owner }) => ref.type === 'Identifier'
+        && ref.name === parent.id.name && ref !== parent.id
+        && !(owner?.type === 'MemberExpression' && owner.property === ref && !owner.computed)
+        && !(owner?.type === 'Property' && owner.key === ref && !owner.computed));
+      return uses.length > 0 && uses.every(({ node: ref }) => extracted(ref));
+    }
+    if (parent?.type === 'MemberExpression' && parent.object === node) {
+      const call = parents.get(parent);
+      if (call?.type !== 'CallExpression' || call.callee !== parent) return false;
+      const method = parent.computed ? parent.property.value : parent.property.name;
+      if (['indexOf', 'slice', 'substring', 'substr'].includes(method)) return true;
+      if (['replace', 'replaceAll', 'toString'].includes(method)) return extracted(call);
+    }
+    if (parent?.type === 'CallExpression' && parent.arguments.includes(node)
+      && parent.callee.type === 'Identifier' && /^extract/.test(parent.callee.name)) return true;
+    return false;
+  }
+  return reads.length > 0 && reads.every(extracted);
+}
+
 function rewrite(file, source, map, options = {}) {
   const edits = [];
   const before = originalFile(file, map);
@@ -76,13 +117,19 @@ function rewrite(file, source, map, options = {}) {
       if (node.type !== 'CallExpression' || node.callee.type !== 'MemberExpression'
         || node.callee.object.name !== 'path' || node.callee.property.name !== 'join') continue;
       const [anchor, ...parts] = node.arguments;
+      parts.forEach(n => handled.add(n));
       if (anchor?.type !== 'Identifier' || !['__dirname', 'ROOT'].includes(anchor.name)
         || !parts.length || !parts.every((n) => n.type === 'Literal' && typeof n.value === 'string')) continue;
       const base = anchor.name === 'ROOT' ? '' : p.dirname(before);
       const old = p.join(base, ...parts.map((n) => n.value));
       const currentBase = anchor.name === 'ROOT' ? '' : p.dirname(file);
       const current = p.join(currentBase, ...parts.map((n) => n.value));
-      loaded.add(originalFile(Object.values(map).includes(current) ? current : old, map));
+      const loadedFile = originalFile(Object.values(map).includes(current) ? current : old, map);
+      if (excerptOnly(node, tree)) {
+        if (Object.keys(map).length && options.sources?.[loadedFile]) {
+          options.onWarning?.(`${file}: excerpt-only source ${loadedFile}; VM stubs require manual review`);
+        }
+      } else loaded.add(loadedFile);
       if (Object.values(map).includes(current) || old.startsWith('../')) continue;
       if (map[old] || before !== file) {
         const nextBase = anchor.name === 'ROOT' ? '' : p.dirname(file);
@@ -94,6 +141,7 @@ function rewrite(file, source, map, options = {}) {
       }
     }
     const stubs = new Map();
+    const ambiguities = new Set();
     for (const old of loaded) {
       const content = options.sources?.[old];
       if (!content) continue;
@@ -106,9 +154,13 @@ function rewrite(file, source, map, options = {}) {
         const target = moduleTarget(from, spec.value, map, options.root);
         let next = relative(currentFile, map[target] || target);
         if (!spec.value.endsWith('.js')) next = next.replace(/\.js$/, '');
-        if (stubs.has(spec.value) && stubs.get(spec.value) !== next) throw new Error(`${file}: ambiguous vm stub ${spec.value}`);
+        if (stubs.has(spec.value) && stubs.get(spec.value) !== next) ambiguities.add(`${file}: ambiguous vm stub ${spec.value}`);
         stubs.set(spec.value, next);
       }
+    }
+    if (ambiguities.size) {
+      if (!options.onAmbiguity) throw new Error([...ambiguities].join('\n'));
+      ambiguities.forEach(options.onAmbiguity);
     }
     const loadedApp = [...loaded].some(old => !old.startsWith('test/') && isJavaScript(old) && options.sources?.[old]);
     if (file.startsWith('test/') && !loadedApp && stubValues.size) {
@@ -133,6 +185,13 @@ function rewrite(file, source, map, options = {}) {
     for (const { node } of tree) {
       if (node.type !== 'Literal' || typeof node.value !== 'string' || handled.has(node)) continue;
       const value = node.value;
+      for (const match of value.matchAll(/(['"])(\.[^'"\s]*)\1/g)) {
+        const target = [moduleTarget(before, match[2], map, options.root), moduleTarget('', match[2], map, options.root)]
+          .find(candidate => map[candidate]);
+        if (map[target]) {
+          options.onWarning?.(`${file}:${node.loc.start.line}: source-text reference ${match[2]}; review manually after moving ${target}`);
+        }
+      }
       let next = value;
       if (requires.has(node.range[0])) {
         const target = moduleTarget(before, value, map, options.root);
@@ -171,6 +230,12 @@ function run(argv) {
     else throw new Error('usage: move-modules.js [--check] [--root <repository>]');
   }
   const map = validateMap(JSON.parse(fs.readFileSync(path.join(root, 'scripts/source-map.json'), 'utf8')));
+  const pending = Object.keys(map).filter((old) => fs.existsSync(path.join(root, old)));
+  for (const old of pending) console.log(`${old}: pending git mv -> ${map[old]}`);
+  if (!check && pending.length) {
+    console.error('Refusing apply: pending git mv operations must finish first');
+    return 2;
+  }
   const files = [...new Set([...appFiles(root), ...walk(root, 'public'), ...walk(root, 'test'),
     ...walk(root, 'e2e'), ...walk(root, '.ai', (f) => /\.(md|json)$/.test(f)),
     ...walk(root, 'docs', (f) => f.endsWith('.md'))])];
@@ -179,9 +244,12 @@ function run(argv) {
     sources[originalFile(file, map)] = fs.readFileSync(path.join(root, file), 'utf8');
   }
   const changes = [];
+  const ambiguities = new Set();
   for (const file of files) {
     const source = fs.readFileSync(path.join(root, file), 'utf8');
-    const output = rewrite(file, source, map, { root, sources, onWarning: warning => console.warn(`WARNING ${warning}`), onEdits(edits) {
+    const output = rewrite(file, source, map, { root, sources,
+      onAmbiguity: ambiguity => ambiguities.add(ambiguity),
+      onWarning: warning => console.warn(`WARNING ${warning}`), onEdits(edits) {
       for (const edit of edits) {
         const line = source.slice(0, edit.start).split('\n').length;
         console.log(`${file}:${line}: ${edit.old} -> ${edit.value}`);
@@ -189,8 +257,10 @@ function run(argv) {
     } });
     if (output !== source) changes.push({ file, output });
   }
-  const pending = Object.keys(map).filter((old) => fs.existsSync(path.join(root, old)));
-  for (const old of pending) console.log(`${old}: pending git mv -> ${map[old]}`);
+  if (ambiguities.size) {
+    ambiguities.forEach(ambiguity => console.error(ambiguity));
+    return 2;
+  }
   if (!check) for (const { file, output } of changes) fs.writeFileSync(path.join(root, file), output);
   return check && (changes.length || pending.length) ? 1 : 0;
 }
