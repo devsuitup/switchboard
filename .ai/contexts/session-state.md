@@ -17,7 +17,12 @@ compared first and returns immediately on a change, before computing activity
 overlays. All-project metadata has a separate JSON field. The overlay key
 includes filters/search/archived mode, sort order, limits, active/pending sessions,
 selection, remote host labels, archive operations, expanded groups and hidden
-settings. Storage is restricted to `expandedSubagents`, `expandedSubagentRest`,
+settings. Open-tab ids and each tab's closed flag are included, so eviction of
+a closed tab immediately releases older-session Archive eligibility (#876).
+The per-row older-archive keep reason uses the same predicate as the button,
+including head/member remote liveness and descriptor fallbacks; row-level
+liveness alone does not capture every eligibility change.
+Storage is restricted to `expandedSubagents`, `expandedSubagentRest`,
 `orphanExpanded:*` and the result of `getExpandedSlugs`.
 
 Per-row overlays contain the projected icon, row booleans, subagent activity/counts,
@@ -41,7 +46,11 @@ Evidence: `test/dom-sidebar-unchanged-543.test.js` loads the shipped sidebar and
 and morphdom boundaries. Its IPC-reply path also runs the actual staged poll,
 busy reconciliation and running-indicator update. The 30-second label ticker
 updates descriptor ages, including merged heads, without a sidebar rebuild and
-preserves background activity labels. `refreshSidebar.counters` tracks completed
+preserves background activity labels. Time labels are written only when their
+text changes, so a no-op ticker does not dirty the DOM through the observer
+(#871/#876). The suite also exercises Mark as unread, an identical skipped
+refresh, and Mark as read through `refreshSidebar({ skipUnchanged: true })`.
+`refreshSidebar.counters` tracks completed
 renders and skips for the renderer lifetime; when debug tracing is enabled,
 `sidebar.refresh` records `skipped`, `renders` and `skips`. Differences between
 two counter samples give the skip rate over that interval, even after enabling

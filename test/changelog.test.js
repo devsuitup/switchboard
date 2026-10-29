@@ -90,6 +90,24 @@ test('parseChangelog accepts CRLF line endings', () => {
   assert.equal(parsed.versions[0].body, '### Fixed\n- Hundredth. (#8)');
 });
 
+for (const heading of ['Added', 'Security', 'fixed', 'New extra', '']) {
+  test(`parseChangelog rejects unknown Unreleased group ${JSON.stringify(heading)}`, () => {
+    assert.throws(() => parseChangelog(SAMPLE.replace('### New', `### ${heading}`)),
+      /malformed Unreleased group/);
+  });
+}
+
+test('parseChangelog accepts only the documented Unreleased groups with CRLF', () => {
+  const body = '### New\n- New item.\n### Changed\n- Changed item.\n### Fixed\n- Fixed item.';
+  const text = SAMPLE.replace('### New\n- Pending thing. (#9)', body);
+  assert.equal(parseChangelog(text.replace(/\n/g, '\r\n')).unreleased, body);
+});
+
+test('Unreleased group validation does not reinterpret historical groups or text after the closing rule', () => {
+  const text = SAMPLE.replace('### Fixed', '### Added') + '\n### Historical\n';
+  assert.match(parseChangelog(text).versions[0].body, /^### Added/);
+});
+
 test('parseChangelog throws on a file with no version section', () => {
   assert.throws(() => parseChangelog('# Changelog\n\n## Unreleased\n\n- x\n'), /no version section/);
   assert.throws(() => parseChangelog(''), /no version section/);
