@@ -3375,8 +3375,18 @@ ipcMain.handle('get-task-snapshots', async () => {
   for (const job of bgAgents.getSnapshot().roster) {
     if (job.sessionId && isHostedJob(job, descriptors)) live.add(job.sessionId);
   }
-  await refreshRemoteHeadTurns();
-  for (const row of getAllCached()) {
+  try {
+    await refreshRemoteHeadTurns();
+  } catch (err) {
+    log.warn(`[task-records] remote head-turn refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let cached = [];
+  try {
+    cached = getAllCached();
+  } catch (err) {
+    log.warn(`[task-records] local snapshot cache read failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  for (const row of cached) {
     if (row.parentSessionId || !live.has(row.sessionId)) continue;
     const folder = row.folder;
     const dir = folder && !parseFolderKey(folder).alias && projectsDirForFolder(folder);
