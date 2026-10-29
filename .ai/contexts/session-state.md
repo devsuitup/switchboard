@@ -56,10 +56,11 @@ conversation's head. `markUnread` is a reducer event: it sets `responseReady`
 and `manualUnread`, without changing liveness or recorded turn evidence.
 The head projection includes the local adapter's manual flag even when a
 transcript or remote adapter supplies its other facts. Reading clears it;
-every busy event (including idle with `armReady: false`), attention and a new
-open head clear it through the reducer. The PTY adapter forwards idle events
-when a manual reminder is set; duplicate idle still preserves an observed
-response-ready closure. It uses the existing
+real busy edges (including busy-to-idle with `armReady: false`), attention and
+a new open head clear it through the reducer. Duplicate or late idle signals
+preserve manual reminders and observed response-ready closures. Open-head and
+attention projections clear only the local adapter's manual reminder, preserving
+readiness recorded by the PTY. It uses the existing
 Response ready slot, stays in renderer memory, and survives sidebar rebuilds
 but not renderer reloads. The button is a normal Tab stop and uses the existing
 focus-visible action strip (#574).
@@ -78,7 +79,11 @@ kept and refused sessions with reasons, caps each list at ten and adds
 question and again per row; newly eligible rows require another confirmation.
 Preparation never publishes errors. Refusals become notices only after a
 confirmed run. With no eligible rows, a click shows one notice without asking;
-the archive button is disabled when preflight finds no eligible rows. Filters
+the archive button is disabled when synchronous row facts leave no candidates.
+Rendering does not query liveness elsewhere or background jobs; asynchronous
+preflight runs only on click. Confirmed batches report kept rows by name and
+reason in one info notice, including rows that become ineligible during the
+post-confirmation and per-row rechecks. Successful rows still offer Undo. Filters
 that show every item have no older action.
 
 The older batch locks its toggle id, every nested slug group through

@@ -156,7 +156,7 @@ function setActivity(sessionId, active, via, opts) {
   const before = state.snapshot();
 
   // response-ready-holds-idle: a duplicate/late idle signal is not a transition — see .ai/contexts/session-state.md
-  if (!active && before.responseReady && !before.manualUnread) {
+  if (!active && before.responseReady && !before.busy) {
     if (window.ATRACE) window.atrace('store.skip', sessionId, { map: 'sessionBusyState', reason: 'response-ready-holds-idle', fn: 'setActivity', via });
     return;
   }

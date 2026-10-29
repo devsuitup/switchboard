@@ -56,7 +56,10 @@ function applyHeadTurnSnapshot(turn) {
     }
   }
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
-  if (turn.state === 'open' && previous?.state !== 'open') localPtyStates.get(turn.sessionId)?.apply({ type: 'clearUnread' });
+  if (turn.state === 'open' && previous?.state !== 'open') {
+    const state = localPtyStates.get(turn.sessionId);
+    if (state?.snapshot().manualUnread) state.apply({ type: 'clearUnread' });
+  }
   const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
   const observedAt = changed ? Date.now() : previous.observedAt;
   const ended = turn.state === 'closed' && (!!previous?.endArmed || !!previous?.ended);
@@ -238,7 +241,8 @@ function isSessionAlive(sessionId) {
 function applyStateClasses(sessionId, snapshot) {
   if (snapshot?.attention && typeof clearHeadUnread === 'function') {
     clearHeadUnread(sessionId);
-    localPtyStates.get(sessionId)?.apply({ type: 'clearUnread' });
+    const state = localPtyStates.get(sessionId);
+    if (state?.snapshot().manualUnread) state.apply({ type: 'clearUnread' });
   }
   const item = sessionItemEl(sessionId);
   if (!item) {

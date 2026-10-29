@@ -188,11 +188,82 @@ test('an idle busy edge without arming readiness clears manual unread through th
     ctx.window.sessionMap.set('pty', row);
     ctx.window.activePtyIds.add('pty');
     ctx.sidebar.renderProjects([{ projectPath: '/proj', sessions: [row] }], true);
+    ctx.setActivity('pty', true, 'test');
     ctx.window.markUnread('pty');
     ctx.setActivity('pty', false, 'test', { armReady: false });
     assert.equal(ctx.read("localPtyStates.get('pty').snapshot().manualUnread"), false);
     assert.equal(ctx.responseReadySessions.has('pty'), false);
     assert.equal(ctx.document.querySelector('.session-item').classList.contains('response-ready'), false);
+  } finally { ctx.destroy(); }
+});
+
+test('a lone idle notification preserves manual unread in the reducer', () => {
+  const state = createSessionState('local-pty');
+  state.apply({ type: 'markUnread' });
+  state.apply({ type: 'busy', active: false });
+  assert.equal(state.snapshot().manualUnread, true, 'idle to idle is not fresh activity');
+  assert.equal(state.snapshot().responseReady, true);
+});
+
+test('a lone idle notification preserves the manually unread row', () => {
+  const ctx = setupSidebarDom();
+  try {
+    const row = session('pty');
+    ctx.window.sessionMap.set('pty', row);
+    ctx.window.activePtyIds.add('pty');
+    ctx.sidebar.renderProjects([{ projectPath: '/proj', sessions: [row] }], true);
+    ctx.window.markUnread('pty');
+    ctx.setActivity('pty', false, 'onCliBusyState', { armReady: false });
+    assert.equal(ctx.read("localPtyStates.get('pty').snapshot().manualUnread"), true);
+    assert.equal(ctx.responseReadySessions.has('pty'), true);
+    assert.ok(ctx.document.querySelector('.session-item').classList.contains('response-ready'));
+  } finally { ctx.destroy(); }
+});
+
+test('attention projection preserves readiness observed by the PTY adapter', () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.setActivity('pty', true, 'test');
+    ctx.setActivity('pty', false, 'test');
+    assert.equal(ctx.responseReadySessions.has('pty'), true);
+    ctx.window.applyStateClasses('pty', { attention: true });
+    assert.equal(ctx.responseReadySessions.has('pty'), true, 'only a manual reminder may be cleared by projection');
+  } finally { ctx.destroy(); }
+});
+
+test('a plain sidebar re-render performs no older-archive liveness or background-job IPC', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const { project } = olderFixture(ctx);
+    await new Promise(resolve => setImmediate(resolve));
+    let liveCalls = 0;
+    let jobCalls = 0;
+    ctx.window.api.getSessionLiveElsewhere = async () => { liveCalls++; return null; };
+    ctx.window.api.bgAgentLiveJob = async () => { jobCalls++; return { known: true }; };
+    ctx.sidebar.renderProjects([project]);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(liveCalls, 0, 'render must not preflight liveness');
+    assert.equal(jobCalls, 0, 'render must not preflight background jobs');
+    assert.equal(ctx.document.querySelector('.sessions-older-archive-btn').disabled, false);
+  } finally { ctx.destroy(); }
+});
+
+test('older archive names a row that becomes ineligible during execution', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const { rows } = olderFixture(ctx);
+    ctx.window.appConfirm = async () => true;
+    const archived = [];
+    ctx.window.api.archiveSession = async id => {
+      archived.push(id);
+      ctx.window.openSessions.set('good', { closed: true });
+      return { ok: true };
+    };
+    await ctx.document.querySelector('.sessions-older-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+    assert.deepEqual(archived, ['refused']);
+    assert.equal(rows[2].archived, 0);
+    assert.match(ctx.document.getElementById('app-notices').textContent, /kept because[\s\S]*good: tab open here/i);
+    assert.ok(ctx.document.querySelector('.app-notice-action'), 'successful archives still offer Undo');
   } finally { ctx.destroy(); }
 });
 
@@ -246,7 +317,7 @@ test('all refused produces one notice and no confirmation', async () => {
     assert.equal(confirms, 0);
     assert.equal(ctx.document.querySelectorAll('#app-notices > *').length, 1);
     assert.match(ctx.document.getElementById('app-notices').textContent, /Nothing.*archive/is);
-    assert.equal(ctx.document.querySelector('.sessions-older-archive-btn').disabled, true);
+    assert.equal(ctx.document.querySelector('.sessions-older-archive-btn').disabled, false, 'async refusals are checked again on click');
   } finally { ctx.destroy(); }
 });
 
@@ -272,7 +343,7 @@ test('older batch keeps active, closed open tabs, live elsewhere, and remote liv
     assert.match(confirm.message, /elsewhere.*live elsewhere/i);
     assert.match(confirm.message, /remote.*host/i);
     assert.deepEqual(writes.sort(), ['good', 'refused']);
-    assert.equal(ctx.document.querySelector('.sessions-older-archive-btn').disabled, true);
+    assert.equal(ctx.document.querySelector('.sessions-older-archive-btn').disabled, false, 'live elsewhere is checked on click');
     ctx.sidebar.renderProjects([project]);
     assert.equal(ctx.document.querySelector('.sessions-older').querySelectorAll('.session-item:not([data-subagent])').length, 6);
     assert.equal(ctx.document.querySelector('.sessions-more-label').textContent, '+ 6 older');
@@ -310,6 +381,7 @@ test('a row becoming live elsewhere during confirmation is kept and never stoppe
     };
     await ctx.document.querySelector('.sessions-older-archive-btn').onclick(new ctx.window.MouseEvent('click'));
     assert.deepEqual(archived, ['refused']);
+    assert.match(ctx.document.getElementById('app-notices').textContent, /kept because[\s\S]*good: live elsewhere/i);
   } finally { ctx.destroy(); }
 });
 

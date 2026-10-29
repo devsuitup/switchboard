@@ -223,10 +223,12 @@ async function archiveSessionRows(rows, olderRule) {
   const unreachable = new Map();
   const notStopped = [];
   const archived = [];
+  const kept = [...(prepared.kept || [])];
   let stoppedAny = false;
   for (const { session, plan } of prepared.plans) {
     if (olderRule) {
       const latest = await prepareOlderArchive([session]);
+      kept.push(...latest.kept);
       for (const { session: refused, reason } of latest.refusals) surfaceStopFailure(null, reason, refused);
       if (!latest.plans.length) continue;
     }
@@ -244,6 +246,8 @@ async function archiveSessionRows(rows, olderRule) {
   }
   announceNotStopped(notStopped);
   if (archived.length) showSessionArchiveUndo(archived, stoppedAny);
+  if (kept.length) showAppNotice({ id: 'archive-older-kept', kind: 'info',
+    message: olderArchiveList(`${kept.length} kept because:`, kept) });
   pollActiveSessions();
   Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
 }
@@ -1876,16 +1880,10 @@ function rebindSidebarEvents(projects) {
     const archiveBtn = moreBtn.querySelector('.sessions-older-archive-btn');
     const olderRows = () => [...olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)')]
       .map(item => sessionMap.get(item.dataset.sessionId)).filter(session => session && !session.archived);
-    const updateArchiveButton = async () => {
-      const candidates = olderRows().filter(session => !olderArchiveKeepReason(session));
-      if (!candidates.length) {
-        archiveBtn.disabled = true;
-        return;
-      }
-      const prepared = await prepareOlderArchive(candidates);
-      if (moreBtn.isConnected && !archivingGroupIds.has(moreBtn.id)) archiveBtn.disabled = !prepared.plans.length;
+    const updateArchiveButton = () => {
+      archiveBtn.disabled = archivingGroupIds.has(moreBtn.id) || !olderRows().some(session => !olderArchiveKeepReason(session));
     };
-    void updateArchiveButton();
+    updateArchiveButton();
     archiveBtn.onclick = async event => {
       event.stopPropagation();
       if (archivingGroupIds.has(moreBtn.id)) return;
@@ -1906,7 +1904,7 @@ function rebindSidebarEvents(projects) {
       } finally {
         for (const row of rows) setArchiveBusy(row.sessionId, false);
         for (const id of groupIds) setGroupArchiveBusy(id, false);
-        await updateArchiveButton();
+        updateArchiveButton();
       }
     };
   });

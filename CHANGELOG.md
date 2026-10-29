@@ -9,6 +9,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - The sessions sidebar skips rebuilding when a background refresh brings back identical data and its display state has not changed. Changed data is checked faster, exit labels stay current, and waiting ages advance every 30 seconds. (#543)
+- Manually unread sessions stay unread after repeated idle notifications, and recorded response readiness survives new turn observations. The older-session Archive button avoids repeated background checks while the sidebar refreshes, and archive results name sessions kept after eligibility changes. (#819)
 - A legacy session name carried across successive session id changes no longer overwrites a newer name you chose. (#696)
 - Sessions keep their buffered terminal output, file-panel shell and grid controls when their session id changes. Switching sessions quickly also keeps the active session's shell label in the header. (#529)
 - Resizing the window in grid view waits for the resize to settle and refreshes only visible cards; single view keeps resizing live. Cards refresh once as they scroll into view, and returning to the window updates offscreen terminal sizes too. (#545)
