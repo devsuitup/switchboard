@@ -7,6 +7,7 @@ function setup(t, { samePath = true } = {}) {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   const { window, document } = ctx;
+  window.setRemoteHostLabels([{ alias: 'host-a', label: '  Alpha <&>  ' }]);
   const projects = ['host-b', undefined, 'host-a'].map((remoteAlias, i) => makeSampleProject({
     projectPath: samePath ? '/home/dev/shared' : '/home/dev/project-' + i,
     remoteAlias,
@@ -92,4 +93,48 @@ test('local grid headings keep path keys and sidebar order on layout and increme
   ctx.window.unwrapGridCards();
   ctx.window.layoutGridCards(new Set(ctx.ids));
   assert.deepEqual(ctx.groups(), ctx.expected());
+});
+
+const expectedLabels = {
+  'session-0': 'host-b: dev/shared',
+  'session-1': 'dev/shared',
+  'session-2': 'Alpha <&>: dev/shared',
+};
+
+for (const mode of ['layout', 'incremental']) {
+  function openGrid(ctx) {
+    if (mode === 'layout') {
+      ctx.ids.forEach(ctx.open);
+      ctx.window.layoutGridCards(new Set(ctx.ids));
+    } else {
+      for (const id of [...ctx.ids].reverse()) {
+        ctx.open(id);
+        ctx.window.wrapInGridCard(id);
+      }
+    }
+  }
+
+  test(`${mode} grouped grid heading texts distinguish local and two remote hosts`, t => {
+    const ctx = setup(t);
+    openGrid(ctx);
+    const headings = [...ctx.window.terminalsEl.querySelectorAll('.grid-project-heading')];
+    assert.deepEqual(headings.map(heading => heading.textContent), ctx.ids.map(id => expectedLabels[id]));
+    assert.equal(new Set(headings.map(heading => heading.textContent)).size, 3);
+  });
+
+  test(`${mode} grid card labels distinguish local and two remote hosts`, t => {
+    const ctx = setup(t);
+    openGrid(ctx);
+    const cards = [...ctx.window.terminalsEl.querySelectorAll('.grid-card')];
+    assert.equal(cards.length, 3);
+    for (const card of cards) {
+      assert.equal(card.querySelector('.grid-card-project').textContent, expectedLabels[card.dataset.sessionId]);
+    }
+  });
+}
+
+test('sidebar project header texts retain host labels, alias fallback and local path', t => {
+  const ctx = setup(t);
+  const headers = [...ctx.document.querySelectorAll('.project-header .project-name')];
+  assert.deepEqual(headers.map(header => header.textContent), ctx.ids.map(id => expectedLabels[id]));
 });

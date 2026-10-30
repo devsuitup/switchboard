@@ -80,6 +80,11 @@ when laying out sidebar rows and when inserting a newly opened card according
 to `sortedOrder`. `data-project-path` retains the original path. Same-path hosts
 and local projects get separate headings; local keys and ordering remain paths.
 Evidence: `test/dom-grid-host-headings-921.test.js` (#921).
+Sidebar project names, grouped grid headings (layout and incremental opening),
+and grid card project labels share `projectDisplayLabel` from `public/utils.js`.
+Remote names prepend `remoteHostLabel(alias) + ': '` to the short path; local
+labels keep the short path alone. Tests assert the rendered text, including
+configured host labels, alias fallback and unchanged sidebar output (#925).
 The skip-key table independently covers background agents, active
 children, dormant rows, task counts, detach availability, both archive locks,
 age-cutoff membership, the 30-second clock bucket and the local day string;
