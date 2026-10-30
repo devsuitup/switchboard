@@ -28,8 +28,20 @@ exceptions are caught and logged through the facade's `log.warn` (console by
 default); they neither reject committed commands nor trigger stale-write retries.
 The observer catch also accepts `null` and `undefined` thrown values, logging
 their string representation. Direct `upsertCachedSessions` commands and recorded
-upsert effects capture indexed folders before submission. An existing session
-whose folder changes reports its id without `upsertOnly`, invalidating even an
+upsert effects capture indexed folders before submission using `getCachedFolder`
+(folder only; `null` means absent), independently for each upsert occurrence,
+without a per-plan folder overlay. Once any occurrence
+differs from the indexed folder, its id remains in the invalidation set even if a
+later occurrence restores the original folder.
+
+This capture is not ordered against commands already queued in the writer. Current
+upserts go through the serialized cache-computation path; direct folder moves use
+deletes. A future direct upsert overlapping a queued folder change could capture a
+stale previous folder and misclassify the notification. Supporting that path would
+require writer-ordered capture (for example, previous folders returned in the ACK).
+
+An existing session whose folder changes reports its id without `upsertOnly`,
+invalidating even an
 available transcript memo (for example, a remote alias before its mirror exists).
 Other upserts report deduplicated ids with `{ upsertOnly: true }`.
 Direct `deleteCachedSession`

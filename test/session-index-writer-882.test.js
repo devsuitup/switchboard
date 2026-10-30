@@ -7,7 +7,7 @@ test('882 transcript index notifications follow successful commit and identify a
   const events = [], committedAtNotification = [];
   let db, release, fail = false, hold = true;
   const committed = new Map();
-  const backend = { getSetting: () => 0, getCachedSession: id => committed.get(id), getMeta: () => null };
+  const backend = { getSetting: () => 0, getCachedSession: id => committed.get(id), getCachedFolder: id => committed.get(id)?.folder ?? null, getMeta: () => null };
   const cache = { init: ctx => { db = ctx.db; },
     refreshFolder() {
       db.upsertCachedSessions([{ sessionId: 'session-a', folder: 'folder' }]);
@@ -50,7 +50,7 @@ for (const mode of ['compute', 'direct']) for (const thrown of [Object.assign(ne
   test(`882b throwing ${String(thrown)} observer cannot reject an acknowledged ${mode} write`, async () => {
     const warnings = [], order = [];
     let db, commits = 0, observations = 0;
-    const backend = { getSetting: () => 0, getCachedSession: () => null, getMeta: () => null };
+    const backend = { getSetting: () => 0, getCachedSession: () => null, getCachedFolder: () => null, getMeta: () => null };
     const writer = createSessionIndexWriter({ readonlyBackend: backend,
       log: { warn: message => warnings.push(message) },
       onSessionsChanged() {
@@ -95,7 +95,7 @@ test('882b mixed effects distinguish upserts from deletions and folder deletes d
   const events = [];
   let db, deleteFolder = false;
   const writer = createSessionIndexWriter({
-    readonlyBackend: { getSetting: () => 0, getCachedSession: () => null, getMeta: () => null, getCachedByFolder: () => [] },
+    readonlyBackend: { getSetting: () => 0, getCachedSession: () => null, getCachedFolder: () => null, getMeta: () => null, getCachedByFolder: () => [] },
     onSessionsChanged: (...args) => events.push(args),
     client: { ready: Promise.resolve(), request: async () => {} },
   }, { init: ctx => { db = ctx.db; }, refreshFolder() {
@@ -152,7 +152,7 @@ for (const mode of ['compute', 'direct']) {
       { sessionId: 'moved', folder: 'remote::folder' },
     ];
     const writer = createSessionIndexWriter({
-      readonlyBackend: { getSetting: () => 0, getCachedSession: id => id === 'new' ? null : { sessionId: id, folder: 'folder' }, getMeta: () => null },
+      readonlyBackend: { getSetting: () => 0, getCachedSession: id => id === 'new' ? null : { sessionId: id, folder: 'folder' }, getCachedFolder: id => id === 'new' ? null : 'folder', getMeta: () => null },
       onSessionsChanged: (...args) => events.push(args),
       client: { ready: Promise.resolve(), async request() {
         await new Promise(resolve => { release = resolve; });

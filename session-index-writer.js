@@ -22,12 +22,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
   const prepareSessionsChanged = effects => {
     if (!options.onSessionsChanged) return;
     if (effects.some(effect => ['deleteCachedFolder', 'cleanupWorktree', 'dropRemoteFolder'].includes(effect.name))) return () => notify(null);
-    const upserts = new Set(), invalidations = new Set(), folders = new Map();
+    const upserts = new Set(), invalidations = new Set();
     for (const { name, args } of effects) {
       if (name === 'upsertCachedSessions') for (const row of args[0]) {
-        const previous = folders.has(row.sessionId) ? folders.get(row.sessionId) : backend.getCachedSession?.(row.sessionId)?.folder;
-        if (previous !== undefined && previous !== row.folder) invalidations.add(row.sessionId);
-        folders.set(row.sessionId, row.folder);
+        const previous = backend.getCachedFolder(row.sessionId);
+        if (previous !== null && previous !== row.folder) invalidations.add(row.sessionId);
         upserts.add(row.sessionId);
       }
       else if (name === 'deleteCachedSession') invalidations.add(args[0]);

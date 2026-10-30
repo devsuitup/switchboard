@@ -221,7 +221,7 @@ test('882 committed index data enables the selected Transcript button through a 
   const rows = new Map();
   let adapter;
   const writer = createSessionIndexWriter({
-    readonlyBackend: { getSetting: () => 0, getCachedSession: id => rows.get(id), getMeta: () => null },
+    readonlyBackend: { getSetting: () => 0, getCachedSession: id => rows.get(id), getCachedFolder: id => rows.get(id)?.folder ?? null, getMeta: () => null },
     client: { ready: Promise.resolve(), async request(_name, effects) {
       for (const effect of effects) if (effect.name === 'upsertCachedSessions') for (const row of effect.args[0]) rows.set(row.sessionId, row);
     } },
