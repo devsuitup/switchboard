@@ -80,15 +80,21 @@ increments `exhaustions` instead. Counts aggregate across chunks of that command
 name (including `effects`), not individual nested effects. An unref'd 60-second
 timer sends `{busyCounts:{command:{retries,exhaustions}}}` only for nonzero
 intervals, then resets the counters. The transport client logs one `info` line
-through the facade's logger (electron-log in main; console by default). Closing
-the writer stops this timer before closing its store. Forced worker termination
-also removes it; partial-minute counts are not flushed. There is no existing
-writer activity-trace channel, so these counts appear in the application log
-only, not the activity trace.
+through the facade's logger (electron-log in main; console by default). The
+injected `onBusyCounts(counts)` callback passes through the facade to the client;
+main emits `session-index-writer.busy` with null session id and the counts as its
+payload when `TRACE.on` is enabled. Closing the writer stops this timer and
+flushes any nonempty partial-minute counts before `db.closeDb()` and its
+checkpoint. The flush resets the counters; idle closes are silent. Forced
+worker termination cannot flush counts that have not reached the client.
 
 Main's readonly db.js facade wraps store read functions once. A thrown code
-beginning with `SQLITE_BUSY` logs one `warn` line through electron-log, naming
-the called store function, then rethrows the same error without a retry.
+beginning with `SQLITE_BUSY` logs one `warn` line naming the called store function
+and the first stack frame outside db.js, then rethrows the same error without a
+retry. It uses the BUSY error's stack, falling back to a new stack when absent.
+The logger defaults to console; db.js never imports electron-log. The writer
+facade injects its logger once the readonly backend is ready through
+`setReadLogger(log)` (electron-log in main).
 Settings mirror reads stay in memory; fresh settings reads use the wrapper.
 Other readonly worker connections and connection bootstrap are unchanged.
 

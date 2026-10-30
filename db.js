@@ -1,13 +1,16 @@
 'use strict';
 
 // see .ai/contexts/session-index-writer.md
-const log = require('electron-log');
+let log = console;
 const rawStore = require('./session-index-store').openSessionIndexStore({ readonly: true });
 const store = Object.fromEntries(Object.entries(rawStore).map(([name, value]) => [name,
   typeof value !== 'function' || !/^(get|list|is|search)/.test(name) ? value : (...args) => {
     try { return value(...args); }
     catch (error) {
-      if (/^SQLITE_BUSY/.test(error?.code || '')) log.warn(`[session-index-reader] ${name}: ${error.code} ${error.message}`);
+      if (/^SQLITE_BUSY/.test(error?.code || '')) {
+        const caller = (error.stack || new Error().stack).split('\n').find(frame => /^\s*at /.test(frame) && !frame.includes(`${__filename}:`));
+        log.warn(`[session-index-reader] ${name}: ${error.code} ${error.message}${caller ? ' ' + caller.trim() : ''}`);
+      }
       throw error;
     }
   },
@@ -23,4 +26,5 @@ module.exports = {
   listSettingKeys: prefix => [...settings.keys()].filter(key => key.startsWith(prefix)),
   isInitialScanComplete: () => settings.get('initial_scan_complete') === true,
   applySettingsAcknowledgment,
+  setReadLogger: logger => { log = logger; },
 };

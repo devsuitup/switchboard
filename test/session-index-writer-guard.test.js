@@ -10,7 +10,7 @@ const reads = new Set(['getMeta', 'getAllMeta', 'isCachePopulated', 'getAllCache
   'getCachedByParent', 'getCachedFolder', 'getCachedSession', 'getCachedMissingEntrypoint', 'getCachedMissingCustomTitle',
   'getFolderMeta', 'getAllFolderMeta', 'getSearchFileIds', 'searchByType', 'isSearchIndexPopulated',
   'searchFtsRecreated', 'getSetting', 'listSettingKeys', 'isInitialScanComplete',
-  'getDailyMetrics', 'getDailyModelTokens', 'getModelUsage', 'getTotalCounts', 'DB_PATH', 'getProjectsRevision', 'applySettingsAcknowledgment', 'closeDb']);
+  'getDailyMetrics', 'getDailyModelTokens', 'getModelUsage', 'getTotalCounts', 'DB_PATH', 'getProjectsRevision', 'applySettingsAcknowledgment', 'setReadLogger', 'closeDb']);
 
 const cacheWriters = new Set(['deleteCachedFolder', 'upsertCachedSessions', 'deleteCachedSession',
   'replaceSessionMetrics', 'touchCachedModified', 'deleteSearchFolder', 'deleteSearchSession',

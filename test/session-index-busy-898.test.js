@@ -14,7 +14,7 @@ function writerHarness() {
   const filename = require.resolve('../workers/session-index-writer');
   const nativeRequire = createRequire(filename);
   const port = new EventEmitter(), timers = [], messages = [], waiters = new Map();
-  const data = new Map(), pauses = [];
+  const data = new Map(), pauses = [], atClose = [];
   let nextId = 0, changes = 0, remaining = 0, attempts = 0, failure;
   const store = {
     getSetting: key => data.get(key),
@@ -25,7 +25,7 @@ function writerHarness() {
     nextChunkSize: () => 32,
     chunkUnit: fn => ({ result: fn() }),
     transact(fn) { attempts++; if (remaining-- > 0) throw failure; return fn(); },
-    closeDb() {},
+    closeDb() { atClose.push(messages.filter(message => message.busyCounts).length); },
   };
   port.postMessage = message => {
     messages.push(message);
@@ -46,7 +46,7 @@ function writerHarness() {
     clearInterval(timer) { timer.stopped = true; },
   }, { filename });
   return {
-    data, pauses, timers,
+    data, pauses, timers, atClose,
     get attempts() { return attempts; },
     fail(count, code = 'SQLITE_BUSY') { remaining = count; failure = Object.assign(new Error('injected lock'), { code }); },
     request(command, ...args) {
@@ -143,7 +143,7 @@ test('the writer facade routes BUSY counts through the application logger', asyn
 
 function readonlyHarness() {
   const filename = require.resolve('../db');
-  const warnings = [], module = { exports: {} };
+  const warnings = [], loaded = [], module = { exports: {} };
   let failure, calls = 0;
   const store = {
     listSettingKeys: () => ['global'],
@@ -153,12 +153,13 @@ function readonlyHarness() {
   };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
     require(name) {
+      loaded.push(name);
       if (name === './session-index-store') return { openSessionIndexStore: () => store };
       if (name === 'electron-log') return { warn: line => warnings.push(line) };
       throw new Error('unexpected require: ' + name);
-    }, module, structuredClone,
+    }, module, structuredClone, __filename: filename, console: { warn: line => warnings.push(line) },
   }, { filename });
-  return { db: module.exports, warnings, fail(error) { failure = error; }, calls: () => calls };
+  return { db: module.exports, warnings, loaded, fail(error) { failure = error; }, calls: () => calls };
 }
 
 test('readonly BUSY and extended BUSY warn with the calling function and rethrow the same error', () => {
@@ -189,4 +190,108 @@ test('readonly successful reads and other errors stay silent and preserve result
     if (error) assert.throws(() => db.getCachedSession('saved'), thrown => thrown === error);
   }
   assert.deepEqual(warnings, []);
+});
+
+test('898b client delivers the original BUSY counts to its observer alongside info logging', async t => {
+  const worker = new EventEmitter(), seen = [], lines = [];
+  worker.terminate = async () => {};
+  const client = createWriterWorkerClient({ workerFactory: () => worker,
+    onBusyCounts: counts => seen.push(counts), log: { info: line => lines.push(line) } });
+  t.after(() => client.terminate());
+  worker.emit('message', { ready: true, settings: [] });
+  await client.ready;
+  const counts = { effects: { retries: 3, exhaustions: 1 } };
+  worker.emit('message', { busyCounts: counts });
+  assert.equal(seen.length, 1);
+  assert.strictEqual(seen[0], counts);
+  assert.equal(lines.length, 1);
+});
+
+test('898b facade forwards BUSY counts and injects its logger into the readonly backend', async t => {
+  const worker = new EventEmitter(), seen = [], loggers = [];
+  worker.terminate = async () => {};
+  const log = { info() {}, warn() {} };
+  const writer = createSessionIndexWriter({ workerFactory: () => worker, log,
+    readonlyBackend: { applySettingsAcknowledgment() {}, setReadLogger: logger => loggers.push(logger) },
+    onBusyCounts: counts => seen.push(counts) }, {});
+  t.after(() => writer.terminate());
+  worker.emit('message', { ready: true, settings: [] });
+  await writer.ready;
+  const counts = { setSetting: { retries: 1, exhaustions: 0 } };
+  worker.emit('message', { busyCounts: counts });
+  assert.strictEqual(seen[0], counts);
+  assert.ok(loggers.length === 1 && loggers[0] === log);
+});
+
+test('898b main traces BUSY counts only while activity tracing is enabled', () => {
+  const filename = require.resolve('../main');
+  const source = fs.readFileSync(filename, 'utf8');
+  const start = source.indexOf("const writer = require('./session-index-writer').createSessionIndexWriter({");
+  const end = source.indexOf('\n});', start) + '\n});'.length;
+  assert.ok(start >= 0 && end > start);
+  let options;
+  const events = [], TRACE = { on: false };
+  vm.runInNewContext(source.slice(start, end), {
+    require: () => ({ createSessionIndexWriter: opts => { options = opts; } }),
+    log: {}, bgAgents: {}, TRACE, trace: (...args) => events.push(args),
+  }, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
+  assert.equal(typeof options.onBusyCounts, 'function');
+  const counts = { effects: { retries: 2, exhaustions: 0 } };
+  options.onBusyCounts(counts);
+  assert.equal(events.length, 0);
+  TRACE.on = true;
+  options.onBusyCounts(counts);
+  assert.equal(events.length, 1);
+  assert.equal(events[0][0], 'session-index-writer.busy');
+  assert.equal(events[0][1], null);
+  assert.strictEqual(events[0][2], counts);
+});
+
+test('898b readonly warning includes the first caller frame outside db.js', () => {
+  const { db, warnings, fail } = readonlyHarness();
+  const error = Object.assign(new Error('locked'), { code: 'SQLITE_BUSY' });
+  error.stack = `Error: locked\n    at Object.getCachedSession (${require.resolve('../db')}:9:1)\n    at renderProjects (caller.js:42:7)\n    at laterCaller (later.js:8:2)`;
+  fail(error);
+  assert.throws(() => db.getCachedSession('saved'), thrown => thrown === error);
+  assert.match(warnings[0], /getCachedSession.*renderProjects \(caller.js:42:7\)/);
+  assert.doesNotMatch(warnings[0], /laterCaller/);
+});
+
+test('898b readonly warning falls back to the current caller when the error has no stack', () => {
+  const { db, warnings, fail } = readonlyHarness();
+  const error = Object.assign(new Error('locked'), { code: 'SQLITE_BUSY', stack: undefined });
+  fail(error);
+  function readFromCaller() { db.getCachedSession('saved'); }
+  assert.throws(readFromCaller, thrown => thrown === error);
+  assert.match(warnings[0], /readFromCaller/);
+});
+
+test('898b plain-node db loading does not load electron-log and defaults to console', () => {
+  const { db, loaded, warnings, fail } = readonlyHarness();
+  assert.equal(loaded.includes('electron-log'), false);
+  fail(Object.assign(new Error('locked'), { code: 'SQLITE_BUSY' }));
+  assert.throws(() => db.getCachedSession('saved'));
+  assert.equal(warnings.length, 1);
+});
+
+test('898b readonly logger can be injected without loading electron-log', () => {
+  const { db, warnings, fail } = readonlyHarness();
+  const injected = [];
+  assert.equal(typeof db.setReadLogger, 'function');
+  db.setReadLogger({ warn: line => injected.push(line) });
+  fail(Object.assign(new Error('locked'), { code: 'SQLITE_BUSY' }));
+  assert.throws(() => db.getCachedSession('saved'));
+  assert.equal(injected.length, 1);
+  assert.equal(warnings.length, 0);
+});
+
+test('898b close publishes pending counts before closing the database and never repeats them', async () => {
+  const writer = writerHarness();
+  writer.fail(2);
+  await writer.request('setSetting', 'saved', 42);
+  await writer.request('close');
+  assert.deepEqual(writer.atClose, [1]);
+  assert.deepEqual(writer.counts(), [{ setSetting: { retries: 2, exhaustions: 0 } }]);
+  writer.flush();
+  assert.equal(writer.counts().length, 1);
 });

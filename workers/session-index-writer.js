@@ -20,11 +20,12 @@ const backgroundCommands = new Set(['effects', 'upsertCachedSessions', 'replaceS
   'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'dropRemoteFolder', 'cleanupWorktree']);
 
 const busyCounts = new Map();
-const busyTimer = setInterval(() => {
+function flushBusyCounts() {
   if (!busyCounts.size) return;
   parentPort.postMessage({ busyCounts: Object.fromEntries(busyCounts) });
   busyCounts.clear();
-}, 60000);
+}
+const busyTimer = setInterval(flushBusyCounts, 60000);
 busyTimer.unref();
 
 async function transaction(name, fn) {
@@ -95,7 +96,7 @@ function* units(name, args) {
 }
 
 function* commandUnits(message) {
-  if (message.command === 'close') { yield () => { clearInterval(busyTimer); db.closeDb(); }; return; }
+  if (message.command === 'close') { yield () => { clearInterval(busyTimer); flushBusyCounts(); db.closeDb(); }; return; }
   if (message.command === 'drain') { yield () => {}; return; }
   if (message.command === 'measurements') { yield () => db.measurements(); return; }
   if (message.command === 'dropRemoteFolder') {
