@@ -1398,21 +1398,8 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
     || [...sessionMap.values()].find(row => row.mergedMemberIds?.includes(sessionId)) || own || openEntry?.session || rowSession || { sessionId };
   const rowEntry = openSessions.get(session.sessionId);
   const planned = await planSessionStop(session, { attach: !!(rowEntry?.attach && !rowEntry.closed), retryTargets, jobStop: true });
-  const targets = [];
-  const excluded = [...planned.excluded];
-  for (const target of planned.targets) {
-    if (target.job && !target.notHosted) {
-      try {
-        const check = await window.api.checkBgAgentVerb('stop', target.jobId);
-        if (!check?.ok) throw new Error(check?.error || 'The background job check is unavailable');
-      } catch (error) {
-        excluded.push({ sessionId: target.sessionId, reason: error?.message || 'The background job check is unavailable' });
-        continue;
-      }
-    }
-    targets.push(target);
-  }
-  const plan = describeSessionStopPlan(session, targets, excluded);
+  const plan = await validateSessionStopPlan(session, planned);
+  const { targets, excluded } = plan;
   if (!targets.length) {
     showAppNotice({ id: sessionActionNoticeId('Stop', session), kind: excluded.length ? 'error' : 'info',
       message: excluded.length ? plan.confirmText : 'Nothing is running to stop.' });
@@ -1420,54 +1407,7 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   }
   if (!await appConfirm({ title: plan.attach ? 'Detach tab?' : 'Stop session?', message: plan.confirmText,
     confirmLabel: plan.attach ? 'Detach' : 'Stop', danger: !plan.attach })) return;
-  const failures = [];
-  const failedTargets = [];
-  const unreachable = new Map();
-  let stopped = 0;
-  for (const target of targets) {
-    const id = target.sessionId;
-    const entry = openSessions.get(id);
-    const previousDetachRequested = entry?.detachRequested;
-    try {
-      if (target.job && !target.notHosted) {
-        const result = target.attachedHere ? await runAttachedJobVerb('stop', target.jobId, id)
-          : await window.api.bgAgentVerb('stop', target.jobId);
-        if (!result?.ok) throw new Error(result?.error || 'The background stop backend is unavailable');
-        target.jobStopped = true;
-      }
-      if (!target.job || target.attachedHere) {
-        if (target.remote && unreachable.has(target.alias)) throw new Error(unreachable.get(target.alias));
-        const backend = target.remote ? window.api.remoteStopSession : window.api.stopSession;
-        if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
-        if (target.remote) {
-          if (entry) delete entry.detachRequested;
-        }
-        const result = target.remote ? await backend(target.alias, id) : await backend(id);
-        if (target.remote && result?.hostUnreachable) {
-          const reason = result.error || 'The host is unreachable';
-          unreachable.set(target.alias, reason);
-          throw new Error(reason);
-        }
-        if (!result || (result.ok === false && result.error !== (target.remote ? 'session not found on that host' : 'not running'))) {
-          throw new Error(result?.error || 'The stop backend is unavailable or returned no result');
-        }
-      }
-      if (target.job && !target.notHosted && typeof refreshAgentsRoster === 'function') refreshAgentsRoster();
-    } catch (error) {
-      if (target.remote && entry) entry.detachRequested = previousDetachRequested;
-      failures.push(`Part ${id} ${target.where}: ${error?.message || error || 'unknown error'}`);
-      failedTargets.push(target);
-      continue;
-    }
-    if (target.remote && typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
-    activePtyIds.delete(id);
-    if (!gridViewActive && activeSessionId === id) {
-      setActiveSession(null);
-      terminalHeader.style.display = 'none';
-      placeholder.style.display = '';
-    }
-    stopped++;
-  }
+  const { failures, failedTargets, stopped } = await executeSessionStopTargets(targets);
   if (failures.length) {
     showSessionActionFailure('Stop', session, failures.join('\n'),
       'Check the connection or the session in its own terminal (the Agents view for a background session), then retry Stop from the sidebar.',
