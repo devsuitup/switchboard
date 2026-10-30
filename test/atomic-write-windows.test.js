@@ -22,7 +22,7 @@ test('Windows rename replaces a destination after its child-held non-sharing han
     'try {',
     '  [Console]::WriteLine("READY")',
     '  if ([Console]::ReadLine() -ne "release") { throw "missing release command" }',
-    '  [System.Threading.Thread]::Sleep(50)',
+    '  [System.Threading.Thread]::Sleep(5)',
     '} finally { $handle.Dispose() }',
   ].join('\n');
   const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {

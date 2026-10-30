@@ -67,7 +67,7 @@ for (const fail of [false, true]) {
     assert.equal(calls.length, fail ? 1 : 2);
     assert.equal(calls[0].dest, dest);
     assert.equal(path.dirname(calls[0].src), dir);
-    if (fail) assert.equal(fs.existsSync(calls[0].src), true, 'existing manifest failure leaves its temp');
+    if (fail) assert.equal(fs.existsSync(calls[0].src), false, 'a failed manifest write removes its temp');
   });
 
   for (const incremental of [false, true]) {

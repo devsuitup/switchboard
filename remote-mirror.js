@@ -50,8 +50,13 @@ function readManifest(manifestPath) {
 function writeManifest(manifestPath, files) {
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
   const tmp = `${manifestPath}.${process.pid}.${randomUUID()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ version: 1, files }), 'utf8');
-  renameWithRetry(tmp, manifestPath);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, files }), 'utf8');
+    renameWithRetry(tmp, manifestPath);
+  } catch (error) {
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    throw error;
+  }
 }
 
 function pruneEmptyDirs(root, dir) {

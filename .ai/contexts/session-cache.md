@@ -2595,7 +2595,7 @@ schedule-runner enabled-state writes (including its injected rename), and
 trigger-watcher result publication. Manifest temps are unique sibling files
 using PID and UUID, replacing the shared `.tmp` name. All final-failure
 handling remains with the caller: remap removes its temp and throws; manifest
-throws and leaves its temp; both transport paths remove `.part`, warn and
+removes its unique temp and throws; both transport paths remove `.part`, warn and
 report failure; schedule returns `{ ok: false }` and removes its temp;
 trigger logs, leaves its temp, deletes the trigger and still loses the result.
 The one-shot legacy DB relocation in session-index-store is excluded.
