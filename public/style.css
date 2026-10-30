@@ -608,6 +608,23 @@ body { display: flex; flex-direction: column; }
   white-space: nowrap;
 }
 
+.project-stop-all-btn {
+  background: transparent;
+  border: 1px solid #555570;
+  border-radius: 5px;
+  color: #a0a0b8;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 5px;
+}
+
+.project-stop-all-btn:hover,
+.project-stop-all-btn:focus-visible {
+  background: rgba(255,100,100,0.1);
+  color: #e06060;
+}
+
 .project-archive-btn,
 .project-new-btn {
   background: transparent;

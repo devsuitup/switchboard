@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- Stop all conversations in a project folder, including its worktrees, with one confirmation that marks mid-turn work. Conversations running background jobs are kept unless you explicitly choose to stop those too; failed stops offer Retry, and an unreachable host is tried once. (#843)
 - Mark a conversation as unread from its sidebar row, archive eligible sessions under **older** with one confirmation, and find text in **View messages** with Ctrl+F. Open, active, live-elsewhere and remote sessions alive on their host are kept; message search keeps your place during live updates and supports Enter, Shift+Enter and Escape. (#819)
 
 ### Changed

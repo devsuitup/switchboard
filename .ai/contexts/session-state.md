@@ -436,6 +436,55 @@ Issue #246 is closed.
 
 ## The two lifecycle verbs: detach and stop
 
+### Folder Stop all (#843)
+
+Project and nested worktree headers offer **Stop all**. The project action takes
+every conversation row from the full cached folder and its nested worktrees,
+independently of sidebar filters, and keeps the host alias in its scope. A
+worktree's own action affects its folder only. Subagent rows are excluded;
+merged parts remain one conversation, planned by `planSessionStop` with
+`jobStop: true`. `validateSessionStopPlan` and `executeSessionStopTargets` are
+shared with the single-conversation Stop in `app.js`; remote routing, job
+preflight, attached-job handling and failure-state preservation stay identical.
+
+One danger question names each candidate conversation and its locations, marks
+mid-turn work using the existing row activity projection, and lists each
+refused part with its conversation name and reason. A conversation with any
+background job is refused as a whole by default, including its foreground
+parts. This implements JB's 2026-10-30 decision: explain the refusal but allow
+an explicit force. The existing `showChoiceDialog` option radios offer **Stop
+all including background jobs** and **Stop the others only**, with the latter
+selected and Cancel focused initially. The third outcome is Cancel. This is
+the same chooser underlying `appChoose`, with its supported danger and initial
+focus settings. With no background jobs, `appConfirm` asks once instead.
+Background classification uses planned job targets that are still hosted, before
+job preflight validation; ended attached jobs only detach their tabs. Refusal
+wording never establishes that a conversation has a background job. In the folder
+batch only, an idle part with unknown daemon state and no observed live process
+is omitted, so an unreadable unrelated job cannot block a foreground conversation
+or flood an idle folder with refusals. The omitted part may be the session's own
+job in a state this build cannot read, so when nothing is left to stop the
+"Nothing is running" notice counts the unchecked parts and gives the reasons. Unknown attached jobs and processes live
+elsewhere retain their planner refusals; forcing never bypasses those checks.
+
+Execution continues after individual failures. One persistent
+`showSessionActionFailure('Stop all', project, ...)` notice names all failed
+conversations and targets and offers Retry. Retry replans only failed targets
+in the current folder, reconfirms once, and retains the existing job-stopped
+state when only detaching its tab needs retrying. Empty retries say nothing is
+running. Retry preselects the background-inclusive choice when a failed target
+still needs its job stopped. Choosing the others when every candidate has a
+background job reports how many conversations were kept and that nothing else
+was running. One unreachable-host map is shared across all conversations in the
+batch, and a fresh Retry gets a fresh map; single-row Stop keeps its own map.
+Archived conversation rows remain in the full cached folder scope. No archive
+or transcript deletion is performed.
+
+Evidence: `test/dom-project-stop-all-843.test.js`; upstream inspiration:
+Ali Basiri's ee656523 `confirmStopWork`.
+
+### Per-conversation lifecycle
+
 Two facts the domain carries separately: **process liveness** (the CLI is
 running — local pid, or a remote descriptor with an ALIVE marker, #262) and
 **attached view** (Switchboard holds a PTY / an ssh attach for it). A row is
