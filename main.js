@@ -1150,9 +1150,9 @@ ipcMain.on('main-error-notices-ready', event => {
   mainErrorHandlers.flushNotices({ replay });
 });
 
-ipcMain.on('main-error-notices-dismissed', event => {
+ipcMain.on('main-error-notices-dismissed', (event, ids) => {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || event.sender !== mainWindow.webContents) return;
-  mainErrorHandlers.dismissNotices();
+  mainErrorHandlers.dismissNotices(ids);
 });
 
 ipcMain.handle('open-main-log', async () => {

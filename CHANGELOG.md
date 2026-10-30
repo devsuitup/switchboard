@@ -11,10 +11,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Changed
 - **Stop session** in a terminal header or grid card now stops every running part of the conversation, with the same confirmation and refusals as its sidebar row. (#917)
 - Opening a conversation from the sidebar now resumes its newest part instead of an older part waiting to restore. (#918)
-- Unexpected application errors now share one notice with repeat counts and an **Open log** button. Notices survive a window reload, and screen readers announce new errors without repeating count updates. The app keeps running and the log may hold details. (#896, #932)
+- Unexpected application errors now share one notice with repeat counts and an **Open log** button; the app keeps running and the log may hold details. Notices survive a window reload, dismissed errors stay dismissed, and screen readers announce new errors without repeating count updates. (#896, #932)
 
 ### Fixed
-- Dismissed application error notices stay dismissed after a window reload. Screen readers can read their summaries while only new errors are announced, and large buffer or array errors keep their usual previews. (#932)
 - The session list no longer stops updating, or shows a continued conversation as two separate entries, when that conversation's transcript is large. (#891)
 - In Agents, finished jobs sharing a live conversation keep separate selections and action errors. Selection follows a conversation into its job, and Transcript becomes available as soon as indexing finishes and is rechecked after worktree or remote-folder removal; when it opens the live session instead of a job's earlier transcript, the detail explains this. (#530, #882)
 - Workflow agents appear under the session that started them, grouped by run, instead of as separate sessions; entries an older build listed separately locally or on a remote host are regrouped. (#875, #886)

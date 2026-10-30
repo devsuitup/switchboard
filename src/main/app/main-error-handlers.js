@@ -47,11 +47,24 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
     let detail = message;
     try {
       const proxy = types.isProxy(error);
-      if (!proxy && typeof error?.message === 'string') message = error.message;
+      if (proxy) message = '[Proxy; inspection omitted]';
+      else if (typeof error?.message === 'string') message = error.message;
       else {
-        const keyCount = error && (typeof error === 'object' || typeof error === 'function')
-          && !proxy && !Array.isArray(error) && !ArrayBuffer.isView(error) && !(error instanceof String) ? Object.keys(error).length : 0;
-        message = keyCount > 1000 ? `[Object with ${keyCount} keys; inspection omitted]`
+        const preview = Array.isArray(error) || ArrayBuffer.isView(error) || types.isStringObject(error);
+        let keyCount = 0;
+        if (error && (typeof error === 'object' || typeof error === 'function')) {
+          const keys = Object.keys(error);
+          if (preview) {
+            const indexedLength = Array.isArray(error) ? 0xFFFFFFFF : types.isTypedArray(error) ? Number.MAX_SAFE_INTEGER
+              : types.isStringObject(error) ? Object.getOwnPropertyDescriptor(error, 'length').value : 0;
+            for (const key of keys) {
+              const index = Number(key);
+              if (Number.isInteger(index) && index >= 0 && index < indexedLength && String(index) === key) continue;
+              if (++keyCount > 1000) break;
+            }
+          } else keyCount = keys.length;
+        }
+        message = keyCount > 1000 ? preview ? '[Object with more than 1000 named keys; inspection omitted]' : `[Object with ${keyCount} keys; inspection omitted]`
           : inspect(error, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity }).slice(0, 16000);
       }
       if (!message.trim()) {
@@ -94,8 +107,9 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
   target.on('unhandledRejection', onRejection);
 
   return {
-    dismissNotices() {
-      delivered.clear();
+    dismissNotices(ids) {
+      if (!Array.isArray(ids) || ids.length > 5 || ![...ids].every(id => typeof id === 'string' && delivered.has(id))) return;
+      for (const id of ids) delivered.delete(id);
     },
     flushNotices({ replay = false } = {}) {
       if (replay) for (const notice of [...delivered.values()]) deliver(notice);

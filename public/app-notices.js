@@ -13,22 +13,22 @@ window.api?.onMainProcessError?.(notice => {
     id: 'main-process-errors', kind: 'error', members,
     message: entries => `${entries.map(member => `${member.message.replace(/\.$/, '')}${member.count > 1 ? ` (${member.count} occurrences)` : ''}`).join('\n')}. Open log; the log may hold details.`,
     actionLabel: 'Open log', onAction: openMainErrorLog, dismissOnAction: false,
-    onDismiss: () => window.api?.mainErrorNoticesDismissed?.(),
+    onDismiss: () => window.api?.mainErrorNoticesDismissed?.(members.map(member => member.id)),
   };
   if (previous) {
     previous.options = options;
     previous.notice.querySelector('.app-notice-message').textContent = options.message(members);
-    const announcement = previous.notice.querySelector('.app-notice-announcement');
-    if (!existing && announcement) announcement.textContent = notice.message;
-  } else {
-    const group = showAppNotice(options);
-    const announcement = document.createElement('span');
+  }
+  const group = previous?.notice || showAppNotice(options);
+  let announcement = group.querySelector('.app-notice-announcement');
+  if (!announcement) {
+    announcement = document.createElement('span');
     announcement.className = 'app-notice-announcement';
     announcement.setAttribute('role', 'alert');
     announcement.setAttribute('aria-atomic', 'true');
-    announcement.textContent = notice.message;
     group.insertBefore(announcement, group.querySelector('button'));
   }
+  if (!existing) announcement.textContent = notice.message;
 });
 window.api?.mainErrorNoticesReady?.();
 
@@ -95,6 +95,10 @@ function showAppNotice(options) {
   if (id !== undefined) notice.dataset.noticeId = id;
   notice.className = 'app-notice';
   notice.setAttribute('role', id === 'main-process-errors' ? 'group' : kind === 'error' ? 'alert' : 'status');
+  if (id === 'main-process-errors') {
+    notice.setAttribute('aria-live', 'off');
+    notice.setAttribute('aria-label', 'Erreurs de l’application');
+  }
   const text = document.createElement('span');
   text.className = 'app-notice-message';
   text.textContent = typeof message === 'function' ? message(members) : message;
@@ -118,8 +122,9 @@ function showAppNotice(options) {
     dismiss.textContent = 'Dismiss';
     dismiss.addEventListener('click', () => {
       if (appNoticeEntries.get(id)?.notice !== notice) return;
+      const onDismiss = appNoticeEntries.get(id).options.onDismiss;
       clearAppNotice(id);
-      options.onDismiss?.();
+      onDismiss?.();
     });
     notice.append(dismiss);
   }

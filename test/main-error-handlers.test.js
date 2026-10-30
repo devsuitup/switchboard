@@ -181,8 +181,52 @@ test('proxy rejection inspection runs no traps', t => {
   ));
   target.emit('unhandledRejection', reason);
   assert.equal(traps, 0, 'error reporting must not run proxy traps');
-  assert.match(logs[0][1], /proxy reason/);
+  assert.equal(logs[0][1], '[Proxy; inspection omitted]');
 });
+
+for (const [name, create] of [
+  ['array', () => [1, 2, 3]],
+  ['Buffer', () => Buffer.alloc(3)],
+  ['typed array', () => new Uint8Array(3)],
+  ['String object', () => new String('abc')],
+  ['cross-realm String object', () => require('node:vm').runInNewContext('new String("abc")')],
+  ['Proxy', () => new Proxy({}, {})],
+]) {
+  test(`300000 named keys on a ${name} rejection are summarized before inspection`, t => {
+    const { target, logs, notices } = setup(t);
+    const reason = create();
+    for (let i = 0; i < 300000; i++) reason[`k${i}`] = 'value';
+    const start = performance.now();
+    target.emit('unhandledRejection', reason);
+    const elapsed = performance.now() - start;
+    assert.match(logs[0][1], /inspection omitted\]$/, 'wide named properties must bypass inspection');
+    assert.ok(logs[0][1].length <= 16000);
+    assert.ok(notices[0].message.length <= 550);
+    assert.ok(elapsed < 1000, `reporting took ${elapsed} ms`);
+    t.diagnostic(`reporting ${name}: ${elapsed.toFixed(1)} ms`);
+  });
+}
+
+for (const [name, create] of [
+  ['array', () => [1]],
+  ['Buffer', () => Buffer.alloc(1)],
+  ['typed array', () => new Uint8Array(1)],
+  ['String object', () => new String('a')],
+  ['cross-realm String object', () => require('node:vm').runInNewContext('new String("x".repeat(2000))')],
+]) {
+  test(`${name} named-key cap permits 1000 keys and summarizes 1001 without getters`, t => {
+    const { target, logs } = setup(t);
+    const reason = create();
+    let reads = 0;
+    for (let i = 0; i < 1000; i++) Object.defineProperty(reason, `k${i}`, { enumerable: true, get() { reads++; return 'unused'; } });
+    target.emit('unhandledRejection', reason);
+    assert.doesNotMatch(logs[0][1], /inspection omitted/);
+    reason.extra = 'overflow';
+    target.emit('unhandledRejection', reason);
+    assert.match(logs[1][1], /inspection omitted/);
+    assert.equal(reads, 0);
+  });
+}
 
 test('large error messages are truncated for display but distinct suffixes keep distinct ids and full stacks', t => {
   const { target, logs, notices } = setup(t);
