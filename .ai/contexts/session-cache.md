@@ -591,7 +591,9 @@ Failure identity combines `err.code || err.name` with the message after
 normalising digits, bare UUIDs and absolute paths anchored at the start of text,
 whitespace, a quote, `=`, `(` or `:`. Slash and backslash paths are accepted after
 those separators; a single backslash root requires a nonempty path component
-and another backslash, preserving distinct `\n`, `\t` and `\u001b[0m` tokens.
+and another backslash, preserving a lone `\n`, `\t` or `\u001b[0m` token.
+Two adjacent escape tokens (`\r\n`, `\n\t`) still normalise as a path, and a
+one-component backslash root (`\tmp`) does not.
 Forward-slash UNC paths normalize at ordinary anchors; `//` is excluded only
 immediately after `:`, preserving `http://` and `file:///` URL hosts (#914).
 Relative paths and URL hosts remain distinct. Each host
