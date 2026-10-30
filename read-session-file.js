@@ -556,7 +556,10 @@ function enumerateSessionFiles(folderPath) {
     // Preferred layout: subagents/ subfolder
     const subagentsDir = path.join(subDir, 'subagents');
     try {
-      if (fs.statSync(subagentsDir).isDirectory()) {
+      if ([subDir, subagentsDir].every(directory => {
+        const stat = fs.lstatSync(directory);
+        return stat.isDirectory() && !stat.isSymbolicLink();
+      })) {
         for (const f of fs.readdirSync(subagentsDir)) {
           if (!f.endsWith('.jsonl')) continue;
           add(path.join(subagentsDir, f));

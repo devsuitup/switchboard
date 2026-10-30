@@ -62,7 +62,10 @@ are ignored. The cold enumerator and local/remote targeted scans share this
 classification, as does live attribution through `subagent-attribution.js`.
 The enumerator and targeted readers lstat every segment from the parent
 directory through `subagents`, `workflows` and the run directory. A symlink
-or Windows junction at any segment excludes the workflow path. They do not
+or Windows junction at any segment excludes the workflow path. Cold discovery
+also lstats the parent and `subagents` directory before enumerating ordinary
+agents, so a junctioned `<fork>/subagents` does not duplicate those agents
+under the fork. They do not
 deduplicate by realpath.
 
 A workflow resumed in a fork writes through a junction into the original
@@ -93,6 +96,13 @@ while preserving real root files even outside the subset. The existing cache
 effects apply deletions and canonical workflow children through the writer
 worker; the reader does not write SQLite directly.
 
+Remote indexing also checks each mirrored folder once per host session for
+parentless `agent-*` rows whose root JSONL is absent. Such a folder gets one
+full scan even when no files changed, overriding any pending subset. Successful
+repairs are remembered in memory; failed scans remain eligible for retry.
+Removed folders/hosts and indexer stop clear the corresponding check state.
+Real root agent files do not trigger a repair.
+
 `buildProjectsFromCache` projects `workflowRunId` and `workflowName`, reading
 `<parent>/workflows/<run>.json` with a worker-lifetime cache keyed by file path,
 mtimeMs and size, reused across both views and subsequent queries (including
@@ -100,9 +110,14 @@ cache reinitialization). Missing, malformed or
 empty titles fall back to the run id. Remote mirrors without run snapshots
 use that same fallback. Snapshot JSON watcher events queue a debounced projects
 notification without a transcript refresh or widening pending targeted scans.
-The watcher compares titles observed in snapshot events, so later status-only
+The watch callback only queues snapshot paths; the serialized debounced flush
+reads and parses each snapshot asynchronously. Failed reads or partial JSON
+preserve the previous observed title and do not notify. The watcher compares
+titles observed in successful snapshot reads, so later status-only
 changes with the same title do not notify. The first event notifies because
-the watcher has no title baseline yet. The title is read when building projects.
+the watcher has no title baseline yet, provided the snapshot is readable JSON.
+Full folder refreshes and dropped folders discard that folder's title baselines.
+The title is read when building projects.
 The sidebar nests one block per parent/run under the
 existing subagent container (and groups orphan workflows in the orphan bucket).
 It reuses the existing caret, child container, preview cap and

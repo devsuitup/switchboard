@@ -208,7 +208,7 @@ async function boundedBootstrapQuit() {
 app.on('before-quit', holdBootstrapQuit);
 await writer.ready;
 const {
-  isCachePopulated, getAllCached, getCachedByParent, getCachedFolder, getCachedSession,
+  isCachePopulated, getAllCached, getCachedByParent, getCachedByFolder, getCachedFolder, getCachedSession,
   getAllFolderMeta, getAllMeta, getSearchFileIds,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, listSettingKeys, isInitialScanComplete,
@@ -618,6 +618,7 @@ const remoteIndexer = createRemoteIndexer({
   scanFolders: scanFoldersViaWorker,
   refreshHeadTurns: alias => refreshRemoteHeadTurns(alias),
   listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
+  getCachedByFolder,
   dropFolder: async folderKey => await writer.dropRemoteFolder(folderKey),
   setRemoteRoots,
   notify: () => notifyRendererProjectsChanged('remote'),
@@ -3607,8 +3608,18 @@ function startProjectsWatcher() {
     const work = new Map(pendingChanges);
     pendingChanges.clear();
 
-    let changed = pendingWorkflowTitles.size > 0;
+    const snapshots = [...pendingWorkflowTitles];
     pendingWorkflowTitles.clear();
+    let changed = false;
+    for (const filename of snapshots) {
+      try {
+        const snapshot = JSON.parse(await fs.promises.readFile(path.join(PROJECTS_DIR, filename), 'utf8'));
+        const title = typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()
+          ? snapshot.workflowName.trim() : path.basename(filename, '.json');
+        if (workflowTitles.get(filename) !== title) changed = true;
+        workflowTitles.set(filename, title);
+      } catch {}
+    }
     let activityChanged = false;
     for (const [folder, scope] of work) {
       const folderPath = path.join(PROJECTS_DIR, folder);
@@ -3618,6 +3629,11 @@ function startProjectsWatcher() {
         folderChanged = await writer.refreshFolder(folder, scope === true ? undefined : { files: scope });
       } else {
         folderChanged = await writer.dropFolderRows(folder);
+      }
+      if (scope === true || !fs.existsSync(folderPath)) {
+        for (const filename of workflowTitles.keys()) {
+          if (filename.startsWith(folder + path.sep)) workflowTitles.delete(filename);
+        }
       }
       changed = folderChanged === true || changed;
       activityChanged = folderChanged === 'activity' || activityChanged;
@@ -3664,13 +3680,7 @@ function startProjectsWatcher() {
         // out-of-band signal for the local-transcript adapter — see .ai/contexts/session-state.md
         localTranscriptTracker.record(parts);
       } else if (parts.length === 4 && parts[2] === 'workflows' && /^wf_[a-z0-9-]{6,}\.json$/.test(basename)) {
-        let title = basename.slice(0, -5);
-        try {
-          const snapshot = JSON.parse(fs.readFileSync(path.join(PROJECTS_DIR, filename), 'utf8'));
-          if (typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()) title = snapshot.workflowName.trim();
-        } catch {}
-        if (workflowTitles.get(filename) !== title) pendingWorkflowTitles.add(folder);
-        workflowTitles.set(filename, title);
+        pendingWorkflowTitles.add(filename);
       } else {
         return;
       }

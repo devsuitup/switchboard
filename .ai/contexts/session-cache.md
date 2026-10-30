@@ -918,7 +918,11 @@ untouched.
   it, but ONLY for a folder already present in `listIndexedFolderKeys()`. A
   folder scanned for the first time (present on the mirror but not yet
   indexed — the "mirror on disk but absent from the cache" case just above)
-  always gets the full walk: there is no baseline to restrict against.
+    always gets the full walk: there is no baseline to restrict against.
+    A once-per-host-session ghost check also requests a full walk when a cached
+    parentless `agent-*` row has no matching mirror-root JSONL, including for
+    finished runs with no changed files. A successful repair overrides that
+    folder's subset and is remembered in memory; failed scans can retry.
 - **`scanFoldersViaWorker({..., fileSubsets})` is purely additive.** Omitting
   `fileSubsets` reproduces the prior behavior byte-for-byte (proven by
   `test/scan-projects-worker.test.js`, unmodified, and by
