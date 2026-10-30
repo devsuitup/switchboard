@@ -191,7 +191,7 @@ for (const method of ['refreshNow', 'refreshHostNow']) {
 }
 
 for (const remaining of [[], [{ alias: 'peer' }]]) {
-  test(`restart prunes head-turn dedup for a removed alias with ${remaining.length} remaining hosts`, async t => {
+  test(`restart prunes head-turn dedup for a removed alias with ${remaining.length} remaining hosts (${remaining.length ? 'existing prune coverage' : '#888 regression'})`, async t => {
     const dataDir = tmp('idx-head-turn-prune');
     const warnings = [];
     let hosts = [{ alias: 'vps' }];
@@ -215,6 +215,63 @@ for (const remaining of [[], [{ alias: 'peer' }]]) {
     await new Promise(resolve => setImmediate(resolve));
     await indexer.refreshHostNow('vps');
     assert.equal(warnings.length, 2, 'the same failure warns again when the removed host is re-added');
+  });
+}
+
+for (const method of ['refreshNow', 'refreshHostNow']) {
+  for (const [kind, messages, expected] of [
+    ['relative paths', ['read projects/foo failed', 'read projects/bar failed'], 2],
+    ['URL hosts', ['read https://alpha.example/cache failed', 'read https://beta.example/cache failed'], 2],
+    ['absolute paths', ['/tmp/alpha failed', 'C:\\Temp\\beta failed', 'read "/tmp/alpha beta" failed', 'read "C:\\Temp\\gamma delta" failed', 'read /tmp/other failed'], 2],
+    ['bare UUIDs', ['session 12345678-abcd-4abc-8abc-123456789abc failed', 'session fedcba98-1234-4567-8def-fedcba987654 failed'], 1],
+  ]) {
+    test(`${method}: head-turn warnings preserve identity for ${kind}`, async t => {
+      const dataDir = tmp('idx-head-turn-boundaries');
+      const warnings = [];
+      let message;
+      const indexer = createRemoteIndexer({
+        dataDir, getHosts: () => [{ alias: 'vps' }],
+        log: { info() {}, warn: value => warnings.push(value) },
+        sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+        refreshHeadTurns: async () => { throw new Error(message); },
+      });
+      t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+      for (message of messages) {
+        if (method === 'refreshNow') await indexer.refreshNow();
+        else await indexer.refreshHostNow('vps');
+      }
+      assert.equal(warnings.length, expected, kind);
+      assert.ok(warnings[0].endsWith(messages[0]), 'retain the original diagnostic');
+    });
+  }
+
+  test(`${method}: head-turn warnings retain twenty signatures and evict the oldest`, async t => {
+    const dataDir = tmp('idx-head-turn-cap');
+    const warnings = [];
+    let message;
+    const indexer = createRemoteIndexer({
+      dataDir, getHosts: () => [{ alias: 'vps' }],
+      log: { info() {}, warn: value => warnings.push(value) },
+      sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+      refreshHeadTurns: async () => { throw new Error(message); },
+    });
+    t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+    const refresh = () => method === 'refreshNow' ? indexer.refreshNow() : indexer.refreshHostNow('vps');
+    for (const letter of 'abcdefghijklmnopqrst') {
+      message = `cache ${letter} unavailable`;
+      await refresh();
+    }
+    message = 'cache a unavailable';
+    await refresh();
+    assert.equal(warnings.length, 20, 'all twenty entries remain deduplicated');
+    message = 'cache u unavailable';
+    await refresh();
+    message = 'cache b unavailable';
+    await refresh();
+    assert.equal(warnings.length, 21, 'a retained entry remains quiet');
+    message = 'cache a unavailable';
+    await refresh();
+    assert.equal(warnings.length, 22, 'the oldest entry warns again after eviction');
   });
 }
 
