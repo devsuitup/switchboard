@@ -2,7 +2,7 @@
 
 This is JB's fork (`devsuitup/switchboard`, transferred from `JeanBaptisteRenard/switchboard` on 2026-08-11) of `doctly/switchboard`. The fork carries features not (yet) upstream — read this before editing anything.
 
-Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/Application/Infrastructure layering. Runtimes (npm, node) run directly on the host — nothing here is Dockerised. CI is GitHub Actions (check status via `gh pr checks`); the `gh` CLI is used for PRs, not `glab`. The husky pre-commit hook runs `task check` automatically. Commit style is a loose `feat(scope): ...` / `fix(scope): ...`, with no strict footer rules.
+Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/Application/Infrastructure layering. Runtimes (npm, node) run directly on the host — nothing here is Dockerised. CI is GitHub Actions (check status via `gh pr checks`); the `gh` CLI is used for PRs, not `glab`. The husky pre-commit hook runs `task check:fast` automatically. Commit style is a loose `feat(scope): ...` / `fix(scope): ...`, with no strict footer rules.
 
 ## Quick orientation
 
@@ -32,6 +32,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change the renderer (sidebar, terminal, app.js) | `public/*.js` — entry is `app.js` |
 | Change screen refresh on return, the Refresh controls, or the PTY resize nudge | [contexts/terminal-refresh.md](contexts/terminal-refresh.md) |
 | Write a test | `test/*.test.js` — node:test + jsdom for renderer files |
+| Change the pre-commit hook's fast check (staged lint, test selection) | [contexts/fast-check.md](contexts/fast-check.md) |
 | Check something only a running app shows (layout, a full IPC round trip), in CI | [../docs/e2e.md](../docs/e2e.md) — Playwright journeys in `e2e/` |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
 | Test a PR or a release candidate against a running app | [../docs/testing-a-pr.md](../docs/testing-a-pr.md) |
@@ -168,7 +169,10 @@ These exist on `devsuitup/switchboard` main but not on `doctly/switchboard` main
    that doc (e.g. `// see .ai/contexts/subagent-observability.md`), and that's
    the ceiling (maintainer rule, PRs #127/#130).
 2. **Changelog.** Every PR that changes behaviour adds its entry under `## Unreleased` in `CHANGELOG.md`, written to the rule in [docs/changelog.md](../docs/changelog.md); a PR users see nothing of takes the `no-changelog` label instead.
-3. `task check` (lint + test). 0 errors. Pre-existing warnings are fine.
+3. `task check` remains the full lint + test gate before a PR. The pre-commit
+   hook runs `task check:fast` (staged JS lint + matching tests); `SKIP_TESTS=1`
+   keeps lint and skips tests with or without Task. 0 errors. Pre-existing
+   warnings are fine. See [fast-check context](contexts/fast-check.md).
 4. Squash to clear commits. No `Co-Authored-By`. Imperative subject, brief why-body.
 5. `gh pr create` against `devsuitup/switchboard:main` (the fork's main, not upstream's). Title format: `(area): short imperative`.
 6. If the change is a port of an upstream PR, **credit the upstream author** in the body with a link. We want abasiri to see we're not stealing.

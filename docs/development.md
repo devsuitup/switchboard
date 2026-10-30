@@ -35,7 +35,8 @@ run `npm run bundle:mermaid` again.
 | `task dev` | `npx electron . --no-sandbox` with `SWITCHBOARD_DATA_DIR=~/.switchboard-dev` |
 | `task test` | `npm test`: ESLint (`pretest`), then the node:test suite — see below |
 | `task lint` | `npx eslint .` |
-| `task check` | `test` and `lint`; the pre-commit hook runs it |
+| `task check:fast` | Lint staged JS and run matching tests; the pre-commit hook runs it |
+| `task check` | Full `test` and `lint` gate before opening a PR |
 | `task ci` | `npm test`, then `npx eslint .`, in sequence |
 | `task coverage` | the suite under c8; text and lcov in `./coverage` |
 | `task install:lint` | installs `eslint` and `jsdom` if missing |
@@ -62,8 +63,29 @@ except `trigger-watcher.test.js`, `trigger-delivery.test.js` and
 serially, because their timings use real clocks. Renderer files are tested
 under jsdom (`test/dom-setup.js`).
 
-The pre-commit hook (husky) runs `task check`, or, without `task`, `npm run lint`
-and `npm test` (`SKIP_TESTS=1` skips the tests in that case only).
+The pre-commit hook (husky) runs `task check:fast`, or, without `task`,
+`node scripts/check-fast.js`. Both routes lint only staged JS files (`.js`, `.cjs`, `.mjs`) and run
+matching tests. `SKIP_TESTS=1` skips tests in either route and keeps lint.
+`task check` remains the full lint and test gate before opening a PR.
+
+The fast check ignores deletions, and a staged path missing from the working
+tree is skipped by lint. A staged test directly under `test/` selects itself
+(nested suites such as `test/canary/` are not selected); other `.js` files select
+`test/<basename>.*.test.js` and `test/<basename>-*.test.js`, and `public/` JS
+also selects the `dom-<basename>` equivalents. Non-JS files select nothing. Tests
+are discovered from the filesystem, deduplicated, sorted and run serially with
+the current Node binary and a 120-second cap per process; the trigger files the
+full runner isolates run without a per-test timeout, capped at 10 minutes. Lint
+and tests read working-tree content, not partially staged blobs. A widely shared
+file selects many tests (`public/sidebar.js`: 38 files). An unmatched JS file
+still gets linted.
+This name-based selection can miss unrelated regressions; the full PR gate and
+required CI cover those. See [fast-check context](../.ai/contexts/fast-check.md).
+
+To time the check without changing files or staging anything, run
+`node scripts/check-fast.js --files pty-ops.js test/pty-ops.test.js` (paths
+relative to the repository root).
+This overrides only the input list; lint and selected tests still execute.
 
 CI (`.github/workflows/test.yml`) runs ESLint, and the suite under coverage on
 Node 20 and 22, on Ubuntu and Windows. On pull requests, lines a change adds or
