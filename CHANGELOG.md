@@ -8,6 +8,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Mark a conversation as unread from its sidebar row, archive eligible sessions under **older** with one confirmation, and find text in **View messages** with Ctrl+F. Open, active, live-elsewhere and remote sessions alive on their host are kept; message search keeps your place during live updates and supports Enter, Shift+Enter and Escape. (#819)
 
 ### Fixed
+- The session list no longer stops updating, or shows a continued conversation as two separate entries, when that conversation's transcript is large. (#891)
 - In Agents, finished jobs sharing a live conversation keep separate selections and action errors. Selection follows a conversation into its job, and Transcript becomes available as soon as indexing finishes and is rechecked after worktree or remote-folder removal; when it opens the live session instead of a job's earlier transcript, the detail explains this. (#530, #882)
 - Workflow agents appear under the session that started them, grouped by run, instead of as separate sessions; entries an older build listed separately locally or on a remote host are regrouped. (#875, #886)
 - The sessions sidebar skips rebuilding when a background refresh brings back identical data and its display state has not changed. Changed data is checked faster, exit labels stay current, and waiting ages advance every 30 seconds. (#543)

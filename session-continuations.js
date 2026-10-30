@@ -14,6 +14,10 @@ function matchesContinuationStamp(stamp, stat) {
     && stamp.size === stat.size.toString();
 }
 
+function continuationMtime(stat) {
+  return new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString();
+}
+
 function continuationId(entry, sessionId) {
   return entry?.type === 'continued-in' && typeof entry.sessionId === 'string' && typeof sessionId === 'string'
     && entry.sessionId.toLowerCase() === sessionId.toLowerCase() && validId(entry.continuedInSessionId)
@@ -23,7 +27,7 @@ function continuationId(entry, sessionId) {
 // see .ai/contexts/session-cache.md ("Continuation index")
 function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new RangeError('maxBytes must be a positive integer');
-  const stat = fs.statSync(file), mtime = stat.mtime.toISOString();
+  const stat = fs.statSync(file, { bigint: true }), mtime = continuationMtime(stat), size = Number(stat.size);
   let index;
   try { index = JSON.parse(previous); } catch {}
   const fd = fs.openSync(file, 'r');
@@ -33,15 +37,15 @@ function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024
     return tail.toString('hex');
   };
   try {
-    const reuse = index?.version === 3 && index.bytes <= stat.size && index.size <= stat.size
-      && (index.size !== stat.size || index.mtime === mtime) && index.tail === tailAt(index.bytes);
-    if (reuse && index.complete && index.bytes === stat.size && index.mtime === mtime) return previous;
+    const reuse = index?.version === 3 && index.bytes <= size && index.size <= size
+      && (index.size !== size || index.mtime === mtime) && index.tail === tailAt(index.bytes);
+    if (reuse && index.complete && index.bytes === size && index.mtime === mtime) return previous;
     const ids = new Set(reuse ? index.sealedIds : []);
     let position = reuse ? index.bytes : 0;
     let pending = reuse ? Buffer.from(index.pending || '', 'base64') : Buffer.alloc(0);
     let oversized = reuse ? !!index.skipLine : false;
     let invalid = reuse ? !!index.invalid : false;
-    const end = Math.min(stat.size, position + maxBytes), buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes));
+    const end = Math.min(size, position + maxBytes), buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes));
     const consume = line => {
       if (!line.length) return true;
       try {
@@ -80,14 +84,14 @@ function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024
     }
     const sealedIds = [...ids];
     let tailValid = false, tailUnresolved = false;
-    if (position === stat.size && pending.length) {
+    if (position === size && pending.length) {
       const before = invalid;
       tailValid = consume(pending);
       tailUnresolved = invalid && !before;
       invalid = before;
     }
     return JSON.stringify({ format: 3, version: 3, ids: [...ids], sealedIds, bytes: position,
-      complete: position === stat.size && (!pending.length || tailValid || oversized), size: stat.size, mtime,
+      complete: position === size && (!pending.length || tailValid || oversized), size, mtime,
       unresolved: invalid || tailUnresolved, invalid,
       skipLine: oversized, pending: pending.toString('base64'), tail: tailAt(position) });
   } finally { fs.closeSync(fd); }
@@ -239,5 +243,5 @@ function continuationRollup(rows, { initialScanComplete = false } = {}) {
   return result;
 }
 
-module.exports = { continuationId, continuationStamp, matchesContinuationStamp,
+module.exports = { continuationId, continuationStamp, matchesContinuationStamp, continuationMtime,
   scanContinuationIndex, resolveContinuations, resolveContinuationsSync, validId, continuationRollup };

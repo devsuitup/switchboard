@@ -2404,9 +2404,19 @@ so DB rows and IPC remain JSON-safe. Full scans in `readSessionFile`, including
 stamp before and after reading and attach it to the index only when unchanged;
 otherwise the index is null. Incremental refresh and resolve scans also attach
 the verified stamp. Refresh derives its ISO mtime from the same BigInt stat as
-`new Date(Number((stat.mtimeNs + 500000n) / 1000000n))`: rounding in BigInt
-before conversion matches Node's Number-stat date at millisecond boundaries.
-Converting nanoseconds to Number before rounding loses precision (#656).
+`continuationMtime(stat)`, using
+`new Date(Number((stat.mtimeNs + 500000n) / 1000000n))`. The chunk parser uses
+the same BigInt-derived ISO value for both writing and comparing its cursor.
+Node's Number-stat date can round up when the nanosecond remainder is just
+below half a millisecond, so it must not decide cursor reuse (#891).
+Full transcript reads also derive the index mtime and the row's `fileMtime`
+from the saved BigInt stamp through `continuationMtime()`. Both values must
+agree before the first refresh as well as afterward: sidebar grouping validates
+their equality. A complete multi-chunk index then stays reusable through an
+ordinary refresh and `init()`, rather than being replaced with a partial scan.
+Legacy ISO cursors written with BigInt rounding remain reusable; a cursor
+written with a different rounding restarts once, then uses the canonical value.
+Converting nanoseconds to Number before rounding also loses precision (#656).
 Existing display-header and SDK-entrypoint reads keep their own budgets.
 
 When a scan has no matching in-memory snapshot after restart, a projects-query
@@ -2426,13 +2436,25 @@ and persists a stamp: matching size and ISO mtime alone cannot rule out a
 replacement under #656. A legacy, incomplete or stale index is read in 1 MiB chunks, yielding
 with `setImmediate` between chunks, with no total scan cap. Identity and stamps
 are checked before/after each synchronous scan and after every yield.
-Identity changes and non-growth changes during a yield remain unresolved;
-same-identity growth continues scanning, including after a previously final
+Identity changes and non-growth changes during a yield remain unresolved.
+If a pass still needs another chunk but its byte cursor does not advance,
+the scanner discards its in-memory snapshot and returns no proof. Preparation
+then defers the whole row through the existing folder marker and targeted
+retry scope; resolution remains unresolved until another lookup. This bounds
+stalled reads or repeated cursor resets without limiting progressing scans.
+Same-identity growth continues scanning, including after a previously final
 chunk, and reuses the cursor only with a matching head and tail. Equal-size
 changes restart from zero on the next lookup. Tests can inject smaller
 `chunkBytes`. Persistence uses
 `setCachedContinuationIndex`, which updates only that column, preserving display
 fields written by a concurrent refresh; it does not upsert an old row snapshot.
+
+Coverage for #891: `test/session-continuations-mtime-891.test.js` injects the
+Number/BigInt stat disagreement on disposable multi-chunk transcripts, checks
+legacy ISO cursors, preparation and resolution, and verifies bounded stalled
+read deferral and recovery. It also checks full reads followed by refresh on
+both sides of `init()`, retaining complete indexes and merged sidebar rows.
+Scanner-loop scenarios have iteration guards.
 
 The local-background sidebar still validates persisted indexes by ISO mtime.
 Its DB rows have no current filesystem stamp to compare, and acquiring one
