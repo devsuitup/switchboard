@@ -115,7 +115,9 @@ reads and parses each snapshot asynchronously. Partial JSON and read errors
 other than ENOENT preserve the previous observed title and do not notify.
 ENOENT retains the run-id fallback as the baseline and notifies if the previous
 title differs or no baseline exists, including after folder-scope pruning in the
-same flush; repeated deletion events remain quiet. The watcher compares
+same flush; repeated deletion events remain quiet. The run-id baseline is only
+retained while the project folder exists; a simultaneous folder deletion and
+snapshot ENOENT cannot recreate a pruned entry (#914). The watcher compares
 titles observed in successful snapshot reads, so later status-only
 changes with the same title do not notify. The first event notifies because
 the watcher has no title baseline yet, provided the snapshot is readable JSON.

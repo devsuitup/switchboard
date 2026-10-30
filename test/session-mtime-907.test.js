@@ -45,11 +45,11 @@ test('refresh skips a subagent immediately after a full read at the rounding bou
   cache.refreshFolder(h.folder);
   assert.equal(opens, 0, 'an unchanged subagent must not need a header read');
   assert.equal(h.rows.get(row.sessionId).fileMtime, expected);
-  assert.equal(h.rows.get(row.sessionId).modified, '2026-10-29T12:00:00.001Z');
+  assert.equal(h.rows.get(row.sessionId).modified, '2026-10-29T12:00:00.000Z');
 });
 
 for (const parentSessionId of [undefined, OLD]) {
-  test(`display header exposes canonical freshness without changing modified, subagent=${!!parentSessionId}`, t => {
+  test(`display header exposes canonical freshness and display time, subagent=${!!parentSessionId}`, t => {
     const h = fixture(t);
     const file = h.file(OLD);
     fs.writeFileSync(file, line({ type: 'user', isSidechain: true, agentId: 'child', message: { content: 'prompt' } }));
@@ -57,7 +57,7 @@ for (const parentSessionId of [undefined, OLD]) {
     const header = readSessionDisplayHeader(file, { parentSessionId });
     assert.ok(header);
     assert.equal(header.fileMtime, expected);
-    assert.equal(header.modified, '2026-10-29T12:00:00.001Z');
+    assert.equal(header.modified, '2026-10-29T12:00:00.000Z');
   });
 }
 
@@ -77,3 +77,32 @@ test('title backfill emits a current legacy row at the rounding boundary and rej
     { sessionId: OLD, fileMtime, customTitle: 'Recovered title' },
   ], 'backfill must recover a current row instead of skipping it on every launch');
 });
+
+for (const parentSessionId of [undefined, OLD]) {
+  test(`display time rounds like fileMtime above half a millisecond, subagent=${!!parentSessionId}`, t => {
+    const h = fixture(t);
+    const file = h.file(OLD);
+    fs.writeFileSync(file, line({ type: 'user', isSidechain: true, agentId: 'child', message: { content: 'prompt' } }));
+    const milliseconds = Date.parse('2026-10-29T12:00:00.000Z');
+    const stat = fs.statSync;
+    t.mock.method(fs, 'statSync', (target, options) => {
+      const result = stat(target, options);
+      if (target === file) {
+        result.mtime = new Date(milliseconds + (options?.bigint ? 0 : 1));
+        result.mtimeMs = options?.bigint ? BigInt(milliseconds) : milliseconds + 0.6;
+        if (options?.bigint) result.mtimeNs = BigInt(milliseconds) * 1000000n + 600000n;
+      }
+      return result;
+    });
+    const rounded = new Date(milliseconds + 1).toISOString();
+    const header = readSessionDisplayHeader(file, { parentSessionId });
+    assert.equal(header.fileMtime, rounded);
+    assert.equal(header.modified, header.fileMtime, 'the header display time must match its freshness key');
+    if (parentSessionId) {
+      const row = readSessionFile(file, h.folder, h.root, { parentSessionId });
+      assert.equal(row.modified, row.fileMtime, 'a subagent full read must not truncate its display time');
+      const birth = fs.statSync(file, { bigint: true }).birthtimeNs;
+      assert.equal(row.created, new Date(Number((birth + 500000n) / 1000000n)).toISOString(), 'a subagent full read must round its creation time');
+    }
+  });
+}

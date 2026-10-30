@@ -181,6 +181,31 @@ for (const snapshotFirst of [false, true]) {
   });
 }
 
+for (const snapshotFirst of [false, true]) {
+  test(`removed folder does not retain a deleted snapshot baseline: snapshotFirst=${snapshotFirst}`, async t => {
+    const h = layout(t), w = watcher(h);
+    w.event();
+    await w.flush();
+    const parked = h.dir + '-parked';
+    fs.renameSync(h.dir, parked);
+    t.after(() => fs.rmSync(parked, { recursive: true, force: true }));
+    if (snapshotFirst) w.event();
+    w.event(h.folder);
+    if (!snapshotFirst) w.event();
+    await w.flush();
+    fs.unlinkSync(path.join(parked, path.relative(h.dir, h.snapshot)));
+    fs.renameSync(parked, h.dir);
+    w.notifications.length = 0;
+    w.event();
+    await w.flush();
+    assert.deepEqual(w.notifications, ['watcher'], 'a recreated folder must observe its missing snapshot anew');
+    w.notifications.length = 0;
+    w.event();
+    await w.flush();
+    assert.deepEqual(w.notifications, [], 'an existing folder keeps the run-id baseline');
+  });
+}
+
 for (const dropped of [false, true]) {
   test(`folder-wide refresh forgets title baselines: dropped=${dropped}`, async t => {
     const h = layout(t), w = watcher(h);
