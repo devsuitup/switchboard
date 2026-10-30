@@ -454,7 +454,13 @@ publication of a fresh temporary copy. After relocation, the same completeness
 check runs on the displaced directory: a complete stage published in the gap
 before the rename is restored, or a complete winner already at the final path
 is reused and the displaced copy removed (#935). Restore and publication
-conflicts reuse only a complete winner; other failures propagate.
+conflicts reuse only a complete winner; other failures propagate; a displaced
+copy that vanished before its restore (ENOENT) leads to a fresh publication.
+The sweep spares `.tmp-` and `.stale-` siblings younger than five minutes, so
+it cannot delete another process's displaced stage mid-restore. This narrows
+the race to the two renames, it does not close it: a child resolving node-pty
+between them still fails, and a loaded `.node` does not stop a directory from
+being moved aside on Windows.
 `test/pty-ops-conpty-stage.test.js` covers missing components, untouched reuse,
 relocation and publication races, including publication just before relocation
 and a competing winner during restoration.

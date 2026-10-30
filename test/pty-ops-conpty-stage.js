@@ -28,7 +28,7 @@ function stageNodePty(tmpRoot, src) {
     const stale = path.join(tmpRoot, entry.name);
     if (entry.isDirectory() && entry.name.startsWith('sb-nodepty-') && stale !== dir) {
       try {
-        if (entry.name.includes('.tmp-') && Date.now() - fs.statSync(stale).mtimeMs < TEMP_MAX_AGE_MS) continue;
+        if (/\.(tmp|stale)-/.test(entry.name) && Date.now() - fs.statSync(stale).mtimeMs < TEMP_MAX_AGE_MS) continue;
         removeBestEffort(stale);
       } catch {}
     }
@@ -48,11 +48,13 @@ function stageNodePty(tmpRoot, src) {
         try {
           fs.renameSync(stale, dir);
         } catch (error) {
-          if (!RENAME_CONFLICTS.has(error.code) || !isComplete()) throw error;
+          if (error.code !== 'ENOENT' && (!RENAME_CONFLICTS.has(error.code) || !isComplete())) throw error;
         }
       }
-      removeBestEffort(stale);
-      return { dir, nodePty: dst };
+      if (isComplete()) {
+        removeBestEffort(stale);
+        return { dir, nodePty: dst };
+      }
     }
     removeBestEffort(stale);
   }

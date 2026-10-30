@@ -180,6 +180,55 @@ test('a complete stage published just before stale relocation is restored and re
   assert.deepEqual(fs.readdirSync(tmpRoot), [path.basename(dir)]);
 });
 
+function relocateCompleteStage(t, onRestore) {
+  const { tmpRoot, src } = fixture(t);
+  const dir = path.join(tmpRoot, `sb-nodepty-1.0.0-${process.platform}-${process.arch}`);
+  fs.mkdirSync(dir);
+  const rename = fs.renameSync;
+  let relocated = false;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (from === dir && !relocated) {
+      relocated = true;
+      fs.cpSync(src, path.join(dir, 'node-pty'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.complete'), '');
+      return rename(from, to);
+    }
+    if (to === dir && path.basename(from).includes('.stale-')) return onRestore(from, to, dir, rename);
+    return rename(from, to);
+  });
+  return { tmpRoot, src, dir };
+}
+
+test('a restore conflict with an incomplete winner is propagated', (t) => {
+  const failure = Object.assign(new Error('restore lost'), { code: 'EPERM' });
+  const { tmpRoot, src } = relocateCompleteStage(t, (from, to, dir) => { fs.mkdirSync(dir); throw failure; });
+  assert.throws(() => stageNodePty(tmpRoot, src), (error) => error === failure);
+});
+
+test('an unrelated restore error is propagated even if a complete winner exists', (t) => {
+  const failure = Object.assign(new Error('I/O failure'), { code: 'EIO' });
+  const { tmpRoot, src } = relocateCompleteStage(t, (from, to, dir, rename) => { rename(from, to); throw failure; });
+  assert.throws(() => stageNodePty(tmpRoot, src), (error) => error === failure);
+});
+
+test('a displaced stage swept by another process before its restore is staged afresh', (t) => {
+  const { tmpRoot, src, dir } = relocateCompleteStage(t, (from, to, dir2, rename) => {
+    fs.rmSync(from, { recursive: true, force: true });
+    return rename(from, to);
+  });
+  const staged = stageNodePty(tmpRoot, src);
+  assert.deepEqual(staged, { dir, nodePty: path.join(dir, 'node-pty') });
+  assert.equal(fs.readFileSync(path.join(staged.nodePty, 'lib', 'index.js'), 'utf8'), 'original library');
+});
+
+test('the sweep keeps a young displaced stage of another process', (t) => {
+  const { tmpRoot, src } = fixture(t);
+  const young = path.join(tmpRoot, `sb-nodepty-1.0.0-${process.platform}-${process.arch}.stale-other`);
+  fs.mkdirSync(young);
+  stageNodePty(tmpRoot, src);
+  assert.ok(fs.existsSync(young));
+});
+
 for (const conflict of [null, 'EEXIST', 'ENOTEMPTY', 'EPERM', 'EBUSY']) {
   test(`a complete stage reappearing ${conflict ? `during restore with ${conflict}` : 'after stale relocation'} is reused`, (t) => {
     const { tmpRoot, src } = fixture(t);
@@ -231,6 +280,10 @@ for (const code of ['EBUSY', 'EPERM']) {
     assert.ok(fs.existsSync(path.join(staged.dir, '.complete')));
     assert.equal(fs.readdirSync(tmpRoot).length, 2);
     mock.mock.restore();
+    stageNodePty(tmpRoot, src);
+    assert.equal(fs.readdirSync(tmpRoot).length, 2, 'a young displaced copy is spared by the sweep');
+    const old = new Date(Date.now() - 10 * 60 * 1000);
+    for (const name of fs.readdirSync(tmpRoot).filter(name => name.includes('.stale-'))) fs.utimesSync(path.join(tmpRoot, name), old, old);
     stageNodePty(tmpRoot, src);
     assert.deepEqual(fs.readdirSync(tmpRoot), [path.basename(dir)]);
   });
