@@ -205,7 +205,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   try {
     const big = fs.statSync(filePath, { bigint: true });
     const stamp = continuationStamp(big);
-    const stat = isSubagent ? { size: Number(big.size), mtime: big.mtime, birthtime: big.birthtime } : fs.statSync(filePath);
+    const stat = isSubagent ? { size: Number(big.size), mtime: new Date(continuationMtime(big)), birthtime: big.birthtime } : fs.statSync(filePath);
     const fileBytes = fs.readFileSync(filePath);
     const content = fileBytes.toString('utf8');
     const lines = content.split('\n').filter(Boolean);
@@ -619,7 +619,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
   const MAX_LINES = 500;
   try {
     const big = fs.statSync(filePath, { bigint: true });
-    const stat = { size: Number(big.size), mtime: big.mtime };
+    const stat = { size: Number(big.size), mtime: new Date(continuationMtime(big)) };
     const fileMtime = continuationMtime(big);
     const readLen = Math.min(MAX_BYTES, stat.size);
     const fd = fs.openSync(filePath, 'r');
