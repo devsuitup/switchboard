@@ -2,7 +2,7 @@
 
 const archive = require('./archived-projects');
 const { scheduleRegistry } = require('./schedule-runner');
-const { whatsNewOnStartup } = require('./changelog');
+const { whatsNewOnStartup } = require('./src/main/app/changelog');
 
 // see .ai/contexts/session-index-writer.md
 function createWriterCommands(db) {

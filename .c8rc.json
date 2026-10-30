@@ -18,7 +18,6 @@
     "**/main.js",
     "preload.js",
     "**/preload.js",
-    "mcp-bridge.js",
     "**/mcp-bridge.js",
     "claude-auth.js",
     "**/claude-auth.js",

@@ -6,9 +6,9 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const espree = require('espree');
-const { createUnsavedGuard } = require('../unsaved-guard');
-const { inventory } = require('../session-exit');
-const { applicationMenuTemplate } = require('../window-frame');
+const { createUnsavedGuard } = require('../src/main/app/unsaved-guard');
+const { inventory } = require('../src/main/app/session-exit');
+const { applicationMenuTemplate } = require('../src/main/app/window-frame');
 const source = fs.readFileSync(require.resolve('../main'), 'utf8');
 const ast = espree.parse(source, { ecmaVersion: 'latest', sourceType: 'commonjs', range: true });
 const startup = ast.body.find(n => n.id?.name === 'startApplication');
@@ -470,7 +470,7 @@ test('C2 shipped exit inventory classifies busy by the real CLI id after a clear
 
 for (const completion of ['render-process-gone', 'destroyed', 'answer']) {
   test(`C4 ${completion} during a busy wait commits without a later background write`, async () => {
-    const { runExitHandoffs } = require('../session-exit');
+    const { runExitHandoffs } = require('../src/main/app/session-exit');
     const states = new Map([['local', 'busy'], ['written', 'idle']]);
     const writes = [], wakes = [];
     let confirm;
@@ -621,7 +621,7 @@ test('H2b an untagged exit marks committed-attempt invalidation external', async
 });
 
 test('C4 external exit resolves the real batch immediately and prevents later busy writes', async () => {
-  const { runExitHandoffs } = require('../session-exit');
+  const { runExitHandoffs } = require('../src/main/app/session-exit');
   const t = setup('win32', (ids, opts) => runExitHandoffs(ids, {
     ...opts, status: () => 'busy', now: () => 0,
     waitForChange: () => new Promise(() => {}), send: () => { t.calls.push('send'); },
@@ -659,7 +659,7 @@ for (const ok of [true, false]) {
 test('C4 an external exit supersedes user cancellation of a written batch', async () => {
   for (const cancel of ['ipc', 'invalidation']) {
     let confirm;
-    const t = setup('win32', (ids, opts) => require('../session-exit').runExitHandoffs(ids, {
+    const t = setup('win32', (ids, opts) => require('../src/main/app/session-exit').runExitHandoffs(ids, {
       ...opts, status: () => 'idle', now: () => 0, waitForChange: async () => {},
       send: () => new Promise(resolve => { confirm = resolve; }),
     }));

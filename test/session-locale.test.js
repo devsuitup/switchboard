@@ -145,12 +145,14 @@ test('schedule launch passes the UTF-8 default to the intercepted child spawn', 
 });
 
 test('relaunch does not persist a synthesized locale into the next app and its implicit SSH children', async () => {
-  const context = load('relaunch.js', {
+  let cleaned = false;
+  const context = load('src/main/app/relaunch.js', {
     process,
-    require: name => name === './clean-env' ? { cleanEnv: cleaner('linux') } : createRequire(path.join(root, 'relaunch.js'))(name),
+    require: name => name === '../../../clean-env' ? { cleanEnv: (...args) => { cleaned = true; return cleaner('linux')(...args); } } : createRequire(path.join(root, 'src/main/app/relaunch.js'))(name),
   });
   let launched;
   await context.module.exports({ env: { PATH: '/bin' }, execPath: '/app', argv: [], cwd: '/tmp',
     spawnSync: (_file, _args, opts) => { launched = opts.env; return { status: 0 }; }, quit() {}, notify() {} });
   assert.equal(launched.LC_CTYPE, undefined);
+  assert.equal(cleaned, true, 'the relaunch fixture must use the Linux environment cleaner');
 });

@@ -59,7 +59,7 @@ for (const platform of ['win32', 'darwin']) test(`${platform} keeps the native u
 });
 
 test('helper submits a transient service with literal argv, then quits', async () => {
-  const relaunch = require('../relaunch');
+  const relaunch = require('../src/main/app/relaunch');
   const calls = [];
   await relaunch({ platform: 'linux', execPath: '/opt/a b/switchboard', argv: ['--example=a b'], cwd: '/work', now: () => 123,
     spawnSync: (...args) => { calls.push(args); return { status: 0 }; }, quit: () => calls.push('quit'), notify: () => assert.fail('unexpected fallback') });
@@ -76,7 +76,7 @@ test('helper submits a transient service with literal argv, then quits', async (
 });
 
 test('service argv escapes dollar expansion and requires executable startup acknowledgement', async () => {
-  const relaunch = require('../relaunch');
+  const relaunch = require('../src/main/app/relaunch');
   let submitted;
   await relaunch({ execPath: '/opt/Switchboard/switchboard', argv: ['--example=${HOME}', '$PATH', '$$'],
     spawnSync: (_cmd, args) => { submitted = args; return { status: 0 }; }, quit() {}, notify: () => assert.fail('unexpected fallback') });
@@ -86,7 +86,7 @@ test('service argv escapes dollar expansion and requires executable startup ackn
 
 for (const result of [{ error: new Error('ENOENT') }, { status: 1, stderr: 'no user bus' }, { status: null }]) {
   test(`helper waits for visible fallback acknowledgement before quit (${result.status ?? result.error?.message ?? 'signal'})`, async () => {
-    const relaunch = require('../relaunch');
+    const relaunch = require('../src/main/app/relaunch');
     const calls = [];
     let acknowledge;
     const done = relaunch({ platform: 'linux', execPath: '/opt/switchboard', argv: [], spawnSync: () => result,
@@ -100,7 +100,7 @@ for (const result of [{ error: new Error('ENOENT') }, { status: 1, stderr: 'no u
 }
 
 test('a thrown spawn error also uses quit-only fallback', async () => {
-  const relaunch = require('../relaunch');
+  const relaunch = require('../src/main/app/relaunch');
   const calls = [];
   await relaunch({ platform: 'linux', spawnSync: () => { throw new Error('spawn refused'); }, log: { warn() {} },
     notify: async message => calls.push(message), quit: () => calls.push('quit') });
@@ -109,7 +109,7 @@ test('a thrown spawn error also uses quit-only fallback', async () => {
 });
 
 for (const marked of [false, true]) test(`lock retries are bounded and reserved for helper launches (${marked})`, async () => {
-  const { acquireInstanceLock } = require('../linux-startup');
+  const { acquireInstanceLock } = require('../src/main/app/linux-startup');
   let calls = 0;
   let elapsed = 0;
   const app = { requestSingleInstanceLock: () => ++calls >= 3 };
@@ -126,14 +126,14 @@ for (const marked of [false, true]) test(`lock retries are bounded and reserved 
 });
 
 test('non-Linux ignores the helper lock marker', async () => {
-  const { acquireInstanceLock } = require('../linux-startup');
+  const { acquireInstanceLock } = require('../src/main/app/linux-startup');
   assert.equal(await acquireInstanceLock({ requestSingleInstanceLock: () => false }, {
     platform: 'win32', argv: ['--switchboard-relaunch'], delay: () => assert.fail('unexpected retry'),
   }), false);
 });
 
 for (const value of ['0', '1', 'unreadable']) test(`Linux startup reports NoNewPrivs=${value}`, () => {
-  const { readNoNewPrivs } = require('../linux-startup');
+  const { readNoNewPrivs } = require('../src/main/app/linux-startup');
   const logs = [];
   const notice = readNoNewPrivs({ platform: 'linux', log: { info: text => logs.push(text) }, readFileSync: file => {
     assert.equal(file, '/proc/self/status');
@@ -146,7 +146,7 @@ for (const value of ['0', '1', 'unreadable']) test(`Linux startup reports NoNewP
 });
 
 test('non-Linux does not read procfs', () => {
-  const { readNoNewPrivs } = require('../linux-startup');
+  const { readNoNewPrivs } = require('../src/main/app/linux-startup');
   assert.equal(readNoNewPrivs({ platform: 'darwin', readFileSync: () => assert.fail('procfs read') }), null);
 });
 
@@ -215,7 +215,7 @@ test('renderer uses a persistent app notice and close action for fallback and st
 
 test('service stop leaves independently surviving children alone', async () => {
   let submitted;
-  await require('../relaunch')({ env: {}, spawnSync: (_cmd, args) => {
+  await require('../src/main/app/relaunch')({ env: {}, spawnSync: (_cmd, args) => {
     submitted = args;
     return { status: 0 };
   }, quit() {}, notify: () => assert.fail('unexpected fallback') });
@@ -233,7 +233,7 @@ test('relaunch forwards caller configuration without exposing values in argv or 
     'INVOCATION_ID', 'JOURNAL_STREAM', 'SYSTEMD_EXEC_PID', 'NOTIFY_SOCKET', 'WATCHDOG_PID', 'WATCHDOG_USEC', 'SWITCHBOARD_RELAUNCH'];
   const env = { ...keep, ...Object.fromEntries(denied.map(key => [key, 'stale-runtime'])) };
   let submitted;
-  await require('../relaunch')({ env, spawnSync: (_cmd, args, opts) => {
+  await require('../src/main/app/relaunch')({ env, spawnSync: (_cmd, args, opts) => {
     submitted = { args, opts };
     return { status: 0 };
   }, quit() {}, notify: () => assert.fail('unexpected fallback') });
@@ -249,7 +249,7 @@ test('relaunch skips names systemd rejects, keeps the Ozone hint, and logs what 
     ELECTRON_OZONE_PLATFORM_HINT: 'wayland', ELECTRON_RUN_AS_NODE: '1' };
   let submitted;
   const warnings = [];
-  await require('../relaunch')({ env, spawnSync: (_cmd, args, opts) => {
+  await require('../src/main/app/relaunch')({ env, spawnSync: (_cmd, args, opts) => {
     submitted = { args, opts };
     return { status: 0 };
   }, quit() {}, notify: () => assert.fail('unexpected fallback'), log: { warn: (...a) => warnings.push(a.join(' ')) } });
@@ -261,7 +261,7 @@ test('relaunch skips names systemd rejects, keeps the Ozone hint, and logs what 
 
 test('a relaunch of a relaunched instance strips the old marker before adding one', async () => {
   let submitted;
-  await require('../relaunch')({ env: {}, argv: ['--switchboard-relaunch', 'document', '--switchboard-relaunch'],
+  await require('../src/main/app/relaunch')({ env: {}, argv: ['--switchboard-relaunch', 'document', '--switchboard-relaunch'],
     spawnSync: (_cmd, args) => {
       submitted = args;
       return { status: 0 };
@@ -295,7 +295,7 @@ test('second-instance focuses ordinary launches but ignores an instance quitting
 test('a marked lock retry reports exhaustion clearly before returning false', async () => {
   const warnings = [];
   let elapsed = 0;
-  assert.equal(await require('../linux-startup').acquireInstanceLock({ requestSingleInstanceLock: () => false }, {
+  assert.equal(await require('../src/main/app/linux-startup').acquireInstanceLock({ requestSingleInstanceLock: () => false }, {
     platform: 'linux', argv: ['--switchboard-relaunch'], now: () => elapsed, delay: async ms => { elapsed += ms; },
     log: { warn: text => warnings.push(text) },
   }), false);
@@ -326,7 +326,7 @@ test('installed DebUpdater executes its force-run branch only when requested; ve
 for (const state of ['active', 'inactive', 'query-timeout']) test(`submission timeout checks the same service before fallback (${state})`, async () => {
   const calls = [];
   let unit;
-  await require('../relaunch')({ env: { HOME: '/isolated' }, spawnSync: (cmd, args, opts) => {
+  await require('../src/main/app/relaunch')({ env: { HOME: '/isolated' }, spawnSync: (cmd, args, opts) => {
     calls.push(cmd);
     if (cmd === 'systemd-run') {
       unit = args.find(a => a.startsWith('--unit=')).slice(7);

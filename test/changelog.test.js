@@ -14,7 +14,7 @@ const {
   whatsNewForVersion,
   createWhatsNew,
   VERSION_BEFORE_WHATS_NEW,
-} = require('../changelog');
+} = require('../src/main/app/changelog');
 
 const ROOT = path.join(__dirname, '..');
 

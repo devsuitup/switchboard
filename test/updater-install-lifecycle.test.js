@@ -9,7 +9,7 @@ const { EventEmitter } = require('node:events');
 const espree = require('espree');
 const { extractFunction } = require('./app-source');
 const { SETTING_DEFAULTS } = require('../public/setting-defaults');
-const { createUnsavedGuard } = require('../unsaved-guard');
+const { createUnsavedGuard } = require('../src/main/app/unsaved-guard');
 
 const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
 const ast = espree.parse(source, { ecmaVersion: 'latest', sourceType: 'commonjs', range: true });

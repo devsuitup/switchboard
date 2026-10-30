@@ -8,7 +8,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createActivityWatchReporter, KEEPALIVE_MS, PULSETIME_SECONDS, CHECKPOINT_MS } = require('../activitywatch-reporter');
+const { createActivityWatchReporter, KEEPALIVE_MS, PULSETIME_SECONDS, CHECKPOINT_MS } = require('../src/main/integrations/activitywatch/activitywatch-reporter');
 
 // `events` is what the server holds, not what was sent: upsertSpan is modelled
 // the way aw-server behaves — an event found by start time and match value is
