@@ -91,21 +91,41 @@ test('parseChangelog accepts CRLF line endings', () => {
 });
 
 for (const heading of ['Added', 'Security', 'fixed', 'New extra', '']) {
-  test(`parseChangelog rejects unknown Unreleased group ${JSON.stringify(heading)}`, () => {
-    assert.throws(() => parseChangelog(SAMPLE.replace('### New', `### ${heading}`)),
+  test(`strict parsing rejects unknown Unreleased group ${JSON.stringify(heading)}`, () => {
+    assert.throws(() => parseChangelog(SAMPLE.replace('### New', `### ${heading}`), { strict: true }),
       /malformed Unreleased group/);
+  });
+
+  test(`runtime parsing preserves released sections with Unreleased group ${JSON.stringify(heading)}`, () => {
+    const text = SAMPLE.replace('### New', `### ${heading}`);
+    let parsed;
+    assert.doesNotThrow(() => { parsed = parseChangelog(text); });
+    assert.equal(parsed.unreleased, `### ${heading}\n- Pending thing. (#9)`);
+    assert.deepEqual(parsed.versions, parseChangelog(SAMPLE).versions);
+    assert.deepEqual(parseChangelog(text, { strict: false }), parsed);
+  });
+
+  test(`startup and menu return dialog data with Unreleased group ${JSON.stringify(heading)}`, () => {
+    const text = SAMPLE.replace('### New', `### ${heading}`);
+    const expected = parseChangelog(SAMPLE).versions;
+    const settings = memorySettings({ global: { lastSeenVersion: '0.0.98' } });
+    const { whatsNew, warnings } = service(settings, { readChangelog: reader(text) });
+    assert.deepEqual(whatsNew.startup(), { version: '0.0.100', sections: expected.slice(0, 2) });
+    assert.deepEqual(whatsNew.forMenu(), { version: '0.0.100', sections: expected.slice(0, 1) });
+    assert.deepEqual(warnings, []);
+    assert.deepEqual(settings.getSetting('global'), { lastSeenVersion: '0.0.98' });
   });
 }
 
 test('parseChangelog accepts only the documented Unreleased groups with CRLF', () => {
   const body = '### New\n- New item.\n### Changed\n- Changed item.\n### Fixed\n- Fixed item.';
   const text = SAMPLE.replace('### New\n- Pending thing. (#9)', body);
-  assert.equal(parseChangelog(text.replace(/\n/g, '\r\n')).unreleased, body);
+  assert.equal(parseChangelog(text.replace(/\n/g, '\r\n'), { strict: true }).unreleased, body);
 });
 
 test('Unreleased group validation does not reinterpret historical groups or text after the closing rule', () => {
   const text = SAMPLE.replace('### Fixed', '### Added') + '\n### Historical\n';
-  assert.match(parseChangelog(text).versions[0].body, /^### Added/);
+  assert.match(parseChangelog(text, { strict: true }).versions[0].body, /^### Added/);
 });
 
 test('parseChangelog throws on a file with no version section', () => {
@@ -298,7 +318,7 @@ test('the menu entry gives nothing and an error when the current version has no 
 
 test('the repository CHANGELOG.md parses, and has a section for the version in package.json', () => {
   const text = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
-  const { unreleased, versions } = parseChangelog(text);
+  const { unreleased, versions } = parseChangelog(text, { strict: true });
   assert.equal(typeof unreleased, 'string', 'CHANGELOG.md must keep a ## Unreleased section');
   const { version } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   assert.ok(versions.some((v) => v.version === version), `CHANGELOG.md has no section for ${version}`);
