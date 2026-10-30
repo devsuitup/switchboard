@@ -154,6 +154,7 @@ function wrapInGridCard(sessionId) {
   const project = document.createElement('span');
   project.className = 'grid-card-project';
   project.textContent = shortProject;
+  project.title = shortProject;
   header.appendChild(project);
 
   const stopBtn = document.createElement('button');

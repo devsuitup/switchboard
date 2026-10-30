@@ -2053,6 +2053,10 @@ body { display: flex; flex-direction: column; }
   font-size: 10px;
   color: #6a6a80;
   white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
 }
 
