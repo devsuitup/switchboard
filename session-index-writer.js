@@ -38,6 +38,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     };
   };
   const client = options.client || createWriterWorkerClient({
+    log: options.log || console,
     workerFactory: options.workerFactory || (() => new Worker(path.join(__dirname, 'workers', 'session-index-writer.js'))),
     onSettings: entries => { mirror.clear(); for (const [key, value] of entries) mirror.set(key, value); if (backend) backend.applySettingsAcknowledgment(entries); },
     ...options.clientOptions,

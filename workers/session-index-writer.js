@@ -19,7 +19,15 @@ let running = false, interactiveBurst = 0;
 const backgroundCommands = new Set(['effects', 'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries',
   'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'dropRemoteFolder', 'cleanupWorktree']);
 
-async function transaction(fn) {
+const busyCounts = new Map();
+const busyTimer = setInterval(() => {
+  if (!busyCounts.size) return;
+  parentPort.postMessage({ busyCounts: Object.fromEntries(busyCounts) });
+  busyCounts.clear();
+}, 60000);
+busyTimer.unref();
+
+async function transaction(name, fn) {
   const backoff = [20, 50, 100];
   for (let attempt = 0; ; attempt++) {
     try { return db.transact(() => {
@@ -29,7 +37,11 @@ async function transaction(fn) {
       return { result, committedRevision: db.getSetting('_writer_revision') || 0 };
     }); }
     catch (error) {
-      if (!/^SQLITE_BUSY/.test(error.code || '') || attempt === backoff.length) throw error;
+      if (!/^SQLITE_BUSY/.test(error.code || '')) throw error;
+      if (!busyCounts.has(name)) busyCounts.set(name, { retries: 0, exhaustions: 0 });
+      const counts = busyCounts.get(name);
+      if (attempt === backoff.length) { counts.exhaustions++; throw error; }
+      counts.retries++;
       await delay(backoff[attempt]);
     }
   }
@@ -83,7 +95,7 @@ function* units(name, args) {
 }
 
 function* commandUnits(message) {
-  if (message.command === 'close') { yield () => { db.closeDb(); }; return; }
+  if (message.command === 'close') { yield () => { clearInterval(busyTimer); db.closeDb(); }; return; }
   if (message.command === 'drain') { yield () => {}; return; }
   if (message.command === 'measurements') { yield () => db.measurements(); return; }
   if (message.command === 'dropRemoteFolder') {
@@ -124,7 +136,7 @@ async function drain() {
           }
           const buffered = [unit];
           let deferred;
-          const acknowledgment = await transaction(() => {
+          const acknowledgment = await transaction(message.command, () => {
             deferred = null;
             let next = unit, result, count = 0;
             while (!next.done) {

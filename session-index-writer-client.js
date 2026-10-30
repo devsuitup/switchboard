@@ -2,7 +2,7 @@
 
 // see .ai/contexts/session-index-writer.md
 function createWriterWorkerClient({ workerFactory, onSettings = () => {}, timeoutMs = 30000, maxRestarts = 3,
-  now = () => Date.now(), setTimeout = global.setTimeout, clearTimeout = global.clearTimeout, heartbeatMs = 30000 }) {
+  now = () => Date.now(), setTimeout = global.setTimeout, clearTimeout = global.clearTimeout, heartbeatMs = 30000, log = console }) {
   let worker, closing, stopped = false, terminated = false, nextId = 0, restartTimer;
   const restarts = [];
   const queue = [];
@@ -95,6 +95,10 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, timeou
     current.on('message', message => {
       if (worker !== current) return;
       heartbeat();
+      if (message.busyCounts) {
+        log.info('[session-index-writer] SQLITE_BUSY ' + JSON.stringify(message.busyCounts));
+        return;
+      }
       if (message.heartbeat) return;
       if (message.ready) {
         clearTimeout(current.bootTimer);

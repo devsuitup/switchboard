@@ -73,6 +73,25 @@ Projects workers retain their readonly connections.
 
 ## Wire contract and failure
 
+Writer transaction BUSY diagnostics (#898) preserve the existing code-prefix
+classification, four attempts and asynchronous 20/50/100 ms backoff. Each retry
+increments `retries` for the submitted command name; the final failed attempt
+increments `exhaustions` instead. Counts aggregate across chunks of that command
+name (including `effects`), not individual nested effects. An unref'd 60-second
+timer sends `{busyCounts:{command:{retries,exhaustions}}}` only for nonzero
+intervals, then resets the counters. The transport client logs one `info` line
+through the facade's logger (electron-log in main; console by default). Closing
+the writer stops this timer before closing its store. Forced worker termination
+also removes it; partial-minute counts are not flushed. There is no existing
+writer activity-trace channel, so these counts appear in the application log
+only, not the activity trace.
+
+Main's readonly db.js facade wraps store read functions once. A thrown code
+beginning with `SQLITE_BUSY` logs one `warn` line through electron-log, naming
+the called store function, then rethrows the same error without a retry.
+Settings mirror reads stay in memory; fresh settings reads use the wrapper.
+Other readonly worker connections and connection bootstrap are unchanged.
+
 Requests are {id,command,args}; replies are {id,result,settings} or
 {id,error:{message,code},settings}. Bootstrap sends {ready,settings,searchFtsRecreated}.
 An ACK follows the command's last transaction. Mutating replies carry a complete
