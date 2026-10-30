@@ -1393,8 +1393,9 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   const isRow = typeof sessionOrId === 'object';
   const sessionId = isRow ? sessionOrId.sessionId : sessionOrId;
   const openEntry = openSessions.get(sessionId);
-  const session = isRow ? sessionOrId : [...sessionMap.values()].find(row => row.mergedMemberIds?.includes(sessionId))
-    || sessionMap.get(sessionId) || openEntry?.session || rowSession || { sessionId };
+  const own = sessionMap.get(sessionId);
+  const session = isRow ? sessionOrId : localMergedMemberRows.get(sessionId) || (own?.mergedMemberIds?.length ? own : null)
+    || [...sessionMap.values()].find(row => row.mergedMemberIds?.includes(sessionId)) || own || openEntry?.session || rowSession || { sessionId };
   const rowEntry = openSessions.get(session.sessionId);
   const planned = await planSessionStop(session, { attach: !!(rowEntry?.attach && !rowEntry.closed), retryTargets, jobStop: true });
   const targets = [];

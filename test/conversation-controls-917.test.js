@@ -147,3 +147,12 @@ test('opening a row with an older dormant member resumes its newest head', async
   assert.deepEqual(opened, ['C'], 'Open must resume the head C, never the older dormant B');
   assert.equal(h.read("dormantWorkingSet.has('B')"), false, 'opening the head clears dormant markers for the conversation');
 });
+
+test('Stop from the original part resolves its row before a stale re-keyed entry listing it', async t => {
+  const h = setup(t);
+  h.w.sessionMap.set('D', { ...h.row, sessionId: 'D', mergedMemberIds: ['B', 'A'] });
+  h.addTab('A');
+  h.addTab('C');
+  await h.w.confirmAndStopSession('A');
+  assert.deepEqual(h.calls.filter(call => call[0] === 'stop'), [['stop', 'A'], ['stop', 'C']]);
+});

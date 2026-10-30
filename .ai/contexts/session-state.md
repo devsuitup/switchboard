@@ -442,8 +442,9 @@ collects local PTYs, remote processes and background jobs. The sidebar passes it
 `confirmAndStopSession` resolves the terminal header or grid card's id to the
 owning conversation row, including when a stale per-tab entry remains cached.
 All three surfaces use the same conversation-wide Stop plan, refusals, job
-checks, confirmation and executor (#917). A tab with no indexed conversation
-uses its own session. `resolveSessionStop`
+checks, confirmation and executor (#917). The row is resolved from the member
+index, then the tab's own merged row, then any row listing it; only a tab no
+indexed row knows falls back to its open entry's session. `resolveSessionStop`
 still selects the IPC for each target and remains available to Archive/Delete.
 Confirmed-dead remote members are filtered out unless their view is still
 active; an unseeded host (`remoteHostAt === null`) is possibly live until a
