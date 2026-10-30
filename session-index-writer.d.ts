@@ -23,7 +23,7 @@ type ArchiveRuntime = {
   notify(): void;
   now(): string;
 };
-type Logger = { warn(...args: unknown[]): void };
+type Logger = { warn(...args: unknown[]): void; info(...args: unknown[]): void };
 type OfferRuntime = { notify(): void };
 
 export interface SessionIndexWriter {
@@ -82,5 +82,6 @@ export function createSessionIndexWriter(options?: {
   readonlyBackend?: Backend;
   clientOptions?: { timeoutMs?: number; maxRestarts?: number };
   log?: Logger;
+  onBusyCounts?: (counts: Record<string, { retries: number; exhaustions: number }>) => void;
   onSessionsChanged?: (ids: string[] | null, change?: { upsertOnly?: boolean }) => void;
 }, cache?: Cache): SessionIndexWriter;

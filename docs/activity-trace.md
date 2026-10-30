@@ -182,7 +182,8 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `trace.prune-failed` | An old file could not be deleted | `file`, `error`, `retained` |
 | `main.loop` | Once per second while tracing is on | `lagMs`; `maxMs`, `p99Ms` only with `SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` at startup |
 | `projects.changed` | A throttled projects notification is sent | `cause` (distinct caller labels coalesced across the throttle window) |
-| `app.quit` | Last line of a clean shutdown | — |
+| `session-index-writer.busy` | At most once a minute when the index writer retried or gave up on `SQLITE_BUSY`, and once at writer close if counts remain | `counts` (per command name: `retries`, `exhaustions`) |
+| `app.quit` | A clean shutdown starts its last steps; `pty.exit` and a final `session-index-writer.busy` can still follow | — |
 
 ### Renderer
 

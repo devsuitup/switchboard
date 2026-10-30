@@ -38,6 +38,8 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     };
   };
   const client = options.client || createWriterWorkerClient({
+    log: options.log || console,
+    onBusyCounts: options.onBusyCounts,
     workerFactory: options.workerFactory || (() => new Worker(path.join(__dirname, 'workers', 'session-index-writer.js'))),
     onSettings: entries => { mirror.clear(); for (const [key, value] of entries) mirror.set(key, value); if (backend) backend.applySettingsAcknowledgment(entries); },
     ...options.clientOptions,
@@ -50,6 +52,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
   const track = promise => { pending.add(promise); promise.finally(() => pending.delete(promise)).catch(() => {}); return promise; };
   const ready = client.ready.then(bootstrap => {
     backend = options.readonlyBackend || require('./db');
+    backend.setReadLogger?.(options.log || console);
     if (bootstrap) backend.searchFtsRecreated = bootstrap.searchFtsRecreated;
     if (!options.client) backend.applySettingsAcknowledgment([...mirror]);
     recorder = createCacheEffects(backend);
