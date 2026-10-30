@@ -1,11 +1,12 @@
 'use strict';
 
-const { inspect } = require('node:util');
+const { inspect, types } = require('node:util');
 const { createHash } = require('node:crypto');
 
 function installMainErrorHandlers({ log, notify, target = process, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
   const counts = new Map();
   const pending = new Map();
+  const delivered = new Map();
 
   function deliver(notice) {
     try {
@@ -13,6 +14,9 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
     } catch {
       return false;
     }
+    delivered.delete(notice.id);
+    delivered.set(notice.id, notice);
+    if (delivered.size > 5) delivered.delete(delivered.keys().next().value);
     return true;
   }
 
@@ -42,14 +46,42 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
     let message = 'Unreadable error';
     let detail = message;
     try {
-      message = typeof error?.message === 'string' ? error.message : inspect(error, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity }).slice(0, 16000);
+      const proxy = types.isProxy(error);
+      if (proxy) message = '[Proxy; inspection omitted]';
+      else if (typeof error?.message === 'string') message = error.message;
+      else if ((Array.isArray(error) || ArrayBuffer.isView(error)) && (error.length ?? error.byteLength) > 1000) {
+        const length = error.length ?? error.byteLength;
+        const name = Array.isArray(error) ? 'Array' : Buffer.isBuffer(error) ? 'Buffer' : types.isDataView(error) ? 'DataView' : error.constructor.name;
+        const sample = Array.isArray(error) ? Array.prototype.slice.call(error, 0, 20)
+          : types.isDataView(error) ? new Uint8Array(error.buffer, error.byteOffset, Math.min(length, 20))
+            : Uint8Array.prototype.subarray.call(error, 0, 20);
+        message = `[${name} ${types.isDataView(error) ? 'byteLength' : 'length'}=${length}; named properties not inspected] ${inspect(sample, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity })}`.slice(0, 16000);
+      }
+      else {
+        const preview = Array.isArray(error) || ArrayBuffer.isView(error) || types.isStringObject(error);
+        let keyCount = 0;
+        if (error && (typeof error === 'object' || typeof error === 'function')) {
+          const keys = Object.keys(error);
+          if (preview) {
+            const indexedLength = Array.isArray(error) ? 0xFFFFFFFF : types.isTypedArray(error) ? Number.MAX_SAFE_INTEGER
+              : types.isStringObject(error) ? Object.getOwnPropertyDescriptor(error, 'length').value : 0;
+            for (const key of keys) {
+              const index = Number(key);
+              if (Number.isInteger(index) && index >= 0 && index < indexedLength && String(index) === key) continue;
+              if (++keyCount > 1000) break;
+            }
+          } else keyCount = keys.length;
+        }
+        message = keyCount > 1000 ? preview ? '[Object with more than 1000 named keys; inspection omitted]' : `[Object with ${keyCount} keys; inspection omitted]`
+          : inspect(error, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity }).slice(0, 16000);
+      }
       if (!message.trim()) {
         message = typeof error;
         try {
-          if (typeof error?.name === 'string' && error.name.trim()) message = error.name;
+          if (!proxy && typeof error?.name === 'string' && error.name.trim()) message = error.name;
         } catch {}
       }
-      detail = typeof error?.stack === 'string' ? error.stack : message;
+      detail = !proxy && typeof error?.stack === 'string' ? error.stack : message;
     } catch {}
     try { log.error(`[main:${origin}]`, detail); } catch {}
     const normalized = message.replace(/\s+/g, ' ').trim();
@@ -83,7 +115,12 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
   target.on('unhandledRejection', onRejection);
 
   return {
-    flushNotices() {
+    dismissNotices(ids) {
+      if (!Array.isArray(ids) || ids.length > 5 || ![...ids].every(id => typeof id === 'string')) return;
+      for (const id of ids) delivered.delete(id);
+    },
+    flushNotices({ replay = false } = {}) {
+      if (replay) for (const notice of [...delivered.values()]) deliver(notice);
       for (const id of pending.keys()) sendPending(id);
     },
     dispose() {
@@ -92,6 +129,7 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
       for (const { state } of pending.values()) clearTimer(state.timer);
       pending.clear();
       counts.clear();
+      delivered.clear();
     },
   };
 }

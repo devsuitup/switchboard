@@ -143,6 +143,105 @@ test('wide objects are capped before logging and hashing without invoking getter
   assert.equal(notices.at(-1).id, notices[0].id, 'object keys beyond the inspected prefix do not enter the hash');
 });
 
+test('a 100000-key rejection is summarized before inspecting property values', t => {
+  const { target, logs, notices } = setup(t);
+  const wide = Object.fromEntries(Array.from({ length: 100000 }, (_, i) => [`key${i}`, 'must not serialize']));
+  let getterCalls = 0;
+  Object.defineProperty(wide, 'hostile', { enumerable: true, get() { getterCalls++; throw new Error('must not run'); } });
+  target.emit('unhandledRejection', wide);
+  assert.equal(logs[0][1], '[Object with 100001 keys; inspection omitted]');
+  assert.equal(notices[0].message, 'Unhandled rejection: [Object with 100001 keys; inspection omitted]');
+  assert.equal(getterCalls, 0);
+});
+
+for (const [name, create] of [
+  ['Buffer', () => Buffer.alloc(5e6)],
+  ['50 MB Buffer', () => Buffer.alloc(50e6)],
+  ['array', () => new Array(5e6).fill(0)],
+  ['typed array', () => new Uint8Array(2e5)],
+  ['DataView', () => new DataView(new ArrayBuffer(2e5))],
+  ['String object', () => new String('x'.repeat(2000))],
+]) {
+  test(`large ${name} rejection retains bounded inspect output`, t => {
+    const { target, logs, notices } = setup(t);
+    let reason = create();
+    const length = reason.length ?? reason.byteLength;
+    const start = performance.now();
+    target.emit('unhandledRejection', reason);
+    const elapsed = performance.now() - start;
+    reason = null;
+    t.diagnostic(`reporting ${name}: ${elapsed.toFixed(1)} ms`);
+    assert.ok(elapsed < 200, `reporting ${name} took ${elapsed} ms; budget is 200 ms`);
+    assert.ok(logs[0][1].length <= 16000);
+    assert.ok(notices[0].message.length <= 550);
+    if (name === 'String object') assert.match(logs[0][1], /String/);
+    else {
+      assert.ok(logs[0][1].includes(String(length)), 'preview must include the real length');
+      assert.match(logs[0][1], /named properties not inspected/);
+      assert.match(logs[0][1], new RegExp(name === 'array' ? 'Array' : name === 'typed array' ? 'Uint8Array' : name.replace('50 MB ', '')));
+      assert.match(logs[0][1], /0/);
+    }
+  });
+}
+
+test('proxy rejection inspection runs no traps', t => {
+  const { target, logs } = setup(t);
+  let traps = 0;
+  const reason = new Proxy({ problem: 'proxy reason' }, Object.fromEntries(
+    ['get', 'ownKeys', 'getOwnPropertyDescriptor', 'getPrototypeOf'].map(name => [name, (...args) => {
+      traps++;
+      return Reflect[name](...args);
+    }]),
+  ));
+  target.emit('unhandledRejection', reason);
+  assert.equal(traps, 0, 'error reporting must not run proxy traps');
+  assert.equal(logs[0][1], '[Proxy; inspection omitted]');
+});
+
+for (const [name, create] of [
+  ['array', () => [1, 2, 3]],
+  ['Buffer', () => Buffer.alloc(3)],
+  ['typed array', () => new Uint8Array(3)],
+  ['String object', () => new String('abc')],
+  ['cross-realm String object', () => require('node:vm').runInNewContext('new String("abc")')],
+  ['Proxy', () => new Proxy({}, {})],
+]) {
+  test(`300000 named keys on a ${name} rejection are summarized before inspection`, t => {
+    const { target, logs, notices } = setup(t);
+    const reason = create();
+    for (let i = 0; i < 300000; i++) reason[`k${i}`] = 'value';
+    const start = performance.now();
+    target.emit('unhandledRejection', reason);
+    const elapsed = performance.now() - start;
+    assert.match(logs[0][1], /inspection omitted\]$/, 'wide named properties must bypass inspection');
+    assert.ok(logs[0][1].length <= 16000);
+    assert.ok(notices[0].message.length <= 550);
+    assert.ok(elapsed < 1000, `reporting took ${elapsed} ms`);
+    t.diagnostic(`reporting ${name}: ${elapsed.toFixed(1)} ms`);
+  });
+}
+
+for (const [name, create] of [
+  ['array', () => [1]],
+  ['Buffer', () => Buffer.alloc(1)],
+  ['typed array', () => new Uint8Array(1)],
+  ['String object', () => new String('a')],
+  ['cross-realm String object', () => require('node:vm').runInNewContext('new String("x".repeat(2000))')],
+]) {
+  test(`${name} named-key cap permits 1000 keys and summarizes 1001 without getters`, t => {
+    const { target, logs } = setup(t);
+    const reason = create();
+    let reads = 0;
+    for (let i = 0; i < 1000; i++) Object.defineProperty(reason, `k${i}`, { enumerable: true, get() { reads++; return 'unused'; } });
+    target.emit('unhandledRejection', reason);
+    assert.doesNotMatch(logs[0][1], /inspection omitted/);
+    reason.extra = 'overflow';
+    target.emit('unhandledRejection', reason);
+    assert.match(logs[1][1], /inspection omitted/);
+    assert.equal(reads, 0);
+  });
+}
+
 test('large error messages are truncated for display but distinct suffixes keep distinct ids and full stacks', t => {
   const { target, logs, notices } = setup(t);
   const error = new Error('command stderr '.repeat(1000));
