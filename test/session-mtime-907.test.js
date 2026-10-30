@@ -49,7 +49,7 @@ test('refresh skips a subagent immediately after a full read at the rounding bou
 });
 
 for (const parentSessionId of [undefined, OLD]) {
-  test(`display header exposes canonical freshness and BigInt display time, subagent=${!!parentSessionId}`, t => {
+  test(`display header exposes canonical freshness and display time, subagent=${!!parentSessionId}`, t => {
     const h = fixture(t);
     const file = h.file(OLD);
     fs.writeFileSync(file, line({ type: 'user', isSidechain: true, agentId: 'child', message: { content: 'prompt' } }));
@@ -101,6 +101,8 @@ for (const parentSessionId of [undefined, OLD]) {
     if (parentSessionId) {
       const row = readSessionFile(file, h.folder, h.root, { parentSessionId });
       assert.equal(row.modified, row.fileMtime, 'a subagent full read must not truncate its display time');
+      const birth = fs.statSync(file, { bigint: true }).birthtimeNs;
+      assert.equal(row.created, new Date(Number((birth + 500000n) / 1000000n)).toISOString(), 'a subagent full read must round its creation time');
     }
   });
 }

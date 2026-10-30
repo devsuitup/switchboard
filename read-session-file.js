@@ -205,7 +205,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   try {
     const big = fs.statSync(filePath, { bigint: true });
     const stamp = continuationStamp(big);
-    const stat = isSubagent ? { size: Number(big.size), mtime: new Date(continuationMtime(big)), birthtime: big.birthtime } : fs.statSync(filePath);
+    const stat = isSubagent ? { size: Number(big.size), mtime: new Date(continuationMtime(big)), birthtime: new Date(Number((big.birthtimeNs + 500000n) / 1000000n)) } : fs.statSync(filePath);
     const fileBytes = fs.readFileSync(filePath);
     const content = fileBytes.toString('utf8');
     const lines = content.split('\n').filter(Boolean);

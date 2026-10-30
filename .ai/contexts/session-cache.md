@@ -2437,8 +2437,9 @@ reads and both display-header variants derive it from a BigInt stat too (#907).
 Subagent full reads retain the BigInt stat taken before reading, so a same-size
 rewrite after the read remains stale for the next refresh (#913). Those reads
 and both display-header variants also reuse that stat's size and Date fields,
-without a second Number stat. Their display Date follows BigInt-stat rounding;
-`fileMtime` still follows `continuationMtime()`.
+without a second Number stat. Their display Dates are rounded half up to the
+millisecond like `continuationMtime()`, as the Number stat did, so `modified`
+equals `fileMtime` when no message timestamp exists.
 The legacy custom-title backfill compares the header's `fileMtime` with the
 cached row's `fileMtime`, keeping the same rounding as refresh. The header's
 `modified` remains a display timestamp and is not a freshness key.
