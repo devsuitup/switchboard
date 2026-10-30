@@ -3,13 +3,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const path = require('node:path');
 const { stopProcessTree } = require('../src/main/terminals/stop-process-tree');
 
 function fixture() {
   const calls = [];
   const child = new EventEmitter();
   const spawnChild = (...args) => { calls.push(args); return child; };
-  return { calls, child, options: { platform: 'win32', spawnChild, graceMs: 0 } };
+  return { calls, child, options: { platform: 'win32', spawnChild, recheckDelayMs: 0 } };
 }
 
 test('stops only the owned PID tree with a hidden, bounded taskkill', async () => {
@@ -17,7 +18,7 @@ test('stops only the owned PID tree with a hidden, bounded taskkill', async () =
   const done = stopProcessTree(897, f.options);
   assert.equal(f.calls.length, 1);
   const [program, args, options] = f.calls[0];
-  assert.equal(program, 'taskkill.exe');
+  assert.equal(program, path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'));
   assert.deepEqual(args, ['/PID', '897', '/T', '/F']);
   assert.equal(options.windowsHide, true);
   assert.equal(options.stdio, 'ignore');
@@ -26,10 +27,10 @@ test('stops only the owned PID tree with a hidden, bounded taskkill', async () =
   assert.equal(await done, true);
 });
 
-test('never spawns after the owned root exits during the grace', async () => {
+test('never spawns after the owned root exits during the recheck delay', async () => {
   const f = fixture();
   let current = true;
-  const done = stopProcessTree(897, { ...f.options, graceMs: 20, isCurrent: () => current,
+  const done = stopProcessTree(897, { ...f.options, recheckDelayMs: 20, isCurrent: () => current,
     spawnChild: (...args) => {
       const child = f.options.spawnChild(...args);
       setImmediate(() => child.emit('close', 0));

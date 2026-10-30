@@ -70,11 +70,11 @@ function killPty(session, sessionId, { stopTree = stopProcessTree, platform = pr
   if (!session || !session.pty || killedPtys.has(session.pty)) return false;
   const pty = session.pty;
   killedPtys.add(pty);
-  if (platform === 'win32' && session.kind === 'local-pty' && !session.exited
+  if (platform === 'win32' && session.kind === 'local-pty' && !session.exited && pty._agent?.exitCode === undefined
     && !session.isAttach && !session.detaching && !session.backgrounding && !session.backgrounded && !session.host) {
     const pid = pty.pid;
-    const isCurrent = () => !session.exited && session.pty === pty && pty.pid === pid;
-    void stopTree(pid, { graceMs: 100, isCurrent }).finally(() => {
+    const isCurrent = () => !session.exited && pty._agent?.exitCode === undefined && session.pty === pty && pty.pid === pid;
+    void stopTree(pid, { recheckDelayMs: 100, isCurrent }).finally(() => {
       withPty({ pty }, 'kill', target => target.kill(), sessionId);
     });
     return true;

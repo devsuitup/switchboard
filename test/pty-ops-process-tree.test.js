@@ -25,7 +25,7 @@ test('local Windows close stops its still-owned tree before closing ConPTY once'
   assert.equal(killPty(f.session, 'test', f.options), true);
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0].pid, 897);
-  assert.equal(f.calls[0].graceMs, 100);
+  assert.equal(f.calls[0].recheckDelayMs, 100);
   assert.equal(f.calls[0].isCurrent(), true);
   assert.equal(killPty(f.session, 'test', f.options), false);
   assert.equal(writePty(f.session, 'x'), false);
@@ -43,6 +43,29 @@ test('the stop guard rejects an exited session, replaced handle or changed root 
     assert.equal(f.calls[0].isCurrent(), false);
     f.finish(false);
   }
+});
+
+test('native root exit before close keeps the PTY-only path before the JS exit event', () => {
+  for (const exitCode of [0, 1]) {
+    const f = fixture();
+    f.session.pty._agent = { exitCode };
+    assert.equal(f.session.exited, false);
+    assert.equal(killPty(f.session, 'test', f.options), true);
+    assert.deepEqual(f.calls, ['pty']);
+  }
+});
+
+test('native root exit during the recheck delay cancels taskkill before the JS exit event', async () => {
+  const f = fixture();
+  f.session.pty._agent = { exitCode: undefined };
+  killPty(f.session, 'test', f.options);
+  assert.equal(f.calls[0].isCurrent(), true);
+  f.session.pty._agent.exitCode = 0;
+  assert.equal(f.session.exited, false);
+  assert.equal(f.calls[0].isCurrent(), false);
+  f.finish(false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.calls.slice(1), ['pty']);
 });
 
 test('background, detach, remote and already exited sessions keep the PTY-only path', () => {
@@ -99,7 +122,9 @@ for (const scenario of ['foreground', 'background', 'exited', 'tree-failed']) {
     await done;
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(commands.length, ['foreground', 'tree-failed'].includes(scenario) ? 1 : 0);
-    if (commands.length) assert.deepEqual(commands[0], { program: 'taskkill.exe', args: ['/PID', '897', '/T', '/F'] });
+    if (commands.length) assert.deepEqual(commands[0], {
+      program: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), args: ['/PID', '897', '/T', '/F'],
+    });
     assert.equal(kills, ['background', 'tree-failed'].includes(scenario) ? 1 : 0);
   });
 }

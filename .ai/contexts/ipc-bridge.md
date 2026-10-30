@@ -511,32 +511,6 @@ being moved aside on Windows.
 relocation and publication races, including publication just before relocation
 and a competing winner during restoration.
 
-Closing a local foreground Windows tab first marks its PTY killed, blocking
-further writes, resizes and duplicate closes. `stopProcessTree` in
-`src/main/terminals/stop-process-tree.js` waits 100 ms, rechecks the session's
-exit flag, exact PTY object and root PID, and starts a hidden
-`taskkill.exe /PID <root> /T /F` with a 2000 ms timeout. Only after that command
-finishes or fails does the once-only ConPTY close run. Running the tree stop
-before ConPTY is deliberate: once ConPTY ends the root, Windows cannot walk
-its descendants from that PID. There is no synchronous process snapshot or
-image-name kill. A natural exit during the grace prevents the taskkill.
-The check and OS process lookup are not atomic; a native process handle or job
-object would be required to eliminate that final PID-reuse race entirely.
-
-Attach, detaching, backgrounding, backgrounded and remote sessions retain the
-PTY-only path. `detachPty` and the background handoff are unchanged. The same
-stop helper preserves the non-background `runClaudeCommand` timeout tree stop
-and POSIX process-group kill, guarded by the child's exit/signal state.
-`test/stop-process-tree.test.js` uses an injected subprocess boundary;
-`test/pty-ops-process-tree.test.js` checks ordering, scope and ownership.
-`test/pty-ops-hidden-grandchild.test.js` loads native node-pty only in a bounded
-child and uses Windows PowerShell (.NET CreateNoWindow) as the non-libuv root.
-The hidden Node child exits on its own after 20 seconds; PowerShell exits after
-25 seconds. Test PID observations latch ESRCH, treat EPERM as unknown, and never
-kill a PID during cleanup. Local execution on 2026-10-30 reproduced the leak;
-the restricted execution environment rejected taskkill with Access denied, so
-the real post-fix tree-stop result remains unverified there.
-
 node-pty 1.2.0-beta.15 (#409) adds a mutex around the handle table
 (microsoft/node-pty#922). In 1.1.0 the shell's exit thread erases the pty's
 entry, and frees it, without a lock, while the main thread may be inside
@@ -567,6 +541,43 @@ lookup and its last use of the entry, and reading or writing freed memory only
 crashes when the allocator has already reused or unmapped it. A kill holds
 the pointer across `ClosePseudoConsole`, which can wait for OpenConsole, and then
 writes to the entry; a resize holds it for one `ResizePseudoConsole` call.
+
+### Closing a local PTY on Windows (#897)
+
+Closing a local foreground Windows tab first marks its PTY killed, blocking
+further writes, resizes and duplicate closes. `stopProcessTree` in
+`src/main/terminals/stop-process-tree.js` waits 100 ms to recheck for a natural
+exit; nothing requests an exit during this delay. It rechecks the session's
+exit flag, native root exit state, exact PTY object and root PID, then starts
+`SystemRoot\System32\taskkill.exe /PID <root> /T /F` hidden with a 2000 ms
+timeout. Only after that command finishes or fails does the once-only ConPTY
+close run. The tree kill runs first: ConPTY close would end the root and leave
+`/T` nothing to walk. It ends every descendant by parent PID, including windows
+started from the tab, and skips the root's CTRL_CLOSE handling.
+
+The tree kill is skipped once the root has exited natively, to avoid targeting
+a reused PID; the plain `pty.kill()` path releases ConPTY instead. node-pty's
+Windows agent sets `exitCode` in its native `_$onProcessExit` callback, before
+the JS exit event, which with `useConptyDll` waits for the output socket to
+close. `killPty` checks `_agent.exitCode !== undefined` both before scheduling
+the tree stop and in its final ownership guard. Exit code zero counts as an
+exit. The check and OS process lookup are not atomic; a native process handle
+or job object would be required to eliminate that final PID-reuse race entirely.
+There is no synchronous process snapshot or image-name kill.
+
+Attach, detaching, backgrounding, backgrounded and remote sessions retain the
+PTY-only path. `detachPty` and the background handoff are unchanged. The same
+stop helper preserves the non-background `runClaudeCommand` timeout tree stop
+and POSIX process-group kill, guarded by the child's exit/signal state.
+`test/stop-process-tree.test.js` uses an injected subprocess boundary;
+`test/pty-ops-process-tree.test.js` checks ordering, scope, ownership and native
+root exit before the JS event.
+`test/pty-ops-hidden-grandchild.test.js` loads native node-pty only in a bounded
+child and uses Windows PowerShell (.NET CreateNoWindow) as the non-libuv root.
+The hidden Node child exits on its own after 20 seconds; PowerShell exits after
+25 seconds. Test PID observations latch ESRCH, treat EPERM as unknown, and never
+kill a PID during cleanup. The post-fix measurement on 2026-10-30 passed: the
+hidden grandchild died about 466 ms after `killPty`.
 
 ### Cursor-position queries
 
