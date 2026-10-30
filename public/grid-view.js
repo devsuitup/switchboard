@@ -133,7 +133,7 @@ function wrapInGridCard(sessionId) {
   replayHiddenBuffer(sessionId);
 
   const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary) || sessionId;
-  const shortProject = shortProjectPath(session.projectPath);
+  const shortProject = projectDisplayLabel(session);
 
   // Create card wrapper
   const card = document.createElement('div');
@@ -154,6 +154,7 @@ function wrapInGridCard(sessionId) {
   const project = document.createElement('span');
   project.className = 'grid-card-project';
   project.textContent = shortProject;
+  project.title = shortProject;
   header.appendChild(project);
 
   const stopBtn = document.createElement('button');
@@ -210,7 +211,7 @@ function wrapInGridCard(sessionId) {
       targetHeading.className = 'grid-project-heading';
       targetHeading.dataset.projectPath = pp;
       targetHeading.dataset.projectKey = projectKey;
-      targetHeading.textContent = pp ? shortProjectPath(pp) : 'Other';
+      targetHeading.textContent = pp ? projectDisplayLabel(session) : 'Other';
       // Insert heading in sortedOrder position
       const orderIndex = new Map(sortedOrder.map((e, i) => [projectStateKey(e), i]));
       const myIdx = orderIndex.get(projectKey);
@@ -346,7 +347,7 @@ function layoutGridCards(openSet) {
       heading.className = 'grid-project-heading';
       heading.dataset.projectPath = projectPath;
       heading.dataset.projectKey = projectKey;
-      heading.textContent = shortProjectPath(projectPath);
+      heading.textContent = projectDisplayLabel(session);
       terminalsEl.appendChild(heading);
     }
     for (const sid of openIds) {
