@@ -21,7 +21,7 @@ threw. Individual throw sites and worker-thread error handling are unchanged.
 | `main-process-error` | `{id, kind: 'error', message, count}` | `api.onMainProcessError(callback)` in preload; `public/app-notices.js` groups errors into one persistent, dismissible B8 notice with an **Open log** action. |
 | `open-main-log` | No arguments | `api.openMainLog()` returns `{ok, error?}`. Main chooses `log.transports.file.getFile().path`, requires an absolute, non-sensitive path (including the existing on-disk path guard), and opens it via `shell.openPath`. Renderer arguments cannot choose another file. OS opener errors are shown in one replaceable error notice; opening the log leaves the error group visible. |
 | `main-error-notices-ready` | No arguments; one-way | `api.mainErrorNoticesReady()` is sent after `app-notices.js` installs its error listener. Only the active window's webContents may arm delivery and flush queued notices. |
-| `main-error-notices-dismissed` | `ids: string[]`, at most five delivered ids; one-way | `api.mainErrorNoticesDismissed(ids)` sends the member ids removed by the user. Only the active window's webContents may dismiss them; main rejects the entire payload unless every entry is a string present in the delivered snapshot. Pending errors and occurrence counts are retained. |
+| `main-error-notices-dismissed` | `ids: string[]`, at most five ids; one-way | `api.mainErrorNoticesDismissed(ids)` sends the member ids removed by the user. Only the active window's webContents may dismiss them; main rejects the entire payload unless it is an array of at most five strings. Known delivered ids are removed and unknown or evicted ids are ignored, so a concurrent delivery evicting one member cannot prevent dismissal of the others. Pending errors and occurrence counts are retained. |
 
 Before the renderer signals that its listener is ready, or if its window/webContents is gone or
 sending throws, notices are queued by normalized-message id (up to 100 distinct messages;
@@ -58,17 +58,20 @@ Display summaries are limited to 500 characters plus the origin label;
 non-Error inspection disables custom inspectors/getters and limits depth,
 array lengths and individual strings. Proxies are always summarized as
 `[Proxy; inspection omitted]`, without inspection or message/name/stack access,
-so none of their traps run. Arrays, ArrayBuffer views (including Buffers) and
-String objects retain inspect's preview when they have at most 1,000 own enumerable
+so none of their traps run. Arrays and ArrayBuffer views (including Buffers)
+with more than 1,000 elements (or bytes for DataView) bypass key enumeration.
+Their preview inspects only a slice of at most 20 elements or bytes, reports
+the type and real length, and explicitly says named properties were not inspected.
+Smaller arrays/views and String objects retain inspect's preview when they have at most 1,000 own enumerable
 non-index keys. Above that cap they use `[Object with more than 1000 named keys; inspection omitted]`.
 String objects are recognized across realms with `util.types.isStringObject`.
 Other non-Error values with more than 1,000 own enumerable keys are summarized as
 `[Object with N keys; inspection omitted]`, without reading property values.
 Key enumeration and inspection remain inside the hostile-value guard. Plain-object
-key enumeration itself, including enumeration of indexed types, is unbounded in time
+key enumeration itself is unbounded in time
 and allocation; the summary avoids serializing those property values but does not
-bound enumeration. Indexed types enumerate numeric keys too before counting named
-keys, so very large buffers/arrays can still make that pre-check expensive. Nested object
+bound enumeration. Small arrays/views and String objects enumerate numeric keys before counting named
+keys; String-object key enumeration remains unbounded, while large arrays/views skip that pre-check entirely. Nested object
 widths and ordinary message/name/stack getters have no hard work budget either.
 The inspected string for other values is
 truncated to 16,000 characters before logging and hashing.
@@ -88,7 +91,7 @@ Existing groups update visible text in place, preserving buttons and focus.
 The empty, persistent `#app-notices` host retains `aria-live="polite"` before any
 notice is inserted, preserving announcements of other B8 notices inserted with text
 already in place and their existing `alert`/`status` roles. The main-error group has
-`role="group"`, the accessible name “Erreurs de l’application” and `aria-live="off"`,
+`role="group"`, the accessible name “Application errors” and `aria-live="off"`,
 so its visible counts and recency order remain readable without live announcements.
 An offscreen announcement span before the buttons supplies its own live semantics
 (`role="alert"`, `aria-atomic="true"`); it changes only when a new

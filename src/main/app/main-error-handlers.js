@@ -49,6 +49,14 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
       const proxy = types.isProxy(error);
       if (proxy) message = '[Proxy; inspection omitted]';
       else if (typeof error?.message === 'string') message = error.message;
+      else if ((Array.isArray(error) || ArrayBuffer.isView(error)) && (error.length ?? error.byteLength) > 1000) {
+        const length = error.length ?? error.byteLength;
+        const name = Array.isArray(error) ? 'Array' : Buffer.isBuffer(error) ? 'Buffer' : types.isDataView(error) ? 'DataView' : error.constructor.name;
+        const sample = Array.isArray(error) ? Array.prototype.slice.call(error, 0, 20)
+          : types.isDataView(error) ? new Uint8Array(error.buffer, error.byteOffset, Math.min(length, 20))
+            : Uint8Array.prototype.subarray.call(error, 0, 20);
+        message = `[${name} ${types.isDataView(error) ? 'byteLength' : 'length'}=${length}; named properties not inspected] ${inspect(sample, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity })}`.slice(0, 16000);
+      }
       else {
         const preview = Array.isArray(error) || ArrayBuffer.isView(error) || types.isStringObject(error);
         let keyCount = 0;
@@ -108,7 +116,7 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
 
   return {
     dismissNotices(ids) {
-      if (!Array.isArray(ids) || ids.length > 5 || ![...ids].every(id => typeof id === 'string' && delivered.has(id))) return;
+      if (!Array.isArray(ids) || ids.length > 5 || ![...ids].every(id => typeof id === 'string')) return;
       for (const id of ids) delivered.delete(id);
     },
     flushNotices({ replay = false } = {}) {

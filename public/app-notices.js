@@ -97,7 +97,7 @@ function showAppNotice(options) {
   notice.setAttribute('role', id === 'main-process-errors' ? 'group' : kind === 'error' ? 'alert' : 'status');
   if (id === 'main-process-errors') {
     notice.setAttribute('aria-live', 'off');
-    notice.setAttribute('aria-label', 'Erreurs de l’application');
+    notice.setAttribute('aria-label', 'Application errors');
   }
   const text = document.createElement('span');
   text.className = 'app-notice-message';

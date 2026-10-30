@@ -424,7 +424,7 @@ test('main-error count text has an off live ancestor inside the shipped polite h
   const group = dom.document.querySelector('[data-notice-id="main-process-errors"]');
   assert.equal(group.querySelector('.app-notice-message').closest('[aria-live]').getAttribute('aria-live'), 'off', 'the group must silence count updates');
   assert.equal(group.querySelector('.app-notice-announcement').getAttribute('role'), 'alert');
-  assert.equal(group.getAttribute('aria-label'), 'Erreurs de l’application');
+  assert.equal(group.getAttribute('aria-label'), 'Application errors');
 });
 
 test('a delivery between dismissal and IPC receipt survives reload replay through preload', t => {
@@ -460,18 +460,43 @@ test('a delivery between dismissal and IPC receipt survives reload replay throug
   assert.match(dom.document.querySelector('.app-notice-message').textContent, /delivered during dismissal/);
 });
 
-test('dismissal rejects malformed, oversized and unknown-id payloads atomically', t => {
+test('dismissal rejects malformed and oversized payloads atomically', t => {
   const { target, webContents, sent, signalReady, ipcMain } = setupMain(t);
   signalReady();
   target.emit('uncaughtException', new Error('retained first'));
   target.emit('uncaughtException', new Error('retained second'));
   const expected = sent.map(([, notice]) => notice);
   const id = expected[0].id;
-  for (const invalid of [undefined, null, id, {}, [id, 1], [id, 'unknown'], Array(6).fill(id), Object.assign(Array(2), { 0: id })]) {
+  for (const invalid of [undefined, null, id, {}, [id, 1], Array(6).fill(id), Object.assign(Array(2), { 0: id })]) {
     ipcMain.emit('main-error-notices-dismissed', { sender: webContents }, invalid);
     webContents.emit('did-navigate');
     const before = sent.length;
     signalReady();
     assert.deepEqual(sent.slice(before).map(([, notice]) => notice), expected, 'invalid payload must preserve the whole snapshot');
   }
+});
+
+test('dismissal ignores an evicted id and removes the other four after a sixth delivery', t => {
+  const { target, webContents, sent, signalReady, ipcMain } = setupMain(t);
+  signalReady();
+  for (const letter of ['A', 'B', 'C', 'D', 'E']) target.emit('uncaughtException', new Error(letter));
+  const dismissed = sent.map(([, notice]) => notice.id);
+  target.emit('uncaughtException', new Error('F'));
+  const survivor = sent.at(-1)[1];
+  ipcMain.emit('main-error-notices-dismissed', { sender: webContents }, dismissed);
+  webContents.emit('did-navigate');
+  const before = sent.length;
+  signalReady();
+  assert.deepEqual(sent.slice(before).map(([, notice]) => notice), [survivor], 'B-E must stay dismissed after A was evicted by F');
+});
+
+test('dismissal ignores an unknown id while removing a known delivered id', t => {
+  const { target, webContents, sent, signalReady, ipcMain } = setupMain(t);
+  signalReady();
+  target.emit('uncaughtException', new Error('dismissed'));
+  ipcMain.emit('main-error-notices-dismissed', { sender: webContents }, [sent[0][1].id, 'unknown']);
+  webContents.emit('did-navigate');
+  const before = sent.length;
+  signalReady();
+  assert.equal(sent.length, before, 'unknown ids must not prevent known ids from being dismissed');
 });

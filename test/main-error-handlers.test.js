@@ -156,17 +156,31 @@ test('a 100000-key rejection is summarized before inspecting property values', t
 
 for (const [name, create] of [
   ['Buffer', () => Buffer.alloc(5e6)],
-  ['array', () => new Array(2e5).fill(0)],
+  ['50 MB Buffer', () => Buffer.alloc(50e6)],
+  ['array', () => new Array(5e6).fill(0)],
   ['typed array', () => new Uint8Array(2e5)],
+  ['DataView', () => new DataView(new ArrayBuffer(2e5))],
   ['String object', () => new String('x'.repeat(2000))],
 ]) {
   test(`large ${name} rejection retains bounded inspect output`, t => {
     const { target, logs, notices } = setup(t);
-    const reason = create();
-    const expected = require('node:util').inspect(reason, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity }).slice(0, 16000);
+    let reason = create();
+    const length = reason.length ?? reason.byteLength;
+    const start = performance.now();
     target.emit('unhandledRejection', reason);
-    assert.equal(logs[0][1], expected);
-    assert.doesNotMatch(notices[0].message, /inspection omitted/);
+    const elapsed = performance.now() - start;
+    reason = null;
+    t.diagnostic(`reporting ${name}: ${elapsed.toFixed(1)} ms`);
+    assert.ok(elapsed < 200, `reporting ${name} took ${elapsed} ms; budget is 200 ms`);
+    assert.ok(logs[0][1].length <= 16000);
+    assert.ok(notices[0].message.length <= 550);
+    if (name === 'String object') assert.match(logs[0][1], /String/);
+    else {
+      assert.ok(logs[0][1].includes(String(length)), 'preview must include the real length');
+      assert.match(logs[0][1], /named properties not inspected/);
+      assert.match(logs[0][1], new RegExp(name === 'array' ? 'Array' : name === 'typed array' ? 'Uint8Array' : name.replace('50 MB ', '')));
+      assert.match(logs[0][1], /0/);
+    }
   });
 }
 
