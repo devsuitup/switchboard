@@ -111,12 +111,16 @@ empty titles fall back to the run id. Remote mirrors without run snapshots
 use that same fallback. Snapshot JSON watcher events queue a debounced projects
 notification without a transcript refresh or widening pending targeted scans.
 The watch callback only queues snapshot paths; the serialized debounced flush
-reads and parses each snapshot asynchronously. Failed reads or partial JSON
-preserve the previous observed title and do not notify. The watcher compares
+reads and parses each snapshot asynchronously. Partial JSON and read errors
+other than ENOENT preserve the previous observed title and do not notify.
+ENOENT discards the baseline and notifies if the previous title differs from
+the run-id fallback; repeated deletion events remain quiet. The watcher compares
 titles observed in successful snapshot reads, so later status-only
 changes with the same title do not notify. The first event notifies because
 the watcher has no title baseline yet, provided the snapshot is readable JSON.
-Full folder refreshes and dropped folders discard that folder's title baselines.
+Full folder refreshes and dropped folders discard that folder's title baselines
+before snapshot reads, preserving a title read in the same flush for later
+status-only events.
 The title is read when building projects.
 The sidebar nests one block per parent/run under the
 existing subagent container (and groups orphan workflows in the orphan bucket).

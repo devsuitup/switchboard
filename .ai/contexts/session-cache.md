@@ -75,7 +75,11 @@ back to the id. Snapshot changes route through the debounced watcher to a
 projects notification without refreshing transcripts or widening pending targeted
 scans. The watcher compares titles observed in snapshot events and suppresses
 repeat notifications when only status changes; the first event has no known
-title baseline and notifies. Local reconciliation runs at startup and on
+title baseline and notifies. Deleted snapshots discard the baseline and notify
+when the title changes to the run id; partial JSON preserves the last title.
+Folder-scope pruning precedes snapshot reads, keeping titles read in the same
+flush as the baseline for later status-only events.
+Local reconciliation runs at startup and on
 projects requests (throttled to five seconds). It stats each root `agent-*`
 candidate once and forces a full folder refresh only if its root JSONL is
 missing, regardless of index freshness. Repair clears the condition; legitimate
@@ -580,8 +584,11 @@ Remote head-turn refresh is best-effort after a successful mirror/index cycle.
 `remote-index.js` logs each distinct failure once per host until the next
 successful head-turn refresh, which logs one recovery message (#873, #885).
 Failure identity combines `err.code || err.name` with the message after
-normalising digits and absolute paths; alternating failures retain their dedup
-entries. Warnings keep the original diagnostic text. Removing a host and calling
+normalising digits, bare UUIDs and absolute paths anchored at the start of text,
+whitespace or a quote; relative paths and URL hosts remain distinct. Each host
+retains at most 20 signatures, evicting the oldest on overflow; alternating
+failures retain their dedup entries within that bound. Warnings keep the
+original diagnostic text. Removing a host and calling
 `restart()` prunes its entries, including when the last host is removed; a
 re-added host warns again. Both `refreshNow` and
 `refreshHostNow` still clear host errors/backoff and advance descriptor freshness.
@@ -918,11 +925,11 @@ untouched.
   it, but ONLY for a folder already present in `listIndexedFolderKeys()`. A
   folder scanned for the first time (present on the mirror but not yet
   indexed — the "mirror on disk but absent from the cache" case just above)
-    always gets the full walk: there is no baseline to restrict against.
-    A once-per-host-session ghost check also requests a full walk when a cached
-    parentless `agent-*` row has no matching mirror-root JSONL, including for
-    finished runs with no changed files. A successful repair overrides that
-    folder's subset and is remembered in memory; failed scans can retry.
+  always gets the full walk: there is no baseline to restrict against.
+  A once-per-host-session ghost check also requests a full walk when a cached
+  parentless `agent-*` row has no matching mirror-root JSONL, including for
+  finished runs with no changed files. A successful repair overrides that
+  folder's subset and is remembered in memory; failed scans can retry.
 - **`scanFoldersViaWorker({..., fileSubsets})` is purely additive.** Omitting
   `fileSubsets` reproduces the prior behavior byte-for-byte (proven by
   `test/scan-projects-worker.test.js`, unmodified, and by

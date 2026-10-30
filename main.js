@@ -3611,6 +3611,13 @@ function startProjectsWatcher() {
     const snapshots = [...pendingWorkflowTitles];
     pendingWorkflowTitles.clear();
     let changed = false;
+    for (const [folder, scope] of work) {
+      if (scope === true || !fs.existsSync(path.join(PROJECTS_DIR, folder))) {
+        for (const filename of workflowTitles.keys()) {
+          if (filename.startsWith(folder + path.sep)) workflowTitles.delete(filename);
+        }
+      }
+    }
     for (const filename of snapshots) {
       try {
         const snapshot = JSON.parse(await fs.promises.readFile(path.join(PROJECTS_DIR, filename), 'utf8'));
@@ -3618,7 +3625,12 @@ function startProjectsWatcher() {
           ? snapshot.workflowName.trim() : path.basename(filename, '.json');
         if (workflowTitles.get(filename) !== title) changed = true;
         workflowTitles.set(filename, title);
-      } catch {}
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          if (workflowTitles.has(filename) && workflowTitles.get(filename) !== path.basename(filename, '.json')) changed = true;
+          workflowTitles.delete(filename);
+        }
+      }
     }
     let activityChanged = false;
     for (const [folder, scope] of work) {
@@ -3629,11 +3641,6 @@ function startProjectsWatcher() {
         folderChanged = await writer.refreshFolder(folder, scope === true ? undefined : { files: scope });
       } else {
         folderChanged = await writer.dropFolderRows(folder);
-      }
-      if (scope === true || !fs.existsSync(folderPath)) {
-        for (const filename of workflowTitles.keys()) {
-          if (filename.startsWith(folder + path.sep)) workflowTitles.delete(filename);
-        }
       }
       changed = folderChanged === true || changed;
       activityChanged = folderChanged === 'activity' || activityChanged;
