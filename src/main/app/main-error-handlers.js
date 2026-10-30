@@ -1,24 +1,18 @@
 'use strict';
 
 const { inspect } = require('node:util');
+const { createHash } = require('node:crypto');
 
-function installMainErrorHandlers({ log, notify, target = process, now = Date.now }) {
-  const shown = new Map();
+function installMainErrorHandlers({ log, notify, target = process }) {
+  const counts = new Map();
   const pending = new Map();
-  let sequence = 0;
 
-  function deliver(message, notice) {
-    const time = now();
-    for (const [key, timestamp] of shown) {
-      if (time - timestamp >= 60_000) shown.delete(key);
-    }
-    if (shown.has(message)) return true;
+  function deliver(notice) {
     try {
       if (notify(notice) === false) return false;
     } catch {
       return false;
     }
-    shown.set(message, time);
     return true;
   }
 
@@ -26,17 +20,24 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
     let message = 'Unreadable error';
     let detail = message;
     try {
-      message = typeof error?.message === 'string' ? error.message : inspect(error, { customInspect: false, getters: false });
+      message = typeof error?.message === 'string' ? error.message : inspect(error, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity });
       detail = typeof error?.stack === 'string' ? error.stack : message;
     } catch {}
     try { log.error(`[main:${origin}]`, detail); } catch {}
+    const normalized = message.replace(/\s+/g, ' ').trim();
+    const id = `main-error:${createHash('sha256').update(normalized).digest('hex')}`;
+    const count = (counts.get(id) || 0) + 1;
+    counts.delete(id);
+    counts.set(id, count);
+    if (counts.size > 100) counts.delete(counts.keys().next().value);
     const label = origin === 'uncaughtException' ? 'Uncaught exception' : 'Unhandled rejection';
-    const notice = { id: `main-error:${++sequence}`, kind: 'error', message: `${label}: ${message}. Details are in the log (Settings → Diagnostics).` };
-    if (!deliver(message, notice)) {
-      pending.set(message, notice);
+    const summary = normalized.length > 500 ? normalized.slice(0, 499) + '…' : normalized;
+    const notice = { id, kind: 'error', count, message: `${label}: ${summary}` };
+    if (!deliver(notice)) {
+      pending.set(id, notice);
       if (pending.size > 100) pending.delete(pending.keys().next().value);
     } else {
-      pending.delete(message);
+      pending.delete(id);
     }
   }
 
@@ -47,15 +48,15 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
 
   return {
     flushNotices() {
-      for (const [message, notice] of pending) {
-        if (deliver(message, notice)) pending.delete(message);
+      for (const [id, notice] of pending) {
+        if (deliver(notice)) pending.delete(id);
       }
     },
     dispose() {
       target.removeListener('uncaughtException', onException);
       target.removeListener('unhandledRejection', onRejection);
       pending.clear();
-      shown.clear();
+      counts.clear();
     },
   };
 }

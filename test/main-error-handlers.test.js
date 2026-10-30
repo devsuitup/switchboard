@@ -29,18 +29,51 @@ test('both real process events log stacks and send one error notice each', () =>
   assert.match(result.stdout, /both process events verified/);
 });
 
-test('identical messages log every time but notify only once per 60 seconds', t => {
-  let now = 1000;
-  const { target, logs, notices } = setup(t, { now: () => now });
+test('normalized recurring messages keep their id and update their count', t => {
+  const { target, logs, notices } = setup(t);
   target.emit('uncaughtException', new Error('same'));
-  now += 59999;
-  target.emit('unhandledRejection', new Error('same'), Promise.resolve());
+  target.emit('unhandledRejection', new Error(' same\n '), Promise.resolve());
   assert.equal(logs.length, 2);
-  assert.equal(notices.length, 1);
-  now++;
+  assert.equal(notices.length, 2);
+  assert.equal(notices[1].id, notices[0].id);
+  assert.equal(notices[1].count, 2);
   target.emit('uncaughtException', new Error('same'));
   assert.equal(logs.length, 3);
-  assert.equal(notices.length, 2);
+  assert.equal(notices.length, 3);
+  assert.equal(notices[2].id, notices[0].id);
+  assert.equal(notices[2].count, 3);
+});
+
+test('large error messages are truncated for display but distinct suffixes keep distinct ids and full stacks', t => {
+  const { target, logs, notices } = setup(t);
+  const error = new Error('command stderr '.repeat(1000));
+  target.emit('uncaughtException', error);
+  target.emit('uncaughtException', new Error(error.message + ' different'));
+  assert.ok(notices[0].message.length <= 550, 'display text must be bounded');
+  assert.match(notices[0].message, /…/);
+  assert.notEqual(notices[0].id, notices[1].id);
+  assert.equal(logs[0][1], error.stack);
+  target.emit('unhandledRejection', { values: Array.from({ length: 1000 }, () => 'x'.repeat(1000)) });
+  assert.ok(notices[2].message.length <= 550, 'object display text must be bounded');
+});
+
+test('unavailable renderer queue drops the oldest beyond 100 distinct messages and preserves repeat counts', t => {
+  let ready = false;
+  const delivered = [];
+  const { target, handlers, logs } = setup(t, { notify: notice => {
+    if (!ready) return false;
+    delivered.push(notice);
+  } });
+  for (let i = 0; i < 105; i++) target.emit('uncaughtException', new Error(`queued-${i}`));
+  target.emit('uncaughtException', new Error('queued-104'));
+  ready = true;
+  handlers.flushNotices();
+  handlers.flushNotices();
+  assert.equal(delivered.length, 100, 'queue retains at most 100 distinct messages');
+  assert.match(delivered[0].message, /queued-5\b/, 'oldest five queued messages must be dropped');
+  assert.match(delivered.at(-1).message, /queued-104\b/);
+  assert.equal(delivered.at(-1).count, 2);
+  assert.equal(logs.length, 106);
 });
 
 test('throwing logger cannot throw or prevent the notice for either event', t => {

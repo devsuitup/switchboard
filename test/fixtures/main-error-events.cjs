@@ -19,8 +19,8 @@ try {
   assert.equal(notices.length, 2);
   for (const notice of notices) {
     assert.equal(notice.kind, 'error');
-    assert.match(notice.message, /Settings → Diagnostics/);
-    assert.match(notice.message, /log/i);
+    assert.equal(notice.count, 1);
+    assert.match(notice.id, /^main-error:[a-f0-9]{64}$/);
   }
   assert.match(notices[0].message, /Unhandled rejection.*x/);
   assert.match(notices[1].message, /Uncaught exception.*y/);

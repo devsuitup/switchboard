@@ -1,7 +1,25 @@
 // see docs/product/BUILDING-BLOCKS.md (B8)
 const appNoticeEntries = new Map();
 
-window.api?.onMainProcessError?.(notice => showAppNotice(notice));
+window.api?.onMainProcessError?.(notice => {
+  const previous = appNoticeEntries.get('main-process-errors');
+  const members = [...new Map([...(previous?.options.members || []), notice].map(member => [member.id, member])).values()].slice(-5);
+  showAppNotice({
+    id: 'main-process-errors', kind: 'error', members,
+    message: entries => `${entries.map(member => `${member.message}${member.count > 1 ? ` (${member.count} occurrences)` : ''}`).join('\n')}. Open log for details and earlier errors.`,
+    actionLabel: 'Open log', onAction: openMainErrorLog, dismissOnAction: false,
+  });
+});
+
+async function openMainErrorLog() {
+  try {
+    const result = await window.api.openMainLog();
+    if (!result?.ok) throw new Error(result?.error || 'Application log is unavailable');
+    clearAppNotice('main-process-log-error');
+  } catch (error) {
+    showAppNotice({ id: 'main-process-log-error', kind: 'error', message: `Cannot open application log: ${error.message}` });
+  }
+}
 
 function sessionActionNoticeId(operation, session) {
   return `${operation}:${session?.remoteAlias || 'local'}:${session?.sessionId || session?.projectPath || 'unknown'}`;

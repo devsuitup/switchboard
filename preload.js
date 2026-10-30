@@ -230,6 +230,7 @@ contextBridge.exposeInMainWorld('api', {
   updaterDownload: () => ipcRenderer.invoke('updater-download'),
   updaterInstall: () => ipcRenderer.invoke('updater-install'),
   updaterClose: () => ipcRenderer.send('updater-close'),
+  openMainLog: () => ipcRenderer.invoke('open-main-log'),
   onMainProcessError: callback => {
     ipcRenderer.on('main-process-error', (_event, notice) => callback(notice));
   },

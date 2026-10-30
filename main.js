@@ -426,7 +426,10 @@ function createWindow() {
       if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
     }
   });
-  mainWindow.webContents.on('did-start-loading', () => { mainErrorWindowReady = false; });
+  mainWindow.webContents.on('did-start-navigation', (_event, _url, isSameDocument, isMainFrame) => {
+    if (isMainFrame && !isSameDocument) mainErrorWindowReady = false;
+  });
+  mainWindow.webContents.on('render-process-gone', () => { mainErrorWindowReady = false; });
   // Override window.open so xterm WebLinksAddon's default handler (which does
   // window.open() then sets location.href) routes through our IPC instead of
   // creating a child BrowserWindow.
@@ -1138,6 +1141,19 @@ ipcMain.handle('worktree-status', async (_event, worktreePath) => {
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
+});
+
+ipcMain.handle('open-main-log', async () => {
+  try {
+    const filePath = log.transports.file.getFile().path;
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || isSensitivePath(filePath)) {
+      return { ok: false, error: 'Application log path is unavailable or blocked' };
+    }
+    const error = await shell.openPath(path.resolve(filePath));
+    return error ? { ok: false, error } : { ok: true };
+  } catch (error) {
+    return { ok: false, error: error.message || String(error) };
+  }
 });
 
 // --- IPC: open a local file in the OS default app (terminal right-click menu) ---

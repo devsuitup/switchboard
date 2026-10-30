@@ -18,17 +18,37 @@ threw. Individual throw sites and worker-thread error handling are unchanged.
 
 | Event | Payload | Bridge / consumer |
 |---|---|---|
-| `main-process-error` | `{id, kind: 'error', message}` | `api.onMainProcessError(callback)` in preload; `public/app-notices.js` calls `showAppNotice`. The persistent, dismissible notice names the error and points to the log in Settings → Diagnostics. |
+| `main-process-error` | `{id, kind: 'error', message, count}` | `api.onMainProcessError(callback)` in preload; `public/app-notices.js` groups errors into one persistent, dismissible B8 notice with an **Open log** action. |
+| `open-main-log` | No arguments | `api.openMainLog()` returns `{ok, error?}`. Main chooses `log.transports.file.getFile().path`, requires an absolute, non-sensitive path (including the existing on-disk path guard), and opens it via `shell.openPath`. Renderer arguments cannot choose another file. OS opener errors are shown in one replaceable error notice; opening the log leaves the error group visible. |
 
 Before the renderer finishes loading, or if its window/webContents is gone or
-sending throws, notices are queued by message (up to 100 distinct messages;
+sending throws, notices are queued by normalized-message id (up to 100 distinct messages;
 overflow drops the oldest queued notice, never its log). `did-finish-load`
 flushes the queue, including on window recreation/reload. Failed sends stay
-queued for the next flush or recurrence. Identical messages, including across
-the two origins, produce at most one delivered notice per 60 seconds; every
-event is still logged. The interval starts on successful delivery. Expired
-deduplication entries are pruned lazily, with no timers or process-liveness
-dependency. Listeners can be disposed independently in plain Node tests.
+queued for the next flush or recurrence. Only a new main-frame document
+navigation resets readiness; subframe loads and same-document navigations do
+not. `render-process-gone` resets readiness until the next `did-finish-load`.
+
+Whitespace-normalized messages, including across the two origins, have a stable
+SHA-256 id derived before display truncation. Every event is logged and updates
+the occurrence count immediately; there is no 60-second suppression. The
+100 most recently encountered distinct ids retain counts (evicted counts start
+again if encountered later). Repeated queued errors retain their latest count.
+Display summaries are limited to 500 characters plus the origin label;
+non-Error inspection disables custom inspectors/getters and limits depth,
+array lengths and individual strings. Error stacks in the log are unchanged.
+
+The renderer uses B8 `members` to retain at most five distinct summaries inside
+one `main-process-errors` notice, replacing repeated ids and showing counts.
+Flush uses the same grouping, so 100 queued errors cannot create 100 alerts.
+Earlier details remain in the log, subject to electron-log's rotation policy.
+There are no backstop timers. Listeners can be disposed independently in plain
+Node tests.
+
+Known gap (#896): an error before any window has ever loaded stays queued only;
+there is no native startup notification or forced window creation. Diagnostics
+lists activity traces, not the main log; **Open log** on the error notice is the
+main-log entry point.
 
 ## Key files
 
@@ -327,6 +347,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 |---|---|---|
 | `read-memory` / `save-memory` | `resolveAllowedMemoryPath` (read/write the returned path, not the caller's own re-resolved one) | disk-resolved allowlist |
 | `get-memories` (the list, and the FTS bodies it indexes) | `acceptMdFile` (`scan-md-files.js`) applies `isSensitivePath` itself and the `isAllowedMemoryPath` predicate `get-memories` passes in; `scanMdFiles` is the directory-wide form of it, and the project-root `CLAUDE.md`/`GEMINI.md`/`agents.md` go through it by name | disk-resolved denylist + allowlist — a listed file is read twice more downstream, once by `read-memory` behind `resolveAllowedMemoryPath` and once by the FTS indexer behind nothing at all, so the guard belongs on the list. The denylist is not the caller's to choose: containment in an allowed project root says nothing about a cloned repo's own `.ssh`/`.env` |
+| `open-main-log` | Main chooses electron-log's path; requires a string absolute path and `!isSensitivePath` before `shell.openPath`. | no renderer-supplied path; disk-resolved denylist |
 | `open-path` / `read-file-for-panel` / `save-file-for-panel` / `watch-file` | Local: `isSensitivePath`. Remote panel reads resolve the session target and guard the literal and canonical host path. Saves refuse a resolved remote target and any path already opened through the remote panel route, even without renderer options. | disk-resolved denylist + main-side remote write refusal |
 | `resolve-terminal-paths` | `resolveTerminalPaths` / `resolveTerminalPathTarget` (`terminal-path-target.js`, async, 8 checks in flight): the session cwd for a relative path, existence, then `isSensitivePath` on the resolved path, then regular-file-ness, `PANEL_FILE_MAX_BYTES` and a NUL-byte sniff | disk-resolved denylist, strictly narrower than `read-file-for-panel` — its whole input is untrusted terminal output, and its answer decides whether a path is even offered as a link. Existence is tested before the denylist because most candidates on a line of prose are not files; a path that exists still passes the denylist before anything else is decided. A remote session is refused outright, and so is one whose working directory cannot be resolved — otherwise an unresolvable remote would fall back to stat-ing the local disk. A panel shell (`panelFor`) resolves through its owning session |
 | `check-delete-worktree` / `delete-worktree` / `worktree-status` | Shared `checkDeleteWorktree`: `WORKTREE_PATH_RE` (shape) + `isKnownProjectRoot` (disk-resolved exact match) | shape + disk-resolved allowlist |
