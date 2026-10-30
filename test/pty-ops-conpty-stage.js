@@ -20,10 +20,10 @@ function stageNodePty(tmpRoot, src) {
   const { version } = JSON.parse(fs.readFileSync(path.join(src, 'package.json'), 'utf8'));
   const dir = path.join(tmpRoot, `sb-nodepty-${version}-${process.platform}-${process.arch}`);
   const dst = path.join(dir, 'node-pty');
-  const marker = path.join(dir, '.complete');
   const prebuild = path.join('prebuilds', `${process.platform}-${process.arch}`);
   const required = ['package.json', ...filesUnder(src, 'lib'), ...filesUnder(src, prebuild)];
-  const isComplete = () => fs.existsSync(marker) && required.every(file => fs.existsSync(path.join(dst, file)));
+  const isComplete = (root = dir) => fs.existsSync(path.join(root, '.complete')) &&
+    required.every(file => fs.existsSync(path.join(root, 'node-pty', file)));
   for (const entry of fs.readdirSync(tmpRoot, { withFileTypes: true })) {
     const stale = path.join(tmpRoot, entry.name);
     if (entry.isDirectory() && entry.name.startsWith('sb-nodepty-') && stale !== dir) {
@@ -42,6 +42,17 @@ function stageNodePty(tmpRoot, src) {
     } catch (error) {
       if (isComplete()) return { dir, nodePty: dst };
       if (error.code !== 'ENOENT') throw error;
+    }
+    if (isComplete(stale)) {
+      if (!isComplete()) {
+        try {
+          fs.renameSync(stale, dir);
+        } catch (error) {
+          if (!RENAME_CONFLICTS.has(error.code) || !isComplete()) throw error;
+        }
+      }
+      removeBestEffort(stale);
+      return { dir, nodePty: dst };
     }
     removeBestEffort(stale);
   }

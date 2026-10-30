@@ -156,6 +156,66 @@ test('a stage published between the first marker check and the directory check i
   assert.equal(fs.readFileSync(path.join(winner.nodePty, 'lib', 'index.js'), 'utf8'), 'winner library');
 });
 
+test('a complete stage published just before stale relocation is restored and returned', (t) => {
+  const { tmpRoot, src } = fixture(t);
+  const dir = path.join(tmpRoot, `sb-nodepty-1.0.0-${process.platform}-${process.arch}`);
+  fs.mkdirSync(dir);
+  const rename = fs.renameSync;
+  let published = false;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (from === dir && !published) {
+      published = true;
+      fs.cpSync(src, path.join(dir, 'node-pty'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'node-pty', 'lib', 'index.js'), 'published library');
+      fs.writeFileSync(path.join(dir, '.complete'), '');
+    }
+    return rename(from, to);
+  });
+
+  const staged = stageNodePty(tmpRoot, src);
+
+  assert.ok(published);
+  assert.deepEqual(staged, { dir, nodePty: path.join(dir, 'node-pty') });
+  assert.equal(fs.readFileSync(path.join(staged.nodePty, 'lib', 'index.js'), 'utf8'), 'published library');
+  assert.deepEqual(fs.readdirSync(tmpRoot), [path.basename(dir)]);
+});
+
+for (const conflict of [null, 'EEXIST', 'ENOTEMPTY', 'EPERM', 'EBUSY']) {
+  test(`a complete stage reappearing ${conflict ? `during restore with ${conflict}` : 'after stale relocation'} is reused`, (t) => {
+    const { tmpRoot, src } = fixture(t);
+    const dir = path.join(tmpRoot, `sb-nodepty-1.0.0-${process.platform}-${process.arch}`);
+    fs.mkdirSync(dir);
+    const rename = fs.renameSync;
+    let relocated = false;
+    function publish(content) {
+      fs.cpSync(src, path.join(dir, 'node-pty'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'node-pty', 'lib', 'index.js'), content);
+      fs.writeFileSync(path.join(dir, '.complete'), '');
+    }
+    t.mock.method(fs, 'renameSync', (from, to) => {
+      if (from === dir && !relocated) {
+        relocated = true;
+        publish('relocated library');
+        rename(from, to);
+        if (!conflict) publish('new winner library');
+        return;
+      }
+      if (to === dir && path.basename(from).includes('.stale-') && conflict) {
+        publish('new winner library');
+        throw Object.assign(new Error('restore lost'), { code: conflict });
+      }
+      return rename(from, to);
+    });
+
+    const staged = stageNodePty(tmpRoot, src);
+
+    assert.ok(relocated);
+    assert.deepEqual(staged, { dir, nodePty: path.join(dir, 'node-pty') });
+    assert.equal(fs.readFileSync(path.join(staged.nodePty, 'lib', 'index.js'), 'utf8'), 'new winner library');
+    assert.deepEqual(fs.readdirSync(tmpRoot), [path.basename(dir)]);
+  });
+}
+
 for (const code of ['EBUSY', 'EPERM']) {
   test(`a relocated incomplete directory locked with ${code} does not prevent publication`, (t) => {
     const { tmpRoot, src } = fixture(t);

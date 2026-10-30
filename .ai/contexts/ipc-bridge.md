@@ -450,9 +450,14 @@ ConPTY suites load `conpty.node`, `conpty_console_list.node` and
 outlived its module on the workstation is not known, so the check covers
 every staged file rather than a guessed subset.
 An incomplete stage is renamed aside before best-effort removal and atomic
-publication of a fresh temporary copy. Rename conflicts reuse only a complete
-winner; other failures propagate. `test/pty-ops-conpty-stage.test.js` covers
-missing components, untouched reuse, relocation and publication races.
+publication of a fresh temporary copy. After relocation, the same completeness
+check runs on the displaced directory: a complete stage published in the gap
+before the rename is restored, or a complete winner already at the final path
+is reused and the displaced copy removed (#935). Restore and publication
+conflicts reuse only a complete winner; other failures propagate.
+`test/pty-ops-conpty-stage.test.js` covers missing components, untouched reuse,
+relocation and publication races, including publication just before relocation
+and a competing winner during restoration.
 
 node-pty 1.2.0-beta.15 (#409) adds a mutex around the handle table
 (microsoft/node-pty#922). In 1.1.0 the shell's exit thread erases the pty's
