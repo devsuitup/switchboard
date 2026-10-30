@@ -260,7 +260,7 @@ test('898b readonly warning names the caller of the read, not the store frame th
   assert.doesNotMatch(warnings[0], /storeThrowSite|laterCaller/);
 });
 
-test('898b readonly warning falls back to the current caller when the error has no stack', () => {
+test('898b readonly warning still names the caller when the error has no stack', () => {
   const { db, warnings, fail } = readonlyHarness();
   const error = Object.assign(new Error('locked'), { code: 'SQLITE_BUSY', stack: undefined });
   fail(error);

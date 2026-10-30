@@ -82,8 +82,8 @@ timer sends `{busyCounts:{command:{retries,exhaustions}}}` only for nonzero
 intervals, then resets the counters. The transport client logs one `info` line
 through the facade's logger (electron-log in main; console by default). The
 injected `onBusyCounts(counts)` callback passes through the facade to the client;
-main emits `session-index-writer.busy` with null session id and the counts as its
-payload when `TRACE.on` is enabled. Closing the writer stops this timer and
+main emits `session-index-writer.busy` with null session id and payload `{ counts }`
+when `TRACE.on` is enabled. Closing the writer stops this timer and
 flushes any nonempty partial-minute counts before `db.closeDb()` and its
 checkpoint. The flush resets the counters; idle closes are silent. Forced
 worker termination cannot flush counts that have not reached the client.
@@ -91,7 +91,7 @@ worker termination cannot flush counts that have not reached the client.
 Main's readonly db.js facade wraps store read functions once. A thrown code
 beginning with `SQLITE_BUSY` logs one `warn` line naming the called store function
 and the first frame outside db.js of the wrapper's own stack (the caller of the read, not the store frame that threw), then rethrows the same error without a
-retry. It uses the BUSY error's stack, falling back to a new stack when absent.
+retry.
 The logger defaults to console; db.js never imports electron-log. The writer
 facade injects its logger once the readonly backend is ready through
 `setReadLogger(log)` (electron-log in main).
