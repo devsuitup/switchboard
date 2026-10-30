@@ -33,6 +33,7 @@
 'use strict';
 
 const fs   = require('fs');
+const { renameWithRetry } = require('./src/main/shared/atomic-write');
 const path = require('path');
 const os   = require('os');
 
@@ -1077,7 +1078,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     }
     try {
       fs.writeFileSync(resultTmp, JSON.stringify(result) + '\n', 'utf8');
-      fs.renameSync(resultTmp, resultPath);
+      renameWithRetry(resultTmp, resultPath);
     } catch (err) {
       safeLogError(ctx, '[trigger-watcher] Failed to write result file:', err.message);
     }

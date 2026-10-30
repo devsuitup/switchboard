@@ -3,6 +3,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
+const { renameWithRetry } = require('./src/main/shared/atomic-write');
 const { isSafeMirrorRelPath, topFolderOf } = require('./remote-hosts');
 
 const MAX_INVENTORY_ENTRIES = 20_000;
@@ -47,9 +49,14 @@ function readManifest(manifestPath) {
 
 function writeManifest(manifestPath, files) {
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-  const tmp = manifestPath + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify({ version: 1, files }), 'utf8');
-  fs.renameSync(tmp, manifestPath);
+  const tmp = `${manifestPath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, files }), 'utf8');
+    renameWithRetry(tmp, manifestPath);
+  } catch (error) {
+    try { fs.rmSync(tmp, { force: true }); } catch {}
+    throw error;
+  }
 }
 
 function pruneEmptyDirs(root, dir) {

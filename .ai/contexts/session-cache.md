@@ -2577,3 +2577,33 @@ than removal. Current proof reasons distinguish identity-lost and proof-invalid.
 Logging-only build/roster revisions and task timestamps do not enter liveVersion.
 Post-ACK freshness uses the actual committed writer revision; progress advances
 only the DB baseline and never refreshes away changed live inputs.
+
+## Atomic rename retries on Windows (#900)
+
+`src/main/shared/atomic-write.js` exports synchronous
+`renameWithRetry(src, dest, { attempts, delays, sleep, rename })`. It retries
+only `EPERM`, `EACCES` and `EBUSY` on win32; other errors and platforms throw
+immediately. The default five attempts sleep 10/30/100/300 ms (440 ms total)
+using `Atomics.wait` on a `SharedArrayBuffer`. Options allow 1-5 attempts and
+nonnegative finite delays with a total below 500 ms. Injected `sleep` and
+`rename` support deterministic tests. The bound covers requested sleep time;
+filesystem calls and OS scheduling can add wall-clock time.
+
+Six publication sites use it: project-remap JSONL rewrites, remote-mirror
+manifests, remote-transport full scp placement and range append,
+schedule-runner enabled-state writes (including its injected rename), and
+trigger-watcher result publication. Manifest temps are unique sibling files
+using PID and UUID, replacing the shared `.tmp` name. All final-failure
+handling remains with the caller: remap removes its temp and throws; manifest
+removes its unique temp and throws; both transport paths remove `.part`, warn and
+report failure; schedule returns `{ ok: false }` and removes its temp;
+trigger logs, leaves its temp, deletes the trigger and still loses the result.
+The one-shot legacy DB relocation in session-index-store is excluded.
+
+The Windows integration test uses its own spawned PowerShell child holding
+the destination through `FileShare.None`. The first rename starts the child's
+50 ms release delay; retries must replace the file after a real sharing
+failure. Cleanup releases the child, terminates only that child by PID if
+necessary, and uses disposable files. Linux/macOS skip the Windows test;
+platform/error-policy tests cover their immediate-rethrow behaviour with VM
+platform injection. This validates a lock scenario, not its frequency in use.
