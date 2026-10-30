@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { runExitHandoffs, EXIT_BUSY_WAIT_MS } = require('../session-exit');
+const { runExitHandoffs, EXIT_BUSY_WAIT_MS } = require('../src/main/app/session-exit');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function setup(ids = ['a']) {

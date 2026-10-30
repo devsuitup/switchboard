@@ -1,15 +1,15 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, screen, session, shell } = require('electron');
 const { Worker } = require('worker_threads');
 const { performance } = require('node:perf_hooks');
-const { createMainLoopMonitor } = require('./main-loop-monitor');
+const { createMainLoopMonitor } = require('./src/main/app/main-loop-monitor');
 const { execFile, spawn: spawnChild } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const pty = require('node-pty');
 const log = require('electron-log');
-const relaunch = require('./relaunch');
-const { acquireInstanceLock, readNoNewPrivs } = require('./linux-startup');
+const relaunch = require('./src/main/app/relaunch');
+const { acquireInstanceLock, readNoNewPrivs } = require('./src/main/app/linux-startup');
 
 // Dev builds default to a separate SQLite DB so they don't race on
 // session_cache with a running installed AppImage. Honors an explicit
@@ -21,7 +21,7 @@ if (!app.isPackaged && !process.env.SWITCHBOARD_DATA_DIR) {
 
 // getFolderIndexMtimeMs moved to session-cache.js
 const { appendToOutputBuffer, MAX_BUFFER_SIZE } = require('./output-buffer');
-const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles, getMcpState } = require('./mcp-bridge');
+const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles, getMcpState } = require('./src/main/integrations/mcp/mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
 
 // SWITCHBOARD_DATA_DIR isolates a dev/test instance from the installed app:
@@ -41,9 +41,9 @@ const activityTrace = require('./activity-trace');
 const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDecision } = activityTrace;
 
 const { classifyTitleActivity } = require('./classify-title-activity');
-const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
-const { createUnsavedGuard } = require('./unsaved-guard');
-const { inventory, runExitHandoffs } = require('./session-exit');
+const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./src/main/app/window-frame');
+const { createUnsavedGuard } = require('./src/main/app/unsaved-guard');
+const { inventory, runExitHandoffs } = require('./src/main/app/session-exit');
 const { backgroundRefusal } = require('./bg-handoff');
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: attempt => { quitAttemptToken = attempt; app.quit(); },
   inventory: () => exitInventory(), background: (ids, opts) => runExitBackground(ids, opts), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; } });
@@ -114,8 +114,8 @@ const { readRemoteTouchedFile } = require('./remote-touched-files');
 const { createChangesWatchRegistry } = require('./git-changes-watch');
 const { createViewerWatchRegistry } = require('./viewer-file-watch');
 const { createMainPanelSaves } = require('./viewer-save-guard');
-const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./activitywatch-client');
-const { createActivityWatchReporter } = require('./activitywatch-reporter');
+const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./src/main/integrations/activitywatch/activitywatch-client');
+const { createActivityWatchReporter } = require('./src/main/integrations/activitywatch/activitywatch-reporter');
 
 setPtyOpLogger(log);
 

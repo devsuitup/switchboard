@@ -305,7 +305,7 @@ test('C5 the exit batch waits on the real CLI id after a clear rekey', async () 
   const asked = [], sends = [], listeners = new Set();
   let status = 'busy';
   const context = vm.createContext({
-    runExitHandoffs: require('../session-exit').runExitHandoffs,
+    runExitHandoffs: require('../src/main/app/session-exit').runExitHandoffs,
     activeSessions: new Map([['tab', { realSessionId: 'real' }]]), Date, setTimeout, clearTimeout,
     cliSessionState: {
       getStatus: id => { asked.push(id); return { status: id === 'real' ? status : 'idle' }; },
@@ -335,7 +335,7 @@ for (const external of [false, true]) {
     const timers = new Set(), listeners = new Set(), sends = [];
     const controller = new AbortController();
     const context = vm.createContext({
-      runExitHandoffs: require('../session-exit').runExitHandoffs,
+      runExitHandoffs: require('../src/main/app/session-exit').runExitHandoffs,
       activeSessions: new Map([['tab', { realSessionId: 'real' }]]), Date,
       setTimeout: fn => { timers.add(fn); return fn; }, clearTimeout: timer => timers.delete(timer),
       cliSessionState: {

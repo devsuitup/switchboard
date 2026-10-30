@@ -10,7 +10,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 
-const { createUnsavedGuard, LOGOFF_CANCEL_MS } = require('../unsaved-guard');
+const { createUnsavedGuard, LOGOFF_CANCEL_MS } = require('../src/main/app/unsaved-guard');
 
 function setup({ timeoutMs = 1000, probeMs = 1500, dialogCeilingMs, quit, closeFinishes = false } = {}) {
   const ipcMain = new EventEmitter();

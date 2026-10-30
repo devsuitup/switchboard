@@ -16,7 +16,7 @@ const {
   createHeaderToggle,
   setHeaderToggle,
 } = require('../public/header-controls');
-const { STRIP_HEIGHT } = require('../window-frame');
+const { STRIP_HEIGHT } = require('../src/main/app/window-frame');
 const { setupTerminalDom } = require('./terminal-manager-harness');
 const { loadAppFunctions } = require('./app-source');
 

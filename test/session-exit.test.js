@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { inventory } = require('../session-exit');
+const { inventory } = require('../src/main/app/session-exit');
 const { backgroundRefusal } = require('../bg-handoff');
 
 test('C2 inventory classifies ready, busy and refused sessions with the main reason', () => {
