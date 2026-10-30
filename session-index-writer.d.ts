@@ -76,4 +76,11 @@ export interface SessionIndexWriter {
   closeDb(): Promise<void>;
 }
 
-export function createSessionIndexWriter(options?: { workerFactory?: () => import('node:worker_threads').Worker; client?: unknown; readonlyBackend?: Backend; clientOptions?: { timeoutMs?: number; maxRestarts?: number } }, cache?: Cache): SessionIndexWriter;
+export function createSessionIndexWriter(options?: {
+  workerFactory?: () => import('node:worker_threads').Worker;
+  client?: unknown;
+  readonlyBackend?: Backend;
+  clientOptions?: { timeoutMs?: number; maxRestarts?: number };
+  log?: Logger;
+  onSessionsChanged?: (ids: string[] | null, change?: { upsertOnly?: boolean }) => void;
+}, cache?: Cache): SessionIndexWriter;

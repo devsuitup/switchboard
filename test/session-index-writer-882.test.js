@@ -46,8 +46,8 @@ test('882 transcript index notifications follow successful commit and identify a
   assert.equal(events[2], null, 'a deleted folder invalidates all cached paths');
 });
 
-for (const mode of ['compute', 'direct']) {
-  test(`882b throwing observer cannot reject an acknowledged ${mode} write`, async () => {
+for (const mode of ['compute', 'direct']) for (const thrown of [Object.assign(new Error('observer exploded'), { code: 'WRITER_STALE' }), null, undefined]) {
+  test(`882b throwing ${String(thrown)} observer cannot reject an acknowledged ${mode} write`, async () => {
     const warnings = [], order = [];
     let db, commits = 0, observations = 0;
     const backend = { getSetting: () => 0, getCachedSession: () => null, getMeta: () => null };
@@ -56,7 +56,7 @@ for (const mode of ['compute', 'direct']) {
       onSessionsChanged() {
         observations++;
         order.push('observer');
-        throw Object.assign(new Error('observer exploded'), { code: 'WRITER_STALE' });
+        throw thrown;
       },
       client: { ready: Promise.resolve(), async request() { commits++; order.push('commit'); return 42; } },
     }, { init: ctx => { db = ctx.db; },
@@ -72,7 +72,7 @@ for (const mode of ['compute', 'direct']) {
     assert.equal(commits, 1, 'observer errors must not trigger stale-write retries');
     assert.equal(observations, 1);
     assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /session-index-writer.*observer exploded/);
+    assert.ok(warnings[0].includes('[session-index-writer] sessions observer failed: ' + (thrown?.message ?? String(thrown))));
   });
 }
 
@@ -138,5 +138,42 @@ for (const command of ['cleanupWorktree', 'dropRemoteFolder']) {
     release();
     await assert.rejects(rejected, /commit failed/);
     assert.deepEqual(events, [null], 'failed compound deletes send no notification');
+  });
+}
+
+for (const mode of ['compute', 'direct']) {
+  test(`894 ${mode} folder-move notifications wait for ACK and failed writes leave memos untouched`, async () => {
+    const events = [];
+    let db, release, fail = false;
+    const rows = [
+      { sessionId: 'moved', folder: 'remote::folder' },
+      { sessionId: 'same', folder: 'folder' },
+      { sessionId: 'new', folder: 'folder' },
+      { sessionId: 'moved', folder: 'remote::folder' },
+    ];
+    const writer = createSessionIndexWriter({
+      readonlyBackend: { getSetting: () => 0, getCachedSession: id => id === 'new' ? null : { sessionId: id, folder: 'folder' }, getMeta: () => null },
+      onSessionsChanged: (...args) => events.push(args),
+      client: { ready: Promise.resolve(), async request() {
+        await new Promise(resolve => { release = resolve; });
+        if (fail) throw new Error('commit failed');
+      } },
+    }, { init: ctx => { db = ctx.db; }, refreshFolder() { db.upsertCachedSessions(rows); } });
+    await writer.ready;
+    writer.initializeCache({});
+    const upsert = () => mode === 'compute' ? writer.refreshFolder('folder') : writer.upsertCachedSessions(rows);
+    const pending = upsert();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(events, [], 'a planned folder move cannot invalidate before ACK');
+    release();
+    await pending;
+    assert.deepEqual(events, [[['moved'], undefined], [['same', 'new'], { upsertOnly: true }]]);
+    events.length = 0;
+    fail = true;
+    const rejected = upsert();
+    await new Promise(resolve => setImmediate(resolve));
+    release();
+    await assert.rejects(rejected, /commit failed/);
+    assert.deepEqual(events, [], 'failed folder moves discard the notification plan');
   });
 }

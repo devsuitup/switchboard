@@ -621,9 +621,11 @@ Changed UUID/path inputs get new entries; disappeared rows are evicted, and
 
 The index writer calls `onSessionsChanged` after successful cache effects or
 direct cache writes are acknowledged, and after final continuation apply for
-computed effects. Upserts invalidate matching unavailable entries only, using
-`{ upsertOnly: true }`; session deletions invalidate matching entries regardless
-of availability. Matching is case-insensitive. Folder deletion, worktree cleanup
+computed effects. Same-folder upserts invalidate matching unavailable entries only,
+using `{ upsertOnly: true }`. An upsert moving an existing id to another indexed
+folder invalidates it regardless of availability, like a session deletion.
+Matching is case-insensitive; non-string ids in an invalidation batch are ignored
+without discarding its valid ids. Folder deletion, worktree cleanup
 and remote-folder removal invalidate all entries with `null`. Size and modified-time
 effects send no notification or roster rebuild. Mixed batches keep upsert and
 deletion notifications separate. Observer exceptions are logged without rejecting
@@ -640,8 +642,8 @@ A running session whose JSONL disappears can retain its indexed row through
 `keepIfRunning`. Without a row-deletion notification, its Transcript button can
 stay enabled until the next explicit/periodic reconcile clears the memo. Clicking
 Transcript rechecks the file without the memo and reports its absence. This gap
-also applies when the surviving row is upserted, since already available entries
-are intentionally retained on upserts.
+also applies when the surviving row is upserted in the same folder, since already
+available entries are intentionally retained on same-folder upserts.
 
 The renderer disables Transcript with its missing-file tooltip. For a job row,
 Transcript calls `runVerb('transcript', id)` through the shipped IPC; main repeats
