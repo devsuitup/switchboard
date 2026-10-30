@@ -4,7 +4,7 @@
 const { parentPort, workerData } = require('node:worker_threads');
 const fs = require('node:fs');
 const { listMemories, listWorkFiles } = require('../file-lists');
-const { fileListPathKey } = require('../file-lists-path');
+const { fileListPathKey } = require('../src/main/viewer/file-lists-path');
 const memoryBodies = new Map();
 let previousEpoch;
 
