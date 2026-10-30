@@ -11,7 +11,7 @@ const { selectTests, runFast } = require('../scripts/check-fast');
 const inventory = [
   'pty-ops.test.js', 'pty-ops-input.test.js', 'other.test.js',
   'foo.test.js', 'foo-extra.test.js', 'dom-foo.test.js', 'dom-foo-extra.test.js',
-  'foo.js', 'foo.test.json',
+  'foo.js', 'foo.test.json', 'foobar.test.js', 'trigger-watcher.test.js',
 ];
 
 test('source basename selects all matching test siblings, sorted and deduplicated', () => {
@@ -28,6 +28,7 @@ test('public source selects renderer and ordinary prefix tests with either separ
 
 test('staged test selects itself without selecting similarly named siblings', () => {
   assert.deepEqual(selectTests(['test\\foo.test.js', 'test/foo.test.js'], inventory), ['test/foo.test.js']);
+  assert.deepEqual(selectTests(['test/canary/cli.test.js'], inventory), []);
 });
 
 test('non-JS files, empty selection and unmatched sources select nothing', () => {
@@ -37,6 +38,19 @@ test('non-JS files, empty selection and unmatched sources select nothing', () =>
 
 test('basenames are literal prefixes, not regular expressions', () => {
   assert.deepEqual(selectTests(['foo[1].js'], ['foo[1].test.js', 'foo1.test.js']), ['test/foo[1].test.js']);
+});
+
+test('a source basename matches only up to a separator', () => {
+  assert.deepEqual(selectTests(['foo.js'], inventory), ['test/foo-extra.test.js', 'test/foo.test.js']);
+});
+
+test('lint takes staged .cjs and .mjs files; serial trigger tests run without a per-file test timeout', (t) => {
+  const options = rig(t, { files: ['scripts/x.cjs', 'trigger-watcher.js'] });
+  assert.equal(runFast(options), 0);
+  const [lint, ...tests] = options.calls;
+  assert.deepEqual(lint.args.slice(-2), ['scripts/x.cjs', 'trigger-watcher.js']);
+  assert.deepEqual(tests.map(call => call.args), [['--test', '--test-concurrency=1', 'test/trigger-watcher.test.js']]);
+  assert.equal(tests[0].options.timeout, 600000);
 });
 
 function rig(t, overrides = {}) {
@@ -72,7 +86,7 @@ test('runs staged JS lint then each actual matching test once, using current Nod
   assert.ok(lint, 'lint must run');
   assert.equal(lint.command, process.execPath);
   assert.match(lint.args[0], /eslint[\\/]bin[\\/]eslint\.js$/);
-  assert.deepEqual(lint.args.slice(1), ['--', 'public/foo.js', 'test/foo.test.js']);
+  assert.deepEqual(lint.args.slice(1), ['--no-error-on-unmatched-pattern', '--', 'public/foo.js', 'test/foo.test.js']);
   assert.deepEqual(tests.map(call => call.args.at(-1)), selectTests(options.files, inventory));
   assert.equal(tests.length, 4);
   for (const call of tests) {

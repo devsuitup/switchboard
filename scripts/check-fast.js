@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { ISOLATED_FILES } = require('./run-tests');
 
 const normalize = file => file.replace(/\\/g, '/');
 
@@ -11,13 +12,13 @@ function selectTests(files, testFiles) {
   for (const file of files.map(normalize)) {
     if (!file.endsWith('.js')) continue;
     if (file.startsWith('test/')) {
-      if (file.endsWith('.test.js')) selected.add(file);
+      if (/^test\/[^/]+\.test\.js$/.test(file)) selected.add(file);
       continue;
     }
     const basename = path.posix.basename(file, '.js');
     const prefixes = file.startsWith('public/') ? [basename, `dom-${basename}`] : [basename];
     for (const name of testFiles) {
-      if (name.endsWith('.test.js') && prefixes.some(prefix => name.startsWith(prefix))) {
+      if (name.endsWith('.test.js') && prefixes.some(prefix => name.startsWith(prefix) && '.-'.includes(name[prefix.length]))) {
         selected.add(`test/${name}`);
       }
     }
@@ -34,21 +35,23 @@ function runFast({ cwd = path.join(__dirname, '..'), files, env = process.env, s
     if (staged.status !== 0) throw new Error(staged.stderr || 'Cannot read staged files');
     files = staged.stdout.split('\0').filter(Boolean);
   }
-  const jsFiles = [...new Set(files.map(normalize).filter(file => file.endsWith('.js')))].sort();
+  const jsFiles = [...new Set(files.map(normalize).filter(file => /\.(js|cjs|mjs)$/.test(file)))].sort();
   if (!jsFiles.length) return 0;
-  const run = args => {
-    const result = spawn(process.execPath, args, { cwd, env, stdio: 'inherit', timeout: 120000 });
+  const run = (args, timeout = 120000) => {
+    const result = spawn(process.execPath, args, { cwd, env, stdio: 'inherit', timeout });
     if (result.error) throw result.error;
     return result.status === null ? 1 : result.status;
   };
   const eslint = path.join(path.dirname(require.resolve('eslint/package.json')), 'bin', 'eslint.js');
-  const lintStatus = run([eslint, '--', ...jsFiles]);
+  const lintStatus = run([eslint, '--no-error-on-unmatched-pattern', '--', ...jsFiles]);
   if (lintStatus !== 0) return lintStatus;
   if (env.SKIP_TESTS) return 0;
   const testFiles = fs.readdirSync(path.join(cwd, 'test'), { withFileTypes: true })
     .filter(entry => entry.isFile()).map(entry => entry.name);
   for (const file of selectTests(jsFiles, testFiles)) {
-    const status = run(['--test', '--test-concurrency=1', '--test-timeout=120000', file]);
+    const status = ISOLATED_FILES.includes(path.posix.basename(file))
+      ? run(['--test', '--test-concurrency=1', file], 600000)
+      : run(['--test', '--test-concurrency=1', '--test-timeout=120000', file]);
     if (status !== 0) return status;
   }
   return 0;

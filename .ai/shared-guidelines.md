@@ -32,6 +32,7 @@ Switchboard is an **Electron desktop app**: renderer + main-process, no Domain/A
 | Change the renderer (sidebar, terminal, app.js) | `public/*.js` — entry is `app.js` |
 | Change screen refresh on return, the Refresh controls, or the PTY resize nudge | [contexts/terminal-refresh.md](contexts/terminal-refresh.md) |
 | Write a test | `test/*.test.js` — node:test + jsdom for renderer files |
+| Change the pre-commit hook's fast check (staged lint, test selection) | [contexts/fast-check.md](contexts/fast-check.md) |
 | Check something only a running app shows (layout, a full IPC round trip), in CI | [../docs/e2e.md](../docs/e2e.md) — Playwright journeys in `e2e/` |
 | Working practices for AI agents (HANDOFF format, shell pitfalls, review loop) | [agent-practices.md](agent-practices.md) |
 | Test a PR or a release candidate against a running app | [../docs/testing-a-pr.md](../docs/testing-a-pr.md) |

@@ -60,4 +60,4 @@ if (require.main === module) {
   process.exit(mainStatus !== 0 ? mainStatus : isolatedStatus);
 }
 
-module.exports = { stageOneConcurrency, DEFAULT_CONCURRENCY };
+module.exports = { stageOneConcurrency, DEFAULT_CONCURRENCY, ISOLATED_FILES };
