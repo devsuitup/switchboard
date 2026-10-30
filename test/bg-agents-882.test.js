@@ -99,7 +99,7 @@ test('882b committed upserts keep available memos and deletions recheck them', a
   assert.equal((await bg.reconcile()).roster[0].transcriptAvailable, true);
   let db, metadataOnly = false, scheduled = 0;
   const writer = createSessionIndexWriter({
-    readonlyBackend: { getSetting: () => 0, getCachedSession: () => ({ sessionId: 'session-a', folder: 'folder' }), getMeta: () => null },
+    readonlyBackend: { getSetting: () => 0, getCachedSession: () => ({ sessionId: 'session-a', folder: 'folder' }), getCachedFolder: () => 'folder', getMeta: () => null },
     onSessionsChanged: (...args) => bg.invalidateTranscripts(...args),
     client: { ready: Promise.resolve(), request: async () => {} },
   }, { init: ctx => { db = ctx.db; }, refreshFolder() {
@@ -142,7 +142,7 @@ for (const mode of ['compute', 'direct']) {
     let db, folder = 'local', committed = { sessionId: 'session-a', folder };
     const events = [];
     const writer = createSessionIndexWriter({
-      readonlyBackend: { getSetting: () => 0, getCachedSession: () => committed, getMeta: () => null },
+      readonlyBackend: { getSetting: () => 0, getCachedSession: () => committed, getCachedFolder: () => committed.folder, getMeta: () => null },
       onSessionsChanged: (...args) => { events.push(args); bg.invalidateTranscripts(...args); },
       client: { ready: Promise.resolve(), async request(name, ...args) {
         const rows = name === 'effects' ? args[0].find(effect => effect.name === 'upsertCachedSessions').args[0] : args[0];
