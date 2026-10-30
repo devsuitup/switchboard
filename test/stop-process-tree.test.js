@@ -10,7 +10,7 @@ function fixture() {
   const calls = [];
   const child = new EventEmitter();
   const spawnChild = (...args) => { calls.push(args); return child; };
-  return { calls, child, options: { platform: 'win32', spawnChild, recheckDelayMs: 0 } };
+  return { calls, child, options: { platform: 'win32', spawnChild } };
 }
 
 test('stops only the owned PID tree with a hidden, bounded taskkill', async () => {
@@ -25,20 +25,6 @@ test('stops only the owned PID tree with a hidden, bounded taskkill', async () =
   assert.ok(options.timeout > 0 && options.timeout <= 2000);
   f.child.emit('close', 0);
   assert.equal(await done, true);
-});
-
-test('never spawns after the owned root exits during the recheck delay', async () => {
-  const f = fixture();
-  let current = true;
-  const done = stopProcessTree(897, { ...f.options, recheckDelayMs: 20, isCurrent: () => current,
-    spawnChild: (...args) => {
-      const child = f.options.spawnChild(...args);
-      setImmediate(() => child.emit('close', 0));
-      return child;
-    } });
-  current = false;
-  assert.equal(await done, false);
-  assert.equal(f.calls.length, 0);
 });
 
 test('rejects absent, invalid, self and already exited PIDs without spawning', async () => {

@@ -2,95 +2,12 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { killPty, writePty, resizePty, detachPty } = require('../pty-ops');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { extractFunction } = require('./app-source');
 const { stopProcessTree } = require('../src/main/terminals/stop-process-tree');
-
-function fixture(extra = {}) {
-  const calls = [];
-  let finish;
-  const pending = new Promise(resolve => { finish = resolve; });
-  const pty = { pid: 897, kill: () => calls.push('pty'), write() {}, resize() {} };
-  const session = { pty, kind: 'local-pty', exited: false, ...extra };
-  const options = { platform: 'win32', stopTree(pid, opts) { calls.push({ pid, ...opts }); return pending; } };
-  return { calls, session, options, finish };
-}
-
-test('local Windows close stops its still-owned tree before closing ConPTY once', async () => {
-  const f = fixture();
-  assert.equal(killPty(f.session, 'test', f.options), true);
-  assert.equal(f.calls.length, 1);
-  assert.equal(f.calls[0].pid, 897);
-  assert.equal(f.calls[0].recheckDelayMs, 100);
-  assert.equal(f.calls[0].isCurrent(), true);
-  assert.equal(killPty(f.session, 'test', f.options), false);
-  assert.equal(writePty(f.session, 'x'), false);
-  assert.equal(resizePty(f.session, 80, 24), false);
-  f.finish(true);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(f.calls.slice(1), ['pty']);
-});
-
-test('the stop guard rejects an exited session, replaced handle or changed root PID', () => {
-  for (const change of [s => { s.exited = true; }, s => { s.pty = { pid: 897 }; }, s => { s.pty.pid++; }]) {
-    const f = fixture();
-    killPty(f.session, 'test', f.options);
-    change(f.session);
-    assert.equal(f.calls[0].isCurrent(), false);
-    f.finish(false);
-  }
-});
-
-test('native root exit before close keeps the PTY-only path before the JS exit event', () => {
-  for (const exitCode of [0, 1]) {
-    const f = fixture();
-    f.session.pty._agent = { exitCode };
-    assert.equal(f.session.exited, false);
-    assert.equal(killPty(f.session, 'test', f.options), true);
-    assert.deepEqual(f.calls, ['pty']);
-  }
-});
-
-test('native root exit during the recheck delay cancels taskkill before the JS exit event', async () => {
-  const f = fixture();
-  f.session.pty._agent = { exitCode: undefined };
-  killPty(f.session, 'test', f.options);
-  assert.equal(f.calls[0].isCurrent(), true);
-  f.session.pty._agent.exitCode = 0;
-  assert.equal(f.session.exited, false);
-  assert.equal(f.calls[0].isCurrent(), false);
-  f.finish(false);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(f.calls.slice(1), ['pty']);
-});
-
-test('background, detach, remote and already exited sessions keep the PTY-only path', () => {
-  for (const extra of [{ backgrounding: true }, { backgrounded: true }, { isAttach: true },
-    { detaching: true }, { host: 'remote' }, { kind: 'remote-attach' }, { exited: true }]) {
-    const f = fixture(extra);
-    assert.equal(killPty(f.session, 'test', f.options), true);
-    assert.deepEqual(f.calls, ['pty']);
-  }
-  const f = fixture();
-  assert.equal(killPty(f.session, 'test', { ...f.options, platform: 'linux' }), true);
-  assert.deepEqual(f.calls, ['pty']);
-});
-
-test('failed tree stop still releases ConPTY and detach fallback never starts a tree stop', async () => {
-  const f = fixture();
-  killPty(f.session, 'test', f.options);
-  f.finish(false);
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.calls.at(-1), 'pty');
-  const d = fixture();
-  d.session.pty.write = () => { throw new Error('closed'); };
-  assert.equal(detachPty(d.session, 'test'), true);
-  assert.deepEqual(d.calls, ['pty']);
-});
 
 for (const scenario of ['foreground', 'background', 'exited', 'tree-failed']) {
   test(`runClaudeCommand timeout retains ${scenario} stop policy`, async () => {

@@ -545,39 +545,67 @@ writes to the entry; a resize holds it for one `ResizePseudoConsole` call.
 ### Closing a local PTY on Windows (#897)
 
 Closing a local foreground Windows tab first marks its PTY killed, blocking
-further writes, resizes and duplicate closes. `stopProcessTree` in
-`src/main/terminals/stop-process-tree.js` waits 100 ms to recheck for a natural
-exit; nothing requests an exit during this delay. It rechecks the session's
-exit flag, native root exit state, exact PTY object and root PID, then starts
-`SystemRoot\System32\taskkill.exe /PID <root> /T /F` hidden with a 2000 ms
-timeout. Only after that command finishes or fails does the once-only ConPTY
-close run. The tree kill runs first: ConPTY close would end the root and leave
-`/T` nothing to walk. It ends every descendant by parent PID, including windows
-started from the tab, and skips the root's CTRL_CLOSE handling.
+further writes, resizes and duplicate closes. `closeWindowsPty` in
+`src/main/terminals/close-windows-pty.js` snapshots PID, parent PID and exact
+creation time before calling the normal, once-only `pty.kill()`. ConPTY close
+lets the shell or Claude handle CTRL_CLOSE, including its last transcript write
+and MCP shutdown. After a single 500 ms wait, a fresh process snapshot identifies
+survivors. Only saved descendants whose PID and creation time still match are
+passed to `stopProcessTree`: hidden
+`SystemRoot\System32\taskkill.exe /PID <survivor> /T /F`, with a 2000 ms timeout
+per command. `/T` includes children started after the initial snapshot; windows
+opened from the tab are included. The root is never passed to taskkill here.
 
-The tree kill is skipped once the root has exited natively, to avoid targeting
-a reused PID; the plain `pty.kill()` path releases ConPTY instead. node-pty's
+Both snapshots use absolute System32 Windows PowerShell with `-NoProfile`,
+`-NonInteractive`, `-ExecutionPolicy Bypass` and the sibling
+`windows-process-snapshot.ps1`. Its small in-memory C# type calls
+`NtQuerySystemInformation(SystemProcessInformation)` to read the whole process
+table, including 100 ns creation timestamps serialized as decimal strings. The
+buffer can grow on a length mismatch (at most four attempts); tree traversal
+uses that single returned table, not one subprocess per generation. It excludes
+children older than their parent, including stale links older than the root.
+The process is hidden, output is capped at 8 MiB, and both execFile's timeout and
+an independent completion deadline are 1500 ms. Any failed or timed-out initial
+snapshot still closes ConPTY and skips survivor cleanup. A failed second
+snapshot skips taskkill. CIM was evaluated first but this sandbox refuses
+`Win32_Process` reads with HRESULT 0x80041003, so it is not used.
+
+On this Windows machine on 2026-10-30, ten successful native snapshots took
+961 ms median / 1294 ms maximum. Ten separate fake-PTY closes using real
+snapshots delayed the normal close by 1170 ms median / 1365 ms maximum;
+`killPty` returned synchronously in 6.4–71.7 ms. These measurements include
+PowerShell startup and compilation. The configured deadline remains 1500 ms;
+event-loop scheduling can add overhead. Raw runs are in the round-d report's
+evidence directory. There is no polling loop in the close path.
+
+Snapshots and survivor kills are skipped once the root has exited natively;
+the plain `pty.kill()` path releases ConPTY instead. node-pty's
 Windows agent sets `exitCode` in its native `_$onProcessExit` callback, before
 the JS exit event, which with `useConptyDll` waits for the output socket to
 close. `killPty` checks `_agent.exitCode !== undefined` both before scheduling
-the tree stop and in its final ownership guard. Exit code zero counts as an
-exit. The check and OS process lookup are not atomic; a native process handle
-or job object would be required to eliminate that final PID-reuse race entirely.
-There is no synchronous process snapshot or image-name kill.
+the snapshot and after it, together with the session exit flag, exact PTY
+object and root PID. Exit code zero counts as an exit. Once the normal close
+has been requested, its expected root exit does not cancel descendant cleanup.
+The creation-time lookup and taskkill are not atomic: PID reuse between those
+operations, or inside taskkill's `/T` traversal, remains a race that would need
+native process handles or a job object to eliminate entirely.
 
 Attach, detaching, backgrounding, backgrounded and remote sessions retain the
 PTY-only path. `detachPty` and the background handoff are unchanged. The same
 stop helper preserves the non-background `runClaudeCommand` timeout tree stop
 and POSIX process-group kill, guarded by the child's exit/signal state.
 `test/stop-process-tree.test.js` uses an injected subprocess boundary;
-`test/pty-ops-process-tree.test.js` checks ordering, scope, ownership and native
-root exit before the JS event.
+`test/pty-ops-process-tree.test.js` preserves the command timeout policies.
+`test/pty-ops-snapshot.test.js` checks ordering, timestamp guards, scope,
+ownership, failures and native root exit before the JS event;
+`test/close-windows-pty-query.test.js` checks the subprocess and deadline.
 `test/pty-ops-hidden-grandchild.test.js` loads native node-pty only in a bounded
 child and uses Windows PowerShell (.NET CreateNoWindow) as the non-libuv root.
 The hidden Node child exits on its own after 20 seconds; PowerShell exits after
 25 seconds. Test PID observations latch ESRCH, treat EPERM as unknown, and never
-kill a PID during cleanup. The post-fix measurement on 2026-10-30 passed: the
-hidden grandchild died about 466 ms after `killPty`.
+kill a PID during cleanup. Round d keeps this test unchanged; sandboxed
+taskkill is access-denied, so successful native descendant termination requires
+the dispatching session's run outside the sandbox.
 
 ### Cursor-position queries
 

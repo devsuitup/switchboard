@@ -2,7 +2,7 @@
 'use strict';
 
 const os = require('os');
-const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
+const { closeWindowsPty } = require('./src/main/terminals/close-windows-pty');
 
 let logger = null;
 
@@ -66,7 +66,7 @@ function resizePty(session, cols, rows, sessionId, options) {
   return withPty(session, 'resize', (pty) => pty.resize(cols, rows, options), sessionId);
 }
 
-function killPty(session, sessionId, { stopTree = stopProcessTree, platform = process.platform } = {}) {
+function killPty(session, sessionId, { platform = process.platform, ...closeOptions } = {}) {
   if (!session || !session.pty || killedPtys.has(session.pty)) return false;
   const pty = session.pty;
   killedPtys.add(pty);
@@ -74,9 +74,9 @@ function killPty(session, sessionId, { stopTree = stopProcessTree, platform = pr
     && !session.isAttach && !session.detaching && !session.backgrounding && !session.backgrounded && !session.host) {
     const pid = pty.pid;
     const isCurrent = () => !session.exited && pty._agent?.exitCode === undefined && session.pty === pty && pty.pid === pid;
-    void stopTree(pid, { recheckDelayMs: 100, isCurrent }).finally(() => {
+    void closeWindowsPty(pid, () => {
       withPty({ pty }, 'kill', target => target.kill(), sessionId);
-    });
+    }, { ...closeOptions, isCurrent });
     return true;
   }
   return withPty(session, 'kill', (pty) => pty.kill(), sessionId);
