@@ -63,6 +63,9 @@ glob `schedule-*.js` are not qualified documentation references and are not rewr
 codemod. Replace or remove stale scope entries after moves; `src/main/**/*.js` already covers the
 destination contexts. This manual check is part of each move PR's configuration review.
 
+The scanner does not read `.d.ts` files: check `import('./x')` type references in root `*.d.ts`
+files (such as `session-index-writer.d.ts`) and coverage or diff-cover exclude lists by hand.
+
 Shrink `test/fixtures/root-app-modules.json` manually after a move. Root inventory equality rejects
 both new root modules and stale allow-list entries. Run the resolver and affected tests, lint, the
 full suite and CI checks prescribed by the ADR. No installation or native rebuild is needed to run

@@ -70,7 +70,7 @@ export interface SessionIndexWriter {
   scheduleRegistry(seed: () => string[]): {
     list(): Promise<string[]>; add(projectPath: string): Promise<void>; remove(projectPath: string): Promise<void>;
   };
-  createWhatsNew(options: Omit<Parameters<typeof import('./changelog').createWhatsNew>[0], 'getSetting' | 'setSetting'>): {
+  createWhatsNew(options: Omit<Parameters<typeof import('./src/main/app/changelog').createWhatsNew>[0], 'getSetting' | 'setSetting'>): {
     startup(): Promise<unknown>; dismissed(): Promise<void>; forMenu(): unknown;
   };
   closeDb(): Promise<void>;
