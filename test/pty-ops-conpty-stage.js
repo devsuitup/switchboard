@@ -11,16 +11,19 @@ function removeBestEffort(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
+function filesUnder(root, rel) {
+  return fs.readdirSync(path.join(root, rel), { withFileTypes: true }).flatMap(entry => entry.isDirectory()
+    ? filesUnder(root, path.join(rel, entry.name)) : [path.join(rel, entry.name)]);
+}
+
 function stageNodePty(tmpRoot, src) {
   const { version } = JSON.parse(fs.readFileSync(path.join(src, 'package.json'), 'utf8'));
   const dir = path.join(tmpRoot, `sb-nodepty-${version}-${process.platform}-${process.arch}`);
   const dst = path.join(dir, 'node-pty');
   const marker = path.join(dir, '.complete');
   const prebuild = path.join('prebuilds', `${process.platform}-${process.arch}`);
-  const isComplete = () => fs.existsSync(marker)
-    && fs.existsSync(path.join(dst, 'package.json'))
-    && fs.existsSync(path.join(dst, 'lib', 'index.js'))
-    && fs.existsSync(path.join(dst, prebuild));
+  const required = ['package.json', ...filesUnder(src, 'lib'), ...filesUnder(src, prebuild)];
+  const isComplete = () => fs.existsSync(marker) && required.every(file => fs.existsSync(path.join(dst, file)));
   for (const entry of fs.readdirSync(tmpRoot, { withFileTypes: true })) {
     const stale = path.join(tmpRoot, entry.name);
     if (entry.isDirectory() && entry.name.startsWith('sb-nodepty-') && stale !== dir) {

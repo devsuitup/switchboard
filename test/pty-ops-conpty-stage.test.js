@@ -316,7 +316,8 @@ test('a marker-only directory is re-staged with its module', (t) => {
   assert.deepEqual(fs.readdirSync(tmpRoot), [path.basename(dir)]);
 });
 
-for (const missing of ['package.json', path.join('lib', 'index.js'), path.join('prebuilds', `${process.platform}-${process.arch}`)]) {
+for (const missing of ['package.json', path.join('lib', 'index.js'), path.join('prebuilds', `${process.platform}-${process.arch}`),
+  path.join('prebuilds', `${process.platform}-${process.arch}`, 'pty.node')]) {
   test(`a marked stage missing ${missing} is re-staged`, (t) => {
     const { tmpRoot, src } = fixture(t);
     const first = stageNodePty(tmpRoot, src);
