@@ -13,7 +13,7 @@ function resolveSessionStop(session, { attach = false } = {}) {
   return { remote: false, alias: null, attach: false, confirmText: 'Stop this session?' };
 }
 
-async function planSessionStop(row, { attach = false, retryTargets, backgroundJobs, jobStop = false } = {}) {
+async function planSessionStop(row, { attach = false, retryTargets, backgroundJobs, jobStop = false, ignoreUnknownIdleJobs = false } = {}) {
   const targets = [];
   const excluded = [];
   for (const id of new Set(retryTargets ? retryTargets.map(target => target.sessionId) : rowSessionIds(row))) {
@@ -67,6 +67,7 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
     }
     const check = await checkBackgroundJob(id, backgroundJobs);
     if (check?.known === false || (jobStop && check?.known !== true)) {
+      if (ignoreUnknownIdleJobs && storedActivitySnapshot(id, row)?.liveness !== 'alive') continue;
       excluded.push({ sessionId: id, reason: `cannot tell whether a background job is running this part (${check?.reason || 'unknown'})` });
     } else if (check?.job) {
       if (jobStop) {
@@ -289,10 +290,9 @@ async function validateSessionStopPlan(session, planned) {
   return describeSessionStopPlan(session, targets, excluded);
 }
 
-async function executeSessionStopTargets(targets) {
+async function executeSessionStopTargets(targets, unreachable = new Map()) {
   const failures = [];
   const failedTargets = [];
-  const unreachable = new Map();
   let stopped = 0;
   for (const target of targets) {
     const id = target.sessionId;
@@ -355,12 +355,11 @@ async function confirmAndStopProjectFolder(project, retryRows) {
     for (const row of rows) {
       const retry = retryRows?.find(entry => entry.row.sessionId === row.sessionId);
       if (retryRows && !retry) continue;
-      const planned = await planSessionStop(row, { jobStop: true, backgroundJobs, retryTargets: retry?.targets });
+      const planned = await planSessionStop(row, { jobStop: true, backgroundJobs, retryTargets: retry?.targets, ignoreUnknownIdleJobs: true });
       const plan = await validateSessionStopPlan(row, planned);
       const name = cleanDisplayName(row.name || row.aiTitle || row.summary) || row.sessionId;
       const snapshot = mergedRowSnapshot(rowSessionIds(row), rowHeadId(row), storedActivitySnapshot(rowHeadId(row), row), row);
-      const background = planned.targets.some(target => target.job)
-        || planned.excluded.some(part => /background job/.test(part.reason));
+      const background = planned.targets.some(target => target.job && !target.notHosted);
       entries.push({ row, plan, name, background, midTurn: !!snapshot?.busy });
     }
     const candidates = entries.filter(entry => entry.plan.targets.length);
@@ -379,7 +378,7 @@ async function confirmAndStopProjectFolder(project, retryRows) {
     let force = false;
     if (hasBackground) {
       const answer = await showChoiceDialog({ title: 'Stop all?', message, danger: true, initialFocus: 'cancel',
-        confirmLabel: 'Stop', selectedId: 'others', options: [
+        confirmLabel: 'Stop', selectedId: retryRows?.some(entry => entry.targets.some(target => target.job && !target.notHosted && !target.jobStopped)) ? 'force' : 'others', options: [
           { id: 'force', label: 'Stop all including background jobs' },
           { id: 'others', label: 'Stop the others only' },
         ] });
@@ -388,10 +387,11 @@ async function confirmAndStopProjectFolder(project, retryRows) {
     } else if (!await appConfirm({ title: 'Stop all?', message, confirmLabel: 'Stop', danger: true })) return;
     const failures = [];
     const failedRows = [];
+    const unreachable = new Map();
     let stopped = 0;
     for (const entry of candidates) {
       if (entry.background && !force) continue;
-      const result = await executeSessionStopTargets(entry.plan.targets);
+      const result = await executeSessionStopTargets(entry.plan.targets, unreachable);
       stopped += result.stopped;
       failures.push(...result.failures.map(error => `${entry.name}: ${error}`));
       if (result.failedTargets.length) failedRows.push({ row: entry.row, targets: result.failedTargets });
@@ -400,6 +400,8 @@ async function confirmAndStopProjectFolder(project, retryRows) {
       showSessionActionFailure(operation, project, failures.join('\n'),
         'Check the connection or the session in its own terminal (the Agents view for a background session), then retry Stop all.',
         () => confirmAndStopProjectFolder(project, failedRows));
+    } else if (!force && candidates.every(entry => entry.background)) {
+      showAppNotice({ id: noticeId, message: `Kept ${candidates.length} conversation${candidates.length === 1 ? '' : 's'} with background jobs; nothing else was running.` });
     } else clearAppNotice(noticeId);
     if (stopped) refreshSidebar();
   } catch (error) {

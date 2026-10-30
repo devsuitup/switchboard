@@ -13,6 +13,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Opening a conversation from the sidebar now resumes its newest part instead of an older part waiting to restore. (#918)
 
 ### Fixed
+- Folder Stop all keeps only conversations with running background jobs by default, explains when all candidates are kept, and retries failed background stops with those jobs selected. An unreachable host is tried once per batch. (#843)
 - The session list no longer stops updating, or shows a continued conversation as two separate entries, when that conversation's transcript is large. (#891)
 - In Agents, finished jobs sharing a live conversation keep separate selections and action errors. Selection follows a conversation into its job, and Transcript becomes available as soon as indexing finishes and is rechecked after worktree or remote-folder removal; when it opens the live session instead of a job's earlier transcript, the detail explains this. (#530, #882)
 - Workflow agents appear under the session that started them, grouped by run, instead of as separate sessions; entries an older build listed separately locally or on a remote host are regrouped. (#875, #886)

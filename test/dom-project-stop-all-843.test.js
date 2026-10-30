@@ -50,6 +50,7 @@ test('default stops non-job conversations including nested worktree and names ba
   try {
     const { done, overlay } = await start(h);
     assert.match(overlay.textContent, /Local work.*mid-turn/);
+    assert.doesNotMatch(overlay.textContent, /Nested work[^\n]*mid-turn/);
     assert.match(overlay.textContent, /Background conversation.*background/);
     assert.match(overlay.textContent, /Other terminal.*outside this window/);
     assert.match(overlay.textContent, /Nested work/);
@@ -119,5 +120,140 @@ test('nested worktree header stops only its own folder', async () => {
     await answerChoiceDialog(h.ctx, { confirm: true });
     await done;
     assert.deepEqual(h.calls, [['stop', 'nested']]);
+  } finally { h.ctx.destroy(); }
+});
+
+test('unknown daemon state on an idle merged part does not keep a plain PTY conversation', async () => {
+  const h = setup();
+  try {
+    h.project.sessions = [{ sessionId: 'local', name: 'Plain conversation', mergedMemberIds: ['idle-part'] }];
+    h.w.cachedAllProjects = [h.project];
+    h.w.api.bgAgentLiveJob = async () => ({ known: false, reason: 'unrelated job has an unreadable state' });
+    const { done, overlay } = await start(h);
+    assert.doesNotMatch(overlay.textContent, /background job|unreadable state/);
+    assert.equal(overlay.querySelector('input[type=radio]'), null);
+    await answerChoiceDialog(h.ctx, { confirm: true });
+    await done;
+    assert.deepEqual(h.calls, [['stop', 'local']]);
+  } finally { h.ctx.destroy(); }
+});
+
+test('all idle conversations with unknown daemon state show Nothing is running', async () => {
+  const h = setup();
+  try {
+    h.project.sessions = [{ sessionId: 'idle-a' }, { sessionId: 'idle-b' }];
+    h.w.cachedAllProjects = [h.project];
+    h.w.api.bgAgentLiveJob = async () => ({ known: false, reason: 'unrelated job has an unreadable state' });
+    await h.button().onclick(new h.w.MouseEvent('click'));
+    assert.equal(h.ctx.document.querySelector('.modal-overlay'), null);
+    assert.equal(h.ctx.document.querySelector('#app-notices [role=alert]'), null);
+    assert.equal(h.ctx.document.querySelector('#app-notices [role=status] .app-notice-message').textContent, 'Nothing is running to stop.');
+    assert.deepEqual(h.calls, []);
+  } finally { h.ctx.destroy(); }
+});
+
+test('unknown attached job refuses its part without classifying a plain conversation as background', async () => {
+  const h = setup();
+  try {
+    h.project.sessions = [{ sessionId: 'local', name: 'Plain conversation', mergedMemberIds: ['unknown-attach'] }];
+    h.w.cachedAllProjects = [h.project];
+    h.w.activePtyIds.add('unknown-attach');
+    h.w.openSessions.set('unknown-attach', { attach: true, attachJobId: 'eeff0011', session: { sessionId: 'unknown-attach' } });
+    h.w.api.bgAgentLiveJob = async () => ({ known: false, reason: 'unreadable state' });
+    const { done, overlay } = await start(h);
+    assert.match(overlay.textContent, /cannot tell whether a background job.*unreadable state/);
+    assert.equal(overlay.querySelector('input[type=radio]'), null);
+    await answerChoiceDialog(h.ctx, { confirm: true });
+    await done;
+    assert.deepEqual(h.calls, [['stop', 'local']]);
+    assert.ok(h.w.activePtyIds.has('unknown-attach'));
+  } finally { h.ctx.destroy(); }
+});
+
+test('ended attached jobs detach by default without classifying the conversation as background', async () => {
+  const h = setup();
+  try {
+    h.project.sessions = [{ sessionId: 'ended', name: 'Ended job' }];
+    h.w.cachedAllProjects = [h.project];
+    h.w.activePtyIds.add('ended');
+    h.w.openSessions.set('ended', { attach: true, attachJobId: 'eeff0011', session: h.project.sessions[0] });
+    const { done, overlay } = await start(h);
+    assert.equal(overlay.querySelector('input[type=radio]'), null);
+    assert.doesNotMatch(overlay.textContent, /refused unless/);
+    await answerChoiceDialog(h.ctx, { confirm: true });
+    await done;
+    assert.deepEqual(h.calls, [['stop', 'ended']]);
+    assert.ok(!h.w.activePtyIds.has('ended'));
+  } finally { h.ctx.destroy(); }
+});
+
+test('Stop the others only with all background candidates explains that nothing else was running', async () => {
+  const h = setup();
+  try {
+    h.project.sessions = [h.project.sessions[1], { sessionId: 'job-part', name: 'Second background conversation' }];
+    h.w.cachedAllProjects = [h.project];
+    const { done } = await start(h);
+    await answerChoiceDialog(h.ctx, { confirm: true });
+    await done;
+    assert.deepEqual(h.calls, []);
+    assert.match(h.ctx.document.querySelector('#app-notices [role=status]')?.textContent || '', /Kept 2 conversations with background jobs; nothing else was running/);
+  } finally { h.ctx.destroy(); }
+});
+
+test('Retry after a forced background failure preselects force and retries the failed job', async () => {
+  const h = setup();
+  try {
+    h.project.sessions = [{ sessionId: 'job-part', name: 'Background conversation' }];
+    h.w.cachedAllProjects = [h.project];
+    h.w.api.bgAgentVerb = async (verb, id) => { h.calls.push([verb, id]); return { ok: false, error: 'daemon refused' }; };
+    const { done, overlay } = await start(h);
+    overlay.querySelector('input[data-choice-id=force]').checked = true;
+    await answerChoiceDialog(h.ctx, { confirm: true });
+    await done;
+    assert.match(h.ctx.document.querySelector('#app-notices [role=alert]').textContent, /daemon refused/);
+    h.w.api.bgAgentVerb = async (verb, id) => { h.calls.push([verb, id]); return { ok: true }; };
+    const retry = h.ctx.read('appNoticeEntries').values().next().value.options.onAction();
+    const question = await answerChoiceDialog(h.ctx, { confirm: true });
+    const selected = question.querySelector('input[type=radio]:checked').dataset.choiceId;
+    await retry;
+    assert.equal(selected, 'force');
+    assert.deepEqual(h.calls, [['stop', 'aabbccdd'], ['stop', 'aabbccdd']]);
+    assert.equal(h.ctx.document.querySelector('#app-notices [role=alert]'), null);
+  } finally { h.ctx.destroy(); }
+});
+
+test('an unsynced unreachable host is attempted once across remote conversations and afresh on Retry', async () => {
+  const h = setup();
+  try {
+    h.project.sessions = ['remote-a', 'remote-b', 'remote-c'].map(sessionId => ({ sessionId, name: sessionId,
+      remoteAlias: 'vps', remoteHostAt: null }));
+    h.w.cachedAllProjects = [h.project];
+    h.w.api.remoteStopSession = async (alias, id) => { h.calls.push(['remote', alias, id]); return { ok: false, hostUnreachable: true, error: 'host has not synced' }; };
+    const { done } = await start(h);
+    await answerChoiceDialog(h.ctx, { confirm: true });
+    await done;
+    assert.deepEqual(h.calls, [['remote', 'vps', 'remote-a']]);
+    const alert = h.ctx.document.querySelector('#app-notices [role=alert]');
+    for (const id of ['remote-a', 'remote-b', 'remote-c']) assert.match(alert.textContent, new RegExp(id + '.*host has not synced'));
+    h.w.api.remoteStopSession = async (alias, id) => { h.calls.push(['remote', alias, id]); return { ok: true }; };
+    const retry = h.ctx.read('appNoticeEntries').values().next().value.options.onAction();
+    await answerChoiceDialog(h.ctx, { confirm: true });
+    await retry;
+    assert.deepEqual(h.calls.slice(1), ['remote-a', 'remote-b', 'remote-c'].map(id => ['remote', 'vps', id]));
+    assert.equal(h.ctx.document.querySelector('#app-notices [role=alert]'), null);
+  } finally { h.ctx.destroy(); }
+});
+
+test('archived running conversations remain in the full folder Stop scope', async () => {
+  const h = setup();
+  try {
+    h.project.sessions = [{ sessionId: 'local', name: 'Archived work', archived: true }];
+    h.w.cachedAllProjects = [h.project];
+    const { done, overlay } = await start(h);
+    assert.match(overlay.textContent, /Archived work/);
+    await answerChoiceDialog(h.ctx, { confirm: true });
+    await done;
+    assert.deepEqual(h.calls, [['stop', 'local']]);
+    assert.equal(h.project.sessions[0].archived, true);
   } finally { h.ctx.destroy(); }
 });

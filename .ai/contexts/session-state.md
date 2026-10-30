@@ -457,15 +457,26 @@ all including background jobs** and **Stop the others only**, with the latter
 selected and Cancel focused initially. The third outcome is Cancel. This is
 the same chooser underlying `appChoose`, with its supported danger and initial
 focus settings. With no background jobs, `appConfirm` asks once instead.
-Unknown jobs and processes live elsewhere retain their planner refusals;
-forcing never bypasses those checks.
+Background classification uses planned job targets that are still hosted, before
+job preflight validation; ended attached jobs only detach their tabs. Refusal
+wording never establishes that a conversation has a background job. In the folder
+batch only, an idle part with unknown daemon state and no observed live process
+is omitted, so an unreadable unrelated job cannot block a foreground conversation
+or flood an idle folder with refusals. Unknown attached jobs and processes live
+elsewhere retain their planner refusals; forcing never bypasses those checks.
 
 Execution continues after individual failures. One persistent
 `showSessionActionFailure('Stop all', project, ...)` notice names all failed
 conversations and targets and offers Retry. Retry replans only failed targets
 in the current folder, reconfirms once, and retains the existing job-stopped
 state when only detaching its tab needs retrying. Empty retries say nothing is
-running. No archive or transcript deletion is performed.
+running. Retry preselects the background-inclusive choice when a failed target
+still needs its job stopped. Choosing the others when every candidate has a
+background job reports how many conversations were kept and that nothing else
+was running. One unreachable-host map is shared across all conversations in the
+batch, and a fresh Retry gets a fresh map; single-row Stop keeps its own map.
+Archived conversation rows remain in the full cached folder scope. No archive
+or transcript deletion is performed.
 
 Evidence: `test/dom-project-stop-all-843.test.js`; upstream inspiration:
 Ali Basiri's ee656523 `confirmStopWork`.
