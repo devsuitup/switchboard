@@ -2,6 +2,7 @@
 'use strict';
 
 const os = require('os');
+const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
 
 let logger = null;
 
@@ -65,9 +66,19 @@ function resizePty(session, cols, rows, sessionId, options) {
   return withPty(session, 'resize', (pty) => pty.resize(cols, rows, options), sessionId);
 }
 
-function killPty(session, sessionId) {
+function killPty(session, sessionId, { stopTree = stopProcessTree, platform = process.platform } = {}) {
   if (!session || !session.pty || killedPtys.has(session.pty)) return false;
-  killedPtys.add(session.pty);
+  const pty = session.pty;
+  killedPtys.add(pty);
+  if (platform === 'win32' && session.kind === 'local-pty' && !session.exited
+    && !session.isAttach && !session.detaching && !session.backgrounding && !session.backgrounded && !session.host) {
+    const pid = pty.pid;
+    const isCurrent = () => !session.exited && session.pty === pty && pty.pid === pid;
+    void stopTree(pid, { graceMs: 100, isCurrent }).finally(() => {
+      withPty({ pty }, 'kill', target => target.kill(), sessionId);
+    });
+    return true;
+  }
   return withPty(session, 'kill', (pty) => pty.kill(), sessionId);
 }
 
