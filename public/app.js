@@ -1393,8 +1393,10 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   const isRow = typeof sessionOrId === 'object';
   const sessionId = isRow ? sessionOrId.sessionId : sessionOrId;
   const openEntry = openSessions.get(sessionId);
-  const session = isRow ? sessionOrId : { ...(sessionMap.get(sessionId) || openEntry?.session || rowSession), sessionId, mergedMemberIds: [] };
-  const planned = await planSessionStop(session, { attach: !!(openEntry?.attach && !openEntry.closed), retryTargets, jobStop: true });
+  const session = isRow ? sessionOrId : [...sessionMap.values()].find(row => row.mergedMemberIds?.includes(sessionId))
+    || sessionMap.get(sessionId) || openEntry?.session || rowSession || { sessionId };
+  const rowEntry = openSessions.get(session.sessionId);
+  const planned = await planSessionStop(session, { attach: !!(rowEntry?.attach && !rowEntry.closed), retryTargets, jobStop: true });
   const targets = [];
   const excluded = [...planned.excluded];
   for (const target of planned.targets) {
@@ -2519,10 +2521,6 @@ const openingSessions = new Map();
 
 // see .ai/contexts/session-state.md ("Opening a session once")
 function openSession(session, customOptions, flags = {}) {
-  if (!flags.automatic && !flags.chooseAgain && session.mergedMemberIds?.length && !rowOpenId(session)) {
-    const dormantId = rowSessionIds(session).find(id => dormantWorkingSet.has(id));
-    if (dormantId && dormantId !== session.sessionId) session = { ...session, sessionId: dormantId, mergedMemberIds: [] };
-  }
   const inFlight = openingSessions.get(session.sessionId);
   const open = { byUser: !flags.automatic, after: null };
   if (inFlight) {
