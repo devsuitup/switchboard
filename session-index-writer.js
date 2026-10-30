@@ -17,18 +17,26 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
   const mirror = new Map();
   const notify = (ids, change) => {
     try { options.onSessionsChanged?.(ids, change); }
-    catch (error) { (options.log || console).warn('[session-index-writer] sessions observer failed: ' + error.message); }
+    catch (error) { (options.log || console).warn('[session-index-writer] sessions observer failed: ' + (error?.message ?? String(error))); }
   };
-  const notifySessionsChanged = effects => {
+  const prepareSessionsChanged = effects => {
     if (!options.onSessionsChanged) return;
-    if (effects.some(effect => ['deleteCachedFolder', 'cleanupWorktree', 'dropRemoteFolder'].includes(effect.name))) { notify(null); return; }
-    const upserts = new Set(), deletions = new Set();
+    if (effects.some(effect => ['deleteCachedFolder', 'cleanupWorktree', 'dropRemoteFolder'].includes(effect.name))) return () => notify(null);
+    const upserts = new Set(), invalidations = new Set(), folders = new Map();
     for (const { name, args } of effects) {
-      if (name === 'upsertCachedSessions') for (const row of args[0]) upserts.add(row.sessionId);
-      else if (name === 'deleteCachedSession') deletions.add(args[0]);
+      if (name === 'upsertCachedSessions') for (const row of args[0]) {
+        const previous = folders.has(row.sessionId) ? folders.get(row.sessionId) : backend.getCachedSession?.(row.sessionId)?.folder;
+        if (previous !== undefined && previous !== row.folder) invalidations.add(row.sessionId);
+        folders.set(row.sessionId, row.folder);
+        upserts.add(row.sessionId);
+      }
+      else if (name === 'deleteCachedSession') invalidations.add(args[0]);
     }
-    if (deletions.size) notify([...deletions]);
-    if (upserts.size) notify([...upserts], { upsertOnly: true });
+    for (const id of invalidations) upserts.delete(id);
+    return () => {
+      if (invalidations.size) notify([...invalidations]);
+      if (upserts.size) notify([...upserts], { upsertOnly: true });
+    };
   };
   const client = options.client || createWriterWorkerClient({
     workerFactory: options.workerFactory || (() => new Worker(path.join(__dirname, 'workers', 'session-index-writer.js'))),
@@ -48,8 +56,10 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     recorder = createCacheEffects(backend);
   });
   ready.catch(() => {});
-  const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(() => client.request(name, ...args)).then(value => {
-    notifySessionsChanged([{ name, args }]);
+  const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(async () => {
+    const notifyChanges = prepareSessionsChanged([{ name, args }]);
+    const value = await client.request(name, ...args);
+    notifyChanges?.();
     return value;
   }));
   const compute = (name, ...args) => {
@@ -78,6 +88,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           effects = recorder.finish();
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector);
         }
+        const notifyChanges = prepareSessionsChanged(effects);
         let acknowledgment;
         try {
           acknowledgment = effects.length ? await client.request('effects', effects, revision) : null;
@@ -87,7 +98,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects') throw error;
           continue;
         }
-        notifySessionsChanged(effects);
+        notifyChanges?.();
         combinedResult = combinedResult === true || result === true ? true : combinedResult === 'activity' || result === 'activity' ? 'activity' : result;
         if (continuationCollector.deferred.size && !continuationRetry) {
           continuationRetry = true;

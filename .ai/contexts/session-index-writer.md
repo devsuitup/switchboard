@@ -26,11 +26,19 @@ The optional `onSessionsChanged(ids, change)` observer runs after the write ACK
 and, for a cache computation, after the final continuation apply. Observer
 exceptions are caught and logged through the facade's `log.warn` (console by
 default); they neither reject committed commands nor trigger stale-write retries.
-Direct `upsertCachedSessions` commands and recorded upsert effects report their
-deduplicated session ids with `{ upsertOnly: true }`. Direct `deleteCachedSession`
+The observer catch also accepts `null` and `undefined` thrown values, logging
+their string representation. Direct `upsertCachedSessions` commands and recorded
+upsert effects capture indexed folders before submission. An existing session
+whose folder changes reports its id without `upsertOnly`, invalidating even an
+available transcript memo (for example, a remote alias before its mirror exists).
+Other upserts report deduplicated ids with `{ upsertOnly: true }`.
+Direct `deleteCachedSession`
 commands and recorded session-delete effects report deduplicated ids without an
 upsert flag. A mixed batch reports deletions first, then upserts in a separate
-call, so available upserted sessions keep their memo. Direct `deleteCachedFolder`,
+call, so available sessions upserted in the same folder keep their memo. Changed
+folder ids join the deletion invalidation call and are excluded from the upsert-only
+call. Notification plans are published only after ACK and final continuation apply;
+failed attempts discard their plans. Direct `deleteCachedFolder`,
 `cleanupWorktree` and `dropRemoteFolder` commands, or a recorded `deleteCachedFolder`
 effect, report `null` once for full invalidation instead of per-session calls.
 Other commands/effects do not notify, including `touchCachedModified` and

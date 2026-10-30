@@ -190,7 +190,7 @@ function scheduleRebuild() {
 }
 
 function invalidateTranscripts(sessionIds, { upsertOnly = false } = {}) {
-  const ids = sessionIds && new Set(sessionIds.map(id => id.toLowerCase()));
+  const ids = sessionIds && new Set(sessionIds.filter(id => typeof id === 'string').map(id => id.toLowerCase()));
   let changed = false;
   for (const [key, entry] of transcriptMemo) {
     if (ids && !ids.has(entry.sessionId)) continue;

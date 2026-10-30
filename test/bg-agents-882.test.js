@@ -12,10 +12,11 @@ function fixture(t, indexed = true) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'bg-882-')));
   t.after(() => { bg.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
   const descriptors = [{ kind: 'interactive', sessionId: 'session-a', cwd: dir }];
-  let descriptorChanged, lookups = 0, stats = 0, throws = 0;
+  let descriptorChanged, resolvedFile, lookups = 0, stats = 0, throws = 0;
   const stat = fs.statSync;
   const file = path.join(dir, 'session-a.jsonl');
-  const resolveFile = () => { lookups++; return indexed ? file : null; };
+  resolvedFile = file;
+  const resolveFile = () => { lookups++; return indexed ? resolvedFile : null; };
   fs.writeFileSync(file, 'transcript');
   t.mock.method(fs, 'statSync', (p, opts) => {
     if (p === file || p === file + '.missing') stats++;
@@ -30,6 +31,7 @@ function fixture(t, indexed = true) {
   });
   bg.start();
   return { file, descriptors, counts: () => ({ lookups, stats, throws }),
+    setResolvedFile: value => { resolvedFile = value; },
     setIndexed: value => { indexed = value; }, change: () => descriptorChanged(),
     indexed: ids => bg.invalidateTranscripts(ids) };
 }
@@ -97,7 +99,7 @@ test('882b committed upserts keep available memos and deletions recheck them', a
   assert.equal((await bg.reconcile()).roster[0].transcriptAvailable, true);
   let db, metadataOnly = false, scheduled = 0;
   const writer = createSessionIndexWriter({
-    readonlyBackend: { getSetting: () => 0, getCachedSession: () => ({ sessionId: 'session-a' }), getMeta: () => null },
+    readonlyBackend: { getSetting: () => 0, getCachedSession: () => ({ sessionId: 'session-a', folder: 'folder' }), getMeta: () => null },
     onSessionsChanged: (...args) => bg.invalidateTranscripts(...args),
     client: { ready: Promise.resolve(), request: async () => {} },
   }, { init: ctx => { db = ctx.db; }, refreshFolder() {
@@ -131,4 +133,52 @@ test('882b committed upserts keep available memos and deletions recheck them', a
   const snapshot = await pushed;
   assert.equal(snapshot.roster[0].transcriptAvailable, false, 'deletions must evict previously available entries');
   assert.equal(f.counts().lookups, before.lookups + 1);
+});
+
+for (const mode of ['compute', 'direct']) {
+  test(`894 ${mode} upserts recheck available transcripts only when their indexed folder changes`, async t => {
+    const f = fixture(t);
+    assert.equal((await bg.reconcile()).roster[0].transcriptAvailable, true);
+    let db, folder = 'local', committed = { sessionId: 'session-a', folder };
+    const events = [];
+    const writer = createSessionIndexWriter({
+      readonlyBackend: { getSetting: () => 0, getCachedSession: () => committed, getMeta: () => null },
+      onSessionsChanged: (...args) => { events.push(args); bg.invalidateTranscripts(...args); },
+      client: { ready: Promise.resolve(), async request(name, ...args) {
+        const rows = name === 'effects' ? args[0].find(effect => effect.name === 'upsertCachedSessions').args[0] : args[0];
+        committed = { ...rows[0] };
+        f.setResolvedFile(committed.folder === 'local' ? f.file : f.file + '.missing');
+      } },
+    }, { init: ctx => { db = ctx.db; }, refreshFolder() {
+      db.upsertCachedSessions([{ sessionId: 'session-a', folder }]);
+      return true;
+    } });
+    await writer.ready;
+    writer.initializeCache({});
+    const upsert = () => mode === 'compute' ? writer.refreshFolder(folder) : writer.upsertCachedSessions([{ sessionId: 'session-a', folder }]);
+    await nextPush(() => { f.descriptors[0].name = 'settled'; f.change(); });
+    const before = f.counts().lookups;
+    await upsert();
+    await nextPush(() => { f.descriptors[0].name = 'same-folder'; f.change(); });
+    assert.equal(f.counts().lookups, before, 'same-folder upserts preserve available memos');
+    events.length = 0;
+    folder = 'remote-alias::local';
+    const pushed = nextPush(() => {}, true);
+    await upsert();
+    const snapshot = await pushed;
+    assert.equal(snapshot.roster[0].transcriptAvailable, false, 'moving to an unmirrored folder invalidates available transcripts');
+    assert.equal(f.counts().lookups, before + 1);
+    assert.deepEqual(events, [[['session-a'], undefined]], 'folder moves notify without upsertOnly');
+  });
+}
+
+test('894 a malformed id cannot discard valid transcript invalidations in the same batch', async t => {
+  const f = fixture(t);
+  assert.equal((await bg.reconcile()).roster[0].transcriptAvailable, true);
+  fs.unlinkSync(f.file);
+  const pushed = nextPush(() => {}, true);
+  assert.doesNotThrow(() => bg.invalidateTranscripts([null, 42, undefined, {}, 'SESSION-A']));
+  const snapshot = await pushed;
+  assert.equal(snapshot.roster[0].transcriptAvailable, false);
+  assert.equal(f.counts().lookups, 2);
 });
