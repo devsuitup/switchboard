@@ -222,6 +222,12 @@ for (const method of ['refreshNow', 'refreshHostNow']) {
   for (const [kind, messages, expected] of [
     ['relative paths', ['read projects/foo failed', 'read projects/bar failed'], 2],
     ['URL hosts', ['read https://alpha.example/cache failed', 'read https://beta.example/cache failed'], 2],
+    ['paths after equals', ['path=/x/a', 'path=/y/b'], 1],
+    ['paths after opening parenthesis', ['failed (/x/a)', 'failed (/y/b)'], 1],
+    ['paths after colon', ['failed:/x/a', 'failed:/y/b'], 1],
+    ['Windows paths after opening parenthesis', ['(C:\\x)', '(D:\\y)'], 1],
+    ['backslash paths after equals', ['path=\\x\\a', 'path=\\y\\b'], 1],
+    ['URLs after equals', ['path=https://alpha.example/cache', 'path=https://beta.example/cache'], 2],
     ['absolute paths', ['/tmp/alpha failed', 'C:\\Temp\\beta failed', 'read "/tmp/alpha beta" failed', 'read "C:\\Temp\\gamma delta" failed', 'read /tmp/other failed'], 2],
     ['bare UUIDs', ['session 12345678-abcd-4abc-8abc-123456789abc failed', 'session fedcba98-1234-4567-8def-fedcba987654 failed'], 1],
   ]) {

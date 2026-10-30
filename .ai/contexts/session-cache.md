@@ -75,8 +75,10 @@ back to the id. Snapshot changes route through the debounced watcher to a
 projects notification without refreshing transcripts or widening pending targeted
 scans. The watcher compares titles observed in snapshot events and suppresses
 repeat notifications when only status changes; the first event has no known
-title baseline and notifies. Deleted snapshots discard the baseline and notify
-when the title changes to the run id; partial JSON preserves the last title.
+title baseline and notifies. Deleted snapshots retain the run id as the baseline
+and notify when the title changes or no baseline exists, including after
+folder-scope pruning in the same flush; repeated deletions remain quiet.
+Partial JSON preserves the last title.
 Folder-scope pruning precedes snapshot reads, keeping titles read in the same
 flush as the baseline for later status-only events.
 Local reconciliation runs at startup and on
@@ -585,7 +587,9 @@ Remote head-turn refresh is best-effort after a successful mirror/index cycle.
 successful head-turn refresh, which logs one recovery message (#873, #885).
 Failure identity combines `err.code || err.name` with the message after
 normalising digits, bare UUIDs and absolute paths anchored at the start of text,
-whitespace or a quote; relative paths and URL hosts remain distinct. Each host
+whitespace, a quote, `=`, `(` or `:`. Slash and backslash paths are accepted after
+those separators; the slash path branch excludes `//`, preserving URL hosts.
+Relative paths and URL hosts remain distinct. Each host
 retains at most 20 signatures, evicting the oldest on overflow; alternating
 failures retain their dedup entries within that bound. Warnings keep the
 original diagnostic text. Removing a host and calling

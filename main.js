@@ -3627,8 +3627,9 @@ function startProjectsWatcher() {
         workflowTitles.set(filename, title);
       } catch (err) {
         if (err.code === 'ENOENT') {
-          if (workflowTitles.has(filename) && workflowTitles.get(filename) !== path.basename(filename, '.json')) changed = true;
-          workflowTitles.delete(filename);
+          const runId = path.basename(filename, '.json');
+          if (workflowTitles.get(filename) !== runId) changed = true;
+          workflowTitles.set(filename, runId);
         }
       }
     }
