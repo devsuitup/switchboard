@@ -2101,9 +2101,9 @@ scheduleActiveSessionsPoll();
 
 // Refresh sidebar timeago labels every 30s so "just now" ticks forward
 setInterval(() => {
-  for (const project of cachedProjects) {
+  for (const project of renderProjects.lastProjects || []) {
     if (!project.remoteAlias) continue;
-    const dot = document.getElementById('ph-' + folderId(project.projectPath))?.querySelector('.remote-host-dot');
+    const dot = document.getElementById('ph-' + folderId(project.projectPath, project.remoteAlias))?.querySelector('.remote-host-dot');
     if (!dot) continue;
     const title = remoteHostState(project).detail;
     if (dot.title !== title) dot.title = title;

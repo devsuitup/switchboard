@@ -54,7 +54,16 @@ refresh, and Mark as read through `refreshSidebar({ skipUnchanged: true })`.
 The same ticker refreshes remote-host dot titles through `remoteHostState`,
 including confirmation ages, retry countdowns and capability details, without
 rebuilding the sidebar. An equality guard avoids DOM mutations for unchanged
-titles. The skip-key table independently covers background agents, active
+titles.
+The ticker uses `renderProjects.lastProjects`, the exact input retained after a
+successful render, including narrowed search sessions and Show archived projects.
+It does not recalculate host live counts from the default project cache.
+`folderId(projectPath, remoteAlias)` preserves local ids and encodes the remote
+alias/path tuple for remote groups. Headers prepend `ph-` to that id; ticker
+lookup, event binding, nested worktrees, archive busy keys and morphdom's group,
+header and list keys share this identity. The #543 skip key includes these
+alias-aware archive busy keys through `archivingGroupIds`.
+The skip-key table independently covers background agents, active
 children, dormant rows, task counts, detach availability, both archive locks,
 age-cutoff membership, the 30-second clock bucket and the local day string;
 each added case is checked by dropping its own key term (#871).

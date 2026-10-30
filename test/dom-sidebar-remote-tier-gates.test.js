@@ -41,7 +41,7 @@ function project(profile, s) {
 function render(ctx, profile, s) {
   ctx.window.sessionMap.set(s.sessionId, s);
   ctx.sidebar.renderProjects([project(profile, s)], true);
-  const header = ctx.document.getElementById('ph-' + ctx.sidebar.folderId('/srv/supervision'));
+  const header = ctx.document.getElementById('ph-' + ctx.sidebar.folderId('/srv/supervision', 'planificator'));
   return { header, item: ctx.document.getElementById('si-remote-1') };
 }
 

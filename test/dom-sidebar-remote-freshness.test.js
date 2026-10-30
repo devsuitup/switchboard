@@ -17,7 +17,7 @@ function remoteProject(overrides) {
 }
 
 function hostDot(ctx, projectPath) {
-  const fId = ctx.sidebar.folderId(projectPath);
+  const fId = ctx.sidebar.folderId(projectPath, 'planificator');
   const header = ctx.document.getElementById('ph-' + fId);
   assert.ok(header, 'project header must render for ' + projectPath);
   return header.querySelector('.remote-host-dot');

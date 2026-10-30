@@ -30,7 +30,7 @@ test('the new-session button of a remote project group is disabled', () => {
   const ctx = setupSidebarDom();
   try {
     ctx.sidebar.renderProjects([remoteProject()], true);
-    const fId = ctx.sidebar.folderId('/srv/supervision');
+    const fId = ctx.sidebar.folderId('/srv/supervision', 'planificator');
     const header = ctx.document.getElementById('ph-' + fId);
     const newBtn = header.querySelector('.project-new-btn');
     assert.ok(newBtn, 'the button must still render');
@@ -43,7 +43,7 @@ test('clicking the new-session button of a remote project group opens nothing', 
   const ctx = setupSidebarDom();
   try {
     ctx.sidebar.renderProjects([remoteProject()], true);
-    const fId = ctx.sidebar.folderId('/srv/supervision');
+    const fId = ctx.sidebar.folderId('/srv/supervision', 'planificator');
     const header = ctx.document.getElementById('ph-' + fId);
     const newBtn = header.querySelector('.project-new-btn');
 
