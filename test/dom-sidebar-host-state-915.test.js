@@ -1,4 +1,4 @@
-﻿const test = require('node:test');
+const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
