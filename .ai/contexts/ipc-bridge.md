@@ -442,6 +442,14 @@ closes a given pty once (a `WeakSet` of killed ptys), and `resizePty` /
 proves it against the real node-pty in a child process (Windows only): with the
 guard removed the child dies with 3221226356.
 
+Both ConPTY suites use `test/pty-ops-conpty-stage.js` to copy node-pty into
+TEMP. A reusable stage requires `.complete`, `node-pty/package.json`,
+`node-pty/lib/index.js` and `node-pty/prebuilds/<platform>-<arch>` (#749).
+An incomplete stage is renamed aside before best-effort removal and atomic
+publication of a fresh temporary copy. Rename conflicts reuse only a complete
+winner; other failures propagate. `test/pty-ops-conpty-stage.test.js` covers
+missing components, untouched reuse, relocation and publication races.
+
 node-pty 1.2.0-beta.15 (#409) adds a mutex around the handle table
 (microsoft/node-pty#922). In 1.1.0 the shell's exit thread erases the pty's
 entry, and frees it, without a lock, while the main thread may be inside
