@@ -219,6 +219,7 @@ test('a completed winner appearing during a failed stale relocation is reused', 
   fs.mkdirSync(dir);
   t.mock.method(fs, 'renameSync', (from) => {
     assert.equal(from, dir);
+    fs.cpSync(src, path.join(dir, 'node-pty'), { recursive: true });
     fs.writeFileSync(path.join(dir, '.complete'), '');
     throw Object.assign(new Error('busy winner'), { code: 'EBUSY' });
   });
@@ -290,6 +291,8 @@ test('consecutive stagings reuse one complete directory without copying again', 
   const { tmpRoot, src } = fixture(t);
   const first = stageNodePty(tmpRoot, src);
   fs.writeFileSync(path.join(src, 'lib', 'index.js'), 'changed source');
+  t.mock.method(fs, 'cpSync', () => assert.fail('a complete stage must be reused untouched'));
+  t.mock.method(fs, 'renameSync', () => assert.fail('a complete stage must not be relocated'));
   const second = stageNodePty(tmpRoot, src);
 
   assert.equal(second.dir, first.dir);
@@ -298,6 +301,84 @@ test('consecutive stagings reuse one complete directory without copying again', 
   assert.equal(fs.readFileSync(path.join(second.nodePty, 'lib', 'index.js'), 'utf8'), 'original library');
   assert.ok(fs.existsSync(path.join(second.dir, '.complete')));
 });
+
+test('a marker-only directory is re-staged with its module', (t) => {
+  const { tmpRoot, src, prebuild } = fixture(t);
+  const dir = path.join(tmpRoot, `sb-nodepty-1.0.0-${process.platform}-${process.arch}`);
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, '.complete'), '');
+
+  const staged = stageNodePty(tmpRoot, src);
+
+  assert.ok(fs.existsSync(path.join(staged.nodePty, 'package.json')), 'marker-only stage must restore package.json');
+  assert.equal(fs.readFileSync(path.join(staged.nodePty, 'lib', 'index.js'), 'utf8'), 'original library');
+  assert.equal(fs.readFileSync(path.join(staged.nodePty, prebuild, 'pty.node'), 'utf8'), 'original prebuild');
+  assert.deepEqual(fs.readdirSync(tmpRoot), [path.basename(dir)]);
+});
+
+for (const missing of ['package.json', path.join('lib', 'index.js'), path.join('prebuilds', `${process.platform}-${process.arch}`),
+  path.join('prebuilds', `${process.platform}-${process.arch}`, 'pty.node')]) {
+  test(`a marked stage missing ${missing} is re-staged`, (t) => {
+    const { tmpRoot, src } = fixture(t);
+    const first = stageNodePty(tmpRoot, src);
+    fs.rmSync(path.join(first.nodePty, missing), { recursive: true, force: true });
+    fs.writeFileSync(path.join(first.nodePty, 'obsolete'), 'partial residue');
+
+    const staged = stageNodePty(tmpRoot, src);
+
+    assert.ok(fs.existsSync(path.join(staged.nodePty, missing)), 'missing module component must be restored');
+    assert.equal(fs.existsSync(path.join(staged.nodePty, 'obsolete')), false);
+    assert.deepEqual(fs.readdirSync(tmpRoot), [path.basename(first.dir)]);
+  });
+}
+
+test('a marker-only directory appearing after the first check is re-staged', (t) => {
+  const { tmpRoot, src } = fixture(t);
+  const dir = path.join(tmpRoot, `sb-nodepty-1.0.0-${process.platform}-${process.arch}`);
+  const exists = fs.existsSync;
+  let first = true;
+  t.mock.method(fs, 'existsSync', (target) => {
+    if (target === path.join(dir, '.complete') && first) {
+      first = false;
+      fs.mkdirSync(dir);
+      fs.writeFileSync(target, '');
+      return false;
+    }
+    return exists(target);
+  });
+
+  const staged = stageNodePty(tmpRoot, src);
+
+  assert.ok(fs.existsSync(path.join(staged.nodePty, 'package.json')), 'second check must reject marker-only stage');
+});
+
+test('a marker appearing during a failed stale relocation does not make the stage complete', (t) => {
+  const { tmpRoot, src } = fixture(t);
+  const dir = path.join(tmpRoot, `sb-nodepty-1.0.0-${process.platform}-${process.arch}`);
+  fs.mkdirSync(dir);
+  const failure = Object.assign(new Error('locked incomplete stage'), { code: 'EBUSY' });
+  t.mock.method(fs, 'renameSync', () => {
+    fs.writeFileSync(path.join(dir, '.complete'), '');
+    throw failure;
+  });
+
+  assert.throws(() => stageNodePty(tmpRoot, src), (error) => error === failure);
+});
+
+for (const code of ['EEXIST', 'ENOTEMPTY', 'EPERM', 'EBUSY']) {
+  test(`a publication conflict with ${code} rejects a marker-only winner`, (t) => {
+    const { tmpRoot, src } = fixture(t);
+    const failure = Object.assign(new Error('incomplete winner'), { code });
+    t.mock.method(fs, 'renameSync', (from, to) => {
+      fs.mkdirSync(to);
+      fs.writeFileSync(path.join(to, '.complete'), '');
+      throw failure;
+    });
+
+    assert.throws(() => stageNodePty(tmpRoot, src), (error) => error === failure);
+    assert.equal(fs.readdirSync(tmpRoot).some((name) => name.includes('.tmp-')), false);
+  });
+}
 
 test('a directory without the completion marker is cleared and re-staged', (t) => {
   const { tmpRoot, src, prebuild } = fixture(t);

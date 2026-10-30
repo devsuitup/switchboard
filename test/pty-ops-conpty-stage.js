@@ -11,11 +11,19 @@ function removeBestEffort(dir) {
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
+function filesUnder(root, rel) {
+  return fs.readdirSync(path.join(root, rel), { withFileTypes: true }).flatMap(entry => entry.isDirectory()
+    ? filesUnder(root, path.join(rel, entry.name)) : [path.join(rel, entry.name)]);
+}
+
 function stageNodePty(tmpRoot, src) {
   const { version } = JSON.parse(fs.readFileSync(path.join(src, 'package.json'), 'utf8'));
   const dir = path.join(tmpRoot, `sb-nodepty-${version}-${process.platform}-${process.arch}`);
   const dst = path.join(dir, 'node-pty');
   const marker = path.join(dir, '.complete');
+  const prebuild = path.join('prebuilds', `${process.platform}-${process.arch}`);
+  const required = ['package.json', ...filesUnder(src, 'lib'), ...filesUnder(src, prebuild)];
+  const isComplete = () => fs.existsSync(marker) && required.every(file => fs.existsSync(path.join(dst, file)));
   for (const entry of fs.readdirSync(tmpRoot, { withFileTypes: true })) {
     const stale = path.join(tmpRoot, entry.name);
     if (entry.isDirectory() && entry.name.startsWith('sb-nodepty-') && stale !== dir) {
@@ -25,21 +33,20 @@ function stageNodePty(tmpRoot, src) {
       } catch {}
     }
   }
-  if (fs.existsSync(marker)) return { dir, nodePty: dst };
+  if (isComplete()) return { dir, nodePty: dst };
   if (fs.existsSync(dir)) {
-    if (fs.existsSync(marker)) return { dir, nodePty: dst };
+    if (isComplete()) return { dir, nodePty: dst };
     const stale = `${dir}.stale-${randomUUID()}`;
     try {
       fs.renameSync(dir, stale);
     } catch (error) {
-      if (fs.existsSync(marker)) return { dir, nodePty: dst };
+      if (isComplete()) return { dir, nodePty: dst };
       if (error.code !== 'ENOENT') throw error;
     }
     removeBestEffort(stale);
   }
   const tmpDir = fs.mkdtempSync(`${dir}.tmp-`);
   const tmpDst = path.join(tmpDir, 'node-pty');
-  const prebuild = path.join('prebuilds', `${process.platform}-${process.arch}`);
   try {
     fs.cpSync(path.join(src, 'lib'), path.join(tmpDst, 'lib'), { recursive: true });
     fs.cpSync(path.join(src, prebuild), path.join(tmpDst, prebuild), { recursive: true });
@@ -48,7 +55,7 @@ function stageNodePty(tmpRoot, src) {
     try {
       fs.renameSync(tmpDir, dir);
     } catch (error) {
-      if (!RENAME_CONFLICTS.has(error.code) || !fs.existsSync(marker)) throw error;
+      if (!RENAME_CONFLICTS.has(error.code) || !isComplete()) throw error;
       removeBestEffort(tmpDir);
     }
   } catch (error) {
