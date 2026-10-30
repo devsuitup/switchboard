@@ -113,6 +113,7 @@ function createRemoteIndexer(ctx) {
   const hostInFlight = new Set();
   const hostTools = new Map(); // alias -> { tools: { tmux, inotifywait } | null, nextProbeAt }
   const headTurnErrors = new Map();
+  const checkedGhostFolders = new Set();
 
   function backoffState(alias) {
     let s = hostBackoff.get(alias);
@@ -198,6 +199,9 @@ function createRemoteIndexer(ctx) {
     for (const alias of [...headTurnErrors.keys()]) {
       if (!known.has(alias)) headTurnErrors.delete(alias);
     }
+    for (const key of checkedGhostFolders) {
+      if (!known.has(parseFolderKey(key).alias)) checkedGhostFolders.delete(key);
+    }
     return dropped;
   }
 
@@ -255,6 +259,7 @@ function createRemoteIndexer(ctx) {
 
     // A mirror on disk but absent from the cache reports no change; index it once.
     const indexed = new Set();
+    const fullRepairs = new Set();
     if (ctx.listIndexedFolderKeys) {
       for (const key of ctx.listIndexedFolderKeys()) {
         const parsed = parseFolderKey(key);
@@ -263,12 +268,27 @@ function createRemoteIndexer(ctx) {
       const present = mirrorFolders(projectsDir);
       for (const folder of present) {
         if (!indexed.has(folder)) toScan.add(folder);
+        const key = joinFolderKey(host.alias, folder);
+        if (checkedGhostFolders.has(key) || !ctx.getCachedByFolder) continue;
+        const ghost = ctx.getCachedByFolder(key).some(row => !row.parentSessionId
+          && row.sessionId.startsWith('agent-')
+          && !fs.existsSync(path.join(projectsDir, folder, row.sessionId + '.jsonl')));
+        if (ghost) {
+          fullRepairs.add(folder);
+          toScan.add(folder);
+        } else {
+          checkedGhostFolders.add(key);
+        }
       }
       // And a folder the cache still knows about but the mirror no longer has.
       if (ctx.dropFolder) {
         const presentSet = new Set(present);
         for (const folder of indexed) {
-            if (!presentSet.has(folder)) await ctx.dropFolder(joinFolderKey(host.alias, folder));
+            if (!presentSet.has(folder)) {
+              const key = joinFolderKey(host.alias, folder);
+              await ctx.dropFolder(key);
+              checkedGhostFolders.delete(key);
+            }
         }
       }
     }
@@ -277,16 +297,19 @@ function createRemoteIndexer(ctx) {
       // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
       const fileSubsets = new Map();
       for (const folder of toScan) {
-        if (!indexed.has(folder)) continue;
+        if (!indexed.has(folder) || fullRepairs.has(folder)) continue;
         const files = changedFilesByFolder.get(folder);
         if (files && files.size > 0) fileSubsets.set(folder, files);
       }
-      await ctx.scanFolders({
+      const scanned = await ctx.scanFolders({
         projectsDir,
         folderPrefix,
         folders: [...toScan],
         ...(fileSubsets.size > 0 ? { fileSubsets } : {}),
       });
+      if (scanned?.ok !== false) {
+        for (const folder of fullRepairs) checkedGhostFolders.add(joinFolderKey(host.alias, folder));
+      }
     }
 
     log.info(`[remote:${host.alias}] ${result.fetched} fetched, ${result.unchanged} unchanged, ` +
@@ -411,6 +434,7 @@ function createRemoteIndexer(ctx) {
 
   function stop() {
     stopped = true;
+    checkedGhostFolders.clear();
     if (timer) {
       timers.clearInterval(timer);
       timer = null;

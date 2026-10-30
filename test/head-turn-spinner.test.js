@@ -205,9 +205,11 @@ for (const method of ['refreshNow', 'refreshHostNow']) {
       const batches = [];
       const pushes = [];
       let scans = 0;
+      const cachedRows = [{ sessionId: 'root', folder: 'host::-p' }, { sessionId: 'local', folder: '-p' }];
       const context = vm.createContext({
         refreshRemoteHeadTurnsFromCache: require('../remote-index').refreshRemoteHeadTurns,
-        path, getAllCached: () => [{ sessionId: 'root', folder: 'host::-p' }, { sessionId: 'local', folder: '-p' }],
+        path, getAllCached: () => cachedRows,
+        getCachedByFolder: folder => cachedRows.filter(row => row.folder === folder),
         getAllMeta: () => new Map(), parseFolderKey: require('../remote-hosts').parseFolderKey,
         projectsDirForFolder: () => dir,
         getAllFolderMeta: () => new Map([['host::-p', {}]]),

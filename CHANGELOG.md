@@ -9,7 +9,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - In Agents, finished jobs sharing a live conversation keep separate selections and action errors. Selection follows a conversation into its job, and Transcript becomes available as soon as indexing finishes and is rechecked after worktree or remote-folder removal; when it opens the live session instead of a job's earlier transcript, the detail explains this. (#530, #882)
-- Workflow agents appear under the session that started them, grouped by run, instead of as separate sessions; entries an older build listed separately on this computer are regrouped. (#875)
+- Workflow agents appear under the session that started them, grouped by run, instead of as separate sessions; entries an older build listed separately locally or on a remote host are regrouped. (#875)
 - The sessions sidebar skips rebuilding when a background refresh brings back identical data and its display state has not changed. Changed data is checked faster, exit labels stay current, and waiting ages advance every 30 seconds. (#543)
 - Remote hosts stay connected and keep refreshing when a local session-state read fails. (#701)
 - Failed scheduled runs now leave a persistent notice with the schedule name, exit code and what to check, even after Run now has shown its launch check mark. While the app window exists, repeated cron failures share one notice with a count and the latest error. (#707)
