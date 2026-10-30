@@ -45,7 +45,22 @@ request first, because `main` is protected.
 
 4. **Wait for the build.** The tag starts `.github/workflows/build.yml`: macOS
    (macos-14), Windows (windows-2022), and Linux x64 and arm64 on separate
-   runners. Its publish job then:
+   runners. Pull requests build only Windows and both Linux architectures;
+   macOS remains part of every tag build. Each build job has a 60-minute timeout.
+   The publish job keeps `needs: build`: all matrix entries must succeed before
+   it runs. If macOS fails, is cancelled or times out, nothing is published
+   automatically, even when Windows and Linux succeed.
+
+   To recover, re-run the failed macOS job in the tag's Actions run (or re-run
+   failed jobs) and let the dependent publish job run once every build succeeds.
+   Alternatively, create the release draft by hand using only artifacts from
+   that tag's successful builds and the tag's changelog section. If macOS
+   artifacts are absent, omit `latest-mac.yml`. Never copy a previous release's
+   mac manifest: upload it only when its version, filenames, sizes and hashes
+   match the macOS files actually attached to this release. Check the draft's
+   assets before publishing it as described below.
+
+   After all builds succeed, the publish job:
    - creates a **draft** release named after the version;
    - uploads each artifact separately, retrying each up to five times — 19
      assets for a full build (dmg, zip and their blockmaps for arm64 and x64; the
