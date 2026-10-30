@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { renameWithRetry } = require('./src/main/shared/atomic-write');
 const { isSafeMirrorRelPath } = require('./remote-hosts');
 const {
   resolveSshPath: defaultResolveSshPath,
@@ -354,7 +355,7 @@ function createSshTransport(opts = {}) {
       return false;
     }
     try {
-      fs.renameSync(tmpPath, destPath);
+      renameWithRetry(tmpPath, destPath);
     } catch (err) {
       try { fs.rmSync(tmpPath, { force: true }); } catch {}
       log.warn(`[remote:${alias}] could not place ${rel}: ${err.message}`);
@@ -409,7 +410,7 @@ function createSshTransport(opts = {}) {
       // Copy-then-append-then-rename. see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
       fs.copyFileSync(destPath, tmpPath);
       fs.appendFileSync(tmpPath, res.stdoutBuffer);
-      fs.renameSync(tmpPath, destPath);
+      renameWithRetry(tmpPath, destPath);
     } catch (err) {
       try { fs.rmSync(tmpPath, { force: true }); } catch {}
       log.warn(`[remote:${alias}] could not append ${rel}: ${err.message}`);

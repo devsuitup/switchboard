@@ -15,6 +15,11 @@
 
 ## Public surface
 
+Result publication uses the synchronous Windows rename retry policy documented
+in [session-cache.md](session-cache.md#atomic-rename-retries-on-windows-900).
+After retry exhaustion, the existing log-and-delete-trigger behaviour still
+loses the result; this change does not add recovery or replay.
+
 ### Escape key trigger
 
 `{ "sessionId": "<id>", "key": "escape" }` sends exactly one `\x1b` byte to

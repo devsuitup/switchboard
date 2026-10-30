@@ -1,5 +1,6 @@
 // schedule-runner.js — Scan schedule-*.md files, match cron, build commands
 const fs = require('fs');
+const { renameWithRetry } = require('./src/main/shared/atomic-write');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
@@ -653,7 +654,7 @@ function setScheduleEnabled(filePath, enabled, { projectRoot, rewrite = rewriteE
     tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
     fs.writeFileSync(tmp, next, { mode });
     fs.chmodSync(tmp, mode);
-    rename(tmp, filePath);
+    renameWithRetry(tmp, filePath, { rename });
     tmp = null;
     return { ok: true };
   } catch (err) {
