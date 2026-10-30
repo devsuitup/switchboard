@@ -347,7 +347,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         firstPrompt: summary,
         created: stat.birthtime.toISOString(),
         modified: stat.mtime.toISOString(),
-        fileMtime: stat.mtime.toISOString(),
+        fileMtime: continuationMtime(fs.statSync(filePath, { bigint: true })),
         fileSize: stat.size,
         messageCount, textContent, slug, customTitle: customTitle || '', aiTitle,
         parentSessionId: opts.parentSessionId,
@@ -618,6 +618,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
   const MAX_LINES = 500;
   try {
     const stat = fs.statSync(filePath);
+    const fileMtime = continuationMtime(fs.statSync(filePath, { bigint: true }));
     const readLen = Math.min(MAX_BYTES, stat.size);
     const fd = fs.openSync(filePath, 'r');
     const buf = Buffer.alloc(readLen);
@@ -702,6 +703,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
         summary: meta.description || summary,
         firstPrompt: summary,
         modified: stat.mtime.toISOString(),
+        fileMtime,
         slug, customTitle, headTitle, tailTitle, aiTitle,
         parentSessionId: opts.parentSessionId,
         workflowRunId: opts.workflowRunId || null,
@@ -715,6 +717,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
       sessionId: fileBase,
       summary, firstPrompt: summary,
       modified: stat.mtime.toISOString(),
+      fileMtime,
       slug, scheduleSlug, scheduleSlugComplete, customTitle, headTitle, tailTitle, aiTitle,
     };
   } catch {
