@@ -24,7 +24,6 @@
     "derive-project-path.js",
     "encode-project-path.js",
     "file-lists.js",
-    "file-lists-path.js",
     "file-lists-worker-client.js",
     "folder-index-state.js",
     "fts-match.js",

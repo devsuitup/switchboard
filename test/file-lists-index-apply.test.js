@@ -116,10 +116,10 @@ test('an oversized UTF-8 body is clamped at a complete character and later entri
 });
 
 test('saving one indexed path does not normalize every indexed ID again', async () => {
-  const { fileListPathKey } = require('../file-lists-path');
+  const { fileListPathKey } = require('../src/main/viewer/file-lists-path');
   const mainRequire = require('node:module').createRequire(path.join(__dirname, '..', 'main.js'));
   let normalized = 0;
-  const ctx = mainIndex({ require: id => id === './file-lists-path'
+  const ctx = mainIndex({ require: id => id === './src/main/viewer/file-lists-path'
     ? { fileListPathKey: (...args) => { normalized++; return fileListPathKey(...args); } }
     : mainRequire(id) });
   ctx.fileListsSnapshot('memory');
@@ -228,7 +228,7 @@ test('a successful apply clears bounded whole-type invalidation for the next sna
 });
 
 test('path keys fold Windows case and separators while preserving POSIX case', () => {
-  const { fileListPathKey } = require('../file-lists-path');
+  const { fileListPathKey } = require('../src/main/viewer/file-lists-path');
   const file = path.resolve('repo/.claude/Note.md');
   assert.equal(fileListPathKey(file, 'win32'), file.replace(/\\/g, '/').toLowerCase());
   assert.equal(fileListPathKey(file, 'linux'), file.replace(/\\/g, '/'));

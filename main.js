@@ -1442,7 +1442,7 @@ ipcMain.handle('get-usage', async () => {
 // see .ai/contexts/viewer-panel.md (File list workers)
 const { createFileListsWorkerClient } = require('./file-lists-worker-client');
 const fileListStates = new Map();
-const { fileListPathKey } = require('./file-lists-path');
+const { fileListPathKey } = require('./src/main/viewer/file-lists-path');
 const FILE_LIST_INDEX_MAX_ENTRIES = 50;
 const FILE_LIST_INDEX_MAX_BODY_BYTES = 128 * 1024;
 const FILE_LIST_MAX_INVALIDATED_PATHS = 256;
