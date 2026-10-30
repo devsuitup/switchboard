@@ -14,6 +14,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      # see .ai/contexts/build-release.md
       matrix:
         include: >-
           ${{ fromJSON(github.event_name != 'pull_request' &&

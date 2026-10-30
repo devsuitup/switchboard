@@ -15,23 +15,23 @@ const nonMac = [
   { os: 'ubuntu-24.04-arm', platform: 'linux', arch: 'arm64' },
 ];
 
-function matrixFor(eventName, ref) {
+function matrixFor(eventName) {
   const include = workflow.jobs.build.strategy.matrix.include;
   if (Array.isArray(include)) return include;
   const expression = include.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/);
   assert.ok(expression, 'matrix.include must be an array or an Actions expression');
   return vm.runInNewContext(expression[1], {
-    github: { event_name: eventName, ref },
+    github: { event_name: eventName },
     fromJSON: JSON.parse,
   }, { filename: workflowPath, timeout: 1000 });
 }
 
 test('pull requests build exactly Windows and both Linux architectures', () => {
-  assert.deepEqual(matrixFor('pull_request', 'refs/pull/899/merge'), nonMac);
+  assert.deepEqual(matrixFor('pull_request'), nonMac);
 });
 
 test('tag pushes also build macOS on the existing runner', () => {
-  assert.deepEqual(matrixFor('push', 'refs/tags/v0.1.0'), [
+  assert.deepEqual(matrixFor('push'), [
     { os: 'macos-14', platform: 'mac' }, ...nonMac,
   ]);
   assert.equal(workflow.jobs.build['runs-on'], '${{ matrix.os }}');
@@ -39,7 +39,7 @@ test('tag pushes also build macOS on the existing runner', () => {
 });
 
 test('macOS has a finite job timeout of at most 60 minutes', () => {
-  assert.ok(matrixFor('push', 'refs/tags/v0.1.0').some(({ platform }) => platform === 'mac'));
+  assert.ok(matrixFor('push').some(({ platform }) => platform === 'mac'));
   const timeout = workflow.jobs.build['timeout-minutes'];
   assert.ok(Number.isInteger(timeout) && timeout > 0 && timeout <= 60,
     'macOS build job must have timeout-minutes between 1 and 60');
