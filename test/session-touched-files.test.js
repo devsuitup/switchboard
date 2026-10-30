@@ -498,19 +498,26 @@ test('round 2 M2: concurrent remote refreshes share one pending batch and the ne
   const cache = require('../session-touched-files').createTouchedFilesCache();
   const run = cache.run.bind(cache);
   const parsed = [];
+  let allParsesStarted;
+  const parsesStarted = new Promise(resolve => { allParsesStarted = resolve; });
   cache.run = (...args) => {
     const result = run(...args);
     parsed.push(result);
+    if (parsed.length === 3) allParsesStarted();
     return result;
   };
   remoteDeps.cache = cache;
   let release, attempts = 0;
   const pending = new Promise(resolve => { release = resolve; });
   remoteDeps.runRemoteCommand = () => { attempts++; return pending; };
-  const calls = Array.from({ length: 3 }, () => listSessionTouchedFiles('S1', remoteDeps));
+  let settled = 0;
+  const calls = Array.from({ length: 3 }, () => listSessionTouchedFiles('S1', remoteDeps).finally(() => { settled++; }));
   try {
+    await parsesStarted;
     await Promise.all(parsed);
+    assert.equal(parsed.length, 3, 'all refreshes must finish parsing before releasing the batch');
     assert.equal(attempts, 1, 'all refreshes must reach the still-pending batch');
+    assert.equal(settled, 0, 'all refreshes must remain pending until the batch is released');
     release({ code: 0, stdout: 'present\t1\n' });
     const results = await Promise.all(calls);
     assert.equal(attempts, 1);
