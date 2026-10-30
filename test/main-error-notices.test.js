@@ -36,7 +36,7 @@ test('process errors cross the real preload bridge into persistent dismissible B
   target.emit('unhandledRejection', new Error('rejected operation'), Promise.resolve());
   clock.advance(1000);
   assert.equal(logs.length, 3);
-  const alerts = dom.document.querySelectorAll('#app-notices [role="alert"]');
+  const alerts = dom.document.querySelectorAll('#app-notices .app-notice');
   assert.equal(alerts.length, 1);
   assert.match(alerts[0].textContent, /Uncaught exception.*<img/);
   assert.equal(alerts[0].querySelector('img'), null);
@@ -45,7 +45,7 @@ test('process errors cross the real preload bridge into persistent dismissible B
   assert.equal(alerts[0].querySelector('.app-notice-action').textContent, 'Open log');
   assert.equal(dom.read('[...appNoticeEntries.values()].every(entry => entry.timer === null)'), true);
   alerts[0].querySelector('.app-notice-dismiss').click();
-  assert.equal(dom.document.querySelectorAll('#app-notices [role="alert"]').length, 0);
+  assert.equal(dom.document.querySelectorAll('#app-notices .app-notice').length, 0);
 });
 
 function setupMain(t) {
@@ -77,10 +77,11 @@ function setupMain(t) {
     }
     vm.runInContext(registration, context, { filename: sourcePath });
   }
-  const ready = source.match(/^ipcMain\.on\('main-error-notices-ready',[\s\S]*?^\}\);/m);
-  if (ready) vm.runInContext(ready[0], context, { filename: sourcePath });
+  for (const registration of source.matchAll(/^ipcMain\.on\('main-error-notices-(?:ready|dismissed)',[\s\S]*?^\}\);/gm)) {
+    vm.runInContext(registration[0], context, { filename: sourcePath });
+  }
   const signalReady = (sender = webContents) => ipcMain.emit('main-error-notices-ready', { sender, senderFrame: sender.mainFrame });
-  return { target, webContents, sent, context, signalReady, clock };
+  return { target, webContents, sent, context, signalReady, clock, ipcMain };
 }
 
 test('ready handshake flushes early errors only from the active renderer', t => {
@@ -157,12 +158,15 @@ test('repeat counts leave announced text unchanged and new ids update the live r
   t.after(() => dom.destroy());
   const emit = (id, count) => dom.window.api._mainProcessErrorCb({ id, count, message: `problem-${id}.` });
   emit('first', 1);
-  const alert = dom.document.querySelector('[role="alert"]');
-  const announced = () => {
-    const copy = alert.cloneNode(true);
-    for (const hidden of copy.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
-    return copy.textContent;
-  };
+  const alert = dom.document.querySelector('.app-notice');
+  const summary = alert.querySelector('.app-notice-message');
+  assert.notEqual(summary.getAttribute('aria-hidden'), 'true', 'summary must remain accessible');
+  assert.equal(alert.getAttribute('role'), 'group');
+  const live = () => [...dom.document.getElementById('app-notices').querySelectorAll('[role="alert"], [aria-live="assertive"], [aria-live="polite"], [role="status"]')];
+  assert.deepEqual(live(), [alert.querySelector('.app-notice-announcement')], 'only the announcement span is live');
+  assert.equal(live()[0].getAttribute('aria-atomic'), 'true');
+  assert.ok(live()[0].compareDocumentPosition(alert.querySelector('button')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  const announced = () => live().map(region => region.textContent).join('\n');
   const original = announced();
   emit('first', 7);
   assert.equal(announced(), original, 'count updates must not change announced text');
@@ -173,6 +177,65 @@ test('repeat counts leave announced text unchanged and new ids update the live r
   const afterNew = announced();
   emit('first', 8);
   assert.equal(announced(), afterNew, 'recency changes must not re-announce the group');
+  dom.window.showAppNotice({ id: 'other-error', kind: 'error', message: 'other error' });
+  dom.window.showAppNotice({ id: 'other-info', kind: 'info', message: 'other info' });
+  assert.equal(dom.document.querySelector('[data-notice-id="other-error"]').getAttribute('role'), 'alert');
+  assert.equal(dom.document.querySelector('[data-notice-id="other-info"]').getAttribute('role'), 'status');
+});
+
+test('a group rerendered without its announcement tolerates a new error id', t => {
+  const dom = setupSidebarDom();
+  t.after(() => dom.destroy());
+  const emit = id => dom.window.api._mainProcessErrorCb({ id, count: 1, message: id });
+  emit('first');
+  dom.read("showAppNotice(appNoticeEntries.get('main-process-errors').options)");
+  assert.doesNotThrow(() => emit('second'));
+  assert.match(dom.document.querySelector('.app-notice-message').textContent, /second/);
+});
+
+test('dismissal crosses real preload and active-window IPC so reload cannot resurrect the group', t => {
+  const dom = setupSidebarDom();
+  t.after(() => dom.destroy());
+  const { target, webContents, sent, signalReady, ipcMain, clock } = setupMain(t);
+  webContents.send = (channel, notice) => {
+    sent.push([channel, notice]);
+    dom.window.api._mainProcessErrorCb(notice);
+  };
+  const sends = [];
+  const ipcRenderer = new EventEmitter();
+  ipcRenderer.send = (...args) => {
+    sends.push(args);
+    ipcMain.emit(args[0], { sender: webContents }, ...args.slice(1));
+  };
+  const preloadPath = path.join(__dirname, '..', 'preload.js');
+  vm.runInNewContext(fs.readFileSync(preloadPath, 'utf8'), {
+    process: { platform: process.platform, argv: [] },
+    require: () => ({ ipcRenderer, contextBridge: { exposeInMainWorld: (_name, api) => { dom.window.api.mainErrorNoticesDismissed = api.mainErrorNoticesDismissed; } } }),
+  }, { filename: preloadPath });
+  signalReady();
+  target.emit('uncaughtException', new Error('dismiss me'));
+  ipcMain.emit('main-error-notices-dismissed', { sender: {} });
+  webContents.emit('did-navigate');
+  signalReady();
+  assert.equal(sent.length, 2, 'foreign dismissal cannot clear the snapshot');
+  dom.document.querySelector('.app-notice-dismiss').click();
+  assert.deepEqual(sends, [['main-error-notices-dismissed']], 'dismissal sends no payload');
+  webContents.emit('did-navigate');
+  signalReady();
+  assert.equal(sent.length, 2, 'dismissed errors must not replay');
+  assert.equal(dom.document.querySelector('.app-notice'), null);
+  clock.advance(1000);
+  target.emit('uncaughtException', new Error('dismiss me'));
+  assert.equal(sent.at(-1)[1].count, 2, 'dismissal preserves occurrence counts');
+  assert.ok(dom.document.querySelector('.app-notice'), 'a new occurrence can show a fresh group');
+  target.emit('uncaughtException', new Error('new error'));
+  webContents.isDestroyed = () => true;
+  ipcMain.emit('main-error-notices-dismissed', { sender: webContents });
+  webContents.isDestroyed = () => false;
+  webContents.emit('did-navigate');
+  const before = sent.length;
+  signalReady();
+  assert.equal(sent.length, before + 2, 'destroyed sender cannot clear the snapshot');
 });
 
 test('a visible member keeps its count after main count-cache eviction and resets after renderer eviction', t => {
@@ -223,7 +286,7 @@ test('renderer subscribes before sending ready through the real preload', t => {
   const subscription = noticesSource.slice(noticesSource.indexOf('window.api?'), noticesSource.indexOf('async function openMainErrorLog'));
   vm.runInContext(subscription, dom.context, { filename: noticesPath });
   assert.equal(ready, 1, 'installed renderer listener must send readiness');
-  assert.match(dom.document.querySelector('[role="alert"]').textContent, /early error/);
+  assert.match(dom.document.querySelector('[data-notice-id="main-process-errors"]').textContent, /early error/);
 });
 
 test('repeated errors keep buttons and focus, refresh member recency and use cautious log wording', t => {
@@ -231,7 +294,7 @@ test('repeated errors keep buttons and focus, refresh member recency and use cau
   t.after(() => dom.destroy());
   const emit = (id, count = 1) => dom.window.api._mainProcessErrorCb({ id, count, message: `problem-${id}.` });
   for (let i = 0; i < 5; i++) emit(String(i));
-  const alert = dom.document.querySelector('[role="alert"]');
+  const alert = dom.document.querySelector('[data-notice-id="main-process-errors"]');
   const action = alert.querySelector('.app-notice-action');
   const dismiss = alert.querySelector('.app-notice-dismiss');
   action.focus();
@@ -239,14 +302,14 @@ test('repeated errors keep buttons and focus, refresh member recency and use cau
   assert.equal(dom.document.querySelector('.app-notice-action'), action, 'repeat must keep the same action element');
   assert.equal(dom.document.querySelector('.app-notice-dismiss'), dismiss);
   assert.equal(dom.document.activeElement, action);
-  assert.equal(dom.document.querySelector('[role="alert"]'), alert);
+  assert.equal(dom.document.querySelector('[data-notice-id="main-process-errors"]'), alert);
   emit('5');
   assert.match(alert.textContent, /problem-0/);
   assert.doesNotMatch(alert.textContent, /problem-1/);
   assert.doesNotMatch(alert.textContent, /\.\./);
   assert.match(alert.textContent, /the log may hold details/);
   dismiss.click();
-  assert.equal(dom.document.querySelector('[role="alert"]'), null);
+  assert.equal(dom.document.querySelector('[data-notice-id="main-process-errors"]'), null);
 });
 
 test('most recently repeated member survives renderer eviction', t => {
@@ -256,7 +319,7 @@ test('most recently repeated member survives renderer eviction', t => {
   for (let i = 0; i < 5; i++) emit(String(i));
   emit('0');
   emit('5');
-  const text = dom.document.querySelector('[role="alert"]').textContent;
+  const text = dom.document.querySelector('[data-notice-id="main-process-errors"]').textContent;
   assert.match(text, /member-0/, 'fresh repeat must survive the five-member limit');
   assert.doesNotMatch(text, /member-1/);
 });
@@ -265,7 +328,7 @@ test('notice punctuation and log wording allow missing rotated details', t => {
   const dom = setupSidebarDom();
   t.after(() => dom.destroy());
   dom.window.api._mainProcessErrorCb({ id: 'period', count: 1, message: 'foo.' });
-  const text = dom.document.querySelector('[role="alert"]').textContent;
+  const text = dom.document.querySelector('[data-notice-id="main-process-errors"]').textContent;
   assert.doesNotMatch(text, /foo\.\./, 'do not append a second period');
   assert.match(text, /the log may hold details/);
 });
@@ -283,9 +346,9 @@ test('queued errors flush into one bounded group with five recent distinct messa
   for (let i = 0; i < 110; i++) target.emit('uncaughtException', new Error(`error-${i}`));
   ready = true;
   handlers.flushNotices();
-  assert.equal(dom.document.querySelectorAll('#app-notices [role="alert"]').length, 1);
+  assert.equal(dom.document.querySelectorAll('#app-notices .app-notice').length, 1);
   assert.equal(dom.read("appNoticeEntries.get('main-process-errors').options.members.length"), 5);
-  const alert = dom.document.querySelector('[role="alert"]');
+  const alert = dom.document.querySelector('[data-notice-id="main-process-errors"]');
   assert.doesNotMatch(alert.textContent, /error-104\b/);
   assert.match(alert.textContent, /error-105\b/);
   assert.match(alert.textContent, /error-109\b/);
@@ -331,7 +394,7 @@ test('Open log traverses the renderer, preload and fixed-path main handler with 
   action.click();
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(opened, [logPath]);
-  assert.ok(dom.document.querySelector('[role="alert"]'), 'opening the log keeps the error visible');
+  assert.ok(dom.document.querySelector('[data-notice-id="main-process-errors"]'), 'opening the log keeps the error visible');
   openError = 'No application associated';
   action.click();
   await new Promise(resolve => setImmediate(resolve));
@@ -344,4 +407,14 @@ test('Open log traverses the renderer, preload and fixed-path main handler with 
   logPath = path.join(temp, 'main.log');
   context.shell.openPath = async () => { throw new Error('opener unavailable'); };
   assert.match((await handler({})).error, /opener unavailable/);
+});
+
+test('main-error announcements have no live ancestor in the shipped page', t => {
+  const dom = setupSidebarDom();
+  t.after(() => dom.destroy());
+  const page = new dom.window.DOMParser().parseFromString(fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8'), 'text/html');
+  assert.equal(page.getElementById('app-notices').getAttribute('aria-live'), null, 'the shipped notice host must not announce count updates');
+  dom.window.api._mainProcessErrorCb({ id: 'first', count: 1, message: 'first' });
+  const group = dom.document.querySelector('[data-notice-id="main-process-errors"]');
+  assert.equal(group.closest('[aria-live], [role="alert"], [role="status"]'), null, 'only the announcement span may be live');
 });

@@ -21,6 +21,7 @@ threw. Individual throw sites and worker-thread error handling are unchanged.
 | `main-process-error` | `{id, kind: 'error', message, count}` | `api.onMainProcessError(callback)` in preload; `public/app-notices.js` groups errors into one persistent, dismissible B8 notice with an **Open log** action. |
 | `open-main-log` | No arguments | `api.openMainLog()` returns `{ok, error?}`. Main chooses `log.transports.file.getFile().path`, requires an absolute, non-sensitive path (including the existing on-disk path guard), and opens it via `shell.openPath`. Renderer arguments cannot choose another file. OS opener errors are shown in one replaceable error notice; opening the log leaves the error group visible. |
 | `main-error-notices-ready` | No arguments; one-way | `api.mainErrorNoticesReady()` is sent after `app-notices.js` installs its error listener. Only the active window's webContents may arm delivery and flush queued notices. |
+| `main-error-notices-dismissed` | No arguments; one-way | `api.mainErrorNoticesDismissed()` is sent when the user dismisses the main-error group. Only the active window's webContents may clear main's delivered snapshot; pending errors and occurrence counts are retained. |
 
 Before the renderer signals that its listener is ready, or if its window/webContents is gone or
 sending throws, notices are queued by normalized-message id (up to 100 distinct messages;
@@ -33,7 +34,9 @@ readiness resets replays that snapshot before flushing pending errors; repeated
 ready signals only flush pending errors. Replay does not increment counts, write
 logs or alter the trailing-update throttle. This recovers notices sent to the
 outgoing page between reload start and commit. The snapshot is bounded separately
-from the 100-id pending/count caches and cleared on disposal.
+from the 100-id pending/count caches and cleared on disposal or user dismissal of
+the group, so a later reload does not resurrect dismissed notices. New occurrences
+and pending trailing updates can still show a fresh group after dismissal.
 Committed main-frame document navigation (`did-navigate`) and `render-process-gone`
 reset readiness until a new handshake. `did-navigate` only fires for new main-frame
 documents and needs no argument inspection. `will-navigate` uses Electron's details
@@ -52,12 +55,17 @@ pending queue retains its own dispatch state, so cache eviction cannot lose a
 trailing count or reset its throttle. Repeated queued errors retain their latest count.
 Display summaries are limited to 500 characters plus the origin label;
 non-Error inspection disables custom inspectors/getters and limits depth,
-array lengths and individual strings. Before inspection, non-Error values with
-more than 1,000 own enumerable keys are summarized as `[Object with N keys;
-inspection omitted]`, without reading property values. Key enumeration and
-inspection remain inside the hostile-value guard. This bounds root-object
-serialization after enumeration; nested object widths and proxy trap execution
-are not given a hard work budget. The inspected string for other values is
+array lengths and individual strings. Arrays, ArrayBuffer views (including Buffers),
+String objects and Proxies bypass the key-count pre-check and retain inspect's
+representation. Proxies also bypass message/name/stack property access; inspection
+keeps `showProxy` at its default false and does not execute their traps.
+Other non-Error values with more than 1,000 own enumerable keys are summarized as
+`[Object with N keys; inspection omitted]`, without reading property values.
+Key enumeration and inspection remain inside the hostile-value guard. Plain-object
+key enumeration itself is unbounded in time and allocation; the summary avoids
+serializing those property values but does not bound enumeration. Nested object
+widths and ordinary message/name/stack getters have no hard work budget either.
+The inspected string for other values is
 truncated to 16,000 characters before logging and hashing.
 Keys beyond that prefix can therefore share an id. Error-message ids still use
 the full normalized message before display truncation. Empty or whitespace-only
@@ -68,12 +76,17 @@ The renderer uses B8 `members` to retain at most five distinct summaries inside
 one `main-process-errors` notice, moving repeated ids to the newest position and
 showing counts. While an id remains in the group, its displayed count is the
 maximum of the previous and incoming count, so a main count-cache eviction cannot
-reduce it. Renderer eviction/dismissal clears that display history.
+reduce it. After more than 100 distinct ids cause count-cache eviction, the shown
+count is a lower bound, not an exact lifetime total. Renderer eviction/dismissal
+clears that display history.
 Existing groups update visible text in place, preserving buttons and focus.
-The visible summary (including counts and recency order) is `aria-hidden`; an
-offscreen announcement span inside the alert changes only when a new id joins,
-using that id's message. Count-only updates and member reordering leave announced
-text untouched. `public/style.css` clips the announcement without hiding it from
+The `#app-notices` host has no live semantics of its own; other B8 notices keep
+their existing `alert`/`status` roles. The group has `role="group"` and its visible summary, including counts and recency
+order, remains accessible. Only an offscreen announcement span before the buttons
+has live semantics (`role="alert"`, `aria-atomic="true"`); it changes only when a new
+id joins, using that id's message. Count-only updates and member reordering leave
+live-region text untouched. A missing announcement span is tolerated if the group
+was rerendered by the generic notice helper. `public/style.css` clips the announcement without hiding it from
 assistive technology. Other B8 notices retain their existing announcement policy.
 Flush uses the same grouping, so 100 queued errors cannot create 100 alerts.
 The notice says the log may hold details, since electron-log rotates it.
@@ -339,6 +352,7 @@ An unknown remote target never falls back to local disk IO.
 | `activity-focus` / `activity-titles` | Focused session and running-session titles for ActivityWatch — see activitywatch.md |
 | `updater-close` | The updater window closed |
 | `main-error-notices-ready` | No arguments; active renderer has installed the main-error listener. Arms delivery and flushes pending errors. |
+| `main-error-notices-dismissed` | No arguments; only the active renderer may clear the delivered main-error snapshot after the user dismisses the group. |
 | `exit-background-cancel` / `unsaved-check-phase` / `unsaved-pong` / `unsaved-dialog` / `unsaved-ready` / `unsaved-check-ack` / `unsaved-check-result` / `unsaved-check-reason-done` | The exit flow's unsaved-edits handshake, handled in `unsaved-guard.js` — see window-frame.md |
 
 ### Events (main → renderer)

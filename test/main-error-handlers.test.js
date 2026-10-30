@@ -154,6 +154,36 @@ test('a 100000-key rejection is summarized before inspecting property values', t
   assert.equal(getterCalls, 0);
 });
 
+for (const [name, create] of [
+  ['Buffer', () => Buffer.alloc(5e6)],
+  ['array', () => new Array(2e5).fill(0)],
+  ['typed array', () => new Uint8Array(2e5)],
+  ['String object', () => new String('x'.repeat(2000))],
+]) {
+  test(`large ${name} rejection retains bounded inspect output`, t => {
+    const { target, logs, notices } = setup(t);
+    const reason = create();
+    const expected = require('node:util').inspect(reason, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity }).slice(0, 16000);
+    target.emit('unhandledRejection', reason);
+    assert.equal(logs[0][1], expected);
+    assert.doesNotMatch(notices[0].message, /inspection omitted/);
+  });
+}
+
+test('proxy rejection inspection runs no traps', t => {
+  const { target, logs } = setup(t);
+  let traps = 0;
+  const reason = new Proxy({ problem: 'proxy reason' }, Object.fromEntries(
+    ['get', 'ownKeys', 'getOwnPropertyDescriptor', 'getPrototypeOf'].map(name => [name, (...args) => {
+      traps++;
+      return Reflect[name](...args);
+    }]),
+  ));
+  target.emit('unhandledRejection', reason);
+  assert.equal(traps, 0, 'error reporting must not run proxy traps');
+  assert.match(logs[0][1], /proxy reason/);
+});
+
 test('large error messages are truncated for display but distinct suffixes keep distinct ids and full stacks', t => {
   const { target, logs, notices } = setup(t);
   const error = new Error('command stderr '.repeat(1000));

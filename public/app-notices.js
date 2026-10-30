@@ -13,18 +13,21 @@ window.api?.onMainProcessError?.(notice => {
     id: 'main-process-errors', kind: 'error', members,
     message: entries => `${entries.map(member => `${member.message.replace(/\.$/, '')}${member.count > 1 ? ` (${member.count} occurrences)` : ''}`).join('\n')}. Open log; the log may hold details.`,
     actionLabel: 'Open log', onAction: openMainErrorLog, dismissOnAction: false,
+    onDismiss: () => window.api?.mainErrorNoticesDismissed?.(),
   };
   if (previous) {
     previous.options = options;
     previous.notice.querySelector('.app-notice-message').textContent = options.message(members);
-    if (!existing) previous.notice.querySelector('.app-notice-announcement').textContent = notice.message;
+    const announcement = previous.notice.querySelector('.app-notice-announcement');
+    if (!existing && announcement) announcement.textContent = notice.message;
   } else {
     const group = showAppNotice(options);
-    group.querySelector('.app-notice-message').setAttribute('aria-hidden', 'true');
     const announcement = document.createElement('span');
     announcement.className = 'app-notice-announcement';
+    announcement.setAttribute('role', 'alert');
+    announcement.setAttribute('aria-atomic', 'true');
     announcement.textContent = notice.message;
-    group.append(announcement);
+    group.insertBefore(announcement, group.querySelector('button'));
   }
 });
 window.api?.mainErrorNoticesReady?.();
@@ -91,7 +94,7 @@ function showAppNotice(options) {
   const notice = document.createElement('div');
   if (id !== undefined) notice.dataset.noticeId = id;
   notice.className = 'app-notice';
-  notice.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  notice.setAttribute('role', id === 'main-process-errors' ? 'group' : kind === 'error' ? 'alert' : 'status');
   const text = document.createElement('span');
   text.className = 'app-notice-message';
   text.textContent = typeof message === 'function' ? message(members) : message;
@@ -113,7 +116,11 @@ function showAppNotice(options) {
     dismiss.type = 'button';
     dismiss.className = 'app-notice-dismiss';
     dismiss.textContent = 'Dismiss';
-    dismiss.addEventListener('click', () => clearAppNotice(id));
+    dismiss.addEventListener('click', () => {
+      if (appNoticeEntries.get(id)?.notice !== notice) return;
+      clearAppNotice(id);
+      options.onDismiss?.();
+    });
     notice.append(dismiss);
   }
   notice.addEventListener('mousedown', event => {

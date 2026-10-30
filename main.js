@@ -1150,6 +1150,11 @@ ipcMain.on('main-error-notices-ready', event => {
   mainErrorHandlers.flushNotices({ replay });
 });
 
+ipcMain.on('main-error-notices-dismissed', event => {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || event.sender !== mainWindow.webContents) return;
+  mainErrorHandlers.dismissNotices();
+});
+
 ipcMain.handle('open-main-log', async () => {
   try {
     const filePath = log.transports.file.getFile().path;

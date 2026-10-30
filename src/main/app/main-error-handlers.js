@@ -1,6 +1,6 @@
 'use strict';
 
-const { inspect } = require('node:util');
+const { inspect, types } = require('node:util');
 const { createHash } = require('node:crypto');
 
 function installMainErrorHandlers({ log, notify, target = process, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
@@ -46,19 +46,21 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
     let message = 'Unreadable error';
     let detail = message;
     try {
-      if (typeof error?.message === 'string') message = error.message;
+      const proxy = types.isProxy(error);
+      if (!proxy && typeof error?.message === 'string') message = error.message;
       else {
-        const keyCount = error && (typeof error === 'object' || typeof error === 'function') ? Object.keys(error).length : 0;
+        const keyCount = error && (typeof error === 'object' || typeof error === 'function')
+          && !proxy && !Array.isArray(error) && !ArrayBuffer.isView(error) && !(error instanceof String) ? Object.keys(error).length : 0;
         message = keyCount > 1000 ? `[Object with ${keyCount} keys; inspection omitted]`
           : inspect(error, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity }).slice(0, 16000);
       }
       if (!message.trim()) {
         message = typeof error;
         try {
-          if (typeof error?.name === 'string' && error.name.trim()) message = error.name;
+          if (!proxy && typeof error?.name === 'string' && error.name.trim()) message = error.name;
         } catch {}
       }
-      detail = typeof error?.stack === 'string' ? error.stack : message;
+      detail = !proxy && typeof error?.stack === 'string' ? error.stack : message;
     } catch {}
     try { log.error(`[main:${origin}]`, detail); } catch {}
     const normalized = message.replace(/\s+/g, ' ').trim();
@@ -92,6 +94,9 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
   target.on('unhandledRejection', onRejection);
 
   return {
+    dismissNotices() {
+      delivered.clear();
+    },
     flushNotices({ replay = false } = {}) {
       if (replay) for (const notice of [...delivered.values()]) deliver(notice);
       for (const id of pending.keys()) sendPending(id);
