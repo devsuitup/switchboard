@@ -42,6 +42,7 @@ const rendererCrossFileGlobals = {
   agentsCliEntryCount: 'readonly',
   agentsSnapshotRevision: 'readonly',
   remoteHostLabel: 'readonly',
+  remoteHostState: 'readonly',
   setRemoteHostLabels: 'readonly',
   writtenActivitySnapshot: 'readonly',
   noteWrittenActivity: 'readonly',

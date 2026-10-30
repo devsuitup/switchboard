@@ -166,6 +166,16 @@ test('a field changed in place rebuilds the sidebar', t => {
 });
 
 const changes = {
+  'background agents': ctx => { ctx.w.bgAgentSessionIds.add('s-top-1'); },
+  'parent active subagent': ctx => { ctx.w.taskRegistry.note('s-top-1', 'agent-871'); },
+  'dormant membership': ctx => { ctx.w.dormantWorkingSet.set('s-top-1', {}); },
+  'task registry running count': ctx => { ctx.w.taskRegistry.note('s-top-1', 'agent-871', 'cli-task'); },
+  'detach availability': ctx => { ctx.w.openSessions.get('s-top-1').attach = true; },
+  'archiving session ids': ctx => { ctx.read('archivingSessionIds').add('s-top-1'); },
+  'archiving group ids': ctx => { ctx.read('archivingGroupIds').add('ph-' + ctx.w.folderId(ctx.projects[0].projectPath)); },
+  'session age bucket': ctx => { const now = ctx.w.Date.now(); ctx.w.Date.now = () => now + 2000; },
+  '30 second time bucket without ticker': ctx => { const now = ctx.w.Date.now(); ctx.w.Date.now = () => now + 30000; },
+  'local day string': ctx => { ctx.w.Date.prototype.toDateString = () => 'Fri Oct 30 2026'; },
   'star filter': ctx => { ctx.w.showStarredOnly = true; },
   'running filter': ctx => { ctx.w.showRunningOnly = true; },
   'today filter': ctx => { ctx.w.showTodayOnly = true; },
@@ -188,15 +198,82 @@ const changes = {
   'hidden project metadata': ctx => { ctx.w.cachedAllProjects = [...ctx.projects, makeSampleProject({ projectPath: '/hidden' })]; },
 };
 
+const prepareChanges = {
+  'background agents': ctx => { ctx.w.bgAgentSessionIds = new Set(); },
+  'parent active subagent': ctx => {
+    ctx.w.reflectSubagentRunningState = () => {};
+    ctx.w.taskRegistry.note('s-top-1', 'bash-871', 'local-ipc', { kind: 'bash' });
+  },
+  'dormant membership': ctx => {
+    ctx.w.dormantWorkingSet = new Map();
+    ctx.w.activePtyIds.add('s-top-1');
+    ctx.w.openSessions.set('s-top-1', { closed: false });
+  },
+  'task registry running count': ctx => {
+    ctx.w.taskRegistry = ctx.w.createTaskRegistry();
+    ctx.w.taskRegistry.note('s-top-1', 'bash-871', 'cli-task', { kind: 'bash' });
+  },
+  'detach availability': ctx => {
+    ctx.w.rowLifecycleLabel = () => null;
+    ctx.w.activePtyIds.add('s-top-1');
+    ctx.w.openSessions.set('s-top-1', { closed: false, attach: false });
+  },
+  'session age bucket': ctx => {
+    ctx.projects[0].sessions[0].modified = new Date(ctx.w.Date.now() - ctx.w.sessionMaxAgeDays * 86400000 + 1000).toISOString();
+  },
+};
+
 for (const [name, change] of Object.entries(changes)) {
   test(`identical payload rebuilds after changing ${name}`, t => {
     const ctx = setup(t);
+    prepareChanges[name]?.(ctx);
     ctx.refresh();
+    ctx.refresh();
+    assert.deepEqual(ctx.counts(), [1, 1]);
     change(ctx);
+    ctx.refresh();
+    assert.deepEqual(ctx.counts(), [2, 2]);
     ctx.refresh();
     assert.deepEqual(ctx.counts(), [2, 2]);
   });
 }
+
+test('ticker updates each remote host confirmation age and retry countdown without rebuilding', t => {
+  const ctx = setup(t);
+  let now = ctx.w.Date.now();
+  ctx.w.Date.now = () => now;
+  Object.assign(ctx.projects[0], { remoteAlias: 'healthy', remoteHostAt: now - 1000 });
+  ctx.projects.push(makeSampleProject({ projectPath: '/offline', sessions: [], remoteAlias: 'offline',
+    remoteHostAt: now - 5000, remoteHostError: 'timeout', remoteHostNextAttemptAt: now + 60000,
+    remoteHostProfile: { tier: 'poll', missing: [{ tier: 'watch', reason: 'inotifywait missing' }] } }));
+  ctx.refresh();
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [1, 1]);
+  const dots = [...ctx.document.querySelectorAll('.remote-host-dot')];
+  assert.equal(dots.length, 2);
+  assert.match(dots[0].title, /confirmed 1s ago/);
+  assert.match(dots[1].title, /last confirmed 5s ago.*next automatic attempt in 1m/);
+  now += 30000;
+  ticker(ctx)();
+  assert.match(dots[0].title, /confirmed 31s ago/);
+  assert.match(dots[1].title, /last confirmed 35s ago.*next automatic attempt in 30s/);
+  assert.match(dots[1].title, /Capability: poll\nwatch unavailable: inotifywait missing/);
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
+
+test('unchanged remote host ticker titles do not dirty the sidebar skip key', t => {
+  const ctx = setup(t);
+  Object.assign(ctx.projects[0], { remoteAlias: 'vps', remoteHostAt: ctx.w.Date.now() - 1000 });
+  ctx.refresh();
+  const tick = ticker(ctx);
+  const observer = new ctx.w.MutationObserver(() => {});
+  observer.observe(ctx.document.querySelector('.remote-host-dot'), { attributes: true });
+  t.after(() => observer.disconnect());
+  tick();
+  assert.equal(observer.takeRecords().length, 0, 'an identical title must not be written again');
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
 
 test('remote host label changes rebuild with an identical payload', t => {
   const ctx = setup(t);
