@@ -2421,6 +2421,11 @@ from the saved BigInt stamp through `continuationMtime()`. Both values must
 agree before the first refresh as well as afterward: sidebar grouping validates
 their equality. A complete multi-chunk index then stays reusable through an
 ordinary refresh and `init()`, rather than being replaced with a partial scan.
+Every transcript `fileMtime` writer uses `continuationMtime()`: full subagent
+reads and both display-header variants derive it from a BigInt stat too (#907).
+The legacy custom-title backfill compares the header's `fileMtime` with the
+cached row's `fileMtime`, keeping the same rounding as refresh. The header's
+`modified` remains its existing display timestamp and is not a freshness key.
 Legacy ISO cursors written with BigInt rounding remain reusable; a cursor
 written with a different rounding restarts once, then uses the canonical value.
 Converting nanoseconds to Number before rounding also loses precision (#656).
