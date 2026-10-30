@@ -2,23 +2,32 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
 const { queryWindowsProcesses } = require('../src/main/terminals/close-windows-pty');
 
 test('the snapshot uses one hidden bounded native process query through System32 PowerShell', async () => {
   const rows = [{ pid: 897, parentPid: 1, created: '134378573582318229' }];
   let calls = 0;
+  let invocation;
   const result = await queryWindowsProcesses({ execute(program, args, opts, done) {
     calls++;
-    assert.equal(program, path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
-    assert.deepEqual(args, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-      path.resolve(__dirname, '../src/main/terminals/windows-process-snapshot.ps1')]);
-    assert.equal(opts.windowsHide, true);
-    assert.equal(opts.timeout, 1500);
-    assert.equal(opts.encoding, 'utf8');
+    invocation = { program, args, opts };
     done(null, JSON.stringify(rows));
     return { kill() {} };
   } });
   assert.equal(calls, 1);
+  const { program, args, opts } = invocation;
+  assert.equal(program, path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
+  assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-EncodedCommand']);
+  assert.equal(args.length, 4);
+  assert.ok(args.every(arg => !/\.ps1$/i.test(arg)));
+  const script = fs.readFileSync(path.resolve(__dirname, '../src/main/terminals/windows-process-snapshot.ps1'), 'utf8');
+  assert.equal(Buffer.from(args[3], 'base64').toString('utf16le'), script);
+  assert.ok([program, ...args].map(arg => `"${arg}"`).join(' ').length < 16000, 'command line must stay below half the Windows 32,767-character limit');
+  assert.equal(opts.windowsHide, true);
+  assert.equal(opts.timeout, 1500);
+  assert.equal(opts.encoding, 'utf8');
+  assert.equal(opts.maxBuffer, 8 * 1024 * 1024);
   assert.deepEqual(result, rows);
 });
 

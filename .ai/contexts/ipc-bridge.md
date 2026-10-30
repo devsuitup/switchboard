@@ -557,8 +557,13 @@ per command. `/T` includes children started after the initial snapshot; windows
 opened from the tab are included. The root is never passed to taskkill here.
 
 Both snapshots use absolute System32 Windows PowerShell with `-NoProfile`,
-`-NonInteractive`, `-ExecutionPolicy Bypass` and the sibling
-`windows-process-snapshot.ps1`. Its small in-memory C# type calls
+`-NonInteractive` and `-EncodedCommand`. The sibling
+`windows-process-snapshot.ps1` ships inside `app.asar`: Node's asar-aware
+`fs.readFileSync` reads its text, cached once per process as UTF-16LE base64.
+PowerShell receives that text rather than an inaccessible archive path, without
+`-File` or an execution-policy override. A regression bounds the full command
+line below 16,000 characters, well below Windows' 32,767-character limit.
+Its small in-memory C# type calls
 `NtQuerySystemInformation(SystemProcessInformation)` to read the whole process
 table, including 100 ns creation timestamps serialized as decimal strings. The
 buffer can grow on a length mismatch (at most four attempts); tree traversal
@@ -570,7 +575,10 @@ snapshot still closes ConPTY and skips survivor cleanup. A failed second
 snapshot skips taskkill. CIM was evaluated first but this sandbox refuses
 `Win32_Process` reads with HRESULT 0x80041003, so it is not used.
 
-On this Windows machine on 2026-10-30, ten successful native snapshots took
+Outside the Codex sandbox, five session-side runs on 2026-10-30 took
+548–618 ms for the native snapshot, including PowerShell startup and
+compilation; CIM `Get-CimInstance` took 633–716 ms for comparison.
+Inside the sandbox, ten successful native snapshots took
 961 ms median / 1294 ms maximum. Ten separate fake-PTY closes using real
 snapshots delayed the normal close by 1170 ms median / 1365 ms maximum;
 `killPty` returned synchronously in 6.4–71.7 ms. These measurements include

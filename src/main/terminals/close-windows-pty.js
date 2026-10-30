@@ -3,9 +3,11 @@
 const { execFile } = require('node:child_process');
 const { setTimeout: delay } = require('node:timers/promises');
 const path = require('node:path');
+const fs = require('node:fs');
 const { stopProcessTree } = require('./stop-process-tree');
 
 const SNAPSHOT_TIMEOUT_MS = 1500;
+let encodedSnapshot;
 
 function queryWindowsProcesses({ execute = execFile } = {}) {
   return new Promise(resolve => {
@@ -13,8 +15,9 @@ function queryWindowsProcesses({ execute = execFile } = {}) {
     const timer = setTimeout(() => { resolve(null); try { child?.kill(); } catch {} }, SNAPSHOT_TIMEOUT_MS);
     const finish = rows => { clearTimeout(timer); resolve(rows); };
     try {
+      encodedSnapshot ??= Buffer.from(fs.readFileSync(path.join(__dirname, 'windows-process-snapshot.ps1'), 'utf8'), 'utf16le').toString('base64');
       child = execute(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'windows-process-snapshot.ps1')],
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', encodedSnapshot],
         { windowsHide: true, timeout: SNAPSHOT_TIMEOUT_MS, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
         (error, stdout) => {
           if (error) return finish(null);
