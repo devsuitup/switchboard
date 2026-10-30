@@ -166,6 +166,15 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   });
 }
 let mainWindow = null;
+let mainErrorWindowReady = false;
+const mainErrorHandlers = require('./src/main/app/main-error-handlers').installMainErrorHandlers({
+  log,
+  notify: notice => {
+    if (!mainErrorWindowReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return false;
+    mainWindow.webContents.send('main-process-error', notice);
+    return true;
+  },
+});
 let activityFlushedForQuit = false;
 let updateInstalling = false;
 let quitAttemptToken = null;
@@ -411,12 +420,15 @@ function createWindow() {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
     return { action: 'deny' };
   });
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  mainWindow.webContents.on('will-navigate', details => {
+    const { url } = details;
     if (url !== mainWindow.webContents.getURL()) {
-      event.preventDefault();
+      details.preventDefault();
       if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
     }
   });
+  mainWindow.webContents.on('did-navigate', () => { mainErrorWindowReady = false; });
+  mainWindow.webContents.on('render-process-gone', () => { mainErrorWindowReady = false; });
   // Override window.open so xterm WebLinksAddon's default handler (which does
   // window.open() then sets location.href) routes through our IPC instead of
   // creating a child BrowserWindow.
@@ -498,6 +510,7 @@ function createWindow() {
   })().catch(err => log.error('[window] bounds save on close failed:', err.message)));
 
   mainWindow.on('closed', () => {
+    mainErrorWindowReady = false;
     quitAttemptToken = unsavedGuard.committedToken(mainWindow);
     if (process.platform === 'darwin') { quitAttemptToken = null; unsavedGuard.invalidate(); }
     // On macOS the app stays alive in the dock after the last window closes.
@@ -1125,6 +1138,25 @@ ipcMain.handle('worktree-status', async (_event, worktreePath) => {
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
+});
+
+ipcMain.on('main-error-notices-ready', event => {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || event.sender !== mainWindow.webContents) return;
+  mainErrorWindowReady = true;
+  mainErrorHandlers.flushNotices();
+});
+
+ipcMain.handle('open-main-log', async () => {
+  try {
+    const filePath = log.transports.file.getFile().path;
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || isSensitivePath(filePath)) {
+      return { ok: false, error: 'Application log path is unavailable or blocked' };
+    }
+    const error = await shell.openPath(path.resolve(filePath));
+    return error ? { ok: false, error } : { ok: true };
+  } catch (error) {
+    return { ok: false, error: error.message || String(error) };
+  }
 });
 
 // --- IPC: open a local file in the OS default app (terminal right-click menu) ---

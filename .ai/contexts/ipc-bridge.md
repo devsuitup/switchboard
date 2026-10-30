@@ -4,6 +4,68 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
+## Main-process error backstop (#896)
+
+`src/main/app/main-error-handlers.js` installs `uncaughtException` and `unhandledRejection`
+listeners in `main.js` before `app.whenReady()`. Both write `[main:<origin>]`
+and the full stack to `electron-log`; non-Error rejection reasons use a safe
+text representation. A throwing logger is contained, independently of notices.
+
+Policy: keep running after logging, with no automatic quit. The exception
+listener suppresses Electron's default exception dialog; a B8 error notice
+replaces it. This is a reporting backstop, not recovery of the operation that
+threw. Individual throw sites and worker-thread error handling are unchanged.
+
+| Event | Payload | Bridge / consumer |
+|---|---|---|
+| `main-process-error` | `{id, kind: 'error', message, count}` | `api.onMainProcessError(callback)` in preload; `public/app-notices.js` groups errors into one persistent, dismissible B8 notice with an **Open log** action. |
+| `open-main-log` | No arguments | `api.openMainLog()` returns `{ok, error?}`. Main chooses `log.transports.file.getFile().path`, requires an absolute, non-sensitive path (including the existing on-disk path guard), and opens it via `shell.openPath`. Renderer arguments cannot choose another file. OS opener errors are shown in one replaceable error notice; opening the log leaves the error group visible. |
+| `main-error-notices-ready` | No arguments; one-way | `api.mainErrorNoticesReady()` is sent after `app-notices.js` installs its error listener. Only the active window's webContents may arm delivery and flush queued notices. |
+
+Before the renderer signals that its listener is ready, or if its window/webContents is gone or
+sending throws, notices are queued by normalized-message id (up to 100 distinct messages;
+overflow drops the least recently encountered queued notice, never its log).
+The `main-error-notices-ready` handshake flushes the queue, including on window
+recreation/reload. Failed sends stay queued for the next handshake or recurrence.
+Committed main-frame document navigation (`did-navigate`) and `render-process-gone`
+reset readiness until a new handshake. `did-navigate` only fires for new main-frame
+documents and needs no argument inspection. `will-navigate` uses Electron's details
+object rather than deprecated positional arguments.
+Started or cancelled navigation, subframe loads and same-document navigation
+do not disarm notices. `did-finish-load` does not control notice readiness.
+
+Whitespace-normalized messages, including across the two origins, have a stable
+SHA-256 id derived before display truncation. Every event is logged and updates
+the occurrence count immediately. The first occurrence sends immediately, then
+each id sends at most once per second with its latest count, including a trailing
+delivery after a burst. The clock and timer functions are injectable in tests.
+The 100 most recently encountered distinct ids retain cached counts (evicted counts
+start again if encountered later unless a delivery is still queued). The bounded
+pending queue retains its own dispatch state, so cache eviction cannot lose a
+trailing count or reset its throttle. Repeated queued errors retain their latest count.
+Display summaries are limited to 500 characters plus the origin label;
+non-Error inspection disables custom inspectors/getters and limits depth,
+array lengths and individual strings. `util.inspect` has no object-key limit;
+the inspected string is truncated to 16,000 characters before logging and hashing.
+Keys beyond that prefix can therefore share an id. Error-message ids still use
+the full normalized message before display truncation. Empty or whitespace-only
+messages fall back to the error name or a type label before hashing.
+Error stacks in the log are unchanged.
+
+The renderer uses B8 `members` to retain at most five distinct summaries inside
+one `main-process-errors` notice, moving repeated ids to the newest position and
+showing counts. Existing groups update text in place, preserving buttons and focus.
+Flush uses the same grouping, so 100 queued errors cannot create 100 alerts.
+The notice says the log may hold details, since electron-log rotates it.
+Trailing timers are unref'd, bounded by the 100 pending ids, and cancelled on
+pending-queue eviction/disposal. Listeners can be disposed independently in plain
+Node tests.
+
+Known gap (#896): an error before any window has ever loaded stays queued only;
+there is no native startup notification or forced window creation. Diagnostics
+lists activity traces, not the main log; **Open log** on the error notice is the
+main-log entry point.
+
 ## Key files
 
 | File | LOC | Role |
@@ -231,6 +293,7 @@ An unknown remote target never falls back to local disk IO.
 | IPC | Notes |
 |---|---|
 | `open-external` | Opens https:// URLs in OS browser |
+| `open-main-log` | No arguments; opens the main-selected, validated application log path and returns `{ok, error?}`. |
 | `clipboard-write-text` | Main-process clipboard write (Wayland fix, PR #18) |
 | `get-app-version` | From package.json |
 | `whats-new-startup` / `whats-new-dismissed` | The What's new dialog: the `CHANGELOG.md` sections to show on startup (or `null`), and recording the running version as `lastSeenVersion` when it closes. Help → What's new sends `show-whats-new` with the running version's section. See `docs/changelog.md` |
@@ -255,11 +318,12 @@ An unknown remote target never falls back to local disk IO.
 | `activity-trace` | Renderer probe → the trace file. Registered **only** when `SWITCHBOARD_ACTIVITY_TRACE` is set (see below) |
 | `activity-focus` / `activity-titles` | Focused session and running-session titles for ActivityWatch — see activitywatch.md |
 | `updater-close` | The updater window closed |
+| `main-error-notices-ready` | No arguments; active renderer has installed the main-error listener. Arms delivery and flushes pending errors. |
 | `exit-background-cancel` / `unsaved-check-phase` / `unsaved-pong` / `unsaved-dialog` / `unsaved-ready` / `unsaved-check-ack` / `unsaved-check-result` / `unsaved-check-reason-done` | The exit flow's unsaved-edits handshake, handled in `unsaved-guard.js` — see window-frame.md |
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
+`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
 
 `remote-resize-allowed(sessionId)` is emitted once when a live remote attach
 promotes from shared to solo. `preload.onRemoteResizeAllowed` forwards the id
@@ -301,6 +365,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 |---|---|---|
 | `read-memory` / `save-memory` | `resolveAllowedMemoryPath` (read/write the returned path, not the caller's own re-resolved one) | disk-resolved allowlist |
 | `get-memories` (the list, and the FTS bodies it indexes) | `acceptMdFile` (`scan-md-files.js`) applies `isSensitivePath` itself and the `isAllowedMemoryPath` predicate `get-memories` passes in; `scanMdFiles` is the directory-wide form of it, and the project-root `CLAUDE.md`/`GEMINI.md`/`agents.md` go through it by name | disk-resolved denylist + allowlist — a listed file is read twice more downstream, once by `read-memory` behind `resolveAllowedMemoryPath` and once by the FTS indexer behind nothing at all, so the guard belongs on the list. The denylist is not the caller's to choose: containment in an allowed project root says nothing about a cloned repo's own `.ssh`/`.env` |
+| `open-main-log` | Main chooses electron-log's path; requires a string absolute path and `!isSensitivePath` before `shell.openPath`. | no renderer-supplied path; disk-resolved denylist |
 | `open-path` / `read-file-for-panel` / `save-file-for-panel` / `watch-file` | Local: `isSensitivePath`. Remote panel reads resolve the session target and guard the literal and canonical host path. Saves refuse a resolved remote target and any path already opened through the remote panel route, even without renderer options. | disk-resolved denylist + main-side remote write refusal |
 | `resolve-terminal-paths` | `resolveTerminalPaths` / `resolveTerminalPathTarget` (`terminal-path-target.js`, async, 8 checks in flight): the session cwd for a relative path, existence, then `isSensitivePath` on the resolved path, then regular-file-ness, `PANEL_FILE_MAX_BYTES` and a NUL-byte sniff | disk-resolved denylist, strictly narrower than `read-file-for-panel` — its whole input is untrusted terminal output, and its answer decides whether a path is even offered as a link. Existence is tested before the denylist because most candidates on a line of prose are not files; a path that exists still passes the denylist before anything else is decided. A remote session is refused outright, and so is one whose working directory cannot be resolved — otherwise an unresolvable remote would fall back to stat-ing the local disk. A panel shell (`panelFor`) resolves through its owning session |
 | `check-delete-worktree` / `delete-worktree` / `worktree-status` | Shared `checkDeleteWorktree`: `WORKTREE_PATH_RE` (shape) + `isKnownProjectRoot` (disk-resolved exact match) | shape + disk-resolved allowlist |

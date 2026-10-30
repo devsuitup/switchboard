@@ -1,6 +1,34 @@
 // see docs/product/BUILDING-BLOCKS.md (B8)
 const appNoticeEntries = new Map();
 
+window.api?.onMainProcessError?.(notice => {
+  const previous = appNoticeEntries.get('main-process-errors');
+  const recent = new Map((previous?.options.members || []).map(member => [member.id, member]));
+  recent.delete(notice.id);
+  recent.set(notice.id, notice);
+  const members = [...recent.values()].slice(-5);
+  const options = {
+    id: 'main-process-errors', kind: 'error', members,
+    message: entries => `${entries.map(member => `${member.message.replace(/\.$/, '')}${member.count > 1 ? ` (${member.count} occurrences)` : ''}`).join('\n')}. Open log; the log may hold details.`,
+    actionLabel: 'Open log', onAction: openMainErrorLog, dismissOnAction: false,
+  };
+  if (previous) {
+    previous.options = options;
+    previous.notice.querySelector('.app-notice-message').textContent = options.message(members);
+  } else showAppNotice(options);
+});
+window.api?.mainErrorNoticesReady?.();
+
+async function openMainErrorLog() {
+  try {
+    const result = await window.api.openMainLog();
+    if (!result?.ok) throw new Error(result?.error || 'Application log is unavailable');
+    clearAppNotice('main-process-log-error');
+  } catch (error) {
+    showAppNotice({ id: 'main-process-log-error', kind: 'error', message: `Cannot open application log: ${error.message}` });
+  }
+}
+
 function sessionActionNoticeId(operation, session) {
   return `${operation}:${session?.remoteAlias || 'local'}:${session?.sessionId || session?.projectPath || 'unknown'}`;
 }
