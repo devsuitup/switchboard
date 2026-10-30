@@ -209,6 +209,7 @@ const rendererCrossFileGlobals = {
   buildSessionItem: 'readonly',
   buildSlugGroup: 'readonly',
   folderId: 'readonly',
+  projectStateKey: 'readonly',
   slugId: 'readonly',
   subagentTypeColor: 'readonly',
   SUBAGENT_LIVE_TTL_MS: 'readonly',

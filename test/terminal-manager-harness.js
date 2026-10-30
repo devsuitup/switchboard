@@ -225,6 +225,11 @@ function setupTerminalDom(opts = {}) {
   }
 
   const ctx = dom.getInternalVMContext();
+  if (!opts.dom) {
+    loadAppFunctions(ctx, {
+      functions: ['folderId', 'projectStateKey'], sourcePath: path.join(PUBLIC_DIR, 'sidebar.js'),
+    });
+  }
   if (!window.document.getElementById('app-notices')) {
     const notices = window.document.createElement('div');
     notices.id = 'app-notices';

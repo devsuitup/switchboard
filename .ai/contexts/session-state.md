@@ -75,6 +75,11 @@ path-only state. Schedule groups already use an encoded alias/path/slug tuple;
 their identity and migration remain unchanged. Evidence:
 `test/dom-sidebar-host-state-915.test.js` and the post-morphdom failure cases in
 `test/dom-sidebar-unchanged-543.test.js`.
+Grouped grid headings also use `projectStateKey` in `data-project-key`, both
+when laying out sidebar rows and when inserting a newly opened card according
+to `sortedOrder`. `data-project-path` retains the original path. Same-path hosts
+and local projects get separate headings; local keys and ordering remain paths.
+Evidence: `test/dom-grid-host-headings-921.test.js` (#921).
 The skip-key table independently covers background agents, active
 children, dormant rows, task counts, detach availability, both archive locks,
 age-cutoff membership, the 30-second clock bucket and the local day string;
