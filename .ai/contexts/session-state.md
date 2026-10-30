@@ -462,7 +462,9 @@ job preflight validation; ended attached jobs only detach their tabs. Refusal
 wording never establishes that a conversation has a background job. In the folder
 batch only, an idle part with unknown daemon state and no observed live process
 is omitted, so an unreadable unrelated job cannot block a foreground conversation
-or flood an idle folder with refusals. Unknown attached jobs and processes live
+or flood an idle folder with refusals. The omitted part may be the session's own
+job in a state this build cannot read, so when nothing is left to stop the
+"Nothing is running" notice counts the unchecked parts and gives the reasons. Unknown attached jobs and processes live
 elsewhere retain their planner refusals; forcing never bypasses those checks.
 
 Execution continues after individual failures. One persistent

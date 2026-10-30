@@ -138,7 +138,7 @@ test('unknown daemon state on an idle merged part does not keep a plain PTY conv
   } finally { h.ctx.destroy(); }
 });
 
-test('all idle conversations with unknown daemon state show Nothing is running', async () => {
+test('all idle conversations with unknown daemon state show Nothing is running and say what was not checked', async () => {
   const h = setup();
   try {
     h.project.sessions = [{ sessionId: 'idle-a' }, { sessionId: 'idle-b' }];
@@ -147,8 +147,24 @@ test('all idle conversations with unknown daemon state show Nothing is running',
     await h.button().onclick(new h.w.MouseEvent('click'));
     assert.equal(h.ctx.document.querySelector('.modal-overlay'), null);
     assert.equal(h.ctx.document.querySelector('#app-notices [role=alert]'), null);
-    assert.equal(h.ctx.document.querySelector('#app-notices [role=status] .app-notice-message').textContent, 'Nothing is running to stop.');
+    assert.equal(h.ctx.document.querySelector('#app-notices [role=status] .app-notice-message').textContent,
+      'Nothing is running to stop. 2 idle parts could not be checked for background jobs (unrelated job has an unreadable state).');
     assert.deepEqual(h.calls, []);
+  } finally { h.ctx.destroy(); }
+});
+
+test('a background conversation refused by the job check does not offer the background choice', async () => {
+  const h = setup();
+  try {
+    h.project.sessions = [{ sessionId: 'local', name: 'Local work' }, { sessionId: 'job-part', name: 'Background only' }];
+    h.w.cachedAllProjects = [h.project];
+    h.w.api.checkBgAgentVerb = async () => ({ ok: false, error: 'daemon refused the check' });
+    const { done, overlay } = await start(h);
+    assert.equal(overlay.querySelector('input[type=radio]'), null);
+    assert.match(overlay.textContent, /Background only \(part job-part\): daemon refused the check/);
+    await answerChoiceDialog(h.ctx, { confirm: true });
+    await done;
+    assert.deepEqual(h.calls, [['stop', 'local']]);
   } finally { h.ctx.destroy(); }
 });
 

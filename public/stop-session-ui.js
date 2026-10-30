@@ -16,6 +16,7 @@ function resolveSessionStop(session, { attach = false } = {}) {
 async function planSessionStop(row, { attach = false, retryTargets, backgroundJobs, jobStop = false, ignoreUnknownIdleJobs = false } = {}) {
   const targets = [];
   const excluded = [];
+  const unchecked = [];
   for (const id of new Set(retryTargets ? retryTargets.map(target => target.sessionId) : rowSessionIds(row))) {
     let member = id === row.sessionId ? row : {
       ...row, sessionId: id,
@@ -67,7 +68,10 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
     }
     const check = await checkBackgroundJob(id, backgroundJobs);
     if (check?.known === false || (jobStop && check?.known !== true)) {
-      if (ignoreUnknownIdleJobs && storedActivitySnapshot(id, row)?.liveness !== 'alive') continue;
+      if (ignoreUnknownIdleJobs && storedActivitySnapshot(id, row)?.liveness !== 'alive') {
+        unchecked.push({ sessionId: id, reason: check?.reason || 'unknown' });
+        continue;
+      }
       excluded.push({ sessionId: id, reason: `cannot tell whether a background job is running this part (${check?.reason || 'unknown'})` });
     } else if (check?.job) {
       if (jobStop) {
@@ -85,7 +89,7 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
       excluded.push({ sessionId: id, reason: 'a process outside this window keeps running; stop it in its own terminal' });
     }
   }
-  return describeSessionStopPlan(row, targets, excluded);
+  return { ...describeSessionStopPlan(row, targets, excluded), unchecked };
 }
 
 function describeSessionStopPlan(row, targets, excluded) {
@@ -360,16 +364,19 @@ async function confirmAndStopProjectFolder(project, retryRows) {
       const name = cleanDisplayName(row.name || row.aiTitle || row.summary) || row.sessionId;
       const snapshot = mergedRowSnapshot(rowSessionIds(row), rowHeadId(row), storedActivitySnapshot(rowHeadId(row), row), row);
       const background = planned.targets.some(target => target.job && !target.notHosted);
-      entries.push({ row, plan, name, background, midTurn: !!snapshot?.busy });
+      entries.push({ row, plan, name, background, unchecked: planned.unchecked || [], midTurn: !!snapshot?.busy });
     }
     const candidates = entries.filter(entry => entry.plan.targets.length);
     const refused = entries.flatMap(entry => entry.plan.excluded.map(part => `${entry.name} (part ${part.sessionId}): ${part.reason}.`));
     if (!candidates.length) {
       if (refused.length) throw new Error(refused.join('\n'));
-      showAppNotice({ id: noticeId, message: 'Nothing is running to stop.' });
+      const unchecked = entries.flatMap(entry => entry.unchecked);
+      showAppNotice({ id: noticeId, message: unchecked.length
+        ? `Nothing is running to stop. ${unchecked.length} idle part${unchecked.length === 1 ? '' : 's'} could not be checked for background jobs (${[...new Set(unchecked.map(part => part.reason))].join('; ')}).`
+        : 'Nothing is running to stop.' });
       return;
     }
-    const hasBackground = entries.some(entry => entry.background);
+    const hasBackground = candidates.some(entry => entry.background);
     const message = [
       'Stop the conversations in this folder, including its nested worktrees? Their processes end; the conversations are kept and can be resumed.',
       ...candidates.map(entry => `${entry.name}${entry.midTurn ? ' (mid-turn)' : ''}: ${entry.plan.targets.map(target => target.where).join(', ')}${entry.background ? '; runs in the background and is refused unless you explicitly include background jobs' : ''}.`),
