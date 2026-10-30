@@ -3629,7 +3629,7 @@ function startProjectsWatcher() {
         if (err.code === 'ENOENT') {
           const runId = path.basename(filename, '.json');
           if (workflowTitles.get(filename) !== runId) changed = true;
-          workflowTitles.set(filename, runId);
+          if (fs.existsSync(path.join(PROJECTS_DIR, filename.split(path.sep)[0]))) workflowTitles.set(filename, runId);
         }
       }
     }

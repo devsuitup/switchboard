@@ -203,8 +203,9 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   const excludedMessageUuids = opts.excludedMessageUuids;
   const excludedMessageSignatures = opts.excludedMessageSignatures;
   try {
-    const stamp = isSubagent ? null : continuationStamp(fs.statSync(filePath, { bigint: true }));
-    const stat = fs.statSync(filePath);
+    const big = fs.statSync(filePath, { bigint: true });
+    const stamp = continuationStamp(big);
+    const stat = isSubagent ? { size: Number(big.size), mtime: big.mtime, birthtime: big.birthtime } : fs.statSync(filePath);
     const fileBytes = fs.readFileSync(filePath);
     const content = fileBytes.toString('utf8');
     const lines = content.split('\n').filter(Boolean);
@@ -347,7 +348,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         firstPrompt: summary,
         created: stat.birthtime.toISOString(),
         modified: stat.mtime.toISOString(),
-        fileMtime: continuationMtime(fs.statSync(filePath, { bigint: true })),
+        fileMtime: continuationMtime(big),
         fileSize: stat.size,
         messageCount, textContent, slug, customTitle: customTitle || '', aiTitle,
         parentSessionId: opts.parentSessionId,
@@ -617,8 +618,9 @@ function readSessionDisplayHeader(filePath, opts = {}) {
   const MAX_BYTES = 256 * 1024;
   const MAX_LINES = 500;
   try {
-    const stat = fs.statSync(filePath);
-    const fileMtime = continuationMtime(fs.statSync(filePath, { bigint: true }));
+    const big = fs.statSync(filePath, { bigint: true });
+    const stat = { size: Number(big.size), mtime: big.mtime };
+    const fileMtime = continuationMtime(big);
     const readLen = Math.min(MAX_BYTES, stat.size);
     const fd = fs.openSync(filePath, 'r');
     const buf = Buffer.alloc(readLen);

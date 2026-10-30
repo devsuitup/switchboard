@@ -78,6 +78,8 @@ repeat notifications when only status changes; the first event has no known
 title baseline and notifies. Deleted snapshots retain the run id as the baseline
 and notify when the title changes or no baseline exists, including after
 folder-scope pruning in the same flush; repeated deletions remain quiet.
+The run-id baseline is retained only while the project folder exists, so an
+ENOENT in a folder-removal flush cannot repopulate that folder's title map.
 Partial JSON preserves the last title.
 Folder-scope pruning precedes snapshot reads, keeping titles read in the same
 flush as the baseline for later status-only events.
@@ -588,7 +590,10 @@ successful head-turn refresh, which logs one recovery message (#873, #885).
 Failure identity combines `err.code || err.name` with the message after
 normalising digits, bare UUIDs and absolute paths anchored at the start of text,
 whitespace, a quote, `=`, `(` or `:`. Slash and backslash paths are accepted after
-those separators; the slash path branch excludes `//`, preserving URL hosts.
+those separators; a single backslash root requires a nonempty path component
+and another backslash, preserving distinct `\n`, `\t` and `\u001b[0m` tokens.
+Forward-slash UNC paths normalize at ordinary anchors; `//` is excluded only
+immediately after `:`, preserving `http://` and `file:///` URL hosts (#914).
 Relative paths and URL hosts remain distinct. Each host
 retains at most 20 signatures, evicting the oldest on overflow; alternating
 failures retain their dedup entries within that bound. Warnings keep the
@@ -2427,9 +2432,14 @@ their equality. A complete multi-chunk index then stays reusable through an
 ordinary refresh and `init()`, rather than being replaced with a partial scan.
 Every transcript `fileMtime` writer uses `continuationMtime()`: full subagent
 reads and both display-header variants derive it from a BigInt stat too (#907).
+Subagent full reads retain the BigInt stat taken before reading, so a same-size
+rewrite after the read remains stale for the next refresh (#913). Those reads
+and both display-header variants also reuse that stat's size and Date fields,
+without a second Number stat. Their display Date follows BigInt-stat rounding;
+`fileMtime` still follows `continuationMtime()`.
 The legacy custom-title backfill compares the header's `fileMtime` with the
 cached row's `fileMtime`, keeping the same rounding as refresh. The header's
-`modified` remains its existing display timestamp and is not a freshness key.
+`modified` remains a display timestamp and is not a freshness key.
 Legacy ISO cursors written with BigInt rounding remain reusable; a cursor
 written with a different rounding restarts once, then uses the canonical value.
 Converting nanoseconds to Number before rounding also loses precision (#656).

@@ -45,11 +45,11 @@ test('refresh skips a subagent immediately after a full read at the rounding bou
   cache.refreshFolder(h.folder);
   assert.equal(opens, 0, 'an unchanged subagent must not need a header read');
   assert.equal(h.rows.get(row.sessionId).fileMtime, expected);
-  assert.equal(h.rows.get(row.sessionId).modified, '2026-10-29T12:00:00.001Z');
+  assert.equal(h.rows.get(row.sessionId).modified, '2026-10-29T12:00:00.000Z');
 });
 
 for (const parentSessionId of [undefined, OLD]) {
-  test(`display header exposes canonical freshness without changing modified, subagent=${!!parentSessionId}`, t => {
+  test(`display header exposes canonical freshness and BigInt display time, subagent=${!!parentSessionId}`, t => {
     const h = fixture(t);
     const file = h.file(OLD);
     fs.writeFileSync(file, line({ type: 'user', isSidechain: true, agentId: 'child', message: { content: 'prompt' } }));
@@ -57,7 +57,7 @@ for (const parentSessionId of [undefined, OLD]) {
     const header = readSessionDisplayHeader(file, { parentSessionId });
     assert.ok(header);
     assert.equal(header.fileMtime, expected);
-    assert.equal(header.modified, '2026-10-29T12:00:00.001Z');
+    assert.equal(header.modified, '2026-10-29T12:00:00.000Z');
   });
 }
 
