@@ -1,6 +1,8 @@
 // see docs/product/BUILDING-BLOCKS.md (B8)
 const appNoticeEntries = new Map();
 
+window.api?.onMainProcessError?.(notice => showAppNotice(notice));
+
 function sessionActionNoticeId(operation, session) {
   return `${operation}:${session?.remoteAlias || 'local'}:${session?.sessionId || session?.projectPath || 'unknown'}`;
 }

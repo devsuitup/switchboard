@@ -4,6 +4,32 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
+## Main-process error backstop (#896)
+
+`src/main/app/main-error-handlers.js` installs `uncaughtException` and `unhandledRejection`
+listeners in `main.js` before `app.whenReady()`. Both write `[main:<origin>]`
+and the full stack to `electron-log`; non-Error rejection reasons use a safe
+text representation. A throwing logger is contained, independently of notices.
+
+Policy: keep running after logging, with no automatic quit. The exception
+listener suppresses Electron's default exception dialog; a B8 error notice
+replaces it. This is a reporting backstop, not recovery of the operation that
+threw. Individual throw sites and worker-thread error handling are unchanged.
+
+| Event | Payload | Bridge / consumer |
+|---|---|---|
+| `main-process-error` | `{id, kind: 'error', message}` | `api.onMainProcessError(callback)` in preload; `public/app-notices.js` calls `showAppNotice`. The persistent, dismissible notice names the error and points to the log in Settings → Diagnostics. |
+
+Before the renderer finishes loading, or if its window/webContents is gone or
+sending throws, notices are queued by message (up to 100 distinct messages;
+overflow drops the oldest queued notice, never its log). `did-finish-load`
+flushes the queue, including on window recreation/reload. Failed sends stay
+queued for the next flush or recurrence. Identical messages, including across
+the two origins, produce at most one delivered notice per 60 seconds; every
+event is still logged. The interval starts on successful delivery. Expired
+deduplication entries are pruned lazily, with no timers or process-liveness
+dependency. Listeners can be disposed independently in plain Node tests.
+
 ## Key files
 
 | File | LOC | Role |

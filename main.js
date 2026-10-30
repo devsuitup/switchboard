@@ -166,6 +166,15 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   });
 }
 let mainWindow = null;
+let mainErrorWindowReady = false;
+const mainErrorHandlers = require('./src/main/app/main-error-handlers').installMainErrorHandlers({
+  log,
+  notify: notice => {
+    if (!mainErrorWindowReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return false;
+    mainWindow.webContents.send('main-process-error', notice);
+    return true;
+  },
+});
 let activityFlushedForQuit = false;
 let updateInstalling = false;
 let quitAttemptToken = null;
@@ -417,10 +426,13 @@ function createWindow() {
       if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
     }
   });
+  mainWindow.webContents.on('did-start-loading', () => { mainErrorWindowReady = false; });
   // Override window.open so xterm WebLinksAddon's default handler (which does
   // window.open() then sets location.href) routes through our IPC instead of
   // creating a child BrowserWindow.
   mainWindow.webContents.on('did-finish-load', () => {
+    mainErrorWindowReady = true;
+    mainErrorHandlers.flushNotices();
     if (privilegeNotice) mainWindow.webContents.send('updater-event', 'startup-notice', privilegeNotice);
     mainWindow.webContents.executeJavaScript(`
       window.open = function(url) {
@@ -498,6 +510,7 @@ function createWindow() {
   })().catch(err => log.error('[window] bounds save on close failed:', err.message)));
 
   mainWindow.on('closed', () => {
+    mainErrorWindowReady = false;
     quitAttemptToken = unsavedGuard.committedToken(mainWindow);
     if (process.platform === 'darwin') { quitAttemptToken = null; unsavedGuard.invalidate(); }
     // On macOS the app stays alive in the dock after the last window closes.
