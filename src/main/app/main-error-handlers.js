@@ -6,6 +6,7 @@ const { createHash } = require('node:crypto');
 function installMainErrorHandlers({ log, notify, target = process, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
   const counts = new Map();
   const pending = new Map();
+  const delivered = new Map();
 
   function deliver(notice) {
     try {
@@ -13,6 +14,9 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
     } catch {
       return false;
     }
+    delivered.delete(notice.id);
+    delivered.set(notice.id, notice);
+    if (delivered.size > 5) delivered.delete(delivered.keys().next().value);
     return true;
   }
 
@@ -42,7 +46,12 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
     let message = 'Unreadable error';
     let detail = message;
     try {
-      message = typeof error?.message === 'string' ? error.message : inspect(error, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity }).slice(0, 16000);
+      if (typeof error?.message === 'string') message = error.message;
+      else {
+        const keyCount = error && (typeof error === 'object' || typeof error === 'function') ? Object.keys(error).length : 0;
+        message = keyCount > 1000 ? `[Object with ${keyCount} keys; inspection omitted]`
+          : inspect(error, { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity }).slice(0, 16000);
+      }
       if (!message.trim()) {
         message = typeof error;
         try {
@@ -83,7 +92,8 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
   target.on('unhandledRejection', onRejection);
 
   return {
-    flushNotices() {
+    flushNotices({ replay = false } = {}) {
+      if (replay) for (const notice of [...delivered.values()]) deliver(notice);
       for (const id of pending.keys()) sendPending(id);
     },
     dispose() {
@@ -92,6 +102,7 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
       for (const { state } of pending.values()) clearTimer(state.timer);
       pending.clear();
       counts.clear();
+      delivered.clear();
     },
   };
 }

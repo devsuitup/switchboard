@@ -143,6 +143,17 @@ test('wide objects are capped before logging and hashing without invoking getter
   assert.equal(notices.at(-1).id, notices[0].id, 'object keys beyond the inspected prefix do not enter the hash');
 });
 
+test('a 100000-key rejection is summarized before inspecting property values', t => {
+  const { target, logs, notices } = setup(t);
+  const wide = Object.fromEntries(Array.from({ length: 100000 }, (_, i) => [`key${i}`, 'must not serialize']));
+  let getterCalls = 0;
+  Object.defineProperty(wide, 'hostile', { enumerable: true, get() { getterCalls++; throw new Error('must not run'); } });
+  target.emit('unhandledRejection', wide);
+  assert.equal(logs[0][1], '[Object with 100001 keys; inspection omitted]');
+  assert.equal(notices[0].message, 'Unhandled rejection: [Object with 100001 keys; inspection omitted]');
+  assert.equal(getterCalls, 0);
+});
+
 test('large error messages are truncated for display but distinct suffixes keep distinct ids and full stacks', t => {
   const { target, logs, notices } = setup(t);
   const error = new Error('command stderr '.repeat(1000));

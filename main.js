@@ -1145,8 +1145,9 @@ ipcMain.handle('open-external', (_event, url) => {
 
 ipcMain.on('main-error-notices-ready', event => {
   if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || event.sender !== mainWindow.webContents) return;
+  const replay = !mainErrorWindowReady;
   mainErrorWindowReady = true;
-  mainErrorHandlers.flushNotices();
+  mainErrorHandlers.flushNotices({ replay });
 });
 
 ipcMain.handle('open-main-log', async () => {

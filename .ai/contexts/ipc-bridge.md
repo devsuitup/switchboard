@@ -27,6 +27,13 @@ sending throws, notices are queued by normalized-message id (up to 100 distinct 
 overflow drops the least recently encountered queued notice, never its log).
 The `main-error-notices-ready` handshake flushes the queue, including on window
 recreation/reload. Failed sends stay queued for the next handshake or recurrence.
+Main retains the last successfully delivered notice for each of the five most
+recently delivered ids, in renderer recency order. The first ready signal after
+readiness resets replays that snapshot before flushing pending errors; repeated
+ready signals only flush pending errors. Replay does not increment counts, write
+logs or alter the trailing-update throttle. This recovers notices sent to the
+outgoing page between reload start and commit. The snapshot is bounded separately
+from the 100-id pending/count caches and cleared on disposal.
 Committed main-frame document navigation (`did-navigate`) and `render-process-gone`
 reset readiness until a new handshake. `did-navigate` only fires for new main-frame
 documents and needs no argument inspection. `will-navigate` uses Electron's details
@@ -45,8 +52,13 @@ pending queue retains its own dispatch state, so cache eviction cannot lose a
 trailing count or reset its throttle. Repeated queued errors retain their latest count.
 Display summaries are limited to 500 characters plus the origin label;
 non-Error inspection disables custom inspectors/getters and limits depth,
-array lengths and individual strings. `util.inspect` has no object-key limit;
-the inspected string is truncated to 16,000 characters before logging and hashing.
+array lengths and individual strings. Before inspection, non-Error values with
+more than 1,000 own enumerable keys are summarized as `[Object with N keys;
+inspection omitted]`, without reading property values. Key enumeration and
+inspection remain inside the hostile-value guard. This bounds root-object
+serialization after enumeration; nested object widths and proxy trap execution
+are not given a hard work budget. The inspected string for other values is
+truncated to 16,000 characters before logging and hashing.
 Keys beyond that prefix can therefore share an id. Error-message ids still use
 the full normalized message before display truncation. Empty or whitespace-only
 messages fall back to the error name or a type label before hashing.
@@ -54,7 +66,15 @@ Error stacks in the log are unchanged.
 
 The renderer uses B8 `members` to retain at most five distinct summaries inside
 one `main-process-errors` notice, moving repeated ids to the newest position and
-showing counts. Existing groups update text in place, preserving buttons and focus.
+showing counts. While an id remains in the group, its displayed count is the
+maximum of the previous and incoming count, so a main count-cache eviction cannot
+reduce it. Renderer eviction/dismissal clears that display history.
+Existing groups update visible text in place, preserving buttons and focus.
+The visible summary (including counts and recency order) is `aria-hidden`; an
+offscreen announcement span inside the alert changes only when a new id joins,
+using that id's message. Count-only updates and member reordering leave announced
+text untouched. `public/style.css` clips the announcement without hiding it from
+assistive technology. Other B8 notices retain their existing announcement policy.
 Flush uses the same grouping, so 100 queued errors cannot create 100 alerts.
 The notice says the log may hold details, since electron-log rotates it.
 Trailing timers are unref'd, bounded by the 100 pending ids, and cancelled on

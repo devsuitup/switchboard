@@ -4,6 +4,8 @@ const appNoticeEntries = new Map();
 window.api?.onMainProcessError?.(notice => {
   const previous = appNoticeEntries.get('main-process-errors');
   const recent = new Map((previous?.options.members || []).map(member => [member.id, member]));
+  const existing = recent.get(notice.id);
+  notice = { ...notice, count: Math.max(existing?.count || 0, notice.count) };
   recent.delete(notice.id);
   recent.set(notice.id, notice);
   const members = [...recent.values()].slice(-5);
@@ -15,7 +17,15 @@ window.api?.onMainProcessError?.(notice => {
   if (previous) {
     previous.options = options;
     previous.notice.querySelector('.app-notice-message').textContent = options.message(members);
-  } else showAppNotice(options);
+    if (!existing) previous.notice.querySelector('.app-notice-announcement').textContent = notice.message;
+  } else {
+    const group = showAppNotice(options);
+    group.querySelector('.app-notice-message').setAttribute('aria-hidden', 'true');
+    const announcement = document.createElement('span');
+    announcement.className = 'app-notice-announcement';
+    announcement.textContent = notice.message;
+    group.append(announcement);
+  }
 });
 window.api?.mainErrorNoticesReady?.();
 

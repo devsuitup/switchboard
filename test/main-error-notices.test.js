@@ -80,7 +80,7 @@ function setupMain(t) {
   const ready = source.match(/^ipcMain\.on\('main-error-notices-ready',[\s\S]*?^\}\);/m);
   if (ready) vm.runInContext(ready[0], context, { filename: sourcePath });
   const signalReady = (sender = webContents) => ipcMain.emit('main-error-notices-ready', { sender, senderFrame: sender.mainFrame });
-  return { target, webContents, sent, context, signalReady };
+  return { target, webContents, sent, context, signalReady, clock };
 }
 
 test('ready handshake flushes early errors only from the active renderer', t => {
@@ -119,12 +119,87 @@ test('committed main document and renderer death require a new ready handshake',
   target.emit('uncaughtException', new Error('new document'));
   assert.equal(sent.length, 1, 'committed navigation must disarm delivery');
   signalReady();
-  assert.equal(sent.length, 2);
+  assert.equal(sent.length, 3, 'ready replays the delivered notice before the queued new document error');
   webContents.emit('render-process-gone', {}, { reason: 'crashed' });
   target.emit('uncaughtException', new Error('dead renderer'));
-  assert.equal(sent.length, 2);
+  assert.equal(sent.length, 3);
   signalReady();
-  assert.equal(sent.length, 3, 'reload handshake re-arms and flushes');
+  assert.equal(sent.length, 6, 'reload handshake replays both delivered ids and flushes the new error');
+});
+
+test('reload and renderer death replay the five latest delivered ids exactly once per ready transition', t => {
+  const { target, webContents, sent, signalReady, clock } = setupMain(t);
+  signalReady();
+  for (let i = 0; i < 6; i++) target.emit('uncaughtException', new Error(`replay-${i}`));
+  target.emit('uncaughtException', new Error('replay-1'));
+  clock.advance(1000);
+  const expected = [sent[2][1], sent[3][1], sent[4][1], sent[5][1], sent[6][1]];
+  webContents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+  target.emit('uncaughtException', new Error('outgoing document'));
+  const latest = [...expected.slice(1), sent.at(-1)[1]];
+  const before = sent.length;
+  webContents.emit('did-navigate', {}, 'file:///app/index.html');
+  assert.equal(sent.length, before, 'commit waits for subscription');
+  signalReady({});
+  assert.equal(sent.length, before, 'foreign readiness cannot replay');
+  signalReady();
+  assert.deepEqual(sent.slice(before).map(([, notice]) => notice), latest, 'reload must recover the latest five ids including the outgoing-page error');
+  assert.equal(latest[3].count, 2, 'replay preserves the last delivered count');
+  signalReady();
+  assert.equal(sent.length, before + 5, 'duplicate ready must not replay again');
+  webContents.emit('render-process-gone', {}, { reason: 'crashed' });
+  signalReady();
+  assert.deepEqual(sent.slice(before + 5).map(([, notice]) => notice), latest, 'renderer death must replay the same bounded group');
+});
+
+test('repeat counts leave announced text unchanged and new ids update the live region', t => {
+  const dom = setupSidebarDom();
+  t.after(() => dom.destroy());
+  const emit = (id, count) => dom.window.api._mainProcessErrorCb({ id, count, message: `problem-${id}.` });
+  emit('first', 1);
+  const alert = dom.document.querySelector('[role="alert"]');
+  const announced = () => {
+    const copy = alert.cloneNode(true);
+    for (const hidden of copy.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
+    return copy.textContent;
+  };
+  const original = announced();
+  emit('first', 7);
+  assert.equal(announced(), original, 'count updates must not change announced text');
+  assert.equal(alert.querySelector('.app-notice-message').textContent, 'problem-first (7 occurrences). Open log; the log may hold details.');
+  emit('second', 1);
+  assert.notEqual(announced(), original, 'a new id must change announced text');
+  assert.match(announced(), /problem-second/);
+  const afterNew = announced();
+  emit('first', 8);
+  assert.equal(announced(), afterNew, 'recency changes must not re-announce the group');
+});
+
+test('a visible member keeps its count after main count-cache eviction and resets after renderer eviction', t => {
+  const dom = setupSidebarDom();
+  t.after(() => dom.destroy());
+  const target = new EventEmitter();
+  const clock = createClock();
+  let ready = true;
+  const handlers = installMainErrorHandlers({ target, ...clock, log: { error() {} }, notify: notice => {
+    if (!ready) return false;
+    dom.window.api._mainProcessErrorCb(notice);
+  } });
+  t.after(() => handlers.dispose());
+  target.emit('uncaughtException', new Error('retained'));
+  for (let i = 0; i < 8; i++) target.emit('uncaughtException', new Error('retained'));
+  clock.advance(1000);
+  ready = false;
+  for (let i = 0; i < 101; i++) target.emit('uncaughtException', new Error(`unavailable-${i}`));
+  ready = true;
+  target.emit('uncaughtException', new Error('retained'));
+  const text = () => dom.document.querySelector('.app-notice-message').textContent;
+  assert.match(text(), /retained \(9 occurrences\)/, 'main cache eviction cannot decrease a visible count');
+  for (let i = 0; i < 5; i++) target.emit('uncaughtException', new Error(`visible-${i}`));
+  assert.doesNotMatch(text(), /retained/);
+  clock.advance(1000);
+  target.emit('uncaughtException', new Error('retained'));
+  assert.match(text(), /retained \(2 occurrences\)/, 'an evicted renderer member starts from the incoming count');
 });
 
 test('renderer subscribes before sending ready through the real preload', t => {
