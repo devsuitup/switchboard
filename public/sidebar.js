@@ -252,7 +252,8 @@ async function archiveSessionRows(rows, olderRule) {
   Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
 }
 
-function folderId(projectPath) {
+function folderId(projectPath, remoteAlias) {
+  if (remoteAlias) return 'project-remote-' + encodeURIComponent(JSON.stringify([remoteAlias, projectPath]));
   return 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
@@ -1204,7 +1205,7 @@ function renderProjects(projects, resort) {
     if (!result) continue;
     const { filtered, visible, older, subagentIndex, topLevelIds, sortOrderEntry } = result;
     newSortedOrder.push(sortOrderEntry);
-    const fId = folderId(project.projectPath);
+    const fId = folderId(project.projectPath, project.remoteAlias);
 
     // Build DOM
     const group = document.createElement('div');
@@ -1313,7 +1314,7 @@ function renderProjects(projects, resort) {
       newSortedOrder.push(wtResult.sortOrderEntry);
 
       const wtName = worktreeName(wt.projectPath) || wt.projectPath.split('/').pop();
-      const wtFId = folderId(wt.projectPath);
+      const wtFId = folderId(wt.projectPath, wt.remoteAlias);
 
       const wtGroup = document.createElement('div');
       wtGroup.className = 'worktree-group';
@@ -1461,6 +1462,7 @@ function renderProjects(projects, resort) {
   sidebarRenderKey = JSON.stringify(sidebarRenderInputs(inputProjects));
   sidebarRenderPayload = JSON.stringify(inputProjects);
   sidebarRenderAllProjects = JSON.stringify(cachedAllProjects);
+  renderProjects.lastProjects = inputProjects;
   sidebarRenderObserver.takeRecords();
   sidebarRenderDirty = false;
 }
@@ -1610,7 +1612,7 @@ async function archiveProjectFolder(project, button) {
     if (result.archiveSessions) {
       let refused = false;
       const notStopped = [];
-      const groupKey = 'ph-' + folderId(project.projectPath);
+      const groupKey = 'ph-' + folderId(project.projectPath, project.remoteAlias);
       const own = sessions.filter(s => !archivingSessionIds.has(s.sessionId));
       setGroupArchiveBusy(groupKey, true);
       for (const s of own) setArchiveBusy(s.sessionId, true);
@@ -1675,7 +1677,7 @@ async function archiveProjectFolder(project, button) {
 
 function rebindSidebarEvents(projects) {
   for (const project of projects) {
-    const fId = folderId(project.projectPath);
+    const fId = folderId(project.projectPath, project.remoteAlias);
     const header = document.getElementById('ph-' + fId);
     if (!header) continue;
     const newBtn = header.querySelector('.project-new-btn');
@@ -1769,7 +1771,7 @@ function rebindSidebarEvents(projects) {
   // Bind worktree header events
   sidebarContent.querySelectorAll('.worktree-header').forEach(wtHeader => {
     const wtFId = wtHeader.id.replace('ph-', '');
-    const wtProject = projects.find(p => folderId(p.projectPath) === wtFId
+    const wtProject = projects.find(p => folderId(p.projectPath, p.remoteAlias) === wtFId
       && (p.remoteAlias || '') === wtHeader.dataset.remoteAlias);
     if (!wtProject) return;
 

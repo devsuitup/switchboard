@@ -32,7 +32,7 @@ function project(profile, session) {
 }
 
 function header(ctx) {
-  return ctx.document.getElementById('ph-' + ctx.sidebar.folderId('/srv/supervision'));
+  return ctx.document.getElementById('ph-' + ctx.sidebar.folderId('/srv/supervision', 'planificator'));
 }
 
 test('the host dot title names the tier and the reason of every tier above it', () => {

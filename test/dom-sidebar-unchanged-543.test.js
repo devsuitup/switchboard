@@ -53,6 +53,82 @@ function olderProject(ctx, extra = {}) {
   return () => ctx.document.querySelector('.sessions-older-archive-btn');
 }
 
+test('ticker keeps each host title when remote projects share a path', t => {
+  const ctx = setup(t);
+  let now = ctx.w.Date.now();
+  ctx.w.Date.now = () => now;
+  Object.assign(ctx.projects[0], { remoteAlias: 'healthy', remoteHostAt: now - 1000 });
+  ctx.projects.push(makeSampleProject({ projectPath: ctx.projects[0].projectPath, sessions: [],
+    remoteAlias: 'offline', remoteHostAt: now - 5000, remoteHostError: 'timeout' }));
+  ctx.refresh();
+  const dots = [...ctx.document.querySelectorAll('.remote-host-dot')];
+  now += 30000;
+  ticker(ctx)();
+  assert.match(dots[0].title, /^no live session \(confirmed 31s ago\)/);
+  assert.match(dots[1].title, /^host unreachable: timeout \(last confirmed 35s ago\)/);
+});
+
+test('same-path remote headers reconnect their own host after morphdom refresh', async t => {
+  const ctx = setup(t);
+  ctx.w.cachedProjects = ctx.w.cachedAllProjects = ['host-a', 'host-b'].map(remoteAlias =>
+    makeSampleProject({ remoteAlias, sessions: [], remoteHostAt: ctx.w.Date.now() }));
+  const calls = [];
+  ctx.w.api.remoteHostRefresh = async alias => { calls.push(alias); };
+  ctx.refresh();
+  const headers = [...ctx.document.querySelectorAll('.project-header')];
+  headers[1].classList.add('collapsed');
+  ctx.refresh({ resort: true });
+  const next = [...ctx.document.querySelectorAll('.project-header')];
+  assert.equal(next[0], headers[0]);
+  assert.equal(next[1], headers[1]);
+  for (const header of next) {
+    assert.equal(typeof header.querySelector('.remote-host-refresh-btn').onclick, 'function',
+      'each host has its own reconnect handler');
+    await header.querySelector('.remote-host-refresh-btn').onclick({ stopPropagation() {} });
+  }
+  assert.deepEqual(calls, ['host-a', 'host-b']);
+  assert.equal(next[0].classList.contains('collapsed'), false);
+  assert.equal(next[1].classList.contains('collapsed'), true);
+  const ids = [...ctx.document.querySelectorAll('[id]')].map(node => node.id);
+  assert.equal(new Set(ids).size, ids.length, 'morphdom keys are unique across hosts');
+});
+
+test('search ticker retains narrowed live count without DOM mutations', t => {
+  const ctx = setup(t);
+  const project = ctx.projects[0];
+  Object.assign(project, { remoteAlias: 'vps', remoteHostAt: ctx.w.Date.now(), sessions:
+    Array.from({ length: 5 }, (_, i) => ({ sessionId: 'live-' + i, status: 'idle', remoteAlias: 'vps' })) });
+  ctx.w.cachedAllProjects = [project];
+  ctx.w.searchMatchIds = new Set(['live-0']);
+  ctx.refresh();
+  const dot = ctx.document.querySelector('.remote-host-dot');
+  assert.match(dot.title, /^1 live session /);
+  const observer = new ctx.w.MutationObserver(() => {});
+  observer.observe(ctx.w.sidebarContent, { subtree: true, childList: true, attributes: true, characterData: true });
+  t.after(() => observer.disconnect());
+  const tick = ticker(ctx);
+  tick();
+  tick();
+  assert.equal(observer.takeRecords().length, 0, 'search titles must not oscillate on ticks');
+  assert.match(dot.title, /^1 live session /);
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
+
+test('Show archived ticker refreshes a remote project absent from default projects', t => {
+  const ctx = setup(t);
+  let now = ctx.w.Date.now();
+  ctx.w.Date.now = () => now;
+  ctx.w.cachedProjects = [];
+  ctx.w.cachedAllProjects = [makeSampleProject({ remoteAlias: 'archive-host', sessions: [], remoteHostAt: now - 1000 })];
+  ctx.w.showArchived = true;
+  ctx.refresh();
+  now += 30000;
+  ticker(ctx)();
+  assert.match(ctx.document.querySelector('.remote-host-dot').title, /confirmed 31s ago/);
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
+
 test('older archive becomes eligible immediately after a closed tab is evicted', t => {
   const ctx = setup(t);
   const button = olderProject(ctx);
@@ -166,6 +242,16 @@ test('a field changed in place rebuilds the sidebar', t => {
 });
 
 const changes = {
+  'background agents': ctx => { ctx.w.bgAgentSessionIds.add('s-top-1'); },
+  'parent active subagent': ctx => { ctx.w.taskRegistry.note('s-top-1', 'agent-871'); },
+  'dormant membership': ctx => { ctx.w.dormantWorkingSet.set('s-top-1', {}); },
+  'task registry running count': ctx => { ctx.w.taskRegistry.note('s-top-1', 'agent-871', 'cli-task'); },
+  'detach availability': ctx => { ctx.w.openSessions.get('s-top-1').attach = true; },
+  'archiving session ids': ctx => { ctx.read('archivingSessionIds').add('s-top-1'); },
+  'archiving group ids': ctx => { ctx.read('archivingGroupIds').add('ph-' + ctx.w.folderId(ctx.projects[0].projectPath, ctx.projects[0].remoteAlias)); },
+  'session age bucket': ctx => { const now = ctx.w.Date.now(); ctx.w.Date.now = () => now + 2000; },
+  '30 second time bucket without ticker': ctx => { const now = ctx.w.Date.now(); ctx.w.Date.now = () => now + 30000; },
+  'local day string': ctx => { ctx.w.Date.prototype.toDateString = () => 'Fri Oct 30 2026'; },
   'star filter': ctx => { ctx.w.showStarredOnly = true; },
   'running filter': ctx => { ctx.w.showRunningOnly = true; },
   'today filter': ctx => { ctx.w.showTodayOnly = true; },
@@ -188,15 +274,82 @@ const changes = {
   'hidden project metadata': ctx => { ctx.w.cachedAllProjects = [...ctx.projects, makeSampleProject({ projectPath: '/hidden' })]; },
 };
 
+const prepareChanges = {
+  'background agents': ctx => { ctx.w.bgAgentSessionIds = new Set(); },
+  'parent active subagent': ctx => {
+    ctx.w.reflectSubagentRunningState = () => {};
+    ctx.w.taskRegistry.note('s-top-1', 'bash-871', 'local-ipc', { kind: 'bash' });
+  },
+  'dormant membership': ctx => {
+    ctx.w.dormantWorkingSet = new Map();
+    ctx.w.activePtyIds.add('s-top-1');
+    ctx.w.openSessions.set('s-top-1', { closed: false });
+  },
+  'task registry running count': ctx => {
+    ctx.w.taskRegistry = ctx.w.createTaskRegistry();
+    ctx.w.taskRegistry.note('s-top-1', 'bash-871', 'cli-task', { kind: 'bash' });
+  },
+  'detach availability': ctx => {
+    ctx.w.rowLifecycleLabel = () => null;
+    ctx.w.activePtyIds.add('s-top-1');
+    ctx.w.openSessions.set('s-top-1', { closed: false, attach: false });
+  },
+  'session age bucket': ctx => {
+    ctx.projects[0].sessions[0].modified = new Date(ctx.w.Date.now() - ctx.w.sessionMaxAgeDays * 86400000 + 1000).toISOString();
+  },
+};
+
 for (const [name, change] of Object.entries(changes)) {
   test(`identical payload rebuilds after changing ${name}`, t => {
     const ctx = setup(t);
+    prepareChanges[name]?.(ctx);
     ctx.refresh();
+    ctx.refresh();
+    assert.deepEqual(ctx.counts(), [1, 1]);
     change(ctx);
+    ctx.refresh();
+    assert.deepEqual(ctx.counts(), [2, 2]);
     ctx.refresh();
     assert.deepEqual(ctx.counts(), [2, 2]);
   });
 }
+
+test('ticker updates each remote host confirmation age and retry countdown without rebuilding', t => {
+  const ctx = setup(t);
+  let now = ctx.w.Date.now();
+  ctx.w.Date.now = () => now;
+  Object.assign(ctx.projects[0], { remoteAlias: 'healthy', remoteHostAt: now - 1000 });
+  ctx.projects.push(makeSampleProject({ projectPath: '/offline', sessions: [], remoteAlias: 'offline',
+    remoteHostAt: now - 5000, remoteHostError: 'timeout', remoteHostNextAttemptAt: now + 60000,
+    remoteHostProfile: { tier: 'poll', missing: [{ tier: 'watch', reason: 'inotifywait missing' }] } }));
+  ctx.refresh();
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [1, 1]);
+  const dots = [...ctx.document.querySelectorAll('.remote-host-dot')];
+  assert.equal(dots.length, 2);
+  assert.match(dots[0].title, /confirmed 1s ago/);
+  assert.match(dots[1].title, /last confirmed 5s ago.*next automatic attempt in 1m/);
+  now += 30000;
+  ticker(ctx)();
+  assert.match(dots[0].title, /confirmed 31s ago/);
+  assert.match(dots[1].title, /last confirmed 35s ago.*next automatic attempt in 30s/);
+  assert.match(dots[1].title, /Capability: poll\nwatch unavailable: inotifywait missing/);
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
+
+test('unchanged remote host ticker titles do not dirty the sidebar skip key', t => {
+  const ctx = setup(t);
+  Object.assign(ctx.projects[0], { remoteAlias: 'vps', remoteHostAt: ctx.w.Date.now() - 1000 });
+  ctx.refresh();
+  const tick = ticker(ctx);
+  const observer = new ctx.w.MutationObserver(() => {});
+  observer.observe(ctx.document.querySelector('.remote-host-dot'), { attributes: true });
+  t.after(() => observer.disconnect());
+  tick();
+  assert.equal(observer.takeRecords().length, 0, 'an identical title must not be written again');
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [1, 1]);
+});
 
 test('remote host label changes rebuild with an identical payload', t => {
   const ctx = setup(t);
@@ -414,4 +567,42 @@ test('debug trace reports cumulative sidebar renders and skips', t => {
   ctx.w.ATRACE = false;
   ctx.refresh();
   assert.equal(records.length, 4);
+});
+
+
+test('remote archive busy keys affect only their host and invalidate the skip key', t => {
+  const ctx = setup(t);
+  ctx.w.cachedProjects = ctx.w.cachedAllProjects = ['host-a', 'host-b'].map(remoteAlias =>
+    makeSampleProject({ remoteAlias, sessions: [] }));
+  ctx.refresh();
+  const headers = [...ctx.document.querySelectorAll('.project-header')];
+  ctx.read('archivingGroupIds').add(headers[1].id);
+  ctx.refresh();
+  const buttons = [...ctx.document.querySelectorAll('.project-archive-btn')];
+  assert.equal(buttons[0].disabled, false);
+  assert.equal(buttons[1].disabled, true);
+  assert.deepEqual(ctx.counts(), [2, 2]);
+  ctx.refresh();
+  assert.deepEqual(ctx.counts(), [2, 2]);
+});
+
+test('same-path nested worktrees bind their own host and preserve distinct morphdom keys', t => {
+  const ctx = setup(t);
+  const projects = ['host-a', 'host-b', null].flatMap(remoteAlias =>
+    ['/repo', '/repo/.claude/worktrees/branch'].map(projectPath =>
+      makeSampleProject({ projectPath, remoteAlias, sessions: [] })));
+  ctx.w.cachedProjects = ctx.w.cachedAllProjects = projects;
+  const calls = [];
+  ctx.w.showNewSessionPopover = project => calls.push([project.remoteAlias, project.projectPath]);
+  ctx.refresh();
+  ctx.refresh({ resort: true });
+  const headers = [...ctx.document.querySelectorAll('.worktree-header')];
+  assert.equal(headers.length, 3);
+  for (const header of headers) {
+    assert.equal(typeof header.querySelector('.worktree-new-btn').onclick, 'function', 'each nested host has its own handler');
+    header.querySelector('.worktree-new-btn').onclick({ stopPropagation() {} });
+  }
+  assert.deepEqual(calls, ['host-a', 'host-b', null].map(alias => [alias, '/repo/.claude/worktrees/branch']));
+  const ids = [...ctx.document.querySelectorAll('[id]')].map(node => node.id);
+  assert.equal(new Set(ids).size, ids.length);
 });
