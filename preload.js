@@ -231,6 +231,7 @@ contextBridge.exposeInMainWorld('api', {
   updaterInstall: () => ipcRenderer.invoke('updater-install'),
   updaterClose: () => ipcRenderer.send('updater-close'),
   openMainLog: () => ipcRenderer.invoke('open-main-log'),
+  mainErrorNoticesReady: () => { ipcRenderer.send('main-error-notices-ready'); },
   onMainProcessError: callback => {
     ipcRenderer.on('main-process-error', (_event, notice) => callback(notice));
   },

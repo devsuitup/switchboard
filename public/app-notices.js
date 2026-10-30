@@ -3,13 +3,21 @@ const appNoticeEntries = new Map();
 
 window.api?.onMainProcessError?.(notice => {
   const previous = appNoticeEntries.get('main-process-errors');
-  const members = [...new Map([...(previous?.options.members || []), notice].map(member => [member.id, member])).values()].slice(-5);
-  showAppNotice({
+  const recent = new Map((previous?.options.members || []).map(member => [member.id, member]));
+  recent.delete(notice.id);
+  recent.set(notice.id, notice);
+  const members = [...recent.values()].slice(-5);
+  const options = {
     id: 'main-process-errors', kind: 'error', members,
-    message: entries => `${entries.map(member => `${member.message}${member.count > 1 ? ` (${member.count} occurrences)` : ''}`).join('\n')}. Open log for details and earlier errors.`,
+    message: entries => `${entries.map(member => `${member.message.replace(/\.$/, '')}${member.count > 1 ? ` (${member.count} occurrences)` : ''}`).join('\n')}. Open log; the log may hold details.`,
     actionLabel: 'Open log', onAction: openMainErrorLog, dismissOnAction: false,
-  });
+  };
+  if (previous) {
+    previous.options = options;
+    previous.notice.querySelector('.app-notice-message').textContent = options.message(members);
+  } else showAppNotice(options);
 });
+window.api?.mainErrorNoticesReady?.();
 
 async function openMainErrorLog() {
   try {

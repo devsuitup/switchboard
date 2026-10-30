@@ -420,22 +420,19 @@ function createWindow() {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
     return { action: 'deny' };
   });
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  mainWindow.webContents.on('will-navigate', details => {
+    const { url } = details;
     if (url !== mainWindow.webContents.getURL()) {
-      event.preventDefault();
+      details.preventDefault();
       if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
     }
   });
-  mainWindow.webContents.on('did-start-navigation', (_event, _url, isSameDocument, isMainFrame) => {
-    if (isMainFrame && !isSameDocument) mainErrorWindowReady = false;
-  });
+  mainWindow.webContents.on('did-navigate', () => { mainErrorWindowReady = false; });
   mainWindow.webContents.on('render-process-gone', () => { mainErrorWindowReady = false; });
   // Override window.open so xterm WebLinksAddon's default handler (which does
   // window.open() then sets location.href) routes through our IPC instead of
   // creating a child BrowserWindow.
   mainWindow.webContents.on('did-finish-load', () => {
-    mainErrorWindowReady = true;
-    mainErrorHandlers.flushNotices();
     if (privilegeNotice) mainWindow.webContents.send('updater-event', 'startup-notice', privilegeNotice);
     mainWindow.webContents.executeJavaScript(`
       window.open = function(url) {
@@ -1141,6 +1138,12 @@ ipcMain.handle('worktree-status', async (_event, worktreePath) => {
 ipcMain.handle('open-external', (_event, url) => {
   log.info('[open-external IPC]', url);
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
+});
+
+ipcMain.on('main-error-notices-ready', event => {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || event.sender !== mainWindow.webContents) return;
+  mainErrorWindowReady = true;
+  mainErrorHandlers.flushNotices();
 });
 
 ipcMain.handle('open-main-log', async () => {

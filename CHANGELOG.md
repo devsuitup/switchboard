@@ -11,7 +11,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ### Changed
 - **Stop session** in a terminal header or grid card now stops every running part of the conversation, with the same confirmation and refusals as its sidebar row. (#917)
 - Opening a conversation from the sidebar now resumes its newest part instead of an older part waiting to restore. (#918)
-- Unexpected application errors now share one notice with repeat counts and an **Open log** button to view details in your default app. The app keeps running. (#896)
+- Unexpected application errors now share one notice with repeat counts and an **Open log** button. Frequent repeats keep the controls usable, and notices resume after a reload; the app keeps running and the log may hold details. (#896)
 
 ### Fixed
 - The session list no longer stops updating, or shows a continued conversation as two separate entries, when that conversation's transcript is large. (#891)

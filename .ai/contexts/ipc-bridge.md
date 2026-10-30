@@ -20,29 +20,45 @@ threw. Individual throw sites and worker-thread error handling are unchanged.
 |---|---|---|
 | `main-process-error` | `{id, kind: 'error', message, count}` | `api.onMainProcessError(callback)` in preload; `public/app-notices.js` groups errors into one persistent, dismissible B8 notice with an **Open log** action. |
 | `open-main-log` | No arguments | `api.openMainLog()` returns `{ok, error?}`. Main chooses `log.transports.file.getFile().path`, requires an absolute, non-sensitive path (including the existing on-disk path guard), and opens it via `shell.openPath`. Renderer arguments cannot choose another file. OS opener errors are shown in one replaceable error notice; opening the log leaves the error group visible. |
+| `main-error-notices-ready` | No arguments; one-way | `api.mainErrorNoticesReady()` is sent after `app-notices.js` installs its error listener. Only the active window's webContents may arm delivery and flush queued notices. |
 
-Before the renderer finishes loading, or if its window/webContents is gone or
+Before the renderer signals that its listener is ready, or if its window/webContents is gone or
 sending throws, notices are queued by normalized-message id (up to 100 distinct messages;
-overflow drops the oldest queued notice, never its log). `did-finish-load`
-flushes the queue, including on window recreation/reload. Failed sends stay
-queued for the next flush or recurrence. Only a new main-frame document
-navigation resets readiness; subframe loads and same-document navigations do
-not. `render-process-gone` resets readiness until the next `did-finish-load`.
+overflow drops the least recently encountered queued notice, never its log).
+The `main-error-notices-ready` handshake flushes the queue, including on window
+recreation/reload. Failed sends stay queued for the next handshake or recurrence.
+Committed main-frame document navigation (`did-navigate`) and `render-process-gone`
+reset readiness until a new handshake. `did-navigate` only fires for new main-frame
+documents and needs no argument inspection. `will-navigate` uses Electron's details
+object rather than deprecated positional arguments.
+Started or cancelled navigation, subframe loads and same-document navigation
+do not disarm notices. `did-finish-load` does not control notice readiness.
 
 Whitespace-normalized messages, including across the two origins, have a stable
 SHA-256 id derived before display truncation. Every event is logged and updates
-the occurrence count immediately; there is no 60-second suppression. The
-100 most recently encountered distinct ids retain counts (evicted counts start
-again if encountered later). Repeated queued errors retain their latest count.
+the occurrence count immediately. The first occurrence sends immediately, then
+each id sends at most once per second with its latest count, including a trailing
+delivery after a burst. The clock and timer functions are injectable in tests.
+The 100 most recently encountered distinct ids retain cached counts (evicted counts
+start again if encountered later unless a delivery is still queued). The bounded
+pending queue retains its own dispatch state, so cache eviction cannot lose a
+trailing count or reset its throttle. Repeated queued errors retain their latest count.
 Display summaries are limited to 500 characters plus the origin label;
 non-Error inspection disables custom inspectors/getters and limits depth,
-array lengths and individual strings. Error stacks in the log are unchanged.
+array lengths and individual strings. `util.inspect` has no object-key limit;
+the inspected string is truncated to 16,000 characters before logging and hashing.
+Keys beyond that prefix can therefore share an id. Error-message ids still use
+the full normalized message before display truncation. Empty or whitespace-only
+messages fall back to the error name or a type label before hashing.
+Error stacks in the log are unchanged.
 
 The renderer uses B8 `members` to retain at most five distinct summaries inside
-one `main-process-errors` notice, replacing repeated ids and showing counts.
+one `main-process-errors` notice, moving repeated ids to the newest position and
+showing counts. Existing groups update text in place, preserving buttons and focus.
 Flush uses the same grouping, so 100 queued errors cannot create 100 alerts.
-Earlier details remain in the log, subject to electron-log's rotation policy.
-There are no backstop timers. Listeners can be disposed independently in plain
+The notice says the log may hold details, since electron-log rotates it.
+Trailing timers are unref'd, bounded by the 100 pending ids, and cancelled on
+pending-queue eviction/disposal. Listeners can be disposed independently in plain
 Node tests.
 
 Known gap (#896): an error before any window has ever loaded stays queued only;
@@ -277,6 +293,7 @@ An unknown remote target never falls back to local disk IO.
 | IPC | Notes |
 |---|---|
 | `open-external` | Opens https:// URLs in OS browser |
+| `open-main-log` | No arguments; opens the main-selected, validated application log path and returns `{ok, error?}`. |
 | `clipboard-write-text` | Main-process clipboard write (Wayland fix, PR #18) |
 | `get-app-version` | From package.json |
 | `whats-new-startup` / `whats-new-dismissed` | The What's new dialog: the `CHANGELOG.md` sections to show on startup (or `null`), and recording the running version as `lastSeenVersion` when it closes. Help → What's new sends `show-whats-new` with the running version's section. See `docs/changelog.md` |
@@ -301,11 +318,12 @@ An unknown remote target never falls back to local disk IO.
 | `activity-trace` | Renderer probe → the trace file. Registered **only** when `SWITCHBOARD_ACTIVITY_TRACE` is set (see below) |
 | `activity-focus` / `activity-titles` | Focused session and running-session titles for ActivityWatch — see activitywatch.md |
 | `updater-close` | The updater window closed |
+| `main-error-notices-ready` | No arguments; active renderer has installed the main-error listener. Arms delivery and flushes pending errors. |
 | `exit-background-cancel` / `unsaved-check-phase` / `unsaved-pong` / `unsaved-dialog` / `unsaved-ready` / `unsaved-check-ack` / `unsaved-check-result` / `unsaved-check-reason-done` | The exit flow's unsaved-edits handshake, handled in `unsaved-guard.js` — see window-frame.md |
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
+`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
 
 `remote-resize-allowed(sessionId)` is emitted once when a live remote attach
 promotes from shared to solo. `preload.onRemoteResizeAllowed` forwards the id
