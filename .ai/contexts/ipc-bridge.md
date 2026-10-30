@@ -364,7 +364,7 @@ An unknown remote target never falls back to local disk IO.
 | `activity-focus` / `activity-titles` | Focused session and running-session titles for ActivityWatch — see activitywatch.md |
 | `updater-close` | The updater window closed |
 | `main-error-notices-ready` | No arguments; active renderer has installed the main-error listener. Arms delivery and flushes pending errors. |
-| `main-error-notices-dismissed` | `ids: string[]` (at most five, all present in the delivered snapshot); only the active renderer may remove those ids after the user dismisses the group. Malformed payloads are rejected atomically; concurrent deliveries of other ids survive. |
+| `main-error-notices-dismissed` | `ids: string[]` (at most five strings); only the active renderer may send it, after the user dismisses the group. A payload of the wrong type or length is rejected whole; otherwise main forgets the ids it still knows and ignores unknown or evicted ones, so concurrent deliveries of other ids survive. |
 | `exit-background-cancel` / `unsaved-check-phase` / `unsaved-pong` / `unsaved-dialog` / `unsaved-ready` / `unsaved-check-ack` / `unsaved-check-result` / `unsaved-check-reason-done` | The exit flow's unsaved-edits handshake, handled in `unsaved-guard.js` — see window-frame.md |
 
 ### Events (main → renderer)
