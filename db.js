@@ -8,7 +8,7 @@ const store = Object.fromEntries(Object.entries(rawStore).map(([name, value]) =>
     try { return value(...args); }
     catch (error) {
       if (/^SQLITE_BUSY/.test(error?.code || '')) {
-        const caller = (error.stack || new Error().stack).split('\n').find(frame => /^\s*at /.test(frame) && !frame.includes(`${__filename}:`));
+        const caller = new Error().stack.split('\n').find(frame => /^\s*at /.test(frame) && !frame.includes(`${__filename}:`));
         log.warn(`[session-index-reader] ${name}: ${error.code} ${error.message}${caller ? ' ' + caller.trim() : ''}`);
       }
       throw error;

@@ -90,7 +90,7 @@ worker termination cannot flush counts that have not reached the client.
 
 Main's readonly db.js facade wraps store read functions once. A thrown code
 beginning with `SQLITE_BUSY` logs one `warn` line naming the called store function
-and the first stack frame outside db.js, then rethrows the same error without a
+and the first frame outside db.js of the wrapper's own stack (the caller of the read, not the store frame that threw), then rethrows the same error without a
 retry. It uses the BUSY error's stack, falling back to a new stack when absent.
 The logger defaults to console; db.js never imports electron-log. The writer
 facade injects its logger once the readonly backend is ready through

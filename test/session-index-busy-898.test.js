@@ -244,17 +244,20 @@ test('898b main traces BUSY counts only while activity tracing is enabled', () =
   assert.equal(events.length, 1);
   assert.equal(events[0][0], 'session-index-writer.busy');
   assert.equal(events[0][1], null);
-  assert.strictEqual(events[0][2], counts);
+  assert.deepEqual(Object.keys(events[0][2]), ['counts']);
+  assert.strictEqual(events[0][2].counts, counts);
 });
 
-test('898b readonly warning includes the first caller frame outside db.js', () => {
+test('898b readonly warning names the caller of the read, not the store frame that threw', () => {
   const { db, warnings, fail } = readonlyHarness();
-  const error = Object.assign(new Error('locked'), { code: 'SQLITE_BUSY' });
-  error.stack = `Error: locked\n    at Object.getCachedSession (${require.resolve('../db')}:9:1)\n    at renderProjects (caller.js:42:7)\n    at laterCaller (later.js:8:2)`;
+  function storeThrowSite() { return Object.assign(new Error('locked'), { code: 'SQLITE_BUSY' }); }
+  const error = storeThrowSite();
   fail(error);
-  assert.throws(() => db.getCachedSession('saved'), thrown => thrown === error);
-  assert.match(warnings[0], /getCachedSession.*renderProjects \(caller.js:42:7\)/);
-  assert.doesNotMatch(warnings[0], /laterCaller/);
+  function renderProjects() { db.getCachedSession('saved'); }
+  function laterCaller() { renderProjects(); }
+  assert.throws(laterCaller, thrown => thrown === error);
+  assert.match(warnings[0], /getCachedSession.*at renderProjects /);
+  assert.doesNotMatch(warnings[0], /storeThrowSite|laterCaller/);
 });
 
 test('898b readonly warning falls back to the current caller when the error has no stack', () => {

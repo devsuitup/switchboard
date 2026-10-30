@@ -198,7 +198,7 @@ const bgAgents = require('./bg-agents');
 const writer = require('./session-index-writer').createSessionIndexWriter({
   log,
   onBusyCounts: counts => {
-    if (TRACE.on) trace('session-index-writer.busy', null, counts);
+    if (TRACE.on) trace('session-index-writer.busy', null, { counts });
   },
   onSessionsChanged: (...args) => bgAgents.invalidateTranscripts(...args),
 });
