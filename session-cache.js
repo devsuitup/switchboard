@@ -508,7 +508,7 @@ function refreshFolder(folder, opts = {}) {
     let stat, fileMtime;
     try {
       stat = fs.statSync(filePath, { bigint: true });
-      fileMtime = new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString();
+      fileMtime = continuationMtime(stat);
     } catch {
       collector.accounted.add(path.relative(folderPath, filePath));
       continue;

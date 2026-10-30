@@ -2409,6 +2409,11 @@ the verified stamp. Refresh derives its ISO mtime from the same BigInt stat as
 the same BigInt-derived ISO value for both writing and comparing its cursor.
 Node's Number-stat date can round up when the nanosecond remainder is just
 below half a millisecond, so it must not decide cursor reuse (#891).
+Full transcript reads also derive the index mtime and the row's `fileMtime`
+from the saved BigInt stamp through `continuationMtime()`. Both values must
+agree before the first refresh as well as afterward: sidebar grouping validates
+their equality. A complete multi-chunk index then stays reusable through an
+ordinary refresh and `init()`, rather than being replaced with a partial scan.
 Legacy ISO cursors written with BigInt rounding remain reusable; a cursor
 written with a different rounding restarts once, then uses the canonical value.
 Converting nanoseconds to Number before rounding also loses precision (#656).
@@ -2447,7 +2452,9 @@ fields written by a concurrent refresh; it does not upsert an old row snapshot.
 Coverage for #891: `test/session-continuations-mtime-891.test.js` injects the
 Number/BigInt stat disagreement on disposable multi-chunk transcripts, checks
 legacy ISO cursors, preparation and resolution, and verifies bounded stalled
-read deferral and recovery. Each scenario has an iteration guard.
+read deferral and recovery. It also checks full reads followed by refresh on
+both sides of `init()`, retaining complete indexes and merged sidebar rows.
+Scanner-loop scenarios have iteration guards.
 
 The local-background sidebar still validates persisted indexes by ISO mtime.
 Its DB rows have no current filesystem stamp to compare, and acquiring one

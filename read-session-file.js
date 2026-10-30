@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { StringDecoder } = require('string_decoder');
-const { continuationId, continuationStamp, matchesContinuationStamp } = require('./session-continuations');
+const { continuationId, continuationStamp, matchesContinuationStamp, continuationMtime } = require('./session-continuations');
 const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
 
 /** Subagent transcripts land under <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl.
@@ -359,6 +359,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       };
     }
 
+    const fileMtime = continuationMtime({ mtimeNs: BigInt(stamp.mtimeNs) });
     const pending = fileBytes.subarray(fileBytes.lastIndexOf(10) + 1);
     const skipLine = pending.length > 1024 * 1024;
     const row = {
@@ -369,14 +370,14 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       // in refreshFolder). Old transcripts without timestamps fall back to stat.
       created: firstTimestamp || stat.birthtime.toISOString(),
       modified: lastTimestamp || stat.mtime.toISOString(),
-      fileMtime: stat.mtime.toISOString(),
+      fileMtime,
       fileSize: stat.size,
       messageCount, textContent, slug, scheduleSlug, customTitle: customTitle || '', aiTitle,
       continuationIndex: matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }))
         ? JSON.stringify({ format: 3, version: 3, ids: [...continuationIds], stamp,
         sealedIds: sealedContinuationIds ?? [...continuationIds], bytes: fileBytes.length,
         complete: fileBytes.length === stat.size && (!incompleteTail || skipLine), size: fileBytes.length,
-        mtime: stat.mtime.toISOString(), unresolved: continuationUnresolved,
+        mtime: fileMtime, unresolved: continuationUnresolved,
         invalid: sealedContinuationIds === null ? continuationUnresolved : continuationInvalid,
         skipLine, pending: skipLine ? '' : pending.toString('base64'),
         tail: fileBytes.subarray(Math.max(0, fileBytes.length - 64)).toString('hex'),

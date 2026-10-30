@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const cache = require('../session-cache');
 const { scanContinuationIndex } = require('../session-continuations');
+const { readSessionFile } = require('../read-session-file');
 const { fixture, OLD, HEAD } = require('./fixtures/continuation-718.cjs');
 
 function boundaryStat(t, file) {
@@ -30,6 +31,36 @@ function boundedOpens(t, file, limit = 16) {
     return open(target, ...args);
   });
   return () => count;
+}
+
+for (const cold of [false, true]) {
+  test(`full read then refresh at 499900 ns keeps a large index complete and rows merged, cold=${cold}`, t => {
+    const h = fixture(t);
+    h.write(OLD, h.padding + h.link());
+    h.write(HEAD);
+    const file = h.file(OLD), expectedMtime = boundaryStat(t, file);
+    assert.ok(fs.statSync(file).size > 1024 * 1024);
+    h.db.upsertCachedSessions([OLD, HEAD].map(id => readSessionFile(h.file(id), h.folder, h.root)));
+    const full = JSON.parse(h.rows.get(OLD).continuationIndex);
+    assert.equal(full.complete, true);
+    assert.deepEqual(full.ids, [HEAD]);
+    assert.equal(h.views().length, 1, 'the full read starts with merged rows');
+    if (cold) h.init();
+    cache.refreshFolder(h.folder);
+    const index = JSON.parse(h.rows.get(OLD).continuationIndex);
+    assert.equal(index.complete, true, 'refresh must retain the full-read continuation index');
+    assert.equal(index.bytes, fs.statSync(file).size);
+    assert.equal(index.mtime, expectedMtime);
+    assert.deepEqual(index.ids, [HEAD]);
+    assert.equal(h.views().length, 1, 'refresh keeps the conversation merged');
+    assert.ok(h.views()[0].mergedMemberIds.includes(OLD));
+    h.init();
+    assert.equal(JSON.parse(h.rows.get(OLD).continuationIndex).complete, true);
+    assert.equal(h.views().length, 1, 'the merged conversation survives init()');
+    cache.refreshFolder(h.folder);
+    assert.equal(JSON.parse(h.rows.get(OLD).continuationIndex).complete, true);
+    assert.equal(h.views().length, 1, 'refresh after init() keeps the conversation merged');
+  });
 }
 
 for (const legacy of [false, true]) {
