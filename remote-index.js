@@ -324,7 +324,7 @@ function createRemoteIndexer(ctx) {
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        const normalised = message.replace(/(["'])(?:[A-Za-z]:[\\/]|\\\\|\/).*?\1|(?<![^\s"'])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s"'<>),;]*/g, '<path>')
+        const normalised = message.replace(/(["'])(?:[A-Za-z]:[\\/]|\\\\|\/).*?\1|(?<![^\s"'=(:])(?:[A-Za-z]:[\\/]|\\|\/(?!\/))[^\s"'<>),;]*/g, '<path>')
           .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<uuid>').replace(/\d+/g, '#');
         const signature = JSON.stringify([err?.code || err?.name, normalised]);
         let seen = headTurnErrors.get(host.alias);

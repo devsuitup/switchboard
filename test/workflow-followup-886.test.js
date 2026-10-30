@@ -118,6 +118,32 @@ test('deleted snapshot publishes the run-id fallback once and forgets the old ti
   assert.deepEqual(w.notifications, ['watcher'], 'recreated title must be observed anew');
 });
 
+for (const baseline of ['cold', 'pruned-first', 'pruned-last']) {
+  test(`deleted snapshot without a title baseline notifies once: ${baseline}`, async t => {
+    const h = layout(t), w = watcher(h);
+    cache.refreshFolder(h.folder);
+    const workflow = () => h.views().find(row => row.workflowRunId === RUN);
+    assert.equal(workflow().workflowName, 'Original title');
+    if (baseline !== 'cold') {
+      w.event();
+      await w.flush();
+      w.notifications.length = 0;
+    }
+    fs.unlinkSync(h.snapshot);
+    if (baseline === 'pruned-first') w.event(h.folder);
+    w.event();
+    if (baseline === 'pruned-last') w.event(h.folder);
+    await w.flush();
+    assert.deepEqual(w.notifications, ['watcher'], 'a missing baseline must publish the run-id fallback');
+    assert.equal(workflow().workflowName, RUN);
+    assert.equal(w.refreshes.length, baseline === 'cold' ? 0 : 1);
+    w.notifications.length = 0;
+    w.event();
+    await w.flush();
+    assert.deepEqual(w.notifications, [], 'the missing snapshot retains a run-id baseline');
+  });
+}
+
 test('deleting a snapshot already showing the run id does not notify', async t => {
   const h = layout(t), w = watcher(h);
   fs.writeFileSync(h.snapshot, '{}');
@@ -131,7 +157,7 @@ test('deleting a snapshot already showing the run id does not notify', async t =
   fs.writeFileSync(h.snapshot, '{}');
   w.event();
   await w.flush();
-  assert.deepEqual(w.notifications, ['watcher'], 'deletion clears even a fallback baseline');
+  assert.deepEqual(w.notifications, [], 'recreating the same fallback title does not notify');
 });
 
 for (const snapshotFirst of [false, true]) {

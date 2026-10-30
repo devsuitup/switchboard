@@ -113,8 +113,9 @@ notification without a transcript refresh or widening pending targeted scans.
 The watch callback only queues snapshot paths; the serialized debounced flush
 reads and parses each snapshot asynchronously. Partial JSON and read errors
 other than ENOENT preserve the previous observed title and do not notify.
-ENOENT discards the baseline and notifies if the previous title differs from
-the run-id fallback; repeated deletion events remain quiet. The watcher compares
+ENOENT retains the run-id fallback as the baseline and notifies if the previous
+title differs or no baseline exists, including after folder-scope pruning in the
+same flush; repeated deletion events remain quiet. The watcher compares
 titles observed in successful snapshot reads, so later status-only
 changes with the same title do not notify. The first event notifies because
 the watcher has no title baseline yet, provided the snapshot is readable JSON.
