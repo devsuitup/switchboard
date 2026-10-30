@@ -438,8 +438,13 @@ active because the process is alive, not because a tab is open.
 
 **No new dialog component.** `public/stop-session-ui.js`'s async
 `planSessionStop(row, { attach, retryTargets, backgroundJobs, jobStop = false })`
-collects local PTYs, remote processes and background jobs. The sidebar passes its whole row; the terminal
-header and grid card pass an id and plan only that tab. `resolveSessionStop`
+collects local PTYs, remote processes and background jobs. The sidebar passes its whole row;
+`confirmAndStopSession` resolves the terminal header or grid card's id to the
+owning conversation row, including when a stale per-tab entry remains cached.
+All three surfaces use the same conversation-wide Stop plan, refusals, job
+checks, confirmation and executor (#917). The row is resolved from the member
+index, then the tab's own merged row, then any row listing it; only a tab no
+indexed row knows falls back to its open entry's session. `resolveSessionStop`
 still selects the IPC for each target and remains available to Archive/Delete.
 Confirmed-dead remote members are filtered out unless their view is still
 active; an unseeded host (`remoteHostAt === null`) is possibly live until a
@@ -520,6 +525,11 @@ byte for byte. Stop failures and retries retain their Stop notice identity;
 Detach failures and retries use Detach.
 
 ### Opening a session once
+
+A sidebar Open targets the conversation head. An older dormant member cannot
+replace that target (#918); opening clears the row's dormant markers. The existing
+reuse of an already open conversation tab and explicit restore/attach targets
+is preserved. Coverage: `test/conversation-controls-917.test.js`.
 
 `openSession` keeps the open of each session id in flight in `openingSessions`
 (id → `{ promise, byUser }`), set before its first `await` and removed when the

@@ -105,8 +105,8 @@ concept. Each entry gives:
 - **Don't say**: "tab", "card" (a card is the grid's), "item".
 - **Code**: `buildSessionItem` (`public/sidebar.js`, row built at 1655-1827);
   `.session-item`; `rowSessionIds` (`public/session-activity-dom.js:3`).
-- **Today**: no doc defines what a row represents; `docs/session-browser.md:86-110`
-  describes it as "the session". Users meet it as "session" (M4).
+- **Today**: [CONCEPT-MAP.md §1](CONCEPT-MAP.md#1-sidebar-row) defines a row as
+  one conversation, decided in #564. Users meet it as "session" (M4).
 
 ### Merged web-session row
 

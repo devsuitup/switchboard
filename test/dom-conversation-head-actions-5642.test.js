@@ -112,7 +112,7 @@ test('Resume with config reuses a non-closed root tab instead of opening a secon
   assert.deepEqual(h.checked, []);
 });
 
-test('Resume with config restores a dormant root through openSession', async t => {
+test('Resume with config opens the head through openSession even when the root is dormant', async t => {
   const h = resumeSetup(t);
   h.ctx.read("dormantWorkingSet.set('A', { item: { sessionId: 'A' }, index: 0 })");
   const checked = [];
@@ -121,7 +121,7 @@ test('Resume with config restores a dormant root through openSession', async t =
   await h.resume();
   await h.settled();
   assert.ok(checked.includes('A'));
-  assert.deepEqual(h.spawned, ['A']);
+  assert.deepEqual(h.spawned, ['B']);
   assert.equal(h.ctx.read("dormantWorkingSet.has('A')"), false);
 });
 

@@ -13,6 +13,13 @@ internal gaps and PTY separator too. This leaves the fixed-width id inside
 the info group at 800 px with the 96 px Linux caption overlay; separate
 shrinking titles left a fixed floor wider than the group's available space.
 
+Stop in the terminal header and grid card stops the whole conversation, as
+Stop on its sidebar row does (#917). `confirmAndStopSession` resolves a tab id
+to its owning merged row before the shared planner, job checks, confirmation
+and executor. External processes and unknown job ownership retain the row's
+refusals; remote parts keep their host route. Detach remains scoped to the
+header/card's attached tab. Coverage: `test/conversation-controls-917.test.js`.
+
 `public/tool-bar.js` declares the frozen `TOOL_BAR` and builds
 `#tool-bar` as the last child of `#terminal-split`, after the file panel.
 Changes, Diff, Touched and Shell share `createHeaderToggle`; the dual-mode
