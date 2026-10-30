@@ -53,6 +53,25 @@ function olderProject(ctx, extra = {}) {
   return () => ctx.document.querySelector('.sessions-older-archive-btn');
 }
 
+for (const boundary of ['rebindSidebarEvents', 'refreshGridCardMembers']) {
+  test(`ticker retains the new host payload when ${boundary} throws after morphdom`, t => {
+    const ctx = setup(t);
+    const now = ctx.w.Date.now();
+    const old = makeSampleProject({ remoteAlias: 'vps', sessions: [], remoteHostAt: now - 1000 });
+    ctx.w.renderProjects([old], true);
+    const next = { ...old, remoteHostError: 'new timeout', remoteHostAt: now - 5000 };
+    ctx.w[boundary] = () => { throw new Error('late render failure'); };
+    assert.throws(() => ctx.w.renderProjects([next], true), /late render failure/);
+    const dot = ctx.document.querySelector('.remote-host-dot');
+    assert.match(dot.title, /host unreachable: new timeout/);
+    ctx.w.Date.now = () => now + 30000;
+    ticker(ctx)();
+    assert.match(dot.title, /^host unreachable: new timeout \(last confirmed 35s ago\)/,
+      'ticker must use the payload already committed to the DOM');
+    assert.equal(ctx.w.renderProjects.unchanged([next]), false, 'failed render does not commit the skip key');
+  });
+}
+
 test('ticker keeps each host title when remote projects share a path', t => {
   const ctx = setup(t);
   let now = ctx.w.Date.now();

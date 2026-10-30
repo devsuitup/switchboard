@@ -257,6 +257,10 @@ function folderId(projectPath, remoteAlias) {
   return 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+function projectStateKey(project) {
+  return project.remoteAlias ? folderId(project.projectPath, project.remoteAlias) : project.projectPath;
+}
+
 function surfaceStopFailure(btn, message, session, operation = 'Archive') {
   session ||= sessionMap.get(btn?.closest('.session-item')?.dataset.sessionId);
   const reason = message?.message || String(message);
@@ -952,10 +956,10 @@ function renderProjects(projects, resort) {
 
   // Sort project groups using sortedOrder as source of truth
   if (!resort && sortedOrder.length > 0) {
-    const orderIndex = new Map(sortedOrder.map((e, i) => [e.projectPath, i]));
+    const orderIndex = new Map(sortedOrder.map((e, i) => [projectStateKey(e), i]));
     projects = [...projects].sort((a, b) => {
-      const aPos = orderIndex.get(a.projectPath);
-      const bPos = orderIndex.get(b.projectPath);
+      const aPos = orderIndex.get(projectStateKey(a));
+      const bPos = orderIndex.get(projectStateKey(b));
       if (aPos !== undefined && bPos !== undefined) return aPos - bPos;
       if (aPos === undefined && bPos !== undefined) return -1;
       if (aPos !== undefined && bPos === undefined) return 1;
@@ -1067,7 +1071,7 @@ function renderProjects(projects, resort) {
     }
 
     // Sort render items
-    const prevEntry = sortedOrder.find(e => e.projectPath === project.projectPath);
+    const prevEntry = sortedOrder.find(e => projectStateKey(e) === projectStateKey(project));
     if (resort || !prevEntry) {
       allItems.sort((a, b) => {
         const aPri = (a.pinned && a.running ? 3 : a.running ? 2 : a.pinned ? 1 : 0);
@@ -1109,12 +1113,12 @@ function renderProjects(projects, resort) {
     return {
       filtered, visible, older, subagentIndex,
       topLevelIds: new Set(allSessions.filter(s => !s.parentSessionId).map(s => s.sessionId)),
-      sortOrderEntry: { projectPath: project.projectPath, itemIds: allItems.map(item => item.element.id) },
+      sortOrderEntry: { projectPath: project.projectPath, ...(project.remoteAlias ? { remoteAlias: project.remoteAlias } : {}), itemIds: allItems.map(item => item.element.id) },
     };
   }
 
   // Build the sessions list DOM (shared between projects and worktrees)
-  function buildSessionsList(fId, visible, older, subagentIndex, projectPath, topLevelIds) {
+  function buildSessionsList(fId, visible, older, subagentIndex, project, topLevelIds) {
     const sessionsList = document.createElement('div');
     sessionsList.className = 'project-sessions';
     sessionsList.id = 'sessions-' + fId;
@@ -1169,7 +1173,7 @@ function renderProjects(projects, resort) {
         // Persist expand/collapse per project. Default = collapsed: this
         // section is rarely the user's focus and can grow long on long-lived
         // projects (this very session has 1300+ orphan subagents).
-        const orphanStateKey = 'orphanExpanded:' + projectPath;
+        const orphanStateKey = 'orphanExpanded:' + projectStateKey(project);
         // see .ai/contexts/subagent-observability.md
         const expanded = searchMatchIds !== null || localStorage.getItem(orphanStateKey) === '1';
 
@@ -1188,7 +1192,7 @@ function renderProjects(projects, resort) {
         });
         orphanGroup.appendChild(orphanLabel);
 
-        const restKey = 'o:' + projectPath;
+        const restKey = 'o:' + projectStateKey(project);
         appendSubagentRows(orphanGroup, orphans, fId, restKey);
         sessionsList.appendChild(orphanGroup);
       }
@@ -1285,7 +1289,7 @@ function renderProjects(projects, resort) {
     }
     header.appendChild(newBtn);
 
-    const sessionsList = buildSessionsList(fId, visible, older, subagentIndex, project.projectPath, topLevelIds);
+    const sessionsList = buildSessionsList(fId, visible, older, subagentIndex, project, topLevelIds);
     const offerNotice = buildReenableNotice(project, fId);
     if (offerNotice) sessionsList.prepend(offerNotice);
 
@@ -1346,7 +1350,7 @@ function renderProjects(projects, resort) {
       wtNewBtn.setAttribute('aria-expanded', 'false');
       wtHeader.appendChild(wtNewBtn);
 
-      const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older, wtResult.subagentIndex, wt.projectPath, wtResult.topLevelIds);
+      const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older, wtResult.subagentIndex, wt, wtResult.topLevelIds);
       wtSessionsList.className = 'worktree-sessions';
       const wtOfferNotice = buildReenableNotice(wt, wtFId);
       if (wtOfferNotice) wtSessionsList.prepend(wtOfferNotice);
@@ -1446,6 +1450,8 @@ function renderProjects(projects, resort) {
     }
   });
 
+  renderProjects.lastProjects = inputProjects;
+
   // Save the full sorted order (project order + item order) as source of truth
   sortedOrder = newSortedOrder;
 
@@ -1462,7 +1468,6 @@ function renderProjects(projects, resort) {
   sidebarRenderKey = JSON.stringify(sidebarRenderInputs(inputProjects));
   sidebarRenderPayload = JSON.stringify(inputProjects);
   sidebarRenderAllProjects = JSON.stringify(cachedAllProjects);
-  renderProjects.lastProjects = inputProjects;
   sidebarRenderObserver.takeRecords();
   sidebarRenderDirty = false;
 }

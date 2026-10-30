@@ -55,14 +55,26 @@ The same ticker refreshes remote-host dot titles through `remoteHostState`,
 including confirmation ages, retry countdowns and capability details, without
 rebuilding the sidebar. An equality guard avoids DOM mutations for unchanged
 titles.
-The ticker uses `renderProjects.lastProjects`, the exact input retained after a
-successful render, including narrowed search sessions and Show archived projects.
+The ticker uses `renderProjects.lastProjects`, the exact input retained immediately
+after morphdom, including narrowed search sessions and Show archived projects.
+If event rebinding or grid refresh then throws, ticks still describe the payload
+already in the DOM; the skip key remains invalid until a complete render (#915).
 It does not recalculate host live counts from the default project cache.
 `folderId(projectPath, remoteAlias)` preserves local ids and encodes the remote
 alias/path tuple for remote groups. Headers prepend `ph-` to that id; ticker
 lookup, event binding, nested worktrees, archive busy keys and morphdom's group,
 header and list keys share this identity. The #543 skip key includes these
 alias-aware archive busy keys through `archivingGroupIds`.
+Project and item ordering retains the remote alias in `sortedOrder` and uses
+`projectStateKey`: local keys remain the exact project path, while remote keys
+use `folderId(projectPath, remoteAlias)`. Orphan expansion (`orphanExpanded:`)
+and orphan rest expansion (`o:` in `expandedSubagentRest`) use the same key,
+including nested worktrees. Existing local persisted expansion survives unchanged;
+remote projects start with independent state rather than adopting the shared
+path-only state. Schedule groups already use an encoded alias/path/slug tuple;
+their identity and migration remain unchanged. Evidence:
+`test/dom-sidebar-host-state-915.test.js` and the post-morphdom failure cases in
+`test/dom-sidebar-unchanged-543.test.js`.
 The skip-key table independently covers background agents, active
 children, dormant rows, task counts, detach availability, both archive locks,
 age-cutoff membership, the 30-second clock bucket and the local day string;
