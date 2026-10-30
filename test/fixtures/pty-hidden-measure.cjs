@@ -5,8 +5,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
-const { guardPtyInputErrors, killPty } = require('../../pty-ops');
+const { guardPtyInputErrors, killPty, trackWindowsPty } = require('../../pty-ops');
+const { windowsJobHelper } = require('../../src/main/terminals/windows-job-helper');
 const nodePty = require(process.env.NODE_PTY_DIR);
+const keepAlive = setInterval(() => {}, 1000);
 
 function observer(pid) {
   let dead = false;
@@ -35,6 +37,7 @@ async function measure() {
   const pidFile = path.join(dir, 'pids.json');
   let session, grandchildAlive, killCalled = false, output = '';
   try {
+    assert.equal(await windowsJobHelper(message => console.error(message)).start(), true, 'resident helper must start');
     const term = guardPtyInputErrors(nodePty.spawn(path.join(process.env.SystemRoot,
       'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
       '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
@@ -45,6 +48,7 @@ async function measure() {
     session = { pty: term, exited: false, kind: 'local-pty' };
     term.onData(data => { output = (output + data).slice(-4000); });
     term.onExit(() => { session.exited = true; });
+    assert.equal(await trackWindowsPty(term), true, 'local root must join its job');
     assert.equal(await until(() => fs.existsSync(pidFile), 10000), true, output);
     const pids = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
     assert.equal(pids.rootPid, term.pid, 'non-libuv root must own the hidden child');
@@ -70,4 +74,4 @@ async function measure() {
   }
 }
 
-measure().then(() => process.exit(0), error => { console.error(error); process.exit(1); });
+measure().then(() => { clearInterval(keepAlive); process.exit(0); }, error => { console.error(error); process.exit(1); });

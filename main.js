@@ -90,7 +90,8 @@ const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
 const { makeDeleteSessionGuard } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
-const { setPtyOpLogger, guardPtyInputErrors, killPty, detachPty, writePty, ptyExitSignalName } = require('./pty-ops');
+const { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, killPty, detachPty, writePty, ptyExitSignalName } = require('./pty-ops');
+const { windowsJobHelper } = require('./src/main/terminals/windows-job-helper');
 const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
 const { JOB_ID_RE, isHostedJob } = require('./bg-agents-roster');
 const { createTerminalResizeHandler } = require('./terminal-resize');
@@ -192,6 +193,14 @@ function resetUpdateAttempt() {
   updateWaitTimer = null;
   if (autoUpdater) autoUpdater.quitAndInstallCalled = false;
 }
+async function readWindowsDaemonPids() {
+  try {
+    const roster = JSON.parse(await fs.promises.readFile(path.join(os.homedir(), '.claude', 'daemon', 'roster.json'), 'utf8'));
+    return [roster.supervisorPid, ...Object.values(roster.workers || {}).map(worker => worker?.pid)]
+      .filter(pid => Number.isSafeInteger(pid) && pid > 0 && pid <= 0xffffffff);
+  } catch { return []; }
+}
+
 async function startApplication() {
 if (!await acquireInstanceLock(app, { log })) { app.quit(); return; }
 const privilegeNotice = readNoNewPrivs({ log });
@@ -3161,6 +3170,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     return { ok: false, error: `Error spawning PTY: ${err.message}` };
   }
 
+  if (!isAttach) void trackWindowsPty(ptyProcess);
   const session = {
     pty: ptyProcess, rendererAttached: true, exited: false,
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
@@ -3838,6 +3848,7 @@ if (!app.isPackaged) {
   });
 
   app.whenReady().then(async () => {
+    if (process.platform === 'win32') void windowsJobHelper(message => log.warn(message), readWindowsDaemonPids).start();
     await legacySearchCleanup;
     // Content Security Policy — restrict what the renderer can load or execute.
     // 'unsafe-inline' for style-src is required because the app sets .style.*

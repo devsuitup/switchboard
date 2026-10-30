@@ -19,4 +19,5 @@ test('closing a real ConPTY kills a non-libuv root\'s hidden grandchild within f
     t.diagnostic(result.stdout);
     assert.equal(result.error, undefined, String(result.error));
     assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /"grandchildDied":true/, 'fixture must complete its real process assertions');
   });

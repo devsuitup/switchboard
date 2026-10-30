@@ -8,6 +8,7 @@ const path = require('node:path');
 const { sendToBackground, holdBackgroundExit, createContinuationReader } = require('../bg-handoff');
 const { acquireTabInput, tryAcquireTabInput } = require('../tab-input-lock');
 const { createComposerState, noteUserInput } = require('../composer-state');
+const { trackWindowsPty, killPty } = require('../pty-ops');
 
 function setup(options = {}) {
   let time = 0, output;
@@ -31,6 +32,20 @@ function setup(options = {}) {
   };
   return { session, bg, deps, writes, exits, notices, scheduled, kills, outputAttached: () => !!output };
 }
+
+test('a confirmed background handoff releases its Windows job before the delayed PTY close', async () => {
+  const events = [];
+  const pty = { pid: 897, onExit() {}, kill() { events.push('pty'); } };
+  await trackWindowsPty(pty, { platform: 'win32', jobs: { assign: async () => true,
+    release: async () => { events.push('release'); return true; }, terminate: async () => { events.push('terminate'); } } });
+  const h = setup({ session: { pty } });
+  h.deps.onConfirmed = () => { assert.equal(h.session.backgrounded, true); events.push('confirmed'); };
+  h.deps.kill = session => killPty(session, 'background', { platform: 'win32' });
+  assert.equal((await sendToBackground('old', h.deps)).ok, true);
+  assert.deepEqual(events, ['release', 'confirmed']);
+  h.scheduled.at(-1).fn();
+  assert.deepEqual(events, ['release', 'confirmed', 'pty']);
+});
 
 test('T1: unsent composer text refuses before any write', async () => {
   const h = setup({ session: { composerState: { pending: 2 } } });

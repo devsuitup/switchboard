@@ -3,8 +3,47 @@
 
 const os = require('os');
 const { closeWindowsPty } = require('./src/main/terminals/close-windows-pty');
+const { windowsJobHelper } = require('./src/main/terminals/windows-job-helper');
 
 let logger = null;
+const jobsByPty = new WeakMap();
+let nextJobId = 0;
+
+function trackWindowsPty(pty, { platform = process.platform, spawnTime = Date.now(), jobs } = {}) {
+  if (platform !== 'win32' || !pty || jobsByPty.has(pty)) return Promise.resolve(false);
+  jobs ??= windowsJobHelper(message => logger?.warn?.(message));
+  const record = { jobs, id: `pty-${++nextJobId}`, closing: false, exited: false, released: false };
+  jobsByPty.set(pty, record);
+  pty.onExit(() => {
+    record.exited = true;
+    if (!record.closing) void releaseWindowsPty(pty);
+  });
+  const current = () => !record.exited && !record.released && pty._agent?.exitCode === undefined;
+  if (pty.pid > 0) return jobs.assign(record.id, pty.pid, spawnTime, current);
+  return new Promise(resolve => {
+    const socket = pty._agent?.outSocket;
+    const finish = () => {
+      clearTimeout(timer);
+      socket?.removeListener('ready_datapipe', connected);
+      resolve(false);
+    };
+    const connected = () => {
+      clearTimeout(timer);
+      if (!current() || record.closing) return finish();
+      resolve(jobs.assign(record.id, pty.pid, Date.now(), current));
+    };
+    const timer = setTimeout(finish, 5500);
+    timer.unref?.();
+    socket?.once('ready_datapipe', connected);
+  });
+}
+
+function releaseWindowsPty(pty) {
+  const record = jobsByPty.get(pty);
+  if (!record || record.released || record.closing) return Promise.resolve(true);
+  record.released = true;
+  return record.jobs.release(record.id);
+}
 
 // see .ai/contexts/ipc-bridge.md ("PTY operations race the exit")
 const killedPtys = new WeakSet();
@@ -72,13 +111,15 @@ function killPty(session, sessionId, { platform = process.platform, ...closeOpti
   killedPtys.add(pty);
   if (platform === 'win32' && session.kind === 'local-pty' && !session.exited && pty._agent?.exitCode === undefined
     && !session.isAttach && !session.detaching && !session.backgrounding && !session.backgrounded && !session.host) {
-    const pid = pty.pid;
-    const isCurrent = () => !session.exited && pty._agent?.exitCode === undefined && session.pty === pty && pty.pid === pid;
-    void closeWindowsPty(pid, () => {
-      withPty({ pty }, 'kill', target => target.kill(), sessionId);
-    }, { ...closeOptions, isCurrent });
-    return true;
+    const record = jobsByPty.get(pty);
+    if (record && !record.released) {
+      record.closing = true;
+      closeWindowsPty(pty, () => withPty({ pty }, 'kill', target => target.kill(), sessionId),
+        () => record.jobs.terminate(record.id), closeOptions);
+      return true;
+    }
   }
+  void releaseWindowsPty(pty);
   return withPty(session, 'kill', (pty) => pty.kill(), sessionId);
 }
 
@@ -91,6 +132,7 @@ function writePty(session, data, sessionId) {
 function detachPty(session, sessionId, { graceMs = 2000, schedule = setTimeout } = {}) {
   if (session.detaching) return true;
   session.detaching = true;
+  void releaseWindowsPty(session.pty);
   const wrote = writePty(session, '\x1a', sessionId);
   if (!wrote) return killPty(session, sessionId);
   const timer = schedule(() => {
@@ -106,4 +148,4 @@ function ptyExitSignalName(signal, signals = os.constants.signals) {
   return Object.keys(signals).find((name) => signals[name] === signal) || `signal ${signal}`;
 }
 
-module.exports = { setPtyOpLogger, guardPtyInputErrors, withPty, resizePty, killPty, writePty, detachPty, ptyExitSignalName };
+module.exports = { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, releaseWindowsPty, withPty, resizePty, killPty, writePty, detachPty, ptyExitSignalName };

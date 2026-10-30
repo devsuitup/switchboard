@@ -14,7 +14,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Unexpected application errors now share one notice with repeat counts and an **Open log** button; the app keeps running and the log may hold details. Notices survive a window reload, dismissed errors stay dismissed, and screen readers announce new errors without repeating count updates. (#896, #932)
 
 ### Fixed
-- Closing a local terminal tab on Windows ends every process started from that tab, including windows opened with commands such as `start notepad` or `Start-Process`. The shell or Claude itself is closed normally first. (#897)
+- Closing or stopping a local terminal tab on Windows ends its processes and opened windows (force-closed windows lose unsaved work), closing the shell or Claude normally first; the background-agents daemon and its agents keep running. (#897)
 - The session list no longer stops updating, or shows a continued conversation as two separate entries, when that conversation's transcript is large. (#891)
 - In Agents, finished jobs sharing a live conversation keep separate selections and action errors. Selection follows a conversation into its job, and Transcript becomes available as soon as indexing finishes and is rechecked after worktree or remote-folder removal; when it opens the live session instead of a job's earlier transcript, the detail explains this. (#530, #882)
 - Workflow agents appear under the session that started them, grouped by run, instead of as separate sessions; entries an older build listed separately locally or on a remote host are regrouped. (#875, #886)
