@@ -1159,6 +1159,10 @@ body { display: flex; flex-direction: column; }
   top: 0;
 }
 
+.busy-spinners-paused .session-icon--busy::before {
+  animation-play-state: paused;
+}
+
 @keyframes braille-spin {
   0%  { content: "\280B"; }
   10% { content: "\2819"; }
