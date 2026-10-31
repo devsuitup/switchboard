@@ -6,7 +6,7 @@ const path = require('node:path');
 
 function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, startupMs = 15000,
   requestMs = 3000, protectedPids = () => [] } = {}) {
-  let child, started = false, ready = false, failed = false, buffer = '', startupTimer;
+  let child, started = false, ready = false, failed = false, buffer = '', startupTimer, earlyCloseWarned = false;
   const pending = new Map();
   const queued = new Map();
   let resolveReady;
@@ -102,9 +102,16 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
   }
 
   function finish(op, id, args = '') {
+    if (op === 'terminate' && !ready && !failed && !earlyCloseWarned) {
+      earlyCloseWarned = true;
+      try { warn('[pty] Tab closed before Windows job helper ready; using plain ConPTY close; hidden processes may remain'); } catch {}
+    }
     const entry = pending.get(id);
     if (entry?.op === 'assign') {
-      if (queued.delete(id)) { pending.delete(id); entry.resolve(false); return Promise.resolve(true); }
+      if (queued.delete(id)) {
+        pending.delete(id); entry.resolve(false);
+        return Promise.resolve(true);
+      }
       return entry.done.then(() => request(op, id, args));
     }
     return request(op, id, args);

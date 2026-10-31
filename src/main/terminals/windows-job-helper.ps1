@@ -25,7 +25,7 @@ public static class PtyJobs {
  [DllImport("shell32.dll", SetLastError=true, CharSet=CharSet.Unicode)] static extern IntPtr CommandLineToArgvW(string command, out int count);
  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr handle);
  static readonly Dictionary<string, IntPtr> Jobs = new Dictionary<string, IntPtr>();
- static bool commandWarning;
+ static bool commandWarning, memberWarning;
  static bool Limits(IntPtr job, uint flags) { var info = new Extended(); info.Basic.Flags = flags; return SetInformationJobObject(job, 9, ref info, (uint)Marshal.SizeOf(info)); }
  static int Error() { return Marshal.GetLastWin32Error(); }
  static int Assign(string id, uint pid, long spawn) {
@@ -94,11 +94,18 @@ public static class PtyJobs {
   try {
    var args = new string[count];
    for (int i = 0; i < count; i++) args[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(buffer, i * IntPtr.Size));
-   string executable = System.IO.Path.GetFileName(args[0]);
+   if (count == 0 || args[0] == null) return false;
+   string executable = args[0].Substring(args[0].LastIndexOfAny(new char[] { '\\', '/' }) + 1);
    int first = 1;
    if (String.Equals(executable, "node", StringComparison.OrdinalIgnoreCase) || String.Equals(executable, "node.exe", StringComparison.OrdinalIgnoreCase)) {
-    if (count < 3 || !args[1].Replace('\\', '/').EndsWith("/@anthropic-ai/claude-code/cli.js", StringComparison.OrdinalIgnoreCase)) return false;
-    first = 2;
+    while (first < count && args[first].StartsWith("-", StringComparison.Ordinal)) {
+     string option = args[first++];
+     if (option == "--") break;
+     if (option == "-e" || option == "--eval" || option == "-p" || option == "--print") return false;
+     if (option == "-r" || option == "--require" || option == "--import" || option == "--loader" || option == "--experimental-loader") first++;
+    }
+    if (first >= count || !args[first].Replace('\\', '/').EndsWith("/@anthropic-ai/claude-code/cli.js", StringComparison.OrdinalIgnoreCase)) return false;
+    first++;
    } else if (!String.Equals(executable, "claude", StringComparison.OrdinalIgnoreCase) && !String.Equals(executable, "claude.exe", StringComparison.OrdinalIgnoreCase)) return false;
    return count > first && (args[first] == "--bg-pty-host" || count > first + 1 && args[first] == "daemon" && args[first + 1] == "run");
   } finally { LocalFree(buffer); }
@@ -107,6 +114,10 @@ public static class PtyJobs {
  static void WarnCommand(uint pid) {
   if (commandWarning) return;
   commandWarning = true; Console.Error.WriteLine("[pty] Windows job command-line read failed; only roster PIDs protect unreadable members (pid=" + pid + ")");
+ }
+ static void WarnMember(uint pid) {
+  if (memberWarning) return;
+  memberWarning = true; Console.Error.WriteLine("[pty] Windows job member cleanup failed; affected members skipped (pid=" + pid + ")");
  }
  static void ProtectDescendants(Dictionary<uint, Member> members, HashSet<uint> protect) {
   bool changed;
@@ -122,12 +133,15 @@ public static class PtyJobs {
  }
  static int TerminateMembers(IntPtr job, Dictionary<uint, long> roster) {
   var protect = new HashSet<uint>();
+  var skipped = new HashSet<uint>();
   var members = new Dictionary<uint, Member>();
   var pids = Members(job);
+  int error = 0;
   foreach (uint pid in pids) {
-   IntPtr process = OpenProcess(0x1000, false, pid);
-   if (process == IntPtr.Zero) { WarnCommand(pid); continue; }
+   IntPtr process = IntPtr.Zero;
    try {
+    process = OpenProcess(0x1000, false, pid);
+    if (process == IntPtr.Zero) { WarnCommand(pid); continue; }
     bool inJob;
     if (!IsProcessInJob(process, job, out inJob) || !inJob) continue;
     var member = Identity(process, pid);
@@ -137,19 +151,21 @@ public static class PtyJobs {
     string command = CommandLine(process);
     if (command == null) WarnCommand(pid);
     if (IsBackgroundAgent(command)) protect.Add(pid);
-   } finally { CloseHandle(process); }
+   } catch (Exception) { skipped.Add(pid); if (error == 0) error = 87; WarnMember(pid); }
+   finally { if (process != IntPtr.Zero) CloseHandle(process); }
   }
   ProtectDescendants(members, protect);
-  int error = 0;
   foreach (uint pid in pids) {
-   if (protect.Contains(pid)) continue;
-   IntPtr process = OpenProcess(0x1001, false, pid);
-   if (process == IntPtr.Zero) { int code = Error(); if (code != 87 && error == 0) error = code; continue; }
+   if (protect.Contains(pid) || skipped.Contains(pid)) continue;
+   IntPtr process = IntPtr.Zero;
    try {
+    process = OpenProcess(0x1001, false, pid);
+    if (process == IntPtr.Zero) { int code = Error(); if (code != 87 && error == 0) error = code; continue; }
     bool inJob;
     if (!IsProcessInJob(process, job, out inJob)) { if (error == 0) error = Error(); continue; }
     if (inJob && !TerminateProcess(process, 1) && error == 0) error = Error();
-   } finally { CloseHandle(process); }
+   } catch (Exception) { if (error == 0) error = 87; WarnMember(pid); }
+   finally { if (process != IntPtr.Zero) CloseHandle(process); }
   }
   return error;
  }
@@ -159,6 +175,7 @@ public static class PtyJobs {
   int error = 0;
   try { if (terminate) error = TerminateMembers(job, roster); }
   catch (System.ComponentModel.Win32Exception ex) { error = ex.NativeErrorCode; }
+  catch (Exception) { error = 87; WarnMember(0); }
   finally { Jobs.Remove(id); CloseHandle(job); }
   return error;
  }

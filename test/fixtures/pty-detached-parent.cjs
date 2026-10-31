@@ -3,10 +3,11 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const mode = process.env.FIXTURE_MODE;
-if (['daemon', 'worker', 'roster', 'stale-roster', 'daemon-eof', 'helper-death', 'helper-timeout', 'pipe-eof', 'lookalike'].includes(mode)) {
+if (['daemon', 'worker', 'roster', 'stale-roster', 'daemon-eof', 'helper-death', 'helper-timeout', 'pipe-eof', 'lookalike', 'malformed'].includes(mode)) {
   const marker = mode === 'worker' ? ['--bg-pty-host'] : ['roster', 'stale-roster', 'lookalike'].includes(mode) ? ['daemon', 'runner'] : ['daemon', 'run'];
-  const daemon = spawn(process.execPath, [process.env.FIXTURE_CLI_ENTRY, ...marker, '--fixture'],
-    { detached: true, stdio: 'ignore', windowsHide: true });
+  const options = mode === 'worker' ? ['--max-old-space-size=128', '-r', 'node:fs', '--require', 'node:path'] : [];
+  const daemon = spawn(process.execPath, [...options, process.env.FIXTURE_CLI_ENTRY, ...marker, '--fixture'],
+    { detached: true, stdio: 'ignore', windowsHide: true, ...(mode === 'malformed' ? { argv0: 'bad<name.exe' } : {}) });
   const hidden = spawn(process.execPath, [path.join(__dirname, 'pty-hidden-grandchild.cjs'), `${process.argv[2]}.hidden`],
     { detached: true, stdio: 'ignore', windowsHide: true });
   daemon.unref(); hidden.unref();
