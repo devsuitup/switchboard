@@ -8,7 +8,7 @@ This file is the **canonical inventory** of the IPC surface. When you add a new 
 
 `src/main/app/main-error-handlers.js` installs `uncaughtException` and `unhandledRejection`
 listeners in `main.js` before `app.whenReady()`. Both write `[main:<origin>]`
-and the full stack to `electron-log`; non-Error rejection reasons use a safe
+and a bounded stack to `electron-log`; non-Error rejection reasons use a safe
 text representation. A throwing logger is contained, independently of notices.
 
 Policy: keep running after logging, with no automatic quit. The exception
@@ -58,10 +58,20 @@ Display summaries are limited to 500 characters plus the origin label;
 non-Error inspection disables custom inspectors/getters and limits depth,
 array lengths and individual strings. Proxies are always summarized as
 `[Proxy; inspection omitted]`, without inspection or message/name/stack access,
-so none of their traps run. Arrays and ArrayBuffer views (including Buffers)
-with more than 1,000 elements (or bytes for DataView) bypass key enumeration.
-Their preview inspects only a slice of at most 20 elements or bytes, reports
-the type and real length, and explicitly says named properties were not inspected.
+so none of their traps run. Arrays, ArrayBuffer views (including Buffers), and
+boxed Strings with more than 1,000 elements, characters, or bytes (for DataView)
+bypass key enumeration. Array length comes from its own data descriptor;
+TypedArray length and DataView byteLength/buffer/byteOffset use intrinsic prototype
+getters, and boxed String length comes from `String.prototype.valueOf.call(value)`.
+Type checks use intrinsic brands, including across realms; constructors are not read.
+Their preview inspects at most 20 elements/bytes or the first 2,000 String characters,
+reports the type and real length, and says named properties were not inspected.
+Arrays and typed arrays are sampled via own index descriptors, without slice/subarray
+or species lookup. Only data values enter the sample; accessors become literal
+`[Getter]`, `[Setter]`, or `[Getter/Setter]` strings. Copying accessor functions into
+the sample is unsafe: Node 22's inspect array grouping can read index getters even
+with `getters: false`. DataView samples use the intrinsic buffer and offset.
+String samples slice the unboxed primitive, avoiding overridable coercion methods.
 Smaller arrays/views and String objects retain inspect's preview when they have at most 1,000 own enumerable
 non-index keys. Above that cap they use `[Object with more than 1000 named keys; inspection omitted]`.
 String objects are recognized across realms with `util.types.isStringObject`.
@@ -70,15 +80,22 @@ Other non-Error values with more than 1,000 own enumerable keys are summarized a
 Key enumeration and inspection remain inside the hostile-value guard. Plain-object
 key enumeration itself is unbounded in time
 and allocation; the summary avoids serializing those property values but does not
-bound enumeration. Small arrays/views and String objects enumerate numeric keys before counting named
-keys; String-object key enumeration remains unbounded, while large arrays/views skip that pre-check entirely. Nested object
-widths and ordinary message/name/stack getters have no hard work budget either.
-The inspected string for other values is
-truncated to 16,000 characters before logging and hashing.
-Keys beyond that prefix can therefore share an id. Error-message ids still use
-the full normalized message before display truncation. Empty or whitespace-only
-messages fall back to the error name or a type label before hashing.
-Error stacks in the log are unchanged.
+bound enumeration. Small arrays/views and String objects enumerate numeric keys
+before counting named keys; large indexed values skip that pre-check entirely.
+Nested plain objects with around a million keys remain out of scope: inspect's
+depth, maxArrayLength and maxStringLength options do not bound object width, and
+truncating its result does not bound the work needed to produce it. Ordinary
+message/name/stack getters likewise have no hard work budget.
+Inspected output, message prefixes, and logged stacks are capped at 16,000 characters.
+For messages of at most 16,000 characters, ids retain the full whitespace-normalized
+message. Longer messages hash the normalized first 16,000 characters followed by
+`\0length=<original UTF-16 length>`; their stacks are not read or formatted, and the
+message prefix is logged instead. This bounds normalization, hashing and logged
+text size; it does not guarantee the backing storage size of V8 substring values.
+Equal prefixes and lengths intentionally deduplicate
+even when unseen suffixes differ; different original lengths remain distinct.
+Inspected values with the same capped output can also share an id. Empty or
+whitespace-only messages fall back to the error name or a type label before hashing.
 
 The renderer uses B8 `members` to retain at most five distinct summaries inside
 one `main-process-errors` notice, moving repeated ids to the newest position and

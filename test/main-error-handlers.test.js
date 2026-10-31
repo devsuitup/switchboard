@@ -198,6 +198,105 @@ test('proxy rejection inspection runs no traps', t => {
   assert.equal(logs[0][1], '[Proxy; inspection omitted]');
 });
 
+test('multi-megabyte String objects bypass enumeration within 200 ms', t => {
+  const { target, logs, notices } = setup(t);
+  for (const length of [5e6, 5e7]) {
+    let reason = new String('x'.repeat(length));
+    const start = performance.now();
+    target.emit('unhandledRejection', reason);
+    const elapsed = performance.now() - start;
+    reason = null;
+    t.diagnostic(`reporting String length=${length}: ${elapsed.toFixed(1)} ms`);
+    assert.ok(elapsed < 200, `String length=${length} took ${elapsed} ms; budget is 200 ms`);
+    assert.match(logs.at(-1)[1], new RegExp(`String length=${length}; named properties not inspected`));
+    assert.ok(logs.at(-1)[1].length <= 16000);
+    assert.ok(notices.at(-1).message.length <= 550);
+  }
+});
+
+test('large array sampling invokes neither species nor index accessors', t => {
+  const { target, logs, notices } = setup(t);
+  let speciesReads = 0;
+  let indexReads = 0;
+  class Reason extends Array {
+    static get [Symbol.species]() { speciesReads++; return Array; }
+  }
+  const subclass = new Reason(5000).fill(7);
+  const accessor = new Array(5000).fill(8);
+  Object.defineProperty(accessor, '0', { get() { indexReads++; throw new Error('index getter'); } });
+  target.emit('unhandledRejection', subclass);
+  target.emit('unhandledRejection', accessor);
+  assert.equal(speciesReads, 0, 'sampling must not consult Symbol.species');
+  assert.equal(indexReads, 0, 'sampling must not read index accessors');
+  for (const log of logs) assert.match(log[1], /Array length=5000; named properties not inspected/);
+  assert.match(logs[0][1], /7/);
+  assert.match(logs[1][1], /\[Getter\]/);
+  assert.equal(notices.length, 2);
+});
+
+for (const [name, create, expected] of [
+  ['typed array', () => new Uint16Array(5000), 'Uint16Array length=5000'],
+  ['Buffer', () => Buffer.alloc(5000), 'Buffer length=5000'],
+  ['DataView', () => new DataView(new Uint8Array(5005).fill(42).buffer, 5, 5000), 'DataView byteLength=5000'],
+  ['cross-realm typed array', () => require('node:vm').runInNewContext('new Uint8Array(5000)'), 'Uint8Array length=5000'],
+]) {
+  test(`large ${name} uses intrinsic metadata despite shadowing accessors`, t => {
+    const { target, logs, notices } = setup(t);
+    const reason = create();
+    let reads = 0;
+    for (const key of ['length', 'byteLength', 'buffer', 'byteOffset', 'constructor']) {
+      Object.defineProperty(reason, key, { get() { reads++; throw new Error(`shadow ${key}`); } });
+    }
+    target.emit('unhandledRejection', reason);
+    assert.equal(reads, 0, 'metadata access must bypass user getters');
+    assert.ok(logs[0][1].includes(expected), logs[0][1]);
+    assert.match(logs[0][1], /named properties not inspected/);
+    if (name === 'DataView') assert.match(logs[0][1], /42/);
+    assert.doesNotMatch(notices[0].message, /Unreadable error/);
+  });
+}
+
+test('large typed array sampling never consults species', t => {
+  const { target, logs } = setup(t);
+  let reads = 0;
+  class Reason extends Uint8Array {
+    static get [Symbol.species]() { reads++; throw new Error('species getter'); }
+  }
+  target.emit('unhandledRejection', new Reason(5000).fill(9));
+  assert.equal(reads, 0);
+  assert.match(logs[0][1], /length=5000/);
+  assert.match(logs[0][1], /9/);
+});
+
+test('50 MB messages bound logs and hash only the prefix plus original length', t => {
+  const { target, logs, notices, clock } = setup(t);
+  let message = 'x'.repeat(50e6);
+  let stackReads = 0;
+  const emit = value => target.emit('unhandledRejection', {
+    message: value,
+    get stack() { stackReads++; throw new Error('must not format an oversized stack'); },
+  });
+  target.emit('unhandledRejection', new Error(message));
+  assert.ok(logs[0][1].length <= 16000, 'message log must be capped before logging');
+  emit(message.slice(0, -1) + 'y');
+  clock.advance(1000);
+  assert.equal(notices.at(-1).id, notices[0].id, 'equal prefixes and lengths intentionally share an id');
+  assert.equal(notices.at(-1).count, 2);
+  emit(message + 'z');
+  assert.notEqual(notices.at(-1).id, notices[0].id, 'original length participates in oversized-message ids');
+  target.emit('unhandledRejection', { message: message.slice(0, 16000) });
+  assert.notEqual(notices.at(-1).id, notices[0].id, 'an uncapped prefix is a separate identity');
+  assert.equal(stackReads, 0);
+  for (const log of logs) assert.ok(log[1].length <= 16000);
+  message = null;
+});
+
+test('oversized explicit stacks are bounded even when the message is short', t => {
+  const { target, logs } = setup(t);
+  target.emit('uncaughtException', { message: 'short', stack: 's'.repeat(50000) });
+  assert.equal(logs[0][1], 's'.repeat(16000));
+});
+
 for (const [name, create] of [
   ['array', () => [1, 2, 3]],
   ['Buffer', () => Buffer.alloc(3)],
@@ -226,7 +325,7 @@ for (const [name, create] of [
   ['Buffer', () => Buffer.alloc(1)],
   ['typed array', () => new Uint8Array(1)],
   ['String object', () => new String('a')],
-  ['cross-realm String object', () => require('node:vm').runInNewContext('new String("x".repeat(2000))')],
+  ['cross-realm String object', () => require('node:vm').runInNewContext('new String("x".repeat(1000))')],
 ]) {
   test(`${name} named-key cap permits 1000 keys and summarizes 1001 without getters`, t => {
     const { target, logs } = setup(t);
