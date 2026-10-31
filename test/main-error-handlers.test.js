@@ -340,6 +340,71 @@ for (const length of [15990, 16001, 50e6]) {
   });
 }
 
+test('oversized native Error custom stack getter cannot contaminate an inner Error', t => {
+  const { target, logs } = setup(t);
+  const error = new Error('reported '.padEnd(16001, 'x'));
+  let inner;
+  let reads = 0;
+  Object.defineProperty(error, 'stack', { configurable: true, get() {
+    reads++;
+    inner = new Error('innocent');
+    return inner.stack;
+  } });
+  const descriptor = Object.getOwnPropertyDescriptor(error, 'stack');
+  const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
+  target.emit('uncaughtException', error);
+  assert.equal(inner?.stack.startsWith('reported '), undefined, 'custom getter must not create an inner Error under the swapped formatter');
+  assert.equal(reads, 0, 'oversized custom stack getter must not run');
+  assert.deepEqual(Object.getOwnPropertyDescriptor(error, 'stack'), descriptor);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace'), formatter);
+  assert.equal(logs[0][1], `${error.message.slice(0, 11000)}\n[truncated; length=16001]`);
+});
+
+test('oversized native stack logs its message prefix and truncation marker exactly once', t => {
+  const { target, logs } = setup(t);
+  const error = new Error('message-prefix '.repeat(1200));
+  target.emit('uncaughtException', error);
+  const header = `${error.message.slice(0, 11000)}\n[truncated; length=${error.message.length}]`;
+  assert.equal(logs[0][1].split('[truncated;').length - 1, 1, 'log must contain exactly one truncation marker');
+  assert.ok(logs[0][1].startsWith(header + '\n'));
+  const frames = logs[0][1].slice(header.length + 1);
+  assert.match(frames, /^    at /);
+  assert.doesNotMatch(frames, /message-prefix/, 'frames must not duplicate the message prefix');
+  assert.ok(logs[0][1].length <= 16000);
+});
+
+test('an oversized native stack read before reporting stays unchanged and retains its frame', t => {
+  const { target, logs } = setup(t);
+  const error = new Error('cached '.padEnd(16001, 'x'));
+  const before = error.stack;
+  target.emit('uncaughtException', error);
+  assert.equal(error.stack, before, 'reporting must preserve an already cached stack');
+  assert.equal(logs[0][1], `${error.message.slice(0, 11000)}\n[truncated; length=16001]\n${before.slice(-4000)}`);
+  assert.match(logs[0][1], /main-error-handlers\.test\.js:\d+:\d+/);
+});
+
+for (const native of [false, true]) {
+  test(`oversized ${native ? 'native Error' : 'non-Error'} own stack string retains its frame`, t => {
+    const { target, logs } = setup(t);
+    const error = native ? new Error() : {};
+    error.message = 'explicit '.padEnd(16001, 'x');
+    Object.defineProperty(error, 'stack', { configurable: true, value: 'Explicit stack\n    at retained-frame:7:9' });
+    target.emit('uncaughtException', error);
+    assert.equal(logs[0][1], `${error.message.slice(0, 11000)}\n[truncated; length=16001]\n${error.stack}`);
+  });
+}
+
+test('oversized native Error without own stack ignores an inherited custom getter', t => {
+  const { target, logs } = setup(t);
+  const error = new Error('absent '.padEnd(16001, 'x'));
+  delete error.stack;
+  let reads = 0;
+  Object.setPrototypeOf(error, Object.create(Error.prototype, { stack: { get() { reads++; return new Error('inner').stack; } } }));
+  target.emit('uncaughtException', error);
+  assert.equal(reads, 0, 'missing own stack must not fall through to an inherited getter');
+  assert.equal(logs[0][1], `${error.message.slice(0, 11000)}\n[truncated; length=16001]`);
+});
+
 for (const [name, create] of [
   ['array', () => [1, 2, 3]],
   ['Buffer', () => Buffer.alloc(3)],

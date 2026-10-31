@@ -3,6 +3,7 @@
 const { inspect, types } = require('node:util');
 const { createHash } = require('node:crypto');
 
+const nativeStackGetter = Object.getOwnPropertyDescriptor(new Error(), 'stack')?.get;
 const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
 const inspectOptions = { customInspect: false, getters: false, depth: 3, maxArrayLength: 20, maxStringLength: 2000, breakLength: Infinity };
 
@@ -117,19 +118,19 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
         if (longMessage) detail = `${message.slice(0, 11000)}\n[truncated; length=${messageLength ?? message.length}]`;
         let stack;
         if (messageLength === null) stack = error?.stack;
-        else if (types.isNativeError(error)) {
-          const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
-          try {
-            Object.defineProperty(Error, 'prepareStackTrace', { configurable: true, writable: true,
-              value: (_, frames) => `${detail}\n${frames.slice(-20).map(frame => `    at ${frame}`).join('\n').slice(-4000)}` });
-            stack = error.stack;
-          } finally {
-            if (formatter) Object.defineProperty(Error, 'prepareStackTrace', formatter);
-            else delete Error.prepareStackTrace;
-          }
-        } else {
+        else {
           const descriptor = error && Object.getOwnPropertyDescriptor(error, 'stack');
-          if (descriptor && 'value' in descriptor) stack = descriptor.value;
+          if (nativeStackGetter && descriptor?.get === nativeStackGetter && types.isNativeError(error)) {
+            const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
+            try {
+              Object.defineProperty(Error, 'prepareStackTrace', { configurable: true, writable: true,
+                value: (_, frames) => frames.slice(-20).map(frame => `    at ${frame}`).join('\n').slice(-4000) });
+              stack = error.stack;
+            } finally {
+              if (formatter) Object.defineProperty(Error, 'prepareStackTrace', formatter);
+              else delete Error.prepareStackTrace;
+            }
+          } else if (descriptor && 'value' in descriptor) stack = descriptor.value;
         }
         if (typeof stack === 'string') detail = longMessage ? `${detail}\n${stack.slice(-4000)}` : stack.slice(0, 16000);
       }
