@@ -10,8 +10,11 @@ Static `path.join` expressions are rewritten as a whole. Their trailing segments
 through to standalone filename rewriting, including dynamic or already-relocated joins.
 Skipped segments naming a moved key or basename warn with their file and line for manual review.
 Root/dirname joins resolving to unmapped subdirectory modules with a moved basename are also
-excluded from rewriting and VM loader inference, even when their consumer moves. Exact move-map
-keys and destinations remain supported; renderer/main basename collisions require manual review.
+excluded from rewriting and VM loader inference when their consumer stays in place. A moved
+consumer keeps relative rewrites to unmapped files, including workers with the same basename;
+`ROOT` anchors retain the root-relative target. Bare moved basenames in standalone literals
+(including renderer filename arrays) warn and stay unchanged when another unmapped scanned
+file shares the basename. Exact move-map keys and destinations remain supported.
 Move maps are copied to null-prototype objects at both public entry points; inherited object
 properties never name moves. The scanner excludes its own script and `module-paths.js`.
 
@@ -35,5 +38,10 @@ scanner has no supported rewrites or moves left; run the full suite after a real
 Check mode also validates `.git-blame-ignore-revs`: every full SHA must be an ancestor commit
 of HEAD, and the last entry (newest move) must contain only R100 renames with 0/0 numstat.
 It uses Git 2.24-compatible commands. Shallow checkouts, archives without `.git`, and missing Git
-print a clear history-validation `SKIP`; the full-history CI matrix can validate the real entries.
+print a clear history-validation `SKIP`. The test suite calls the exported `checkBlameIgnore`
+on the actual repository root; the full-history CI matrix validates the real entries after rebases.
+Malformed or abbreviated entries report that a full 40-hex SHA is required (exit 1); Git command
+errors, including failed `git show` reads, report history-validation failures separately (exit 2).
+Both history validation and fixture Git commands strip inherited `GIT_*` and `HUSKY*` variables
+to prevent pre-commit environment state from redirecting their repository or index.
 Refresh entries after rebases and prefer merging main, as documented in the move procedure.

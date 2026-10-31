@@ -118,6 +118,10 @@ function rewrite(file, source, map, options = {}) {
     const stubValues = new Set([...stubNodes].map(node => node.value));
     const quote = (node, value) => `${source[node.range[0]]}${value}${source[node.range[0]]}`;
     const movedNames = new Set(Object.keys(map).flatMap(old => [old, p.basename(old)]));
+    const collisionFiles = options.sources ? Object.keys(options.sources) : options.root
+      ? [...appFiles(options.root), ...walk(options.root, 'public'), ...walk(options.root, 'test'), ...walk(options.root, 'e2e')] : [];
+    const unmappedBasenames = new Set(collisionFiles.filter(candidate => p.dirname(candidate) !== '.'
+      && !map[candidate] && !Object.values(map).includes(candidate)).map(candidate => p.basename(candidate)));
     const warnSegments = parts => {
       for (const part of parts) {
         if (part.type === 'Literal' && movedNames.has(part.value)) {
@@ -137,7 +141,7 @@ function rewrite(file, source, map, options = {}) {
       }
       const base = anchor.name === 'ROOT' ? '' : p.dirname(before);
       const old = p.join(base, ...parts.map((n) => n.value));
-      if (p.dirname(old) !== '.' && !map[old] && !Object.values(map).includes(old)
+      if (before === file && p.dirname(old) !== '.' && !map[old] && !Object.values(map).includes(old)
         && movedNames.has(p.basename(old))) {
         warnSegments(parts);
         continue;
@@ -237,6 +241,8 @@ function rewrite(file, source, map, options = {}) {
         }
       } else if (stubNodes.has(node) && stubs.has(value)) {
         next = stubs.get(value);
+      } else if (p.basename(value) === value && movedNames.has(value) && unmappedBasenames.has(value)) {
+        options.onWarning?.(`${file}:${node.loc.start.line}: ambiguous basename ${value} also names an unmapped file; review manually`);
       } else if (map[value]) {
         next = map[value];
       } else if (value.startsWith('.')) {
@@ -262,7 +268,8 @@ function checkBlameIgnore(root) {
   const revisions = fs.readFileSync(file, 'utf8').split(/\r?\n/)
     .map(line => line.split('#')[0].trim()).filter(Boolean);
   if (!revisions.length) return true;
-  const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 10000 });
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(GIT_|HUSKY)/i.test(key)));
+  const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 10000, env });
   if (!fs.existsSync(path.join(root, '.git'))) {
     console.warn('SKIP .git-blame-ignore-revs: repository history is not available');
     return true;
@@ -279,7 +286,12 @@ function checkBlameIgnore(root) {
   }
   let valid = true;
   for (const sha of revisions) {
-    if (!/^[a-f\d]{40}$/i.test(sha) || git('cat-file', '-e', `${sha}^{commit}`).status !== 0
+    if (!/^[a-f\d]{40}$/i.test(sha)) {
+      console.error(`.git-blame-ignore-revs: ${sha} must be a full 40-hex SHA`);
+      valid = false;
+      continue;
+    }
+    if (git('cat-file', '-e', `${sha}^{commit}`).status !== 0
       || git('merge-base', '--is-ancestor', sha, 'HEAD').status !== 0) {
       console.error(`.git-blame-ignore-revs: ${sha} is not a commit reachable from HEAD`);
       valid = false;
@@ -289,7 +301,10 @@ function checkBlameIgnore(root) {
   const newest = revisions.at(-1);
   const names = git('show', '--format=', '--find-renames=100%', '--name-status', newest);
   const stats = git('show', '--format=', '--find-renames=100%', '--numstat', newest);
-  if (names.status !== 0 || stats.status !== 0 || !names.stdout.trim()
+  for (const result of [names, stats]) {
+    if (result.error || result.status !== 0) throw new Error(`Cannot check blame-ignore history: ${result.error?.message || result.stderr}`);
+  }
+  if (!names.stdout.trim()
     || !names.stdout.trim().split('\n').every(line => line.startsWith('R100\t'))
     || !stats.stdout.trim().split('\n').every(line => line.startsWith('0\t0\t'))) {
     console.error(`.git-blame-ignore-revs: newest entry ${newest} must be a pure-rename commit (all R100, 0/0)`);
@@ -349,4 +364,4 @@ if (require.main === module) {
   catch (error) { console.error(error.message); process.exitCode = 2; }
 }
 
-module.exports = { rewrite, validateMap };
+module.exports = { rewrite, validateMap, checkBlameIgnore };
