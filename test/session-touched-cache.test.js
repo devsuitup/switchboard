@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const touched = require('../session-touched-files');
+const touched = require('../src/main/changes/session-touched-files');
 
 const NOW = Date.parse('2026-10-03T12:00:00Z');
 const DAY = 86400000;

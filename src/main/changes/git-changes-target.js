@@ -3,7 +3,7 @@
 'use strict';
 
 const path = require('path');
-const { resolveJsonlPath } = require('./read-session-file');
+const { resolveJsonlPath } = require('../../../read-session-file');
 
 // Accepted sessionId shapes — see .ai/contexts/changes-view.md ("cwd resolution").
 const PLAIN_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
