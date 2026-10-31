@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { renameWithRetry } = require('./src/main/shared/atomic-write');
+const { renameWithRetry } = require('../shared/atomic-write');
 const { isSafeMirrorRelPath } = require('./remote-hosts');
 const {
   resolveSshPath: defaultResolveSshPath,

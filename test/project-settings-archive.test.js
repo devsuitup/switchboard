@@ -13,7 +13,7 @@ const { JSDOM } = require('jsdom');
 const { extractFunction, loadAppFunctions } = require('./app-source');
 const { setupSidebarDom } = require('./dom-setup');
 const { encodeProjectPath } = require('../encode-project-path');
-const { parseFolderKey, joinFolderKey } = require('../remote-hosts');
+const { parseFolderKey, joinFolderKey } = require('../src/main/remote/remote-hosts');
 const { applyAndPersistArchived, clearArchivedEntry } = require('../archived-projects');
 const { loadScheduleRunner } = require('./schedule-runner-harness');
 

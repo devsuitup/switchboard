@@ -16,20 +16,23 @@ function rig(t, file, error) {
   const calls = [];
   const filename = path.resolve(__dirname, '..', file);
   const nativeRequire = createRequire(filename);
+  const atomicWritePath = require.resolve('../src/main/shared/atomic-write');
   const module = { exports: {} };
   const env = { ...process.env, SWITCHBOARD_TRIGGERS_DIR: dir };
+  let atomicLoads = 0;
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
     module, exports: module.exports, __dirname: path.dirname(filename), __filename: filename,
-    require: id => id === './src/main/shared/atomic-write' ? {
+    require: id => nativeRequire.resolve(id) === atomicWritePath ? (atomicLoads++, {
       renameWithRetry: (src, dest, opts) => {
         calls.push({ src, dest, opts });
         if (error) throw error;
         return (opts?.rename || fs.renameSync)(src, dest);
       },
-    } : nativeRequire(id),
+    }) : nativeRequire(id),
     process: { env, platform: process.platform, pid: process.pid, kill: process.kill.bind(process) },
     Buffer, console, setTimeout, clearTimeout, setInterval, clearInterval, setImmediate,
   }, { filename });
+  assert.equal(atomicLoads, 1, `${file} must load the atomic-write stub`);
   return { dir, calls, api: module.exports };
 }
 
@@ -51,7 +54,7 @@ for (const fail of [false, true]) {
 
   test('mirror manifest' + suffix, async t => {
     const error = fail ? new Error('final rename failure') : null;
-    const { dir, calls, api } = rig(t, 'remote-mirror.js', error);
+    const { dir, calls, api } = rig(t, 'src/main/remote/remote-mirror.js', error);
     const dest = path.join(dir, 'manifest.json');
     const transport = { listFiles: async () => ({ files: [], sessions: [] }) };
     const sync = () => api.syncMirror({ alias: 'test', transport, projectsDir: dir, manifestPath: dest });
@@ -73,7 +76,7 @@ for (const fail of [false, true]) {
   for (const incremental of [false, true]) {
     test((incremental ? 'range append' : 'scp fetch') + suffix, async t => {
       const error = fail ? new Error('final rename failure') : null;
-      const { dir, calls, api } = rig(t, 'remote-transport.js', error);
+      const { dir, calls, api } = rig(t, 'src/main/remote/remote-transport.js', error);
       const rel = '-srv-test/session.jsonl';
       const dest = path.join(dir, rel);
       fs.mkdirSync(path.dirname(dest), { recursive: true });

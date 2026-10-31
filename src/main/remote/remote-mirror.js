@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { renameWithRetry } = require('./src/main/shared/atomic-write');
+const { renameWithRetry } = require('../shared/atomic-write');
 const { isSafeMirrorRelPath, topFolderOf } = require('./remote-hosts');
 
 const MAX_INVENTORY_ENTRIES = 20_000;

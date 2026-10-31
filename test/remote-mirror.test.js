@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { syncMirror, readManifest, MAX_CYCLE_FILES, MAX_CYCLE_BYTES } = require('../remote-mirror');
+const { syncMirror, readManifest, MAX_CYCLE_FILES, MAX_CYCLE_BYTES } = require('../src/main/remote/remote-mirror');
 const { readSubagentMeta } = require('../read-session-file');
 
 function tmp(name) {

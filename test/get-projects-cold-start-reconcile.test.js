@@ -23,7 +23,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const { normalizeHosts, parseFolderKey } = require('../remote-hosts');
+const { normalizeHosts, parseFolderKey } = require('../src/main/remote/remote-hosts');
 
 function extractGetProjectsHandlerBody() {
   const src = fs.readFileSync(path.join(root, 'main.js'), 'utf8');

@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createTerminalResizeHandler } = require('../terminal-resize');
 const { extractFunction } = require('./app-source');
-const { createTmuxAttachAdapter } = require('../remote-attach');
+const { createTmuxAttachAdapter } = require('../src/main/remote/remote-attach');
 
 async function promotionFixture(t, { initialCount = 1 } = {}) {
   const events = [];

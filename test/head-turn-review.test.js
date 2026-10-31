@@ -210,7 +210,7 @@ test('real cached rows batch only live remote heads, excluding local, archived, 
     const path = require('node:path');
     const vm = require('node:vm');
     const { extractFunction } = require('./test/app-source');
-    const { parseFolderKey } = require('./remote-hosts');
+    const { parseFolderKey } = require('./src/main/remote/remote-hosts');
     const store = require('./session-index-store').openSessionIndexStore({ readonly: false });
     const root = process.env.SWITCHBOARD_DATA_DIR;
     const row = (sessionId, folder, extra = {}) => ({ sessionId, folder,
@@ -226,7 +226,7 @@ test('real cached rows batch only live remote heads, excluding local, archived, 
     const batches = [];
     const hosts = [];
     const context = vm.createContext({ path, ...store, parseFolderKey,
-      refreshRemoteHeadTurnsFromCache: require('./remote-index').refreshRemoteHeadTurns,
+      refreshRemoteHeadTurnsFromCache: require('./src/main/remote/remote-index').refreshRemoteHeadTurns,
       remoteIndexer: { getRemoteSessions: alias => {
         hosts.push(alias);
         return { sessions: (alias === 'dev' ? ['live', 'child', 'archived', 'local'] : ['other']).map(sessionId => ({ sessionId })) };

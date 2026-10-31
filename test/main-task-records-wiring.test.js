@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createTaskRegistry } = require('../public/task-registry');
-const { parseFolderKey } = require('../remote-hosts');
+const { parseFolderKey } = require('../src/main/remote/remote-hosts');
 const fixture = require('./fixtures/cli-tasks-2.1.296.json');
 const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8').replace(/\r\n/g, '\n');
 
@@ -23,7 +23,7 @@ test('shipped main bootstrap replays old open tasks for live local owners and fo
   const renderer = createTaskRegistry();
   let handler;
   const ctx = vm.createContext({ require: name => name === './task-records-client' ? require('../task-records-client') : null,
-    refreshRemoteHeadTurnsFromCache: require('../remote-index').refreshRemoteHeadTurns,
+    refreshRemoteHeadTurnsFromCache: require('../src/main/remote/remote-index').refreshRemoteHeadTurns,
     path, mainWindow: { isDestroyed: () => false, webContents: { send: (channel, payload) => {
       if (channel === 'task-snapshot') renderer.applySnapshot(payload);
       if (channel === 'task-rekey') renderer.rekey(payload.oldId, payload.newId, { continued: payload.continued });
@@ -67,7 +67,7 @@ for (const failure of ['metadata', 'cache-once', 'cache-persistent']) {
     let failedOnce = false;
     const ctx = vm.createContext({
       require: name => name === './task-records-client' ? require('../task-records-client') : null,
-      refreshRemoteHeadTurnsFromCache: require('../remote-index').refreshRemoteHeadTurns,
+      refreshRemoteHeadTurnsFromCache: require('../src/main/remote/remote-index').refreshRemoteHeadTurns,
       path, mainWindow: null, log: { warn: message => warnings.push(message) },
       ipcMain: { handle: (channel, callback) => { assert.equal(channel, 'get-task-snapshots'); handler = callback; } },
       cliSessionState: { getSidebarDescriptors: () => [{ sessionId: id }], readAllDescriptors: () => [] },
@@ -127,7 +127,7 @@ test('get-task-snapshots skips failing child cache rows, warns once per call and
   let handler;
   const ctx = vm.createContext({
     require: name => name === './task-records-client' ? require('../task-records-client') : null,
-    refreshRemoteHeadTurnsFromCache: require('../remote-index').refreshRemoteHeadTurns,
+    refreshRemoteHeadTurnsFromCache: require('../src/main/remote/remote-index').refreshRemoteHeadTurns,
     path, resolveJsonlPath: require('../read-session-file').resolveJsonlPath, mainWindow: null, log: { warn: message => warnings.push(message) },
     ipcMain: { handle: (channel, callback) => { assert.equal(channel, 'get-task-snapshots'); handler = callback; } },
     cliSessionState: { getSidebarDescriptors: () => ids.map(sessionId => ({ sessionId })), readAllDescriptors: () => [] },

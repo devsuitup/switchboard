@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildChecklist, handleEnrolRequest, UNKNOWN_AUTH_TEXT } = require('../remote-enrol');
+const { buildChecklist, handleEnrolRequest, UNKNOWN_AUTH_TEXT } = require('../src/main/remote/remote-enrol');
 
 const GOOD = {
   tmux: true, inotifywait: true, claude: true, claudeVersion: '2.1.288 (Claude Code)', claudeDir: true, auth: true,

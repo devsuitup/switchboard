@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createRemoteIndexer, PROBE_INTERVAL_MS, PROBE_RETRY_MS } = require('../remote-index');
+const { createRemoteIndexer, PROBE_INTERVAL_MS, PROBE_RETRY_MS } = require('../src/main/remote/remote-index');
 
 function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-idx-probe-'));

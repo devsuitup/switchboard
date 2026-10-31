@@ -20,9 +20,9 @@ const {
   NO_DIR_EXIT_CODE,
   NO_TMUX_EXIT_CODE,
   NO_CLAUDE_EXIT_CODE,
-} = require('../remote-launch');
-const { buildStopCommand } = require('../remote-stop');
-const { shellSingleQuote, parseTmuxField } = require('../remote-attach');
+} = require('../src/main/remote/remote-launch');
+const { buildStopCommand } = require('../src/main/remote/remote-stop');
+const { shellSingleQuote, parseTmuxField } = require('../src/main/remote/remote-attach');
 
 const UUID = '3f2a9c10-7b1d-4e55-9a60-0123456789ab';
 const silentLog = { info() {}, warn() {}, error() {} };

@@ -26,7 +26,7 @@ const {
   NOT_CLAUDE_EXIT_CODE,
   NO_SOCKET_EXIT_CODE,
   NC_MISSING_EXIT_CODE,
-} = require('../remote-send');
+} = require('../src/main/remote/remote-send');
 
 const silentLog = { info() {}, warn() {}, error() {} };
 const SOCKET = '/run/user/1000/cc-socks/4242.sock';
@@ -52,7 +52,7 @@ function trackedAdapter(runRemoteCommand, now) {
   class TrackedMap extends Map {
     constructor() { super(); maps.push(this); }
   }
-  const filename = path.join(__dirname, '..', 'remote-send.js');
+  const filename = path.join(__dirname, '../src/main/remote/remote-send.js');
   const module = { exports: {} };
   require('vm').runInNewContext(fs.readFileSync(filename, 'utf8'), {
     module, require: require('module').createRequire(filename), Buffer, Map: TrackedMap,

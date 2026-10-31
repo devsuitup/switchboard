@@ -8,7 +8,7 @@ const {
   defaultRunRemoteCommand,
 } = require('./remote-attach');
 const { isValidAlias } = require('./remote-hosts');
-const { remoteHostLabel } = require('./public/utils');
+const { remoteHostLabel } = require('../../../public/utils');
 
 const DEFAULT_LAUNCH_TIMEOUT_MS = 20000;
 const NO_DIR_EXIT_CODE = 9;

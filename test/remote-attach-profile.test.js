@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { createTmuxAttachAdapter } = require('../remote-attach');
+const { createTmuxAttachAdapter } = require('../src/main/remote/remote-attach');
 
 function profileDirectory(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-profile-'));
@@ -15,7 +15,7 @@ function profileDirectory(t) {
 }
 
 function loadProfile(dataDir, warnings) {
-  const { loadAttachProfileId } = require('../remote-attach-profile');
+  const { loadAttachProfileId } = require('../src/main/remote/remote-attach-profile');
   return loadAttachProfileId(dataDir, { warn: message => warnings.push(message) });
 }
 
@@ -128,5 +128,5 @@ test('shipped main adapter uses the same userData directory as the single-instan
   });
   assert.deepEqual(calls, [{ dir: 'isolated-userData', logger: 'logger' }]);
   assert.equal(options.profileId, 'persisted-profile');
-  assert.match(source, /require\('\.\/remote-attach-profile'\)/);
+  assert.match(source, /require\('\.\/src\/main\/remote\/remote-attach-profile'\)/);
 });

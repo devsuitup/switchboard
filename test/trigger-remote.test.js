@@ -11,7 +11,7 @@ const path = require('path');
 const { setTimeout: realSetTimeout } = require('node:timers');
 const { start } = require('../trigger-watcher');
 const { createTriggerContext } = require('../trigger-context');
-const { createRemoteIndexer } = require('../remote-index');
+const { createRemoteIndexer } = require('../src/main/remote/remote-index');
 const log = { info() {}, warn() {}, error() {}, debug() {} };
 const NO_FRESH = 'fewer than two pulls of the session descriptors of this host completed after the wait began, before the deadline; nothing was written';
 const UNKNOWN = 'the descriptor of this host carries no readable status; whether the session is idle is unknown; nothing was written';
@@ -304,7 +304,7 @@ test('U22: main uses a dynamic opt-in getter and the central default', () => {
   let settings = {};
   const indexer = {}; const adapter = {};
   const { SETTING_DEFAULTS } = require('../public/setting-defaults');
-  const { enabledHosts, normalizeRefreshMs } = require('../remote-hosts');
+  const { enabledHosts, normalizeRefreshMs } = require('../src/main/remote/remote-hosts');
   const deps = new Function('getSetting', 'SETTING_DEFAULTS', 'remoteIndexer', 'remoteSendAdapter', 'enabledHosts', 'normalizeRefreshMs', 'return ({' + source.slice(start, end) + '});')(() => settings, SETTING_DEFAULTS, indexer, adapter, enabledHosts, normalizeRefreshMs);
   assert.equal(deps.remote, undefined);
   settings = { remoteTriggers: true, remoteHosts: [{ alias: 'vps' }], remoteRefreshMs: 1 };
@@ -324,7 +324,7 @@ test('U22: each remote lookup reads global settings once for all aliases and rer
     getRemoteSessions: () => ({ sessions: [descriptor], at: 42, error: null }),
   };
   const { SETTING_DEFAULTS } = require('../public/setting-defaults');
-  const { enabledHosts, normalizeRefreshMs } = require('../remote-hosts');
+  const { enabledHosts, normalizeRefreshMs } = require('../src/main/remote/remote-hosts');
   const deps = new Function('getSetting', 'SETTING_DEFAULTS', 'remoteIndexer', 'remoteSendAdapter', 'enabledHosts', 'normalizeRefreshMs', 'return ({' + source.slice(start, end) + '});')(
     key => { assert.equal(key, 'global'); reads++; return settings; }, SETTING_DEFAULTS, indexer, {}, enabledHosts, normalizeRefreshMs);
   const ctx = createTriggerContext({ activeSessions: new Map(), log, get remote() { return deps.remote; } });

@@ -2,11 +2,11 @@
 'use strict';
 
 const path = require('path');
-const { defaultRunRemoteCommand } = require('./remote-attach');
+const { defaultRunRemoteCommand } = require('./src/main/remote/remote-attach');
 const { shQuote, buildRemoteGitCommand, buildGitArgs, isSafeGitPath } = require('./git-changes-runner');
 const { toLf, decodeUtf8 } = require('./git-changes-file');
 const { matchesDenylist } = require('./src/main/shared/ipc-path-validator');
-const { isValidAlias } = require('./remote-hosts');
+const { isValidAlias } = require('./src/main/remote/remote-hosts');
 
 const REMOTE_TOUCHED_READ_MAX_BYTES = 2 * 1024 * 1024;
 const REMOTE_TOUCHED_STAT_MAX_BYTES = 64 * 1024;

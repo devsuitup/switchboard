@@ -5,7 +5,7 @@
 const { runToExit } = require('./src/main/shared/run-to-exit');
 const fs = require('fs');
 const path = require('path');
-const { defaultRunRemoteCommand } = require('./remote-attach');
+const { defaultRunRemoteCommand } = require('./src/main/remote/remote-attach');
 const {
   parseStatusPorcelainV2,
   parseNumstat,

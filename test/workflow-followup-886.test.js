@@ -8,8 +8,8 @@ const vm = require('node:vm');
 const { fixture, OLD: P, line } = require('./fixtures/continuation-718.cjs');
 const { loadAppFunctions } = require('./app-source');
 const cache = require('../session-cache');
-const { createRemoteIndexer } = require('../remote-index');
-const { mirrorProjectsDirFor } = require('../remote-hosts');
+const { createRemoteIndexer } = require('../src/main/remote/remote-index');
+const { mirrorProjectsDirFor } = require('../src/main/remote/remote-hosts');
 const { enumerateSessionFiles } = require('../read-session-file');
 
 const RUN = 'wf_abcdef-886';

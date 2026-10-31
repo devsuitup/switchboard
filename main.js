@@ -98,12 +98,12 @@ const { createTerminalResizeHandler } = require('./terminal-resize');
 const { createComposerState } = require('./composer-state');
 const { handleTerminalInput } = require('./terminal-input');
 const { createTriggerContext } = require('./trigger-context');
-const { createTmuxAttachAdapter } = require('./remote-attach');
-const { loadAttachProfileId } = require('./remote-attach-profile');
-const { createRemoteStopAdapter } = require('./remote-stop');
-const { attachBlockReason, sendBlockReason, launchBlockReason } = require('./remote-host-profile');
-const { createRemoteLaunchAdapter, handleLaunchRequest } = require('./remote-launch');
-const { createRemoteSendAdapter, handleSendRequest } = require('./remote-send');
+const { createTmuxAttachAdapter } = require('./src/main/remote/remote-attach');
+const { loadAttachProfileId } = require('./src/main/remote/remote-attach-profile');
+const { createRemoteStopAdapter } = require('./src/main/remote/remote-stop');
+const { attachBlockReason, sendBlockReason, launchBlockReason } = require('./src/main/remote/remote-host-profile');
+const { createRemoteLaunchAdapter, handleLaunchRequest } = require('./src/main/remote/remote-launch');
+const { createRemoteSendAdapter, handleSendRequest } = require('./src/main/remote/remote-send');
 const { createGitChangesRunner, localGitEnv } = require('./git-changes-runner');
 const { runToExit } = require('./src/main/shared/run-to-exit');
 const gitChangesTarget = require('./git-changes-target');
@@ -626,14 +626,14 @@ const projectsClient = createProjectsWorkerClient({
 const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
-const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts, normalizeHosts, normalizeRefreshMs } = require('./remote-hosts');
+const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts, normalizeHosts, normalizeRefreshMs } = require('./src/main/remote/remote-hosts');
 const { remoteHostLabel } = require('./public/utils');
-const { handleEnrolRequest } = require('./remote-enrol');
+const { handleEnrolRequest } = require('./src/main/remote/remote-enrol');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
-const { createSshTransport } = require('./remote-transport');
-require('./remote-ssh-binary').setResolverLog(log);
-const { createRemoteIndexer, refreshRemoteHeadTurns: refreshRemoteHeadTurnsFromCache } = require('./remote-index');
-const { createRemoteWatcher } = require('./remote-watch');
+const { createSshTransport } = require('./src/main/remote/remote-transport');
+require('./src/main/remote/remote-ssh-binary').setResolverLog(log);
+const { createRemoteIndexer, refreshRemoteHeadTurns: refreshRemoteHeadTurnsFromCache } = require('./src/main/remote/remote-index');
+const { createRemoteWatcher } = require('./src/main/remote/remote-watch');
 const { createRemoteActivityTracker } = require('./remote-activity');
 const { createLocalTranscriptTracker } = require('./local-transcript-activity');
 

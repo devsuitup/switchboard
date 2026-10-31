@@ -2,8 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createRemoteLaunchAdapter, handleLaunchRequest } = require('../remote-launch');
-const { handleEnrolRequest } = require('../remote-enrol');
+const { createRemoteLaunchAdapter, handleLaunchRequest } = require('../src/main/remote/remote-launch');
+const { handleEnrolRequest } = require('../src/main/remote/remote-enrol');
 
 const alias = 'planificator';
 const getHosts = () => [{ alias, label: 'VPS', enabled: true }];

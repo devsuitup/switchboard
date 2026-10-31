@@ -18,7 +18,7 @@ const os = require('os');
 const path = require('path');
 
 const sessionCache = require('../session-cache');
-const { syncMirror } = require('../remote-mirror');
+const { syncMirror } = require('../src/main/remote/remote-mirror');
 const { encodeProjectPath } = require('../encode-project-path');
 
 function tmp(name) {

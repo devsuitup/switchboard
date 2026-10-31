@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
-const { computeHostProfile } = require('../remote-host-profile');
+const { computeHostProfile } = require('../src/main/remote/remote-host-profile');
 
 const SESSION = {
   sessionId: 'remote-1',
