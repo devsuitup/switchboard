@@ -5,6 +5,7 @@ const { classifyTranscriptPath } = require('./subagent-attribution');
 const { scanContinuationIndex } = require('./session-continuations');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
 const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
+const { releaseWindowsPty } = require('./pty-ops');
 
 /**
  * Fork detection for active PTY sessions.
@@ -569,7 +570,7 @@ function publishRekey(sessionId, newId, session, currentFiles, kind, background)
   rekeyMcpServer(sessionId, newId);
   rekeyActivity(sessionId, newId, kind);
   const mainWindow = getMainWindow();
-  if (background) { session.backgrounded = true; session.backgroundJobId = background.jobId; }
+  if (background) { session.backgrounded = true; session.backgroundJobId = background.jobId; void releaseWindowsPty(session.pty); }
   if (TRACE.on) trace('session.forked', sessionId, { newId, kind, jobId: background?.jobId || null, wasBusy: !!session._cliBusy, sent: !!(mainWindow && !mainWindow.isDestroyed()) });
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (background) mainWindow.webContents.send('session-forked', sessionId, newId, kind, background);

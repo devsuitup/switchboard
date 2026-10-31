@@ -80,6 +80,7 @@ function mainContext() {
     process, path, os, fs,
     spawnChild: spawn, cpSpawn: spawn,
     spawnPty: spawn,
+    trackWindowsPty() {},
     setTimeout, clearTimeout,
     log: { info() {}, warn() {}, error() {} },
     isWindows: false, isWslShell: () => false,

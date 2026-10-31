@@ -90,7 +90,9 @@ const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
 const { makeDeleteSessionGuard } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
-const { setPtyOpLogger, guardPtyInputErrors, killPty, detachPty, writePty, ptyExitSignalName } = require('./pty-ops');
+const { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, killPty, detachPty, writePty, ptyExitSignalName } = require('./pty-ops');
+const { configureWindowsJobHelper } = require('./src/main/terminals/windows-job-helper');
+const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
 const { JOB_ID_RE, isHostedJob } = require('./bg-agents-roster');
 const { createTerminalResizeHandler } = require('./terminal-resize');
 const { createComposerState } = require('./composer-state');
@@ -191,6 +193,16 @@ function resetUpdateAttempt() {
   updateWaitTimer = null;
   if (autoUpdater) autoUpdater.quitAndInstallCalled = false;
 }
+async function readWindowsDaemonPids() {
+  try {
+    const roster = JSON.parse(await fs.promises.readFile(require('./bg-agents').getDaemonRosterPath(), 'utf8'));
+    return [{ pid: roster.supervisorPid, procStart: roster.supervisorProcStart }, ...Object.values(roster.workers || {})]
+      .filter(value => Number.isSafeInteger(value?.pid) && value.pid > 0 && value.pid <= 0xffffffff
+        && typeof value.procStart === 'string' && /^\d{17,19}$/.test(value.procStart))
+      .map(({ pid, procStart }) => ({ pid, procStart }));
+  } catch { return []; }
+}
+
 async function startApplication() {
 if (!await acquireInstanceLock(app, { log })) { app.quit(); return; }
 const privilegeNotice = readNoNewPrivs({ log });
@@ -2718,13 +2730,6 @@ function wireSessionPty(session, sessionId, ptyProcess) {
   });
 }
 
-function killProcessTree(child) {
-  try {
-    if (isWindows) spawnChild('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    else process.kill(-child.pid, 'SIGKILL');
-  } catch { try { child.kill('SIGKILL'); } catch {} }
-}
-
 // Run `claude <argv>` to completion through the login shell -- see .ai/contexts/bg-agents.md ("Running the CLI")
 function runClaudeCommand(claudeArgv, { cwd, timeout }) {
   return new Promise((resolve) => {
@@ -2763,7 +2768,12 @@ function runClaudeCommand(claudeArgv, { cwd, timeout }) {
       return;
     }
     const timer = setTimeout(() => {
-      if (killTree) killProcessTree(child);
+      if (killTree) {
+        const isCurrent = () => child.exitCode === null && child.signalCode === null;
+        void stopProcessTree(child.pid, { isCurrent }).then(stopped => {
+          if (!stopped && isCurrent()) { try { child.kill('SIGKILL'); } catch {} }
+        });
+      }
       else { try { child.kill('SIGKILL'); } catch {} }
       finish(null, new Error(`claude ${claudeArgv[0]} timed out after ${timeout} ms`));
     }, timeout);
@@ -3162,6 +3172,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     return { ok: false, error: `Error spawning PTY: ${err.message}` };
   }
 
+  if (!isAttach) void trackWindowsPty(ptyProcess);
   const session = {
     pty: ptyProcess, rendererAttached: true, exited: false,
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
@@ -3839,6 +3850,7 @@ if (!app.isPackaged) {
   });
 
   app.whenReady().then(async () => {
+    if (process.platform === 'win32') void configureWindowsJobHelper(message => log.warn(message), readWindowsDaemonPids).start();
     await legacySearchCleanup;
     // Content Security Policy — restrict what the renderer can load or execute.
     // 'unsafe-inline' for style-src is required because the app sets .style.*

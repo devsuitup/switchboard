@@ -6,6 +6,7 @@ const { scanContinuationIndex } = require('./session-continuations');
 const { isComposerEmpty, noteUserInput } = require('./composer-state');
 const { JOB_ID_RE } = require('./bg-agents-roster');
 const { tryAcquireTabInput } = require('./tab-input-lock');
+const { releaseWindowsPty } = require('./pty-ops');
 
 const BG_HANDOFF_TIMEOUT_MS = 120000;
 const BG_HANDOFF_EXIT_TIMEOUT_MS = 15000;
@@ -177,6 +178,7 @@ async function sendToBackground(sessionId, deps) {
         const job = findHandoff(descriptors, ids);
         if (job) {
           session.backgrounded = true;
+          await releaseWindowsPty(session.pty);
           deps.onConfirmed?.(job);
           deps.schedule?.(() => { if (!session.exited) deps.kill(session); }, deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS);
           return { ok: true, oldSessionId: sessionId, jobId: job.jobId, sessionId: job.sessionId, cwd: job.cwd || session.cwd };
