@@ -345,7 +345,9 @@ for (const reason of ['archived', 'hidden-project', 'sdk-only']) {
   test(`T6.6 shipped producer supplies current ${reason} removal evidence`, t => {
     const h = fixture(t, { indexed: true, attach: false });
     const { createSessionProjectionDiagnostics } = require('../public/session-projection-diagnostics');
-    const rows = h.list(true), facts = rows[0].projectionFacts, records = [];
+    h.list(true);
+    const [key, inputs] = Object.entries(cache.getProjectsProjection().facts)[0], records = [];
+    const [scope, rootId] = key.split('|'), facts = { scope, rootId, inputs };
     const d = createSessionProjectionDiagnostics({ emit: record => records.push(record) });
     d.observe({ rows: [{ scope: facts.scope, rootId: facts.rootId, sessionId: B, headSessionId: B, memberIds: [A, B],
       visibleInDefault: true, background: { jobId: J, sessionId: B }, activity: { source: 'none', jobId: null, valid: false, state: null, hosted: false, attached: false, foreground: false }, inputs: facts.inputs }] });
@@ -377,7 +379,7 @@ test('T6.1/T6.6 actual cache provenance reaches renderer commits and archive vis
   w.api.getProjects = async () => {
     const defaultProjects = cache.buildProjectsFromCache(false), first = cache.getProjectsProjection();
     const allProjects = cache.buildProjectsFromCache(true), second = cache.getProjectsProjection();
-    return { defaultProjects, allProjects, projection: { buildId: ++buildId, removedInputs: { ...first.removedInputs, ...second.removedInputs } } };
+    return { defaultProjects, allProjects, projection: { buildId: ++buildId, facts: { ...first.facts, ...second.facts }, removedInputs: { ...first.removedInputs, ...second.removedInputs } } };
   };
   loadAppFunctions(dom.context, { functions: ['dedup', 'loadProjects', 'observeSessionProjection'] });
   await w.loadProjects(); assert.equal(records.length, 1); assert.equal(records[0].projectsBuildId, 1);
@@ -403,7 +405,7 @@ test('T6.1 accepted cache and roster events log exact merge, gap, split and evid
   const build = () => {
     const defaultProjects = cache.buildProjectsFromCache(false), first = cache.getProjectsProjection();
     const allProjects = cache.buildProjectsFromCache(true), second = cache.getProjectsProjection();
-    return { defaultProjects, allProjects, projection: { buildId: ++buildId, removedInputs: { ...first.removedInputs, ...second.removedInputs } } };
+    return { defaultProjects, allProjects, projection: { buildId: ++buildId, facts: { ...first.facts, ...second.facts }, removedInputs: { ...first.removedInputs, ...second.removedInputs } } };
   };
   w.api.getProjects = async () => build();
   loadAppFunctions(dom.context, { functions: ['dedup', 'loadProjects', 'observeSessionProjection'] });

@@ -1077,7 +1077,11 @@ throttled projects-changed notification with cause conflict, then returns only
 Preload recognizes that exact envelope and reconstructs a coded Error. Ordinary
 errors still reject; boolean arrays and the paired defaultProjects/allProjects
 reply retain their successful shapes, with compact provenance on the paired
-reply. Rejected worker results never reach placeholder/archive/attach assembly.
+reply. Its `projection.facts` map shares deciding inputs by opaque `scope|root`
+across both views (#742). Rows carry no `projectionFacts`; main's assembly and
+the renderer observer resolve representatives through the envelope's proof member
+sets. Subagents and terminals have no facts. Paired activity-trace byte counts
+include the envelope. Rejected worker results never reach placeholder/archive/attach assembly.
 
 session-projection-changed is a narrow preload send. Main requires its own
 window's webContents and main frame, validates allowlisted typed fields and logs

@@ -2570,9 +2570,30 @@ after the retry name that state and offer a manual sidebar retry.
 
 ## Accepted projection provenance (#719)
 
-Build IDs belong to the worker reply envelope, rather than its session rows.
-The renderer combines that ID with row facts for diagnostics. Direct cache
-builds and worker builds therefore return equivalent session payloads.
+Build IDs and facts belong to the worker reply envelope, rather than its
+session rows (#742). `getProjectsProjection()` returns `{ facts, removedInputs }`
+for the latest direct cache build. The worker combines both builds into
+`projection: { buildId, facts, removedInputs }`; `facts` maps opaque `scope|root`
+keys to deciding inputs, shared by defaultProjects and allProjects. Session
+rows carry no `projectionFacts`. Direct cache builds and worker builds return
+equivalent session payloads.
+
+Facts cover every observed top-level conversation, including plain foreground
+rows, so later background transitions, splits and disappearances remain visible.
+Subagent and plain-terminal rows contribute neither facts nor exclusion inputs.
+The producer collects facts after background merging, resolving representatives
+to canonical roots with a case-insensitive cache lookup. The shared
+`indexProjectionFacts` helper indexes each proof's complete member set by opaque
+scope and member ID; main and renderer use it when a representative differs from
+the root. Main's archive/hidden-project assembly derives current exclusions from
+this index without changing the accepted worker envelope. Renderer acceptance
+replaces its index with the accepted envelope, retained for roster-only events;
+obsolete replies cannot replace it. No facts are reattached to session rows.
+
+Activity trace's paired `replyBytes.both` includes the shared projection envelope;
+boolean replies keep their array contract and their byte counts cover that array.
+The diagnostics logger still validates and compacts individual transition records
+as before; transport compaction does not truncate the facts used for comparison.
 
 The worker returns cloneable build provenance and current exclusion inputs for
 archived, hidden-project and sdk-only rows. Main carries it through assembly;
