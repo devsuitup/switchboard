@@ -9,7 +9,7 @@ const vm = require('vm');
 const sessionCache = require('../session-cache');
 const { encodeProjectPath } = require('../encode-project-path');
 const { deriveProjectPath, resolveSessionRealCwd } = require('../derive-project-path');
-const { listSessionTouchedFiles } = require('../session-touched-files');
+const { listSessionTouchedFiles } = require('../src/main/changes/session-touched-files');
 
 const WINDOW = 256 * 1024;
 

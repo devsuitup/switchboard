@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { createChangesWatchRegistry } = require('../git-changes-watch');
+const { createChangesWatchRegistry } = require('../src/main/changes/git-changes-watch');
 
 const ROOT = path.join(__dirname, '..');
 
