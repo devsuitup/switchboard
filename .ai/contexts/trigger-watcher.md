@@ -95,7 +95,7 @@ Starts the watcher.  Call once at app boot.
 
 ```js
 // main.js
-require('./trigger-watcher').start(createTriggerContext({
+require('./src/main/triggers/trigger-watcher').start(createTriggerContext({
   activeSessions, log, getCliStatus, projectsDir: PROJECTS_DIR,
   getLiveDescriptor, resolveSessionId, get remote() { /* remoteTriggers gate */ },
 }));
