@@ -214,6 +214,33 @@ test('multi-megabyte String objects bypass enumeration within 200 ms', t => {
   }
 });
 
+test('large cross-realm String objects bypass enumeration within 200 ms', t => {
+  const { target, logs, notices } = setup(t);
+  let reason = require('node:vm').runInNewContext('new String("x".repeat(5e6))');
+  reason.named = 'not inspected';
+  const start = performance.now();
+  target.emit('unhandledRejection', reason);
+  const elapsed = performance.now() - start;
+  reason = null;
+  t.diagnostic(`reporting cross-realm String: ${elapsed.toFixed(1)} ms`);
+  assert.ok(elapsed < 200, `cross-realm String took ${elapsed} ms; budget is 200 ms`);
+  assert.match(logs[0][1], /String length=5000000; named properties not inspected/);
+  assert.ok(logs[0][1].length <= 16000);
+  assert.ok(notices[0].message.length <= 550);
+});
+
+test('Buffer classification never walks a Proxy prototype', t => {
+  const { target, logs } = setup(t);
+  let reads = 0;
+  const reason = new Uint8Array(5000);
+  Object.setPrototypeOf(reason, new Proxy(Buffer.prototype, {
+    getPrototypeOf(value) { reads++; return Reflect.getPrototypeOf(value); },
+  }));
+  target.emit('unhandledRejection', reason);
+  assert.equal(reads, 0, 'Buffer classification must not walk a Proxy prototype');
+  assert.match(logs[0][1], /Uint8Array length=5000/);
+});
+
 test('large array sampling invokes neither species nor index accessors', t => {
   const { target, logs, notices } = setup(t);
   let speciesReads = 0;
@@ -297,6 +324,22 @@ test('oversized explicit stacks are bounded even when the message is short', t =
   assert.equal(logs[0][1], 's'.repeat(16000));
 });
 
+for (const length of [15990, 16001, 50e6]) {
+  test(`message length ${length} retains a bounded prefix, truncation marker and stack frames`, t => {
+    const { target, logs } = setup(t);
+    const error = new Error('stderr '.padEnd(length, 'x'));
+    const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
+    const start = performance.now();
+    target.emit('uncaughtException', error);
+    t.diagnostic(`reporting Error length=${length}: ${(performance.now() - start).toFixed(1)} ms`);
+    assert.match(logs[0][1], /\n\s+at /, 'a truncated message must retain stack frames');
+    assert.match(logs[0][1], new RegExp(`\\[truncated; length=${length}\\]`));
+    assert.ok(logs[0][1].startsWith('stderr '));
+    assert.ok(logs[0][1].length <= 16000);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace'), formatter);
+  });
+}
+
 for (const [name, create] of [
   ['array', () => [1, 2, 3]],
   ['Buffer', () => Buffer.alloc(3)],
@@ -341,7 +384,7 @@ for (const [name, create] of [
   });
 }
 
-test('large error messages are truncated for display but distinct suffixes keep distinct ids and full stacks', t => {
+test('display summaries are truncated while distinct suffixes keep distinct ids and fitting stacks remain intact', t => {
   const { target, logs, notices } = setup(t);
   const error = new Error('command stderr '.repeat(1000));
   target.emit('uncaughtException', error);

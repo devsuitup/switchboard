@@ -16,7 +16,7 @@ function largeIndexedPreview(error) {
   const length = array ? Object.getOwnPropertyDescriptor(error, 'length').value
     : string ? value.length : intrinsic(view ? DataView.prototype : typedArrayPrototype, view ? 'byteLength' : 'length');
   if (length <= 1000) return null;
-  const name = array ? 'Array' : string ? 'String' : Buffer.isBuffer(error) ? 'Buffer'
+  const name = array ? 'Array' : string ? 'String' : types.isUint8Array(error) && Object.getPrototypeOf(error) === Buffer.prototype ? 'Buffer'
     : view ? 'DataView' : intrinsic(typedArrayPrototype, Symbol.toStringTag);
   let sample;
   if (string) sample = String.prototype.slice.call(value, 0, 2000);
@@ -112,9 +112,26 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
         } catch {}
       }
       detail = message;
-      if (!proxy && messageLength === null) {
-        const stack = error?.stack;
-        if (typeof stack === 'string') detail = stack.slice(0, 16000);
+      if (!proxy) {
+        const longMessage = message.length > 15000;
+        if (longMessage) detail = `${message.slice(0, 11000)}\n[truncated; length=${messageLength ?? message.length}]`;
+        let stack;
+        if (messageLength === null) stack = error?.stack;
+        else if (types.isNativeError(error)) {
+          const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
+          try {
+            Object.defineProperty(Error, 'prepareStackTrace', { configurable: true, writable: true,
+              value: (_, frames) => `${detail}\n${frames.slice(-20).map(frame => `    at ${frame}`).join('\n').slice(-4000)}` });
+            stack = error.stack;
+          } finally {
+            if (formatter) Object.defineProperty(Error, 'prepareStackTrace', formatter);
+            else delete Error.prepareStackTrace;
+          }
+        } else {
+          const descriptor = error && Object.getOwnPropertyDescriptor(error, 'stack');
+          if (descriptor && 'value' in descriptor) stack = descriptor.value;
+        }
+        if (typeof stack === 'string') detail = longMessage ? `${detail}\n${stack.slice(-4000)}` : stack.slice(0, 16000);
       }
     } catch {}
     try { log.error(`[main:${origin}]`, detail); } catch {}
