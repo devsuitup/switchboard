@@ -10,10 +10,16 @@ const { createRequire } = require('node:module');
 function loadShipped(filename, imports, platform = 'win32') {
   const module = { exports: {} };
   const shippedRequire = createRequire(path.join(__dirname, '..', filename));
+  const pending = new Set(Object.keys(imports));
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', filename), 'utf8'), {
     module, exports: module.exports, Buffer, TextDecoder, process: { platform },
-    require: name => Object.hasOwn(imports, name) ? imports[name] : shippedRequire(name),
+    require: name => {
+      if (!Object.hasOwn(imports, name)) return shippedRequire(name);
+      pending.delete(name);
+      return imports[name];
+    },
   }, { filename });
+  assert.deepEqual([...pending].filter(name => name !== './session-touched-files'), [], `${filename} must load its stubs`);
   return module.exports;
 }
 
@@ -67,9 +73,9 @@ for (const shortPart of ['file', 'root', 'both', 'case']) {
       writeFileSync: (p, bytes) => { assert.equal(p, path.win32.join(reportedRoot, 'f.txt')); disk = bytes; },
     };
     const resolver = loadShipped('src/main/shared/resolve-path-on-disk.js', { fs: fakeFs, path: path.win32 });
-    const api = loadShipped('git-changes-file.js', {
-      fs: fakeFs, path: path.win32, './src/main/shared/resolve-path-on-disk': resolver,
-      './src/main/shared/ipc-path-validator': { isSensitivePath: () => false },
+    const api = loadShipped('src/main/changes/git-changes-file.js', {
+      fs: fakeFs, path: path.win32, '../shared/resolve-path-on-disk': resolver,
+      '../shared/ipc-path-validator': { isSensitivePath: () => false },
       './session-touched-files': { resolveTouchedPath: p => ({ path: p }) },
     });
     let probes = 0;
@@ -110,10 +116,10 @@ for (const [platform, pathApi, root, file] of [
       readFileSync: () => Buffer.from('current\n'),
       writeFileSync: () => { writes++; },
     };
-    const api = loadShipped('git-changes-file.js', {
+    const api = loadShipped('src/main/changes/git-changes-file.js', {
       fs: fakeFs, path: pathApi,
-      './src/main/shared/resolve-path-on-disk': { resolveOnDisk: p => p, isInsideDir: () => true },
-      './src/main/shared/ipc-path-validator': { isSensitivePath: () => false },
+      '../shared/resolve-path-on-disk': { resolveOnDisk: p => p, isInsideDir: () => true },
+      '../shared/ipc-path-validator': { isSensitivePath: () => false },
       './session-touched-files': { resolveTouchedPath: p => ({ path: p }) },
     }, platform);
     const runGit = async args => {
@@ -131,7 +137,7 @@ for (const [platform, pathApi, root, file] of [
 test('Touched refuses a missing short-spelled file without falling back to an editor or saving', async () => {
   const root = 'C:\\Users\\Long Profile\\Repo';
   const file = 'C:\\Users\\LONGPR~1\\Repo\\missing.txt';
-  const api = loadShipped('git-changes-file.js', {
+  const api = loadShipped('src/main/changes/git-changes-file.js', {
     fs: {
       realpathSync: Object.assign(p => p, { native: p => {
         if (p === file) throw Object.assign(new Error('missing file'), { code: 'ENOENT' });
@@ -140,8 +146,8 @@ test('Touched refuses a missing short-spelled file without falling back to an ed
       lstatSync: () => { throw Object.assign(new Error('missing file'), { code: 'ENOENT' }); },
     },
     path: path.win32,
-    './src/main/shared/resolve-path-on-disk': { resolveOnDisk: p => p === file ? null : p, isInsideDir: () => true },
-    './src/main/shared/ipc-path-validator': { isSensitivePath: () => false },
+    '../shared/resolve-path-on-disk': { resolveOnDisk: p => p === file ? null : p, isInsideDir: () => true },
+    '../shared/ipc-path-validator': { isSensitivePath: () => false },
     './session-touched-files': { resolveTouchedPath: p => ({ path: p }) },
   });
   const runGit = async args => {
@@ -168,10 +174,10 @@ for (const reason of ['repo', 'git-dir']) {
       } }),
       lstatSync: () => ({ isSymbolicLink: () => false }),
     };
-    const api = loadShipped('git-changes-file.js', {
+    const api = loadShipped('src/main/changes/git-changes-file.js', {
       fs: fakeFs, path: path.win32,
-      './src/main/shared/resolve-path-on-disk': loadShipped('src/main/shared/resolve-path-on-disk.js', { fs: fakeFs, path: path.win32 }),
-      './src/main/shared/ipc-path-validator': { isSensitivePath: () => false },
+      '../shared/resolve-path-on-disk': loadShipped('src/main/shared/resolve-path-on-disk.js', { fs: fakeFs, path: path.win32 }),
+      '../shared/ipc-path-validator': { isSensitivePath: () => false },
       './session-touched-files': { resolveTouchedPath: p => ({ path: p }) },
     });
     const runGit = async args => {

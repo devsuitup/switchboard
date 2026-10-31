@@ -32,7 +32,7 @@ const {
   MAX_ERROR_LINES,
   MAX_ERROR_CHARS,
   NOT_A_REPO_REASON,
-} = require('../git-changes-runner');
+} = require('../src/main/changes/git-changes-runner');
 
 // The guard resolves against the running platform's path rules, so a fixture
 // cwd must be absolute FOR THAT PLATFORM: "/repo" is a drive-relative path on
@@ -79,7 +79,7 @@ test('remote Touched executes its quoted stat and bounded read scripts through a
   fs.writeFileSync(path.join(mirror, 'S1.jsonl'), JSON.stringify({ type: 'assistant', message: { content:
     all.map(p => ({ type: 'tool_use', name: 'Write', input: { file_path: p } })),
   } }) + '\n');
-  const { listSessionTouchedFiles } = require('../session-touched-files');
+  const { listSessionTouchedFiles } = require('../src/main/changes/session-touched-files');
   const listed = await listSessionTouchedFiles('S1', { dataDir: root, getCachedFolder: () => 'fake-host::-repo',
     isRemoteFolder: () => true, runRemoteCommand: exec });
   assert.equal(listed.ok, true, listed.error);
@@ -92,7 +92,7 @@ test('remote Touched executes its quoted stat and bounded read scripts through a
   assert.equal(states.get(posix(path.join(root, 'missing'))).state, 'gone');
   assert.equal(states.get(posix(dir)).state, 'not-file');
   assert.equal(states.get(posix(alias)).state, 'refused');
-  const { readRemoteTouchedFile } = require('../remote-touched-files');
+  const { readRemoteTouchedFile } = require('../src/main/changes/remote-touched-files');
   const target = { ok: true, kind: 'remote', alias: 'fake-host', cwd: posix(root) };
   const pair = await readRemoteTouchedFile({ target, absolutePath: paths[0] }, { runRemoteCommand: exec });
   assert.equal(pair.ok, true, pair.error);
@@ -1788,7 +1788,7 @@ const { discoveryCases, savedEnv } = require('./git-discovery-fixture');
 test('discovery: an empty ancestor .git is ignored without hiding a higher entry: diagnostic matrix', require('./git-discovery-fixture').emptyAncestorMatrix);
 
 test('localGitEnv: French inheritance yields an isolated C child environment', t => {
-  const { localGitEnv } = require('../git-changes-runner');
+  const { localGitEnv } = require('../src/main/changes/git-changes-runner');
   const locations = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_PREFIX', 'GIT_NAMESPACE'];
   const input = { LANG: 'fr_FR.utf8', LC_ALL: 'fr_FR.utf8', LC_MESSAGES: 'fr_FR.utf8', LANGUAGE: 'fr', KEEP_754: 'kept', GIT_CEILING_DIRECTORIES: '/limit', GIT_DISCOVERY_ACROSS_FILESYSTEM: 'true', ...Object.fromEntries(locations.map(k => [k, 'wrong'])) };
   savedEnv(t, input);
@@ -1814,7 +1814,7 @@ test('localGitEnv: French inheritance yields an isolated C child environment', t
 for (const flavour of ['posix', 'win32']) {
   for (const group of ['discovery: an empty ancestor .git is ignored without hiding a higher entry', 'discovery: Git ceilings bound corroboration in Changes and Touched', 'discovery: device boundaries follow the Git boolean environment']) {
     test(group + ' (' + flavour + ')', async t => {
-      const { gitEntryAtOrAbove, createGitChangesRunner } = require('../git-changes-runner');
+      const { gitEntryAtOrAbove, createGitChangesRunner } = require('../src/main/changes/git-changes-runner');
       const p = path[flavour];
       for (const c of discoveryCases(p, flavour === 'win32' ? 'C:\\' : '/')) {
         assert.equal(gitEntryAtOrAbove(c.cwd, c.fsOps, p, c.env), c.expected, c.label);
@@ -1841,7 +1841,7 @@ for (const flavour of ['posix', 'win32']) {
     });
   }
   test('discovery: platform roots and comparisons (' + flavour + ')', () => {
-    const { gitEntryAtOrAbove } = require('../git-changes-runner');
+    const { gitEntryAtOrAbove } = require('../src/main/changes/git-changes-runner');
     const { synthetic } = require('./git-discovery-fixture');
     const p = path[flavour];
     for (const root of flavour === 'win32' ? ['C:\\', '\\\\server\\share\\'] : ['/']) {

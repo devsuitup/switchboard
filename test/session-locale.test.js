@@ -99,7 +99,7 @@ test('main startup supplies local sessions but never synthesizes a locale for th
 });
 
 test('git changes keeps LC_ALL=C even with a session UTF-8 environment', () => {
-  const context = load('git-changes-runner.js', { process });
+  const context = load('src/main/changes/git-changes-runner.js', { process });
   const env = vm.runInContext('localGitEnv', context)(cleaner('darwin')({}));
   assert.equal(env.LC_ALL, 'C');
   assert.equal(env.LANG, 'C');
