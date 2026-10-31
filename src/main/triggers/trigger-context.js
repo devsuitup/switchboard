@@ -3,12 +3,12 @@
 
 const path = require('path');
 const fs = require('fs');
-const cliSessionState = require('./cli-session-state');
-const { normalizeSessionId, isClearCommand } = require('./session-transitions');
-const { scanContinuationIndex, resolveContinuationsSync, validId } = require('./session-continuations');
-const { classifyUserText } = require('./read-session-file');
+const cliSessionState = require('../../../cli-session-state');
+const { normalizeSessionId, isClearCommand } = require('../../../session-transitions');
+const { scanContinuationIndex, resolveContinuationsSync, validId } = require('../../../session-continuations');
+const { classifyUserText } = require('../../../read-session-file');
 
-const { createTranscriptTurnReader } = require('./transcript-turn');
+const { createTranscriptTurnReader } = require('../../../transcript-turn');
 
 // Local session handle — see .ai/contexts/trigger-watcher.md, "Session handle".
 function createLocalSessionHandle(ptyProcess) {

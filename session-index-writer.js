@@ -168,7 +168,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         const entries = targets.map(({ group, alias }, i) => {
           const entry = archive.archivedEntry(alias, group.projectPath);
           const disabledFiles = (offers[entry]?.disabledSchedules || []).filter(file => {
-            try { return require('./schedule-runner').parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.enabled === 'false'; } catch { return false; }
+            try { return require('./src/main/schedules/schedule-runner').parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.enabled === 'false'; } catch { return false; }
           });
           return { entry, disabledFiles, record: { archivedAt: now,
             knownSessionIds: archive.knownIdsForGroup({ projects, activeSessions: deps.activeSessions, diskIds: diskIds[i], alias, projectPath: group.projectPath }) } };
@@ -238,7 +238,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       for (const project of kept) {
         const offer = offers[archive.archivedEntry(project.remoteAlias || null, project.projectPath)];
         const names = (offer?.disabledSchedules || []).map(file => {
-          try { return require('./schedule-runner').parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.name || path.basename(file); } catch { return null; }
+          try { return require('./src/main/schedules/schedule-runner').parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.name || path.basename(file); } catch { return null; }
         }).filter(Boolean);
         if (names.length) project.reenableOffer = offer.failed?.length ? { names, failed: offer.failed } : { names };
       }

@@ -14,7 +14,7 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 
-const { resolveRunNowTarget } = require('../run-schedule-now-target');
+const { resolveRunNowTarget } = require('../src/main/schedules/run-schedule-now-target');
 
 function rig() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-run-now-')));

@@ -168,7 +168,7 @@ main-log entry point.
 |---|---|---|
 | `preload.js` | ~270 | The `contextBridge.exposeInMainWorld('api', {...})` block. Every renderer-facing function. |
 | `main.js` | ~4100 | The `ipcMain.handle('<name>', ...)` and `ipcMain.on('<name>', ...)` handlers, scattered throughout. |
-| `schedule-ipc.js` | ~220 | **Also registers IPC handlers** (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`) — `init()` is called from `main.js`, but a `main.js`-only search for `ipcMain.handle` misses these three. Audit both files. |
+| `src/main/schedules/schedule-ipc.js` | ~220 | **Also registers IPC handlers** (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`) — `init()` is called from `main.js`, but a `main.js`-only search for `ipcMain.handle` misses these three. Audit both files. |
 | `bg-agents-ipc.js` | ~130 | **Also registers IPC handlers** (`get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`) and sends `bg-agents-changed` — `init()` is called from `main.js`, so a `main.js`-only search for `ipcMain.handle` misses these six. Audit both files. |
 | `unsaved-guard.js` | ~440 | **Also registers IPC handlers** for the exit flow (`exit-attempt-snapshot`, `exit-background`, `exit-background-cancel`, `unsaved-check-phase`, `unsaved-pong`, `unsaved-dialog`, `unsaved-ready`, `unsaved-check-ack`, `unsaved-check-result`, `unsaved-check-reason-done`) through the `ipcMain` it is handed by `createUnsavedGuard`. See window-frame.md. |
 

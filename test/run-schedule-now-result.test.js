@@ -10,6 +10,41 @@ const { EventEmitter } = require('node:events');
 const { createRequire } = require('node:module');
 const { extractFunction } = require('./app-source');
 
+const SCHEDULE_RUNNER = './schedule-runner';
+const pendingLazyStubs = new WeakMap();
+
+function loadShipped(filename, imports, lazy = []) {
+  const module = { exports: {} };
+  const shippedRequire = createRequire(path.join(__dirname, '..', filename));
+  const pending = new Set(Object.keys(imports));
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', filename), 'utf8'), {
+    module, exports: module.exports,
+    require: name => {
+      if (!Object.hasOwn(imports, name)) return shippedRequire(name);
+      pending.delete(name);
+      return imports[name];
+    },
+  }, { filename: path.join(__dirname, '..', filename) });
+  assert.deepEqual([...pending].filter(name => !lazy.includes(name)), [], `${filename} must load its stubs`);
+  pendingLazyStubs.set(module.exports, pending);
+  return module.exports;
+}
+
+function assertLazyStubsLoaded(api) {
+  assert.deepEqual([...pendingLazyStubs.get(api)], [], 'lazy stubs must be loaded');
+}
+
+test('VM loader rejects an unused eager stub key', () => {
+  assert.throws(() => loadShipped('src/main/schedules/run-schedule-now-target.js', {
+    stale: {},
+  }), /must load its stubs/);
+});
+
+test('VM loader rejects an unused lazy stub key after the operation', () => {
+  const api = loadShipped('src/main/schedules/run-schedule-now-target.js', { stale: {} }, ['stale']);
+  assert.throws(() => assertLazyStubsLoaded(api), /lazy stubs must be loaded/);
+});
+
 function setup(t, { sandbox = false, platform = 'linux', refused = [], spawnError, syncError, archived = false, noReply = false, deferSpawn = false, windowState = 'open' } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-run-result-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -49,20 +84,21 @@ function setup(t, { sandbox = false, platform = 'linux', refused = [], spawnErro
   const slice = extractFunction(source, 'runScheduleCommand');
   const lineOffset = source.slice(0, source.indexOf(slice)).split('\n').length - 1;
   vm.runInContext(slice, ctx, { filename: path.join(__dirname, '../main.js'), lineOffset, columnOffset: 0 });
-  const localRequire = createRequire(path.join(__dirname, '../schedule-ipc.js'));
-  const ipc = vm.createContext({
-    require: name => name === 'electron' ? { ipcMain: { handle: (name, handler) => handlers.set(name, handler) } }
-      : name === './schedule-runner' ? {
-        parseFrontmatter: localRequire(name).parseFrontmatter,
-        createScheduleSession: () => ({ sessionId: 'manual-session' }),
-        buildScheduleCommand: () => ({ claudeArgs: ['--resume', 'manual-session', '--add-dir', '/refused'] }),
-      } : localRequire(name),
-    module: { exports: {} },
-  });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../schedule-ipc.js'), 'utf8'), ipc, { filename: path.join(__dirname, '../schedule-ipc.js') });
-  ctx.scheduleIpc = ipc.module.exports;
-  ipc.module.exports.init(log, noReply ? async () => undefined : ctx.runScheduleCommand, () => true, () => false);
-  return { run: () => handlers.get('run-schedule-now')(null, file),
+  const ipc = loadShipped('src/main/schedules/schedule-ipc.js', {
+    electron: { ipcMain: { handle: (name, handler) => handlers.set(name, handler) } },
+    [SCHEDULE_RUNNER]: {
+      parseFrontmatter: require('../src/main/schedules/schedule-runner').parseFrontmatter,
+      createScheduleSession: () => ({ sessionId: 'manual-session' }),
+      buildScheduleCommand: () => ({ claudeArgs: ['--resume', 'manual-session', '--add-dir', '/refused'] }),
+    },
+  }, [SCHEDULE_RUNNER]);
+  ctx.scheduleIpc = ipc;
+  ipc.init(log, noReply ? async () => undefined : ctx.runScheduleCommand, () => true, () => false);
+  return { run: async () => {
+    const result = await handlers.get('run-schedule-now')(null, file);
+    assertLazyStubsLoaded(ipc);
+    return result;
+  },
     cron: () => ctx.runScheduleCommand(['--resume', 'cron-session'], root, 'Nightly cron', () => {}),
     children, events, messages, logs, activities, root };
 }

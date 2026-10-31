@@ -33,12 +33,12 @@
 'use strict';
 
 const fs   = require('fs');
-const { renameWithRetry } = require('./src/main/shared/atomic-write');
+const { renameWithRetry } = require('../shared/atomic-write');
 const path = require('path');
 const os   = require('os');
 
 const { createLocalSessionHandle } = require('./trigger-context');
-const { promptMatches } = require('./transcript-turn');
+const { promptMatches } = require('../../../transcript-turn');
 
 const DEFAULT_TRIGGERS_DIR   = path.join(os.homedir(), '.switchboard', 'triggers');
 // Default idle-wait timeout: 5 minutes.
@@ -791,7 +791,7 @@ async function submitWithVerify(handle, sessionId, command, ctx, deadlineMs, { t
   // Nothing observed in the window — retry the Enter ONCE (bare '\r', never the text),
   // and only into a free composer. See docs/automation.md.
   // see docs/decisions/0003-trigger-delivery-per-tab.md
-  if (require('./session-transitions').isClearCommand(command) && ctx.delivery?.resetCompleted()) {
+  if (require('../../../session-transitions').isClearCommand(command) && ctx.delivery?.resetCompleted()) {
     return { enterAt, submit_retries: 0, sawBusy: false, confirmed: null, composerConfirmed: false,
       sessionExited: false, timedOut: false, recoverySkipped: true,
       recoveryReason: 'the clear-family reset completed; recovery Enter would reach its successor', waited_ms: first.waited_ms };
@@ -2079,7 +2079,7 @@ function start(ctx) {
   }
 
   // see docs/decisions/0003-trigger-delivery-per-tab.md
-  const { acquireTabInput: acquireTabLock } = require('./src/main/terminals/tab-input-lock');
+  const { acquireTabInput: acquireTabLock } = require('../terminals/tab-input-lock');
 
   function scheduleNext() {
     while (waitQueue.length > 0 && inFlight.size < MAX_INFLIGHT) {

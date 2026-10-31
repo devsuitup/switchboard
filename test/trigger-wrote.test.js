@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { setTimeout: realSetTimeout } = require('node:timers');
-const { start } = require('../trigger-watcher');
+const { start } = require('../src/main/triggers/trigger-watcher');
 
 const log = { info() {}, warn() {}, error() {}, debug() {} };
 const id = 'wrote-session';

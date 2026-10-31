@@ -9,7 +9,7 @@ const vm = require('node:vm');
 const archive = require('../archived-projects');
 const { createWriterCommands } = require('../session-index-commands');
 const { createSessionIndexWriter } = require('../session-index-writer');
-const { setScheduleEnabled, parseFrontmatter } = require('../schedule-runner');
+const { setScheduleEnabled, parseFrontmatter } = require('../src/main/schedules/schedule-runner');
 
 const group = (projectPath, folderKey = '-p') => ({ projectPath, folderKey });
 const entry = archive.archivedEntry(null, '/p');

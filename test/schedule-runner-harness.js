@@ -18,7 +18,7 @@ function loadScheduleRunner({ home, platform = process.platform, pathModule = pa
         if (name === 'fs') return filesystem;
         if (name === 'path') return pathModule;
         if (name === 'os') return { homedir: () => home };
-        if (name === './src/main/shared/normalize-project-path') return load('src/main/shared/normalize-project-path.js');
+        if (name === '../shared/normalize-project-path') return load('src/main/shared/normalize-project-path.js');
         return localRequire(name);
       },
     });
@@ -26,7 +26,7 @@ function loadScheduleRunner({ home, platform = process.platform, pathModule = pa
     modules.set(file, context.module.exports);
     return context.module.exports;
   }
-  return { runner: load('schedule-runner.js'), load, filesystem };
+  return { runner: load('src/main/schedules/schedule-runner.js'), load, filesystem };
 }
 
 module.exports = { loadScheduleRunner };

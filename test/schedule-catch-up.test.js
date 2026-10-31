@@ -15,7 +15,7 @@ process.env.HOME = ROOT;
 process.env.USERPROFILE = ROOT;
 delete process.env.SWITCHBOARD_DATA_DIR;
 
-const { startScheduler, claimScheduleMinute, scanSchedules } = require('../schedule-runner');
+const { startScheduler, claimScheduleMinute, scanSchedules } = require('../src/main/schedules/schedule-runner');
 
 const STATE_DIR = path.join(ROOT, 'data', 'schedule-state');
 const PROJECT = path.join(ROOT, 'project');

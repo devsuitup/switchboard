@@ -542,7 +542,7 @@ concept. Each entry gives:
   `.claude/commands/` whose cron fires headless `claude -p` runs while the app
   is running.
 - **Don't say**: "cron job", "routine", "automation" alone.
-- **Code**: `schedule-runner.js`, `schedule-ipc.js`, `run-schedule-now-target.js`;
+  - **Code**: `src/main/schedules/schedule-runner.js`, `src/main/schedules/schedule-ipc.js`, `src/main/schedules/run-schedule-now-target.js`;
   `docs/automation.md:14-180`.
 - **Today**: "Create scheduled task" (`public/sidebar.js:903`), "schedule" in
   docs and the archive dialog ("Disable the N enabled schedules",
@@ -555,7 +555,7 @@ concept. Each entry gives:
   Switchboard type a command into an open session's terminal, optionally
   waiting for it to be idle.
 - **Don't say**: "hook", "message", "inject" in user docs.
-- **Code**: `trigger-watcher.js`, `trigger-context.js`; `docs/automation.md:181-700`.
+  - **Code**: `src/main/triggers/trigger-watcher.js`, `src/main/triggers/trigger-context.js`; `docs/automation.md:181-700`.
 - **Today**: no UI; `remoteTriggers` is a setting with no UI either
   (`docs/automation.md:406-409`).
 

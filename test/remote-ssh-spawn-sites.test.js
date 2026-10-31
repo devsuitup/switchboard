@@ -16,7 +16,7 @@ const { walk } = require('../scripts/module-paths');
 const ROOT = path.join(__dirname, '..');
 
 test('U20 GUARD: both trigger modules are included in the spawn-site inventory', () => {
-  for (const file of ['trigger-watcher.js', 'trigger-context.js']) assert.ok(mainProcessFiles().includes(file));
+  for (const file of ['src/main/triggers/trigger-watcher.js', 'src/main/triggers/trigger-context.js']) assert.ok(mainProcessFiles().includes(file));
 });
 const RESOLVER_MODULE = './remote-ssh-binary';
 const RESOLVER_EXPORTS = new Set(['resolveSshPath', 'resolveScpPath']);

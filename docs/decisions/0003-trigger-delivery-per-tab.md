@@ -6,6 +6,10 @@
 
 ## Context
 
+Current modules live in `src/main/triggers/` after ADR 0005, step 8.
+The historical filenames and line references below describe the verified HEAD
+named here, before that relocation.
+
 This record addresses issue #592, following the narrow #579 fix in PR #594.
 Source references were verified at HEAD `713cbda317840ac37ecd10ac5a3bfc9e623558e9`
 on `wt/592`. Sections under Decision are requirements for later implementation,

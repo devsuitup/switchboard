@@ -1,13 +1,18 @@
 # Context: schedule-runner
 
+Main-process modules live in `src/main/schedules/` (ADR 0005, step 8):
+`schedule-runner.js`, `schedule-ipc.js` and `run-schedule-now-target.js` are siblings.
+Their project and home based schedule paths remain unchanged. The Run now VM
+test uses a module-specific loader and checks eager and lazy stub consumption.
+
 **Purpose**: in-process cron that fires user-defined Claude tasks on a schedule. Stores schedules as Markdown files with YAML frontmatter inside each project's `.claude/commands/schedule-*.md`. Spawns `claude --resume <sid> -p "..."` as a detached child process when the cron expression matches.
 
 ## Key files
 
 | File | LOC | Role |
 |---|---|---|
-| `schedule-runner.js` | ~670 | The cron loop, cron parser, file scanner, catch-up record, session pre-seeder, command builder. |
-| `schedule-ipc.js` | ~225 | IPC handlers + the inline `SCHEDULE_CREATOR_TEMPLATE` (an embedded Claude command that teaches Claude how to write schedule files). |
+| `src/main/schedules/schedule-runner.js` | ~670 | The cron loop, cron parser, file scanner, catch-up record, session pre-seeder, command builder. |
+| `src/main/schedules/schedule-ipc.js` | ~225 | IPC handlers + the inline `SCHEDULE_CREATOR_TEMPLATE` (an embedded Claude command that teaches Claude how to write schedule files). |
 
 ## Public surface
 
