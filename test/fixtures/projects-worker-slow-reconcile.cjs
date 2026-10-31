@@ -49,7 +49,7 @@ async function run() {
     const result = await client.request({ reconcile: false, measureBytes: true });
     assert.equal(result.defaultProjects.length, 2);
     assert.equal(result.reconciled, false);
-    assert.equal(result.replyBytes.both, Buffer.byteLength(JSON.stringify({ defaultProjects: result.defaultProjects, allProjects: result.allProjects })));
+    assert.equal(result.replyBytes.both, Buffer.byteLength(JSON.stringify({ defaultProjects: result.defaultProjects, allProjects: result.allProjects, projection: result.projection })));
     console.log('slow reconcile progress verified');
   } finally { client.shutdown(); await worker.terminate(); db.closeDb(); }
 }

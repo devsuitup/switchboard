@@ -953,13 +953,13 @@ function conversationMemberIds(rows, id) {
 }
 
 /** Build projects response from cached data */
-let projectsProjection = { removedInputs: {} };
+let projectsProjection = { facts: {}, removedInputs: {} };
 const workflowNames = new Map();
 
 function getProjectsProjection() { return projectsProjection; }
 
 function buildProjectsFromCache(showArchived) {
-  projectsProjection = { removedInputs: {} };
+  projectsProjection = { facts: {}, removedInputs: {} };
   const metaMap = getAllMeta(true);
   const cachedRows = scopedConversationRows(getAllCached());
   const workflowName = row => {
@@ -1014,6 +1014,7 @@ function buildProjectsFromCache(showArchived) {
   const sdkOnlyProjectKeys = new Set();
 
   const cachedById = new Map(cachedRows.map(r => [r.sessionId, r]));
+  const projectionSources = new Map(cachedRows.map(row => [row.sessionId.toLowerCase(), row]));
   const { localDescriptors, localJobs } = localBackgroundState();
   const conversations = conversationGroups(cachedRows, localDescriptors, localJobs, rollup,
     { projectsDir: PROJECTS_DIR, folderMeta: getAllFolderMeta(), activeSessions });
@@ -1040,6 +1041,7 @@ function buildProjectsFromCache(showArchived) {
         proof: { kind: partIds.length > 1 ? 'continuation' : 'single', rootId, partIds, valid: !reason, reason }, filterReason } };
   };
   const exclude = (row, reason) => {
+    if (row.parentSessionId || row.type === 'terminal') return;
     const fact = projectionInputs(row, reason);
     projectsProjection.removedInputs[fact.scope + '|' + fact.rootId] = fact.inputs;
   };
@@ -1095,7 +1097,6 @@ function buildProjectsFromCache(showArchived) {
       bridgeSessionId: row.bridgeSessionId || null,
       headSessionId,
       mergedMemberIds: orderedChildren.map(child => child.sessionId),
-      projectionFacts: projectionInputs(row),
     };
     if (!showArchived && s.archived) { exclude(row, 'archived'); continue; }
     // see .ai/contexts/subagent-observability.md ("A subagent follows its archived conversation")
@@ -1210,13 +1211,13 @@ function buildProjectsFromCache(showArchived) {
   });
   for (const proj of projects) {
     for (const session of proj.sessions) {
-      if (!session.projectionFacts) {
+      if (!session.parentSessionId && session.type !== 'terminal') {
         const group = conversations.get(session.sessionId.toLowerCase());
-        const source = cachedRows.find(row => row.sessionId.toLowerCase() === (group?.rootId || session.sessionId).toLowerCase())
+        const source = projectionSources.get((group?.rootId || session.sessionId).toLowerCase())
           || { ...session, folder: proj.folder };
-        session.projectionFacts = projectionInputs(source);
+        const fact = projectionInputs(source, session.archived ? 'archived' : null);
+        projectsProjection.facts[fact.scope + '|' + fact.rootId] = fact.inputs;
       }
-      if (session.archived) session.projectionFacts.inputs.filterReason = 'archived';
       if (!session.mergedMemberIds?.length) continue;
       session.conversationParts = [session.sessionId, ...session.mergedMemberIds].map(id => {
         const descriptor = !proj.remoteAlias && session.bgSessionId === id
