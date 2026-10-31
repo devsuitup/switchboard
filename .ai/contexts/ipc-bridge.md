@@ -96,10 +96,13 @@ message. Longer messages hash the normalized first 16,000 characters followed by
 `\0length=<original UTF-16 length>`. Messages over 15,000 characters log the first
 11,000 characters, `[truncated; length=N]` with the original UTF-16 message length,
 and at most the last 4,000 stack characters, keeping the total below 16,000.
-For native Errors with messages over 16,000 characters, the own stack accessor
-must match V8's shared getter, captured once at module load from a fresh Error.
-Only then does a temporary `Error.prepareStackTrace` format at most the last 20
-call sites, returning frames only (at most 4,000 characters). The log adds the
+For messages over 16,000 characters, a temporary `Error.prepareStackTrace` is
+installed before reading the own stack descriptor. On Node 20 (V8 11), that
+descriptor read formats a previously unread native stack into a data property
+through the temporary formatter. On Node 22, the native own stack accessor must
+match V8's shared getter, captured once at module load from a fresh Error, before
+it is called directly. The formatter uses at most the last 20 call sites,
+returning frames only (at most 4,000 characters). The log adds the
 bounded message prefix and truncation marker once. The prior formatter descriptor
 is restored in `finally`. V8 caches those frames on a previously unread Error;
 this is an accepted trade-off to avoid materializing the full oversized stack.
@@ -107,10 +110,12 @@ Restoring the accessor descriptor cannot reset V8's internal cached value, and
 reconstructing an Error would lose its original call sites. A stack read before
 reporting is already cached and remains unchanged. There is currently no app
 reader of the reported Error's stack after this backstop.
-All other oversized reasons, including native Errors with custom, absent, or
-data-property stacks, use only an own stack data descriptor. Custom own or
-inherited stack getters never run in this path. Runtimes exposing native stacks
-as data properties likewise use that fallback. The 15,990-character regression
+Own stack data values, including explicit or previously cached stacks, are used
+as-is before the log tail cap. Custom own or inherited stack getters never run
+in this path; absent stacks contribute no frames.
+A native Error from another vm realm has a different stack getter on Node 22+
+and therefore contributes no frames in this oversized-message path.
+The 15,990-character regression
 cannot exercise the swap: it is below the strict >16,000 threshold, so it covers
 ordinary stack reading and truncation; the 16,001-character case covers the swap.
 Smaller messages retain the existing stack-prefix cap.

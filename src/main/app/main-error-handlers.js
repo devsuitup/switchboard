@@ -119,18 +119,19 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
         let stack;
         if (messageLength === null) stack = error?.stack;
         else {
-          const descriptor = error && Object.getOwnPropertyDescriptor(error, 'stack');
-          if (nativeStackGetter && descriptor?.get === nativeStackGetter && types.isNativeError(error)) {
-            const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
-            try {
-              Object.defineProperty(Error, 'prepareStackTrace', { configurable: true, writable: true,
-                value: (_, frames) => frames.slice(-20).map(frame => `    at ${frame}`).join('\n').slice(-4000) });
-              stack = error.stack;
-            } finally {
-              if (formatter) Object.defineProperty(Error, 'prepareStackTrace', formatter);
-              else delete Error.prepareStackTrace;
+          const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
+          try {
+            Object.defineProperty(Error, 'prepareStackTrace', { configurable: true, writable: true,
+              value: (_, frames) => frames.slice(-20).map(frame => `    at ${frame}`).join('\n').slice(-4000) });
+            const descriptor = error && Object.getOwnPropertyDescriptor(error, 'stack');
+            if (descriptor && 'value' in descriptor) stack = descriptor.value;
+            else if (nativeStackGetter && descriptor?.get === nativeStackGetter && types.isNativeError(error)) {
+              stack = Reflect.apply(nativeStackGetter, error, []);
             }
-          } else if (descriptor && 'value' in descriptor) stack = descriptor.value;
+          } finally {
+            if (formatter) Object.defineProperty(Error, 'prepareStackTrace', formatter);
+            else delete Error.prepareStackTrace;
+          }
         }
         if (typeof stack === 'string') detail = longMessage ? `${detail}\n${stack.slice(-4000)}` : stack.slice(0, 16000);
       }

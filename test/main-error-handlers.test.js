@@ -353,7 +353,7 @@ test('oversized native Error custom stack getter cannot contaminate an inner Err
   const descriptor = Object.getOwnPropertyDescriptor(error, 'stack');
   const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
   target.emit('uncaughtException', error);
-  assert.equal(inner?.stack.startsWith('reported '), undefined, 'custom getter must not create an inner Error under the swapped formatter');
+  assert.equal(inner, undefined, 'custom getter must not create an inner Error under the swapped formatter');
   assert.equal(reads, 0, 'oversized custom stack getter must not run');
   assert.deepEqual(Object.getOwnPropertyDescriptor(error, 'stack'), descriptor);
   assert.deepEqual(Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace'), formatter);
@@ -372,6 +372,20 @@ test('oversized native stack logs its message prefix and truncation marker exact
   assert.doesNotMatch(frames, /message-prefix/, 'frames must not duplicate the message prefix');
   assert.ok(logs[0][1].length <= 16000);
 });
+
+for (const length of [16001, 50e6]) {
+  test(`reporting an unread native stack with message length ${length} caches bounded frames only`, t => {
+    const { target } = setup(t);
+    const error = new Error('unread-message '.padEnd(length, 'x'));
+    const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
+    target.emit('uncaughtException', error);
+    const stack = error.stack;
+    assert.ok(stack.length <= 4000, `cached stack must be bounded; received ${stack.length} characters`);
+    assert.match(stack, /^    at /);
+    assert.doesNotMatch(stack, /unread-message|xxxx/, 'cached stack must contain no message text');
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace'), formatter);
+  });
+}
 
 test('an oversized native stack read before reporting stays unchanged and retains its frame', t => {
   const { target, logs } = setup(t);
