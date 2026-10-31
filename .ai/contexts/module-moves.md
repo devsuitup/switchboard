@@ -36,12 +36,16 @@ a disposable repository archive when changing the scanner. Check exit 0 only pro
 scanner has no supported rewrites or moves left; run the full suite after a real move.
 
 Check mode also validates `.git-blame-ignore-revs`: every full SHA must be an ancestor commit
-of HEAD, and the last entry (newest move) must contain only R100 renames with 0/0 numstat.
+of HEAD or any parent recorded in MERGE_HEAD during a merge, and the last entry (newest move)
+must contain only R100 renames with 0/0 numstat. Resolve MERGE_HEAD through Git's per-worktree
+path so conflicted merges and multiple incoming parents use the correct history boundary.
 It uses Git 2.24-compatible commands. Shallow checkouts, archives without `.git`, and missing Git
 print a clear history-validation `SKIP`. The test suite calls the exported `checkBlameIgnore`
 on the actual repository root; the full-history CI matrix validates the real entries after rebases.
 Malformed or abbreviated entries report that a full 40-hex SHA is required (exit 1); Git command
 errors, including failed `git show` reads, report history-validation failures separately (exit 2).
+Reachability status 1 is a bad entry; spawn errors (including ENOENT/timeouts), signal termination
+and merge-base statuses other than 0/1 throw, producing exit 2 rather than a stale-entry warning.
 Both history validation and fixture Git commands strip inherited `GIT_*` and `HUSKY*` variables
 to prevent pre-commit environment state from redirecting their repository or index.
 Refresh entries after rebases and prefer merging main, as documented in the move procedure.
