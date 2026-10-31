@@ -18,8 +18,8 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 
-const { start } = require('../trigger-watcher');
-const { createTriggerContext } = require('../trigger-context');
+const { start } = require('../src/main/triggers/trigger-watcher');
+const { createTriggerContext } = require('../src/main/triggers/trigger-context');
 
 function mkTmp(prefix) {
   return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));

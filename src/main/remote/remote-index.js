@@ -12,6 +12,7 @@ const {
   manifestPathFor,
 } = require('./remote-hosts');
 const { syncMirror } = require('./remote-mirror');
+const { syncTurnTails } = require('./remote-turn-tails');
 const { encodeProjectPath } = require('../../../encode-project-path');
 const { computeHostProfile } = require('./remote-host-profile');
 
@@ -108,6 +109,7 @@ function createRemoteIndexer(ctx) {
   let inFlight = false;
   let stopped = false;
   const remoteSessions = new Map(); // alias -> sessions array, from the same ssh cycle as the inventory
+  const remoteHeadTurnFiles = new Map();
   const remoteSessionsAt = new Map(); // alias -> epoch ms of the last cycle that did not throw
   const hostBackoff = new Map(); // alias -> { failures, lastError, nextAttemptAt }
   const hostInFlight = new Set();
@@ -187,6 +189,9 @@ function createRemoteIndexer(ctx) {
     for (const alias of [...remoteSessions.keys()]) {
       if (!known.has(alias)) remoteSessions.delete(alias);
     }
+    for (const alias of remoteHeadTurnFiles.keys()) {
+      if (!known.has(alias)) remoteHeadTurnFiles.delete(alias);
+    }
     for (const alias of [...remoteSessionsAt.keys()]) {
       if (!known.has(alias)) remoteSessionsAt.delete(alias);
     }
@@ -248,9 +253,20 @@ function createRemoteIndexer(ctx) {
       log,
     });
 
-    remoteSessions.set(host.alias, Array.isArray(result.sessions)
-      ? result.sessions.map(s => (s && 'waitingFor' in s ? { ...s, waitingFor: sanitizeWaitingFor(s.waitingFor) } : s))
-      : []);
+    const previousPlaceholderIds = getPlaceholderSessions(host.alias).map(s => s.sessionId).sort();
+    const sessions = Array.isArray(result.sessions) ? result.sessions : [];
+    const oversizedFiles = result.oversizedFiles || [];
+    remoteHeadTurnFiles.set(host.alias, await syncTurnTails({
+      alias: host.alias, transport: ctx.transport, projectsDir, oversizedFiles, sessions, log,
+    }));
+    const unmirrored = new Set(oversizedFiles.filter(f => f.rel.split('/').length === 2
+      && !fs.existsSync(path.join(projectsDir, f.rel))).map(f => path.posix.basename(f.rel, '.jsonl')));
+    remoteSessions.set(host.alias, sessions.map(s => s ? { ...s,
+      ...('waitingFor' in s ? { waitingFor: sanitizeWaitingFor(s.waitingFor) } : {}),
+      ...(unmirrored.has(s.sessionId) ? { descriptorOnly: true } : {}),
+    } : s));
+    const placeholdersChanged = JSON.stringify(previousPlaceholderIds)
+      !== JSON.stringify(getPlaceholderSessions(host.alias).map(s => s.sessionId).sort());
 
     const folderPrefix = host.alias;
     const toScan = new Set(result.changedFolders);
@@ -336,7 +352,7 @@ function createRemoteIndexer(ctx) {
         }
       }
     }
-    return toScan.size > 0 || toolsChanged;
+    return toScan.size > 0 || toolsChanged || placeholdersChanged;
   }
 
   // see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
@@ -520,6 +536,7 @@ function createRemoteIndexer(ctx) {
     start, stop, dispose, restart, refreshNow, refreshHostNow,
     isRunning: () => timer !== null,
     getRemoteSessions,
+    getRemoteHeadTurnFiles: alias => alias ? remoteHeadTurnFiles.get(alias) || [] : [...remoteHeadTurnFiles.values()].flat(),
     getRemoteHostProfile,
     getPlaceholderSessions,
     getAllPlaceholderSessions,
@@ -539,11 +556,22 @@ async function refreshRemoteHeadTurns(ctx, hostAlias) {
     liveByHost.set(hostAlias, new Set(sessions.map(d => d.sessionId)));
   }
   const meta = ctx.getAllMeta();
+  const tailHeads = new Set();
+  for (const row of ctx.getRemoteHeadTurnFiles?.(hostAlias) || []) {
+    if (meta.get(row.parentSessionId)?.archived || (hostAlias && row.alias !== hostAlias)) continue;
+    if (!liveByHost.has(row.alias)) {
+      liveByHost.set(row.alias, new Set(ctx.getRemoteSessions(row.alias).sessions.map(d => d.sessionId)));
+    }
+    if (!liveByHost.get(row.alias).has(row.parentSessionId)) continue;
+    tailHeads.add(row.alias + '::' + row.parentSessionId);
+    rows.push({ file: row.file, parentSessionId: row.parentSessionId, turnOnly: true });
+  }
   for (const row of ctx.getAllCached()) {
     if (row.parentSessionId || meta.get(row.sessionId)?.archived) continue;
     const folder = row.folder;
     const { alias } = parseFolderKey(folder);
     if (!alias || (hostAlias && alias !== hostAlias)) continue;
+    if (tailHeads.has(alias + '::' + row.sessionId)) continue;
     if (!liveByHost.has(alias)) {
       liveByHost.set(alias, new Set(ctx.getRemoteSessions(alias).sessions.map(d => d.sessionId)));
     }

@@ -113,7 +113,7 @@ for (const fail of [false, true]) {
 
   test('schedule enable' + suffix, t => {
     const error = fail ? new Error('final rename failure') : null;
-    const { dir, calls, api } = rig(t, 'schedule-runner.js', error);
+    const { dir, calls, api } = rig(t, 'src/main/schedules/schedule-runner.js', error);
     const commands = path.join(dir, '.claude', 'commands');
     fs.mkdirSync(commands, { recursive: true });
     const dest = path.join(commands, 'schedule-test.md');
@@ -134,7 +134,7 @@ for (const fail of [false, true]) {
 
   test('trigger result' + suffix, async t => {
     const error = fail ? new Error('final rename failure') : null;
-    const { dir, calls, api } = rig(t, 'trigger-watcher.js', error);
+    const { dir, calls, api } = rig(t, 'src/main/triggers/trigger-watcher.js', error);
     const errors = [];
     const trigger = path.join(dir, 'bad.json');
     fs.writeFileSync(trigger, '{');

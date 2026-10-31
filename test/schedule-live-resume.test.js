@@ -10,7 +10,7 @@ const { EventEmitter } = require('node:events');
 const { JSDOM } = require('jsdom');
 const { extractFunction, loadAppFunctions } = require('./app-source');
 const cliSessionState = require('../cli-session-state');
-const { buildScheduleCommand } = require('../schedule-runner');
+const { buildScheduleCommand } = require('../src/main/schedules/schedule-runner');
 const { guardResume } = require('../public/resume-guard');
 
 const ROOT = path.join(__dirname, '..');
@@ -27,7 +27,7 @@ function setup(t, { sandbox = false } = {}) {
   const done = [];
   const main = vm.createContext({
     cliSessionState,
-    scheduleIpc: require('../schedule-ipc'), mainWindow: null,
+    scheduleIpc: require('../src/main/schedules/schedule-ipc'), mainWindow: null,
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     sessionHasPty: () => false,
     ptyPids: () => [],

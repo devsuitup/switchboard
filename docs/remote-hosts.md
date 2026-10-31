@@ -129,7 +129,12 @@ a liveness check of its pid. Only what changed is then fetched: a new file with
 The mirror lives in the data directory, under `remote/<alias>/projects/`
 (`~/.switchboard/remote/<alias>/` for an installed app). Limits per pull: 500
 files and 256 MB — the rest waits for the next pull — and files over 64 MB are
-skipped. A listing of more than 20,000 entries is refused. A file deleted on the
+not copied in full. Live sessions with larger transcripts get a separate,
+bounded tail read for their turn state (at most 256 KiB plus one alignment
+byte per changed live transcript, up to 200 per pull). These tails are not
+available as transcripts, search results or message counts. A previously copied
+complete transcript remains a historical snapshot until full mirroring can
+resume. A listing of more than 20,000 entries is refused. A file deleted on the
 host is deleted from the mirror only after a pull with no failure.
 
 Besides the periodic pull, one long-lived ssh connection per host runs

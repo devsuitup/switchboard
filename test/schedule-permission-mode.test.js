@@ -15,7 +15,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildScheduleCommand, parseFrontmatter } = require('../schedule-runner');
+const { buildScheduleCommand, parseFrontmatter } = require('../src/main/schedules/schedule-runner');
 
 /** Pull the value following --permission-mode out of an argv array. */
 function permissionModeOf(claudeArgs) {
@@ -113,7 +113,7 @@ test('schedule-ipc: the task-creator template tells Claude to write auto', () =>
   // from. If it still says acceptEdits, every newly created task pins the old
   // default explicitly and never picks up this change.
   const src = require('node:fs').readFileSync(
-    require('node:path').join(__dirname, '..', 'schedule-ipc.js'), 'utf8');
+    require('node:path').join(__dirname, '..', 'src/main/schedules/schedule-ipc.js'), 'utf8');
   assert.match(src, /permission-mode:\s*auto/,
     'the frontmatter template must default to auto');
   assert.doesNotMatch(src, /permission-mode:\s*acceptEdits/,

@@ -10,8 +10,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cliSessionState = require('../cli-session-state');
-const { createTriggerContext } = require('../trigger-context');
-const { start } = require('../trigger-watcher');
+const { createTriggerContext } = require('../src/main/triggers/trigger-context');
+const { start } = require('../src/main/triggers/trigger-watcher');
 
 const sessionId = 'e7abbcdc-0000-4000-8000-000000000000';
 const jobId = 'e7abbcdc';

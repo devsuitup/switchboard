@@ -95,19 +95,18 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
   }
 
   const previous = readManifest(manifestPath);
+  const oversizedFiles = [];
 
   // pass 1: full vs incremental per file — see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
   const seenThisCycle = new Set();
   const candidates = [];
   for (const [rel, meta] of want) {
-    // The inventory already carries the size; scp is bounded in time only, so
-    // this is the only place a single oversized transcript can be refused
-    // before it lands. See .ai/contexts/session-cache.md, "Remote hosts".
     if (meta.size > MAX_FILE_BYTES) {
+      oversizedFiles.push({ rel, ...meta });
       seenThisCycle.add(rel);
       const { count, shouldLog } = bumpStreak(manifestPath, rel);
       if (shouldLog && log && log.warn) {
-        log.warn(`[remote:${alias}] ${rel} skipped: over ${MAX_FILE_BYTES} bytes (${count}x consecutive)`);
+        log.warn(`[remote:${alias}] ${rel} full mirror not fetched: ${meta.size} bytes exceeds ${MAX_FILE_BYTES}; live head uses a separate turn-state tail (${count}x consecutive)`);
       }
       continue;
     }
@@ -240,6 +239,7 @@ async function syncMirror({ alias, transport, projectsDir, manifestPath, log }) 
     removed,
     changedFolders,
     changedFilesByFolder,
+    oversizedFiles,
     sessions: Array.isArray(sessions) ? sessions : [],
   };
 }

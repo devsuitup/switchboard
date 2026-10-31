@@ -55,7 +55,7 @@ test('runner provenance survives full indexing, SQLite, header refresh and sideb
     require('node:os').homedir = () => process.env.SWITCHBOARD_TEST_HOME;
     const db = require('./test/fixtures/writer-store.cjs');
     const cache = require('./session-cache');
-    const { createScheduleSession } = require('./schedule-runner');
+    const { createScheduleSession } = require('./src/main/schedules/schedule-runner');
     const { readSessionFile, readSessionDisplayHeader } = require('./read-session-file');
     const { encodeProjectPath } = require('./encode-project-path');
     const projectPath = path.join(process.env.SWITCHBOARD_TEST_HOME, 'project');

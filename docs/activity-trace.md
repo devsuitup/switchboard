@@ -467,6 +467,12 @@ representative/head, selected activity source and visibility facets. Omission or
 metadata-time changes alone are silent; current deciding inputs still refresh.
 These records complement the optional OSC/paint trace above.
 
+The paired projects reply shares deciding facts in `projection.facts`, keyed by
+opaque scope and graph root (#742), instead of copying them into each session
+row of both views. All top-level conversations remain observable, including
+foreground rows before a transition or split; subagents and terminals are omitted.
+The `ipc.get-projects` paired `replyBytes` measure includes this envelope.
+
 Correlate schema:1, main timestamp, cause, opaque host/project scope and graph
 root with projects generation/build and roster revision. Inputs describe exact
 CLI inclusion/availability, cached-job evidence, accepted descriptors, attach and

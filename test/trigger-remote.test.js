@@ -9,8 +9,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { setTimeout: realSetTimeout } = require('node:timers');
-const { start } = require('../trigger-watcher');
-const { createTriggerContext } = require('../trigger-context');
+const { start } = require('../src/main/triggers/trigger-watcher');
+const { createTriggerContext } = require('../src/main/triggers/trigger-context');
 const { createRemoteIndexer } = require('../src/main/remote/remote-index');
 const log = { info() {}, warn() {}, error() {}, debug() {} };
 const NO_FRESH = 'fewer than two pulls of the session descriptors of this host completed after the wait began, before the deadline; nothing was written';
@@ -181,7 +181,7 @@ for (const off of [true, false]) test(`U15/U22: setting ${off ? 'off' : 'on with
   const r = await run(s); assert.deepEqual(r, { ok: false, error: 'session not found', sessionId: 'remote', submitted: 'no', wrote: false, steps_total: 1 });
 });
 test('U20 GUARD: trigger modules cannot require a process spawner', () => {
-  for (const file of ['trigger-watcher.js', 'trigger-context.js']) assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), /require\(['"](?:node:)?child_process['"]\)/);
+  for (const file of ['src/main/triggers/trigger-watcher.js', 'src/main/triggers/trigger-context.js']) assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), /require\(['"](?:node:)?child_process['"]\)/);
 });
 for (const command of ['/compact', '/clear', '  /compact  ', 'compact']) test(`U21: allowed command ${command} sends its canonical text`, async () => {
   const s = fixture(); const result = await run(s, { command });

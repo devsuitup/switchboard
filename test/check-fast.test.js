@@ -45,10 +45,10 @@ test('a source basename matches only up to a separator', () => {
 });
 
 test('lint takes staged .cjs and .mjs files; serial trigger tests run without a per-file test timeout', (t) => {
-  const options = rig(t, { files: ['scripts/x.cjs', 'trigger-watcher.js'] });
+  const options = rig(t, { files: ['scripts/x.cjs', 'src/main/triggers/trigger-watcher.js'] });
   assert.equal(runFast(options), 0);
   const [lint, ...tests] = options.calls;
-  assert.deepEqual(lint.args.slice(-2), ['scripts/x.cjs', 'trigger-watcher.js']);
+  assert.deepEqual(lint.args.slice(-2), ['scripts/x.cjs', 'src/main/triggers/trigger-watcher.js']);
   assert.deepEqual(tests.map(call => call.args), [['--test', '--test-concurrency=1', 'test/trigger-watcher.test.js']]);
   assert.equal(tests[0].options.timeout, 600000);
 });

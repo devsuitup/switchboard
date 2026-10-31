@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { setScheduleEnabled, scanSchedules } = require('../schedule-runner');
+const { setScheduleEnabled, scanSchedules } = require('../src/main/schedules/schedule-runner');
 
 function rig() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-schedule-disable-')));

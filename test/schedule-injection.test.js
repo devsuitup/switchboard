@@ -11,7 +11,7 @@
 const test   = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildScheduleCommand } = require('../schedule-runner');
+const { buildScheduleCommand } = require('../src/main/schedules/schedule-runner');
 const { quoteArgForShell, quoteArgvForShell } = require('../src/main/terminals/shell-profiles');
 
 // ── buildScheduleCommand ─────────────────────────────────────────────────────

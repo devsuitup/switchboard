@@ -4,8 +4,8 @@
 'use strict';
 
 const path = require('path');
-const { resolveOnDisk } = require('./src/main/shared/resolve-path-on-disk');
-const { isSensitivePath } = require('./src/main/shared/ipc-path-validator');
+const { resolveOnDisk } = require('../shared/resolve-path-on-disk');
+const { isSensitivePath } = require('../shared/ipc-path-validator');
 
 const SCHEDULE_FILENAME_RE = /^schedule-.*\.md$/i;
 

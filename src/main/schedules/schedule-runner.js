@@ -1,11 +1,11 @@
 // schedule-runner.js — Scan schedule-*.md files, match cron, build commands
 const fs = require('fs');
-const { renameWithRetry } = require('./src/main/shared/atomic-write');
+const { renameWithRetry } = require('../shared/atomic-write');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { encodeProjectPath, verifiedTranscriptCwd } = require('./encode-project-path');
-const { normalizeProjectPath } = require('./src/main/shared/normalize-project-path');
+const { encodeProjectPath, verifiedTranscriptCwd } = require('../../../encode-project-path');
+const { normalizeProjectPath } = require('../shared/normalize-project-path');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
@@ -138,7 +138,7 @@ function loadFolderMetaMap() {
   try {
     // Lazy require so requiring schedule-runner.js never forces the native
     // better-sqlite3 binding to load (keeps the module test-friendly).
-    const { getAllFolderMeta } = require('./db');
+    const { getAllFolderMeta } = require('../../../db');
     const meta = getAllFolderMeta();
     const map = new Map();
     for (const [folder, row] of meta) {

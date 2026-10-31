@@ -90,15 +90,15 @@ test('main-wiring source check: terminal-input carries the pty.input probe, unde
 
 test('main-wiring source check: trigger-watcher.start is handed createTriggerContext(...)', () => {
   const args = argsOf(
-    "require('./trigger-watcher').start", "require('./trigger-watcher').start",
+    "require('./src/main/triggers/trigger-watcher').start", "require('./src/main/triggers/trigger-watcher').start",
   );
   assert.match(
     args.trim(), /^createTriggerContext\s*\(/,
     'trigger-watcher.start must receive the result of createTriggerContext',
   );
   assert.match(
-    mainSrc, /require\('\.\/trigger-context'\)/,
-    'main.js must require ./trigger-context',
+    mainSrc, /require\('\.\/src\/main\/triggers\/trigger-context'\)/,
+    'main.js must require ./src/main/triggers/trigger-context',
   );
   assert.match(
     args, /getLiveDescriptor:\s*\(\s*id\s*\)\s*=>\s*cliSessionState\.findLiveProcess\(\s*id\s*\)/,

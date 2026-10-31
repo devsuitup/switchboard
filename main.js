@@ -81,7 +81,7 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./src/main/terminals/shell-profiles');
-const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./schedule-runner');
+const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
@@ -97,7 +97,7 @@ const { JOB_ID_RE, isHostedJob } = require('./bg-agents-roster');
 const { createTerminalResizeHandler } = require('./src/main/terminals/terminal-resize');
 const { createComposerState } = require('./src/main/terminals/composer-state');
 const { handleTerminalInput } = require('./src/main/terminals/terminal-input');
-const { createTriggerContext } = require('./trigger-context');
+const { createTriggerContext } = require('./src/main/triggers/trigger-context');
 const { createTmuxAttachAdapter } = require('./src/main/remote/remote-attach');
 const { loadAttachProfileId } = require('./src/main/remote/remote-attach-profile');
 const { createRemoteStopAdapter } = require('./src/main/remote/remote-stop');
@@ -870,7 +870,7 @@ async function unarchivedScheduleProjects(projectPath) {
 
 function skipMissedScheduleRuns(projects) {
   try {
-    require('./schedule-runner').skipMissedRuns(log, projects, path.join(path.dirname(DB_PATH), 'schedule-state'));
+    require('./src/main/schedules/schedule-runner').skipMissedRuns(log, projects, path.join(path.dirname(DB_PATH), 'schedule-state'));
   } catch (err) {
     log.warn('[schedule] Cannot reset the catch-up record after unarchive:', err.message);
   }
@@ -1355,7 +1355,11 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
     backfillEntrypoints();
     backfillCustomTitles();
     const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
-    const projection = result.projection ? structuredClone(result.projection) : undefined;
+    const projection = result.projection
+      ? { ...result.projection, removedInputs: structuredClone(result.projection.removedInputs) }
+      : undefined;
+    const diagnostics = projection ? require('./public/session-projection-diagnostics') : null;
+    let factsByMember = null;
     const assemble = async (projects, archived) => {
       const merged = mergePlaceholderSessions(projects);
       const kept = await writer.applyAndPersistArchived(merged, archived);
@@ -1366,7 +1370,8 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
           const filterReason = hidden.includes(project.projectPath) || hidden.includes(project.remoteAlias + '::' + project.projectPath)
             ? 'hidden-project' : 'archived';
           for (const row of project.sessions) {
-            const facts = row.projectionFacts;
+            factsByMember ??= diagnostics.indexProjectionFacts(projection);
+            const facts = factsByMember.get(diagnostics.projectionScope(project.remoteAlias, project.projectPath) + '|' + row.sessionId.toLowerCase());
             if (facts) projection.removedInputs[facts.scope + '|' + facts.rootId] = { ...facts.inputs, filterReason };
           }
         }
@@ -1756,7 +1761,7 @@ ipcMain.handle('delete-setting', async (_event, key) => {
 });
 
 // --- Scheduled tasks ---
-const scheduleIpc = require('./schedule-ipc');
+const scheduleIpc = require('./src/main/schedules/schedule-ipc');
 
 ipcMain.handle('get-shell-profiles', () => {
   // TODO(lint): `_shellProfiles` is scoped inside shell-profiles.js and not
@@ -3421,6 +3426,7 @@ async function refreshRemoteHeadTurns(hostAlias) {
   await refreshRemoteHeadTurnsFromCache({
     getAllCached, getAllMeta, projectsDirForFolder,
     getRemoteSessions: alias => remoteIndexer.getRemoteSessions(alias),
+    getRemoteHeadTurnFiles: alias => remoteIndexer.getRemoteHeadTurnFiles?.(alias) || [],
     readBatch: rows => taskRecords.readBatch(rows),
   }, hostAlias);
 }
@@ -3979,7 +3985,7 @@ if (!app.isPackaged) {
     // I3: wrapped in try/catch so a boot failure here doesn't abort
     // app.whenReady (auto-updater, etc. would otherwise be silently lost).
     try {
-      require('./trigger-watcher').start(createTriggerContext({
+      require('./src/main/triggers/trigger-watcher').start(createTriggerContext({
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
         resolveSessionId: (id) => sessionTransitions.currentSessionId(id),

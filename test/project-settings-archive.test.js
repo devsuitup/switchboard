@@ -199,7 +199,7 @@ test('delete drops project settings, cache, search and schedules without changin
 });
 
 async function schedulerHarness(t, h) {
-  const localRequire = createRequire(path.join(ROOT, 'schedule-runner.js'));
+  const localRequire = createRequire(path.join(ROOT, 'src/main/schedules/schedule-runner.js'));
   const timers = [];
   const clock = { now: new Date(2026, 0, 5, 10, 50).getTime() };
   class Clock extends Date {
@@ -211,7 +211,7 @@ async function schedulerHarness(t, h) {
     process: { env: {} }, Date: Clock, setTimeout: fn => { const timer = { fn }; timers.push(timer); return timer; },
     setInterval: () => ({}), clearTimeout() {}, clearInterval() {},
   });
-  vm.runInContext(read('schedule-runner.js'), runnerContext, { filename: path.join(ROOT, 'schedule-runner.js') });
+  vm.runInContext(read('src/main/schedules/schedule-runner.js'), runnerContext, { filename: path.join(ROOT, 'src/main/schedules/schedule-runner.js') });
   const stateDir = path.join(h.dir, 'schedule-state');
   const log = { info() {}, warn() {}, error() {} };
   h.context.skipMissedScheduleRuns = projects => runnerContext.module.exports.skipMissedRuns(log, projects, stateDir);
@@ -326,7 +326,7 @@ function runNowHarness(h) {
       require: name => {
         if (name === 'electron') return { ipcMain: { handle: (channel, fn) => handlers.set(channel, fn) } };
         if (name === 'os') return { homedir: () => h.dir };
-        if (name === './schedule-runner') return load('schedule-runner.js');
+        if (localRequire.resolve(name) === require.resolve('../src/main/schedules/schedule-runner')) return load('src/main/schedules/schedule-runner.js');
         return localRequire(name);
       },
     });
@@ -335,8 +335,12 @@ function runNowHarness(h) {
     return context.module.exports;
   }
   const log = { info() {}, warn() {}, error() {} };
-  load('schedule-ipc.js').init(log, (...args) => { runs.push(args); return { ok: true }; }, () => true, h.context.isProjectSettingsArchived);
-  return { run: file => handlers.get('run-schedule-now')(null, file), runs };
+  load('src/main/schedules/schedule-ipc.js').init(log, (...args) => { runs.push(args); return { ok: true }; }, () => true, h.context.isProjectSettingsArchived);
+  return { run: async file => {
+    const result = await handlers.get('run-schedule-now')(null, file);
+    if (result.ok) assert.ok(modules.has('src/main/schedules/schedule-runner.js'), 'Run now must load the home-isolated schedule runner');
+    return result;
+  }, runs };
 }
 
 test('Run now refuses an archived project before writing a transcript and resumes on unarchive', async t => {

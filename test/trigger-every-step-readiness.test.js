@@ -17,7 +17,7 @@ const os     = require('os');
 const path   = require('path');
 const { setTimeout: realSetTimeout } = require('node:timers');
 
-const { start, waitForBusyFall, waitForCliIdleAfter } = require('../trigger-watcher');
+const { start, waitForBusyFall, waitForCliIdleAfter } = require('../src/main/triggers/trigger-watcher');
 
 function mkTmp() {
   return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-trigger-every-')));

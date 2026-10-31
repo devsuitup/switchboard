@@ -4,7 +4,7 @@
 const test   = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createTriggerContext, createLocalSessionHandle } = require('../trigger-context');
+const { createTriggerContext, createLocalSessionHandle } = require('../src/main/triggers/trigger-context');
 const { createComposerState, noteUserInput } = require('../src/main/terminals/composer-state');
 const { spawnSync } = require('node:child_process');
 
@@ -196,11 +196,11 @@ test('a re-key mid-chain forgets the transcript read under the previous id', () 
     const reader = original(...args);
     return { ...reader, forget: (p) => { forgotten.push(p); reader.forget(p); } };
   };
-  const contextPath = require.resolve('../trigger-context');
+  const contextPath = require.resolve('../src/main/triggers/trigger-context');
   const cached = require.cache[contextPath];
   delete require.cache[contextPath];
   try {
-    const { createTriggerContext: create } = require('../trigger-context');
+    const { createTriggerContext: create } = require('../src/main/triggers/trigger-context');
     const session = { pty: { pid: 1 }, host: null, projectFolder: 'proj', exited: false };
     const activeSessions = new Map([['old-id', session]]);
     let alias = null;

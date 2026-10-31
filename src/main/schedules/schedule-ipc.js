@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
-const { encodeProjectPath } = require('./encode-project-path');
+const { encodeProjectPath } = require('../../../encode-project-path');
 const { resolveRunNowTarget } = require('./run-schedule-now-target');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');

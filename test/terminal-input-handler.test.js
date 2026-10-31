@@ -13,7 +13,7 @@ const os     = require('os');
 const path   = require('path');
 
 const { handleTerminalInput } = require('../src/main/terminals/terminal-input');
-const { createTriggerContext } = require('../trigger-context');
+const { createTriggerContext } = require('../src/main/triggers/trigger-context');
 const { createComposerState }  = require('../src/main/terminals/composer-state');
 
 const silentLog = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
@@ -123,7 +123,7 @@ test('a half-typed sentence refuses the trigger, and a submitted one lets it thr
   const ctx     = createTriggerContext({
     activeSessions: sessions, log: silentLog, isPtyAlive: () => true,
   });
-  const watcher = require('../trigger-watcher').start(ctx);
+  const watcher = require('../src/main/triggers/trigger-watcher').start(ctx);
 
   try {
     // 1. The user types a sentence and does not submit it.
