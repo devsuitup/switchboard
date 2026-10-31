@@ -287,7 +287,7 @@ function checkBlameIgnore(root) {
   const mergePath = git('rev-parse', '--git-path', 'MERGE_HEAD');
   if (mergePath.error || mergePath.status !== 0) throw new Error(`Cannot check blame-ignore history: ${mergePath.error?.message || mergePath.stderr}`);
   const mergeFile = path.resolve(root, mergePath.stdout.trim());
-  const heads = ['HEAD', ...(fs.existsSync(mergeFile) ? fs.readFileSync(mergeFile, 'utf8').trim().split(/\s+/) : [])];
+  const heads = ['HEAD', ...(fs.existsSync(mergeFile) ? fs.readFileSync(mergeFile, 'utf8').trim().split(/\s+/).filter(Boolean) : [])];
   let valid = true;
   for (const sha of revisions) {
     if (!/^[a-f\d]{40}$/i.test(sha)) {
@@ -296,7 +296,7 @@ function checkBlameIgnore(root) {
       continue;
     }
     const commit = git('cat-file', '-e', `${sha}^{commit}`);
-    if (commit.error) throw new Error(`Cannot check blame-ignore history: ${commit.error.message}`);
+    if (commit.error || commit.signal) throw new Error(`Cannot check blame-ignore history: ${commit.error?.message || commit.signal}`);
     const reachable = commit.status === 0 && heads.some(head => {
       const result = git('merge-base', '--is-ancestor', sha, head);
       if (result.error || ![0, 1].includes(result.status)) throw new Error(`Cannot check blame-ignore history: ${result.error?.message || result.stderr || result.signal}`);
