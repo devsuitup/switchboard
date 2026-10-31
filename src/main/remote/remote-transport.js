@@ -28,6 +28,7 @@ const MAX_LIST_BYTES = 8 * 1024 * 1024;
 const DEFAULT_CONCURRENCY = 4;
 // see .ai/contexts/session-cache.md ("Remote hosts — incremental fetch")
 const MAX_RANGE_FETCH_BYTES = 64 * 1024 * 1024;
+const TURN_TAIL_BYTES = 256 * 1024;
 
 const SSH_BASE_OPTS = [
   '-o', 'BatchMode=yes',
@@ -441,6 +442,33 @@ function createSshTransport(opts = {}) {
     return { fetched, failed };
   }
 
+  async function readTurnTail(alias, { rel, mtimeMs }, destPath) {
+    if (!isSafeMirrorRelPath(rel) || !rel.endsWith('.jsonl') || !Number.isFinite(mtimeMs)) {
+      throw new Error('invalid turn-state tail request');
+    }
+    const res = await run(resolveSshPath(), [...SSH_BASE_OPTS, '-n', alias,
+      `tail -c ${TURN_TAIL_BYTES + 1} '${REMOTE_PROJECTS_REL}/${rel}'`], {
+      timeoutMs: fetchTimeoutMs, binary: true, maxBytes: TURN_TAIL_BYTES + 1,
+    });
+    if (res.code !== 0 || res.timedOut || res.truncated) {
+      throw new Error(res.timedOut ? 'ssh tail timed out' : res.truncated ? 'ssh tail exceeded the size cap' : `ssh tail failed (exit ${res.code}): ${res.stderr.trim()}`);
+    }
+    const bytes = res.stdoutBuffer;
+    const newline = bytes.indexOf(10);
+    const tail = newline < 0 ? Buffer.alloc(0) : bytes.subarray(newline + 1);
+    const tmpPath = destPath + '.part';
+    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    try {
+      fs.writeFileSync(tmpPath, tail);
+      const time = new Date(mtimeMs);
+      fs.utimesSync(tmpPath, time, time);
+      renameWithRetry(tmpPath, destPath);
+    } catch (err) {
+      try { fs.rmSync(tmpPath, { force: true }); } catch {}
+      throw err;
+    }
+  }
+
   // Kill what is running without ending the transport -- see
   // .ai/contexts/session-cache.md, "Remote hosts".
   function cancelInFlight() {
@@ -455,7 +483,7 @@ function createSshTransport(opts = {}) {
     cancelInFlight();
   }
 
-  return { listFiles, probeTools, checkHost, fetchFiles, fetchIncremental, cancelInFlight, dispose, liveCount: () => live.size };
+  return { listFiles, probeTools, checkHost, fetchFiles, fetchIncremental, readTurnTail, cancelInFlight, dispose, liveCount: () => live.size };
 }
 
 module.exports = {
