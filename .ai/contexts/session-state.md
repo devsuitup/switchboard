@@ -1481,7 +1481,8 @@ Selectors depend only on `session-icon--<rung>`, with no layout measurement.
 
 The busy braille animation pauses while the window is hidden or unfocused
 (#544). `session-activity-dom.js` reuses `document.hasFocus()` and native
-window focus/blur and document visibilitychange events, synchronously toggling
+window focus/blur, document visibilitychange and window pointerdown,
+pointermove and keydown events (capture, passive), synchronously toggling
 `busy-spinners-paused` on the document element at startup and on every event.
 CSS pauses only `.session-icon--busy::before`, across sidebar, grid, header
 and Agents, including icons rendered after the pause. Busy/attention state,

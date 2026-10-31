@@ -86,6 +86,17 @@ test('user input resumes spinners when focus arrived without a focus event', () 
   } finally { ctx.destroy(); }
 });
 
+test('pointer input over an unfocused window keeps spinners paused', () => {
+  const ctx = setupSidebarDom();
+  try {
+    Object.defineProperty(ctx.document, 'hasFocus', { value: () => false });
+    for (const type of ['pointerdown', 'pointermove']) {
+      ctx.window.dispatchEvent(new ctx.window.Event(type));
+      assert.ok(ctx.document.documentElement.classList.contains('busy-spinners-paused'), type);
+    }
+  } finally { ctx.destroy(); }
+});
+
 test('the pause state stops the busy pseudo-element animation without changing its cadence', () => {
   const ctx = setupSidebarDom();
   try {
