@@ -1189,9 +1189,9 @@ body { display: flex; flex-direction: column; }
 /* Parent is at the prompt while spawned subagents still work in the
    background — see .ai/contexts/session-state.md.
    Static full braille cell in violet — deliberately no animation
-   (docs/decisions/0002: new indicators default to static), and both hue
-   and stillness distinguish it from the light-blue animated cli-busy
-   spinner. */
+   (docs/decisions/0002: new indicators default to static). Its full cell
+   distinguishes it from the cli-busy spinner, which is also still while the
+   window is unfocused. */
 .session-icon--agents-busy {
   animation: none !important;
   background: transparent !important;

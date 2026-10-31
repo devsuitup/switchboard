@@ -60,11 +60,29 @@ test('pausing animation preserves busy state and newly rendered busy rows', () =
       modified: '2026-10-31T10:00:00.000Z', messageCount: 1 }] })];
     ctx.sidebar.renderProjects(projects, true);
     const iconBefore = ctx.document.querySelector('#si-spinner .session-icon').outerHTML;
+    let focused = true;
+    Object.defineProperty(ctx.document, 'hasFocus', { value: () => focused });
+    ctx.window.dispatchEvent(new ctx.window.Event('focus'));
+    assert.equal(ctx.document.documentElement.classList.contains('busy-spinners-paused'), false);
+    focused = false;
     ctx.window.dispatchEvent(new ctx.window.Event('blur'));
     assert.ok(ctx.document.documentElement.classList.contains('busy-spinners-paused'));
     ctx.sidebar.renderProjects(projects, true);
     assert.equal(ctx.document.querySelector('#si-spinner .session-icon').outerHTML, iconBefore);
     assert.ok(ctx.document.querySelector('#si-spinner').classList.contains('cli-busy'));
+  } finally { ctx.destroy(); }
+});
+
+test('user input resumes spinners when focus arrived without a focus event', () => {
+  const ctx = setupSidebarDom();
+  try {
+    assert.ok(ctx.document.documentElement.classList.contains('busy-spinners-paused'));
+    Object.defineProperty(ctx.document, 'hasFocus', { value: () => true });
+    for (const type of ['pointerdown', 'pointermove', 'keydown']) {
+      ctx.document.documentElement.classList.add('busy-spinners-paused');
+      ctx.window.dispatchEvent(new ctx.window.Event(type));
+      assert.equal(ctx.document.documentElement.classList.contains('busy-spinners-paused'), false, type);
+    }
   } finally { ctx.destroy(); }
 });
 

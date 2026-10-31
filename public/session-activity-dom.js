@@ -8,6 +8,9 @@ function updateBusySpinnerAnimation() {
 window.addEventListener('focus', updateBusySpinnerAnimation);
 window.addEventListener('blur', updateBusySpinnerAnimation);
 document.addEventListener('visibilitychange', updateBusySpinnerAnimation);
+for (const type of ['pointerdown', 'pointermove', 'keydown']) {
+  window.addEventListener(type, updateBusySpinnerAnimation, { capture: true, passive: true });
+}
 updateBusySpinnerAnimation();
 
 function outputSurfaceVisible(element) {

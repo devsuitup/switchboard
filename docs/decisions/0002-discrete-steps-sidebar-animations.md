@@ -94,6 +94,11 @@ is unfocused, and resume immediately when both visibility and focus return.
 The renderer uses its existing native focus/visibility signals and
 `document.hasFocus()`; a document-level class covers all busy icon surfaces
 and newly rendered rows without changing session activity or attention state.
+Pointer and key input also re-evaluate the state, so a reload that never
+receives a window `focus` event cannot leave spinners frozen in a focused
+window. While paused, a busy session with background subagents (violet
+spinner) and an idle parent with busy agents (violet static full cell) differ
+only by glyph shape, no longer by motion.
 
 The issue's measurements found 7 busy icons cost 6–7% of one core and 27 cost
 10%, versus 0.2% idle. Animating `content` cannot run on the compositor: each
