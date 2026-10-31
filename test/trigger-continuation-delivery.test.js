@@ -9,7 +9,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { resolveContinuations, resolveContinuationsSync, scanContinuationIndex } = require('../session-continuations');
-const { createTriggerContext } = require('../trigger-context');
+const { createTriggerContext } = require('../src/main/triggers/trigger-context');
 
 function fixture(t, edges) {
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-592-continuation-'));
@@ -220,7 +220,7 @@ test('ADR continuation size cap: a 65 MiB uncontinued conversation refuses a for
 });
 
 test('ADR continuation size cap: the production limit is 512 MiB', () => {
-  const source = fs.readFileSync(require.resolve('../trigger-context'), 'utf8');
+  const source = fs.readFileSync(require.resolve('../src/main/triggers/trigger-context'), 'utf8');
   const expression = source.match(/let remainingBytes = ([^;]+);/);
   assert.ok(expression, 'production scan limit must be declared');
   assert.equal(vm.runInNewContext(expression[1]), 512 * 1024 * 1024);
@@ -238,12 +238,12 @@ test('ADR continuation size cap: over 512 MiB is unresolved and refuses an alias
     return result;
   });
   const graphs = [];
-  const filename = require.resolve('../trigger-context');
+  const filename = require.resolve('../src/main/triggers/trigger-context');
   const localRequire = createRequire(filename);
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, require: id => {
     const loaded = localRequire(id);
-    if (id !== './session-continuations') return loaded;
+    if (id !== '../../../session-continuations') return loaded;
     return { ...loaded, resolveContinuationsSync: (...args) => {
       const graph = loaded.resolveContinuationsSync(...args);
       graphs.push(graph);

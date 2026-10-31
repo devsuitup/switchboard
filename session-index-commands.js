@@ -1,7 +1,7 @@
 'use strict';
 
 const archive = require('./archived-projects');
-const { scheduleRegistry } = require('./schedule-runner');
+const { scheduleRegistry } = require('./src/main/schedules/schedule-runner');
 const { whatsNewOnStartup } = require('./src/main/app/changelog');
 
 // see .ai/contexts/session-index-writer.md

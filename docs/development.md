@@ -188,8 +188,8 @@ main.js             Electron main process: windows, IPC, PTYs, watchers, schedul
 preload.js          The context bridge (window.api)
 db.js               SQLite: session cache, metadata, settings, FTS search
 session-cache.js    Transcript indexer and ~/.claude/projects watcher
-schedule-runner.js  Cron scheduler for schedule-*.md files
-trigger-watcher.js  The file-based trigger API
+src/main/schedules/ Cron scheduler and schedule IPC for schedule-*.md files
+src/main/triggers/  The file-based trigger API and delivery context
 remote-*.js         Remote hosts: inventory, mirror, watch, attach, stop
 mcp-bridge.js       The IDE emulation MCP server
 window-frame.js     Window options, the application menu, zoom keys

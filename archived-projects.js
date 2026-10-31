@@ -5,7 +5,7 @@ const path = require('path');
 const { joinFolderKey, parseFolderKey } = require('./src/main/remote/remote-hosts');
 const { encodeProjectPath } = require('./encode-project-path');
 const { worktreeParentPath, isHiddenRepositoryWorktree } = require('./public/worktree-nesting');
-const { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter } = require('./schedule-runner');
+const { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter } = require('./src/main/schedules/schedule-runner');
 
 const SETTING_KEY = 'archivedProjects';
 const OFFERS_KEY = 'scheduleReenableOffers';

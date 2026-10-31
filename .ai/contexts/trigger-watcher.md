@@ -1,17 +1,21 @@
 # Context: trigger-watcher
 
+Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
+`src/main/triggers/` (ADR 0005, step 8). The watcher's lazy tab mutex import is
+`../terminals/tab-input-lock`; its home based trigger directory is unchanged.
+
 **Purpose**: lets external harness scripts inject keyboard input into open PTY sessions without any Electron IPC.  The primary use case is the token-usage harness calling `/compact` on a session when it detects a high context-window fill.
 
 ## Key files
 
 | File | LOC | Role |
 |---|---|---|
-| `trigger-watcher.js` | ~2170 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
-| `trigger-context.js` | ~420 | `createTriggerContext({ activeSessions, log, getCliStatus, projectsDir, getLiveDescriptor, resolveSessionId, remote })` — builds the whole `ctx` object out of `main.js`'s session map, including the pinned per-tab delivery binding (`pinDelivery`) and the descriptor fallback lookup (`lookupDeliveryFallback`). |
+| `src/main/triggers/trigger-watcher.js` | ~2170 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
+| `src/main/triggers/trigger-context.js` | ~420 | `createTriggerContext({ activeSessions, log, getCliStatus, projectsDir, getLiveDescriptor, resolveSessionId, remote })` — builds the whole `ctx` object out of `main.js`'s session map, including the pinned per-tab delivery binding (`pinDelivery`) and the descriptor fallback lookup (`lookupDeliveryFallback`). |
 | `transcript-turn.js` | ~230 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
 | `src/main/terminals/terminal-input.js` | ~35 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
 | `src/main/terminals/tab-input-lock.js` | ~35 | The per-tab mutex (`acquireTabInput`), shared with the Send to background action (`tryAcquireTabInput`; see "Re-keyed sessions"). |
-| `main.js` (wiring) | ~20 | `require('./trigger-watcher').start(createTriggerContext({ … }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
+| `main.js` (wiring) | ~20 | `require('./src/main/triggers/trigger-watcher').start(createTriggerContext({ … }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
 
 ## Public surface
 

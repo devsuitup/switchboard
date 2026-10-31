@@ -11,6 +11,11 @@ Two mechanisms run Claude without you at the keyboard:
 Both live in the running app: when Switchboard is not running, nothing fires. A
 schedule can ask to [catch up](#catching-up-a-missed-run) a run it missed.
 
+Implementation paths: `src/main/schedules/` contains the scheduler and schedule
+IPC modules; `src/main/triggers/` contains the trigger watcher and context
+(ADR 0005, step 8). The schedule and trigger file directories described below
+are unchanged.
+
 ## Schedules
 
 A schedule is a file named `schedule-<something>.md` in a project's
