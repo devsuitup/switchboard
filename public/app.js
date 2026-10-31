@@ -2263,7 +2263,10 @@ function observeSessionProjection({ generation, cause, provenance } = {}) {
     const state = observeSessionProjection.state ||= { generation: 0, provenance: {},
       observer: helper.createSessionProjectionDiagnostics({ emit: record => window.api.sessionProjectionChanged?.(record) }) };
     if (generation !== undefined) state.generation = generation;
-    if (provenance) state.provenance = provenance;
+    if (provenance) {
+      state.provenance = provenance;
+      state.factsByMember = helper.indexProjectionFacts(provenance);
+    }
     const visible = new Set(cachedProjects.flatMap(project => project.sessions.map(row =>
       helper.projectionScope(project.remoteAlias, project.projectPath) + '|' + row.sessionId.toLowerCase())));
     const rows = [];
@@ -2271,9 +2274,10 @@ function observeSessionProjection({ generation, cause, provenance } = {}) {
       if (row.parentSessionId || row.type === 'terminal') continue;
       const selection = typeof selectBackgroundActivity === 'function' ? selectBackgroundActivity(rowHeadId(row), row) : null;
       const entry = selection?.entry;
-      const facts = row.projectionFacts;
+      const rowScope = helper.projectionScope(project.remoteAlias, project.projectPath);
+      const facts = state.factsByMember?.get(rowScope + '|' + row.sessionId.toLowerCase());
       const foreground = typeof backgroundActivityIsForeground === 'function' && backgroundActivityIsForeground(rowHeadId(row), row, selection);
-      const scope = facts?.scope || helper.projectionScope(project.remoteAlias, project.projectPath);
+      const scope = facts?.scope || rowScope;
       const visibleInDefault = visible.has(scope + '|' + row.sessionId.toLowerCase());
       const attaches = typeof backgroundAttachFacts === 'function' ? backgroundAttachFacts(row) : [];
       const attached = attaches.length > 0;

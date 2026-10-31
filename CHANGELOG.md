@@ -9,6 +9,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Mark a conversation as unread from its sidebar row, archive eligible sessions under **older** with one confirmation, and find text in **View messages** with Ctrl+F. Open, active, live-elsewhere and remote sessions alive on their host are kept; message search keeps your place during live updates and supports Enter, Shift+Enter and Escape. (#819)
 
 ### Changed
+- Refreshing a large session list moves about a quarter less data between Switchboard's processes. (#742)
 - **Stop session** in a terminal header or grid card now stops every running part of the conversation, with the same confirmation and refusals as its sidebar row. (#917)
 - Opening a conversation from the sidebar now resumes its newest part instead of an older part waiting to restore. (#918)
 - Unexpected application errors now share one notice with repeat counts and an **Open log** button; the app keeps running and the log may hold details. Notices survive a window reload, dismissed errors stay dismissed, and screen readers announce new errors without repeating count updates. (#896, #932)

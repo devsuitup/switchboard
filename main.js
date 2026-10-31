@@ -1356,6 +1356,8 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
     backfillCustomTitles();
     const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
     const projection = result.projection ? structuredClone(result.projection) : undefined;
+    const diagnostics = projection ? require('./public/session-projection-diagnostics') : null;
+    const factsByMember = diagnostics?.indexProjectionFacts(projection);
     const assemble = async (projects, archived) => {
       const merged = mergePlaceholderSessions(projects);
       const kept = await writer.applyAndPersistArchived(merged, archived);
@@ -1366,7 +1368,7 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
           const filterReason = hidden.includes(project.projectPath) || hidden.includes(project.remoteAlias + '::' + project.projectPath)
             ? 'hidden-project' : 'archived';
           for (const row of project.sessions) {
-            const facts = row.projectionFacts;
+            const facts = factsByMember.get(diagnostics.projectionScope(project.remoteAlias, project.projectPath) + '|' + row.sessionId.toLowerCase());
             if (facts) projection.removedInputs[facts.scope + '|' + facts.rootId] = { ...facts.inputs, filterReason };
           }
         }
