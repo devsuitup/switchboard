@@ -21,7 +21,7 @@ by the user: a fourth tab, a split under the main terminal, one global shell.
 | `public/terminal-manager.js` | The three lifted assumptions below. |
 | `public/grid-view.js` | The second `.visible` sweep, and the WebGL suspend a panel shell must sit out. |
 | `public/app.js` | The shell's own exit, and the two places a live PTY is counted as a session. |
-| `panel-terminal-target.js` | Main-process cwd resolution and `isPanelShellSession`, dependency-injected (same pattern as `git-changes-target.js`). |
+| `src/main/terminals/panel-terminal-target.js` | Main-process cwd resolution and `isPanelShellSession`, dependency-injected (same pattern as `git-changes-target.js`). |
 
 ## Main process
 
@@ -58,8 +58,8 @@ everywhere a live PTY stands for a session the user can see or act on:
 
 **The two sides of the exclusion use different keys, because they hold
 different things.** In the main process the value is the session object, so
-`isPanelShellSession(session)` (`panel-terminal-target.js`) reads `panelFor` —
-the field that actually defines a panel shell. `panel-terminal-target.js`
+`isPanelShellSession(session)` (`src/main/terminals/panel-terminal-target.js`) reads `panelFor` —
+the field that actually defines a panel shell. `src/main/terminals/panel-terminal-target.js`
 requires nothing, so any main-process module can import it without a cycle. The
 renderer holds ids and nothing else (`activePtyIds`), so
 `countSessionsWithoutPanelShells(ids)` keys on the `panel:` id prefix instead.

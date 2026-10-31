@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { resolveTerminalPathTarget, resolveTerminalPaths, fileHasNullByte } = require('../terminal-path-target');
+const { resolveTerminalPathTarget, resolveTerminalPaths, fileHasNullByte } = require('../src/main/terminals/terminal-path-target');
 const { isSensitivePathAsync } = require('../src/main/shared/ipc-path-validator');
 
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -118,8 +118,8 @@ test('fileHasNullByte reports true for an unreadable path rather than letting it
 
 // --- Which cwd a session's candidates resolve against ---
 
-const { resolveTerminalPathsCwd } = require('../terminal-path-target');
-const { resolvePanelTerminalCwd } = require('../panel-terminal-target');
+const { resolveTerminalPathsCwd } = require('../src/main/terminals/terminal-path-target');
+const { resolvePanelTerminalCwd } = require('../src/main/terminals/panel-terminal-target');
 
 function cwdDeps(sessions, targets) {
   return {

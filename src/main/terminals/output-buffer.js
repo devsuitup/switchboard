@@ -65,7 +65,7 @@
 const COALESCE_THRESHOLD = 64;
 const MAX_BUFFER_SIZE = 256 * 1024;
 
-const { removeCursorPositionQueries, splitReplayQuery } = require('./public/terminal-replay-queries');
+const { removeCursorPositionQueries, splitReplayQuery } = require('../../../public/terminal-replay-queries');
 
 function dropBufferEnd(state, count) {
   let left = count;

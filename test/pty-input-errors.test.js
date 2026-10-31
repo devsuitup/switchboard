@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { spawnSync } = require('node:child_process');
-const { guardPtyInputErrors, setPtyOpLogger } = require('../pty-ops');
+const { guardPtyInputErrors, setPtyOpLogger } = require('../src/main/terminals/pty-ops');
 
 test.afterEach(() => setPtyOpLogger(null));
 
@@ -40,7 +40,7 @@ for (const code of ['EAGAIN', 'EPIPE']) {
       process.once('uncaughtException', onUncaught);
       ops.detachPty({ pty }, 'attach-517', { schedule: () => null });
     `;
-    const result = spawnSync(process.execPath, ['-e', script, require.resolve('../pty-ops'), code], {
+    const result = spawnSync(process.execPath, ['-e', script, require.resolve('../src/main/terminals/pty-ops'), code], {
       encoding: 'utf8', timeout: 5000, windowsHide: true,
     });
     assert.ifError(result.error);

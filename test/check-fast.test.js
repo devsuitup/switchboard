@@ -15,7 +15,7 @@ const inventory = [
 ];
 
 test('source basename selects all matching test siblings, sorted and deduplicated', () => {
-  assert.deepEqual(selectTests(['pty-ops.js', 'src/main/pty-ops.js'], inventory), [
+  assert.deepEqual(selectTests(['src/main/terminals/pty-ops.js', 'src/main/pty-ops.js'], inventory), [
     'test/pty-ops-input.test.js', 'test/pty-ops.test.js',
   ]);
 });
@@ -101,7 +101,7 @@ test('runs staged JS lint then each actual matching test once, using current Nod
 });
 
 test('SKIP_TESTS keeps lint and skips tests with task or direct invocation', (t) => {
-  const options = rig(t, { files: ['pty-ops.js'], env: { SKIP_TESTS: '1' } });
+  const options = rig(t, { files: ['src/main/terminals/pty-ops.js'], env: { SKIP_TESTS: '1' } });
   assert.equal(runFast(options), 0);
   assert.equal(options.calls.length, 1);
   assert.ok(options.calls[0].args[0].includes('eslint'));
@@ -114,13 +114,13 @@ test('docs-only selection spawns neither lint nor tests', (t) => {
 });
 
 test('lint failure blocks tests and returns its exit status', (t) => {
-  const options = rig(t, { files: ['pty-ops.js'], respond: () => ({ status: 2 }) });
+  const options = rig(t, { files: ['src/main/terminals/pty-ops.js'], respond: () => ({ status: 2 }) });
   assert.equal(runFast(options), 2);
   assert.equal(options.calls.length, 1);
 });
 
 test('test failure blocks later tests and returns its exit status', (t) => {
-  const options = rig(t, { files: ['pty-ops.js'], respond: (command, args) => ({ status: args[0] === '--test' ? 3 : 0 }) });
+  const options = rig(t, { files: ['src/main/terminals/pty-ops.js'], respond: (command, args) => ({ status: args[0] === '--test' ? 3 : 0 }) });
   assert.equal(runFast(options), 3);
   assert.equal(options.calls.length, 2);
 });
@@ -132,9 +132,9 @@ test('git failure is reported instead of silently accepting an empty selection',
 });
 
 test('spawn error and signal termination cannot pass the check', (t) => {
-  const options = rig(t, { files: ['pty-ops.js'], respond: () => ({ error: new Error('spawn failed'), status: null }) });
+  const options = rig(t, { files: ['src/main/terminals/pty-ops.js'], respond: () => ({ error: new Error('spawn failed'), status: null }) });
   assert.throws(() => runFast(options), /spawn failed/);
-  const terminated = rig(t, { files: ['pty-ops.js'], respond: () => ({ status: null, signal: 'SIGTERM' }) });
+  const terminated = rig(t, { files: ['src/main/terminals/pty-ops.js'], respond: () => ({ status: null, signal: 'SIGTERM' }) });
   assert.equal(runFast(terminated), 1);
 });
 

@@ -275,7 +275,7 @@ concept. Each entry gives:
   project's `+` menu, listed as a row with a terminal badge, removed when its
   shell exits.
 - **Don't say**: "shell session", "console".
-- **Code**: `type: 'terminal'`; `plain-terminal-shell.js`;
+- **Code**: `type: 'terminal'`; `src/main/terminals/plain-terminal-shell.js`;
   `public/app.js:686-707` (removed on exit).
 - **Today**: its only row action
   is Stop (`public/sidebar.js:1808-1818`).

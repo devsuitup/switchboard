@@ -32,7 +32,7 @@ function setup(t, { jobs = {}, outside = [], others = [], listed = [], checkedRe
   fs.writeFileSync(path.join(root, folder, SID + '.jsonl'), JSON.stringify({ type: 'user', message: { content: 'hello' } }) + '\n');
   const writes = [], respawned = [], exitedAtRespawn = [], listeners = new Set();
   const session = { kind: 'local-pty', realSessionId: SID, projectFolder: folder, exitDrain: Promise.resolve(),
-    composerState: require('../composer-state').createComposerState(),
+    composerState: require('../src/main/terminals/composer-state').createComposerState(),
     pty: { pid: SOURCE_PID, onData: () => ({ dispose() {} }) } };
   const activeSessions = new Map([['tab', session], ...others.map((o, i) => ['other' + i, o])]);
   const ctx = vm.createContext({

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { createTerminalResizeHandler } = require('../terminal-resize');
+const { createTerminalResizeHandler } = require('../src/main/terminals/terminal-resize');
 const { extractFunction } = require('./app-source');
 const { createTmuxAttachAdapter } = require('../src/main/remote/remote-attach');
 
@@ -142,7 +142,7 @@ test('remote open, reattach and launch preserve the adapter sizing capability in
       isRemoteFolder: () => true,
       parseFolderKey: () => ({ alias: 'fixture' }),
       remoteIndexer: { getRemoteSessions: () => ({ sessions: [descriptor] }), refreshHostNow: async () => {} },
-      normalizePtySize: require('../pty-size').normalizePtySize,
+      normalizePtySize: require('../src/main/terminals/pty-size').normalizePtySize,
       remoteAttachAdapter: { attach: async () => attachResult },
       remoteLaunchAdapter: {},
       handleLaunchRequest: async () => ({ ok: true, descriptor, attachResult }),

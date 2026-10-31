@@ -18,6 +18,18 @@ node scripts/move-modules.js
 node scripts/move-modules.js --check
 ```
 
+Refresh the blame-ignore entry after every rebase; prefer merging main into the branch over
+rebasing, since the session tooling refuses force-pushes. Keep entries in move order, newest last.
+Check mode verifies that every listed full SHA is a commit reachable from HEAD and that the last
+entry is a pure rename (all R100, zero insertions/deletions). It exits 1 for stale or impure entries;
+abbreviated or malformed entries must be replaced with a full 40-hex SHA. Git command failures
+are reported separately and exit 2.
+Shallow repositories and archives without Git history print an explicit `SKIP` for this validation;
+use a full-history checkout to verify the entries. `test/move-modules.test.js` calls the exported
+`checkBlameIgnore` on the repository root in CI, whose test matrix uses `fetch-depth: 0`.
+Git subprocesses discard inherited `GIT_*` and `HUSKY*` variables so hook state cannot redirect
+the history lookup to another repository or index.
+
 The first check reports each pending reference and exits 1 until the references are rewritten.
 Check mode never writes. Apply mode updates references only; it never moves files or runs git.
 It plans all edits before writing and rejects invalid maps, renames and ambiguous VM stub mappings.
@@ -41,6 +53,14 @@ still need manual review. A full source evaluation keeps participating even when
 is also sliced. Unknown source uses remain conservative; separate VM contexts can still require
 manual ambiguity resolution.
 Non-first path segments in `path.join` are never rewritten as standalone module filenames.
+Directory constants such as `PUBLIC_DIR`, and root/dirname joins resolving to an unmapped
+subdirectory module with a moved basename (for example `public/activity-trace.js`), remain
+unchanged and produce a `WARNING` when the consuming module stays in place. In a moved module,
+static dirname joins to unmapped files are rewritten relative to the new location, including
+same-basename worker and renderer files; `ROOT` joins keep their root-relative target.
+Bare moved basenames in literals such as renderer filename arrays remain unchanged and warn
+when an unmapped file elsewhere in the scanned tree has that basename. Exact mapped
+subdirectory paths and already-relocated destinations keep their normal rewrite/loader handling.
 Qualified documentation paths
 change; bare filenames remain valid. It does not evaluate code or computed path expressions.
 Review dynamic paths manually, especially interpolated worker paths and source strings inside tests.

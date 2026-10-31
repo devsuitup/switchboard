@@ -82,7 +82,7 @@ function remoteMain(descriptorIds) {
     attachBlockReason, sendBlockReason,
     getCachedFolder: () => 'host::project', isRemoteFolder: () => true,
     parseFolderKey: () => ({ alias: 'host' }),
-    normalizePtySize: require('../pty-size').normalizePtySize,
+    normalizePtySize: require('../src/main/terminals/pty-size').normalizePtySize,
     wireSessionPty() {}, revealIfSdkSession() {},
     REMOTE_READ_ONLY: 'read-only',
   });

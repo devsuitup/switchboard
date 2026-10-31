@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
-const { guardPtyInputErrors, killPty, trackWindowsPty } = require('../../pty-ops');
+const { guardPtyInputErrors, killPty, trackWindowsPty } = require('../../src/main/terminals/pty-ops');
 const { windowsJobHelper } = require('../../src/main/terminals/windows-job-helper');
 const nodePty = require(process.env.NODE_PTY_DIR);
 const keepAlive = setInterval(() => {}, 1000);

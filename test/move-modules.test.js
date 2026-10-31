@@ -6,7 +6,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { rewrite, validateMap } = require('../scripts/move-modules');
+const vm = require('node:vm');
+const { createRequire } = require('node:module');
+const { rewrite, validateMap, checkBlameIgnore } = require('../scripts/move-modules');
 
 const map = { 'a.js': 'src/main/viewer/a.js', 'b.js': 'src/main/shared/b.js' };
 
@@ -234,6 +236,201 @@ function cliFixture(t, prefix) {
     [path.join(__dirname, '../scripts/move-modules.js'), '--root', root, ...args], { encoding: 'utf8', timeout: 120000 });
   return { root, write, run };
 }
+
+test('renderer basename collisions preserve unmoved consumers and relocate joins in moved consumers', t => {
+  const { root, write, run } = cliFixture(t, 'move-renderer-collision-');
+  write('scripts/source-map.json', JSON.stringify({
+    'activity-trace.js': 'src/main/shared/activity-trace.js',
+    'loader.js': 'src/main/shared/loader.js',
+  }));
+  write('src/main/shared/activity-trace.js', 'module.exports = {};');
+  const renderer = [
+    "path.join(PUBLIC_DIR, 'activity-trace.js');",
+    "path.join(ROOT, 'public', 'activity-trace.js');",
+    "path.join(__dirname, 'public', 'activity-trace.js');",
+  ];
+  write('src/main/shared/loader.js', renderer.join('\n'));
+  write('test/collision.test.js', [
+    ...renderer.slice(0, 2),
+    "path.join(__dirname, '..', 'public', 'activity-trace.js');",
+    "path.join(ROOT, 'activity-trace.js');",
+  ].join('\n'));
+  write('public/activity-trace.js', 'window.trace = {};');
+  const check = run('--check');
+  assert.equal(check.status, 1, check.stderr);
+  assert.match(check.stdout, /src\/main\/shared\/loader.js:3:.*'\.\.\/\.\.\/\.\.\/public\/activity-trace.js'/);
+  assert.match(check.stderr, /WARNING src\/main\/shared\/loader.js:1: path.join segment activity-trace.js/);
+  for (let line = 1; line <= 3; line++) {
+    assert.ok(check.stderr.includes(`WARNING test/collision.test.js:${line}: path.join segment activity-trace.js`), check.stderr);
+  }
+  assert.equal(run().status, 0);
+  assert.equal(fs.readFileSync(path.join(root, 'src/main/shared/loader.js'), 'utf8'), [
+    renderer[0], "path.join(ROOT, 'public/activity-trace.js');", "path.join(__dirname, '../../../public/activity-trace.js');",
+  ].join('\n'));
+  assert.equal(run('--check').status, 0);
+});
+
+test('a moved session-index writer keeps its unmapped worker with the same basename', t => {
+  const { root, write, run } = cliFixture(t, 'move-worker-collision-');
+  const destination = 'src/main/session-index/session-index-writer.js';
+  write('scripts/source-map.json', JSON.stringify({ 'session-index-writer.js': destination }));
+  write(destination, "new Worker(path.join(__dirname, 'workers', 'session-index-writer.js'));");
+  write('workers/session-index-writer.js', 'module.exports = {};');
+  const check = run('--check');
+  assert.equal(check.status, 1, check.stderr);
+  assert.match(check.stdout, /'\.\.\/\.\.\/\.\.\/workers\/session-index-writer.js'/);
+  assert.equal(run().status, 0);
+  assert.equal(fs.readFileSync(path.join(root, destination), 'utf8'),
+    "new Worker(path.join(__dirname, '../../../workers/session-index-writer.js'));");
+  assert.equal(run('--check').status, 0);
+});
+
+test('bare moved basenames in renderer arrays warn and stay unchanged when a collision exists', t => {
+  const { root, write, run } = cliFixture(t, 'move-array-collision-');
+  write('scripts/source-map.json', JSON.stringify({ 'activity-trace.js': 'src/main/shared/activity-trace.js' }));
+  write('src/main/shared/activity-trace.js', 'module.exports = {};');
+  write('public/activity-trace.js', 'window.trace = {};');
+  const input = "for (const file of ['activity-trace.js', 'other.js']) path.join(PUBLIC_DIR, file);";
+  write('test/renderer.test.js', input);
+  const check = run('--check');
+  assert.equal(check.status, 0, check.stdout);
+  assert.match(check.stderr, /WARNING test\/renderer.test.js:1:.*ambiguous.*activity-trace.js/);
+  assert.equal(run().status, 0);
+  assert.equal(fs.readFileSync(path.join(root, 'test/renderer.test.js'), 'utf8'), input);
+  assert.equal(run('--check').status, 0);
+});
+
+function historyFixture(t) {
+  const fixture = cliFixture(t, 'move-history-');
+  fixture.write('scripts/source-map.json', '{}');
+  fixture.write('gitconfig', '');
+  const git = (...args) => {
+    const result = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
+      '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', ...args], {
+      cwd: fixture.root, encoding: 'utf8', timeout: 10000,
+      env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(GIT_|HUSKY)/i.test(key))),
+        GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(fixture.root, 'gitconfig') },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git('init');
+  fixture.write('before.txt', `fixture ${path.basename(fixture.root)}\n`);
+  git('add', 'before.txt');
+  git('commit', '-m', 'fixture base');
+  const base = git('rev-parse', 'HEAD');
+  git('mv', 'before.txt', 'after.txt');
+  git('commit', '-m', 'fixture pure rename');
+  const rename = git('rev-parse', 'HEAD');
+  return { ...fixture, git, base, rename };
+}
+
+test('repository blame-ignore entries resolve and the newest entry is a pure rename', () => {
+  assert.equal(typeof checkBlameIgnore, 'function', 'history validation must be exported for the CI repository check');
+  assert.equal(checkBlameIgnore(path.join(__dirname, '..')), true);
+});
+
+test('history fixture ignores hook environment and preserves a decoy index', t => {
+  if (process.env.MOVE_HISTORY_HOOK_CHILD === '1') {
+    const fixture = historyFixture(t);
+    fixture.write('.git-blame-ignore-revs', `${fixture.rename}\n`);
+    assert.equal(fixture.run('--check').status, 0, 'checker must use the fixture history despite inherited GIT_DIR');
+    return;
+  }
+  const decoy = historyFixture(t);
+  decoy.write('decoy-only.txt', 'decoy index sentinel\n');
+  decoy.git('add', 'decoy-only.txt');
+  const index = path.join(decoy.root, '.git/index');
+  const before = fs.readFileSync(index);
+  for (const extra of [{}, { GIT_DIR: path.join(decoy.root, '.git'), GIT_WORK_TREE: decoy.root }]) {
+    const env = { ...process.env, MOVE_HISTORY_HOOK_CHILD: '1', GIT_INDEX_FILE: index, HUSKY: '1', ...extra };
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawnSync(process.execPath, ['--test', '--test-timeout=120000',
+      '--test-name-pattern=history fixture ignores hook environment', __filename], {
+      encoding: 'utf8', timeout: 120000, env,
+    });
+    assert.ok(fs.readFileSync(index).equals(before), 'hook fixture must not modify the decoy index');
+    assert.equal(child.status, 0, child.stdout + child.stderr);
+  }
+});
+
+test('--check diagnoses abbreviated and malformed blame-ignore SHAs', t => {
+  const { write, run, rename } = historyFixture(t);
+  for (const sha of [rename.slice(0, 12), 'z'.repeat(40)]) {
+    write('.git-blame-ignore-revs', `${sha}\n`);
+    const result = run('--check');
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /must be a full 40-hex SHA/);
+  }
+});
+
+test('--check reports git show failures separately with exit 2', t => {
+  const { root, write, rename } = historyFixture(t);
+  write('.git-blame-ignore-revs', `${rename}\n`);
+  const filename = path.join(__dirname, '../scripts/move-modules.js');
+  const realRequire = createRequire(filename);
+  for (const option of ['--name-status', '--numstat']) {
+    const messages = [];
+    const module = { exports: {} };
+    const require = name => name === 'node:child_process' ? {
+      spawnSync: (command, args, options) => args[0] === 'show' && args.includes(option)
+        ? { status: 128, stderr: 'fatal: injected object read failure', stdout: '' }
+        : spawnSync(command, args, options),
+    } : realRequire(name);
+    require.main = module;
+    const process = { argv: ['node', filename, '--check', '--root', root], exitCode: 0, env: global.process.env };
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+      require, module, __dirname: path.dirname(filename), process,
+      console: { error: message => messages.push(message), warn: message => messages.push(message), log() {} },
+    }, { filename });
+    assert.equal(process.exitCode, 2, messages.join('\n'));
+    assert.match(messages.join('\n'), /Cannot check blame-ignore history:.*injected object read failure/);
+    assert.doesNotMatch(messages.join('\n'), /must be a pure-rename/);
+  }
+});
+
+test('--check rejects every unreachable blame-ignore commit, including an existing dangling commit', t => {
+  const { write, run, git, rename } = historyFixture(t);
+  const dangling = git('commit-tree', 'HEAD^{tree}', '-m', 'fixture unrelated root');
+  for (const stale of ['0'.repeat(40), dangling]) {
+    write('.git-blame-ignore-revs', `${stale}\n${rename}\n`);
+    const result = run('--check');
+    assert.equal(result.status, 1, `must reject stale SHA ${stale}: ${result.stderr}`);
+    assert.ok(result.stderr.includes(stale), result.stderr);
+  }
+});
+
+test('--check accepts reachable rename history and rejects a newest entry with edits or no renames', t => {
+  const { write, run, git, base, rename } = historyFixture(t);
+  write('.git-blame-ignore-revs', `# move history\n${base}\n${rename} # newest move\n`);
+  assert.equal(run('--check').status, 0);
+  git('mv', 'after.txt', 'final.txt');
+  write('extra.txt', 'edited\n');
+  git('add', 'extra.txt');
+  git('commit', '-m', 'fixture impure rename');
+  const impure = git('rev-parse', 'HEAD');
+  for (const sha of [impure, base]) {
+    write('.git-blame-ignore-revs', `${rename}\n${sha}\n`);
+    const result = run('--check');
+    assert.equal(result.status, 1, `must reject impure newest entry: ${result.stderr}`);
+    assert.match(result.stderr, /pure.rename|R100/);
+  }
+});
+
+test('--check explicitly skips unreachable history in a shallow repository or a non-repository fixture', t => {
+  const { write, run, base, rename } = historyFixture(t);
+  write('.git/shallow', `${rename}\n`);
+  write('.git-blame-ignore-revs', `${base}\n${rename}\n`);
+  const shallow = run('--check');
+  assert.equal(shallow.status, 0, shallow.stderr);
+  assert.match(shallow.stderr, /SKIP.*blame.*shallow/i);
+  const archive = cliFixture(t, 'move-archive-');
+  archive.write('scripts/source-map.json', '{}');
+  archive.write('.git-blame-ignore-revs', `${rename}\n`);
+  const result = archive.run('--check');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /SKIP.*blame.*histor|SKIP.*blame.*repository/i);
+});
 
 test('the CLI refuses apply before moves without changing any file and allows check to list pending moves', t => {
   const { root, write, run } = cliFixture(t, 'move-pending-');

@@ -12,9 +12,9 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 
-const { handleTerminalInput } = require('../terminal-input');
+const { handleTerminalInput } = require('../src/main/terminals/terminal-input');
 const { createTriggerContext } = require('../trigger-context');
-const { createComposerState }  = require('../composer-state');
+const { createComposerState }  = require('../src/main/terminals/composer-state');
 
 const silentLog = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
 

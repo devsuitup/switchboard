@@ -3,7 +3,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { normalizePtySize, DEFAULT_COLS, DEFAULT_ROWS, MAX_COLS, MAX_ROWS } = require('../pty-size');
+const { normalizePtySize, DEFAULT_COLS, DEFAULT_ROWS, MAX_COLS, MAX_ROWS } = require('../src/main/terminals/pty-size');
 
 test('a measured size passes through unchanged', () => {
   assert.deepStrictEqual(normalizePtySize({ cols: 213, rows: 57 }), { cols: 213, rows: 57 });

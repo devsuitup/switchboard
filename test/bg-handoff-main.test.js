@@ -94,7 +94,7 @@ function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = ()
     for (const waiter of waiters) if (notifications >= waiter.count) waiter.resolve();
   });
   let descriptors = [];
-  const session = { kind: 'local-pty', realSessionId: 'OLD', projectFolder: folder, exitDrain: new Promise(resolve => { exited = resolve; }), composerState: require('../composer-state').createComposerState(), pty: { onData: fn => { const tap = { fn, disposed: false, dispose() { tap.disposed = true; } }; taps.push(tap); return tap; } } };
+  const session = { kind: 'local-pty', realSessionId: 'OLD', projectFolder: folder, exitDrain: new Promise(resolve => { exited = resolve; }), composerState: require('../src/main/terminals/composer-state').createComposerState(), pty: { onData: fn => { const tap = { fn, disposed: false, dispose() { tap.disposed = true; } }; taps.push(tap); return tap; } } };
   const ctx = vm.createContext({
     setTimeout, clearTimeout, Date, Promise, path, fs, require: require('node:module').createRequire(path.join(__dirname, '../main.js')), PROJECTS_DIR: root,
     detectSessionTransitions: name => onTransitions(name),

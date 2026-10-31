@@ -110,7 +110,7 @@ test('local Claude and plain-terminal launch environments retain the UTF-8 defau
   const claude = mainStatement(n => n.type === 'VariableDeclaration' && n.declarations.some(d => d.id.name === 'ptyEnv'));
   for (const platform of ['darwin', 'linux', 'win32']) {
     const context = vm.createContext({ cleanPtyEnv: cleaner(platform)({}), shell: '/bin/sh', shellExtraArgs: [],
-      shellArgs: () => [], plainTerminalLaunch: require('../plain-terminal-shell').plainTerminalLaunch,
+      shellArgs: () => [], plainTerminalLaunch: require('../src/main/terminals/plain-terminal-shell').plainTerminalLaunch,
       ensurePlainTerminalInitFiles: () => false, PLAIN_TERMINAL_INIT_DIR: '/unused', log: {} });
     vm.runInContext(plain.source, context, { filename: plain.filename });
     vm.runInContext(claude.source, context, { filename: claude.filename });

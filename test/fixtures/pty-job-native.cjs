@@ -11,7 +11,7 @@ const vm = require('node:vm');
 const { PassThrough } = require('node:stream');
 const { extractFunction } = require('../app-source');
 const { createWindowsJobHelper } = require('../../src/main/terminals/windows-job-helper');
-const { trackWindowsPty, releaseWindowsPty, guardPtyInputErrors, killPty } = require('../../pty-ops');
+const { trackWindowsPty, releaseWindowsPty, guardPtyInputErrors, killPty } = require('../../src/main/terminals/pty-ops');
 const keepAlive = setInterval(() => {}, 1000);
 
 function observer(pid) {

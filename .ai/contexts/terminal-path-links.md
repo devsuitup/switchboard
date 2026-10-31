@@ -10,7 +10,7 @@ link.
 | File | Role |
 |---|---|
 | `public/terminal-path-links.js` | The matcher, the per-path cache, and the xterm link provider. Dual-mode: a classic `<script>` in the renderer, `require()`-d by `test/terminal-path-links.test.js`. |
-| `terminal-path-target.js` | Main-side openability: the one question the provider asks per candidate. |
+| `src/main/terminals/terminal-path-target.js` | Main-side openability: the one question the provider asks per candidate. |
 | `main.js` | `resolve-terminal-paths` handler. |
 | `public/terminal-manager.js` | Registers the provider per terminal; routes a click to `openFileInPanel`. |
 | `public/file-panel.js` | `openFileInPanel(sessionId, path, { line })` — hands the path and the line to `openTouchedPath` (`public/touched-files-view.js`). |

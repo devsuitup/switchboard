@@ -20,7 +20,7 @@ if (!app.isPackaged && !process.env.SWITCHBOARD_DATA_DIR) {
 }
 
 // getFolderIndexMtimeMs moved to session-cache.js
-const { appendToOutputBuffer, MAX_BUFFER_SIZE } = require('./output-buffer');
+const { appendToOutputBuffer, MAX_BUFFER_SIZE } = require('./src/main/terminals/output-buffer');
 const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles, getMcpState } = require('./src/main/integrations/mcp/mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
 
@@ -80,23 +80,23 @@ function spawnPty(file, args, opts) {
 }
 
 // Shell profiles → shell-profiles.js
-const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
+const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./src/main/terminals/shell-profiles');
 const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./schedule-runner');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./src/main/shared/ipc-path-validator');
-const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
-const { normalizePtySize } = require('./pty-size');
+const { validatePreLaunchCmd } = require('./src/main/terminals/pre-launch-cmd-guard');
+const { normalizePtySize } = require('./src/main/terminals/pty-size');
 const { makeDeleteSessionGuard } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
-const { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, killPty, detachPty, writePty, ptyExitSignalName } = require('./pty-ops');
+const { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, killPty, detachPty, writePty, ptyExitSignalName } = require('./src/main/terminals/pty-ops');
 const { configureWindowsJobHelper } = require('./src/main/terminals/windows-job-helper');
 const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
 const { JOB_ID_RE, isHostedJob } = require('./bg-agents-roster');
-const { createTerminalResizeHandler } = require('./terminal-resize');
-const { createComposerState } = require('./composer-state');
-const { handleTerminalInput } = require('./terminal-input');
+const { createTerminalResizeHandler } = require('./src/main/terminals/terminal-resize');
+const { createComposerState } = require('./src/main/terminals/composer-state');
+const { handleTerminalInput } = require('./src/main/terminals/terminal-input');
 const { createTriggerContext } = require('./trigger-context');
 const { createTmuxAttachAdapter } = require('./src/main/remote/remote-attach');
 const { loadAttachProfileId } = require('./src/main/remote/remote-attach-profile');
@@ -107,9 +107,9 @@ const { createRemoteSendAdapter, handleSendRequest } = require('./src/main/remot
 const { createGitChangesRunner, localGitEnv } = require('./src/main/changes/git-changes-runner');
 const { runToExit } = require('./src/main/shared/run-to-exit');
 const gitChangesTarget = require('./src/main/changes/git-changes-target');
-const terminalPathTarget = require('./terminal-path-target');
-const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
-const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./plain-terminal-shell');
+const terminalPathTarget = require('./src/main/terminals/terminal-path-target');
+const { resolvePanelTerminalCwd, isPanelShellSession } = require('./src/main/terminals/panel-terminal-target');
+const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./src/main/terminals/plain-terminal-shell');
 const gitChangesFile = require('./src/main/changes/git-changes-file');
 const { listSessionTouchedFiles, mainTouchedCache } = require('./src/main/changes/session-touched-files');
 const { readRemoteTouchedFile } = require('./src/main/changes/remote-touched-files');

@@ -327,7 +327,7 @@ test('A5 upgrades renew consent, generations are revalidated, sender and launch 
 test('#769 a confirmed handoff during an open exit dialog does not ask again after rekey', async () => {
   const t = setup();
   const session = t.records.get('local');
-  session.composerState = require('../composer-state').createComposerState();
+  session.composerState = require('../src/main/terminals/composer-state').createComposerState();
   let entered = false, time = 0;
   t.menu();
   assert.equal(t.checks().length, 1);

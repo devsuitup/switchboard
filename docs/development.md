@@ -83,7 +83,7 @@ This name-based selection can miss unrelated regressions; the full PR gate and
 required CI cover those. See [fast-check context](../.ai/contexts/fast-check.md).
 
 To time the check without changing files or staging anything, run
-`node scripts/check-fast.js --files pty-ops.js test/pty-ops.test.js` (paths
+`node scripts/check-fast.js --files src/main/terminals/pty-ops.js test/pty-ops.test.js` (paths
 relative to the repository root).
 This overrides only the input list; lint and selected tests still execute.
 
