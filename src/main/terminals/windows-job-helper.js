@@ -112,7 +112,9 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
 
   function terminate(id, pids) {
     const sendPids = values => {
-      const valid = [...new Set((Array.isArray(values) ? values : []).filter(pid => Number.isSafeInteger(pid) && pid > 0 && pid <= 0xffffffff))];
+      const valid = [...new Set((Array.isArray(values) ? values : []).filter(value => Number.isSafeInteger(value?.pid)
+        && value.pid > 0 && value.pid <= 0xffffffff && typeof value.procStart === 'string' && /^\d{17,19}$/.test(value.procStart))
+        .map(value => `${value.pid}:${value.procStart}`))];
       return finish('terminate', id, valid.length ? ` ${valid.join(',')}` : '');
     };
     try {
@@ -139,10 +141,18 @@ function createWindowsJobHelper({ spawn: spawnChild = spawn, warn = () => {}, st
   };
 }
 
-let singleton;
-function windowsJobHelper(warn, protectedPids) {
-  singleton ??= createWindowsJobHelper({ warn, protectedPids });
+let singleton, configuration;
+function configureWindowsJobHelper(warn, protectedPids) {
+  if (configuration && (configuration.warn !== warn || configuration.protectedPids !== protectedPids)) {
+    throw new Error('Windows job helper already configured');
+  }
+  if (!configuration && singleton) throw new Error('Windows job helper already configured by first use');
+  configuration ??= { warn, protectedPids };
+  return windowsJobHelper();
+}
+function windowsJobHelper() {
+  singleton ??= createWindowsJobHelper(configuration);
   return singleton;
 }
 
-module.exports = { createWindowsJobHelper, windowsJobHelper };
+module.exports = { createWindowsJobHelper, configureWindowsJobHelper, windowsJobHelper };

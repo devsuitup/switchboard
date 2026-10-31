@@ -537,6 +537,7 @@ function liveJobCheck(sessionId, { workerLiveness = new Map() } = {}) {
 }
 
 module.exports = {
+  getDaemonRosterPath: () => daemonRosterPath,
   invalidateTranscripts,
   init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck, findRestoreJob,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,

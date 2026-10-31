@@ -16,15 +16,30 @@ test('main reads only supervisor and worker PIDs from the disposable daemon rost
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-roster-897g-'));
   const roster = path.join(home, '.claude', 'daemon', 'roster.json');
   fs.mkdirSync(path.dirname(roster), { recursive: true });
-  const context = vm.createContext({ fs, path, os: { homedir: () => home } });
+  const context = vm.createContext({ fs, path, os: { homedir: () => home },
+    require: name => { assert.equal(name, './bg-agents'); return { getDaemonRosterPath: () => roster }; } });
   vm.runInContext(extractFunction(source, 'readWindowsDaemonPids'), context, { filename });
   try {
     assert.deepEqual(Array.from(await context.readWindowsDaemonPids()), []);
     fs.writeFileSync(roster, '{');
     assert.deepEqual(Array.from(await context.readWindowsDaemonPids()), []);
-    fs.writeFileSync(roster, JSON.stringify({ supervisorPid: 901, workers: { a: { pid: 902, procStart: 10 }, b: { pid: -1 } }, unrelatedPid: 903 }));
-    assert.deepEqual(Array.from(await context.readWindowsDaemonPids()), [901, 902]);
+    const supervisor = { pid: 901, procStart: '133000000000000000' };
+    const worker = { pid: 902, procStart: '133000000000000001' };
+    fs.writeFileSync(roster, JSON.stringify({ supervisorPid: supervisor.pid, supervisorProcStart: supervisor.procStart,
+      workers: { a: worker, b: { pid: -1 }, c: { pid: 904 } }, unrelatedPid: 903 }));
+    assert.deepEqual(JSON.parse(JSON.stringify(await context.readWindowsDaemonPids())), [supervisor, worker]);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('background roster getter follows the configured service path', () => {
+  const bgAgents = require('../bg-agents');
+  const path = require('node:path'), os = require('node:os');
+  const custom = path.join(os.tmpdir(), 'sb-roster-h', 'custom.json');
+  bgAgents.init({ daemonRosterPath: custom });
+  assert.equal(bgAgents.getDaemonRosterPath(), custom);
+  bgAgents.init({ jobsDir: path.join(os.tmpdir(), 'sb-roster-h', 'jobs') });
+  assert.equal(bgAgents.getDaemonRosterPath(), path.join(os.tmpdir(), 'sb-roster-h', 'daemon', 'roster.json'));
+  bgAgents.stop();
 });
 
 test('main warms the helper off the close path and registers only foreground local spawns before wiring exit', () => {
@@ -51,7 +66,7 @@ test('main warms the helper off the close path and registers only foreground loc
   assert.equal(spawns.length, 2);
   assert.ok(spawns.every(({ node }) => node.range[1] < registration.range[0]));
   const warms = nodes.filter(({ node }) => node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && node.callee.property.name === 'start'
-    && node.callee.object.callee?.name === 'windowsJobHelper');
+    && node.callee.object.callee?.name === 'configureWindowsJobHelper');
   assert.equal(warms.length, 1);
   const warm = warms[0];
   assert.equal(warm.node.callee.object.arguments[1]?.name, 'readWindowsDaemonPids', 'main must pass roster evidence to the helper');

@@ -91,7 +91,7 @@ const { normalizePtySize } = require('./pty-size');
 const { makeDeleteSessionGuard } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
 const { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, killPty, detachPty, writePty, ptyExitSignalName } = require('./pty-ops');
-const { windowsJobHelper } = require('./src/main/terminals/windows-job-helper');
+const { configureWindowsJobHelper } = require('./src/main/terminals/windows-job-helper');
 const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
 const { JOB_ID_RE, isHostedJob } = require('./bg-agents-roster');
 const { createTerminalResizeHandler } = require('./terminal-resize');
@@ -195,9 +195,11 @@ function resetUpdateAttempt() {
 }
 async function readWindowsDaemonPids() {
   try {
-    const roster = JSON.parse(await fs.promises.readFile(path.join(os.homedir(), '.claude', 'daemon', 'roster.json'), 'utf8'));
-    return [roster.supervisorPid, ...Object.values(roster.workers || {}).map(worker => worker?.pid)]
-      .filter(pid => Number.isSafeInteger(pid) && pid > 0 && pid <= 0xffffffff);
+    const roster = JSON.parse(await fs.promises.readFile(require('./bg-agents').getDaemonRosterPath(), 'utf8'));
+    return [{ pid: roster.supervisorPid, procStart: roster.supervisorProcStart }, ...Object.values(roster.workers || {})]
+      .filter(value => Number.isSafeInteger(value?.pid) && value.pid > 0 && value.pid <= 0xffffffff
+        && typeof value.procStart === 'string' && /^\d{17,19}$/.test(value.procStart))
+      .map(({ pid, procStart }) => ({ pid, procStart }));
   } catch { return []; }
 }
 
@@ -3848,7 +3850,7 @@ if (!app.isPackaged) {
   });
 
   app.whenReady().then(async () => {
-    if (process.platform === 'win32') void windowsJobHelper(message => log.warn(message), readWindowsDaemonPids).start();
+    if (process.platform === 'win32') void configureWindowsJobHelper(message => log.warn(message), readWindowsDaemonPids).start();
     await legacySearchCleanup;
     // Content Security Policy — restrict what the renderer can load or execute.
     // 'unsafe-inline' for style-src is required because the app sets .style.*

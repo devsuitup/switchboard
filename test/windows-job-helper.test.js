@@ -50,11 +50,13 @@ test('terminate sends validated roster PIDs after an in-flight assign and bounds
   const f = fixture(t);
   const assign = f.helper.assign('one', 897, 100);
   f.child.stdout.emit('data', 'ready\n');
-  const done = f.helper.terminate('one', [901, 902, 901, -1, '903', NaN]);
+  const done = f.helper.terminate('one', [{ pid: 901, procStart: '133000000000000000' }, { pid: 902, procStart: '133000000000000001' },
+    { pid: 901, procStart: '133000000000000000' }, { pid: -1, procStart: '133000000000000000' }, 903,
+    { pid: 904 }, { pid: 905, procStart: 'broken' }]);
   f.child.stdout.emit('data', 'assigned one\n');
   await assign;
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.writes.at(-1), 'terminate one 901,902\n');
+  assert.equal(f.writes.at(-1), 'terminate one 901:133000000000000000,902:133000000000000001\n');
   f.child.stdout.emit('data', 'terminated one\n');
   assert.equal(await done, true);
 });
@@ -73,11 +75,11 @@ test('best-effort roster reads are asynchronous, bounded and never strand termin
 
 test('termination uses asynchronously read roster PIDs and ignores roster read errors', async t => {
   for (const fails of [false, true]) {
-    const f = fixture(t, { protectedPids: async () => { if (fails) throw new Error('missing roster'); return [901]; } });
+    const f = fixture(t, { protectedPids: async () => { if (fails) throw new Error('missing roster'); return [{ pid: 901, procStart: '133000000000000000' }]; } });
     f.helper.start(); f.child.stdout.emit('data', 'ready\n');
     const done = f.helper.terminate('one');
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(f.writes.at(-1), fails ? 'terminate one\n' : 'terminate one 901\n');
+    assert.equal(f.writes.at(-1), fails ? 'terminate one\n' : 'terminate one 901:133000000000000000\n');
     f.child.stdout.emit('data', 'terminated one\n');
     assert.equal(await done, true);
   }
@@ -159,4 +161,20 @@ test('synchronous helper spawn failure and invalid process identity return failu
   assert.equal(await helper.assign('one', 897, 100), false);
   assert.equal(await helper.assign('two', 898, 100), false);
   assert.equal(spawns, 1); assert.equal(warnings, 1);
+});
+
+test('singleton is configured once and rejects different bindings instead of silently ignoring them', () => {
+  const vm = require('node:vm');
+  const filename = require.resolve('../src/main/terminals/windows-job-helper');
+  const context = vm.createContext({ require: require('node:module').createRequire(filename), module: { exports: {} } });
+  vm.runInContext(fs.readFileSync(filename, 'utf8'), context, { filename });
+  const api = context.module.exports;
+  const warn = () => {}, protectedPids = () => [];
+  assert.equal(typeof api.configureWindowsJobHelper, 'function', 'configuration must be explicit');
+  api.configureWindowsJobHelper(warn, protectedPids);
+  const helper = api.windowsJobHelper();
+  api.configureWindowsJobHelper(warn, protectedPids);
+  assert.equal(api.windowsJobHelper(), helper);
+  assert.throws(() => api.configureWindowsJobHelper(() => {}, protectedPids), /already configured/);
+  assert.throws(() => api.configureWindowsJobHelper(warn, () => []), /already configured/);
 });

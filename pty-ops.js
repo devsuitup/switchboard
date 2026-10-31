@@ -11,7 +11,7 @@ let nextJobId = 0;
 
 function trackWindowsPty(pty, { platform = process.platform, spawnTime = Date.now(), jobs } = {}) {
   if (platform !== 'win32' || !pty || jobsByPty.has(pty)) return Promise.resolve(false);
-  jobs ??= windowsJobHelper(message => logger?.warn?.(message));
+  jobs ??= windowsJobHelper();
   const record = { jobs, id: `pty-${++nextJobId}`, closing: false, exited: false, released: false };
   jobsByPty.set(pty, record);
   pty.onExit(() => {

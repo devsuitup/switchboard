@@ -544,145 +544,126 @@ writes to the entry; a resize holds it for one `ResizePseudoConsole` call.
 
 ### Closing a local PTY on Windows (#897)
 
-Windows tab cleanup replaces per-close process snapshots with a resident helper and
-one unnamed native job per foreground local PTY. The implementation is under
-`src/main/terminals/`, following ADR 0005. Background-agent processes are protected
-explicitly; ordinary detached processes still belong to their tab.
+Windows tab cleanup uses a resident hidden PowerShell helper and one unnamed
+native job per foreground local PTY (`src/main/terminals/`, ADR 0005).
+At app ready, main configures the singleton once and starts it without awaiting
+startup. `windowsJobHelper()` only retrieves it; configuring it again with
+different function bindings throws instead of silently keeping the first ones.
+First and restored tabs never wait for compilation. Queued assignments wait for
+`ready` (15 s startup deadline). Node reads the packaged `.ps1` with asar-aware
+fs.readFileSync; build.files includes src/**/*, and no archive path goes to
+PowerShell. The absolute System32 executable runs with -NoProfile,
+-NonInteractive, -EncodedCommand, windowsHide and SilentlyContinue; Add-Type
+compiles the P/Invoke C# once. No compilation occurs on the close path.
 
-At app ready, main starts the singleton without awaiting it. First and restored
-tabs do not wait for PowerShell startup or compilation. Assignments queue until
-ready (15 s startup maximum; failure falls back to plain `pty.kill()`). The hidden
-helper uses absolute System32 Windows PowerShell, `-NoProfile -NonInteractive
--EncodedCommand` and `$ProgressPreference='SilentlyContinue'`. Node reads
-`windows-job-helper.ps1` through its asar-aware `fs.readFileSync`; no external
-process receives an archive path. `build.files` already includes `src/**/*`.
-PowerShell compiles C# once with Add-Type, then serves stdin/stdout lines.
-There is no PowerShell launch or compilation on the close path.
+Jobs **never** set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. They retain only
+JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x800): applications that explicitly request
+CREATE_BREAKAWAY_FROM_JOB keep that ability. Node detached spawn does not request
+that flag, so ordinary detached children are still members. SILENT_BREAKAWAY_OK
+is absent because it would exempt ordinary descendants. Closing job handles,
+helper death, transport/protocol failure or timeout therefore kills no members.
+The failed singleton logs once, settles requests false and never restarts in the
+same app session; subsequent tabs degrade to plain ConPTY close. EOF/finally
+only closes handles, with no membership scan or termination. Release also just
+closes the handle; there is no limit flag to clear and no release-time flag API
+failure. Explicit protected-aware terminate is the only job cleanup operation.
 
-The protocol is `assign <ptyId> <rootPid> <spawnTimeMs>`, `terminate <ptyId> [protectedPid,...]`
-and `release <ptyId>`; replies are `assigned`, `terminated`, `released`
-plus the id, or `error <id> <Win32 code>`, following an initial `ready`.
-The client buffers split lines, queues assignments until ready, drops roots
-that have exited, and resolves requests false on helper failure. A startup,
-transport, protocol or 3 s request timeout disables that singleton for the
-rest of the app session and logs once. Assignment failures are logged for
-the affected job; ordinary PTY close remains available.
+The protocol is assign <ptyId> <rootPid> <spawnTimeMs>,
+terminate <ptyId> [pid:procStart,...], release <ptyId>. Replies are assigned,
+terminated, released plus id, or error <id> <Win32 code>. The client buffers
+split lines, rejects invalid identities, and drops exited/released queued roots.
+Request replies have a 3 s deadline. Assignment opens the process, checks its
+GetProcessTimes creation time against spawn time plus 100 ms, checks liveness
+with WaitForSingleObject, and assigns through that same identity-pinning handle.
+Descendants born after assignment join automatically; children already born can
+escape. Removing that gap would require suspended native creation/assignment.
 
-Assignment uses OpenProcess, GetProcessTimes, WaitForSingleObject and
-AssignProcessToJobObject. The process handle pins identity through assignment;
-creation later than the recorded spawn time plus 100 ms is rejected. New jobs
-have JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x2800).
-After assignment, descendants join automatically. This does not retroactively
-capture children created before assignment: helper startup and the IPC round trip
-leave a deliberate gap. Processes created in that interval can escape tab cleanup;
-non-blocking startup accepts this limitation. Eliminating it requires suspended
-native creation/assignment. Native fixture cases gate child creation until the
-assignment acknowledgement, while pty-ops-hidden-grandchild also tests an
-ungated PowerShell root.
+node-pty 1.2.0-beta.15 initially returns PID zero. trackWindowsPty subscribes to
+ready_datapipe, records the connection time and assigns the real PID, with a
+5.5 s unref'd bound. Exited, released and closing roots are not assigned. Main
+does not register attach or remote PTYs. Normal root exit releases the job,
+including when native exit is known before JS exit delivery. The exit listener
+keeps a job whose explicit close has already started.
 
-node-pty 1.2.0-beta.15 initially returns PID zero: WindowsPtyAgent connects its
-root after the output worker is ready, and WindowsTerminal sets its PID on
-`ready_datapipe`. `trackWindowsPty` subscribes to that native connection,
-records its time there, and assigns the real PID. A 5.5 s unref'd deadline
-bounds this subscription. Exited, released or already-closing deferred roots
-are not assigned. Attach and remote PTYs are not registered by main.
+Tab close/Stop marks the PTY killed, suppresses duplicate closes/writes/resizes,
+calls pty.kill synchronously, then polls native _agent.exitCode every 25 ms until
+exit (including zero) or 2000 ms. This cap is below Windows' five-second
+CTRL_CLOSE allowance. No claim is made that non-root Claude/MCP processes receive
+CTRL_CLOSE. The helper enumerates job members with QueryInformationJobObject,
+growing the buffer on ERROR_MORE_DATA, then explicitly terminates unprotected
+members. Opened GUI windows lose unsaved work. Enumeration/termination is a
+snapshot: a later child can escape. API errors are returned per job and the
+handle is closed without blindly killing unidentified members.
 
-Tab close and Stop first mark the PTY killed, suppressing duplicate closes,
-writes and resizes. They call the normal `pty.kill()` **synchronously**,
-then poll only the root's native `_agent.exitCode` at 25 ms intervals until
-exit or 2000 ms. This native field is set before node-pty's delayed JS exit
-event; exit code zero counts as exit. The helper then enumerates the job with
-QueryInformationJobObject(JobObjectBasicProcessIdList), growing the native buffer
-on ERROR_MORE_DATA. It never calls TerminateJobObject. The two-second cap is an explicit UI cleanup bound below
-Windows' five-second CTRL_CLOSE allowance: the root receives the normal
-ConPTY close first, but a root that takes longer can be force-terminated at
-the cap. No claim is made that non-root Claude or MCP processes receive
-CTRL_CLOSE handling. Remaining descendants, including GUI windows, are
-force-closed and unsaved work is lost, except for the protected set below.
+For each member it reads command line with NtQueryInformationProcess class 60
+(Windows 8.1+), parent PID with ProcessBasicInformation and creation FILETIME
+with GetProcessTimes. One named IsBackgroundAgent matcher uses
+CommandLineToArgvW, freed with LocalFree. It accepts claude/claude.exe, or
+node/node.exe immediately running @anthropic-ai/claude-code/cli.js. The first
+arguments after the executable/script must be daemon run, or --bg-pty-host as
+the first argument. Prompt/commit text containing these words does not qualify.
+This covers the previously observed native CLI form `... daemon run --origin
+transient --spawned-by <pid>`; the node CLI-entry form is synthetic native test
+coverage. Round h could not refresh the real daemon command line: CIM access was
+denied and no installed claude command was found on this task's PATH.
 
-For each member the helper reads its command line with NtQueryInformationProcess
-(ProcessCommandLineInformation = 60, Windows 8.1+), parent PID with
-ProcessBasicInformation, and creation time with GetProcessTimes. The single
-IsBackgroundAgent matcher recognizes ` daemon run ` and `--bg-pty-host`.
-Protected seeds are those matching members and the roster PIDs supplied by main.
-Main asynchronously reads `~/.claude/daemon/roster.json` best-effort for
-`supervisorPid` and `workers[*].pid`. The helper client bounds this optional read
-at 50 ms; missing, invalid or slow reads yield no roster seeds. No new await is
-added to killPty or the close/shutdown handlers, and no synchronous roster I/O
-blocks the main thread. Descendants of protected members are added transitively
-using only parents in this job whose creation time is no later than their child's,
-rejecting stale parent-PID links. An unreadable command line does not protect a
-member unless its PID comes from the roster; the helper logs that condition once.
+Main obtains the roster path from bg-agents.getDaemonRosterPath(), honoring its
+configured path. Its asynchronous best-effort read supplies worker pid/procStart
+pairs and the supervisor pair only if supervisorProcStart is present; PID alone
+is never evidence. Existing rosters without a supervisor creation timestamp rely
+on the daemon argv marker. The optional read is bounded at 50 ms; missing,
+malformed and slow reads supply no seeds. procStart is a 17-19 digit decimal
+Windows FILETIME string (100 ns since 1601), compared to native creation time
+with the same <=100 tick tolerance as cli-session-state.procStartMatches and
+bg-worker-liveness. Stale/reused PIDs do not protect a member. Matched members
+and validated roster members seed transitive protection only through parents in
+the same snapshot whose creation time is no later than the child's. Unreadable
+command lines warn once per helper lifetime and need validated roster evidence.
+Other members are opened with terminate/query access and checked with
+IsProcessInJob on that handle immediately before TerminateProcess. No
+TerminateJobObject is used.
 
-Each other snapshot member is opened with PROCESS_TERMINATE |
-PROCESS_QUERY_LIMITED_INFORMATION and checked with IsProcessInJob on that handle
-before TerminateProcess, guarding against PID reuse outside the job. The helper
-then clears KILL_ON_JOB_CLOSE and closes its job handle so protected processes
-and their children keep running. Without protected members all snapshot members
-are terminated. Enumeration and termination are not an atomic process-creation
-barrier: a child created after enumeration may escape cleanup. API failures are
-reported per job; enumeration failure releases the job rather than killing an
-unidentified daemon through handle closure.
+A background agent whose launcher has already exited can lose its ancestry link
+to the daemon. If it has no own marker or roster identity, closing the originating
+tab ends it. This accepted rare case requires the daemon to have been cold-started
+from that tab; surviving ancestry cannot be reconstructed from an absent parent.
 
-Natural root exit releases the job. The native-exit guard in killPty also
-releases it when exit is already known before JS exit delivery. Attach,
-detaching, backgrounding, backgrounded, hosted and non-local sessions use
-plain close. Release clears KILL_ON_JOB_CLOSE with SetInformationJobObject
-before closing the handle; no TerminateJobObject is used. Detach requests
-release before its Ctrl-Z/write or fallback kill. A confirmed background
-handoff sets backgrounded and awaits release before scheduling its kill;
-background continuation rekeying also requests release. The normal-exit
-listener never releases a job whose close was explicitly requested, because
-that would cancel the required descendant cleanup.
+Attach, detaching, backgrounding, backgrounded, hosted and non-local sessions use
+plain close. Detach releases before Ctrl-Z/write or fallback kill. Confirmed
+background handoff awaits release before scheduling its kill; continuation
+rekeying also requests release.
 
-Quit does not await helper replies or the two-second timers. shutdownForExit
-retains its existing 1500 ms drain; pty.kill remains synchronous. Child and
-stdio handles and timers are unref'd. When Electron exits, its stdin pipe to
-the helper closes; EOF runs the same protected-aware termination for every job,
-then clears KILL_ON_JOB_CLOSE and closes the handles. This scans membership at
-shutdown, rather than assuming assignment-time membership is final. The EOF path
-uses command-line markers and descendant ancestry; it cannot obtain new roster
-PIDs after main exits. A crashed or forcibly killed helper cannot execute cleanup:
-the OS closes its still-armed handles and can kill a tab-owned daemon and its
-agents. That crash limitation is accepted. Released jobs are unaffected. Native
-pipe-EOF, protected-daemon EOF and helper-death tests cover these paths without Electron.
+App quit retains the existing 1500 ms shutdown drain and adds no await. It calls
+the same synchronous pty.kill; the existing unref'd 25 ms native-exit poll can
+issue best-effort protected termination if the root exits while that drain is
+still active. There is no guarantee: its 2000 ms deadline exceeds the drain, and
+Node/Electron's outer libuv job can kill the helper before EOF. Hidden descendants
+of still-open tabs can therefore survive app exit, as before this PR. No new quit
+cleanup path or stronger guarantee is claimed. Helper/parent death itself leaves
+the assigned processes alive because no job is armed. Pure-Node native parent-exit
+tests exercise this property; they are not an Electron exit measurement.
 
-Round f's ten sequential native runs on this machine measured
-helper startup 1125.37 ms median / 1580.10 ms max, assignment acknowledgement
-8.87 / 9.79 ms and termination acknowledgement 2.87 / 4.33 ms. These include
-PowerShell startup/C# compilation only in the startup column. Native three-tab
-cleanup took 63 ms, helper death 33 ms and pipe EOF 32 ms. Measurements are
-point-in-time observations, not latency guarantees; raw output and the final
-quit measurements are in `.work-files/codex-report-897f.md` and its linked logs.
+Resident PowerShell with P/Invoke may be flagged by EDR/AV or ended by the user.
+There is no restart policy. Round-3 observations were about 78 MB working set,
+65 MB private memory and 1 s startup CPU. Round h's startup, memory and 60 s idle
+CPU measurements, native quit timing and raw evidence are recorded in
+`.work-files/codex-report-897h.md`; these are machine/load observations, not
+performance guarantees. No EDR product was tested.
 
-**Detached processes:** libuv explicitly does not set
-CREATE_BREAKAWAY_FROM_JOB for Node's detached spawn. It sets DETACHED_PROCESS
-and CREATE_NEW_PROCESS_GROUP (and CREATE_SUSPENDED during setup). Merely
-allowing breakaway on this job cannot exempt a detached Node daemon. The
-native detached-grandchild test requires it to end with its tab. Only the explicit
-background-agent protected set survives. SILENT_BREAKAWAY_OK would exempt ordinary descendants as well,
-defeating tab cleanup, so it is deliberately absent. Sources:
-[Node 22.23.4 libuv process.c](https://github.com/nodejs/node/blob/v22.23.4/deps/uv/src/win/process.c#L988-L1018).
-The flag semantics are documented in
-[Microsoft's job limits reference](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_basic_limit_information).
-The daemon and worker native cases launch through an intermediate that exits,
-then assert an unrelated hidden child dies while the daemon and its unmarked
-child survive. Roster-only and `daemon runner` negative cases distinguish PID
-evidence from marker matching.
-
-Tests: pty-ops-jobs covers synchronous close, native exit, the grace deadline,
-exclusions, detach and deferred PID assignment; windows-job-helper covers the
-protocol, ready queue, failures and release. bg-handoff checks release ordering;
-pty-job-shutdown loads the real shutdown functions with the process/database
-ports controlled. windows-job-native uses real ConPTY and job APIs for three
-simultaneous closes, helper death, stdin EOF, release, quit, detached spawn and protected daemons,
-plus ten latency measurements. Every native case observes its own PIDs, latches
-ESRCH, treats EPERM as unknown, and bounds fixture lifetimes. Neither wrapper
-accepts an empty successful fixture exit as evidence. The shared
-stop-process-tree helper and command timeout tests remain unchanged.
-windows-job-policy executes the shipped PowerShell/C# and probes its native
-matcher and ancestry policy, including stale creation times, outside-job parents,
-cycles and grandchildren encountered before their parents.
+Tests load shipped production code: pty-ops-jobs covers close ordering, grace
+deadline, exclusions, detach and deferred assignment; windows-job-helper covers
+protocol, roster identity transport, singleton configuration and failure paths;
+windows-job-policy compiles the real PowerShell/C# for argv, FILETIME and ancestry
+policy. pty-job-shutdown uses the real shutdown functions with controlled external
+ports. windows-job-native uses real ConPTY/jobs, simultaneous tabs, explicit hidden
+child cleanup, valid/stale roster identities, protected daemons, release, helper
+death/EOF/timeout and parent exit. windows-job-latency runs the ten cold helper
+startup/assignment/termination samples separately so profiling does not consume
+the functional file's 120 s process budget. Surviving fake processes
+expire through their own fixture timers after the observation window. Processes
+have absolute safety lifetimes and fixture cleanup only targets owned PIDs.
+The new stop-process-tree.js helper was introduced in this PR (round b) and is
+used by runClaudeCommand for command-timeout cleanup; it is unchanged in round h.
 
 ### Cursor-position queries
 
