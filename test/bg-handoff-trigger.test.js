@@ -8,7 +8,7 @@ const path = require('node:path');
 const { sendToBackground } = require('../bg-handoff');
 const { createTriggerContext } = require('../trigger-context');
 const { start } = require('../trigger-watcher');
-const { createComposerState } = require('../composer-state');
+const { createComposerState } = require('../src/main/terminals/composer-state');
 
 async function until(predicate) {
   const deadline = Date.now() + 4000;

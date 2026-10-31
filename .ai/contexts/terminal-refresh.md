@@ -107,8 +107,8 @@ unrelated geometry fit cannot revive a stale refresh.
 
 For local and solo remote terminals, `preload.resizeTerminal` sends one
 `terminal-resize` message with the fitted size and `{refresh: true}`.
-`createTerminalResizeHandler` in `terminal-resize.js` accepts only integer,
-positive sizes within the existing `pty-size.js` upper bounds (1000 columns,
+`createTerminalResizeHandler` in `src/main/terminals/terminal-resize.js` accepts only integer,
+positive sizes within the existing `src/main/terminals/pty-size.js` upper bounds (1000 columns,
 500 rows). Oversized requests are rejected before any PTY call or timer.
 One column remains valid for the existing refresh boundary case.
 Only boolean `true` requests refresh; truthy strings, numbers and objects
@@ -248,7 +248,7 @@ These observations require a live Windows app; the tests do not establish them.
 ## Stale queries in hidden replay
 
 The shared `public/terminal-replay-queries.js` matcher serves hidden renderer
-accumulation/reveal and main's reattach buffer (`output-buffer.js`).
+accumulation/reveal and main's reattach buffer (`src/main/terminals/output-buffer.js`).
 `removeCursorPositionQueries` removes these complete requests in one pass:
 
 - CPR (`ESC[6n`), DECXCPR (`ESC[?6n`) and DSR status (`ESC[5n`).

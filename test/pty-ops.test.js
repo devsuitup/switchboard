@@ -5,9 +5,9 @@
 const test   = require('node:test');
 const assert = require('node:assert/strict');
 
-const { setPtyOpLogger, withPty, resizePty, killPty, writePty } = require('../pty-ops');
-const { handleTerminalInput } = require('../terminal-input');
-const { createComposerState } = require('../composer-state');
+const { setPtyOpLogger, withPty, resizePty, killPty, writePty } = require('../src/main/terminals/pty-ops');
+const { handleTerminalInput } = require('../src/main/terminals/terminal-input');
+const { createComposerState } = require('../src/main/terminals/composer-state');
 
 /** A pty whose every method throws the real node-pty message. */
 function makeDeadPty(message = 'Cannot resize a pty that has already exited') {

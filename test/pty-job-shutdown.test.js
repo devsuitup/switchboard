@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { extractFunction } = require('./app-source');
-const { trackWindowsPty, killPty } = require('../pty-ops');
+const { trackWindowsPty, killPty } = require('../src/main/terminals/pty-ops');
 const { performance } = require('node:perf_hooks');
 const espree = require('espree');
 

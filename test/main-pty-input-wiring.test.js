@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const espree = require('espree');
 const { EventEmitter } = require('node:events');
-const { guardPtyInputErrors } = require('../pty-ops');
+const { guardPtyInputErrors } = require('../src/main/terminals/pty-ops');
 
 test('main spawnPty registers the input error guard for ConPTY, fallback and POSIX spawns', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
@@ -36,7 +36,7 @@ test('main spawnPty registers the input error guard for ConPTY, fallback and POS
       process: { platform: scenario.platform, env: scenario.env },
       log: { warn() {} },
     });
-    vm.runInContext(source.slice(...spawnFunction.range), context);
+    vm.runInContext(source.slice(...spawnFunction.range), context, { filename: path.join(__dirname, '..', 'main.js') });
     assert.equal(context.spawnPty('shell', ['arg'], { cols: 80 }), pty);
     assert.ok(input.listenerCount('error') > 0, `${JSON.stringify(scenario)} returned an unguarded PTY`);
     assert.doesNotThrow(() => input.emit('error', new Error('write EAGAIN')));
@@ -44,5 +44,5 @@ test('main spawnPty registers the input error guard for ConPTY, fallback and POS
     assert.equal(calls.at(-1).opts.useConptyDll, scenario.useConptyDll);
     assert.equal(calls.at(-1).opts.cols, 80);
   }
-  assert.match(source, /const\s*\{[^}]*\bguardPtyInputErrors\b[^}]*\}\s*=\s*require\('\.\/pty-ops'\)/);
+  assert.match(source, /const\s*\{[^}]*\bguardPtyInputErrors\b[^}]*\}\s*=\s*require\('\.\/src\/main\/terminals\/pty-ops'\)/);
 });
