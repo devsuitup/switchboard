@@ -10,6 +10,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Changed
 - Large session lists refresh with less overhead. (#742)
+- Switchboard uses less CPU in the background: busy spinners pause while the window is hidden or unfocused and resume when it is visible and focused. (#544)
 - **Stop session** in a terminal header or grid card now stops every running part of the conversation, with the same confirmation and refusals as its sidebar row. (#917)
 - Opening a conversation from the sidebar now resumes its newest part instead of an older part waiting to restore. (#918)
 - Unexpected application errors now share one notice with repeat counts and an **Open log** button; the app keeps running and the log may hold details. Notices survive a window reload, dismissed errors stay dismissed, and screen readers announce new errors without repeating count updates. (#896, #932)

@@ -1,5 +1,18 @@
 const headTurns = new Map();
 
+function updateBusySpinnerAnimation() {
+  document.documentElement.classList.toggle('busy-spinners-paused',
+    document.visibilityState !== 'visible' || !document.hasFocus());
+}
+
+window.addEventListener('focus', updateBusySpinnerAnimation);
+window.addEventListener('blur', updateBusySpinnerAnimation);
+document.addEventListener('visibilitychange', updateBusySpinnerAnimation);
+for (const type of ['pointerdown', 'pointermove', 'keydown']) {
+  window.addEventListener(type, updateBusySpinnerAnimation, { capture: true, passive: true });
+}
+updateBusySpinnerAnimation();
+
 function outputSurfaceVisible(element) {
   if (!element?.isConnected || document.hidden || document.visibilityState !== 'visible') return false;
   for (let parent = element; parent; parent = parent.parentElement) {

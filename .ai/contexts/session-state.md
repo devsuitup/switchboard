@@ -1479,6 +1479,17 @@ Selectors depend only on `session-icon--<rung>`, with no layout measurement.
 | stale | `session-icon--stale` | opaque grey dash | finished background jobs without a live descriptor, across session surfaces |
 | archived | `session-icon--archived` | base filled dot at 0.5 opacity | reserved, unused |
 
+The busy braille animation pauses while the window is hidden or unfocused
+(#544). `session-activity-dom.js` reuses `document.hasFocus()` and native
+window focus/blur, document visibilitychange and window pointerdown,
+pointermove and keydown events (capture, passive), synchronously toggling
+`busy-spinners-paused` on the document element at startup and on every event.
+CSS pauses only `.session-icon--busy::before`, across sidebar, grid, header
+and Agents, including icons rendered after the pause. Busy/attention state,
+glyphs and labels do not change. The animation resumes as soon as the document
+is both visible and focused; see ADR 0002. The regression is
+`test/dom-busy-spinner-pause.test.js`.
+
 `--state-waiting` lives in `:root` and reuses the existing attention orange;
 the attention slot and summary also reference it. The UI has one shared dark
 palette, no light-theme overrides; terminal themes change xterm only. Waiting's
