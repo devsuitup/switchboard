@@ -311,7 +311,7 @@ function historyFixture(t) {
       env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(GIT_|HUSKY)/i.test(key))),
         GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(fixture.root, 'gitconfig') },
     });
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
     return result.stdout.trim();
   };
   git('init');
@@ -399,6 +399,63 @@ test('--check rejects every unreachable blame-ignore commit, including an existi
     assert.ok(result.stderr.includes(stale), result.stderr);
   }
 });
+
+test('--check accepts rename commits reachable only from an in-progress merge', t => {
+  const { root, write, run, git } = historyFixture(t);
+  write('conflict.txt', 'common\n');
+  git('add', 'conflict.txt');
+  git('commit', '-m', 'common merge base');
+  const common = git('rev-parse', 'HEAD');
+  git('checkout', '-b', 'incoming');
+  write('conflict.txt', 'incoming\n');
+  git('commit', '-am', 'incoming edit');
+  git('mv', 'after.txt', 'final.txt');
+  git('commit', '-m', 'incoming pure rename');
+  const incoming = git('rev-parse', 'HEAD');
+  git('checkout', '-b', 'local', common);
+  write('conflict.txt', 'local\n');
+  git('commit', '-am', 'local edit');
+  assert.throws(() => git('merge', '--no-edit', 'incoming'), /CONFLICT|Automatic merge failed/);
+  assert.equal(fs.readFileSync(path.join(root, '.git/MERGE_HEAD'), 'utf8').trim(), incoming);
+  write('.git-blame-ignore-revs', `${incoming}\n`);
+  const merging = run('--check');
+  assert.equal(merging.status, 0, merging.stderr);
+  git('merge', '--abort');
+  const aborted = run('--check');
+  assert.equal(aborted.status, 1, aborted.stderr);
+  assert.match(aborted.stderr, /not a commit reachable/);
+});
+
+for (const failure of [
+  { name: 'spawn error', result: { error: new Error('injected spawn failure'), status: 0 } },
+  { name: 'timeout', result: { error: Object.assign(new Error('injected timeout'), { code: 'ETIMEDOUT' }), status: null } },
+  { name: 'ENOENT', result: { error: Object.assign(new Error('injected ENOENT'), { code: 'ENOENT' }), status: null } },
+  { name: 'exit 128', result: { status: 128, stderr: 'injected fatal failure' } },
+  { name: 'signal', result: { status: null, signal: 'SIGTERM', stderr: 'injected signal failure' } },
+]) {
+  test(`--check reports reachability git ${failure.name} as exit 2`, t => {
+    const { root, write, rename } = historyFixture(t);
+    write('.git-blame-ignore-revs', `${rename}\n`);
+    const filename = path.join(__dirname, '../scripts/move-modules.js');
+    const realRequire = createRequire(filename);
+    const messages = [];
+    const module = { exports: {} };
+    const require = name => name === 'node:child_process' ? {
+      spawnSync: (command, args, options) => args[0] === 'merge-base'
+        ? { stdout: '', stderr: '', ...failure.result }
+        : spawnSync(command, args, options),
+    } : realRequire(name);
+    require.main = module;
+    const process = { argv: ['node', filename, '--check', '--root', root], exitCode: 0, env: global.process.env };
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+      require, module, __dirname: path.dirname(filename), process,
+      console: { error: message => messages.push(message), warn: message => messages.push(message), log() {} },
+    }, { filename });
+    assert.equal(process.exitCode, 2, messages.join('\n'));
+    assert.match(messages.join('\n'), /Cannot check blame-ignore history:.*injected/);
+    assert.doesNotMatch(messages.join('\n'), /not a commit reachable/);
+  });
+}
 
 test('--check accepts reachable rename history and rejects a newest entry with edits or no renames', t => {
   const { write, run, git, base, rename } = historyFixture(t);

@@ -284,6 +284,10 @@ function checkBlameIgnore(root) {
     console.warn('SKIP .git-blame-ignore-revs: shallow repository history is incomplete');
     return true;
   }
+  const mergePath = git('rev-parse', '--git-path', 'MERGE_HEAD');
+  if (mergePath.error || mergePath.status !== 0) throw new Error(`Cannot check blame-ignore history: ${mergePath.error?.message || mergePath.stderr}`);
+  const mergeFile = path.resolve(root, mergePath.stdout.trim());
+  const heads = ['HEAD', ...(fs.existsSync(mergeFile) ? fs.readFileSync(mergeFile, 'utf8').trim().split(/\s+/) : [])];
   let valid = true;
   for (const sha of revisions) {
     if (!/^[a-f\d]{40}$/i.test(sha)) {
@@ -291,9 +295,15 @@ function checkBlameIgnore(root) {
       valid = false;
       continue;
     }
-    if (git('cat-file', '-e', `${sha}^{commit}`).status !== 0
-      || git('merge-base', '--is-ancestor', sha, 'HEAD').status !== 0) {
-      console.error(`.git-blame-ignore-revs: ${sha} is not a commit reachable from HEAD`);
+    const commit = git('cat-file', '-e', `${sha}^{commit}`);
+    if (commit.error) throw new Error(`Cannot check blame-ignore history: ${commit.error.message}`);
+    const reachable = commit.status === 0 && heads.some(head => {
+      const result = git('merge-base', '--is-ancestor', sha, head);
+      if (result.error || ![0, 1].includes(result.status)) throw new Error(`Cannot check blame-ignore history: ${result.error?.message || result.stderr || result.signal}`);
+      return result.status === 0;
+    });
+    if (!reachable) {
+      console.error(`.git-blame-ignore-revs: ${sha} is not a commit reachable from ${heads.length > 1 ? 'HEAD or MERGE_HEAD' : 'HEAD'}`);
       valid = false;
     }
   }

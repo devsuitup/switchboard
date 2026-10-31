@@ -20,10 +20,14 @@ node scripts/move-modules.js --check
 
 Refresh the blame-ignore entry after every rebase; prefer merging main into the branch over
 rebasing, since the session tooling refuses force-pushes. Keep entries in move order, newest last.
-Check mode verifies that every listed full SHA is a commit reachable from HEAD and that the last
-entry is a pure rename (all R100, zero insertions/deletions). It exits 1 for stale or impure entries;
+Check mode verifies that every listed full SHA is a commit reachable from HEAD (or any MERGE_HEAD
+parent while a merge is in progress) and that the last entry is a pure rename (all R100, zero
+insertions/deletions). It exits 1 for stale or impure entries;
 abbreviated or malformed entries must be replaced with a full 40-hex SHA. Git command failures
-are reported separately and exit 2.
+are reported separately and exit 2. In particular, reachability checks accept only Git statuses
+0 (ancestor) and 1 (not an ancestor); spawn errors, timeouts, missing Git during the check and
+other statuses are history-validation failures, not stale entries. Aborting the merge removes
+MERGE_HEAD reachability; the next check again requires the entries to be reachable from HEAD.
 Shallow repositories and archives without Git history print an explicit `SKIP` for this validation;
 use a full-history checkout to verify the entries. `test/move-modules.test.js` calls the exported
 `checkBlameIgnore` on the repository root in CI, whose test matrix uses `fetch-depth: 0`.
