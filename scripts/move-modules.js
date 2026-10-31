@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { isJavaScript, walk, appFiles, nodes, relativeRequires } = require('./module-paths');
 const p = path.posix;
 
@@ -136,6 +137,11 @@ function rewrite(file, source, map, options = {}) {
       }
       const base = anchor.name === 'ROOT' ? '' : p.dirname(before);
       const old = p.join(base, ...parts.map((n) => n.value));
+      if (p.dirname(old) !== '.' && !map[old] && !Object.values(map).includes(old)
+        && movedNames.has(p.basename(old))) {
+        warnSegments(parts);
+        continue;
+      }
       const currentBase = anchor.name === 'ROOT' ? '' : p.dirname(file);
       const current = p.join(currentBase, ...parts.map((n) => n.value));
       const loadedFile = originalFile(Object.values(map).includes(current) ? current : old, map);
@@ -250,6 +256,48 @@ function rewrite(file, source, map, options = {}) {
   return source;
 }
 
+function checkBlameIgnore(root) {
+  const file = path.join(root, '.git-blame-ignore-revs');
+  if (!fs.existsSync(file)) return true;
+  const revisions = fs.readFileSync(file, 'utf8').split(/\r?\n/)
+    .map(line => line.split('#')[0].trim()).filter(Boolean);
+  if (!revisions.length) return true;
+  const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 10000 });
+  if (!fs.existsSync(path.join(root, '.git'))) {
+    console.warn('SKIP .git-blame-ignore-revs: repository history is not available');
+    return true;
+  }
+  const shallow = git('rev-parse', '--is-shallow-repository');
+  if (shallow.error?.code === 'ENOENT' || /not a git repository/i.test(shallow.stderr || '')) {
+    console.warn('SKIP .git-blame-ignore-revs: repository history is not available');
+    return true;
+  }
+  if (shallow.status !== 0) throw new Error(`Cannot check blame-ignore history: ${shallow.error?.message || shallow.stderr}`);
+  if (shallow.stdout.trim() === 'true') {
+    console.warn('SKIP .git-blame-ignore-revs: shallow repository history is incomplete');
+    return true;
+  }
+  let valid = true;
+  for (const sha of revisions) {
+    if (!/^[a-f\d]{40}$/i.test(sha) || git('cat-file', '-e', `${sha}^{commit}`).status !== 0
+      || git('merge-base', '--is-ancestor', sha, 'HEAD').status !== 0) {
+      console.error(`.git-blame-ignore-revs: ${sha} is not a commit reachable from HEAD`);
+      valid = false;
+    }
+  }
+  if (!valid) return false;
+  const newest = revisions.at(-1);
+  const names = git('show', '--format=', '--find-renames=100%', '--name-status', newest);
+  const stats = git('show', '--format=', '--find-renames=100%', '--numstat', newest);
+  if (names.status !== 0 || stats.status !== 0 || !names.stdout.trim()
+    || !names.stdout.trim().split('\n').every(line => line.startsWith('R100\t'))
+    || !stats.stdout.trim().split('\n').every(line => line.startsWith('0\t0\t'))) {
+    console.error(`.git-blame-ignore-revs: newest entry ${newest} must be a pure-rename commit (all R100, 0/0)`);
+    return false;
+  }
+  return true;
+}
+
 function run(argv) {
   let root = path.resolve(__dirname, '..');
   let check = false;
@@ -258,6 +306,7 @@ function run(argv) {
     else if (argv[i] === '--root' && argv[i + 1]) root = path.resolve(argv[++i]);
     else throw new Error('usage: move-modules.js [--check] [--root <repository>]');
   }
+  if (check && !checkBlameIgnore(root)) return 1;
   const map = validateMap(JSON.parse(fs.readFileSync(path.join(root, 'scripts/source-map.json'), 'utf8')));
   const pending = Object.keys(map).filter((old) => fs.existsSync(path.join(root, old)));
   for (const old of pending) console.log(`${old}: pending git mv -> ${map[old]}`);

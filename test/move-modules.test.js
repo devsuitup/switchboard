@@ -235,6 +235,104 @@ function cliFixture(t, prefix) {
   return { root, write, run };
 }
 
+test('renderer basename collisions stay unchanged and warn even when their consumer moves', t => {
+  const { write, run } = cliFixture(t, 'move-renderer-collision-');
+  write('scripts/source-map.json', JSON.stringify({
+    'activity-trace.js': 'src/main/shared/activity-trace.js',
+    'loader.js': 'src/main/shared/loader.js',
+  }));
+  write('src/main/shared/activity-trace.js', 'module.exports = {};');
+  const renderer = [
+    "path.join(PUBLIC_DIR, 'activity-trace.js');",
+    "path.join(ROOT, 'public', 'activity-trace.js');",
+    "path.join(__dirname, 'public', 'activity-trace.js');",
+  ];
+  write('src/main/shared/loader.js', renderer.join('\n'));
+  write('test/collision.test.js', [
+    ...renderer.slice(0, 2),
+    "path.join(__dirname, '..', 'public', 'activity-trace.js');",
+    "path.join(ROOT, 'activity-trace.js');",
+  ].join('\n'));
+  write('public/activity-trace.js', 'window.trace = {};');
+  const check = run('--check');
+  assert.equal(check.status, 1, check.stderr);
+  assert.doesNotMatch(check.stdout, /src\/main\/shared\/loader.js:/, 'non-root joins must not be rewritten when their consumer moves');
+  for (const file of ['src/main/shared/loader.js', 'test/collision.test.js']) {
+    for (let line = 1; line <= 3; line++) {
+      assert.ok(check.stderr.includes(`WARNING ${file}:${line}: path.join segment activity-trace.js`), check.stderr);
+    }
+  }
+  assert.equal(run().status, 0);
+  assert.equal(run('--check').status, 0);
+});
+
+function historyFixture(t) {
+  const fixture = cliFixture(t, 'move-history-');
+  fixture.write('scripts/source-map.json', '{}');
+  fixture.write('gitconfig', '');
+  const git = (...args) => {
+    const result = spawnSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false',
+      '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', ...args], {
+      cwd: fixture.root, encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(fixture.root, 'gitconfig') },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  git('init');
+  fixture.write('before.txt', 'fixture\n');
+  git('add', 'before.txt');
+  git('commit', '-m', 'fixture base');
+  const base = git('rev-parse', 'HEAD');
+  git('mv', 'before.txt', 'after.txt');
+  git('commit', '-m', 'fixture pure rename');
+  const rename = git('rev-parse', 'HEAD');
+  return { ...fixture, git, base, rename };
+}
+
+test('--check rejects every unreachable blame-ignore commit, including an existing dangling commit', t => {
+  const { write, run, git, rename } = historyFixture(t);
+  const dangling = git('commit-tree', 'HEAD^{tree}', '-m', 'fixture unrelated root');
+  for (const stale of ['0'.repeat(40), dangling]) {
+    write('.git-blame-ignore-revs', `${stale}\n${rename}\n`);
+    const result = run('--check');
+    assert.equal(result.status, 1, `must reject stale SHA ${stale}: ${result.stderr}`);
+    assert.ok(result.stderr.includes(stale), result.stderr);
+  }
+});
+
+test('--check accepts reachable rename history and rejects a newest entry with edits or no renames', t => {
+  const { write, run, git, base, rename } = historyFixture(t);
+  write('.git-blame-ignore-revs', `# move history\n${base}\n${rename} # newest move\n`);
+  assert.equal(run('--check').status, 0);
+  git('mv', 'after.txt', 'final.txt');
+  write('extra.txt', 'edited\n');
+  git('add', 'extra.txt');
+  git('commit', '-m', 'fixture impure rename');
+  const impure = git('rev-parse', 'HEAD');
+  for (const sha of [impure, base]) {
+    write('.git-blame-ignore-revs', `${rename}\n${sha}\n`);
+    const result = run('--check');
+    assert.equal(result.status, 1, `must reject impure newest entry: ${result.stderr}`);
+    assert.match(result.stderr, /pure.rename|R100/);
+  }
+});
+
+test('--check explicitly skips unreachable history in a shallow repository or a non-repository fixture', t => {
+  const { write, run, base, rename } = historyFixture(t);
+  write('.git/shallow', `${rename}\n`);
+  write('.git-blame-ignore-revs', `${base}\n${rename}\n`);
+  const shallow = run('--check');
+  assert.equal(shallow.status, 0, shallow.stderr);
+  assert.match(shallow.stderr, /SKIP.*blame.*shallow/i);
+  const archive = cliFixture(t, 'move-archive-');
+  archive.write('scripts/source-map.json', '{}');
+  archive.write('.git-blame-ignore-revs', `${rename}\n`);
+  const result = archive.run('--check');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /SKIP.*blame.*histor|SKIP.*blame.*repository/i);
+});
+
 test('the CLI refuses apply before moves without changing any file and allows check to list pending moves', t => {
   const { root, write, run } = cliFixture(t, 'move-pending-');
   write('scripts/source-map.json', JSON.stringify({ 'a.js': map['a.js'] }));
