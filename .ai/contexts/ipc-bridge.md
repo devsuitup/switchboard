@@ -589,6 +589,11 @@ fs.readFileSync; build.files includes src/**/*, and no archive path goes to
 PowerShell. The absolute System32 executable runs with -NoProfile,
 -NonInteractive, -EncodedCommand, windowsHide and SilentlyContinue; Add-Type
 compiles the P/Invoke C# once. No compilation occurs on the close path.
+Closing a tab while its assignment is still queued cancels that assignment and
+uses plain ConPTY close; hidden processes may remain. The helper warns once per
+app session for this early-close case and remains available for later tabs.
+This warning also covers a close before node-pty has submitted the root PID.
+Release before readiness cancels the assignment silently.
 
 Jobs **never** set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. They retain only
 JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x800): applications that explicitly request
@@ -628,24 +633,34 @@ growing the buffer on ERROR_MORE_DATA, then explicitly terminates unprotected
 members. Opened GUI windows lose unsaved work. Enumeration/termination is a
 snapshot: a later child can escape. API errors are returned per job and the
 handle is closed without blindly killing unidentified members.
+An exception inspecting or terminating one member skips that member and lets the
+other members finish cleanup. Inspection failures exclude that PID from the
+termination pass. The helper reports one member-failure warning per lifetime,
+returns an error for the affected job, and always removes/closes its job handle.
 
 For each member it reads command line with NtQueryInformationProcess class 60
 (Windows 8.1+), parent PID with ProcessBasicInformation and creation FILETIME
 with GetProcessTimes. One named IsBackgroundAgent matcher uses
 CommandLineToArgvW, freed with LocalFree. It accepts claude/claude.exe, or
-node/node.exe immediately running @anthropic-ai/claude-code/cli.js. The first
+node/node.exe running @anthropic-ai/claude-code/cli.js after Node options, including
+`--max-old-space-size=…` and `-r`/`--require` preload pairs. The first
 arguments after the executable/script must be daemon run, or --bg-pty-host as
 the first argument. Prompt/commit text containing these words does not qualify.
-This covers the previously observed native CLI form `... daemon run --origin
-transient --spawned-by <pid>`; the node CLI-entry form is synthetic native test
-coverage. Round h could not refresh the real daemon command line: CIM access was
-denied and no installed claude command was found on this task's PATH.
+Executable basenames use separator lookup rather than filesystem path validation,
+so malformed argv[0] values such as `bad<name.exe` do not throw. The matcher was
+checked against live daemon and worker command lines:
+`...\claude-code\bin\claude.exe daemon run --origin transient --spawned-by "{...}"`
+and `...\claude.exe --bg-pty-host \\.\pipe\cc-daemon-... 444 110 -- ...`.
+The Node CLI-entry form also has synthetic native test coverage.
 
 Main obtains the roster path from bg-agents.getDaemonRosterPath(), honoring its
 configured path. Its asynchronous best-effort read supplies worker pid/procStart
-pairs and the supervisor pair only if supervisorProcStart is present; PID alone
-is never evidence. Existing rosters without a supervisor creation timestamp rely
-on the daemon argv marker. The optional read is bounded at 50 ms; missing,
+pairs. The roster shape consumed by `bg-agents.workerSample` carries `proto`,
+`updatedAt`, `supervisorPid` and worker `pid`/`procStart` pairs; neither that code
+nor `cli-session-state` defines a supervisor creation timestamp. The supervisor
+therefore relies on argv protection. `readWindowsDaemonPids` can also forward
+`supervisorProcStart` if a future roster provides one; PID alone is never evidence.
+The optional read is bounded at 50 ms; missing,
 malformed and slow reads supply no seeds. procStart is a 17-19 digit decimal
 Windows FILETIME string (100 ns since 1601), compared to native creation time
 with the same <=100 tick tolerance as cli-session-state.procStartMatches and
@@ -678,11 +693,7 @@ the assigned processes alive because no job is armed. Pure-Node native parent-ex
 tests exercise this property; they are not an Electron exit measurement.
 
 Resident PowerShell with P/Invoke may be flagged by EDR/AV or ended by the user.
-There is no restart policy. Round-3 observations were about 78 MB working set,
-65 MB private memory and 1 s startup CPU. Round h's startup, memory and 60 s idle
-CPU measurements, native quit timing and raw evidence are recorded in
-`.work-files/codex-report-897h.md`; these are machine/load observations, not
-performance guarantees. No EDR product was tested.
+There is no restart policy. No EDR product was tested.
 
 Tests load shipped production code: pty-ops-jobs covers close ordering, grace
 deadline, exclusions, detach and deferred assignment; windows-job-helper covers
@@ -693,11 +704,14 @@ ports. windows-job-native uses real ConPTY/jobs, simultaneous tabs, explicit hid
 child cleanup, valid/stale roster identities, protected daemons, release, helper
 death/EOF/timeout and parent exit. windows-job-latency runs the ten cold helper
 startup/assignment/termination samples separately so profiling does not consume
-the functional file's 120 s process budget. Surviving fake processes
+the functional file's 120 s process budget. `windows-job-malformed` likewise
+isolates the extra malformed-argv cleanup regression from that budget. Surviving fake processes
 expire through their own fixture timers after the observation window. Processes
 have absolute safety lifetimes and fixture cleanup only targets owned PIDs.
-The new stop-process-tree.js helper was introduced in this PR (round b) and is
-used by runClaudeCommand for command-timeout cleanup; it is unchanged in round h.
+The native test runner owns each fixture's temporary directory and registers
+cleanup in its after hook, including when the fixture exits before its finally
+block. Both cleanup paths retry transient Windows removal failures.
+`stop-process-tree.js` is used by runClaudeCommand for command-timeout cleanup.
 
 ### Cursor-position queries
 

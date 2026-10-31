@@ -32,7 +32,7 @@ async function until(predicate, ms = 5000) {
 }
 
 async function run(mode) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-job-native-'));
+  const dir = process.env.FIXTURE_TMP_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'sb-job-native-'));
   const terms = [], helpers = [], hidden = [];
   const expiryGate = path.join(dir, 'expire');
   const cliEntry = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
@@ -96,6 +96,7 @@ async function run(mode) {
     return { session, alive, daemon, daemonChild };
   }
   try {
+    if (mode === 'fixture-exit') process.exit(23);
     if (mode === 'parent-exit') {
       const file = path.join(dir, 'parent-pids');
       const parent = spawn(process.execPath, [path.join(__dirname, 'pty-job-parent.cjs')], { windowsHide: true,
@@ -154,7 +155,7 @@ async function run(mode) {
     const count = ['simultaneous', 'shutdown'].includes(mode) ? 3 : mode === 'helper-death' ? 2 : 1;
     const cases = [];
     for (let i = 0; i < count; i++) cases.push(await term(h, i,
-      ['detached', 'daemon', 'worker', 'roster', 'stale-roster', 'daemon-eof', 'helper-death', 'helper-timeout', 'pipe-eof', 'lookalike'].includes(mode)));
+      ['detached', 'daemon', 'worker', 'roster', 'stale-roster', 'daemon-eof', 'helper-death', 'helper-timeout', 'pipe-eof', 'lookalike', 'malformed'].includes(mode)));
     assert.equal(await startup, true, 'helper must compile and report ready');
     for (const c of cases) assert.equal(c.alive(), true, 'every owned child must still be alive immediately before close');
     const started = Date.now();
@@ -204,7 +205,7 @@ async function run(mode) {
       assert.equal(await until(() => cases.every(c => c.alive() === false), 5000), true, 'every hidden grandchild must exit within five seconds');
     }
     if (cases[0].daemon && !['helper-death', 'helper-timeout', 'pipe-eof', 'daemon-eof'].includes(mode)) {
-      if (mode === 'lookalike' || mode === 'stale-roster') {
+      if (mode === 'lookalike' || mode === 'stale-roster' || mode === 'malformed') {
         assert.equal(await until(() => cases[0].daemon() === false && cases[0].daemonChild() === false), true,
           'daemon runner is not the daemon run marker; its tree must end');
       } else {
@@ -230,7 +231,7 @@ async function run(mode) {
     }
     await until(() => hidden.every(alive => alive() === false), 18000);
     await until(() => helpers.every(child => child.exitCode !== null || child.signalCode !== null), 4000);
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 }
 
