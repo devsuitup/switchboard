@@ -6,14 +6,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
-const gitChangesFile = require('../git-changes-file');
+const gitChangesFile = require('../src/main/changes/git-changes-file');
 const { isSensitivePath } = require('../src/main/shared/ipc-path-validator');
 const { createMainPanelSaves } = require('../viewer-save-guard');
 
 const { runToExit } = require('../src/main/shared/run-to-exit');
 const MAX_BYTES = 1024;
 async function fixtureRunGit(args, options) {
-  const env = require('../git-changes-runner').localGitEnv(options.env);
+  const env = require('../src/main/changes/git-changes-runner').localGitEnv(options.env);
   const result = await runToExit('git', args, { ...options, env });
   return { ...result, tooLarge: result.overflow };
 }
@@ -140,7 +140,7 @@ tr() { text=; IFS= read -r text; printf '%s' "${'$'}{text,,}"; }
   const api = panelHandlers(fs, fixtureGitFiles, (alias, command, options) => {
     calls++;
     return command.includes('rev-parse') ? { code: 128, stderr: 'not a git repository' }
-      : shell.run(alias, 'RESOLVED=' + require('../git-changes-runner').shQuote(resolved) + '; ' + command, options);
+      : shell.run(alias, 'RESOLVED=' + require('../src/main/changes/git-changes-runner').shQuote(resolved) + '; ' + command, options);
   });
   for (const filePath of safePaths) {
     resolved = filePath;
@@ -156,7 +156,7 @@ tr() { text=; IFS= read -r text; printf '%s' "${'$'}{text,,}"; }
     assert.equal((await api.read(key, { sessionId: 'R1' })).reason, 'refused', key);
     assert.equal(calls, before, 'literal key must not reach transport');
   }
-  const { inspectRemoteTouchedPaths } = require('../remote-touched-files');
+  const { inspectRemoteTouchedPaths } = require('../src/main/changes/remote-touched-files');
   const states = await inspectRemoteTouchedPaths('host', [...safePaths, ...keys], {
     runRemoteCommand: shell.run,
   });
@@ -182,7 +182,7 @@ for (const key of ['deploy/id_ed25519_deploy', 'keys/id_rsa_github', 'backup/id_
     const before = calls;
     const filePath = '/outside/' + key;
     assert.equal((await api.read(filePath, { sessionId: 'R1' })).reason, 'refused', filePath);
-    const { inspectRemoteTouchedPaths } = require('../remote-touched-files');
+    const { inspectRemoteTouchedPaths } = require('../src/main/changes/remote-touched-files');
     const states = await inspectRemoteTouchedPaths('host', [filePath], {
       runRemoteCommand: async () => { calls++; return { code: 0, stdout: 'present\t123\n' }; },
     });
@@ -192,8 +192,8 @@ for (const key of ['deploy/id_ed25519_deploy', 'keys/id_rsa_github', 'backup/id_
 
   test('round 4 s2 shell: resolved private key is refused on read and inspection: ' + key, async t => {
     const shell = fakeTouchedShell(t);
-    const { shQuote } = require('../git-changes-runner');
-    const { inspectRemoteTouchedPaths } = require('../remote-touched-files');
+    const { shQuote } = require('../src/main/changes/git-changes-runner');
+    const { inspectRemoteTouchedPaths } = require('../src/main/changes/remote-touched-files');
     for (const name of ['id_generator.py', 'id_utils/x.js', key]) {
       const file = path.join(shell.dir, name);
       fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -281,7 +281,7 @@ function panelHandlers(fsOps = fs, gitOps = fixtureGitFiles, remoteExec = null) 
     invalidateFtsSignature() {},
     remotePanelPaths: new Set(),
     resolveGitChangesTarget: id => id === 'R1' ? { ok: true, kind: 'remote', alias: 'host', cwd: '/repo/sub' } : { ok: false, error: 'invalid remote session' },
-    readRemoteTouchedFile: args => require('../remote-touched-files').readRemoteTouchedFile(args, { runRemoteCommand: remoteExec }),
+    readRemoteTouchedFile: args => require('../src/main/changes/remote-touched-files').readRemoteTouchedFile(args, { runRemoteCommand: remoteExec }),
   };
   for (const channel of ['read-file-for-panel', 'save-file-for-panel']) {
     const start = source.indexOf("ipcMain.handle('" + channel + "'");
@@ -330,7 +330,7 @@ test('remote Touched IPC opens outside the session repository read-only and enfo
   assert.equal(pair.git, false);
   assert.equal(pair.current, body);
   assert.equal(pair.readOnly, true);
-  const { REMOTE_TOUCHED_READ_MAX_BYTES } = require('../remote-touched-files');
+  const { REMOTE_TOUCHED_READ_MAX_BYTES } = require('../src/main/changes/remote-touched-files');
   assert.ok(Number.isFinite(REMOTE_TOUCHED_READ_MAX_BYTES));
   body = 'é'.repeat(Math.floor(REMOTE_TOUCHED_READ_MAX_BYTES / 2));
   assert.equal((await api.read('/outside/file', { editor: true, sessionId: 'R1' })).ok, true);
@@ -393,7 +393,7 @@ test('remote Touched quotes hostile read operands and refuses binary and oversiz
     const rel = filePath.slice('/repo/'.length);
     assert.ok(calls.at(-1).includes("'HEAD:" + rel.replace(/'/g, "'\\''") + "'"));
   }
-  const { REMOTE_TOUCHED_READ_MAX_BYTES } = require('../remote-touched-files');
+  const { REMOTE_TOUCHED_READ_MAX_BYTES } = require('../src/main/changes/remote-touched-files');
   for (const body of ['bin\0ary', 'x'.repeat(REMOTE_TOUCHED_READ_MAX_BYTES + 1)]) {
     const api = panelHandlers(fs, fixtureGitFiles, async (_alias, command) => ({ code: 0,
       stdout: command.includes('rev-parse') ? '/repo\n' : command.includes("'show'") ? body : 'working text' }));
@@ -423,7 +423,7 @@ function fixture(t) {
   fs.writeFileSync(config, '');
   require('./git-discovery-fixture').savedEnv(t, { HOME: root, USERPROFILE: root, XDG_CONFIG_HOME: root, GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1' });
   t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
-  const env = require('../git-changes-runner').localGitEnv();
+  const env = require('../src/main/changes/git-changes-runner').localGitEnv();
   const git = (...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd: dir, env, timeout: 10_000, stdio: 'pipe' });
   return { dir, git };
 }

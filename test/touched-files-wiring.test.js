@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const os = require('node:os');
-const { listSessionTouchedFiles } = require('../session-touched-files');
+const { listSessionTouchedFiles } = require('../src/main/changes/session-touched-files');
 const { isRemoteFolder } = require('../src/main/remote/remote-hosts');
 
 const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');

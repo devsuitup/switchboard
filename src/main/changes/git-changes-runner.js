@@ -2,10 +2,10 @@
 
 'use strict';
 
-const { runToExit } = require('./src/main/shared/run-to-exit');
+const { runToExit } = require('../shared/run-to-exit');
 const fs = require('fs');
 const path = require('path');
-const { defaultRunRemoteCommand } = require('./src/main/remote/remote-attach');
+const { defaultRunRemoteCommand } = require('../remote/remote-attach');
 const {
   parseStatusPorcelainV2,
   parseNumstat,

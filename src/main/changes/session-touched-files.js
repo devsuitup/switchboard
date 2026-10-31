@@ -5,11 +5,11 @@
 const fs = require('fs');
 const path = require('path');
 const { createTouchedFilesCache } = require('./touched-transcript-cache');
-const { enumerateSessionFiles, readSubagentMeta } = require('./read-session-file');
+const { enumerateSessionFiles, readSubagentMeta } = require('../../../read-session-file');
 const { isValidChangesSessionId } = require('./git-changes-target');
-const { extractCwdFromJsonl } = require('./derive-project-path');
-const { verifiedTranscriptCwd } = require('./encode-project-path');
-const { parseFolderKey, mirrorProjectsDirFor } = require('./src/main/remote/remote-hosts');
+const { extractCwdFromJsonl } = require('../../../derive-project-path');
+const { verifiedTranscriptCwd } = require('../../../encode-project-path');
+const { parseFolderKey, mirrorProjectsDirFor } = require('../remote/remote-hosts');
 const { isRemoteTouchedPath, inspectRemoteTouchedPaths } = require('./remote-touched-files');
 
 const TOUCH_TOOLS = Object.freeze(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);

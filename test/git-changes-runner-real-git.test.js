@@ -24,10 +24,10 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
-const { createGitChangesRunner, isSafeNoIndexPath, NOT_A_REPO_REASON, missingCwdError, UNTRACKED_COUNT_LIMITS } = require('../git-changes-runner');
+const { createGitChangesRunner, isSafeNoIndexPath, NOT_A_REPO_REASON, missingCwdError, UNTRACKED_COUNT_LIMITS } = require('../src/main/changes/git-changes-runner');
 const { realFixture, raw, git: localeGit, frenchLocale } = require('./git-locale-fixture');
 const { savedEnv } = require('./git-discovery-fixture');
-const { localGitEnv } = require('../git-changes-runner');
+const { localGitEnv } = require('../src/main/changes/git-changes-runner');
 
 require('./git-locale-fixture').isolateGitSuite();
 
