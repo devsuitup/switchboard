@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const { runToExit } = require('../run-to-exit');
+const { runToExit } = require('../src/main/shared/run-to-exit');
 
 function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-rte-'));

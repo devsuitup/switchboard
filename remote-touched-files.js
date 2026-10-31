@@ -5,7 +5,7 @@ const path = require('path');
 const { defaultRunRemoteCommand } = require('./remote-attach');
 const { shQuote, buildRemoteGitCommand, buildGitArgs, isSafeGitPath } = require('./git-changes-runner');
 const { toLf, decodeUtf8 } = require('./git-changes-file');
-const { matchesDenylist } = require('./ipc-path-validator');
+const { matchesDenylist } = require('./src/main/shared/ipc-path-validator');
 const { isValidAlias } = require('./remote-hosts');
 
 const REMOTE_TOUCHED_READ_MAX_BYTES = 2 * 1024 * 1024;

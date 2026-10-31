@@ -18,7 +18,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { resolveOnDisk, isInsideDir } = require('./resolve-path-on-disk');
+const { resolveOnDisk, isInsideDir } = require('./src/main/shared/resolve-path-on-disk');
 
 /** A session id may only be a plain filename component. */
 function isValidSessionId(id) {

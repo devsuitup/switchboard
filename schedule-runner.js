@@ -5,7 +5,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { encodeProjectPath, verifiedTranscriptCwd } = require('./encode-project-path');
-const { normalizeProjectPath } = require('./normalize-project-path');
+const { normalizeProjectPath } = require('./src/main/shared/normalize-project-path');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');

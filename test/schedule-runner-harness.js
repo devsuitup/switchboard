@@ -18,7 +18,7 @@ function loadScheduleRunner({ home, platform = process.platform, pathModule = pa
         if (name === 'fs') return filesystem;
         if (name === 'path') return pathModule;
         if (name === 'os') return { homedir: () => home };
-        if (name === './normalize-project-path') return load('normalize-project-path.js');
+        if (name === './src/main/shared/normalize-project-path') return load('src/main/shared/normalize-project-path.js');
         return localRequire(name);
       },
     });

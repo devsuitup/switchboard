@@ -40,7 +40,7 @@ const { projectionScope } = require('./public/session-projection-diagnostics');
 const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./bg-agents-roster');
-const { state: TRACE, trace } = require('./activity-trace');
+const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
 
 /**
  * Session cache module.

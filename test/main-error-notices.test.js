@@ -378,7 +378,7 @@ test('Open log traverses the renderer, preload and fixed-path main handler with 
   const context = {
     ipcMain: { handle: (channel, cb) => { assert.equal(channel, 'open-main-log'); handler = cb; } },
     log: { transports: { file: { getFile: () => ({ path: logPath }) } } },
-    path, isSensitivePath: require('../ipc-path-validator').isSensitivePath,
+    path, isSensitivePath: require('../src/main/shared/ipc-path-validator').isSensitivePath,
     shell: { openPath: async value => { opened.push(value); return openError; } },
   };
   vm.runInNewContext(registration[0], context, { filename: sourcePath });

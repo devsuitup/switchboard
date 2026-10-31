@@ -7,10 +7,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 const gitChangesFile = require('../git-changes-file');
-const { isSensitivePath } = require('../ipc-path-validator');
+const { isSensitivePath } = require('../src/main/shared/ipc-path-validator');
 const { createMainPanelSaves } = require('../viewer-save-guard');
 
-const { runToExit } = require('../run-to-exit');
+const { runToExit } = require('../src/main/shared/run-to-exit');
 const MAX_BYTES = 1024;
 async function fixtureRunGit(args, options) {
   const env = require('../git-changes-runner').localGitEnv(options.env);

@@ -37,7 +37,7 @@ log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 const LOG_DEBUG_ON = log.transports.file.level === 'debug' || log.transports.console.level === 'debug';
 
 // Opt-in activity trace — see docs/activity-trace.md.
-const activityTrace = require('./activity-trace');
+const activityTrace = require('./src/main/shared/activity-trace');
 const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDecision } = activityTrace;
 
 const { classifyTitleActivity } = require('./classify-title-activity');
@@ -50,9 +50,9 @@ const unsavedGuard = createUnsavedGuard({ ipcMain, quit: attempt => { quitAttemp
 let exitInventory = () => ({ rows: [], counts: {}, remote: {} });
 let runExitBackground = async () => [];
 let flushForLogoff = () => Promise.resolve();
-const { cleanEnv, scrubSessionEnv } = require('./clean-env');
+const { cleanEnv, scrubSessionEnv } = require('./src/main/shared/clean-env');
 scrubSessionEnv(process.env);
-const { normalizeProjectPath: normalizeArchivedProjectPath } = require('./normalize-project-path');
+const { normalizeProjectPath: normalizeArchivedProjectPath } = require('./src/main/shared/normalize-project-path');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
@@ -85,7 +85,7 @@ const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, initialSch
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
-const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
+const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./src/main/shared/ipc-path-validator');
 const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
 const { normalizePtySize } = require('./pty-size');
 const { makeDeleteSessionGuard } = require('./delete-session-guard');
@@ -103,7 +103,7 @@ const { attachBlockReason, sendBlockReason, launchBlockReason } = require('./rem
 const { createRemoteLaunchAdapter, handleLaunchRequest } = require('./remote-launch');
 const { createRemoteSendAdapter, handleSendRequest } = require('./remote-send');
 const { createGitChangesRunner, localGitEnv } = require('./git-changes-runner');
-const { runToExit } = require('./run-to-exit');
+const { runToExit } = require('./src/main/shared/run-to-exit');
 const gitChangesTarget = require('./git-changes-target');
 const terminalPathTarget = require('./terminal-path-target');
 const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');

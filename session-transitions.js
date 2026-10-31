@@ -3,7 +3,7 @@ const fs = require('fs');
 const { readSubagentMeta, classifyUserText, workflowRunDirectories } = require('./read-session-file');
 const { classifyTranscriptPath } = require('./subagent-attribution');
 const { scanContinuationIndex } = require('./session-continuations');
-const { state: TRACE, trace } = require('./activity-trace');
+const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
 const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
 
 /**

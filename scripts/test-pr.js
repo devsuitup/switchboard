@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 const { isDeepStrictEqual } = require('node:util');
-const { scrubSessionEnv } = require('../clean-env');
+const { scrubSessionEnv } = require('../src/main/shared/clean-env');
 
 function validatePr(pr) {
   if (!/^\d+$/.test(String(pr ?? ''))) throw new Error('PR must be numeric: task test-pr PR=<number>');

@@ -7,8 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { stripExtendedPrefix } = require('../resolve-path-on-disk');
-const { isSensitivePath, isSensitivePathAsync } = require('../ipc-path-validator');
+const { stripExtendedPrefix } = require('../src/main/shared/resolve-path-on-disk');
+const { isSensitivePath, isSensitivePathAsync } = require('../src/main/shared/ipc-path-validator');
 
 const BS = String.fromCharCode(92);
 const EXT = BS + BS + '?' + BS;
@@ -159,7 +159,7 @@ test('trailing dots and spaces on a credential name are refused by both guards',
 });
 
 test('stripTrailingDotsAndSpaces trims each segment and keeps the root', { skip: !win && 'win32 only' }, () => {
-  const { stripTrailingDotsAndSpaces } = require('../resolve-path-on-disk');
+  const { stripTrailingDotsAndSpaces } = require('../src/main/shared/resolve-path-on-disk');
   assert.strictEqual(stripTrailingDotsAndSpaces('C:' + BS + 'a. ' + BS + 'b.' + BS + 'c '), 'C:' + BS + 'a' + BS + 'b' + BS + 'c');
 });
 
