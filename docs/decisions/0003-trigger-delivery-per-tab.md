@@ -160,7 +160,7 @@ when a nested CLI descriptor names a different id. Preserve their existing
 composer/readiness/result gates. Do not add descriptor fallback to these tabs.
 Today's public contract includes plain terminals (`docs/automation.md:196`).
 The POSIX/fish shims block `claude` with a hint and return 1
-(`plain-terminal-shell.js:10`, `plain-terminal-shell.js:14`); no shim runs in
+(`src/main/terminals/plain-terminal-shell.js:10`, `src/main/terminals/plain-terminal-shell.js:14`); no shim runs in
 PowerShell/cmd (`.ai/contexts/plain-terminal.md:52`). The synthetic nested-CLI scenario remains
 required, for a bypassed shim or an unshimmed shell. Unattached remote socket
 delivery retains its

@@ -35,7 +35,7 @@ From `session-cache.js`:
 - `init(ctx)` — wire main process → cache (mainWindow ref for IPC events)
 - `refreshFolder(folder, opts)` — opts `{files: Set<string>}` for targeted refresh (watcher payload). Defaults to full folder walk. Returns a boolean indicating a sidebar-relevant change, after computing the cache writes; the writer facade resolves it after those writes are acknowledged.
 - `populateCacheViaWorker()` — initial scan / re-scan. The worker (`workers/scan-projects.js`) streams one `{type:'folder', result, current, total}` message per on-disk folder (plus a final `{type:'done'}`) instead of buffering the whole tree, so each folder is written to the DB and pushed to the renderer as soon as it's read — a large history no longer leaves the sidebar empty for the entire scan.
-- `buildProjectsFromCache(showArchived)` — produces the sidebar payload (sorted, grouped by project, missing flag computed here). It also injects every live plain-terminal PTY from `activeSessions` as a synthetic row, so a terminal sorts among the cached sessions even though it has no JSONL; the row's `summary` is the hard-coded string `Terminal`, which is what the sidebar displays — the renderer's own session object is never the one shown. A panel shell is a plain terminal too and is excluded here by `isPanelShellSession` (`panel-terminal-target.js`); see `.ai/contexts/panel-terminal.md` for the full list of places that have to skip one.
+- `buildProjectsFromCache(showArchived)` — produces the sidebar payload (sorted, grouped by project, missing flag computed here). It also injects every live plain-terminal PTY from `activeSessions` as a synthetic row, so a terminal sorts among the cached sessions even though it has no JSONL; the row's `summary` is the hard-coded string `Terminal`, which is what the sidebar displays — the renderer's own session object is never the one shown. A panel shell is a plain terminal too and is excluded here by `isPanelShellSession` (`src/main/terminals/panel-terminal-target.js`); see `.ai/contexts/panel-terminal.md` for the full list of places that have to skip one.
 - `notifyRendererProjectsChanged(cause)` — structural pushes use a 1.5s leading-edge/trailing throttle; activity-only pushes coalesce for at least 30s.
 - `sendIndexingProgress()` (internal) — emits the `indexing-progress` IPC event, gated on `coldStart` (captured once at the top of `populateCacheViaWorker()` via `!isInitialScanComplete()`) and throttled to ~4 events/s (the first event and every `done:true` always pass). Feeds the renderer's first-run banner; see `.ai/contexts/ipc-bridge.md`. A `done:true` payload carrying `error` keeps the banner visible with the failure message instead of hiding it.
 
@@ -1564,7 +1564,7 @@ Launching a new remote session (#222) and injection over the messaging socket
   (titles only when no other client is still attached, issue #290). No new IPC
   or `main.js` call site was added for this — `stop-session` already calls
   `killPty(session, sessionId)` → `session.pty.kill()` through the existing
-  `pty-ops.js` seam, so the clean detach is just what that seam now reaches.
+  `src/main/terminals/pty-ops.js` seam, so the clean detach is just what that seam now reaches.
 
 - **`main.js`'s onData/onExit wiring (OSC parsing, busy detection, output
   buffering, `activeSessions` cleanup) is shared between local spawn and
@@ -1573,7 +1573,7 @@ Launching a new remote session (#222) and injection over the messaging socket
   remote-attach branch — the same code path, not a parallel copy that can
   drift. A remote session's `ptyProcess` (from `remote-attach.js`) exposes
   the same `write/resize/kill/onData/onExit/pid` shape node-pty does, so
-  `pty-ops.js` (`writePty`/`resizePty`/`killPty`) and this wiring need no
+  `src/main/terminals/pty-ops.js` (`writePty`/`resizePty`/`killPty`) and this wiring need no
   remote-awareness of their own — the existing `terminal-resize` IPC reaches
   a remote session's PTY through the exact same `resizePty(session, cols,
   rows, sessionId)` call as a local one.
@@ -1956,7 +1956,7 @@ Launching a new remote session (#222) and injection over the messaging socket
   `handle: attachResult.ptyProcess` — the same wrapper object also stored as
   `session.pty`. That works without a second object because the wrapper
   already exposes `write`/`isAlive` alongside the pty-duck-type methods
-  (`resize`/`kill`/`onData`/`onExit`/`pid`) `pty-ops.js` and `wireSessionPty`
+  (`resize`/`kill`/`onData`/`onExit`/`pid`) `src/main/terminals/pty-ops.js` and `wireSessionPty`
   need; `getPtyForSession` takes it as `session.handle` given, unmodified,
   exactly the branch #220 left unexercised. Proven in
   `test/remote-attach.test.js` ("pilots the fake remote pty through write()

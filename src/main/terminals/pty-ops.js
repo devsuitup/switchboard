@@ -2,8 +2,8 @@
 'use strict';
 
 const os = require('os');
-const { closeWindowsPty } = require('./src/main/terminals/close-windows-pty');
-const { windowsJobHelper } = require('./src/main/terminals/windows-job-helper');
+const { closeWindowsPty } = require('./close-windows-pty');
+const { windowsJobHelper } = require('./windows-job-helper');
 
 let logger = null;
 const jobsByPty = new WeakMap();

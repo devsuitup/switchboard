@@ -96,13 +96,30 @@ message. Longer messages hash the normalized first 16,000 characters followed by
 `\0length=<original UTF-16 length>`. Messages over 15,000 characters log the first
 11,000 characters, `[truncated; length=N]` with the original UTF-16 message length,
 and at most the last 4,000 stack characters, keeping the total below 16,000.
-For native Errors with messages over 16,000 characters, a temporary V8
-`Error.prepareStackTrace` formats at most the last 20 call sites with the bounded
-message instead of formatting the entire message into a lazy stack. The prior
-formatter descriptor is restored in `finally`; V8 may cache that bounded stack
-on the Error. Oversized non-native reasons use only an own stack data descriptor,
-avoiding a custom stack getter. Smaller messages retain the existing stack-prefix
-cap. A Node 22.23.4 probe with a 50-million-character message measured about
+For messages over 16,000 characters, a temporary `Error.prepareStackTrace` is
+installed before reading the own stack descriptor. On Node 20 (V8 11), that
+descriptor read formats a previously unread native stack into a data property
+through the temporary formatter. On Node 22, the native own stack accessor must
+match V8's shared getter, captured once at module load from a fresh Error, before
+it is called directly. The formatter uses at most the last 20 call sites,
+returning frames only (at most 4,000 characters). The log adds the
+bounded message prefix and truncation marker once. The prior formatter descriptor
+is restored in `finally`. V8 caches those frames on a previously unread Error;
+this is an accepted trade-off to avoid materializing the full oversized stack.
+Restoring the accessor descriptor cannot reset V8's internal cached value, and
+reconstructing an Error would lose its original call sites. A stack read before
+reporting is already cached and remains unchanged. There is currently no app
+reader of the reported Error's stack after this backstop.
+Own stack data values, including explicit or previously cached stacks, are used
+as-is before the log tail cap. Custom own or inherited stack getters never run
+in this path; absent stacks contribute no frames.
+A native Error from another vm realm has a different stack getter on Node 22+
+and therefore contributes no frames in this oversized-message path.
+The 15,990-character regression
+cannot exercise the swap: it is below the strict >16,000 threshold, so it covers
+ordinary stack reading and truncation; the 16,001-character case covers the swap.
+Smaller messages retain the existing stack-prefix cap.
+A Node 22.23.4 probe with a 50-million-character message measured about
 50 MB of extra heap for `error.stack.slice(-4000)`, versus about 28 KB for
 call-site formatting: slicing the tail alone does materialize that native stack.
 This bounds normalization, hashing and logged text size; it does not guarantee
@@ -435,7 +452,7 @@ adapter applies it.
   Work-files still use the narrower `.includes('/.work-files/')` substring check — same weakness against a symlinked ancestor, not yet migrated (see "IPC path-guard inventory" below). A handler that reads *content* back to the renderer (file panel, memory) and a handler that only decides *whether to run a command* (`run-schedule-now`) both need a guard, and neither one is safe with `path.resolve()` alone.
 - **Trust boundary is the contextBridge call**. Anything passed across must survive structured-clone serialization. No functions, no DOM nodes, no class instances — only plain JSON.
 - **Async handlers return promises**. Renderer uses `await window.api.foo(...)`. Throws cross the boundary as rejected promises; return `{ok, error}` if you want graceful failure handling on the renderer side.
-- **Never call a method on `session.pty` directly.** Go through `pty-ops.js` (`resizePty` / `killPty` / `writePty`, or the generic `withPty`). See "PTY operations race the exit" below.
+- **Never call a method on `session.pty` directly.** Go through `src/main/terminals/pty-ops.js` (`resizePty` / `killPty` / `writePty`, or the generic `withPty`). See "PTY operations race the exit" below.
 
 ### IPC path-guard inventory
 
@@ -447,14 +464,14 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | `get-memories` (the list, and the FTS bodies it indexes) | `acceptMdFile` (`scan-md-files.js`) applies `isSensitivePath` itself and the `isAllowedMemoryPath` predicate `get-memories` passes in; `scanMdFiles` is the directory-wide form of it, and the project-root `CLAUDE.md`/`GEMINI.md`/`agents.md` go through it by name | disk-resolved denylist + allowlist — a listed file is read twice more downstream, once by `read-memory` behind `resolveAllowedMemoryPath` and once by the FTS indexer behind nothing at all, so the guard belongs on the list. The denylist is not the caller's to choose: containment in an allowed project root says nothing about a cloned repo's own `.ssh`/`.env` |
 | `open-main-log` | Main chooses electron-log's path; requires a string absolute path and `!isSensitivePath` before `shell.openPath`. | no renderer-supplied path; disk-resolved denylist |
 | `open-path` / `read-file-for-panel` / `save-file-for-panel` / `watch-file` | Local: `isSensitivePath`. Remote panel reads resolve the session target and guard the literal and canonical host path. Saves refuse a resolved remote target and any path already opened through the remote panel route, even without renderer options. | disk-resolved denylist + main-side remote write refusal |
-| `resolve-terminal-paths` | `resolveTerminalPaths` / `resolveTerminalPathTarget` (`terminal-path-target.js`, async, 8 checks in flight): the session cwd for a relative path, existence, then `isSensitivePath` on the resolved path, then regular-file-ness, `PANEL_FILE_MAX_BYTES` and a NUL-byte sniff | disk-resolved denylist, strictly narrower than `read-file-for-panel` — its whole input is untrusted terminal output, and its answer decides whether a path is even offered as a link. Existence is tested before the denylist because most candidates on a line of prose are not files; a path that exists still passes the denylist before anything else is decided. A remote session is refused outright, and so is one whose working directory cannot be resolved — otherwise an unresolvable remote would fall back to stat-ing the local disk. A panel shell (`panelFor`) resolves through its owning session |
+| `resolve-terminal-paths` | `resolveTerminalPaths` / `resolveTerminalPathTarget` (`src/main/terminals/terminal-path-target.js`, async, 8 checks in flight): the session cwd for a relative path, existence, then `isSensitivePath` on the resolved path, then regular-file-ness, `PANEL_FILE_MAX_BYTES` and a NUL-byte sniff | disk-resolved denylist, strictly narrower than `read-file-for-panel` — its whole input is untrusted terminal output, and its answer decides whether a path is even offered as a link. Existence is tested before the denylist because most candidates on a line of prose are not files; a path that exists still passes the denylist before anything else is decided. A remote session is refused outright, and so is one whose working directory cannot be resolved — otherwise an unresolvable remote would fall back to stat-ing the local disk. A panel shell (`panelFor`) resolves through its owning session |
 | `check-delete-worktree` / `delete-worktree` / `worktree-status` | Shared `checkDeleteWorktree`: `WORKTREE_PATH_RE` (shape) + `isKnownProjectRoot` (disk-resolved exact match) | shape + disk-resolved allowlist |
 | `delete-session-preview` / `delete-session` | `deleteSessionGuard` then `resolveRowDeletionTargets` (`delete-session-target.js`) | full live/background/unknown-state guard + disk-resolved containment |
 | `run-schedule-now` | `resolveRunNowTarget` (`run-schedule-now-target.js`), which composes directory shape (requested path) + filename shape (requested **and** resolved) + `isSensitivePath` + `isAllowedMemoryPath` on both the resolved file and the resolved project root | disk-resolved allowlist + denylist — **the only handler in the app that both reads a file and spawns a process from a renderer-supplied path; the file's content becomes a prompt sent to the model, so the resolved target is constrained, not just its location** |
 | `read-work-file` / `delete-work-file` | `.includes('/.work-files/')` substring | ad hoc string, **not disk-resolved** — a symlinked ancestor defeats it the same way it defeated `isSensitivePath`/`isAllowedMemoryPath` before they were fixed here. Not migrated in this pass; same fix shape (`resolveOnDisk` + a `.work-files` component check instead of a substring test) would close it |
 | `read-activity-trace-file` / `delete-activity-trace-file` | `resolveTraceFilePath` (`activity-trace.js`) | ad hoc string (directory + basename pattern), **not disk-resolved** — narrower surface (one generated file family) lowers the stakes, not migrated |
 | `add-project` / `remap-project` | none on the probe (`fs.statSync`/`fs.existsSync`/`fs.lstatSync`); the actual write is confined through `encodeProjectPath` | existence/type oracle only — inherent to the feature (both accept an arbitrary disk location by design), not cheaply fixable without breaking it |
-| `open-terminal` (`preLaunchCmd`) | `validatePreLaunchCmd` (`pre-launch-cmd-guard.js`) | not a path guard — a character allowlist on a raw-shell-by-design string (the documented prefix's character set plus its analogues: `env VAR=val`, `doas`, an absolute binary path); a denylist here proved incomplete (process substitution `<(...)`/`>(...)` needed none of the blocked characters), so this is closed by construction instead of by enumeration. Known cost: bare `$VAR` expansion and quoted arguments, both previously accepted, are now refused. The real-bash test of the documented shape spawns `bash -l -c` without `-i`: it asserts that the validated prefix runs as an ordinary command line, which does not depend on interactive mode, and `-i` with no TTY is what prints "cannot set terminal process group" (job control) next to the intermittent status 2147483652; the intermittent status is handled in `test/spawn-retry.js` (#342) |
+| `open-terminal` (`preLaunchCmd`) | `validatePreLaunchCmd` (`src/main/terminals/pre-launch-cmd-guard.js`) | not a path guard — a character allowlist on a raw-shell-by-design string (the documented prefix's character set plus its analogues: `env VAR=val`, `doas`, an absolute binary path); a denylist here proved incomplete (process substitution `<(...)`/`>(...)` needed none of the blocked characters), so this is closed by construction instead of by enumeration. Known cost: bare `$VAR` expansion and quoted arguments, both previously accepted, are now refused. The real-bash test of the documented shape spawns `bash -l -c` without `-i`: it asserts that the validated prefix runs as an ordinary command line, which does not depend on interactive mode, and `-i` with no TTY is what prints "cannot set terminal process group" (job control) next to the intermittent status 2147483652; the intermittent status is handled in `test/spawn-retry.js` (#342) |
 | `read-session-jsonl` / `read-subagent-jsonl` / `start-subagent-watch` / `create-schedule-session` | none directly — path is derived from a SQLite key or built via `encodeProjectPath`, not taken verbatim from the renderer | out of scope for a path guard; flag if a renderer-controlled string is ever found reaching the derivation unencoded |
 | `git-changes-file` / `git-changes-watch` / `git-changes-unwatch` | `isSafeRevPathOperand` + `resolveTargetInsideRepo` (`git-changes-file.js`): the repo root and git directories come from `git rev-parse --show-toplevel --absolute-git-dir --git-common-dir`, a symlink at the target is refused before anything follows it, and **every remaining check runs on the disk-resolved path** — containment in the root, no `.git` segment, nothing inside a git directory, `isSensitivePath`, regular file | shape + disk-resolved containment + denylist — the operand is `<rev>:<path>`, a *revision*, not a pathspec: `--literal-pathspecs` does not reach it and `--` cannot separate it, so it carries its own guard. See `.ai/contexts/changes-view.md` ("Editing a changed file") |
 | `git-changes-save` | `isSafeRepoRelativePath` + the same `resolveTargetInsideRepo`, plus a version token that must still match the bytes on disk; the write runs on the path the guard returned, never on a re-derived one | shape + disk-resolved containment + denylist — **the only write handler in the app whose entire input is a relative path from the renderer**, so containment is the guard, not an afterthought; `save-file-for-panel` next to it has none (it takes an absolute path and checks only `isSensitivePath`) and is not the precedent to copy here |
@@ -498,7 +515,7 @@ The path that produced it: the user closes a session → the PTY exits → the
 renderer re-lays out the remaining terminals and emits one `terminal-resize` per
 tile, including for the session that just went away.
 
-`pty-ops.js` is the single place a session PTY is touched. It keeps the liveness
+`src/main/terminals/pty-ops.js` is the single place a session PTY is touched. It keeps the liveness
 check as a cheap fast path but wraps the call, the way `trigger-watcher.js`
 already reasoned about its writes ("an exit between the liveness probe and the
 write is bounded by the try/catch on the write"). Callers get a boolean instead
@@ -732,7 +749,7 @@ node reader as the shell):
   reply through the same way.
 
 A visible session answers at once: xterm.js replies with a plain CPR
-(`CSI row;col R`), which `composer-state.js` does not treat as a report (see
+(`CSI row;col R`), which `src/main/terminals/composer-state.js` does not treat as a report (see
 `.ai/contexts/trigger-watcher.md`, CPR), so the answer pushes the quiet clock
 once.
 
@@ -746,7 +763,7 @@ share the matcher in `public/terminal-replay-queries.js`; see
 - `appendToHiddenAccumulator` / `replayHiddenBuffer` (`public/terminal-manager.js`)
   remove these queries from what they keep, including a query split across chunks
   and one left in the live write buffer when the session was hidden.
-- `appendToOutputBuffer` (`output-buffer.js`), main's reattach buffer, removes them
+- `appendToOutputBuffer` (`src/main/terminals/output-buffer.js`), main's reattach buffer, removes them
   on the way in, a query split across several chunks included (the last
   four code units of the buffer are checked, across entries). That buffer also
   holds the queries a visible renderer already answered.
@@ -782,7 +799,7 @@ is deliberate — the file transport is at `info` in packaged builds, so a resiz
 storm against a dying PTY costs nothing in production, and the line is there in
 dev when someone next has to diagnose this.
 
-Not covered by `pty-ops.js`, on purpose: `trigger-watcher.js` writes (already
+Not covered by `src/main/terminals/pty-ops.js`, on purpose: `trigger-watcher.js` writes (already
 bounded by their callers' try/catch, plus a `process.kill(pid, 0)` liveness
 probe) and the `clear` shim write in `open-terminal`, which happens before a
 session object exists.
@@ -967,7 +984,7 @@ Two constraints shaped the API:
   `isSensitivePath`, because the legitimate surface here is a single generated
   file family. Both the check (`resolveTraceFilePath`) and the capped read
   (`readTraceTail`) live in `activity-trace.js` rather than inline in the
-  handler, for the same reason `fts-match.js` and `terminal-input.js` do:
+  handler, for the same reason `fts-match.js` and `src/main/terminals/terminal-input.js` do:
   a handler body cannot be unit-tested without booting Electron, and these two
   carry the parts worth testing — a non-string path must answer `null` rather
   than throw (a rejected invoke leaves the button dead with no message), and a

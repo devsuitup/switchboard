@@ -18,7 +18,7 @@ const fs     = require('fs');
 const os     = require('os');
 const { spawnSyncRetryingCrash } = require('./spawn-retry');
 
-const { validatePreLaunchCmd } = require('../pre-launch-cmd-guard');
+const { validatePreLaunchCmd } = require('../src/main/terminals/pre-launch-cmd-guard');
 
 // ── allowed: the documented use case and its analogues ──────────────────────
 

@@ -5,7 +5,7 @@ const { classifyTranscriptPath } = require('./subagent-attribution');
 const { scanContinuationIndex } = require('./session-continuations');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
 const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
-const { releaseWindowsPty } = require('./pty-ops');
+const { releaseWindowsPty } = require('./src/main/terminals/pty-ops');
 
 /**
  * Fork detection for active PTY sessions.

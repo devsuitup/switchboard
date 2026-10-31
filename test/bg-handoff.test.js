@@ -6,9 +6,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { sendToBackground, holdBackgroundExit, createContinuationReader } = require('../bg-handoff');
-const { acquireTabInput, tryAcquireTabInput } = require('../tab-input-lock');
-const { createComposerState, noteUserInput } = require('../composer-state');
-const { trackWindowsPty, killPty } = require('../pty-ops');
+const { acquireTabInput, tryAcquireTabInput } = require('../src/main/terminals/tab-input-lock');
+const { createComposerState, noteUserInput } = require('../src/main/terminals/composer-state');
+const { trackWindowsPty, killPty } = require('../src/main/terminals/pty-ops');
 
 function setup(options = {}) {
   let time = 0, output;

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { createTmuxAttachAdapter } = require('../src/main/remote/remote-attach');
 
 function handler() {
-  return require('../terminal-resize').createTerminalResizeHandler;
+  return require('../src/main/terminals/terminal-resize').createTerminalResizeHandler;
 }
 
 function fixture(onResize) {
@@ -220,7 +220,7 @@ test('a thrown remote restoration reaches the guarded retry and restores the att
 });
 
 test('PTY resize rejects dimensions above the existing allocation bounds', () => {
-  const { MAX_COLS, MAX_ROWS } = require('../pty-size');
+  const { MAX_COLS, MAX_ROWS } = require('../src/main/terminals/pty-size');
   const ctx = fixture();
   for (const refresh of [false, true]) {
     ctx.resize('s', MAX_COLS + 1, 40, refresh);
@@ -235,7 +235,7 @@ test('PTY resize rejects dimensions above the existing allocation bounds', () =>
 });
 
 test('the first-open nudge stays inside the PTY column upper bound', () => {
-  const { MAX_COLS, MAX_ROWS } = require('../pty-size');
+  const { MAX_COLS, MAX_ROWS } = require('../src/main/terminals/pty-size');
   const ctx = fixture();
   ctx.session.firstResize = true;
   ctx.resize('s', MAX_COLS, MAX_ROWS);

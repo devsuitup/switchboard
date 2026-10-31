@@ -2021,7 +2021,7 @@ test('a link the path check refuses for another reason still goes to the guarded
 });
 
 test('a link in a remote session with no known working directory opens nothing, through the real resolution', async () => {
-  const { resolveTerminalPathsCwd } = require('../terminal-path-target');
+  const { resolveTerminalPathsCwd } = require('../src/main/terminals/terminal-path-target');
   const ctx = setupDom({
     resolveImpl: (id, texts) => {
       const where = resolveTerminalPathsCwd(id, {

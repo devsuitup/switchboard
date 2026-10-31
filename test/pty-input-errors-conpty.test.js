@@ -45,7 +45,7 @@ function runChild() {
   const staged = stageNodePty(os.tmpdir(), src);
   return spawnSync(process.execPath, ['-e', CHILD], {
     cwd: path.join(__dirname, '..'),
-    env: { ...process.env, PTY_OPS: path.join(__dirname, '..', 'pty-ops.js'), NODE_PTY_DIR: staged.nodePty },
+    env: { ...process.env, PTY_OPS: path.join(__dirname, '../src/main/terminals/pty-ops.js'), NODE_PTY_DIR: staged.nodePty },
     timeout: 30000,
     encoding: 'utf8',
   });

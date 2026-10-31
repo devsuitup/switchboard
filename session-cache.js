@@ -32,7 +32,7 @@ const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkE
 const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('./src/main/remote/remote-hosts');
-const { isPanelShellSession } = require('./panel-terminal-target');
+const { isPanelShellSession } = require('./src/main/terminals/panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp, continuationMtime, continuationRollup } = require('./session-continuations');
 const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds: resolveConversationMemberIds, scopedConversationRows } = require('./sidebar-bg-sessions');

@@ -5,7 +5,7 @@ const test   = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createTriggerContext, createLocalSessionHandle } = require('../trigger-context');
-const { createComposerState, noteUserInput } = require('../composer-state');
+const { createComposerState, noteUserInput } = require('../src/main/terminals/composer-state');
 const { spawnSync } = require('node:child_process');
 
 const silentLog = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };

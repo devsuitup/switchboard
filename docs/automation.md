@@ -404,7 +404,7 @@ character of an empty prompt. Typed into a non-empty prompt, a slash command
 stays there, unsubmitted.
 
 **How Switchboard knows.** Every keystroke the renderer sends to a terminal goes
-through one IPC channel, and `composer-state.js` keeps a copy of the text it
+through one IPC channel, and `src/main/terminals/composer-state.js` keeps a copy of the text it
 believes is in the prompt, with a cursor. `pending` is that text's length in
 code points.
 

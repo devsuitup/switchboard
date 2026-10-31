@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
-const ops = require('../pty-ops');
+const ops = require('../src/main/terminals/pty-ops');
 
 function fixture(t) {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
