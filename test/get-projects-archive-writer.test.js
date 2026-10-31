@@ -52,7 +52,7 @@ function scenario(name, body) {
               ipcMain: { handle: (_name, fn) => { invoke = fn; } },
               console, TRACE: { on: false }, performance, projectsReconciledAt: Date.now(),
               getSetting: db.getSetting, normalizeHosts: () => [],
-              parseFolderKey: require('./remote-hosts').parseFolderKey,
+              parseFolderKey: require('./src/main/remote/remote-hosts').parseFolderKey,
               isInitialScanComplete: () => true, isCachePopulated: () => true,
               isSearchIndexPopulated: () => true,
               populateCacheViaWorker: () => assert.fail('warm cache populated'),

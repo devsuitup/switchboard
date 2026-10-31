@@ -25,7 +25,7 @@ const PTY_FUNCS = new Set(['spawn']);
 const SSH_NAME_RE = /(^|[\\/])(ssh|scp)(\.exe)?$/i;
 
 // Spawners injected through options, invisible to the value analysis.
-const INJECTED_SPAWNERS = { 'remote-attach.js': new Set(['spawnPtyFn']) };
+const INJECTED_SPAWNERS = { 'src/main/remote/remote-attach.js': new Set(['spawnPtyFn']) };
 // Wrappers that take the program as their first argument, called from other modules too.
 const SPAWN_WRAPPERS = new Set(['runToExit', 'spawnPty']);
 
@@ -46,9 +46,9 @@ const UNRESOLVED_ALLOWED = {
 
 // file -> the program of each resolver-backed site, in source order; a wrapper's site lists what its callers pass.
 const EXPECTED_RESOLVER_SITES = {
-  'remote-attach.js': ['resolveSshPath()', 'resolveSshPath()'],
-  'remote-transport.js': ['resolveSshPath()|resolveScpPath()'],
-  'remote-watch.js': ['resolveSshPath()'],
+  'src/main/remote/remote-attach.js': ['resolveSshPath()', 'resolveSshPath()'],
+  'src/main/remote/remote-transport.js': ['resolveSshPath()|resolveScpPath()'],
+  'src/main/remote/remote-watch.js': ['resolveSshPath()'],
 };
 
 function mainProcessFiles(root = ROOT) {
@@ -56,7 +56,7 @@ function mainProcessFiles(root = ROOT) {
     ...fs.readdirSync(root).filter((f) => f.endsWith('.js')),
     ...walk(root, 'workers'),
     ...walk(root, 'src'),
-  ].filter((f) => path.basename(f) !== 'remote-ssh-binary.js').sort();
+  ].filter((f) => f !== 'src/main/remote/remote-ssh-binary.js').sort();
 }
 
 test('spawn-site enumeration reaches nested workers and src modules', (t) => {
@@ -430,7 +430,7 @@ test('the scanner accepts the resolver behind an injectable default', () => {
 
 // ── default wiring, per operation ──────────────────────────────────────────
 
-const { resetResolvedBinaries } = require('../remote-ssh-binary');
+const { resetResolvedBinaries } = require('../src/main/remote/remote-ssh-binary');
 const SSH = path.join(os.tmpdir(), 'switchboard-359', 'custom-ssh');
 const SCP = path.join(os.tmpdir(), 'switchboard-359', 'custom-scp');
 
@@ -472,7 +472,7 @@ const silentLog = { info() {}, warn() {}, error() {}, debug() {} };
 
 test('the mirror inventory runs SWITCHBOARD_SSH_PATH', async (t) => {
   withBinaryEnv(t);
-  const { createSshTransport } = require('../remote-transport');
+  const { createSshTransport } = require('../src/main/remote/remote-transport');
   const spawn = closingSpawn(0);
   await createSshTransport({ spawn, log: silentLog }).listFiles('vps');
   assert.deepEqual(spawn.cmds(), [SSH]);
@@ -480,7 +480,7 @@ test('the mirror inventory runs SWITCHBOARD_SSH_PATH', async (t) => {
 
 test('the mirror file copy runs SWITCHBOARD_SCP_PATH, which runs SWITCHBOARD_SSH_PATH through -S', async (t) => {
   withBinaryEnv(t);
-  const { createSshTransport } = require('../remote-transport');
+  const { createSshTransport } = require('../src/main/remote/remote-transport');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-359-scp-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const spawn = closingSpawn(1);
@@ -495,7 +495,7 @@ test('the mirror file copy runs SWITCHBOARD_SCP_PATH, which runs SWITCHBOARD_SSH
 
 test('the mirror range fetch runs SWITCHBOARD_SSH_PATH', async (t) => {
   withBinaryEnv(t);
-  const { createSshTransport } = require('../remote-transport');
+  const { createSshTransport } = require('../src/main/remote/remote-transport');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-359-range-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.mkdirSync(path.join(dir, '-srv-a'));
@@ -507,7 +507,7 @@ test('the mirror range fetch runs SWITCHBOARD_SSH_PATH', async (t) => {
 
 test('the watch channel runs SWITCHBOARD_SSH_PATH', (t) => {
   withBinaryEnv(t);
-  const { createRemoteWatcher } = require('../remote-watch');
+  const { createRemoteWatcher } = require('../src/main/remote/remote-watch');
   const cmds = [];
   const spawn = (cmd) => { cmds.push(cmd); return fakeChild(); };
   const timers = { setTimeout: () => ({}), clearTimeout: () => {} };
@@ -519,7 +519,7 @@ test('the watch channel runs SWITCHBOARD_SSH_PATH', (t) => {
 
 test('the remote command runner (probe, stop, Changes) runs SWITCHBOARD_SSH_PATH', async (t) => {
   withBinaryEnv(t);
-  const { defaultRunRemoteCommand } = require('../remote-attach');
+  const { defaultRunRemoteCommand } = require('../src/main/remote/remote-attach');
   const spawnFn = closingSpawn(0);
   await defaultRunRemoteCommand('vps', 'true', { spawnFn });
   assert.deepEqual(spawnFn.cmds(), [SSH]);
@@ -527,7 +527,7 @@ test('the remote command runner (probe, stop, Changes) runs SWITCHBOARD_SSH_PATH
 
 test('the attach PTY runs SWITCHBOARD_SSH_PATH', async (t) => {
   withBinaryEnv(t);
-  const { createTmuxAttachAdapter } = require('../remote-attach');
+  const { createTmuxAttachAdapter } = require('../src/main/remote/remote-attach');
   const files = [];
   const pty = { onData() {}, onExit() {}, write() {}, resize() {}, kill() {}, pid: 1 };
   const adapter = createTmuxAttachAdapter({

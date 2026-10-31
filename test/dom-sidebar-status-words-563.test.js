@@ -4,7 +4,7 @@ const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const fs = require('node:fs');
 const path = require('node:path');
 const { extractFunction } = require('./app-source');
-const { computeHostProfile, attachBlockReason, sendBlockReason } = require('../remote-host-profile');
+const { computeHostProfile, attachBlockReason, sendBlockReason } = require('../src/main/remote/remote-host-profile');
 
 const now = Date.parse('2026-10-20T12:00:00Z');
 const cases = [

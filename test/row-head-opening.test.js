@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { loadAppFunctions, extractFunction } = require('./app-source');
-const { computeHostProfile, attachBlockReason, sendBlockReason } = require('../remote-host-profile');
+const { computeHostProfile, attachBlockReason, sendBlockReason } = require('../src/main/remote/remote-host-profile');
 
 const mainPath = path.join(__dirname, '../main.js');
 const mainSource = fs.readFileSync(mainPath, 'utf8');

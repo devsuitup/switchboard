@@ -8,7 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('events');
 
-const { defaultRunRemoteCommand, DEFAULT_MAX_STDOUT_BYTES } = require('../remote-attach');
+const { defaultRunRemoteCommand, DEFAULT_MAX_STDOUT_BYTES } = require('../src/main/remote/remote-attach');
 
 function fakeChild() {
   const child = new EventEmitter();

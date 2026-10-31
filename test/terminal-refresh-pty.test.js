@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createTmuxAttachAdapter } = require('../remote-attach');
+const { createTmuxAttachAdapter } = require('../src/main/remote/remote-attach');
 
 function handler() {
   return require('../terminal-resize').createTerminalResizeHandler;

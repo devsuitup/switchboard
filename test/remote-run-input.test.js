@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('events');
 const { Readable, Writable } = require('stream');
 
-const { defaultRunRemoteCommand, buildRemoteCommandArgs } = require('../remote-attach');
+const { defaultRunRemoteCommand, buildRemoteCommandArgs } = require('../src/main/remote/remote-attach');
 
 function fakeSpawn({ exitOnEnd = true, code = 0, emitError = false } = {}) {
   const record = { calls: [], written: [], ended: false, killed: false };

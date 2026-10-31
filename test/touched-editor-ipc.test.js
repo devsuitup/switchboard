@@ -69,7 +69,7 @@ test('round 2 m1: a read uses the checked resolved path after the original chang
 });
 
 test('round 2 m2: oversized HEAD is too large at the real transport cap', async () => {
-  const { defaultRunRemoteCommand } = require('../remote-attach');
+  const { defaultRunRemoteCommand } = require('../src/main/remote/remote-attach');
   const { PassThrough } = require('node:stream');
   const { EventEmitter } = require('node:events');
   const api = panelHandlers(fs, fixtureGitFiles, async (alias, command, options) => {

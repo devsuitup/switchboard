@@ -11,7 +11,7 @@ const bg = require('../bg-agents');
 const cli = require('../cli-session-state');
 const ipc = require('../bg-agents-ipc');
 const { mergeRoster, isHostedJob } = require('../bg-agents-roster');
-const { parseFolderKey } = require('../remote-hosts');
+const { parseFolderKey } = require('../src/main/remote/remote-hosts');
 
 const SID = 'aaaaaaaa-1234-4321-abcd-123456789abc';
 const JOB = 'aaaaaaaa';

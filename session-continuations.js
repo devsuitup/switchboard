@@ -1,5 +1,5 @@
 const fs = require('fs');
-const { parseFolderKey } = require('./remote-hosts');
+const { parseFolderKey } = require('./src/main/remote/remote-hosts');
 
 const validId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(id);
 

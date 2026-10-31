@@ -12,7 +12,7 @@ const {
   manifestPathFor,
 } = require('./remote-hosts');
 const { syncMirror } = require('./remote-mirror');
-const { encodeProjectPath } = require('./encode-project-path');
+const { encodeProjectPath } = require('../../../encode-project-path');
 const { computeHostProfile } = require('./remote-host-profile');
 
 const NOOP_LOG = { info() {}, warn() {}, error() {} };

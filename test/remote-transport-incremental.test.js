@@ -13,8 +13,8 @@ const path = require('path');
 const { EventEmitter } = require('events');
 const { Readable } = require('stream');
 
-const { createSshTransport, REMOTE_PROJECTS_REL } = require('../remote-transport');
-const { resolveSshPath } = require('../remote-ssh-binary');
+const { createSshTransport, REMOTE_PROJECTS_REL } = require('../src/main/remote/remote-transport');
+const { resolveSshPath } = require('../src/main/remote/remote-ssh-binary');
 
 function fakeChild() {
   const child = new EventEmitter();

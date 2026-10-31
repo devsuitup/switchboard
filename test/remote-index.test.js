@@ -10,8 +10,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createRemoteIndexer, refreshRemoteHeadTurns } = require('../remote-index');
-const { MIN_REFRESH_MS } = require('../remote-hosts');
+const { createRemoteIndexer, refreshRemoteHeadTurns } = require('../src/main/remote/remote-index');
+const { MIN_REFRESH_MS } = require('../src/main/remote/remote-hosts');
 
 test('U18/U23: all enabled aliases resolve dynamically while singular lookup stays unchanged', async () => {
   const dataDir = tmp('idx-find-aliases');
@@ -1210,7 +1210,7 @@ test('getRemoteHostProfile follows the last cycle: never synced, then live tmux 
 });
 
 test('sanitizeWaitingFor keeps a short plain string and drops everything else', () => {
-  const { sanitizeWaitingFor } = require('../remote-index');
+  const { sanitizeWaitingFor } = require('../src/main/remote/remote-index');
   assert.equal(sanitizeWaitingFor('permission prompt'), 'permission prompt');
   assert.equal(sanitizeWaitingFor('  input needed '), 'input needed');
   assert.equal(sanitizeWaitingFor('x'.repeat(64)), 'x'.repeat(64));
@@ -1250,7 +1250,7 @@ test('the indexer and the placeholder keep a validated waitingFor beside the sta
 });
 
 test('sanitizeWaitingFor rejects bidi and zero-width controls', () => {
-  const { sanitizeWaitingFor } = require('../remote-index');
+  const { sanitizeWaitingFor } = require('../src/main/remote/remote-index');
   for (const code of [0x200b, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069]) {
     assert.equal(sanitizeWaitingFor('a' + String.fromCharCode(code) + 'b'), null, code.toString(16));
   }
@@ -1258,7 +1258,7 @@ test('sanitizeWaitingFor rejects bidi and zero-width controls', () => {
 });
 
 test('sanitizeWaitingFor rejects C1 controls, soft hyphen, ALM, invisible operators and BOM', () => {
-  const { sanitizeWaitingFor } = require('../remote-index');
+  const { sanitizeWaitingFor } = require('../src/main/remote/remote-index');
   for (const code of [0x80, 0x9f, 0xad, 0x61c, 0x180e, 0x2028, 0x2029, 0x2060, 0x2064, 0xfeff]) {
     assert.equal(sanitizeWaitingFor('a' + String.fromCharCode(code) + 'b'), null, code.toString(16));
   }

@@ -207,14 +207,14 @@ for (const method of ['refreshNow', 'refreshHostNow']) {
       let scans = 0;
       const cachedRows = [{ sessionId: 'root', folder: 'host::-p' }, { sessionId: 'local', folder: '-p' }];
       const context = vm.createContext({
-        refreshRemoteHeadTurnsFromCache: require('../remote-index').refreshRemoteHeadTurns,
+        refreshRemoteHeadTurnsFromCache: require('../src/main/remote/remote-index').refreshRemoteHeadTurns,
         path, getAllCached: () => cachedRows,
         getCachedByFolder: folder => cachedRows.filter(row => row.folder === folder),
-        getAllMeta: () => new Map(), parseFolderKey: require('../remote-hosts').parseFolderKey,
+        getAllMeta: () => new Map(), parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
         projectsDirForFolder: () => dir,
         getAllFolderMeta: () => new Map([['host::-p', {}]]),
         getSetting: () => ({ remoteHosts: [{ alias: 'host' }] }),
-        createRemoteIndexer: options => require('../remote-index').createRemoteIndexer({
+        createRemoteIndexer: options => require('../src/main/remote/remote-index').createRemoteIndexer({
           ...options,
           sync: async () => ({ fetched: changed ? 1 : 0, unchanged: changed ? 0 : 1,
             removed: 0, failed: 0, changedFolders: new Set(changed ? ['-p'] : []),
