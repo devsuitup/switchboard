@@ -7,6 +7,9 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 
+const LAZY_STUBS = new Set(['./session-touched-files']);
+const pendingLazyStubs = new WeakMap();
+
 function loadShipped(filename, imports, platform = 'win32') {
   const module = { exports: {} };
   const shippedRequire = createRequire(path.join(__dirname, '..', filename));
@@ -19,8 +22,13 @@ function loadShipped(filename, imports, platform = 'win32') {
       return imports[name];
     },
   }, { filename });
-  assert.deepEqual([...pending].filter(name => name !== './session-touched-files'), [], `${filename} must load its stubs`);
+  assert.deepEqual([...pending].filter(name => !LAZY_STUBS.has(name)), [], `${filename} must load its stubs`);
+  if (pending.size) pendingLazyStubs.set(module.exports, pending);
   return module.exports;
+}
+
+function assertLazyStubsLoaded(api) {
+  assert.deepEqual([...(pendingLazyStubs.get(api) || [])], [], 'lazy stubs must be loaded');
 }
 
 test('round 3: Changes fixtures expand short temporary directory spellings', () => {
@@ -100,6 +108,7 @@ for (const shortPart of ['file', 'root', 'both', 'case']) {
     assert.equal(disk.toString(), 'saved\n');
     assert.ok(nativeCalls.includes(absolutePath));
     assert.ok(nativeCalls.includes(reportedRoot));
+    assertLazyStubsLoaded(api);
   });
 }
 
@@ -131,6 +140,7 @@ for (const [platform, pathApi, root, file] of [
     const saved = await api.writeTouchedChangesFile({ absolutePath: file, content: 'saved\n', version: api.versionOf(Buffer.from('current\n')), maxBytes: 1024 }, { runGit });
     assert.equal(saved.reason, 'outside');
     assert.equal(writes, 0);
+    assertLazyStubsLoaded(api);
   });
 }
 
@@ -161,6 +171,7 @@ test('Touched refuses a missing short-spelled file without falling back to an ed
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'missing');
   }
+  assertLazyStubsLoaded(api);
 });
 
 for (const reason of ['repo', 'git-dir']) {
@@ -191,5 +202,6 @@ for (const reason of ['repo', 'git-dir']) {
       assert.equal(result.ok, false);
       assert.equal(result.reason, reason);
     }
+    assertLazyStubsLoaded(api);
   });
 }
