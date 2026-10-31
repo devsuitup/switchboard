@@ -490,7 +490,7 @@ test('workflow transitions detect new and growing agents even when the ordinary 
 
 test('Changes resolves the workflow agent sidecar from its cached run id', t => {
   const h = workflowFixture(t);
-  const { resolveGitChangesTarget } = require('../git-changes-target');
+  const { resolveGitChangesTarget } = require('../src/main/changes/git-changes-target');
   const meta = JSON.parse(fs.readFileSync(h.file.replace(/\.jsonl$/, '.meta.json')));
   meta.worktreePath = h.root;
   fs.writeFileSync(h.file.replace(/\.jsonl$/, '.meta.json'), JSON.stringify(meta));

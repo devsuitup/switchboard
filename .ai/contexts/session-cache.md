@@ -583,8 +583,8 @@ for that lazy fallback. Evidence is deleted before persistence or worker message
 ## Remote SSH hosts (issue #201)
 
 The main-process SSH modules live in `src/main/remote/` (ADR 0005, step 5).
-The activity and touched-files contexts keep `remote-activity.js` and
-`remote-touched-files.js` at the repository root. Bare remote module filenames
+The activity context keeps `remote-activity.js` at the repository root;
+Touched uses `src/main/changes/remote-touched-files.js`. Bare remote module filenames
 in this document refer to `src/main/remote/` unless another path is given.
 
 ### Head-turn refresh failures (issue #701)

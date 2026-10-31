@@ -20,7 +20,7 @@ const {
   diffHeaderNamesPath,
   COUNT_STATUS,
   BINARY_SNIFF_BYTES,
-} = require('../git-changes');
+} = require('../src/main/changes/git-changes');
 
 // --- parseStatusPorcelainV2 --------------------------------------------
 

@@ -92,6 +92,33 @@ test('release cancels an assign queued before ready and never sends it later', a
   f.child.stdout.emit('data', 'ready\n');
   assert.equal(await assign, false);
   assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.warnings, []);
+});
+
+test('closing before ready cancels assignments and warns once about plain ConPTY cleanup', async t => {
+  const f = fixture(t);
+  const first = f.helper.assign('one', 897, 100);
+  const second = f.helper.assign('two', 898, 100);
+  assert.equal(await f.helper.terminate('one'), true);
+  assert.equal(await f.helper.terminate('two'), true);
+  assert.equal(await first, false);
+  assert.equal(await second, false);
+  assert.equal(f.warnings.length, 1, 'early closes must emit one warning per helper lifetime');
+  assert.match(f.warnings[0], /before.*ready.*plain ConPTY/i);
+  f.child.stdout.emit('data', 'ready\n');
+  assert.deepEqual(f.writes, []);
+  const later = f.helper.assign('later', 899, 100);
+  f.child.stdout.emit('data', 'assigned later\n');
+  assert.equal(await later, true);
+});
+
+test('close before helper readiness warns even before the PTY has submitted its PID', async t => {
+  const f = fixture(t);
+  f.helper.start();
+  const done = f.helper.terminate('pending-pid');
+  assert.equal(f.warnings.length, 1, 'a close with no queued assignment still needs the startup warning');
+  f.child.stdout.emit('data', 'ready\nterminated pending-pid\n');
+  assert.equal(await done, true);
 });
 
 test('helper death, protocol failure and startup timeout settle requests, log once, never restart', async t => {

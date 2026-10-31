@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { versionOf, soleEol } = require('./git-changes-file');
+const { versionOf, soleEol } = require('./src/main/changes/git-changes-file');
 
 function asEditorText(text) {
   return typeof text === 'string' ? text.replace(/\r\n?/g, '\n') : '';

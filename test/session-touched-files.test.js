@@ -16,7 +16,7 @@ const {
   extractTouches,
   resolveTouchedPath,
   collectSessionTouchedFiles,
-} = require('../session-touched-files');
+} = require('../src/main/changes/session-touched-files');
 
 function assistantLine(...blocks) {
   return JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: blocks } });
@@ -443,10 +443,10 @@ test('a stat that never answers leaves the row unreadable instead of holding the
 
 // --- listSessionTouchedFiles (the IPC's target resolution) -----------------
 
-const { listSessionTouchedFiles } = require('../session-touched-files');
+const { listSessionTouchedFiles } = require('../src/main/changes/session-touched-files');
 const { encodeProjectPath } = require('../encode-project-path');
 const { fakeTouchedShell } = require('./remote-touched-shell');
-const { inspectRemoteTouchedPaths } = require('../remote-touched-files');
+const { inspectRemoteTouchedPaths } = require('../src/main/changes/remote-touched-files');
 
 test('round 2 M1: 100 long paths travel intact on stdin with a short command', async t => {
   const shell = fakeTouchedShell(t);
@@ -472,7 +472,7 @@ tr() { text=; IFS= read -r text; printf '%s' "$text"; }
 
 test('round 2 M2: a local list resolves while the remote batch is pending', async t => {
   const { w, deps: remoteDeps } = remoteListWorld454(t, ['/repo/a']);
-  const cache = require('../session-touched-files').createTouchedFilesCache();
+  const cache = require('../src/main/changes/session-touched-files').createTouchedFilesCache();
   let release, started;
   const batchStarted = new Promise(resolve => { started = resolve; });
   const pending = new Promise(resolve => { release = resolve; });
@@ -495,7 +495,7 @@ test('round 2 M2: a local list resolves while the remote batch is pending', asyn
 
 test('round 2 M2: concurrent remote refreshes share one pending batch and the next refresh retries', async t => {
   const { deps: remoteDeps } = remoteListWorld454(t, ['/repo/a']);
-  const cache = require('../session-touched-files').createTouchedFilesCache();
+  const cache = require('../src/main/changes/session-touched-files').createTouchedFilesCache();
   const run = cache.run.bind(cache);
   const parsed = [];
   cache.run = (...args) => {

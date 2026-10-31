@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { loadProjectActionHandlers } = require('./project-action-harness');
-const { localGitEnv } = require('../git-changes-runner');
+const { localGitEnv } = require('../src/main/changes/git-changes-runner');
 const deletion = require('../worktree-delete');
 
 const target = '/home/jb/repo/.claude/worktrees/task';
