@@ -3421,6 +3421,7 @@ async function refreshRemoteHeadTurns(hostAlias) {
   await refreshRemoteHeadTurnsFromCache({
     getAllCached, getAllMeta, projectsDirForFolder,
     getRemoteSessions: alias => remoteIndexer.getRemoteSessions(alias),
+    getRemoteHeadTurnFiles: alias => remoteIndexer.getRemoteHeadTurnFiles?.(alias) || [],
     readBatch: rows => taskRecords.readBatch(rows),
   }, hostAlias);
 }

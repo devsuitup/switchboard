@@ -1000,6 +1000,54 @@ untouched.
   function backs it. `test/remote-scan-file-granularity.test.js` pins the file
   granularity, including a file that vanished from the mirror.
 
+### Oversized remote transcripts (#699)
+
+The 64 MiB full-mirror ceiling remains. `syncMirror` returns `oversizedFiles`
+from its existing inventory; `remote-index` then runs `syncTurnTails` for live
+top-level heads only. No extra listing or real-host discovery is needed.
+
+Decision: use a remote tail read feeding only head-turn state (option b).
+Option a, placing aligned tails in the ordinary mirror, would reuse the fetch
+loop but would require persistent partial-file guards in indexing, search,
+viewer resolution, counts, continuation detection and startup scans. Missing
+one guard would present a tail as a complete transcript. Both options transfer
+the same bounded tail bytes; b needs fewer consumer changes and reads only live
+heads, so it is the smaller boundary with the same remote I/O cost.
+
+`readTurnTail` uses the existing SSH runner, timeout, cancellation, binary capture
+and output cap. `tail -c 262145` returns at most 256 KiB plus one alignment byte.
+The first cut JSONL line is discarded before an atomic replacement. No newline
+means an empty, unknown tail. Incomplete trailing JSON is left to the existing
+turn reader. This bounded raw tail can lack usable evidence when individual
+records (including API blobs) exceed the window; it never falls back to reading
+the full remote transcript. The cache mtime is the inventory's remote mtime so
+descriptor ordering uses the host clock.
+
+Tails live outside `projects/`, at `remote/<alias>/turn-state/<rel>.tail`, with
+their own inventory entries marked `partial: true`. Only `turnOnly` task-worker
+reads receive these paths. The normal mirror inventory and scan subsets never
+contain partial data; viewer paths still resolve only complete mirror files.
+A prior complete mirror remains a historical snapshot. Fresh oversized live
+sessions become descriptor-only placeholders, with no fabricated counts or
+continuation data. Bootstrap and post-pull head refresh select tails ahead of
+cached full copies, respect archives and liveness, and also accept heads absent
+from the session cache.
+Adding or removing descriptor-only placeholder IDs triggers a projects refresh;
+an unchanged placeholder does not. This also publishes a new oversized head
+that appears after an idle pull with no other indexing or capability change.
+
+The tail pass is serial and capped at 200 live descriptors and 200 files:
+at most 52,429,000 payload bytes in addition to the ordinary 256 MiB mirror
+budget. Unchanged size/mtime plus a present partial cache transfers nothing,
+including after restart. Changed tails replace bytes rather than append;
+failed reads preserve prior evidence and retry the unchanged remote version.
+Deleted, inactive or newly under-cap tails are removed. Full-mirror limit logs
+now name the separate turn-state path; successful and failed tail reads log
+their actual result. Existing complete-file size/defer warning throttling stays.
+
+Coverage: `test/remote-oversized-turn-699.test.js` uses injected SSH children,
+real disposable files and the real task-record worker; no SSH or Electron.
+
 ### Remote hosts — incremental fetch (issue #257)
 
 **The fetch itself is now incremental for a growing transcript; the parse
