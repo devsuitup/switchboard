@@ -19,7 +19,7 @@ const {
   readTerminalLogicalLine,
   registerTerminalPathLinks,
 } = require('../public/terminal-path-links');
-const { resolveTerminalPaths, fileHasNullByte } = require('../terminal-path-target');
+const { resolveTerminalPaths, fileHasNullByte } = require('../src/main/terminals/terminal-path-target');
 const { isSensitivePathAsync } = require('../src/main/shared/ipc-path-validator');
 
 const MAX_BYTES = 2 * 1024 * 1024;

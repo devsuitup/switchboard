@@ -2079,7 +2079,7 @@ function start(ctx) {
   }
 
   // see docs/decisions/0003-trigger-delivery-per-tab.md
-  const { acquireTabInput: acquireTabLock } = require('./tab-input-lock');
+  const { acquireTabInput: acquireTabLock } = require('./src/main/terminals/tab-input-lock');
 
   function scheduleNext() {
     while (waitQueue.length > 0 && inFlight.size < MAX_INFLIGHT) {

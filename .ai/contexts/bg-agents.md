@@ -19,7 +19,7 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 | `session-exit.js` | `runExitHandoffs`, `EXIT_BUSY_WAIT_MS` (see "Exit handoff batch") |
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
 | `bridge-session-id.js` | Shared case-sensitive suffix for job `cse_` and descriptor `session_` bridge ids |
-| `pty-ops.js` | `detachPty` |
+| `src/main/terminals/pty-ops.js` | `detachPty` |
 | `bg-handoff.js` | Eligibility, `/bg` submission, continuation/descriptor proof, bounded exit hold |
 | `main.js` | `runClaudeCommand`; the `type: 'attach'` branch of `open-terminal`; detach in `stop-session`; `bgAgents.init` and `bg-agents-ipc` wiring; renderer unsubscribe on window close, `bgAgents.stop()` on app quit |
 | `public/agents-view.js` | The view; `agentJobIsLive`; `groupAgentEntries` (Group by); `bgAgentSessionIds` for the sidebar badge |
@@ -365,7 +365,7 @@ one-megabyte chunks to keep the event loop available for large resumed
 conversations. Only a target absent from that snapshot, in the appended tail,
 can authorize the re-key. A partial record already present
 at spawn and a rewritten prefix cannot become fresh evidence. The tab must
-also have submitted `/bg` itself (`terminal-input.js` tracks the composer),
+also have submitted `/bg` itself (`src/main/terminals/terminal-input.js` tracks the composer),
 or have a confirmed button handoff. Ctrl+C and the CLI's cancellation message
 revoke the typed command, while an empty confirmation Enter preserves it.
 Another process backgrounding the same conversation cannot take over its PTY.
@@ -1151,7 +1151,7 @@ recovery Enter is sent.
 
 On the no-job route, the written `/bg` is recorded in `session.composerState` through
 `noteUserInput` before the write, and the Enter after it, as
-`terminal-input.js` does for typed keys. A dangling lone-Esc partial is discarded
+`src/main/terminals/terminal-input.js` does for typed keys. A dangling lone-Esc partial is discarded
 before noting the plain `/bg` write, so a previous Esc (including Esc Esc)
 cannot consume its slash as Alt+/. Other partial sequences keep their ordinary
 parser handling. If that text write throws or returns false, the previous
@@ -1203,7 +1203,7 @@ lingering CLI would keep the old tab's process alive.
 Output subscriptions and descriptor-change waits exist only during handoff;
 100 ms bounded waits also cover transcript-only changes, with no new idle poll.
 
-`tab-input-lock.js` shares the existing trigger FIFO by session object. The
+`src/main/terminals/tab-input-lock.js` shares the existing trigger FIFO by session object. The
 action refuses while a trigger holds or queues that tab; triggers admitted
 during handoff wait under their existing deadline. This prevents automation
 text or Enter from interleaving with `/bg`. Typed terminal answers retain their
