@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const activity = require('../activity-trace');
+const activity = require('../src/main/shared/activity-trace');
 const originalTrace = activity.trace;
 let records;
 const scheduled = [];

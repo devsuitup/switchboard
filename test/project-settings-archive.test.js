@@ -67,7 +67,7 @@ function setup(t, { hidden = [], cron = '* * * * *', registered = true,
   }, { refreshFolder: context.refreshFolder });
   const source = read('main.js');
   vm.runInContext(extractFunction(source, 'isDirectory'), context, { filename: path.join(ROOT, 'main.js') });
-  context.normalizeArchivedProjectPath = modules.load('normalize-project-path.js').normalizeProjectPath;
+  context.normalizeArchivedProjectPath = modules.load('src/main/shared/normalize-project-path.js').normalizeProjectPath;
   vm.runInContext(extractFunction(source, 'unarchivedScheduleProjects'), context, { filename: path.join(ROOT, 'main.js') });
   if (source.includes('function isProjectSettingsArchived(')) {
     vm.runInContext(extractFunction(source, 'isProjectSettingsArchived'), context, { filename: path.join(ROOT, 'main.js') });

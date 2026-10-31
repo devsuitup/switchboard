@@ -55,7 +55,7 @@ function fixture(t) {
   const filename = path.join(__dirname, '../session-cache.js');
   const localRequire = createRequire(filename);
   const context = { module: { exports: {} }, __dirname: path.dirname(filename), console, Buffer, Set, Map, Date: ClockDate,
-    require: name => name === './activity-trace' ? { state: traceState, trace: (...args) => traced.push(args) } : localRequire(name),
+    require: name => name === './src/main/shared/activity-trace' ? { state: traceState, trace: (...args) => traced.push(args) } : localRequire(name),
     setTimeout: (callback, delay) => {
       const timer = { unrefed: false, unref() { this.unrefed = true; } };
       const run = () => { scheduled.delete(timer); callback(); };

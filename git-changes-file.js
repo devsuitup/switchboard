@@ -5,10 +5,10 @@
 const realFs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { runToExit } = require('./run-to-exit');
+const { runToExit } = require('./src/main/shared/run-to-exit');
 const { localGitEnv, gitEntryAtOrAbove } = require('./git-changes-runner');
-const { resolveOnDisk, isInsideDir } = require('./resolve-path-on-disk');
-const { isSensitivePath } = require('./ipc-path-validator');
+const { resolveOnDisk, isInsideDir } = require('./src/main/shared/resolve-path-on-disk');
+const { isSensitivePath } = require('./src/main/shared/ipc-path-validator');
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_PATH_LENGTH = 4096;

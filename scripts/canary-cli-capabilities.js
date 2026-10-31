@@ -5,7 +5,7 @@ const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
-const { cleanEnv } = require('../clean-env');
+const { cleanEnv } = require('../src/main/shared/clean-env');
 
 const ROOT = path.resolve(__dirname, '..');
 const FIXTURE = path.join(ROOT, 'test/fixtures/session-capabilities/fake-cli.js');

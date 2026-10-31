@@ -103,7 +103,7 @@ function createPanelSaveHandlers(deps) {
  * {getKnownProjectPaths() -> iterable, invalidateFtsSignature(kind), onError(err)}
  */
 function createMainPanelSaves({ getKnownProjectPaths, invalidateFtsSignature, onError }) {
-  const validator = require('./ipc-path-validator');
+  const validator = require('./src/main/shared/ipc-path-validator');
   return createPanelSaveHandlers({
     isSensitivePath: validator.isSensitivePath,
     resolveAllowedMemoryPath: (literal) => validator.resolveAllowedMemoryPath(literal, [...getKnownProjectPaths()]),

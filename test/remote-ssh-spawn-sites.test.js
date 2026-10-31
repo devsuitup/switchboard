@@ -39,7 +39,7 @@ const UNRESOLVED_ALLOWED = {
     runScheduleCommand: 'the shell of the schedule\'s shell profile',
     runClaudeCommand: 'the shell profile running a local claude command (agents, --bg, stop, respawn, rm)',
   },
-  'run-to-exit.js': {
+  'src/main/shared/run-to-exit.js': {
     runToExit: 'exported wrapper; its callers are covered by the program-name test below',
   },
 };
@@ -411,7 +411,7 @@ test('the program-name check ignores a call that starts no process', () => {
 });
 
 test('the program-name check flags ssh passed to a known wrapper from another module', () => {
-  const src = ["const { runToExit } = require('./run-to-exit');", "runToExit('ssh', [], {});"].join('\n');
+  const src = ["const { runToExit } = require('./src/main/shared/run-to-exit');", "runToExit('ssh', [], {});"].join('\n');
   assert.equal(programNameOffenders('fixture.js', src).length, 1);
 });
 

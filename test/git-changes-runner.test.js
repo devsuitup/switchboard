@@ -43,7 +43,7 @@ const REPO = path.resolve('/repo');
 test('remote Touched executes its quoted stat and bounded read scripts through a local fake host', async t => {
   const fs = require('node:fs');
   const os = require('node:os');
-  const { runToExit } = require('../run-to-exit');
+  const { runToExit } = require('../src/main/shared/run-to-exit');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-touched-fake-host-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const posix = p => process.platform === 'win32' ? '/' + p[0].toLowerCase() + p.slice(2).replaceAll('\\', '/') : p;

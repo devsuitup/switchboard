@@ -100,7 +100,7 @@ test('a typed /bg exit survives a continuation beyond the first transcript scan 
 test('background rekey writes an activity trace after Diagnostics is enabled at runtime', async t => {
   const h = fixture(t);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-bg-trace-639-'));
-  const trace = require('../activity-trace');
+  const trace = require('../src/main/shared/activity-trace');
   try {
     trace.init(dir);
     trace.setEnabled(true);

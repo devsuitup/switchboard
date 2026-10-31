@@ -15,7 +15,7 @@ const { spawnSync } = require('node:child_process');
 const {
   createActivityTrace, formatEntry, codePoints, controlOffset, busyDecision, progressDecision,
   envEnabled, envState, initialEnabled, resolveTraceFilePath, readTraceTail,
-} = require('../activity-trace');
+} = require('../src/main/shared/activity-trace');
 
 function capture(options = {}) {
   const lines = [];
@@ -217,7 +217,7 @@ function enabledInChildEnv(overrides) {
     if (k.toUpperCase() === 'SWITCHBOARD_ACTIVITY_TRACE') delete env[k];
   }
   Object.assign(env, overrides);
-  const modulePath = path.join(__dirname, '..', 'activity-trace.js');
+  const modulePath = path.join(__dirname, '../src/main/shared/activity-trace.js');
   const r = spawnSync(
     process.execPath,
     ['-e', `process.stdout.write(String(require(${JSON.stringify(modulePath)}).enabled))`],

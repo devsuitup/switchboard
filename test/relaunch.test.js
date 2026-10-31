@@ -228,7 +228,7 @@ test('relaunch forwards caller configuration without exposing values in argv or 
     LC_CTYPE: 'fr_FR.UTF-8', XDG_CONFIG_HOME: '/isolated/config', XDG_RUNTIME_DIR: '/run/user/1000',
     DISPLAY: ':1', WAYLAND_DISPLAY: 'wayland-1', XAUTHORITY: '/isolated/authority', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/bus',
     CUSTOM_SECRET: 'sentinel=$secret with spaces', EMPTY: '' };
-  const denied = [...require('../clean-env').SESSION_MARKERS, 'ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ASAR', 'NODE_OPTIONS',
+  const denied = [...require('../src/main/shared/clean-env').SESSION_MARKERS, 'ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ASAR', 'NODE_OPTIONS',
     'GOOGLE_API_KEY', 'ORIGINAL_XDG_CURRENT_DESKTOP', 'WT_SESSION', 'CHROME_CRASHPAD_PIPE_NAME', 'CHROME_RESTART',
     'INVOCATION_ID', 'JOURNAL_STREAM', 'SYSTEMD_EXEC_PID', 'NOTIFY_SOCKET', 'WATCHDOG_PID', 'WATCHDOG_USEC', 'SWITCHBOARD_RELAUNCH'];
   const env = { ...keep, ...Object.fromEntries(denied.map(key => [key, 'stale-runtime'])) };

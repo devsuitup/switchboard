@@ -18,7 +18,7 @@ function load(file, globals = {}) {
 }
 
 function cleaner(platform) {
-  return load('clean-env.js', { process: { platform } }).module.exports.cleanEnv;
+  return load('src/main/shared/clean-env.js', { process: { platform } }).module.exports.cleanEnv;
 }
 
 function mainStatement(predicate) {
@@ -78,7 +78,7 @@ test('main startup supplies local sessions but never synthesizes a locale for th
     const source = { PATH: '/bin' };
     let spawnOptions;
     const context = vm.createContext({
-      require: name => name === './clean-env' ? { cleanEnv: cleaner(platform), scrubSessionEnv() {} } : {},
+      require: name => name === './src/main/shared/clean-env' ? { cleanEnv: cleaner(platform), scrubSessionEnv() {} } : {},
       process: { env: source }, module: {},
       createTmuxAttachAdapter: opts => opts,
       loadAttachProfileId() {}, app: { getPath() {} }, log: {}, os: { homedir: () => '/home/test' },
@@ -148,7 +148,7 @@ test('relaunch does not persist a synthesized locale into the next app and its i
   let cleaned = false;
   const context = load('src/main/app/relaunch.js', {
     process,
-    require: name => name === '../../../clean-env' ? { cleanEnv: (...args) => { cleaned = true; return cleaner('linux')(...args); } } : createRequire(path.join(root, 'src/main/app/relaunch.js'))(name),
+    require: name => name === '../shared/clean-env' ? { cleanEnv: (...args) => { cleaned = true; return cleaner('linux')(...args); } } : createRequire(path.join(root, 'src/main/app/relaunch.js'))(name),
   });
   let launched;
   await context.module.exports({ env: { PATH: '/bin' }, execPath: '/app', argv: [], cwd: '/tmp',
