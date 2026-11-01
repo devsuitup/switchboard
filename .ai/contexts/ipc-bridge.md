@@ -117,13 +117,17 @@ reconstructing an Error would lose its original call sites. A stack read before
 reporting is already cached and remains unchanged. There is currently no app
 reader of the reported Error's stack after this backstop.
 Own stack data values, including explicit or previously cached stacks, retain
-their contents. For long messages, the message is searched for only in the first
-1,000 characters of the stack (plus its first 200 characters), whatever the error
-name or header. When found there, the 4,000-character cap starts at the first
-frame line after the full message, so frame-like message text cannot match. A
-stack that itself starts with a frame keeps its head. Otherwise the cap is the
-last 4,000 characters, as before. Custom own or inherited stack getters and name
-getters never run in the oversized-message path; absent stacks contribute no frames.
+their contents. When the error's own message is over 15,000 characters, it must
+start within the first 1,000 characters of the stack (matched on its first 200
+characters, then confirmed in full), whatever the error name or header. When
+found there, the 4,000-character cap starts at the first frame line after the
+full message, so frame-like message text cannot match. A stack that itself
+starts with a frame keeps its head. Otherwise, including a long text that comes
+from the error name, the cap is the last 4,000 characters, as before. A single
+frame line close to 4,000 characters can then leave fewer frames than the tail
+would; the throw site is kept, which is the trade-off #965 chose. The
+stack-capping step reads no name and runs no custom stack getter; absent stacks
+contribute no frames.
 A native Error from another vm realm has a different stack getter on Node 22+
 and therefore contributes no frames in this oversized-message path.
 The 15,990-character regression

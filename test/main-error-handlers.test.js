@@ -647,3 +647,10 @@ test('long message absent from the stack head falls back to the last 4000 stack 
   target.emit('uncaughtException', { message: 'absent '.padEnd(15500, 'x'), stack });
   assert.equal(logs[0][1], `${'absent '.padEnd(15500, 'x').slice(0, 11000)}\n[truncated; length=15500]\n${stack.slice(-4000)}`);
 });
+
+test('a whitespace message with a long name does not match a newline before the first frame', t => {
+  const { target, logs } = setup(t);
+  const stack = 'Error\n    at THROWSITE965 (f.js:1:1)\n    at next965 (f.js:2:2)';
+  target.emit('uncaughtException', { message: '\n', name: 'N'.repeat(15500), stack });
+  assert.match(logs[0][1], /at THROWSITE965 /, 'the first frame must not be skipped');
+});
