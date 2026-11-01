@@ -153,7 +153,7 @@ test('main forwards the descriptor start time with an owner identity change', ()
   const end = source.indexOf(NL + '});', start) + 4;
   let callback;
   const live = [];
-  const ctx = vm.createContext({ notifyRendererProjectsChanged() {}, sessionTransitions: { detectPendingBackgroundContinuations() {} },
+  const ctx = vm.createContext({ notifyRendererProjectsChanged() {}, sessionTransitions: { refreshDescriptorSessions() {}, detectPendingBackgroundContinuations() {} },
     taskOwnerLiveness: new Map(), taskRecords: { ownerAlive: (sid, startedAt) => live.push([sid, startedAt]) },
     cliSessionState: { onStatusesChanged: cb => { callback = cb; }, getSidebarDescriptors: () => [{ sessionId: 'owner', pid: 12, startedAt: 1234 }] } });
   vm.runInContext(source.slice(start, end), ctx);

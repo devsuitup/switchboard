@@ -140,6 +140,29 @@ parent attribution, Changes sidecars and shipped sidebar code under jsdom.
 
 ## Running subagent count (#627)
 
+### Descriptor-backed local owners (#552)
+
+`session-transitions.js` keeps one observation state per live descriptor session
+id when no owned Claude PTY already supplies it. Attach clients do not count as
+owned workers. The descriptor reader's existing liveness and process-identity
+checks select these owners; `encodeProjectPath(descriptor.cwd)` selects their
+transcript folder. Startup and descriptor status notifications reconcile this
+map. Project-folder invalidations reuse `detectSubagentTransitions`, and its
+existing five-second settle timer also visits descriptor-backed states. There
+are no additional filesystem watches or polling intervals. Removed descriptors
+and sessions that acquire an owned PTY release their observation state; replacing
+the descriptor PID/start identity resets it. Missing descriptors release observation
+without claiming process death or completing recorded tasks.
+
+First observation replays the parent transcript and the discovered child metadata
+through the existing task worker, including children not indexed yet. Subsequent
+transcript writes use the existing project watcher/local-transcript tracker. This
+closes the gap where initial task snapshots ran before a background descriptor
+appeared, or before its children entered the cache. Numeric counts still require
+recorded CLI agent tasks; file activity alone remains inferred activity. Sidebar
+and grid projections remain unchanged and keyed by conversation session id, never
+the daemon job id or attach client's PTY. Tests: `descriptor-subagents-552.test.js`.
+
 The parent row shows plain secondary text beneath its title: `1 subagent
 running` or `N subagents running`, with the same pluralized `aria-label`.
 The count is outside the child container, so expanding, collapsing, filtering,

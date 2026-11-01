@@ -16,6 +16,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Unexpected application errors now share one notice with repeat counts and an **Open log** button; the app keeps running and the log may hold details. Notices survive a window reload, dismissed errors stay dismissed, and screen readers announce new errors without repeating count updates. (#896, #932)
 
 ### Fixed
+- Background conversations now show their running subagent count and activity indicator, whether attached in a tab or running without one. (#552)
 - Live remote sessions with very large transcripts now appear in the session list and show their turn state. (#699)
 - Closing or stopping a local terminal tab on Windows ends its processes and opened windows (force-closed windows lose unsaved work), closing the shell or Claude normally first; recognized background agents keep running. If terminal cleanup becomes unavailable, closing a tab uses the normal terminal close; hidden processes may remain when quitting the app. (#897)
 - The session list no longer stops updating, or shows a continued conversation as two separate entries, when that conversation's transcript is large. (#891)

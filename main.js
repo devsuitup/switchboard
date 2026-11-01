@@ -3477,6 +3477,14 @@ ipcMain.handle('get-task-snapshots', async () => {
 const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
+  getLiveDescriptors: () => cliSessionState.getSidebarDescriptors(),
+  onDescriptorSession: async (sessionId, session, folderPath) => {
+    await taskRecords.read(path.join(folderPath, sessionId + '.jsonl'), sessionId);
+    for (const file of session._subFileList || []) {
+      await taskRecords.child(path.join(folderPath, sessionId, 'subagents', file), sessionId,
+        path.basename(file, '.jsonl').slice('agent-'.length));
+    }
+  },
   onBackgroundConfirmed: context => persistBackgroundHandoff(context),
   hasTaskRecord: (id, agentId) => taskRecords.hasRecord(id, agentId),
   backgroundJobExists: jobId => {
@@ -3516,6 +3524,7 @@ cliSessionState.init({
   },
 });
 cliSessionState.onStatusesChanged(() => {
+  sessionTransitions.refreshDescriptorSessions();
   sessionTransitions.detectPendingBackgroundContinuations();
   notifyRendererProjectsChanged('cli-status');
   const observed = new Set();
@@ -3879,6 +3888,7 @@ if (!app.isPackaged) {
     remoteIndexer.start();
     syncRemoteWatchers();
     cliSessionState.ensureWatching();
+    sessionTransitions.refreshDescriptorSessions();
     bgAgents.start();
     // Remove IDE lock files left behind by a crashed instance whose PID was
     // reused (the function only unlinks locks matching our own pid).
