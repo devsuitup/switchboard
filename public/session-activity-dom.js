@@ -392,10 +392,21 @@ function snapshotForLocal(sessionId, session, selection) {
 }
 
 // Paints an icon slot from a snapshot held by another adapter — see .ai/contexts/session-state.md ("Descriptor-owned attention")
+function rowHasRunningSchedule(row) {
+  return !row?.remoteAlias && !!row?.runningScheduleIds?.length;
+}
+
+function scheduledRunIcon(snapshot, row) {
+  const icon = renderSessionIcon(snapshot);
+  if (!rowHasRunningSchedule(row)) return icon;
+  return { ...icon, title: 'Scheduled run in progress', glyph: '\u23f1', slotClasses: ['session-icon--scheduled'] };
+}
+
 function paintSessionIconFromSnapshot(el, snapshot, title, text, session, row) {
   if (!el) return;
-  writeIconSlot(el, renderSessionIcon(snapshot), title, text, session,
-    row && rowLifecycleLabel(row.sessionId, snapshot, row));
+  const scheduled = rowHasRunningSchedule(row);
+  writeIconSlot(el, scheduledRunIcon(snapshot, row), scheduled ? 'Scheduled run in progress' : title, text, session,
+    scheduled ? null : row && rowLifecycleLabel(row.sessionId, snapshot, row));
 }
 
 // see .ai/contexts/session-state.md
@@ -408,7 +419,8 @@ function paintSessionIcon(el, sessionId, session) {
       mergedMemberIds: item.dataset.mergedMemberIds?.split(' ') || [], remoteAlias: item.dataset.remoteAlias } : { sessionId });
   const projected = mergedRowSnapshot(rowSessionIds(row), sessionId, snapshot, row);
   const label = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(row), projected, row);
-  writeIconSlot(el, renderSessionIcon(projected), label?.title, label?.text,
+  const scheduled = rowHasRunningSchedule(row);
+  writeIconSlot(el, scheduledRunIcon(projected, row), scheduled ? 'Scheduled run in progress' : label?.title, label?.text,
     !label && !row.parentSessionId && localSessionForStatus(rowHeadId(row), row),
-    row.parentSessionId ? null : rowLifecycleLabel(sessionId, projected, row));
+    scheduled || row.parentSessionId ? null : rowLifecycleLabel(sessionId, projected, row));
 }

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
+const loadGetProjectsHandler = require('./get-projects-handler.cjs');
 const { projectsWorker } = require('./fixtures/projects-worker-718.cjs');
 const { projectionScope } = require('../public/session-projection-diagnostics');
 const { encodeProjectPath } = require('../encode-project-path');
@@ -56,18 +56,15 @@ test('742 worker shares facts across both views and covers plain roots while omi
 test('742 main relay derives current archive exclusions from envelope facts without mutating the worker reply', async t => {
   const h = fixture(t), result = await h.build();
   const original = JSON.stringify(result), scope = projectionScope(null, h.root);
-  const filename = require.resolve('../main.js'), source = fs.readFileSync(filename, 'utf8');
-  const start = source.indexOf("ipcMain.handle('get-projects'");
-  let invoke;
-  vm.runInNewContext(source.slice(start, source.indexOf('\n});', start) + 4), {
-    ipcMain: { handle: (_name, fn) => { invoke = fn; } }, require: require('node:module').createRequire(filename), structuredClone, console,
+  const invoke = loadGetProjectsHandler({
+    structuredClone, console,
     TRACE: { on: false }, performance, projectsReconciledAt: Date.now(),
     getSetting: () => null, isInitialScanComplete: () => true, isCachePopulated: () => true,
     isSearchIndexPopulated: () => true, backfillEntrypoints() {}, backfillCustomTitles() {},
     projectsClient: { request: async () => result }, mergePlaceholderSessions: projects => projects,
     writer: { applyAndPersistArchived: projects => projects.filter(p => p.remoteAlias) },
     annotateRemoteAttachable: projects => projects,
-  }, { filename });
+  });
   const reply = await invoke(null, 'both');
   assert.equal(reply.projection.removedInputs[scope + '|' + A]?.filterReason, 'archived');
   assert.equal(reply.projection.removedInputs[scope + '|plain']?.filterReason, 'archived');

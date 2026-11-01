@@ -59,7 +59,9 @@ contextBridge.exposeInMainWorld('api', {
   // the PTY never runs against a placeholder geometry. May be null.
   openTerminal: (id, projectPath, isNew, sessionOptions, initialSize) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions, initialSize),
   search: (type, query, titleOnly) => ipcRenderer.invoke('search', type, query, titleOnly),
-  readSessionJsonl: (sessionId) => ipcRenderer.invoke('read-session-jsonl', sessionId),
+  readSessionJsonl: (sessionId, options) => options === undefined
+    ? ipcRenderer.invoke('read-session-jsonl', sessionId)
+    : ipcRenderer.invoke('read-session-jsonl', sessionId, options),
   readSubagentJsonl: (parentSessionId, agentId) => ipcRenderer.invoke('read-subagent-jsonl', parentSessionId, agentId),
   listSubagents: (parentSessionId) => ipcRenderer.invoke('list-subagents', parentSessionId),
   startSubagentWatch: (parentSessionId, agentId) => ipcRenderer.invoke('start-subagent-watch', parentSessionId, agentId),

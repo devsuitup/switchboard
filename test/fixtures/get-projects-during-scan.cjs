@@ -84,9 +84,12 @@ async function run() {
       isCachePopulated: db.isCachePopulated, isSearchIndexPopulated: db.isSearchIndexPopulated,
       populateCacheViaWorker() {}, backfillEntrypoints() {}, backfillCustomTitles() {}, projectsClient,
       mergePlaceholderSessions: projects => projects, annotateRemoteAttachable: projects => projects,
+      cliSessionState: require('../../cli-session-state'),
     });
     const start = source.indexOf("ipcMain.handle('get-projects'");
-    vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 4), context);
+    vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 4), context, {
+      filename: require.resolve('../../main.js'), lineOffset: source.slice(0, start).split(String.fromCharCode(10)).length - 1,
+    });
     hold = true;
     scan = writer.writeScannedFolder({ folder: 'scan-one', projectPath: root, sessions: [], indexMtimeMs: 1 });
     await waiting;
