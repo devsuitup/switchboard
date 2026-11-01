@@ -23,9 +23,9 @@ window.__activeViewerWatches = window.__activeViewerWatches || new Set();
 const activeViewerWatches = window.__activeViewerWatches;
 let liveJsonlView = null;
 
-function releaseJsonlFollower(sessionId, token) {
+function releaseJsonlFollower(sessionId, token, park = false) {
   if (!token) return;
-  try { Promise.resolve(window.api.readSessionJsonl(sessionId, { mode: 'stop', token })).catch(() => {}); } catch {}
+  try { Promise.resolve(window.api.readSessionJsonl(sessionId, { mode: 'stop', token, park })).catch(() => {}); } catch {}
 }
 
 function stopLiveJsonlViewer() {
@@ -35,6 +35,7 @@ function stopLiveJsonlViewer() {
   view.stopped = true;
   if (view.timer) clearTimeout(view.timer);
   releaseJsonlFollower(view.session.sessionId, view.token);
+  releaseJsonlFollower(view.session.sessionId, view.checkpoint);
   view.token = null;
 }
 
@@ -59,19 +60,13 @@ function requestLiveJsonlRefresh(payload) {
       if (live && view.token && !needsRead && !view.more) return;
       const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(view.session.sessionId).writtenWatermark : 0;
       const result = await window.api.readSessionJsonl(view.session.sessionId, view.token
-        ? { mode: 'next', token: view.token, final: !live } : { mode: 'follow' });
+        ? { mode: 'next', token: view.token, final: !live } : { mode: 'follow', checkpoint: view.checkpoint });
       if (liveJsonlView !== view || view.stopped) { releaseJsonlFollower(view.session.sessionId, result.token); return; }
       if (result.error) { view.live = wasLive; return; }
       if (result.token) view.token = result.token;
       const entries = result.entries || [];
-      let append = result.append && !result.reset;
-      let added = entries;
-      if (!result.append && !result.reset) {
-        append = entries.length >= view.entries.length && view.entries.every((entry, index) => JSON.stringify(entry) === JSON.stringify(entries[index]));
-        if (append) added = entries.slice(view.entries.length);
-      }
-      if (append) { for (const entry of added) view.entries.push(entry); }
-      else view.entries = entries;
+      const append = result.append && !result.reset;
+      const added = entries;
       if (!append || added.length) renderJsonlViewerEntries(view.session, { entries: added }, watermark, true, append);
       if (result.skipped && typeof showAppNotice === 'function') {
         view.skipped += result.skipped;
@@ -81,7 +76,8 @@ function requestLiveJsonlRefresh(payload) {
       view.more = !!result.more;
       if (view.more) { view.needsRead = true; view.dirty = true; }
       if (!live && !view.more) {
-        releaseJsonlFollower(view.session.sessionId, view.token);
+        view.checkpoint = view.token;
+        releaseJsonlFollower(view.session.sessionId, view.token, true);
         view.token = null;
       }
     } catch {} finally {
@@ -500,7 +496,7 @@ function renderLocalCommand({ cmd, output }) {
 }
 
 // Merge consecutive local command entries (separate JSONL entries for caveat, bash-input, stdout/stderr)
-function mergeLocalCommandEntries(entries) {
+function mergeLocalCommandEntries(entries, state) {
   const result = [];
   let i = 0;
   while (i < entries.length) {
@@ -524,6 +520,10 @@ function mergeLocalCommandEntries(entries) {
       }
 
       const inputMatch = combined.match(/<bash-input>([\s\S]*?)<\/bash-input>/);
+      if (state && i === entries.length && !/<\/bash-stdout>|<\/bash-stderr>/.test(combined)) {
+        state.localTail = entries.slice(start);
+        state.localStart = result.length;
+      }
       if (inputMatch) {
         const cmd = inputMatch[1].trim();
         const stdoutMatch = combined.match(/<bash-stdout>([\s\S]*?)<\/bash-stdout>/);
@@ -828,7 +828,7 @@ async function showJsonlViewer(session) {
   // the user no longer sees.
   drainViewerWatches();
   const view = { session, loading: true, dirty: false, needsRead: false, stopped: false, timer: null, live: null,
-    token: null, entries: [], more: false, skipped: 0 };
+    token: null, checkpoint: null, more: false, skipped: 0 };
   liveJsonlView = view;
   const result = await window.api.readSessionJsonl(session.sessionId, { mode: 'follow' });
   if (liveJsonlView !== view || view.stopped) { releaseJsonlFollower(session.sessionId, result.token); return; }
@@ -848,7 +848,6 @@ async function showJsonlViewer(session) {
   jsonlViewerTitle.textContent = displayName;
   jsonlViewerSessionId.textContent = session.sessionId;
   view.token = result.token;
-  view.entries = result.entries || [];
   view.more = !!result.more;
   if (typeof clearAppNotice === 'function') clearAppNotice('LiveTranscript:' + session.sessionId);
   renderJsonlViewerEntries(session, result, watermark);
@@ -867,7 +866,7 @@ function renderJsonlViewerEntries(session, result, watermark, refresh = false, a
     activeViewerWatches.clear();
     agentMatchCounters = {};
     jsonlViewerBody.innerHTML = '';
-    jsonlViewerBody.jsonlRenderState = { tools: new Map(), rendered: 0 };
+    jsonlViewerBody.jsonlRenderState = { tools: new Map(), rendered: 0, localTail: [], localNodes: [], localStart: Infinity };
   }
   const state = jsonlViewerBody.jsonlRenderState;
 
@@ -876,10 +875,14 @@ function renderJsonlViewerEntries(session, result, watermark, refresh = false, a
     return;
   }
 
-  const rawEntries = result.entries || [];
+  const rawEntries = [...state.localTail, ...(result.entries || [])];
+  for (const node of state.localNodes) { node.remove(); state.rendered--; }
+  state.localTail = [];
+  state.localNodes = [];
+  state.localStart = Infinity;
 
   // Merge consecutive local command entries (caveat + bash-input + stdout/stderr)
-  const entries = mergeLocalCommandEntries(rawEntries);
+  const entries = mergeLocalCommandEntries(rawEntries, state);
 
   // Build tool_use_id → result content map so results render under their tool call
   const toolResultMap = new Map();
@@ -907,11 +910,12 @@ function renderJsonlViewerEntries(session, result, watermark, refresh = false, a
   }
 
   let rendered = state.rendered;
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     const el = renderJsonlEntry(entry, toolResultMap, state.tools);
     if (el) {
       if (rendered === 0) jsonlViewerBody.innerHTML = '';
       jsonlViewerBody.appendChild(el);
+      if (index >= state.localStart) state.localNodes.push(el);
       el.querySelectorAll('.jsonl-clickable-img').forEach(img => {
         img.onclick = () => showJsonlScreenshot(img.src);
       });

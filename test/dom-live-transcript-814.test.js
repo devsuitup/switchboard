@@ -19,14 +19,16 @@ function setup(t) {
   w.focusMessageViewer = () => {};
   loadAppFunctions(ctx.context, { functions: ['hideAllViewers'], sourcePath: path.join(__dirname, '../public/memory-workfiles-view.js') });
   let reads = 0, live = { kind: 'schedule' }, entries = [turn('first')], offset = 0;
-  const modes = [];
+  const modes = [], requests = [];
   let nextRead = null, projectsChanged;
   w.api.readSessionJsonl = (_id, options) => {
     modes.push(options?.mode || 'ordinary');
+    requests.push(options);
     if (options?.mode === 'stop') return Promise.resolve({ ok: true });
     reads++;
     if (nextRead) return nextRead();
-    if (options?.mode === 'follow') { offset = entries.length; return Promise.resolve({ entries: [...entries], token: 'follow-token' }); }
+    if (options?.mode === 'follow' && !options.checkpoint) { offset = entries.length; return Promise.resolve({ entries: [...entries], token: 'follow-token' }); }
+    if (options?.mode === 'follow' && options.checkpoint) { const added = entries.slice(offset); offset = entries.length; return Promise.resolve({ entries: added, token: 'follow-token', append: true }); }
     if (options?.mode === 'next') { const added = entries.slice(offset); offset = entries.length; return Promise.resolve({ entries: added, token: 'follow-token', append: true }); }
     return Promise.resolve({ entries: [...entries] });
   };
@@ -45,12 +47,75 @@ function setup(t) {
     }
     await flush();
   }
-  return { ctx, w, tick, modes, get reads() { return reads; }, set live(value) { live = value; },
+  return { ctx, w, tick, modes, requests, get reads() { return reads; }, set live(value) { live = value; },
     append(text) { entries.push(turn(text)); }, set nextRead(value) { nextRead = value; },
     appendEntry(entry) { entries.push(entry); },
     projectsChanged: () => projectsChanged?.(),
     activity: id => ctx.emitSessionTranscriptActivity({ sessionId: id || 'run', at: Date.now() }),
   };
+}
+
+test('re-arm sends its byte checkpoint and never serializes retained renderer history', async t => {
+  const h = setup(t);
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  const first = h.w.jsonlViewerBody.firstElementChild;
+  h.live = null;
+  h.projectsChanged();
+  await h.tick();
+  assert.ok(h.requests.some(options => options.mode === 'stop' && options.park === true));
+  const stringify = h.w.JSON.stringify;
+  let serializations = 0;
+  h.w.JSON.stringify = (...args) => { serializations++; return stringify(...args); };
+  try {
+    h.live = { kind: 'schedule' };
+    h.append('later');
+    h.projectsChanged();
+    await h.tick();
+    assert.equal(h.requests.at(-1).checkpoint, 'follow-token');
+    assert.equal(serializations, 0, 're-arm does not serialize the retained prefix');
+    assert.equal(h.w.jsonlViewerBody.firstElementChild, first);
+    assert.match(h.w.jsonlViewerBody.textContent, /first[\s\S]*later/);
+  } finally { h.w.JSON.stringify = stringify; }
+});
+
+test('a command beginning in the initial snapshot merges through three refreshes', async t => {
+  const h = setup(t);
+  const local = text => ({ type: 'user', message: { content: text } });
+  h.appendEntry(local('<local-command-caveat>local</local-command-caveat>'));
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  for (const text of ['<bash-input>echo hello</bash-input>', '<bash-stdout>hello</bash-stdout>', 'after command']) {
+    h.appendEntry(local(text));
+    h.activity();
+    await h.tick();
+  }
+  const incremental = h.w.jsonlViewerBody.innerHTML;
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  assert.equal(h.w.jsonlViewerBody.innerHTML, incremental);
+  assert.equal(h.w.jsonlViewerBody.querySelectorAll('.jsonl-tool-block').length, 1);
+});
+
+for (const prefix of ['<bash-input>echo hello</bash-input>', '<local-command-caveat>local</local-command-caveat>']) {
+  for (const output of ['stdout', 'stderr']) {
+    test(`split local command ${prefix} and ${output} matches a full render`, async t => {
+      const h = setup(t);
+      await h.w.showJsonlViewer({ sessionId: 'run' });
+      const local = text => ({ type: 'user', message: { content: text } });
+      h.appendEntry(local(prefix));
+      h.activity();
+      await h.tick();
+      h.appendEntry(local((prefix.includes('caveat') ? '<bash-input>echo hello</bash-input>' : '')
+        + `<bash-${output}>hello</bash-${output}>`));
+      h.activity();
+      await h.tick();
+      const body = h.w.jsonlViewerBody;
+      assert.equal(body.querySelectorAll('.jsonl-tool-block').length, 1, 'one command block');
+      assert.match(body.querySelector('.jsonl-tool-block').textContent, /echo hello[\s\S]*hello/);
+      assert.doesNotMatch(body.textContent, /<bash-|<local-command-caveat>/, 'no escaped command tags');
+      const incremental = body.innerHTML;
+      await h.w.showJsonlViewer({ sessionId: 'run' });
+      assert.equal(body.innerHTML, incremental, 'incremental DOM equals full rendering');
+    });
+  }
 }
 
 test('incremental appends preserve expanded blocks, nested watches and earlier DOM objects', async t => {
