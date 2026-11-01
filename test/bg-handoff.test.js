@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { sendToBackground, holdBackgroundExit, createContinuationReader } = require('../bg-handoff');
+const { sendToBackground, holdBackgroundExit, createContinuationReader } = require('../src/main/bg-agents/bg-handoff');
 const { acquireTabInput, tryAcquireTabInput } = require('../src/main/terminals/tab-input-lock');
 const { createComposerState, noteUserInput } = require('../src/main/terminals/composer-state');
 const { trackWindowsPty, killPty } = require('../src/main/terminals/pty-ops');
@@ -401,7 +401,7 @@ test('S2-T5b a refused respawn and a failed respawn after /exit read differently
 });
 
 test('S2-T7 (owned rows) respawnRoute refuses an unknown or held owner and respawns otherwise', () => {
-  const { respawnRoute } = require('../bg-handoff');
+  const { respawnRoute } = require('../src/main/bg-agents/bg-handoff');
   const base = { oldId: S2_SID, lookup: { known: true, job: { id: 'aaaaaaaa', resumeTarget: S2_SID } },
     check: { known: true, state: 'stopped', workerLiveness: 'dead', sessionIds: [S2_SID] }, elsewhere: [{ known: true, live: null }] };
   assert.equal(respawnRoute({ ...base, owned: { known: true, job: null } }).route, 'respawn');
@@ -514,7 +514,7 @@ for (const [label, overrides, expected, reason] of [
   ['outside live', { elsewhere: [{ known: true, live: { pid: 777 } }] }, 'refuse', /pid 777/],
 ]) {
   test('S2-T7 route row: ' + label, () => {
-    const { respawnRoute } = require('../bg-handoff');
+    const { respawnRoute } = require('../src/main/bg-agents/bg-handoff');
     const result = respawnRoute({ ...routeBase(), ...overrides });
     assert.equal(result.route, expected);
     if (reason) {

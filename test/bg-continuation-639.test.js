@@ -8,7 +8,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const transitions = require('../session-transitions');
 const { mergeLocalBackgroundSessions } = require('../sidebar-bg-sessions');
-const { parseJobState, mergeRoster } = require('../bg-agents-roster');
+const { parseJobState, mergeRoster } = require('../src/main/bg-agents/bg-agents-roster');
 
 const OLD = '11111111-1111-4111-8111-111111111111';
 const HEAD = '22222222-2222-4222-8222-222222222222';

@@ -17,7 +17,7 @@ test('main reads only supervisor and worker PIDs from the disposable daemon rost
   const roster = path.join(home, '.claude', 'daemon', 'roster.json');
   fs.mkdirSync(path.dirname(roster), { recursive: true });
   const context = vm.createContext({ fs, path, os: { homedir: () => home },
-    require: name => { assert.equal(name, './bg-agents'); return { getDaemonRosterPath: () => roster }; } });
+    require: name => { assert.equal(name, './src/main/bg-agents/bg-agents'); return { getDaemonRosterPath: () => roster }; } });
   vm.runInContext(extractFunction(source, 'readWindowsDaemonPids'), context, { filename });
   try {
     assert.deepEqual(Array.from(await context.readWindowsDaemonPids()), []);
@@ -32,7 +32,7 @@ test('main reads only supervisor and worker PIDs from the disposable daemon rost
 });
 
 test('background roster getter follows the configured service path', () => {
-  const bgAgents = require('../bg-agents');
+  const bgAgents = require('../src/main/bg-agents/bg-agents');
   const path = require('node:path'), os = require('node:os');
   const custom = path.join(os.tmpdir(), 'sb-roster-h', 'custom.json');
   bgAgents.init({ daemonRosterPath: custom });

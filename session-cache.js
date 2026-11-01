@@ -39,7 +39,7 @@ const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds:
 const { projectionScope } = require('./public/session-projection-diagnostics');
 const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
-const { isHostedJob } = require('./bg-agents-roster');
+const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
 
 /**

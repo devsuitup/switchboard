@@ -1,7 +1,7 @@
 // bg-agents-ipc.js — see .ai/contexts/bg-agents.md and .ai/contexts/ipc-bridge.md
 'use strict';
 
-const { deleteSessionRefusal } = require('./delete-session-guard');
+const { deleteSessionRefusal } = require('../../../delete-session-guard');
 const { JOB_ID_RE } = require('./bg-agents-roster');
 const { liveWorkerDescriptor } = require('./bg-worker-liveness');
 

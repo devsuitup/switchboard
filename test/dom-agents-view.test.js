@@ -35,7 +35,7 @@ for (const [hosted, expected] of [[true, 'Idle'], [false, 'Unknown']]) {
   test(`A-T7 running hosted=${hosted} renders ${expected}`, async t => {
     const h = setup({ storage: { agentsGroupBy: 'state' } });
     t.after(() => h.destroy());
-    const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+    const { mergeRoster, parseJobState } = require('../src/main/bg-agents/bg-agents-roster');
     const job = parseJobState('{"state":"running"}');
     const entry = { ...mergeRoster({ jobs: new Map([['aaaaaaaa', job]]), descriptors: hosted
       ? [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's-a', status: 'idle' }] : [] })[0] };
@@ -49,7 +49,7 @@ for (const [hosted, expected] of [[true, 'Idle'], [false, 'Unknown']]) {
 
 test('A-T7 dead running displays the CLI failed state', async t => {
   const h = setup(); t.after(() => h.destroy());
-  const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+  const { mergeRoster, parseJobState } = require('../src/main/bg-agents/bg-agents-roster');
   const entry = mergeRoster({ jobs: new Map([['aaaaaaaa', parseJobState('{"state":"running"}')]]), descriptors: [],
     cli: [{ id: 'aaaaaaaa', sessionId: 's-a', kind: 'background', state: 'failed' }] })[0];
   assert.equal(entry.hosted, false);
@@ -163,7 +163,7 @@ const ROSTER = [
 
 test('882 selected background job retains selection when promoted to interactive', async t => {
   const h = setup(); t.after(() => h.destroy());
-  const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+  const { mergeRoster, parseJobState } = require('../src/main/bg-agents/bg-agents-roster');
   const jobs = new Map([['aaaaaaaa', parseJobState(JSON.stringify({ state: 'stopped', sessionId: '11111111-1111-4111-8111-111111111111' }))]]);
   h.setSnapshot({ roster: mergeRoster({ jobs, descriptors: [] }), daemonReachable: true });
   await h.window.showAgentsView();
@@ -176,7 +176,7 @@ test('882 selected background job retains selection when promoted to interactive
 
 test('882 selected external conversation follows its unique job after merging', async t => {
   const h = setup(); t.after(() => h.destroy());
-  const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+  const { mergeRoster, parseJobState } = require('../src/main/bg-agents/bg-agents-roster');
   const descriptors = [{ kind: 'interactive', sessionId: '11111111-1111-4111-8111-111111111111', name: 'external', pid: 42 }];
   h.setSnapshot({ roster: mergeRoster({ jobs: new Map(), descriptors }), daemonReachable: true });
   await h.window.showAgentsView();
@@ -189,7 +189,7 @@ test('882 selected external conversation follows its unique job after merging', 
 
 test('882 external selection is cleared when multiple jobs share its conversation', async t => {
   const h = setup(); t.after(() => h.destroy());
-  const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+  const { mergeRoster, parseJobState } = require('../src/main/bg-agents/bg-agents-roster');
   const sessionId = 'aaaaaaaa-1111-4111-8111-111111111111';
   const descriptors = [{ kind: 'interactive', sessionId, name: 'external', pid: 42 }];
   h.setSnapshot({ roster: mergeRoster({ jobs: new Map(), descriptors }), daemonReachable: true });
@@ -204,7 +204,7 @@ test('882 external selection is cleared when multiple jobs share its conversatio
 
 test('882 jobs without a previous session do not describe a pre-compaction transcript', t => {
   const h = setup(); t.after(() => h.destroy());
-  const { mergeRoster, parseJobState } = require('../bg-agents-roster');
+  const { mergeRoster, parseJobState } = require('../src/main/bg-agents/bg-agents-roster');
   const [entry] = mergeRoster({ jobs: new Map([['aaaaaaaa', parseJobState(JSON.stringify({ state: 'stopped', bridgeSessionId: 'cse_bridge' }))]]),
     descriptors: [{ kind: 'interactive', bridgeSessionId: 'session_bridge', sessionId: 's-a' }] });
   assert.equal(entry.kind, 'interactive');
@@ -213,7 +213,7 @@ test('882 jobs without a previous session do not describe a pre-compaction trans
 
 test('882 committed index data enables the selected Transcript button through a roster push', async t => {
   const h = setup(); t.after(() => h.destroy());
-  const bg = require('../bg-agents');
+  const bg = require('../src/main/bg-agents/bg-agents');
   const { createSessionIndexWriter } = require('../session-index-writer');
   const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'agents-index-882-'));
   t.after(() => { bg.stop(); fs.rmSync(dir, { recursive: true, force: true }); });

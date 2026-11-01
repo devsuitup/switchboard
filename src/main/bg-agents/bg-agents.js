@@ -8,7 +8,7 @@ const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, stripShellNoise, JOB_ID_RE,
   dispatchRefusal, isHostedJob, SESSION_ID_RE, sessionIdFromLinkScanPath,
 } = require('./bg-agents-roster');
-const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('./project-root');
+const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('../../../project-root');
 const { classifyWorkerLiveness, workerTimestamp } = require('./bg-worker-liveness');
 
 const DEFAULT_JOBS_DIR = path.join(os.homedir(), '.claude', 'jobs');
