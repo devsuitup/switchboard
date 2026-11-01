@@ -606,3 +606,44 @@ test('dispose removes only its own process listeners', t => {
   assert.deepEqual(target.listeners('uncaughtException'), [other]);
   assert.equal(target.listenerCount('unhandledRejection'), 0);
 });
+
+function longHeaderErrors965() {
+  const msg = () => 'header '.padEnd(15500, 'x');
+  const make = (proto, after) => {
+    class HeaderError965 extends Error {}
+    if (proto !== undefined) HeaderError965.prototype.name = proto.name;
+    function throwSite965() { const e = new HeaderError965(msg()); after?.(e); return e; }
+    return throwSite965();
+  };
+  return {
+    'empty name': () => make({ name: '' }),
+    'null name': () => make({ name: null }),
+    'Node style [ERR_X] header': () => make({ name: 'TypeError [ERR_X]' }, e => void e.stack || Object.defineProperty(e, 'name', { value: 'TypeError', configurable: true, writable: true })),
+    'name changed after the stack was cached': () => make(undefined, e => { void e.stack; e.name = 'Renamed965'; }),
+    'throwing name getter': () => make(undefined, e => void e.stack || Object.defineProperty(e, 'name', { configurable: true, get() { throw new Error('name getter ran'); } })),
+    'Symbol name': () => make(undefined, e => void e.stack || Object.defineProperty(e, 'name', { configurable: true, value: Symbol('name965') })),
+  };
+}
+
+for (const [label, build] of Object.entries(longHeaderErrors965())) {
+  test(`long message with ${label} still logs its frames and throw site`, t => {
+    const { target, logs } = setup(t);
+    const error = build();
+    target.emit('uncaughtException', error);
+    const marker = '[truncated; length=15500]\n';
+    const at = logs[0][1].indexOf(marker);
+    assert.notEqual(at, -1);
+    const frames = logs[0][1].slice(at + marker.length);
+    assert.match(frames, /^    at /, 'frames must follow the marker');
+    assert.match(frames, /at throwSite965 /, 'throw-site frame must be logged');
+    assert.ok(frames.length <= 4000);
+    assert.ok(logs[0][1].length <= 16000);
+  });
+}
+
+test('long message absent from the stack head falls back to the last 4000 stack characters', t => {
+  const { target, logs } = setup(t);
+  const stack = `unrelated header\n${'filler '.repeat(3000)}\n    at tailFrame965 (file.js:1:1)`;
+  target.emit('uncaughtException', { message: 'absent '.padEnd(15500, 'x'), stack });
+  assert.equal(logs[0][1], `${'absent '.padEnd(15500, 'x').slice(0, 11000)}\n[truncated; length=15500]\n${stack.slice(-4000)}`);
+});

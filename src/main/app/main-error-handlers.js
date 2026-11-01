@@ -135,15 +135,17 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
           }
         }
         if (typeof stack === 'string') {
-          let stackStart = 0;
-          if (longMessage && typeof errorMessage === 'string' && stack.length > errorMessage.length) {
-            const header = `${error?.name ?? 'Error'}: `;
-            if (stack.startsWith(header) && stack.startsWith(errorMessage, header.length)) {
-              const at = stack.indexOf('\n    at ', header.length + errorMessage.length);
-              if (at !== -1) stackStart = at + 1;
+          let capped = stack.slice(-4000);
+          if (longMessage && stack.startsWith('    at ')) capped = stack.slice(0, 4000);
+          else if (longMessage && typeof errorMessage === 'string' && stack.length > errorMessage.length) {
+            const probe = errorMessage.slice(0, 200);
+            const at = stack.slice(0, 1000 + probe.length).indexOf(probe);
+            if (at !== -1 && stack.startsWith(errorMessage, at)) {
+              const frame = stack.indexOf('\n    at ', at + errorMessage.length);
+              if (frame !== -1) capped = stack.slice(frame + 1, frame + 4001);
             }
           }
-          detail = longMessage ? `${detail}\n${stack.slice(stackStart, stackStart + 4000)}` : stack.slice(0, 16000);
+          detail = longMessage ? `${detail}\n${capped}` : stack.slice(0, 16000);
         }
       }
     } catch {}

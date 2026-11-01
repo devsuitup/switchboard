@@ -95,7 +95,8 @@ For messages of at most 16,000 characters, ids retain the full whitespace-normal
 message. Longer messages hash the normalized first 16,000 characters followed by
 `\0length=<original UTF-16 length>`. Messages over 15,000 characters log the first
 11,000 characters, `[truncated; length=N]` with the original UTF-16 message length,
-and at most the first 4,000 stack characters, keeping the total below 16,000.
+and at most 4,000 stack characters (see below for which), keeping the total below
+16,000.
 For messages over 16,000 characters, a temporary `Error.prepareStackTrace` is
 installed before reading the own stack descriptor. On Node 20 (V8 11), that
 descriptor read formats a previously unread native stack into a data property
@@ -116,12 +117,13 @@ reconstructing an Error would lose its original call sites. A stack read before
 reporting is already cached and remains unchanged. There is currently no app
 reader of the reported Error's stack after this backstop.
 Own stack data values, including explicit or previously cached stacks, retain
-their contents. For long messages, a stack starting with the error name and
-message skips that header before the 4,000-character cap. The first frame is
-searched for after the full message length so frame-like message text cannot
-match. Without a matching header or frame line, the cap starts at the stack head.
-Custom own or inherited stack getters never run in the oversized-message path;
-absent stacks contribute no frames.
+their contents. For long messages, the message is searched for only in the first
+1,000 characters of the stack (plus its first 200 characters), whatever the error
+name or header. When found there, the 4,000-character cap starts at the first
+frame line after the full message, so frame-like message text cannot match. A
+stack that itself starts with a frame keeps its head. Otherwise the cap is the
+last 4,000 characters, as before. Custom own or inherited stack getters and name
+getters never run in the oversized-message path; absent stacks contribute no frames.
 A native Error from another vm realm has a different stack getter on Node 22+
 and therefore contributes no frames in this oversized-message path.
 The 15,990-character regression
