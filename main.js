@@ -2276,14 +2276,14 @@ ipcMain.handle('rename-session', async (_event, sessionId, name) => {
 const transcriptFollower = require('./src/main/viewer/transcript-follower').createTranscriptFollower();
 
 ipcMain.handle('read-session-jsonl', (_event, sessionId, options) => {
-  if (options?.mode === 'stop') return transcriptFollower.close(sessionId, options.token);
+  if (options?.mode === 'stop') return transcriptFollower.close(sessionId, options.token, options.park === true);
   const folder = getCachedFolder(sessionId);
   if (!folder) return { error: 'Session not found in cache' };
   const folderDir = projectsDirForFolder(folder);
   if (!folderDir) return { error: 'Session belongs to a host that is no longer declared' };
   const jsonlPath = path.join(folderDir, sessionId + '.jsonl');
   try {
-    if (options?.mode === 'follow') return transcriptFollower.open(sessionId, jsonlPath);
+    if (options?.mode === 'follow') return transcriptFollower.open(sessionId, jsonlPath, options.checkpoint);
     if (options?.mode === 'next') return transcriptFollower.read(sessionId, options.token, jsonlPath, options.final === true);
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];

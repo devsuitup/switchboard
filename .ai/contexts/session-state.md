@@ -17,7 +17,7 @@ snapshot even when the Sessions tab is not active.
 Notifications share one fixed one-second coalescing timer; reads never overlap.
 Each refresh queries the existing `getSessionLiveElsewhere` API before reading
 the session, covering both tracked schedules and another live CLI. A stopped
-session drains its final bounded snapshot, then releases only its main-side
+session drains its final bounded snapshot, then parks its main-side
 cursor. The visible controller stays attached; a subsequent projects or matching
 activity notification checks liveness and re-arms follow when a run starts.
 Unknown/read errors
@@ -44,18 +44,25 @@ historical integrity scan.
 
 A known unread backlog reuses the same one-second timer until drained; it does
 not stat a quiet live file. Ending pins the final file size and accepts a valid
-last JSON record without a newline, then releases the cursor. Closing a view
+last JSON record without a newline, then parks the cursor. Closing a view
 invalidates the cursor and stops an in-flight read at its next yield. Initial
 history loading retains the existing full-history cost; incremental I/O and
-pending-line memory are bounded. Re-arming compares the new snapshot with the
-retained prefix, appending only new entries when it matches; a changed prefix
-resets the view.
+pending-line memory are bounded. Re-arming sends the parked cursor's opaque token
+as `checkpoint`; the main process validates its byte offset, file identity and
+bounded samples, then returns only appended entries. The final-size boundary is
+cleared for each new run. An expired checkpoint or changed file resets through
+the same bounded reader. There is at most one parked cursor, no retained file
+handle or polling, and dismissing the view releases it. The renderer retains no
+history for prefix serialization/comparison. (#986)
 
 Incremental refresh renders only new entries, retaining earlier DOM nodes,
 expanded blocks and nested watches. A tool-id index attaches a later result to
 its existing tool row without rebuilding neighboring blocks. Full replacement
 and watch draining happen only on a history reset or view change. Refresh
-preserves scroll position when the reader is above the bottom. It updates the
+re-merges a trailing unfinished local command with the next batch, replacing
+only that command's provisional nodes so caveat/input/output splits match a
+full render. (#986) Refresh preserves scroll position when the reader is above
+the bottom. It updates the
 existing message-search DOM rather than closing it.
 Written-activity watermarks are captured before reading so a later write is
 not acknowledged by an older rendering. Tests in `dom-live-transcript-814.test.js`
