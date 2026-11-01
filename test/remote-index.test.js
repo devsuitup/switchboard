@@ -1326,13 +1326,14 @@ test('start prunes removed hosts immediately while a refresh is in flight', asyn
   const dataDir = tmp('idx-remove-in-flight');
   let hosts = [{ alias: 'a' }, { alias: 'b' }];
   const dropped = [];
+  const indexed = new Set(['a::-x', 'b::-y']);
   let release, entered;
   const gate = new Promise(resolve => { release = resolve; });
   const started = new Promise(resolve => { entered = resolve; });
   const indexer = createRemoteIndexer({
     getHosts: () => hosts, dataDir, transport: {}, timers: fakeTimers(),
-    listIndexedFolderKeys: () => ['a::-x', 'b::-y'],
-    dropFolder: async key => { dropped.push(key); },
+    listIndexedFolderKeys: () => [...indexed],
+    dropFolder: async key => { dropped.push(key); indexed.delete(key); },
     sync: async () => { entered(); await gate; return { changedFolders: new Set() }; },
   });
   const refresh = indexer.refreshNow();
@@ -1343,7 +1344,9 @@ test('start prunes removed hosts immediately while a refresh is in flight', asyn
     assert.deepEqual(dropped, ['b::-y']);
     hosts = [];
     assert.equal(indexer.start(), false);
-    assert.deepEqual(dropped, ['b::-y']);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dropped, ['b::-y', 'a::-x']);
+    assert.deepEqual([...indexed], []);
   } finally {
     indexer.dispose();
     release();
@@ -1368,23 +1371,26 @@ test('start logs a rejected prune without an unhandled rejection', async () => {
   } finally { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
-test('start and restart with zero hosts retain all mirrored folders', () => {
+test('start and restart with zero hosts prune all mirrored folders without SSH or a timer', async () => {
   const dataDir = tmp('idx-zero-hosts');
   let hosts = [];
   const dropped = [];
+  const indexed = new Set(['a::-x', 'b::-y']);
+  const timers = fakeTimers();
   const indexer = createRemoteIndexer({
-    getHosts: () => hosts, dataDir, transport: {}, timers: fakeTimers(),
-    listIndexedFolderKeys: () => ['a::-x', 'b::-y'],
-    dropFolder: async key => { dropped.push(key); },
-    sync: async () => ({ changedFolders: new Set() }),
+    getHosts: () => hosts, dataDir, transport: forbiddenTransport(), timers,
+    listIndexedFolderKeys: () => [...indexed],
+    dropFolder: async key => { dropped.push(key); indexed.delete(key); },
   });
   try {
     assert.equal(indexer.start(), false);
-    assert.deepEqual(dropped, []);
-    hosts = [{ alias: 'a' }, { alias: 'b' }];
-    assert.equal(indexer.restart(), true);
-    hosts = [];
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dropped, ['a::-x', 'b::-y']);
+    indexed.add('c::-z');
     assert.equal(indexer.restart(), false);
-    assert.deepEqual(dropped, []);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dropped, ['a::-x', 'b::-y', 'c::-z']);
+    assert.deepEqual([...indexed], []);
+    assert.deepEqual(timers.created, []);
   } finally { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });

@@ -17,6 +17,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ### Fixed
 - Local commands in a live **View messages** keep their output together when it arrives in a later update. A new run resumes live updates without loading the whole transcript again. (#986)
+- Removing or disabling your last remote host now removes its sessions from the list, as it already did when other hosts remained. (#983)
 - A scheduled task that is running now counts as a running session: the running-sessions filter keeps it, it moves up with the other running sessions of its project and schedule group, and hovering its icon shows **Scheduled run in progress**. An open **View messages** of a running scheduled task, or of a session running elsewhere, updates as the transcript grows. (#814)
 - Live remote sessions with very large transcripts now appear in the session list and show their turn state. (#699)
 - Closing or stopping a local terminal tab on Windows ends its processes and opened windows (force-closed windows lose unsaved work), closing the shell or Claude normally first; recognized background agents keep running. If terminal cleanup becomes unavailable, closing a tab uses the normal terminal close; hidden processes may remain when quitting the app. (#897)
