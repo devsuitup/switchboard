@@ -160,12 +160,18 @@ Idle descriptor callbacks skip attach clients, so they cannot build a second
 subagent observation state alongside the descriptor owner. There
 are no additional filesystem watches or polling intervals. Removed descriptors
 and sessions that acquire an owned PTY release their observation state. The CLI
-status cache retains the first live writer for a session id, including when another
-"Resume anyway" process writes a status update. Other live writers remain cached
-as replacement candidates; losing or re-keying one of them cannot remove the
-selected owner. When that owner disappears, a cached live writer takes over;
-replacing the selected PID/start identity resets observation. Missing descriptors
-release observation without claiming process death or completing recorded tasks.
+status cache and default sidebar descriptors retain last-writer semantics,
+including for "Resume anyway". Observation alone requests all live, known,
+non-stale writers and chooses the earliest `startedAt` (missing times last, PID
+as tie-breaker), independently of directory order. The chosen writer determines
+the transcript folder. Observation retains its identity while that folder stays
+the same and the previous and current sets of PID/start identities overlap. Thus
+busy/idle flips, adding a competitor, or losing the oldest process while another
+remains do not replay tasks, reset child state or emit a completion. Each refresh
+updates that set, so a chain of overlapping owners also remains continuous.
+A folder change, a completely disjoint owner set, or disappearance followed by
+reappearance bootstraps a new observation. Missing descriptors release observation
+without claiming process death or completing recorded tasks.
 Folder invalidations reconcile again after the owned-session loop only when that
 pass published a re-key, before scanning descriptor states,
 so a fork or /clear that acquires a descriptor's session id drops the duplicate
@@ -188,15 +194,17 @@ rehabilitates the child through the existing settle tick without a folder event.
 An unchanged file settles at the end of the window; this is bounded inference,
 not proof that an arbitrarily long silent external worker has finished. Owned
 PTY bootstrap retains its existing fresh-file-only recheck policy. Once a CLI task
-record is available, the entry drops its recheck window and leaves the settle loop;
+record is available, the entry's `_cliTask` flag excludes it from the settle loop;
 the task registry supplies its status without further inferred file activity.
 
 Main-side descriptor reconciliation excludes projects explicitly listed in local
 `global.hiddenProjects` (#987 item 3), before observation or task replay. It reuses
 the existing project-path normalizer, including Windows separator and short-path
-handling. A remote hidden entry cannot hide a local project. A separately visible
-worktree of a hidden repository remains eligible; `hiddenRepository` alone does
-not remove its row. Hiding an observed project releases its state on the next
+handling. A remote hidden entry cannot hide a local project. A hidden repository's
+`.claude/worktrees/<name>` groups are excluded too, using the sidebar's worktree
+parent rule; `hiddenRepository` removes those rows. Other independently visible
+worktree layouts remain eligible. The parent path is normalized separately so
+missing child paths cannot change the parent's Windows spelling. Hiding an observed project releases its state on the next
 descriptor refresh, and unhiding allows fresh observation.
 
 Archive-only filtering is deferred. `get-projects` supplies both default and

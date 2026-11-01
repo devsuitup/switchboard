@@ -47,7 +47,7 @@ function descriptorFixture(t) {
   return { tmp, folder, dir, events, seeds, warnings, activeSessions, descriptors, options, child, descriptor };
 }
 
-test('987 concurrent writers retain the first live descriptor owner and its observation', async t => {
+test('987r concurrent writers keep last-writer status without resetting observation', async t => {
   const f = descriptorFixture(t);
   t.mock.timers.reset();
   const sessionsDir = path.join(f.tmp, 'sessions');
@@ -55,15 +55,14 @@ test('987 concurrent writers retain the first live descriptor owner and its obse
   const alive = new Set([123, 456]);
   const write = (pid, status) => fs.writeFileSync(path.join(sessionsDir, `${pid}.json`),
     JSON.stringify({ ...f.descriptor(id), pid, status, startedAt: pid }));
-  write(123, 'busy');
+  write(123, 'idle');
   cli.init({ dir: sessionsDir, activeSessions: f.activeSessions, log: silent, onIdle() {},
     isProcessAlive: pid => alive.has(pid), readParentPid: () => null });
   t.after(() => cli.stop());
   assert.ok(cli.ensureWatching());
-  transitions.init({ ...f.options, getLiveDescriptors: () => cli.getSidebarDescriptors() });
+  transitions.init({ ...f.options, getLiveDescriptors: () => cli.getSidebarDescriptors({ allWriters: true }) });
   const file = f.child(id);
   transitions.refreshDescriptorSessions();
-  const first = cli.getSidebarDescriptors()[0];
   const changed = async (pid, status) => {
     const notification = new Promise((resolve, reject) => {
       const timer = setTimeout(() => { off(); reject(new Error('descriptor update timed out')); }, 5000);
@@ -74,22 +73,29 @@ test('987 concurrent writers retain the first live descriptor owner and its obse
     transitions.refreshDescriptorSessions();
   };
   await changed(456, 'busy');
-  await changed(123, 'idle');
-  await changed(456, 'idle');
-  assert.equal(cli.getSidebarDescriptors()[0].pid, first.pid, 'the first live owner survives competing status writes');
-  assert.equal(f.seeds.length, 1, 'competing live writers do not replay or reset observation');
+  assert.equal(cli.getStatus(id).status, 'busy', 'the second live writer supplies status');
+  assert.equal(cli.getSidebarDescriptors()[0].pid, 456, 'sidebar status follows the last writer');
+  assert.equal(f.seeds.length, 1, 'the second writer does not replay task history');
   fs.utimesSync(file, new Date(), new Date(Date.now() + 1000));
   transitions.detectSessionTransitions(f.folder);
   assert.equal(f.events.filter(([channel]) => channel === 'subagent-spawned').length, 1);
+  await changed(123, 'idle');
+  assert.equal(cli.getStatus(id).status, 'idle');
+  await changed(456, 'idle');
+  await changed(123, 'busy');
+  await changed(456, 'busy');
+  assert.equal(f.seeds.length, 1, 'competing live writers do not replay or reset observation');
+  assert.equal(f.events.filter(([channel]) => channel === 'subagent-spawned').length, 1);
+  assert.equal(f.events.filter(([channel]) => channel === 'subagent-completed').length, 0, 'status flips do not complete the child');
   alive.delete(123);
   await changed(123, 'idle');
   assert.equal(cli.getSidebarDescriptors()[0].pid, 456, 'the surviving writer takes over when the first owner dies');
-  assert.equal(f.seeds.length, 2, 'a real owner replacement bootstraps once');
+  assert.equal(f.seeds.length, 1, 'a surviving writer in the same folder continues observation without replay');
   await changed(123, 'busy');
   assert.equal(cli.getSidebarDescriptors()[0].pid, 456, 'a dead competing writer cannot remove the live owner');
 });
 
-test('987 task records settle descriptor history immediately and stop the settle loop', t => {
+test('987 task records stop inferred events and the settle loop', t => {
   const f = descriptorFixture(t);
   const file = f.child(id);
   f.descriptors.push(f.descriptor(id));
@@ -97,16 +103,134 @@ test('987 task records settle descriptor history immediately and stop the settle
   let checks = 0;
   transitions.init({ ...f.options, hasTaskRecord: () => { checks++; return recorded; } });
   transitions.refreshDescriptorSessions();
-  const entry = f.seeds[0].session.knownSubagents.get('active');
-  assert.ok(entry._recheckStart);
   recorded = true;
   t.mock.timers.tick(5000);
-  assert.equal(entry._recheckStart, null, 'a recorded task releases its historical recheck window');
   const settledChecks = checks;
   fs.utimesSync(file, new Date(), new Date(Date.now() + 1000));
   t.mock.timers.tick(10000);
   assert.equal(checks, settledChecks, 'recorded tasks do not keep the settle loop alive');
   assert.equal(f.events.length, 0, 'task records suppress inferred file events');
+});
+
+test('987r stale pid reuse yields to the live writer and accepts its waiting update', async t => {
+  const f = descriptorFixture(t);
+  t.mock.timers.reset();
+  const sessionsDir = path.join(f.tmp, 'sessions');
+  fs.mkdirSync(sessionsDir);
+  const write = (pid, status) => fs.writeFileSync(path.join(sessionsDir, `${pid}.json`), JSON.stringify({
+    ...f.descriptor(id), pid, status, procStart: '111', startedAt: pid,
+  }));
+  write(100, 'idle');
+  write(200, 'busy');
+  cli.init({ dir: sessionsDir, activeSessions: f.activeSessions, log: silent, onIdle() {}, platform: 'linux',
+    isProcessAlive: () => true, readProcStart: pid => pid === 100 ? '222' : '111', readParentPid: () => null });
+  t.after(() => cli.stop());
+  assert.ok(cli.ensureWatching());
+  assert.equal(cli.getStatus(id)?.status, 'busy', 'a procStart mismatch cannot pin status to pid 100');
+  assert.equal(cli.getSidebarDescriptors()[0]?.pid, 200, 'sidebar descriptors select the live writer');
+  assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }).map(d => d.pid), [200], 'observation excludes the stale writer');
+  transitions.init({ ...f.options, getLiveDescriptors: () => cli.getSidebarDescriptors({ allWriters: true }) });
+  f.child(id);
+  transitions.refreshDescriptorSessions();
+  assert.equal(f.seeds.length, 1, 'the live writer is observed despite an earlier stale descriptor');
+  const changed = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { off(); reject(new Error('descriptor update timed out')); }, 5000);
+    const off = cli.onDescriptorsChanged(() => { clearTimeout(timer); off(); resolve(); });
+  });
+  write(200, 'waiting');
+  await changed;
+  transitions.refreshDescriptorSessions();
+  assert.equal(cli.getStatus(id).status, 'waiting', 'a live waiting update remains authoritative');
+  assert.equal(f.seeds.length, 1, 'waiting does not replay observation');
+});
+
+test('987r observation chooses earliest startedAt independently of descriptor order', t => {
+  const f = descriptorFixture(t);
+  f.child(id);
+  f.descriptors.push({ ...f.descriptor(id), pid: 100, startedAt: 20, cwd: path.join(f.tmp, 'other') },
+    { ...f.descriptor(id), pid: 200, startedAt: 10 });
+  transitions.init(f.options);
+  transitions.refreshDescriptorSessions();
+  assert.equal(f.seeds.length, 1, 'only the earliest live owner bootstraps');
+  assert.equal(f.seeds[0].session.projectFolder, f.folder, 'earliest startedAt chooses the transcript folder');
+  f.descriptors.reverse();
+  transitions.refreshDescriptorSessions();
+  assert.equal(f.seeds.length, 1, 'readdir order cannot reset observation');
+});
+
+test('987r observation resets for disjoint owners, folder changes and disappearance', t => {
+  const f = descriptorFixture(t);
+  f.child(id);
+  f.descriptors.push(f.descriptor(id));
+  transitions.init(f.options);
+  transitions.refreshDescriptorSessions();
+  f.descriptors[0] = { ...f.descriptor(id), pid: 456, startedAt: 2 };
+  transitions.refreshDescriptorSessions();
+  assert.equal(f.seeds.length, 2, 'disjoint owner sets bootstrap once');
+  f.descriptors[0].cwd = path.join(f.tmp, 'other');
+  transitions.refreshDescriptorSessions();
+  assert.equal(f.seeds.length, 3, 'a different transcript folder bootstraps once');
+  const owner = f.descriptors.pop();
+  transitions.refreshDescriptorSessions();
+  f.descriptors.push(owner);
+  transitions.refreshDescriptorSessions();
+  assert.equal(f.seeds.length, 4, 'disappearance releases observation identity');
+});
+
+test('987r pid reuse after caching replaces stale status with the earliest live writer', t => {
+  const f = descriptorFixture(t);
+  t.mock.timers.reset();
+  const sessionsDir = path.join(f.tmp, 'sessions');
+  fs.mkdirSync(sessionsDir);
+  let reused = false;
+  for (const [pid, startedAt, status] of [[100, 20, 'idle'], [200, 10, 'waiting'], [300, 30, 'busy']]) {
+    fs.writeFileSync(path.join(sessionsDir, `${pid}.json`), JSON.stringify({
+      ...f.descriptor(id), pid, startedAt, status, procStart: '111',
+    }));
+  }
+  cli.init({ dir: sessionsDir, activeSessions: f.activeSessions, log: silent, onIdle() {}, platform: 'linux',
+    isProcessAlive: () => true, readProcStart: pid => reused && pid === 300 ? '222' : '111' });
+  t.after(() => cli.stop());
+  assert.ok(cli.ensureWatching());
+  assert.equal(cli.getStatus(id).status, 'busy', 'seeding keeps last-writer status');
+  reused = true;
+  assert.equal(cli.getStatus(id).status, 'waiting', 'stale status falls back by earliest startedAt');
+  assert.equal(cli.getSidebarDescriptors()[0].pid, 200, 'fallback ignores readdir order');
+});
+
+test('987r an invalid descriptor cannot shadow a valid owner', t => {
+  const f = descriptorFixture(t);
+  f.descriptors.push({ get sessionId() { throw new Error('bad id'); } },
+    { ...f.descriptor(id), cwd: null, startedAt: 0 }, f.descriptor(id));
+  transitions.init(f.options);
+  transitions.refreshDescriptorSessions();
+  assert.equal(f.seeds.length, 1, 'normalization failures do not block valid observation');
+  assert.deepEqual(f.warnings, ['[descriptor-subagents] ?: bad id']);
+});
+
+test('987r observation retains stale competitor proof when the Windows table becomes unavailable', async t => {
+  const f = descriptorFixture(t);
+  t.mock.timers.reset();
+  const sessionsDir = path.join(f.tmp, 'sessions');
+  fs.mkdirSync(sessionsDir);
+  let clock = Date.now() + 1000;
+  let readable = true;
+  for (const pid of [100, 200]) fs.writeFileSync(path.join(sessionsDir, `${pid}.json`), JSON.stringify({
+    ...f.descriptor(id), pid, status: 'busy', procStart: '134319945380279381', pidDomain: 'win32:anchor',
+  }));
+  cli.init({ dir: sessionsDir, activeSessions: f.activeSessions, log: silent, onIdle() {}, platform: 'win32',
+    now: () => clock, isProcessAlive: () => true,
+    readProcessTable: async () => readable ? new Map([[100, { ppid: 1, created: 134319945380280000n }],
+      [200, { ppid: 1, created: 134319945380279381n }]]) : null });
+  t.after(() => cli.stop());
+  assert.ok(cli.ensureWatching());
+  await cli.refreshProcessTable();
+  assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }).map(d => d.pid), [200]);
+  readable = false;
+  clock += 5000;
+  await cli.refreshProcessTable({ force: true });
+  assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }).map(d => d.pid), [200],
+    'losing the table must not resurrect a proven stale competing writer');
 });
 
 test('987 a pass without a rekey reads descriptors only once', t => {
@@ -252,7 +376,8 @@ function mainWiring(taskRecords, { descriptors = [], hiddenProjects = [] } = {})
   let refreshed = 0;
   const cliState = { init() {}, onStatusesChanged: fn => { listener = fn; }, getSidebarDescriptors: () => descriptors };
   const ctx = vm.createContext({
-    require: name => name === './cli-session-state' ? cliState : { init: value => { options = value; },
+    require: name => name === './public/worktree-nesting' ? require('../public/worktree-nesting')
+      : name === './cli-session-state' ? cliState : { init: value => { options = value; },
       refreshDescriptorSessions: () => { refreshed++; }, detectPendingBackgroundContinuations() {} },
     PROJECTS_DIR: '/projects', activeSessions: new Map(), mainWindow: null, log: silent, rekeyMcpServer() {},
     persistBackgroundHandoff() {}, activityReporter: {}, writer: {}, bgAgents: {},
@@ -485,7 +610,7 @@ test('main wires descriptor observation to the task worker and descriptor status
   });
 });
 
-test('987 seeded concurrent writers hand over on a lazy death probe without another file write', t => {
+test('987 seeded observation survives last-writer death without promoting cached status', t => {
   const f = descriptorFixture(t);
   t.mock.timers.reset();
   const sessionsDir = path.join(f.tmp, 'sessions');
@@ -501,17 +626,15 @@ test('987 seeded concurrent writers hand over on a lazy death probe without anot
     now: () => now, isProcessAlive: pid => alive.has(pid), readParentPid: () => null });
   t.after(() => cli.stop());
   assert.ok(cli.ensureWatching());
-  transitions.init({ ...f.options, getLiveDescriptors: () => cli.getSidebarDescriptors() });
+  transitions.init({ ...f.options, getLiveDescriptors: () => cli.getSidebarDescriptors({ allWriters: true }) });
   f.child(id);
   transitions.refreshDescriptorSessions();
-  assert.equal(cli.getSidebarDescriptors()[0].pid, 123, 'seeding retains the first live writer');
-  alive.delete(123);
+  assert.equal(cli.getSidebarDescriptors()[0].pid, 456, 'seeding retains the last live writer status');
+  alive.delete(456);
   now += 6000;
-  assert.equal(cli.getSidebarDescriptors().length, 1, 'promoting a writer during enumeration yields one descriptor');
+  assert.equal(cli.getStatus(id), undefined, 'a death probe does not promote an older cached status');
   transitions.refreshDescriptorSessions();
-  assert.equal(cli.getSidebarDescriptors()[0].pid, 456, 'a lazy probe returns the promoted descriptor, not the dead one');
-  assert.equal(cli.getStatus(id).status, 'waiting', 'takeover preserves the replacement status');
-  assert.equal(f.seeds.length, 2, 'a lazy owner replacement resets observation exactly once');
+  assert.equal(f.seeds.length, 1, 'the surviving writer keeps observing the same folder without replay');
 });
 
 test('987 hidden local projects skip observation and replay while visible worktrees remain eligible', t => {
@@ -537,4 +660,12 @@ test('987 hidden local projects skip observation and replay while visible worktr
   hiddenProjects.splice(0, 1, f.tmp);
   descriptors[0] = { ...f.descriptor(id), cwd: path.join(f.tmp, '.work-files', 'worktrees', '987') };
   assert.equal(options.getLiveDescriptors().length, 1, 'a separately visible worktree of a hidden repository stays eligible');
+});
+
+test('987r hidden repositories exclude nested claude worktree descriptors', t => {
+  const f = descriptorFixture(t);
+  const descriptors = [{ ...f.descriptor(id), cwd: path.join(f.tmp, '.claude', 'worktrees', 'nested') }];
+  const hiddenProjects = [f.tmp.replace(/\\/g, '/')];
+  const { options } = mainWiring({}, { descriptors, hiddenProjects });
+  assert.equal(options.getLiveDescriptors().length, 0, 'a hidden repository also hides its claude worktree');
 });

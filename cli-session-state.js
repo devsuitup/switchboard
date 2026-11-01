@@ -189,8 +189,8 @@ function refreshProcessTable({ force = false } = {}) {
       processTable = { at: now(), observedAt, map };
       processTableInFlight = null;
       if (map) {
-        const stale = JSON.stringify([...statusBySession].filter(([id, entry]) => sidebarDescriptorIsStale(id, entry))
-          .map(([id, entry]) => [id, entry.pid]).sort());
+        const stale = JSON.stringify([...known.values()].filter(entry => sidebarDescriptorIsStale(statusKey(entry.sessionId), entry))
+          .map(entry => [statusKey(entry.sessionId), entry.pid]).sort());
         const sidebarChanged = stale !== staleSidebarIdentity;
         staleSidebarIdentity = stale;
         if (sidebarChanged) notifyStatusesChanged();
@@ -608,8 +608,7 @@ function seed() {
 
 function rememberStatus(state) {
   const key = statusKey(state.sessionId);
-  const owner = statusBySession.get(key);
-  if (owner && owner.pid !== state.pid && isProcessAlive(owner.pid)) return;
+  if (deliveryProcessIdentity(state) === 'stale') return;
   statusBySession.set(key, { ...parseDescriptor(JSON.stringify(state)),
     statusUpdatedAt: state.statusUpdatedAt, waitingFor: state.waitingFor });
 }
@@ -619,9 +618,6 @@ function forgetSession(sessionId, pid) {
   if (statusBySession.get(key)?.pid !== pid) return;
   statusBySession.delete(key);
   lastProbeAt.delete(key);
-  const replacement = [...known.values()].find(state => state.pid !== pid
-    && statusKey(state.sessionId) === key && isProcessAlive(state.pid));
-  if (replacement) rememberStatus(replacement);
 }
 
 function ensureWatching() {
@@ -688,6 +684,14 @@ function getStatus(sessionId) {
   let entry = statusBySession.get(key);
   if (!entry) return undefined;
 
+  if (sidebarDescriptorIsStale(key, entry)) {
+    const replacement = liveKnownDescriptors().find(state => statusKey(state.sessionId) === key);
+    if (!replacement) return undefined;
+    forgetSession(sessionId, entry.pid);
+    rememberStatus(replacement);
+    entry = statusBySession.get(key);
+  }
+
   const t = now();
   const last = lastProbeAt.get(key) || 0;
   if (t - last >= GET_STATUS_PROBE_THROTTLE_MS) {
@@ -697,8 +701,7 @@ function getStatus(sessionId) {
       forgetSession(sessionId, entry.pid);
       notifyDescriptorsChanged();
       notifyStatusesChanged();
-      entry = statusBySession.get(key);
-      if (!entry) return undefined;
+      return undefined;
     }
   }
   return { status: entry.status, statusUpdatedAt: entry.statusUpdatedAt, waitingFor: entry.waitingFor };
@@ -708,8 +711,16 @@ function sidebarStateChanged(previous, entry) {
   return !previous || ['status', 'waitingFor', 'pid', 'kind', 'jobId', 'name', 'nameSource', 'cwd'].some(field => previous[field] !== entry[field]);
 }
 
-function getSidebarDescriptors() {
+function liveKnownDescriptors() {
+  return [...known.values()].filter(entry => isProcessAlive(entry.pid)
+    && !sidebarDescriptorIsStale(statusKey(entry.sessionId), entry))
+    .sort((a, b) => (a.startedAt ?? Infinity) - (b.startedAt ?? Infinity) || a.pid - b.pid);
+}
+
+function getSidebarDescriptors({ allWriters = false } = {}) {
   startProcessTableRefresh();
+  if (allWriters) return liveKnownDescriptors().map(entry => ({ ...parseDescriptor(JSON.stringify(entry)),
+    statusUpdatedAt: entry.statusUpdatedAt, waitingFor: entry.waitingFor }));
   const descriptors = [];
   for (const id of [...statusBySession.keys()]) {
     if (!getStatus(id)) continue;
@@ -720,11 +731,12 @@ function getSidebarDescriptors() {
 }
 
 function sidebarDescriptorIsStale(id, entry) {
+  const writer = [...known.values()].find(s => s.pid === entry.pid && statusKey(s.sessionId) === id);
+  if (!writer) return true;
   if (processTableEnabled && (!processTableFresh() || !processTable.map)) {
     return JSON.parse(staleSidebarIdentity).some(([sessionId, pid]) => sessionId === id && pid === entry.pid);
   }
-  const writer = [...known.values()].find(s => s.pid === entry.pid && statusKey(s.sessionId) === id);
-  return !!writer && deliveryProcessIdentity(writer) === 'stale';
+  return deliveryProcessIdentity(writer) === 'stale';
 }
 
 function canCompareProcStart(raw) {

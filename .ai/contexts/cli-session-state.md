@@ -118,12 +118,18 @@ never a wrong verdict.
 ## Matching a state file to a Switchboard session
 
 For concurrent writers of one session id ("Resume anyway"), the status cache and
-sidebar descriptor retain the first live writer until it disappears or changes
-session id. Other writers' descriptors are kept as takeover candidates, and their
-status edges can still trigger an owned rescan. Their writes or death do not replace
-the selected owner's status or reset descriptor-backed subagent observation. A
-cached live writer takes over on owner removal or a liveness probe, without waiting
-for it to write again. See `subagent-observability.md`, "Descriptor-backed local owners".
+default sidebar descriptor keep last-writer semantics. A second writer's busy or
+waiting update remains visible to trigger delivery, background handoff and row
+status. A lazy death probe removes that status without promoting an older cached
+status. Proven stale process identities are excluded; if a cached status becomes
+stale, the earliest-started remaining live, known writer supplies its replacement.
+Missing cache entries cannot qualify as descriptor owners. Unknown process-start
+proof alone does not exclude an otherwise known, live descriptor, as before.
+`getSidebarDescriptors({ allWriters: true })` exposes all live, non-stale cached
+writers, ordered by `startedAt` (missing times last, PID as tie-breaker), solely
+for subagent observation. That observation preserves its own identity across
+status updates and overlapping owners in the same folder; it never pins status.
+See `subagent-observability.md`, "Descriptor-backed local owners".
 
 By `sessionId` only, against `session.realSessionId || <map key>` over
 `activeSessions`, skipping `exited`, `isPlainTerminal`, and sessions with no

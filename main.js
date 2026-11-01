@@ -3486,8 +3486,12 @@ sessionTransitions.init({
   getLiveDescriptors: () => {
     const hidden = new Set(((getSetting('global') || {}).hiddenProjects || [])
       .filter(entry => parseFolderKey(entry).alias === null).map(normalizeArchivedProjectPath));
-    const descriptors = cliSessionState.getSidebarDescriptors();
-    return hidden.size ? descriptors.filter(descriptor => !hidden.has(normalizeArchivedProjectPath(descriptor.cwd))) : descriptors;
+    const descriptors = cliSessionState.getSidebarDescriptors({ allWriters: true });
+    return hidden.size ? descriptors.filter(descriptor => {
+      const cwd = normalizeArchivedProjectPath(descriptor.cwd);
+      const parent = require('./public/worktree-nesting').worktreeParentPath(descriptor.cwd?.replace(/\\/g, '/'));
+      return !hidden.has(cwd) && !hidden.has(normalizeArchivedProjectPath(parent));
+    }) : descriptors;
   },
   onDescriptorSession: async (sessionId, session, folderPath) => {
     await taskRecords.read(path.join(folderPath, sessionId + '.jsonl'), sessionId);
