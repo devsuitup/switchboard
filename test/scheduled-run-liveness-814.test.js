@@ -69,28 +69,28 @@ test('re-arm resumes an unchanged prefix without a full read', async t => {
 });
 
 for (const change of ['replace', 'rewrite', 'expired']) {
-  test(`re-arm resets with bounded reads after ${change}`, async t => {
+  test(`re-arm resets to complete history after ${change}`, async t => {
     const h = transcriptFixture(t);
     const initial = await h.invoke({ mode: 'follow' });
     await h.invoke({ mode: 'stop', token: initial.token, park: true });
     if (change === 'replace') fs.renameSync(h.file, h.file + '.old');
-    fs.writeFileSync(h.file, h.line('replacement'));
-    const readFile = fs.readFileSync, read = fs.readSync;
-    let fullReads = 0, bytes = 0;
+    const history = ['replacement', 'x'.repeat(1100 * 1024), 'y'.repeat(5 * 1024 * 1024), 'last message'];
+    fs.writeFileSync(h.file, history.map(h.line).join(''));
+    const readFile = fs.readFileSync;
+    let fullReads = 0;
     fs.readFileSync = (...args) => { fullReads++; return readFile(...args); };
-    fs.readSync = (...args) => { const n = read(...args); bytes += n; return n; };
     try {
       const next = await h.invoke({ mode: 'follow', checkpoint: change === 'expired' ? 'expired' : initial.token });
-      assert.equal(fullReads, 0);
-      assert.ok(bytes <= 8 * 1024 * 1024);
+      assert.equal(next.entries.length, history.length, 'reset includes all records in its first reply');
+      assert.equal(fullReads, 1, 'checkpoint mismatch uses the full-history open path');
       assert.equal(next.reset, true);
-      assert.deepEqual(Array.from(next.entries, entry => entry.message.content), ['replacement']);
+      assert.deepEqual(Array.from(next.entries, entry => entry.message.content), history);
       assert.equal((await h.invoke({ mode: 'stop', token: initial.token })).ok, false, 'old stop cannot close the new cursor');
       fs.appendFileSync(h.file, h.line('after reset'));
       const appended = await h.invoke({ mode: 'next', token: next.token });
       assert.equal(appended.reset, false);
       assert.deepEqual(Array.from(appended.entries, entry => entry.message.content), ['after reset']);
-    } finally { fs.readSync = read; fs.readFileSync = readFile; }
+    } finally { fs.readFileSync = readFile; }
   });
 }
 

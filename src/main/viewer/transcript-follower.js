@@ -38,10 +38,10 @@ function createTranscriptFollower() {
       const saved = parked;
       dispose();
       const matches = saved && saved.id === id && saved.token === checkpoint;
-      const stat = fs.statSync(file, { bigint: true });
-      current = { id, file: matches ? saved.file : file, token: randomUUID(), closed: false, busy: false,
-        cursor: matches ? { ...saved.cursor, finalSize: null } : cursor(stat, 0, []) };
-      return read(id, current.token, file).then(result => ({ ...result, reset: !matches || result.reset }));
+      if (!matches) return { ...open(id, file), reset: true };
+      current = { id, file: saved.file, token: randomUUID(), closed: false, busy: false,
+        cursor: { ...saved.cursor, finalSize: null } };
+      return read(id, current.token, file).then(result => result.reset ? { ...open(id, file), reset: true } : result);
     }
     dispose();
     const fd = fs.openSync(file, 'r');

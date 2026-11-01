@@ -83,7 +83,7 @@ keeps reason plus age, or age alone.
 | Terminal header | `#terminal-header-status.session-icon` (`public/session-activity-dom.js`, `paintTerminalHeaderStatus`) | activity and lifecycle in tooltip and accessible name, no visible text; repaints with the active row, including merged-member updates, without waiting for a poll; also works when that row is filtered out |
 | Terminal banner | text (`public/app.js`, `applyProcessExit`) | recorded Stopped, Exited (code N) or Killed (SIG); Detach says the session keeps running in the background |
 | Agents group/header | emoji and Title Case label; counts (`public/agents-view.js`) | Active/Blocked/Idle/Done/Stopped/Failed/External/Unknown groups; N running · N finished · N external |
-| Status bar/filter | text (`public/app.js`, `public/index.html`) | N open here · N sessions · N projects; Show sessions open here only |
+| Status bar/filter | text (`public/app.js`, `public/index.html`) | N open here · N sessions · N projects; Show running sessions only (scheduled runs included) |
 | Slug-group header | `.slug-group-dot` (`public/sidebar.js`) | separate pulsing green mark when any child has a PTY; N sessions and time |
 | Remote host | `.remote-host-dot` (`public/style.css`) | separate reachability mark: green, red error, amber unknown, pulsing amber connecting |
 

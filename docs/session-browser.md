@@ -25,7 +25,7 @@ Below the tabs, on the Sessions tab, a row of buttons:
 
 | Button (tooltip) | Effect |
 |---|---|
-| Show sessions open here only | Only sessions with a terminal open in this window |
+| Show running sessions only | Running sessions, including scheduled runs |
 | Show pinned only | Only pinned sessions |
 | Show today's sessions only | Only sessions modified today |
 | Show archived sessions | Includes archived sessions in the list |

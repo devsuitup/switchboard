@@ -63,6 +63,7 @@ function requestLiveJsonlRefresh(payload) {
         ? { mode: 'next', token: view.token, final: !live } : { mode: 'follow', checkpoint: view.checkpoint });
       if (liveJsonlView !== view || view.stopped) { releaseJsonlFollower(view.session.sessionId, result.token); return; }
       if (result.error) { view.live = wasLive; return; }
+      view.checkpoint = null;
       if (result.token) view.token = result.token;
       const entries = result.entries || [];
       const append = result.append && !result.reset;
@@ -391,27 +392,9 @@ const toolRenderers = {
       nestedContainer.className = 'jsonl-subagent-nested';
 
       const subSessionId = match.sessionId;
-      const rawNested = result.entries;
-      const nestedEntries = mergeLocalCommandEntries(rawNested);
-
-      // Build tool result map for nested entries
-      const nestedResultMap = new Map();
-      for (const entry of nestedEntries) {
-        const blocks = entry.message?.content || entry.content;
-        if (!Array.isArray(blocks)) continue;
-        for (const b of blocks) {
-          if (b.type === 'tool_result' && b.tool_use_id) {
-            nestedResultMap.set(b.tool_use_id, b.content || b.output || '');
-          }
-        }
-      }
-
       const prevSessionId = currentViewerSessionId;
       currentViewerSessionId = subSessionId;
-      for (const entry of nestedEntries) {
-        const entryEl = renderJsonlEntry(entry, nestedResultMap);
-        if (entryEl) nestedContainer.appendChild(entryEl);
-      }
+      appendJsonlEntries(nestedContainer, result.entries);
       currentViewerSessionId = prevSessionId;
 
       el.after(nestedContainer);
@@ -439,23 +422,9 @@ const toolRenderers = {
           // Stream new entries into nestedContainer
           nestedContainer.addEventListener('subagent-watch-data', (evt) => {
             const { entries: newEntries } = evt.detail;
-            const merged = mergeLocalCommandEntries(newEntries);
-            const appendResultMap = new Map();
-            for (const entry of merged) {
-              const blocks2 = entry.message?.content || entry.content;
-              if (!Array.isArray(blocks2)) continue;
-              for (const b of blocks2) {
-                if (b.type === 'tool_result' && b.tool_use_id) {
-                  appendResultMap.set(b.tool_use_id, b.content || b.output || '');
-                }
-              }
-            }
             const savedId = currentViewerSessionId;
             currentViewerSessionId = subSessionId;
-            for (const entry of merged) {
-              const entryEl = renderJsonlEntry(entry, appendResultMap);
-              if (entryEl) nestedContainer.appendChild(entryEl);
-            }
+            appendJsonlEntries(nestedContainer, newEntries);
             currentViewerSessionId = savedId;
           });
 
@@ -866,25 +835,38 @@ function renderJsonlViewerEntries(session, result, watermark, refresh = false, a
     activeViewerWatches.clear();
     agentMatchCounters = {};
     jsonlViewerBody.innerHTML = '';
-    jsonlViewerBody.jsonlRenderState = { tools: new Map(), rendered: 0, localTail: [], localNodes: [], localStart: Infinity };
+    jsonlViewerBody.jsonlRenderState = null;
   }
-  const state = jsonlViewerBody.jsonlRenderState;
 
   if (result.error) {
     jsonlViewerBody.innerHTML = '<div class="plans-empty">Error loading messages: ' + escapeHtml(result.error) + '</div>';
     return;
   }
 
-  const rawEntries = [...state.localTail, ...(result.entries || [])];
+  const rendered = appendJsonlEntries(jsonlViewerBody, result.entries || []);
+
+  if (rendered === 0) {
+    jsonlViewerBody.innerHTML = '<div class="plans-empty">No messages found in this session.</div>';
+  }
+
+  jsonlViewerBody.scrollTop = !refresh || atBottom ? jsonlViewerBody.scrollHeight : scrollTop;
+  const markSeen = () => {
+    if (writtenActivity.rendered && rendered > 0 && currentViewerSessionId === session.sessionId && typeof markTranscriptOutputSeen === 'function') markTranscriptOutputSeen(session.sessionId, jsonlViewerBody, writtenActivity.watermark);
+  };
+  jsonlViewerBody.onscroll = markSeen;
+  requestAnimationFrame(() => { writtenActivity.rendered = true; markSeen(); });
+}
+
+function appendJsonlEntries(container, newEntries) {
+  const state = container.jsonlRenderState ||= { tools: new Map(), rendered: 0, localTail: [], localNodes: [], localStart: Infinity };
+  const rawEntries = [...state.localTail, ...newEntries];
   for (const node of state.localNodes) { node.remove(); state.rendered--; }
   state.localTail = [];
   state.localNodes = [];
   state.localStart = Infinity;
 
-  // Merge consecutive local command entries (caveat + bash-input + stdout/stderr)
   const entries = mergeLocalCommandEntries(rawEntries, state);
 
-  // Build tool_use_id → result content map so results render under their tool call
   const toolResultMap = new Map();
   for (const entry of entries) {
     const blocks = entry.message?.content || entry.content;
@@ -913,8 +895,8 @@ function renderJsonlViewerEntries(session, result, watermark, refresh = false, a
   for (const [index, entry] of entries.entries()) {
     const el = renderJsonlEntry(entry, toolResultMap, state.tools);
     if (el) {
-      if (rendered === 0) jsonlViewerBody.innerHTML = '';
-      jsonlViewerBody.appendChild(el);
+      if (rendered === 0) container.innerHTML = '';
+      container.appendChild(el);
       if (index >= state.localStart) state.localNodes.push(el);
       el.querySelectorAll('.jsonl-clickable-img').forEach(img => {
         img.onclick = () => showJsonlScreenshot(img.src);
@@ -923,18 +905,7 @@ function renderJsonlViewerEntries(session, result, watermark, refresh = false, a
     }
   }
   state.rendered = rendered;
-
-  if (rendered === 0) {
-    jsonlViewerBody.innerHTML = '<div class="plans-empty">No messages found in this session.</div>';
-  }
-
-  // Scroll to the bottom so the most recent messages are visible
-  jsonlViewerBody.scrollTop = !refresh || atBottom ? jsonlViewerBody.scrollHeight : scrollTop;
-  const markSeen = () => {
-    if (writtenActivity.rendered && rendered > 0 && currentViewerSessionId === session.sessionId && typeof markTranscriptOutputSeen === 'function') markTranscriptOutputSeen(session.sessionId, jsonlViewerBody, writtenActivity.watermark);
-  };
-  jsonlViewerBody.onscroll = markSeen;
-  requestAnimationFrame(() => { writtenActivity.rendered = true; markSeen(); });
+  return rendered;
 }
 
 // --- Subagent transcript view ---

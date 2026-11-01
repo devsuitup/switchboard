@@ -50,8 +50,11 @@ history loading retains the existing full-history cost; incremental I/O and
 pending-line memory are bounded. Re-arming sends the parked cursor's opaque token
 as `checkpoint`; the main process validates its byte offset, file identity and
 bounded samples, then returns only appended entries. The final-size boundary is
-cleared for each new run. An expired checkpoint or changed file resets through
-the same bounded reader. There is at most one parked cursor, no retained file
+cleared for each new run. An expired checkpoint or changed file reopens through
+the ordinary full-history path, so its first reply includes the entire history,
+including visible records larger than the incremental reader's 4 MiB limit.
+The renderer clears the consumed checkpoint after accepting a successful reply,
+so dismissal releases only the current token. There is at most one parked cursor, no retained file
 handle or polling, and dismissing the view releases it. The renderer retains no
 history for prefix serialization/comparison. (#986)
 
@@ -61,7 +64,11 @@ its existing tool row without rebuilding neighboring blocks. Full replacement
 and watch draining happen only on a history reset or view change. Refresh
 re-merges a trailing unfinished local command with the next batch, replacing
 only that command's provisional nodes so caveat/input/output splits match a
-full render. (#986) Refresh preserves scroll position when the reader is above
+full render. Expanded subagent snapshots and watch batches use the same
+container-scoped append helper and provisional-command state as the main view.
+A non-local entry ends a consecutive local-command group, including across
+batches, preserving full-render ordering. (#986, #990)
+Refresh preserves scroll position when the reader is above
 the bottom. It updates the
 existing message-search DOM rather than closing it.
 Written-activity watermarks are captured before reading so a later write is

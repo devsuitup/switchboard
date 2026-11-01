@@ -2,6 +2,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const { createTranscriptFollower } = require('../src/main/viewer/transcript-follower');
 const { setupSidebarDom } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
 const turn = text => ({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
@@ -34,6 +37,7 @@ function setup(t) {
   };
   w.api.getSessionLiveElsewhere = async () => live;
   w.api.onProjectsChanged = callback => { projectsChanged = callback; };
+  w.api.onSubagentWatchEvent = callback => { w.api._subagentWatchEventCb = callback; };
   ctx.evalPublic('jsonl-viewer.js');
   const timers = new Map();
   let serial = 0;
@@ -77,6 +81,108 @@ test('re-arm sends its byte checkpoint and never serializes retained renderer hi
     assert.match(h.w.jsonlViewerBody.textContent, /first[\s\S]*later/);
   } finally { h.w.JSON.stringify = stringify; }
 });
+
+test('accepted re-arm releases only its current token when the view closes', async t => {
+  const h = setup(t);
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  h.live = null;
+  h.projectsChanged();
+  await h.tick();
+  h.live = { kind: 'schedule' };
+  h.nextRead = async () => ({ entries: [turn('new run')], token: 'new-token', append: true });
+  h.projectsChanged();
+  await h.tick();
+  const beforeClose = h.requests.length;
+  h.w.hideAllViewers();
+  assert.deepEqual(h.requests.slice(beforeClose).map(options => options.token), ['new-token'],
+    'closing a re-armed view must not send its consumed checkpoint');
+});
+
+test('a stale checkpoint after a re-arm error restores the complete full-render DOM in one refresh', async t => {
+  const h = setup(t);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'viewer-990-'));
+  const file = path.join(root, 'run.jsonl');
+  const follower = createTranscriptFollower();
+  t.after(() => { follower.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  const history = [turn('original')];
+  const write = () => fs.writeFileSync(file, history.map(entry => JSON.stringify(entry) + '\n').join(''));
+  write();
+  h.w.api.readSessionJsonl = async (id, options) => {
+    if (options.mode === 'stop') return follower.close(id, options.token, options.park);
+    if (options.mode === 'follow') return follower.open(id, file, options.checkpoint);
+    return follower.read(id, options.token, file, options.final);
+  };
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  h.live = null;
+  h.projectsChanged();
+  await h.tick();
+  fs.renameSync(file, file + '.unavailable');
+  h.live = { kind: 'schedule' };
+  h.projectsChanged();
+  await h.tick();
+  fs.renameSync(file + '.unavailable', file);
+  history.push(turn('x'.repeat(1100 * 1024)), turn('y'.repeat(5 * 1024 * 1024)), turn('last message'));
+  write();
+  h.live = { kind: 'schedule' };
+  h.projectsChanged();
+  await h.tick();
+  const incremental = h.w.jsonlViewerBody.innerHTML;
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  assert.equal(incremental.length, h.w.jsonlViewerBody.innerHTML.length, 'reset includes every large record immediately');
+  assert.ok(incremental === h.w.jsonlViewerBody.innerHTML, 'reset DOM equals a full render');
+});
+
+test('a non-local entry between incremental bash input and stdout matches a full render', async t => {
+  const h = setup(t);
+  const local = text => ({ type: 'user', message: { content: text } });
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  h.appendEntry(local('<bash-input>echo hello</bash-input>'));
+  h.activity();
+  await h.tick();
+  h.append('intervening message');
+  h.appendEntry(local('<bash-stdout>hello</bash-stdout>'));
+  h.activity();
+  await h.tick();
+  const incremental = h.w.jsonlViewerBody.innerHTML;
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  assert.equal(incremental, h.w.jsonlViewerBody.innerHTML, 'intervening message keeps full-render ordering and grouping');
+});
+
+for (const initial of ['<bash-input>echo hello</bash-input>', '<local-command-caveat>local</local-command-caveat>']) {
+  test(`nested live commands split after ${initial} match a full render`, async t => {
+    const h = setup(t);
+    const local = text => ({ type: 'user', message: { content: text } });
+    const entries = [turn('nested first'), local(initial)];
+    h.appendEntry({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'agent', name: 'Agent', input: { description: 'child', subagent_type: 'Explore' } },
+    ] } });
+    h.w.api.listSubagents = async () => [{ agentId: 'child', sessionId: 'child-session', description: 'child', subagentType: 'Explore' }];
+    h.w.api.readSubagentJsonl = async () => ({ entries: [...entries] });
+    h.w.api.startSubagentWatch = async () => ({ watchId: 'watch' });
+    h.w.api.stopSubagentWatch = async () => {};
+    h.w.api._subagentSpawnedCb({ parentSessionId: 'run', agentId: 'child' });
+    await h.w.showJsonlViewer({ sessionId: 'run' });
+    const agent = h.w.jsonlViewerBody.querySelector('.jsonl-agent-expandable');
+    agent.click();
+    await flush();
+    const nested = h.w.jsonlViewerBody.querySelector('.jsonl-subagent-nested');
+    const first = nested.firstElementChild;
+    const batches = initial.includes('caveat')
+      ? [local('<bash-input>echo hello</bash-input>'), local('<bash-stdout>hello</bash-stdout>')]
+      : [local('<bash-stdout>hello</bash-stdout>')];
+    for (const entry of batches) {
+      entries.push(entry);
+      h.w.api._subagentWatchEventCb({ parentSessionId: 'run', agentId: 'child', entries: [entry] });
+    }
+    assert.equal(nested.firstElementChild, first, 'earlier nested DOM survives appends');
+    const incremental = nested.innerHTML;
+    agent.click();
+    agent.click();
+    await flush();
+    assert.equal(incremental, h.w.jsonlViewerBody.querySelector('.jsonl-subagent-nested').innerHTML,
+      'nested incremental DOM equals a full render');
+  });
+}
 
 test('a command beginning in the initial snapshot merges through three refreshes', async t => {
   const h = setup(t);
