@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const bg = require('../bg-agents');
+const bg = require('../src/main/bg-agents/bg-agents');
 const SID = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 
@@ -153,7 +153,7 @@ for (const state of ['working', 'blocked']) {
       descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID });
       return { ok: true };
     });
-    require('../bg-agents-ipc').init({
+    require('../src/main/bg-agents/bg-agents-ipc').init({
       ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
       getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
       getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }),

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
-const { parseJobState, mergeRoster } = require('../bg-agents-roster');
+const { parseJobState, mergeRoster } = require('../src/main/bg-agents/bg-agents-roster');
 
 const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
 const GREEN = 'rgb(62, 207, 90)';

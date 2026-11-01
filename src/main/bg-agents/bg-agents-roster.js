@@ -1,7 +1,7 @@
 // bg-agents-roster.js — see .ai/contexts/bg-agents.md
 'use strict';
-const { bridgeSessionKey } = require('./bridge-session-id');
-const { normalizeTaskEvidence } = require('./task-records');
+const { bridgeSessionKey } = require('../../../bridge-session-id');
+const { normalizeTaskEvidence } = require('../../../task-records');
 const { liveWorkerDescriptor } = require('./bg-worker-liveness');
 
 const JOB_STATES = new Set(['running', 'working', 'blocked', 'done', 'stopped', 'failed']);

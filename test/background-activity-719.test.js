@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setupSidebarDom } = require('./dom-setup');
-const { parseJobState, mergeRoster } = require('../bg-agents-roster');
+const { parseJobState, mergeRoster } = require('../src/main/bg-agents/bg-agents-roster');
 const B = '369b1c23-9bd7-47a2-b4bf-36ee3ca4b55f', J = '369b1c23', K = 'aaaaaaaa';
 const job = state => parseJobState(JSON.stringify({ sessionId: B, state, updatedAt: '2026-10-19T08:15:00Z',
   inFlight: { tasks: 0, kinds: [] }, fan: [] }));
@@ -100,7 +100,7 @@ test('T1.2 another job timestamp cannot age out independent evidence on the same
 });
 
 test('T1.2 real corrupt and evicted job reads invalidate current evidence without losing lifecycle', { timeout: 10000 }, async t => {
-  const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), bg = require('../bg-agents');
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), bg = require('../src/main/bg-agents/bg-agents');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'invalid-job-719-'));
   const h = setupSidebarDom(); h.evalPublic('agents-view.js');
   t.after(() => { bg.stop(); h.destroy(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -198,7 +198,7 @@ for (const state of ['working', 'blocked', 'done', 'stopped', 'failed']) for (co
 }
 
 test('T2.4 changing only cached transcript scope triggers the existing structural job notification', { timeout: 10000 }, async t => {
-  const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), bg = require('../bg-agents');
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), bg = require('../src/main/bg-agents/bg-agents');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scope-notification-719-'));
   t.after(() => { bg.stop(); fs.rmSync(dir, { recursive: true, force: true }); });
   fs.mkdirSync(path.join(dir, J));

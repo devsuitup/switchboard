@@ -108,9 +108,10 @@ function createRemoteIndexer(ctx) {
   let timer = null;
   let inFlight = false;
   let stopped = false;
+  let generation = 0;
   const remoteSessions = new Map(); // alias -> sessions array, from the same ssh cycle as the inventory
   const remoteHeadTurnFiles = new Map();
-  const remoteSessionsAt = new Map(); // alias -> epoch ms of the last cycle that did not throw
+  const remoteSessionsAt = new Map();
   const hostBackoff = new Map(); // alias -> { failures, lastError, nextAttemptAt }
   const hostInFlight = new Set();
   const hostTools = new Map(); // alias -> { tools: { tmux, inotifywait } | null, nextProbeAt }
@@ -240,7 +241,7 @@ function createRemoteIndexer(ctx) {
     return !!tools && (!prev || !prev.tools || prev.tools.tmux !== tools.tmux || prev.tools.inotifywait !== tools.inotifywait);
   }
 
-  async function refreshHost(host) {
+  async function refreshHost(host, cancelled) {
     const projectsDir = mirrorProjectsDirFor(ctx.dataDir, host.alias);
     const manifestPath = manifestPathFor(ctx.dataDir, host.alias);
     fs.mkdirSync(projectsDir, { recursive: true });
@@ -253,21 +254,8 @@ function createRemoteIndexer(ctx) {
       log,
     });
 
-    const previousPlaceholderIds = getPlaceholderSessions(host.alias).map(s => s.sessionId).sort();
-    const sessions = Array.isArray(result.sessions) ? result.sessions : [];
-    const oversizedFiles = result.oversizedFiles || [];
-    remoteHeadTurnFiles.set(host.alias, await syncTurnTails({
-      alias: host.alias, transport: ctx.transport, projectsDir, oversizedFiles, sessions, log,
-    }));
-    const unmirrored = new Set(oversizedFiles.filter(f => f.rel.split('/').length === 2
-      && !fs.existsSync(path.join(projectsDir, f.rel))).map(f => path.posix.basename(f.rel, '.jsonl')));
-    remoteSessions.set(host.alias, sessions.map(s => s ? { ...s,
-      ...('waitingFor' in s ? { waitingFor: sanitizeWaitingFor(s.waitingFor) } : {}),
-      ...(unmirrored.has(s.sessionId) ? { descriptorOnly: true } : {}),
-    } : s));
-    const placeholdersChanged = JSON.stringify(previousPlaceholderIds)
-      !== JSON.stringify(getPlaceholderSessions(host.alias).map(s => s.sessionId).sort());
-
+    if (stopped) return false;
+    let scannedRows = false;
     const folderPrefix = host.alias;
     const toScan = new Set(result.changedFolders);
     const changedFilesByFolder = result.changedFilesByFolder instanceof Map
@@ -323,15 +311,36 @@ function createRemoteIndexer(ctx) {
         folders: [...toScan],
         ...(fileSubsets.size > 0 ? { fileSubsets } : {}),
       });
+      scannedRows = true;
       if (scanned?.ok !== false) {
         for (const folder of fullRepairs) checkedGhostFolders.add(joinFolderKey(host.alias, folder));
       }
     }
 
+    if (cancelled()) return scannedRows;
+    const previousSessions = remoteSessions.get(host.alias) || [];
+    const sessions = Array.isArray(result.sessions) ? result.sessions : [];
+    const oversizedFiles = result.oversizedFiles || [];
+    const unmirrored = new Set(oversizedFiles.filter(f => f.rel.split('/').length === 2
+      && !fs.existsSync(path.join(projectsDir, f.rel))).map(f => path.posix.basename(f.rel, '.jsonl')));
+    remoteSessions.set(host.alias, sessions.map(s => s ? { ...s,
+      ...('waitingFor' in s ? { waitingFor: sanitizeWaitingFor(s.waitingFor) } : {}),
+      ...(unmirrored.has(s.sessionId) ? { descriptorOnly: true } : {}),
+    } : s));
+    remoteSessionsAt.set(host.alias, now());
+    if (JSON.stringify(previousSessions) !== JSON.stringify(remoteSessions.get(host.alias)) && ctx.notify) ctx.notify();
+    const tails = await syncTurnTails({
+      alias: host.alias, transport: ctx.transport, projectsDir, oversizedFiles, sessions, log, cancelled,
+    });
+    if (cancelled()) return scannedRows;
+    remoteHeadTurnFiles.set(host.alias, tails);
+
     log.info(`[remote:${host.alias}] ${result.fetched} fetched, ${result.unchanged} unchanged, ` +
       `${result.removed} removed, ${result.failed} failed, ${toScan.size} folders indexed`);
 
+    if (cancelled()) return scannedRows;
     const toolsChanged = await probeHostTools(host.alias);
+    if (cancelled()) return scannedRows;
     if (ctx.refreshHeadTurns) {
       try {
         await ctx.refreshHeadTurns(host.alias);
@@ -352,12 +361,14 @@ function createRemoteIndexer(ctx) {
         }
       }
     }
-    return toScan.size > 0 || toolsChanged || placeholdersChanged;
+    return toScan.size > 0 || toolsChanged;
   }
 
   // see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
   async function refreshNow({ force = false } = {}) {
     if (stopped || inFlight) return { skipped: true };
+    const cycle = generation;
+    const cancelled = () => stopped || cycle !== generation;
     const list = hosts();
     publishRoots(list);
     if (list.length === 0) return { skipped: true, hosts: 0 };
@@ -369,7 +380,7 @@ function createRemoteIndexer(ctx) {
     try {
       changed = await pruneUnknownAliases(list) > 0;
       for (const host of list) {
-        if (stopped) break;
+        if (cancelled()) break;
         if (hostInFlight.has(host.alias)) continue;
         const state = backoffState(host.alias);
         if (force) {
@@ -380,10 +391,12 @@ function createRemoteIndexer(ctx) {
           continue; // still backing off: no attempt, no log, no ssh
         }
         try {
-          if (await refreshHost(host)) changed = true;
+          if (await refreshHost(host, cancelled)) changed = true;
+          if (cancelled()) break;
           if (onHostSuccess(host.alias)) changed = true;
           remoteSessionsAt.set(host.alias, now());
         } catch (err) {
+          if (cancelled()) break;
           // A failed cycle keeps the last known descriptors — see
           // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
           errors.push({ alias: host.alias, error: err instanceof Error ? err.message : String(err) });
@@ -391,10 +404,10 @@ function createRemoteIndexer(ctx) {
         }
       }
     } finally {
-      inFlight = false;
+      if (cycle === generation) inFlight = false;
     }
 
-    if (changed && ctx.notify) ctx.notify();
+    if (!stopped && changed && ctx.notify) ctx.notify();
     return { skipped: false, hosts: list.length, changed, errors };
   }
 
@@ -403,6 +416,8 @@ function createRemoteIndexer(ctx) {
   async function refreshHostNow(alias, { force = false } = {}) {
     if (stopped) return { skipped: true, reason: 'stopped' };
     if (inFlight || hostInFlight.has(alias)) return { skipped: true, reason: 'in-flight' };
+    const cycle = generation;
+    const cancelled = () => stopped || cycle !== generation;
     const host = hosts().find(h => h.alias === alias);
     if (!host) return { skipped: true, reason: 'unknown-host' };
     const state = backoffState(alias);
@@ -414,20 +429,26 @@ function createRemoteIndexer(ctx) {
       return { skipped: true, reason: 'backoff' };
     }
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
+    const cancelledResult = rowsChanged => {
+      if (rowsChanged && !stopped && ctx.notify) ctx.notify();
+      return { skipped: true, reason: stopped ? 'stopped' : 'in-flight' };
+    };
     hostInFlight.add(alias);
     let changed = false;
     let error = null;
     try {
-      changed = await refreshHost(host);
+      changed = await refreshHost(host, cancelled);
+      if (cancelled()) return cancelledResult(changed);
       if (onHostSuccess(alias)) changed = true;
       remoteSessionsAt.set(alias, now());
     } catch (err) {
+      if (cancelled()) return cancelledResult(false);
       // A failed cycle keeps the last known descriptors — see
       // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
       if (onHostFailure(alias, err, intervalMs)) changed = true;
       error = err instanceof Error ? err.message : String(err);
     } finally {
-      hostInFlight.delete(alias);
+      if (cycle === generation) hostInFlight.delete(alias);
     }
     if (changed && ctx.notify) ctx.notify();
     return { skipped: false, changed, error };
@@ -452,6 +473,9 @@ function createRemoteIndexer(ctx) {
 
   function stop() {
     stopped = true;
+    generation++;
+    inFlight = false;
+    hostInFlight.clear();
     checkedGhostFolders.clear();
     if (timer) {
       timers.clearInterval(timer);

@@ -9,18 +9,18 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 
 | File | Role |
 |---|---|
-| `bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `dispatchRefusal`, `isHostedJob`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
-| `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobCheck`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
+| `src/main/bg-agents/bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `dispatchRefusal`, `isHostedJob`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
+| `src/main/bg-agents/bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobCheck`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
 | `project-root.js` | `resolveProjectRoots(cwd)`: the `.claude/worktrees` pattern, else one `git rev-parse`; never throws |
 | `delete-session-guard.js` | `deleteSessionRefusal`: the fail-closed liveness check `delete-session` runs first |
-| `bg-agents-ipc.js` | `get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`, the `bg-agents-changed` push; `respawnForHandoff` on the returned unsubscribe function |
-| `bg-worker-liveness.js` | Pure: `classifyWorkerLiveness`, `liveWorkerDescriptor` (see "Job states") |
+| `src/main/bg-agents/bg-agents-ipc.js` | `get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`, the `bg-agents-changed` push; `respawnForHandoff` on the returned unsubscribe function |
+| `src/main/bg-agents/bg-worker-liveness.js` | Pure: `classifyWorkerLiveness`, `liveWorkerDescriptor` (see "Job states") |
 | `sidebar-bg-sessions.js` | `mergeLocalBackgroundSessions`: local background rows and continuation merging for the sidebar |
 | `session-exit.js` | `runExitHandoffs`, `EXIT_BUSY_WAIT_MS` (see "Exit handoff batch") |
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
 | `bridge-session-id.js` | Shared case-sensitive suffix for job `cse_` and descriptor `session_` bridge ids |
 | `src/main/terminals/pty-ops.js` | `detachPty` |
-| `bg-handoff.js` | Eligibility, `/bg` submission, continuation/descriptor proof, bounded exit hold |
+| `src/main/bg-agents/bg-handoff.js` | Eligibility, `/bg` submission, continuation/descriptor proof, bounded exit hold |
 | `main.js` | `runClaudeCommand`; the `type: 'attach'` branch of `open-terminal`; detach in `stop-session`; `bgAgents.init` and `bg-agents-ipc` wiring; renderer unsubscribe on window close, `bgAgents.stop()` on app quit |
 | `public/agents-view.js` | The view; `agentJobIsLive`; `groupAgentEntries` (Group by); `bgAgentSessionIds` for the sidebar badge |
 | `public/resume-guard.js` | A live `kind: 'bg'` descriptor answers `{ attach, cwd }` |

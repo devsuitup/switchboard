@@ -8,10 +8,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 const { loadAppFunctions } = require('./app-source');
-const { mergeRoster, parseJobState } = require('../bg-agents-roster');
-const bgAgents = require('../bg-agents');
+const { mergeRoster, parseJobState } = require('../src/main/bg-agents/bg-agents-roster');
+const bgAgents = require('../src/main/bg-agents/bg-agents');
 const cliSessionState = require('../cli-session-state');
-const bgIpc = require('../bg-agents-ipc');
+const bgIpc = require('../src/main/bg-agents/bg-agents-ipc');
 
 const SID = 'aaaaaaaa-1234-4321-abcd-123456789abc';
 const BRIDGE = 'cse_0189wicjnQ3j6mppaWVWuntM';

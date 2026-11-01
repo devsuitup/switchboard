@@ -8,7 +8,7 @@ for (const size of [{ width: 1400, height: 900 }, { width: 900, height: 700 }]) 
     const { app, page } = await launch();
     await app.evaluate(({ app: electronApp, BrowserWindow, ipcMain }, dimensions) => {
       const load = process.mainModule.require;
-      load(load('path').join(electronApp.getAppPath(), 'bg-agents.js')).stop();
+      load(load('path').join(electronApp.getAppPath(), 'src/main/bg-agents/bg-agents.js')).stop();
       ipcMain.removeHandler('get-bg-agents');
       ipcMain.handle('get-bg-agents', () => ({ roster: [], daemonReachable: true }));
       BrowserWindow.getAllWindows()[0].setContentSize(dimensions.width, dimensions.height);

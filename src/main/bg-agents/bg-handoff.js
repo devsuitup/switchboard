@@ -2,11 +2,11 @@
 
 const { stripVTControlCharacters } = require('node:util');
 const fs = require('node:fs');
-const { scanContinuationIndex } = require('./session-continuations');
-const { isComposerEmpty, noteUserInput } = require('./src/main/terminals/composer-state');
+const { scanContinuationIndex } = require('../../../session-continuations');
+const { isComposerEmpty, noteUserInput } = require('../terminals/composer-state');
 const { JOB_ID_RE } = require('./bg-agents-roster');
-const { tryAcquireTabInput } = require('./src/main/terminals/tab-input-lock');
-const { releaseWindowsPty } = require('./src/main/terminals/pty-ops');
+const { tryAcquireTabInput } = require('../terminals/tab-input-lock');
+const { releaseWindowsPty } = require('../terminals/pty-ops');
 
 const BG_HANDOFF_TIMEOUT_MS = 120000;
 const BG_HANDOFF_EXIT_TIMEOUT_MS = 15000;

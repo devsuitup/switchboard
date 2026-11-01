@@ -9,7 +9,7 @@ const os = require('os');
 const path = require('path');
 
 const cliSessionState = require('../cli-session-state');
-const { mergeRoster } = require('../bg-agents-roster');
+const { mergeRoster } = require('../src/main/bg-agents/bg-agents-roster');
 const { makeDeleteSessionGuard } = require('../delete-session-guard');
 
 const silentLog = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };

@@ -8,7 +8,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { spawnSync } = require('node:child_process');
 const { normalizeTaskEvidence } = require('../task-records');
-const { parseJobState, mergeRoster } = require('../bg-agents-roster');
+const { parseJobState, mergeRoster } = require('../src/main/bg-agents/bg-agents-roster');
 const { setupSidebarDom } = require('./dom-setup');
 
 const SID = 'aaaaaaaa-1234-4321-abcd-123456789abc';

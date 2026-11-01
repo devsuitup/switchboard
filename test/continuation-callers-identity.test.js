@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const cache = require('../session-cache');
 const { continuationStamp } = require('../session-continuations');
-const { createContinuationReader } = require('../bg-handoff');
+const { createContinuationReader } = require('../src/main/bg-agents/bg-handoff');
 const { encodeProjectPath } = require('../encode-project-path');
 
 for (const [name, change, reused] of [

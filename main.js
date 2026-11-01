@@ -44,7 +44,7 @@ const { classifyTitleActivity } = require('./classify-title-activity');
 const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./src/main/app/window-frame');
 const { createUnsavedGuard } = require('./src/main/app/unsaved-guard');
 const { inventory, runExitHandoffs } = require('./src/main/app/session-exit');
-const { backgroundRefusal } = require('./bg-handoff');
+const { backgroundRefusal } = require('./src/main/bg-agents/bg-handoff');
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: attempt => { quitAttemptToken = attempt; app.quit(); },
   inventory: () => exitInventory(), background: (ids, opts) => runExitBackground(ids, opts), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; } });
 let exitInventory = () => ({ rows: [], counts: {}, remote: {} });
@@ -93,7 +93,7 @@ const { resolveWindowsClaude } = require('./claude-binary');
 const { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, killPty, detachPty, writePty, ptyExitSignalName } = require('./src/main/terminals/pty-ops');
 const { configureWindowsJobHelper } = require('./src/main/terminals/windows-job-helper');
 const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
-const { JOB_ID_RE, isHostedJob } = require('./bg-agents-roster');
+const { JOB_ID_RE, isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
 const { createTerminalResizeHandler } = require('./src/main/terminals/terminal-resize');
 const { createComposerState } = require('./src/main/terminals/composer-state');
 const { handleTerminalInput } = require('./src/main/terminals/terminal-input');
@@ -195,7 +195,7 @@ function resetUpdateAttempt() {
 }
 async function readWindowsDaemonPids() {
   try {
-    const roster = JSON.parse(await fs.promises.readFile(require('./bg-agents').getDaemonRosterPath(), 'utf8'));
+    const roster = JSON.parse(await fs.promises.readFile(require('./src/main/bg-agents/bg-agents').getDaemonRosterPath(), 'utf8'));
     return [{ pid: roster.supervisorPid, procStart: roster.supervisorProcStart }, ...Object.values(roster.workers || {})]
       .filter(value => Number.isSafeInteger(value?.pid) && value.pid > 0 && value.pid <= 0xffffffff
         && typeof value.procStart === 'string' && /^\d{17,19}$/.test(value.procStart))
@@ -206,7 +206,7 @@ async function readWindowsDaemonPids() {
 async function startApplication() {
 if (!await acquireInstanceLock(app, { log })) { app.quit(); return; }
 const privilegeNotice = readNoNewPrivs({ log });
-const bgAgents = require('./bg-agents');
+const bgAgents = require('./src/main/bg-agents/bg-agents');
 const writer = require('./session-index-writer').createSessionIndexWriter({
   log,
   onBusyCounts: counts => {
@@ -1822,7 +1822,7 @@ ipcMain.handle('get-active-terminals', () => {
 });
 
 // --- IPC: stop-session ---
-const { sendToBackground, respawnRoute, createContinuationReader, holdBackgroundExit, cancellationIn } = require('./bg-handoff');
+const { sendToBackground, respawnRoute, createContinuationReader, holdBackgroundExit, cancellationIn } = require('./src/main/bg-agents/bg-handoff');
 
 const backgroundHandoffs = new WeakMap();
 
@@ -3597,7 +3597,7 @@ bgAgents.init({
     return false;
   },
 });
-const unsubscribeBgAgents = require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
+const unsubscribeBgAgents = require('./src/main/bg-agents/bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
   activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting: key => getSetting(key) });
 bgAgents.onJobsChanged(() => notifyRendererProjectsChanged('bg-jobs'));
 bgAgents.onJobsChanged(() => {

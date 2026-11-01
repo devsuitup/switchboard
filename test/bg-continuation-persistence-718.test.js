@@ -20,7 +20,7 @@ for (const mode of ['normal', 'contended', 'absent']) test('A1/A5 typed legacy h
   const ctx = vm.createContext({ path, fs, require: require('node:module').createRequire(path.join(__dirname, '../main.js')), PROJECTS_DIR: h.root,
     activeSessions: h.activeSessions, sessionCache: cache, writer, sessionTransitions: transitions, sessionHasPty: () => false, ptyPids: () => [],
     mainWindow: null, log: h.log, rekeyMcpServer() {}, activityReporter: { rekey() {} }, taskRecords: { rekey() {}, hasRecord: () => false },
-    isHostedJob: require('../bg-agents-roster').isHostedJob, bgAgents: { getCachedJobs: () => new Map([['1234abcd', { sessionId: HEAD, state: 'working' }]]) },
+    isHostedJob: require('../src/main/bg-agents/bg-agents-roster').isHostedJob, bgAgents: { getCachedJobs: () => new Map([['1234abcd', { sessionId: HEAD, state: 'working' }]]) },
     cliSessionState: { readAllDescriptors: () => h.descriptors, getSidebarDescriptors: () => h.descriptors,
       clearOwner: () => 'other', getDescriptorIdentity: () => 'fixture', liveElsewhereChecked: async id => { liveness.push(id); return { known: true, live: id === HEAD ? h.descriptors[0] : null }; } },
     notifyRendererProjectsChanged: () => { assert.equal(h.views().length, 1); notified.push('coherent'); } });
