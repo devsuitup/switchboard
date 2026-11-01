@@ -1005,12 +1005,29 @@ untouched.
 The 64 MiB full-mirror ceiling remains. `syncMirror` returns `oversizedFiles`
 from its existing inventory; after ordinary folder indexing, `remote-index`
 publishes fresh descriptors and their timestamp, notifying on descriptor changes,
-before running `syncTurnTails` for live top-level heads only. Keeping local scan
-errors ahead of publication preserves Archive's cold-cache validation: a failed
-first scan cannot make a session eligible for stop/archive. Descriptor publication needs no tail evidence; the
-head-turn refresh still runs after the tails have been registered. No extra
-listing or real-host discovery is needed. Successful cycle completion still
-advances the existing freshness stamp and clears the host's prior error/backoff.
+before running `syncTurnTails` for live top-level heads only. A thrown local
+indexing error fails the cycle before publication, so a failed scan cannot make
+a session eligible for stop/archive. A scan that reports `ok: false` (the
+worker relay resolves it and never throws) still publishes descriptors, and
+stop eligibility depends on the descriptors. Descriptor publication needs no
+tail evidence; the head-turn refresh still runs after the tails have been
+registered. No extra listing or real-host discovery is needed. Successful cycle
+completion still advances the existing freshness stamp and clears the host's
+prior error/backoff.
+
+A restart (every settings save) bumps the generation and lets the new pass start
+at once; the old pass is only told to stop at its next check. Until it reaches
+one, its `syncMirror` or `scanFolders` call can overlap the new pass, and
+`syncMirror` can still write its manifest after the SSH fetch was killed. The
+next pass re-reads the manifest and repairs it, so the overlap is left as is.
+A cancelled pass that already indexed rows reports a change, so the sidebar is
+notified even though the new pass finds an up-to-date mirror. A cancelled
+`refreshHostNow` returns `reason: 'in-flight'` when the indexer is running
+again, so the Archive handler retries, and `reason: 'stopped'` only when the
+indexer is really stopped. The stale-pass guards on the in-flight flags and the
+head-turn publication are pinned by `test/remote-turn-tail-followups-972.test.js`.
+Tail removal and inventory-write warnings are logged on change of error code,
+like the per-head tail logs, so a persistent failure warns once.
 
 Decision: use a remote tail read feeding only head-turn state (option b).
 Option a, placing aligned tails in the ordinary mirror, would reuse the fetch

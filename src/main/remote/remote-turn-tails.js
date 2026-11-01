@@ -16,8 +16,14 @@ async function syncTurnTails({ alias, transport, projectsDir, oversizedFiles = [
   const owner = transport || log;
   let roots = tailLogStates.get(owner);
   if (!roots) tailLogStates.set(owner, roots = new Map());
-  let states = roots.get(root);
-  if (!states) roots.set(root, states = new Map());
+  let entry = roots.get(root);
+  if (!entry) roots.set(root, entry = { heads: new Map(), notes: new Map() });
+  const states = entry.heads;
+  const warnOnce = (key, err, line) => {
+    const signature = err.code || err.name;
+    if (entry.notes.get(key) !== signature) log.warn(line);
+    entry.notes.set(key, signature);
+  };
   const previous = readManifest(manifestPath);
   const live = new Set(sessions.slice(0, MAX_SESSION_DESCRIPTORS).map(s => s?.sessionId));
   const wanted = oversizedFiles.filter(f => isSafeRelPath(f.rel) && f.rel.split('/').length === 2
@@ -52,23 +58,29 @@ async function syncTurnTails({ alias, transport, projectsDir, oversizedFiles = [
   for (const rel of states.keys()) {
     if (!keep.has(rel)) states.delete(rel);
   }
-  if (!states.size) roots.delete(root);
+  const owed = new Set();
   for (const rel of Object.keys(previous)) {
     if (!isSafeRelPath(rel) || keep.has(rel)) continue;
     try {
       fs.rmSync(path.join(root, rel + '.tail'), { force: true });
     } catch (err) {
       next[rel] = previous[rel];
-      log.warn(`[remote:${alias}] could not remove ${rel} turn-state tail: ${err.message}`);
+      owed.add(`remove:${rel}`);
+      warnOnce(`remove:${rel}`, err, `[remote:${alias}] could not remove ${rel} turn-state tail: ${err.message}`);
     }
   }
   if (wanted.length || Object.keys(previous).length) {
     try {
       writeManifest(manifestPath, next);
     } catch (err) {
-      log.warn(`[remote:${alias}] could not write turn-state tail manifest: ${err.message}`);
+      owed.add('manifest');
+      warnOnce('manifest', err, `[remote:${alias}] could not write turn-state tail manifest: ${err.message}`);
     }
   }
+  for (const key of [...entry.notes.keys()]) {
+    if (!owed.has(key)) entry.notes.delete(key);
+  }
+  if (!states.size && !entry.notes.size) roots.delete(root);
   return rows;
 }
 

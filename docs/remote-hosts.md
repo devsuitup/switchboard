@@ -134,11 +134,12 @@ bounded tail read for their turn state (at most 256 KiB plus one alignment
 byte per changed live transcript, up to 200 per pull). These tails are not
 available as transcripts, search results or message counts. A previously copied
 complete transcript remains a historical snapshot until full mirroring can
-resume. After ordinary mirror indexing, live session descriptors are published before these tail reads; head-turn
-state is refreshed after them. Stop/restart cancels the old tail pass and lets a
-new refresh start immediately. Tail cache cleanup or inventory-write errors warn
-without failing the host refresh. A listing of more than 20,000 entries is refused. A file deleted on the
-host is deleted from the mirror only after a pull with no failure.
+resume. After ordinary mirror indexing, live session descriptors are published
+before these tail reads; head-turn state is refreshed after them. Stop/restart
+cancels the old tail pass and lets a new refresh start immediately. Tail cache
+cleanup or inventory-write errors warn without failing the host refresh. A
+listing of more than 20,000 entries is refused. A file deleted on the host is
+deleted from the mirror only after a pull with no failure.
 
 Besides the periodic pull, one long-lived ssh connection per host runs
 `inotifywait` on `~/.claude/projects` and `~/.claude/sessions`, and triggers a

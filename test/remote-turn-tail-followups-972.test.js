@@ -9,6 +9,7 @@ const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { createSshTransport, SESSIONS_MARKER, ALIVE_MARKER_PREFIX } = require('../src/main/remote/remote-transport');
 const { createRemoteIndexer } = require('../src/main/remote/remote-index');
+const { syncTurnTails } = require('../src/main/remote/remote-turn-tails');
 
 const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
 const rel = id => `-srv-a/${id}.jsonl`;
@@ -154,4 +155,206 @@ test('tail removal failure warns, retains cleanup debt, and does not fail the ho
   fs.writeFileSync(file, 'cleanup retry');
   await f.indexer.refreshNow();
   assert.equal(fs.existsSync(file), false, 'failed deletion is retried on the next pull');
+});
+
+function scripted(t, { gates = {}, folders = [], sessions = [], oversized = () => [], onTail } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-972s-'));
+  const calls = { sync: 0, tails: [] };
+  const notices = [];
+  const transport = {
+    cancelInFlight() {},
+    readTurnTail: async (_alias, spec, file) => {
+      calls.tails.push(spec.rel);
+      await onTail?.(calls.tails.length);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, '\n');
+    },
+  };
+  const indexer = createRemoteIndexer({
+    dataDir: dir,
+    getHosts: () => [{ alias: 'vps' }],
+    transport,
+    scanFolders: async () => { await gates.scan?.promise; return { ok: true }; },
+    listIndexedFolderKeys: () => [],
+    timers: { setInterval: () => 1, clearInterval() {} },
+    notify: () => notices.push(1),
+    log: { info() {}, warn() {} },
+    sync: async () => {
+      const n = ++calls.sync;
+      await gates[n]?.promise;
+      return {
+        fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
+        changedFolders: new Set(n === 1 ? folders : []),
+        sessions, oversizedFiles: oversized(),
+      };
+    },
+  });
+  t.after(() => {
+    indexer.dispose();
+    for (const g of Object.values(gates)) g.resolve();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return { indexer, calls, notices };
+}
+
+const tick = () => new Promise(resolve => setImmediate(resolve));
+const until = async predicate => { for (let i = 0; i < 200 && !predicate(); i++) await tick(); };
+
+test('a refreshHostNow cancelled by restart never reports the indexer as stopped', async t => {
+  const gates = { 1: deferred() };
+  const f = scripted(t, { gates });
+  const old = f.indexer.refreshHostNow('vps', { force: true });
+  await until(() => f.calls.sync === 1);
+  f.indexer.restart();
+  gates[1].resolve();
+  assert.deepEqual(await old, { skipped: true, reason: 'in-flight' });
+});
+
+test('a refreshHostNow cancelled by a real stop still reports stopped', async t => {
+  const gates = { 1: deferred() };
+  const f = scripted(t, { gates });
+  const old = f.indexer.refreshHostNow('vps', { force: true });
+  await until(() => f.calls.sync === 1);
+  f.indexer.stop();
+  gates[1].resolve();
+  assert.deepEqual(await old, { skipped: true, reason: 'stopped' });
+});
+
+for (const lane of ['refreshNow', 'refreshHostNow']) {
+  test(`a ${lane} cancelled after its rows were scanned still notifies`, async t => {
+    const gates = { scan: deferred() };
+    const f = scripted(t, { gates, folders: ['-srv-a'] });
+    const old = lane === 'refreshNow' ? f.indexer.refreshNow() : f.indexer.refreshHostNow('vps', { force: true });
+    await until(() => f.calls.sync === 1);
+    await tick();
+    await tick();
+    f.indexer.restart();
+    await until(() => f.calls.sync === 2);
+    await tick();
+    const before = f.notices.length;
+    gates.scan.resolve();
+    await old;
+    assert.ok(f.notices.length > before, 'the new generation sees an up-to-date mirror, so the old pass must notify');
+  });
+}
+
+test('an old refreshNow unwinding after restart cannot release the new generation guard', async t => {
+  const gates = { 1: deferred(), 2: deferred() };
+  const f = scripted(t, { gates });
+  const old = f.indexer.refreshNow();
+  await until(() => f.calls.sync === 1);
+  f.indexer.restart();
+  await until(() => f.calls.sync === 2);
+  gates[1].resolve();
+  await old;
+  assert.deepEqual(await f.indexer.refreshHostNow('vps'), { skipped: true, reason: 'in-flight' });
+  gates[2].resolve();
+});
+
+test('an old refreshHostNow unwinding after restart cannot release the new host guard', async t => {
+  const gates = { 1: deferred(), 3: deferred() };
+  const f = scripted(t, { gates });
+  const old = f.indexer.refreshHostNow('vps', { force: true });
+  await until(() => f.calls.sync === 1);
+  f.indexer.restart();
+  await until(() => f.calls.sync === 2);
+  await tick();
+  await tick();
+  const current = f.indexer.refreshHostNow('vps', { force: true });
+  await until(() => f.calls.sync === 3);
+  gates[1].resolve();
+  await old;
+  assert.deepEqual(await f.indexer.refreshHostNow('vps', { force: true }), { skipped: true, reason: 'in-flight' });
+  gates[3].resolve();
+  await current;
+});
+
+test('a cancelled pass does not empty the published head-turn files while it unwinds', async t => {
+  const id = ids[0];
+  const tailGate = deferred();
+  const gates = { 3: deferred() };
+  let mtimeMs = 1000;
+  const f = scripted(t, {
+    gates,
+    sessions: [{ sessionId: id }],
+    oversized: () => [{ rel: rel(id), size: 209 * 1024 * 1024, mtimeMs }],
+    onTail: n => (n === 2 ? tailGate.promise : undefined),
+  });
+  await f.indexer.refreshNow();
+  assert.equal(f.indexer.getRemoteHeadTurnFiles('vps').length, 1);
+  mtimeMs = 2000;
+  const old = f.indexer.refreshNow();
+  await until(() => f.calls.tails.length === 2);
+  f.indexer.restart();
+  await until(() => f.calls.sync === 3);
+  tailGate.resolve();
+  await old;
+  assert.equal(f.indexer.getRemoteHeadTurnFiles('vps').length, 1, 'rows survive the unwinding pass');
+  gates[3].resolve();
+});
+
+function tailFixture(t, read) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-972t-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const projectsDir = path.join(dir, 'projects');
+  fs.mkdirSync(projectsDir, { recursive: true });
+  const logs = [];
+  const state = { cancelled: false };
+  const run = () => syncTurnTails({
+    alias: 'vps',
+    transport: { readTurnTail: () => read(state) },
+    projectsDir,
+    oversizedFiles: [{ rel: rel(ids[0]), size: 1, mtimeMs: 1 }],
+    sessions: [{ sessionId: ids[0] }],
+    log: { info: line => logs.push(line), warn: line => logs.push(line) },
+    cancelled: () => state.cancelled,
+  });
+  return { logs, run, manifest: path.join(dir, 'turn-state/inventory.json') };
+}
+
+test('a tail read that settles after cancellation publishes nothing and leaves no manifest', async t => {
+  const f = tailFixture(t, async state => { state.cancelled = true; });
+  assert.deepEqual(await f.run(), []);
+  assert.deepEqual(f.logs, []);
+  assert.equal(fs.existsSync(f.manifest), false);
+});
+
+test('a tail read that fails after cancellation logs nothing and leaves no manifest', async t => {
+  const f = tailFixture(t, async state => { state.cancelled = true; throw new Error('killed'); });
+  assert.deepEqual(await f.run(), []);
+  assert.deepEqual(f.logs, []);
+  assert.equal(fs.existsSync(f.manifest), false);
+});
+
+test('a persistent tail removal failure warns once across pulls and again after a recovery', async t => {
+  const f = fixture(t);
+  await f.indexer.refreshNow();
+  const file = f.indexer.getRemoteHeadTurnFiles('vps')[0].file;
+  const lock = () => {
+    fs.rmSync(file, { recursive: true, force: true });
+    fs.mkdirSync(file);
+    fs.writeFileSync(path.join(file, 'locked'), 'fixture');
+  };
+  const warns = () => f.logs.filter(line => line.includes('could not remove')).length;
+  lock();
+  f.state.ids = [ids[1]];
+  for (let i = 0; i < 3; i++) await f.indexer.refreshNow();
+  assert.equal(warns(), 1, 'the same removal failure is reported once');
+  fs.rmSync(file, { recursive: true });
+  fs.writeFileSync(file, 'unlocked');
+  await f.indexer.refreshNow();
+  assert.equal(fs.existsSync(file), false, 'the retried removal succeeds');
+  f.state.ids = [...ids];
+  await f.indexer.refreshNow();
+  lock();
+  f.state.ids = [ids[1]];
+  await f.indexer.refreshNow();
+  assert.equal(warns(), 2, 'a new failure after a recovery is reported again');
+});
+
+test('a persistent tail manifest write failure warns once across pulls', async t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.dir, 'remote/vps/turn-state/inventory.json'), { recursive: true });
+  for (let i = 0; i < 3; i++) await f.indexer.refreshNow();
+  assert.equal(f.logs.filter(line => line.includes('could not write turn-state tail manifest')).length, 1);
 });
