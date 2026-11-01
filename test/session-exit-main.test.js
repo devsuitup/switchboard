@@ -99,11 +99,13 @@ test('A4 shipped menu, updater and close wait for consent; Cancel preserves proc
     app.quit = () => app.emit('before-quit', t.event());
     Object.assign(t.context, { app, process: { platform }, mainWindow: t.win, activeSessions: t.records, closedSessions: new Map(),
       killPty: () => t.calls.push('stop-pty'), changesWatchers: { closeAll() {} }, closeAllFileWatchers() {}, unsubscribeBgAgents() {},
-      subagentWatchers: new Map(), shutdownComplete: false,
+      subagentWatchers: new Map(), transcriptFollower: require('../src/main/viewer/transcript-follower').createTranscriptFollower(), shutdownComplete: false,
       shutdownForExit: async () => { t.calls.push('shutdown'); t.context.shutdownComplete = true; }, exitOnce: () => t.calls.push('exit') });
     const start = source.indexOf("  mainWindow.on('closed'");
     const end = source.indexOf('\n  });', start) + 6;
-    vm.runInContext(source.slice(start, end), t.context);
+    vm.runInContext(source.slice(start, end), t.context, {
+      filename: require.resolve('../main'), lineOffset: source.slice(0, start).split('\n').length - 1,
+    });
     const allClosed = startup.body.body.find(n => n.expression?.arguments?.[0]?.value === 'window-all-closed');
     const beforeQuit = startup.body.body.findLast(n => n.expression?.arguments?.[0]?.value === 'before-quit');
     vm.runInContext(source.slice(...allClosed.range), t.context);
@@ -263,10 +265,13 @@ test('C2 a committed macOS native install keeps its bypass when the window close
   assert.equal(close.prevented, false, 'committed Stop consent permits the native close');
   Object.assign(t.context, { activeSessions: t.records, closedSessions: new Map(),
     killPty: () => t.calls.push('stop-pty'), changesWatchers: { closeAll() {} },
-    closeAllFileWatchers() {}, unsubscribeBgAgents() {}, subagentWatchers: new Map() });
+    closeAllFileWatchers() {}, unsubscribeBgAgents() {}, subagentWatchers: new Map(),
+    transcriptFollower: require('../src/main/viewer/transcript-follower').createTranscriptFollower() });
   const start = source.indexOf("  mainWindow.on('closed'");
   const end = source.indexOf('\n  });', start) + 6;
-  vm.runInContext(source.slice(start, end), t.context);
+  vm.runInContext(source.slice(start, end), t.context, {
+    filename: require.resolve('../main'), lineOffset: source.slice(0, start).split('\n').length - 1,
+  });
   t.win.emit('closed');
   assert.equal(t.context.updateInstalling, true, 'releasing a committed window must preserve the native install bypass');
   assert.equal(t.guard.launchAllowed(), true, 'window cleanup still releases the attempt');

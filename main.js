@@ -545,6 +545,7 @@ function createWindow() {
       try { entry.teardown(); } catch {}
     }
     subagentWatchers.clear();
+    transcriptFollower.dispose();
     mainWindow = null;
   });
 }
@@ -1376,7 +1377,7 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
           }
         }
       }
-      return annotateRemoteAttachable(kept);
+      return annotateRemoteAttachable(cliSessionState.annotateScheduleRuns(kept));
     };
     const reply = showArchived === 'both'
       ? { defaultProjects: await assemble(result.defaultProjects, false), allProjects: await assemble(result.allProjects, true), projection }
@@ -2272,13 +2273,18 @@ ipcMain.handle('rename-session', async (_event, sessionId, name) => {
 });
 
 // --- IPC: archive-session ---
-ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
+const transcriptFollower = require('./src/main/viewer/transcript-follower').createTranscriptFollower();
+
+ipcMain.handle('read-session-jsonl', (_event, sessionId, options) => {
+  if (options?.mode === 'stop') return transcriptFollower.close(sessionId, options.token);
   const folder = getCachedFolder(sessionId);
   if (!folder) return { error: 'Session not found in cache' };
   const folderDir = projectsDirForFolder(folder);
   if (!folderDir) return { error: 'Session belongs to a host that is no longer declared' };
   const jsonlPath = path.join(folderDir, sessionId + '.jsonl');
   try {
+    if (options?.mode === 'follow') return transcriptFollower.open(sessionId, jsonlPath);
+    if (options?.mode === 'next') return transcriptFollower.read(sessionId, options.token, jsonlPath, options.final === true);
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];
     for (const line of content.split('\n')) {

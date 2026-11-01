@@ -266,6 +266,7 @@ const rendererCrossFileGlobals = {
   isSessionAlive: 'readonly',
   paintSessionIcon: 'readonly',
   paintSessionIconFromSnapshot: 'readonly',
+  rowHasRunningSchedule: 'readonly',
   paintTerminalHeaderStatus: 'readonly',
   // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
   setRemoteAttached: 'readonly',
@@ -334,6 +335,7 @@ const rendererCrossFileGlobals = {
   updateRunningIndicators: 'readonly',
   hideAllViewers: 'readonly',
   drainViewerWatches: 'readonly',
+  requestLiveJsonlRefresh: 'readonly',
   showTerminalHeader: 'readonly',
   switchPanel: 'readonly',
   showAddProjectDialog: 'readonly',

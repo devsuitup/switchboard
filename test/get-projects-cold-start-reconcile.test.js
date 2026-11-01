@@ -11,48 +11,14 @@
 // return. That reintroduced the exact multi-minute blocking hang this
 // feature set out to fix, via a different call site.
 //
-// This test extracts the REAL get-projects handler body from main.js's
-// source (same brace-matching technique test/main-ctx-db-wiring.test.js
-// uses for the ctx.db literal) and executes it against mocked collaborators,
-// so it verifies the actual shipped logic rather than a hand-copied
-// re-implementation that could silently drift from it.
+// The shipped registration is evaluated without source wrapping by get-projects-handler.cjs.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const path = require('path');
-
-const root = path.join(__dirname, '..');
+const loadGetProjectsHandler = require('./get-projects-handler.cjs');
 const { normalizeHosts, parseFolderKey } = require('../src/main/remote/remote-hosts');
 
-function extractGetProjectsHandlerBody() {
-  const src = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
-  const marker = "ipcMain.handle('get-projects'";
-  const start = src.indexOf(marker);
-  assert.ok(start !== -1, 'main.js must define the get-projects handler');
-  const arrowIdx = src.indexOf('=>', start);
-  const bodyOpen = src.indexOf('{', arrowIdx);
-  let depth = 0, end = -1;
-  for (let i = bodyOpen; i < src.length; i++) {
-    if (src[i] === '{') depth++;
-    else if (src[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
-  }
-  assert.ok(end !== -1, 'get-projects handler body must be balanced');
-  return src.slice(bodyOpen + 1, end);
-}
-
 function makeHandler(mocks) {
-  const body = extractGetProjectsHandlerBody();
-  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const fn = new AsyncFunction(
-    'isCachePopulated', 'isSearchIndexPopulated', 'isInitialScanComplete',
-    'populateCacheViaWorker',
-    'reconcileCacheFromFilesystem', 'buildProjectsFromCache', 'mergePlaceholderSessions',
-    'annotateRemoteAttachable', 'applyAndPersistArchived', 'getSetting', 'setSetting', 'showArchived',
-    'backfillEntrypoints', 'backfillCustomTitles', 'normalizeHosts', 'parseFolderKey',
-    'projectsClient', 'TRACE', 'projectsReconciledAt', 'writer',
-    body
-  );
   // annotateRemoteAttachable (remote-attach join, issue #221),
   // mergePlaceholderSessions (descriptor-only sessions, issue #278) and
   // applyAndPersistArchived (archived folders, issue #473) are all
@@ -61,20 +27,20 @@ function makeHandler(mocks) {
   const annotateRemoteAttachable = mocks.annotateRemoteAttachable || (projects => projects);
   const mergePlaceholderSessions = mocks.mergePlaceholderSessions || (projects => projects);
   const applyAndPersistArchived = projects => projects;
-  return () => fn(
-    mocks.isCachePopulated, mocks.isSearchIndexPopulated,
-    mocks.isInitialScanComplete, mocks.populateCacheViaWorker,
-    mocks.reconcileCacheFromFilesystem, mocks.buildProjectsFromCache, mergePlaceholderSessions,
-    annotateRemoteAttachable, applyAndPersistArchived, mocks.getSetting || (() => null), mocks.setSetting || (() => {}), false,
-    mocks.backfillEntrypoints || (() => {}), mocks.backfillCustomTitles || (() => {}), normalizeHosts, parseFolderKey,
-    { request: options => {
+  const handler = loadGetProjectsHandler({
+    ...mocks, annotateRemoteAttachable, mergePlaceholderSessions, normalizeHosts, parseFolderKey,
+    getSetting: mocks.getSetting || (() => null), setSetting: mocks.setSetting || (() => {}),
+    backfillEntrypoints: mocks.backfillEntrypoints || (() => {}), backfillCustomTitles: mocks.backfillCustomTitles || (() => {}),
+    TRACE: { on: false }, projectsReconciledAt: 0,
+    projectsClient: { request: options => {
       if (options.reconcile) mocks.reconcileCacheFromFilesystem();
       return Promise.resolve({ defaultProjects: mocks.buildProjectsFromCache(), allProjects: [], rows: 0 });
-    } }, { on: false }, 0, { applyAndPersistArchived, completeRepairFolders: async folders => {
+    } }, writer: { applyAndPersistArchived, completeRepairFolders: async folders => {
       const current = mocks.getSetting('bridge_uuid_reindex_folders');
       mocks.setSetting('bridge_uuid_reindex_folders', current.filter(key => !folders.includes(key)));
-    } }
-  );
+    } },
+  });
+  return () => handler(null, false);
 }
 
 test('get-projects on a cold cache never runs reconcileCacheFromFilesystem synchronously', async () => {

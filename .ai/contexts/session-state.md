@@ -1,5 +1,61 @@
 # Session state — one domain module, one icon slot
 
+## Live read-only message views (#814)
+
+`public/jsonl-viewer.js` owns one refresh controller for the current top-level
+message view. The existing `localTranscriptTracker` verifies writes and emits
+`session-transcript-activity` at its bounded rate. The renderer's existing local
+transcript adapter forwards these notifications to `requestLiveJsonlRefresh`;
+subagent and unrelated session writes are ignored. The viewer also listens to
+the existing `projects-changed` event so an ending process triggers its final
+snapshot even when the Sessions tab is not active.
+
+Notifications share one fixed one-second coalescing timer; reads never overlap.
+Each refresh queries the existing `getSessionLiveElsewhere` API before reading
+the session, covering both tracked schedules and another live CLI. A stopped
+session drains its final bounded snapshot, then the controller stops. Unknown/read errors
+keep the current rendering and wait for another notification. There is no
+periodic transcript or liveness poll. `drainViewerWatches` cancels the controller
+alongside nested subagent watches when the view closes or changes; identity
+checks discard pending replies, including an initial load dismissed mid-read.
+Grid dismissal also drains watches; closing the window disposes the main-side
+follower. A late stop from an old view cannot close a newer token.
+
+The existing `read-session-jsonl` IPC accepts optional `follow`, `next` and `stop`
+modes; ordinary callers retain the original response. `src/main/viewer/transcript-follower.js`
+keeps one token and cursor, without a dedicated watcher or retained file handle.
+Opening loads ordinary history once. Subsequent reads use `transcript-tail.js`'s
+verified `readRange` and API-metadata prefix filter. They consume at most 8 MiB
+including sample probes per request, in 256 KiB chunks with event-loop yields.
+Replies target 1 MiB of complete visible records (one record can reach 4 MiB).
+Partial UTF-8/JSON records are retained as bytes, capped at 4 MiB; API metadata
+is skipped without retaining its payload. Larger visible records are skipped
+with a visible notice to reopen after the run for the complete history.
+Identity, shrink and head/middle/boundary samples detect replaced/rewritten
+files and reset the rendered history. This is sampled detection, not a complete
+historical integrity scan.
+
+A known unread backlog reuses the same one-second timer until drained; it does
+not stat a quiet live file. Ending pins the final file size and accepts a valid
+last JSON record without a newline, then releases the cursor. Closing a view
+invalidates the cursor and stops an in-flight read at its next yield. Initial
+history loading and rendering the accumulated visible history retain the
+existing full-history cost; incremental I/O and pending-line memory are bounded.
+
+Refresh reuses the ordinary entry renderer and tool-result matching, drains
+obsolete nested watches, and preserves scroll position when the reader is above
+the bottom. It updates the existing message-search DOM rather than closing it.
+Written-activity watermarks are captured before reading so a later write is
+not acknowledged by an older rendering. Tests in `dom-live-transcript-814.test.js`
+use the shipped viewer, hide function and activity callback in jsdom, with the
+IPC read/liveness boundary and timers controlled. `scheduled-run-liveness-814`
+also executes the shipped main IPC registration and preload with real temporary
+transcripts, including multi-megabyte API/visible records, partial UTF-8,
+replacement, final EOF and cancellation. A real Electron round trip
+and a real CLI run remain separate validation.
+
+## Activity state
+
 **Purpose**: `public/session-state.js` owns activity and unread transitions for
 local PTY, local transcript and remote adapters. Shared projections select one
 activity icon for each conversation head across sidebar, grid and terminal.

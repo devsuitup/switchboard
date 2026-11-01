@@ -806,11 +806,13 @@ function buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleSc
   nameEl.className = 'slug-group-name';
   nameEl.textContent = displayName;
 
-  const hasRunning = sessions.some(s => rowSessionIds(s).some(id => activePtyIds.has(id)));
+  const hasScheduledRun = sessions.some(rowHasRunningSchedule);
+  const hasRunning = hasScheduledRun || sessions.some(s => rowSessionIds(s).some(id => activePtyIds.has(id)));
 
   const meta = document.createElement('div');
   meta.className = 'slug-group-meta';
   meta.innerHTML = `<span class="slug-group-dot${hasRunning ? ' running' : ''}"></span><span class="slug-group-count">${sessions.length} sessions</span> ${escapeHtml(timeStr)}`;
+  if (hasScheduledRun) meta.querySelector('.slug-group-dot').title = 'Scheduled run in progress';
 
   const archiveSlugBtn = document.createElement('button');
   archiveSlugBtn.className = 'slug-group-archive-btn';
@@ -831,7 +833,7 @@ function buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleSc
   const promoted = [];
   const rest = [];
   for (const session of sessions) {
-    if (rowSessionIds(session).some(id => activePtyIds.has(id))) {
+    if (rowHasRunningSchedule(session) || rowSessionIds(session).some(id => activePtyIds.has(id))) {
       promoted.push(session);
     } else {
       rest.push(session);
@@ -880,6 +882,7 @@ let sidebarRenderKey = null;
 let sidebarRenderPayload = null;
 let sidebarRenderAllProjects = null;
 let sidebarRenderDirty = true;
+let sidebarScheduleRunsKey = '[]';
 const sidebarRenderObserver = new MutationObserver(() => { sidebarRenderDirty = true; });
 sidebarRenderObserver.observe(sidebarContent, { subtree: true, childList: true, attributes: true, characterData: true });
 
@@ -931,6 +934,10 @@ renderProjects.unchanged = projects => {
 };
 
 function renderProjects(projects, resort) {
+  const scheduleRunsKey = JSON.stringify(projects.flatMap(project => project.sessions.filter(rowHasRunningSchedule)
+    .map(session => JSON.stringify([project.remoteAlias || '', project.projectPath, session.sessionId, [...session.runningScheduleIds].sort()]))).sort());
+  if (sidebarScheduleRunsKey !== scheduleRunsKey) resort = true;
+  sidebarScheduleRunsKey = scheduleRunsKey;
   const inputProjects = projects;
   sidebarRenderKey = null;
   sidebarRenderPayload = null;
@@ -1018,7 +1025,7 @@ function renderProjects(projects, resort) {
     const subagentIndex = buildSubagentIndex(allSessions);
     let filtered = allSessions.filter(s => !s.parentSessionId);
     if (showStarredOnly) filtered = filtered.filter(s => s.starred);
-    if (showRunningOnly) filtered = filtered.filter(s => rowSessionIds(s).some(id => activePtyIds.has(id)));
+    if (showRunningOnly) filtered = filtered.filter(s => rowHasRunningSchedule(s) || rowSessionIds(s).some(id => activePtyIds.has(id)));
     if (showTodayOnly) {
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -1035,8 +1042,8 @@ function renderProjects(projects, resort) {
 
     // Sort
     filtered = [...filtered].sort((a, b) => {
-      const aRunning = rowSessionIds(a).some(id => activePtyIds.has(id) || pendingSessions.has(id));
-      const bRunning = rowSessionIds(b).some(id => activePtyIds.has(id) || pendingSessions.has(id));
+      const aRunning = rowHasRunningSchedule(a) || rowSessionIds(a).some(id => activePtyIds.has(id) || pendingSessions.has(id));
+      const bRunning = rowHasRunningSchedule(b) || rowSessionIds(b).some(id => activePtyIds.has(id) || pendingSessions.has(id));
       const aPri = (a.starred && aRunning ? 3 : aRunning ? 2 : a.starred ? 1 : 0);
       const bPri = (b.starred && bRunning ? 3 : bRunning ? 2 : b.starred ? 1 : 0);
       if (aPri !== bPri) return bPri - aPri;
@@ -1058,12 +1065,12 @@ function renderProjects(projects, resort) {
     }
     const allItems = [];
     for (const session of ungrouped) {
-      const isRunning = rowSessionIds(session).some(id => activePtyIds.has(id) || pendingSessions.has(id));
+      const isRunning = rowHasRunningSchedule(session) || rowSessionIds(session).some(id => activePtyIds.has(id) || pendingSessions.has(id));
       allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, dormant: rowSessionIds(session).some(isDormantSession), element: buildSessionItem(session) });
     }
     for (const [slug, sessions] of slugMap) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
-      const hasRunning = sessions.some(s => rowSessionIds(s).some(id => activePtyIds.has(id) || pendingSessions.has(id)));
+      const hasRunning = sessions.some(s => rowHasRunningSchedule(s) || rowSessionIds(s).some(id => activePtyIds.has(id) || pendingSessions.has(id)));
       const hasPinned = sessions.some(s => s.starred);
       const hasDormant = sessions.some(s => rowSessionIds(s).some(isDormantSession));
       const element = buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleScopes);

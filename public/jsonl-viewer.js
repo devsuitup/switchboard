@@ -21,7 +21,70 @@ const liveSubagents = new Set();
 // scripts isn't global.
 window.__activeViewerWatches = window.__activeViewerWatches || new Set();
 const activeViewerWatches = window.__activeViewerWatches;
+let liveJsonlView = null;
+
+function releaseJsonlFollower(sessionId, token) {
+  if (!token) return;
+  try { Promise.resolve(window.api.readSessionJsonl(sessionId, { mode: 'stop', token })).catch(() => {}); } catch {}
+}
+
+function stopLiveJsonlViewer() {
+  const view = liveJsonlView;
+  liveJsonlView = null;
+  if (!view) return;
+  view.stopped = true;
+  if (view.timer) clearTimeout(view.timer);
+  releaseJsonlFollower(view.session.sessionId, view.token);
+  view.token = null;
+}
+
+function requestLiveJsonlRefresh(payload) {
+  const view = liveJsonlView;
+  if (!view || view.stopped || payload && (payload.kind === 'subagent' || payload.sessionId !== view.session.sessionId)) return;
+  view.dirty = true;
+  view.needsRead ||= !!payload;
+  if (view.loading || view.timer) return;
+  view.timer = setTimeout(async () => {
+    view.timer = null;
+    view.dirty = false;
+    const needsRead = view.needsRead;
+    view.needsRead = false;
+    view.loading = true;
+    const wasLive = view.live;
+    try {
+      const live = await window.api.getSessionLiveElsewhere(view.session.sessionId);
+      if (liveJsonlView !== view || view.stopped) return;
+      if (!live && view.live === false && !view.more) { stopLiveJsonlViewer(); return; }
+      view.live = !!live;
+      if (live && !needsRead && !view.more) return;
+      const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(view.session.sessionId).writtenWatermark : 0;
+      const result = await window.api.readSessionJsonl(view.session.sessionId, view.token
+        ? { mode: 'next', token: view.token, final: !live } : { mode: 'follow' });
+      if (liveJsonlView !== view || view.stopped) { releaseJsonlFollower(view.session.sessionId, result.token); return; }
+      if (result.error) { view.live = wasLive; return; }
+      if (result.token) view.token = result.token;
+      const entries = result.entries || [];
+      view.entries = result.append && !result.reset ? view.entries.concat(entries) : entries;
+      if (!result.append || result.reset || entries.length) renderJsonlViewerEntries(view.session, { entries: view.entries }, watermark, true);
+      if (result.skipped && typeof showAppNotice === 'function') {
+        view.skipped += result.skipped;
+        showAppNotice({ id: 'LiveTranscript:' + view.session.sessionId, kind: 'info',
+          message: `Live updates left out ${view.skipped} very long transcript ${view.skipped === 1 ? 'entry' : 'entries'}. Reopen View messages after the run to load the full transcript.` });
+      }
+      view.more = !!result.more;
+      if (view.more) { view.needsRead = true; view.dirty = true; }
+      if (!live && !view.more) stopLiveJsonlViewer();
+    } catch {} finally {
+      view.loading = false;
+      if (view.dirty && liveJsonlView === view) requestLiveJsonlRefresh();
+    }
+  }, 1000);
+}
+
+if (window.api?.onProjectsChanged) window.api.onProjectsChanged(() => requestLiveJsonlRefresh());
+
 function drainViewerWatches() {
+  stopLiveJsonlViewer();
   for (const stop of activeViewerWatches) {
     try { stop(); } catch {}
   }
@@ -749,14 +812,18 @@ function renderJsonlEntry(entry, toolResultMap) {
 
 async function showJsonlViewer(session) {
   const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(session.sessionId).writtenWatermark : 0;
-  const writtenActivity = { sessionId: session.sessionId, watermark, rendered: false };
-  jsonlViewerBody.writtenActivity = writtenActivity;
   // Drain any watches from the previously-rendered viewer first — the new
   // render replaces the DOM and we'd otherwise keep polling files for blocks
   // the user no longer sees.
   drainViewerWatches();
-  const result = await window.api.readSessionJsonl(session.sessionId);
+  const view = { session, loading: true, dirty: false, needsRead: false, stopped: false, timer: null, live: null,
+    token: null, entries: [], more: false, skipped: 0 };
+  liveJsonlView = view;
+  const result = await window.api.readSessionJsonl(session.sessionId, { mode: 'follow' });
+  if (liveJsonlView !== view || view.stopped) { releaseJsonlFollower(session.sessionId, result.token); return; }
   hideAllViewers();
+  view.stopped = false;
+  liveJsonlView = view;
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   jsonlViewer.style.display = 'flex';
@@ -769,6 +836,24 @@ async function showJsonlViewer(session) {
   const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
   jsonlViewerTitle.textContent = displayName;
   jsonlViewerSessionId.textContent = session.sessionId;
+  view.token = result.token;
+  view.entries = result.entries || [];
+  view.more = !!result.more;
+  if (typeof clearAppNotice === 'function') clearAppNotice('LiveTranscript:' + session.sessionId);
+  renderJsonlViewerEntries(session, result, watermark);
+  view.loading = false;
+  if (view.more) { view.needsRead = true; view.dirty = true; }
+  if (view.dirty) requestLiveJsonlRefresh();
+}
+
+function renderJsonlViewerEntries(session, result, watermark, refresh = false) {
+  const scrollTop = jsonlViewerBody.scrollTop;
+  const atBottom = jsonlViewerBody.scrollHeight - scrollTop - jsonlViewerBody.clientHeight <= 32;
+  const writtenActivity = { sessionId: session.sessionId, watermark, rendered: false };
+  jsonlViewerBody.writtenActivity = writtenActivity;
+  for (const stop of activeViewerWatches) { try { stop(); } catch {} }
+  activeViewerWatches.clear();
+  agentMatchCounters = {};
   jsonlViewerBody.innerHTML = '';
 
   if (result.error) {
@@ -814,7 +899,7 @@ async function showJsonlViewer(session) {
   });
 
   // Scroll to the bottom so the most recent messages are visible
-  jsonlViewerBody.scrollTop = jsonlViewerBody.scrollHeight;
+  jsonlViewerBody.scrollTop = !refresh || atBottom ? jsonlViewerBody.scrollHeight : scrollTop;
   const markSeen = () => {
     if (writtenActivity.rendered && rendered > 0 && currentViewerSessionId === session.sessionId && typeof markTranscriptOutputSeen === 'function') markTranscriptOutputSeen(session.sessionId, jsonlViewerBody, writtenActivity.watermark);
   };

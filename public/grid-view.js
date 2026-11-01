@@ -410,6 +410,7 @@ function showGridView() {
   settingsViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
   jsonlViewer.messageSearch?.close(false);
+  if (typeof window.drainViewerWatches === 'function') window.drainViewerWatches();
   if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
   terminalArea.style.display = '';
 

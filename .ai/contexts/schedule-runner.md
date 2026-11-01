@@ -180,6 +180,38 @@ deleted files or files whose `enabled` changed are skipped without a failure.
 
 ## Invariants
 
+### Running schedules in the sidebar (#814)
+
+The cron-local `runningTasks` set remains the overlap guard. Session liveness
+comes from the shared launcher's existing `cliSessionState.trackScheduleRun`:
+it tracks the child/session pair for both cron and Run now, including manual
+runs that never enter the cron set. Start, exit and spawn error notify the
+existing status listeners. An old child's exit cannot clear a replacement
+binding or emit a duplicate end notification.
+
+The main process's `get-projects` assembly calls `annotateScheduleRuns` after
+archive handling, for both default and all-project replies. Local rows carry
+`runningScheduleIds` for their representative, head or merged members currently
+tracked by the launcher; absent liveness removes that field. Remote rows never
+inherit local run identity. No new IPC channel, preload API or worker-persisted
+state is added: the existing status listener sends `projects-changed`, which
+reloads these annotations, including after a renderer reload.
+
+The sidebar treats these rows as running for filtering, sorting, truncation,
+the schedule header dot and promotion out of a collapsed group. A change to
+the scoped live schedule set requests a normal re-sort even on a reload that
+otherwise preserves order. Both initial icon painting and subsequent activity
+repainting use a clock glyph and “Scheduled run in progress”, including its
+accessible label. End returns the row to ordinary ordering and presentation.
+
+See [session-state.md](session-state.md), “Live read-only message views”, for
+the bounded transcript refresh and its shutdown behavior. Regressions:
+`scheduled-run-liveness-814.test.js`, `dom-scheduled-running-814.test.js` and
+`dom-live-transcript-814.test.js`. These exercise plain Node and jsdom boundaries;
+they do not launch Electron, Claude or a real schedule.
+
+### Launch invariants
+
 - **Project Archive suspends launches without editing schedule files (#568).**
   `main.js` filters `scheduleProjects().list()` with `isProjectSettingsArchived`
   on every scheduler check, including startup, cron ticks and wake catch-up.
@@ -206,7 +238,7 @@ deleted files or files whose `enabled` changed are skipped without a failure.
 - **One run at a time per schedule** — `runningTasks` Set guards against overlap. If a schedule is still running when the next minute matches, the next tick is skipped with an info log line (no queue, no retry). A catch-up hits the same guard, after its minute is recorded: the skipped minute is consumed, not retried.
 - **Trigger alignment**: `setTimeout` to next minute boundary, then `setInterval(tick, 60_000)`. The first call is aligned to the wall-clock minute; subsequent calls drift only by JS event-loop latency.
 - **Session pre-seeding is required** — `claude --resume <sid>` won't work without an existing JSONL. `createScheduleSession` writes a minimal valid JSONL containing one user message (the prompt).
-- **Headless child process** — spawned through the configured shell profile with `stdio: ['ignore', 'ignore', 'pipe']`, no PTY and no `detached` option. Stderr is captured for logging; stdout is dropped. No live tail; users see results by opening the resulting session in the sidebar.
+- **Headless child process** — spawned through the configured shell profile with `stdio: ['ignore', 'ignore', 'pipe']`, no PTY and no `detached` option. Stderr is captured for logging; stdout is dropped. The read-only message view follows transcript writes through the existing watcher.
 - **The permission mode defaults to `auto`** when a schedule's `cli:` block names none (`DEFAULT_SCHEDULE_PERMISSION_MODE`); an explicit `permission-mode`, such as `acceptEdits`, is passed verbatim. A mode that prompts for tool permission would hang the headless `-p` run.
 
 ## Non-obvious behaviors
