@@ -95,26 +95,47 @@ For messages of at most 16,000 characters, ids retain the full whitespace-normal
 message. Longer messages hash the normalized first 16,000 characters followed by
 `\0length=<original UTF-16 length>`. Messages over 15,000 characters log the first
 11,000 characters, `[truncated; length=N]` with the original UTF-16 message length,
-and at most the last 4,000 stack characters, keeping the total below 16,000.
+and at most 4,000 stack characters (see below for which), keeping the total below
+16,000.
 For messages over 16,000 characters, a temporary `Error.prepareStackTrace` is
 installed before reading the own stack descriptor. On Node 20 (V8 11), that
 descriptor read formats a previously unread native stack into a data property
 through the temporary formatter. On Node 22, the native own stack accessor must
 match V8's shared getter, captured once at module load from a fresh Error, before
-it is called directly. The formatter uses at most the last 20 call sites,
+it is called directly. The formatter uses at most the first 20 call sites,
 returning frames only (at most 4,000 characters). The log adds the
 bounded message prefix and truncation marker once. The prior formatter descriptor
-is restored in `finally`. V8 caches those frames on a previously unread Error;
+is restored in `finally`.
+If `Error.prepareStackTrace` is non-configurable or `Error` is frozen, messages
+over 16,000 characters log no stack, including explicit or already cached stacks,
+rather than risk materializing an unbounded lazy stack on Node 20. Messages of
+15,001–16,000 characters are unaffected by this restriction.
+V8 caches those frames on a previously unread Error;
 this is an accepted trade-off to avoid materializing the full oversized stack.
 Restoring the accessor descriptor cannot reset V8's internal cached value, and
 reconstructing an Error would lose its original call sites. A stack read before
 reporting is already cached and remains unchanged. There is currently no app
 reader of the reported Error's stack after this backstop.
-Own stack data values, including explicit or previously cached stacks, are used
-as-is before the log tail cap. Custom own or inherited stack getters never run
-in this path; absent stacks contribute no frames.
+Own stack data values, including explicit or previously cached stacks, retain
+their contents. When the error's own message is over 15,000 characters, it must
+start at an index from 0 to 1,000 of the stack (matched on its first 200
+characters, then confirmed in full), whatever the error name or header. When
+found there and only whitespace (at most 1,000 characters) separates it from
+the next frame line, the 4,000-character cap starts at that frame line (a
+message ending in a newline may share it with the first frame). The head is
+kept only if it does not contain the message's first 200 characters again, so
+a name that repeats or contains the message falls back to the tail. A stack
+that itself starts with a frame keeps its head. Otherwise, including a long
+text that comes from the error name, the cap is the last 4,000 characters, as
+before. When the frames exceed 4,000 characters, the head keeps the throw site
+and may hold fewer frames than the tail would; that is the trade-off #965
+chose. The capping itself only slices a stack string already
+read. A whitespace-only message reads `error.name` at every length. Otherwise
+custom stack and name getters never run for messages over 16,000 characters;
+for 15,001–16,000 characters the stack is read through `error.stack`. Absent
+stacks contribute no frames.
 A native Error from another vm realm has a different stack getter on Node 22+
-and therefore contributes no frames in this oversized-message path.
+and therefore contributes no frames for messages over 16,000 characters.
 The 15,990-character regression
 cannot exercise the swap: it is below the strict >16,000 threshold, so it covers
 ordinary stack reading and truncation; the 16,001-character case covers the swap.

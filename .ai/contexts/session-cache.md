@@ -1015,15 +1015,29 @@ registered. No extra listing or real-host discovery is needed. Successful cycle
 completion still advances the existing freshness stamp and clears the host's
 prior error/backoff.
 
-A restart (every settings save) bumps the generation and lets the new pass start
-at once; the old pass is only told to stop at its next check. Until it reaches
-one, its `syncMirror` or `scanFolders` call can overlap the new pass, and
-`syncMirror` can still write its manifest after the SSH fetch was killed. Files
-that sync fetched are recorded in the manifest, so the next pass sees them
-unchanged and never re-indexes them: a pass cancelled by a restart therefore
-still indexes what its sync fetched, and only a real stop (dispose, when the
-database may be closed) skips the scan. The scan is local and idempotent, and
-the writer worker serializes it with the new pass.
+A restart (every settings save) bumps the generation and lets the new pass
+start at once; the old pass is only told to stop at its next check. Its
+`syncMirror` can overlap the new pass and still write its manifest after the
+SSH fetch was killed. Files that sync fetched are recorded in the manifest,
+so the next pass sees them unchanged and never re-indexes them. A pass
+cancelled by a restart therefore scans only `result.changedFolders`, provided
+its alias is still enabled in `hosts()`. A removed or disabled alias and a
+real stop (dispose, when the database may be closed) skip that scan. The new
+pass owns unindexed-folder repair, ghost-folder checks and missing-folder
+deletion; a cancelled pass does none of those repairs.
+
+Each `scanFoldersViaWorker` starts a separate worker: the writer serializes
+individual writes, not whole scans. A per-alias promise in `remote-index`
+therefore queues scans across generations. A new pass waits for the previous
+scan to settle, including rejection, before starting its own scan, so the
+older worker cannot overwrite the newer scan's rows afterwards. Other aliases
+can scan independently. The queue survives restart and releases its entry
+after the last queued scan settles. A queued scan rechecks stop, alias removal
+and generation before starting its worker. If another restart cancelled it
+while it waited, it discards its prepared repairs and scans only its original
+`changedFolders`; an empty set starts no worker. Mirror fetches are still
+concurrent; this orders scans, not the entire mirror-and-index cycle.
+
 A cancelled pass that already indexed rows reports a change, so the sidebar is
 notified even though the new pass finds an up-to-date mirror. A cancelled
 `refreshHostNow` returns `reason: 'in-flight'` when the indexer is running

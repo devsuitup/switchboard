@@ -157,9 +157,13 @@ test('tail removal failure warns, retains cleanup debt, and does not fail the ho
   assert.equal(fs.existsSync(file), false, 'failed deletion is retried on the next pull');
 });
 
-function scripted(t, { gates = {}, folders = [], sessions = [], oversized = () => [], onTail } = {}) {
+function scripted(t, {
+  gates = {}, folders = [], sessions = [], oversized = () => [], onTail,
+  indexed = [], cached = () => [], onScan, changedFolders = n => n === 1 ? folders : [],
+} = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-972s-'));
-  const calls = { sync: 0, tails: [], scans: [] };
+  const state = { hosts: [{ alias: 'vps' }] };
+  const calls = { sync: 0, tails: [], scans: [], batches: [], drops: [], ghostChecks: [] };
   const notices = [];
   const transport = {
     cancelInFlight() {},
@@ -172,10 +176,18 @@ function scripted(t, { gates = {}, folders = [], sessions = [], oversized = () =
   };
   const indexer = createRemoteIndexer({
     dataDir: dir,
-    getHosts: () => [{ alias: 'vps' }],
+    getHosts: () => state.hosts,
     transport,
-    scanFolders: async opts => { calls.scans.push(...opts.folders); await gates.scan?.promise; return { ok: true }; },
-    listIndexedFolderKeys: () => [],
+    scanFolders: async opts => {
+      calls.scans.push(...opts.folders);
+      calls.batches.push(opts);
+      await onScan?.(calls.batches.length);
+      await gates.scan?.promise;
+      return { ok: true };
+    },
+    listIndexedFolderKeys: () => indexed.filter(key => !calls.drops.includes(key)),
+    dropFolder: async key => { calls.drops.push(key); },
+    getCachedByFolder: key => { calls.ghostChecks.push(key); return cached(key); },
     timers: { setInterval: () => 1, clearInterval() {} },
     notify: () => notices.push(1),
     log: { info() {}, warn() {} },
@@ -184,7 +196,7 @@ function scripted(t, { gates = {}, folders = [], sessions = [], oversized = () =
       await gates[n]?.promise;
       return {
         fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
-        changedFolders: new Set(n === 1 ? folders : []),
+        changedFolders: new Set(changedFolders(n)),
         sessions, oversizedFiles: oversized(),
       };
     },
@@ -194,11 +206,18 @@ function scripted(t, { gates = {}, folders = [], sessions = [], oversized = () =
     for (const g of Object.values(gates)) g.resolve();
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  return { indexer, calls, notices };
+  return { indexer, calls, notices, dir, state };
 }
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
-const until = async predicate => { for (let i = 0; i < 200 && !predicate(); i++) await tick(); };
+const until = async predicate => {
+  for (let i = 0; i < 200 && !predicate(); i++) await tick();
+  assert.ok(predicate(), 'expected asynchronous checkpoint was reached');
+};
+
+test('until rejects when its asynchronous checkpoint never arrives', async () => {
+  await assert.rejects(until(() => false), /expected asynchronous checkpoint was reached/);
+});
 
 test('a refreshHostNow cancelled by restart never reports the indexer as stopped', async t => {
   const gates = { 1: deferred() };
@@ -366,8 +385,127 @@ test('a pass whose restart landed during its sync still indexes the folders that
   await until(() => f.calls.sync === 1);
   f.indexer.restart();
   await until(() => f.calls.sync === 2);
+  assert.equal(f.calls.sync, 2);
   gates[1].resolve();
   await old;
   await tick();
   assert.ok(f.calls.scans.includes('-srv-a'), 'the fetched folder is scanned, since the next pass sees it unchanged');
 });
+
+for (const change of ['removed', 'disabled']) {
+  test(`a cancelled sync does not scan an alias ${change} by restart after pruning`, async t => {
+    const gates = { 1: deferred(), 2: deferred() };
+    const f = scripted(t, { gates, folders: ['-srv-a'], indexed: ['vps::-srv-a'] });
+    fs.mkdirSync(path.join(f.dir, 'remote/vps/projects/-srv-a'), { recursive: true });
+    const old = f.indexer.refreshNow();
+    await until(() => f.calls.sync === 1);
+    f.state.hosts = [{ alias: 'other' }, ...(change === 'disabled' ? [{ alias: 'vps', enabled: false }] : [])];
+    f.indexer.restart();
+    await until(() => f.calls.sync === 2);
+    assert.deepEqual(f.calls.drops, ['vps::-srv-a'], 'new generation pruned the undeclared alias');
+    gates[1].resolve();
+    await old;
+    assert.deepEqual(f.calls.batches, [], 'cancelled pass cannot re-index the pruned alias');
+    gates[2].resolve();
+  });
+}
+
+test('a cancelled sync scans only fetched folders and leaves repairs to the new pass', async t => {
+  const gates = { 1: deferred(), 2: deferred() };
+  const f = scripted(t, {
+    gates, folders: ['-srv-a'], indexed: ['vps::-srv-ghost', 'vps::-srv-gone'],
+    cached: () => [{ sessionId: 'agent-ghost' }],
+  });
+  for (const folder of ['-srv-unindexed', '-srv-ghost']) {
+    fs.mkdirSync(path.join(f.dir, 'remote/vps/projects', folder), { recursive: true });
+  }
+  const old = f.indexer.refreshNow();
+  await until(() => f.calls.sync === 1);
+  f.indexer.restart();
+  await until(() => f.calls.sync === 2);
+  gates[1].resolve();
+  await old;
+  assert.deepEqual(f.calls.scans, ['-srv-a'], 'cancelled pass scans only changedFolders');
+  assert.deepEqual(f.calls.ghostChecks, [], 'cancelled pass does not inspect ghosts');
+  assert.deepEqual(f.calls.drops, [], 'cancelled pass does not drop missing folders');
+  gates[2].resolve();
+  await until(() => f.calls.batches.length === 2);
+  assert.deepEqual(new Set(f.calls.batches[1].folders), new Set(['-srv-unindexed', '-srv-ghost']));
+  assert.deepEqual(f.calls.drops, ['vps::-srv-gone'], 'new pass handles missing folders');
+  assert.ok(f.calls.ghostChecks.includes('vps::-srv-ghost'), 'new pass checks ghosts');
+});
+
+for (const rejects of [false, true]) {
+  test(`a new pass waits for the previous alias scan to ${rejects ? 'reject' : 'resolve'}`, async t => {
+    const gates = { 2: deferred(), scan: deferred() };
+    const events = [];
+    const f = scripted(t, {
+      gates: { 2: gates[2] }, changedFolders: () => ['-srv-a'],
+      onScan: async n => {
+        events.push(`start:${n}`);
+        if (n === 1) {
+          await gates.scan.promise;
+          events.push('settled:1');
+          if (rejects) throw new Error('old worker failed');
+        }
+      },
+    });
+    t.after(() => gates.scan.resolve());
+    const old = f.indexer.refreshNow();
+    await until(() => f.calls.batches.length === 1);
+    f.indexer.restart();
+    await until(() => f.calls.sync === 2);
+    gates[2].resolve();
+    for (let i = 0; i < 10; i++) await tick();
+    try {
+      assert.deepEqual(events, ['start:1'], 'new scan must not start while the old worker is running');
+    } finally {
+      gates.scan.resolve();
+      await old;
+    }
+    await until(() => f.calls.batches.length === 2);
+    assert.deepEqual(events, ['start:1', 'settled:1', 'start:2']);
+  });
+}
+
+test('a pass disposed during its sync does not scan the folders that sync fetched', async t => {
+  const gates = { 1: deferred() };
+  const f = scripted(t, { gates, folders: ['-srv-a'] });
+  const old = f.indexer.refreshNow();
+  await until(() => f.calls.sync === 1);
+  f.indexer.dispose();
+  gates[1].resolve();
+  await old;
+  assert.deepEqual(f.calls.scans, [], 'disposed indexer must not scan into a potentially closed database');
+});
+
+for (const fetched of [[], ['-srv-b']]) {
+  test(`a queued pass cancelled by another restart scans only its ${fetched.length ? 'fetched folders' : 'empty fetched set'}`, async t => {
+    const oldScan = deferred();
+    const gates = { 3: deferred() };
+    const f = scripted(t, {
+      gates,
+      changedFolders: n => n === 1 ? ['-srv-a'] : n === 2 ? fetched : [],
+      onScan: n => n === 1 ? oldScan.promise : undefined,
+    });
+    t.after(() => oldScan.resolve());
+    fs.mkdirSync(path.join(f.dir, 'remote/vps/projects/-srv-unindexed'), { recursive: true });
+    const old = f.indexer.refreshNow();
+    await until(() => f.calls.batches.length === 1);
+    f.indexer.restart();
+    await until(() => f.calls.sync === 2);
+    for (let i = 0; i < 10; i++) await tick();
+    assert.equal(f.calls.batches.length, 1, 'second generation is queued behind the old scan');
+    f.indexer.restart();
+    await until(() => f.calls.sync === 3);
+    oldScan.resolve();
+    await old;
+    for (let i = 0; i < 10; i++) await tick();
+    assert.deepEqual(f.calls.batches.slice(1).map(batch => batch.folders), fetched.length ? [fetched] : [],
+      'a queued pass must discard prepared repairs when it becomes cancelled');
+    const before = f.calls.batches.length;
+    gates[3].resolve();
+    await until(() => f.calls.batches.length === before + 1);
+    assert.deepEqual(f.calls.batches.at(-1).folders, ['-srv-unindexed'], 'current generation owns the repair');
+  });
+}
