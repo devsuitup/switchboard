@@ -59,7 +59,8 @@ function scenario(name, body) {
               backfillEntrypoints() {}, backfillCustomTitles() {}, writer,
               projectsClient: { request: async () => structuredClone(views) },
               mergePlaceholderSessions: rows => rows, annotateRemoteAttachable: rows => rows,
-            });
+              cliSessionState: require('./cli-session-state'),
+            }, { filename: path.resolve('main.js'), lineOffset: source.slice(0, start).split(String.fromCharCode(10)).length - 1 });
             ${body}
           } finally { await writer.closeDb(); }
         })().catch(error => { console.error(error); process.exitCode = 1; });

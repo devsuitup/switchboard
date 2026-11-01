@@ -423,14 +423,16 @@ test('a window close preserves exit drains and session ids until coordinated rel
     closeDb: async () => {}, writer: { releaseLiveSession: id => released.push(id) },
     activeSessions: new Map([['closed', { exited: false, exitDrain }]]),
     changesWatchers: { closeAll() {} }, closeAllFileWatchers() {}, unsubscribeBgAgents() {},
-    subagentWatchers: new Map(),
+    subagentWatchers: new Map(), transcriptFollower: require('../src/main/viewer/transcript-follower').createTranscriptFollower(),
   });
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   const start = source.indexOf("mainWindow.on('closed'");
   const end = source.indexOf('\n  });', start) + 6;
   let closed;
   f.context.mainWindow = { on: (_name, fn) => { closed = fn; } };
-  vm.runInContext(source.slice(start, end), f.context);
+  vm.runInContext(source.slice(start, end), f.context, {
+    filename: path.join(__dirname, '../main.js'), lineOffset: source.slice(0, start).split('\n').length - 1,
+  });
   closed();
   assert.equal(f.context.activeSessions.size, 0);
   assert.equal(f.context.closedSessions.has('closed'), true);

@@ -389,16 +389,21 @@ test('macOS window close and activate preserve sidebar job watching without an A
       unsavedGuard: { committedToken: () => null, invalidate() {} },
       activeSessions: new Map(), killPty: () => assert.fail('no PTY to kill'),
       changesWatchers: { closeAll() {} }, closeAllFileWatchers() {}, subagentWatchers: new Map(),
-      bgAgents, unsubscribeBgAgents() {}, BrowserWindow: { getAllWindows: () => [] },
+      bgAgents, transcriptFollower: require('../src/main/viewer/transcript-follower').createTranscriptFollower(),
+      unsubscribeBgAgents() {}, BrowserWindow: { getAllWindows: () => [] },
       createWindow: () => { context.mainWindow = { reopened: true }; },
       app: { on: (_name, callback) => { context.activate = callback; } },
     };
     const closedStart = source.indexOf("  mainWindow.on('closed', () => {");
     const closedEnd = source.indexOf('\n  });', closedStart) + '\n  });'.length;
-    vm.runInNewContext(source.slice(closedStart, closedEnd), context);
+    vm.runInNewContext(source.slice(closedStart, closedEnd), context, {
+      filename: path.join(__dirname, '..', 'main.js'), lineOffset: source.slice(0, closedStart).split('\n').length - 1,
+    });
     const activateStart = source.indexOf("    app.on('activate', () => {");
     const activateEnd = source.indexOf('\n    });', activateStart) + '\n    });'.length;
-    vm.runInNewContext(source.slice(activateStart, activateEnd), context);
+    vm.runInNewContext(source.slice(activateStart, activateEnd), context, {
+      filename: path.join(__dirname, '..', 'main.js'), lineOffset: source.slice(0, activateStart).split('\n').length - 1,
+    });
     context.closed();
     assert.equal(bgAgents.getCachedJobs().get('aaaaaaaa')?.state, 'working', 'window close keeps the cache');
     context.activate();

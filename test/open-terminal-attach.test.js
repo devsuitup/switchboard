@@ -4,6 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
+const MAIN_FILENAME = path.join(__dirname, '..', 'main.js');
 
 const MAIN = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const PRELOAD = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
@@ -53,11 +55,11 @@ test('stop-session detaches an attach session instead of killing it', () => {
 test('window close releases the Agents subscriber and app quit stops the job watchers', async () => {
   const idx = MAIN.indexOf("mainWindow.on('closed'");
   const end = MAIN.indexOf('\n  });', idx) + '\n  });'.length;
-  const vm = require('node:vm');
   let closed, _beforeQuit, unsubscribed = 0, stopped = 0;
   const context = {
     mainWindow: { on: (_name, callback) => { closed = callback; } },
     activeSessions: new Map(), closedSessions: new Map(), changesWatchers: { closeAll() {} }, closeAllFileWatchers() {},
+    transcriptFollower: require('../src/main/viewer/transcript-follower').createTranscriptFollower(),
     subagentWatchers: new Map(), unsubscribeBgAgents: () => { unsubscribed++; },
     unsubscribeTaskJobs() {}, taskRecords: { dispose() {} },
     bgAgents: { stop: () => { stopped++; } },
@@ -69,7 +71,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
     cliSessionState: { stop() {} }, remoteIndexer: { dispose() {} }, remoteWatcher: { stopAll() {} },
     appQuitting: false, updateInstalling: false, quitAttemptToken: null, process: { platform: 'win32' },
   };
-  vm.runInNewContext(MAIN.slice(idx, end), context);
+  vm.runInNewContext(MAIN.slice(idx, end), context, { filename: MAIN_FILENAME, lineOffset: MAIN.slice(0, idx).split('\n').length - 1 });
   closed();
   assert.equal(unsubscribed, 1);
   assert.equal(stopped, 0, 'closing the window keeps the jobs cache active');
@@ -86,7 +88,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
   context.clearTimeout = clearTimeout;
   const quitStart = MAIN.indexOf('let shutdownPromise;');
   const quitEnd = MAIN.indexOf("app.removeListener('before-quit', holdBootstrapQuit);", quitStart);
-  vm.runInNewContext(MAIN.slice(quitStart, quitEnd) + '\nshutdownForExit();', context);
+  vm.runInNewContext(MAIN.slice(quitStart, quitEnd) + '\nshutdownForExit();', context, { filename: MAIN_FILENAME, lineOffset: MAIN.slice(0, quitStart).split('\n').length - 1 });
   await context.shutdownForExit();
   assert.equal(stopped, 1, 'app quit releases the job watchers');
 });
@@ -102,13 +104,15 @@ test('registering an attach PTY notifies the sidebar even without a transcript o
   const start = MAIN.indexOf('  activeSessions.set(sessionId, session);');
   const end = MAIN.indexOf('  if (!isPlainTerminal && !panelOwnerId)', start);
   assert.ok(start >= 0 && end > start);
-  const register = new Function('activeSessions', 'sessionId', 'session', 'isAttach', 'isPlainTerminal',
-    'revealIfSdkSession', 'notifyRendererProjectsChanged', MAIN.slice(start, end));
   const active = new Map();
   let notifications = 0;
-  register(active, 'bg-head', { isAttach: true }, true, false, () => {}, () => { notifications++; });
+  const register = (sessionId, session, isAttach) => vm.runInNewContext(MAIN.slice(start, end), {
+    activeSessions: active, sessionId, session, isAttach, isPlainTerminal: false,
+    revealIfSdkSession() {}, notifyRendererProjectsChanged() { notifications++; },
+  }, { filename: MAIN_FILENAME, lineOffset: MAIN.slice(0, start).split('\n').length - 1 });
+  register('bg-head', { isAttach: true }, true);
   assert.equal(active.has('bg-head'), true);
   assert.equal(notifications, 1);
-  register(active, 'ordinary', {}, false, false, () => {}, () => { notifications++; });
+  register('ordinary', {}, false);
   assert.equal(notifications, 1);
 });

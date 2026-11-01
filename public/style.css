@@ -1108,6 +1108,24 @@ body { display: flex; flex-direction: column; }
 
 .session-icon--idle {}
 
+.session-icon--scheduled {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none;
+  border-radius: 0;
+  position: relative;
+}
+
+.session-icon--scheduled::before {
+  content: attr(data-glyph);
+  color: var(--state-waiting);
+  font-size: 12px;
+  line-height: 6px;
+  position: absolute;
+  left: -2px;
+  top: 0;
+}
+
 .session-icon--idle.running {
   box-shadow: 0 4px 0 -2px #3ecf5a;
 }

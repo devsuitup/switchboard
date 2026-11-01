@@ -114,6 +114,7 @@ function armLocalTranscriptAgentsDecayTimer(sessionId) {
 
 // see .ai/contexts/session-state.md ("The local-transcript adapter (step 4)")
 function onLocalTranscriptActivity(payload) {
+  if (typeof requestLiveJsonlRefresh === 'function') requestLiveJsonlRefresh(payload);
   if (payload && payload.kind === 'subagent') {
     onLocalTranscriptSubagentActivity(payload);
     return;
