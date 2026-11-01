@@ -1003,8 +1003,35 @@ untouched.
 ### Oversized remote transcripts (#699)
 
 The 64 MiB full-mirror ceiling remains. `syncMirror` returns `oversizedFiles`
-from its existing inventory; `remote-index` then runs `syncTurnTails` for live
-top-level heads only. No extra listing or real-host discovery is needed.
+from its existing inventory; after ordinary folder indexing, `remote-index`
+publishes fresh descriptors and their timestamp, notifying on descriptor changes,
+before running `syncTurnTails` for live top-level heads only. A thrown local
+indexing error fails the cycle before publication, so a failed scan cannot make
+a session eligible for stop/archive. A scan that reports `ok: false` (the
+worker relay resolves it and never throws) still publishes descriptors, and
+stop eligibility depends on the descriptors. Descriptor publication needs no
+tail evidence; the head-turn refresh still runs after the tails have been
+registered. No extra listing or real-host discovery is needed. Successful cycle
+completion still advances the existing freshness stamp and clears the host's
+prior error/backoff.
+
+A restart (every settings save) bumps the generation and lets the new pass start
+at once; the old pass is only told to stop at its next check. Until it reaches
+one, its `syncMirror` or `scanFolders` call can overlap the new pass, and
+`syncMirror` can still write its manifest after the SSH fetch was killed. Files
+that sync fetched are recorded in the manifest, so the next pass sees them
+unchanged and never re-indexes them: a pass cancelled by a restart therefore
+still indexes what its sync fetched, and only a real stop (dispose, when the
+database may be closed) skips the scan. The scan is local and idempotent, and
+the writer worker serializes it with the new pass.
+A cancelled pass that already indexed rows reports a change, so the sidebar is
+notified even though the new pass finds an up-to-date mirror. A cancelled
+`refreshHostNow` returns `reason: 'in-flight'` when the indexer is running
+again, so the Archive handler retries, and `reason: 'stopped'` only when the
+indexer is really stopped. The stale-pass guards on the in-flight flags and the
+head-turn publication are pinned by `test/remote-turn-tail-followups-972.test.js`.
+Tail removal and inventory-write warnings are logged on change of error code,
+like the per-head tail logs, so a persistent failure warns once.
 
 Decision: use a remote tail read feeding only head-turn state (option b).
 Option a, placing aligned tails in the ordinary mirror, would reuse the fetch
@@ -1041,9 +1068,16 @@ at most 52,429,000 payload bytes in addition to the ordinary 256 MiB mirror
 budget. Unchanged size/mtime plus a present partial cache transfers nothing,
 including after restart. Changed tails replace bytes rather than append;
 failed reads preserve prior evidence and retry the unchanged remote version.
-Deleted, inactive or newly under-cap tails are removed. Full-mirror limit logs
-now name the separate turn-state path; successful and failed tail reads log
-their actual result. Existing complete-file size/defer warning throttling stays.
+That retained evidence can be stale after a failed refresh; it is still consumed
+without a runtime stale marker. Deleted, inactive or newly under-cap tails are
+removed. Removal and manifest-write errors warn without failing the host cycle;
+failed removals remain in the inventory for a later cleanup attempt. Per-head
+success/failure logs emit on state changes (including recovery), with state
+discarded when a head leaves the tail pass. Full-mirror warning throttling stays.
+Stopping invalidates the current indexer generation and releases its refresh
+guards before cancelling SSH. The tail loop checks that generation before each
+read and after it settles, so restart can refresh immediately without the old
+loop spawning more heads or publishing late results.
 
 Coverage: `test/remote-oversized-turn-699.test.js` uses injected SSH children,
 real disposable files and the real task-record worker; no SSH or Electron.
@@ -1167,7 +1201,7 @@ created the `.jsonl`; a manual host refresh did not help.
   Dead descriptors (`ALIVE:0`) are dropped exactly as before — that filter
   runs first, inside `parseSessions()`, unchanged.
 - **The placeholder itself is synthesized in `remote-index.js`**, lazily, from
-  whatever the last successful cycle stored — never persisted, never mirrored.
+  the latest published descriptor inventory — never persisted, never mirrored.
   `getPlaceholderSessions(alias)` filters `descriptorOnly` sessions that also
   carry a `cwd` (nothing to group under, otherwise) and builds a session-shaped
   object via `buildPlaceholderSession()`: `sessionId` is the descriptor's own
@@ -1351,14 +1385,16 @@ created the `.jsonl`; a manual host refresh did not help.
     cannot grow unboundedly across host-list edits. Attach now exists off this
     data (issue #221, below); capacity tiers and a liveness badge in the UI
     (#218, #212) still don't.
-    **Corrected 2026-09-10 (issue #252): only a SUCCESSFUL cycle replaces this
-    map.** `refreshHost()`'s failure path used to also do `remoteSessions.set(alias,
+    **Corrected 2026-09-10 (issue #252): failed pulls never clear this map.**
+    Since #972, a successful mirror/index pass publishes descriptors before tail
+    reads, with its own publication timestamp. A local scan exception still fails
+    before publication. `refreshHost()`'s failure path used to also do `remoteSessions.set(alias,
     [])`, so one transient ssh timeout wiped every live descriptor and
     `annotateRemoteAttachable` (`main.js`) then found none — every remote
     session read as non-attachable for the whole backoff window even though
     the tmux sessions were alive (field incident 2026-09-10 17:41). The wipe is
     removed from both `refreshNow()`'s and `refreshHostNow()`'s catch blocks;
-    `getRemoteSessions(alias)` on a failed cycle now returns the previous
+    `getRemoteSessions(alias)` on a pull failing before publication returns the previous
     `sessions` list unchanged, the previous `at`, and the fresh `error` from
     `hostBackoff` — the host dot already renders `error` as "unreachable", so
     the UI signal is unchanged, only the underlying data survives. Attach
