@@ -77,11 +77,12 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
     let message = 'Unreadable error';
     let detail = message;
     let messageLength = null;
+    let errorMessage;
     try {
       const proxy = types.isProxy(error);
       if (proxy) message = '[Proxy; inspection omitted]';
       else {
-        const errorMessage = error?.message;
+        errorMessage = error?.message;
         const previewMessage = typeof errorMessage === 'string' ? null : largeIndexedPreview(error);
         if (typeof errorMessage === 'string') {
           if (errorMessage.length > 16000) messageLength = errorMessage.length;
@@ -133,7 +134,17 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
             else delete Error.prepareStackTrace;
           }
         }
-        if (typeof stack === 'string') detail = longMessage ? `${detail}\n${stack.slice(0, 4000)}` : stack.slice(0, 16000);
+        if (typeof stack === 'string') {
+          let stackStart = 0;
+          if (longMessage && typeof errorMessage === 'string' && stack.length > errorMessage.length) {
+            const header = `${error?.name ?? 'Error'}: `;
+            if (stack.startsWith(header) && stack.startsWith(errorMessage, header.length)) {
+              const at = stack.indexOf('\n    at ', header.length + errorMessage.length);
+              if (at !== -1) stackStart = at + 1;
+            }
+          }
+          detail = longMessage ? `${detail}\n${stack.slice(stackStart, stackStart + 4000)}` : stack.slice(0, 16000);
+        }
       }
     } catch {}
     try { log.error(`[main:${origin}]`, detail); } catch {}

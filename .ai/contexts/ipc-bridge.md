@@ -105,16 +105,23 @@ it is called directly. The formatter uses at most the first 20 call sites,
 returning frames only (at most 4,000 characters). The log adds the
 bounded message prefix and truncation marker once. The prior formatter descriptor
 is restored in `finally`.
-If `Error.prepareStackTrace` is non-configurable or `Error` is frozen, the oversized-message path omits even cached stacks rather than risk materializing an unbounded lazy stack on Node 20.
+If `Error.prepareStackTrace` is non-configurable or `Error` is frozen, messages
+over 16,000 characters log no stack, including explicit or already cached stacks,
+rather than risk materializing an unbounded lazy stack on Node 20. Messages of
+15,001–16,000 characters are unaffected by this restriction.
 V8 caches those frames on a previously unread Error;
 this is an accepted trade-off to avoid materializing the full oversized stack.
 Restoring the accessor descriptor cannot reset V8's internal cached value, and
 reconstructing an Error would lose its original call sites. A stack read before
 reporting is already cached and remains unchanged. There is currently no app
 reader of the reported Error's stack after this backstop.
-Own stack data values, including explicit or previously cached stacks, are used
-as-is before the log head cap; an already cached message header can consume that cap and leave no frames. Custom own or inherited stack getters never run
-in this path; absent stacks contribute no frames.
+Own stack data values, including explicit or previously cached stacks, retain
+their contents. For long messages, a stack starting with the error name and
+message skips that header before the 4,000-character cap. The first frame is
+searched for after the full message length so frame-like message text cannot
+match. Without a matching header or frame line, the cap starts at the stack head.
+Custom own or inherited stack getters never run in the oversized-message path;
+absent stacks contribute no frames.
 A native Error from another vm realm has a different stack getter on Node 22+
 and therefore contributes no frames in this oversized-message path.
 The 15,990-character regression
