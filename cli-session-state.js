@@ -67,11 +67,24 @@ function trackScheduleRun(sessionId, child, cwd, scheduleName) {
   const key = sessionId.toLowerCase();
   const live = { kind: 'schedule', pid: child.pid, cwd, startedAt: Date.now(), scheduleName };
   scheduledRuns.set(key, live);
+  notifyStatusesChanged();
   const release = () => {
-    if (scheduledRuns.get(key) === live) scheduledRuns.delete(key);
+    if (scheduledRuns.get(key) !== live) return;
+    scheduledRuns.delete(key);
+    notifyStatusesChanged();
   };
   child.once('exit', release);
   child.once('error', release);
+}
+
+function annotateScheduleRuns(projects) {
+  for (const project of projects) for (const session of project.sessions) {
+    const ids = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])].filter(Boolean))];
+    const live = project.remoteAlias || session.remoteAlias ? [] : ids.filter(id => scheduledRuns.has(id.toLowerCase()));
+    if (live.length) session.runningScheduleIds = live;
+    else delete session.runningScheduleIds;
+  }
+  return projects;
 }
 
 function defaultIsProcessAlive(pid) {
@@ -1078,6 +1091,7 @@ module.exports = {
   readWorkerProcessEvidence,
   init,
   trackScheduleRun,
+  annotateScheduleRuns,
   findLiveProcess,
   liveElsewhere,
   liveElsewhereMany,

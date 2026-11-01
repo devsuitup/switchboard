@@ -21,7 +21,80 @@ const liveSubagents = new Set();
 // scripts isn't global.
 window.__activeViewerWatches = window.__activeViewerWatches || new Set();
 const activeViewerWatches = window.__activeViewerWatches;
+let liveJsonlView = null;
+
+function releaseJsonlFollower(sessionId, token) {
+  if (!token) return;
+  try { Promise.resolve(window.api.readSessionJsonl(sessionId, { mode: 'stop', token })).catch(() => {}); } catch {}
+}
+
+function stopLiveJsonlViewer() {
+  const view = liveJsonlView;
+  liveJsonlView = null;
+  if (!view) return;
+  view.stopped = true;
+  if (view.timer) clearTimeout(view.timer);
+  releaseJsonlFollower(view.session.sessionId, view.token);
+  view.token = null;
+}
+
+function requestLiveJsonlRefresh(payload) {
+  const view = liveJsonlView;
+  if (!view || view.stopped || payload && (payload.kind === 'subagent' || payload.sessionId !== view.session.sessionId)) return;
+  view.dirty = true;
+  view.needsRead ||= !!payload;
+  if (view.loading || view.timer) return;
+  view.timer = setTimeout(async () => {
+    view.timer = null;
+    view.dirty = false;
+    const needsRead = view.needsRead;
+    view.needsRead = false;
+    view.loading = true;
+    const wasLive = view.live;
+    try {
+      const live = await window.api.getSessionLiveElsewhere(view.session.sessionId);
+      if (liveJsonlView !== view || view.stopped) return;
+      if (!live && view.live === false && !view.more) return;
+      view.live = !!live;
+      if (live && view.token && !needsRead && !view.more) return;
+      const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(view.session.sessionId).writtenWatermark : 0;
+      const result = await window.api.readSessionJsonl(view.session.sessionId, view.token
+        ? { mode: 'next', token: view.token, final: !live } : { mode: 'follow' });
+      if (liveJsonlView !== view || view.stopped) { releaseJsonlFollower(view.session.sessionId, result.token); return; }
+      if (result.error) { view.live = wasLive; return; }
+      if (result.token) view.token = result.token;
+      const entries = result.entries || [];
+      let append = result.append && !result.reset;
+      let added = entries;
+      if (!result.append && !result.reset) {
+        append = entries.length >= view.entries.length && view.entries.every((entry, index) => JSON.stringify(entry) === JSON.stringify(entries[index]));
+        if (append) added = entries.slice(view.entries.length);
+      }
+      if (append) { for (const entry of added) view.entries.push(entry); }
+      else view.entries = entries;
+      if (!append || added.length) renderJsonlViewerEntries(view.session, { entries: added }, watermark, true, append);
+      if (result.skipped && typeof showAppNotice === 'function') {
+        view.skipped += result.skipped;
+        showAppNotice({ id: 'LiveTranscript:' + view.session.sessionId, kind: 'info',
+          message: `Live updates left out ${view.skipped} very long transcript ${view.skipped === 1 ? 'entry' : 'entries'}. Reopen View messages after the run to load the full transcript.` });
+      }
+      view.more = !!result.more;
+      if (view.more) { view.needsRead = true; view.dirty = true; }
+      if (!live && !view.more) {
+        releaseJsonlFollower(view.session.sessionId, view.token);
+        view.token = null;
+      }
+    } catch {} finally {
+      view.loading = false;
+      if (view.dirty && liveJsonlView === view) requestLiveJsonlRefresh();
+    }
+  }, 1000);
+}
+
+if (window.api?.onProjectsChanged) window.api.onProjectsChanged(() => requestLiveJsonlRefresh());
+
 function drainViewerWatches() {
+  stopLiveJsonlViewer();
   for (const stop of activeViewerWatches) {
     try { stop(); } catch {}
   }
@@ -606,7 +679,7 @@ function extractResultText(data) {
   return JSON.stringify(data, null, 2);
 }
 
-function renderJsonlEntry(entry, toolResultMap) {
+function renderJsonlEntry(entry, toolResultMap, toolElements) {
   // Synthetic local command entry from mergeLocalCommandEntries
   if (entry._localCmd) {
     return renderLocalCommand(entry._localCmd);
@@ -717,6 +790,7 @@ function renderJsonlEntry(entry, toolResultMap) {
       div.appendChild(textEl);
     } else if (block.type === 'tool_use') {
       const toolEl = renderToolUse(block);
+      if (block.id && toolElements) toolElements.set(block.id, toolEl);
       // Attach matched tool result into the tool block's content area
       if (block.id && toolResultMap && toolResultMap.has(block.id)) {
         const resultData = toolResultMap.get(block.id);
@@ -749,14 +823,18 @@ function renderJsonlEntry(entry, toolResultMap) {
 
 async function showJsonlViewer(session) {
   const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(session.sessionId).writtenWatermark : 0;
-  const writtenActivity = { sessionId: session.sessionId, watermark, rendered: false };
-  jsonlViewerBody.writtenActivity = writtenActivity;
   // Drain any watches from the previously-rendered viewer first — the new
   // render replaces the DOM and we'd otherwise keep polling files for blocks
   // the user no longer sees.
   drainViewerWatches();
-  const result = await window.api.readSessionJsonl(session.sessionId);
+  const view = { session, loading: true, dirty: false, needsRead: false, stopped: false, timer: null, live: null,
+    token: null, entries: [], more: false, skipped: 0 };
+  liveJsonlView = view;
+  const result = await window.api.readSessionJsonl(session.sessionId, { mode: 'follow' });
+  if (liveJsonlView !== view || view.stopped) { releaseJsonlFollower(session.sessionId, result.token); return; }
   hideAllViewers();
+  view.stopped = false;
+  liveJsonlView = view;
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   jsonlViewer.style.display = 'flex';
@@ -769,7 +847,29 @@ async function showJsonlViewer(session) {
   const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
   jsonlViewerTitle.textContent = displayName;
   jsonlViewerSessionId.textContent = session.sessionId;
-  jsonlViewerBody.innerHTML = '';
+  view.token = result.token;
+  view.entries = result.entries || [];
+  view.more = !!result.more;
+  if (typeof clearAppNotice === 'function') clearAppNotice('LiveTranscript:' + session.sessionId);
+  renderJsonlViewerEntries(session, result, watermark);
+  view.loading = false;
+  if (view.more) { view.needsRead = true; view.dirty = true; }
+  if (view.dirty) requestLiveJsonlRefresh();
+}
+
+function renderJsonlViewerEntries(session, result, watermark, refresh = false, append = false) {
+  const scrollTop = jsonlViewerBody.scrollTop;
+  const atBottom = jsonlViewerBody.scrollHeight - scrollTop - jsonlViewerBody.clientHeight <= 32;
+  const writtenActivity = { sessionId: session.sessionId, watermark, rendered: false };
+  jsonlViewerBody.writtenActivity = writtenActivity;
+  if (!append) {
+    for (const stop of activeViewerWatches) { try { stop(); } catch {} }
+    activeViewerWatches.clear();
+    agentMatchCounters = {};
+    jsonlViewerBody.innerHTML = '';
+    jsonlViewerBody.jsonlRenderState = { tools: new Map(), rendered: 0 };
+  }
+  const state = jsonlViewerBody.jsonlRenderState;
 
   if (result.error) {
     jsonlViewerBody.innerHTML = '<div class="plans-empty">Error loading messages: ' + escapeHtml(result.error) + '</div>';
@@ -793,28 +893,39 @@ async function showJsonlViewer(session) {
     }
   }
 
-  let rendered = 0;
+  for (const [id, content] of toolResultMap) {
+    const toolEl = state.tools.get(id);
+    if (!toolEl) continue;
+    let contentEl = toolEl.querySelector('.jsonl-tool-content');
+    if (!contentEl) {
+      contentEl = document.createElement('div');
+      contentEl.className = 'jsonl-tool-content';
+      toolEl.appendChild(contentEl);
+    }
+    renderToolResult(content, contentEl);
+    toolResultMap.delete(id);
+  }
+
+  let rendered = state.rendered;
   for (const entry of entries) {
-    const el = renderJsonlEntry(entry, toolResultMap);
+    const el = renderJsonlEntry(entry, toolResultMap, state.tools);
     if (el) {
+      if (rendered === 0) jsonlViewerBody.innerHTML = '';
       jsonlViewerBody.appendChild(el);
+      el.querySelectorAll('.jsonl-clickable-img').forEach(img => {
+        img.onclick = () => showJsonlScreenshot(img.src);
+      });
       rendered++;
     }
   }
+  state.rendered = rendered;
 
   if (rendered === 0) {
     jsonlViewerBody.innerHTML = '<div class="plans-empty">No messages found in this session.</div>';
   }
 
-  // Click-to-fullscreen for inline images
-  jsonlViewerBody.querySelectorAll('.jsonl-clickable-img').forEach(img => {
-    img.onclick = () => {
-      showJsonlScreenshot(img.src);
-    };
-  });
-
   // Scroll to the bottom so the most recent messages are visible
-  jsonlViewerBody.scrollTop = jsonlViewerBody.scrollHeight;
+  jsonlViewerBody.scrollTop = !refresh || atBottom ? jsonlViewerBody.scrollHeight : scrollTop;
   const markSeen = () => {
     if (writtenActivity.rendered && rendered > 0 && currentViewerSessionId === session.sessionId && typeof markTranscriptOutputSeen === 'function') markTranscriptOutputSeen(session.sessionId, jsonlViewerBody, writtenActivity.watermark);
   };

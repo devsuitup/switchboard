@@ -11,10 +11,27 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const vm = require('node:vm');
 
 const { createViewerWatchRegistry } = require('../viewer-file-watch');
 
 const MAIN = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+
+test('closing the window disposes the live transcript follower', () => {
+  let close, disposed = 0;
+  const start = MAIN.indexOf("mainWindow.on('closed'");
+  const end = MAIN.indexOf('\n  });', start) + 6;
+  vm.runInNewContext(MAIN.slice(start, end), {
+    mainWindow: { on: (_name, callback) => { close = callback; } },
+    activeSessions: new Map(), closedSessions: new Map(),
+    changesWatchers: { closeAll() {} }, closeAllFileWatchers() {}, unsubscribeBgAgents() {},
+    subagentWatchers: new Map(), transcriptFollower: { dispose() { disposed++; } },
+    unsavedGuard: { committedToken: () => null, invalidate() {} }, process: { platform: 'win32' },
+    mainErrorWindowReady: true, quitAttemptToken: null,
+  }, { filename: path.join(__dirname, '../main.js'), lineOffset: MAIN.slice(0, start).split('\n').length - 1 });
+  close();
+  assert.equal(disposed, 1, 'window teardown must cancel pending live transcript work');
+});
 
 function closedHandler() {
   const start = MAIN.indexOf("mainWindow.on('closed'");

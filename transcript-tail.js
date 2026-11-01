@@ -181,4 +181,4 @@ function createTranscriptTailReader({ tailBytes = CHUNK_BYTES } = {}) {
   };
 }
 
-module.exports = { createTranscriptTailReader, readRange };
+module.exports = { createTranscriptTailReader, readRange, API_PREFIX };

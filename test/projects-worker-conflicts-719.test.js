@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { createProjectsWorkerClient } = require('../projects-worker-client');
+const loadGetProjectsHandler = require('./get-projects-handler.cjs');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function fixture(options = {}) {
   const worker = new EventEmitter();
@@ -122,11 +123,9 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
   const { loadAppFunctions } = require('./app-source');
   const h = setupSidebarDom(); t.after(() => h.destroy());
   const f = fixture(); t.after(() => f.client.shutdown());
-  let invoke, event, notifications = 0, assemblies = 0, bridge;
-  const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  const start = main.indexOf("ipcMain.handle('get-projects'");
-  vm.runInNewContext(main.slice(start, main.indexOf('\n});', start) + 4), {
-    ipcMain: { handle: (_name, handler) => { invoke = handler; } }, TRACE: { on: false }, console,
+  let event, notifications = 0, assemblies = 0, bridge;
+  const invoke = loadGetProjectsHandler({
+    TRACE: { on: false }, console,
     getSetting: () => null, isInitialScanComplete: () => true, isCachePopulated: () => true, isSearchIndexPopulated: () => true,
     backfillEntrypoints() {}, backfillCustomTitles() {}, projectsReconciledAt: 0, projectsClient: f.client,
     mergePlaceholderSessions: rows => { assemblies++; return rows; },
