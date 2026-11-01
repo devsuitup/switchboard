@@ -77,11 +77,12 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
     let message = 'Unreadable error';
     let detail = message;
     let messageLength = null;
+    let errorMessage;
     try {
       const proxy = types.isProxy(error);
       if (proxy) message = '[Proxy; inspection omitted]';
       else {
-        const errorMessage = error?.message;
+        errorMessage = error?.message;
         const previewMessage = typeof errorMessage === 'string' ? null : largeIndexedPreview(error);
         if (typeof errorMessage === 'string') {
           if (errorMessage.length > 16000) messageLength = errorMessage.length;
@@ -122,7 +123,7 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
           const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
           try {
             Object.defineProperty(Error, 'prepareStackTrace', { configurable: true, writable: true,
-              value: (_, frames) => frames.slice(-20).map(frame => `    at ${frame}`).join('\n').slice(-4000) });
+              value: (_, frames) => frames.slice(0, 20).map(frame => `    at ${frame}`).join('\n').slice(0, 4000) });
             const descriptor = error && Object.getOwnPropertyDescriptor(error, 'stack');
             if (descriptor && 'value' in descriptor) stack = descriptor.value;
             else if (nativeStackGetter && descriptor?.get === nativeStackGetter && types.isNativeError(error)) {
@@ -133,7 +134,24 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
             else delete Error.prepareStackTrace;
           }
         }
-        if (typeof stack === 'string') detail = longMessage ? `${detail}\n${stack.slice(-4000)}` : stack.slice(0, 16000);
+        if (typeof stack === 'string') {
+          let capped = stack.slice(-4000);
+          if (longMessage && stack.startsWith('    at ')) capped = stack.slice(0, 4000);
+          else if (longMessage && typeof errorMessage === 'string' && errorMessage.length > 15000
+            && stack.length > errorMessage.length) {
+            const probe = errorMessage.slice(0, 200);
+            const at = stack.slice(0, 1000 + probe.length).indexOf(probe);
+            if (at !== -1 && stack.startsWith(errorMessage, at)) {
+              const end = at + errorMessage.length;
+              const frame = stack.indexOf('\n    at ', end - 1);
+              if (frame !== -1 && frame - end <= 1000 && !stack.slice(end, frame).trim()) {
+                const head = stack.slice(frame + 1, frame + 4001);
+                if (!head.includes(probe)) capped = head;
+              }
+            }
+          }
+          detail = longMessage ? `${detail}\n${capped}` : stack.slice(0, 16000);
+        }
       }
     } catch {}
     try { log.error(`[main:${origin}]`, detail); } catch {}
