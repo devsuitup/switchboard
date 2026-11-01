@@ -701,6 +701,19 @@ test('a multiline message repeated on the first frame-like line keeps the real f
   assert.ok(logs[0][1].length <= 16000);
 });
 
+test('a multiline message whose first line is blank keeps its native head', t => {
+  const { target, logs } = setup(t);
+  const message = `  
+${'w'.repeat(15500)}`;
+  function blankFirstLineThrowSite996() { return new Error(message); }
+  target.emit('uncaughtException', blankFirstLineThrowSite996());
+  const marker = `[truncated; length=${message.length}]
+`;
+  const frames = logs[0][1].slice(logs[0][1].indexOf(marker) + marker.length);
+  assert.match(frames, /^    at blankFirstLineThrowSite996 /, 'the throw site must open the logged frames');
+  assert.ok(!frames.includes('w'.repeat(200)), 'no message text in the logged frames');
+});
+
 for (const length of [15500, 16001]) {
   test(`a cached stack with a same-message appended cause keeps both throw sites (${length} characters)`, t => {
     const { target, logs } = setup(t);
