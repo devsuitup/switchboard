@@ -659,8 +659,10 @@ Observation only: a remote session is read, searched and counted, never resumed
 or deleted from here.
 
 - **The local path is unchanged when no host is declared.** `remote-index.js`
-  `start()` returns false before touching anything if `enabledHosts()` is empty:
-  no `setInterval`, no ssh, no mirror directory. `session-cache.js`'s
+  `start()` returns false without arming anything if `enabledHosts()` is empty:
+  no `setInterval`, no ssh, no mirror directory. It still starts a detached
+  prune that reads the indexed folder keys and drops those of an undeclared
+  alias, notifying if it dropped any. `session-cache.js`'s
   `remoteRoots` map stays empty, so `resolveFolderDir()` is `path.join(PROJECTS_DIR, folder)`
   and `buildProjectsFromCache`'s root list has exactly one entry — the same
   `readdirSync` it always did. Proven by `test/remote-index.test.js` (a transport
@@ -1025,18 +1027,36 @@ its alias is still enabled in `hosts()`. A removed or disabled alias and a
 real stop (dispose, when the database may be closed) skip that scan. The new
 pass owns unindexed-folder repair, ghost-folder checks and missing-folder
 deletion; a cancelled pass does none of those repairs.
+It scans changed folders whole, without file-level subsets: the cancelled
+generation does not collect the indexed-folder baseline needed to restrict a
+scan safely. This can cost more than the current pass's incremental scan.
 
 Each `scanFoldersViaWorker` starts a separate worker: the writer serializes
 individual writes, not whole scans. A per-alias promise in `remote-index`
 therefore queues scans across generations. A new pass waits for the previous
-scan to settle, including rejection, before starting its own scan, so the
+scan to settle, including rejection, before computing its indexed folders,
+repair set and file subsets or deleting missing folders. It therefore avoids
+rescanning unchanged folders that the preceding scan just indexed, and the
 older worker cannot overwrite the newer scan's rows afterwards. Other aliases
 can scan independently. The queue survives restart and releases its entry
 after the last queued scan settles. A queued scan rechecks stop, alias removal
 and generation before starting its worker. If another restart cancelled it
-while it waited, it discards its prepared repairs and scans only its original
+while it waited, it skips repairs and scans only its original
 `changedFolders`; an empty set starts no worker. Mirror fetches are still
 concurrent; this orders scans, not the entire mirror-and-index cycle.
+Only the current generation remembers ghost checks or successful ghost repairs;
+a cancelled scan cannot refill the set cleared by restart. Removed-alias pruning
+never holds the pass: an alias with a queued scan has its drop chained onto that
+scan (rejection caught), and an alias without one is dropped at once. The
+chained drop reads the folder keys again to include late writes, and is skipped
+if the indexer stopped or the alias is declared and enabled again by then; it
+notifies when it dropped rows. Remaining hosts therefore sync, and
+`refreshHostNow` answers, while a removed host's scan is still running. A pass
+that waits behind an earlier scan of its own alias still keeps `refreshHostNow`
+returning `in-flight` for as long as that scan runs (up to
+`SUBSET_SCAN_TIMEOUT_MS`, 10 minutes, far beyond the Archive handler's existing
+20-second budget, which is unchanged); no timeout or retry was added. Removing
+the last host still prunes, without arming a timer or contacting SSH.
 
 A cancelled pass that already indexed rows reports a change, so the sidebar is
 notified even though the new pass finds an up-to-date mirror. A cancelled
