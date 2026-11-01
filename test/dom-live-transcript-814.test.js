@@ -47,9 +47,98 @@ function setup(t) {
   }
   return { ctx, w, tick, modes, get reads() { return reads; }, set live(value) { live = value; },
     append(text) { entries.push(turn(text)); }, set nextRead(value) { nextRead = value; },
+    appendEntry(entry) { entries.push(entry); },
     projectsChanged: () => projectsChanged?.(),
     activity: id => ctx.emitSessionTranscriptActivity({ sessionId: id || 'run', at: Date.now() }),
   };
+}
+
+test('incremental appends preserve expanded blocks, nested watches and earlier DOM objects', async t => {
+  const h = setup(t);
+  h.appendEntry({ type: 'assistant', message: { content: [
+    { type: 'thinking', thinking: 'reasoning' },
+    { type: 'tool_use', id: 'agent', name: 'Agent', input: { description: 'child', subagent_type: 'Explore' } },
+    { type: 'tool_use', id: 'tool', name: 'Bash', input: { command: 'echo hello' } },
+  ] } });
+  h.w.api.listSubagents = async () => [{ agentId: 'child', sessionId: 'child-session', description: 'child', subagentType: 'Explore' }];
+  h.w.api.readSubagentJsonl = async () => ({ entries: [turn('nested')] });
+  h.w.api.startSubagentWatch = async () => ({ watchId: 'watch' });
+  let stopped = 0;
+  h.w.api.stopSubagentWatch = async () => { stopped++; };
+  h.w.api._subagentSpawnedCb({ parentSessionId: 'run', agentId: 'child' });
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  const first = h.w.jsonlViewerBody.firstElementChild;
+  const thinking = h.w.jsonlViewerBody.querySelector('.jsonl-thinking');
+  thinking.querySelector('.jsonl-toggle').click();
+  const agent = h.w.jsonlViewerBody.querySelector('.jsonl-agent-expandable');
+  agent.click();
+  await flush();
+  const nested = h.w.jsonlViewerBody.querySelector('.jsonl-subagent-nested');
+  assert.ok(nested);
+  h.append('second');
+  h.activity();
+  await h.tick();
+  assert.equal(h.w.jsonlViewerBody.firstElementChild, first, 'append keeps earlier DOM objects');
+  assert.equal(thinking.querySelector('.jsonl-tool-body').style.display, '');
+  assert.equal(h.w.jsonlViewerBody.querySelector('.jsonl-subagent-nested'), nested);
+  assert.equal(stopped, 0, 'append keeps the nested watch');
+  h.appendEntry({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool', content: 'hello result' }] } });
+  h.activity();
+  await h.tick();
+  assert.match(h.w.jsonlViewerBody.querySelectorAll('.jsonl-tool-block')[1].textContent, /hello result/);
+  assert.equal(h.w.jsonlViewerBody.querySelector('.jsonl-agent-expandable'), agent);
+  assert.equal(h.w.jsonlViewerBody.querySelector('.jsonl-subagent-nested'), nested);
+  assert.equal(stopped, 0);
+  h.live = null;
+  h.projectsChanged();
+  await h.tick();
+  assert.ok(h.modes.includes('stop'), 'idle releases the main-side cursor');
+  h.live = { kind: 'schedule' };
+  h.append('next run');
+  h.projectsChanged();
+  await h.tick();
+  assert.match(h.w.jsonlViewerBody.textContent, /next run/);
+  assert.equal(h.w.jsonlViewerBody.firstElementChild, first, 're-arming preserves an unchanged history prefix');
+  assert.equal(h.w.jsonlViewerBody.querySelector('.jsonl-subagent-nested'), nested);
+  assert.equal(stopped, 0);
+});
+
+test('a history reset replaces obsolete DOM and releases nested watches', async t => {
+  const h = setup(t);
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  const first = h.w.jsonlViewerBody.firstElementChild;
+  let stopped = 0;
+  h.w.__activeViewerWatches.add(() => { stopped++; });
+  h.nextRead = async () => ({ entries: [turn('replaced history')], append: true, reset: true, token: 'follow-token' });
+  h.activity();
+  await h.tick();
+  assert.notEqual(h.w.jsonlViewerBody.firstElementChild, first);
+  assert.match(h.w.jsonlViewerBody.textContent, /replaced history/);
+  assert.doesNotMatch(h.w.jsonlViewerBody.textContent, /first/);
+  assert.equal(stopped, 1);
+});
+
+for (const trigger of ['projects', 'activity']) {
+  test(`an idle visible view re-arms when a run starts through ${trigger}`, async t => {
+    const h = setup(t);
+    h.live = null;
+    await h.w.showJsonlViewer({ sessionId: 'run' });
+    h.projectsChanged();
+    await h.tick();
+    h.projectsChanged();
+    await h.tick();
+    const reads = h.reads;
+    h.live = { kind: 'schedule' };
+    h.append('later scheduled run');
+    if (trigger === 'projects') h.projectsChanged(); else h.activity();
+    await h.tick();
+    assert.match(h.w.jsonlViewerBody.textContent, /later scheduled run/, 'visible idle transcript follows a later run');
+    assert.equal(h.reads, reads + 1);
+    h.w.hideAllViewers();
+    h.activity();
+    await h.tick();
+    assert.equal(h.reads, reads + 1);
+  });
 }
 
 for (const kind of ['schedule', 'cli']) {

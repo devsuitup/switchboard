@@ -54,9 +54,9 @@ function requestLiveJsonlRefresh(payload) {
     try {
       const live = await window.api.getSessionLiveElsewhere(view.session.sessionId);
       if (liveJsonlView !== view || view.stopped) return;
-      if (!live && view.live === false && !view.more) { stopLiveJsonlViewer(); return; }
+      if (!live && view.live === false && !view.more) return;
       view.live = !!live;
-      if (live && !needsRead && !view.more) return;
+      if (live && view.token && !needsRead && !view.more) return;
       const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(view.session.sessionId).writtenWatermark : 0;
       const result = await window.api.readSessionJsonl(view.session.sessionId, view.token
         ? { mode: 'next', token: view.token, final: !live } : { mode: 'follow' });
@@ -64,8 +64,15 @@ function requestLiveJsonlRefresh(payload) {
       if (result.error) { view.live = wasLive; return; }
       if (result.token) view.token = result.token;
       const entries = result.entries || [];
-      view.entries = result.append && !result.reset ? view.entries.concat(entries) : entries;
-      if (!result.append || result.reset || entries.length) renderJsonlViewerEntries(view.session, { entries: view.entries }, watermark, true);
+      let append = result.append && !result.reset;
+      let added = entries;
+      if (!result.append && !result.reset) {
+        append = entries.length >= view.entries.length && view.entries.every((entry, index) => JSON.stringify(entry) === JSON.stringify(entries[index]));
+        if (append) added = entries.slice(view.entries.length);
+      }
+      if (append) { for (const entry of added) view.entries.push(entry); }
+      else view.entries = entries;
+      if (!append || added.length) renderJsonlViewerEntries(view.session, { entries: added }, watermark, true, append);
       if (result.skipped && typeof showAppNotice === 'function') {
         view.skipped += result.skipped;
         showAppNotice({ id: 'LiveTranscript:' + view.session.sessionId, kind: 'info',
@@ -73,7 +80,10 @@ function requestLiveJsonlRefresh(payload) {
       }
       view.more = !!result.more;
       if (view.more) { view.needsRead = true; view.dirty = true; }
-      if (!live && !view.more) stopLiveJsonlViewer();
+      if (!live && !view.more) {
+        releaseJsonlFollower(view.session.sessionId, view.token);
+        view.token = null;
+      }
     } catch {} finally {
       view.loading = false;
       if (view.dirty && liveJsonlView === view) requestLiveJsonlRefresh();
@@ -669,7 +679,7 @@ function extractResultText(data) {
   return JSON.stringify(data, null, 2);
 }
 
-function renderJsonlEntry(entry, toolResultMap) {
+function renderJsonlEntry(entry, toolResultMap, toolElements) {
   // Synthetic local command entry from mergeLocalCommandEntries
   if (entry._localCmd) {
     return renderLocalCommand(entry._localCmd);
@@ -780,6 +790,7 @@ function renderJsonlEntry(entry, toolResultMap) {
       div.appendChild(textEl);
     } else if (block.type === 'tool_use') {
       const toolEl = renderToolUse(block);
+      if (block.id && toolElements) toolElements.set(block.id, toolEl);
       // Attach matched tool result into the tool block's content area
       if (block.id && toolResultMap && toolResultMap.has(block.id)) {
         const resultData = toolResultMap.get(block.id);
@@ -846,15 +857,19 @@ async function showJsonlViewer(session) {
   if (view.dirty) requestLiveJsonlRefresh();
 }
 
-function renderJsonlViewerEntries(session, result, watermark, refresh = false) {
+function renderJsonlViewerEntries(session, result, watermark, refresh = false, append = false) {
   const scrollTop = jsonlViewerBody.scrollTop;
   const atBottom = jsonlViewerBody.scrollHeight - scrollTop - jsonlViewerBody.clientHeight <= 32;
   const writtenActivity = { sessionId: session.sessionId, watermark, rendered: false };
   jsonlViewerBody.writtenActivity = writtenActivity;
-  for (const stop of activeViewerWatches) { try { stop(); } catch {} }
-  activeViewerWatches.clear();
-  agentMatchCounters = {};
-  jsonlViewerBody.innerHTML = '';
+  if (!append) {
+    for (const stop of activeViewerWatches) { try { stop(); } catch {} }
+    activeViewerWatches.clear();
+    agentMatchCounters = {};
+    jsonlViewerBody.innerHTML = '';
+    jsonlViewerBody.jsonlRenderState = { tools: new Map(), rendered: 0 };
+  }
+  const state = jsonlViewerBody.jsonlRenderState;
 
   if (result.error) {
     jsonlViewerBody.innerHTML = '<div class="plans-empty">Error loading messages: ' + escapeHtml(result.error) + '</div>';
@@ -878,25 +893,36 @@ function renderJsonlViewerEntries(session, result, watermark, refresh = false) {
     }
   }
 
-  let rendered = 0;
+  for (const [id, content] of toolResultMap) {
+    const toolEl = state.tools.get(id);
+    if (!toolEl) continue;
+    let contentEl = toolEl.querySelector('.jsonl-tool-content');
+    if (!contentEl) {
+      contentEl = document.createElement('div');
+      contentEl.className = 'jsonl-tool-content';
+      toolEl.appendChild(contentEl);
+    }
+    renderToolResult(content, contentEl);
+    toolResultMap.delete(id);
+  }
+
+  let rendered = state.rendered;
   for (const entry of entries) {
-    const el = renderJsonlEntry(entry, toolResultMap);
+    const el = renderJsonlEntry(entry, toolResultMap, state.tools);
     if (el) {
+      if (rendered === 0) jsonlViewerBody.innerHTML = '';
       jsonlViewerBody.appendChild(el);
+      el.querySelectorAll('.jsonl-clickable-img').forEach(img => {
+        img.onclick = () => showJsonlScreenshot(img.src);
+      });
       rendered++;
     }
   }
+  state.rendered = rendered;
 
   if (rendered === 0) {
     jsonlViewerBody.innerHTML = '<div class="plans-empty">No messages found in this session.</div>';
   }
-
-  // Click-to-fullscreen for inline images
-  jsonlViewerBody.querySelectorAll('.jsonl-clickable-img').forEach(img => {
-    img.onclick = () => {
-      showJsonlScreenshot(img.src);
-    };
-  });
 
   // Scroll to the bottom so the most recent messages are visible
   jsonlViewerBody.scrollTop = !refresh || atBottom ? jsonlViewerBody.scrollHeight : scrollTop;

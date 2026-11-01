@@ -4,6 +4,27 @@ const assert = require('node:assert/strict');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 const { loadAppFunctions } = require('./app-source');
 
+test('a schedule start preserves unrelated project and session order on reload', t => {
+  const { ctx, run, projects } = fixture(t, false);
+  delete run.runningScheduleIds;
+  const other = makeSampleProject({ projectPath: '/other', folder: 'other', sessions: [
+    { sessionId: 'a', summary: 'A', modified: '2026-10-30T00:00:00Z' },
+    { sessionId: 'b', summary: 'B', modified: '2026-10-29T00:00:00Z' },
+  ] });
+  const third = makeSampleProject({ projectPath: '/third', folder: 'third', sessions: [
+    { sessionId: 'c', summary: 'C', modified: '2026-10-28T00:00:00Z' },
+  ] });
+  ctx.window.visibleSessionCount = 20;
+  ctx.sidebar.renderProjects([...projects, other, third], true);
+  const before = ctx.window.sortedOrder.map(p => p.projectPath);
+  other.sessions[1].modified = '2026-11-01T00:00:00Z';
+  run.runningScheduleIds = ['run'];
+  ctx.sidebar.renderProjects([third, other, ...projects]);
+  assert.deepEqual(ctx.window.sortedOrder.map(p => p.projectPath), before, 'schedule start preserves unrelated project order');
+  assert.deepEqual(Array.from(ctx.window.sortedOrder.find(p => p.projectPath === '/other').itemIds), ['si-a', 'si-b'], 'unrelated rows retain their preserved order');
+  assert.equal(ctx.window.sortedOrder[0].itemIds[0], 'si-run', 'scheduled run is promoted within its own project');
+});
+
 function fixture(t, grouped) {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());

@@ -199,8 +199,10 @@ reloads these annotations, including after a renderer reload.
 
 The sidebar treats these rows as running for filtering, sorting, truncation,
 the schedule header dot and promotion out of a collapsed group. A change to
-the scoped live schedule set requests a normal re-sort even on a reload that
-otherwise preserves order. Both initial icon painting and subsequent activity
+the scoped live schedule set repositions only the affected row or schedule group
+within its project. Ordinary reloads retain the saved project order and the
+relative order of unrelated items; explicit user actions still request a full
+re-sort. Both initial icon painting and subsequent activity
 repainting use a clock glyph and “Scheduled run in progress”, including its
 accessible label. End returns the row to ordinary ordering and presentation.
 

@@ -882,7 +882,7 @@ let sidebarRenderKey = null;
 let sidebarRenderPayload = null;
 let sidebarRenderAllProjects = null;
 let sidebarRenderDirty = true;
-let sidebarScheduleRunsKey = '[]';
+let sidebarScheduleRuns = new Map();
 const sidebarRenderObserver = new MutationObserver(() => { sidebarRenderDirty = true; });
 sidebarRenderObserver.observe(sidebarContent, { subtree: true, childList: true, attributes: true, characterData: true });
 
@@ -934,10 +934,23 @@ renderProjects.unchanged = projects => {
 };
 
 function renderProjects(projects, resort) {
-  const scheduleRunsKey = JSON.stringify(projects.flatMap(project => project.sessions.filter(rowHasRunningSchedule)
-    .map(session => JSON.stringify([project.remoteAlias || '', project.projectPath, session.sessionId, [...session.runningScheduleIds].sort()]))).sort());
-  if (sidebarScheduleRunsKey !== scheduleRunsKey) resort = true;
-  sidebarScheduleRunsKey = scheduleRunsKey;
+  const scheduleRuns = new Map();
+  const changedScheduleItems = new Set();
+  for (const project of projects) {
+    for (const session of project.sessions.filter(rowHasRunningSchedule)) {
+      const itemId = session.scheduleSlug
+        ? 'schedule-' + encodeURIComponent(JSON.stringify([project.remoteAlias || '', project.projectPath, session.scheduleSlug]))
+        : 'si-' + session.sessionId;
+      const key = JSON.stringify([projectStateKey(project), itemId]);
+      if (!scheduleRuns.has(key)) scheduleRuns.set(key, []);
+      scheduleRuns.get(key).push([session.sessionId, [...session.runningScheduleIds].sort()]);
+    }
+  }
+  for (const [key, runs] of scheduleRuns) scheduleRuns.set(key, JSON.stringify(runs.sort()));
+  for (const key of new Set([...scheduleRuns.keys(), ...sidebarScheduleRuns.keys()])) {
+    if (scheduleRuns.get(key) !== sidebarScheduleRuns.get(key)) changedScheduleItems.add(key);
+  }
+  sidebarScheduleRuns = scheduleRuns;
   const inputProjects = projects;
   sidebarRenderKey = null;
   sidebarRenderPayload = null;
@@ -1096,6 +1109,14 @@ function renderProjects(projects, resort) {
         if (aPos !== undefined && bPos === undefined) return 1;
         return b.sortTime - a.sortTime;
       });
+      const changed = allItems.filter(item => changedScheduleItems.has(JSON.stringify([projectStateKey(project), item.element.id])));
+      for (const item of changed) {
+        allItems.splice(allItems.indexOf(item), 1);
+        const priority = candidate => candidate.pinned && candidate.running ? 3 : candidate.running ? 2 : candidate.pinned ? 1 : 0;
+        const index = allItems.findIndex(other => priority(item) > priority(other)
+          || priority(item) === priority(other) && item.sortTime > other.sortTime);
+        allItems.splice(index < 0 ? allItems.length : index, 0, item);
+      }
     }
 
     // Truncate
