@@ -7,10 +7,10 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
-const bg = require('../bg-agents');
+const bg = require('../src/main/bg-agents/bg-agents');
 const cli = require('../cli-session-state');
-const ipc = require('../bg-agents-ipc');
-const { mergeRoster, isHostedJob } = require('../bg-agents-roster');
+const ipc = require('../src/main/bg-agents/bg-agents-ipc');
+const { mergeRoster, isHostedJob } = require('../src/main/bg-agents/bg-agents-roster');
 const { parseFolderKey } = require('../src/main/remote/remote-hosts');
 
 const SID = 'aaaaaaaa-1234-4321-abcd-123456789abc';

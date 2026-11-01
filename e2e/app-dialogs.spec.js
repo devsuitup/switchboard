@@ -7,7 +7,7 @@ test('background Delete is a designed confirmation: Escape cancels and Delete pr
   page.on('dialog', dialog => { native.push(dialog.type()); dialog.dismiss(); });
   await app.evaluate(({ app: electronApp, ipcMain }) => {
     const load = process.mainModule.require;
-    load(load('path').join(electronApp.getAppPath(), 'bg-agents.js')).stop();
+    load(load('path').join(electronApp.getAppPath(), 'src/main/bg-agents/bg-agents.js')).stop();
     globalThis.dialogDeletes = [];
     ipcMain.removeHandler('get-bg-agents');
     ipcMain.handle('get-bg-agents', () => ({ daemonReachable: true, roster: [
@@ -26,7 +26,7 @@ test('background Delete is a designed confirmation: Escape cancels and Delete pr
   const opener = page.locator('#agents-detail [data-verb="rm"]');
   await app.evaluate(({ app: electronApp }) => {
     const load = process.mainModule.require;
-    return load(load('path').join(electronApp.getAppPath(), 'bg-agents.js')).reconcile();
+    return load(load('path').join(electronApp.getAppPath(), 'src/main/bg-agents/bg-agents.js')).reconcile();
   });
   await expect(opener).toBeVisible();
   await opener.focus();

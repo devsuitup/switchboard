@@ -8,7 +8,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const transitions = require('../session-transitions');
 const cli = require('../cli-session-state');
-const bg = require('../bg-agents');
+const bg = require('../src/main/bg-agents/bg-agents');
 
 const OLD = '11111111-1111-4111-8111-111111111111';
 const HEAD = '22222222-2222-4222-8222-222222222222';
@@ -45,7 +45,7 @@ for (const proof of ['descriptor', 'job', 'callback-error']) {
       persistBackgroundHandoff: context => { confirmed.push(context); return proof === 'callback-error' ? Promise.reject(Error('callback gone')) : Promise.resolve(); },
       activityReporter: { rekey() {} }, taskRecords: { rekey() {}, hasRecord: () => false },
       cliSessionState: cli, bgAgents: bg, getCachedSession: () => ({ customTitle: 'original title' }),
-      isHostedJob: require('../bg-agents-roster').isHostedJob,
+      isHostedJob: require('../src/main/bg-agents/bg-agents-roster').isHostedJob,
       writer: { rekeySessionMeta: async (...args) => { metadata.push(args); } },
     }, { filename: 'main.js' });
     t.after(() => { transitions.init({ activeSessions: new Map() }); cli.stop(); bg.stop(); fs.rmSync(root, { recursive: true, force: true }); });

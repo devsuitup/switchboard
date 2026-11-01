@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setupSidebarDom } = require('./dom-setup');
-const { parseJobState, mergeRoster } = require('../bg-agents-roster');
+const { parseJobState, mergeRoster } = require('../src/main/bg-agents/bg-agents-roster');
 
 const SID = 'aaaaaaaa-1234-4321-abcd-123456789abc';
 const JOB = 'abcdef01';

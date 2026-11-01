@@ -96,7 +96,7 @@ test('a split CLI cancellation message revokes the typed background command', t 
   const h = fixture(t);
   let output;
   const context = vm.createContext({ TRACE: { on: false }, ptyGenerationCounter: 0, log: { info() {} },
-    cancellationIn: require('../bg-handoff').cancellationIn,
+    cancellationIn: require('../src/main/bg-agents/bg-handoff').cancellationIn,
     mainWindow: null, appendToOutputBuffer() {}, MAX_BUFFER_SIZE: 1024 });
   const { wireSessionPty } = loadAppFunctions(context, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
   wireSessionPty(h.entry, OLD, { onData: fn => { output = fn; }, onExit() {} });
@@ -305,7 +305,7 @@ test('typed /bg, altscreen off, collision daemon fork and attach row produce one
   w.activeSessionId = OLD; w.activePtyIds.add(OLD);
   let output;
   const context = vm.createContext({ TRACE: { on: false }, ptyGenerationCounter: 0, log: { info() {} },
-    cancellationIn: require('../bg-handoff').cancellationIn,
+    cancellationIn: require('../src/main/bg-agents/bg-handoff').cancellationIn,
     mainWindow: null, appendToOutputBuffer() {}, MAX_BUFFER_SIZE: 1024 });
   const { wireSessionPty } = loadAppFunctions(context, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
   wireSessionPty(h.entry, OLD, { onData: fn => { output = fn; }, onExit() {} });

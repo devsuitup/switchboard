@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, JOB_ID_RE, stripShellNoise,
   dispatchRefusal, isHostedJob,
-} = require('../bg-agents-roster');
+} = require('../src/main/bg-agents/bg-agents-roster');
 
 const STATE = JSON.stringify({
   state: 'done',

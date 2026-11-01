@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const bg = require('../bg-agents');
+const bg = require('../src/main/bg-agents/bg-agents');
 const { createSessionIndexWriter } = require('../session-index-writer');
 
 function fixture(t, indexed = true) {

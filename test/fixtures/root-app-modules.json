@@ -1,10 +1,5 @@
 [
     "archived-projects.js",
-    "bg-agents.js",
-    "bg-agents-ipc.js",
-    "bg-agents-roster.js",
-    "bg-handoff.js",
-    "bg-worker-liveness.js",
     "bridge-session-id.js",
     "cache-effects.js",
     "classify-title-activity.js",
