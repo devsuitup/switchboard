@@ -45,7 +45,7 @@ function setup(t) {
   w.clearTimeout = id => timers.delete(id);
   async function tick() {
     for (const [id, timer] of [...timers]) {
-      if (timer.ms >= 20000) continue;
+      if (timer.ms >= 15000) continue;
       timers.delete(id);
       await timer.callback();
     }
@@ -130,6 +130,103 @@ test('a stale checkpoint after a re-arm error restores the complete full-render 
   await h.w.showJsonlViewer({ sessionId: 'run' });
   assert.equal(incremental.length, h.w.jsonlViewerBody.innerHTML.length, 'reset includes every large record immediately');
   assert.ok(incremental === h.w.jsonlViewerBody.innerHTML, 'reset DOM equals a full render');
+});
+
+for (const reset of [true, false]) {
+  test(`a ${reset ? 'reset' : 'full replacement'} clears omitted-entry notices and restarts their count`, async t => {
+    const h = setup(t);
+    await h.w.showJsonlViewer({ sessionId: 'run' });
+    h.nextRead = async () => ({ entries: [], append: true, skipped: 2, token: 'follow-token' });
+    h.activity();
+    await h.tick();
+    const notices = h.w.document.getElementById('app-notices');
+    assert.match(notices.textContent, /left out 2/);
+    h.nextRead = async () => ({ entries: [turn('complete history')], append: reset, reset, token: 'follow-token' });
+    h.activity();
+    await h.tick();
+    assert.equal(notices.textContent, '', 'complete history clears the obsolete omission notice');
+    h.nextRead = async () => ({ entries: [], append: true, skipped: 1, token: 'follow-token' });
+    h.activity();
+    await h.tick();
+    assert.match(notices.textContent, /left out 1 very long transcript entry\./, 'new omissions start a fresh count');
+  });
+}
+
+test('a matching checkpoint read error recovers on the next notification with full-render DOM', async t => {
+  const h = setup(t);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'viewer-994-'));
+  const file = path.join(root, 'run.jsonl');
+  const follower = createTranscriptFollower();
+  t.after(() => { follower.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  const history = [turn('original')];
+  const write = () => fs.writeFileSync(file, history.map(entry => JSON.stringify(entry) + '\n').join(''));
+  write();
+  let error;
+  h.w.api.readSessionJsonl = async (id, options) => {
+    if (options.mode === 'stop') return follower.close(id, options.token, options.park);
+    const result = await (options.mode === 'follow' ? follower.open(id, file, options.checkpoint)
+      : follower.read(id, options.token, file, options.final));
+    if (result.error) error = result.error;
+    return result;
+  };
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  h.live = null;
+  h.projectsChanged();
+  await h.tick();
+  const before = h.w.jsonlViewerBody.innerHTML;
+  fs.renameSync(file, file + '.unavailable');
+  h.live = { kind: 'schedule' };
+  h.projectsChanged();
+  await h.tick();
+  assert.match(error, /ENOENT/, 'the matching checkpoint reaches a temporarily missing file');
+  assert.equal(h.w.jsonlViewerBody.innerHTML, before, 'a failed read preserves the visible history');
+  fs.renameSync(file + '.unavailable', file);
+  history.push(turn('recovered'));
+  write();
+  h.activity();
+  await h.tick();
+  const recovered = h.w.jsonlViewerBody.innerHTML;
+  assert.match(h.w.jsonlViewerBody.textContent, /original[\s\S]*recovered/);
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  assert.equal(recovered, h.w.jsonlViewerBody.innerHTML, 'recovered DOM equals a full render');
+});
+
+test('a nested tool result in a later watch batch attaches to its tool row like a full render', async t => {
+  const h = setup(t);
+  const entries = [turn('nested first')];
+  h.appendEntry({ type: 'assistant', message: { content: [
+    { type: 'tool_use', id: 'agent', name: 'Agent', input: { description: 'child', subagent_type: 'Explore' } },
+  ] } });
+  h.w.api.listSubagents = async () => [{ agentId: 'child', sessionId: 'child-session', description: 'child', subagentType: 'Explore' }];
+  h.w.api.readSubagentJsonl = async () => ({ entries: [...entries] });
+  h.w.api.startSubagentWatch = async () => ({ watchId: 'watch' });
+  h.w.api.stopSubagentWatch = async () => {};
+  h.w.api._subagentSpawnedCb({ parentSessionId: 'run', agentId: 'child' });
+  await h.w.showJsonlViewer({ sessionId: 'run' });
+  const agent = h.w.jsonlViewerBody.querySelector('.jsonl-agent-expandable');
+  agent.click();
+  await flush();
+  const nested = h.w.jsonlViewerBody.querySelector('.jsonl-subagent-nested');
+  const send = entry => {
+    entries.push(entry);
+    h.w.api._subagentWatchEventCb({ parentSessionId: 'run', agentId: 'child', entries: [entry] });
+  };
+  send({ type: 'assistant', message: { content: [
+    { type: 'tool_use', id: 'nested-tool', name: 'Bash', input: { command: 'echo nested' } },
+  ] } });
+  const tool = nested.querySelector('.jsonl-tool-block');
+  send(turn('between tool use and result'));
+  send({ type: 'user', message: { content: [
+    { type: 'tool_result', tool_use_id: 'nested-tool', content: 'nested result' },
+  ] } });
+  assert.equal(nested.querySelector('.jsonl-tool-block'), tool, 'the existing tool row survives');
+  assert.match(tool.textContent, /nested result/, 'the later result attaches under its tool row');
+  const incremental = nested.innerHTML;
+  agent.click();
+  agent.click();
+  await flush();
+  assert.equal(incremental, h.w.jsonlViewerBody.querySelector('.jsonl-subagent-nested').innerHTML,
+    'nested incremental DOM equals a full render');
 });
 
 test('a non-local entry between incremental bash input and stdout matches a full render', async t => {

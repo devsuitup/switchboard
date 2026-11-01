@@ -67,6 +67,10 @@ function requestLiveJsonlRefresh(payload) {
       if (result.token) view.token = result.token;
       const entries = result.entries || [];
       const append = result.append && !result.reset;
+      if (!append) {
+        view.skipped = 0;
+        if (typeof clearAppNotice === 'function') clearAppNotice('LiveTranscript:' + view.session.sessionId);
+      }
       const added = entries;
       if (!append || added.length) renderJsonlViewerEntries(view.session, { entries: added }, watermark, true, append);
       if (result.skipped && typeof showAppNotice === 'function') {
