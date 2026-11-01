@@ -146,7 +146,26 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
               const frame = stack.indexOf('\n    at ', end - 1);
               if (frame !== -1 && frame - end <= 1000 && !stack.slice(end, frame).trim()) {
                 const head = stack.slice(frame + 1, frame + 4001);
-                if (!head.split('\n', 1)[0].includes(probe)) capped = head;
+                const firstLine = head.split('\n', 1)[0];
+                const probeLine = probe.split('\n', 1)[0];
+                const repeatsFirst = probeLine === probe ? firstLine.includes(probe) : firstLine.endsWith(probeLine);
+                if (!probeLine || !repeatsFirst) {
+                  const repeat = head.indexOf(probe, firstLine.length + 1);
+                  if (repeat === -1) capped = head;
+                  else {
+                    const prefix = head.slice(0, head.lastIndexOf('\n', repeat));
+                    capped = prefix;
+                    const repeatEnd = frame + 1 + repeat + errorMessage.length;
+                    const nextFrame = stack.indexOf('\n    at ', repeatEnd - 1);
+                    if (nextFrame !== -1 && nextFrame - repeatEnd <= 1000 && !stack.slice(repeatEnd, nextFrame).trim()) {
+                      const rest = stack.slice(nextFrame + 1);
+                      const remaining = 3999 - prefix.length;
+                      let tail = rest.slice(-remaining);
+                      if (rest.length > remaining && rest[rest.length - remaining - 1] !== '\n') tail = tail.replace(/^[^\n]*(?:\n|$)/, '');
+                      if (tail) capped = `${prefix}\n${tail}`;
+                    }
+                  }
+                }
               }
             }
           }

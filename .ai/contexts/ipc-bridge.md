@@ -123,13 +123,19 @@ characters, then confirmed in full), whatever the error name or header. When
 found there and only whitespace (at most 1,000 characters) separates it from
 the next frame line, the 4,000-character cap starts at that frame line (a
 message ending in a newline may share it with the first frame). The head is
-kept only if its first frame line does not contain the message's first 200
-characters again. A stack that repeats the message on that frame-like line
-falls back to the tail. Repetition on later lines, including an appended cause
-with the same message, keeps the head so the outer throw site is retained. A stack
-that itself starts with a frame keeps its head. Otherwise, including a long
-text that comes from the error name, the cap is the last 4,000 characters, as
-before. When the frames exceed 4,000 characters, the head keeps the throw site
+kept only if its first frame line does not repeat the message's first 200
+characters (when they span several lines, it must end with their non-empty
+first line, so a blank or short first line cannot match a frame); otherwise it
+falls back to the tail. Only those 200 characters are compared, not the whole
+message.
+If those 200 characters repeat on a later line, the head is cut before that
+line and joined within the 4,000-character budget to the end of the frames
+following the repeated message (the same whitespace rule applies), dropping
+any partial first tail line; without a valid following frame, only the prefix
+is kept. This retains both throw sites when they fit, at the cost of
+intervening frames. A stack that itself starts with a frame keeps its head.
+Otherwise, including a long text that comes from the error name, the cap is
+the last 4,000 characters, as before. When the frames exceed 4,000 characters, the head keeps the throw site
 and may hold fewer frames than the tail would; that is the trade-off #965
 chose. The capping itself only slices a stack string already
 read. A whitespace-only message reads `error.name` at every length. Otherwise
