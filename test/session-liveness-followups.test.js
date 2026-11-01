@@ -22,7 +22,7 @@ function bootMain(t, { descriptor = {}, ...opts } = {}) {
     stopping: false, clearTimeout() {},
     TRACE: { on: false }, trace() {},
     activeSessions: new Map(), log: { info() {}, debug() {}, warn() {} },
-    sessionTransitions: { detectPendingBackgroundContinuations() {} },
+    sessionTransitions: { refreshDescriptorSessions() {}, detectPendingBackgroundContinuations() {} },
     getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: channel => sent.push(channel) } }),
     setTimeout: fn => { timers.push(fn); return timers.length; },
     require: () => ({

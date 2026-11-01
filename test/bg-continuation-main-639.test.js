@@ -39,11 +39,11 @@ for (const proof of ['descriptor', 'job', 'callback-error']) {
     const start = source.indexOf('sessionTransitions.init({');
     const end = source.indexOf('\n});', start) + '\n});'.length;
     vm.runInNewContext(source.slice(start, end), {
-      PROJECTS_DIR: projects, activeSessions, sessionTransitions: transitions,
+      path, PROJECTS_DIR: projects, activeSessions, sessionTransitions: transitions,
       mainWindow: { isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } },
       log: { info() {}, debug() {}, warn: (...args) => errors.push(args), error: (...args) => errors.push(args) }, rekeyMcpServer() {},
       persistBackgroundHandoff: context => { confirmed.push(context); return proof === 'callback-error' ? Promise.reject(Error('callback gone')) : Promise.resolve(); },
-      activityReporter: { rekey() {} }, taskRecords: { rekey() {}, hasRecord: () => false },
+      activityReporter: { rekey() {} }, taskRecords: { rekey() {}, hasRecord: () => false, async read() {}, async child() {} },
       cliSessionState: cli, bgAgents: bg, getCachedSession: () => ({ customTitle: 'original title' }),
       isHostedJob: require('../src/main/bg-agents/bg-agents-roster').isHostedJob,
       writer: { rekeySessionMeta: async (...args) => { metadata.push(args); } },
