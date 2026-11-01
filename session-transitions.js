@@ -6,6 +6,7 @@ const { scanContinuationIndex } = require('./session-continuations');
 const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
 const { SUBAGENT_LIVE_TTL_MS } = require('./public/subagent-timing');
 const { releaseWindowsPty } = require('./src/main/terminals/pty-ops');
+const { encodeProjectPath } = require('./encode-project-path');
 
 /**
  * Fork detection for active PTY sessions.
@@ -13,6 +14,8 @@ const { releaseWindowsPty } = require('./src/main/terminals/pty-ops');
  */
 let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActivity, clearOwner, getDescriptorIdentity, setTimeoutFn, hasTaskRecord, getBackgroundTarget, rekeyMetadata, backgroundJobExists;
 let onBackgroundConfirmed;
+let getLiveDescriptors, onDescriptorSession;
+const descriptorSessions = new Map();
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -29,6 +32,11 @@ function init(ctx) {
   rekeyMetadata = ctx.rekeyMetadata || (() => {});
   backgroundJobExists = ctx.backgroundJobExists || (() => false);
   onBackgroundConfirmed = ctx.onBackgroundConfirmed || (() => {});
+  getLiveDescriptors = ctx.getLiveDescriptors || (() => []);
+  onDescriptorSession = ctx.onDescriptorSession || (() => {});
+  descriptorSessions.clear();
+  if (settleTimer) clearTimeout(settleTimer);
+  settleTimer = null;
   rekeyed.clear();
   signalsCache.clear();
   for (const timer of recheckTimers.values()) clearTimeout(timer);
@@ -130,8 +138,8 @@ function armSubagentSettleTick(session) {
 function runSubagentSettleTick() {
   settleTimer = null;
   if (!activeSessions) return;
-  for (const [sessionId, session] of [...activeSessions]) {
-    if (session.exited || session.isPlainTerminal || !session.projectFolder) continue;
+  for (const [sessionId, session] of [...activeSessions, ...descriptorSessions]) {
+    if (session.exited || session.isPlainTerminal || session.isAttach || !session.projectFolder) continue;
     if (!hasUnsettledSubagents(session)) continue;
     detectSubagentTransitions(
       session.realSessionId || sessionId,
@@ -139,6 +147,30 @@ function runSubagentSettleTick() {
       path.join(PROJECTS_DIR, session.projectFolder)
     );
   }
+}
+
+function refreshDescriptorSessions() {
+  const observed = new Set();
+  const owned = new Set([...activeSessions].filter(([, s]) => s && !s.exited && !s.isPlainTerminal && !s.isAttach)
+    .map(([key, s]) => normalizeSessionId(s.realSessionId || key)));
+  for (const descriptor of getLiveDescriptors()) {
+    const sessionId = normalizeSessionId(descriptor.sessionId);
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(sessionId)
+      || typeof descriptor.cwd !== 'string' || !path.isAbsolute(descriptor.cwd) || owned.has(sessionId)) continue;
+    observed.add(sessionId);
+    const projectFolder = encodeProjectPath(descriptor.cwd);
+    const identity = JSON.stringify([descriptor.pid, descriptor.startedAt, projectFolder]);
+    if (descriptorSessions.get(sessionId)?.identity === identity) continue;
+    const session = { projectFolder, identity };
+    descriptorSessions.set(sessionId, session);
+    const folderPath = path.join(PROJECTS_DIR, projectFolder);
+    detectSubagentTransitions(sessionId, session, folderPath);
+    try {
+      Promise.resolve(onDescriptorSession(sessionId, session, folderPath))
+        .catch(err => log.warn(`[descriptor-subagents] ${sessionId}: ${err.message}`));
+    } catch (err) { log.warn(`[descriptor-subagents] ${sessionId}: ${err.message}`); }
+  }
+  for (const id of descriptorSessions.keys()) if (!observed.has(id)) descriptorSessions.delete(id);
 }
 
 /** Walk <folder>/<sessionId>/subagents/ and detect new or completed subagent files.
@@ -668,6 +700,8 @@ function holdContinuationExit(sessionId, session, finish) {
 
 /** Detect fork and /clear transitions for active PTY sessions in a folder */
 function detectSessionTransitions(folder) {
+  try { refreshDescriptorSessions(); }
+  catch (err) { log.warn(`[descriptor-subagents] refresh failed: ${err.message}`); }
   const folderPath = path.join(PROJECTS_DIR, folder);
   let currentFiles;
   try {
@@ -679,7 +713,7 @@ function detectSessionTransitions(folder) {
 
   for (const [sessionId, session] of [...activeSessions]) {
     // Run subagent detection for all non-exited, non-terminal sessions in this folder
-    if (!session.exited && !session.isPlainTerminal && session.projectFolder === folder) {
+    if (!session.exited && !session.isPlainTerminal && !session.isAttach && session.projectFolder === folder) {
       const effectiveSessionId = session.realSessionId || sessionId;
       detectSubagentTransitions(effectiveSessionId, session, folderPath);
     }
@@ -784,6 +818,9 @@ function detectSessionTransitions(folder) {
     session.knownJsonlFiles = updated;
     if (recheck) scheduleRecheck(folder);
   }
+  for (const [sessionId, session] of descriptorSessions) {
+    if (session.projectFolder === folder) detectSubagentTransitions(sessionId, session, folderPath);
+  }
 }
 
 
@@ -863,4 +900,4 @@ function detectPendingBackgroundContinuations() {
   }
 }
 
-module.exports = { drainMetadataWrites, init, detectSessionTransitions, detectSubagentTransitions, detectPendingBackgroundContinuations, snapshotContinuations, snapshotContinuationsBeforeSpawn, holdContinuationExit, currentSessionId, isClearCommand, normalizeSessionId };
+module.exports = { drainMetadataWrites, init, detectSessionTransitions, detectSubagentTransitions, refreshDescriptorSessions, detectPendingBackgroundContinuations, snapshotContinuations, snapshotContinuationsBeforeSpawn, holdContinuationExit, currentSessionId, isClearCommand, normalizeSessionId };

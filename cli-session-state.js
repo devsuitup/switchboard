@@ -468,7 +468,7 @@ function notifyOwnerExit(sessionId, pid) {
 function findSession(sessionId) {
   if (!activeSessions) return null;
   for (const [key, session] of activeSessions) {
-    if (!session || session.exited || session.isPlainTerminal || !session.projectFolder) continue;
+    if (!session || session.exited || session.isPlainTerminal || session.isAttach || !session.projectFolder) continue;
     const effectiveId = session.realSessionId || key;
     if (statusKey(effectiveId) === statusKey(sessionId)) return { sessionId: effectiveId, session };
   }
