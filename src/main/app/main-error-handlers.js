@@ -142,8 +142,11 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
             const probe = errorMessage.slice(0, 200);
             const at = stack.slice(0, 1000 + probe.length).indexOf(probe);
             if (at !== -1 && stack.startsWith(errorMessage, at)) {
-              const frame = stack.indexOf('\n    at ', at + errorMessage.length - 1);
-              if (frame !== -1) capped = stack.slice(frame + 1, frame + 4001);
+              const end = at + errorMessage.length;
+              const frame = stack.indexOf('\n    at ', end - 1);
+              if (frame !== -1 && frame - end <= 1000 && !stack.slice(end, frame).trim()) {
+                capped = stack.slice(frame + 1, frame + 4001);
+              }
             }
           }
           detail = longMessage ? `${detail}\n${capped}` : stack.slice(0, 16000);

@@ -662,3 +662,21 @@ test('a long message ending in a newline keeps the first frame that shares it', 
   target.emit('uncaughtException', { message, stack });
   assert.match(logs[0][1], /\[truncated; length=15501\]\n    at F0965 /, 'the first frame must not be skipped');
 });
+
+test('a name that repeats a long message with a fake frame keeps the real frames', t => {
+  const { target, logs } = setup(t);
+  const message = `${'m'.repeat(200)}\n    at FAKE965 (x.js:1:1)\n${'m'.repeat(15300)}`;
+  const stack = `${message}: ${message}\n    at REAL965 (f.js:1:1)\n    at next965 (f.js:2:2)`;
+  target.emit('uncaughtException', { message, name: message, stack });
+  assert.match(logs[0][1], /at REAL965 /, 'the real first frame must be logged');
+});
+
+test('a native Error whose name repeats its long message keeps its throw site', t => {
+  const { target, logs } = setup(t);
+  const message = `${'m'.repeat(200)}\n    at FAKE965 (x.js:1:1)\n${'m'.repeat(15300)}`;
+  function nativeThrowSite965() { return new Error(message); }
+  const error = nativeThrowSite965();
+  error.name = message;
+  target.emit('uncaughtException', error);
+  assert.match(logs[0][1], /at nativeThrowSite965 /, 'the throw-site frame must be logged');
+});
