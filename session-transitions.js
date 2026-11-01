@@ -175,7 +175,10 @@ function refreshDescriptorSessions() {
       detectSubagentTransitions(sessionId, session, folderPath);
       Promise.resolve(onDescriptorSession(sessionId, session, folderPath))
         .catch(err => log.warn(`[descriptor-subagents] ${sessionId}: ${err.message}`));
-    } catch (err) { log.warn(`[descriptor-subagents] ${sessionId}: ${err.message}`); }
+    } catch (err) {
+      if (sessionId) descriptorSessions.delete(sessionId);
+      log.warn(`[descriptor-subagents] ${sessionId || '?'}: ${err.message}`);
+    }
   }
   for (const id of descriptorSessions.keys()) if (!observed.has(id)) descriptorSessions.delete(id);
 }

@@ -164,7 +164,11 @@ the descriptor PID/start identity resets it. Missing descriptors release observa
 without claiming process death or completing recorded tasks. Folder invalidations
 reconcile again after the owned-session loop, before scanning descriptor states,
 so a fork or /clear that acquires a descriptor's session id drops the duplicate
-observation in the same pass and cannot send duplicate spawn/completion events.
+observation in the pass that performs the re-key. A descriptor observed in earlier
+passes, before the fork or /clear could be parsed, may already have announced a
+child; the owned bootstrap can announce it again, which the renderer treats as
+idempotent. A descriptor whose scan throws is dropped from observation and rebuilt
+by the next refresh.
 
 Descriptor bootstrap stays silent but gives every child file a `STABLE_MS` (30 s)
 recheck window, even when its mtime is older than 60 s. These workers can predate

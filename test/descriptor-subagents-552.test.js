@@ -74,6 +74,8 @@ test('991 a failing descriptor does not skip another descriptor or removed-owner
   assert.doesNotThrow(() => transitions.refreshDescriptorSessions(), 'a failed descriptor scan is isolated');
   assert.deepEqual(f.seeds.map(seed => seed.sessionId), [removedId, goodId], 'later descriptors still hydrate');
   assert.deepEqual(f.warnings, [`[descriptor-subagents] ${badId}: descriptor scan failed`], 'one warning identifies the failing descriptor');
+  transitions.refreshDescriptorSessions();
+  assert.deepEqual(f.seeds.map(seed => seed.sessionId), [removedId, goodId, badId], 'the failed descriptor is retried on the next refresh');
   fs.appendFileSync(removedChild, '{}\n');
   fs.utimesSync(removedChild, new Date(), new Date(Date.now() + 1000));
   t.mock.timers.tick(5000);
