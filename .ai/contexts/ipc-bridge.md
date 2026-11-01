@@ -118,18 +118,21 @@ reporting is already cached and remains unchanged. There is currently no app
 reader of the reported Error's stack after this backstop.
 Own stack data values, including explicit or previously cached stacks, retain
 their contents. When the error's own message is over 15,000 characters, it must
-start within the first 1,000 characters of the stack (matched on its first 200
+start at an index from 0 to 1,000 of the stack (matched on its first 200
 characters, then confirmed in full), whatever the error name or header. When
 found there, the 4,000-character cap starts at the first frame line after the
-full message, so frame-like message text cannot match. A stack that itself
+full message (a message ending in a newline may share it with the first frame),
+so frame-like message text cannot match. A stack that itself
 starts with a frame keeps its head. Otherwise, including a long text that comes
 from the error name, the cap is the last 4,000 characters, as before. A single
 frame line close to 4,000 characters can then leave fewer frames than the tail
-would; the throw site is kept, which is the trade-off #965 chose. The
-stack-capping step reads no name and runs no custom stack getter; absent stacks
-contribute no frames.
+would; the throw site is kept, which is the trade-off #965 chose. The capping
+itself only slices a stack string already read. Custom stack and name getters
+never run for messages over 16,000 characters; for 15,001–16,000 characters the
+stack is read through `error.stack`, and a whitespace-only message still reads
+`error.name`. Absent stacks contribute no frames.
 A native Error from another vm realm has a different stack getter on Node 22+
-and therefore contributes no frames in this oversized-message path.
+and therefore contributes no frames for messages over 16,000 characters.
 The 15,990-character regression
 cannot exercise the swap: it is below the strict >16,000 threshold, so it covers
 ordinary stack reading and truncation; the 16,001-character case covers the swap.

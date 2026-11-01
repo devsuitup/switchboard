@@ -654,3 +654,11 @@ test('a whitespace message with a long name does not match a newline before the 
   target.emit('uncaughtException', { message: '\n', name: 'N'.repeat(15500), stack });
   assert.match(logs[0][1], /at THROWSITE965 /, 'the first frame must not be skipped');
 });
+
+test('a long message ending in a newline keeps the first frame that shares it', t => {
+  const { target, logs } = setup(t);
+  const message = `${'x'.repeat(15500)}\n`;
+  const stack = `${message}    at F0965 (f.js:1:1)\n    at F1965 (f.js:2:2)`;
+  target.emit('uncaughtException', { message, stack });
+  assert.match(logs[0][1], /\[truncated; length=15501\]\n    at F0965 /, 'the first frame must not be skipped');
+});
