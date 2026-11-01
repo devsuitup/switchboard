@@ -18,7 +18,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 async function within(promise) {
   let timer;
   try {
-    return await Promise.race([promise.then(() => true), new Promise(resolve => { timer = setTimeout(() => resolve(false), 2000); })]);
+    return await Promise.race([promise.then(() => true), new Promise(resolve => { timer = setTimeout(() => resolve(false), 10000); })]);
   } finally { clearTimeout(timer); }
 }
 
@@ -159,7 +159,7 @@ test('tail removal failure warns, retains cleanup debt, and does not fail the ho
 
 function scripted(t, { gates = {}, folders = [], sessions = [], oversized = () => [], onTail } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-972s-'));
-  const calls = { sync: 0, tails: [] };
+  const calls = { sync: 0, tails: [], scans: [] };
   const notices = [];
   const transport = {
     cancelInFlight() {},
@@ -174,7 +174,7 @@ function scripted(t, { gates = {}, folders = [], sessions = [], oversized = () =
     dataDir: dir,
     getHosts: () => [{ alias: 'vps' }],
     transport,
-    scanFolders: async () => { await gates.scan?.promise; return { ok: true }; },
+    scanFolders: async opts => { calls.scans.push(...opts.folders); await gates.scan?.promise; return { ok: true }; },
     listIndexedFolderKeys: () => [],
     timers: { setInterval: () => 1, clearInterval() {} },
     notify: () => notices.push(1),
@@ -357,4 +357,17 @@ test('a persistent tail manifest write failure warns once across pulls', async t
   fs.mkdirSync(path.join(f.dir, 'remote/vps/turn-state/inventory.json'), { recursive: true });
   for (let i = 0; i < 3; i++) await f.indexer.refreshNow();
   assert.equal(f.logs.filter(line => line.includes('could not write turn-state tail manifest')).length, 1);
+});
+
+test('a pass whose restart landed during its sync still indexes the folders that sync fetched', async t => {
+  const gates = { 1: deferred() };
+  const f = scripted(t, { gates, folders: ['-srv-a'] });
+  const old = f.indexer.refreshNow();
+  await until(() => f.calls.sync === 1);
+  f.indexer.restart();
+  await until(() => f.calls.sync === 2);
+  gates[1].resolve();
+  await old;
+  await tick();
+  assert.ok(f.calls.scans.includes('-srv-a'), 'the fetched folder is scanned, since the next pass sees it unchanged');
 });

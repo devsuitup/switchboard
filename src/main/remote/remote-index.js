@@ -254,7 +254,7 @@ function createRemoteIndexer(ctx) {
       log,
     });
 
-    if (cancelled()) return false;
+    if (stopped) return false;
     let scannedRows = false;
     const folderPrefix = host.alias;
     const toScan = new Set(result.changedFolders);

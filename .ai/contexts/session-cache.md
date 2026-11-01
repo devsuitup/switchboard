@@ -1018,8 +1018,12 @@ prior error/backoff.
 A restart (every settings save) bumps the generation and lets the new pass start
 at once; the old pass is only told to stop at its next check. Until it reaches
 one, its `syncMirror` or `scanFolders` call can overlap the new pass, and
-`syncMirror` can still write its manifest after the SSH fetch was killed. The
-next pass re-reads the manifest and repairs it, so the overlap is left as is.
+`syncMirror` can still write its manifest after the SSH fetch was killed. Files
+that sync fetched are recorded in the manifest, so the next pass sees them
+unchanged and never re-indexes them: a pass cancelled by a restart therefore
+still indexes what its sync fetched, and only a real stop (dispose, when the
+database may be closed) skips the scan. The scan is local and idempotent, and
+the writer worker serializes it with the new pass.
 A cancelled pass that already indexed rows reports a change, so the sidebar is
 notified even though the new pass finds an up-to-date mirror. A cancelled
 `refreshHostNow` returns `reason: 'in-flight'` when the indexer is running
