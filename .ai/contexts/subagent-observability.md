@@ -151,14 +151,28 @@ map. Project-folder invalidations reuse `detectSubagentTransitions`, and its
 existing five-second settle timer also visits descriptor-backed states. There
 is no descriptor read or process-table refresh from that timer: it only visits
 the observation states already reconciled by startup, status notifications and
-project-folder invalidations. A descriptor-reader failure during a folder
-invalidation logs a warning and leaves owned PTY fork and /clear detection running.
+project-folder invalidations. Refresh contains descriptor-reader failures for all
+callers, including startup and status notifications; an unavailable reader leaves
+the previous observations intact. Each descriptor scan and hydration has its own
+error guard and warning, so a failed scan cannot skip later descriptors or pruning.
+Owned PTY fork and /clear detection still runs after a reader failure.
 Idle descriptor callbacks skip attach clients, so they cannot build a second
 subagent observation state alongside the descriptor owner. There
 are no additional filesystem watches or polling intervals. Removed descriptors
 and sessions that acquire an owned PTY release their observation state; replacing
 the descriptor PID/start identity resets it. Missing descriptors release observation
-without claiming process death or completing recorded tasks.
+without claiming process death or completing recorded tasks. Folder invalidations
+reconcile again after the owned-session loop, before scanning descriptor states,
+so a fork or /clear that acquires a descriptor's session id drops the duplicate
+observation in the same pass and cannot send duplicate spawn/completion events.
+
+Descriptor bootstrap stays silent but gives every child file a `STABLE_MS` (30 s)
+recheck window, even when its mtime is older than 60 s. These workers can predate
+Switchboard and remain alive during silent tool calls. Growth within that window
+rehabilitates the child through the existing settle tick without a folder event.
+An unchanged file settles at the end of the window; this is bounded inference,
+not proof that an arbitrarily long silent external worker has finished. Owned
+PTY bootstrap retains its existing fresh-file-only recheck policy.
 
 First observation replays the parent transcript and the discovered child metadata
 through the existing task worker, including children not indexed yet. Subsequent
@@ -689,10 +703,11 @@ when a *new* subagent starts. Two rules keep that rescan quiet:
   bypass mtime inference, including explicitly open tasks with old timestamps.
   Every remaining file present at a session's
   first scan is recorded silently as `completed: true`, whatever its mtime.
-  Switchboard owns the PTYs its subagents run in — one set per Electron
+  For owned sessions, Switchboard owns the PTYs its subagents run in — one set per Electron
   process — so they all died with the previous process, and a restored session
   gets a brand-new PTY whose agents write *after* bootstrap and are picked up
-  by the normal path. Nothing on disk at that moment can be live. The silence
+  by the normal path. Descriptor-backed sessions can already be running when
+  Switchboard starts and therefore keep a recheck window for every file. The silence
   is unconditional; the *verdict* is not (next bullet).
 - **After bootstrap, a first sighting is only a spawn if the file is fresh.**
   An unknown file whose mtime is already older than `FRESH_SIGHTING_MS` (60 s)
@@ -709,11 +724,13 @@ when a *new* subagent starts. Two rules keep that rescan quiet:
   `subagent-spawned` is emitted (logged `[subagent-spawn-late]`). The window
   closes once the file has been seen motionless for a full `STABLE_MS`, after
   which the entry is frozen and costs nothing. **At bootstrap the window is
-  opened only for files whose mtime is fresh** — the handful that could
+  opened only for files whose mtime is fresh in owned PTY sessions** — the handful that could
   conceivably still be running. Everything older is frozen outright: a window
   over the whole history would cost one `statSync` per historical file per
   flush, exactly what the dir-mtime cache exists to avoid, and a file minutes
-  old cannot be the agent in question anyway. The narrow window is what keeps
+  old cannot belong to the newly started owned PTY. Descriptor-backed sessions
+  instead recheck their full history for one bounded window, since age cannot
+  exclude an external worker in a silent tool call. The narrow window is what keeps
   the startup rule falsifiable: if the PTY-ownership argument above is ever
   wrong (an orphaned process surviving a hard kill and still writing), the
   agent is announced late instead of staying invisible for the whole session.

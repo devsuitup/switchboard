@@ -150,22 +150,29 @@ function runSubagentSettleTick() {
 }
 
 function refreshDescriptorSessions() {
+  let descriptors;
+  try { descriptors = getLiveDescriptors(); }
+  catch (err) {
+    log.warn(`[descriptor-subagents] refresh failed: ${err.message}`);
+    return;
+  }
   const observed = new Set();
   const owned = new Set([...activeSessions].filter(([, s]) => s && !s.exited && !s.isPlainTerminal && !s.isAttach)
     .map(([key, s]) => normalizeSessionId(s.realSessionId || key)));
-  for (const descriptor of getLiveDescriptors()) {
-    const sessionId = normalizeSessionId(descriptor.sessionId);
-    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(sessionId)
-      || typeof descriptor.cwd !== 'string' || !path.isAbsolute(descriptor.cwd) || owned.has(sessionId)) continue;
-    observed.add(sessionId);
-    const projectFolder = encodeProjectPath(descriptor.cwd);
-    const identity = JSON.stringify([descriptor.pid, descriptor.startedAt, projectFolder]);
-    if (descriptorSessions.get(sessionId)?.identity === identity) continue;
-    const session = { projectFolder, identity };
-    descriptorSessions.set(sessionId, session);
-    const folderPath = path.join(PROJECTS_DIR, projectFolder);
-    detectSubagentTransitions(sessionId, session, folderPath);
+  for (const descriptor of descriptors) {
+    let sessionId;
     try {
+      sessionId = normalizeSessionId(descriptor.sessionId);
+      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(sessionId)
+        || typeof descriptor.cwd !== 'string' || !path.isAbsolute(descriptor.cwd) || owned.has(sessionId)) continue;
+      observed.add(sessionId);
+      const projectFolder = encodeProjectPath(descriptor.cwd);
+      const identity = JSON.stringify([descriptor.pid, descriptor.startedAt, projectFolder]);
+      if (descriptorSessions.get(sessionId)?.identity === identity) continue;
+      const session = { projectFolder, identity, descriptorBacked: true };
+      descriptorSessions.set(sessionId, session);
+      const folderPath = path.join(PROJECTS_DIR, projectFolder);
+      detectSubagentTransitions(sessionId, session, folderPath);
       Promise.resolve(onDescriptorSession(sessionId, session, folderPath))
         .catch(err => log.warn(`[descriptor-subagents] ${sessionId}: ${err.message}`));
     } catch (err) { log.warn(`[descriptor-subagents] ${sessionId}: ${err.message}`); }
@@ -237,11 +244,6 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
     files = prevFileList;
   }
 
-  // First walk for this session: pre-populate knownSubagents with every
-  // existing file silently so we don't flood the renderer with spawn/complete
-  // events for agents that already finished before Switchboard started watching.
-  // No file present at this point can belong to a live agent, whatever its
-  // mtime — see .ai/contexts/subagent-observability.md
   if (isBootstrap) {
     session.knownSubagents = new Map();
   }
@@ -289,20 +291,10 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
     const mtimeMs = stat.mtimeMs;
 
     if (!known) {
-      // A file that cannot be live is recorded as finished, silently. At
-      // bootstrap that covers every file: Switchboard owns the PTYs, so
-      // nothing it spawned outlived the previous process. Afterwards only a
-      // stale mtime says so, and the sighting may simply be late.
-      //
-      // Either way the verdict stays reversible while the file could
-      // conceivably be alive — a recheck window rehabilitates it if it grows.
-      // Only a plainly historical file seen at bootstrap is frozen outright,
-      // which is what keeps startup free of a per-file statSync.
-      // See .ai/contexts/subagent-observability.md
       const isFresh = (now - mtimeMs) < FRESH_SIGHTING_MS;
       const looksAlive = !isBootstrap && isFresh;
       if (!looksAlive) {
-        const recheck = !isBootstrap || isFresh;
+        const recheck = session.descriptorBacked || !isBootstrap || isFresh;
         session.knownSubagents.set(agentId, {
           mtimeMs,
           completed: true,
@@ -700,8 +692,7 @@ function holdContinuationExit(sessionId, session, finish) {
 
 /** Detect fork and /clear transitions for active PTY sessions in a folder */
 function detectSessionTransitions(folder) {
-  try { refreshDescriptorSessions(); }
-  catch (err) { log.warn(`[descriptor-subagents] refresh failed: ${err.message}`); }
+  refreshDescriptorSessions();
   const folderPath = path.join(PROJECTS_DIR, folder);
   let currentFiles;
   try {
@@ -818,6 +809,7 @@ function detectSessionTransitions(folder) {
     session.knownJsonlFiles = updated;
     if (recheck) scheduleRecheck(folder);
   }
+  refreshDescriptorSessions();
   for (const [sessionId, session] of descriptorSessions) {
     if (session.projectFolder === folder) detectSubagentTransitions(sessionId, session, folderPath);
   }

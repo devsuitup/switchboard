@@ -16,7 +16,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Unexpected application errors now share one notice with repeat counts and an **Open log** button; the app keeps running and the log may hold details. Notices survive a window reload, dismissed errors stay dismissed, and screen readers announce new errors without repeating count updates. (#896, #932)
 
 ### Fixed
-- Sessions running outside a Switchboard tab — background conversations, attached or not, and sessions started in another terminal — now show their running subagent count and activity indicator. (#552)
+- Sessions Switchboard did not start — background conversations, attached in a tab or not, and sessions started in another terminal — now show their running subagent count and activity indicator. (#552)
 - Removing or disabling your last remote host now removes its sessions from the list, as it already did when other hosts remained. (#983)
 - A scheduled task that is running now counts as a running session: the running-sessions filter keeps it, it moves up with the other running sessions of its project and schedule group, and hovering its icon shows **Scheduled run in progress**. An open **View messages** of a running scheduled task, or of a session running elsewhere, updates as the transcript grows. (#814)
 - Live remote sessions with very large transcripts now appear in the session list and show their turn state. (#699)
