@@ -125,7 +125,7 @@ function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = ()
       onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
       liveElsewhereChecked: async id => ({ known: true, live: descriptors.find(d => d.sessionId === id) || null }),
     },
-    ...require('../bg-handoff'),
+    ...require('../src/main/bg-agents/bg-handoff'),
   });
   const { handleSendToBackground } = loadAppFunctions(ctx, { declarations: ['backgroundHandoffs'],
     functions: ['handleSendToBackground', 'persistBackgroundHandoff', 'readBackgroundHandoffStamp'], sourcePath: path.join(__dirname, '../main.js') });
@@ -362,7 +362,7 @@ test('S2-T9 shipped respawn handler releases the real PTY exit without persistin
   const calls = [];
   let exit;
   Object.assign(h.ctx, {
-    sendToBackground: (id, deps) => require('../bg-handoff').sendToBackground(id, { ...deps, timeoutMs: 1000, exitTimeoutMs: 300 }),
+    sendToBackground: (id, deps) => require('../src/main/bg-agents/bg-handoff').sendToBackground(id, { ...deps, timeoutMs: 1000, exitTimeoutMs: 300 }),
     ptyGenerationCounter: 0, TRACE: { on: false }, ptyExitSignalName: () => null,
     shutdownMcpServer() {}, appQuitting: false, exitedRemoteSessionIds: new Set(),
     activityReporter: { sessionEnded() {} }, taskRecords: { ownerDied() {} },

@@ -5,9 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const bgAgents = require('../bg-agents');
+const bgAgents = require('../src/main/bg-agents/bg-agents');
 const cliSessionState = require('../cli-session-state');
-const bgIpc = require('../bg-agents-ipc');
+const bgIpc = require('../src/main/bg-agents/bg-agents-ipc');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 
 const SID = 'aaaaaaaa-1234-4321-abcd-123456789abc';

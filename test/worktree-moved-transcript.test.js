@@ -566,7 +566,7 @@ async function runExitHandler({ releaseLiveSession }) {
     resolveExitDrain: () => { calls.exitDrained = true; },
     ptyProcess: { onExit: (cb) => { handler = cb; } },
     session,
-    holdBackgroundExit: require('../bg-handoff').holdBackgroundExit,
+    holdBackgroundExit: require('../src/main/bg-agents/bg-handoff').holdBackgroundExit,
     sessionTransitions: require('../session-transitions'),
     sessionId: 'orig',
     activeSessions,

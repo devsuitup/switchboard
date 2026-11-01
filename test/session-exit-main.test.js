@@ -332,7 +332,7 @@ test('#769 a confirmed handoff during an open exit dialog does not ask again aft
   t.menu();
   assert.equal(t.checks().length, 1);
   assert.deepEqual(t.detail().snapshot.rows.map(row => row.id), ['local']);
-  const result = await require('../bg-handoff').sendToBackground('local', {
+  const result = await require('../src/main/bg-agents/bg-handoff').sendToBackground('local', {
     getSession: id => t.records.get(id), getStatus: () => 'idle', now: () => time,
     readContinuationIds: () => entered ? ['continuation'] : [],
     readDescriptors: () => [{ kind: 'bg', sessionId: 'continuation', jobId: '1234abcd' }],
@@ -456,7 +456,7 @@ for (const [from, to] of [['close', 'quit'], ['quit', 'update']]) {
 test('C2 shipped exit inventory classifies busy by the real CLI id after a clear rekey', () => {
   const asked = [];
   const context = vm.createContext({
-    exitInventory: null, inventory, backgroundRefusal: require('../bg-handoff').backgroundRefusal,
+    exitInventory: null, inventory, backgroundRefusal: require('../src/main/bg-agents/bg-handoff').backgroundRefusal,
     activeSessions: new Map([['tab', { kind: 'local-pty', pty: {}, realSessionId: 'real' }]]),
     cliSessionState: { getStatus: id => { asked.push(id); return { status: id === 'real' ? 'busy' : 'idle' }; } },
   });

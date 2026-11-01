@@ -13,7 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { JOB_STATES } = require('../bg-agents-roster');
+const { JOB_STATES } = require('../src/main/bg-agents/bg-agents-roster');
 const { normalizeTaskEvidence, IN_FLIGHT_KINDS } = require('../task-records');
 
 const JOBS_DIR = path.join(os.homedir(), '.claude', 'jobs');

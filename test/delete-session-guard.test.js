@@ -9,7 +9,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const { makeDeleteSessionGuard } = require('../delete-session-guard');
-const bgAgents = require('../bg-agents');
+const bgAgents = require('../src/main/bg-agents/bg-agents');
 const cliSessionState = require('../cli-session-state');
 
 const silentLog = { info() {}, warn() {}, error() {}, debug() {} };

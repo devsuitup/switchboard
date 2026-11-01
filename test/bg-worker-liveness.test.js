@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { classifyWorkerLiveness } = require('../bg-worker-liveness');
+const { classifyWorkerLiveness } = require('../src/main/bg-agents/bg-worker-liveness');
 const bootTime = Date.parse('2026-10-25T10:00:00Z');
 const stamp = ms => String((BigInt(ms) + 11644473600000n) * 10000n);
 const job = { id: 'aaaaaaaa', daemonShort: 'bbbbbbbb', sessionId: 's', updatedAt: '2026-10-25T11:00:00Z' };

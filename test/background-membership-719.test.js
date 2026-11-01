@@ -270,7 +270,7 @@ for (const reason of ['attach', 'elsewhere', 'unknown', 'working', 'blocked', 'h
     const folder = path.join(h.projectsDir, h.folder); fs.mkdirSync(folder);
     for (const id of [A, B]) fs.writeFileSync(path.join(folder, id + '.jsonl'), '{}');
     const { makeDeleteSessionGuard } = require('../delete-session-guard');
-    const { isHostedJob } = require('../bg-agents-roster');
+    const { isHostedJob } = require('../src/main/bg-agents/bg-agents-roster');
     const checked = [];
     const guard = makeDeleteSessionGuard({ activeSessions: h.active,
       bgAgents: { liveJobCheck: id => { checked.push(id); return { known: !(id === B && reason === 'unknown'),

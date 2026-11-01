@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
-const { dispatchArgs } = require('../bg-agents-roster');
+const { dispatchArgs } = require('../src/main/bg-agents/bg-agents-roster');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const tick = () => new Promise(r => setTimeout(r, 0));
