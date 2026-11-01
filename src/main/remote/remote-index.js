@@ -114,6 +114,7 @@ function createRemoteIndexer(ctx) {
   const remoteSessionsAt = new Map();
   const hostBackoff = new Map(); // alias -> { failures, lastError, nextAttemptAt }
   const hostInFlight = new Set();
+  const hostScans = new Map();
   const hostTools = new Map(); // alias -> { tools: { tmux, inotifywait } | null, nextProbeAt }
   const headTurnErrors = new Map();
   const checkedGhostFolders = new Set();
@@ -255,16 +256,17 @@ function createRemoteIndexer(ctx) {
     });
 
     if (stopped) return false;
+    if (cancelled() && !hosts().some(h => h.alias === host.alias)) return false;
     let scannedRows = false;
     const folderPrefix = host.alias;
-    const toScan = new Set(result.changedFolders);
+    const changedFolders = new Set(result.changedFolders);
+    const toScan = new Set(changedFolders);
     const changedFilesByFolder = result.changedFilesByFolder instanceof Map
       ? result.changedFilesByFolder : new Map();
 
-    // A mirror on disk but absent from the cache reports no change; index it once.
     const indexed = new Set();
     const fullRepairs = new Set();
-    if (ctx.listIndexedFolderKeys) {
+    if (!cancelled() && ctx.listIndexedFolderKeys) {
       for (const key of ctx.listIndexedFolderKeys()) {
         const parsed = parseFolderKey(key);
         if (parsed.alias === host.alias) indexed.add(parsed.folder);
@@ -284,7 +286,6 @@ function createRemoteIndexer(ctx) {
           checkedGhostFolders.add(key);
         }
       }
-      // And a folder the cache still knows about but the mirror no longer has.
       if (ctx.dropFolder) {
         const presentSet = new Set(present);
         for (const folder of indexed) {
@@ -305,15 +306,28 @@ function createRemoteIndexer(ctx) {
         const files = changedFilesByFolder.get(folder);
         if (files && files.size > 0) fileSubsets.set(folder, files);
       }
-      const scanned = await ctx.scanFolders({
-        projectsDir,
-        folderPrefix,
-        folders: [...toScan],
-        ...(fileSubsets.size > 0 ? { fileSubsets } : {}),
+      const previousScan = hostScans.get(host.alias) || Promise.resolve();
+      const scan = previousScan.catch(() => {}).then(async () => {
+        if (stopped || (cancelled() && !hosts().some(h => h.alias === host.alias))) return;
+        const repairing = !cancelled();
+        const folders = [...(repairing ? toScan : changedFolders)];
+        if (folders.length === 0) return;
+        const scanned = await ctx.scanFolders({
+          projectsDir,
+          folderPrefix,
+          folders,
+          ...(fileSubsets.size > 0 ? { fileSubsets } : {}),
+        });
+        scannedRows = true;
+        if (repairing && scanned?.ok !== false) {
+          for (const folder of fullRepairs) checkedGhostFolders.add(joinFolderKey(host.alias, folder));
+        }
       });
-      scannedRows = true;
-      if (scanned?.ok !== false) {
-        for (const folder of fullRepairs) checkedGhostFolders.add(joinFolderKey(host.alias, folder));
+      hostScans.set(host.alias, scan);
+      try {
+        await scan;
+      } finally {
+        if (hostScans.get(host.alias) === scan) hostScans.delete(host.alias);
       }
     }
 
