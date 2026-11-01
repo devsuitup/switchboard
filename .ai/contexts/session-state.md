@@ -53,6 +53,11 @@ bounded samples, then returns only appended entries. The final-size boundary is
 cleared for each new run. An expired checkpoint or changed file reopens through
 the ordinary full-history path, so its first reply includes the entire history,
 including visible records larger than the incremental reader's 4 MiB limit.
+Checkpoint re-arm validates identity, size and bounded samples before consuming
+tail data; a mismatch goes directly to the full-history open without a discarded
+incremental read. A successful history replacement clears the live omission
+notice and its count, so later omissions count only the new incremental history.
+(#994)
 The renderer clears the consumed checkpoint after accepting a successful reply,
 so dismissal releases only the current token. There is at most one parked cursor, no retained file
 handle or polling, and dismissing the view releases it. The renderer retains no
