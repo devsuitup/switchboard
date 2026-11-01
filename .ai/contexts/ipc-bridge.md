@@ -122,14 +122,14 @@ start at an index from 0 to 1,000 of the stack (matched on its first 200
 characters, then confirmed in full), whatever the error name or header. When
 found there and only whitespace (at most 1,000 characters) separates it from
 the next frame line, the 4,000-character cap starts at that frame line (a
-message ending in a newline may share it with the first frame). A name that
-repeats the message leaves the second copy, not whitespace, after the first
-one, so frame-like text inside the message is never taken for the first frame.
-A stack that itself starts with a frame keeps its head. Otherwise, including a
-long text that comes from the error name, the cap is the last 4,000
-characters, as before. A single frame line close to 4,000 characters can then
-leave fewer frames than the tail would; the throw site is kept, which is the
-trade-off #965 chose. The capping itself only slices a stack string already
+message ending in a newline may share it with the first frame). The head is
+kept only if it does not contain the message's first 200 characters again, so
+a name that repeats or contains the message falls back to the tail. A stack
+that itself starts with a frame keeps its head. Otherwise, including a long
+text that comes from the error name, the cap is the last 4,000 characters, as
+before. When the frames exceed 4,000 characters, the head keeps the throw site
+and may hold fewer frames than the tail would; that is the trade-off #965
+chose. The capping itself only slices a stack string already
 read. A whitespace-only message reads `error.name` at every length. Otherwise
 custom stack and name getters never run for messages over 16,000 characters;
 for 15,001–16,000 characters the stack is read through `error.stack`. Absent

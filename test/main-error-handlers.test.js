@@ -680,3 +680,11 @@ test('a native Error whose name repeats its long message keeps its throw site', 
   target.emit('uncaughtException', error);
   assert.match(logs[0][1], /at nativeThrowSite965 /, 'the throw-site frame must be logged');
 });
+
+test('a name holding the message and a frame-like line falls back to the stack tail', t => {
+  const { target, logs } = setup(t);
+  const message = 'm'.repeat(15500);
+  const stack = `${message}\n    at FAKE965 (x.js:1:1): ${message}\n    at REAL965 (f.js:1:1)`;
+  target.emit('uncaughtException', { message, name: `${message}\n    at FAKE965 (x.js:1:1)`, stack });
+  assert.match(logs[0][1], /at REAL965 /, 'the real frame must be logged');
+});
