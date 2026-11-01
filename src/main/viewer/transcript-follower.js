@@ -25,13 +25,24 @@ function cursor(stat, offset, samples) {
 
 function createTranscriptFollower() {
   let current = null;
+  let parked = null;
 
   function dispose() {
     if (current) current.closed = true;
     current = null;
+    parked = null;
   }
 
-  function open(id, file) {
+  function open(id, file, checkpoint) {
+    if (checkpoint) {
+      const saved = parked;
+      dispose();
+      const matches = saved && saved.id === id && saved.token === checkpoint;
+      const stat = fs.statSync(file, { bigint: true });
+      current = { id, file: matches ? saved.file : file, token: randomUUID(), closed: false, busy: false,
+        cursor: matches ? { ...saved.cursor, finalSize: null } : cursor(stat, 0, []) };
+      return read(id, current.token, file).then(result => ({ ...result, reset: !matches || result.reset }));
+    }
     dispose();
     const fd = fs.openSync(file, 'r');
     try {
@@ -56,9 +67,15 @@ function createTranscriptFollower() {
     } finally { fs.closeSync(fd); }
   }
 
-  function close(id, token) {
+  function close(id, token, park = false) {
+    if (parked && parked.id === id && parked.token === token && !park) {
+      parked = null;
+      return { ok: true };
+    }
     if (!current || current.id !== id || current.token !== token) return { ok: false };
+    const saved = park && !current.busy ? current : null;
     dispose();
+    parked = saved;
     return { ok: true };
   }
 

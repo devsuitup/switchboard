@@ -50,6 +50,65 @@ test('live message refresh reads only appended data rather than re-reading histo
   } finally { fs.readFileSync = original; }
 });
 
+test('re-arm resumes an unchanged prefix without a full read', async t => {
+  const h = transcriptFixture(t);
+  const initial = await h.invoke({ mode: 'follow' });
+  await h.invoke({ mode: 'next', token: initial.token, final: true });
+  await h.invoke({ mode: 'stop', token: initial.token, park: true });
+  fs.appendFileSync(h.file, h.line('next run'));
+  const original = fs.readFileSync;
+  let fullReads = 0;
+  fs.readFileSync = (...args) => { fullReads++; return original(...args); };
+  try {
+    const next = await h.invoke({ mode: 'follow', checkpoint: initial.token });
+    assert.equal(fullReads, 0, 're-arm never reads the full transcript');
+    assert.equal(next.append, true);
+    assert.equal(next.reset, false);
+    assert.deepEqual(Array.from(next.entries, entry => entry.message.content), ['next run']);
+  } finally { fs.readFileSync = original; }
+});
+
+for (const change of ['replace', 'rewrite', 'expired']) {
+  test(`re-arm resets with bounded reads after ${change}`, async t => {
+    const h = transcriptFixture(t);
+    const initial = await h.invoke({ mode: 'follow' });
+    await h.invoke({ mode: 'stop', token: initial.token, park: true });
+    if (change === 'replace') fs.renameSync(h.file, h.file + '.old');
+    fs.writeFileSync(h.file, h.line('replacement'));
+    const readFile = fs.readFileSync, read = fs.readSync;
+    let fullReads = 0, bytes = 0;
+    fs.readFileSync = (...args) => { fullReads++; return readFile(...args); };
+    fs.readSync = (...args) => { const n = read(...args); bytes += n; return n; };
+    try {
+      const next = await h.invoke({ mode: 'follow', checkpoint: change === 'expired' ? 'expired' : initial.token });
+      assert.equal(fullReads, 0);
+      assert.ok(bytes <= 8 * 1024 * 1024);
+      assert.equal(next.reset, true);
+      assert.deepEqual(Array.from(next.entries, entry => entry.message.content), ['replacement']);
+      assert.equal((await h.invoke({ mode: 'stop', token: initial.token })).ok, false, 'old stop cannot close the new cursor');
+      fs.appendFileSync(h.file, h.line('after reset'));
+      const appended = await h.invoke({ mode: 'next', token: next.token });
+      assert.equal(appended.reset, false);
+      assert.deepEqual(Array.from(appended.entries, entry => entry.message.content), ['after reset']);
+    } finally { fs.readSync = read; fs.readFileSync = readFile; }
+  });
+}
+
+test('re-arm clears the final-size boundary on every subsequent run', async t => {
+  const h = transcriptFixture(t);
+  let result = await h.invoke({ mode: 'follow' });
+  for (const text of ['second run', 'third run']) {
+    fs.appendFileSync(h.file, h.line('end of previous run'));
+    const final = await h.invoke({ mode: 'next', token: result.token, final: true });
+    assert.deepEqual(Array.from(final.entries, entry => entry.message.content), ['end of previous run']);
+    await h.invoke({ mode: 'stop', token: result.token, park: true });
+    fs.appendFileSync(h.file, h.line(text));
+    result = await h.invoke({ mode: 'follow', checkpoint: result.token });
+    assert.equal(result.reset, false);
+    assert.deepEqual(Array.from(result.entries, entry => entry.message.content), [text]);
+  }
+});
+
 test('a large API record is skipped with bounded reads before the next visible message', async t => {
   const h = transcriptFixture(t);
   const initial = await h.invoke({ mode: 'follow' });

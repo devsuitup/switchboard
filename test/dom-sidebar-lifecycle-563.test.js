@@ -83,11 +83,11 @@ test('#563 the status bar counts terminals open here and omits a zero count', t 
   assert.equal(ctx.window.statusBarInfo.textContent, '1 sessions · 1 projects');
 });
 
-test('#563 the sidebar filter names sessions open here', () => {
+test('#563 the sidebar filter names running sessions', () => {
   const { JSDOM } = require('jsdom');
   const dom = new JSDOM(fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8'));
   try {
-    assert.equal(dom.window.document.querySelector('#running-toggle').title, 'Show sessions open here only');
+    assert.equal(dom.window.document.querySelector('#running-toggle').title, 'Show running sessions only');
   } finally {
     dom.window.close();
   }
