@@ -324,15 +324,74 @@ test('oversized explicit stacks are bounded even when the message is short', t =
   assert.equal(logs[0][1], 's'.repeat(16000));
 });
 
+for (const filename of ['throw-site-965.js', 'long-frame-965-'.padEnd(500, 'x') + '.js']) {
+  test(`deep oversized native stack preserves its throw site with filename length ${filename.length}`, t => {
+    const { target, logs } = setup(t);
+    const limit = Error.stackTraceLimit;
+    t.after(() => { Error.stackTraceLimit = limit; });
+    Error.stackTraceLimit = 50;
+    const error = require('node:vm').runInNewContext(`
+        function throwSite965() { throw new Error('deep '.padEnd(16001, 'x')); }
+        function recurse965(depth) { return depth ? recurse965(depth - 1) : throwSite965(); }
+        try { recurse965(60); } catch (error) { error; }
+      `, { Error }, { filename });
+    assert.ok(error instanceof Error);
+    target.emit('uncaughtException', error);
+    assert.match(logs[0][1], /at throwSite965 /, 'logged stack must retain the throw-site frame');
+    assert.ok(error.stack.startsWith('    at throwSite965 '), 'cached formatter output must start at the throw site');
+    assert.ok(error.stack.split('\n').length <= 20);
+    assert.ok(error.stack.length <= 4000);
+    assert.ok(logs[0][1].length <= 16000);
+  });
+}
+
+for (const length of [15990, 16001]) {
+  test(`explicit stack head survives truncation for message length ${length}`, t => {
+    const { target, logs } = setup(t);
+    const stack = '    at explicitThrowSite965:1:1\n' + 'caller-frame\n'.repeat(1000);
+    const message = 'explicit '.padEnd(length, 'x');
+    target.emit('uncaughtException', { message, stack });
+    assert.equal(logs[0][1], `${message.slice(0, 11000)}\n[truncated; length=${length}]\n${stack.slice(0, 4000)}`);
+    assert.ok(logs[0][1].length <= 16000);
+  });
+}
+
+for (const length of [15001, 15990]) {
+  test(`fresh native message length ${length} preserves its throw site beyond a decoy frame`, t => {
+    const { target, logs } = setup(t);
+    const limit = Error.stackTraceLimit;
+    t.after(() => { Error.stackTraceLimit = limit; });
+    Error.stackTraceLimit = 50;
+    const error = require('node:vm').runInNewContext(`
+        function throwSite965() { throw new Error('fresh \\n    at messageDecoy965 '.padEnd(${length}, 'x')); }
+        function recurse965(depth) { return depth ? recurse965(depth - 1) : throwSite965(); }
+        try { recurse965(60); } catch (error) { error; }
+      `, { Error }, { filename: 'fresh-long-message-965.js' });
+    target.emit('uncaughtException', error);
+    const header = `${error.message.slice(0, 11000)}\n[truncated; length=${length}]\n`;
+    assert.ok(logs[0][1].startsWith(header));
+    const frames = logs[0][1].slice(header.length);
+    assert.match(frames, /^    at throwSite965 /, 'logged stack must start at the real throw site');
+    assert.doesNotMatch(frames, /messageDecoy965/, 'message text must not be mistaken for a frame');
+    assert.ok(frames.length <= 4000);
+    assert.ok(logs[0][1].length <= 16000);
+  });
+}
+
 for (const length of [15990, 16001, 50e6]) {
-  test(`message length ${length} retains a bounded prefix, truncation marker and stack frames`, t => {
+  test(`message length ${length} retains a bounded prefix, truncation marker and stack head`, t => {
     const { target, logs } = setup(t);
     const error = new Error('stderr '.padEnd(length, 'x'));
     const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
     const start = performance.now();
     target.emit('uncaughtException', error);
     t.diagnostic(`reporting Error length=${length}: ${(performance.now() - start).toFixed(1)} ms`);
-    assert.match(logs[0][1], /\n\s+at /, 'a truncated message must retain stack frames');
+    const header = `${error.message.slice(0, 11000)}\n[truncated; length=${length}]`;
+    assert.ok(logs[0][1].startsWith(header + '\n'));
+    const frames = logs[0][1].slice(header.length + 1);
+    assert.match(frames, /^    at /, 'a newly formatted long-message stack must retain frames');
+    assert.ok(frames.length <= 4000);
+    assert.match(frames, /main-error-handlers\.test\.js:\d+:\d+/);
     assert.match(logs[0][1], new RegExp(`\\[truncated; length=${length}\\]`));
     assert.ok(logs[0][1].startsWith('stderr '));
     assert.ok(logs[0][1].length <= 16000);
@@ -387,14 +446,19 @@ for (const length of [16001, 50e6]) {
   });
 }
 
-test('an oversized native stack read before reporting stays unchanged and retains its frame', t => {
+test('an oversized native stack read before reporting stays unchanged and logs its frames', t => {
   const { target, logs } = setup(t);
   const error = new Error('cached '.padEnd(16001, 'x'));
   const before = error.stack;
   target.emit('uncaughtException', error);
   assert.equal(error.stack, before, 'reporting must preserve an already cached stack');
-  assert.equal(logs[0][1], `${error.message.slice(0, 11000)}\n[truncated; length=16001]\n${before.slice(-4000)}`);
-  assert.match(logs[0][1], /main-error-handlers\.test\.js:\d+:\d+/);
+  const header = `${error.message.slice(0, 11000)}\n[truncated; length=16001]\n`;
+  assert.ok(logs[0][1].startsWith(header));
+  const frames = logs[0][1].slice(header.length);
+  assert.match(frames, /^    at /, 'an already cached oversized stack must retain frames');
+  assert.match(frames, /main-error-handlers\.test\.js:\d+:\d+/);
+  assert.ok(frames.length <= 4000);
+  assert.ok(logs[0][1].length <= 16000);
 });
 
 for (const native of [false, true]) {
@@ -541,4 +605,86 @@ test('dispose removes only its own process listeners', t => {
   handlers.dispose();
   assert.deepEqual(target.listeners('uncaughtException'), [other]);
   assert.equal(target.listenerCount('unhandledRejection'), 0);
+});
+
+function longHeaderErrors965() {
+  const msg = () => 'header '.padEnd(15500, 'x');
+  const make = (proto, after) => {
+    class HeaderError965 extends Error {}
+    if (proto !== undefined) HeaderError965.prototype.name = proto.name;
+    function throwSite965() { const e = new HeaderError965(msg()); after?.(e); return e; }
+    return throwSite965();
+  };
+  return {
+    'empty name': () => make({ name: '' }),
+    'null name': () => make({ name: null }),
+    'Node style [ERR_X] header': () => make({ name: 'TypeError [ERR_X]' }, e => void e.stack || Object.defineProperty(e, 'name', { value: 'TypeError', configurable: true, writable: true })),
+    'name changed after the stack was cached': () => make(undefined, e => { void e.stack; e.name = 'Renamed965'; }),
+    'throwing name getter': () => make(undefined, e => void e.stack || Object.defineProperty(e, 'name', { configurable: true, get() { throw new Error('name getter ran'); } })),
+    'Symbol name': () => make(undefined, e => void e.stack || Object.defineProperty(e, 'name', { configurable: true, value: Symbol('name965') })),
+  };
+}
+
+for (const [label, build] of Object.entries(longHeaderErrors965())) {
+  test(`long message with ${label} still logs its frames and throw site`, t => {
+    const { target, logs } = setup(t);
+    const error = build();
+    target.emit('uncaughtException', error);
+    const marker = '[truncated; length=15500]\n';
+    const at = logs[0][1].indexOf(marker);
+    assert.notEqual(at, -1);
+    const frames = logs[0][1].slice(at + marker.length);
+    assert.match(frames, /^    at /, 'frames must follow the marker');
+    assert.match(frames, /at throwSite965 /, 'throw-site frame must be logged');
+    assert.ok(frames.length <= 4000);
+    assert.ok(logs[0][1].length <= 16000);
+  });
+}
+
+test('long message absent from the stack head falls back to the last 4000 stack characters', t => {
+  const { target, logs } = setup(t);
+  const stack = `unrelated header\n${'filler '.repeat(3000)}\n    at tailFrame965 (file.js:1:1)`;
+  target.emit('uncaughtException', { message: 'absent '.padEnd(15500, 'x'), stack });
+  assert.equal(logs[0][1], `${'absent '.padEnd(15500, 'x').slice(0, 11000)}\n[truncated; length=15500]\n${stack.slice(-4000)}`);
+});
+
+test('a whitespace message with a long name does not match a newline before the first frame', t => {
+  const { target, logs } = setup(t);
+  const stack = 'Error\n    at THROWSITE965 (f.js:1:1)\n    at next965 (f.js:2:2)';
+  target.emit('uncaughtException', { message: '\n', name: 'N'.repeat(15500), stack });
+  assert.match(logs[0][1], /at THROWSITE965 /, 'the first frame must not be skipped');
+});
+
+test('a long message ending in a newline keeps the first frame that shares it', t => {
+  const { target, logs } = setup(t);
+  const message = `${'x'.repeat(15500)}\n`;
+  const stack = `${message}    at F0965 (f.js:1:1)\n    at F1965 (f.js:2:2)`;
+  target.emit('uncaughtException', { message, stack });
+  assert.match(logs[0][1], /\[truncated; length=15501\]\n    at F0965 /, 'the first frame must not be skipped');
+});
+
+test('a name that repeats a long message with a fake frame keeps the real frames', t => {
+  const { target, logs } = setup(t);
+  const message = `${'m'.repeat(200)}\n    at FAKE965 (x.js:1:1)\n${'m'.repeat(15300)}`;
+  const stack = `${message}: ${message}\n    at REAL965 (f.js:1:1)\n    at next965 (f.js:2:2)`;
+  target.emit('uncaughtException', { message, name: message, stack });
+  assert.match(logs[0][1], /at REAL965 /, 'the real first frame must be logged');
+});
+
+test('a native Error whose name repeats its long message keeps its throw site', t => {
+  const { target, logs } = setup(t);
+  const message = `${'m'.repeat(200)}\n    at FAKE965 (x.js:1:1)\n${'m'.repeat(15300)}`;
+  function nativeThrowSite965() { return new Error(message); }
+  const error = nativeThrowSite965();
+  error.name = message;
+  target.emit('uncaughtException', error);
+  assert.match(logs[0][1], /at nativeThrowSite965 /, 'the throw-site frame must be logged');
+});
+
+test('a name holding the message and a frame-like line falls back to the stack tail', t => {
+  const { target, logs } = setup(t);
+  const message = 'm'.repeat(15500);
+  const stack = `${message}\n    at FAKE965 (x.js:1:1): ${message}\n    at REAL965 (f.js:1:1)`;
+  target.emit('uncaughtException', { message, name: `${message}\n    at FAKE965 (x.js:1:1)`, stack });
+  assert.match(logs[0][1], /at REAL965 /, 'the real frame must be logged');
 });
