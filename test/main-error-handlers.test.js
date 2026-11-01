@@ -324,15 +324,49 @@ test('oversized explicit stacks are bounded even when the message is short', t =
   assert.equal(logs[0][1], 's'.repeat(16000));
 });
 
+for (const filename of ['throw-site-965.js', 'long-frame-965-'.padEnd(500, 'x') + '.js']) {
+  test(`deep oversized native stack preserves its throw site with filename length ${filename.length}`, t => {
+    const { target, logs } = setup(t);
+    const limit = Error.stackTraceLimit;
+    t.after(() => { Error.stackTraceLimit = limit; });
+    Error.stackTraceLimit = 50;
+    const error = require('node:vm').runInNewContext(`
+        function throwSite965() { throw new Error('deep '.padEnd(16001, 'x')); }
+        function recurse965(depth) { return depth ? recurse965(depth - 1) : throwSite965(); }
+        try { recurse965(60); } catch (error) { error; }
+      `, { Error }, { filename });
+    assert.ok(error instanceof Error);
+    target.emit('uncaughtException', error);
+    assert.match(logs[0][1], /at throwSite965 /, 'logged stack must retain the throw-site frame');
+    assert.ok(error.stack.startsWith('    at throwSite965 '), 'cached formatter output must start at the throw site');
+    assert.ok(error.stack.split('\n').length <= 20);
+    assert.ok(error.stack.length <= 4000);
+    assert.ok(logs[0][1].length <= 16000);
+  });
+}
+
+for (const length of [15990, 16001]) {
+  test(`explicit stack head survives truncation for message length ${length}`, t => {
+    const { target, logs } = setup(t);
+    const stack = '    at explicitThrowSite965:1:1\n' + 'caller-frame\n'.repeat(1000);
+    const message = 'explicit '.padEnd(length, 'x');
+    target.emit('uncaughtException', { message, stack });
+    assert.equal(logs[0][1], `${message.slice(0, 11000)}\n[truncated; length=${length}]\n${stack.slice(0, 4000)}`);
+    assert.ok(logs[0][1].length <= 16000);
+  });
+}
+
 for (const length of [15990, 16001, 50e6]) {
-  test(`message length ${length} retains a bounded prefix, truncation marker and stack frames`, t => {
+  test(`message length ${length} retains a bounded prefix, truncation marker and stack head`, t => {
     const { target, logs } = setup(t);
     const error = new Error('stderr '.padEnd(length, 'x'));
     const formatter = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
     const start = performance.now();
     target.emit('uncaughtException', error);
     t.diagnostic(`reporting Error length=${length}: ${(performance.now() - start).toFixed(1)} ms`);
-    assert.match(logs[0][1], /\n\s+at /, 'a truncated message must retain stack frames');
+    const header = `${error.message.slice(0, 11000)}\n[truncated; length=${length}]`;
+    assert.equal(logs[0][1], `${header}\n${error.stack.slice(0, 4000)}`);
+    if (length > 16000) assert.match(logs[0][1], /\n\s+at /, 'a newly formatted oversized stack must retain frames');
     assert.match(logs[0][1], new RegExp(`\\[truncated; length=${length}\\]`));
     assert.ok(logs[0][1].startsWith('stderr '));
     assert.ok(logs[0][1].length <= 16000);
@@ -387,14 +421,13 @@ for (const length of [16001, 50e6]) {
   });
 }
 
-test('an oversized native stack read before reporting stays unchanged and retains its frame', t => {
+test('an oversized native stack read before reporting stays unchanged and logs its head', t => {
   const { target, logs } = setup(t);
   const error = new Error('cached '.padEnd(16001, 'x'));
   const before = error.stack;
   target.emit('uncaughtException', error);
   assert.equal(error.stack, before, 'reporting must preserve an already cached stack');
-  assert.equal(logs[0][1], `${error.message.slice(0, 11000)}\n[truncated; length=16001]\n${before.slice(-4000)}`);
-  assert.match(logs[0][1], /main-error-handlers\.test\.js:\d+:\d+/);
+  assert.equal(logs[0][1], `${error.message.slice(0, 11000)}\n[truncated; length=16001]\n${before.slice(0, 4000)}`);
 });
 
 for (const native of [false, true]) {

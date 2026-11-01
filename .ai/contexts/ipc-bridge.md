@@ -95,23 +95,25 @@ For messages of at most 16,000 characters, ids retain the full whitespace-normal
 message. Longer messages hash the normalized first 16,000 characters followed by
 `\0length=<original UTF-16 length>`. Messages over 15,000 characters log the first
 11,000 characters, `[truncated; length=N]` with the original UTF-16 message length,
-and at most the last 4,000 stack characters, keeping the total below 16,000.
+and at most the first 4,000 stack characters, keeping the total below 16,000.
 For messages over 16,000 characters, a temporary `Error.prepareStackTrace` is
 installed before reading the own stack descriptor. On Node 20 (V8 11), that
 descriptor read formats a previously unread native stack into a data property
 through the temporary formatter. On Node 22, the native own stack accessor must
 match V8's shared getter, captured once at module load from a fresh Error, before
-it is called directly. The formatter uses at most the last 20 call sites,
+it is called directly. The formatter uses at most the first 20 call sites,
 returning frames only (at most 4,000 characters). The log adds the
 bounded message prefix and truncation marker once. The prior formatter descriptor
-is restored in `finally`. V8 caches those frames on a previously unread Error;
+is restored in `finally`.
+If `Error.prepareStackTrace` is non-configurable or `Error` is frozen, the oversized-message path omits even cached stacks rather than risk materializing an unbounded lazy stack on Node 20.
+V8 caches those frames on a previously unread Error;
 this is an accepted trade-off to avoid materializing the full oversized stack.
 Restoring the accessor descriptor cannot reset V8's internal cached value, and
 reconstructing an Error would lose its original call sites. A stack read before
 reporting is already cached and remains unchanged. There is currently no app
 reader of the reported Error's stack after this backstop.
 Own stack data values, including explicit or previously cached stacks, are used
-as-is before the log tail cap. Custom own or inherited stack getters never run
+as-is before the log head cap; an already cached message header can consume that cap and leave no frames. Custom own or inherited stack getters never run
 in this path; absent stacks contribute no frames.
 A native Error from another vm realm has a different stack getter on Node 22+
 and therefore contributes no frames in this oversized-message path.
