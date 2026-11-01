@@ -18,7 +18,6 @@ const silent = { info() {}, warn() {}, debug() {} };
 
 function mainWiring(taskRecords) {
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  assert.match(source, /cliSessionState.ensureWatching\(\);\s+sessionTransitions.refreshDescriptorSessions\(\);/, 'startup seeds descriptor activity without waiting for a status edge');
   const start = source.indexOf("const sessionTransitions = require('./session-transitions');");
   const end = source.indexOf('// a session with a live PTY', start);
   assert.ok(start >= 0 && end > start);
@@ -36,6 +35,98 @@ function mainWiring(taskRecords) {
   vm.runInContext(source.slice(start, end), ctx, { filename: path.join(__dirname, '../main.js'),
     lineOffset: source.slice(0, start).split('\n').length - 1 });
   return { options, notify: () => listener(), refreshes: () => refreshed };
+}
+
+test('startup seeds descriptor activity without waiting for a status edge', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  assert.match(source, /cliSessionState.ensureWatching\(\);\s+sessionTransitions.refreshDescriptorSessions\(\);/);
+});
+
+test('552b settle ticks never refresh the process table without a descriptor change', async t => {
+  const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'settle-cost-552b-')));
+  const folder = encodeProjectPath(tmp);
+  const subdir = path.join(tmp, folder, id, 'subagents');
+  fs.mkdirSync(subdir, { recursive: true });
+  const activeSessions = new Map([[id, { projectFolder: folder }]]);
+  let refreshes = 0;
+  cli.init({ dir: tmp, activeSessions, platform: 'win32', log: silent, now: () => Date.now(),
+    readProcessTable: async () => { refreshes++; return new Map(); } });
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  transitions.init({ PROJECTS_DIR: tmp, activeSessions, log: silent,
+    getLiveDescriptors: () => cli.getSidebarDescriptors(),
+    getMainWindow: () => null, rekeyMcpServer() {} });
+  t.after(() => {
+    transitions.init({ PROJECTS_DIR: tmp, activeSessions: new Map(), log: silent });
+    cli.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  transitions.detectSessionTransitions(folder);
+  fs.writeFileSync(path.join(subdir, 'agent-fresh.jsonl'), '{}\n');
+  transitions.detectSessionTransitions(folder);
+  await cli.refreshProcessTable();
+  refreshes = 0;
+  for (let tick = 0; tick < 12; tick++) {
+    t.mock.timers.tick(5000);
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+  assert.equal(refreshes, 0, 'settle ticks must not refresh the process table, even with no descriptors');
+});
+
+test('552b idle descriptors skip attach clients and still select an owned worker', async t => {
+  const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'attach-idle-552b-')));
+  const file = path.join(tmp, '123.json');
+  const attach = { isAttach: true, projectFolder: 'folder', realSessionId: id };
+  const activeSessions = new Map([['attach-tab', attach]]);
+  const rescans = [];
+  const write = status => fs.writeFileSync(file, JSON.stringify({ pid: 123, sessionId: id,
+    status, procStart: '111', cwd: tmp }));
+  write('busy');
+  cli.init({ dir: tmp, activeSessions, log: silent, isProcessAlive: () => true,
+    readProcStart: () => '111', readParentPid: () => null,
+    onIdle: (sessionId, session) => rescans.push({ sessionId, session }) });
+  t.after(() => { cli.stop(); fs.rmSync(tmp, { recursive: true, force: true }); });
+  assert.ok(cli.ensureWatching());
+  const change = async status => {
+    const notification = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => { off(); reject(new Error('status change timed out')); }, 5000);
+      const off = cli.onStatusesChanged(() => { clearTimeout(timeout); off(); resolve(); });
+    });
+    write(status);
+    await notification;
+  };
+  await change('idle');
+  assert.equal(rescans.length, 0, 'an attach client must not receive onIdle or acquire duplicate subagent state');
+  const worker = { projectFolder: 'folder', realSessionId: id };
+  activeSessions.set('owned-tab', worker);
+  await change('busy');
+  await change('idle');
+  assert.deepEqual(rescans, [{ sessionId: id, session: worker }], 'the owned worker behind the attach entry still receives onIdle');
+});
+
+for (const kind of ['fork', 'clear']) {
+  test(`552b a throwing descriptor reader preserves owned ${kind} detection`, t => {
+    const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'reader-error-552b-')));
+    const folder = 'folder';
+    fs.mkdirSync(path.join(tmp, folder));
+    const activeSessions = new Map([['old-id', { projectFolder: folder, knownJsonlFiles: new Set(), pty: { pid: 7 } }]]);
+    const warnings = [];
+    transitions.init({ PROJECTS_DIR: tmp, activeSessions,
+      log: { ...silent, warn: message => warnings.push(message) },
+      getLiveDescriptors: () => { throw new Error('descriptor reader unavailable'); },
+      clearOwner: () => 'mine', getMainWindow: () => null, rekeyMcpServer() {} });
+    t.after(() => {
+      transitions.init({ PROJECTS_DIR: tmp, activeSessions: new Map(), log: silent });
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+    const record = kind === 'fork' ? { type: 'user', forkedFrom: { sessionId: 'old-id' } }
+      : { sessionId: 'new-id', type: 'user', message: { role: 'user',
+        content: '<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>' } };
+    fs.writeFileSync(path.join(tmp, folder, 'new-id.jsonl'), JSON.stringify(record) + '\n');
+    assert.doesNotThrow(() => transitions.detectSessionTransitions(folder), 'descriptor errors must not abort owned transition detection');
+    assert.ok(activeSessions.has('new-id') && !activeSessions.has('old-id'), `${kind} still rekeys the owned PTY`);
+    assert.ok(warnings.some(message => message.includes('descriptor reader unavailable')), 'the descriptor failure is logged');
+  });
 }
 
 for (const attached of [false, true]) {

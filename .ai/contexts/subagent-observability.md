@@ -149,6 +149,12 @@ checks select these owners; `encodeProjectPath(descriptor.cwd)` selects their
 transcript folder. Startup and descriptor status notifications reconcile this
 map. Project-folder invalidations reuse `detectSubagentTransitions`, and its
 existing five-second settle timer also visits descriptor-backed states. There
+is no descriptor read or process-table refresh from that timer: it only visits
+the observation states already reconciled by startup, status notifications and
+project-folder invalidations. A descriptor-reader failure during a folder
+invalidation logs a warning and leaves owned PTY fork and /clear detection running.
+Idle descriptor callbacks skip attach clients, so they cannot build a second
+subagent observation state alongside the descriptor owner. There
 are no additional filesystem watches or polling intervals. Removed descriptors
 and sessions that acquire an owned PTY release their observation state; replacing
 the descriptor PID/start identity resets it. Missing descriptors release observation

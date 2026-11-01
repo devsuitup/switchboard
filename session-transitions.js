@@ -138,7 +138,6 @@ function armSubagentSettleTick(session) {
 function runSubagentSettleTick() {
   settleTimer = null;
   if (!activeSessions) return;
-  refreshDescriptorSessions();
   for (const [sessionId, session] of [...activeSessions, ...descriptorSessions]) {
     if (session.exited || session.isPlainTerminal || session.isAttach || !session.projectFolder) continue;
     if (!hasUnsettledSubagents(session)) continue;
@@ -701,7 +700,8 @@ function holdContinuationExit(sessionId, session, finish) {
 
 /** Detect fork and /clear transitions for active PTY sessions in a folder */
 function detectSessionTransitions(folder) {
-  refreshDescriptorSessions();
+  try { refreshDescriptorSessions(); }
+  catch (err) { log.warn(`[descriptor-subagents] refresh failed: ${err.message}`); }
   const folderPath = path.join(PROJECTS_DIR, folder);
   let currentFiles;
   try {
