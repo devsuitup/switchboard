@@ -16,6 +16,123 @@ const fixture = require('./fixtures/cli-tasks-2.1.296.json');
 const id = fixture.parentSessionId;
 const silent = { info() {}, warn() {}, debug() {} };
 
+function descriptorFixture(t) {
+  const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'descriptor-991-')));
+  const folder = encodeProjectPath(tmp);
+  const dir = path.join(tmp, folder);
+  fs.mkdirSync(dir);
+  const events = [];
+  const seeds = [];
+  const warnings = [];
+  const activeSessions = new Map();
+  const descriptors = [];
+  const options = { PROJECTS_DIR: tmp, activeSessions, log: { ...silent, warn: message => warnings.push(message) },
+    rekeyMcpServer() {}, clearOwner: () => 'mine', getLiveDescriptors: () => descriptors,
+    onDescriptorSession: (sessionId, session) => seeds.push({ sessionId, session }),
+    getMainWindow: () => ({ isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } }),
+  };
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  t.after(() => {
+    transitions.init({ PROJECTS_DIR: tmp, activeSessions: new Map(), log: silent });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  const child = sessionId => {
+    const subdir = path.join(dir, sessionId, 'subagents');
+    fs.mkdirSync(subdir, { recursive: true });
+    const file = path.join(subdir, 'agent-active.jsonl');
+    fs.writeFileSync(file, '{}\n');
+    return file;
+  };
+  const descriptor = sessionId => ({ sessionId, cwd: tmp, pid: 123, startedAt: 1, kind: 'bg' });
+  return { tmp, folder, dir, events, seeds, warnings, activeSessions, descriptors, options, child, descriptor };
+}
+
+test('991 direct descriptor refresh contains a failing reader', t => {
+  const f = descriptorFixture(t);
+  transitions.init({ ...f.options, getLiveDescriptors: () => { throw new Error('reader unavailable'); } });
+  assert.doesNotThrow(() => transitions.refreshDescriptorSessions(), 'every refresh caller is protected from reader failures');
+  assert.deepEqual(f.warnings, ['[descriptor-subagents] refresh failed: reader unavailable']);
+});
+
+test('991 a failing descriptor does not skip another descriptor or removed-owner pruning', t => {
+  const f = descriptorFixture(t);
+  const removedId = '11111111-1111-1111-1111-111111111111';
+  const badId = '22222222-2222-2222-2222-222222222222';
+  const goodId = '33333333-3333-3333-3333-333333333333';
+  const removedChild = f.child(removedId);
+  f.child(badId);
+  f.child(goodId);
+  let fail = false;
+  transitions.init({ ...f.options, getMainWindow: () => {
+    if (fail) { fail = false; throw new Error('descriptor scan failed'); }
+    return f.options.getMainWindow();
+  } });
+  f.descriptors.push(f.descriptor(removedId));
+  transitions.refreshDescriptorSessions();
+  f.descriptors.splice(0, 1, f.descriptor(badId), f.descriptor(goodId));
+  fail = true;
+  assert.doesNotThrow(() => transitions.refreshDescriptorSessions(), 'a failed descriptor scan is isolated');
+  assert.deepEqual(f.seeds.map(seed => seed.sessionId), [removedId, goodId], 'later descriptors still hydrate');
+  assert.deepEqual(f.warnings, [`[descriptor-subagents] ${badId}: descriptor scan failed`], 'one warning identifies the failing descriptor');
+  transitions.refreshDescriptorSessions();
+  assert.deepEqual(f.seeds.map(seed => seed.sessionId), [removedId, goodId, badId], 'the failed descriptor is retried on the next refresh');
+  fs.appendFileSync(removedChild, '{}\n');
+  fs.utimesSync(removedChild, new Date(), new Date(Date.now() + 1000));
+  t.mock.timers.tick(5000);
+  assert.equal(f.events.filter(([, event]) => event.parentSessionId === removedId).length, 0, 'removed descriptors are pruned despite a scan failure');
+});
+
+for (const kind of ['fork', 'clear']) {
+  test(`991 ${kind} drops an earlier descriptor observation in the rekey pass`, t => {
+    const f = descriptorFixture(t);
+    const oldId = '11111111-1111-1111-1111-111111111111';
+    const file = f.child(id);
+    f.descriptors.push(f.descriptor(id));
+    f.activeSessions.set(oldId, { projectFolder: f.folder, knownJsonlFiles: new Set(), pty: { pid: 7 } });
+    transitions.init(f.options);
+    transitions.refreshDescriptorSessions();
+    const observed = f.seeds[0].session.knownSubagents.get('active');
+    const before = observed.mtimeMs;
+    const record = kind === 'fork' ? { type: 'user', forkedFrom: { sessionId: oldId } }
+      : { sessionId: id, type: 'user', message: { role: 'user',
+        content: '<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>' } };
+    fs.writeFileSync(path.join(f.dir, id + '.jsonl'), JSON.stringify(record) + '\n');
+    transitions.detectSessionTransitions(f.folder);
+    assert.ok(f.activeSessions.has(id) && !f.activeSessions.has(oldId));
+    transitions.detectSubagentTransitions(id, f.activeSessions.get(id), f.dir);
+    t.mock.timers.tick(5000);
+    fs.appendFileSync(file, '{}\n');
+    fs.utimesSync(file, new Date(), new Date());
+    t.mock.timers.tick(5000);
+    assert.equal(observed.mtimeMs, before, 'the descriptor observation is absent immediately after the rekey pass');
+    assert.equal(f.events.filter(([channel]) => channel === 'subagent-spawned').length, 1, 'only the owned observer announces growth');
+    t.mock.timers.tick(5000);
+    t.mock.timers.tick(30000);
+    assert.equal(f.events.filter(([channel]) => channel === 'subagent-completed').length, 1, 'only the owned observer announces completion');
+  });
+}
+
+for (const kind of ['bg', 'interactive']) {
+  test(`987 stale ${kind} descriptor children can become active after bootstrap`, t => {
+    const f = descriptorFixture(t);
+    const file = f.child(id);
+    const stale = new Date(Date.now() - 120000);
+    fs.utimesSync(file, stale, stale);
+    f.descriptors.push({ ...f.descriptor(id), kind });
+    transitions.init(f.options);
+    transitions.refreshDescriptorSessions();
+    assert.equal(f.events.length, 0, 'bootstrap stays silent for historical children');
+    t.mock.timers.tick(5000);
+    fs.appendFileSync(file, '{}\n');
+    fs.utimesSync(file, new Date(), new Date());
+    t.mock.timers.tick(5000);
+    assert.equal(f.events.filter(([channel]) => channel === 'subagent-spawned').length, 1, 'a stale descriptor child resumes through the settle tick without a folder event');
+    t.mock.timers.tick(5000);
+    t.mock.timers.tick(30000);
+    assert.equal(f.events.filter(([channel]) => channel === 'subagent-completed').length, 1);
+  });
+}
+
 function mainWiring(taskRecords) {
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
   const start = source.indexOf("const sessionTransitions = require('./session-transitions');");
