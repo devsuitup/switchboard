@@ -3483,7 +3483,16 @@ ipcMain.handle('get-task-snapshots', async () => {
 const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
-  getLiveDescriptors: () => cliSessionState.getSidebarDescriptors(),
+  getLiveDescriptors: () => {
+    const hidden = new Set(((getSetting('global') || {}).hiddenProjects || [])
+      .filter(entry => parseFolderKey(entry).alias === null).map(normalizeArchivedProjectPath));
+    const descriptors = cliSessionState.getSidebarDescriptors({ allWriters: true });
+    return hidden.size ? descriptors.filter(descriptor => {
+      const cwd = normalizeArchivedProjectPath(descriptor.cwd);
+      const parent = require('./public/worktree-nesting').worktreeParentPath(descriptor.cwd?.replace(/\\/g, '/'));
+      return !hidden.has(cwd) && !hidden.has(normalizeArchivedProjectPath(parent));
+    }) : descriptors;
+  },
   onDescriptorSession: async (sessionId, session, folderPath) => {
     await taskRecords.read(path.join(folderPath, sessionId + '.jsonl'), sessionId);
     for (const file of session._subFileList || []) {

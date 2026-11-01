@@ -18,6 +18,9 @@ for (const mode of ['normal', 'contended', 'absent']) test('A1/A5 typed legacy h
   h.init(writer); const requested = [], notified = [], liveness = [];
   if (mode === 'absent') h.rows.delete(OLD);
   const ctx = vm.createContext({ path, fs, require: require('node:module').createRequire(path.join(__dirname, '../main.js')), PROJECTS_DIR: h.root,
+    getSetting: () => null,
+    parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
+    normalizeArchivedProjectPath: require('../src/main/shared/normalize-project-path').normalizeProjectPath,
     activeSessions: h.activeSessions, sessionCache: cache, writer, sessionTransitions: transitions, sessionHasPty: () => false, ptyPids: () => [],
     mainWindow: null, log: h.log, rekeyMcpServer() {}, activityReporter: { rekey() {} }, taskRecords: { rekey() {}, hasRecord: () => false, async read() {}, async child() {} },
     isHostedJob: require('../src/main/bg-agents/bg-agents-roster').isHostedJob, bgAgents: { getCachedJobs: () => new Map([['1234abcd', { sessionId: HEAD, state: 'working' }]]) },

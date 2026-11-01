@@ -39,6 +39,9 @@ for (const proof of ['descriptor', 'job', 'callback-error']) {
     const start = source.indexOf('sessionTransitions.init({');
     const end = source.indexOf('\n});', start) + '\n});'.length;
     vm.runInNewContext(source.slice(start, end), {
+      getSetting: () => null,
+      parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
+      normalizeArchivedProjectPath: require('../src/main/shared/normalize-project-path').normalizeProjectPath,
       path, PROJECTS_DIR: projects, activeSessions, sessionTransitions: transitions,
       mainWindow: { isDestroyed: () => false, webContents: { send: (...args) => events.push(args) } },
       log: { info() {}, debug() {}, warn: (...args) => errors.push(args), error: (...args) => errors.push(args) }, rekeyMcpServer() {},
