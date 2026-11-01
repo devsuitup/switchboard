@@ -38,10 +38,10 @@ function createTranscriptFollower() {
       const saved = parked;
       dispose();
       const matches = saved && saved.id === id && saved.token === checkpoint;
-      const stat = fs.statSync(file, { bigint: true });
-      current = { id, file: matches ? saved.file : file, token: randomUUID(), closed: false, busy: false,
-        cursor: matches ? { ...saved.cursor, finalSize: null } : cursor(stat, 0, []) };
-      return read(id, current.token, file).then(result => ({ ...result, reset: !matches || result.reset }));
+      if (!matches) return { ...open(id, file), reset: true };
+      current = { id, file: saved.file, token: randomUUID(), closed: false, busy: false,
+        cursor: { ...saved.cursor, finalSize: null } };
+      return read(id, current.token, file, false, true);
     }
     dispose();
     const fd = fs.openSync(file, 'r');
@@ -79,7 +79,7 @@ function createTranscriptFollower() {
     return { ok: true };
   }
 
-  async function read(id, token, file, final = false) {
+  async function read(id, token, file, final = false, fullReset = false) {
     const record = current;
     if (!record || record.id !== id || record.token !== token || record.closed) return { error: 'Transcript follower expired or closed' };
     if (record.busy) return { error: 'A transcript read is already in progress' };
@@ -100,6 +100,7 @@ function createTranscriptFollower() {
           if (!readRange(file, sample.start, sample.data.length, stat).equals(sample.data)) { reset = true; break; }
         }
       }
+      if (reset && fullReset) return { ...open(id, file), reset: true };
       if (reset) work = cursor(stat, 0, []);
       if (final && work.finalSize === null) work.finalSize = Number(stat.size);
       const target = Math.min(Number(stat.size), work.finalSize ?? Number(stat.size));
