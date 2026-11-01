@@ -659,8 +659,10 @@ Observation only: a remote session is read, searched and counted, never resumed
 or deleted from here.
 
 - **The local path is unchanged when no host is declared.** `remote-index.js`
-  `start()` returns false before touching anything if `enabledHosts()` is empty:
-  no `setInterval`, no ssh, no mirror directory. `session-cache.js`'s
+  `start()` returns false without arming anything if `enabledHosts()` is empty:
+  no `setInterval`, no ssh, no mirror directory. It still starts a detached
+  prune that reads the indexed folder keys and drops those of an undeclared
+  alias, notifying if it dropped any. `session-cache.js`'s
   `remoteRoots` map stays empty, so `resolveFolderDir()` is `path.join(PROJECTS_DIR, folder)`
   and `buildProjectsFromCache`'s root list has exactly one entry — the same
   `readdirSync` it always did. Proven by `test/remote-index.test.js` (a transport
@@ -1044,11 +1046,17 @@ while it waited, it skips repairs and scans only its original
 concurrent; this orders scans, not the entire mirror-and-index cycle.
 Only the current generation remembers ghost checks or successful ghost repairs;
 a cancelled scan cannot refill the set cleared by restart. Removed-alias pruning
-also waits for that alias's queued scan, catches its rejection, then reads the
-folder keys again to include late writes. Removing the last host still prunes,
-without arming a timer or contacting SSH. No new timeout or retry is added:
-`refreshHostNow` still returns `in-flight` immediately during a refresh, and
-the Archive handler retains its existing 20-second budget.
+never holds the pass: an alias with a queued scan has its drop chained onto that
+scan (rejection caught), and an alias without one is dropped at once. The
+chained drop reads the folder keys again to include late writes, and is skipped
+if the indexer stopped or the alias is declared and enabled again by then; it
+notifies when it dropped rows. Remaining hosts therefore sync, and
+`refreshHostNow` answers, while a removed host's scan is still running. A pass
+that waits behind an earlier scan of its own alias still keeps `refreshHostNow`
+returning `in-flight` for as long as that scan runs (up to
+`SUBSET_SCAN_TIMEOUT_MS`, 10 minutes, far beyond the Archive handler's existing
+20-second budget, which is unchanged); no timeout or retry was added. Removing
+the last host still prunes, without arming a timer or contacting SSH.
 
 A cancelled pass that already indexed rows reports a change, so the sidebar is
 notified even though the new pass finds an up-to-date mirror. A cancelled

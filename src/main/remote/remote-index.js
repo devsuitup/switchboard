@@ -118,6 +118,7 @@ function createRemoteIndexer(ctx) {
   const hostTools = new Map(); // alias -> { tools: { tmux, inotifywait } | null, nextProbeAt }
   const headTurnErrors = new Map();
   const checkedGhostFolders = new Set();
+  const pendingDrops = new Set();
 
   function backoffState(alias) {
     let s = hostBackoff.get(alias);
@@ -178,6 +179,29 @@ function createRemoteIndexer(ctx) {
   }
 
   // Nothing else ever revisits a folder whose alias is no longer declared.
+  async function dropAliasFolders(alias) {
+    let dropped = 0;
+    for (const key of ctx.listIndexedFolderKeys()) {
+      if (parseFolderKey(key).alias !== alias) continue;
+      await ctx.dropFolder(key);
+      dropped++;
+    }
+    return dropped;
+  }
+
+  function dropAliasAfterScan(alias, pending) {
+    const chained = pending.catch(() => {}).then(async () => {
+      if (stopped || hosts().some(h => h.alias === alias)) return;
+      const dropped = await dropAliasFolders(alias);
+      if (dropped > 0 && !stopped && ctx.notify) ctx.notify();
+    }).catch(err => log.warn(`[remote:${alias}] deferred alias prune failed: ${err.message}`)).finally(() => {
+      pendingDrops.delete(alias);
+      if (hostScans.get(alias) === chained) hostScans.delete(alias);
+    });
+    pendingDrops.add(alias);
+    hostScans.set(alias, chained);
+  }
+
   async function pruneUnknownAliases(list) {
     if (!ctx.listIndexedFolderKeys || !ctx.dropFolder) return 0;
     const known = new Set(list.map(h => h.alias));
@@ -186,16 +210,12 @@ function createRemoteIndexer(ctx) {
       const { alias } = parseFolderKey(key);
       if (alias !== null) aliases.add(alias);
     }
-    for (const alias of aliases) {
-      const pending = hostScans.get(alias);
-      if (!known.has(alias) && pending) await pending.catch(() => {});
-    }
     let dropped = 0;
-    for (const key of ctx.listIndexedFolderKeys()) {
-      const { alias } = parseFolderKey(key);
-      if (alias === null || known.has(alias)) continue;
-      await ctx.dropFolder(key);
-      dropped++;
+    for (const alias of aliases) {
+      if (known.has(alias) || pendingDrops.has(alias)) continue;
+      const pending = hostScans.get(alias);
+      if (pending) dropAliasAfterScan(alias, pending);
+      else dropped += await dropAliasFolders(alias);
     }
     for (const alias of [...remoteSessions.keys()]) {
       if (!known.has(alias)) remoteSessions.delete(alias);
@@ -295,7 +315,7 @@ function createRemoteIndexer(ctx) {
           if (ghost) {
             fullRepairs.add(folder);
             toScan.add(folder);
-          } else if (!cancelled()) {
+          } else {
             checkedGhostFolders.add(key);
           }
         }
@@ -489,7 +509,9 @@ function createRemoteIndexer(ctx) {
     for (const alias of headTurnErrors.keys()) {
       if (!list.some(host => host.alias === alias)) headTurnErrors.delete(alias);
     }
-    pruneUnknownAliases(list).catch(err => log.warn('[remote] alias prune failed:', err.message));
+    pruneUnknownAliases(list).then(dropped => {
+      if (dropped > 0 && !stopped && ctx.notify) ctx.notify();
+    }).catch(err => log.warn('[remote] alias prune failed:', err.message));
     // No host declared: no timer, and the transport is never touched.
     if (list.length === 0) return false;
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);

@@ -250,6 +250,72 @@ for (const remaining of [[], [{ alias: 'other' }]]) {
   }
 }
 
+test('983 removing a host with a running scan does not stall the remaining hosts', async t => {
+  const held = deferred();
+  const store = new Set();
+  const f = scripted(t, {
+    store, folders: ['-srv-a'],
+    onScan: n => n === 1 ? held.promise.then(() => { store.add('vps::-srv-late'); }) : undefined,
+  });
+  t.after(() => held.resolve());
+  const old = f.indexer.refreshNow();
+  await until(() => f.calls.batches.length === 1);
+  f.state.hosts = [{ alias: 'other' }];
+  f.indexer.restart();
+  await until(() => f.calls.sync === 2);
+  await until(() => f.indexer.getRemoteSessions('other').at !== null);
+  assert.equal((await f.indexer.refreshHostNow('other')).skipped, false, 'a remaining host refreshes while the removed scan is held');
+  assert.deepEqual(f.calls.drops, [], 'the removed alias is not dropped under its running scan');
+  held.resolve();
+  await old;
+  await until(() => f.calls.drops.includes('vps::-srv-late'));
+  assert.deepEqual([...store], [], 'removed-alias rows are dropped once its scan settles');
+});
+
+test('983 a deferred drop does not touch the index after the indexer stopped', async t => {
+  const held = deferred();
+  const store = new Set();
+  const f = scripted(t, { store, folders: ['-srv-a'], onScan: n => n === 1 ? held.promise : undefined });
+  t.after(() => held.resolve());
+  const old = f.indexer.refreshNow();
+  await until(() => f.calls.batches.length === 1);
+  f.state.hosts = [];
+  f.indexer.restart();
+  f.indexer.stop();
+  held.resolve();
+  await old;
+  for (let i = 0; i < 10; i++) await tick();
+  assert.deepEqual(f.calls.drops, [], 'a stopped indexer drops nothing');
+  assert.deepEqual([...store], ['vps::-srv-a']);
+});
+
+test('983 a deferred drop skips an alias declared again while its scan was running', async t => {
+  const held = deferred();
+  const store = new Set();
+  const f = scripted(t, { store, folders: ['-srv-a'], onScan: n => n === 1 ? held.promise : undefined });
+  t.after(() => held.resolve());
+  fs.mkdirSync(path.join(f.dir, 'remote/vps/projects/-srv-a'), { recursive: true });
+  const old = f.indexer.refreshNow();
+  await until(() => f.calls.batches.length === 1);
+  f.state.hosts = [];
+  f.indexer.restart();
+  f.state.hosts = [{ alias: 'vps' }];
+  held.resolve();
+  await old;
+  for (let i = 0; i < 10; i++) await tick();
+  assert.deepEqual(f.calls.drops, [], 'a re-declared host keeps its rows');
+  assert.deepEqual([...store], ['vps::-srv-a']);
+});
+
+test('983 start with no host notifies when the detached prune dropped rows', async t => {
+  const f = scripted(t, { indexed: ['vps::-srv-a'] });
+  f.state.hosts = [];
+  assert.equal(f.indexer.start(), false);
+  await until(() => f.calls.drops.length === 1);
+  await until(() => f.notices.length > 0);
+  assert.deepEqual(f.calls.drops, ['vps::-srv-a']);
+});
+
 for (const rejects of [false, true]) {
   test(`983 missing-folder deletion waits for its old scan (rejects=${rejects})`, async t => {
     const held = deferred();
