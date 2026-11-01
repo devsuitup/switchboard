@@ -146,7 +146,7 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
               const frame = stack.indexOf('\n    at ', end - 1);
               if (frame !== -1 && frame - end <= 1000 && !stack.slice(end, frame).trim()) {
                 const head = stack.slice(frame + 1, frame + 4001);
-                if (!head.includes(probe)) capped = head;
+                if (!head.split('\n', 1)[0].includes(probe)) capped = head;
               }
             }
           }

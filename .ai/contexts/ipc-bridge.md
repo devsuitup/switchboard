@@ -123,8 +123,10 @@ characters, then confirmed in full), whatever the error name or header. When
 found there and only whitespace (at most 1,000 characters) separates it from
 the next frame line, the 4,000-character cap starts at that frame line (a
 message ending in a newline may share it with the first frame). The head is
-kept only if it does not contain the message's first 200 characters again, so
-a name that repeats or contains the message falls back to the tail. A stack
+kept only if its first frame line does not contain the message's first 200
+characters again. A stack that repeats the message on that frame-like line
+falls back to the tail. Repetition on later lines, including an appended cause
+with the same message, keeps the head so the outer throw site is retained. A stack
 that itself starts with a frame keeps its head. Otherwise, including a long
 text that comes from the error name, the cap is the last 4,000 characters, as
 before. When the frames exceed 4,000 characters, the head keeps the throw site

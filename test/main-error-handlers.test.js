@@ -681,10 +681,29 @@ test('a native Error whose name repeats its long message keeps its throw site', 
   assert.match(logs[0][1], /at nativeThrowSite965 /, 'the throw-site frame must be logged');
 });
 
-test('a name holding the message and a frame-like line falls back to the stack tail', t => {
+test('a stack repeating the message on the first frame-like line falls back to the stack tail', t => {
   const { target, logs } = setup(t);
   const message = 'm'.repeat(15500);
   const stack = `${message}\n    at FAKE965 (x.js:1:1): ${message}\n    at REAL965 (f.js:1:1)`;
   target.emit('uncaughtException', { message, name: `${message}\n    at FAKE965 (x.js:1:1)`, stack });
   assert.match(logs[0][1], /at REAL965 /, 'the real frame must be logged');
 });
+
+for (const length of [15500, 16001]) {
+  test(`a cached stack with a same-message appended cause keeps the outer throw site (${length} characters)`, t => {
+    const { target, logs } = setup(t);
+    const message = 'appended cause '.padEnd(length, 'x');
+    function causeThrowSite984() { return new Error(message); }
+    function outerThrowSite984() { return new Error(message, { cause: causeThrowSite984() }); }
+    const error = outerThrowSite984();
+    const outerStack = error.stack;
+    error.stack += `\nCaused by: ${error.cause.stack}`;
+    target.emit('uncaughtException', error);
+    const marker = `[truncated; length=${length}]\n`;
+    const frames = logs[0][1].slice(logs[0][1].indexOf(marker) + marker.length);
+    assert.match(frames, /^    at outerThrowSite984 /, 'the outer throw-site frame must be logged');
+    assert.equal(frames, error.stack.slice(outerStack.indexOf('\n    at ') + 1).slice(0, 4000));
+    assert.ok(frames.length <= 4000);
+    assert.ok(logs[0][1].length <= 16000);
+  });
+}
