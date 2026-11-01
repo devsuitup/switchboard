@@ -689,21 +689,70 @@ test('a stack repeating the message on the first frame-like line falls back to t
   assert.match(logs[0][1], /at REAL965 /, 'the real frame must be logged');
 });
 
+test('a multiline message repeated on the first frame-like line keeps the real frame', t => {
+  const { target, logs } = setup(t);
+  const message = `multiline message\n${'m'.repeat(15500)}`;
+  const stack = `${message}\n    at FAKE996 (x.js:1:1): ${message}\n    at REAL996 (f.js:1:1)`;
+  target.emit('uncaughtException', { message, stack });
+  const marker = `[truncated; length=${message.length}]\n`;
+  const frames = logs[0][1].slice(logs[0][1].indexOf(marker) + marker.length);
+  assert.match(frames, /at REAL996 /, 'the real frame must be logged');
+  assert.ok(frames.length <= 4000);
+  assert.ok(logs[0][1].length <= 16000);
+});
+
 for (const length of [15500, 16001]) {
-  test(`a cached stack with a same-message appended cause keeps the outer throw site (${length} characters)`, t => {
+  test(`a cached stack with a same-message appended cause keeps both throw sites (${length} characters)`, t => {
     const { target, logs } = setup(t);
     const message = 'appended cause '.padEnd(length, 'x');
     function causeThrowSite984() { return new Error(message); }
     function outerThrowSite984() { return new Error(message, { cause: causeThrowSite984() }); }
     const error = outerThrowSite984();
-    const outerStack = error.stack;
+    void error.stack;
     error.stack += `\nCaused by: ${error.cause.stack}`;
     target.emit('uncaughtException', error);
     const marker = `[truncated; length=${length}]\n`;
     const frames = logs[0][1].slice(logs[0][1].indexOf(marker) + marker.length);
     assert.match(frames, /^    at outerThrowSite984 /, 'the outer throw-site frame must be logged');
-    assert.equal(frames, error.stack.slice(outerStack.indexOf('\n    at ') + 1).slice(0, 4000));
+    assert.match(frames, /at causeThrowSite984 /, 'the cause throw-site frame must be logged');
+    assert.ok(!frames.includes(message.slice(0, 200)), 'frames must not repeat the message probe');
+    assert.ok(!frames.includes('x'.repeat(200)), 'frames must not contain a 200-character message run');
     assert.ok(frames.length <= 4000);
     assert.ok(logs[0][1].length <= 16000);
   });
 }
+
+for (const [label, gap] of [
+  ['no following frame', ''],
+  ['non-whitespace separator', '\nnot a frame\n    at excluded996 (f.js:2:1)'],
+  ['whitespace separator over 1000 characters', `${' '.repeat(1001)}\n    at excluded996 (f.js:2:1)`],
+]) {
+  test(`a repeated long message with ${label} keeps only the outer frames`, t => {
+    const { target, logs } = setup(t);
+    const message = 'repeated message '.padEnd(15500, 'x');
+    const prefix = '    at outer996 (f.js:1:1)';
+    const stack = `Error: ${message}\n${prefix}\nCaused by: Error: ${message}${gap}`;
+    target.emit('uncaughtException', { message, stack });
+    assert.equal(logs[0][1], `${message.slice(0, 11000)}\n[truncated; length=15500]\n${prefix}`);
+  });
+}
+
+test('a partial cause frame is dropped when the cause frames exceed the remaining budget', t => {
+  const { target, logs } = setup(t);
+  const message = 'repeated message '.padEnd(15500, 'x');
+  const prefix = '    at outer996 (f.js:1:1)';
+  const retained = '    at retained996 (f.js:3:1)';
+  const stack = `Error: ${message}\n${prefix}\nCaused by: Error: ${message}\n    at discarded996 (${'z'.repeat(4200)}:2:1)\n${retained}`;
+  target.emit('uncaughtException', { message, stack });
+  assert.equal(logs[0][1], `${message.slice(0, 11000)}\n[truncated; length=15500]\n${prefix}\n${retained}`);
+});
+
+test('a repeated message ending in a newline keeps its shared cause frame after 1000 whitespace characters', t => {
+  const { target, logs } = setup(t);
+  const message = `${'repeated message '.padEnd(15500, 'x')}\n`;
+  const prefix = '    at outer996 (f.js:1:1)';
+  const cause = '    at cause996 (f.js:2:1)';
+  const stack = `Error: ${message}${prefix}\nCaused by: Error: ${message}${'\n'.repeat(1000)}${cause}`;
+  target.emit('uncaughtException', { message, stack });
+  assert.equal(logs[0][1], `${message.slice(0, 11000)}\n[truncated; length=15501]\n${prefix}\n${cause}`);
+});
