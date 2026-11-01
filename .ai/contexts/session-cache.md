@@ -1025,18 +1025,30 @@ its alias is still enabled in `hosts()`. A removed or disabled alias and a
 real stop (dispose, when the database may be closed) skip that scan. The new
 pass owns unindexed-folder repair, ghost-folder checks and missing-folder
 deletion; a cancelled pass does none of those repairs.
+It scans changed folders whole, without file-level subsets: the cancelled
+generation does not collect the indexed-folder baseline needed to restrict a
+scan safely. This can cost more than the current pass's incremental scan.
 
 Each `scanFoldersViaWorker` starts a separate worker: the writer serializes
 individual writes, not whole scans. A per-alias promise in `remote-index`
 therefore queues scans across generations. A new pass waits for the previous
-scan to settle, including rejection, before starting its own scan, so the
+scan to settle, including rejection, before computing its indexed folders,
+repair set and file subsets or deleting missing folders. It therefore avoids
+rescanning unchanged folders that the preceding scan just indexed, and the
 older worker cannot overwrite the newer scan's rows afterwards. Other aliases
 can scan independently. The queue survives restart and releases its entry
 after the last queued scan settles. A queued scan rechecks stop, alias removal
 and generation before starting its worker. If another restart cancelled it
-while it waited, it discards its prepared repairs and scans only its original
+while it waited, it skips repairs and scans only its original
 `changedFolders`; an empty set starts no worker. Mirror fetches are still
 concurrent; this orders scans, not the entire mirror-and-index cycle.
+Only the current generation remembers ghost checks or successful ghost repairs;
+a cancelled scan cannot refill the set cleared by restart. Removed-alias pruning
+also waits for that alias's queued scan, catches its rejection, then reads the
+folder keys again to include late writes. Removing the last host still prunes,
+without arming a timer or contacting SSH. No new timeout or retry is added:
+`refreshHostNow` still returns `in-flight` immediately during a refresh, and
+the Archive handler retains its existing 20-second budget.
 
 A cancelled pass that already indexed rows reports a change, so the sidebar is
 notified even though the new pass finds an up-to-date mirror. A cancelled

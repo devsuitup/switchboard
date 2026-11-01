@@ -181,6 +181,15 @@ function createRemoteIndexer(ctx) {
   async function pruneUnknownAliases(list) {
     if (!ctx.listIndexedFolderKeys || !ctx.dropFolder) return 0;
     const known = new Set(list.map(h => h.alias));
+    const aliases = new Set(hostScans.keys());
+    for (const key of ctx.listIndexedFolderKeys()) {
+      const { alias } = parseFolderKey(key);
+      if (alias !== null) aliases.add(alias);
+    }
+    for (const alias of aliases) {
+      const pending = hostScans.get(alias);
+      if (!known.has(alias) && pending) await pending.catch(() => {});
+    }
     let dropped = 0;
     for (const key of ctx.listIndexedFolderKeys()) {
       const { alias } = parseFolderKey(key);
@@ -258,77 +267,79 @@ function createRemoteIndexer(ctx) {
     if (stopped) return false;
     if (cancelled() && !hosts().some(h => h.alias === host.alias)) return false;
     let scannedRows = false;
+    let indexedFolders = 0;
     const folderPrefix = host.alias;
     const changedFolders = new Set(result.changedFolders);
-    const toScan = new Set(changedFolders);
     const changedFilesByFolder = result.changedFilesByFolder instanceof Map
       ? result.changedFilesByFolder : new Map();
 
-    const indexed = new Set();
-    const fullRepairs = new Set();
-    if (!cancelled() && ctx.listIndexedFolderKeys) {
-      for (const key of ctx.listIndexedFolderKeys()) {
-        const parsed = parseFolderKey(key);
-        if (parsed.alias === host.alias) indexed.add(parsed.folder);
-      }
-      const present = mirrorFolders(projectsDir);
-      for (const folder of present) {
-        if (!indexed.has(folder)) toScan.add(folder);
-        const key = joinFolderKey(host.alias, folder);
-        if (checkedGhostFolders.has(key) || !ctx.getCachedByFolder) continue;
-        const ghost = ctx.getCachedByFolder(key).some(row => !row.parentSessionId
-          && row.sessionId.startsWith('agent-')
-          && !fs.existsSync(path.join(projectsDir, folder, row.sessionId + '.jsonl')));
-        if (ghost) {
-          fullRepairs.add(folder);
-          toScan.add(folder);
-        } else {
-          checkedGhostFolders.add(key);
+    const previousScan = hostScans.get(host.alias) || Promise.resolve();
+    const scan = previousScan.catch(() => {}).then(async () => {
+      if (stopped || (cancelled() && !hosts().some(h => h.alias === host.alias))) return;
+      const toScan = new Set(changedFolders);
+      const indexed = new Set();
+      const fullRepairs = new Set();
+      if (!cancelled() && ctx.listIndexedFolderKeys) {
+        for (const key of ctx.listIndexedFolderKeys()) {
+          const parsed = parseFolderKey(key);
+          if (parsed.alias === host.alias) indexed.add(parsed.folder);
         }
-      }
-      if (ctx.dropFolder) {
-        const presentSet = new Set(present);
-        for (const folder of indexed) {
+        const present = mirrorFolders(projectsDir);
+        for (const folder of present) {
+          if (!indexed.has(folder)) toScan.add(folder);
+          const key = joinFolderKey(host.alias, folder);
+          if (checkedGhostFolders.has(key) || !ctx.getCachedByFolder) continue;
+          const ghost = ctx.getCachedByFolder(key).some(row => !row.parentSessionId
+            && row.sessionId.startsWith('agent-')
+            && !fs.existsSync(path.join(projectsDir, folder, row.sessionId + '.jsonl')));
+          if (ghost) {
+            fullRepairs.add(folder);
+            toScan.add(folder);
+          } else if (!cancelled()) {
+            checkedGhostFolders.add(key);
+          }
+        }
+        if (ctx.dropFolder) {
+          const presentSet = new Set(present);
+          for (const folder of indexed) {
+            if (cancelled()) break;
             if (!presentSet.has(folder)) {
               const key = joinFolderKey(host.alias, folder);
               await ctx.dropFolder(key);
               checkedGhostFolders.delete(key);
             }
+          }
         }
       }
-    }
 
-    if (toScan.size > 0 && ctx.scanFolders) {
+      const repairing = !cancelled();
+      const folders = [...(repairing ? toScan : changedFolders)];
+      indexedFolders = folders.length;
+      if (folders.length === 0 || !ctx.scanFolders || stopped
+        || (cancelled() && !hosts().some(h => h.alias === host.alias))) return;
       // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
       const fileSubsets = new Map();
       for (const folder of toScan) {
-        if (!indexed.has(folder) || fullRepairs.has(folder)) continue;
+        if (!repairing || !indexed.has(folder) || fullRepairs.has(folder)) continue;
         const files = changedFilesByFolder.get(folder);
         if (files && files.size > 0) fileSubsets.set(folder, files);
       }
-      const previousScan = hostScans.get(host.alias) || Promise.resolve();
-      const scan = previousScan.catch(() => {}).then(async () => {
-        if (stopped || (cancelled() && !hosts().some(h => h.alias === host.alias))) return;
-        const repairing = !cancelled();
-        const folders = [...(repairing ? toScan : changedFolders)];
-        if (folders.length === 0) return;
-        const scanned = await ctx.scanFolders({
-          projectsDir,
-          folderPrefix,
-          folders,
-          ...(fileSubsets.size > 0 ? { fileSubsets } : {}),
-        });
-        scannedRows = true;
-        if (repairing && scanned?.ok !== false) {
-          for (const folder of fullRepairs) checkedGhostFolders.add(joinFolderKey(host.alias, folder));
-        }
+      const scanned = await ctx.scanFolders({
+        projectsDir,
+        folderPrefix,
+        folders,
+        ...(fileSubsets.size > 0 ? { fileSubsets } : {}),
       });
-      hostScans.set(host.alias, scan);
-      try {
-        await scan;
-      } finally {
-        if (hostScans.get(host.alias) === scan) hostScans.delete(host.alias);
+      scannedRows = true;
+      if (!cancelled() && scanned?.ok !== false) {
+        for (const folder of fullRepairs) checkedGhostFolders.add(joinFolderKey(host.alias, folder));
       }
+    });
+    hostScans.set(host.alias, scan);
+    try {
+      await scan;
+    } finally {
+      if (hostScans.get(host.alias) === scan) hostScans.delete(host.alias);
     }
 
     if (cancelled()) return scannedRows;
@@ -350,7 +361,7 @@ function createRemoteIndexer(ctx) {
     remoteHeadTurnFiles.set(host.alias, tails);
 
     log.info(`[remote:${host.alias}] ${result.fetched} fetched, ${result.unchanged} unchanged, ` +
-      `${result.removed} removed, ${result.failed} failed, ${toScan.size} folders indexed`);
+      `${result.removed} removed, ${result.failed} failed, ${indexedFolders} folders indexed`);
 
     if (cancelled()) return scannedRows;
     const toolsChanged = await probeHostTools(host.alias);
@@ -375,7 +386,7 @@ function createRemoteIndexer(ctx) {
         }
       }
     }
-    return toScan.size > 0 || toolsChanged;
+    return indexedFolders > 0 || toolsChanged;
   }
 
   // see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
@@ -385,7 +396,6 @@ function createRemoteIndexer(ctx) {
     const cancelled = () => stopped || cycle !== generation;
     const list = hosts();
     publishRoots(list);
-    if (list.length === 0) return { skipped: true, hosts: 0 };
 
     inFlight = true;
     let changed = false;
@@ -393,6 +403,10 @@ function createRemoteIndexer(ctx) {
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
     try {
       changed = await pruneUnknownAliases(list) > 0;
+      if (list.length === 0) {
+        if (changed && !stopped && ctx.notify) ctx.notify();
+        return { skipped: true, hosts: 0 };
+      }
       for (const host of list) {
         if (cancelled()) break;
         if (hostInFlight.has(host.alias)) continue;
@@ -475,9 +489,9 @@ function createRemoteIndexer(ctx) {
     for (const alias of headTurnErrors.keys()) {
       if (!list.some(host => host.alias === alias)) headTurnErrors.delete(alias);
     }
+    pruneUnknownAliases(list).catch(err => log.warn('[remote] alias prune failed:', err.message));
     // No host declared: no timer, and the transport is never touched.
     if (list.length === 0) return false;
-    pruneUnknownAliases(list).catch(err => log.warn('[remote] alias prune failed:', err.message));
     const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
     timer = timers.setInterval(() => { refreshNow().catch(() => {}); }, intervalMs);
     if (timer && typeof timer.unref === 'function') timer.unref();

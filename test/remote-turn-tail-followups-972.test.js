@@ -160,6 +160,7 @@ test('tail removal failure warns, retains cleanup debt, and does not fail the ho
 function scripted(t, {
   gates = {}, folders = [], sessions = [], oversized = () => [], onTail,
   indexed = [], cached = () => [], onScan, changedFolders = n => n === 1 ? folders : [],
+  store, changedFilesByFolder = new Map(),
 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-972s-'));
   const state = { hosts: [{ alias: 'vps' }] };
@@ -183,10 +184,11 @@ function scripted(t, {
       calls.batches.push(opts);
       await onScan?.(calls.batches.length);
       await gates.scan?.promise;
+      if (store) for (const folder of opts.folders) store.add(`${opts.folderPrefix}::${folder}`);
       return { ok: true };
     },
-    listIndexedFolderKeys: () => indexed.filter(key => !calls.drops.includes(key)),
-    dropFolder: async key => { calls.drops.push(key); },
+    listIndexedFolderKeys: () => store ? [...store] : indexed.filter(key => !calls.drops.includes(key)),
+    dropFolder: async key => { calls.drops.push(key); store?.delete(key); },
     getCachedByFolder: key => { calls.ghostChecks.push(key); return cached(key); },
     timers: { setInterval: () => 1, clearInterval() {} },
     notify: () => notices.push(1),
@@ -197,6 +199,7 @@ function scripted(t, {
       return {
         fetched: 0, unchanged: 0, removed: 0, failed: 0, total: 0,
         changedFolders: new Set(changedFolders(n)),
+        changedFilesByFolder,
         sessions, oversizedFiles: oversized(),
       };
     },
@@ -217,6 +220,111 @@ const until = async predicate => {
 
 test('until rejects when its asynchronous checkpoint never arrives', async () => {
   await assert.rejects(until(() => false), /expected asynchronous checkpoint was reached/);
+});
+
+for (const remaining of [[], [{ alias: 'other' }]]) {
+  for (const rejects of [false, true]) {
+    test(`983 prune waits for a removed alias scan (${remaining.length} hosts, rejects=${rejects})`, async t => {
+      const held = deferred();
+      const store = new Set();
+      const f = scripted(t, {
+        store, folders: ['-srv-a'], gates: { 2: deferred() },
+        onScan: async () => {
+          await held.promise;
+          store.add('vps::-srv-late');
+          if (rejects) throw new Error('worker failed after writing');
+        },
+      });
+      t.after(() => held.resolve());
+      const old = f.indexer.refreshNow();
+      await until(() => f.calls.batches.length === 1);
+      f.state.hosts = remaining;
+      assert.equal(f.indexer.restart(), remaining.length > 0);
+      await tick();
+      assert.deepEqual(f.calls.drops, [], 'prune must wait for the old worker');
+      held.resolve();
+      await old;
+      await until(() => f.calls.drops.includes('vps::-srv-late'));
+      assert.deepEqual([...store], [], 'no removed-alias rows survive the late scan write');
+    });
+  }
+}
+
+for (const rejects of [false, true]) {
+  test(`983 missing-folder deletion waits for its old scan (rejects=${rejects})`, async t => {
+    const held = deferred();
+    const store = new Set(['vps::-srv-a']);
+    const f = scripted(t, {
+      store, folders: ['-srv-a'],
+      onScan: async () => {
+        await held.promise;
+        store.add('vps::-srv-a');
+        if (rejects) throw new Error('worker failed after writing');
+      },
+    });
+    t.after(() => held.resolve());
+    fs.mkdirSync(path.join(f.dir, 'remote/vps/projects/-srv-a'), { recursive: true });
+    const old = f.indexer.refreshNow();
+    await until(() => f.calls.batches.length === 1);
+    fs.rmdirSync(path.join(f.dir, 'remote/vps/projects/-srv-a'));
+    f.indexer.restart();
+    await until(() => f.calls.sync === 2);
+    for (let i = 0; i < 10; i++) await tick();
+    try {
+      assert.deepEqual(f.calls.drops, [], 'folder deletion must wait for the old worker');
+    } finally {
+      held.resolve();
+      await old;
+    }
+    await until(() => f.calls.drops.includes('vps::-srv-a'));
+    assert.deepEqual([...store], [], 'deleted folder cannot be resurrected by the old scan');
+  });
+}
+
+test('983 waiting pass recomputes folders and file subsets after the old scan', async t => {
+  const held = deferred();
+  const store = new Set();
+  const files = new Set(['changed.jsonl']);
+  const f = scripted(t, {
+    store, changedFolders: n => n === 1 ? ['-srv-a', '-srv-b'] : ['-srv-b'],
+    changedFilesByFolder: new Map([['-srv-b', files]]),
+    onScan: n => n === 1 ? held.promise : undefined,
+  });
+  t.after(() => held.resolve());
+  for (const folder of ['-srv-a', '-srv-b']) {
+    fs.mkdirSync(path.join(f.dir, 'remote/vps/projects', folder), { recursive: true });
+  }
+  const old = f.indexer.refreshNow();
+  await until(() => f.calls.batches.length === 1);
+  f.indexer.restart();
+  await until(() => f.calls.sync === 2);
+  assert.deepEqual(await f.indexer.refreshHostNow('vps'), { skipped: true, reason: 'in-flight' });
+  held.resolve();
+  await old;
+  await until(() => f.indexer.getRemoteSessions('vps').at !== null);
+  assert.deepEqual(f.calls.batches[1].folders, ['-srv-b'], 'unchanged folders indexed by the old scan must not be rescanned');
+  assert.deepEqual(f.calls.batches[1].fileSubsets, new Map([['-srv-b', files]]), 'freshly indexed folders permit a file subset');
+});
+
+test('983 cancelled repair scan cannot refill ghost checks after restart', async t => {
+  const held = deferred();
+  const gates = { 2: deferred() };
+  const f = scripted(t, {
+    gates, indexed: ['vps::-srv-a'], cached: () => [{ sessionId: 'agent-ghost' }],
+    onScan: n => n === 1 ? held.promise : undefined,
+  });
+  t.after(() => held.resolve());
+  fs.mkdirSync(path.join(f.dir, 'remote/vps/projects/-srv-a'), { recursive: true });
+  const old = f.indexer.refreshNow();
+  await until(() => f.calls.batches.length === 1);
+  f.indexer.restart();
+  await until(() => f.calls.sync === 2);
+  held.resolve();
+  await old;
+  gates[2].resolve();
+  await until(() => f.indexer.getRemoteSessions('vps').at !== null);
+  assert.deepEqual(f.calls.ghostChecks, ['vps::-srv-a', 'vps::-srv-a'], 'new generation must recheck ghosts after the cancelled repair');
+  assert.equal(f.calls.batches.length, 2, 'new generation owns its ghost repair');
 });
 
 test('a refreshHostNow cancelled by restart never reports the indexer as stopped', async t => {
