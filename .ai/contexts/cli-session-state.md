@@ -117,6 +117,14 @@ never a wrong verdict.
 
 ## Matching a state file to a Switchboard session
 
+For concurrent writers of one session id ("Resume anyway"), the status cache and
+sidebar descriptor retain the first live writer until it disappears or changes
+session id. Other writers' descriptors are kept as takeover candidates, and their
+status edges can still trigger an owned rescan. Their writes or death do not replace
+the selected owner's status or reset descriptor-backed subagent observation. A
+cached live writer takes over on owner removal or a liveness probe, without waiting
+for it to write again. See `subagent-observability.md`, "Descriptor-backed local owners".
+
 By `sessionId` only, against `session.realSessionId || <map key>` over
 `activeSessions`, skipping `exited`, `isPlainTerminal`, and sessions with no
 `projectFolder`. `realSessionId` is what makes forked and resumed sessions work:
@@ -183,8 +191,9 @@ holds an entry **only while `isProcessAlive(state.pid)` is true** — a
 descriptor a crashed or killed CLI left behind (the CLI only deletes its file
 on a clean exit) must not surface as a permanently "live" status on a closed
 session. Both `seed()` and `handleFile()` apply this gate before writing to
-`statusBySession`; `handleFile()` also deletes the entry outright once the
-liveness check fails, same as it does when the file itself disappears.
+`statusBySession`; removal of its selected writer promotes a cached live writer
+for the same id, or deletes the entry when no replacement remains. A different
+writer's death or session-id change leaves the selected owner intact.
 
 **That gate only runs on a file event — a CLI killed without a clean exit
 writes no such event, so its last status stayed cached forever until this app
@@ -192,8 +201,8 @@ restarted (F2, audit-fable-2026-09-11).** `getStatus(sessionId)` now keeps the
 `pid` alongside the cached `{status, statusUpdatedAt, waitingFor}` and re-probes
 `isProcessAlive(pid)` itself, lazily, throttled to once per
 `GET_STATUS_PROBE_THROTTLE_MS` (5 s) per sessionId (`now()` is injected so
-tests use a fake clock instead of real delays) — a dead pid deletes the entry
-and the call returns `undefined`, same as a file event would have done. This
+tests use a fake clock instead of real delays) — a dead pid triggers the same
+replacement selection as a file event, returning `undefined` only if none remains. This
 still never touches disk and never arms `onIdle` — "the one invariant" above
 is unchanged. The shared 5s cached-PID probe also detects an exit without a
 `getStatus` caller. A lazy `getStatus` read that removes a dead entry also

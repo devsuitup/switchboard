@@ -159,16 +159,27 @@ Owned PTY fork and /clear detection still runs after a reader failure.
 Idle descriptor callbacks skip attach clients, so they cannot build a second
 subagent observation state alongside the descriptor owner. There
 are no additional filesystem watches or polling intervals. Removed descriptors
-and sessions that acquire an owned PTY release their observation state; replacing
-the descriptor PID/start identity resets it. Missing descriptors release observation
-without claiming process death or completing recorded tasks. Folder invalidations
-reconcile again after the owned-session loop, before scanning descriptor states,
+and sessions that acquire an owned PTY release their observation state. The CLI
+status cache retains the first live writer for a session id, including when another
+"Resume anyway" process writes a status update. Other live writers remain cached
+as replacement candidates; losing or re-keying one of them cannot remove the
+selected owner. When that owner disappears, a cached live writer takes over;
+replacing the selected PID/start identity resets observation. Missing descriptors
+release observation without claiming process death or completing recorded tasks.
+Folder invalidations reconcile again after the owned-session loop only when that
+pass published a re-key, before scanning descriptor states,
 so a fork or /clear that acquires a descriptor's session id drops the duplicate
 observation in the pass that performs the re-key. A descriptor observed in earlier
 passes, before the fork or /clear could be parsed, may already have announced a
-child; the owned bootstrap can announce it again, which the renderer treats as
-idempotent. A descriptor whose scan throws is dropped from observation and rebuilt
-by the next refresh.
+child. Owned bootstrap is silent; subsequent growth during its fresh-file recheck
+can re-announce the child through `subagent-spawn-late`, which the renderer treats
+as idempotent. If the child stops growing after descriptor observation is dropped,
+that observation emits no `subagent-completed`; its last announcement expires
+through the renderer's 60 s TTL. A descriptor whose scan throws is dropped from
+observation. Its identity and failure time impose a 30 s backoff before another
+refresh may retry; warnings occur once per identity while it remains observed,
+even if several retries fail. A replacement identity retries immediately, and
+disappearance releases the failure state. This adds no retry timer.
 
 Descriptor bootstrap stays silent but gives every child file a `STABLE_MS` (30 s)
 recheck window, even when its mtime is older than 60 s. These workers can predate
@@ -176,7 +187,26 @@ Switchboard and remain alive during silent tool calls. Growth within that window
 rehabilitates the child through the existing settle tick without a folder event.
 An unchanged file settles at the end of the window; this is bounded inference,
 not proof that an arbitrarily long silent external worker has finished. Owned
-PTY bootstrap retains its existing fresh-file-only recheck policy.
+PTY bootstrap retains its existing fresh-file-only recheck policy. Once a CLI task
+record is available, the entry drops its recheck window and leaves the settle loop;
+the task registry supplies its status without further inferred file activity.
+
+Main-side descriptor reconciliation excludes projects explicitly listed in local
+`global.hiddenProjects` (#987 item 3), before observation or task replay. It reuses
+the existing project-path normalizer, including Windows separator and short-path
+handling. A remote hidden entry cannot hide a local project. A separately visible
+worktree of a hidden repository remains eligible; `hiddenRepository` alone does
+not remove its row. Hiding an observed project releases its state on the next
+descriptor refresh, and unhiding allows fresh observation.
+
+Archive-only filtering is deferred. `get-projects` supplies both default and
+archived snapshots, and renderer `showArchived` and search state choose which one
+is displayed. Main has no cheap, authoritative set of currently visible archived
+folders. Filtering on archive settings alone would suppress owners whose rows are
+currently shown by the archive toggle or search.
+
+The #987 follow-ups amend #552, which is still under `Unreleased`; no additional
+changelog entry is added. A subsequent PR should carry `no-changelog`.
 
 First observation replays the parent transcript and the discovered child metadata
 through the existing task worker, including children not indexed yet. Subsequent

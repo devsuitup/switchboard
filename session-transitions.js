@@ -16,6 +16,9 @@ let PROJECTS_DIR, activeSessions, getMainWindow, log, rekeyMcpServer, rekeyActiv
 let onBackgroundConfirmed;
 let getLiveDescriptors, onDescriptorSession;
 const descriptorSessions = new Map();
+const descriptorFailures = new Map();
+const DESCRIPTOR_RETRY_MS = 30000;
+let rekeyGeneration = 0;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -35,6 +38,8 @@ function init(ctx) {
   getLiveDescriptors = ctx.getLiveDescriptors || (() => []);
   onDescriptorSession = ctx.onDescriptorSession || (() => {});
   descriptorSessions.clear();
+  descriptorFailures.clear();
+  rekeyGeneration = 0;
   if (settleTimer) clearTimeout(settleTimer);
   settleTimer = null;
   rekeyed.clear();
@@ -161,14 +166,18 @@ function refreshDescriptorSessions() {
     .map(([key, s]) => normalizeSessionId(s.realSessionId || key)));
   for (const descriptor of descriptors) {
     let sessionId;
+    let identity;
     try {
       sessionId = normalizeSessionId(descriptor.sessionId);
       if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(sessionId)
         || typeof descriptor.cwd !== 'string' || !path.isAbsolute(descriptor.cwd) || owned.has(sessionId)) continue;
       observed.add(sessionId);
       const projectFolder = encodeProjectPath(descriptor.cwd);
-      const identity = JSON.stringify([descriptor.pid, descriptor.startedAt, projectFolder]);
+      identity = JSON.stringify([descriptor.pid, descriptor.startedAt, projectFolder]);
       if (descriptorSessions.get(sessionId)?.identity === identity) continue;
+      const failure = descriptorFailures.get(sessionId);
+      if (failure?.identity === identity && Date.now() - failure.failedAt < DESCRIPTOR_RETRY_MS) continue;
+      if (failure?.identity !== identity) descriptorFailures.delete(sessionId);
       const session = { projectFolder, identity, descriptorBacked: true };
       descriptorSessions.set(sessionId, session);
       const folderPath = path.join(PROJECTS_DIR, projectFolder);
@@ -177,10 +186,13 @@ function refreshDescriptorSessions() {
         .catch(err => log.warn(`[descriptor-subagents] ${sessionId}: ${err.message}`));
     } catch (err) {
       if (sessionId) descriptorSessions.delete(sessionId);
-      log.warn(`[descriptor-subagents] ${sessionId || '?'}: ${err.message}`);
+      const failure = descriptorFailures.get(sessionId);
+      if (!failure || failure.identity !== identity) log.warn(`[descriptor-subagents] ${sessionId || '?'}: ${err.message}`);
+      descriptorFailures.set(sessionId, { identity, failedAt: Date.now() });
     }
   }
   for (const id of descriptorSessions.keys()) if (!observed.has(id)) descriptorSessions.delete(id);
+  for (const id of descriptorFailures.keys()) if (!observed.has(id)) descriptorFailures.delete(id);
 }
 
 /** Walk <folder>/<sessionId>/subagents/ and detect new or completed subagent files.
@@ -274,7 +286,11 @@ function detectSubagentTransitions(sessionId, session, folderPath) {
     const agentId = classified.agentId;
     if (hasTaskRecord(sessionId, agentId)) {
       const entry = session.knownSubagents.get(agentId);
-      if (entry) entry._cliTask = true;
+      if (entry) {
+        entry._cliTask = true;
+        entry._recheckStart = null;
+        entry._recheckMs = null;
+      }
       continue;
     }
     const filePath = path.join(subagentsDir, file);
@@ -581,6 +597,7 @@ function rekeySession(sessionId, newId, session, currentFiles, kind, background)
 async function drainMetadataWrites() { await Promise.all([...metadataWrites]); }
 
 function publishRekey(sessionId, newId, session, currentFiles, kind, background) {
+  rekeyGeneration++;
   log.info(`[session-transition] ${sessionId} → ${newId} (${kind})`);
   session.knownJsonlFiles = new Set(currentFiles);
   session.realSessionId = newId;
@@ -696,6 +713,7 @@ function holdContinuationExit(sessionId, session, finish) {
 /** Detect fork and /clear transitions for active PTY sessions in a folder */
 function detectSessionTransitions(folder) {
   refreshDescriptorSessions();
+  const generation = rekeyGeneration;
   const folderPath = path.join(PROJECTS_DIR, folder);
   let currentFiles;
   try {
@@ -812,7 +830,7 @@ function detectSessionTransitions(folder) {
     session.knownJsonlFiles = updated;
     if (recheck) scheduleRecheck(folder);
   }
-  refreshDescriptorSessions();
+  if (rekeyGeneration !== generation) refreshDescriptorSessions();
   for (const [sessionId, session] of descriptorSessions) {
     if (session.projectFolder === folder) detectSubagentTransitions(sessionId, session, folderPath);
   }

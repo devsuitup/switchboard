@@ -480,7 +480,7 @@ function retainAfterMiss(name, deleted) {
   if (!stale) return;
   if (deleted && !isProcessAlive(stale.pid)) {
     notifyOwnerExit(stale.sessionId, stale.pid);
-    forgetSession(stale.sessionId);
+    forgetSession(stale.sessionId, stale.pid);
     known.delete(name);
     return;
   }
@@ -503,16 +503,15 @@ function handleFile(name) {
   }
 
   const prev = known.get(name);
-  if (prev && prev.sessionId && statusKey(prev.sessionId) !== statusKey(state.sessionId)) forgetSession(prev.sessionId);
-  const identity = { ...state, pidDomain: JSON.parse(text).pidDomain };
+  const identity = { ...parseDescriptor(text), ...state, pidDomain: JSON.parse(text).pidDomain };
   try { identity.descriptorMtimeMs = fs.statSync(path.join(dir, name)).mtimeMs; } catch {}
   known.set(name, identity);
+  if (prev && prev.sessionId && statusKey(prev.sessionId) !== statusKey(state.sessionId)) forgetSession(prev.sessionId, prev.pid);
   if (isProcessAlive(state.pid)) {
-    statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status,
-      statusUpdatedAt: state.statusUpdatedAt, waitingFor: state.waitingFor, pid: state.pid });
+    rememberStatus(identity);
   } else {
     notifyOwnerExit(state.sessionId, state.pid);
-    forgetSession(state.sessionId);
+    forgetSession(state.sessionId, state.pid);
   }
 
   const reused = !!prev && prev.procStart !== state.procStart;
@@ -563,14 +562,14 @@ function armLivenessProbe() {
       handleFile(name);
       const retained = known.get(name);
       if (retained && retained.missedProbes != null && ++retained.missedProbes >= 2) {
-        forgetSession(retained.sessionId);
+        forgetSession(retained.sessionId, retained.pid);
         known.delete(name);
       }
     }
     for (const [id, entry] of statusBySession) {
       if (!isProcessAlive(entry.pid)) {
         notifyOwnerExit(id, entry.pid);
-        forgetSession(id);
+        forgetSession(id, entry.pid);
       }
     }
     if (previous.size !== statusBySession.size || [...statusBySession].some(([id, entry]) => {
@@ -595,12 +594,11 @@ function seed() {
     try { text = fs.readFileSync(path.join(dir, name), 'utf8'); } catch { continue; }
     const state = parseState(text);
     if (state) {
-      const identity = { ...state, pidDomain: JSON.parse(text).pidDomain };
+      const identity = { ...parseDescriptor(text), ...state, pidDomain: JSON.parse(text).pidDomain };
       try { identity.descriptorMtimeMs = fs.statSync(path.join(dir, name)).mtimeMs; } catch {}
       known.set(name, identity);
       if (isProcessAlive(state.pid)) {
-        statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status,
-          statusUpdatedAt: state.statusUpdatedAt, waitingFor: state.waitingFor, pid: state.pid });
+        rememberStatus(identity);
       } else {
         notifyOwnerExit(state.sessionId, state.pid);
       }
@@ -608,9 +606,22 @@ function seed() {
   }
 }
 
-function forgetSession(sessionId) {
-  statusBySession.delete(statusKey(sessionId));
-  lastProbeAt.delete(statusKey(sessionId));
+function rememberStatus(state) {
+  const key = statusKey(state.sessionId);
+  const owner = statusBySession.get(key);
+  if (owner && owner.pid !== state.pid && isProcessAlive(owner.pid)) return;
+  statusBySession.set(key, { ...parseDescriptor(JSON.stringify(state)),
+    statusUpdatedAt: state.statusUpdatedAt, waitingFor: state.waitingFor });
+}
+
+function forgetSession(sessionId, pid) {
+  const key = statusKey(sessionId);
+  if (statusBySession.get(key)?.pid !== pid) return;
+  statusBySession.delete(key);
+  lastProbeAt.delete(key);
+  const replacement = [...known.values()].find(state => state.pid !== pid
+    && statusKey(state.sessionId) === key && isProcessAlive(state.pid));
+  if (replacement) rememberStatus(replacement);
 }
 
 function ensureWatching() {
@@ -674,7 +685,7 @@ function stop() {
 // Lookup + throttled lazy liveness re-probe -- see .ai/contexts/cli-session-state.md ("the one invariant" still holds: never arms onIdle).
 function getStatus(sessionId) {
   const key = statusKey(sessionId);
-  const entry = statusBySession.get(key);
+  let entry = statusBySession.get(key);
   if (!entry) return undefined;
 
   const t = now();
@@ -683,10 +694,11 @@ function getStatus(sessionId) {
     lastProbeAt.set(key, t);
     if (!isProcessAlive(entry.pid)) {
       notifyOwnerExit(sessionId, entry.pid);
-      forgetSession(sessionId);
+      forgetSession(sessionId, entry.pid);
       notifyDescriptorsChanged();
       notifyStatusesChanged();
-      return undefined;
+      entry = statusBySession.get(key);
+      if (!entry) return undefined;
     }
   }
   return { status: entry.status, statusUpdatedAt: entry.statusUpdatedAt, waitingFor: entry.waitingFor };
@@ -699,8 +711,10 @@ function sidebarStateChanged(previous, entry) {
 function getSidebarDescriptors() {
   startProcessTableRefresh();
   const descriptors = [];
-  for (const [id, entry] of statusBySession) {
-    if (getStatus(id) && !sidebarDescriptorIsStale(id, entry)) descriptors.push({ ...entry });
+  for (const id of [...statusBySession.keys()]) {
+    if (!getStatus(id)) continue;
+    const current = statusBySession.get(id);
+    if (!sidebarDescriptorIsStale(id, current)) descriptors.push({ ...current });
   }
   return descriptors;
 }
