@@ -147,9 +147,9 @@ function installMainErrorHandlers({ log, notify, target = process, now = Date.no
               if (frame !== -1 && frame - end <= 1000 && !stack.slice(end, frame).trim()) {
                 const head = stack.slice(frame + 1, frame + 4001);
                 const firstLine = head.split('\n', 1)[0];
-                const probeLine = probe.split('\n', 1)[0];
-                const repeatsFirst = probeLine === probe ? firstLine.includes(probe) : firstLine.endsWith(probeLine);
-                if (!probeLine || !repeatsFirst) {
+                const at0 = head.indexOf(probe);
+                const repeatsFirst = at0 !== -1 && at0 < firstLine.length;
+                if (!repeatsFirst) {
                   const repeat = head.indexOf(probe, firstLine.length + 1);
                   if (repeat === -1) capped = head;
                   else {

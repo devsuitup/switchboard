@@ -681,30 +681,23 @@ test('a native Error whose name repeats its long message keeps its throw site', 
   assert.match(logs[0][1], /at nativeThrowSite965 /, 'the throw-site frame must be logged');
 });
 
-test('a stack repeating the message on the first frame-like line falls back to the stack tail', t => {
-  const { target, logs } = setup(t);
-  const message = 'm'.repeat(15500);
-  const stack = `${message}\n    at FAKE965 (x.js:1:1): ${message}\n    at REAL965 (f.js:1:1)`;
-  target.emit('uncaughtException', { message, name: `${message}\n    at FAKE965 (x.js:1:1)`, stack });
-  assert.match(logs[0][1], /at REAL965 /, 'the real frame must be logged');
-});
-
-test('a multiline message repeated on the first frame-like line keeps the real frame', t => {
-  const { target, logs } = setup(t);
-  const message = `multiline message\n${'m'.repeat(15500)}`;
-  const stack = `${message}\n    at FAKE996 (x.js:1:1): ${message}\n    at REAL996 (f.js:1:1)`;
-  target.emit('uncaughtException', { message, stack });
-  const marker = `[truncated; length=${message.length}]\n`;
-  const frames = logs[0][1].slice(logs[0][1].indexOf(marker) + marker.length);
-  assert.match(frames, /at REAL996 /, 'the real frame must be logged');
-  assert.ok(frames.length <= 4000);
-  assert.ok(logs[0][1].length <= 16000);
-});
+for (const [label, newline] of [['LF', '\n'], ['CRLF', '\r\n']]) {
+  for (const multiline of [false, true]) {
+    test(`a ${multiline ? 'multiline' : 'single-line'} message repeated on the first frame-like line falls back to the stack tail (${label})`, t => {
+      const { target, logs } = setup(t);
+      const message = (multiline ? `multiline message${newline}` : '') + 'm'.repeat(15500);
+      const stack = `${message}${newline}    at FAKE996 (x.js:1:1): ${message}${newline}    at REAL996 (f.js:1:1)`;
+      target.emit('uncaughtException', { message, name: `${message}${newline}    at FAKE996 (x.js:1:1)`, stack });
+      assert.equal(logs[0][1], `${message.slice(0, 11000)}\n[truncated; length=${message.length}]\n${stack.slice(-4000)}`);
+      assert.match(logs[0][1], /at REAL996 /, 'the real frame must be logged');
+      assert.ok(logs[0][1].length <= 16000);
+    });
+  }
+}
 
 test('a multiline message whose first line is blank keeps its native head', t => {
   const { target, logs } = setup(t);
-  const message = `  
-${'w'.repeat(15500)}`;
+  const message = '  \n' + 'w'.repeat(15500);
   function blankFirstLineThrowSite996() { return new Error(message); }
   target.emit('uncaughtException', blankFirstLineThrowSite996());
   const marker = `[truncated; length=${message.length}]
@@ -712,6 +705,34 @@ ${'w'.repeat(15500)}`;
   const frames = logs[0][1].slice(logs[0][1].indexOf(marker) + marker.length);
   assert.match(frames, /^    at blankFirstLineThrowSite996 /, 'the throw site must open the logged frames');
   assert.ok(!frames.includes('w'.repeat(200)), 'no message text in the logged frames');
+});
+
+test('a multiline message starting with a closing parenthesis keeps its native head', t => {
+  const { target, logs } = setup(t);
+  const message = ')\n' + 'w'.repeat(15500);
+  function closingParenthesisThrowSite1002() { return new Error(message); }
+  target.emit('uncaughtException', closingParenthesisThrowSite1002());
+  const marker = `[truncated; length=${message.length}]\n`;
+  assert.ok(logs[0][1].includes(marker));
+  const frames = logs[0][1].slice(logs[0][1].indexOf(marker) + marker.length);
+  assert.match(frames, /^    at closingParenthesisThrowSite1002 /, 'the throw site must open the logged frames');
+  assert.ok(!frames.includes('w'.repeat(200)), 'no message text in the logged frames');
+  assert.ok(frames.length <= 4000);
+  assert.ok(logs[0][1].length <= 16000);
+});
+
+test('a multiline message starting with 1 keeps its ESM-style stack head', t => {
+  const { target, logs } = setup(t);
+  const message = '1\n' + 'w'.repeat(15500);
+  const stack = `Error: ${message}\n    at file:///x.mjs:10:1\n    at next1002 (x.mjs:11:1)`;
+  target.emit('uncaughtException', { message, stack });
+  const marker = `[truncated; length=${message.length}]\n`;
+  assert.ok(logs[0][1].includes(marker));
+  const frames = logs[0][1].slice(logs[0][1].indexOf(marker) + marker.length);
+  assert.match(frames, /^    at file:\/\/\/x\.mjs:10:1\n/, 'the throw site must open the logged frames');
+  assert.ok(!frames.includes('w'.repeat(200)), 'no message text in the logged frames');
+  assert.ok(frames.length <= 4000);
+  assert.ok(logs[0][1].length <= 16000);
 });
 
 for (const length of [15500, 16001]) {
