@@ -29,6 +29,49 @@ test('DA2 reply without a live query is dropped', t => {
   assert.deepEqual(ctx.sent, [], 'unsolicited DA2 must not reach the PTY');
 });
 
+test('Shift+F3, Ctrl+F3 and other row-1 CPR-shaped input pass with no query pending', t => {
+  const ctx = setup(t);
+  const inputs = ['\x1b[1;2R', '\x1b[1;5R', '\x1b[1;3R', '\x1b[1;16R', '\x1b[1;80R'];
+  for (const input of inputs) {
+    ctx.input(input);
+    assert.deepEqual(ctx.sent.splice(0), [{ id: 'live', data: input }], JSON.stringify(input));
+  }
+  ctx.output(DA2_QUERY);
+  ctx.time(5000);
+  for (const input of inputs) ctx.input(input);
+  assert.deepEqual(ctx.sent.map(item => item.data), inputs);
+});
+
+for (const [kind, query, reply] of [
+  ['DECXCPR', '\x1b[?6n', '\x1b[?12;34R'],
+  ['DECXCPR row 1', '\x1b[?6n', '\x1b[?1;2R'],
+  ...['\x07', '\x1b\\'].flatMap(end => [
+    ['OSC 12', `\x1b]12;?${end}`, `\x1b]12;rgb:ff/AA/00${end}`],
+    ['OSC 4', `\x1b]4;255;?${end}`, `\x1b]4;255;rgb:ffff/AAAA/0000${end}`],
+  ]),
+]) {
+  test(`${kind} ${JSON.stringify(reply)} is dropped when unsolicited or late and passes when timely`, t => {
+    const ctx = setup(t);
+    ctx.window.ATRACE = true;
+    const traces = [];
+    ctx.window.atrace = (event, id, details) => traces.push({ event, id, details });
+    ctx.input(reply);
+    assert.deepEqual(ctx.sent, [], 'unsolicited reply must not reach the PTY');
+    assert.equal(traces.at(-1).details.kind, kind.replace(' row 1', ''));
+    ctx.output(query);
+    ctx.time(4000);
+    ctx.input(reply);
+    assert.deepEqual(ctx.sent.splice(0), [{ id: 'live', data: reply }]);
+    ctx.time(4001);
+    ctx.input(reply);
+    assert.deepEqual(ctx.sent, [], 'late reply must not reach the PTY');
+    for (const input of ['x' + reply, reply + 'x', reply.slice(0, -1)]) {
+      ctx.input(input);
+      assert.deepEqual(ctx.sent.splice(0), [{ id: 'live', data: input }]);
+    }
+  });
+}
+
 test('timely DA2 replies pass through the 4000 ms boundary, then expire', t => {
   const ctx = setup(t);
   ctx.output(DA2_QUERY);
@@ -64,7 +107,7 @@ test('normal input, keys, paste, incomplete replies and mixed bytes pass unchang
     'hello', ';276;0c', '\x1b[A', '\x1b[200~pasted ;276;0c\x1b[201~',
     '\x1b[200~' + DA2_REPLY + '\x1b[201~', DA2_REPLY + 'x', 'x' + DA2_REPLY,
     DA2_REPLY + '\n', DA2_REPLY + '\r', DA2_REPLY.slice(0, -1), '',
-    '\x1b[?12;34R', '\x1b]12;rgb:ff/aa/00\x07', '\x1b[1n',
+    '\x1b[1n',
   ];
   for (const input of inputs) ctx.input(input);
   assert.deepEqual(ctx.sent.map(item => item.data), inputs);
@@ -82,6 +125,7 @@ const queries = [
   '\x1b[c', '\x1b[0c', '\x1b[>c', DA2_QUERY, '\x1b[>q', '\x1b[>0q',
   '\x1b[6n', '\x1b[?6n', '\x1b[5n', '\x1b[?2026$p', '\x1b[4$p',
   '\x1b]10;?\x07', '\x1b]11;?\x1b\\',
+  '\x1b]12;?\x07', '\x1b]4;255;?\x1b\\',
 ];
 
 test('every recognised live query arms replies whole, at every split and byte by byte', t => {
@@ -149,6 +193,31 @@ test('query carry is bounded and cannot bridge a long unrelated output chunk', t
   ctx.output('>0c');
   ctx.input(DA2_REPLY);
   assert.deepEqual(ctx.sent, [{ id: 'live', data: DA2_REPLY }]);
+});
+
+test('live query detection avoids replacement and bounds the next chunk boundary search', t => {
+  const ctx = setup(t);
+  const matcher = ctx.window.terminalReplayQueries;
+  const remove = matcher.removeCursorPositionQueries;
+  const split = matcher.splitReplayQuery;
+  let replacements = 0;
+  const searched = [];
+  matcher.removeCursorPositionQueries = data => { replacements++; return remove(data); };
+  matcher.splitReplayQuery = (tail, next) => { searched.push(next.length); return split(tail, next); };
+  ctx.output('\x1b[');
+  ctx.output('>0c' + 'x'.repeat(10000));
+  ctx.input(DA2_REPLY);
+  assert.deepEqual(ctx.sent.splice(0), [{ id: 'live', data: DA2_REPLY }]);
+  ctx.time(5000);
+  ctx.output('x'.repeat(10000));
+  ctx.input(DA2_REPLY);
+  assert.deepEqual(ctx.sent, []);
+  ctx.output('x'.repeat(10000) + DA2_QUERY);
+  ctx.input(DA2_REPLY);
+  assert.deepEqual(ctx.sent.splice(0), [{ id: 'live', data: DA2_REPLY }]);
+  assert.equal(replacements, 0, 'live query detection must not build a filtered output copy');
+  assert.ok(searched.length > 0);
+  assert.ok(searched.every(length => length <= 256), JSON.stringify(searched));
 });
 
 test('dropped replies trace kind and age only when tracing is enabled', t => {

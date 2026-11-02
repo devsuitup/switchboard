@@ -969,21 +969,22 @@ function replayHiddenBuffer(sessionId) {
 
 const LIVE_QUERY_REPLY_WINDOW_MS = 4000;
 const LIVE_QUERY_TAIL_LIMIT = 256;
-const TERMINAL_QUERY_REPLIES = /^(?:\x1b\[(?:[?>][0-9;]*c|\d+;\d+R|0n|\??\d+;\d+\$y)|\x1b\]1[01];rgb:[0-9a-fA-F/]+(?:\x07|\x1b\\))+(?![\s\S])/;
+const TERMINAL_QUERY_REPLIES = /^(?:\x1b\[(?:[?>][0-9;]*c|(?:\?\d+|(?!1;)\d+);\d+R|0n|\??\d+;\d+\$y)|\x1b\](?:1[012]|4;\d+);rgb:[0-9a-fA-F/]+(?:\x07|\x1b\\))+(?![\s\S])/;
 
 // see .ai/contexts/terminal-refresh.md
 function recordLiveTerminalQuery(entry, data) {
   const tail = entry.liveQueryTail || '';
-  if (removeCursorPositionQueries(data) !== data || splitReplayQuery(tail, data)) {
+  if (window.terminalReplayQueries.hasTerminalQuery(data) || splitReplayQuery(tail, data.slice(0, LIVE_QUERY_TAIL_LIMIT))) {
     entry.lastLiveQueryAt = performance.now();
   }
   entry.liveQueryTail = (tail + data.slice(-LIVE_QUERY_TAIL_LIMIT)).slice(-LIVE_QUERY_TAIL_LIMIT);
 }
 
 function terminalQueryReplyKind(data) {
-  if (data.startsWith('\x1b]')) return `OSC ${data.slice(2, 4)}`;
+  if (data.startsWith('\x1b]')) return `OSC ${data.slice(2, data.indexOf(';'))}`;
   if (/^\x1b\[[?>][0-9;]*c/.test(data)) return data[2] === '?' ? 'DA1' : 'DA2';
   if (/^\x1b\[\d+;\d+R/.test(data)) return 'CPR';
+  if (/^\x1b\[\?\d+;\d+R/.test(data)) return 'DECXCPR';
   if (data.startsWith('\x1b[0n')) return 'DSR';
   return 'DECRQM';
 }

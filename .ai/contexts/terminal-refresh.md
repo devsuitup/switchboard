@@ -293,14 +293,27 @@ Live output keeps queries so the current requester can receive a timely reply.
 For live late replies (#1011), each terminal entry records the monotonic arrival
 time of its last complete query through the same matcher, with at most 256
 UTF-16 code units carried between output chunks. Replay writes do not arm this
-window. Its `onData` handler drops only chunks consisting entirely of DA1/DA2,
-CPR, DSR status, OSC 10/11 RGB or DECRQM replies when no live query was seen or
-its age exceeds `LIVE_QUERY_REPLY_WINDOW_MS` (4000 ms). Timely replies and any
+window. Complete-query detection tests the shared matcher without replacing
+output. Split-query detection combines the retained tail with only the first
+256 code units of the incoming chunk, bounding the boundary-search allocation.
+Its `onData` handler drops only chunks consisting entirely of DA1/DA2,
+CPR, DECXCPR, DSR status, OSC 4/10/11/12 RGB or DECRQM replies when no live query
+was seen or its age exceeds `LIVE_QUERY_REPLY_WINDOW_MS` (4000 ms). Timely replies and any
 chunk containing other bytes, including keys and pastes, pass unchanged; the
 existing exact focus-report filter is retained. Enabled activity tracing emits
 `terminal.query-reply.drop` with the first reply's kind and age in milliseconds
 (`null` when no query was seen). The window belongs to the entry, survives
 session rekeying, and disappears with terminal destruction.
+
+Non-private CPR-shaped input at row 1 (`ESC[1;<n>R`) always passes because xterm
+uses that shape for modified F3 keys, including Shift+F3 and Ctrl+F3. A genuine
+late CPR at row 1 therefore also passes. Private DECXCPR (`ESC[?<r>;<c>R`)
+cannot encode a key and has no row-1 exemption.
+
+The timestamp is taken when output reaches the renderer. This guard catches
+replies Switchboard itself sends late, such as when a minimised window's
+animation-frame flush is throttled. Delays after a reply leaves Switchboard,
+including ssh, ConPTY or remote-host delays, are outside its reach.
 
 Responses, cursor movement, mode changes, colour setters, incomplete requests
 and unrelated escape sequences remain unchanged. The filter targets the forms
