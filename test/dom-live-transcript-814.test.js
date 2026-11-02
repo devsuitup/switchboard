@@ -150,6 +150,21 @@ for (const reset of [true, false]) {
     await h.tick();
     assert.match(notices.textContent, /left out 1 very long transcript entry\./, 'new omissions start a fresh count');
   });
+
+  test(`a ${reset ? 'reset' : 'full replacement'} reply keeps its own omitted-entry notice with a fresh count`, async t => {
+    const h = setup(t);
+    await h.w.showJsonlViewer({ sessionId: 'run' });
+    h.nextRead = async () => ({ entries: [], append: true, skipped: 2, token: 'follow-token' });
+    h.activity();
+    await h.tick();
+    const notices = h.w.document.getElementById('app-notices');
+    assert.match(notices.textContent, /left out 2/);
+    h.nextRead = async () => ({ entries: [turn('replacement history')], append: reset, reset, skipped: 1, token: 'follow-token' });
+    h.activity();
+    await h.tick();
+    assert.equal(h.requests.at(-1).mode, 'next');
+    assert.match(notices.textContent, /left out 1 very long transcript entry\./, 'the replacement reply keeps its own omission notice');
+  });
 }
 
 test('a matching checkpoint read error recovers on the next notification with full-render DOM', async t => {
