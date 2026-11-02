@@ -290,6 +290,18 @@ one chunk still use the full matcher. It returns the exact suffix/prefix
 lengths to remove, preserving main's size accounting.
 
 Live output keeps queries so the current requester can receive a timely reply.
+For live late replies (#1011), each terminal entry records the monotonic arrival
+time of its last complete query through the same matcher, with at most 256
+UTF-16 code units carried between output chunks. Replay writes do not arm this
+window. Its `onData` handler drops only chunks consisting entirely of DA1/DA2,
+CPR, DSR status, OSC 10/11 RGB or DECRQM replies when no live query was seen or
+its age exceeds `LIVE_QUERY_REPLY_WINDOW_MS` (4000 ms). Timely replies and any
+chunk containing other bytes, including keys and pastes, pass unchanged; the
+existing exact focus-report filter is retained. Enabled activity tracing emits
+`terminal.query-reply.drop` with the first reply's kind and age in milliseconds
+(`null` when no query was seen). The window belongs to the entry, survives
+session rekeying, and disappears with terminal destruction.
+
 Responses, cursor movement, mode changes, colour setters, incomplete requests
 and unrelated escape sequences remain unchanged. The filter targets the forms
 listed above; mixed colour setter/query lists and other query families are

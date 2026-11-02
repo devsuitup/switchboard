@@ -967,6 +967,27 @@ function replayHiddenBuffer(sessionId) {
   });
 }
 
+const LIVE_QUERY_REPLY_WINDOW_MS = 4000;
+const LIVE_QUERY_TAIL_LIMIT = 256;
+const TERMINAL_QUERY_REPLIES = /^(?:\x1b\[(?:[?>][0-9;]*c|\d+;\d+R|0n|\??\d+;\d+\$y)|\x1b\]1[01];rgb:[0-9a-fA-F/]+(?:\x07|\x1b\\))+(?![\s\S])/;
+
+// see .ai/contexts/terminal-refresh.md
+function recordLiveTerminalQuery(entry, data) {
+  const tail = entry.liveQueryTail || '';
+  if (removeCursorPositionQueries(data) !== data || splitReplayQuery(tail, data)) {
+    entry.lastLiveQueryAt = performance.now();
+  }
+  entry.liveQueryTail = (tail + data.slice(-LIVE_QUERY_TAIL_LIMIT)).slice(-LIVE_QUERY_TAIL_LIMIT);
+}
+
+function terminalQueryReplyKind(data) {
+  if (data.startsWith('\x1b]')) return `OSC ${data.slice(2, 4)}`;
+  if (/^\x1b\[[?>][0-9;]*c/.test(data)) return data[2] === '?' ? 'DA1' : 'DA2';
+  if (/^\x1b\[\d+;\d+R/.test(data)) return 'CPR';
+  if (data.startsWith('\x1b[0n')) return 'DSR';
+  return 'DECRQM';
+}
+
 // Entry point for PTY data (wired to window.api.onTerminalData in app.js).
 // Lives here rather than app.js so the sync-block/flush interplay runs under
 // the jsdom test harness — the v0.0.35 frozen-terminal bug shipped because
@@ -981,6 +1002,7 @@ function handleTerminalData(sessionId, data) {
     if (hidden) s.hiddenChunks++;
   }
   if (entry) {
+    recordLiveTerminalQuery(entry, data);
     if (hidden) {
       // Fully suspended — accumulate only, never call terminal.write().
       // drainLiveBufferIntoHiddenAccumulator folds in whatever was left
@@ -1247,6 +1269,11 @@ function createTerminalEntry(session, opts = {}) {
   // Wire up IPC (use entry.session.sessionId so fork re-keying works)
   terminal.onData(data => {
     if (data === '\x1b[I' || data === '\x1b[O') return;
+    const age = entry.lastLiveQueryAt == null ? null : performance.now() - entry.lastLiveQueryAt;
+    if ((age === null || age > LIVE_QUERY_REPLY_WINDOW_MS) && TERMINAL_QUERY_REPLIES.test(data)) {
+      if (window.ATRACE) window.atrace('terminal.query-reply.drop', entry.session.sessionId, { kind: terminalQueryReplyKind(data), age });
+      return;
+    }
     window.api.sendInput(entry.session.sessionId, data);
   });
   terminal.onScroll?.(() => {
