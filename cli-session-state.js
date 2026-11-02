@@ -466,6 +466,11 @@ function notifyOwnerExit(sessionId, pid) {
       && entry.pid === current.pid && statusKey(entry.sessionId) === key);
     if (current && !currentExited && isProcessAlive(current.pid)) return;
     if ([...known.values()].some(entry => statusKey(entry.sessionId) === key && !entry.exited && isProcessAlive(entry.pid))) return;
+    if (currentExited) {
+      forgetSession(key, current.pid);
+      notifyDescriptorsChanged();
+      notifyStatusesChanged();
+    }
     try { callback(key); } catch (err) { log.warn(`[cli-state] owner-exit callback failed: ${err.message}`); }
   });
 }

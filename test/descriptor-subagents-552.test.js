@@ -271,6 +271,10 @@ test('1006 owner exit ignores an exited status writer after PID reuse', async t 
   t.mock.timers.tick(cli.FLUSH_MS);
   await Promise.resolve();
   assert.deepEqual(deaths, [id], 'A exiting must notify owner exit before any getStatus despite B PID reuse');
+  const status = cli.getStatus(id);
+  await Promise.resolve();
+  assert.deepEqual(deaths, [id], 'reading status after the owner-exit flush must not notify twice');
+  assert.equal(status, undefined, 'owner exit removes the exited cached status writer');
   assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }), [], 'B remains excluded after PID reuse');
   t.mock.timers.tick(5000);
   await Promise.resolve();
