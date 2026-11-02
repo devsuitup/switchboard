@@ -11,7 +11,6 @@ const cli = require('../cli-session-state');
 const { encodeProjectPath } = require('../encode-project-path');
 const { createTaskRecordsClient } = require('../task-records-client');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
-const { extractFunction } = require('./app-source');
 const fixture = require('./fixtures/cli-tasks-2.1.296.json');
 
 const id = fixture.parentSessionId;
@@ -221,6 +220,29 @@ for (const deathProbe of ['observation', 'status', 'timer', 'seed', 'write']) {
     assert.equal(f.seeds.length, seeds + 1, 'a fresh descriptor can start observation again');
   });
 }
+
+test('1000 owner exit fires when observation precedes PID reuse within the probe window', async t => {
+  const f = descriptorFixture(t);
+  const sessionsDir = path.join(f.tmp, 'sessions');
+  fs.mkdirSync(sessionsDir);
+  fs.writeFileSync(path.join(sessionsDir, '100.json'), JSON.stringify({
+    ...f.descriptor(id), pid: 100, status: 'busy', procStart: '111',
+  }));
+  let alive = true;
+  const deaths = [];
+  cli.init({ dir: sessionsDir, activeSessions: f.activeSessions, log: silent, onIdle() {},
+    platform: 'linux', readParentPid: () => null, readProcStart: () => null,
+    isProcessAlive: () => alive, onOwnerExit: sessionId => deaths.push(sessionId) });
+  t.after(() => cli.stop());
+  assert.ok(cli.ensureWatching());
+  assert.equal(cli.getStatus(id)?.status, 'busy');
+  alive = false;
+  assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }), []);
+  alive = true;
+  assert.equal(cli.getStatus(id), undefined);
+  await Promise.resolve();
+  assert.deepEqual(deaths, [id], 'an observed dead writer cannot suppress owner exit after PID reuse');
+});
 
 test('1000 a rewritten descriptor with a different PID cannot expose its missing cached writer', t => {
   const f = descriptorFixture(t);
@@ -491,8 +513,6 @@ function mainWiring(taskRecords, { descriptors = [], hiddenProjects = [] } = {})
     parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
     normalizeArchivedProjectPath: require('../src/main/shared/normalize-project-path').normalizeProjectPath,
   });
-  vm.runInContext(extractFunction(source, 'isProjectSettingsArchived'), ctx,
-    { filename: path.join(__dirname, '../main.js') });
   vm.runInContext(source.slice(start, end), ctx, { filename: path.join(__dirname, '../main.js'),
     lineOffset: source.slice(0, start).split('\n').length - 1 });
   return { options, notify: () => listener(), refreshes: () => refreshed };
