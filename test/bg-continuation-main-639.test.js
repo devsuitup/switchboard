@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createRequire } = require('node:module');
+const { extractFunction } = require('./app-source');
 const transitions = require('../session-transitions');
 const cli = require('../cli-session-state');
 const bg = require('../src/main/bg-agents/bg-agents');
@@ -38,7 +40,8 @@ for (const proof of ['descriptor', 'job', 'callback-error']) {
     const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
     const start = source.indexOf('sessionTransitions.init({');
     const end = source.indexOf('\n});', start) + '\n});'.length;
-    vm.runInNewContext(source.slice(start, end), {
+    const context = vm.createContext({
+      require: createRequire(path.join(__dirname, '../main.js')),
       getSetting: () => null,
       parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
       normalizeArchivedProjectPath: require('../src/main/shared/normalize-project-path').normalizeProjectPath,
@@ -50,7 +53,10 @@ for (const proof of ['descriptor', 'job', 'callback-error']) {
       cliSessionState: cli, bgAgents: bg, getCachedSession: () => ({ customTitle: 'original title' }),
       isHostedJob: require('../src/main/bg-agents/bg-agents-roster').isHostedJob,
       writer: { rekeySessionMeta: async (...args) => { metadata.push(args); } },
-    }, { filename: 'main.js' });
+    });
+    vm.runInContext(extractFunction(source, 'isProjectSettingsArchived'), context,
+      { filename: path.join(__dirname, '../main.js') });
+    vm.runInContext(source.slice(start, end), context, { filename: path.join(__dirname, '../main.js') });
     t.after(() => { transitions.init({ activeSessions: new Map() }); cli.stop(); bg.stop(); fs.rmSync(root, { recursive: true, force: true }); });
     transitions.detectSessionTransitions('project');
     if (proof === 'descriptor') {

@@ -450,6 +450,9 @@ function notifyStatusesChanged() {
 }
 
 function notifyOwnerExit(sessionId, pid) {
+  for (const entry of known.values()) {
+    if (entry.pid === pid && statusKey(entry.sessionId) === statusKey(sessionId)) entry.exited = true;
+  }
   if (!onOwnerExit) return;
   const key = statusKey(sessionId);
   if (pendingOwnerDeaths.has(key)) return;
@@ -684,6 +687,14 @@ function getStatus(sessionId) {
   let entry = statusBySession.get(key);
   if (!entry) return undefined;
 
+  if ([...known.values()].some(writer => writer.exited && writer.pid === entry.pid && statusKey(writer.sessionId) === key)) {
+    notifyOwnerExit(sessionId, entry.pid);
+    forgetSession(sessionId, entry.pid);
+    notifyDescriptorsChanged();
+    notifyStatusesChanged();
+    return undefined;
+  }
+
   if (sidebarDescriptorIsStale(key, entry)) {
     const replacement = liveKnownDescriptors().find(state => statusKey(state.sessionId) === key);
     if (!replacement) return undefined;
@@ -712,8 +723,14 @@ function sidebarStateChanged(previous, entry) {
 }
 
 function liveKnownDescriptors() {
-  return [...known.values()].filter(entry => isProcessAlive(entry.pid)
-    && !sidebarDescriptorIsStale(statusKey(entry.sessionId), entry))
+  return [...known.values()].filter(entry => {
+    if (entry.exited) return false;
+    if (!isProcessAlive(entry.pid)) {
+      entry.exited = true;
+      return false;
+    }
+    return !sidebarDescriptorIsStale(statusKey(entry.sessionId), entry);
+  })
     .sort((a, b) => (a.startedAt ?? Infinity) - (b.startedAt ?? Infinity) || a.pid - b.pid);
 }
 
