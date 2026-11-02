@@ -198,10 +198,11 @@ record is available, the entry's `_cliTask` flag excludes it from the settle loo
 the task registry supplies its status without further inferred file activity.
 
 Main-side descriptor reconciliation excludes projects explicitly listed in local
-`global.hiddenProjects` (#987 item 3), before observation or task replay. It shares
-`isProjectSettingsArchived` with the schedule guard and uses the existing
-project-path normalizer, including Windows separator and short-path
-handling. A remote hidden entry cannot hide a local project. A hidden repository's
+`global.hiddenProjects` (#987 item 3), before observation or task replay. It reuses
+the existing project-path normalizer, including Windows separator and short-path
+handling, and builds the hidden set once per refresh. It does not call
+`isProjectSettingsArchived`: the schedule guard resolves a worktree's parent after
+`realpath`, the sidebar rule takes it from the raw path. A remote hidden entry cannot hide a local project. A hidden repository's
 `.claude/worktrees/<name>` groups are excluded too, using the sidebar's worktree
 parent rule; `hiddenRepository` removes those rows. Other independently visible
 worktree layouts remain eligible. The parent path is normalized separately so
