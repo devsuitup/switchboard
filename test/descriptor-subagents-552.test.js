@@ -244,6 +244,39 @@ test('1000 owner exit fires when observation precedes PID reuse within the probe
   assert.deepEqual(deaths, [id], 'an observed dead writer cannot suppress owner exit after PID reuse');
 });
 
+test('1006 owner exit ignores an exited status writer after PID reuse', async t => {
+  const f = descriptorFixture(t);
+  const sessionsDir = path.join(f.tmp, 'sessions');
+  fs.mkdirSync(sessionsDir);
+  const alive = new Set([100, 200]);
+  const deaths = [];
+  let event;
+  t.mock.method(fs, 'watch', (_dir, callback) => {
+    event = callback;
+    return { on() {}, close() {} };
+  });
+  for (const [pid, status] of [[100, 'waiting'], [200, 'busy']]) {
+    fs.writeFileSync(path.join(sessionsDir, `${pid}.json`), JSON.stringify({ ...f.descriptor(id), pid, status }));
+  }
+  cli.init({ dir: sessionsDir, activeSessions: f.activeSessions, log: silent, onIdle() {},
+    platform: 'darwin', readParentPid: () => null, isProcessAlive: pid => alive.has(pid),
+    onOwnerExit: sessionId => deaths.push(sessionId) });
+  t.after(() => cli.stop());
+  assert.ok(cli.ensureWatching());
+  assert.equal(cli.getStatus(id)?.status, 'busy', 'B is the last status writer');
+  alive.clear();
+  assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }), [], 'observation marks both writers exited');
+  alive.add(200);
+  event('change', '100.json');
+  t.mock.timers.tick(cli.FLUSH_MS);
+  await Promise.resolve();
+  assert.deepEqual(deaths, [id], 'A exiting must notify owner exit before any getStatus despite B PID reuse');
+  assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }), [], 'B remains excluded after PID reuse');
+  t.mock.timers.tick(5000);
+  await Promise.resolve();
+  assert.deepEqual(deaths, [id], 'observation and the liveness timer must not notify twice');
+});
+
 test('1000 a rewritten descriptor with a different PID cannot expose its missing cached writer', t => {
   const f = descriptorFixture(t);
   const sessionsDir = path.join(f.tmp, 'sessions');

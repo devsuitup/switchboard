@@ -462,7 +462,9 @@ function notifyOwnerExit(sessionId, pid) {
     if (!pendingOwnerDeaths.has(key)) return;
     pendingOwnerDeaths.delete(key);
     const current = statusBySession.get(key);
-    if (current && isProcessAlive(current.pid)) return;
+    const currentExited = current && [...known.values()].some(entry => entry.exited
+      && entry.pid === current.pid && statusKey(entry.sessionId) === key);
+    if (current && !currentExited && isProcessAlive(current.pid)) return;
     if ([...known.values()].some(entry => statusKey(entry.sessionId) === key && !entry.exited && isProcessAlive(entry.pid))) return;
     try { callback(key); } catch (err) { log.warn(`[cli-state] owner-exit callback failed: ${err.message}`); }
   });
