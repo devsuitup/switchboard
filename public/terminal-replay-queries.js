@@ -4,6 +4,11 @@
 const terminalReplayQueries = (() => {
   const queries = /\x1b(?:\[(?:\??6n|5n|0?c|>0?[cq]|\??[0-9;]*\$p)|\](?:4;[0-9]+;\?(?:;[0-9]+;\?)*|(?:10|11|12);\?(?:;\?)*)(?:\x07|\x1b\\)|P\$q[^\x00-\x1f\x7f-\x9f]*\x1b\\)/g;
   const MAX_QUERY_TAIL = 256;
+  const query = new RegExp(queries.source);
+
+  function hasTerminalQuery(data) {
+    return query.test(data);
+  }
 
   function removeCursorPositionQueries(data) {
     return data.replace(queries, '');
@@ -41,7 +46,7 @@ const terminalReplayQueries = (() => {
     return null;
   }
 
-  return { removeCursorPositionQueries, splitReplayQuery };
+  return { hasTerminalQuery, removeCursorPositionQueries, splitReplayQuery };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = terminalReplayQueries;
