@@ -148,7 +148,10 @@ matching (PID, session) writer in `known` is marked exited, and also excludes
 exited known writers when checking for a live replacement. A reused PID therefore
 cannot suppress confirmed owner death, even when another writer's death reaches
 the callback before the next `getStatus`. This gate does not promote another
-writer or change last-writer status semantics for live writers.
+writer or change last-writer status semantics for live writers. When the gate
+confirms owner death with an exited cached status writer, it forgets that status
+and notifies descriptor and status subscribers before firing the callback. A
+later `getStatus` returns `undefined` without reporting the same death again.
 This exited mark does not extend to `readAllDescriptors`, `findLiveProcess` /
 `scanLiveProcessesChecked` or `readWriterDescriptors`. Those disk readers still
 use `isProcessAlive` alone when process identity is unknown; their existing
