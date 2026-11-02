@@ -123,13 +123,25 @@ waiting update remains visible to trigger delivery, background handoff and row
 status. A lazy death probe removes that status without promoting an older cached
 status. Proven stale process identities are excluded; if a cached status becomes
 stale, the earliest-started remaining live, known writer supplies its replacement.
-Missing cache entries cannot qualify as descriptor owners. Unknown process-start
-proof alone does not exclude an otherwise known, live descriptor, as before.
+Unknown process-start proof alone does not exclude an otherwise known, live
+descriptor, as before.
 `getSidebarDescriptors({ allWriters: true })` exposes all live, non-stale cached
 writers, ordered by `startedAt` (missing times last, PID as tie-breaker), solely
 for subagent observation. That observation preserves its own identity across
 status updates and overlapping owners in the same folder; it never pins status.
 See `subagent-observability.md`, "Descriptor-backed local owners".
+
+Once a cached writer's PID is observed dead (during seeding, a descriptor write,
+the shared probe, a lazy status read or all-writer observation), its `known` entry
+is marked exited. Observation and stale-status fallback exclude it even if that
+PID later becomes alive with unknown process identity. A valid descriptor write
+replaces the entry and clears the mark. A filename rewritten with another PID
+can replace its `known` writer while the previous PID's status remains cached.
+The sidebar stale check treats that missing writer as stale rather than trusting
+the cached status or throwing on an absent identity.
+If observation marks the selected status writer exited, `getStatus` deletes that
+status before considering stale-identity fallback, so death cannot promote another
+writer even when the PID has already been reused.
 
 By `sessionId` only, against `session.realSessionId || <map key>` over
 `activeSessions`, skipping `exited`, `isPlainTerminal`, and sessions with no
@@ -197,9 +209,10 @@ holds an entry **only while `isProcessAlive(state.pid)` is true** — a
 descriptor a crashed or killed CLI left behind (the CLI only deletes its file
 on a clean exit) must not surface as a permanently "live" status on a closed
 session. Both `seed()` and `handleFile()` apply this gate before writing to
-`statusBySession`; removal of its selected writer promotes a cached live writer
-for the same id, or deletes the entry when no replacement remains. A different
-writer's death or session-id change leaves the selected owner intact.
+`statusBySession`; a dead writer deletes the entry only when it is that entry's
+PID. Nothing is promoted on death or removal. A different writer's death or
+session-id change leaves the last-writer status intact. Only a cached entry proven
+stale allows fallback to the earliest-started remaining live known writer.
 
 **That gate only runs on a file event — a CLI killed without a clean exit
 writes no such event, so its last status stayed cached forever until this app
@@ -207,8 +220,8 @@ restarted (F2, audit-fable-2026-09-11).** `getStatus(sessionId)` now keeps the
 `pid` alongside the cached `{status, statusUpdatedAt, waitingFor}` and re-probes
 `isProcessAlive(pid)` itself, lazily, throttled to once per
 `GET_STATUS_PROBE_THROTTLE_MS` (5 s) per sessionId (`now()` is injected so
-tests use a fake clock instead of real delays) — a dead pid triggers the same
-replacement selection as a file event, returning `undefined` only if none remains. This
+tests use a fake clock instead of real delays) — a dead pid deletes its matching
+entry and returns `undefined`, even when another cached writer remains alive. This
 still never touches disk and never arms `onIdle` — "the one invariant" above
 is unchanged. The shared 5s cached-PID probe also detects an exit without a
 `getStatus` caller. A lazy `getStatus` read that removes a dead entry also

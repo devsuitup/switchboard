@@ -200,7 +200,9 @@ the task registry supplies its status without further inferred file activity.
 Main-side descriptor reconciliation excludes projects explicitly listed in local
 `global.hiddenProjects` (#987 item 3), before observation or task replay. It reuses
 the existing project-path normalizer, including Windows separator and short-path
-handling. A remote hidden entry cannot hide a local project. A hidden repository's
+handling, and builds the hidden set once per refresh. It does not call
+`isProjectSettingsArchived`: the schedule guard resolves a worktree's parent after
+`realpath`, the sidebar rule takes it from the raw path. A remote hidden entry cannot hide a local project. A hidden repository's
 `.claude/worktrees/<name>` groups are excluded too, using the sidebar's worktree
 parent rule; `hiddenRepository` removes those rows. Other independently visible
 worktree layouts remain eligible. The parent path is normalized separately so
@@ -212,9 +214,6 @@ archived snapshots, and renderer `showArchived` and search state choose which on
 is displayed. Main has no cheap, authoritative set of currently visible archived
 folders. Filtering on archive settings alone would suppress owners whose rows are
 currently shown by the archive toggle or search.
-
-The #987 follow-ups amend #552, which is still under `Unreleased`; no additional
-changelog entry is added. A subsequent PR should carry `no-changelog`.
 
 First observation replays the parent transcript and the discovered child metadata
 through the existing task worker, including children not indexed yet. Subsequent

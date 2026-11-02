@@ -11,6 +11,7 @@ const cli = require('../cli-session-state');
 const { encodeProjectPath } = require('../encode-project-path');
 const { createTaskRecordsClient } = require('../task-records-client');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
+const { extractFunction } = require('./app-source');
 const fixture = require('./fixtures/cli-tasks-2.1.296.json');
 
 const id = fixture.parentSessionId;
@@ -120,15 +121,19 @@ test('987r stale pid reuse yields to the live writer and accepts its waiting upd
   const write = (pid, status) => fs.writeFileSync(path.join(sessionsDir, `${pid}.json`), JSON.stringify({
     ...f.descriptor(id), pid, status, procStart: '111', startedAt: pid,
   }));
-  write(100, 'idle');
-  write(200, 'busy');
+  write(100, 'busy');
+  write(200, 'idle');
+  let identityAvailable = true;
   cli.init({ dir: sessionsDir, activeSessions: f.activeSessions, log: silent, onIdle() {}, platform: 'linux',
-    isProcessAlive: () => true, readProcStart: pid => pid === 100 ? '222' : '111', readParentPid: () => null });
+    isProcessAlive: () => true, readProcStart: pid => identityAvailable ? (pid === 200 ? '222' : '111') : null,
+    readParentPid: () => null });
   t.after(() => cli.stop());
   assert.ok(cli.ensureWatching());
-  assert.equal(cli.getStatus(id)?.status, 'busy', 'a procStart mismatch cannot pin status to pid 100');
-  assert.equal(cli.getSidebarDescriptors()[0]?.pid, 200, 'sidebar descriptors select the live writer');
-  assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }).map(d => d.pid), [200], 'observation excludes the stale writer');
+  identityAvailable = false;
+  assert.equal(cli.getStatus(id)?.status, 'busy', 'a stale writer seeded last cannot overwrite the live status');
+  identityAvailable = true;
+  assert.equal(cli.getSidebarDescriptors()[0]?.pid, 100, 'sidebar descriptors select the live writer');
+  assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }).map(d => d.pid), [100], 'observation excludes the stale writer');
   transitions.init({ ...f.options, getLiveDescriptors: () => cli.getSidebarDescriptors({ allWriters: true }) });
   f.child(id);
   transitions.refreshDescriptorSessions();
@@ -137,11 +142,111 @@ test('987r stale pid reuse yields to the live writer and accepts its waiting upd
     const timer = setTimeout(() => { off(); reject(new Error('descriptor update timed out')); }, 5000);
     const off = cli.onDescriptorsChanged(() => { clearTimeout(timer); off(); resolve(); });
   });
-  write(200, 'waiting');
+  write(100, 'waiting');
   await changed;
   transitions.refreshDescriptorSessions();
   assert.equal(cli.getStatus(id).status, 'waiting', 'a live waiting update remains authoritative');
   assert.equal(f.seeds.length, 1, 'waiting does not replay observation');
+});
+
+test('1000 observing a dead last writer cannot promote an older status after PID reuse', t => {
+  const f = descriptorFixture(t);
+  const sessionsDir = path.join(f.tmp, 'sessions');
+  fs.mkdirSync(sessionsDir);
+  const alive = new Set([100, 200]);
+  for (const [pid, status] of [[100, 'waiting'], [200, 'busy']]) {
+    fs.writeFileSync(path.join(sessionsDir, `${pid}.json`), JSON.stringify({ ...f.descriptor(id), pid, status }));
+  }
+  cli.init({ dir: sessionsDir, activeSessions: f.activeSessions, log: silent, onIdle() {},
+    platform: 'darwin', readParentPid: () => null, isProcessAlive: pid => alive.has(pid) });
+  t.after(() => cli.stop());
+  assert.ok(cli.ensureWatching());
+  assert.equal(cli.getStatus(id)?.status, 'busy');
+  alive.delete(200);
+  assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }).map(d => d.pid), [100]);
+  alive.add(200);
+  assert.equal(cli.getStatus(id), undefined, 'an observed death deletes last-writer status without promotion');
+  assert.deepEqual(cli.getSidebarDescriptors(), [], 'default sidebar status cannot promote the older live writer');
+});
+
+for (const deathProbe of ['observation', 'status', 'timer', 'seed', 'write']) {
+  test(`1000 an exited descriptor stays excluded after unknown-identity PID reuse (${deathProbe})`, t => {
+    const f = descriptorFixture(t);
+    const sessionsDir = path.join(f.tmp, 'sessions');
+    fs.mkdirSync(sessionsDir);
+    let alive = deathProbe !== 'seed';
+    let event;
+    t.mock.method(fs, 'watch', (_dir, callback) => {
+      event = callback;
+      return { on() {}, close() {} };
+    });
+    const write = () => fs.writeFileSync(path.join(sessionsDir, '100.json'), JSON.stringify({
+      ...f.descriptor(id), pid: 100, status: 'busy',
+    }));
+    write();
+    cli.init({ dir: sessionsDir, activeSessions: f.activeSessions, log: silent, onIdle() {},
+      platform: 'darwin', readParentPid: () => null, isProcessAlive: () => alive });
+    t.after(() => cli.stop());
+    assert.ok(cli.ensureWatching());
+    f.child(id);
+    transitions.init({ ...f.options, getLiveDescriptors: () => cli.getSidebarDescriptors({ allWriters: true }) });
+    if (alive) {
+      assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }).map(d => d.pid), [100]);
+      transitions.refreshDescriptorSessions();
+    }
+    const seeds = f.seeds.length;
+    alive = false;
+    if (deathProbe === 'status') assert.equal(cli.getStatus(id), undefined);
+    if (deathProbe === 'timer') t.mock.timers.tick(5000);
+    if (deathProbe === 'write') { event('change', '100.json'); t.mock.timers.tick(150); }
+    if (deathProbe === 'observation') {
+      assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }), []);
+      transitions.refreshDescriptorSessions();
+    } else {
+      assert.equal(cli.getStatus(id), undefined);
+    }
+    alive = true;
+    assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }), [],
+      'PID reuse without a descriptor write cannot resurrect an exited writer');
+    assert.equal(cli.getStatus(id), undefined, 'status fallback also excludes the exited writer');
+    transitions.refreshDescriptorSessions();
+    assert.equal(f.seeds.length, seeds, 'PID reuse cannot replay task history');
+    write();
+    event('change', '100.json');
+    t.mock.timers.tick(150);
+    assert.deepEqual(cli.getSidebarDescriptors({ allWriters: true }).map(d => d.pid), [100],
+      'a fresh valid descriptor write clears the exited mark');
+    assert.equal(cli.getStatus(id)?.status, 'busy');
+    transitions.refreshDescriptorSessions();
+    assert.equal(f.seeds.length, seeds + 1, 'a fresh descriptor can start observation again');
+  });
+}
+
+test('1000 a rewritten descriptor with a different PID cannot expose its missing cached writer', t => {
+  const f = descriptorFixture(t);
+  const sessionsDir = path.join(f.tmp, 'sessions');
+  fs.mkdirSync(sessionsDir);
+  let event;
+  t.mock.method(fs, 'watch', (_dir, callback) => {
+    event = callback;
+    return { on() {}, close() {} };
+  });
+  const write = pid => fs.writeFileSync(path.join(sessionsDir, '100.json'), JSON.stringify({
+    ...f.descriptor(id), pid, status: 'busy', procStart: '111',
+  }));
+  write(100);
+  cli.init({ dir: sessionsDir, activeSessions: f.activeSessions, log: silent, onIdle() {},
+    platform: 'linux', readParentPid: () => null, readProcStart: () => null,
+    isProcessAlive: pid => pid === 100 });
+  t.after(() => cli.stop());
+  assert.ok(cli.ensureWatching());
+  assert.equal(cli.getStatus(id)?.status, 'busy');
+  write(200);
+  event('change', '100.json');
+  t.mock.timers.tick(150);
+  assert.doesNotThrow(() => cli.getStatus(id), 'a missing cached writer must be treated as stale');
+  assert.equal(cli.getStatus(id), undefined);
+  assert.deepEqual(cli.getSidebarDescriptors(), []);
 });
 
 test('987r observation chooses earliest startedAt independently of descriptor order', t => {
@@ -386,6 +491,8 @@ function mainWiring(taskRecords, { descriptors = [], hiddenProjects = [] } = {})
     parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
     normalizeArchivedProjectPath: require('../src/main/shared/normalize-project-path').normalizeProjectPath,
   });
+  vm.runInContext(extractFunction(source, 'isProjectSettingsArchived'), ctx,
+    { filename: path.join(__dirname, '../main.js') });
   vm.runInContext(source.slice(start, end), ctx, { filename: path.join(__dirname, '../main.js'),
     lineOffset: source.slice(0, start).split('\n').length - 1 });
   return { options, notify: () => listener(), refreshes: () => refreshed };
