@@ -143,8 +143,12 @@ If observation marks the selected status writer exited, `getStatus` deletes that
 status before considering stale-identity fallback, so death cannot promote another
 writer even when the PID has already been reused.
 
-The deferred owner-exit callback also excludes exited known writers when checking
-for a live replacement, so a reused PID cannot suppress confirmed owner death.
+The deferred owner-exit callback excludes the cached status writer when its
+matching (PID, session) writer in `known` is marked exited, and also excludes
+exited known writers when checking for a live replacement. A reused PID therefore
+cannot suppress confirmed owner death, even when another writer's death reaches
+the callback before the next `getStatus`. This gate does not promote another
+writer or change last-writer status semantics for live writers.
 This exited mark does not extend to `readAllDescriptors`, `findLiveProcess` /
 `scanLiveProcessesChecked` or `readWriterDescriptors`. Those disk readers still
 use `isProcessAlive` alone when process identity is unknown; their existing
