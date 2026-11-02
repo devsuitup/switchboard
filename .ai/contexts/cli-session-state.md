@@ -143,6 +143,15 @@ If observation marks the selected status writer exited, `getStatus` deletes that
 status before considering stale-identity fallback, so death cannot promote another
 writer even when the PID has already been reused.
 
+The deferred owner-exit callback also excludes exited known writers when checking
+for a live replacement, so a reused PID cannot suppress confirmed owner death.
+This exited mark does not extend to `readAllDescriptors`, `findLiveProcess` /
+`scanLiveProcessesChecked` or `readWriterDescriptors`. Those disk readers still
+use `isProcessAlive` alone when process identity is unknown; their existing
+identity checks can reject proven mismatches, but do not consult the cached exited
+mark. PID reuse with unknown identity can therefore still revive a dead descriptor
+there, including for live-elsewhere queries and `getLiveDescriptor`.
+
 By `sessionId` only, against `session.realSessionId || <map key>` over
 `activeSessions`, skipping `exited`, `isPlainTerminal`, and sessions with no
 `projectFolder`. `realSessionId` is what makes forked and resumed sessions work:

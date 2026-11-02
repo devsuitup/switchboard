@@ -202,11 +202,12 @@ Main-side descriptor reconciliation excludes projects explicitly listed in local
 the existing project-path normalizer, including Windows separator and short-path
 handling, and builds the hidden set once per refresh. It does not call
 `isProjectSettingsArchived`: the schedule guard resolves a worktree's parent after
-`realpath`, the sidebar rule takes it from the raw path. A remote hidden entry cannot hide a local project. A hidden repository's
-`.claude/worktrees/<name>` groups are excluded too, using the sidebar's worktree
-parent rule; `hiddenRepository` removes those rows. Other independently visible
-worktree layouts remain eligible. The parent path is normalized separately so
-missing child paths cannot change the parent's Windows spelling. Hiding an observed project releases its state on the next
+`realpath`, the sidebar rule takes it from the raw path. A remote hidden entry cannot
+hide a local project. A hidden repository's `.claude/worktrees/<name>` groups are
+excluded too, using the sidebar's worktree parent rule; `hiddenRepository` removes
+those rows. Other independently visible worktree layouts remain eligible. The parent
+path is normalized separately so missing child paths cannot change the parent's
+Windows spelling. Hiding an observed project releases its state on the next
 descriptor refresh, and unhiding allows fresh observation.
 
 Archive-only filtering is deferred. `get-projects` supplies both default and

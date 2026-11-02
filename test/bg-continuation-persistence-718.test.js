@@ -28,7 +28,7 @@ for (const mode of ['normal', 'contended', 'absent']) test('A1/A5 typed legacy h
       clearOwner: () => 'other', getDescriptorIdentity: () => 'fixture', liveElsewhereChecked: async id => { liveness.push(id); return { known: true, live: id === HEAD ? h.descriptors[0] : null }; } },
     notifyRendererProjectsChanged: () => { assert.equal(h.views().length, 1); notified.push('coherent'); } });
   const { persistBackgroundHandoff } = require('./app-source').loadAppFunctions(ctx, { sourcePath: path.join(__dirname, '../main.js'), declarations: ['backgroundHandoffs'],
-    functions: ['isProjectSettingsArchived', 'readBackgroundHandoffStamp', 'persistBackgroundHandoff'] });
+    functions: ['readBackgroundHandoffStamp', 'persistBackgroundHandoff'] });
   ctx.persistBackgroundHandoff = context => { const pending = persistBackgroundHandoff(context); requested.push(pending); return pending; };
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8').replace(/\r\n/g, '\n');
   const start = source.indexOf('sessionTransitions.init({');
