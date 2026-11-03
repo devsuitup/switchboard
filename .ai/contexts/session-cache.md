@@ -35,7 +35,7 @@ From `session-cache.js`:
 - `init(ctx)` — wire main process → cache (mainWindow ref for IPC events)
 - `refreshFolder(folder, opts)` — opts `{files: Set<string>}` for targeted refresh (watcher payload). Defaults to full folder walk. Returns a boolean indicating a sidebar-relevant change, after computing the cache writes; the writer facade resolves it after those writes are acknowledged.
 - `populateCacheViaWorker()` — initial scan / re-scan. The worker (`workers/scan-projects.js`) streams one `{type:'folder', result, current, total}` message per on-disk folder (plus a final `{type:'done'}`) instead of buffering the whole tree, so each folder is written to the DB and pushed to the renderer as soon as it's read — a large history no longer leaves the sidebar empty for the entire scan.
-- `buildProjectsFromCache(showArchived)` — produces the sidebar payload (sorted, grouped by project, missing flag computed here). It also injects every live plain-terminal PTY from `activeSessions` as a synthetic row, so a terminal sorts among the cached sessions even though it has no JSONL; the row's `summary` is the hard-coded string `Terminal`, which is what the sidebar displays — the renderer's own session object is never the one shown. A panel shell is a plain terminal too and is excluded here by `isPanelShellSession` (`panel-terminal-target.js`); see `.ai/contexts/panel-terminal.md` for the full list of places that have to skip one.
+- `buildProjectsFromCache(showArchived)` — produces the sidebar payload (sorted, grouped by project, missing flag computed here). It also injects every live plain-terminal PTY from `activeSessions` as a synthetic row, so a terminal sorts among the cached sessions even though it has no JSONL; the row's `summary` is the hard-coded string `Terminal`, which is what the sidebar displays — the renderer's own session object is never the one shown. A panel shell is a plain terminal too and is excluded here by `isPanelShellSession` (`src/main/terminals/panel-terminal-target.js`); see `.ai/contexts/panel-terminal.md` for the full list of places that have to skip one.
 - `notifyRendererProjectsChanged(cause)` — structural pushes use a 1.5s leading-edge/trailing throttle; activity-only pushes coalesce for at least 30s.
 - `sendIndexingProgress()` (internal) — emits the `indexing-progress` IPC event, gated on `coldStart` (captured once at the top of `populateCacheViaWorker()` via `!isInitialScanComplete()`) and throttled to ~4 events/s (the first event and every `done:true` always pass). Feeds the renderer's first-run banner; see `.ai/contexts/ipc-bridge.md`. A `done:true` payload carrying `error` keeps the banner visible with the failure message instead of hiding it.
 
@@ -60,6 +60,38 @@ Compared cache fields: `sessionId`, `folder`, `projectPath`, `summary`,
 `description`, `bridgeSessionId`, `mergedIntoSessionId`, and SDK membership
 derived from `entrypoint`. Compared metadata: `name`, `starred`, `archived`,
 `nameSource`, `nameRevision`. Empty optional values are normalized.
+
+Workflow agents (#875) also carry nullable `workflowRunId`, reconciled with
+`cols.has` without reindexing and included in the structural field comparison.
+The shared `subagent-attribution.js` classifier admits their five-part
+relative paths while excluding journals and unknown depths. The cold walker
+and targeted readers skip symlinks/junctions at every workflow path segment
+from the parent to the run directory. Full and header
+reads preserve the run id, so `resolveJsonlPath` maps each synthetic child id
+back to the same cached file without rereading its body every watcher flush.
+The projects payload includes the run id and a run title cached across builds
+by snapshot path, mtimeMs and size from `<parent>/workflows/<run>.json`, falling
+back to the id. Snapshot changes route through the debounced watcher to a
+projects notification without refreshing transcripts or widening pending targeted
+scans. The watcher compares titles observed in snapshot events and suppresses
+repeat notifications when only status changes; the first event has no known
+title baseline and notifies. Deleted snapshots retain the run id as the baseline
+and notify when the title changes or no baseline exists, including after
+folder-scope pruning in the same flush; repeated deletions remain quiet.
+The run-id baseline is retained only while the project folder exists, so an
+ENOENT in a folder-removal flush cannot repopulate that folder's title map.
+Partial JSON preserves the last title.
+Folder-scope pruning precedes snapshot reads, keeping titles read in the same
+flush as the baseline for later status-only events.
+Local reconciliation runs at startup and on
+projects requests (throttled to five seconds). It stats each root `agent-*`
+candidate once and forces a full folder refresh only if its root JSONL is
+missing, regardless of index freshness. Repair clears the condition; legitimate
+legacy root files never trigger it. Remote subset scans remove an old root
+`agent-<id>` row when processing a workflow transcript's upsert or deletion,
+provided the root file is absent from the mirror. Existing root files are
+preserved even outside the subset. Deletion and regrouping use existing writer effects. See
+[subagent-observability](subagent-observability.md#workflow-agent-transcripts-875).
 
 These are the inputs to `buildProjectsFromCache` and
 `mergeLocalBackgroundSessions`: they determine names, timestamps, message
@@ -550,6 +582,47 @@ for that lazy fallback. Evidence is deleted before persistence or worker message
 
 ## Remote SSH hosts (issue #201)
 
+The main-process SSH modules live in `src/main/remote/` (ADR 0005, step 5).
+The activity context keeps `remote-activity.js` at the repository root;
+Touched uses `src/main/changes/remote-touched-files.js`. Bare remote module filenames
+in this document refer to `src/main/remote/` unless another path is given.
+
+### Head-turn refresh failures (issue #701)
+
+Remote head-turn refresh is best-effort after a successful mirror/index cycle.
+`remote-index.js` logs each distinct failure once per host until the next
+successful head-turn refresh, which logs one recovery message (#873, #885).
+Failure identity combines `err.code || err.name` with the message after
+normalising digits, bare UUIDs and absolute paths anchored at the start of text,
+whitespace, a quote, `=`, `(` or `:`. Slash and backslash paths are accepted after
+those separators; a single backslash root requires a nonempty path component
+and another backslash, preserving a lone `\n`, `\t` or `\u001b[0m` token.
+Two adjacent escape tokens (`\r\n`, `\n\t`) still normalise as a path, and a
+one-component backslash root (`\tmp`) does not.
+Forward-slash UNC paths normalize at ordinary anchors; `//` is excluded only
+immediately after `:`, preserving `http://` and `file:///` URL hosts (#914).
+Relative paths and URL hosts remain distinct. Each host
+retains at most 20 signatures, evicting the oldest on overflow; alternating
+failures retain their dedup entries within that bound. Warnings keep the
+original diagnostic text. Removing a host and calling
+`restart()` prunes its entries, including when the last host is removed; a
+re-added host warns again. Both `refreshNow` and
+`refreshHostNow` still clear host errors/backoff and advance descriptor freshness.
+`main.js` delegates head-turn selection to `refreshRemoteHeadTurns` in
+`remote-index.js`. For a specific alias with no live descriptors, it returns
+before `getAllMeta` or `getAllCached`; live hosts still scan individually.
+The unscoped snapshot refresh continues to select live heads across aliases.
+`get-task-snapshots` warns if that refresh fails and continues refreshing local
+tasks from readable cache rows. If the local row read also fails, it warns and
+returns the worker's existing snapshots. A per-row child cache read failure skips
+only that row's children, warns once per IPC call and continues with later rows.
+The initial task state (pills and head-turn spinner) therefore loads despite a
+failing refresh, instead of being lost to the renderer's silent snapshot IPC
+rejection catch (`public/task-registry.js`). Remote turn evidence can remain stale
+until a successful refresh; there is no new error panel UI.
+The VM-loaded handler regressions are in `test/main-task-records-wiring.test.js`.
+`test/remote-index.test.js` exercises the shipped helper and both refresh APIs.
+
 ### Host display names (issue #677)
 
 `public/utils.js` owns `remoteHostLabel(alias, hosts)` and the renderer's
@@ -586,8 +659,10 @@ Observation only: a remote session is read, searched and counted, never resumed
 or deleted from here.
 
 - **The local path is unchanged when no host is declared.** `remote-index.js`
-  `start()` returns false before touching anything if `enabledHosts()` is empty:
-  no `setInterval`, no ssh, no mirror directory. `session-cache.js`'s
+  `start()` returns false without arming anything if `enabledHosts()` is empty:
+  no `setInterval`, no ssh, no mirror directory. It still starts a detached
+  prune that reads the indexed folder keys and drops those of an undeclared
+  alias, notifying if it dropped any. `session-cache.js`'s
   `remoteRoots` map stays empty, so `resolveFolderDir()` is `path.join(PROJECTS_DIR, folder)`
   and `buildProjectsFromCache`'s root list has exactly one entry — the same
   `readdirSync` it always did. Proven by `test/remote-index.test.js` (a transport
@@ -869,6 +944,10 @@ untouched.
   folder scanned for the first time (present on the mirror but not yet
   indexed — the "mirror on disk but absent from the cache" case just above)
   always gets the full walk: there is no baseline to restrict against.
+  A once-per-host-session ghost check also requests a full walk when a cached
+  parentless `agent-*` row has no matching mirror-root JSONL, including for
+  finished runs with no changed files. A successful repair overrides that
+  folder's subset and is remembered in memory; failed scans can retry.
 - **`scanFoldersViaWorker({..., fileSubsets})` is purely additive.** Omitting
   `fileSubsets` reproduces the prior behavior byte-for-byte (proven by
   `test/scan-projects-worker.test.js`, unmodified, and by
@@ -922,6 +1001,120 @@ untouched.
   (4) pinning `readSessionFile` for local indexing first, since the same
   function backs it. `test/remote-scan-file-granularity.test.js` pins the file
   granularity, including a file that vanished from the mirror.
+
+### Oversized remote transcripts (#699)
+
+The 64 MiB full-mirror ceiling remains. `syncMirror` returns `oversizedFiles`
+from its existing inventory; after ordinary folder indexing, `remote-index`
+publishes fresh descriptors and their timestamp, notifying on descriptor changes,
+before running `syncTurnTails` for live top-level heads only. A thrown local
+indexing error fails the cycle before publication, so a failed scan cannot make
+a session eligible for stop/archive. A scan that reports `ok: false` (the
+worker relay resolves it and never throws) still publishes descriptors, and
+stop eligibility depends on the descriptors. Descriptor publication needs no
+tail evidence; the head-turn refresh still runs after the tails have been
+registered. No extra listing or real-host discovery is needed. Successful cycle
+completion still advances the existing freshness stamp and clears the host's
+prior error/backoff.
+
+A restart (every settings save) bumps the generation and lets the new pass
+start at once; the old pass is only told to stop at its next check. Its
+`syncMirror` can overlap the new pass and still write its manifest after the
+SSH fetch was killed. Files that sync fetched are recorded in the manifest,
+so the next pass sees them unchanged and never re-indexes them. A pass
+cancelled by a restart therefore scans only `result.changedFolders`, provided
+its alias is still enabled in `hosts()`. A removed or disabled alias and a
+real stop (dispose, when the database may be closed) skip that scan. The new
+pass owns unindexed-folder repair, ghost-folder checks and missing-folder
+deletion; a cancelled pass does none of those repairs.
+It scans changed folders whole, without file-level subsets: the cancelled
+generation does not collect the indexed-folder baseline needed to restrict a
+scan safely. This can cost more than the current pass's incremental scan.
+
+Each `scanFoldersViaWorker` starts a separate worker: the writer serializes
+individual writes, not whole scans. A per-alias promise in `remote-index`
+therefore queues scans across generations. A new pass waits for the previous
+scan to settle, including rejection, before computing its indexed folders,
+repair set and file subsets or deleting missing folders. It therefore avoids
+rescanning unchanged folders that the preceding scan just indexed, and the
+older worker cannot overwrite the newer scan's rows afterwards. Other aliases
+can scan independently. The queue survives restart and releases its entry
+after the last queued scan settles. A queued scan rechecks stop, alias removal
+and generation before starting its worker. If another restart cancelled it
+while it waited, it skips repairs and scans only its original
+`changedFolders`; an empty set starts no worker. Mirror fetches are still
+concurrent; this orders scans, not the entire mirror-and-index cycle.
+Only the current generation remembers ghost checks or successful ghost repairs;
+a cancelled scan cannot refill the set cleared by restart. Removed-alias pruning
+never holds the pass: an alias with a queued scan has its drop chained onto that
+scan (rejection caught), and an alias without one is dropped at once. The
+chained drop reads the folder keys again to include late writes, and is skipped
+if the indexer stopped or the alias is declared and enabled again by then; it
+notifies when it dropped rows. Remaining hosts therefore sync, and
+`refreshHostNow` answers, while a removed host's scan is still running. A pass
+that waits behind an earlier scan of its own alias still keeps `refreshHostNow`
+returning `in-flight` for as long as that scan runs (up to
+`SUBSET_SCAN_TIMEOUT_MS`, 10 minutes, far beyond the Archive handler's existing
+20-second budget, which is unchanged); no timeout or retry was added. Removing
+the last host still prunes, without arming a timer or contacting SSH.
+
+A cancelled pass that already indexed rows reports a change, so the sidebar is
+notified even though the new pass finds an up-to-date mirror. A cancelled
+`refreshHostNow` returns `reason: 'in-flight'` when the indexer is running
+again, so the Archive handler retries, and `reason: 'stopped'` only when the
+indexer is really stopped. The stale-pass guards on the in-flight flags and the
+head-turn publication are pinned by `test/remote-turn-tail-followups-972.test.js`.
+Tail removal and inventory-write warnings are logged on change of error code,
+like the per-head tail logs, so a persistent failure warns once.
+
+Decision: use a remote tail read feeding only head-turn state (option b).
+Option a, placing aligned tails in the ordinary mirror, would reuse the fetch
+loop but would require persistent partial-file guards in indexing, search,
+viewer resolution, counts, continuation detection and startup scans. Missing
+one guard would present a tail as a complete transcript. Both options transfer
+the same bounded tail bytes; b needs fewer consumer changes and reads only live
+heads, so it is the smaller boundary with the same remote I/O cost.
+
+`readTurnTail` uses the existing SSH runner, timeout, cancellation, binary capture
+and output cap. `tail -c 262145` returns at most 256 KiB plus one alignment byte.
+The first cut JSONL line is discarded before an atomic replacement. No newline
+means an empty, unknown tail. Incomplete trailing JSON is left to the existing
+turn reader. This bounded raw tail can lack usable evidence when individual
+records (including API blobs) exceed the window; it never falls back to reading
+the full remote transcript. The cache mtime is the inventory's remote mtime so
+descriptor ordering uses the host clock.
+
+Tails live outside `projects/`, at `remote/<alias>/turn-state/<rel>.tail`, with
+their own inventory entries marked `partial: true`. Only `turnOnly` task-worker
+reads receive these paths. The normal mirror inventory and scan subsets never
+contain partial data; viewer paths still resolve only complete mirror files.
+A prior complete mirror remains a historical snapshot. Fresh oversized live
+sessions become descriptor-only placeholders, with no fabricated counts or
+continuation data. Bootstrap and post-pull head refresh select tails ahead of
+cached full copies, respect archives and liveness, and also accept heads absent
+from the session cache.
+Adding or removing descriptor-only placeholder IDs triggers a projects refresh;
+an unchanged placeholder does not. This also publishes a new oversized head
+that appears after an idle pull with no other indexing or capability change.
+
+The tail pass is serial and capped at 200 live descriptors and 200 files:
+at most 52,429,000 payload bytes in addition to the ordinary 256 MiB mirror
+budget. Unchanged size/mtime plus a present partial cache transfers nothing,
+including after restart. Changed tails replace bytes rather than append;
+failed reads preserve prior evidence and retry the unchanged remote version.
+That retained evidence can be stale after a failed refresh; it is still consumed
+without a runtime stale marker. Deleted, inactive or newly under-cap tails are
+removed. Removal and manifest-write errors warn without failing the host cycle;
+failed removals remain in the inventory for a later cleanup attempt. Per-head
+success/failure logs emit on state changes (including recovery), with state
+discarded when a head leaves the tail pass. Full-mirror warning throttling stays.
+Stopping invalidates the current indexer generation and releases its refresh
+guards before cancelling SSH. The tail loop checks that generation before each
+read and after it settles, so restart can refresh immediately without the old
+loop spawning more heads or publishing late results.
+
+Coverage: `test/remote-oversized-turn-699.test.js` uses injected SSH children,
+real disposable files and the real task-record worker; no SSH or Electron.
 
 ### Remote hosts — incremental fetch (issue #257)
 
@@ -1042,7 +1235,7 @@ created the `.jsonl`; a manual host refresh did not help.
   Dead descriptors (`ALIVE:0`) are dropped exactly as before — that filter
   runs first, inside `parseSessions()`, unchanged.
 - **The placeholder itself is synthesized in `remote-index.js`**, lazily, from
-  whatever the last successful cycle stored — never persisted, never mirrored.
+  the latest published descriptor inventory — never persisted, never mirrored.
   `getPlaceholderSessions(alias)` filters `descriptorOnly` sessions that also
   carry a `cwd` (nothing to group under, otherwise) and builds a session-shaped
   object via `buildPlaceholderSession()`: `sessionId` is the descriptor's own
@@ -1226,14 +1419,16 @@ created the `.jsonl`; a manual host refresh did not help.
     cannot grow unboundedly across host-list edits. Attach now exists off this
     data (issue #221, below); capacity tiers and a liveness badge in the UI
     (#218, #212) still don't.
-    **Corrected 2026-09-10 (issue #252): only a SUCCESSFUL cycle replaces this
-    map.** `refreshHost()`'s failure path used to also do `remoteSessions.set(alias,
+    **Corrected 2026-09-10 (issue #252): failed pulls never clear this map.**
+    Since #972, a successful mirror/index pass publishes descriptors before tail
+    reads, with its own publication timestamp. A local scan exception still fails
+    before publication. `refreshHost()`'s failure path used to also do `remoteSessions.set(alias,
     [])`, so one transient ssh timeout wiped every live descriptor and
     `annotateRemoteAttachable` (`main.js`) then found none — every remote
     session read as non-attachable for the whole backoff window even though
     the tmux sessions were alive (field incident 2026-09-10 17:41). The wipe is
     removed from both `refreshNow()`'s and `refreshHostNow()`'s catch blocks;
-    `getRemoteSessions(alias)` on a failed cycle now returns the previous
+    `getRemoteSessions(alias)` on a pull failing before publication returns the previous
     `sessions` list unchanged, the previous `at`, and the fresh `error` from
     `hostBackoff` — the host dot already renders `error` as "unreachable", so
     the UI signal is unchanged, only the underlying data survives. Attach
@@ -1487,7 +1682,7 @@ Launching a new remote session (#222) and injection over the messaging socket
   (titles only when no other client is still attached, issue #290). No new IPC
   or `main.js` call site was added for this — `stop-session` already calls
   `killPty(session, sessionId)` → `session.pty.kill()` through the existing
-  `pty-ops.js` seam, so the clean detach is just what that seam now reaches.
+  `src/main/terminals/pty-ops.js` seam, so the clean detach is just what that seam now reaches.
 
 - **`main.js`'s onData/onExit wiring (OSC parsing, busy detection, output
   buffering, `activeSessions` cleanup) is shared between local spawn and
@@ -1496,7 +1691,7 @@ Launching a new remote session (#222) and injection over the messaging socket
   remote-attach branch — the same code path, not a parallel copy that can
   drift. A remote session's `ptyProcess` (from `remote-attach.js`) exposes
   the same `write/resize/kill/onData/onExit/pid` shape node-pty does, so
-  `pty-ops.js` (`writePty`/`resizePty`/`killPty`) and this wiring need no
+  `src/main/terminals/pty-ops.js` (`writePty`/`resizePty`/`killPty`) and this wiring need no
   remote-awareness of their own — the existing `terminal-resize` IPC reaches
   a remote session's PTY through the exact same `resizePty(session, cols,
   rows, sessionId)` call as a local one.
@@ -1879,7 +2074,7 @@ Launching a new remote session (#222) and injection over the messaging socket
   `handle: attachResult.ptyProcess` — the same wrapper object also stored as
   `session.pty`. That works without a second object because the wrapper
   already exposes `write`/`isAlive` alongside the pty-duck-type methods
-  (`resize`/`kill`/`onData`/`onExit`/`pid`) `pty-ops.js` and `wireSessionPty`
+  (`resize`/`kill`/`onData`/`onExit`/`pid`) `src/main/terminals/pty-ops.js` and `wireSessionPty`
   need; `getPtyForSession` takes it as `session.handle` given, unmodified,
   exactly the branch #220 left unexercised. Proven in
   `test/remote-attach.test.js` ("pilots the fake remote pty through write()
@@ -2269,10 +2464,39 @@ stored fileMtime; missing stamp alone never selects it. Its next mtime change
 upgrades the cursor. Remote rows, subagents and unknown links are not selected.
 
 Prepared proof is consumed before the unchanged/budget branches only if both the
-previous serialized index and final stat still match. Header work rechecks that
-version. A changed known linked row which cannot reach verified EOF defers its
-entire row and related effects; parser-level partial/malformed tails and new
+previous serialized index and final stat still match. Header work records that
+version for the final pre-write stamp check. A changed known linked row which
+cannot reach verified EOF defers its entire row and related effects;
+parser-level partial/malformed tails and new
 branches are published as observed. No old proof is attached to fresh fileMtime.
+
+Issue #879 removes the redundant stat immediately after the display-header read.
+Both successful headers and the null-header fallback register the original stamp
+in `linkedVersions` before collecting effects. No database write occurs between
+that registration and the final stamp check. That check removes raced rows from
+upserts, names, metrics, search and deletions; touches and file-size adoption also
+exclude them, and the collector retains their retry scope with folder mtime zero.
+It also catches changes while later files and bridge merges are read. Removing
+only the intermediate check passes the continuation refresh suite; removing both
+checks fails the header-race and later-file-race row assertions. The later-file
+test triggers on reading OTHER after OLD, independently of the number of stats.
+
+The readonly-worker D2 tests gate the first preparation yield and assert that no
+progress or result escapes it, then release the gate and check the completed
+index and both views. Their deadline matches the 120-second test process cap,
+also bounding the cases when CI invokes its runner without a process timeout,
+rather than imposing a separate 9-second scheduling assumption. A real-file
+ENOENT injected after the yield logs a warning, returns a null preparation, completes reconciliation
+and the reply, and admits the next request. The two-attempt refresh loop is
+bounded; the missing file is accounted/deleted by refresh rather than leaving an
+unresolved promise. This path uses no SQLite or Node-22-only API. Node 22 load
+loops with both Windows TEMP spellings did not reproduce the reported CI timeout,
+and its cause is not established. A plausible cause is the continuation-scan
+loop of #891: when the stored `index.mtime` and `stat.mtime` round to different
+milliseconds, the cursor is never reused and the scan never ends. The CI stack
+stopped inside that scan. The ENOENT warning itself does not hang.
+The VM fixture evaluates unwrapped production modules with their real filenames
+and isolated module globals so coverage keeps the shipped source locations.
 
 The cache owns `deferredContinuationFiles`; targeted preparation and raw refresh
 union it into their scope, including an OTHER-only request. Writer computations
@@ -2321,9 +2545,30 @@ so DB rows and IPC remain JSON-safe. Full scans in `readSessionFile`, including
 stamp before and after reading and attach it to the index only when unchanged;
 otherwise the index is null. Incremental refresh and resolve scans also attach
 the verified stamp. Refresh derives its ISO mtime from the same BigInt stat as
-`new Date(Number((stat.mtimeNs + 500000n) / 1000000n))`: rounding in BigInt
-before conversion matches Node's Number-stat date at millisecond boundaries.
-Converting nanoseconds to Number before rounding loses precision (#656).
+`continuationMtime(stat)`, using
+`new Date(Number((stat.mtimeNs + 500000n) / 1000000n))`. The chunk parser uses
+the same BigInt-derived ISO value for both writing and comparing its cursor.
+Node's Number-stat date can round up when the nanosecond remainder is just
+below half a millisecond, so it must not decide cursor reuse (#891).
+Full transcript reads also derive the index mtime and the row's `fileMtime`
+from the saved BigInt stamp through `continuationMtime()`. Both values must
+agree before the first refresh as well as afterward: sidebar grouping validates
+their equality. A complete multi-chunk index then stays reusable through an
+ordinary refresh and `init()`, rather than being replaced with a partial scan.
+Every transcript `fileMtime` writer uses `continuationMtime()`: full subagent
+reads and both display-header variants derive it from a BigInt stat too (#907).
+Subagent full reads retain the BigInt stat taken before reading, so a same-size
+rewrite after the read remains stale for the next refresh (#913). Those reads
+and both display-header variants also reuse that stat's size and Date fields,
+without a second Number stat. Their display Dates are rounded half up to the
+millisecond like `continuationMtime()`, as the Number stat did, so `modified`
+equals `fileMtime` when no message timestamp exists.
+The legacy custom-title backfill compares the header's `fileMtime` with the
+cached row's `fileMtime`, keeping the same rounding as refresh. The header's
+`modified` remains a display timestamp and is not a freshness key.
+Legacy ISO cursors written with BigInt rounding remain reusable; a cursor
+written with a different rounding restarts once, then uses the canonical value.
+Converting nanoseconds to Number before rounding also loses precision (#656).
 Existing display-header and SDK-entrypoint reads keep their own budgets.
 
 When a scan has no matching in-memory snapshot after restart, a projects-query
@@ -2343,13 +2588,25 @@ and persists a stamp: matching size and ISO mtime alone cannot rule out a
 replacement under #656. A legacy, incomplete or stale index is read in 1 MiB chunks, yielding
 with `setImmediate` between chunks, with no total scan cap. Identity and stamps
 are checked before/after each synchronous scan and after every yield.
-Identity changes and non-growth changes during a yield remain unresolved;
-same-identity growth continues scanning, including after a previously final
+Identity changes and non-growth changes during a yield remain unresolved.
+If a pass still needs another chunk but its byte cursor does not advance,
+the scanner discards its in-memory snapshot and returns no proof. Preparation
+then defers the whole row through the existing folder marker and targeted
+retry scope; resolution remains unresolved until another lookup. This bounds
+stalled reads or repeated cursor resets without limiting progressing scans.
+Same-identity growth continues scanning, including after a previously final
 chunk, and reuses the cursor only with a matching head and tail. Equal-size
 changes restart from zero on the next lookup. Tests can inject smaller
 `chunkBytes`. Persistence uses
 `setCachedContinuationIndex`, which updates only that column, preserving display
 fields written by a concurrent refresh; it does not upsert an old row snapshot.
+
+Coverage for #891: `test/session-continuations-mtime-891.test.js` injects the
+Number/BigInt stat disagreement on disposable multi-chunk transcripts, checks
+legacy ISO cursors, preparation and resolution, and verifies bounded stalled
+read deferral and recovery. It also checks full reads followed by refresh on
+both sides of `init()`, retaining complete indexes and merged sidebar rows.
+Scanner-loop scenarios have iteration guards.
 
 The local-background sidebar still validates persisted indexes by ISO mtime.
 Its DB rows have no current filesystem stamp to compare, and acquiring one
@@ -2431,9 +2688,30 @@ after the retry name that state and offer a manual sidebar retry.
 
 ## Accepted projection provenance (#719)
 
-Build IDs belong to the worker reply envelope, rather than its session rows.
-The renderer combines that ID with row facts for diagnostics. Direct cache
-builds and worker builds therefore return equivalent session payloads.
+Build IDs and facts belong to the worker reply envelope, rather than its
+session rows (#742). `getProjectsProjection()` returns `{ facts, removedInputs }`
+for the latest direct cache build. The worker combines both builds into
+`projection: { buildId, facts, removedInputs }`; `facts` maps opaque `scope|root`
+keys to deciding inputs, shared by defaultProjects and allProjects. Session
+rows carry no `projectionFacts`. Direct cache builds and worker builds return
+equivalent session payloads.
+
+Facts cover every observed top-level conversation, including plain foreground
+rows, so later background transitions, splits and disappearances remain visible.
+Subagent and plain-terminal rows contribute neither facts nor exclusion inputs.
+The producer collects facts after background merging, resolving representatives
+to canonical roots with a case-insensitive cache lookup. The shared
+`indexProjectionFacts` helper indexes each proof's complete member set by opaque
+scope and member ID; main and renderer use it when a representative differs from
+the root. Main's archive/hidden-project assembly derives current exclusions from
+this index without changing the accepted worker envelope. Renderer acceptance
+replaces its index with the accepted envelope, retained for roster-only events;
+obsolete replies cannot replace it. No facts are reattached to session rows.
+
+Activity trace's paired `replyBytes.both` includes the shared projection envelope;
+boolean replies keep their array contract and their byte counts cover that array.
+The diagnostics logger still validates and compacts individual transition records
+as before; transport compaction does not truncate the facts used for comparison.
 
 The worker returns cloneable build provenance and current exclusion inputs for
 archived, hidden-project and sdk-only rows. Main carries it through assembly;
@@ -2443,3 +2721,33 @@ than removal. Current proof reasons distinguish identity-lost and proof-invalid.
 Logging-only build/roster revisions and task timestamps do not enter liveVersion.
 Post-ACK freshness uses the actual committed writer revision; progress advances
 only the DB baseline and never refreshes away changed live inputs.
+
+## Atomic rename retries on Windows (#900)
+
+`src/main/shared/atomic-write.js` exports synchronous
+`renameWithRetry(src, dest, { attempts, delays, sleep, rename })`. It retries
+only `EPERM`, `EACCES` and `EBUSY` on win32; other errors and platforms throw
+immediately. The default five attempts sleep 10/30/100/300 ms (440 ms total)
+using `Atomics.wait` on a `SharedArrayBuffer`. Options allow 1-5 attempts and
+nonnegative finite delays with a total below 500 ms. Injected `sleep` and
+`rename` support deterministic tests. The bound covers requested sleep time;
+filesystem calls and OS scheduling can add wall-clock time.
+
+Six publication sites use it: project-remap JSONL rewrites, remote-mirror
+manifests, remote-transport full scp placement and range append,
+schedule-runner enabled-state writes (including its injected rename), and
+trigger-watcher result publication. Manifest temps are unique sibling files
+using PID and UUID, replacing the shared `.tmp` name. All final-failure
+handling remains with the caller: remap removes its temp and throws; manifest
+removes its unique temp and throws; both transport paths remove `.part`, warn and
+report failure; schedule returns `{ ok: false }` and removes its temp;
+trigger logs, leaves its temp, deletes the trigger and still loses the result.
+The one-shot legacy DB relocation in session-index-store is excluded.
+
+The Windows integration test uses its own spawned PowerShell child holding
+the destination through `FileShare.None`. The first rename starts the child's
+50 ms release delay; retries must replace the file after a real sharing
+failure. Cleanup releases the child, terminates only that child by PID if
+necessary, and uses disposable files. Linux/macOS skip the Windows test;
+platform/error-policy tests cover their immediate-rethrow behaviour with VM
+platform injection. This validates a lock scenario, not its frequency in use.

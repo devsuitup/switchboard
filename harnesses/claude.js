@@ -8,7 +8,7 @@ const projects = require('../derive-project-path');
 const { encodeProjectPath } = require('../encode-project-path');
 const { resolveContinuations, resolveContinuationsSync } = require('../session-continuations');
 const { liveElsewhere } = require('../cli-session-state');
-const { getCachedJobs } = require('../bg-agents');
+const { getCachedJobs } = require('../src/main/bg-agents/bg-agents');
 const { resolveWindowsClaude } = require('../claude-binary');
 const { classifyTitleActivity } = require('../classify-title-activity');
 

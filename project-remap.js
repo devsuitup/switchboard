@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { renameWithRetry } = require('./src/main/shared/atomic-write');
 const { enumerateSessionFiles } = require('./read-session-file');
 
 /**
@@ -22,7 +23,7 @@ function rewriteJsonlAtomic(filePath, oldPath, newPath) {
       return line;
     }).join('\n');
     fs.writeFileSync(tmp, updated);
-    fs.renameSync(tmp, filePath);
+    renameWithRetry(tmp, filePath);
   } catch (err) {
     try { fs.unlinkSync(tmp); } catch {}
     throw err;

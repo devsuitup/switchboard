@@ -1,15 +1,15 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, powerMonitor, screen, session, shell } = require('electron');
 const { Worker } = require('worker_threads');
 const { performance } = require('node:perf_hooks');
-const { createMainLoopMonitor } = require('./main-loop-monitor');
+const { createMainLoopMonitor } = require('./src/main/app/main-loop-monitor');
 const { execFile, spawn: spawnChild } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const pty = require('node-pty');
 const log = require('electron-log');
-const relaunch = require('./relaunch');
-const { acquireInstanceLock, readNoNewPrivs } = require('./linux-startup');
+const relaunch = require('./src/main/app/relaunch');
+const { acquireInstanceLock, readNoNewPrivs } = require('./src/main/app/linux-startup');
 
 // Dev builds default to a separate SQLite DB so they don't race on
 // session_cache with a running installed AppImage. Honors an explicit
@@ -20,8 +20,8 @@ if (!app.isPackaged && !process.env.SWITCHBOARD_DATA_DIR) {
 }
 
 // getFolderIndexMtimeMs moved to session-cache.js
-const { appendToOutputBuffer, MAX_BUFFER_SIZE } = require('./output-buffer');
-const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles, getMcpState } = require('./mcp-bridge');
+const { appendToOutputBuffer, MAX_BUFFER_SIZE } = require('./src/main/terminals/output-buffer');
+const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles, getMcpState } = require('./src/main/integrations/mcp/mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
 
 // SWITCHBOARD_DATA_DIR isolates a dev/test instance from the installed app:
@@ -37,22 +37,22 @@ log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 const LOG_DEBUG_ON = log.transports.file.level === 'debug' || log.transports.console.level === 'debug';
 
 // Opt-in activity trace — see docs/activity-trace.md.
-const activityTrace = require('./activity-trace');
+const activityTrace = require('./src/main/shared/activity-trace');
 const { state: TRACE, trace, codePoints, controlOffset, busyDecision, progressDecision } = activityTrace;
 
 const { classifyTitleActivity } = require('./classify-title-activity');
-const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./window-frame');
-const { createUnsavedGuard } = require('./unsaved-guard');
-const { inventory, runExitHandoffs } = require('./session-exit');
-const { backgroundRefusal } = require('./bg-handoff');
+const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, menuPopupPoint } = require('./src/main/app/window-frame');
+const { createUnsavedGuard } = require('./src/main/app/unsaved-guard');
+const { inventory, runExitHandoffs } = require('./src/main/app/session-exit');
+const { backgroundRefusal } = require('./src/main/bg-agents/bg-handoff');
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: attempt => { quitAttemptToken = attempt; app.quit(); },
   inventory: () => exitInventory(), background: (ids, opts) => runExitBackground(ids, opts), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; } });
 let exitInventory = () => ({ rows: [], counts: {}, remote: {} });
 let runExitBackground = async () => [];
 let flushForLogoff = () => Promise.resolve();
-const { cleanEnv, scrubSessionEnv } = require('./clean-env');
+const { cleanEnv, scrubSessionEnv } = require('./src/main/shared/clean-env');
 scrubSessionEnv(process.env);
-const { normalizeProjectPath: normalizeArchivedProjectPath } = require('./normalize-project-path');
+const { normalizeProjectPath: normalizeArchivedProjectPath } = require('./src/main/shared/normalize-project-path');
 
 try { require('electron-reloader')(module, { watchRenderer: true }); } catch {};
 
@@ -80,42 +80,44 @@ function spawnPty(file, args, opts) {
 }
 
 // Shell profiles → shell-profiles.js
-const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
-const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./schedule-runner');
+const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./src/main/terminals/shell-profiles');
+const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
-const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./ipc-path-validator');
-const { validatePreLaunchCmd } = require('./pre-launch-cmd-guard');
-const { normalizePtySize } = require('./pty-size');
+const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./src/main/shared/ipc-path-validator');
+const { validatePreLaunchCmd } = require('./src/main/terminals/pre-launch-cmd-guard');
+const { normalizePtySize } = require('./src/main/terminals/pty-size');
 const { makeDeleteSessionGuard } = require('./delete-session-guard');
 const { resolveWindowsClaude } = require('./claude-binary');
-const { setPtyOpLogger, guardPtyInputErrors, killPty, detachPty, writePty, ptyExitSignalName } = require('./pty-ops');
-const { JOB_ID_RE, isHostedJob } = require('./bg-agents-roster');
-const { createTerminalResizeHandler } = require('./terminal-resize');
-const { createComposerState } = require('./composer-state');
-const { handleTerminalInput } = require('./terminal-input');
-const { createTriggerContext } = require('./trigger-context');
-const { createTmuxAttachAdapter } = require('./remote-attach');
-const { loadAttachProfileId } = require('./remote-attach-profile');
-const { createRemoteStopAdapter } = require('./remote-stop');
-const { attachBlockReason, sendBlockReason, launchBlockReason } = require('./remote-host-profile');
-const { createRemoteLaunchAdapter, handleLaunchRequest } = require('./remote-launch');
-const { createRemoteSendAdapter, handleSendRequest } = require('./remote-send');
-const { createGitChangesRunner, localGitEnv } = require('./git-changes-runner');
-const { runToExit } = require('./run-to-exit');
-const gitChangesTarget = require('./git-changes-target');
-const terminalPathTarget = require('./terminal-path-target');
-const { resolvePanelTerminalCwd, isPanelShellSession } = require('./panel-terminal-target');
-const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./plain-terminal-shell');
-const gitChangesFile = require('./git-changes-file');
-const { listSessionTouchedFiles, mainTouchedCache } = require('./session-touched-files');
-const { readRemoteTouchedFile } = require('./remote-touched-files');
-const { createChangesWatchRegistry } = require('./git-changes-watch');
+const { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, killPty, detachPty, writePty, ptyExitSignalName } = require('./src/main/terminals/pty-ops');
+const { configureWindowsJobHelper } = require('./src/main/terminals/windows-job-helper');
+const { stopProcessTree } = require('./src/main/terminals/stop-process-tree');
+const { JOB_ID_RE, isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
+const { createTerminalResizeHandler } = require('./src/main/terminals/terminal-resize');
+const { createComposerState } = require('./src/main/terminals/composer-state');
+const { handleTerminalInput } = require('./src/main/terminals/terminal-input');
+const { createTriggerContext } = require('./src/main/triggers/trigger-context');
+const { createTmuxAttachAdapter } = require('./src/main/remote/remote-attach');
+const { loadAttachProfileId } = require('./src/main/remote/remote-attach-profile');
+const { createRemoteStopAdapter } = require('./src/main/remote/remote-stop');
+const { attachBlockReason, sendBlockReason, launchBlockReason } = require('./src/main/remote/remote-host-profile');
+const { createRemoteLaunchAdapter, handleLaunchRequest } = require('./src/main/remote/remote-launch');
+const { createRemoteSendAdapter, handleSendRequest } = require('./src/main/remote/remote-send');
+const { createGitChangesRunner, localGitEnv } = require('./src/main/changes/git-changes-runner');
+const { runToExit } = require('./src/main/shared/run-to-exit');
+const gitChangesTarget = require('./src/main/changes/git-changes-target');
+const terminalPathTarget = require('./src/main/terminals/terminal-path-target');
+const { resolvePanelTerminalCwd, isPanelShellSession } = require('./src/main/terminals/panel-terminal-target');
+const { plainTerminalLaunch, ensureInitFiles: ensurePlainTerminalInitFiles } = require('./src/main/terminals/plain-terminal-shell');
+const gitChangesFile = require('./src/main/changes/git-changes-file');
+const { listSessionTouchedFiles, mainTouchedCache } = require('./src/main/changes/session-touched-files');
+const { readRemoteTouchedFile } = require('./src/main/changes/remote-touched-files');
+const { createChangesWatchRegistry } = require('./src/main/changes/git-changes-watch');
 const { createViewerWatchRegistry } = require('./viewer-file-watch');
 const { createMainPanelSaves } = require('./viewer-save-guard');
-const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./activitywatch-client');
-const { createActivityWatchReporter } = require('./activitywatch-reporter');
+const { createActivityWatchClient, DEFAULT_BASE_URL: ACTIVITYWATCH_URL } = require('./src/main/integrations/activitywatch/activitywatch-client');
+const { createActivityWatchReporter } = require('./src/main/integrations/activitywatch/activitywatch-reporter');
 
 setPtyOpLogger(log);
 
@@ -166,6 +168,15 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
   });
 }
 let mainWindow = null;
+let mainErrorWindowReady = false;
+const mainErrorHandlers = require('./src/main/app/main-error-handlers').installMainErrorHandlers({
+  log,
+  notify: notice => {
+    if (!mainErrorWindowReady || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return false;
+    mainWindow.webContents.send('main-process-error', notice);
+    return true;
+  },
+});
 let activityFlushedForQuit = false;
 let updateInstalling = false;
 let quitAttemptToken = null;
@@ -182,10 +193,27 @@ function resetUpdateAttempt() {
   updateWaitTimer = null;
   if (autoUpdater) autoUpdater.quitAndInstallCalled = false;
 }
+async function readWindowsDaemonPids() {
+  try {
+    const roster = JSON.parse(await fs.promises.readFile(require('./src/main/bg-agents/bg-agents').getDaemonRosterPath(), 'utf8'));
+    return [{ pid: roster.supervisorPid, procStart: roster.supervisorProcStart }, ...Object.values(roster.workers || {})]
+      .filter(value => Number.isSafeInteger(value?.pid) && value.pid > 0 && value.pid <= 0xffffffff
+        && typeof value.procStart === 'string' && /^\d{17,19}$/.test(value.procStart))
+      .map(({ pid, procStart }) => ({ pid, procStart }));
+  } catch { return []; }
+}
+
 async function startApplication() {
 if (!await acquireInstanceLock(app, { log })) { app.quit(); return; }
 const privilegeNotice = readNoNewPrivs({ log });
-const writer = require('./session-index-writer').createSessionIndexWriter();
+const bgAgents = require('./src/main/bg-agents/bg-agents');
+const writer = require('./session-index-writer').createSessionIndexWriter({
+  log,
+  onBusyCounts: counts => {
+    if (TRACE.on) trace('session-index-writer.busy', null, { counts });
+  },
+  onSessionsChanged: (...args) => bgAgents.invalidateTranscripts(...args),
+});
 let bootstrapQuit;
 const holdBootstrapQuit = event => {
   event.preventDefault();
@@ -204,7 +232,7 @@ async function boundedBootstrapQuit() {
 app.on('before-quit', holdBootstrapQuit);
 await writer.ready;
 const {
-  isCachePopulated, getAllCached, getCachedByParent, getCachedFolder, getCachedSession,
+  isCachePopulated, getAllCached, getCachedByParent, getCachedByFolder, getCachedFolder, getCachedSession,
   getAllFolderMeta, getAllMeta, getSearchFileIds,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, listSettingKeys, isInitialScanComplete,
@@ -407,12 +435,15 @@ function createWindow() {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
     return { action: 'deny' };
   });
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  mainWindow.webContents.on('will-navigate', details => {
+    const { url } = details;
     if (url !== mainWindow.webContents.getURL()) {
-      event.preventDefault();
+      details.preventDefault();
       if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
     }
   });
+  mainWindow.webContents.on('did-navigate', () => { mainErrorWindowReady = false; });
+  mainWindow.webContents.on('render-process-gone', () => { mainErrorWindowReady = false; });
   // Override window.open so xterm WebLinksAddon's default handler (which does
   // window.open() then sets location.href) routes through our IPC instead of
   // creating a child BrowserWindow.
@@ -494,6 +525,7 @@ function createWindow() {
   })().catch(err => log.error('[window] bounds save on close failed:', err.message)));
 
   mainWindow.on('closed', () => {
+    mainErrorWindowReady = false;
     quitAttemptToken = unsavedGuard.committedToken(mainWindow);
     if (process.platform === 'darwin') { quitAttemptToken = null; unsavedGuard.invalidate(); }
     // On macOS the app stays alive in the dock after the last window closes.
@@ -513,6 +545,7 @@ function createWindow() {
       try { entry.teardown(); } catch {}
     }
     subagentWatchers.clear();
+    transcriptFollower.dispose();
     mainWindow = null;
   });
 }
@@ -595,14 +628,14 @@ const projectsClient = createProjectsWorkerClient({
 const { resolveJsonlPath, readSubagentMeta } = require('./read-session-file');
 
 // --- Remote SSH hosts (observation only) — see .ai/contexts/session-cache.md ---
-const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts, normalizeHosts, normalizeRefreshMs } = require('./remote-hosts');
+const { isRemoteFolder, parseFolderKey, joinFolderKey, enabledHosts, normalizeHosts, normalizeRefreshMs } = require('./src/main/remote/remote-hosts');
 const { remoteHostLabel } = require('./public/utils');
-const { handleEnrolRequest } = require('./remote-enrol');
+const { handleEnrolRequest } = require('./src/main/remote/remote-enrol');
 const REMOTE_READ_ONLY = 'remote sessions are read-only — this build observes them, it does not attach to them';
-const { createSshTransport } = require('./remote-transport');
-require('./remote-ssh-binary').setResolverLog(log);
-const { createRemoteIndexer } = require('./remote-index');
-const { createRemoteWatcher } = require('./remote-watch');
+const { createSshTransport } = require('./src/main/remote/remote-transport');
+require('./src/main/remote/remote-ssh-binary').setResolverLog(log);
+const { createRemoteIndexer, refreshRemoteHeadTurns: refreshRemoteHeadTurnsFromCache } = require('./src/main/remote/remote-index');
+const { createRemoteWatcher } = require('./src/main/remote/remote-watch');
 const { createRemoteActivityTracker } = require('./remote-activity');
 const { createLocalTranscriptTracker } = require('./local-transcript-activity');
 
@@ -615,6 +648,7 @@ const remoteIndexer = createRemoteIndexer({
   scanFolders: scanFoldersViaWorker,
   refreshHeadTurns: alias => refreshRemoteHeadTurns(alias),
   listIndexedFolderKeys: () => [...getAllFolderMeta().keys()],
+  getCachedByFolder,
   dropFolder: async folderKey => await writer.dropRemoteFolder(folderKey),
   setRemoteRoots,
   notify: () => notifyRendererProjectsChanged('remote'),
@@ -838,7 +872,7 @@ async function unarchivedScheduleProjects(projectPath) {
 
 function skipMissedScheduleRuns(projects) {
   try {
-    require('./schedule-runner').skipMissedRuns(log, projects, path.join(path.dirname(DB_PATH), 'schedule-state'));
+    require('./src/main/schedules/schedule-runner').skipMissedRuns(log, projects, path.join(path.dirname(DB_PATH), 'schedule-state'));
   } catch (err) {
     log.warn('[schedule] Cannot reset the catch-up record after unarchive:', err.message);
   }
@@ -1123,6 +1157,31 @@ ipcMain.handle('open-external', (_event, url) => {
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
 });
 
+ipcMain.on('main-error-notices-ready', event => {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || event.sender !== mainWindow.webContents) return;
+  const replay = !mainErrorWindowReady;
+  mainErrorWindowReady = true;
+  mainErrorHandlers.flushNotices({ replay });
+});
+
+ipcMain.on('main-error-notices-dismissed', (event, ids) => {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed() || event.sender !== mainWindow.webContents) return;
+  mainErrorHandlers.dismissNotices(ids);
+});
+
+ipcMain.handle('open-main-log', async () => {
+  try {
+    const filePath = log.transports.file.getFile().path;
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath) || isSensitivePath(filePath)) {
+      return { ok: false, error: 'Application log path is unavailable or blocked' };
+    }
+    const error = await shell.openPath(path.resolve(filePath));
+    return error ? { ok: false, error } : { ok: true };
+  } catch (error) {
+    return { ok: false, error: error.message || String(error) };
+  }
+});
+
 // --- IPC: open a local file in the OS default app (terminal right-click menu) ---
 ipcMain.handle('open-path', (_event, filePath) => {
   if (typeof filePath !== 'string' || !filePath) return;
@@ -1298,7 +1357,11 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
     backfillEntrypoints();
     backfillCustomTitles();
     const result = await projectsClient.request({ reconcile: !needsPopulate && Date.now() - projectsReconciledAt >= 5000, measureBytes: TRACE.on });
-    const projection = result.projection ? structuredClone(result.projection) : undefined;
+    const projection = result.projection
+      ? { ...result.projection, removedInputs: structuredClone(result.projection.removedInputs) }
+      : undefined;
+    const diagnostics = projection ? require('./public/session-projection-diagnostics') : null;
+    let factsByMember = null;
     const assemble = async (projects, archived) => {
       const merged = mergePlaceholderSessions(projects);
       const kept = await writer.applyAndPersistArchived(merged, archived);
@@ -1309,12 +1372,13 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
           const filterReason = hidden.includes(project.projectPath) || hidden.includes(project.remoteAlias + '::' + project.projectPath)
             ? 'hidden-project' : 'archived';
           for (const row of project.sessions) {
-            const facts = row.projectionFacts;
+            factsByMember ??= diagnostics.indexProjectionFacts(projection);
+            const facts = factsByMember.get(diagnostics.projectionScope(project.remoteAlias, project.projectPath) + '|' + row.sessionId.toLowerCase());
             if (facts) projection.removedInputs[facts.scope + '|' + facts.rootId] = { ...facts.inputs, filterReason };
           }
         }
       }
-      return annotateRemoteAttachable(kept);
+      return annotateRemoteAttachable(cliSessionState.annotateScheduleRuns(kept));
     };
     const reply = showArchived === 'both'
       ? { defaultProjects: await assemble(result.defaultProjects, false), allProjects: await assemble(result.allProjects, true), projection }
@@ -1403,7 +1467,7 @@ ipcMain.handle('get-usage', async () => {
 // see .ai/contexts/viewer-panel.md (File list workers)
 const { createFileListsWorkerClient } = require('./file-lists-worker-client');
 const fileListStates = new Map();
-const { fileListPathKey } = require('./file-lists-path');
+const { fileListPathKey } = require('./src/main/viewer/file-lists-path');
 const FILE_LIST_INDEX_MAX_ENTRIES = 50;
 const FILE_LIST_INDEX_MAX_BODY_BYTES = 128 * 1024;
 const FILE_LIST_MAX_INVALIDATED_PATHS = 256;
@@ -1699,7 +1763,7 @@ ipcMain.handle('delete-setting', async (_event, key) => {
 });
 
 // --- Scheduled tasks ---
-const scheduleIpc = require('./schedule-ipc');
+const scheduleIpc = require('./src/main/schedules/schedule-ipc');
 
 ipcMain.handle('get-shell-profiles', () => {
   // TODO(lint): `_shellProfiles` is scoped inside shell-profiles.js and not
@@ -1759,7 +1823,7 @@ ipcMain.handle('get-active-terminals', () => {
 });
 
 // --- IPC: stop-session ---
-const { sendToBackground, respawnRoute, createContinuationReader, holdBackgroundExit, cancellationIn } = require('./bg-handoff');
+const { sendToBackground, respawnRoute, createContinuationReader, holdBackgroundExit, cancellationIn } = require('./src/main/bg-agents/bg-handoff');
 
 const backgroundHandoffs = new WeakMap();
 
@@ -2011,6 +2075,7 @@ ipcMain.handle('remote-send-prompt', (_event, payload) => handleSendRequest(payl
 function gitChangesTargetDeps() {
   return {
     getCachedFolder,
+    getCachedSession,
     isRemoteFolder,
     parseFolderKey,
     getRemoteSessions: (alias) => remoteIndexer.getRemoteSessions(alias),
@@ -2209,13 +2274,18 @@ ipcMain.handle('rename-session', async (_event, sessionId, name) => {
 });
 
 // --- IPC: archive-session ---
-ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
+const transcriptFollower = require('./src/main/viewer/transcript-follower').createTranscriptFollower();
+
+ipcMain.handle('read-session-jsonl', (_event, sessionId, options) => {
+  if (options?.mode === 'stop') return transcriptFollower.close(sessionId, options.token, options.park === true);
   const folder = getCachedFolder(sessionId);
   if (!folder) return { error: 'Session not found in cache' };
   const folderDir = projectsDirForFolder(folder);
   if (!folderDir) return { error: 'Session belongs to a host that is no longer declared' };
   const jsonlPath = path.join(folderDir, sessionId + '.jsonl');
   try {
+    if (options?.mode === 'follow') return transcriptFollower.open(sessionId, jsonlPath, options.checkpoint);
+    if (options?.mode === 'next') return transcriptFollower.read(sessionId, options.token, jsonlPath, options.final === true);
     const content = fs.readFileSync(jsonlPath, 'utf-8');
     const entries = [];
     for (const line of content.split('\n')) {
@@ -2671,13 +2741,6 @@ function wireSessionPty(session, sessionId, ptyProcess) {
   });
 }
 
-function killProcessTree(child) {
-  try {
-    if (isWindows) spawnChild('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-    else process.kill(-child.pid, 'SIGKILL');
-  } catch { try { child.kill('SIGKILL'); } catch {} }
-}
-
 // Run `claude <argv>` to completion through the login shell -- see .ai/contexts/bg-agents.md ("Running the CLI")
 function runClaudeCommand(claudeArgv, { cwd, timeout }) {
   return new Promise((resolve) => {
@@ -2716,7 +2779,12 @@ function runClaudeCommand(claudeArgv, { cwd, timeout }) {
       return;
     }
     const timer = setTimeout(() => {
-      if (killTree) killProcessTree(child);
+      if (killTree) {
+        const isCurrent = () => child.exitCode === null && child.signalCode === null;
+        void stopProcessTree(child.pid, { isCurrent }).then(stopped => {
+          if (!stopped && isCurrent()) { try { child.kill('SIGKILL'); } catch {} }
+        });
+      }
       else { try { child.kill('SIGKILL'); } catch {} }
       finish(null, new Error(`claude ${claudeArgv[0]} timed out after ${timeout} ms`));
     }, timeout);
@@ -3077,6 +3145,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     return { ok: false, error: `Error spawning PTY: ${err.message}` };
   }
 
+  if (!isAttach) void trackWindowsPty(ptyProcess);
   const session = {
     pty: ptyProcess, rendererAttached: true, exited: false,
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
@@ -3322,22 +3391,12 @@ const taskRecords = createTaskRecordsClient({
   },
 });
 async function refreshRemoteHeadTurns(hostAlias) {
-  const rows = [];
-  const liveByHost = new Map();
-  const meta = getAllMeta();
-  for (const row of getAllCached()) {
-    if (row.parentSessionId || meta.get(row.sessionId)?.archived) continue;
-    const folder = row.folder;
-    const { alias } = parseFolderKey(folder);
-    if (!alias || (hostAlias && alias !== hostAlias)) continue;
-    if (!liveByHost.has(alias)) {
-      liveByHost.set(alias, new Set(remoteIndexer.getRemoteSessions(alias).sessions.map(d => d.sessionId)));
-    }
-    if (!liveByHost.get(alias).has(row.sessionId)) continue;
-    const dir = projectsDirForFolder(folder);
-    if (dir) rows.push({ file: path.join(dir, row.sessionId + '.jsonl'), parentSessionId: row.sessionId, turnOnly: true });
-  }
-  if (rows.length) await taskRecords.readBatch(rows);
+  await refreshRemoteHeadTurnsFromCache({
+    getAllCached, getAllMeta, projectsDirForFolder,
+    getRemoteSessions: alias => remoteIndexer.getRemoteSessions(alias),
+    getRemoteHeadTurnFiles: alias => remoteIndexer.getRemoteHeadTurnFiles?.(alias) || [],
+    readBatch: rows => taskRecords.readBatch(rows),
+  }, hostAlias);
 }
 ipcMain.handle('get-task-snapshots', async () => {
   const live = new Set(cliSessionState.getSidebarDescriptors().map(d => d.sessionId));
@@ -3348,15 +3407,36 @@ ipcMain.handle('get-task-snapshots', async () => {
   for (const job of bgAgents.getSnapshot().roster) {
     if (job.sessionId && isHostedJob(job, descriptors)) live.add(job.sessionId);
   }
-  await refreshRemoteHeadTurns();
-  for (const row of getAllCached()) {
+  try {
+    await refreshRemoteHeadTurns();
+  } catch (err) {
+    log.warn(`[task-records] remote head-turn refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let cached = [];
+  try {
+    cached = getAllCached();
+  } catch (err) {
+    log.warn(`[task-records] local snapshot cache read failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  let childCacheWarned = false;
+  for (const row of cached) {
     if (row.parentSessionId || !live.has(row.sessionId)) continue;
     const folder = row.folder;
     const dir = folder && !parseFolderKey(folder).alias && projectsDirForFolder(folder);
     if (dir) {
       await taskRecords.read(path.join(dir, row.sessionId + '.jsonl'), row.sessionId);
-      for (const child of getCachedByParent(row.sessionId)) {
-        if (child.agentId) await taskRecords.child(path.join(dir, row.sessionId, 'subagents', 'agent-' + child.agentId + '.jsonl'), row.sessionId, child.agentId);
+      let children;
+      try {
+        children = getCachedByParent(row.sessionId);
+      } catch (err) {
+        if (!childCacheWarned) {
+          log.warn(`[task-records] child snapshot cache read failed: ${err instanceof Error ? err.message : String(err)}`);
+          childCacheWarned = true;
+        }
+        continue;
+      }
+      for (const child of children) {
+        if (child.agentId) await taskRecords.child(resolveJsonlPath(dir, { ...child, folder: '.' }), row.sessionId, child.agentId);
       }
     }
   }
@@ -3365,6 +3445,23 @@ ipcMain.handle('get-task-snapshots', async () => {
 const sessionTransitions = require('./session-transitions');
 sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
+  getLiveDescriptors: () => {
+    const hidden = new Set(((getSetting('global') || {}).hiddenProjects || [])
+      .filter(entry => parseFolderKey(entry).alias === null).map(normalizeArchivedProjectPath));
+    const descriptors = cliSessionState.getSidebarDescriptors({ allWriters: true });
+    return hidden.size ? descriptors.filter(descriptor => {
+      const cwd = normalizeArchivedProjectPath(descriptor.cwd);
+      const parent = require('./public/worktree-nesting').worktreeParentPath(descriptor.cwd?.replace(/\\/g, '/'));
+      return !hidden.has(cwd) && !hidden.has(normalizeArchivedProjectPath(parent));
+    }) : descriptors;
+  },
+  onDescriptorSession: async (sessionId, session, folderPath) => {
+    await taskRecords.read(path.join(folderPath, sessionId + '.jsonl'), sessionId);
+    for (const file of session._subFileList || []) {
+      await taskRecords.child(path.join(folderPath, sessionId, 'subagents', file), sessionId,
+        path.basename(file, '.jsonl').slice('agent-'.length));
+    }
+  },
   onBackgroundConfirmed: context => persistBackgroundHandoff(context),
   hasTaskRecord: (id, agentId) => taskRecords.hasRecord(id, agentId),
   backgroundJobExists: jobId => {
@@ -3404,6 +3501,7 @@ cliSessionState.init({
   },
 });
 cliSessionState.onStatusesChanged(() => {
+  sessionTransitions.refreshDescriptorSessions();
   sessionTransitions.detectPendingBackgroundContinuations();
   notifyRendererProjectsChanged('cli-status');
   const observed = new Set();
@@ -3455,15 +3553,14 @@ ipcMain.handle('session-continuations', (_event, sessionId) => sessionCache.reso
 ipcMain.handle('sessions-live-elsewhere', (_event, sessionIds) => cliSessionState.liveElsewhereMany(sessionIds, sessionHasPty, ptyPids));
 
 // see .ai/contexts/bg-agents.md
-const bgAgents = require('./bg-agents');
 bgAgents.init({
   log,
   runClaude: runClaudeCommand,
   cliSessionState,
-  transcriptExists: (sessionId) => {
+  resolveTranscriptPath: (sessionId) => {
     const folder = getCachedFolder(sessionId);
     const dir = folder && projectsDirForFolder(folder);
-    try { return !!dir && fs.statSync(path.join(dir, sessionId + '.jsonl')).isFile(); } catch { return false; }
+    return dir ? path.join(dir, sessionId + '.jsonl') : null;
   },
   makeIsOwnPid: () => cliSessionState.ownProcessFilter(ptyPids),
   dispatchSettings: (cwd) => {
@@ -3480,7 +3577,7 @@ bgAgents.init({
     return false;
   },
 });
-const unsubscribeBgAgents = require('./bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
+const unsubscribeBgAgents = require('./src/main/bg-agents/bg-agents-ipc').init({ ipcMain, bgAgents, getMainWindow: () => mainWindow, log,
   activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting: key => getSetting(key) });
 bgAgents.onJobsChanged(() => notifyRendererProjectsChanged('bg-jobs'));
 bgAgents.onJobsChanged(() => {
@@ -3533,6 +3630,8 @@ function startProjectsWatcher() {
   // The watcher reports the specific filename, so for the common case of a
   // subagent appending JSONL we can stat one file instead of thousands.
   const pendingChanges = new Map();
+  const pendingWorkflowTitles = new Set();
+  const workflowTitles = new Map();
   let debounceTimer = null;
 
   flushProjectsBeforeExit = async () => {
@@ -3553,7 +3652,31 @@ function startProjectsWatcher() {
     const work = new Map(pendingChanges);
     pendingChanges.clear();
 
+    const snapshots = [...pendingWorkflowTitles];
+    pendingWorkflowTitles.clear();
     let changed = false;
+    for (const [folder, scope] of work) {
+      if (scope === true || !fs.existsSync(path.join(PROJECTS_DIR, folder))) {
+        for (const filename of workflowTitles.keys()) {
+          if (filename.startsWith(folder + path.sep)) workflowTitles.delete(filename);
+        }
+      }
+    }
+    for (const filename of snapshots) {
+      try {
+        const snapshot = JSON.parse(await fs.promises.readFile(path.join(PROJECTS_DIR, filename), 'utf8'));
+        const title = typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()
+          ? snapshot.workflowName.trim() : path.basename(filename, '.json');
+        if (workflowTitles.get(filename) !== title) changed = true;
+        workflowTitles.set(filename, title);
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          const runId = path.basename(filename, '.json');
+          if (workflowTitles.get(filename) !== runId) changed = true;
+          if (fs.existsSync(path.join(PROJECTS_DIR, filename.split(path.sep)[0]))) workflowTitles.set(filename, runId);
+        }
+      }
+    }
     let activityChanged = false;
     for (const [folder, scope] of work) {
       const folderPath = path.join(PROJECTS_DIR, folder);
@@ -3608,6 +3731,8 @@ function startProjectsWatcher() {
         recordChange(folder, rel);
         // out-of-band signal for the local-transcript adapter — see .ai/contexts/session-state.md
         localTranscriptTracker.record(parts);
+      } else if (parts.length === 4 && parts[2] === 'workflows' && /^wf_[a-z0-9-]{6,}\.json$/.test(basename)) {
+        pendingWorkflowTitles.add(filename);
       } else {
         return;
       }
@@ -3717,6 +3842,7 @@ if (!app.isPackaged) {
   });
 
   app.whenReady().then(async () => {
+    if (process.platform === 'win32') void configureWindowsJobHelper(message => log.warn(message), readWindowsDaemonPids).start();
     await legacySearchCleanup;
     // Content Security Policy — restrict what the renderer can load or execute.
     // 'unsafe-inline' for style-src is required because the app sets .style.*
@@ -3739,6 +3865,7 @@ if (!app.isPackaged) {
     remoteIndexer.start();
     syncRemoteWatchers();
     cliSessionState.ensureWatching();
+    sessionTransitions.refreshDescriptorSessions();
     bgAgents.start();
     // Remove IDE lock files left behind by a crashed instance whose PID was
     // reused (the function only unlinks locks matching our own pid).
@@ -3747,10 +3874,11 @@ if (!app.isPackaged) {
 
     // Shared runCommand for cron scheduler and "run now" — takes argv, not a shell string
     const { spawn: cpSpawn } = require('child_process');
-    async function runScheduleCommand(claudeArgv, cwd, name, onDone) {
+    async function runScheduleCommand(claudeArgv, cwd, name, onDone, { manual = false } = {}) {
+      const runName = manual ? `Manual run ${name}` : name;
       const globalSettings = getSetting('global') || {};
       if (isProjectSettingsArchived(cwd)) {
-        log.info(`[schedule] ${name} suspended: project is archived`);
+        log.info(`[schedule] ${runName} suspended: project is archived`);
         if (onDone) onDone();
         return { ok: false, error: 'Project is archived; unarchive it before running schedules.' };
       }
@@ -3763,7 +3891,7 @@ if (!app.isPackaged) {
 
       const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
       if (sandbox && process.platform !== 'linux') {
-        log.error(`[schedule] ${name}: skipped — sandbox is enabled but requires Linux (bubblewrap)`);
+        log.error(`[schedule] ${runName}: skipped — sandbox is enabled but requires Linux (bubblewrap)`);
         if (onDone) onDone();
         return { ok: false, error: 'The schedule sandbox requires Linux (bubblewrap). Run it on Linux with bubblewrap, or disable Sandbox in the project or global settings and try Run now again.' };
       }
@@ -3776,7 +3904,7 @@ if (!app.isPackaged) {
         // see docs/sandbox.md ("Schedules")
         const refused = scheduleBindRefusals(addDirs, await scheduleProjects().list(), os.homedir(), cwd);
         if (refused.length) {
-          log.error(`[schedule] ${name}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
+          log.error(`[schedule] ${runName}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
           if (onDone) onDone();
           return { ok: false, error: `Sandbox add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}. Remove or change these add-dirs in the schedule file, then try Run now again.` };
         }
@@ -3796,21 +3924,25 @@ if (!app.isPackaged) {
           env,
         });
       } catch (err) {
-        log.error(`[schedule] ${name} error:`, err.message);
+        log.error(`[schedule] ${runName} error:`, err.message);
         if (onDone) onDone();
         return spawnFailure(err);
       }
-      cliSessionState.trackScheduleRun(claudeArgv[claudeArgv.indexOf('--resume') + 1], child, cwd, name);
+      cliSessionState.trackScheduleRun(claudeArgv[claudeArgv.indexOf('--resume') + 1], child, cwd, runName);
       // see .ai/contexts/activitywatch.md ("Running")
-      const activityId = `schedule:${name}:${Date.now()}`;
-      activityReporter.sessionStarted({ sessionId: activityId, project: cwd, name: `Scheduled: ${name}` });
+      const activityId = `schedule:${runName}:${Date.now()}`;
+      activityReporter.sessionStarted({ sessionId: activityId, project: cwd, name: `Scheduled: ${runName}` });
 
       let stderr = '';
       child.stderr.on('data', (data) => { stderr += data.toString(); });
 
-      child.on('exit', (code) => {
-        if (stderr.trim()) log.error(`[schedule] ${name} stderr:\n${stderr.trim()}`);
-        log.info(`[schedule] ${name} finished (exit ${code})`);
+      child.on('exit', (code, signal) => {
+        if (stderr.trim()) log.error(`[schedule] ${runName} stderr:\n${stderr.trim()}`);
+        log.info(`[schedule] ${runName} finished (exit ${code})`);
+        scheduleIpc.reportRunExit(mainWindow, {
+          name, projectPath: cwd, sessionId: claudeArgv[claudeArgv.indexOf('--resume') + 1],
+          manual, code, signal, sandbox, stderr,
+        });
         activityReporter.sessionEnded(activityId);
         if (onDone) onDone();
       });
@@ -3818,7 +3950,7 @@ if (!app.isPackaged) {
       return new Promise(resolve => {
         child.once('spawn', () => resolve({ ok: true }));
         child.on('error', (err) => {
-          log.error(`[schedule] ${name} error:`, err.message);
+          log.error(`[schedule] ${runName} error:`, err.message);
           activityReporter.sessionEnded(activityId);
           if (onDone) onDone();
           resolve(spawnFailure(err));
@@ -3840,7 +3972,7 @@ if (!app.isPackaged) {
     // I3: wrapped in try/catch so a boot failure here doesn't abort
     // app.whenReady (auto-updater, etc. would otherwise be silently lost).
     try {
-      require('./trigger-watcher').start(createTriggerContext({
+      require('./src/main/triggers/trigger-watcher').start(createTriggerContext({
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
         resolveSessionId: (id) => sessionTransitions.currentSessionId(id),

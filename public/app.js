@@ -1114,7 +1114,8 @@ window.api.onCliBusyState((sessionId, busy) => {
 // --- Single entry point for all sidebar renders ---
 // resort=true: re-sort items by priority+time (use for user-initiated actions)
 // resort=false (default): preserve existing DOM order, new items go to top
-function refreshSidebar({ resort = false } = {}) {
+function refreshSidebar({ resort = false, skipUnchanged = false, hiddenSettings } = {}) {
+  if (hiddenSettings) renderProjects.hiddenSettings = hiddenSettings;
   // When searching, always use all projects (search ignores archive filter)
   let projects = (searchMatchIds !== null)
     ? cachedAllProjects
@@ -1133,7 +1134,12 @@ function refreshSidebar({ resort = false } = {}) {
     }).filter(Boolean);
   }
 
-  renderProjects(projects, resort);
+  const skipped = !!(skipUnchanged && !resort && renderProjects.unchanged?.(projects));
+  if (!skipped) renderProjects(projects, resort);
+  const counters = refreshSidebar.counters ||= { renders: 0, skips: 0 };
+  if (skipped) counters.skips++;
+  else counters.renders++;
+  if (window.ATRACE) window.atrace('sidebar.refresh', null, { skipped, ...counters });
   pruneRemoteActivityTimers();
   pruneLocalTranscriptTimers();
 }
@@ -1387,23 +1393,13 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   const isRow = typeof sessionOrId === 'object';
   const sessionId = isRow ? sessionOrId.sessionId : sessionOrId;
   const openEntry = openSessions.get(sessionId);
-  const session = isRow ? sessionOrId : { ...(sessionMap.get(sessionId) || openEntry?.session || rowSession), sessionId, mergedMemberIds: [] };
-  const planned = await planSessionStop(session, { attach: !!(openEntry?.attach && !openEntry.closed), retryTargets, jobStop: true });
-  const targets = [];
-  const excluded = [...planned.excluded];
-  for (const target of planned.targets) {
-    if (target.job && !target.notHosted) {
-      try {
-        const check = await window.api.checkBgAgentVerb('stop', target.jobId);
-        if (!check?.ok) throw new Error(check?.error || 'The background job check is unavailable');
-      } catch (error) {
-        excluded.push({ sessionId: target.sessionId, reason: error?.message || 'The background job check is unavailable' });
-        continue;
-      }
-    }
-    targets.push(target);
-  }
-  const plan = describeSessionStopPlan(session, targets, excluded);
+  const own = sessionMap.get(sessionId);
+  const session = isRow ? sessionOrId : localMergedMemberRows.get(sessionId) || (own?.mergedMemberIds?.length ? own : null)
+    || [...sessionMap.values()].find(row => row.mergedMemberIds?.includes(sessionId)) || own || openEntry?.session || rowSession || { sessionId };
+  const rowEntry = openSessions.get(session.sessionId);
+  const planned = await planSessionStop(session, { attach: !!(rowEntry?.attach && !rowEntry.closed), retryTargets, jobStop: true });
+  const plan = await validateSessionStopPlan(session, planned);
+  const { targets, excluded } = plan;
   if (!targets.length) {
     showAppNotice({ id: sessionActionNoticeId('Stop', session), kind: excluded.length ? 'error' : 'info',
       message: excluded.length ? plan.confirmText : 'Nothing is running to stop.' });
@@ -1411,54 +1407,7 @@ async function confirmAndStopSession(sessionOrId, btn, rowSession, retryTargets)
   }
   if (!await appConfirm({ title: plan.attach ? 'Detach tab?' : 'Stop session?', message: plan.confirmText,
     confirmLabel: plan.attach ? 'Detach' : 'Stop', danger: !plan.attach })) return;
-  const failures = [];
-  const failedTargets = [];
-  const unreachable = new Map();
-  let stopped = 0;
-  for (const target of targets) {
-    const id = target.sessionId;
-    const entry = openSessions.get(id);
-    const previousDetachRequested = entry?.detachRequested;
-    try {
-      if (target.job && !target.notHosted) {
-        const result = target.attachedHere ? await runAttachedJobVerb('stop', target.jobId, id)
-          : await window.api.bgAgentVerb('stop', target.jobId);
-        if (!result?.ok) throw new Error(result?.error || 'The background stop backend is unavailable');
-        target.jobStopped = true;
-      }
-      if (!target.job || target.attachedHere) {
-        if (target.remote && unreachable.has(target.alias)) throw new Error(unreachable.get(target.alias));
-        const backend = target.remote ? window.api.remoteStopSession : window.api.stopSession;
-        if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
-        if (target.remote) {
-          if (entry) delete entry.detachRequested;
-        }
-        const result = target.remote ? await backend(target.alias, id) : await backend(id);
-        if (target.remote && result?.hostUnreachable) {
-          const reason = result.error || 'The host is unreachable';
-          unreachable.set(target.alias, reason);
-          throw new Error(reason);
-        }
-        if (!result || (result.ok === false && result.error !== (target.remote ? 'session not found on that host' : 'not running'))) {
-          throw new Error(result?.error || 'The stop backend is unavailable or returned no result');
-        }
-      }
-      if (target.job && !target.notHosted && typeof refreshAgentsRoster === 'function') refreshAgentsRoster();
-    } catch (error) {
-      if (target.remote && entry) entry.detachRequested = previousDetachRequested;
-      failures.push(`Part ${id} ${target.where}: ${error?.message || error || 'unknown error'}`);
-      failedTargets.push(target);
-      continue;
-    }
-    if (target.remote && typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
-    activePtyIds.delete(id);
-    if (!gridViewActive && activeSessionId === id) {
-      setActiveSession(null);
-      terminalHeader.style.display = 'none';
-      placeholder.style.display = '';
-    }
-    stopped++;
-  }
+  const { failures, failedTargets, stopped } = await executeSessionStopTargets(targets);
   if (failures.length) {
     showSessionActionFailure('Stop', session, failures.join('\n'),
       'Check the connection or the session in its own terminal (the Agents view for a background session), then retry Stop from the sidebar.',
@@ -2095,14 +2044,32 @@ scheduleActiveSessionsPoll();
 
 // Refresh sidebar timeago labels every 30s so "just now" ticks forward
 setInterval(() => {
+  for (const project of renderProjects.lastProjects || []) {
+    if (!project.remoteAlias) continue;
+    const dot = document.getElementById('ph-' + folderId(project.projectPath, project.remoteAlias))?.querySelector('.remote-host-dot');
+    if (!dot) continue;
+    const title = remoteHostState(project).detail;
+    if (dot.title !== title) dot.title = title;
+  }
   for (const [sessionId, session] of sessionMap) {
-    if (!session.modified) continue;
     const item = document.getElementById('si-' + sessionId);
     if (!item) continue;
     const timeEl = item.querySelector('.session-time');
-    if (!timeEl) continue;
-    const msgSuffix = session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '';
-    timeEl.textContent = formatDate(new Date(session.modified)) + msgSuffix;
+    if (timeEl && session.modified) {
+      const msgSuffix = session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '';
+      const text = formatDate(new Date(session.modified)) + msgSuffix;
+      if (timeEl.textContent !== text) timeEl.textContent = text;
+    }
+    const status = item.querySelector('.session-status');
+    if (!status) continue;
+    const snapshot = mergedRowSnapshot(rowSessionIds(session), sessionId, storedActivitySnapshot(sessionId, session), session);
+    const label = typeof backgroundActivityLabel === 'function' ? backgroundActivityLabel(rowHeadId(session), snapshot, session)
+      : session.bgJobId ? { text: 'Activity unavailable' } : null;
+    const descriptor = localSessionForStatus(rowHeadId(session), session);
+    const age = formatStatusAge(descriptor?.statusUpdatedAt);
+    const why = descriptor?.status === 'waiting' ? descriptor.waitingFor : '';
+    const text = label ? label.text : descriptor?.status ? [why, age].filter(Boolean).join(' · ') : '';
+    if (status.textContent !== text) status.textContent = text;
   }
 }, 30000);
 
@@ -2259,7 +2226,8 @@ async function loadProjects({ resort = false } = {}) {
       scheduleActiveSessionsPoll();
     }
     if (typeof observeSessionProjection === 'function') observeSessionProjection({ generation: job.generation, cause: 'projects', provenance: response.projection });
-    refreshSidebar({ resort: job.resort });
+    refreshSidebar({ resort: job.resort, skipUnchanged: true,
+      hiddenSettings: [globalSettings?.hiddenProjects, globalSettings?.hiddenProjectKinds] });
     renderDefaultStatus();
     return state.outcome;
   };
@@ -2295,7 +2263,10 @@ function observeSessionProjection({ generation, cause, provenance } = {}) {
     const state = observeSessionProjection.state ||= { generation: 0, provenance: {},
       observer: helper.createSessionProjectionDiagnostics({ emit: record => window.api.sessionProjectionChanged?.(record) }) };
     if (generation !== undefined) state.generation = generation;
-    if (provenance) state.provenance = provenance;
+    if (provenance) {
+      state.provenance = provenance;
+      state.factsByMember = helper.indexProjectionFacts(provenance);
+    }
     const visible = new Set(cachedProjects.flatMap(project => project.sessions.map(row =>
       helper.projectionScope(project.remoteAlias, project.projectPath) + '|' + row.sessionId.toLowerCase())));
     const rows = [];
@@ -2303,9 +2274,10 @@ function observeSessionProjection({ generation, cause, provenance } = {}) {
       if (row.parentSessionId || row.type === 'terminal') continue;
       const selection = typeof selectBackgroundActivity === 'function' ? selectBackgroundActivity(rowHeadId(row), row) : null;
       const entry = selection?.entry;
-      const facts = row.projectionFacts;
+      const rowScope = helper.projectionScope(project.remoteAlias, project.projectPath);
+      const facts = state.factsByMember?.get(rowScope + '|' + row.sessionId.toLowerCase());
       const foreground = typeof backgroundActivityIsForeground === 'function' && backgroundActivityIsForeground(rowHeadId(row), row, selection);
-      const scope = facts?.scope || helper.projectionScope(project.remoteAlias, project.projectPath);
+      const scope = facts?.scope || rowScope;
       const visibleInDefault = visible.has(scope + '|' + row.sessionId.toLowerCase());
       const attaches = typeof backgroundAttachFacts === 'function' ? backgroundAttachFacts(row) : [];
       const attached = attaches.length > 0;
@@ -2494,10 +2466,6 @@ const openingSessions = new Map();
 
 // see .ai/contexts/session-state.md ("Opening a session once")
 function openSession(session, customOptions, flags = {}) {
-  if (!flags.automatic && !flags.chooseAgain && session.mergedMemberIds?.length && !rowOpenId(session)) {
-    const dormantId = rowSessionIds(session).find(id => dormantWorkingSet.has(id));
-    if (dormantId && dormantId !== session.sessionId) session = { ...session, sessionId: dormantId, mergedMemberIds: [] };
-  }
   const inFlight = openingSessions.get(session.sessionId);
   const open = { byUser: !flags.automatic, after: null };
   if (inFlight) {

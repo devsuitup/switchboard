@@ -24,6 +24,13 @@ const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .c
 // public/sidebar.js (and equivalents). Kept readonly so reassignment
 // from another file gets flagged.
 const rendererCrossFileGlobals = {
+  validateSessionStopPlan: 'readonly',
+  executeSessionStopTargets: 'readonly',
+  confirmAndStopProjectFolder: 'readonly',
+  markUnread: 'readonly',
+  createMessageSearch: 'readonly',
+  focusMessageViewer: 'readonly',
+  Highlight: 'readonly',
   runAttachedJobVerb: 'readonly',
   writeSessionExitBanner: 'readonly',
   updateTerminalHeader: 'readonly',
@@ -38,6 +45,7 @@ const rendererCrossFileGlobals = {
   agentsCliEntryCount: 'readonly',
   agentsSnapshotRevision: 'readonly',
   remoteHostLabel: 'readonly',
+  remoteHostState: 'readonly',
   setRemoteHostLabels: 'readonly',
   writtenActivitySnapshot: 'readonly',
   noteWrittenActivity: 'readonly',
@@ -156,6 +164,7 @@ const rendererCrossFileGlobals = {
   // no ESLint config, so new cross-file renderer symbols have to be declared
   // here when syncing or no-undef fires across five consumers.
   shortProjectPath: 'readonly',
+  projectDisplayLabel: 'readonly',
   // public/choice-dialog.js and public/worktree-nesting.js
   showChoiceDialog: 'readonly',
   appConfirm: 'readonly',
@@ -204,6 +213,7 @@ const rendererCrossFileGlobals = {
   buildSessionItem: 'readonly',
   buildSlugGroup: 'readonly',
   folderId: 'readonly',
+  projectStateKey: 'readonly',
   slugId: 'readonly',
   subagentTypeColor: 'readonly',
   SUBAGENT_LIVE_TTL_MS: 'readonly',
@@ -217,6 +227,7 @@ const rendererCrossFileGlobals = {
   syncLocalPtyAgentsBusy: 'readonly',
   sessionItemEl: 'readonly',
   rowSessionIds: 'readonly',
+  rowLifecycleLabel: 'readonly',
   rowHeadId: 'readonly',
   rowHeadSession: 'readonly',
   rowOpenId: 'readonly',
@@ -255,6 +266,7 @@ const rendererCrossFileGlobals = {
   isSessionAlive: 'readonly',
   paintSessionIcon: 'readonly',
   paintSessionIconFromSnapshot: 'readonly',
+  rowHasRunningSchedule: 'readonly',
   paintTerminalHeaderStatus: 'readonly',
   // public/remote-activity-ui.js (remote-ssh adapter, see .ai/contexts/session-state.md)
   setRemoteAttached: 'readonly',
@@ -323,6 +335,7 @@ const rendererCrossFileGlobals = {
   updateRunningIndicators: 'readonly',
   hideAllViewers: 'readonly',
   drainViewerWatches: 'readonly',
+  requestLiveJsonlRefresh: 'readonly',
   showTerminalHeader: 'readonly',
   switchPanel: 'readonly',
   showAddProjectDialog: 'readonly',

@@ -83,7 +83,7 @@ keeps reason plus age, or age alone.
 | Terminal header | `#terminal-header-status.session-icon` (`public/session-activity-dom.js`, `paintTerminalHeaderStatus`) | activity and lifecycle in tooltip and accessible name, no visible text; repaints with the active row, including merged-member updates, without waiting for a poll; also works when that row is filtered out |
 | Terminal banner | text (`public/app.js`, `applyProcessExit`) | recorded Stopped, Exited (code N) or Killed (SIG); Detach says the session keeps running in the background |
 | Agents group/header | emoji and Title Case label; counts (`public/agents-view.js`) | Active/Blocked/Idle/Done/Stopped/Failed/External/Unknown groups; N running · N finished · N external |
-| Status bar/filter | text (`public/app.js`, `public/index.html`) | N open here · N sessions · N projects; Show sessions open here only |
+| Status bar/filter | text (`public/app.js`, `public/index.html`); running filter includes scheduled runs | N open here · N sessions · N projects; Show running sessions only |
 | Slug-group header | `.slug-group-dot` (`public/sidebar.js`) | separate pulsing green mark when any child has a PTY; N sessions and time |
 | Remote host | `.remote-host-dot` (`public/style.css`) | separate reachability mark: green, red error, amber unknown, pulsing amber connecting |
 
@@ -185,6 +185,23 @@ The Changes badge is the one place that already meets "never colour alone".
   (`Delete`, `Stop`), never `OK`.
 
 ### 2.3 Other verbs
+
+**Mark as unread** / **Mark as read** is a native sidebar row button targeting
+the conversation's head. It toggles the existing Response ready activity slot
+without a confirmation, persists through sidebar rebuilds in renderer memory,
+and is reachable with Tab through the existing focus-visible action strip.
+
+**Archive all older sessions**, beside `+ N older`, always asks once through
+`appConfirm`. The question names the number of unarchived conversation rows
+(including slug-group members, excluding subagents) and defines older using
+the current visible-item limit and age cutoff. Running targets make the
+question dangerous. Refused rows keep persistent errors while eligible rows
+archive; unreachable hosts keep the archive-without-stop notice. Undo restores
+successful rows and leaves stopped processes stopped.
+
+**Find in messages** belongs to the focused message viewer: Ctrl+F (Cmd+F on
+macOS), a live counter, Previous/Next, Enter/Shift+Enter to wrap, Escape to close
+and return focus to messages. Leaving the viewer clears its search highlights.
 
 | Job | Names in use | Where |
 |---|---|---|

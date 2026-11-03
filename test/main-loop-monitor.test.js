@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { performance } = require('node:perf_hooks');
-const { createMainLoopMonitor } = require('../main-loop-monitor');
+const { createMainLoopMonitor } = require('../src/main/app/main-loop-monitor');
 
 function clock() {
   let now = 0;

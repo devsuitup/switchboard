@@ -1,5 +1,7 @@
 # Context: changes-view
 
+Main-process modules for this context live in `src/main/changes/` (ADR 0005, step 6).
+
 **Purpose**: A git-status-sourced view of a session's working tree, in the
 same right-hand file panel IDE Emulation already uses — for local and remote
 sessions alike, and editable in place on a local one. Issue #251.
@@ -12,12 +14,12 @@ integration: `.ai/contexts/viewer-panel.md` ("Changes mode").
 
 | File | Role |
 |---|---|
-| `git-changes.js` | Pure parser — no electron, no DOM, no fs. `require()`-d from `main.js` and from tests, same pattern as `remote-hosts.js` / `derive-project-path.js`. |
-| `git-changes-runner.js` | Runs the git commands, local or remote, behind one interface. |
+| `src/main/changes/git-changes.js` | Pure parser — no electron, no DOM, no fs. `require()`-d from `main.js` and from tests, same pattern as `remote-hosts.js` / `derive-project-path.js`. |
+| `src/main/changes/git-changes-runner.js` | Runs the git commands, local or remote, behind one interface. |
 | `run-to-exit.js` | The local spawn both runners share: settles on `close`, drains past the stdout cap instead of killing — see "A capped read waits for git to exit". An `input` option is written to the child's stdin and closed (the `check-attr --stdin` call). |
-| `git-changes-target.js` | cwd resolution for the panel's IPCs, extracted out of `main.js` for testability (same rationale as `delete-session-target.js`). |
-| `git-changes-file.js` | The content pair and the write target behind the editable diff: the `<rev>:<path>` guard, the repository-containment check, the read and the write. |
-| `git-changes-watch.js` | The registry behind `git-changes-watch`: arms `fs.watch`, debounces, re-arms after a rename, and reports the repo-relative path. |
+| `src/main/changes/git-changes-target.js` | cwd resolution for the panel's IPCs, extracted out of `main.js` for testability (same rationale as `delete-session-target.js`). |
+| `src/main/changes/git-changes-file.js` | The content pair and the write target behind the editable diff: the `<rev>:<path>` guard, the repository-containment check, the read and the write. |
+| `src/main/changes/git-changes-watch.js` | The registry behind `git-changes-watch`: arms `fs.watch`, debounces, re-arms after a rename, and reports the repo-relative path. |
 | `public/file-panel.js` | Renderer: the `'changes'` tab type, its rows, the editor, and the read-only diff-line renderer. |
 | `public/session-activity.js` | `onSessionIdle()` — the no-polling refresh hook. |
 

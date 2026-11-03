@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const binary = require('../remote-ssh-binary');
+const binary = require('../src/main/remote/remote-ssh-binary');
 const { createBinaryResolver } = binary;
 
 const WIN_ENV = { SystemRoot: 'C:\\Windows', ProgramFiles: 'C:\\Program Files' };

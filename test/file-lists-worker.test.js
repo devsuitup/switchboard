@@ -11,7 +11,7 @@ const { once } = require('node:events');
 const { encodeProjectPath } = require('../encode-project-path');
 const { deriveProjectPath } = require('../derive-project-path');
 const { scanMdFiles, acceptMdFile } = require('../scan-md-files');
-const { isAllowedMemoryPath } = require('../ipc-path-validator');
+const { isAllowedMemoryPath } = require('../src/main/shared/ipc-path-validator');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'file-lists-'));

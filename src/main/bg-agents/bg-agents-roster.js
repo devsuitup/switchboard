@@ -1,0 +1,287 @@
+// bg-agents-roster.js — see .ai/contexts/bg-agents.md
+'use strict';
+const { bridgeSessionKey } = require('../../../bridge-session-id');
+const { normalizeTaskEvidence } = require('../../../task-records');
+const { liveWorkerDescriptor } = require('./bg-worker-liveness');
+
+const JOB_STATES = new Set(['running', 'working', 'blocked', 'done', 'stopped', 'failed']);
+const SESSION_STATUSES = new Set(['busy', 'idle', 'waiting', 'shell']);
+const JOB_ID_RE = /^[0-9a-f]{8}$/;
+const JOB_ID_IN_TEXT_RE = /(?:^|[^0-9a-f])([0-9a-f]{8})(?![0-9a-f])/i;
+const TRANSCRIPT_ID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const str = (v) => (typeof v === 'string' && v ? v : null);
+const num = (v) => (Number.isFinite(v) ? v : null);
+
+function sessionIdFromLinkScanPath(p) {
+  if (typeof p !== 'string') return null;
+  const m = TRANSCRIPT_ID_RE.exec(p);
+  return m ? m[1].toLowerCase() : null;
+}
+
+function sessionIdField(v) {
+  return typeof v === 'string' && SESSION_ID_RE.test(v) ? v.toLowerCase() : null;
+}
+
+function flagValue(flags, name) {
+  if (!Array.isArray(flags)) return null;
+  const i = flags.indexOf(name);
+  return i >= 0 && i + 1 < flags.length ? str(flags[i + 1]) : null;
+}
+
+function parseJobState(text) {
+  let raw;
+  try { raw = JSON.parse(text); } catch { return null; }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const fan = Array.isArray(raw.fan)
+    ? raw.fan.filter(f => f && typeof f === 'object').map(f => ({
+      id: str(f.id), kind: str(f.kind), label: str(f.label), startedAt: num(f.startedAt), doneAt: num(f.doneAt),
+    }))
+    : [];
+  const children = Array.isArray(raw.children)
+    ? raw.children.filter(c => c && typeof c === 'object').map(c => ({
+      id: c.id == null ? null : String(c.id), href: str(c.href), kind: str(c.kind),
+    }))
+    : [];
+  return {
+    id: str(raw.id),
+    daemonShort: str(raw.daemonShort),
+    updatedAt: str(raw.updatedAt) || num(raw.updatedAt),
+    state: JOB_STATES.has(raw.state) ? raw.state : null,
+    detail: str(raw.detail),
+    tempo: str(raw.tempo),
+    tokens: num(raw.tokens),
+    fan,
+    children,
+    result: raw.output && typeof raw.output === 'object' ? str(raw.output.result) : null,
+    template: str(raw.template),
+    agent: flagValue(raw.respawnFlags, '--agent'),
+    model: flagValue(raw.respawnFlags, '--model'),
+    name: raw.nameSource === 'collision' ? null : str(raw.name) || flagValue(raw.respawnFlags, '--name'),
+    nameSource: str(raw.nameSource),
+    sessionId: sessionIdFromLinkScanPath(raw.linkScanPath) || sessionIdField(raw.sessionId) || sessionIdField(raw.resumeSessionId),
+    transcriptPath: str(raw.linkScanPath),
+    bridgeSessionId: str(raw.bridgeSessionId),
+    taskEvidence: normalizeTaskEvidence(raw),
+  };
+}
+
+const MAX_NOISY_CANDIDATES = 32;
+
+function arrayStarts(text) {
+  const out = [];
+  for (let i = text.indexOf('['); i !== -1 && out.length < MAX_NOISY_CANDIDATES; i = text.indexOf('[', i + 1)) {
+    if (!text.slice(text.lastIndexOf('\n', i - 1) + 1, i).trim()) out.push(i);
+  }
+  return out;
+}
+
+function arrayEnds(text) {
+  const out = [];
+  for (let i = text.lastIndexOf(']'); i !== -1 && out.length < MAX_NOISY_CANDIDATES; i = i > 0 ? text.lastIndexOf(']', i - 1) : -1) {
+    const eol = text.indexOf('\n', i);
+    if (!text.slice(i + 1, eol === -1 ? text.length : eol).trim()) out.push(i);
+  }
+  return out;
+}
+
+function parseJsonArray(text) {
+  const s = String(text == null ? '' : text);
+  try { return JSON.parse(s); } catch { /* fall through to the noisy parse */ }
+  const starts = arrayStarts(s);
+  const ends = arrayEnds(s);
+  for (const a of starts) {
+    for (const b of ends) {
+      if (b <= a) continue;
+      try {
+        const v = JSON.parse(s.slice(a, b + 1));
+        if (Array.isArray(v)) return v;
+      } catch { /* next candidate */ }
+    }
+  }
+  return null;
+}
+
+const SHELL_NOISE_RE = /^(?:[\w./-]*sh): (?:no job control in this shell|cannot set terminal process group\b.*|initialize_job_control: .*)$/;
+
+function stripShellNoise(stderr) {
+  const lines = String(stderr == null ? '' : stderr).split('\n');
+  let i = 0;
+  while (i < lines.length && SHELL_NOISE_RE.test(lines[i].trim())) i++;
+  return lines.slice(i).join('\n').trim();
+}
+
+function parseCliList(text) {
+  const raw = parseJsonArray(text);
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  for (const s of raw) {
+    if (!s || typeof s !== 'object') continue;
+    const kind = s.kind === 'background' || s.kind === 'interactive' ? s.kind : null;
+    if (!kind || typeof s.sessionId !== 'string' || !s.sessionId) continue;
+    out.push({
+      id: str(s.id),
+      sessionId: s.sessionId,
+      name: str(s.name),
+      cwd: str(s.cwd),
+      kind,
+      state: JOB_STATES.has(s.state) ? s.state : null,
+      status: SESSION_STATUSES.has(s.status) ? s.status : null,
+      pid: Number.isInteger(s.pid) && s.pid > 0 ? s.pid : null,
+      startedAt: num(s.startedAt),
+    });
+  }
+  return out;
+}
+
+function emptyEntry() {
+  return {
+    id: null, sessionId: null, name: null, cwd: null, kind: 'background',
+    state: null, status: null, pid: null, startedAt: null,
+    agent: null, model: null, detail: null, tempo: null, tokens: null,
+    fan: [], children: [], result: null, attachedHere: false,
+  };
+}
+
+function backgroundEntry(id, cliEntry, job, descriptor, descriptors) {
+  const e = emptyEntry();
+  e.id = id;
+  e.listed = !!cliEntry;
+  const cachedJob = !!job;
+  if (job?.sessionId && sessionIdField(cliEntry?.sessionId) && job.sessionId.toLowerCase() !== cliEntry.sessionId.toLowerCase()) job = null;
+  if (descriptor?.sessionId && (cliEntry?.sessionId || job?.sessionId)
+    && descriptor.sessionId.toLowerCase() !== (cliEntry?.sessionId || job.sessionId).toLowerCase()) descriptor = null;
+  e.cachedJob = cachedJob;
+  e.descriptorInputs = descriptor ? [{ sessionId: descriptor.sessionId, jobId: descriptor.jobId, kind: descriptor.kind, pid: descriptor.pid || null }] : [];
+  if (job) {
+    Object.assign(e, {
+      sessionId: job.sessionId, name: job.name, state: job.state, agent: job.agent, model: job.model,
+      detail: job.detail, tempo: job.tempo, tokens: job.tokens, fan: job.fan, children: job.children, result: job.result,
+      transcriptPath: job.transcriptPath, bridgeSessionId: job.bridgeSessionId,
+      taskEvidence: job.taskEvidence,
+    });
+  }
+  if (cliEntry) {
+    e.sessionId = job?.sessionId && !sessionIdField(cliEntry.sessionId) ? job.sessionId : cliEntry.sessionId || e.sessionId;
+    e.name = cliEntry.name || e.name;
+    e.cwd = cliEntry.cwd || e.cwd;
+    e.state = job?.state === 'running' && !isHostedJob({ ...job, id }, descriptors)
+      ? cliEntry.state || job.state : (job && job.state) || cliEntry.state || e.state;
+    e.pid = cliEntry.pid || e.pid;
+    e.startedAt = cliEntry.startedAt ?? e.startedAt;
+  }
+  if (descriptor) {
+    e.status = descriptor.status ?? e.status;
+    e.waitingFor = descriptor.waitingFor ?? null;
+    e.sessionId = e.sessionId || descriptor.sessionId;
+    e.name = e.name || descriptor.name;
+    e.cwd = e.cwd || descriptor.cwd;
+    e.agent = e.agent || descriptor.agent;
+    e.pid = descriptor.pid || e.pid;
+    e.startedAt = e.startedAt ?? descriptor.startedAt;
+  }
+  if (job?.nameSource === 'collision' || descriptor?.nameSource === 'collision') e.name = null;
+  if (sessionIdField(e.sessionId)) e.sessionId = e.sessionId.toLowerCase();
+  return e;
+}
+
+function mergeRoster({ cli, jobs, descriptors, isOwnPid, isAttachedHere }) {
+  const own = typeof isOwnPid === 'function' ? isOwnPid : () => false;
+  const attached = typeof isAttachedHere === 'function' ? isAttachedHere : () => false;
+  const byJobId = new Map();
+  for (const d of descriptors || []) {
+    if (d && d.kind === 'bg' && JOB_ID_RE.test(String(d.jobId || '').toLowerCase()) && str(d.sessionId)) byJobId.set(d.jobId.toLowerCase(), d);
+  }
+  const roster = [];
+  const listed = new Map((cli || []).filter(s => s.kind === 'background' && JOB_ID_RE.test(String(s.id || '').toLowerCase())).map(s => [s.id.toLowerCase(), s]));
+  const cached = new Map([...(jobs || [])].filter(([id]) => JOB_ID_RE.test(String(id).toLowerCase())).map(([id, job]) => [id.toLowerCase(), job]));
+  for (const id of new Set([...listed.keys(), ...cached.keys(), ...byJobId.keys()])) {
+    roster.push(backgroundEntry(id, listed.get(id), cached.get(id), byJobId.get(id), descriptors));
+  }
+  const matched = new Set();
+  for (const e of roster) {
+    const matches = d => d && d.sessionId && ((e.sessionId && d.sessionId.toLowerCase() === e.sessionId.toLowerCase())
+      || (bridgeSessionKey(e.bridgeSessionId) !== null && bridgeSessionKey(e.bridgeSessionId) === bridgeSessionKey(d.bridgeSessionId)));
+    const holder = (descriptors || []).find(matches);
+    if (holder) {
+      e.conversationPid = holder.pid;
+      e.conversationOwn = own(holder.pid);
+    }
+    if (!['stopped', 'done', 'failed'].includes(e.state)) continue;
+    const d = (descriptors || []).find(d => d && d.kind === 'interactive' && matches(d));
+    if (!d) continue;
+    matched.add(d.sessionId.toLowerCase());
+    if (own(d.pid)) continue;
+    Object.assign(e, {
+      kind: 'interactive', state: null, jobState: e.state,
+      transcriptSource: e.sessionId && e.sessionId.toLowerCase() !== d.sessionId.toLowerCase() ? 'live-session' : null,
+      transcriptPath: e.sessionId?.toLowerCase() === d.sessionId.toLowerCase() ? e.transcriptPath : null,
+      sessionId: d.sessionId,
+      name: d.name || e.name, cwd: d.cwd || e.cwd, status: d.status,
+      pid: d.pid, conversationPid: d.pid, conversationOwn: false, startedAt: d.startedAt,
+    });
+  }
+  for (const d of descriptors || []) {
+    if (!d || d.kind !== 'interactive' || !d.sessionId || own(d.pid)) continue;
+    if (matched.has(d.sessionId.toLowerCase())) continue;
+    roster.push({
+      ...emptyEntry(), kind: 'interactive', sessionId: d.sessionId, name: d.name, cwd: d.cwd,
+      status: d.status, pid: d.pid, startedAt: d.startedAt,
+    });
+  }
+  for (const e of roster) {
+    e.hosted = isHostedJob(e, descriptors);
+    e.attachedHere = e.kind === 'background' && !!attached(e.id);
+  }
+  return roster;
+}
+
+function splitAddDirs(value) {
+  if (typeof value !== 'string') return [];
+  return value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+}
+
+function dispatchArgs(fields) {
+  const f = fields && typeof fields === 'object' ? fields : {};
+  const prompt = typeof f.prompt === 'string' ? f.prompt.trim() : '';
+  if (!prompt) return { ok: false, error: 'a prompt is required' };
+  if (prompt.startsWith('-')) return { ok: false, error: 'the prompt cannot start with "-": the CLI would read it as a flag' };
+  if (typeof f.cwd !== 'string' || !f.cwd) return { ok: false, error: 'a project directory is required' };
+  const args = ['--bg'];
+  const name = typeof f.name === 'string' ? f.name.trim() : '';
+  if (name) args.push('--name', name);
+  const agent = typeof f.agent === 'string' ? f.agent.trim() : '';
+  if (agent) args.push('--agent', agent);
+  if (f.dangerouslySkipPermissions) args.push('--dangerously-skip-permissions');
+  else if (typeof f.permissionMode === 'string' && f.permissionMode) args.push('--permission-mode', f.permissionMode);
+  for (const dir of splitAddDirs(f.addDirs)) args.push('--add-dir', dir);
+  args.push('--', prompt);
+  return { ok: true, args, cwd: f.cwd };
+}
+
+function isHostedJob(job, descriptors = [], evidence) {
+  if (!job || job.kind && job.kind !== 'background' || job.state === 'stopped' || job.state === 'failed') return false;
+  if (liveWorkerDescriptor(job, descriptors || [])) return true;
+  if (evidence === 'dead') return false;
+  if (job.state === 'running' && evidence === 'live') return true;
+  if ((descriptors || []).some(d => d?.kind === 'interactive'
+    && job.sessionId && d.sessionId?.toLowerCase() === job.sessionId.toLowerCase())) return false;
+  return job.state === 'working' || job.state === 'blocked';
+}
+
+function dispatchRefusal({ sandbox, preLaunchCmd } = {}) {
+  if (sandbox) return 'this project runs its sessions sandboxed, and a background agent runs under the claude daemon, outside the sandbox: start it as a session instead';
+  if (typeof preLaunchCmd === 'string' && preLaunchCmd.trim()) return 'this project has a pre-launch command, and the claude daemon does not run it for a background agent: start it as a session instead';
+  return null;
+}
+
+function parseDispatchOutput(stdout) {
+  const m = JOB_ID_IN_TEXT_RE.exec(String(stdout || ''));
+  return m ? m[1].toLowerCase() : null;
+}
+
+module.exports = {
+  parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, dispatchRefusal, isHostedJob,
+  sessionIdFromLinkScanPath, stripShellNoise, JOB_ID_RE, JOB_STATES, SESSION_ID_RE,
+};

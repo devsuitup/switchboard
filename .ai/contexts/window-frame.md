@@ -117,7 +117,7 @@ liveness. See [session-state.md](session-state.md) for the projection rules.
 
 `process-exited` carries the exit code, the signal's name and whether a Stop
 was asked for: main turns node-pty's signal number into a name with
-`ptyExitSignalName()` (`pty-ops.js`), and the `stop-session` and
+`ptyExitSignalName()` (`src/main/terminals/pty-ops.js`), and the `stop-session` and
 `remote-stop-session` handlers set `session.stopRequested` before they signal
 the process. `openSession` forgets the previous exit before it awaits
 `openTerminal`'s answer, so an exit that arrives while the relaunch is still

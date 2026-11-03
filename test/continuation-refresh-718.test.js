@@ -132,16 +132,53 @@ test('B5/B7 linked growth with pinned mtime defers then refreshes through its co
   assert.equal(cache.continuationRefreshScope(h.folder, opts).files.has(OLD + '.jsonl'), false);
 });
 
-test('#733 watcher between index save and targeted refresh retains a coherent row', { timeout: 9000 }, async t => {
-  const h = fixture(t); h.write(OLD, h.padding); h.write(OTHER); cache.refreshFolder(h.folder); h.init();
+for (const growAfterSave of [false, true]) test('#733 watcher between index save and targeted refresh retains a coherent row, growAfterSave=' + growAfterSave, { timeout: 9000 }, async t => {
+  const h = fixture(t);
+  h.write(OLD, line({ type: 'ai-title', aiTitle: 'Saved AI title', slug: 'saved-slug' }) + h.padding); h.write(OTHER);
+  const pinned = new Date('2026-10-19T08:00:00.000Z');
+  fs.utimesSync(h.file(OLD), pinned, pinned);
+  cache.refreshFolder(h.folder); h.init();
   h.append(OLD, h.link());
+  fs.utimesSync(h.file(OLD), pinned, pinned);
   await cache.resolveSessionContinuations(OLD, { getSessionLiveElsewhere: async () => ({ known: true, live: {} }) });
-  const before = structuredClone(h.rows.get(OLD)); h.append(OTHER);
-  cache.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', OLD + '.jsonl']) });
-  assert.ok(h.rows.get(OLD).continuationIndex);
-  if (h.rows.get(OLD).fileMtime === before.fileMtime) assert.deepEqual(h.rows.get(OLD), before);
+  const before = structuredClone(h.rows.get(OLD));
+  const savedStat = fs.statSync(h.file(OLD), { bigint: true });
+  const savedIndex = JSON.parse(before.continuationIndex);
+  assert.equal(before.fileMtime, pinned.toISOString());
+  assert.equal(Number(savedStat.size) - before.fileSize, Buffer.byteLength(h.link()));
+  assert.equal(savedIndex.bytes, Number(savedStat.size));
+  assert.deepEqual(savedIndex.stamp, continuationStamp(savedStat));
+  if (growAfterSave) {
+    h.append(OLD);
+    fs.utimesSync(h.file(OLD), pinned, pinned);
+  }
+  h.append(OTHER);
+  const files = new Set([OTHER + '.jsonl', OLD + '.jsonl']);
+  assert.equal([...files][0], OTHER + '.jsonl', 'OTHER must be scanned first to spend the shared budget');
+  assert.ok(fs.statSync(h.file(OTHER)).size > h.rows.get(OTHER).fileSize, 'OTHER has changed and requires a scan');
+  cache.refreshFolder(h.folder, { files });
+  assert.equal(JSON.parse(h.rows.get(OTHER).continuationIndex).bytes, fs.statSync(h.file(OTHER)).size,
+    'OTHER spent the ordinary shared continuation budget before OLD');
+  const refreshed = h.rows.get(OLD);
+  if (growAfterSave) assert.deepEqual(refreshed, before, 'OTHER spent the shared budget, so the stale saved index defers the whole row');
+  else {
+    assert.equal(refreshed.fileSize, Number(savedStat.size));
+    for (const field of ['sessionId', 'folder', 'projectPath', 'summary', 'firstPrompt', 'created', 'modified', 'fileMtime', 'messageCount', 'textContent', 'dailyMetrics', 'continuationIndex', 'aiTitle', 'slug']) {
+      assert.deepEqual(refreshed[field], before[field], field);
+    }
+    assert.equal(refreshed.customTitle || '', before.customTitle || '', 'customTitle');
+  }
   const preparedContinuations = await cache.prepareContinuationRefresh(h.folder, { files: new Set([OLD + '.jsonl']) });
   cache.refreshFolder(h.folder, { files: new Set([OLD + '.jsonl']), preparedContinuations });
+  const row = h.rows.get(OLD), index = JSON.parse(row.continuationIndex);
+  const finalStat = fs.statSync(h.file(OLD), { bigint: true });
+  assert.equal(row.fileSize, Number(finalStat.size));
+  assert.equal(row.fileMtime, pinned.toISOString());
+  assert.equal(index.mtime, row.fileMtime);
+  assert.equal(index.bytes, row.fileSize);
+  assert.deepEqual(index.stamp, continuationStamp(finalStat));
+  assert.deepEqual(index.ids, [HEAD]);
+  assert.equal(index.complete, true);
   assert.equal(h.views().length, 1);
 });
 
@@ -340,15 +377,16 @@ for (const missing of ['file', 'folder', 'project-path']) test('718b deleted def
 });
 
 test('718b final stamp check defers a source changed after its header was accepted', async t => {
-  const h = fixture(t); h.write(OLD, h.link()); cache.refreshFolder(h.folder); h.append(OLD, h.padding);
+  const h = fixture(t); h.write(OLD, h.link()); h.write(OTHER); cache.refreshFolder(h.folder);
+  h.append(OLD, h.padding); h.append(OTHER);
   const preparedContinuations = await cache.prepareContinuationRefresh(h.folder);
-  const before = structuredClone(h.rows.get(OLD)), stat = fs.statSync; let checks = 0;
-  const hook = t.mock.method(fs, 'statSync', (file, options) => {
-    if (file === h.file(OLD) && options?.bigint && ++checks === 3) h.append(OLD);
-    return stat(file, options);
+  const before = structuredClone(h.rows.get(OLD)), open = fs.openSync; let raced = false;
+  const hook = t.mock.method(fs, 'openSync', (file, ...args) => {
+    if (file === h.file(OTHER) && !raced) { raced = true; h.append(OLD); }
+    return open(file, ...args);
   });
-  cache.refreshFolder(h.folder, { preparedContinuations }); hook.mock.restore();
-  assert.equal(checks, 3, 'the race reaches the final pre-commit stamp check');
+  cache.refreshFolder(h.folder, { files: new Set([OLD + '.jsonl', OTHER + '.jsonl']), preparedContinuations }); hook.mock.restore();
+  assert.equal(raced, true, 'reading the next file changes OLD after its header was accepted');
   assert.deepEqual(h.rows.get(OLD), before, 'a late file change must not publish a stale row');
   assert.equal(h.folders.get(h.folder).indexMtimeMs, 0);
   assert.ok(cache.continuationRefreshScope(h.folder, { files: new Set([OTHER + '.jsonl']) }).files.has(OLD + '.jsonl'));

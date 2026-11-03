@@ -94,7 +94,7 @@ function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = ()
     for (const waiter of waiters) if (notifications >= waiter.count) waiter.resolve();
   });
   let descriptors = [];
-  const session = { kind: 'local-pty', realSessionId: 'OLD', projectFolder: folder, exitDrain: new Promise(resolve => { exited = resolve; }), composerState: require('../composer-state').createComposerState(), pty: { onData: fn => { const tap = { fn, disposed: false, dispose() { tap.disposed = true; } }; taps.push(tap); return tap; } } };
+  const session = { kind: 'local-pty', realSessionId: 'OLD', projectFolder: folder, exitDrain: new Promise(resolve => { exited = resolve; }), composerState: require('../src/main/terminals/composer-state').createComposerState(), pty: { onData: fn => { const tap = { fn, disposed: false, dispose() { tap.disposed = true; } }; taps.push(tap); return tap; } } };
   const ctx = vm.createContext({
     setTimeout, clearTimeout, Date, Promise, path, fs, require: require('node:module').createRequire(path.join(__dirname, '../main.js')), PROJECTS_DIR: root,
     detectSessionTransitions: name => onTransitions(name),
@@ -125,7 +125,7 @@ function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = ()
       onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
       liveElsewhereChecked: async id => ({ known: true, live: descriptors.find(d => d.sessionId === id) || null }),
     },
-    ...require('../bg-handoff'),
+    ...require('../src/main/bg-agents/bg-handoff'),
   });
   const { handleSendToBackground } = loadAppFunctions(ctx, { declarations: ['backgroundHandoffs'],
     functions: ['handleSendToBackground', 'persistBackgroundHandoff', 'readBackgroundHandoffStamp'], sourcePath: path.join(__dirname, '../main.js') });
@@ -305,7 +305,7 @@ test('C5 the exit batch waits on the real CLI id after a clear rekey', async () 
   const asked = [], sends = [], listeners = new Set();
   let status = 'busy';
   const context = vm.createContext({
-    runExitHandoffs: require('../session-exit').runExitHandoffs,
+    runExitHandoffs: require('../src/main/app/session-exit').runExitHandoffs,
     activeSessions: new Map([['tab', { realSessionId: 'real' }]]), Date, setTimeout, clearTimeout,
     cliSessionState: {
       getStatus: id => { asked.push(id); return { status: id === 'real' ? status : 'idle' }; },
@@ -335,7 +335,7 @@ for (const external of [false, true]) {
     const timers = new Set(), listeners = new Set(), sends = [];
     const controller = new AbortController();
     const context = vm.createContext({
-      runExitHandoffs: require('../session-exit').runExitHandoffs,
+      runExitHandoffs: require('../src/main/app/session-exit').runExitHandoffs,
       activeSessions: new Map([['tab', { realSessionId: 'real' }]]), Date,
       setTimeout: fn => { timers.add(fn); return fn; }, clearTimeout: timer => timers.delete(timer),
       cliSessionState: {
@@ -362,7 +362,7 @@ test('S2-T9 shipped respawn handler releases the real PTY exit without persistin
   const calls = [];
   let exit;
   Object.assign(h.ctx, {
-    sendToBackground: (id, deps) => require('../bg-handoff').sendToBackground(id, { ...deps, timeoutMs: 1000, exitTimeoutMs: 300 }),
+    sendToBackground: (id, deps) => require('../src/main/bg-agents/bg-handoff').sendToBackground(id, { ...deps, timeoutMs: 1000, exitTimeoutMs: 300 }),
     ptyGenerationCounter: 0, TRACE: { on: false }, ptyExitSignalName: () => null,
     shutdownMcpServer() {}, appQuitting: false, exitedRemoteSessionIds: new Set(),
     activityReporter: { sessionEnded() {} }, taskRecords: { ownerDied() {} },

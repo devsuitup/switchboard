@@ -41,7 +41,7 @@ test('a re-key reaches the reporter, beside the MCP server that follows it the s
 
 test('a scheduled run is a running session, ended on exit and on a spawn error alike', () => {
   const run = block(MAIN, 'function runScheduleCommand(', '\n    }\n');
-  assert.match(run, /activityReporter\.sessionStarted\(\{ sessionId: activityId, project: cwd, name: `Scheduled: \$\{name\}` \}\)/);
+  assert.match(run, /activityReporter\.sessionStarted\(\{ sessionId: activityId, project: cwd, name: `Scheduled: \$\{runName\}` \}\)/);
   assert.equal((run.match(/activityReporter\.sessionEnded\(activityId\)/g) || []).length, 2);
 });
 

@@ -23,6 +23,10 @@ function shortProjectPath(projectPath) {
   return projectPath.split(/[\\/]/).filter(Boolean).slice(-2).join('/');
 }
 
+function projectDisplayLabel(project) {
+  return (project.remoteAlias ? remoteHostLabel(project.remoteAlias) + ': ' : '') + shortProjectPath(project.projectPath);
+}
+
 /**
  * Permission modes offered for a session, in the order they're shown.
  *

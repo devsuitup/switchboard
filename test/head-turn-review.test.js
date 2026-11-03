@@ -210,7 +210,7 @@ test('real cached rows batch only live remote heads, excluding local, archived, 
     const path = require('node:path');
     const vm = require('node:vm');
     const { extractFunction } = require('./test/app-source');
-    const { parseFolderKey } = require('./remote-hosts');
+    const { parseFolderKey } = require('./src/main/remote/remote-hosts');
     const store = require('./session-index-store').openSessionIndexStore({ readonly: false });
     const root = process.env.SWITCHBOARD_DATA_DIR;
     const row = (sessionId, folder, extra = {}) => ({ sessionId, folder,
@@ -226,6 +226,7 @@ test('real cached rows batch only live remote heads, excluding local, archived, 
     const batches = [];
     const hosts = [];
     const context = vm.createContext({ path, ...store, parseFolderKey,
+      refreshRemoteHeadTurnsFromCache: require('./src/main/remote/remote-index').refreshRemoteHeadTurns,
       remoteIndexer: { getRemoteSessions: alias => {
         hosts.push(alias);
         return { sessions: (alias === 'dev' ? ['live', 'child', 'archived', 'local'] : ['other']).map(sessionId => ({ sessionId })) };
@@ -234,7 +235,11 @@ test('real cached rows batch only live remote heads, excluding local, archived, 
       taskRecords: { readBatch: async rows => batches.push(Array.from(rows, r => ({ ...r }))) },
     });
     const source = fs.readFileSync('./main.js', 'utf8');
-    vm.runInContext(extractFunction(source, 'refreshRemoteHeadTurns'), context);
+    const slice = extractFunction(source, 'refreshRemoteHeadTurns');
+    vm.runInContext(slice, context, {
+      filename: path.resolve('./main.js'),
+      lineOffset: source.slice(0, source.indexOf(slice)).split('\\n').length - 1,
+    });
     (async () => {
       try {
         await context.refreshRemoteHeadTurns('dev');

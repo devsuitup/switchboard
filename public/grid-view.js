@@ -133,7 +133,7 @@ function wrapInGridCard(sessionId) {
   replayHiddenBuffer(sessionId);
 
   const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary) || sessionId;
-  const shortProject = shortProjectPath(session.projectPath);
+  const shortProject = projectDisplayLabel(session);
 
   // Create card wrapper
   const card = document.createElement('div');
@@ -154,6 +154,7 @@ function wrapInGridCard(sessionId) {
   const project = document.createElement('span');
   project.className = 'grid-card-project';
   project.textContent = shortProject;
+  project.title = shortProject;
   header.appendChild(project);
 
   const stopBtn = document.createElement('button');
@@ -199,23 +200,25 @@ function wrapInGridCard(sessionId) {
   // Insert card into the correct project group in the grid
   if (gridViewActive && gridGroupByProject) {
     const pp = session.projectPath || '';
+    const projectKey = projectStateKey({ projectPath: pp, remoteAlias: session.remoteAlias });
     // Find or create the project heading for this session
     let targetHeading = null;
     for (const h of terminalsEl.querySelectorAll('.grid-project-heading')) {
-      if (h.dataset.projectPath === pp) { targetHeading = h; break; }
+      if (h.dataset.projectKey === projectKey) { targetHeading = h; break; }
     }
     if (!targetHeading) {
       targetHeading = document.createElement('div');
       targetHeading.className = 'grid-project-heading';
       targetHeading.dataset.projectPath = pp;
-      targetHeading.textContent = pp ? shortProjectPath(pp) : 'Other';
+      targetHeading.dataset.projectKey = projectKey;
+      targetHeading.textContent = pp ? projectDisplayLabel(session) : 'Other';
       // Insert heading in sortedOrder position
-      const orderIndex = new Map(sortedOrder.map((e, i) => [e.projectPath, i]));
-      const myIdx = orderIndex.get(pp);
+      const orderIndex = new Map(sortedOrder.map((e, i) => [projectStateKey(e), i]));
+      const myIdx = orderIndex.get(projectKey);
       let inserted = false;
       if (myIdx !== undefined) {
         for (const h of terminalsEl.querySelectorAll('.grid-project-heading')) {
-          const hIdx = orderIndex.get(h.dataset.projectPath);
+          const hIdx = orderIndex.get(h.dataset.projectKey);
           if (hIdx !== undefined && hIdx > myIdx) {
             terminalsEl.insertBefore(targetHeading, h);
             inserted = true;
@@ -330,19 +333,21 @@ function layoutGridCards(openSet) {
   document.querySelectorAll('.terminal-container:not(.panel-terminal)').forEach(el => el.classList.remove('visible'));
   const sessionIds = [];
   const sidebarItems = sidebarContent.querySelectorAll('.session-item[data-session-id]');
-  let currentProjectPath = null;
+  let currentProjectKey = null;
   for (const item of sidebarItems) {
     const ids = rowSessionIds({ sessionId: item.dataset.sessionId, mergedMemberIds: item.dataset.mergedMemberIds?.split(' ') });
     const openIds = ids.filter(id => openSet.has(id));
     if (!openIds.length) continue;
     const session = sessionMap.get(item.dataset.sessionId);
     const projectPath = session ? session.projectPath : null;
-    if (gridGroupByProject && projectPath && projectPath !== currentProjectPath) {
-      currentProjectPath = projectPath;
+    const projectKey = session ? projectStateKey(session) : null;
+    if (gridGroupByProject && projectPath && projectKey !== currentProjectKey) {
+      currentProjectKey = projectKey;
       const heading = document.createElement('div');
       heading.className = 'grid-project-heading';
       heading.dataset.projectPath = projectPath;
-      heading.textContent = shortProjectPath(projectPath);
+      heading.dataset.projectKey = projectKey;
+      heading.textContent = projectDisplayLabel(session);
       terminalsEl.appendChild(heading);
     }
     for (const sid of openIds) {
@@ -404,6 +409,8 @@ function showGridView() {
   memoryViewer.style.display = 'none';
   settingsViewer.style.display = 'none';
   jsonlViewer.style.display = 'none';
+  jsonlViewer.messageSearch?.close(false);
+  if (typeof window.drainViewerWatches === 'function') window.drainViewerWatches();
   if (typeof hideAgentsView === 'function') hideAgentsView({ restore: false });
   terminalArea.style.display = '';
 

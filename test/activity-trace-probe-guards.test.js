@@ -27,7 +27,7 @@ const mainSrc = fs.readFileSync(MAIN_PATH, 'utf8');
 // vanish as long as another appeared.
 const EXPECTED_PROBES = [
   'app.quit', 'busy.emit', 'busy.emit', 'busy.emit', 'ipc.get-memories', 'ipc.get-projects', 'ipc.get-work-files',
-  'osc.notify', 'osc.progress', 'osc.title', 'poll.snapshot', 'pty.exit', 'pty.input', 'pty.resize',
+  'osc.notify', 'osc.progress', 'osc.title', 'poll.snapshot', 'pty.exit', 'pty.input', 'pty.resize', 'session-index-writer.busy',
 ];
 
 // Everything whose evaluation costs something: the writer and the four payload

@@ -84,7 +84,9 @@ fragment every event it sits in.
   belongs to another host.
 - A scheduled run has no transcript id when it is spawned, so it is reported
   under `schedule:<name>:<spawn time>` with the name `Scheduled: <name>` — the
-  schedule's own name, not its prompt.
+  schedule's own name, not its prompt. Run now prefixes that name with
+  `Manual run `, producing `Scheduled: Manual run <name>` and an id of
+  `schedule:Manual run <name>:<spawn time>`.
 - A session is timed from its spawn even if reporting was turned on later.
   Turning reporting on writes every session already running at once, rather
   than at the next checkpoint.

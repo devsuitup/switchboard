@@ -1311,7 +1311,7 @@ test('/clear: the old id still leads to the session, so a trigger chain that sen
     const { activeSessions } = setupForkDetection(tmp, { clearOwner: () => 'mine' });
     const pty = { pid: 4242, write() {} };
     activeSessions.set('old-id', makePtySession(folder, { pty, cwd: '/w' }));
-    const { createTriggerContext } = require('../trigger-context');
+    const { createTriggerContext } = require('../src/main/triggers/trigger-context');
     const ctx = createTriggerContext({
       activeSessions, log: { info() {}, warn() {}, error() {}, debug() {} },
       getCliStatus: (id) => ({ status: 'idle', id }),
@@ -1342,7 +1342,7 @@ test('/clear: a trigger aimed at the cleared id reaches the conversation reopene
     const ptyA = { pid: 4242, write() {} };
     const ptyB = { pid: 5353, write() {} };
     activeSessions.set('old-id', makePtySession(folder, { pty: ptyA }));
-    const { createTriggerContext } = require('../trigger-context');
+    const { createTriggerContext } = require('../src/main/triggers/trigger-context');
     const ctx = createTriggerContext({
       activeSessions, log: { info() {}, warn() {}, error() {}, debug() {} },
       resolveSessionId: (id) => sessionTransitions.currentSessionId(id),

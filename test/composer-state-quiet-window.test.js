@@ -7,7 +7,7 @@
 const test   = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createComposerState, noteUserInput } = require('../composer-state');
+const { createComposerState, noteUserInput } = require('../src/main/terminals/composer-state');
 
 const QUIET_MS = 3000; // trigger-watcher.js DEFAULT_QUIET_MS
 const CPR      = '\x1b[?59;3R';

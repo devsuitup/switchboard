@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { syncMirror, readManifest, MAX_CYCLE_FILES, MAX_CYCLE_BYTES } = require('../remote-mirror');
+const { syncMirror, readManifest, MAX_CYCLE_FILES, MAX_CYCLE_BYTES } = require('../src/main/remote/remote-mirror');
 const { readSubagentMeta } = require('../read-session-file');
 
 function tmp(name) {
@@ -246,7 +246,7 @@ test('a file above the per-file ceiling is never fetched', async () => {
     });
     assert.deepEqual(asked, ['-srv-a/small.jsonl'], 'the oversized file must never be asked for');
     assert.equal(fs.existsSync(path.join(projectsDir, '-srv-a/huge.jsonl')), false);
-    assert.ok(warned.some(m => m.includes('skipped')), 'the skip must be reported, not silent');
+    assert.ok(warned.some(m => m.includes('full mirror not fetched') && m.includes('turn-state tail')), 'the size limit and separate turn-state path must be reported');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

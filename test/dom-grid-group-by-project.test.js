@@ -121,6 +121,9 @@ function setupGridDom({ stored = null } = {}) {
 
   const ctx = dom.getInternalVMContext();
   loadAppFunctions(ctx, {
+    functions: ['folderId', 'projectStateKey'], sourcePath: path.join(PUBLIC_DIR, 'sidebar.js'),
+  });
+  loadAppFunctions(ctx, {
     functions: ['rowSessionIds', 'sessionItemEl'], sourcePath: path.join(PUBLIC_DIR, 'session-activity-dom.js'),
   });
   for (const file of ['icons.js', 'utils.js', 'shortcuts.js', 'session-state.js', 'process-exit.js', 'session-activity-dom.js', 'session-activity.js', 'subagent-timing.js', 'task-registry.js', 'grid-view.js']) {

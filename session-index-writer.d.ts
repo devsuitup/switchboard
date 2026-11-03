@@ -23,7 +23,7 @@ type ArchiveRuntime = {
   notify(): void;
   now(): string;
 };
-type Logger = { warn(...args: unknown[]): void };
+type Logger = { warn(...args: unknown[]): void; info(...args: unknown[]): void };
 type OfferRuntime = { notify(): void };
 
 export interface SessionIndexWriter {
@@ -70,10 +70,18 @@ export interface SessionIndexWriter {
   scheduleRegistry(seed: () => string[]): {
     list(): Promise<string[]>; add(projectPath: string): Promise<void>; remove(projectPath: string): Promise<void>;
   };
-  createWhatsNew(options: Omit<Parameters<typeof import('./changelog').createWhatsNew>[0], 'getSetting' | 'setSetting'>): {
+  createWhatsNew(options: Omit<Parameters<typeof import('./src/main/app/changelog').createWhatsNew>[0], 'getSetting' | 'setSetting'>): {
     startup(): Promise<unknown>; dismissed(): Promise<void>; forMenu(): unknown;
   };
   closeDb(): Promise<void>;
 }
 
-export function createSessionIndexWriter(options?: { workerFactory?: () => import('node:worker_threads').Worker; client?: unknown; readonlyBackend?: Backend; clientOptions?: { timeoutMs?: number; maxRestarts?: number } }, cache?: Cache): SessionIndexWriter;
+export function createSessionIndexWriter(options?: {
+  workerFactory?: () => import('node:worker_threads').Worker;
+  client?: unknown;
+  readonlyBackend?: Backend;
+  clientOptions?: { timeoutMs?: number; maxRestarts?: number };
+  log?: Logger;
+  onBusyCounts?: (counts: Record<string, { retries: number; exhaustions: number }>) => void;
+  onSessionsChanged?: (ids: string[] | null, change?: { upsertOnly?: boolean }) => void;
+}, cache?: Cache): SessionIndexWriter;

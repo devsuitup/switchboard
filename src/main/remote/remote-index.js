@@ -1,0 +1,659 @@
+// see .ai/contexts/session-cache.md ("Remote hosts")
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const {
+  enabledHosts,
+  normalizeRefreshMs,
+  joinFolderKey,
+  parseFolderKey,
+  mirrorProjectsDirFor,
+  manifestPathFor,
+} = require('./remote-hosts');
+const { syncMirror } = require('./remote-mirror');
+const { syncTurnTails } = require('./remote-turn-tails');
+const { encodeProjectPath } = require('../../../encode-project-path');
+const { computeHostProfile } = require('./remote-host-profile');
+
+const NOOP_LOG = { info() {}, warn() {}, error() {} };
+
+// see .ai/contexts/session-cache.md ("Remote hosts backoff")
+const MAX_BACKOFF_MS = 30 * 60 * 1000;
+
+// see .ai/contexts/session-cache.md ("Remote hosts — capability tiers", the probe)
+const PROBE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const PROBE_RETRY_MS = 30 * 60 * 1000;
+
+// see .ai/contexts/session-cache.md ("Remote hosts backoff")
+function backoffDelayMs(failures, intervalMs) {
+  if (failures <= 0) return 0;
+  return Math.min(intervalMs * Math.pow(2, failures - 1), MAX_BACKOFF_MS);
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+function placeholderTitle(cwd) {
+  if (typeof cwd !== 'string' || !cwd) return null;
+  const trimmed = cwd.replace(/[\\/]+$/, '');
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || cwd;
+}
+
+const MAX_WAITING_FOR_LENGTH = 64;
+
+// see .ai/contexts/cli-session-state.md ("waiting")
+function sanitizeWaitingFor(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!text || text.length > MAX_WAITING_FOR_LENGTH) return null;
+  for (let k = 0; k < text.length; k++) {
+    const code = text.charCodeAt(k);
+    if (code < 32 || code === 127) return null;
+    if (code >= 0x200b && code <= 0x200f) return null;
+    if (code >= 0x202a && code <= 0x202e) return null;
+    if (code >= 0x2066 && code <= 0x2069) return null;
+    if (code >= 0x80 && code <= 0x9f) return null;
+    if (code === 0xad || code === 0x61c || code === 0x180e || code === 0xfeff) return null;
+    if (code === 0x2028 || code === 0x2029) return null;
+    if (code >= 0x2060 && code <= 0x2064) return null;
+  }
+  return text;
+}
+
+// see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+function buildPlaceholderSession(alias, descriptor) {
+  const id = (typeof descriptor.sessionId === 'string' && descriptor.sessionId)
+    ? descriptor.sessionId
+    : `pid:${descriptor.pid}`;
+  return {
+    sessionId: id,
+    remoteAlias: alias,
+    projectPath: descriptor.cwd,
+    folder: encodeProjectPath(descriptor.cwd),
+    remoteDescriptorSeen: true,
+    status: descriptor.status || null,
+    statusUpdatedAt: descriptor.statusUpdatedAt || null,
+    waitingFor: sanitizeWaitingFor(descriptor.waitingFor),
+    modified: descriptor.statusUpdatedAt || descriptor.startedAt || null,
+    messageCount: 0,
+    summary: placeholderTitle(descriptor.cwd),
+    placeholder: true,
+  };
+}
+
+/**
+ * Periodic mirror + index of every declared SSH host.
+ * see .ai/contexts/session-cache.md ("Remote SSH hosts")
+ *
+ * ctx (everything reaching the outside world is injected):
+ *   getHosts()                       -> raw host array from settings
+ *   getRefreshMs()                   -> configured interval (floored at 60 s)
+ *   dataDir                          -> where <dataDir>/remote/<alias>/ lives
+ *   transport                        -> see remote-mirror.js
+ *   scanFolders({projectsDir, folderPrefix, folders}) -> Promise
+ *   listIndexedFolderKeys()          -> every folder key already in the cache
+ *   dropFolder(folderKey)            -> remove a folder from cache + search
+ *   setRemoteRoots(Map<alias,dir>)   -> tell the cache where each mirror lives
+ *   notify()                         -> push a sidebar refresh
+ *   timers                           -> { setInterval, clearInterval } (test seam)
+ *   sync                             -> syncMirror override (test seam)
+ *   now()                            -> current epoch ms (test seam, defaults to Date.now)
+ */
+function createRemoteIndexer(ctx) {
+  const log = ctx.log || NOOP_LOG;
+  const timers = ctx.timers || { setInterval, clearInterval };
+  const sync = ctx.sync || syncMirror;
+  const now = ctx.now || Date.now;
+
+  let timer = null;
+  let inFlight = false;
+  let stopped = false;
+  let generation = 0;
+  const remoteSessions = new Map(); // alias -> sessions array, from the same ssh cycle as the inventory
+  const remoteHeadTurnFiles = new Map();
+  const remoteSessionsAt = new Map();
+  const hostBackoff = new Map(); // alias -> { failures, lastError, nextAttemptAt }
+  const hostInFlight = new Set();
+  const hostScans = new Map();
+  const hostTools = new Map(); // alias -> { tools: { tmux, inotifywait } | null, nextProbeAt }
+  const headTurnErrors = new Map();
+  const checkedGhostFolders = new Set();
+  const pendingDrops = new Set();
+
+  function backoffState(alias) {
+    let s = hostBackoff.get(alias);
+    if (!s) {
+      s = { failures: 0, lastError: null, lastErrorTransport: false, attempts: 0, nextAttemptAt: 0 };
+      hostBackoff.set(alias, s);
+    }
+    return s;
+  }
+
+  function onHostSuccess(alias) {
+    const state = backoffState(alias);
+    if (state.failures > 0) {
+      log.info(`[remote:${alias}] refresh recovered after ${state.failures} consecutive failure(s)`);
+    }
+    const errorChanged = state.lastError !== null;
+    state.failures = 0;
+    state.attempts += 1;
+    state.lastError = null;
+    state.lastErrorTransport = false;
+    state.nextAttemptAt = 0;
+    return errorChanged;
+  }
+
+  function onHostFailure(alias, thrown, intervalMs) {
+    const err = thrown instanceof Error ? thrown : new Error(String(thrown));
+    const state = backoffState(alias);
+    const prevDelay = backoffDelayMs(state.failures, intervalMs);
+    state.failures += 1;
+    state.attempts += 1;
+    const errorChanged = state.lastError !== err.message;
+    state.lastError = err.message;
+    state.lastErrorTransport = err.remoteTransport === true;
+    const delay = backoffDelayMs(state.failures, intervalMs);
+    state.nextAttemptAt = now() + delay;
+    if (delay !== prevDelay) {
+      log.warn(`[remote:${alias}] refresh failed (${state.failures}x consecutive): ${err.message}; ` +
+        `retrying in ${Math.round(delay / 1000)}s`);
+    }
+    return errorChanged;
+  }
+
+  function getRemoteHostState(alias) {
+    const s = hostBackoff.get(alias);
+    if (!s) return { consecutiveFailures: 0, lastError: null, lastErrorTransport: false, attempts: 0, nextAttemptAt: 0 };
+    return { consecutiveFailures: s.failures, lastError: s.lastError, lastErrorTransport: s.lastErrorTransport, attempts: s.attempts, nextAttemptAt: s.nextAttemptAt };
+  }
+
+  function hosts() {
+    return enabledHosts(ctx.getHosts ? ctx.getHosts() : []);
+  }
+
+  function publishRoots(list) {
+    if (!ctx.setRemoteRoots) return;
+    const roots = new Map();
+    for (const h of list) roots.set(h.alias, mirrorProjectsDirFor(ctx.dataDir, h.alias));
+    ctx.setRemoteRoots(roots);
+  }
+
+  // Nothing else ever revisits a folder whose alias is no longer declared.
+  async function dropAliasFolders(alias) {
+    let dropped = 0;
+    for (const key of ctx.listIndexedFolderKeys()) {
+      if (parseFolderKey(key).alias !== alias) continue;
+      await ctx.dropFolder(key);
+      dropped++;
+    }
+    return dropped;
+  }
+
+  function dropAliasAfterScan(alias, pending) {
+    const chained = pending.catch(() => {}).then(async () => {
+      if (stopped || hosts().some(h => h.alias === alias)) return;
+      const dropped = await dropAliasFolders(alias);
+      if (dropped > 0 && !stopped && ctx.notify) ctx.notify();
+    }).catch(err => log.warn(`[remote:${alias}] deferred alias prune failed: ${err.message}`)).finally(() => {
+      pendingDrops.delete(alias);
+      if (hostScans.get(alias) === chained) hostScans.delete(alias);
+    });
+    pendingDrops.add(alias);
+    hostScans.set(alias, chained);
+  }
+
+  async function pruneUnknownAliases(list) {
+    if (!ctx.listIndexedFolderKeys || !ctx.dropFolder) return 0;
+    const known = new Set(list.map(h => h.alias));
+    const aliases = new Set(hostScans.keys());
+    for (const key of ctx.listIndexedFolderKeys()) {
+      const { alias } = parseFolderKey(key);
+      if (alias !== null) aliases.add(alias);
+    }
+    let dropped = 0;
+    for (const alias of aliases) {
+      if (known.has(alias) || pendingDrops.has(alias)) continue;
+      const pending = hostScans.get(alias);
+      if (pending) dropAliasAfterScan(alias, pending);
+      else dropped += await dropAliasFolders(alias);
+    }
+    for (const alias of [...remoteSessions.keys()]) {
+      if (!known.has(alias)) remoteSessions.delete(alias);
+    }
+    for (const alias of remoteHeadTurnFiles.keys()) {
+      if (!known.has(alias)) remoteHeadTurnFiles.delete(alias);
+    }
+    for (const alias of [...remoteSessionsAt.keys()]) {
+      if (!known.has(alias)) remoteSessionsAt.delete(alias);
+    }
+    for (const alias of [...hostTools.keys()]) {
+      if (!known.has(alias)) hostTools.delete(alias);
+    }
+    for (const alias of [...hostBackoff.keys()]) {
+      if (!known.has(alias)) hostBackoff.delete(alias);
+    }
+    for (const alias of [...headTurnErrors.keys()]) {
+      if (!known.has(alias)) headTurnErrors.delete(alias);
+    }
+    for (const key of checkedGhostFolders) {
+      if (!known.has(parseFolderKey(key).alias)) checkedGhostFolders.delete(key);
+    }
+    return dropped;
+  }
+
+  function mirrorFolders(projectsDir) {
+    try {
+      return fs.readdirSync(projectsDir, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== '.git')
+        .map(d => d.name);
+    } catch {
+      return [];
+    }
+  }
+
+  function rearmProbe(alias) {
+    const entry = hostTools.get(alias);
+    if (entry) entry.nextProbeAt = 0;
+  }
+
+  async function probeHostTools(alias) {
+    if (!ctx.transport || typeof ctx.transport.probeTools !== 'function') return false;
+    const prev = hostTools.get(alias);
+    if (prev && now() < prev.nextProbeAt) return false;
+    let tools = null;
+    try {
+      tools = await ctx.transport.probeTools(alias);
+    } catch (err) {
+      log.warn(`[remote:${alias}] tool probe failed: ${err.message}`);
+    }
+    const kept = tools || (prev ? prev.tools : null);
+    hostTools.set(alias, { tools: kept, nextProbeAt: now() + (kept && kept.tmux && kept.inotifywait && tools ? PROBE_INTERVAL_MS : PROBE_RETRY_MS) });
+    return !!tools && (!prev || !prev.tools || prev.tools.tmux !== tools.tmux || prev.tools.inotifywait !== tools.inotifywait);
+  }
+
+  async function refreshHost(host, cancelled) {
+    const projectsDir = mirrorProjectsDirFor(ctx.dataDir, host.alias);
+    const manifestPath = manifestPathFor(ctx.dataDir, host.alias);
+    fs.mkdirSync(projectsDir, { recursive: true });
+
+    const result = await sync({
+      alias: host.alias,
+      transport: ctx.transport,
+      projectsDir,
+      manifestPath,
+      log,
+    });
+
+    if (stopped) return false;
+    if (cancelled() && !hosts().some(h => h.alias === host.alias)) return false;
+    let scannedRows = false;
+    let indexedFolders = 0;
+    const folderPrefix = host.alias;
+    const changedFolders = new Set(result.changedFolders);
+    const changedFilesByFolder = result.changedFilesByFolder instanceof Map
+      ? result.changedFilesByFolder : new Map();
+
+    const previousScan = hostScans.get(host.alias) || Promise.resolve();
+    const scan = previousScan.catch(() => {}).then(async () => {
+      if (stopped || (cancelled() && !hosts().some(h => h.alias === host.alias))) return;
+      const toScan = new Set(changedFolders);
+      const indexed = new Set();
+      const fullRepairs = new Set();
+      if (!cancelled() && ctx.listIndexedFolderKeys) {
+        for (const key of ctx.listIndexedFolderKeys()) {
+          const parsed = parseFolderKey(key);
+          if (parsed.alias === host.alias) indexed.add(parsed.folder);
+        }
+        const present = mirrorFolders(projectsDir);
+        for (const folder of present) {
+          if (!indexed.has(folder)) toScan.add(folder);
+          const key = joinFolderKey(host.alias, folder);
+          if (checkedGhostFolders.has(key) || !ctx.getCachedByFolder) continue;
+          const ghost = ctx.getCachedByFolder(key).some(row => !row.parentSessionId
+            && row.sessionId.startsWith('agent-')
+            && !fs.existsSync(path.join(projectsDir, folder, row.sessionId + '.jsonl')));
+          if (ghost) {
+            fullRepairs.add(folder);
+            toScan.add(folder);
+          } else {
+            checkedGhostFolders.add(key);
+          }
+        }
+        if (ctx.dropFolder) {
+          const presentSet = new Set(present);
+          for (const folder of indexed) {
+            if (cancelled()) break;
+            if (!presentSet.has(folder)) {
+              const key = joinFolderKey(host.alias, folder);
+              await ctx.dropFolder(key);
+              checkedGhostFolders.delete(key);
+            }
+          }
+        }
+      }
+
+      const repairing = !cancelled();
+      const folders = [...(repairing ? toScan : changedFolders)];
+      indexedFolders = folders.length;
+      if (folders.length === 0 || !ctx.scanFolders || stopped
+        || (cancelled() && !hosts().some(h => h.alias === host.alias))) return;
+      // see .ai/contexts/session-cache.md ("Remote hosts file-level rescan")
+      const fileSubsets = new Map();
+      for (const folder of toScan) {
+        if (!repairing || !indexed.has(folder) || fullRepairs.has(folder)) continue;
+        const files = changedFilesByFolder.get(folder);
+        if (files && files.size > 0) fileSubsets.set(folder, files);
+      }
+      const scanned = await ctx.scanFolders({
+        projectsDir,
+        folderPrefix,
+        folders,
+        ...(fileSubsets.size > 0 ? { fileSubsets } : {}),
+      });
+      scannedRows = true;
+      if (!cancelled() && scanned?.ok !== false) {
+        for (const folder of fullRepairs) checkedGhostFolders.add(joinFolderKey(host.alias, folder));
+      }
+    });
+    hostScans.set(host.alias, scan);
+    try {
+      await scan;
+    } finally {
+      if (hostScans.get(host.alias) === scan) hostScans.delete(host.alias);
+    }
+
+    if (cancelled()) return scannedRows;
+    const previousSessions = remoteSessions.get(host.alias) || [];
+    const sessions = Array.isArray(result.sessions) ? result.sessions : [];
+    const oversizedFiles = result.oversizedFiles || [];
+    const unmirrored = new Set(oversizedFiles.filter(f => f.rel.split('/').length === 2
+      && !fs.existsSync(path.join(projectsDir, f.rel))).map(f => path.posix.basename(f.rel, '.jsonl')));
+    remoteSessions.set(host.alias, sessions.map(s => s ? { ...s,
+      ...('waitingFor' in s ? { waitingFor: sanitizeWaitingFor(s.waitingFor) } : {}),
+      ...(unmirrored.has(s.sessionId) ? { descriptorOnly: true } : {}),
+    } : s));
+    remoteSessionsAt.set(host.alias, now());
+    if (JSON.stringify(previousSessions) !== JSON.stringify(remoteSessions.get(host.alias)) && ctx.notify) ctx.notify();
+    const tails = await syncTurnTails({
+      alias: host.alias, transport: ctx.transport, projectsDir, oversizedFiles, sessions, log, cancelled,
+    });
+    if (cancelled()) return scannedRows;
+    remoteHeadTurnFiles.set(host.alias, tails);
+
+    log.info(`[remote:${host.alias}] ${result.fetched} fetched, ${result.unchanged} unchanged, ` +
+      `${result.removed} removed, ${result.failed} failed, ${indexedFolders} folders indexed`);
+
+    if (cancelled()) return scannedRows;
+    const toolsChanged = await probeHostTools(host.alias);
+    if (cancelled()) return scannedRows;
+    if (ctx.refreshHeadTurns) {
+      try {
+        await ctx.refreshHeadTurns(host.alias);
+        if (headTurnErrors.delete(host.alias)) {
+          log.info(`[remote:${host.alias}] head-turn refresh recovered`);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const normalised = message.replace(/(["'])(?:[A-Za-z]:[\\/]|\\\\|\/).*?\1|(?<![^\s"'=(:])(?:[A-Za-z]:[\\/]|\\\\|\\(?=[^\s\\]+\\)|(?<!:)\/|(?<=:)\/(?!\/))[^\s"'<>),;]*/g, '<path>')
+          .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<uuid>').replace(/\d+/g, '#');
+        const signature = JSON.stringify([err?.code || err?.name, normalised]);
+        let seen = headTurnErrors.get(host.alias);
+        if (!seen) headTurnErrors.set(host.alias, seen = new Set());
+        if (!seen.has(signature)) {
+          seen.add(signature);
+          if (seen.size > 20) seen.delete(seen.values().next().value);
+          log.warn(`[remote:${host.alias}] head-turn refresh failed: ${message}`);
+        }
+      }
+    }
+    return indexedFolders > 0 || toolsChanged;
+  }
+
+  // see .ai/contexts/session-cache.md ("Remote hosts backoff" — manual reconnect, issue #252)
+  async function refreshNow({ force = false } = {}) {
+    if (stopped || inFlight) return { skipped: true };
+    const cycle = generation;
+    const cancelled = () => stopped || cycle !== generation;
+    const list = hosts();
+    publishRoots(list);
+
+    inFlight = true;
+    let changed = false;
+    const errors = [];
+    const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
+    try {
+      changed = await pruneUnknownAliases(list) > 0;
+      if (list.length === 0) {
+        if (changed && !stopped && ctx.notify) ctx.notify();
+        return { skipped: true, hosts: 0 };
+      }
+      for (const host of list) {
+        if (cancelled()) break;
+        if (hostInFlight.has(host.alias)) continue;
+        const state = backoffState(host.alias);
+        if (force) {
+          state.failures = 0;
+          state.nextAttemptAt = 0;
+          rearmProbe(host.alias);
+        } else if (now() < state.nextAttemptAt) {
+          continue; // still backing off: no attempt, no log, no ssh
+        }
+        try {
+          if (await refreshHost(host, cancelled)) changed = true;
+          if (cancelled()) break;
+          if (onHostSuccess(host.alias)) changed = true;
+          remoteSessionsAt.set(host.alias, now());
+        } catch (err) {
+          if (cancelled()) break;
+          // A failed cycle keeps the last known descriptors — see
+          // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
+          errors.push({ alias: host.alias, error: err instanceof Error ? err.message : String(err) });
+          if (onHostFailure(host.alias, err, intervalMs)) changed = true;
+        }
+      }
+    } finally {
+      if (cycle === generation) inFlight = false;
+    }
+
+    if (!stopped && changed && ctx.notify) ctx.notify();
+    return { skipped: false, hosts: list.length, changed, errors };
+  }
+
+  // see .ai/contexts/session-cache.md ("Remote hosts — watch channel" and,
+  // for `force`, "Remote hosts backoff" — manual reconnect, issue #252)
+  async function refreshHostNow(alias, { force = false } = {}) {
+    if (stopped) return { skipped: true, reason: 'stopped' };
+    if (inFlight || hostInFlight.has(alias)) return { skipped: true, reason: 'in-flight' };
+    const cycle = generation;
+    const cancelled = () => stopped || cycle !== generation;
+    const host = hosts().find(h => h.alias === alias);
+    if (!host) return { skipped: true, reason: 'unknown-host' };
+    const state = backoffState(alias);
+    if (force) {
+      state.failures = 0;
+      state.nextAttemptAt = 0;
+      rearmProbe(alias);
+    } else if (now() < state.nextAttemptAt) {
+      return { skipped: true, reason: 'backoff' };
+    }
+    const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
+    const cancelledResult = rowsChanged => {
+      if (rowsChanged && !stopped && ctx.notify) ctx.notify();
+      return { skipped: true, reason: stopped ? 'stopped' : 'in-flight' };
+    };
+    hostInFlight.add(alias);
+    let changed = false;
+    let error = null;
+    try {
+      changed = await refreshHost(host, cancelled);
+      if (cancelled()) return cancelledResult(changed);
+      if (onHostSuccess(alias)) changed = true;
+      remoteSessionsAt.set(alias, now());
+    } catch (err) {
+      if (cancelled()) return cancelledResult(false);
+      // A failed cycle keeps the last known descriptors — see
+      // .ai/contexts/session-cache.md ("Remote hosts — freshness contract").
+      if (onHostFailure(alias, err, intervalMs)) changed = true;
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      if (cycle === generation) hostInFlight.delete(alias);
+    }
+    if (changed && ctx.notify) ctx.notify();
+    return { skipped: false, changed, error };
+  }
+
+  function start() {
+    stopped = false;
+    const list = hosts();
+    publishRoots(list);
+    for (const alias of headTurnErrors.keys()) {
+      if (!list.some(host => host.alias === alias)) headTurnErrors.delete(alias);
+    }
+    pruneUnknownAliases(list).then(dropped => {
+      if (dropped > 0 && !stopped && ctx.notify) ctx.notify();
+    }).catch(err => log.warn('[remote] alias prune failed:', err.message));
+    // No host declared: no timer, and the transport is never touched.
+    if (list.length === 0) return false;
+    const intervalMs = normalizeRefreshMs(ctx.getRefreshMs ? ctx.getRefreshMs() : undefined);
+    timer = timers.setInterval(() => { refreshNow().catch(() => {}); }, intervalMs);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    refreshNow().catch(() => {});
+    return true;
+  }
+
+  function stop() {
+    stopped = true;
+    generation++;
+    inFlight = false;
+    hostInFlight.clear();
+    checkedGhostFolders.clear();
+    if (timer) {
+      timers.clearInterval(timer);
+      timer = null;
+    }
+    if (ctx.transport && typeof ctx.transport.cancelInFlight === 'function') ctx.transport.cancelInFlight();
+  }
+
+  // Terminal: for application shutdown only, never for restart().
+  function dispose() {
+    stop();
+    if (ctx.transport && typeof ctx.transport.dispose === 'function') ctx.transport.dispose();
+  }
+
+  function restart() {
+    stop();
+    return start();
+  }
+
+  // Freshness contract (issue #212) — see .ai/contexts/session-cache.md ("Remote hosts — freshness contract")
+  function getRemoteSessions(alias) {
+    const backoff = hostBackoff.get(alias);
+    return {
+      sessions: remoteSessions.get(alias) || [],
+      at: remoteSessionsAt.get(alias) || null,
+      error: backoff ? backoff.lastError : null,
+    };
+  }
+
+  // see .ai/contexts/session-cache.md ("Remote hosts — capability tiers")
+  function getRemoteHostProfile(alias) {
+    const { sessions, at, error } = getRemoteSessions(alias);
+    const known = hostTools.get(alias);
+    return computeHostProfile({ at, error, descriptors: sessions, tools: known ? known.tools : null });
+  }
+
+  // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+  function getPlaceholderSessions(alias) {
+    const list = remoteSessions.get(alias) || [];
+    const out = [];
+    for (const descriptor of list) {
+      if (!descriptor || !descriptor.descriptorOnly) continue;
+      if (typeof descriptor.cwd !== 'string' || !descriptor.cwd) continue;
+      out.push(buildPlaceholderSession(alias, descriptor));
+    }
+    return out;
+  }
+
+  function getAllPlaceholderSessions() {
+    const out = [];
+    for (const alias of remoteSessions.keys()) out.push(...getPlaceholderSessions(alias));
+    return out;
+  }
+
+  // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
+  function findSessionAlias(sessionId) {
+    for (const [alias, list] of remoteSessions) {
+      if (list.some(s => s && s.sessionId === sessionId)) return alias;
+    }
+    return null;
+  }
+
+  function findSessionAliases(sessionId, isEnabled) {
+    const aliases = [];
+    for (const [alias, list] of remoteSessions) {
+      if (isEnabled(alias) && list.some(s => s && s.sessionId === sessionId)) aliases.push(alias);
+    }
+    return aliases;
+  }
+
+  // see .ai/contexts/session-state.md ("The two lifecycle verbs: detach and stop")
+  function dropRemoteSession(alias, sessionId) {
+    const list = remoteSessions.get(alias);
+    if (!list || list.length === 0) return false;
+    const next = list.filter(s => s.sessionId !== sessionId);
+    if (next.length === list.length) return false;
+    remoteSessions.set(alias, next);
+    return true;
+  }
+
+  return {
+    start, stop, dispose, restart, refreshNow, refreshHostNow,
+    isRunning: () => timer !== null,
+    getRemoteSessions,
+    getRemoteHeadTurnFiles: alias => alias ? remoteHeadTurnFiles.get(alias) || [] : [...remoteHeadTurnFiles.values()].flat(),
+    getRemoteHostProfile,
+    getPlaceholderSessions,
+    getAllPlaceholderSessions,
+    findSessionAlias,
+    findSessionAliases,
+    dropRemoteSession,
+    getRemoteHostState,
+  };
+}
+
+async function refreshRemoteHeadTurns(ctx, hostAlias) {
+  const rows = [];
+  const liveByHost = new Map();
+  if (hostAlias) {
+    const sessions = ctx.getRemoteSessions(hostAlias).sessions;
+    if (sessions.length === 0) return;
+    liveByHost.set(hostAlias, new Set(sessions.map(d => d.sessionId)));
+  }
+  const meta = ctx.getAllMeta();
+  const tailHeads = new Set();
+  for (const row of ctx.getRemoteHeadTurnFiles?.(hostAlias) || []) {
+    if (meta.get(row.parentSessionId)?.archived || (hostAlias && row.alias !== hostAlias)) continue;
+    if (!liveByHost.has(row.alias)) {
+      liveByHost.set(row.alias, new Set(ctx.getRemoteSessions(row.alias).sessions.map(d => d.sessionId)));
+    }
+    if (!liveByHost.get(row.alias).has(row.parentSessionId)) continue;
+    tailHeads.add(row.alias + '::' + row.parentSessionId);
+    rows.push({ file: row.file, parentSessionId: row.parentSessionId, turnOnly: true });
+  }
+  for (const row of ctx.getAllCached()) {
+    if (row.parentSessionId || meta.get(row.sessionId)?.archived) continue;
+    const folder = row.folder;
+    const { alias } = parseFolderKey(folder);
+    if (!alias || (hostAlias && alias !== hostAlias)) continue;
+    if (tailHeads.has(alias + '::' + row.sessionId)) continue;
+    if (!liveByHost.has(alias)) {
+      liveByHost.set(alias, new Set(ctx.getRemoteSessions(alias).sessions.map(d => d.sessionId)));
+    }
+    if (!liveByHost.get(alias).has(row.sessionId)) continue;
+    const dir = ctx.projectsDirForFolder(folder);
+    if (dir) rows.push({ file: path.join(dir, row.sessionId + '.jsonl'), parentSessionId: row.sessionId, turnOnly: true });
+  }
+  if (rows.length) await ctx.readBatch(rows);
+}
+
+module.exports = { createRemoteIndexer, refreshRemoteHeadTurns, PROBE_INTERVAL_MS, PROBE_RETRY_MS, backoffDelayMs, buildPlaceholderSession, placeholderTitle, sanitizeWaitingFor };

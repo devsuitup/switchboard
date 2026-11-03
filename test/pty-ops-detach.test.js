@@ -2,7 +2,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detachPty } = require('../pty-ops');
+const { detachPty } = require('../src/main/terminals/pty-ops');
 
 function fakeSession() {
   const calls = { writes: [], kills: 0 };

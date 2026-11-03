@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
-const { state: TRACE, trace } = require('./activity-trace');
+const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
 
 function createTaskRecordsClient({ onSnapshot = () => {}, onRekey = () => {}, onError = () => {}, maxEntries = 2048, workerFactory = () => new Worker(path.join(__dirname, 'workers/task-records.js')) } = {}) {
   const snapshots = new Map();

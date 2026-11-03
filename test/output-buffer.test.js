@@ -16,7 +16,7 @@
 
 const test  = require('node:test');
 const assert = require('node:assert/strict');
-const { appendToOutputBuffer, COALESCE_THRESHOLD, MAX_BUFFER_SIZE } = require('../output-buffer');
+const { appendToOutputBuffer, COALESCE_THRESHOLD, MAX_BUFFER_SIZE } = require('../src/main/terminals/output-buffer');
 
 const MAX = MAX_BUFFER_SIZE; // exported from output-buffer.js — single source of truth
 

@@ -5,14 +5,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
+const cliSessionState = require('../cli-session-state');
+const loadGetProjectsHandler = require('./get-projects-handler.cjs');
 
 function handler(overrides = {}) {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  const start = source.indexOf("ipcMain.handle('get-projects'");
-  const end = source.indexOf('\n});', start) + 4;
-  let invoke;
   const context = {
-    ipcMain: { handle: (_name, fn) => { invoke = fn; } },
     console,
     TRACE: { on: false },
     performance,
@@ -36,8 +34,7 @@ function handler(overrides = {}) {
     ...overrides,
   };
   context.writer = { applyAndPersistArchived: context.applyAndPersistArchived };
-  vm.runInNewContext(source.slice(start, end), context);
-  return invoke;
+  return loadGetProjectsHandler(context);
 }
 
 test('warm get-projects relays to the worker without sweeping or building on main', async () => {
@@ -49,6 +46,25 @@ test('warm get-projects relays to the worker without sweeping or building on mai
   } } });
   assert.deepEqual(await invoke(null, false), projects);
   assert.equal(requests, 1);
+});
+
+test('get-projects exposes a live scheduled member in both views and removes it after exit', async t => {
+  const child = new EventEmitter();
+  child.pid = 12345;
+  cliSessionState.trackScheduleRun('scheduled-head', child, '/fixture', 'Audit');
+  t.after(() => child.emit('exit', 0));
+  const local = { sessionId: 'root', headSessionId: 'scheduled-head', mergedMemberIds: ['scheduled-head'] };
+  const remote = { sessionId: 'scheduled-head', remoteAlias: 'host' };
+  const projects = [{ projectPath: '/fixture', sessions: [local] }, { projectPath: '/fixture', remoteAlias: 'host', sessions: [remote] }];
+  const invoke = handler({ projectsClient: { request: async () => ({ defaultProjects: projects, allProjects: projects, rows: 2 }) } });
+  const running = await invoke(null, 'both');
+  for (const view of [running.defaultProjects, running.allProjects]) {
+    assert.deepEqual(view[0].sessions[0].runningScheduleIds, ['scheduled-head']);
+    assert.equal(view[1].sessions[0].runningScheduleIds, undefined);
+  }
+  child.emit('exit', 0);
+  const ended = await invoke(null, 'both');
+  for (const view of [ended.defaultProjects, ended.allProjects]) assert.equal(view[0].sessions[0].runningScheduleIds, undefined);
 });
 
 test('paired get-projects traces worker-measured bytes without serializing views on main', async () => {
@@ -96,7 +112,8 @@ test('projects snapshot carries cached background state and attach identity in i
     sessionCache: { getRemoteRoots: () => new Map() },
     getProjectsRevision: () => 'db-version',
   };
-  vm.runInNewContext(source.slice(start, end), context);
+  vm.runInNewContext(source.slice(start, end), context, { filename: path.join(__dirname, '../main.js'),
+    lineOffset: source.slice(0, start).split('\n').length - 1 });
   const first = context.projectsSnapshot();
   assert.equal(first.localDescriptors[0].name, 'registry');
   assert.equal(first.localJobs[0][1].state, 'working');

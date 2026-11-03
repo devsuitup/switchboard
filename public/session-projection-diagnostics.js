@@ -10,6 +10,17 @@ function projectionScope(host, projectPath) {
   return 'scope-' + (a >>> 0).toString(16) + '-' + (b >>> 0).toString(16);
 }
 
+function indexProjectionFacts(projection) {
+  const byMember = new Map();
+  for (const [key, inputs] of Object.entries(projection?.facts || {})) {
+    const separator = key.indexOf('|');
+    const scope = key.slice(0, separator), rootId = key.slice(separator + 1);
+    const fact = { scope, rootId, inputs };
+    for (const id of new Set([rootId, ...(inputs.proof?.partIds || [])])) byMember.set(scope + '|' + id.toLowerCase(), fact);
+  }
+  return byMember;
+}
+
 function createSessionProjectionDiagnostics({ emit } = {}) {
   let previous = new Map();
   const ids = values => [...new Set((values || []).map(id => String(id).toLowerCase()))].sort();
@@ -142,5 +153,5 @@ function validateSessionProjectionRecord(record) {
   } catch { return false; }
 }
 
-if (typeof module !== 'undefined') module.exports = { createSessionProjectionDiagnostics, validateSessionProjectionRecord, projectionScope };
-if (typeof window !== 'undefined') window.SessionProjectionDiagnostics = { createSessionProjectionDiagnostics, validateSessionProjectionRecord, projectionScope };
+if (typeof module !== 'undefined') module.exports = { createSessionProjectionDiagnostics, validateSessionProjectionRecord, projectionScope, indexProjectionFacts };
+if (typeof window !== 'undefined') window.SessionProjectionDiagnostics = { createSessionProjectionDiagnostics, validateSessionProjectionRecord, projectionScope, indexProjectionFacts };

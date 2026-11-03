@@ -9,7 +9,7 @@ for (const mode of ['normal', 'contended', 'absent']) test('A1/A5 typed legacy h
   const cache = require('../session-cache'), transitions = require('../session-transitions');
   const h = fixture(t); h.write(OLD, h.padding); h.write(OTHER); cache.refreshFolder(h.folder);
   const index = JSON.parse(h.rows.get(OLD).continuationIndex); delete index.head; h.rows.get(OLD).continuationIndex = JSON.stringify(index); h.init();
-  const entry = { projectFolder: h.folder, pty: { pid: 7, write() {} }, composerState: require('../composer-state').createComposerState(),
+  const entry = { projectFolder: h.folder, pty: { pid: 7, write() {} }, composerState: require('../src/main/terminals/composer-state').createComposerState(),
     knownJsonlFiles: new Set([OLD + '.jsonl', OTHER + '.jsonl']), continuationSnapshot: transitions.snapshotContinuations(h.file(OLD), OLD) };
   h.activeSessions.set(OLD, entry);
   const writer = { rekeySessionMeta: async (from, to) => h.meta.set(to, { ...h.meta.get(from), ...h.meta.get(to) }),
@@ -18,9 +18,12 @@ for (const mode of ['normal', 'contended', 'absent']) test('A1/A5 typed legacy h
   h.init(writer); const requested = [], notified = [], liveness = [];
   if (mode === 'absent') h.rows.delete(OLD);
   const ctx = vm.createContext({ path, fs, require: require('node:module').createRequire(path.join(__dirname, '../main.js')), PROJECTS_DIR: h.root,
+    getSetting: () => null,
+    parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
+    normalizeArchivedProjectPath: require('../src/main/shared/normalize-project-path').normalizeProjectPath,
     activeSessions: h.activeSessions, sessionCache: cache, writer, sessionTransitions: transitions, sessionHasPty: () => false, ptyPids: () => [],
-    mainWindow: null, log: h.log, rekeyMcpServer() {}, activityReporter: { rekey() {} }, taskRecords: { rekey() {}, hasRecord: () => false },
-    isHostedJob: require('../bg-agents-roster').isHostedJob, bgAgents: { getCachedJobs: () => new Map([['1234abcd', { sessionId: HEAD, state: 'working' }]]) },
+    mainWindow: null, log: h.log, rekeyMcpServer() {}, activityReporter: { rekey() {} }, taskRecords: { rekey() {}, hasRecord: () => false, async read() {}, async child() {} },
+    isHostedJob: require('../src/main/bg-agents/bg-agents-roster').isHostedJob, bgAgents: { getCachedJobs: () => new Map([['1234abcd', { sessionId: HEAD, state: 'working' }]]) },
     cliSessionState: { readAllDescriptors: () => h.descriptors, getSidebarDescriptors: () => h.descriptors,
       clearOwner: () => 'other', getDescriptorIdentity: () => 'fixture', liveElsewhereChecked: async id => { liveness.push(id); return { known: true, live: id === HEAD ? h.descriptors[0] : null }; } },
     notifyRendererProjectsChanged: () => { assert.equal(h.views().length, 1); notified.push('coherent'); } });
@@ -30,7 +33,7 @@ for (const mode of ['normal', 'contended', 'absent']) test('A1/A5 typed legacy h
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8').replace(/\r\n/g, '\n');
   const start = source.indexOf('sessionTransitions.init({');
   vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 4), ctx, { filename: 'main.js' });
-  const input = require('../terminal-input').handleTerminalInput;
+  const input = require('../src/main/terminals/terminal-input').handleTerminalInput;
   input(h.activeSessions, OLD, '/bg', Date.now()); input(h.activeSessions, OLD, '\r', Date.now());
   h.append(OLD, h.link());
   if (mode === 'contended') { h.append(OTHER); cache.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', OLD + '.jsonl']) }); }

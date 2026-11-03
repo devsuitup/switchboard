@@ -10,8 +10,8 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 
 | File | Role |
 |---|---|
-| `session-cache.js` | Calls `enumerateSessionFiles(folderPath)` (`read-session-file.js`), which walks `<folder>/*.jsonl` AND `<folder>/<parentSessionId>/subagents/*.jsonl` (+ legacy `<folder>/<parentSessionId>/*.jsonl`). Sets `subagentType` from JSONL metadata. |
-| `db.js` (read side of `session-index-store.js`) | `session_cache` row has `parentSessionId`, `agentId`, `subagentType` columns. `getCachedByParent(parentSessionId)` returns all children. |
+| `session-cache.js` | Calls `enumerateSessionFiles(folderPath)` (`read-session-file.js`), which walks root, ordinary/legacy subagent and workflow agent transcripts. Sets `subagentType` from JSONL metadata. |
+| `db.js` (read side of `session-index-store.js`) | `session_cache` row has `parentSessionId`, `agentId`, `subagentType`, `workflowRunId` columns. `getCachedByParent(parentSessionId)` returns all children. |
 | `read-session-file.js` | `readSessionDisplayHeader()` extracts `agentId` + `isSidechain` flags from the first 256 KB. |
 
 ### IPC bridge (main ↔ renderer)
@@ -41,7 +41,7 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 
 - **A subagent click MUST NOT spawn `claude --resume`.** The opener routing in `sidebar.js` checks `item.dataset.subagent && session.parentSessionId` and dispatches to `showSubagentTranscript` instead of `openSession`. **If you add a new sidebar opener path, replicate this discriminator.**
 - **`subagentType` is the canonical "is-subagent" signal**: non-null/non-empty string. The agent type itself (e.g. `'frontend-implementer'`, `'researcher'`) is human-meaningful but the *presence* of the value is what matters for routing.
-- **Subagent JSONLs are at `<folder>/<parentSessionId>/subagents/<agentId>.jsonl`**, NOT at `<folder>/<agentId>.jsonl`. There's also a legacy layout `<folder>/<parentSessionId>/<agentId>.jsonl`. **Always use `enumerateSessionFiles()` to walk both layouts.**
+- **Subagent JSONLs belong beneath their parent**, including `<parent>/subagents/agent-<id>.jsonl`, legacy `<parent>/agent-<id>.jsonl`, and `<parent>/subagents/workflows/<run>/agent-<id>.jsonl`. Use `enumerateSessionFiles()` to discover them and `resolveJsonlPath()` with the cached row to reopen them.
 - **Watchers are scoped per `(parentSessionId, agentId)`**: don't share a watcher across subagents — `start-subagent-watch` returns a `watchId` that's unique per call.
 - **Watch cleanup is mandatory** when the transcript view is closed. `drainViewerWatches()` (in `jsonl-viewer.js`) walks `activeViewerWatches` and calls `stopSubagentWatch` for each. Forgetting this leaks `fs.watch` handles.
 
@@ -52,7 +52,178 @@ This is the **#1 fork-specific feature** (upstream PR #47 still pending). It per
 - **Subagent status badges**: originally (PR #48) derived from the most recent JSONL line — `isSidechain: true` meant active, completion was inferred from mtime stability. Since #624/#627 the shared task registry decides, and the parent row shows a running count instead of per-child badges (see below).
 - **The "Resume in terminal anyway" button** in the transcript view bypasses the routing and calls the original `openSession` opener. This is intentional — for the rare debugging case where a user genuinely wants to re-enter the subagent's session.
 
+## Workflow agent transcripts (#875)
+
+`classifyTranscriptPath` in `subagent-attribution.js` classifies project-relative root, ordinary/legacy
+subagent and workflow agent paths. Workflow transcripts live at
+`<parent>/subagents/workflows/<wf_runId>/agent-<agentId>.jsonl`; run ids must
+match `/^wf_[a-z0-9-]{6,}$/`. Run journals, sidecars and unrecognized nesting
+are ignored. The cold enumerator and local/remote targeted scans share this
+classification, as does live attribution through `subagent-attribution.js`.
+The enumerator and targeted readers lstat every segment from the parent
+directory through `subagents`, `workflows` and the run directory. A symlink
+or Windows junction at any segment excludes the workflow path. Cold discovery
+also lstats the parent and `subagents` directory before enumerating ordinary
+agents, so a junctioned `<fork>/subagents` does not duplicate those agents
+under the fork. They do not
+deduplicate by realpath.
+
+A workflow resumed in a fork writes through a junction into the original
+parent's run directory. Its agents are therefore listed under the original
+parent; the fork gets no transition-based busy signal. This change covers
+canonical workflow discovery, grouping and original-parent transitions; it
+does not attribute a resumed workflow's activity to the fork.
+
+The cache identity remains `sub:<parent>:<agentId>`. The nullable
+`workflowRunId` column is reconciled additively without clearing the cache or
+its initial-scan marker. Full and header reads carry it; `resolveJsonlPath`
+uses it for cached refresh matching, transcript viewing, Changes sidecars and
+task snapshot hydration. Transition discovery includes workflow run-directory
+mtimes in its directory-list cache, so a new agent inside an existing run is
+visible even when the ordinary `subagents` directory has not changed.
+Only classified agent transcripts enter that cached list, so a remaining
+journal cannot prevent collection of a deleted agent. Missing run directories
+still participate in targeted deletion detection.
+
+Local reconciliation runs at startup and on projects requests, throttled to
+five seconds. It stats each root `agent-*` candidate once; only a missing
+root JSONL forces a full folder refresh despite fresh index metadata. A real
+legacy root file is preserved and does not cause repeated refreshes; deleting
+the ghost row clears the repair condition. Remote indexed folders receive
+subset scans: processing a workflow transcript's upsert or deletion also
+removes an old root `agent-<id>` row if its root JSONL is absent from the mirror,
+while preserving real root files even outside the subset. The existing cache
+effects apply deletions and canonical workflow children through the writer
+worker; the reader does not write SQLite directly.
+
+Remote indexing also checks each mirrored folder once per host session for
+parentless `agent-*` rows whose root JSONL is absent. Such a folder gets one
+full scan even when no files changed, overriding any pending subset. Successful
+repairs are remembered in memory; failed scans remain eligible for retry.
+Removed folders/hosts and indexer stop clear the corresponding check state.
+Real root agent files do not trigger a repair.
+
+`buildProjectsFromCache` projects `workflowRunId` and `workflowName`, reading
+`<parent>/workflows/<run>.json` with a worker-lifetime cache keyed by file path,
+mtimeMs and size, reused across both views and subsequent queries (including
+cache reinitialization). Missing, malformed or
+empty titles fall back to the run id. Remote mirrors without run snapshots
+use that same fallback. Snapshot JSON watcher events queue a debounced projects
+notification without a transcript refresh or widening pending targeted scans.
+The watch callback only queues snapshot paths; the serialized debounced flush
+reads and parses each snapshot asynchronously. Partial JSON and read errors
+other than ENOENT preserve the previous observed title and do not notify.
+ENOENT retains the run-id fallback as the baseline and notifies if the previous
+title differs or no baseline exists, including after folder-scope pruning in the
+same flush; repeated deletion events remain quiet. The run-id baseline is only
+retained while the project folder exists; a simultaneous folder deletion and
+snapshot ENOENT cannot recreate a pruned entry (#914). The watcher compares
+titles observed in successful snapshot reads, so later status-only
+changes with the same title do not notify. The first event notifies because
+the watcher has no title baseline yet, provided the snapshot is readable JSON.
+Full folder refreshes and dropped folders discard that folder's title baselines
+before snapshot reads, preserving a title read in the same flush for later
+status-only events.
+The title is read when building projects.
+The sidebar nests one block per parent/run under the
+existing subagent container (and groups orphan workflows in the orphan bucket).
+It reuses the existing caret, child container, preview cap and
+`expandedSubagents`/`expandedSubagentRest` persistence with a workflow-scoped
+key. Ordinary children retain their own preview; each workflow has its own.
+Titles are escaped. The #543 skip guard already compares the projected
+payload, including the new run id and title; its logic is unchanged.
+
+`test/workflow-subagents-875.test.js` exercises disposable on-disk layouts,
+full and targeted local/remote scans, journal exclusion, linked runs,
+targeted deletion, cached header reads, additive SQLite reconciliation,
+parent attribution, Changes sidecars and shipped sidebar code under jsdom.
+
 ## Running subagent count (#627)
+
+### Descriptor-backed local owners (#552)
+
+`session-transitions.js` keeps one observation state per live descriptor session
+id when no owned Claude PTY already supplies it. Attach clients do not count as
+owned workers. The descriptor reader's existing liveness and process-identity
+checks select these owners; `encodeProjectPath(descriptor.cwd)` selects their
+transcript folder. Startup and descriptor status notifications reconcile this
+map. Project-folder invalidations reuse `detectSubagentTransitions`, and its
+existing five-second settle timer also visits descriptor-backed states. There
+is no descriptor read or process-table refresh from that timer: it only visits
+the observation states already reconciled by startup, status notifications and
+project-folder invalidations. Refresh contains descriptor-reader failures for all
+callers, including startup and status notifications; an unavailable reader leaves
+the previous observations intact. Each descriptor scan and hydration has its own
+error guard and warning, so a failed scan cannot skip later descriptors or pruning.
+Owned PTY fork and /clear detection still runs after a reader failure.
+Idle descriptor callbacks skip attach clients, so they cannot build a second
+subagent observation state alongside the descriptor owner. There
+are no additional filesystem watches or polling intervals. Removed descriptors
+and sessions that acquire an owned PTY release their observation state. The CLI
+status cache and default sidebar descriptors retain last-writer semantics,
+including for "Resume anyway". Observation alone requests all live, known,
+non-stale writers and chooses the earliest `startedAt` (missing times last, PID
+as tie-breaker), independently of directory order. The chosen writer determines
+the transcript folder. Observation retains its identity while that folder stays
+the same and the previous and current sets of PID/start identities overlap. Thus
+busy/idle flips, adding a competitor, or losing the oldest process while another
+remains do not replay tasks, reset child state or emit a completion. Each refresh
+updates that set, so a chain of overlapping owners also remains continuous.
+A folder change, a completely disjoint owner set, or disappearance followed by
+reappearance bootstraps a new observation. Missing descriptors release observation
+without claiming process death or completing recorded tasks.
+Folder invalidations reconcile again after the owned-session loop only when that
+pass published a re-key, before scanning descriptor states,
+so a fork or /clear that acquires a descriptor's session id drops the duplicate
+observation in the pass that performs the re-key. A descriptor observed in earlier
+passes, before the fork or /clear could be parsed, may already have announced a
+child. Owned bootstrap is silent; subsequent growth during its fresh-file recheck
+can re-announce the child through `subagent-spawn-late`, which the renderer treats
+as idempotent. If the child stops growing after descriptor observation is dropped,
+that observation emits no `subagent-completed`; its last announcement expires
+through the renderer's 60 s TTL. A descriptor whose scan throws is dropped from
+observation. Its identity and failure time impose a 30 s backoff before another
+refresh may retry; warnings occur once per identity while it remains observed,
+even if several retries fail. A replacement identity retries immediately, and
+disappearance releases the failure state. This adds no retry timer.
+
+Descriptor bootstrap stays silent but gives every child file a `STABLE_MS` (30 s)
+recheck window, even when its mtime is older than 60 s. These workers can predate
+Switchboard and remain alive during silent tool calls. Growth within that window
+rehabilitates the child through the existing settle tick without a folder event.
+An unchanged file settles at the end of the window; this is bounded inference,
+not proof that an arbitrarily long silent external worker has finished. Owned
+PTY bootstrap retains its existing fresh-file-only recheck policy. Once a CLI task
+record is available, the entry's `_cliTask` flag excludes it from the settle loop;
+the task registry supplies its status without further inferred file activity.
+
+Main-side descriptor reconciliation excludes projects explicitly listed in local
+`global.hiddenProjects` (#987 item 3), before observation or task replay. It reuses
+the existing project-path normalizer, including Windows separator and short-path
+handling, and builds the hidden set once per refresh. It does not call
+`isProjectSettingsArchived`: the schedule guard resolves a worktree's parent after
+`realpath`, the sidebar rule takes it from the raw path. A remote hidden entry cannot
+hide a local project. A hidden repository's `.claude/worktrees/<name>` groups are
+excluded too, using the sidebar's worktree parent rule; `hiddenRepository` removes
+those rows. Other independently visible worktree layouts remain eligible. The parent
+path is normalized separately so missing child paths cannot change the parent's
+Windows spelling. Hiding an observed project releases its state on the next
+descriptor refresh, and unhiding allows fresh observation.
+
+Archive-only filtering is deferred. `get-projects` supplies both default and
+archived snapshots, and renderer `showArchived` and search state choose which one
+is displayed. Main has no cheap, authoritative set of currently visible archived
+folders. Filtering on archive settings alone would suppress owners whose rows are
+currently shown by the archive toggle or search.
+
+First observation replays the parent transcript and the discovered child metadata
+through the existing task worker, including children not indexed yet. Subsequent
+transcript writes use the existing project watcher/local-transcript tracker. This
+closes the gap where initial task snapshots ran before a background descriptor
+appeared, or before its children entered the cache. Numeric counts still require
+recorded CLI agent tasks; file activity alone remains inferred activity. Sidebar
+and grid projections remain unchanged and keyed by conversation session id, never
+the daemon job id or attach client's PTY. Tests: `descriptor-subagents-552.test.js`.
 
 The parent row shows plain secondary text beneath its title: `1 subagent
 running` or `N subagents running`, with the same pluralized `aria-label`.
@@ -574,10 +745,11 @@ when a *new* subagent starts. Two rules keep that rescan quiet:
   bypass mtime inference, including explicitly open tasks with old timestamps.
   Every remaining file present at a session's
   first scan is recorded silently as `completed: true`, whatever its mtime.
-  Switchboard owns the PTYs its subagents run in — one set per Electron
+  For owned sessions, Switchboard owns the PTYs its subagents run in — one set per Electron
   process — so they all died with the previous process, and a restored session
   gets a brand-new PTY whose agents write *after* bootstrap and are picked up
-  by the normal path. Nothing on disk at that moment can be live. The silence
+  by the normal path. Descriptor-backed sessions can already be running when
+  Switchboard starts and therefore keep a recheck window for every file. The silence
   is unconditional; the *verdict* is not (next bullet).
 - **After bootstrap, a first sighting is only a spawn if the file is fresh.**
   An unknown file whose mtime is already older than `FRESH_SIGHTING_MS` (60 s)
@@ -594,11 +766,13 @@ when a *new* subagent starts. Two rules keep that rescan quiet:
   `subagent-spawned` is emitted (logged `[subagent-spawn-late]`). The window
   closes once the file has been seen motionless for a full `STABLE_MS`, after
   which the entry is frozen and costs nothing. **At bootstrap the window is
-  opened only for files whose mtime is fresh** — the handful that could
+  opened only for files whose mtime is fresh in owned PTY sessions** — the handful that could
   conceivably still be running. Everything older is frozen outright: a window
   over the whole history would cost one `statSync` per historical file per
   flush, exactly what the dir-mtime cache exists to avoid, and a file minutes
-  old cannot be the agent in question anyway. The narrow window is what keeps
+  old cannot belong to the newly started owned PTY. Descriptor-backed sessions
+  instead recheck their full history for one bounded window, since age cannot
+  exclude an external worker in a silent tool call. The narrow window is what keeps
   the startup rule falsifiable: if the PTY-ownership argument above is ever
   wrong (an orphaned process surviving a hard kill and still writing), the
   agent is announced late instead of staying invisible for the whole session.

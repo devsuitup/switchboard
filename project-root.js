@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const childProcess = require('child_process');
-const { localGitEnv } = require('./git-changes-runner');
+const { localGitEnv } = require('./src/main/changes/git-changes-runner');
 
 const GIT_TIMEOUT_MS = 2000;
 const CLAUDE_WORKTREE_RE = /^(.+?)([/\\]\.claude[/\\]worktrees[/\\][^/\\]+)(?:[/\\].*)?$/;

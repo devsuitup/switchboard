@@ -23,9 +23,9 @@ const { Readable } = require('stream');
 
 const {
   createRemoteWatcher, parseWatchLine, buildSshArgs, NO_INOTIFYWAIT_MARKER,
-} = require('../remote-watch');
-const { backoffDelayMs } = require('../remote-index');
-const { REMOTE_PROJECTS_REL, REMOTE_SESSIONS_REL } = require('../remote-transport');
+} = require('../src/main/remote/remote-watch');
+const { backoffDelayMs } = require('../src/main/remote/remote-index');
+const { REMOTE_PROJECTS_REL, REMOTE_SESSIONS_REL } = require('../src/main/remote/remote-transport');
 
 const silentLog = { info() {}, warn() {}, error() {} };
 

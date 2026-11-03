@@ -7,7 +7,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createActivityWatchClient, MAX_COOLDOWN_MS } = require('../activitywatch-client');
+const { createActivityWatchClient, MAX_COOLDOWN_MS } = require('../src/main/integrations/activitywatch/activitywatch-client');
 
 const BUCKET = { client: 'aw-watcher-switchboard', type: 'app.editor.activity' };
 

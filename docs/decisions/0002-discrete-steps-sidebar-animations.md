@@ -84,3 +84,29 @@ Rejected alternatives:
 - The old effects (shimmer, rotating border, ripple) are gone from
   `style.css`; this ADR is the record of why they must not come back on a
   "polish" pass.
+
+## Update — 2026-10-31: pause busy spinners in the background (#544)
+
+Keep the braille glyph sequence, colour and 0.8-second cadence while the
+window is visible and focused. Pause its `::before` animation with
+`animation-play-state: paused` whenever the document is hidden or the window
+is unfocused, and resume immediately when both visibility and focus return.
+The renderer uses its existing native focus/visibility signals and
+`document.hasFocus()`; a document-level class covers all busy icon surfaces
+and newly rendered rows without changing session activity or attention state.
+Pointer and key input also re-evaluate the state, so a reload that never
+receives a window `focus` event cannot leave spinners frozen in a focused
+window. While paused, a busy session with background subagents (violet
+spinner) and an idle parent with busy agents (violet static full cell) differ
+only by glyph shape, no longer by motion.
+
+The issue's measurements found 7 busy icons cost 6–7% of one core and 27 cost
+10%, versus 0.2% idle. Animating `content` cannot run on the compositor: each
+step forces style recalculation and layout. Pausing avoids that continuous
+work while the window is in the background. These are the reported baseline
+measurements, not a new CPU measurement of this change.
+
+A compositor-friendly sprite or transform spinner remains an option for a
+future decision with visual review and CPU measurements. It would change the
+braille look selected here and is outside this update; the compositing floor
+documented above would still need measurement.

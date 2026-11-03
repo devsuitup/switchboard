@@ -88,6 +88,11 @@ tasks:
           echo "ESLint and jsdom already installed — nothing to do."
         fi
 
+  "check:fast":
+    desc: Lint staged JS and run matching tests
+    cmds:
+      - node scripts/check-fast.js
+
   check:
     desc: Run tests + lint (pre-commit / pre-push gate)
     deps: [test, lint]

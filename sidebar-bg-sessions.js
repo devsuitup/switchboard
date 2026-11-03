@@ -4,9 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const { encodeProjectPath } = require('./encode-project-path');
 const { resolveWorktreePath } = require('./derive-project-path');
-const { parseFolderKey } = require('./remote-hosts');
+const { parseFolderKey } = require('./src/main/remote/remote-hosts');
 const { validId, continuationRollup } = require('./session-continuations');
-const { isHostedJob, JOB_ID_RE, JOB_STATES } = require('./bg-agents-roster');
+const { isHostedJob, JOB_ID_RE, JOB_STATES } = require('./src/main/bg-agents/bg-agents-roster');
 const { conversationMeta } = require('./conversation-meta');
 
 const key = id => String(id).toLowerCase();

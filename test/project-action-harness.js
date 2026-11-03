@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { encodeProjectPath } = require('../encode-project-path');
-const { isPanelShellSession } = require('../panel-terminal-target');
+const { isPanelShellSession } = require('../src/main/terminals/panel-terminal-target');
 
 function spawnFromExec(exec) {
   return (exe, args, options) => {

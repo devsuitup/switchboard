@@ -32,7 +32,7 @@ const {
   isSafeRevPathOperand,
   buildBlobRev,
   requireLocalTarget,
-} = require('../git-changes-file');
+} = require('../src/main/changes/git-changes-file');
 
 const ADVERSARIAL = [
   ['', 'the empty string'],
@@ -153,7 +153,7 @@ test('only the read-only status and diff handlers admit a subagent id (mutation 
 });
 
 test('Touched rejects invalid absolute paths before asking git', async () => {
-  const { readTouchedChangesFile, writeTouchedChangesFile } = require('../git-changes-file');
+  const { readTouchedChangesFile, writeTouchedChangesFile } = require('../src/main/changes/git-changes-file');
   const deps = { runGit: () => { throw new Error('git must not run'); } };
   for (const absolutePath of ['', 'relative.txt', null, path.resolve(ROOT, 'control\nfile')]) {
     const read = await readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps);
@@ -164,7 +164,7 @@ test('Touched rejects invalid absolute paths before asking git', async () => {
 });
 
 test('Touched falls back on a failed git transport but refuses other git errors', async () => {
-  const { readTouchedChangesFile } = require('../git-changes-file');
+  const { readTouchedChangesFile } = require('../src/main/changes/git-changes-file');
   for (const code of [-1, 1, 128]) {
     const result = await readTouchedChangesFile({ absolutePath: path.join(ROOT, 'example.txt'), maxBytes: 1024 }, {
       runGit: async () => ({ code, stdout: '', stderr: 'probe failed' }),
@@ -176,7 +176,7 @@ test('Touched falls back on a failed git transport but refuses other git errors'
 });
 
 test('Touched refuses a sensitive path before asking git', async () => {
-  const { readTouchedChangesFile, writeTouchedChangesFile } = require('../git-changes-file');
+  const { readTouchedChangesFile, writeTouchedChangesFile } = require('../src/main/changes/git-changes-file');
   const absolutePath = path.join(ROOT, '.ssh', 'credential');
   let calls = 0;
   const deps = { runGit: async () => { calls++; return { code: 128 }; } };
@@ -186,7 +186,7 @@ test('Touched refuses a sensitive path before asking git', async () => {
 });
 
 test('round 2: Touched refuses any literal git directory before probing on read and write', async () => {
-  const { readTouchedChangesFile, writeTouchedChangesFile } = require('../git-changes-file');
+  const { readTouchedChangesFile, writeTouchedChangesFile } = require('../src/main/changes/git-changes-file');
   for (const absolutePath of ['.git/config', '.GIT/config', 'sub/.Git/config'].map(name => path.join(ROOT, name)).concat(ROOT + '/.git/../example.txt')) {
     let calls = 0;
     const deps = { runGit: async () => { calls++; return { code: 128, stderr: 'fatal: not a git repository' }; } };
@@ -199,7 +199,7 @@ test('round 2: Touched refuses any literal git directory before probing on read 
 test('round 2: corroborated absence permits plain fallback', async (t) => {
   const { file, cwd, root } = fixture(t);
   assertAbsent(cwd, root);
-  const result = await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, {
+  const result = await require('../src/main/changes/git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, {
     runGit: async () => ({ code: 128, stderr: 'fatal: not a git repository (or any of the parent directories): .git' }),
   });
   assert.equal(result.ok, true);
@@ -212,7 +212,7 @@ test('Touched: exit 128 outside a repository is independent of French stderr', a
   for (const stderr of [...FRENCH, '', '致命的なエラー']) {
     await t.test(stderr || 'empty stderr', async () => {
     const calls = [];
-    const result = await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, {
+    const result = await require('../src/main/changes/git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, {
       runGit: async (args, options) => { calls.push({ args, options }); return { code: 128, stdout: '', stderr }; },
     });
     assert.deepEqual(result, { ok: true, git: false }, stderr);
@@ -232,7 +232,7 @@ test('Touched: an English no-repository diagnostic does not hide a broken gitfil
   const { file, ancestor } = fixture(t);
   fs.writeFileSync(path.join(ancestor, '.git'), 'gitdir: missing\n');
   const stderr = 'fatal: not a git repository: missing';
-  const result = await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, {
+  const result = await require('../src/main/changes/git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, {
     runGit: async () => ({ code: 128, stdout: '', stderr }),
   });
   assert.deepEqual(result, { ok: false, reason: 'git', error: stderr });
@@ -240,7 +240,7 @@ test('Touched: an English no-repository diagnostic does not hide a broken gitfil
 
 test('Touched: fatal discovery needs definite filesystem absence', async t => {
   const { file, cwd } = fixture(t);
-  const api = require('../git-changes-file');
+  const api = require('../src/main/changes/git-changes-file');
   for (const code of [1, 127, 255, 0, -1]) {
     const result = await api.readTouchedChangesFile({ absolutePath: file, maxBytes: 1024 }, { runGit: async () => ({ code, stdout: '', stderr: 'probe' }) });
     assert.deepEqual(result, code === -1 ? { ok: true, git: false } : { ok: false, reason: 'git', error: 'probe' });
@@ -258,7 +258,7 @@ test('Touched: fatal discovery needs definite filesystem absence', async t => {
 for (const group of ['discovery: an empty ancestor .git is ignored without hiding a higher entry', 'discovery: Git ceilings bound corroboration in Changes and Touched', 'discovery: device boundaries follow the Git boolean environment', 'discovery: one exported noRepositoryAt contract covers both landing orders']) {
   test(group, async t => {
     const { file, cwd } = fixture(t);
-    const api = require('../git-changes-file');
+    const api = require('../src/main/changes/git-changes-file');
     assert.equal(typeof api.noRepositoryAt, 'function');
     const cases = discoveryCases().filter(c => group.includes('empty ancestor') ? /empty|HEAD/.test(c.label) : group.includes('ceilings') ? /ceiling/.test(c.label) : group.includes('device') ? /dev|stat failure/.test(c.label) : true);
     for (const c of cases) {
@@ -289,7 +289,7 @@ for (const group of ['discovery: an empty ancestor .git is ignored without hidin
 }
 
 test('discovery: shipped source uses the single noRepositoryAt decision', () => {
-  const source = fs.readFileSync(path.join(ROOT, 'git-changes-file.js'), 'utf8');
+  const source = fs.readFileSync(path.join(ROOT, 'src/main/changes/git-changes-file.js'), 'utf8');
   for (const line of source.split('\n').filter(l => l.includes('not a git repository'))) {
     assert.match(line, /return \{ ok: false, error: 'not a git repository', reason: 'repo' \}/);
   }
@@ -311,7 +311,7 @@ test('discovery: shipped source uses the single noRepositoryAt decision', () => 
 test('noRepositoryAt: original cwd must be a directory before canonical walk', t => {
   const { cwd } = fixture(t);
   const { shape } = require('./git-discovery-fixture');
-  const { noRepositoryAt } = require('../git-changes-file');
+  const { noRepositoryAt } = require('../src/main/changes/git-changes-file');
   const fsOps = {
     statSync: value => shape(value === cwd ? 'file' : 'directory'),
     realpathSync: { native: value => value === cwd ? path.join(path.dirname(cwd),'physical') : value },
@@ -327,22 +327,22 @@ test('Touched: dangling git symlink refuses fallback', async t => {
     if (['EPERM','EACCES','ENOSYS'].includes(err.code)) { t.skip('platform cannot create a dangling symlink: '+err.code); return; }
     throw err;
   }
-  assert.deepEqual(await require('../git-changes-file').readTouchedChangesFile({absolutePath:file,maxBytes:1024},{runGit:async()=>({code:128,stdout:'',stderr:'probe'})}),{ok:false,reason:'git',error:'probe'});
+  assert.deepEqual(await require('../src/main/changes/git-changes-file').readTouchedChangesFile({absolutePath:file,maxBytes:1024},{runGit:async()=>({code:128,stdout:'',stderr:'probe'})}),{ok:false,reason:'git',error:'probe'});
 });
 
 test('round 3: a Touched file symlink selects read-only plain content before probing git', async () => {
-  const absolutePath = path.join(ROOT, 'git-changes-file.js');
+  const absolutePath = path.join(ROOT, 'src/main/changes/git-changes-file.js');
   const deps = { fs: { lstatSync: () => ({ isSymbolicLink: () => true }) }, runGit: () => { throw new Error('git must not run'); } };
-  const read = await require('../git-changes-file').readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps);
+  const read = await require('../src/main/changes/git-changes-file').readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps);
   assert.equal(read.ok, true);
   assert.equal(read.git, false);
   assert.equal(read.readOnly, true);
 });
 
 test('round 2: a vanished repository root is refused without plain fallback', async () => {
-  const absolutePath = path.join(ROOT, 'git-changes-file.js');
+  const absolutePath = path.join(ROOT, 'src/main/changes/git-changes-file.js');
   const deps = { runGit: async () => ({ code: 0, stdout: path.join(ROOT, 'does-not-exist-round-two') + '\n', stderr: '' }) };
-  const result = await require('../git-changes-file').readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps);
+  const result = await require('../src/main/changes/git-changes-file').readTouchedChangesFile({ absolutePath, maxBytes: 1024 }, deps);
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'repo');
 });

@@ -5,10 +5,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { sendToBackground } = require('../bg-handoff');
-const { createTriggerContext } = require('../trigger-context');
-const { start } = require('../trigger-watcher');
-const { createComposerState } = require('../composer-state');
+const { sendToBackground } = require('../src/main/bg-agents/bg-handoff');
+const { createTriggerContext } = require('../src/main/triggers/trigger-context');
+const { start } = require('../src/main/triggers/trigger-watcher');
+const { createComposerState } = require('../src/main/terminals/composer-state');
 
 async function until(predicate) {
   const deadline = Date.now() + 4000;

@@ -1,6 +1,47 @@
 // see docs/product/BUILDING-BLOCKS.md (B8)
 const appNoticeEntries = new Map();
 
+window.api?.onMainProcessError?.(notice => {
+  const previous = appNoticeEntries.get('main-process-errors');
+  const recent = new Map((previous?.options.members || []).map(member => [member.id, member]));
+  const existing = recent.get(notice.id);
+  notice = { ...notice, count: Math.max(existing?.count || 0, notice.count) };
+  recent.delete(notice.id);
+  recent.set(notice.id, notice);
+  const members = [...recent.values()].slice(-5);
+  const options = {
+    id: 'main-process-errors', kind: 'error', members,
+    message: entries => `${entries.map(member => `${member.message.replace(/\.$/, '')}${member.count > 1 ? ` (${member.count} occurrences)` : ''}`).join('\n')}. Open log; the log may hold details.`,
+    actionLabel: 'Open log', onAction: openMainErrorLog, dismissOnAction: false,
+    onDismiss: () => window.api?.mainErrorNoticesDismissed?.(members.map(member => member.id)),
+  };
+  if (previous) {
+    previous.options = options;
+    previous.notice.querySelector('.app-notice-message').textContent = options.message(members);
+  }
+  const group = previous?.notice || showAppNotice(options);
+  let announcement = group.querySelector('.app-notice-announcement');
+  if (!announcement) {
+    announcement = document.createElement('span');
+    announcement.className = 'app-notice-announcement';
+    announcement.setAttribute('role', 'alert');
+    announcement.setAttribute('aria-atomic', 'true');
+    group.insertBefore(announcement, group.querySelector('button'));
+  }
+  if (!existing) announcement.textContent = notice.message;
+});
+window.api?.mainErrorNoticesReady?.();
+
+async function openMainErrorLog() {
+  try {
+    const result = await window.api.openMainLog();
+    if (!result?.ok) throw new Error(result?.error || 'Application log is unavailable');
+    clearAppNotice('main-process-log-error');
+  } catch (error) {
+    showAppNotice({ id: 'main-process-log-error', kind: 'error', message: `Cannot open application log: ${error.message}` });
+  }
+}
+
 function sessionActionNoticeId(operation, session) {
   return `${operation}:${session?.remoteAlias || 'local'}:${session?.sessionId || session?.projectPath || 'unknown'}`;
 }
@@ -53,7 +94,11 @@ function showAppNotice(options) {
   const notice = document.createElement('div');
   if (id !== undefined) notice.dataset.noticeId = id;
   notice.className = 'app-notice';
-  notice.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  notice.setAttribute('role', id === 'main-process-errors' ? 'group' : kind === 'error' ? 'alert' : 'status');
+  if (id === 'main-process-errors') {
+    notice.setAttribute('aria-live', 'off');
+    notice.setAttribute('aria-label', 'Application errors');
+  }
   const text = document.createElement('span');
   text.className = 'app-notice-message';
   text.textContent = typeof message === 'function' ? message(members) : message;
@@ -75,7 +120,12 @@ function showAppNotice(options) {
     dismiss.type = 'button';
     dismiss.className = 'app-notice-dismiss';
     dismiss.textContent = 'Dismiss';
-    dismiss.addEventListener('click', () => clearAppNotice(id));
+    dismiss.addEventListener('click', () => {
+      if (appNoticeEntries.get(id)?.notice !== notice) return;
+      const onDismiss = appNoticeEntries.get(id).options.onDismiss;
+      clearAppNotice(id);
+      onDismiss?.();
+    });
     notice.append(dismiss);
   }
   notice.addEventListener('mousedown', event => {

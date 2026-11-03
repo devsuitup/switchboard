@@ -4,7 +4,7 @@ const { createHash } = require('node:crypto');
 const path = require('node:path');
 const fs = require('node:fs');
 const { StringDecoder } = require('node:string_decoder');
-const { resolveOnDisk } = require('./resolve-path-on-disk');
+const { resolveOnDisk } = require('./src/main/shared/resolve-path-on-disk');
 
 const HASH_LIMIT = 512 * 1024 * 1024;
 const DIRECTORY_LIMIT = 200000;

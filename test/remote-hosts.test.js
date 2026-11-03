@@ -12,7 +12,7 @@ const {
   normalizeHosts, enabledHosts, normalizeRefreshMs, isSafeRelPath,
   isSafeMetaRelPath, isSafeMirrorRelPath, topFolderOf,
   MIN_REFRESH_MS,
-} = require('../remote-hosts');
+} = require('../src/main/remote/remote-hosts');
 const { encodeProjectPath } = require('../encode-project-path');
 
 test('a local folder key never parses as remote', () => {

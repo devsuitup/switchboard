@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createRequire } = require('node:module');
 const { Worker } = require('node:worker_threads');
 const { createSessionIndexWriter } = require('../../session-index-writer');
 const { createProjectsWorkerClient } = require('../../projects-worker-client');
@@ -49,7 +50,8 @@ async function run() {
     const source = fs.readFileSync(path.join(__dirname, '../../main.js'), 'utf8');
     const applyStart = source.indexOf('  apply: async result => {', source.indexOf('const projectsClient'));
     const applyEnd = source.indexOf('\n  },', applyStart) + 4;
-    const context = vm.createContext({ writer, projectsSnapshot: snapshot, projectsReconciledAt: 0, Date, structuredClone });
+    const context = vm.createContext({ writer, projectsSnapshot: snapshot, projectsReconciledAt: 0, Date, structuredClone,
+      require: createRequire(path.join(__dirname, '../../main.js')) });
     const apply = vm.runInContext('({' + source.slice(applyStart, applyEnd) + '}).apply', context);
     let applications = 0, reconciled = false, workers = 0;
     projectsClient = createProjectsWorkerClient({
@@ -82,9 +84,12 @@ async function run() {
       isCachePopulated: db.isCachePopulated, isSearchIndexPopulated: db.isSearchIndexPopulated,
       populateCacheViaWorker() {}, backfillEntrypoints() {}, backfillCustomTitles() {}, projectsClient,
       mergePlaceholderSessions: projects => projects, annotateRemoteAttachable: projects => projects,
+      cliSessionState: require('../../cli-session-state'),
     });
     const start = source.indexOf("ipcMain.handle('get-projects'");
-    vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 4), context);
+    vm.runInContext(source.slice(start, source.indexOf('\n});', start) + 4), context, {
+      filename: require.resolve('../../main.js'), lineOffset: source.slice(0, start).split(String.fromCharCode(10)).length - 1,
+    });
     hold = true;
     scan = writer.writeScannedFolder({ folder: 'scan-one', projectPath: root, sessions: [], indexMtimeMs: 1 });
     await waiting;

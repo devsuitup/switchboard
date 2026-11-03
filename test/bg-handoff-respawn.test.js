@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { loadAppFunctions } = require('./app-source');
-const bg = require('../bg-agents');
+const bg = require('../src/main/bg-agents/bg-agents');
 
 const SID = 'abcdefab-abcd-4abc-8abc-abcdefabcdef';
 const OTHER = '22222222-2222-4222-8222-222222222222';
@@ -32,7 +32,7 @@ function setup(t, { jobs = {}, outside = [], others = [], listed = [], checkedRe
   fs.writeFileSync(path.join(root, folder, SID + '.jsonl'), JSON.stringify({ type: 'user', message: { content: 'hello' } }) + '\n');
   const writes = [], respawned = [], exitedAtRespawn = [], listeners = new Set();
   const session = { kind: 'local-pty', realSessionId: SID, projectFolder: folder, exitDrain: Promise.resolve(),
-    composerState: require('../composer-state').createComposerState(),
+    composerState: require('../src/main/terminals/composer-state').createComposerState(),
     pty: { pid: SOURCE_PID, onData: () => ({ dispose() {} }) } };
   const activeSessions = new Map([['tab', session], ...others.map((o, i) => ['other' + i, o])]);
   const ctx = vm.createContext({
@@ -62,12 +62,12 @@ function setup(t, { jobs = {}, outside = [], others = [], listed = [], checkedRe
         return { known: true, live: live || null };
       },
     },
-    ...require('../bg-handoff'),
-    sendToBackground: (id, deps) => require('../bg-handoff').sendToBackground(id, { ...deps, timeoutMs: 1000, exitTimeoutMs: 300 }),
+    ...require('../src/main/bg-agents/bg-handoff'),
+    sendToBackground: (id, deps) => require('../src/main/bg-agents/bg-handoff').sendToBackground(id, { ...deps, timeoutMs: 1000, exitTimeoutMs: 300 }),
   });
   const { handleSendToBackground } = loadAppFunctions(ctx, { declarations: ['backgroundHandoffs'],
     functions: ['handleSendToBackground', 'persistBackgroundHandoff', 'readBackgroundHandoffStamp'], sourcePath: path.join(__dirname, '../main.js') });
-  if (checkedRespawn) ctx.unsubscribeBgAgents = require('../bg-agents-ipc').init({
+  if (checkedRespawn) ctx.unsubscribeBgAgents = require('../src/main/bg-agents/bg-agents-ipc').init({
     ipcMain: { handle() {} }, getMainWindow: () => null, log: { warn() {} }, activeSessions,
     bgAgents: { ...bg, runVerb: async (verb, id) => { respawned.push(id); exitedAtRespawn.push(session.exited === true); return { ok: true }; } },
     cliSessionState: { ...ctx.cliSessionState, readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID }] },

@@ -116,12 +116,20 @@ test('an oversized UTF-8 body is clamped at a complete character and later entri
 });
 
 test('saving one indexed path does not normalize every indexed ID again', async () => {
-  const { fileListPathKey } = require('../file-lists-path');
+  const { fileListPathKey } = require('../src/main/viewer/file-lists-path');
   const mainRequire = require('node:module').createRequire(path.join(__dirname, '..', 'main.js'));
   let normalized = 0;
-  const ctx = mainIndex({ require: id => id === './file-lists-path'
-    ? { fileListPathKey: (...args) => { normalized++; return fileListPathKey(...args); } }
-    : mainRequire(id) });
+  const stubs = {
+    './src/main/viewer/file-lists-path': {
+      fileListPathKey: (...args) => { normalized++; return fileListPathKey(...args); },
+    },
+  };
+  const ctx = mainIndex({ require: id => {
+    if (Object.hasOwn(stubs, id)) return stubs[id];
+    const stubId = Object.keys(stubs).find(key => path.basename(key) === path.basename(id));
+    if (stubId) throw new Error(`Required specifier "${id}" does not match stub "${stubId}"`);
+    return mainRequire(id);
+  } });
   ctx.fileListsSnapshot('memory');
   const result = delta(1000);
   result.manifest = result.manifest.map(([id, signature]) => [path.resolve(`repo/.claude/${id}.md`), signature]);
@@ -129,6 +137,7 @@ test('saving one indexed path does not normalize every indexed ID again', async 
   await ctx.applyFileListIndex('memory', result, () => true);
   normalized = 0;
   ctx.invalidateFtsSignature('memory', result.upserts[0].id);
+  assert.ok(normalized >= 1, `path normalization stub was not used (${normalized} calls)`);
   assert.ok(normalized <= 2, `one save normalized ${normalized} paths`);
   assert.equal(ctx.fileListsSnapshot('memory').indexed.filter(([, signature]) => signature === null).length, 1);
 });
@@ -228,7 +237,7 @@ test('a successful apply clears bounded whole-type invalidation for the next sna
 });
 
 test('path keys fold Windows case and separators while preserving POSIX case', () => {
-  const { fileListPathKey } = require('../file-lists-path');
+  const { fileListPathKey } = require('../src/main/viewer/file-lists-path');
   const file = path.resolve('repo/.claude/Note.md');
   assert.equal(fileListPathKey(file, 'win32'), file.replace(/\\/g, '/').toLowerCase());
   assert.equal(fileListPathKey(file, 'linux'), file.replace(/\\/g, '/'));

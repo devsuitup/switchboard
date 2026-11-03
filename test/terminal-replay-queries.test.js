@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { createCanvas } = require('@napi-rs/canvas');
 const { setupTerminalDom } = require('./terminal-manager-harness');
-const { appendToOutputBuffer, MAX_BUFFER_SIZE } = require('../output-buffer');
+const { appendToOutputBuffer, MAX_BUFFER_SIZE } = require('../src/main/terminals/output-buffer');
 const { removeCursorPositionQueries, splitReplayQuery } = require('../public/terminal-replay-queries');
 
 const queries = [

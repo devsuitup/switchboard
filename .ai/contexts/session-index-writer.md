@@ -26,6 +26,46 @@ The worker path uses path.join(__dirname,'workers',...). package.json already sh
 root *.js and workers/**/* and unpacks better-sqlite3 and node-pty through
 the normal dependency packaging. No native rebuild is introduced.
 
+The optional `onSessionsChanged(ids, change)` observer runs after the write ACK
+and, for a cache computation, after the final continuation apply. Observer
+exceptions are caught and logged through the facade's `log.warn` (console by
+default); they neither reject committed commands nor trigger stale-write retries.
+The observer catch also accepts `null` and `undefined` thrown values, logging
+their string representation. Direct `upsertCachedSessions` commands and recorded
+upsert effects capture indexed folders before submission using `getCachedFolder`
+(folder only; `null` means absent), independently for each upsert occurrence,
+without a per-plan folder overlay. Once any occurrence
+differs from the indexed folder, its id remains in the invalidation set even if a
+later occurrence restores the original folder.
+
+This capture is not ordered against commands already queued in the writer. Current
+upserts go through the serialized cache-computation path; direct folder moves use
+deletes. A future direct upsert overlapping a queued folder change could capture a
+stale previous folder and misclassify the notification. Supporting that path would
+require writer-ordered capture (for example, previous folders returned in the ACK).
+
+An existing session whose folder changes reports its id without `upsertOnly`,
+invalidating even an
+available transcript memo (for example, a remote alias before its mirror exists).
+Other upserts report deduplicated ids with `{ upsertOnly: true }`.
+Direct `deleteCachedSession`
+commands and recorded session-delete effects report deduplicated ids without an
+upsert flag. A mixed batch reports deletions first, then upserts in a separate
+call, so available sessions upserted in the same folder keep their memo. Changed
+folder ids join the deletion invalidation call and are excluded from the upsert-only
+call. Notification plans are published only after ACK and final continuation apply;
+failed attempts discard their plans. Direct `deleteCachedFolder`,
+`cleanupWorktree` and `dropRemoteFolder` commands, or a recorded `deleteCachedFolder`
+effect, report `null` once for full invalidation instead of per-session calls.
+Other commands/effects do not notify, including `touchCachedModified` and
+`setCachedFileSize`. Computations (`refreshFolder`, `releaseLiveSession`,
+`dropFolderRows`, `buildProjectsFromCache`, scanned-folder writes and Projects
+worker effect application) notify only according to the effects they record.
+Main forwards both arguments to Agents to invalidate transcript availability
+after the indexed path is readable. Rejected commands do not notify; a rejected
+multi-chunk command may already have committed earlier chunks, as described below.
+See `bg-agents.md` and `test/session-index-writer-882.test.js` (#882).
+
 Issue #740 adds nullable `session_cache.fileSize INTEGER` in writable schema
 reconciliation. Existing rows and metadata remain intact; missing sizes are
 filled by refresh. The size travels through cache upsert effects
@@ -36,6 +76,31 @@ query adapter record and locally apply this effect before writer admission. Main
 Projects workers retain their readonly connections.
 
 ## Wire contract and failure
+
+Writer transaction BUSY diagnostics (#898) preserve the existing code-prefix
+classification, four attempts and asynchronous 20/50/100 ms backoff. Each retry
+increments `retries` for the submitted command name; the final failed attempt
+increments `exhaustions` instead. Counts aggregate across chunks of that command
+name (including `effects`), not individual nested effects. An unref'd 60-second
+timer sends `{busyCounts:{command:{retries,exhaustions}}}` only for nonzero
+intervals, then resets the counters. The transport client logs one `info` line
+through the facade's logger (electron-log in main; console by default). The
+injected `onBusyCounts(counts)` callback passes through the facade to the client;
+main emits `session-index-writer.busy` with null session id and payload `{ counts }`
+when `TRACE.on` is enabled. Closing the writer stops this timer and
+flushes any nonempty partial-minute counts before `db.closeDb()` and its
+checkpoint. The flush resets the counters; idle closes are silent. Forced
+worker termination cannot flush counts that have not reached the client.
+
+Main's readonly db.js facade wraps store read functions once. A thrown code
+beginning with `SQLITE_BUSY` logs one `warn` line naming the called store function
+and the first frame outside db.js of the wrapper's own stack (the caller of the read, not the store frame that threw), then rethrows the same error without a
+retry.
+The logger defaults to console; db.js never imports electron-log. The writer
+facade injects its logger once the readonly backend is ready through
+`setReadLogger(log)` (electron-log in main).
+Settings mirror reads stay in memory; fresh settings reads use the wrapper.
+Other readonly worker connections and connection bootstrap are unchanged.
 
 Requests are {id,command,args}; replies are {id,result,settings} or
 {id,error:{message,code},settings}. Bootstrap sends {ready,settings,searchFtsRecreated}.

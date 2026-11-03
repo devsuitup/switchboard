@@ -14,9 +14,9 @@ interactive shell records it in its history like any command the user typed.
 
 | File | Role |
 |---|---|
-| `plain-terminal-shell.js` | `plainTerminalLaunch()`: args, env and the fallback line per shell. `ensureInitFiles()`: writes the generated startup files. The files' content. |
+| `src/main/terminals/plain-terminal-shell.js` | `plainTerminalLaunch()`: args, env and the fallback line per shell. `ensureInitFiles()`: writes the generated startup files. The files' content. |
 | `main.js` (`open-terminal`, `isPlainTerminal` branch) | Builds the base env, asks `plainTerminalLaunch()`, spawns what it returns, types `launch.typed` 300 ms after the spawn when it is not null. |
-| `shell-profiles.js` | `shellArgs()`: the args every other spawn uses (`-l -i` for bash, zsh and fish). |
+| `src/main/terminals/shell-profiles.js` | `shellArgs()`: the args every other spawn uses (`-l -i` for bash, zsh and fish). |
 | `test/plain-terminal-shell.test.js` | Args and env per shell, the generated files run by real bash and zsh, the `main.js` wiring. |
 
 ## Where the generated files live

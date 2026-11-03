@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { versionOf, soleEol } = require('./git-changes-file');
+const { versionOf, soleEol } = require('./src/main/changes/git-changes-file');
 
 function asEditorText(text) {
   return typeof text === 'string' ? text.replace(/\r\n?/g, '\n') : '';
@@ -103,7 +103,7 @@ function createPanelSaveHandlers(deps) {
  * {getKnownProjectPaths() -> iterable, invalidateFtsSignature(kind), onError(err)}
  */
 function createMainPanelSaves({ getKnownProjectPaths, invalidateFtsSignature, onError }) {
-  const validator = require('./ipc-path-validator');
+  const validator = require('./src/main/shared/ipc-path-validator');
   return createPanelSaveHandlers({
     isSensitivePath: validator.isSensitivePath,
     resolveAllowedMemoryPath: (literal) => validator.resolveAllowedMemoryPath(literal, [...getKnownProjectPaths()]),

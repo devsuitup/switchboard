@@ -14,7 +14,7 @@ const {
   KEYBOARD_ROLES,
   windowFrameOptions,
   applicationMenuTemplate,
-} = require('../window-frame');
+} = require('../src/main/app/window-frame');
 const { initWindowStrip } = require('../public/window-strip');
 
 const MAIN_SRC = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
@@ -255,7 +255,7 @@ test('the menu button opens the application menu under itself', () => {
 
 // --- Zoom keys, whatever the layout ---
 
-const { zoomKey, nextZoomLevel, ZOOM_MIN_LEVEL, ZOOM_MAX_LEVEL, menuPopupPoint } = require('../window-frame');
+const { zoomKey, nextZoomLevel, ZOOM_MIN_LEVEL, ZOOM_MAX_LEVEL, menuPopupPoint } = require('../src/main/app/window-frame');
 const key = (k, code, mods = {}) => ({ type: 'keyDown', key: k, code, control: false, meta: false, alt: false, shift: false, ...mods });
 
 test('zoom keys are read by the character produced, on US and AZERTY alike', () => {

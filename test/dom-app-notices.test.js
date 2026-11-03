@@ -144,7 +144,7 @@ test('leaving hover does not resume a focused notice, including focus moving bet
   assert.equal(notice.isConnected, false);
 });
 
-test('the shipped page has an empty polite live region before notices are loaded and keeps it after dismissal', t => {
+test('the shipped page keeps an empty polite notice host before loading and after dismissal', t => {
   const html = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
   const dom = new JSDOM(html);
   t.after(() => dom.window.close());
@@ -156,10 +156,13 @@ test('the shipped page has an empty polite live region before notices are loaded
   const { window, document } = setup(t);
   const persistent = document.getElementById('app-notices');
   assert.ok(persistent);
+  assert.equal(persistent.getAttribute('aria-live'), 'polite');
   window.showAppNotice({ id: 'live', message: 'Saved.' });
+  assert.equal(persistent.querySelector('.app-notice').getAttribute('role'), 'status');
   window.clearAppNotice('live');
   assert.equal(document.getElementById('app-notices'), persistent);
   assert.equal(persistent.childElementCount, 0);
+  assert.equal(persistent.getAttribute('aria-live'), 'polite');
 });
 
 for (const selector of ['.app-notice-dismiss', '.app-notice-action']) {

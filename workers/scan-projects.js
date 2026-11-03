@@ -4,7 +4,8 @@ const path = require('path');
 const { getFolderIndexMtimeMs } = require('../folder-index-state');
 const { deriveProjectPath } = require('../derive-project-path');
 const { setRemappedProjectReader } = require('../encode-project-path');
-const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessionId } = require('../read-session-file');
+const { readSessionFile, enumerateSessionFiles, mergeBridgeGroups, subagentSessionId, isCanonicalWorkflowPath } = require('../read-session-file');
+const { classifyTranscriptPath } = require('../subagent-attribution');
 
 const PROJECTS_DIR = workerData.projectsDir;
 const REMAPS = workerData.remaps && typeof workerData.remaps === 'object' ? workerData.remaps : {};
@@ -25,9 +26,9 @@ function readFolderFromFilesystem(folder) {
   const sessions = [];
   const indexMtimeMs = getFolderIndexMtimeMs(folderPath);
 
-  for (const { filePath, parentSessionId } of enumerateSessionFiles(folderPath)) {
+  for (const { filePath, parentSessionId, workflowRunId } of enumerateSessionFiles(folderPath)) {
     try {
-      const s = readSessionFile(filePath, key, projectPath, { parentSessionId });
+      const s = readSessionFile(filePath, key, projectPath, { parentSessionId, workflowRunId });
       if (s) sessions.push(s);
     } catch {}
   }
@@ -45,12 +46,9 @@ function readFolderFromFilesystem(folder) {
 
 // rel is POSIX-separated (remote inventory, not the local fs) -- see
 // .ai/contexts/session-cache.md ("Remote hosts file-level rescan").
-function sessionIdFromRel(rel, parentSessionId) {
-  const parts = String(rel).split('/');
-  const filename = parts[parts.length - 1];
-  if (!parentSessionId) return path.basename(filename, '.jsonl');
-  const m = filename.match(/^agent-(.+)\.jsonl$/);
-  return m ? subagentSessionId(parentSessionId, m[1]) : null;
+function sessionIdFromRel(rel, classified) {
+  if (!classified.parentSessionId) return path.basename(rel, '.jsonl');
+  return classified.agentId ? subagentSessionId(classified.parentSessionId, classified.agentId) : null;
 }
 
 // File-subset scan for the remote path -- see .ai/contexts/session-cache.md
@@ -66,21 +64,26 @@ function readFolderFileSubsetFromFilesystem(folder, files, existingRows) {
   const goneIds = [];
   const scanFiles = new Set(files || []);
   for (const rel of scanFiles) {
-    const parts = String(rel).split('/');
-    let parentSessionId = null;
-    if (parts.length === 3 && parts[1] === 'subagents') parentSessionId = parts[0];
-    else if (parts.length === 2) parentSessionId = parts[0];
+    const classified = classifyTranscriptPath(rel);
+    if (!classified) continue;
+    if (classified.workflowRunId) {
+      const rootId = 'agent-' + classified.agentId;
+      if ((existingRows || []).some(row => row.sessionId === rootId && !row.parentSessionId)
+        && !fs.existsSync(path.join(folderPath, rootId + '.jsonl')) && !goneIds.includes(rootId)) goneIds.push(rootId);
+    }
+    const parts = rel.split(/[\\/]/);
     const filePath = path.join(folderPath, ...parts);
 
     try {
       fs.statSync(filePath);
     } catch {
-      const sessionId = sessionIdFromRel(rel, parentSessionId);
+      const sessionId = sessionIdFromRel(rel, classified);
       if (sessionId) goneIds.push(sessionId);
       continue;
     }
+    if (!isCanonicalWorkflowPath(folderPath, classified)) continue;
     try {
-      const s = readSessionFile(filePath, key, projectPath, { parentSessionId });
+      const s = readSessionFile(filePath, key, projectPath, classified);
       if (s) freshRows.push(s);
     } catch {}
   }

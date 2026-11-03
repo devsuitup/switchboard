@@ -2,7 +2,7 @@
 
 const claude = require('./claude');
 const { assertHarness } = require('./contract');
-const { parseFolderKey } = require('../remote-hosts');
+const { parseFolderKey } = require('../src/main/remote/remote-hosts');
 
 const HARNESSES = { [claude.id]: assertHarness(claude) };
 const DEFAULT_HARNESS = claude.id;

@@ -2,7 +2,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { init } = require('../bg-agents-ipc');
+const { init } = require('../src/main/bg-agents/bg-agents-ipc');
 
 function fakeIpc() {
   const handlers = new Map();

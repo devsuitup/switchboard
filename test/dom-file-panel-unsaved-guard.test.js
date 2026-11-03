@@ -11,7 +11,7 @@ const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 const { registerPanelTerminals } = require('./terminal-manager-harness');
 const { EventEmitter } = require('node:events');
-const { createUnsavedGuard } = require('../unsaved-guard');
+const { createUnsavedGuard } = require('../src/main/app/unsaved-guard');
 const { loadAppFunctions } = require('./app-source');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -232,7 +232,7 @@ for (const [from, to] of [['close', 'quit'], ['quit', 'update']]) {
     const ctx = setup();
     try {
       exitRuntime(ctx);
-      const { inventory, runExitHandoffs } = require('../session-exit');
+      const { inventory, runExitHandoffs } = require('../src/main/app/session-exit');
       const ipcMain = new EventEmitter();
       const handlers = new Map();
       ipcMain.handle = (name, fn) => handlers.set(name, fn);

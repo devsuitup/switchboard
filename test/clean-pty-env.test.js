@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { cleanEnv } = require('../clean-env');
+const { cleanEnv } = require('../src/main/shared/clean-env');
 
 const SESSION_MARKERS = [
   'CLAUDECODE',

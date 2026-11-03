@@ -11,7 +11,7 @@ const {
   createComposerState,
   noteUserInput,
   isComposerEmpty,
-} = require('../composer-state');
+} = require('../src/main/terminals/composer-state');
 
 /** Feed every chunk in order into a fresh state and return it. */
 function feed(chunks, now = 1000) {

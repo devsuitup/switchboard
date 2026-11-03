@@ -4,7 +4,35 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+## v0.0.103 — 2026-11-03
+
+### New
+- Stop all conversations in a project folder, including its worktrees, with one confirmation that marks mid-turn work. Conversations running background jobs are kept unless you explicitly choose to stop those too; failed stops offer Retry, and an unreachable host is tried once. (#843)
+- Mark a conversation as unread from its sidebar row, archive eligible sessions under **older** with one confirmation, and find text in **View messages** with Ctrl+F. Open, active, live-elsewhere and remote sessions alive on their host are kept; message search keeps your place during live updates and supports Enter, Shift+Enter and Escape. (#819)
+
+### Changed
+- Large session lists refresh with less overhead. (#742)
+- Switchboard uses less CPU in the background: busy spinners pause while the window is hidden or unfocused and resume when it is visible and focused. (#544)
+- **Stop session** in a terminal header or grid card now stops every running part of the conversation, with the same confirmation and refusals as its sidebar row. (#917)
+- Opening a conversation from the sidebar now resumes its newest part instead of an older part waiting to restore. (#918)
+- Unexpected application errors now share one notice with repeat counts and an **Open log** button; the app keeps running and the log may hold details. Notices survive a window reload, dismissed errors stay dismissed, and screen readers announce new errors without repeating count updates. (#896, #932)
+
 ### Fixed
+- Right-clicking a session row opens its menu again, and archiving a folder while sessions are still indexing shows its notice instead of failing. (#1014)
+- Terminal replies that Switchboard sends late no longer reach tmux panes as stray `;276;0c` text. (#1011)
+- Local commands in a live **View messages**, including expanded subagent transcripts, keep their output together when it arrives in a later update. (#986, #990)
+- Sessions Switchboard did not start — background conversations, attached in a tab or not, and sessions started in another terminal — now show their running subagent count and activity indicator. (#552)
+- Removing or disabling your last remote host now removes its sessions from the list, as it already did when other hosts remained. (#983)
+- A scheduled task that is running now counts as a running session: the running-sessions filter keeps it, it moves up with the other running sessions of its project and schedule group, and hovering its icon shows **Scheduled run in progress**. An open **View messages** of a running scheduled task, or of a session running elsewhere, updates as the transcript grows. (#814)
+- Live remote sessions with very large transcripts now appear in the session list and show their turn state. (#699)
+- Closing or stopping a local terminal tab on Windows ends its processes and opened windows (force-closed windows lose unsaved work), closing the shell or Claude normally first; recognized background agents keep running. If terminal cleanup becomes unavailable, closing a tab uses the normal terminal close; hidden processes may remain when quitting the app. (#897)
+- The session list no longer stops updating, or shows a continued conversation as two separate entries, when that conversation's transcript is large. (#891)
+- In Agents, finished jobs sharing a live conversation keep separate selections and action errors. Selection follows a conversation into its job, and Transcript becomes available as soon as indexing finishes and is rechecked after worktree or remote-folder removal; when it opens the live session instead of a job's earlier transcript, the detail explains this. (#530, #882)
+- Workflow agents appear under the session that started them, grouped by run, instead of as separate sessions; entries an older build listed separately locally or on a remote host are regrouped. (#875, #886)
+- The sessions list no longer redraws when nothing in it changed; exit labels stay current and waiting ages update every 30 seconds. Remote host confirmation ages and retry countdowns also update every 30 seconds, including search results and archived projects; projects at the same path on different hosts keep their own status, controls, order, orphan expansion and grouped grid headings. (#543, #871, #915, #921)
+- Grid headings and card labels name the remote host, like the sidebar. (#925)
+- Remote hosts stay connected and keep refreshing when a local session-state read fails. (#701)
+- Failed scheduled runs now leave a persistent notice with the schedule name, exit code and what to check, even after Run now has shown its launch check mark. While the app window exists, repeated cron failures share one notice with a count and the latest error. (#707)
 - A legacy session name carried across successive session id changes no longer overwrites a newer name you chose. (#696)
 - Sessions keep their buffered terminal output, file-panel shell and grid controls when their session id changes. Switching sessions quickly also keeps the active session's shell label in the header. (#529)
 - Resizing the window in grid view waits for the resize to settle and refreshes only visible cards; single view keeps resizing live. Cards refresh once as they scroll into view, and returning to the window updates offscreen terminal sizes too. (#545)

@@ -152,8 +152,14 @@ test('N1: terminal and document shortcuts and PTY input stop under an open quest
 test('N1: xterm protocol replies reach every PTY while a modal is open', async () => {
   const ctx = setup();
   const entries = [];
+  const liveOutput = async (entry, data) => {
+    ctx.window.handleTerminalData(entry.session.sessionId, data);
+    ctx.window.flushTerminalBuffer(entry.session.sessionId);
+    await new Promise(resolve => entry.terminal.write('', resolve));
+  };
   try {
-    vm.runInContext(fs.readFileSync(require.resolve('@xterm/xterm'), 'utf8'), ctx.context);
+    const filename = require.resolve('@xterm/xterm');
+    vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx.context, { filename });
     const Xterm = ctx.window.Terminal;
     ctx.window.Terminal = class extends Xterm {
       loadAddon() {}
@@ -163,16 +169,17 @@ test('N1: xterm protocol replies reach every PTY while a modal is open', async (
     for (const [sessionId, options] of [['s1', {}], ['background', {}], ['shell', { panel: true }]]) {
       entries.push(ctx.window.createTerminalEntry({ sessionId }, options));
     }
+    ctx.window.gridViewActive = true;
     const pending = ctx.window.appConfirm({ danger: true });
     for (const entry of entries) {
-      await new Promise(resolve => entry.terminal.write('\x1b[6n\x1b[c\x1b[?1$p', resolve));
+      await liveOutput(entry, '\x1b[6n\x1b[c\x1b[?1$p');
     }
     assert.deepEqual(ctx.writes, ['s1', 'background', 'shell'].flatMap(id => [
       [id, '\x1b[1;1R'], [id, '\x1b[?1;2c'], [id, '\x1b[?1;2$y'],
     ]));
     ctx.doc.querySelector('.choice-dialog-cancel').click();
     await pending;
-    await new Promise(resolve => entries[0].terminal.write('\x1b[6n', resolve));
+    await liveOutput(entries[0], '\x1b[6n');
     assert.deepEqual(ctx.writes.at(-1), ['s1', '\x1b[1;1R']);
   } finally {
     for (const entry of entries) entry.terminal.dispose();

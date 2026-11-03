@@ -28,7 +28,7 @@ const {
   TMUX_WINDOW_KILLED_MARKER,
   PID_TERM_MARKER,
   PID_FORCE_MARKER,
-} = require('../remote-stop');
+} = require('../src/main/remote/remote-stop');
 
 const silentLog = { info() {}, warn() {}, error() {} };
 

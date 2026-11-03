@@ -27,7 +27,7 @@ function agentsEscapeAttr(value) {
 }
 
 function agentsEntryKey(entry) {
-  return entry.kind === 'background' ? 'bg:' + entry.id : 'int:' + entry.sessionId;
+  return entry.id ? 'bg:' + entry.id : 'int:' + entry.sessionId;
 }
 
 function agentDisplayName(entry) {
@@ -341,7 +341,12 @@ function applyAgentsSnapshot(snapshot) {
       entry.hosted, entry.attachedHere, entry.conversationOwn, entry.status, entry.waitingFor]).sort(([a], [b]) => a.localeCompare(b)));
   const previous = activityFields(bgActivityEntries);
   const previousJobs = new Map(bgActivityEntries);
+  const selected = agentsSelectedEntry();
   agentsRoster = Array.isArray(snapshot && snapshot.roster) ? snapshot.roster : [];
+  if (selected && !selected.id && !agentsRoster.some(e => agentsEntryKey(e) === agentsSelectedKey)) {
+    const matches = agentsRoster.filter(e => e.id && e.sessionId?.toLowerCase() === selected.sessionId?.toLowerCase());
+    if (matches.length === 1) agentsSelectedKey = agentsEntryKey(matches[0]);
+  }
   agentsDaemonReachable = !snapshot || snapshot.daemonReachable !== false;
   agentsCliAvailable = snapshot?.cliAvailable === true;
   agentsCliEntryCount = snapshot?.cliEntryCount || 0;
@@ -518,6 +523,7 @@ function renderAgentDetail(entry) {
       </span>
     </div>
     ${entry.detail ? `<div class="agents-detail-line">${escapeHtml(entry.detail)}</div>` : ''}
+    ${entry.transcriptSource === 'live-session' ? `<div class="agents-detail-line">Transcript opens the live session, not the job's pre-compaction file.</div>` : ''}
     ${meta.length ? `<div class="agents-detail-meta">${escapeHtml(meta.join(' · '))}</div>` : ''}
     ${entry.kind === 'interactive' ? `<div class="agents-detail-meta">${escapeHtml(entry.cwd || '')}${entry.status ? ' · ' + escapeHtml(entry.status) : ''}</div>` : ''}
     ${fan ? `<div class="agents-detail-section">Subagents<ul>${fan}</ul></div>` : ''}

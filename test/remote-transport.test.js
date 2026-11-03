@@ -16,8 +16,8 @@ const { Readable } = require('stream');
 const {
   createSshTransport, parseInventory, parseSessions, splitListOutput,
   LIST_COMMAND, ALIVE_MARKER_PREFIX, SESSIONS_MARKER, MAX_SESSION_DESCRIPTORS, MAX_SESSION_DESCRIPTOR_BYTES,
-} = require('../remote-transport');
-const { resolveSshPath, resolveScpPath } = require('../remote-ssh-binary');
+} = require('../src/main/remote/remote-transport');
+const { resolveSshPath, resolveScpPath } = require('../src/main/remote/remote-ssh-binary');
 
 function fakeChild() {
   const child = new EventEmitter();

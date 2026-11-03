@@ -51,8 +51,8 @@ test('main-wiring source check: terminal-input is registered and calls handleTer
     'terminal-input must call handleTerminalInput(activeSessions, sessionId, data, Date.now())',
   );
   assert.match(
-    mainSrc, /require\('\.\/terminal-input'\)/,
-    'main.js must require ./terminal-input',
+    mainSrc, /require\('\.\/src\/main\/terminals\/terminal-input'\)/,
+    'main.js must require ./src/main/terminals/terminal-input',
   );
 });
 
@@ -90,15 +90,15 @@ test('main-wiring source check: terminal-input carries the pty.input probe, unde
 
 test('main-wiring source check: trigger-watcher.start is handed createTriggerContext(...)', () => {
   const args = argsOf(
-    "require('./trigger-watcher').start", "require('./trigger-watcher').start",
+    "require('./src/main/triggers/trigger-watcher').start", "require('./src/main/triggers/trigger-watcher').start",
   );
   assert.match(
     args.trim(), /^createTriggerContext\s*\(/,
     'trigger-watcher.start must receive the result of createTriggerContext',
   );
   assert.match(
-    mainSrc, /require\('\.\/trigger-context'\)/,
-    'main.js must require ./trigger-context',
+    mainSrc, /require\('\.\/src\/main\/triggers\/trigger-context'\)/,
+    'main.js must require ./src/main/triggers/trigger-context',
   );
   assert.match(
     args, /getLiveDescriptor:\s*\(\s*id\s*\)\s*=>\s*cliSessionState\.findLiveProcess\(\s*id\s*\)/,
@@ -162,8 +162,8 @@ test('main-wiring source check: no PTY method is called bare on a session', () =
     'main.js must reach a session pty through pty-ops, not call it directly: ' + found.join(', '),
   );
   assert.match(
-    mainSrc, /require\('\.\/pty-ops'\)/,
-    'main.js must require ./pty-ops',
+    mainSrc, /require\('\.\/src\/main\/terminals\/pty-ops'\)/,
+    'main.js must require ./src/main/terminals/pty-ops',
   );
   assert.match(
     mainSrc, /\bsetPtyOpLogger\(\s*log\s*\)/,
@@ -181,7 +181,7 @@ test('main-wiring source check: terminal-resize delegates all resizes to the gua
     mainSrc, /createTerminalResizeHandler\(\s*activeSessions\s*(?:,|\))/,
     'the shared handler must use the current session registry',
   );
-  const resizeSrc = fs.readFileSync(path.join(__dirname, '..', 'terminal-resize.js'), 'utf8');
+  const resizeSrc = fs.readFileSync(path.join(__dirname, '../src/main/terminals/terminal-resize.js'), 'utf8');
   assert.match(resizeSrc, /require\('\.\/pty-ops'\)/);
   assert.doesNotMatch(resizeSrc, /\bsession\.pty\.(resize|kill|write)\s*\(/);
 });
@@ -212,7 +212,7 @@ test('main-wiring source check: remote-stop-session only drops/kills and reconci
 });
 
 test('main-wiring source check: the keystroke path writes through pty-ops', () => {
-  const inputSrc = fs.readFileSync(path.join(__dirname, '..', 'terminal-input.js'), 'utf8');
+  const inputSrc = fs.readFileSync(path.join(__dirname, '../src/main/terminals/terminal-input.js'), 'utf8');
   assert.doesNotMatch(
     inputSrc, /\bsession\.pty\.write\s*\(/,
     'terminal-input.js must write through writePty, not straight at the pty',

@@ -13,9 +13,10 @@ function resolveSessionStop(session, { attach = false } = {}) {
   return { remote: false, alias: null, attach: false, confirmText: 'Stop this session?' };
 }
 
-async function planSessionStop(row, { attach = false, retryTargets, backgroundJobs, jobStop = false } = {}) {
+async function planSessionStop(row, { attach = false, retryTargets, backgroundJobs, jobStop = false, ignoreUnknownIdleJobs = false } = {}) {
   const targets = [];
   const excluded = [];
+  const unchecked = [];
   for (const id of new Set(retryTargets ? retryTargets.map(target => target.sessionId) : rowSessionIds(row))) {
     let member = id === row.sessionId ? row : {
       ...row, sessionId: id,
@@ -67,6 +68,10 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
     }
     const check = await checkBackgroundJob(id, backgroundJobs);
     if (check?.known === false || (jobStop && check?.known !== true)) {
+      if (ignoreUnknownIdleJobs && storedActivitySnapshot(id, row)?.liveness !== 'alive') {
+        unchecked.push({ sessionId: id, reason: check?.reason || 'unknown' });
+        continue;
+      }
       excluded.push({ sessionId: id, reason: `cannot tell whether a background job is running this part (${check?.reason || 'unknown'})` });
     } else if (check?.job) {
       if (jobStop) {
@@ -84,7 +89,7 @@ async function planSessionStop(row, { attach = false, retryTargets, backgroundJo
       excluded.push({ sessionId: id, reason: 'a process outside this window keeps running; stop it in its own terminal' });
     }
   }
-  return describeSessionStopPlan(row, targets, excluded);
+  return { ...describeSessionStopPlan(row, targets, excluded), unchecked };
 }
 
 function describeSessionStopPlan(row, targets, excluded) {
@@ -269,4 +274,145 @@ async function stopBeforeArchive(session, { unreachable, plan } = {}) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { resolveSessionStop, planSessionStop, planSessionDetach, planSessionArchive, isRemoteSessionAlive, stopBeforeArchive };
+}
+
+async function validateSessionStopPlan(session, planned) {
+  const targets = [];
+  const excluded = [...planned.excluded];
+  for (const target of planned.targets) {
+    if (target.job && !target.notHosted) {
+      try {
+        const check = await window.api.checkBgAgentVerb('stop', target.jobId);
+        if (!check?.ok) throw new Error(check?.error || 'The background job check is unavailable');
+      } catch (error) {
+        excluded.push({ sessionId: target.sessionId, reason: error?.message || 'The background job check is unavailable' });
+        continue;
+      }
+    }
+    targets.push(target);
+  }
+  return describeSessionStopPlan(session, targets, excluded);
+}
+
+async function executeSessionStopTargets(targets, unreachable = new Map()) {
+  const failures = [];
+  const failedTargets = [];
+  let stopped = 0;
+  for (const target of targets) {
+    const id = target.sessionId;
+    const entry = openSessions.get(id);
+    const previousDetachRequested = entry?.detachRequested;
+    try {
+      if (target.job && !target.notHosted) {
+        const result = target.attachedHere ? await runAttachedJobVerb('stop', target.jobId, id)
+          : await window.api.bgAgentVerb('stop', target.jobId);
+        if (!result?.ok) throw new Error(result?.error || 'The background stop backend is unavailable');
+        target.jobStopped = true;
+      }
+      if (!target.job || target.attachedHere) {
+        if (target.remote && unreachable.has(target.alias)) throw new Error(unreachable.get(target.alias));
+        const backend = target.remote ? window.api.remoteStopSession : window.api.stopSession;
+        if (typeof backend !== 'function') throw new Error('The stop backend is unavailable');
+        if (target.remote) {
+          if (entry) delete entry.detachRequested;
+        }
+        const result = target.remote ? await backend(target.alias, id) : await backend(id);
+        if (target.remote && result?.hostUnreachable) {
+          const reason = result.error || 'The host is unreachable';
+          unreachable.set(target.alias, reason);
+          throw new Error(reason);
+        }
+        if (!result || (result.ok === false && result.error !== (target.remote ? 'session not found on that host' : 'not running'))) {
+          throw new Error(result?.error || 'The stop backend is unavailable or returned no result');
+        }
+      }
+      if (target.job && !target.notHosted && typeof refreshAgentsRoster === 'function') refreshAgentsRoster();
+    } catch (error) {
+      if (target.remote && entry) entry.detachRequested = previousDetachRequested;
+      failures.push(`Part ${id} ${target.where}: ${error?.message || error || 'unknown error'}`);
+      failedTargets.push(target);
+      continue;
+    }
+    if (target.remote && typeof applyRemoteStopped === 'function') applyRemoteStopped(id);
+    activePtyIds.delete(id);
+    if (!gridViewActive && activeSessionId === id) {
+      setActiveSession(null);
+      terminalHeader.style.display = 'none';
+      placeholder.style.display = '';
+    }
+    stopped++;
+  }
+  return { failures, failedTargets, stopped };
+}
+
+async function confirmAndStopProjectFolder(project, retryRows) {
+  const operation = 'Stop all';
+  const noticeId = sessionActionNoticeId(operation, project);
+  try {
+    const alias = project.remoteAlias || null;
+    const groups = cachedAllProjects.filter(p => (p.remoteAlias || null) === alias
+      && (p.projectPath === project.projectPath || worktreeParentPath(p.projectPath) === project.projectPath));
+    if (!groups.some(p => p.projectPath === project.projectPath)) throw new Error('The folder is no longer in the index');
+    const rows = groups.flatMap(p => p.sessions.filter(row => !row.parentSessionId));
+    const backgroundJobs = new Map();
+    const entries = [];
+    for (const row of rows) {
+      const retry = retryRows?.find(entry => entry.row.sessionId === row.sessionId);
+      if (retryRows && !retry) continue;
+      const planned = await planSessionStop(row, { jobStop: true, backgroundJobs, retryTargets: retry?.targets, ignoreUnknownIdleJobs: true });
+      const plan = await validateSessionStopPlan(row, planned);
+      const name = cleanDisplayName(row.name || row.aiTitle || row.summary) || row.sessionId;
+      const snapshot = mergedRowSnapshot(rowSessionIds(row), rowHeadId(row), storedActivitySnapshot(rowHeadId(row), row), row);
+      const background = planned.targets.some(target => target.job && !target.notHosted);
+      entries.push({ row, plan, name, background, unchecked: planned.unchecked || [], midTurn: !!snapshot?.busy });
+    }
+    const candidates = entries.filter(entry => entry.plan.targets.length);
+    const refused = entries.flatMap(entry => entry.plan.excluded.map(part => `${entry.name} (part ${part.sessionId}): ${part.reason}.`));
+    if (!candidates.length) {
+      if (refused.length) throw new Error(refused.join('\n'));
+      const unchecked = entries.flatMap(entry => entry.unchecked);
+      showAppNotice({ id: noticeId, message: unchecked.length
+        ? `Nothing is running to stop. ${unchecked.length} idle part${unchecked.length === 1 ? '' : 's'} could not be checked for background jobs (${[...new Set(unchecked.map(part => part.reason))].join('; ')}).`
+        : 'Nothing is running to stop.' });
+      return;
+    }
+    const hasBackground = candidates.some(entry => entry.background);
+    const message = [
+      'Stop the conversations in this folder, including its nested worktrees? Their processes end; the conversations are kept and can be resumed.',
+      ...candidates.map(entry => `${entry.name}${entry.midTurn ? ' (mid-turn)' : ''}: ${entry.plan.targets.map(target => target.where).join(', ')}${entry.background ? '; runs in the background and is refused unless you explicitly include background jobs' : ''}.`),
+      ...refused,
+    ];
+    let force = false;
+    if (hasBackground) {
+      const answer = await showChoiceDialog({ title: 'Stop all?', message, danger: true, initialFocus: 'cancel',
+        confirmLabel: 'Stop', selectedId: retryRows?.some(entry => entry.targets.some(target => target.job && !target.notHosted && !target.jobStopped)) ? 'force' : 'others', options: [
+          { id: 'force', label: 'Stop all including background jobs' },
+          { id: 'others', label: 'Stop the others only' },
+        ] });
+      if (!answer) return;
+      force = answer.choice === 'force';
+    } else if (!await appConfirm({ title: 'Stop all?', message, confirmLabel: 'Stop', danger: true })) return;
+    const failures = [];
+    const failedRows = [];
+    const unreachable = new Map();
+    let stopped = 0;
+    for (const entry of candidates) {
+      if (entry.background && !force) continue;
+      const result = await executeSessionStopTargets(entry.plan.targets, unreachable);
+      stopped += result.stopped;
+      failures.push(...result.failures.map(error => `${entry.name}: ${error}`));
+      if (result.failedTargets.length) failedRows.push({ row: entry.row, targets: result.failedTargets });
+    }
+    if (failures.length) {
+      showSessionActionFailure(operation, project, failures.join('\n'),
+        'Check the connection or the session in its own terminal (the Agents view for a background session), then retry Stop all.',
+        () => confirmAndStopProjectFolder(project, failedRows));
+    } else if (!force && candidates.every(entry => entry.background)) {
+      showAppNotice({ id: noticeId, message: `Kept ${candidates.length} conversation${candidates.length === 1 ? '' : 's'} with background jobs; nothing else was running.` });
+    } else clearAppNotice(noticeId);
+    if (stopped) refreshSidebar();
+  } catch (error) {
+    showSessionActionFailure(operation, project, error, 'Check the folder and its sessions, then retry Stop all.',
+      () => confirmAndStopProjectFolder(project, retryRows));
+  }
 }

@@ -17,7 +17,7 @@ delete process.env.SWITCHBOARD_DATA_DIR;
 
 const {
   scanSchedules, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry,
-} = require('../schedule-runner');
+} = require('../src/main/schedules/schedule-runner');
 const { encodeProjectPath } = require('../encode-project-path');
 
 const PROJECTS = path.join(ROOT, '.claude', 'projects');

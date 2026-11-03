@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { extractFunction } = require('./app-source');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
-const { attachBlockReason, sendBlockReason, computeHostProfile } = require('../remote-host-profile');
+const { attachBlockReason, sendBlockReason, computeHostProfile } = require('../src/main/remote/remote-host-profile');
 
 const mainPath = path.join(__dirname, '..', 'main.js');
 const annotateSource = extractFunction(fs.readFileSync(mainPath, 'utf8'), 'annotateRemoteAttachable');

@@ -7,14 +7,28 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 
+const LAZY_STUBS = new Set(['./session-touched-files']);
+const pendingLazyStubs = new WeakMap();
+
 function loadShipped(filename, imports, platform = 'win32') {
   const module = { exports: {} };
   const shippedRequire = createRequire(path.join(__dirname, '..', filename));
+  const pending = new Set(Object.keys(imports));
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', filename), 'utf8'), {
     module, exports: module.exports, Buffer, TextDecoder, process: { platform },
-    require: name => Object.hasOwn(imports, name) ? imports[name] : shippedRequire(name),
+    require: name => {
+      if (!Object.hasOwn(imports, name)) return shippedRequire(name);
+      pending.delete(name);
+      return imports[name];
+    },
   }, { filename });
+  assert.deepEqual([...pending].filter(name => !LAZY_STUBS.has(name)), [], `${filename} must load its stubs`);
+  if (pending.size) pendingLazyStubs.set(module.exports, pending);
   return module.exports;
+}
+
+function assertLazyStubsLoaded(api) {
+  assert.deepEqual([...(pendingLazyStubs.get(api) || [])], [], 'lazy stubs must be loaded');
 }
 
 test('round 3: Changes fixtures expand short temporary directory spellings', () => {
@@ -66,10 +80,10 @@ for (const shortPart of ['file', 'root', 'both', 'case']) {
       readFileSync: () => disk,
       writeFileSync: (p, bytes) => { assert.equal(p, path.win32.join(reportedRoot, 'f.txt')); disk = bytes; },
     };
-    const resolver = loadShipped('resolve-path-on-disk.js', { fs: fakeFs, path: path.win32 });
-    const api = loadShipped('git-changes-file.js', {
-      fs: fakeFs, path: path.win32, './resolve-path-on-disk': resolver,
-      './ipc-path-validator': { isSensitivePath: () => false },
+    const resolver = loadShipped('src/main/shared/resolve-path-on-disk.js', { fs: fakeFs, path: path.win32 });
+    const api = loadShipped('src/main/changes/git-changes-file.js', {
+      fs: fakeFs, path: path.win32, '../shared/resolve-path-on-disk': resolver,
+      '../shared/ipc-path-validator': { isSensitivePath: () => false },
       './session-touched-files': { resolveTouchedPath: p => ({ path: p }) },
     });
     let probes = 0;
@@ -94,6 +108,7 @@ for (const shortPart of ['file', 'root', 'both', 'case']) {
     assert.equal(disk.toString(), 'saved\n');
     assert.ok(nativeCalls.includes(absolutePath));
     assert.ok(nativeCalls.includes(reportedRoot));
+    assertLazyStubsLoaded(api);
   });
 }
 
@@ -110,10 +125,10 @@ for (const [platform, pathApi, root, file] of [
       readFileSync: () => Buffer.from('current\n'),
       writeFileSync: () => { writes++; },
     };
-    const api = loadShipped('git-changes-file.js', {
+    const api = loadShipped('src/main/changes/git-changes-file.js', {
       fs: fakeFs, path: pathApi,
-      './resolve-path-on-disk': { resolveOnDisk: p => p, isInsideDir: () => true },
-      './ipc-path-validator': { isSensitivePath: () => false },
+      '../shared/resolve-path-on-disk': { resolveOnDisk: p => p, isInsideDir: () => true },
+      '../shared/ipc-path-validator': { isSensitivePath: () => false },
       './session-touched-files': { resolveTouchedPath: p => ({ path: p }) },
     }, platform);
     const runGit = async args => {
@@ -125,13 +140,14 @@ for (const [platform, pathApi, root, file] of [
     const saved = await api.writeTouchedChangesFile({ absolutePath: file, content: 'saved\n', version: api.versionOf(Buffer.from('current\n')), maxBytes: 1024 }, { runGit });
     assert.equal(saved.reason, 'outside');
     assert.equal(writes, 0);
+    assertLazyStubsLoaded(api);
   });
 }
 
 test('Touched refuses a missing short-spelled file without falling back to an editor or saving', async () => {
   const root = 'C:\\Users\\Long Profile\\Repo';
   const file = 'C:\\Users\\LONGPR~1\\Repo\\missing.txt';
-  const api = loadShipped('git-changes-file.js', {
+  const api = loadShipped('src/main/changes/git-changes-file.js', {
     fs: {
       realpathSync: Object.assign(p => p, { native: p => {
         if (p === file) throw Object.assign(new Error('missing file'), { code: 'ENOENT' });
@@ -140,8 +156,8 @@ test('Touched refuses a missing short-spelled file without falling back to an ed
       lstatSync: () => { throw Object.assign(new Error('missing file'), { code: 'ENOENT' }); },
     },
     path: path.win32,
-    './resolve-path-on-disk': { resolveOnDisk: p => p === file ? null : p, isInsideDir: () => true },
-    './ipc-path-validator': { isSensitivePath: () => false },
+    '../shared/resolve-path-on-disk': { resolveOnDisk: p => p === file ? null : p, isInsideDir: () => true },
+    '../shared/ipc-path-validator': { isSensitivePath: () => false },
     './session-touched-files': { resolveTouchedPath: p => ({ path: p }) },
   });
   const runGit = async args => {
@@ -155,6 +171,7 @@ test('Touched refuses a missing short-spelled file without falling back to an ed
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'missing');
   }
+  assertLazyStubsLoaded(api);
 });
 
 for (const reason of ['repo', 'git-dir']) {
@@ -168,10 +185,10 @@ for (const reason of ['repo', 'git-dir']) {
       } }),
       lstatSync: () => ({ isSymbolicLink: () => false }),
     };
-    const api = loadShipped('git-changes-file.js', {
+    const api = loadShipped('src/main/changes/git-changes-file.js', {
       fs: fakeFs, path: path.win32,
-      './resolve-path-on-disk': loadShipped('resolve-path-on-disk.js', { fs: fakeFs, path: path.win32 }),
-      './ipc-path-validator': { isSensitivePath: () => false },
+      '../shared/resolve-path-on-disk': loadShipped('src/main/shared/resolve-path-on-disk.js', { fs: fakeFs, path: path.win32 }),
+      '../shared/ipc-path-validator': { isSensitivePath: () => false },
       './session-touched-files': { resolveTouchedPath: p => ({ path: p }) },
     });
     const runGit = async args => {
@@ -185,5 +202,6 @@ for (const reason of ['repo', 'git-dir']) {
       assert.equal(result.ok, false);
       assert.equal(result.reason, reason);
     }
+    assertLazyStubsLoaded(api);
   });
 }

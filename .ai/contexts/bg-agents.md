@@ -9,18 +9,18 @@ attaches/stops/respawns/deletes/dispatches through the CLI. User doc:
 
 | File | Role |
 |---|---|
-| `bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `dispatchRefusal`, `isHostedJob`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
-| `bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobCheck`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
+| `src/main/bg-agents/bg-agents-roster.js` | Pure: `parseJobState`, `parseCliList`, `mergeRoster`, `dispatchArgs`, `dispatchRefusal`, `isHostedJob`, `parseDispatchOutput`, `JOB_STATES`, `JOB_ID_RE` |
+| `src/main/bg-agents/bg-agents.js` | Watchers over `~/.claude/jobs/*/state.json`, descriptor subscription, `reconcile()` through `claude agents --json --all`, `runVerb`, `dispatch`, `liveJobCheck`, `onChange`; `projectRoot`/`worktreeRoot` on every entry, cached |
 | `project-root.js` | `resolveProjectRoots(cwd)`: the `.claude/worktrees` pattern, else one `git rev-parse`; never throws |
 | `delete-session-guard.js` | `deleteSessionRefusal`: the fail-closed liveness check `delete-session` runs first |
-| `bg-agents-ipc.js` | `get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`, the `bg-agents-changed` push; `respawnForHandoff` on the returned unsubscribe function |
-| `bg-worker-liveness.js` | Pure: `classifyWorkerLiveness`, `liveWorkerDescriptor` (see "Job states") |
+| `src/main/bg-agents/bg-agents-ipc.js` | `get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`, the `bg-agents-changed` push; `respawnForHandoff` on the returned unsubscribe function |
+| `src/main/bg-agents/bg-worker-liveness.js` | Pure: `classifyWorkerLiveness`, `liveWorkerDescriptor` (see "Job states") |
 | `sidebar-bg-sessions.js` | `mergeLocalBackgroundSessions`: local background rows and continuation merging for the sidebar |
 | `session-exit.js` | `runExitHandoffs`, `EXIT_BUSY_WAIT_MS` (see "Exit handoff batch") |
 | `cli-session-state.js` | `onDescriptorsChanged`, `readAllDescriptors`, `kind`/`jobId` on live-elsewhere |
 | `bridge-session-id.js` | Shared case-sensitive suffix for job `cse_` and descriptor `session_` bridge ids |
-| `pty-ops.js` | `detachPty` |
-| `bg-handoff.js` | Eligibility, `/bg` submission, continuation/descriptor proof, bounded exit hold |
+| `src/main/terminals/pty-ops.js` | `detachPty` |
+| `src/main/bg-agents/bg-handoff.js` | Eligibility, `/bg` submission, continuation/descriptor proof, bounded exit hold |
 | `main.js` | `runClaudeCommand`; the `type: 'attach'` branch of `open-terminal`; detach in `stop-session`; `bgAgents.init` and `bg-agents-ipc` wiring; renderer unsubscribe on window close, `bgAgents.stop()` on app quit |
 | `public/agents-view.js` | The view; `agentJobIsLive`; `groupAgentEntries` (Group by); `bgAgentSessionIds` for the sidebar badge |
 | `public/resume-guard.js` | A live `kind: 'bg'` descriptor answers `{ attach, cwd }` |
@@ -365,7 +365,7 @@ one-megabyte chunks to keep the event loop available for large resumed
 conversations. Only a target absent from that snapshot, in the appended tail,
 can authorize the re-key. A partial record already present
 at spawn and a rewritten prefix cannot become fresh evidence. The tab must
-also have submitted `/bg` itself (`terminal-input.js` tracks the composer),
+also have submitted `/bg` itself (`src/main/terminals/terminal-input.js` tracks the composer),
 or have a confirmed button handoff. Ctrl+C and the CLI's cancellation message
 revoke the typed command, while an empty confirmation Enter preserves it.
 Another process backgrounding the same conversation cannot take over its PTY.
@@ -568,6 +568,19 @@ Any descriptor holding a row's session id supplies `conversationPid`, even
 when its kind is `bg` and the job file already says finished. Such a row keeps
 its job state but cannot offer destructive verbs while that pid is live.
 
+Roster keys follow job identity: every row with a job id uses `bg:<job-id>`,
+including a promoted interactive row. An external row without a job keeps
+`int:<session-id>`. Multiple finished jobs may share the live UUID or bridge
+suffix; each retains its metadata, selection, pending action and errors under
+its own key. This avoids choosing an arbitrary winning job and keeps a job's
+selection stable when its conversation changes between background and interactive.
+When a selected external conversation becomes a unique job row, selection follows
+its session UUID (case-insensitively) to that job. Multiple matching jobs remain
+ambiguous, so no arbitrary job receives the external selection.
+When promotion changes a previously present UUID, detail says "Transcript opens the live session,
+not the job's pre-compaction file." The old transcript path is cleared so it
+cannot accidentally establish availability for the live UUID.
+
 The job watcher starts with the app so the sidebar can read `getCachedJobs`
 without opening Agents or scanning job files on project loads. A done job with
 a live bg descriptor retains the roster's sidebar bg marker. The local projects
@@ -596,15 +609,55 @@ is not a descriptor's UUID. `liveElsewhereChecked(..., { includeOwnProcesses:
 true })` explicitly bypasses both the has-PTY shortcut and own-process filtering
 for destructive-verb checks. Ordinary resume checks keep excluding own processes.
 
-Roster rebuilds do not query SQLite or stat transcript files. For a job or a
-merged row, Transcript calls `runVerb('transcript', id)` through the shipped IPC;
-main lazily checks the same cached folder/path as `read-session-jsonl` and returns
-the UUID or a clear missing/unindexed-file error without spawning. A retry sees
-newly indexed files without rebuilding the roster. External rows with no job id
-use the ordinary read-only viewer directly. The ordinary
+Roster rebuilds memoize `transcriptAvailable` by session UUID and the job's
+transcript-path input. Main's `resolveTranscriptPath` resolves the cached folder
+only on a memo miss; the service stats that resolved JSONL path with
+`throwIfNoEntry: false`. Without that resolver, the service stats the job's known
+path. Missing paths,
+directories and lookup/stat errors return false. Unchanged descriptor/job rebuilds
+repeat neither the SQLite lookup nor the stat, including while Agents is closed.
+Changed UUID/path inputs get new entries; disappeared rows are evicted, and
+`reconcile()` and `stop()` clear the memo.
+
+The index writer calls `onSessionsChanged` after successful cache effects or
+direct cache writes are acknowledged, and after final continuation apply for
+computed effects. Same-folder upserts invalidate matching unavailable entries only,
+using `{ upsertOnly: true }`. An upsert moving an existing id to another indexed
+folder invalidates it regardless of availability, like a session deletion.
+Matching is case-insensitive; non-string ids in an invalidation batch are ignored
+without discarding its valid ids. Folder deletion, worktree cleanup
+and remote-folder removal invalidate all entries with `null`. Size and modified-time
+effects send no notification or roster rebuild. Mixed batches keep upsert and
+deletion notifications separate. Observer exceptions are logged without rejecting
+committed writes. This covers watcher refresh, scan and Projects worker
+effects, including reindex. A memo invalidation schedules the ordinary 250 ms
+roster push, enabling a disabled Transcript button without the 30 s CLI poll.
+The existing projects watcher feeds `writer.refreshFolder` after its 500 ms
+debounce; scan results also pass through the writer. A filesystem event alone is
+too early because SQLite may not contain the path yet. Commit notifications are
+cheaper than new hover/click IPC and reliable for disabled buttons, which do not
+dispatch clicks. Failed index commits leave the memo untouched.
+
+A running session whose JSONL disappears can retain its indexed row through
+`keepIfRunning`. Without a row-deletion notification, its Transcript button can
+stay enabled until the next explicit/periodic reconcile clears the memo. Clicking
+Transcript rechecks the file without the memo and reports its absence. This gap
+also applies when the surviving row is upserted in the same folder, since already
+available entries are intentionally retained on same-folder upserts.
+
+The renderer disables Transcript with its missing-file tooltip. For a job row,
+Transcript calls `runVerb('transcript', id)` through the shipped IPC; main repeats
+an uncached check and returns the UUID or a clear missing/unindexed-file error
+without spawning. External rows with no job id
+use the ordinary read-only viewer directly, with the same availability flag. The ordinary
 `read-session-jsonl` handler catches file-read errors if a file disappears
 after the roster snapshot. `test/bg-agents-522.test.js` exercises the shipped
 IPC and renderer functions against disposable job/descriptor/transcript files.
+`test/bg-agents-882.test.js` counts lookups/stats across repeated rebuilds and
+checks invalidation and missing files. `test/session-index-writer-882.test.js`
+checks the post-commit notification boundary. `test/dom-agents-view.test.js`
+covers both selection transitions, no-previous-session wording, and a writer
+commit enabling the same selected Transcript button through a real roster push.
 
 ## Data flow
 
@@ -1098,7 +1151,7 @@ recovery Enter is sent.
 
 On the no-job route, the written `/bg` is recorded in `session.composerState` through
 `noteUserInput` before the write, and the Enter after it, as
-`terminal-input.js` does for typed keys. A dangling lone-Esc partial is discarded
+`src/main/terminals/terminal-input.js` does for typed keys. A dangling lone-Esc partial is discarded
 before noting the plain `/bg` write, so a previous Esc (including Esc Esc)
 cannot consume its slash as Alt+/. Other partial sequences keep their ordinary
 parser handling. If that text write throws or returns false, the previous
@@ -1150,7 +1203,7 @@ lingering CLI would keep the old tab's process alive.
 Output subscriptions and descriptor-change waits exist only during handoff;
 100 ms bounded waits also cover transcript-only changes, with no new idle poll.
 
-`tab-input-lock.js` shares the existing trigger FIFO by session object. The
+`src/main/terminals/tab-input-lock.js` shares the existing trigger FIFO by session object. The
 action refuses while a trigger holds or queues that tab; triggers admitted
 during handoff wait under their existing deadline. This prevents automation
 text or Enter from interleaving with `/bg`. Typed terminal answers retain their

@@ -854,18 +854,18 @@ test('lazy merged row: a running member is reattached under its own id', async (
   } finally { h.destroy(); }
 });
 
-test('lazy merged row: a click on the row resumes its dormant member, and the row is no longer marked', async () => {
-  const h = setupMerged();
+test('lazy merged row: a click resumes its head instead of an older dormant member, and the row is no longer marked', async () => {
+  const h = setupMerged({ members: ['B', 'C'], head: 'C' });
   try {
     h.indexMerged();
     await h.fns.tickRestorePlanner();
     h.row('A').click();
     for (let j = 0; j < 5; j++) await settle();
-    assert.deepEqual(h.openTerminalCalls, ['B']);
+    assert.deepEqual(h.openTerminalCalls, ['C']);
     assert.deepEqual(h.dormantIds(), ['x']);
     assert.equal(h.row('A').classList.contains('dormant'), false);
     await h.fns.persistWorkingSet();
-    assert.deepEqual(h.savedIds(), ['B', 'x']);
+    assert.deepEqual(h.savedIds(), ['C', 'x']);
   } finally { h.destroy(); }
 });
 
@@ -1091,7 +1091,7 @@ test('lazy merged row: a second click, or the session keys on a dormant sibling,
     for (const ok of [false, true]) {
       const label = `${second}, ${ok ? 'B opens' : 'B fails'}`;
       let finishOpen;
-      const h = setupMerged({ saved: ['B', 'C', 'x'], members: ['B', 'C'], openResult: () => new Promise((resolve) => { finishOpen = resolve; }) });
+      const h = setupMerged({ saved: ['B', 'C', 'x'], members: ['B', 'C'], head: 'B', openResult: () => new Promise((resolve) => { finishOpen = resolve; }) });
       try {
         h.indexMerged();
         await h.fns.tickRestorePlanner();

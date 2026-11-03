@@ -82,7 +82,7 @@ test('Claude delegates fork transcript, continuation, state, job and binary cont
   for (const key of ['deriveProjectPath', 'resolveWorktreePath']) assert.equal(claude[key], projects[key]);
   for (const key of ['resolveContinuations', 'resolveContinuationsSync']) assert.equal(claude[key], require('../session-continuations')[key]);
   assert.equal(claude.liveElsewhere, require('../cli-session-state').liveElsewhere);
-  assert.equal(claude.getCachedJobs, require('../bg-agents').getCachedJobs);
+  assert.equal(claude.getCachedJobs, require('../src/main/bg-agents/bg-agents').getCachedJobs);
   assert.equal(claude.resolveWindowsLaunch, require('../claude-binary').resolveWindowsClaude);
   assert.equal(claude.classifyTitleActivity, require('../classify-title-activity').classifyTitleActivity);
   assert.deepEqual(claude.classifyTitleActivity('plain title'), { busy: false, idle: false, via: null });

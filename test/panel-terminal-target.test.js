@@ -6,7 +6,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolvePanelTerminalCwd, isPanelShellSession, REMOTE_REFUSAL } = require('../panel-terminal-target');
+const { resolvePanelTerminalCwd, isPanelShellSession, REMOTE_REFUSAL } = require('../src/main/terminals/panel-terminal-target');
 
 test('a local session resolves to its own working directory (worktree included)', () => {
   const calls = [];

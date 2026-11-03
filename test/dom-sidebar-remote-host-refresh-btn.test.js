@@ -34,7 +34,7 @@ test('clicking the remote host refresh action targets only its own alias and fli
 
     ctx.sidebar.renderProjects([remoteProject()], true);
 
-    const fId = ctx.sidebar.folderId('/srv/supervision');
+    const fId = ctx.sidebar.folderId('/srv/supervision', 'planificator');
     const header = ctx.document.getElementById('ph-' + fId);
     const refreshBtn = header.querySelector('.remote-host-refresh-btn');
     assert.ok(refreshBtn, 'a remote project header must carry a reconnect action');
@@ -59,7 +59,7 @@ test('the reconnect action never bubbles into the header collapse toggle', () =>
     ctx.window.api.remoteHostRefresh = () => new Promise(() => {}); // never resolves in this test
     ctx.sidebar.renderProjects([remoteProject()], true);
 
-    const fId = ctx.sidebar.folderId('/srv/supervision');
+    const fId = ctx.sidebar.folderId('/srv/supervision', 'planificator');
     const header = ctx.document.getElementById('ph-' + fId);
     const refreshBtn = header.querySelector('.remote-host-refresh-btn');
 

@@ -4,7 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { deriveProjectPath } = require('./derive-project-path');
-const { isAllowedMemoryPath: _isAllowedMemoryPath } = require('./ipc-path-validator');
+const { isAllowedMemoryPath: _isAllowedMemoryPath } = require('./src/main/shared/ipc-path-validator');
 const { scanMdFiles: scanMarkdown, acceptMdFile: acceptMarkdown } = require('./scan-md-files');
 
 function getKnownProjectPaths(options) {

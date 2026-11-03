@@ -8,10 +8,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { JSDOM } = require('jsdom');
 const { loadAppFunctions } = require('./app-source');
-const { mergeRoster, parseJobState } = require('../bg-agents-roster');
-const bgAgents = require('../bg-agents');
+const { mergeRoster, parseJobState } = require('../src/main/bg-agents/bg-agents-roster');
+const bgAgents = require('../src/main/bg-agents/bg-agents');
 const cliSessionState = require('../cli-session-state');
-const bgIpc = require('../bg-agents-ipc');
+const bgIpc = require('../src/main/bg-agents/bg-agents-ipc');
 
 const SID = 'aaaaaaaa-1234-4321-abcd-123456789abc';
 const BRIDGE = 'cse_0189wicjnQ3j6mppaWVWuntM';
@@ -20,7 +20,7 @@ const OTHER_SID = 'bbbbbbbb-1234-4321-abcd-123456789abc';
 const JOB = 'aaaaaaaa';
 const PID = 987654;
 
-function fixture(t, { state = 'stopped', live = true, own = false, ownDescriptor = false, bridge = false, unknown = false, transcriptExists } = {}) {
+function fixture(t, { state = 'stopped', live = true, own = false, ownDescriptor = false, bridge = false, unknown = false, resolveTranscriptPath } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-522-'));
   const jobs = path.join(dir, 'jobs');
   const sessions = path.join(dir, 'sessions');
@@ -40,7 +40,7 @@ function fixture(t, { state = 'stopped', live = true, own = false, ownDescriptor
   cliSessionState.init({ dir: sessions, activeSessions, onIdle() {}, isProcessAlive: () => live, readProcStartMany: async () => new Map(), platform: 'win32' });
   const calls = [];
   bgAgents.init({
-    jobsDir: jobs, homeDir: dir, cliSessionState, resolveProjectRoots: async () => null, transcriptExists,
+    jobsDir: jobs, homeDir: dir, cliSessionState, resolveProjectRoots: async () => null, resolveTranscriptPath,
     makeIsOwnPid: () => pid => ownDescriptor && pid === PID,
     runClaude: async (args) => {
       calls.push(args);
@@ -111,18 +111,20 @@ for (const verb of ['rm', 'respawn']) {
   });
 }
 
-test('[522r2] roster defers transcript checks until the IPC click and sees a newly indexed file', { timeout: 9000 }, async (t) => {
+test('[530] roster exposes transcript availability and the IPC rechecks a newly indexed file', { timeout: 9000 }, async (t) => {
   let indexed = false;
   let checks = 0;
-  const f = fixture(t, { live: false, transcriptExists: () => { checks++; return indexed; } });
-  await f.handlers.get('get-bg-agents')({});
-  await bgAgents.reconcile();
-  assert.equal(checks, 0, 'roster rebuilding must not query the transcript index');
+  const f = fixture(t, { live: false, resolveTranscriptPath: () => { checks++; return indexed ? f.transcript : null; } });
+  fs.writeFileSync(f.transcript, 'indexed transcript');
+  const missing = await f.handlers.get('get-bg-agents')({});
+  assert.equal(missing.roster[0].transcriptAvailable, false);
+  const beforeClick = checks;
   const invoke = () => f.handlers.get('bg-agent-verb')({}, 'transcript', JOB);
   assert.equal((await invoke()).ok, false);
   indexed = true;
   assert.equal((await invoke()).ok, true, 'index completion needs no roster rebuild');
-  assert.equal(checks, 2);
+  assert.equal(checks, beforeClick + 2);
+  assert.equal((await bgAgents.reconcile()).roster[0].transcriptAvailable, true);
 });
 
 test('[522] IPC transcript handles a missing file, then an existing file', { timeout: 9000 }, async (t) => {
@@ -158,6 +160,73 @@ function renderer(t) {
       'formatTokens', 'formatAgentAge', 'agentsEscapeAttr', 'runAgentVerb', 'refreshAgentsRoster'],
   }) };
 }
+
+for (const bridge of [false, true]) {
+  test(`[530] two finished jobs sharing one live ${bridge ? 'bridge' : 'UUID'} have independent row keys`, async (t) => {
+    const f = fixture(t, { bridge });
+    const second = 'bbbbbbbb';
+    fs.mkdirSync(path.join(f.jobs, second));
+    fs.copyFileSync(path.join(f.jobs, JOB, 'state.json'), path.join(f.jobs, second, 'state.json'));
+    const { roster } = await f.handlers.get('get-bg-agents')({});
+    const r = renderer(t);
+    assert.equal(roster.length, 2, 'both jobs retain their metadata');
+    const keys = roster.map(r.agentsEntryKey);
+    assert.equal(new Set(keys).size, roster.length, 'every roster row has a unique key');
+    vm.runInContext(`agentsPendingVerbs.add('${keys[0]}'); agentsVerbErrors.set('${keys[0]}', 'first job error')`, r.context);
+    const detail = r.window.document.createElement('div');
+    detail.innerHTML = r.renderAgentDetail(roster[1]);
+    assert.equal(detail.querySelector('[data-verb="resume"]').disabled, false, 'pending state stays on the first job');
+    assert.equal(detail.querySelector('.agents-detail-error'), null, 'errors stay on the first job');
+  });
+}
+
+test('[530] real missing transcript disables the button, appearance enables it, disappearance disables it', async (t) => {
+  const f = fixture(t, { live: false });
+  const r = renderer(t);
+  for (const present of [false, true, false]) {
+    if (present) fs.writeFileSync(f.transcript, '');
+    else if (fs.existsSync(f.transcript)) fs.unlinkSync(f.transcript);
+    const { roster } = await f.handlers.get('get-bg-agents')({});
+    assert.equal(roster[0].transcriptAvailable, present, 'availability follows the file without reading its contents');
+    const detail = r.window.document.createElement('div');
+    detail.innerHTML = r.renderAgentDetail(roster[0]);
+    const button = detail.querySelector('[data-verb="transcript"]');
+    assert.equal(button.disabled, !present);
+    assert.equal(button.title, present ? '' : 'Transcript does not exist or is not available yet');
+  }
+});
+
+test('[530] bridge merged row explains and opens the live transcript rather than the old job file', async (t) => {
+  let livePath;
+  const f = fixture(t, { bridge: true, resolveTranscriptPath: id => path.join(livePath, id.toLowerCase() + '.jsonl') });
+  livePath = f.dir;
+  fs.writeFileSync(f.transcript, 'old pre-compaction transcript');
+  let snapshot = await f.handlers.get('get-bg-agents')({});
+  assert.equal(snapshot.roster[0].transcriptAvailable, false, 'the old job file cannot enable the live transcript');
+  fs.writeFileSync(path.join(f.dir, OTHER_SID + '.jsonl'), 'live transcript');
+  snapshot = await bgAgents.reconcile();
+  const entry = snapshot.roster[0];
+  assert.equal(entry.transcriptAvailable, true);
+  const r = renderer(t);
+  const detail = r.window.document.createElement('div');
+  detail.innerHTML = r.renderAgentDetail(entry);
+  assert.match(detail.textContent, /Transcript opens the live session, not the job's pre-compaction file\./);
+  const opened = [];
+  r.window.api = { bgAgentVerb: (verb, id) => f.handlers.get('bg-agent-verb')({}, verb, id) };
+  r.window.showJsonlViewer = session => opened.push(session.sessionId.toLowerCase());
+  await r.runAgentVerb('transcript', entry);
+  assert.deepEqual(opened, [OTHER_SID]);
+  detail.innerHTML = r.renderAgentDetail({ id: JOB, sessionId: SID, kind: 'background', state: 'stopped' });
+  assert.doesNotMatch(detail.textContent, /Transcript opens the live session/);
+});
+
+test('[530] bridge merged row cannot stat the old job transcript as its live transcript', async (t) => {
+  const f = fixture(t, { bridge: true });
+  fs.writeFileSync(f.transcript, 'old transcript');
+  const { roster } = await f.handlers.get('get-bg-agents')({});
+  assert.equal(roster[0].transcriptAvailable, false);
+  assert.equal((await f.handlers.get('bg-agent-verb')({}, 'transcript', JOB)).ok, false);
+});
 
 test('[522] renderer disables destructive buttons and names the live pid', { timeout: 9000 }, (t) => {
   const r = renderer(t);

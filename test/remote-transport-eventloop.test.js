@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { spawn } = require('child_process');
 
-const TRANSPORT = path.join(__dirname, '..', 'remote-transport.js').replace(/\\/g, '\\\\');
+const TRANSPORT = path.join(__dirname, '../src/main/remote/remote-transport.js').replace(/\\/g, '\\\\');
 
 const PROBE = `
 const { EventEmitter } = require('events');

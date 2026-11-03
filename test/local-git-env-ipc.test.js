@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { loadProjectActionHandlers } = require('./project-action-harness');
-const { localGitEnv } = require('../git-changes-runner');
+const { localGitEnv } = require('../src/main/changes/git-changes-runner');
 const { savedEnv } = require('./git-discovery-fixture');
 
 test('local worktree IPCs pass the C environment on every Git attempt', async t => {

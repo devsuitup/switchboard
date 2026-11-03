@@ -28,18 +28,19 @@ async function shutdownProducers() {
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { setRemappedProjectReader } = require('./encode-project-path');
 const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
-const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups } = require('./read-session-file');
+const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups, isCanonicalWorkflowPath } = require('./read-session-file');
+const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
-const { parseFolderKey, joinFolderKey } = require('./remote-hosts');
-const { isPanelShellSession } = require('./panel-terminal-target');
+const { parseFolderKey, joinFolderKey } = require('./src/main/remote/remote-hosts');
+const { isPanelShellSession } = require('./src/main/terminals/panel-terminal-target');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
-const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp, continuationRollup } = require('./session-continuations');
+const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp, continuationMtime, continuationRollup } = require('./session-continuations');
 const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds: resolveConversationMemberIds, scopedConversationRows } = require('./sidebar-bg-sessions');
 const { projectionScope } = require('./public/session-projection-diagnostics');
 const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
-const { isHostedJob } = require('./bg-agents-roster');
-const { state: TRACE, trace } = require('./activity-trace');
+const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
+const { state: TRACE, trace } = require('./src/main/shared/activity-trace');
 
 /**
  * Session cache module.
@@ -87,13 +88,14 @@ function changedContinuation(row, file, stat) {
   let stamp;
   try { stamp = JSON.parse(row.continuationIndex)?.stamp; } catch {}
   return stamp ? !matchesContinuationStamp(stamp, stat)
-    : row.fileMtime !== new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString();
+    : row.fileMtime !== continuationMtime(stat);
 }
 
 async function scanContinuationFile(file, id, previous, chunkBytes = CONTINUATION_BYTE_BUDGET) {
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new RangeError('chunkBytes must be a positive integer');
   chunkBytes = Math.min(chunkBytes, CONTINUATION_BYTE_BUDGET);
   let serialized = previous, index, stat, grew;
+  let bytes = 0;
   do {
     serialized = scanCachedContinuation(file, id, serialized, chunkBytes);
     if (serialized === null) return null;
@@ -106,6 +108,11 @@ async function scanContinuationFile(file, id, previous, chunkBytes = CONTINUATIO
       continuationFiles.delete(file);
       return null;
     }
+    if (index.bytes <= bytes && (grew || (!index.complete && index.bytes < index.size))) {
+      continuationFiles.delete(file);
+      return null;
+    }
+    bytes = index.bytes;
   } while (grew || (!index.complete && index.bytes < index.size));
   return { serialized, stat };
 }
@@ -177,7 +184,7 @@ function scanCachedContinuation(file, id, previous, maxBytes, stat = fs.statSync
   const after = fs.statSync(file, { bigint: true });
   if (!sameContinuationStamp(stat, after)) { continuationFiles.delete(file); return null; }
   serialized = JSON.stringify({ ...JSON.parse(serialized), stamp: continuationStamp(stat), head,
-    mtime: new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString() });
+    mtime: continuationMtime(stat) });
   rememberContinuation(file, stat, head, serialized);
   return serialized;
 }
@@ -348,8 +355,8 @@ function readFolderFromFilesystem(folder) {
   if (!projectPath) return { projectPath: null, sessions: [] };
   const sessions = [];
 
-  for (const { filePath, parentSessionId } of enumerateSessionFiles(folderPath)) {
-    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
+  for (const { filePath, parentSessionId, workflowRunId } of enumerateSessionFiles(folderPath)) {
+    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
     if (s) sessions.push(s);
   }
 
@@ -365,7 +372,7 @@ function readFolderFromFilesystem(folder) {
 // see .ai/contexts/session-cache.md ("Watcher notification rules")
 const PROJECT_ROW_FIELDS = ['sessionId', 'folder', 'projectPath', 'summary', 'firstPrompt',
   'created', 'slug', 'scheduleSlug', 'aiTitle', 'customTitle',
-  'parentSessionId', 'agentId', 'subagentType', 'description', 'bridgeSessionId',
+  'parentSessionId', 'agentId', 'subagentType', 'description', 'workflowRunId', 'bridgeSessionId',
   'mergedIntoSessionId', 'entrypoint'];
 const PROJECT_META_FIELDS = ['name', 'starred', 'archived', 'nameSource', 'nameRevision'];
 const PROJECT_ACTIVITY_FIELDS = ['modified', 'fileMtime', 'messageCount'];
@@ -454,17 +461,10 @@ function refreshFolder(folder, opts = {}) {
   if (targeted) {
     filesToScan = [];
     for (const rel of opts.files) {
-      const filePath = path.join(folderPath, rel);
-      // Derive parentSessionId for subagent paths: <folder>/<parent>/subagents/agent-X.jsonl
-      const parts = rel.split(path.sep);
-      let parentSessionId = null;
-      if (parts.length === 3 && parts[1] === 'subagents') {
-        parentSessionId = parts[0];
-      } else if (parts.length === 2) {
-        // legacy <folder>/<parent>/agent-X.jsonl layout (no subagents/ subdir)
-        parentSessionId = parts[0];
-      }
-      filesToScan.push({ filePath, parentSessionId });
+      const classified = classifyTranscriptPath(rel);
+      if (!classified || !isCanonicalWorkflowPath(folderPath, classified)) continue;
+      const filePath = path.join(folderPath, ...rel.split(/[\\/]/));
+      filesToScan.push({ filePath, ...classified });
     }
   } else {
     filesToScan = enumerateSessionFiles(folderPath);
@@ -504,11 +504,11 @@ function refreshFolder(folder, opts = {}) {
   //   - Header read failing (truncated chunk, partial JSON): fall back to a
   //     mtime-only DB touch so the sidebar still reflects activity.
 
-  for (const { filePath, parentSessionId } of filesToScan) {
+  for (const { filePath, parentSessionId, workflowRunId } of filesToScan) {
     let stat, fileMtime;
     try {
       stat = fs.statSync(filePath, { bigint: true });
-      fileMtime = new Date(Number((stat.mtimeNs + 500000n) / 1000000n)).toISOString();
+      fileMtime = continuationMtime(stat);
     } catch {
       collector.accounted.add(path.relative(folderPath, filePath));
       continue;
@@ -569,12 +569,7 @@ function refreshFolder(folder, opts = {}) {
       if (!changedSize && cachedEntry.fileMtime === fileMtime && cachedEntry.projectPath === projectPath
         && continuationIndex === cachedEntry.continuationIndex) { collector.accounted.add(relativeFile); continue; }
       // EXISTING -- header-only refresh.
-      const h = readSessionDisplayHeader(filePath, { parentSessionId });
-      if (linked) {
-        let after;
-        try { after = fs.statSync(filePath, { bigint: true }); } catch { defer(); continue; }
-        if (!sameContinuationStamp(stat, after)) { defer(); continue; }
-      }
+      const h = readSessionDisplayHeader(filePath, { parentSessionId, workflowRunId });
       collector.accounted.add(relativeFile);
       if (linked) linkedVersions.set(cachedDbId, { stat, filePath, relativeFile });
       if (h) {
@@ -599,6 +594,7 @@ function refreshFolder(folder, opts = {}) {
           aiTitle: h.aiTitle || cachedEntry.aiTitle,
           customTitle: h.tailTitle || cachedEntry.customTitle || h.headTitle,
           parentSessionId: h.parentSessionId || cachedEntry.parentSessionId,
+          workflowRunId: h.workflowRunId || cachedEntry.workflowRunId,
           agentId: h.agentId || cachedEntry.agentId,
           subagentType: h.subagentType || cachedEntry.subagentType,
           description: h.description || cachedEntry.description,
@@ -626,7 +622,7 @@ function refreshFolder(folder, opts = {}) {
     // entry / metrics / name are built AFTER merge resolution below, from
     // whatever object actually survives (a compaction mirror's raw read here
     // may still be replaced by a cutoff-filtered re-derivation, or dropped).
-    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId });
+    const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
     if (s) {
       if (!parentSessionId && s.continuationIndex) {
         const head = continuationHead(filePath, stat.size);
@@ -773,11 +769,15 @@ function reconciliationFolders(throttle) {
   if (throttle && now - lastReconcileAt < RECONCILE_THROTTLE_MS) return [];
   lastReconcileAt = now;
   const metaMap = getAllFolderMeta();
+  const ghostFolders = new Set(getAllCached().filter(row => {
+    if (row.parentSessionId || !row.sessionId.startsWith('agent-') || parseFolderKey(row.folder).alias !== null) return false;
+    try { fs.statSync(path.join(PROJECTS_DIR, row.folder, row.sessionId + '.jsonl')); return false; } catch { return true; }
+  }).map(row => row.folder));
   return fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
     .filter(d => d.isDirectory() && d.name !== '.git')
     .map(d => {
       const folder = d.name, meta = metaMap.get(folder);
-      const refresh = !meta || getFolderIndexMtimeMs(path.join(PROJECTS_DIR, folder)) > (meta.indexMtimeMs || 0)
+      const refresh = ghostFolders.has(folder) || !meta || getFolderIndexMtimeMs(path.join(PROJECTS_DIR, folder)) > (meta.indexMtimeMs || 0)
         || (meta.projectPath && !storedProjectPathMatchesFolder(meta.projectPath, folder));
       return { folder, refresh: refresh && !pendingRepairFolders().includes(folder) };
     });
@@ -953,14 +953,33 @@ function conversationMemberIds(rows, id) {
 }
 
 /** Build projects response from cached data */
-let projectsProjection = { removedInputs: {} };
+let projectsProjection = { facts: {}, removedInputs: {} };
+const workflowNames = new Map();
 
 function getProjectsProjection() { return projectsProjection; }
 
 function buildProjectsFromCache(showArchived) {
-  projectsProjection = { removedInputs: {} };
+  projectsProjection = { facts: {}, removedInputs: {} };
   const metaMap = getAllMeta(true);
   const cachedRows = scopedConversationRows(getAllCached());
+  const workflowName = row => {
+    if (!row.parentSessionId || !isWorkflowRunId(row.workflowRunId)) return null;
+    const folderPath = resolveFolderDir(row.folder);
+    if (!folderPath) return row.workflowRunId;
+    const file = path.join(folderPath, row.parentSessionId, 'workflows', row.workflowRunId + '.json');
+    let stat;
+    try { stat = fs.statSync(file); } catch { workflowNames.delete(file); return row.workflowRunId; }
+    const cached = workflowNames.get(file);
+    if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+      let title = row.workflowRunId;
+      try {
+        const snapshot = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (typeof snapshot.workflowName === 'string' && snapshot.workflowName.trim()) title = snapshot.workflowName.trim();
+      } catch {}
+      workflowNames.set(file, { title, mtimeMs: stat.mtimeMs, size: stat.size });
+    }
+    return workflowNames.get(file).title;
+  };
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
 
@@ -995,6 +1014,7 @@ function buildProjectsFromCache(showArchived) {
   const sdkOnlyProjectKeys = new Set();
 
   const cachedById = new Map(cachedRows.map(r => [r.sessionId, r]));
+  const projectionSources = new Map(cachedRows.map(row => [row.sessionId.toLowerCase(), row]));
   const { localDescriptors, localJobs } = localBackgroundState();
   const conversations = conversationGroups(cachedRows, localDescriptors, localJobs, rollup,
     { projectsDir: PROJECTS_DIR, folderMeta: getAllFolderMeta(), activeSessions });
@@ -1021,6 +1041,7 @@ function buildProjectsFromCache(showArchived) {
         proof: { kind: partIds.length > 1 ? 'continuation' : 'single', rootId, partIds, valid: !reason, reason }, filterReason } };
   };
   const exclude = (row, reason) => {
+    if (row.parentSessionId || row.type === 'terminal') return;
     const fact = projectionInputs(row, reason);
     projectsProjection.removedInputs[fact.scope + '|' + fact.rootId] = fact.inputs;
   };
@@ -1064,6 +1085,8 @@ function buildProjectsFromCache(showArchived) {
       scheduleSlug: row.scheduleSlug || null,
       aiTitle: row.aiTitle || null,
       parentSessionId: row.parentSessionId || null,
+      workflowRunId: row.workflowRunId || null,
+      workflowName: workflowName(row),
       agentId: row.agentId || null,
       subagentType: row.subagentType || null,
       description: row.description || null,
@@ -1074,7 +1097,6 @@ function buildProjectsFromCache(showArchived) {
       bridgeSessionId: row.bridgeSessionId || null,
       headSessionId,
       mergedMemberIds: orderedChildren.map(child => child.sessionId),
-      projectionFacts: projectionInputs(row),
     };
     if (!showArchived && s.archived) { exclude(row, 'archived'); continue; }
     // see .ai/contexts/subagent-observability.md ("A subagent follows its archived conversation")
@@ -1189,13 +1211,13 @@ function buildProjectsFromCache(showArchived) {
   });
   for (const proj of projects) {
     for (const session of proj.sessions) {
-      if (!session.projectionFacts) {
+      if (!session.parentSessionId && session.type !== 'terminal') {
         const group = conversations.get(session.sessionId.toLowerCase());
-        const source = cachedRows.find(row => row.sessionId.toLowerCase() === (group?.rootId || session.sessionId).toLowerCase())
+        const source = projectionSources.get((group?.rootId || session.sessionId).toLowerCase())
           || { ...session, folder: proj.folder };
-        session.projectionFacts = projectionInputs(source);
+        const fact = projectionInputs(source, session.archived ? 'archived' : null);
+        projectsProjection.facts[fact.scope + '|' + fact.rootId] = fact.inputs;
       }
-      if (session.archived) session.projectionFacts.inputs.filterReason = 'archived';
       if (!session.mergedMemberIds?.length) continue;
       session.conversationParts = [session.sessionId, ...session.mergedMemberIds].map(id => {
         const descriptor = !proj.remoteAlias && session.bgSessionId === id

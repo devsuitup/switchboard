@@ -91,12 +91,14 @@ async function build(message) {
   const defaultProjects = cache.buildProjectsFromCache(false);
   const defaultProjection = cache.getProjectsProjection();
   const allProjects = cache.buildProjectsFromCache(true);
-  const projection = { buildId: message.id, removedInputs: { ...defaultProjection.removedInputs, ...cache.getProjectsProjection().removedInputs } };
+  const allProjection = cache.getProjectsProjection();
+  const projection = { buildId: message.id, facts: { ...defaultProjection.facts, ...allProjection.facts },
+    removedInputs: { ...defaultProjection.removedInputs, ...allProjection.removedInputs } };
   for (const inputs of Object.values(projection.removedInputs)) inputs.projectsBuildId = message.id;
   const replyBytes = message.measureBytes ? {
     default: Buffer.byteLength(JSON.stringify(defaultProjects)),
     all: Buffer.byteLength(JSON.stringify(allProjects)),
-    both: Buffer.byteLength(JSON.stringify({ defaultProjects, allProjects })),
+    both: Buffer.byteLength(JSON.stringify({ defaultProjects, allProjects, projection })),
   } : null;
   return { defaultProjects, allProjects, projection, effects, keptLiveRows: cache.getProjectsWorkerRetainedRows(), rows: rows.size, reconciled, replyBytes };
 }

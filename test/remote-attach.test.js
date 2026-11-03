@@ -24,7 +24,7 @@ const {
   buildRemoteCommandArgs,
   buildClientCountProbeCommand,
   shellSingleQuote,
-} = require('../remote-attach');
+} = require('../src/main/remote/remote-attach');
 const { classifyTitleActivity } = require('../classify-title-activity');
 
 function createTestAdapter(opts) {

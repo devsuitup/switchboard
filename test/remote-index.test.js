@@ -10,8 +10,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createRemoteIndexer } = require('../remote-index');
-const { MIN_REFRESH_MS } = require('../remote-hosts');
+const { createRemoteIndexer, refreshRemoteHeadTurns } = require('../src/main/remote/remote-index');
+const { MIN_REFRESH_MS } = require('../src/main/remote/remote-hosts');
 
 test('U18/U23: all enabled aliases resolve dynamically while singular lookup stays unchanged', async () => {
   const dataDir = tmp('idx-find-aliases');
@@ -59,6 +59,272 @@ function fakeClock(start = 0) {
   fn.advance = (ms) => { t += ms; };
   return fn;
 }
+
+for (const mode of ['all', 'single']) {
+  for (const asynchronous of [false, true]) {
+    test(`${mode}: a ${asynchronous ? 'rejected' : 'thrown'} head-turn refresh leaves the host healthy`, async t => {
+      const dataDir = tmp('idx-head-turn');
+      const now = fakeClock(1000);
+      const warnings = [];
+      let syncCalls = 0;
+      let headCalls = 0;
+      const descriptor = { sessionId: 'live', pid: 42 };
+      const indexer = createRemoteIndexer({
+        dataDir, now, getHosts: () => [{ alias: 'vps' }],
+        log: { info() {}, warn: message => warnings.push(message) },
+        sync: async () => {
+          syncCalls++;
+          return { fetched: 0, unchanged: 0, removed: 0, failed: 0,
+            changedFolders: new Set(), sessions: [descriptor] };
+        },
+        refreshHeadTurns: alias => {
+          assert.equal(alias, 'vps');
+          headCalls++;
+          const error = new Error('local SQLite read failed');
+          if (asynchronous) return Promise.reject(error);
+          throw error;
+        },
+      });
+      t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+      const refresh = () => mode === 'all' ? indexer.refreshNow() : indexer.refreshHostNow('vps');
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const result = await refresh();
+        assert.deepEqual(mode === 'all' ? result.errors : result.error, mode === 'all' ? [] : null);
+        assert.deepEqual(indexer.getRemoteHostState('vps'), {
+          consecutiveFailures: 0, lastError: null, lastErrorTransport: false, attempts: attempt, nextAttemptAt: 0,
+        });
+        assert.deepEqual(indexer.getRemoteSessions('vps'), { sessions: [descriptor], at: now(), error: null });
+        now.advance(1);
+      }
+      assert.equal(syncCalls, 2, 'the next automatic refresh must not back off');
+      assert.equal(headCalls, 2);
+      assert.equal(warnings.length, 1, 'identical head-turn failures warn only once per host');
+      assert.match(warnings[0], /\[remote:vps\].*head.turn.*local SQLite read failed/);
+    });
+  }
+}
+
+for (const method of ['refreshNow', 'refreshHostNow']) {
+  test(`${method}: head-turn warnings track each host error and log recovery once`, async t => {
+    const dataDir = tmp('idx-head-turn-log');
+    const warnings = [];
+    const recoveries = [];
+    const errors = new Map([['vps', 'cache unavailable'], ['peer', 'cache unavailable']]);
+    const indexer = createRemoteIndexer({
+      dataDir, getHosts: () => [{ alias: 'vps' }, { alias: 'peer' }],
+      log: { info: message => { if (message.includes('head-turn')) recoveries.push(message); }, warn: message => warnings.push(message) },
+      sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+      refreshHeadTurns: async alias => { if (errors.has(alias)) throw new Error(errors.get(alias)); },
+    });
+    t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+    const refresh = async () => {
+      if (method === 'refreshNow') await indexer.refreshNow();
+      else for (const alias of ['vps', 'peer']) await indexer.refreshHostNow(alias);
+    };
+    await refresh();
+    await refresh();
+    assert.equal(warnings.length, 2, 'the same error is logged once for each host');
+    assert.match(warnings[0], /\[remote:vps\].*cache unavailable/);
+    assert.match(warnings[1], /\[remote:peer\].*cache unavailable/);
+    errors.set('vps', 'cache corrupt');
+    await refresh();
+    await refresh();
+    assert.equal(warnings.length, 3, 'a changed error warns again only on the affected host');
+    assert.match(warnings[2], /\[remote:vps\].*cache corrupt/);
+    errors.delete('vps');
+    await refresh();
+    await refresh();
+    assert.equal(recoveries.length, 1, 'a successful refresh logs recovery once');
+    assert.match(recoveries[0], /\[remote:vps\].*head-turn.*recovered/);
+    errors.set('vps', 'cache corrupt');
+    await refresh();
+    assert.equal(warnings.length, 4, 'success rearms warnings even for the same error');
+    assert.match(warnings[3], /\[remote:vps\].*cache corrupt/);
+    errors.clear();
+    await refresh();
+    await refresh();
+    assert.equal(recoveries.length, 3, 'each remaining failure recovers exactly once');
+  });
+}
+
+for (const method of ['refreshNow', 'refreshHostNow']) {
+  for (const identity of ['code', 'name']) {
+    test(`${method}: head-turn warnings deduplicate alternating normalised messages by error ${identity}`, async t => {
+      const dataDir = tmp('idx-head-turn-dedup');
+      const warnings = [];
+      let error;
+      const indexer = createRemoteIndexer({
+        dataDir, getHosts: () => [{ alias: 'vps' }],
+        log: { info() {}, warn: message => warnings.push(message) },
+        sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+        refreshHeadTurns: async () => { throw error; },
+      });
+      t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+      const refresh = () => method === 'refreshNow' ? indexer.refreshNow() : indexer.refreshHostNow('vps');
+      const messages = [
+        'read 12 failed at "/tmp/cache alpha/session-123.jsonl"',
+        'read 34 failed at "C:\\Temp\\cache beta\\session-456.jsonl"',
+        'read 12 failed at "/tmp/cache alpha/session-123.jsonl"',
+        'read 56 failed at \\\\server\\cache\\session-789.jsonl',
+      ];
+      for (const message of messages) {
+        error = Object.assign(new Error(message), { [identity]: 'SQLITE_BUSY' });
+        if (identity === 'code') error.name = `VariableError${warnings.length}`;
+        await refresh();
+      }
+      assert.equal(warnings.length, 1, 'A, B, A and variable digits/absolute paths of the same failure warn once');
+      assert.ok(warnings[0].endsWith(messages[0]), 'the warning retains the original diagnostic');
+      error = Object.assign(new Error(messages[0]), { [identity]: 'SQLITE_IOERR' });
+      await refresh();
+      assert.equal(warnings.length, 2, 'a different error code/name warns again even with the same message');
+      error = Object.assign(new Error(messages[0]), { [identity]: 'SQLITE_BUSY' });
+      await refresh();
+      assert.equal(warnings.length, 2, 'alternating failure identities retain their own dedup entries');
+      error = Object.assign(new Error('cache schema unavailable'), { [identity]: 'SQLITE_BUSY' });
+      await refresh();
+      assert.equal(warnings.length, 3, 'a distinct normalised message with the same code/name warns once');
+      error = Object.assign(new Error(messages[0]), { [identity]: 'SQLITE_BUSY' });
+      await refresh();
+      assert.equal(warnings.length, 3, 'returning to an earlier message does not warn again');
+    });
+  }
+}
+
+for (const remaining of [[], [{ alias: 'peer' }]]) {
+  test(`restart prunes head-turn dedup for a removed alias with ${remaining.length} remaining hosts (${remaining.length ? 'existing prune coverage' : '#888 regression'})`, async t => {
+    const dataDir = tmp('idx-head-turn-prune');
+    const warnings = [];
+    let hosts = [{ alias: 'vps' }];
+    const indexer = createRemoteIndexer({
+      dataDir, getHosts: () => hosts, timers: fakeTimers(),
+      listIndexedFolderKeys: () => [], dropFolder: async () => {},
+      log: { info() {}, warn: message => warnings.push(message) },
+      sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+      refreshHeadTurns: async alias => { if (alias === 'vps') throw Object.assign(new Error('cache unavailable'), { code: 'SQLITE_BUSY' }); },
+    });
+    t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+    await indexer.refreshHostNow('vps');
+    await indexer.refreshHostNow('vps');
+    assert.equal(warnings.length, 1);
+    hosts = remaining;
+    indexer.restart();
+    await indexer.refreshNow();
+    assert.equal(warnings.length, 1, 'removing an alias does not manufacture a warning');
+    hosts = [{ alias: 'vps' }];
+    indexer.restart();
+    await new Promise(resolve => setImmediate(resolve));
+    await indexer.refreshHostNow('vps');
+    assert.equal(warnings.length, 2, 'the same failure warns again when the removed host is re-added');
+  });
+}
+
+for (const method of ['refreshNow', 'refreshHostNow']) {
+  for (const [kind, messages, expected] of [
+    ['relative paths', ['read projects/foo failed', 'read projects/bar failed'], 2],
+    ['URL hosts', ['read https://alpha.example/cache failed', 'read https://beta.example/cache failed'], 2],
+    ['paths after equals', ['path=/x/a', 'path=/y/b'], 1],
+    ['paths after opening parenthesis', ['failed (/x/a)', 'failed (/y/b)'], 1],
+    ['paths after colon', ['failed:/x/a', 'failed:/y/b'], 1],
+    ['Windows paths after opening parenthesis', ['(C:\\x)', '(D:\\y)'], 1],
+    ['backslash paths after equals', ['path=\\x\\a', 'path=\\y\\b'], 1],
+    ['URLs after equals', ['path=https://alpha.example/cache', 'path=https://beta.example/cache'], 2],
+    ['absolute paths', ['/tmp/alpha failed', 'C:\\Temp\\beta failed', 'read "/tmp/alpha beta" failed', 'read "C:\\Temp\\gamma delta" failed', 'read /tmp/other failed'], 2],
+    ['bare UUIDs', ['session 12345678-abcd-4abc-8abc-123456789abc failed', 'session fedcba98-1234-4567-8def-fedcba987654 failed'], 1],
+  ]) {
+    test(`${method}: head-turn warnings preserve identity for ${kind}`, async t => {
+      const dataDir = tmp('idx-head-turn-boundaries');
+      const warnings = [];
+      let message;
+      const indexer = createRemoteIndexer({
+        dataDir, getHosts: () => [{ alias: 'vps' }],
+        log: { info() {}, warn: value => warnings.push(value) },
+        sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+        refreshHeadTurns: async () => { throw new Error(message); },
+      });
+      t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+      for (message of messages) {
+        if (method === 'refreshNow') await indexer.refreshNow();
+        else await indexer.refreshHostNow('vps');
+      }
+      assert.equal(warnings.length, expected, kind);
+      assert.ok(warnings[0].endsWith(messages[0]), 'retain the original diagnostic');
+    });
+  }
+
+  test(`${method}: head-turn warnings retain twenty signatures and evict the oldest`, async t => {
+    const dataDir = tmp('idx-head-turn-cap');
+    const warnings = [];
+    let message;
+    const indexer = createRemoteIndexer({
+      dataDir, getHosts: () => [{ alias: 'vps' }],
+      log: { info() {}, warn: value => warnings.push(value) },
+      sync: async () => ({ fetched: 0, unchanged: 0, removed: 0, failed: 0, changedFolders: new Set(), sessions: [] }),
+      refreshHeadTurns: async () => { throw new Error(message); },
+    });
+    t.after(() => { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+    const refresh = () => method === 'refreshNow' ? indexer.refreshNow() : indexer.refreshHostNow('vps');
+    for (const letter of 'abcdefghijklmnopqrst') {
+      message = `cache ${letter} unavailable`;
+      await refresh();
+    }
+    message = 'cache a unavailable';
+    await refresh();
+    assert.equal(warnings.length, 20, 'all twenty entries remain deduplicated');
+    message = 'cache u unavailable';
+    await refresh();
+    message = 'cache b unavailable';
+    await refresh();
+    assert.equal(warnings.length, 21, 'a retained entry remains quiet');
+    message = 'cache a unavailable';
+    await refresh();
+    assert.equal(warnings.length, 22, 'the oldest entry warns again after eviction');
+  });
+}
+
+test('a host without live descriptors does not scan cached sessions or metadata', async () => {
+  const calls = [];
+  await refreshRemoteHeadTurns({
+    getRemoteSessions: alias => { calls.push(alias); return { sessions: [] }; },
+    getAllCached: () => { calls.push('cache'); return []; },
+    getAllMeta: () => { calls.push('meta'); return new Map(); },
+    projectsDirForFolder: () => { calls.push('dir'); },
+    readBatch: async () => { calls.push('batch'); },
+  }, 'idle');
+  assert.deepEqual(calls, ['idle'], 'an idle host must return before either SQLite scan');
+});
+
+test('head-turn batches retain only live remote parent rows and reread archive metadata', async () => {
+  const cached = [
+    { sessionId: 'live', folder: 'vps::-p' },
+    { sessionId: 'child', folder: 'vps::-p', parentSessionId: 'live' },
+    { sessionId: 'archived', folder: 'vps::-p' },
+    { sessionId: 'dead', folder: 'vps::-p' },
+    { sessionId: 'local', folder: '-p' },
+    { sessionId: 'other', folder: 'peer::-p' },
+    { sessionId: 'missing', folder: 'vps::-missing' },
+  ];
+  const meta = new Map([['archived', { archived: true }]]);
+  const batches = [];
+  const ctx = {
+    getAllCached: () => cached, getAllMeta: () => meta,
+    getRemoteSessions: alias => ({ sessions: (alias === 'vps'
+      ? ['live', 'child', 'archived', 'local', 'missing'] : ['other']).map(sessionId => ({ sessionId })) }),
+    projectsDirForFolder: folder => folder.endsWith('missing') ? null : path.join('mirror', folder),
+    readBatch: async rows => batches.push(rows),
+  };
+  await refreshRemoteHeadTurns(ctx, 'vps');
+  assert.deepEqual(batches.pop(), [{
+    file: path.join('mirror', 'vps::-p', 'live.jsonl'), parentSessionId: 'live', turnOnly: true,
+  }]);
+  await refreshRemoteHeadTurns(ctx);
+  assert.deepEqual(batches.pop().map(row => row.parentSessionId), ['live', 'other']);
+  meta.set('live', { archived: true });
+  await refreshRemoteHeadTurns(ctx, 'vps');
+  assert.deepEqual(batches, []);
+  meta.delete('live');
+  await refreshRemoteHeadTurns(ctx, 'vps');
+  assert.equal(batches.pop()[0].parentSessionId, 'live');
+});
 
 test('no host declared: no timer, no transport call, no mirror directory', async () => {
   const dataDir = tmp('idx-none');
@@ -944,7 +1210,7 @@ test('getRemoteHostProfile follows the last cycle: never synced, then live tmux 
 });
 
 test('sanitizeWaitingFor keeps a short plain string and drops everything else', () => {
-  const { sanitizeWaitingFor } = require('../remote-index');
+  const { sanitizeWaitingFor } = require('../src/main/remote/remote-index');
   assert.equal(sanitizeWaitingFor('permission prompt'), 'permission prompt');
   assert.equal(sanitizeWaitingFor('  input needed '), 'input needed');
   assert.equal(sanitizeWaitingFor('x'.repeat(64)), 'x'.repeat(64));
@@ -984,7 +1250,7 @@ test('the indexer and the placeholder keep a validated waitingFor beside the sta
 });
 
 test('sanitizeWaitingFor rejects bidi and zero-width controls', () => {
-  const { sanitizeWaitingFor } = require('../remote-index');
+  const { sanitizeWaitingFor } = require('../src/main/remote/remote-index');
   for (const code of [0x200b, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069]) {
     assert.equal(sanitizeWaitingFor('a' + String.fromCharCode(code) + 'b'), null, code.toString(16));
   }
@@ -992,7 +1258,7 @@ test('sanitizeWaitingFor rejects bidi and zero-width controls', () => {
 });
 
 test('sanitizeWaitingFor rejects C1 controls, soft hyphen, ALM, invisible operators and BOM', () => {
-  const { sanitizeWaitingFor } = require('../remote-index');
+  const { sanitizeWaitingFor } = require('../src/main/remote/remote-index');
   for (const code of [0x80, 0x9f, 0xad, 0x61c, 0x180e, 0x2028, 0x2029, 0x2060, 0x2064, 0xfeff]) {
     assert.equal(sanitizeWaitingFor('a' + String.fromCharCode(code) + 'b'), null, code.toString(16));
   }
@@ -1060,13 +1326,14 @@ test('start prunes removed hosts immediately while a refresh is in flight', asyn
   const dataDir = tmp('idx-remove-in-flight');
   let hosts = [{ alias: 'a' }, { alias: 'b' }];
   const dropped = [];
+  const indexed = new Set(['a::-x', 'b::-y']);
   let release, entered;
   const gate = new Promise(resolve => { release = resolve; });
   const started = new Promise(resolve => { entered = resolve; });
   const indexer = createRemoteIndexer({
     getHosts: () => hosts, dataDir, transport: {}, timers: fakeTimers(),
-    listIndexedFolderKeys: () => ['a::-x', 'b::-y'],
-    dropFolder: async key => { dropped.push(key); },
+    listIndexedFolderKeys: () => [...indexed],
+    dropFolder: async key => { dropped.push(key); indexed.delete(key); },
     sync: async () => { entered(); await gate; return { changedFolders: new Set() }; },
   });
   const refresh = indexer.refreshNow();
@@ -1077,7 +1344,9 @@ test('start prunes removed hosts immediately while a refresh is in flight', asyn
     assert.deepEqual(dropped, ['b::-y']);
     hosts = [];
     assert.equal(indexer.start(), false);
-    assert.deepEqual(dropped, ['b::-y']);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dropped, ['b::-y', 'a::-x']);
+    assert.deepEqual([...indexed], []);
   } finally {
     indexer.dispose();
     release();
@@ -1102,23 +1371,26 @@ test('start logs a rejected prune without an unhandled rejection', async () => {
   } finally { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
-test('start and restart with zero hosts retain all mirrored folders', () => {
+test('start and restart with zero hosts prune all mirrored folders without SSH or a timer', async () => {
   const dataDir = tmp('idx-zero-hosts');
   let hosts = [];
   const dropped = [];
+  const indexed = new Set(['a::-x', 'b::-y']);
+  const timers = fakeTimers();
   const indexer = createRemoteIndexer({
-    getHosts: () => hosts, dataDir, transport: {}, timers: fakeTimers(),
-    listIndexedFolderKeys: () => ['a::-x', 'b::-y'],
-    dropFolder: async key => { dropped.push(key); },
-    sync: async () => ({ changedFolders: new Set() }),
+    getHosts: () => hosts, dataDir, transport: forbiddenTransport(), timers,
+    listIndexedFolderKeys: () => [...indexed],
+    dropFolder: async key => { dropped.push(key); indexed.delete(key); },
   });
   try {
     assert.equal(indexer.start(), false);
-    assert.deepEqual(dropped, []);
-    hosts = [{ alias: 'a' }, { alias: 'b' }];
-    assert.equal(indexer.restart(), true);
-    hosts = [];
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dropped, ['a::-x', 'b::-y']);
+    indexed.add('c::-z');
     assert.equal(indexer.restart(), false);
-    assert.deepEqual(dropped, []);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(dropped, ['a::-x', 'b::-y', 'c::-z']);
+    assert.deepEqual([...indexed], []);
+    assert.deepEqual(timers.created, []);
   } finally { indexer.dispose(); fs.rmSync(dataDir, { recursive: true, force: true }); }
 });

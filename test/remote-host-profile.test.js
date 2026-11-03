@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { computeHostProfile, attachBlockReason, sendBlockReason, launchBlockReason, ATTACH_BLOCK_AFTER_FAILURES, TIERS } = require('../remote-host-profile');
+const { computeHostProfile, attachBlockReason, sendBlockReason, launchBlockReason, ATTACH_BLOCK_AFTER_FAILURES, TIERS } = require('../src/main/remote/remote-host-profile');
 
 const AT = Date.parse('2026-10-01T10:00:00Z');
 const tmuxDescriptor = { pid: 101, sessionId: 'a', tmux: 'main:@0.%0' };

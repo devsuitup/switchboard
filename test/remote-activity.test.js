@@ -13,7 +13,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createRemoteActivityTracker, sessionIdFromRel } = require('../remote-activity');
-const { REMOTE_PROJECTS_REL } = require('../remote-transport');
+const { REMOTE_PROJECTS_REL } = require('../src/main/remote/remote-transport');
 
 const UUID = '11111111-1111-4111-8111-111111111111';
 

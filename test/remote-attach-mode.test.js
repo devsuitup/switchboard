@@ -6,7 +6,7 @@ const { EventEmitter } = require('node:events');
 const { spawnSync } = require('node:child_process');
 const { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs');
 const path = require('node:path');
-const { createTmuxAttachAdapter } = require('../remote-attach');
+const { createTmuxAttachAdapter } = require('../src/main/remote/remote-attach');
 
 const SEP = '\u0001';
 const flush = () => new Promise(resolve => setImmediate(resolve));

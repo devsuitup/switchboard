@@ -14,7 +14,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { spawnSyncRetryingCrash } = require('./spawn-retry');
 
-const { LIST_COMMAND, ALIVE_MARKER_PREFIX, SESSIONS_MARKER, splitListOutput, parseSessions } = require('../remote-transport');
+const { LIST_COMMAND, ALIVE_MARKER_PREFIX, SESSIONS_MARKER, splitListOutput, parseSessions } = require('../src/main/remote/remote-transport');
 
 function shAvailable() {
   const r = spawnSync('sh', ['-c', 'exit 0']);

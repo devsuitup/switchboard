@@ -36,6 +36,9 @@ const archivingGroupIds = new Set();
 const remappingProjectPaths = new Set();
 const deletingWorktreePaths = new Set();
 const ARCHIVE_CHECKING_TITLE = 'Checking the host before archiving…';
+const unreadButtonTemplate = document.createElement('button');
+unreadButtonTemplate.className = 'session-unread-btn';
+unreadButtonTemplate.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 5 9 7 9-7"/></svg>';
 
 // see .ai/contexts/session-state.md ("Archive/delete are stop-then-archive/delete")
 function setArchiveBusy(sessionId, busy) {
@@ -51,7 +54,7 @@ function setArchiveBusy(sessionId, busy) {
 function setGroupArchiveBusy(domId, busy) {
   if (busy) archivingGroupIds.add(domId); else archivingGroupIds.delete(domId);
   const el = document.getElementById(domId);
-  const btn = el && el.querySelector('.slug-group-archive-btn, .project-archive-btn');
+  const btn = el && el.querySelector('.slug-group-archive-btn, .project-archive-btn, .sessions-older-archive-btn');
   if (btn) btn.disabled = busy;
 }
 
@@ -118,37 +121,101 @@ function showSessionArchiveUndo(rows, didStop) {
   notice.didStop = didStop;
 }
 
-async function confirmSessionArchivePlan(rows, prepared, ask) {
+async function confirmSessionArchivePlan(rows, prepared, ask, prepare = window.planSessionArchive) {
   while (prepared.ok) {
     const targets = prepared.plans.flatMap(({ plan }) => plan.targets);
     const result = await ask(prepared);
     if (!result) return null;
     if (!result.archiveSessions) return { prepared, result };
-    const latest = await window.planSessionArchive(rows);
+    const latest = await prepare(rows);
     if (!latest.ok) return { prepared: latest, result };
-    const added = latest.plans.some(({ plan }) => plan.targets.some(target => !targets.some(confirmed =>
-      confirmed.sessionId === target.sessionId && confirmed.alias === target.alias && confirmed.attach === target.attach)));
+    const added = latest.plans.some(({ session, plan }) => prepare === prepareOlderArchive
+      ? !prepared.plans.some(confirmed => confirmed.session.sessionId === session.sessionId)
+      : plan.targets.some(target => !targets.some(confirmed =>
+        confirmed.sessionId === target.sessionId && confirmed.alias === target.alias && confirmed.attach === target.attach)));
     prepared = latest;
     if (!added) return { prepared, result };
   }
   return { prepared };
 }
 
-async function archiveSessionRows(rows) {
-  const confirmed = await confirmSessionArchivePlan(rows, await window.planSessionArchive(rows), async prepared => {
+function olderArchiveKeepReason(session) {
+  const ids = [...new Set([...rowSessionIds(session), rowHeadId(session)])];
+  if (ids.includes(activeSessionId)) return 'active session on screen';
+  if (ids.some(id => openSessions.has(id))) return 'tab open here';
+  if (ids.some(id => activePtyIds.has(id))) return 'running here';
+  if (ids.some(id => pendingSessions.has(id) || isDormantSession(id))) return 'waiting to restore';
+  if (session.starred) return 'pinned';
+  if (session.remoteAlias && ids.some(id => isRemoteSessionAlive({ ...session, sessionId: id,
+    remoteDescriptorSeen: session.remoteMemberDescriptorSeen?.[id] ?? session.remoteDescriptorSeen }))) return 'alive on its host';
+  return null;
+}
+
+function olderArchiveList(title, rows) {
+  if (!rows.length) return '';
+  return [title, ...rows.slice(0, 10).map(({ session, reason }) => `${cleanDisplayName(session.name || session.aiTitle || session.summary) || session.sessionId}${reason ? ': ' + reason : ''}`),
+    ...(rows.length > 10 ? [`+${rows.length - 10} more`] : [])].join('\n');
+}
+
+async function prepareOlderArchive(rows) {
+  const plans = [];
+  const refusals = [];
+  const kept = [];
+  for (const session of rows) {
+    if (session.archived) continue;
+    try {
+      let reason = olderArchiveKeepReason(session);
+      if (!reason && !session.remoteAlias) {
+        for (const id of new Set([...rowSessionIds(session), rowHeadId(session)])) {
+          if (await window.api.getSessionLiveElsewhere(id)) {
+            reason = 'live elsewhere';
+            break;
+          }
+        }
+      }
+      reason ||= olderArchiveKeepReason(session);
+      if (reason) {
+        kept.push({ session, reason });
+        continue;
+      }
+      const prepared = await window.planSessionArchive([session]);
+      if (prepared.ok) {
+        reason = olderArchiveKeepReason(session);
+        if (reason || prepared.plans.some(({ plan }) => plan.targets.length)) kept.push({ session, reason: reason || 'running or attached' });
+        else plans.push(...prepared.plans);
+      } else refusals.push({ session, reason: prepared.error });
+    } catch (error) {
+      refusals.push({ session, reason: error.message });
+    }
+  }
+  return { ok: true, plans, refusals, kept };
+}
+
+async function archiveSessionRows(rows, olderRule) {
+  const prepare = olderRule ? prepareOlderArchive : window.planSessionArchive;
+  const confirmed = await confirmSessionArchivePlan(rows, await prepare(rows), async prepared => {
+    if (olderRule && !prepared.plans.length) {
+      showAppNotice({ id: 'archive-older-empty', kind: 'error', message: ['Nothing eligible to archive.',
+        olderArchiveList('Kept:', prepared.kept), olderArchiveList('Refused:', prepared.refusals)].filter(Boolean).join('\n') });
+      return null;
+    }
     const targets = prepared.plans.flatMap(({ plan }) => plan.targets);
-    if (!targets.length) return { archiveSessions: true };
+    if (!targets.length && !olderRule) return { archiveSessions: true };
     const running = targets.filter(target => !target.attach).length;
-    const question = rows.length === 1 ? 'Archive this session?' : `Archive ${rows.length} sessions?`;
+    const question = olderRule ? `Archive ${prepared.plans.length} older session${prepared.plans.length === 1 ? '' : 's'}?`
+      : rows.length === 1 ? 'Archive this session?' : `Archive ${rows.length} sessions?`;
     if (!await appConfirm({
-      title: question, confirmLabel: 'Archive', danger: true,
-      message: [question, ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
+      title: question, confirmLabel: 'Archive', danger: targets.length > 0,
+      message: [question, ...(olderRule ? [olderRule, olderArchiveList('To archive:', prepared.plans),
+        olderArchiveList('Kept:', prepared.kept), olderArchiveList('Refused:', prepared.refusals),
+        'Kept and refused sessions stay unarchived. Undo restores archived rows.'] : []), ...(running ? [`${running} running process${running === 1 ? '' : 'es'} will be stopped first.`] : []),
         ...prepared.plans.filter(({ plan }) => plan.targets.length).map(({ plan }) => plan.confirmText.split('\n').slice(1).join('\n'))].join('\n'),
     })) return null;
     return { archiveSessions: true };
-  });
+  }, prepare);
   if (!confirmed) return;
   const { prepared } = confirmed;
+  for (const { session, reason } of prepared.refusals || []) surfaceStopFailure(null, reason, session);
   if (!prepared.ok) {
     surfaceStopFailure(null, prepared.error, prepared.session);
     return;
@@ -156,8 +223,15 @@ async function archiveSessionRows(rows) {
   const unreachable = new Map();
   const notStopped = [];
   const archived = [];
+  const kept = [...(prepared.kept || [])];
   let stoppedAny = false;
   for (const { session, plan } of prepared.plans) {
+    if (olderRule) {
+      const latest = await prepareOlderArchive([session]);
+      kept.push(...latest.kept);
+      for (const { session: refused, reason } of latest.refusals) surfaceStopFailure(null, reason, refused);
+      if (!latest.plans.length) continue;
+    }
     const result = await stopForArchive(session, unreachable, plan);
     stoppedAny ||= !!result.didStop;
     if (!result.ok) {
@@ -172,12 +246,19 @@ async function archiveSessionRows(rows) {
   }
   announceNotStopped(notStopped);
   if (archived.length) showSessionArchiveUndo(archived, stoppedAny);
+  if (kept.length) showAppNotice({ id: 'archive-older-kept', kind: 'info',
+    message: olderArchiveList(`${kept.length} kept because:`, kept) });
   pollActiveSessions();
   Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
 }
 
-function folderId(projectPath) {
+function folderId(projectPath, remoteAlias) {
+  if (remoteAlias) return 'project-remote-' + encodeURIComponent(JSON.stringify([remoteAlias, projectPath]));
   return 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function projectStateKey(project) {
+  return project.remoteAlias ? folderId(project.projectPath, project.remoteAlias) : project.projectPath;
 }
 
 function surfaceStopFailure(btn, message, session, operation = 'Archive') {
@@ -267,16 +348,20 @@ let _expandedSubagentsGCDone = false;
 function _gcExpandedSubagentsOnce() {
   if (_expandedSubagentsGCDone) return;
   _expandedSubagentsGCDone = true;
+  const groups = new Set(sessionMap.keys());
+  for (const session of sessionMap.values()) {
+    if (session.parentSessionId && session.workflowRunId) groups.add('workflow:' + session.parentSessionId + ':' + session.workflowRunId);
+  }
   try {
     const raw = new Set(JSON.parse(localStorage.getItem('expandedSubagents') || '[]'));
-    const pruned = new Set([...raw].filter(id => sessionMap.has(id)));
+    const pruned = new Set([...raw].filter(id => groups.has(id)));
     if (pruned.size !== raw.size) {
       localStorage.setItem('expandedSubagents', JSON.stringify([...pruned]));
     }
   } catch {} // eslint: allowEmptyCatch
   try {
     const raw = new Set(JSON.parse(localStorage.getItem('expandedSubagentRest') || '[]'));
-    const pruned = new Set([...raw].filter(k => !k.startsWith('p:') || sessionMap.has(k.slice(2))));
+    const pruned = new Set([...raw].filter(k => !k.startsWith('p:') || groups.has(k.slice(2))));
     if (pruned.size !== raw.size) {
       localStorage.setItem('expandedSubagentRest', JSON.stringify([...pruned]));
     }
@@ -594,6 +679,34 @@ function appendSubagentRestToggle(container, domKey, stateKey, rest) {
 function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
   const children = subagentIndex && subagentIndex.get(parentSessionId);
   if (!children || children.length === 0) return;
+  parentEl.after(buildSubagentGroup(parentSessionId, children));
+}
+
+function appendSubagentRows(container, children, domKey, restKey, inWorkflow = false) {
+  const workflows = new Map();
+  const ordinary = [];
+  for (const child of children) {
+    if (!inWorkflow && child.workflowRunId) {
+      const key = child.parentSessionId + ':' + child.workflowRunId;
+      if (!workflows.has(key)) workflows.set(key, []);
+      workflows.get(key).push(child);
+    } else ordinary.push(child);
+  }
+  const restExpanded = searchMatchIds !== null || getExpandedSubagentRest().has(restKey);
+  const { shown, rest } = restExpanded ? { shown: ordinary, rest: [] } : splitSubagentsForPreview(ordinary);
+  for (const child of shown) container.appendChild(buildSubagentItem(child));
+  appendSubagentRestToggle(container, domKey, restKey, rest);
+  for (const [key, members] of workflows) {
+    const group = document.createElement('div');
+    group.className = 'sidebar-workflow-group';
+    group.id = 'workflow-' + key;
+    group.dataset.workflowRunId = members[0].workflowRunId;
+    group.appendChild(buildSubagentGroup('workflow:' + key, members, members[0].workflowName || members[0].workflowRunId));
+    container.appendChild(group);
+  }
+}
+
+function buildSubagentGroup(parentSessionId, children, title) {
 
   const expandedSet = getExpandedSubagents();
   const caretId = caretIdFor(parentSessionId);
@@ -603,7 +716,7 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
   caret.className = 'sidebar-children-caret js-stateful';
   caret.id = caretId;
   if (isExpanded) caret.classList.add('expanded');
-  caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${children.length} subagent${children.length !== 1 ? 's' : ''}`;
+  caret.innerHTML = `<span class="caret-arrow">&#9654;</span> ${title ? escapeHtml(title) + ' · ' : ''}${children.length} subagent${children.length !== 1 ? 's' : ''}`;
 
   const domKey = parentSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const childrenContainer = document.createElement('div');
@@ -612,15 +725,7 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
   childrenContainer.style.display = isExpanded ? '' : 'none';
 
   const restKey = 'p:' + parentSessionId;
-  const restExpanded = searchMatchIds !== null || getExpandedSubagentRest().has(restKey);
-  const { shown, rest } = restExpanded
-    ? { shown: children, rest: [] }
-    : splitSubagentsForPreview(children);
-
-  for (const child of shown) {
-    childrenContainer.appendChild(buildSubagentItem(child));
-  }
-  appendSubagentRestToggle(childrenContainer, domKey, restKey, rest);
+  appendSubagentRows(childrenContainer, children, domKey, restKey, !!title);
 
   caret.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -632,8 +737,9 @@ function appendSubagentChildren(parentEl, parentSessionId, subagentIndex) {
     saveExpandedSubagents(set);
   });
 
-  parentEl.after(caret);
-  caret.after(childrenContainer);
+  const fragment = document.createDocumentFragment();
+  fragment.append(caret, childrenContainer);
+  return fragment;
 }
 
 function rowHeadSession(session, head = rowHeadId(session)) {
@@ -700,11 +806,13 @@ function buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleSc
   nameEl.className = 'slug-group-name';
   nameEl.textContent = displayName;
 
-  const hasRunning = sessions.some(s => rowSessionIds(s).some(id => activePtyIds.has(id)));
+  const hasScheduledRun = sessions.some(rowHasRunningSchedule);
+  const hasRunning = hasScheduledRun || sessions.some(s => rowSessionIds(s).some(id => activePtyIds.has(id)));
 
   const meta = document.createElement('div');
   meta.className = 'slug-group-meta';
   meta.innerHTML = `<span class="slug-group-dot${hasRunning ? ' running' : ''}"></span><span class="slug-group-count">${sessions.length} sessions</span> ${escapeHtml(timeStr)}`;
+  if (hasScheduledRun) meta.querySelector('.slug-group-dot').title = 'Scheduled run in progress';
 
   const archiveSlugBtn = document.createElement('button');
   archiveSlugBtn.className = 'slug-group-archive-btn';
@@ -725,7 +833,7 @@ function buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleSc
   const promoted = [];
   const rest = [];
   for (const session of sessions) {
-    if (rowSessionIds(session).some(id => activePtyIds.has(id))) {
+    if (rowHasRunningSchedule(session) || rowSessionIds(session).some(id => activePtyIds.has(id))) {
       promoted.push(session);
     } else {
       rest.push(session);
@@ -770,7 +878,84 @@ function buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleSc
   return group;
 }
 
+let sidebarRenderKey = null;
+let sidebarRenderPayload = null;
+let sidebarRenderAllProjects = null;
+let sidebarRenderDirty = true;
+let sidebarScheduleRuns = new Map();
+const sidebarRenderObserver = new MutationObserver(() => { sidebarRenderDirty = true; });
+sidebarRenderObserver.observe(document.getElementById('sidebar-content'), { subtree: true, childList: true, attributes: true, characterData: true });
+
+function sidebarRenderInputs(projects) {
+  const now = Date.now();
+  const storageEntries = Object.keys(localStorage)
+    .filter(key => key === 'expandedSubagents' || key === 'expandedSubagentRest' || key.startsWith('orphanExpanded:'))
+    .sort().map(key => [key, localStorage.getItem(key)]);
+  const activity = projects.map(project => project.sessions.map(session => {
+    const ids = [...new Set([...rowSessionIds(session), rowHeadId(session)])];
+    const snapshot = mergedRowSnapshot(rowSessionIds(session), session.sessionId,
+      storedActivitySnapshot(session.sessionId, session), session);
+    const remoteAttention = !session.parentSessionId && ids.map(remoteAttentionSnapshot).find(Boolean);
+    const label = typeof backgroundActivityLabel === 'function' ? backgroundActivityLabel(rowHeadId(session), snapshot, session)
+      : session.bgJobId ? { text: 'Activity unavailable', title: `${renderSessionIcon(snapshot).title}\nJob activity unavailable` } : null;
+    const descriptor = localSessionForStatus(rowHeadId(session), session);
+    return [renderSessionIcon(remoteAttention || snapshot),
+    !!snapshot.attention || !!remoteAttention, !!snapshot.responseReady, !!snapshot.unseenWrittenActivity,
+    !!snapshot.busy, snapshot.liveness === 'alive' || !!(session.remoteAlias && isRemoteSessionAlive(session)),
+    ids.some(parentHasActiveSubagent), ids.some(isDormantSession),
+    typeof bgAgentSessionIds !== 'undefined' && ids.some(id => bgAgentSessionIds.has(String(id).toLowerCase())),
+    session.parentSessionId ? [attentionSessions.has(session.sessionId), responseReadySessions.has(session.sessionId),
+      !!sessionBusyState.get(session.sessionId)] : rowLifecycleLabel(session.sessionId, remoteAttention || snapshot, session),
+    isSubagentActive(session.parentSessionId, session.agentId),
+    window.taskRegistry?.runningAgentCount(rowSessionIds(session)) || 0,
+    planSessionDetach(session).targets.length > 0,
+    olderArchiveKeepReason(session),
+    label && [label.title, label.text],
+    descriptor && [descriptor.status, descriptor.waitingFor],
+    new Date(session.modified).getTime() >= now - sessionMaxAgeDays * 86400000];
+  }));
+  return [activity, renderProjects.hiddenSettings, activeSessionId, [...activePtyIds], [...pendingSessions.keys()],
+    [...openSessions].map(([id, entry]) => [id, !!entry.closed]),
+    sortedOrder, searchMatchIds && [...searchMatchIds], searchMatchProjectPaths && [...searchMatchProjectPaths],
+    showStarredOnly, showRunningOnly, showTodayOnly, visibleSessionCount, sessionMaxAgeDays,
+    typeof showArchived !== 'undefined' && showArchived,
+    typeof searchInput !== 'undefined' ? searchInput.value : '',
+    [...getExpandedSlugs()], storageEntries,
+    projects.map(project => remoteHostLabel(project.remoteAlias)),
+    [...archivingSessionIds], [...archivingGroupIds],
+    Math.floor(now / 30000), new Date(now).toDateString()];
+}
+
+renderProjects.unchanged = projects => {
+  if (sidebarRenderPayload !== JSON.stringify(projects)) return false;
+  if (sidebarRenderAllProjects !== JSON.stringify(cachedAllProjects)) return false;
+  if (sidebarRenderObserver.takeRecords().length) sidebarRenderDirty = true;
+  return !sidebarRenderDirty && sidebarRenderKey === JSON.stringify(sidebarRenderInputs(projects));
+};
+
 function renderProjects(projects, resort) {
+  const scheduleRuns = new Map();
+  const changedScheduleItems = new Set();
+  for (const project of projects) {
+    for (const session of project.sessions.filter(rowHasRunningSchedule)) {
+      const itemId = session.scheduleSlug
+        ? 'schedule-' + encodeURIComponent(JSON.stringify([project.remoteAlias || '', project.projectPath, session.scheduleSlug]))
+        : 'si-' + session.sessionId;
+      const key = JSON.stringify([projectStateKey(project), itemId]);
+      if (!scheduleRuns.has(key)) scheduleRuns.set(key, []);
+      scheduleRuns.get(key).push([session.sessionId, [...session.runningScheduleIds].sort()]);
+    }
+  }
+  for (const [key, runs] of scheduleRuns) scheduleRuns.set(key, JSON.stringify(runs.sort()));
+  for (const key of new Set([...scheduleRuns.keys(), ...sidebarScheduleRuns.keys()])) {
+    if (scheduleRuns.get(key) !== sidebarScheduleRuns.get(key)) changedScheduleItems.add(key);
+  }
+  sidebarScheduleRuns = scheduleRuns;
+  const inputProjects = projects;
+  sidebarRenderKey = null;
+  sidebarRenderPayload = null;
+  sidebarRenderAllProjects = null;
+  sidebarRenderDirty = true;
   pruneStaleSubagents();
   pendingSubagentRest.clear();
   const legacyScheduleScopes = new Map();
@@ -791,10 +976,10 @@ function renderProjects(projects, resort) {
 
   // Sort project groups using sortedOrder as source of truth
   if (!resort && sortedOrder.length > 0) {
-    const orderIndex = new Map(sortedOrder.map((e, i) => [e.projectPath, i]));
+    const orderIndex = new Map(sortedOrder.map((e, i) => [projectStateKey(e), i]));
     projects = [...projects].sort((a, b) => {
-      const aPos = orderIndex.get(a.projectPath);
-      const bPos = orderIndex.get(b.projectPath);
+      const aPos = orderIndex.get(projectStateKey(a));
+      const bPos = orderIndex.get(projectStateKey(b));
       if (aPos !== undefined && bPos !== undefined) return aPos - bPos;
       if (aPos === undefined && bPos !== undefined) return -1;
       if (aPos !== undefined && bPos === undefined) return 1;
@@ -853,7 +1038,7 @@ function renderProjects(projects, resort) {
     const subagentIndex = buildSubagentIndex(allSessions);
     let filtered = allSessions.filter(s => !s.parentSessionId);
     if (showStarredOnly) filtered = filtered.filter(s => s.starred);
-    if (showRunningOnly) filtered = filtered.filter(s => rowSessionIds(s).some(id => activePtyIds.has(id)));
+    if (showRunningOnly) filtered = filtered.filter(s => rowHasRunningSchedule(s) || rowSessionIds(s).some(id => activePtyIds.has(id)));
     if (showTodayOnly) {
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -870,8 +1055,8 @@ function renderProjects(projects, resort) {
 
     // Sort
     filtered = [...filtered].sort((a, b) => {
-      const aRunning = rowSessionIds(a).some(id => activePtyIds.has(id) || pendingSessions.has(id));
-      const bRunning = rowSessionIds(b).some(id => activePtyIds.has(id) || pendingSessions.has(id));
+      const aRunning = rowHasRunningSchedule(a) || rowSessionIds(a).some(id => activePtyIds.has(id) || pendingSessions.has(id));
+      const bRunning = rowHasRunningSchedule(b) || rowSessionIds(b).some(id => activePtyIds.has(id) || pendingSessions.has(id));
       const aPri = (a.starred && aRunning ? 3 : aRunning ? 2 : a.starred ? 1 : 0);
       const bPri = (b.starred && bRunning ? 3 : bRunning ? 2 : b.starred ? 1 : 0);
       if (aPri !== bPri) return bPri - aPri;
@@ -893,12 +1078,12 @@ function renderProjects(projects, resort) {
     }
     const allItems = [];
     for (const session of ungrouped) {
-      const isRunning = rowSessionIds(session).some(id => activePtyIds.has(id) || pendingSessions.has(id));
+      const isRunning = rowHasRunningSchedule(session) || rowSessionIds(session).some(id => activePtyIds.has(id) || pendingSessions.has(id));
       allItems.push({ sortTime: new Date(session.modified).getTime(), pinned: !!session.starred, running: isRunning, dormant: rowSessionIds(session).some(isDormantSession), element: buildSessionItem(session) });
     }
     for (const [slug, sessions] of slugMap) {
       const mostRecentTime = Math.max(...sessions.map(s => new Date(s.modified).getTime()));
-      const hasRunning = sessions.some(s => rowSessionIds(s).some(id => activePtyIds.has(id) || pendingSessions.has(id)));
+      const hasRunning = sessions.some(s => rowHasRunningSchedule(s) || rowSessionIds(s).some(id => activePtyIds.has(id) || pendingSessions.has(id)));
       const hasPinned = sessions.some(s => s.starred);
       const hasDormant = sessions.some(s => rowSessionIds(s).some(isDormantSession));
       const element = buildSlugGroup(slug, sessions, subagentIndex, project, legacyScheduleScopes);
@@ -906,7 +1091,7 @@ function renderProjects(projects, resort) {
     }
 
     // Sort render items
-    const prevEntry = sortedOrder.find(e => e.projectPath === project.projectPath);
+    const prevEntry = sortedOrder.find(e => projectStateKey(e) === projectStateKey(project));
     if (resort || !prevEntry) {
       allItems.sort((a, b) => {
         const aPri = (a.pinned && a.running ? 3 : a.running ? 2 : a.pinned ? 1 : 0);
@@ -924,6 +1109,14 @@ function renderProjects(projects, resort) {
         if (aPos !== undefined && bPos === undefined) return 1;
         return b.sortTime - a.sortTime;
       });
+      const changed = allItems.filter(item => changedScheduleItems.has(JSON.stringify([projectStateKey(project), item.element.id])));
+      for (const item of changed) {
+        allItems.splice(allItems.indexOf(item), 1);
+        const priority = candidate => candidate.pinned && candidate.running ? 3 : candidate.running ? 2 : candidate.pinned ? 1 : 0;
+        const index = allItems.findIndex(other => priority(item) > priority(other)
+          || priority(item) === priority(other) && item.sortTime > other.sortTime);
+        allItems.splice(index < 0 ? allItems.length : index, 0, item);
+      }
     }
 
     // Truncate
@@ -948,12 +1141,12 @@ function renderProjects(projects, resort) {
     return {
       filtered, visible, older, subagentIndex,
       topLevelIds: new Set(allSessions.filter(s => !s.parentSessionId).map(s => s.sessionId)),
-      sortOrderEntry: { projectPath: project.projectPath, itemIds: allItems.map(item => item.element.id) },
+      sortOrderEntry: { projectPath: project.projectPath, ...(project.remoteAlias ? { remoteAlias: project.remoteAlias } : {}), itemIds: allItems.map(item => item.element.id) },
     };
   }
 
   // Build the sessions list DOM (shared between projects and worktrees)
-  function buildSessionsList(fId, visible, older, subagentIndex, projectPath, topLevelIds) {
+  function buildSessionsList(fId, visible, older, subagentIndex, project, topLevelIds) {
     const sessionsList = document.createElement('div');
     sessionsList.className = 'project-sessions';
     sessionsList.id = 'sessions-' + fId;
@@ -967,7 +1160,17 @@ function renderProjects(projects, resort) {
       const moreBtn = document.createElement('div');
       moreBtn.className = 'sessions-more-toggle js-stateful';
       moreBtn.id = 'older-' + fId;
-      moreBtn.textContent = `+ ${older.length} older`;
+      const moreLabel = document.createElement('button');
+      moreLabel.className = 'sessions-more-label';
+      moreLabel.setAttribute('aria-expanded', 'false');
+      moreLabel.setAttribute('aria-controls', 'older-list-' + fId);
+      const archiveOlderBtn = document.createElement('button');
+      archiveOlderBtn.className = 'sessions-older-archive-btn';
+      archiveOlderBtn.title = 'Archive all older sessions';
+      archiveOlderBtn.setAttribute('aria-label', archiveOlderBtn.title);
+      archiveOlderBtn.innerHTML = ICONS.archive(14);
+      archiveOlderBtn.disabled = archivingGroupIds.has(moreBtn.id);
+      moreBtn.append(moreLabel, archiveOlderBtn);
       const olderList = document.createElement('div');
       olderList.className = 'sessions-older js-stateful';
       olderList.id = 'older-list-' + fId;
@@ -977,6 +1180,10 @@ function renderProjects(projects, resort) {
         const sid = item.element.dataset && item.element.dataset.sessionId;
         if (sid) appendSubagentChildren(item.element, sid, subagentIndex);
       }
+      const olderRows = [...olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)')]
+        .map(item => sessionMap.get(item.dataset.sessionId)).filter(Boolean);
+      archiveOlderBtn.disabled ||= !olderRows.some(session => !olderArchiveKeepReason(session));
+      moreLabel.textContent = `+ ${olderList.querySelectorAll('.session-item:not([data-subagent])').length} older`;
       sessionsList.appendChild(moreBtn);
       sessionsList.appendChild(olderList);
     }
@@ -994,7 +1201,7 @@ function renderProjects(projects, resort) {
         // Persist expand/collapse per project. Default = collapsed: this
         // section is rarely the user's focus and can grow long on long-lived
         // projects (this very session has 1300+ orphan subagents).
-        const orphanStateKey = 'orphanExpanded:' + projectPath;
+        const orphanStateKey = 'orphanExpanded:' + projectStateKey(project);
         // see .ai/contexts/subagent-observability.md
         const expanded = searchMatchIds !== null || localStorage.getItem(orphanStateKey) === '1';
 
@@ -1013,16 +1220,8 @@ function renderProjects(projects, resort) {
         });
         orphanGroup.appendChild(orphanLabel);
 
-        const restKey = 'o:' + projectPath;
-        const restExpanded = searchMatchIds !== null || getExpandedSubagentRest().has(restKey);
-        const { shown, rest } = restExpanded
-          ? { shown: orphans, rest: [] }
-          : splitSubagentsForPreview(orphans);
-
-        for (const orphan of shown) {
-          orphanGroup.appendChild(buildSubagentItem(orphan));
-        }
-        appendSubagentRestToggle(orphanGroup, fId, restKey, rest);
+        const restKey = 'o:' + projectStateKey(project);
+        appendSubagentRows(orphanGroup, orphans, fId, restKey);
         sessionsList.appendChild(orphanGroup);
       }
     }
@@ -1038,7 +1237,7 @@ function renderProjects(projects, resort) {
     if (!result) continue;
     const { filtered, visible, older, subagentIndex, topLevelIds, sortOrderEntry } = result;
     newSortedOrder.push(sortOrderEntry);
-    const fId = folderId(project.projectPath);
+    const fId = folderId(project.projectPath, project.remoteAlias);
 
     // Build DOM
     const group = document.createElement('div');
@@ -1048,9 +1247,7 @@ function renderProjects(projects, resort) {
     const header = document.createElement('div');
     header.className = 'project-header js-stateful';
     header.id = 'ph-' + fId;
-    // shortProjectPath() is upstream's shared helper (utils.js); escapeHtml stays
-    // because this is innerHTML — upstream's variant interpolates the raw path.
-    const shortName = (project.remoteAlias ? remoteHostLabel(project.remoteAlias) + ': ' : '') + shortProjectPath(project.projectPath);
+    const shortName = projectDisplayLabel(project);
     const missingIcon = project.missing ? '<svg class="project-missing-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> ' : '';
     header.innerHTML = `<span class="arrow">&#9660;</span> ${missingIcon}<span class="project-name">${escapeHtml(shortName)}</span>`;
 
@@ -1081,6 +1278,13 @@ function renderProjects(projects, resort) {
     settingsBtn.title = 'Project settings';
     settingsBtn.innerHTML = ICONS.gear(16);
     header.appendChild(settingsBtn);
+
+    const stopAllBtn = document.createElement('button');
+    stopAllBtn.className = 'project-stop-all-btn';
+    stopAllBtn.type = 'button';
+    stopAllBtn.textContent = 'Stop all';
+    stopAllBtn.title = 'Stop all sessions in this folder and its worktrees';
+    header.appendChild(stopAllBtn);
 
     const archiveGroupBtn = document.createElement('button');
     archiveGroupBtn.className = 'project-archive-btn';
@@ -1118,7 +1322,7 @@ function renderProjects(projects, resort) {
     }
     header.appendChild(newBtn);
 
-    const sessionsList = buildSessionsList(fId, visible, older, subagentIndex, project.projectPath, topLevelIds);
+    const sessionsList = buildSessionsList(fId, visible, older, subagentIndex, project, topLevelIds);
     const offerNotice = buildReenableNotice(project, fId);
     if (offerNotice) sessionsList.prepend(offerNotice);
 
@@ -1147,7 +1351,7 @@ function renderProjects(projects, resort) {
       newSortedOrder.push(wtResult.sortOrderEntry);
 
       const wtName = worktreeName(wt.projectPath) || wt.projectPath.split('/').pop();
-      const wtFId = folderId(wt.projectPath);
+      const wtFId = folderId(wt.projectPath, wt.remoteAlias);
 
       const wtGroup = document.createElement('div');
       wtGroup.className = 'worktree-group';
@@ -1158,6 +1362,13 @@ function renderProjects(projects, resort) {
       wtHeader.id = 'ph-' + wtFId;
       wtHeader.dataset.remoteAlias = wt.remoteAlias || '';
       wtHeader.innerHTML = `<span class="worktree-branch-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8c0-2.76-2.46-5-5.5-5S2 5.24 2 8h2l1-1 1 1h4"/><path d="M13 7.14A5.82 5.82 0 0 1 16.5 6c3.04 0 5.5 2.24 5.5 5h-3l-1-1-1 1h-3"/><path d="M5.89 9.71c-2.15 2.15-2.3 5.47-.35 7.43l4.24-4.25.7-.7.71-.71 2.12-2.12c-1.95-1.96-5.27-1.8-7.42.35"/><path d="M11 15.5c.5 2.5-.17 4.5-1 6.5h4c2-5.5-.5-12-1-14"/></svg></span> <span class="worktree-name">${escapeHtml(wtName)}</span>`;
+
+      const wtStopAllBtn = document.createElement('button');
+      wtStopAllBtn.className = 'project-stop-all-btn';
+      wtStopAllBtn.type = 'button';
+      wtStopAllBtn.textContent = 'Stop all';
+      wtStopAllBtn.title = 'Stop all sessions in this worktree';
+      wtHeader.appendChild(wtStopAllBtn);
 
       const wtHideBtn = document.createElement('button');
       wtHideBtn.className = 'worktree-hide-btn';
@@ -1179,7 +1390,7 @@ function renderProjects(projects, resort) {
       wtNewBtn.setAttribute('aria-expanded', 'false');
       wtHeader.appendChild(wtNewBtn);
 
-      const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older, wtResult.subagentIndex, wt.projectPath, wtResult.topLevelIds);
+      const wtSessionsList = buildSessionsList(wtFId, wtResult.visible, wtResult.older, wtResult.subagentIndex, wt, wtResult.topLevelIds);
       wtSessionsList.className = 'worktree-sessions';
       const wtOfferNotice = buildReenableNotice(wt, wtFId);
       if (wtOfferNotice) wtSessionsList.prepend(wtOfferNotice);
@@ -1262,7 +1473,9 @@ function renderProjects(projects, resort) {
       }
       if (fromEl.classList.contains('sessions-more-toggle') && fromEl.classList.contains('expanded')) {
         toEl.classList.add('expanded');
-        toEl.textContent = '- hide older';
+        const label = toEl.querySelector('.sessions-more-label');
+        label.textContent = '- hide older';
+        label.setAttribute('aria-expanded', 'true');
       }
       if (fromEl.classList.contains('slug-group-older') && fromEl.style.display !== 'none') {
         toEl.style.display = '';
@@ -1277,6 +1490,8 @@ function renderProjects(projects, resort) {
     }
   });
 
+  renderProjects.lastProjects = inputProjects;
+
   // Save the full sorted order (project order + item order) as source of truth
   sortedOrder = newSortedOrder;
 
@@ -1290,6 +1505,11 @@ function renderProjects(projects, resort) {
   if (activeSessionId && openSessions.has(activeSessionId) && !isUserTyping) {
     openSessions.get(activeSessionId).terminal.focus();
   }
+  sidebarRenderKey = JSON.stringify(sidebarRenderInputs(inputProjects));
+  sidebarRenderPayload = JSON.stringify(inputProjects);
+  sidebarRenderAllProjects = JSON.stringify(cachedAllProjects);
+  sidebarRenderObserver.takeRecords();
+  sidebarRenderDirty = false;
 }
 
 // see .ai/contexts/session-cache.md ("Archived projects", re-enable offers)
@@ -1437,7 +1657,7 @@ async function archiveProjectFolder(project, button) {
     if (result.archiveSessions) {
       let refused = false;
       const notStopped = [];
-      const groupKey = 'ph-' + folderId(project.projectPath);
+      const groupKey = 'ph-' + folderId(project.projectPath, project.remoteAlias);
       const own = sessions.filter(s => !archivingSessionIds.has(s.sessionId));
       setGroupArchiveBusy(groupKey, true);
       for (const s of own) setArchiveBusy(s.sessionId, true);
@@ -1502,10 +1722,14 @@ async function archiveProjectFolder(project, button) {
 
 function rebindSidebarEvents(projects) {
   for (const project of projects) {
-    const fId = folderId(project.projectPath);
+    const fId = folderId(project.projectPath, project.remoteAlias);
     const header = document.getElementById('ph-' + fId);
     if (!header) continue;
     const newBtn = header.querySelector('.project-new-btn');
+    const stopAllBtn = header.querySelector('.project-stop-all-btn');
+    if (stopAllBtn) {
+      stopAllBtn.onclick = (e) => { e.stopPropagation(); return confirmAndStopProjectFolder(project); };
+    }
     if (newBtn) {
       if (project.remoteAlias) {
         newBtn.onclick = (e) => {
@@ -1588,7 +1812,7 @@ function rebindSidebarEvents(projects) {
       };
     }
     header.onclick = (e) => {
-      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn') || e.target.closest('.project-remap-btn') || e.target.closest('.remote-host-refresh-btn')) return;
+      if (e.target.closest('.project-stop-all-btn') || e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn') || e.target.closest('.project-remap-btn') || e.target.closest('.remote-host-refresh-btn')) return;
       header.classList.toggle('collapsed');
     };
   }
@@ -1596,9 +1820,14 @@ function rebindSidebarEvents(projects) {
   // Bind worktree header events
   sidebarContent.querySelectorAll('.worktree-header').forEach(wtHeader => {
     const wtFId = wtHeader.id.replace('ph-', '');
-    const wtProject = projects.find(p => folderId(p.projectPath) === wtFId
+    const wtProject = projects.find(p => folderId(p.projectPath, p.remoteAlias) === wtFId
       && (p.remoteAlias || '') === wtHeader.dataset.remoteAlias);
     if (!wtProject) return;
+
+    const wtStopAllBtn = wtHeader.querySelector('.project-stop-all-btn');
+    if (wtStopAllBtn) {
+      wtStopAllBtn.onclick = (e) => { e.stopPropagation(); return confirmAndStopProjectFolder(wtProject); };
+    }
 
     const wtNewBtn = wtHeader.querySelector('.worktree-new-btn');
     if (wtNewBtn) {
@@ -1668,7 +1897,7 @@ function rebindSidebarEvents(projects) {
       };
     }
     wtHeader.onclick = (e) => {
-      if (e.target.closest('.worktree-new-btn') || e.target.closest('.worktree-hide-btn') || e.target.closest('.worktree-delete-btn')) return;
+      if (e.target.closest('.project-stop-all-btn') || e.target.closest('.worktree-new-btn') || e.target.closest('.worktree-hide-btn') || e.target.closest('.worktree-delete-btn')) return;
       wtHeader.classList.toggle('collapsed');
     };
   });
@@ -1713,12 +1942,45 @@ function rebindSidebarEvents(projects) {
   sidebarContent.querySelectorAll('.sessions-more-toggle').forEach(moreBtn => {
     const olderList = moreBtn.nextElementSibling;
     if (!olderList || !olderList.classList.contains('sessions-older')) return;
-    const count = olderList.children.length;
-    moreBtn.onclick = () => {
+    const count = olderList.querySelectorAll('.session-item:not([data-subagent])').length;
+    const label = moreBtn.querySelector('.sessions-more-label');
+    moreBtn.onclick = (event) => {
+      if (event.target.closest('.sessions-older-archive-btn')) return;
       const showing = olderList.style.display !== 'none';
       olderList.style.display = showing ? 'none' : '';
       moreBtn.classList.toggle('expanded', !showing);
-      moreBtn.textContent = showing ? `+ ${count} older` : '- hide older';
+      label.textContent = showing ? `+ ${count} older` : '- hide older';
+      label.setAttribute('aria-expanded', String(!showing));
+    };
+    const archiveBtn = moreBtn.querySelector('.sessions-older-archive-btn');
+    const olderRows = () => [...olderList.querySelectorAll('.session-item:not([data-subagent]):not(.archived-item)')]
+      .map(item => sessionMap.get(item.dataset.sessionId)).filter(session => session && !session.archived);
+    const updateArchiveButton = () => {
+      archiveBtn.disabled = archivingGroupIds.has(moreBtn.id) || !olderRows().some(session => !olderArchiveKeepReason(session));
+    };
+    updateArchiveButton();
+    archiveBtn.onclick = async event => {
+      event.stopPropagation();
+      if (archivingGroupIds.has(moreBtn.id)) return;
+      const rows = olderRows();
+      if (!rows.length) return;
+      const groupIds = [moreBtn.id, ...[...olderList.querySelectorAll('.slug-group')].map(group => group.id)];
+      if (groupIds.some(id => archivingGroupIds.has(id)) || rows.some(row => archivingSessionIds.has(row.sessionId))) {
+        showSessionActionFailure('Archive', rows[0], 'An archive is still in progress', 'Try again when it finishes.');
+        return;
+      }
+      for (const id of groupIds) setGroupArchiveBusy(id, true);
+      for (const row of rows) setArchiveBusy(row.sessionId, true);
+      const rule = `Older means rows or slug groups outside the first ${visibleSessionCount} visible items, or last modified more than ${sessionMaxAgeDays} days ago. Active sessions, tabs open here (including closed tabs), sessions live elsewhere and remote sessions alive on their host are kept. Pinned sessions and sessions waiting to restore are kept.`;
+      try {
+        await archiveSessionRows(rows, rule);
+      } catch (error) {
+        for (const row of rows.filter(row => !row.archived)) surfaceStopFailure(null, error.message, row);
+      } finally {
+        for (const row of rows) setArchiveBusy(row.sessionId, false);
+        for (const id of groupIds) setGroupArchiveBusy(id, false);
+        updateArchiveButton();
+      }
     };
   });
 
@@ -1840,6 +2102,14 @@ function rebindSidebarEvents(projects) {
         showJsonlViewer(rowHeadSession(session));
       };
     }
+
+    const unreadBtn = item.querySelector('.session-unread-btn');
+    if (unreadBtn) unreadBtn.onclick = event => {
+      event.stopPropagation();
+      const head = rowHeadId(session);
+      if (storedActivitySnapshot(head, session).responseReady) clearUnread(head, 'markRead');
+      else markUnread(head);
+    };
 
     const deleteBtn = item.querySelector('.session-delete-btn');
     if (deleteBtn) {
@@ -2211,9 +2481,6 @@ function buildSessionItem(session) {
   summaryEl.className = 'session-summary';
   summaryEl.textContent = displayName;
 
-  // Compact meta line: time + msgs on the left, first UUID segment on the right
-  // (replaces the full-width session-id line). The 30s label ticker in app.js
-  // updates .session-time only, so it must stay its own span.
   const metaEl = document.createElement('div');
   metaEl.className = 'session-meta';
   const timeEl = document.createElement('span');
@@ -2319,6 +2586,10 @@ function buildSessionItem(session) {
   jsonlBtn.title = 'View messages';
   jsonlBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>';
 
+  const unreadBtn = unreadButtonTemplate.cloneNode(true);
+  unreadBtn.title = snapshot.responseReady ? 'Mark as read' : 'Mark as unread';
+  unreadBtn.setAttribute('aria-label', unreadBtn.title);
+
   const bridgeBtn = document.createElement('button');
   bridgeBtn.className = 'session-bridge-btn';
   bridgeBtn.title = 'Open on claude.ai';
@@ -2341,6 +2612,7 @@ function buildSessionItem(session) {
     actions.appendChild(forkBtn);
     // see .ai/contexts/session-cache.md ("Remote hosts — descriptor-only sessions")
     if (!session.placeholder) actions.appendChild(jsonlBtn);
+    actions.appendChild(unreadBtn);
     if (bridgeSessionUrl(session.bridgeSessionId)) actions.appendChild(bridgeBtn);
     actions.appendChild(archiveBtn);
     actions.appendChild(launchConfigBtn);

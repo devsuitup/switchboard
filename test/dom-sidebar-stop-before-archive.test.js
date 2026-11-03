@@ -58,7 +58,7 @@ function remoteSession(id, alias, alive, extra = {}) {
 }
 
 function headerFor(ctx, project) {
-  return ctx.document.getElementById('ph-' + ctx.sidebar.folderId(project.projectPath));
+  return ctx.document.getElementById('ph-' + ctx.sidebar.folderId(project.projectPath, project.remoteAlias));
 }
 
 // ---------------------------------------------------------------------------

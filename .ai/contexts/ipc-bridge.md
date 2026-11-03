@@ -4,14 +4,201 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
+## Main-process error backstop (#896)
+
+`src/main/app/main-error-handlers.js` installs `uncaughtException` and `unhandledRejection`
+listeners in `main.js` before `app.whenReady()`. Both write `[main:<origin>]`
+and a bounded stack to `electron-log`; non-Error rejection reasons use a safe
+text representation. A throwing logger is contained, independently of notices.
+
+Policy: keep running after logging, with no automatic quit. The exception
+listener suppresses Electron's default exception dialog; a B8 error notice
+replaces it. This is a reporting backstop, not recovery of the operation that
+threw. Individual throw sites and worker-thread error handling are unchanged.
+
+| Event | Payload | Bridge / consumer |
+|---|---|---|
+| `main-process-error` | `{id, kind: 'error', message, count}` | `api.onMainProcessError(callback)` in preload; `public/app-notices.js` groups errors into one persistent, dismissible B8 notice with an **Open log** action. |
+| `open-main-log` | No arguments | `api.openMainLog()` returns `{ok, error?}`. Main chooses `log.transports.file.getFile().path`, requires an absolute, non-sensitive path (including the existing on-disk path guard), and opens it via `shell.openPath`. Renderer arguments cannot choose another file. OS opener errors are shown in one replaceable error notice; opening the log leaves the error group visible. |
+| `main-error-notices-ready` | No arguments; one-way | `api.mainErrorNoticesReady()` is sent after `app-notices.js` installs its error listener. Only the active window's webContents may arm delivery and flush queued notices. |
+| `main-error-notices-dismissed` | `ids: string[]`, at most five ids; one-way | `api.mainErrorNoticesDismissed(ids)` sends the member ids removed by the user. Only the active window's webContents may dismiss them; main rejects the entire payload unless it is an array of at most five strings. Known delivered ids are removed and unknown or evicted ids are ignored, so a concurrent delivery evicting one member cannot prevent dismissal of the others. Pending errors and occurrence counts are retained. |
+
+Before the renderer signals that its listener is ready, or if its window/webContents is gone or
+sending throws, notices are queued by normalized-message id (up to 100 distinct messages;
+overflow drops the least recently encountered queued notice, never its log).
+The `main-error-notices-ready` handshake flushes the queue, including on window
+recreation/reload. Failed sends stay queued for the next handshake or recurrence.
+Main retains the last successfully delivered notice for each of the five most
+recently delivered ids, in renderer recency order. The first ready signal after
+readiness resets replays that snapshot before flushing pending errors; repeated
+ready signals only flush pending errors. Replay does not increment counts, write
+logs or alter the trailing-update throttle. This recovers notices sent to the
+outgoing page between reload start and commit. The snapshot is bounded separately
+from the 100-id pending/count caches and cleared on disposal. User dismissal removes
+only the reported member ids, so a later reload does not resurrect dismissed notices
+or lose a different error delivered between the click and IPC receipt. New occurrences
+and pending trailing updates can still show a fresh group after dismissal.
+Committed main-frame document navigation (`did-navigate`) and `render-process-gone`
+reset readiness until a new handshake. `did-navigate` only fires for new main-frame
+documents and needs no argument inspection. `will-navigate` uses Electron's details
+object rather than deprecated positional arguments.
+Started or cancelled navigation, subframe loads and same-document navigation
+do not disarm notices. `did-finish-load` does not control notice readiness.
+
+Whitespace-normalized messages, including across the two origins, have a stable
+SHA-256 id derived before display truncation. Every event is logged and updates
+the occurrence count immediately. The first occurrence sends immediately, then
+each id sends at most once per second with its latest count, including a trailing
+delivery after a burst. The clock and timer functions are injectable in tests.
+The 100 most recently encountered distinct ids retain cached counts (evicted counts
+start again if encountered later unless a delivery is still queued). The bounded
+pending queue retains its own dispatch state, so cache eviction cannot lose a
+trailing count or reset its throttle. Repeated queued errors retain their latest count.
+Display summaries are limited to 500 characters plus the origin label;
+non-Error inspection disables custom inspectors/getters and limits depth,
+array lengths and individual strings. Proxies are always summarized as
+`[Proxy; inspection omitted]`, without inspection or message/name/stack access,
+so none of their traps run. Arrays, ArrayBuffer views (including Buffers), and
+boxed Strings with more than 1,000 elements, characters, or bytes (for DataView)
+bypass key enumeration. Array length comes from its own data descriptor;
+TypedArray length and DataView byteLength/buffer/byteOffset use intrinsic prototype
+getters, and boxed String length comes from `String.prototype.valueOf.call(value)`.
+Type checks use intrinsic brands, including across realms; constructors are not read.
+Buffer labeling requires the Uint8Array brand and a direct `Buffer.prototype`
+identity check; it never walks an intervening Proxy prototype.
+Their preview inspects at most 20 elements/bytes or the first 2,000 String characters,
+reports the type and real length, and says named properties were not inspected.
+Arrays and typed arrays are sampled via own index descriptors, without slice/subarray
+or species lookup. Only data values enter the sample; accessors become literal
+`[Getter]`, `[Setter]`, or `[Getter/Setter]` strings. Copying accessor functions into
+the sample is unsafe: Node 22's inspect array grouping can read index getters even
+with `getters: false`. DataView samples use the intrinsic buffer and offset.
+String samples slice the unboxed primitive, avoiding overridable coercion methods.
+Smaller arrays/views and String objects retain inspect's preview when they have at most 1,000 own enumerable
+non-index keys. Above that cap they use `[Object with more than 1000 named keys; inspection omitted]`.
+Small arrays (length at most 1,000) still go through inspect, which can run an
+own index getter in Node 22 despite `getters: false`.
+String objects are recognized across realms with `util.types.isStringObject`.
+Other non-Error values with more than 1,000 own enumerable keys are summarized as
+`[Object with N keys; inspection omitted]`, without reading property values.
+Key enumeration and inspection remain inside the hostile-value guard. Plain-object
+key enumeration itself is unbounded in time
+and allocation; the summary avoids serializing those property values but does not
+bound enumeration. Small arrays/views and String objects enumerate numeric keys
+before counting named keys; large indexed values skip that pre-check entirely.
+Nested plain objects with around a million keys remain out of scope: inspect's
+depth, maxArrayLength and maxStringLength options do not bound object width, and
+truncating its result does not bound the work needed to produce it. Ordinary
+message/name/stack getters likewise have no hard work budget.
+Inspected output, message prefixes, and logged stacks are capped at 16,000 characters.
+For messages of at most 16,000 characters, ids retain the full whitespace-normalized
+message. Longer messages hash the normalized first 16,000 characters followed by
+`\0length=<original UTF-16 length>`. Messages over 15,000 characters log the first
+11,000 characters, `[truncated; length=N]` with the original UTF-16 message length,
+and at most 4,000 stack characters (see below for which), keeping the total below
+16,000.
+For messages over 16,000 characters, a temporary `Error.prepareStackTrace` is
+installed before reading the own stack descriptor. On Node 20 (V8 11), that
+descriptor read formats a previously unread native stack into a data property
+through the temporary formatter. On Node 22, the native own stack accessor must
+match V8's shared getter, captured once at module load from a fresh Error, before
+it is called directly. The formatter uses at most the first 20 call sites,
+returning frames only (at most 4,000 characters). The log adds the
+bounded message prefix and truncation marker once. The prior formatter descriptor
+is restored in `finally`.
+If `Error.prepareStackTrace` is non-configurable or `Error` is frozen, messages
+over 16,000 characters log no stack, including explicit or already cached stacks,
+rather than risk materializing an unbounded lazy stack on Node 20. Messages of
+15,001–16,000 characters are unaffected by this restriction.
+V8 caches those frames on a previously unread Error;
+this is an accepted trade-off to avoid materializing the full oversized stack.
+Restoring the accessor descriptor cannot reset V8's internal cached value, and
+reconstructing an Error would lose its original call sites. A stack read before
+reporting is already cached and remains unchanged. There is currently no app
+reader of the reported Error's stack after this backstop.
+Own stack data values, including explicit or previously cached stacks, retain
+their contents. When the error's own message is over 15,000 characters, it must
+start at an index from 0 to 1,000 of the stack (matched on its first 200
+characters, then confirmed in full), whatever the error name or header. When
+found there and only whitespace (at most 1,000 characters) separates it from
+the next frame line, the 4,000-character cap starts at that frame line (a
+message ending in a newline may share it with the first frame). The head is
+kept only if the message's full 200-character probe does not start inside its
+first frame line; otherwise it falls back to the tail. A blank or short first
+message line matching only a frame suffix is not a repeat. Only those 200
+characters are compared, not the whole message.
+If those 200 characters repeat on a later line, the head is cut before that
+line and joined within the 4,000-character budget to the end of the frames
+following the repeated message (the same whitespace rule applies), dropping
+any partial first tail line; without a valid following frame, only the prefix
+is kept. This retains both throw sites when they fit, at the cost of
+intervening frames. A stack that itself starts with a frame keeps its head.
+Otherwise, including a long text that comes from the error name, the cap is
+the last 4,000 characters, as before. When the frames exceed 4,000 characters,
+the head keeps the throw site and may hold fewer frames than the tail would;
+that is the trade-off #965 chose. The capping itself only slices a stack
+string already read. A whitespace-only message reads `error.name` at every
+length. Otherwise
+custom stack and name getters never run for messages over 16,000 characters;
+for 15,001–16,000 characters the stack is read through `error.stack`. Absent
+stacks contribute no frames.
+A native Error from another vm realm has a different stack getter on Node 22+
+and therefore contributes no frames for messages over 16,000 characters.
+The 15,990-character regression
+cannot exercise the swap: it is below the strict >16,000 threshold, so it covers
+ordinary stack reading and truncation; the 16,001-character case covers the swap.
+Smaller messages retain the existing stack-prefix cap.
+A Node 22.23.4 probe with a 50-million-character message measured about
+50 MB of extra heap for `error.stack.slice(-4000)`, versus about 28 KB for
+call-site formatting: slicing the tail alone does materialize that native stack.
+This bounds normalization, hashing and logged text size; it does not guarantee
+the backing storage size of V8 substring values, or avoid the cost of an already
+cached, cross-realm or custom stack string. Message prefix slicing itself can
+materialize a large V8 string.
+Equal prefixes and lengths intentionally deduplicate
+even when unseen suffixes differ; different original lengths remain distinct.
+Inspected values with the same capped output can also share an id. Empty or
+whitespace-only messages fall back to the error name or a type label before hashing.
+
+The renderer uses B8 `members` to retain at most five distinct summaries inside
+one `main-process-errors` notice, moving repeated ids to the newest position and
+showing counts. While an id remains in the group, its displayed count is the
+maximum of the previous and incoming count, so a main count-cache eviction cannot
+reduce it. After more than 100 distinct ids cause count-cache eviction, the shown
+count is a lower bound, not an exact lifetime total. Renderer eviction/dismissal
+clears that display history.
+Existing groups update visible text in place, preserving buttons and focus.
+The empty, persistent `#app-notices` host retains `aria-live="polite"` before any
+notice is inserted, preserving announcements of other B8 notices inserted with text
+already in place and their existing `alert`/`status` roles. The main-error group has
+`role="group"`, the accessible name “Application errors” and `aria-live="off"`,
+so its visible counts and recency order remain readable without live announcements.
+An offscreen announcement span before the buttons supplies its own live semantics
+(`role="alert"`, `aria-atomic="true"`); it changes only when a new
+id joins, using that id's message. Count-only updates and member reordering leave
+live-region text untouched. A missing announcement span is recreated after a generic
+notice rerender so the next new id is still announced. `public/style.css` clips the
+announcement without hiding it from assistive technology. Other B8 notices retain
+the persistent polite host and their existing roles.
+Flush uses the same grouping, so 100 queued errors cannot create 100 alerts.
+The notice says the log may hold details, since electron-log rotates it.
+Trailing timers are unref'd, bounded by the 100 pending ids, and cancelled on
+pending-queue eviction/disposal. Listeners can be disposed independently in plain
+Node tests.
+
+Known gap (#896): an error before any window has ever loaded stays queued only;
+there is no native startup notification or forced window creation. Diagnostics
+lists activity traces, not the main log; **Open log** on the error notice is the
+main-log entry point.
+
 ## Key files
 
 | File | LOC | Role |
 |---|---|---|
 | `preload.js` | ~270 | The `contextBridge.exposeInMainWorld('api', {...})` block. Every renderer-facing function. |
 | `main.js` | ~4100 | The `ipcMain.handle('<name>', ...)` and `ipcMain.on('<name>', ...)` handlers, scattered throughout. |
-| `schedule-ipc.js` | ~220 | **Also registers IPC handlers** (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`) — `init()` is called from `main.js`, but a `main.js`-only search for `ipcMain.handle` misses these three. Audit both files. |
-| `bg-agents-ipc.js` | ~130 | **Also registers IPC handlers** (`get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`) and sends `bg-agents-changed` — `init()` is called from `main.js`, so a `main.js`-only search for `ipcMain.handle` misses these six. Audit both files. |
+| `src/main/schedules/schedule-ipc.js` | ~220 | **Also registers IPC handlers** (`get-schedule-creator-command`, `create-schedule-session`, `run-schedule-now`) — `init()` is called from `main.js`, but a `main.js`-only search for `ipcMain.handle` misses these three. Audit both files. |
+| `src/main/bg-agents/bg-agents-ipc.js` | ~130 | **Also registers IPC handlers** (`get-bg-agents`, `check-bg-agent-verb`, `bg-agent-verb`, `dispatch-bg-agent`, `bg-agent-live-job`, `restore-background-job`) and sends `bg-agents-changed` — `init()` is called from `main.js`, so a `main.js`-only search for `ipcMain.handle` misses these six. Audit both files. |
 | `unsaved-guard.js` | ~440 | **Also registers IPC handlers** for the exit flow (`exit-attempt-snapshot`, `exit-background`, `exit-background-cancel`, `unsaved-check-phase`, `unsaved-pong`, `unsaved-dialog`, `unsaved-ready`, `unsaved-check-ack`, `unsaved-check-result`, `unsaved-check-reason-done`) through the `ipcMain` it is handed by `createUnsavedGuard`. See window-frame.md. |
 
 ## Public surface (IPC inventory)
@@ -231,6 +418,7 @@ An unknown remote target never falls back to local disk IO.
 | IPC | Notes |
 |---|---|
 | `open-external` | Opens https:// URLs in OS browser |
+| `open-main-log` | No arguments; opens the main-selected, validated application log path and returns `{ok, error?}`. |
 | `clipboard-write-text` | Main-process clipboard write (Wayland fix, PR #18) |
 | `get-app-version` | From package.json |
 | `whats-new-startup` / `whats-new-dismissed` | The What's new dialog: the `CHANGELOG.md` sections to show on startup (or `null`), and recording the running version as `lastSeenVersion` when it closes. Help → What's new sends `show-whats-new` with the running version's section. See `docs/changelog.md` |
@@ -255,11 +443,13 @@ An unknown remote target never falls back to local disk IO.
 | `activity-trace` | Renderer probe → the trace file. Registered **only** when `SWITCHBOARD_ACTIVITY_TRACE` is set (see below) |
 | `activity-focus` / `activity-titles` | Focused session and running-session titles for ActivityWatch — see activitywatch.md |
 | `updater-close` | The updater window closed |
+| `main-error-notices-ready` | No arguments; active renderer has installed the main-error listener. Arms delivery and flushes pending errors. |
+| `main-error-notices-dismissed` | `ids: string[]` (at most five strings); only the active renderer may send it, after the user dismisses the group. A payload of the wrong type or length is rejected whole; otherwise main forgets the ids it still knows and ignores unknown or evicted ones, so concurrent deliveries of other ids survive. |
 | `exit-background-cancel` / `unsaved-check-phase` / `unsaved-pong` / `unsaved-dialog` / `unsaved-ready` / `unsaved-check-ack` / `unsaved-check-result` / `unsaved-check-reason-done` | The exit flow's unsaved-edits handshake, handled in `unsaved-guard.js` — see window-frame.md |
 
 ### Events (main → renderer)
 
-`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
+`terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
 
 `remote-resize-allowed(sessionId)` is emitted once when a live remote attach
 promotes from shared to solo. `preload.onRemoteResizeAllowed` forwards the id
@@ -291,7 +481,7 @@ adapter applies it.
   Work-files still use the narrower `.includes('/.work-files/')` substring check — same weakness against a symlinked ancestor, not yet migrated (see "IPC path-guard inventory" below). A handler that reads *content* back to the renderer (file panel, memory) and a handler that only decides *whether to run a command* (`run-schedule-now`) both need a guard, and neither one is safe with `path.resolve()` alone.
 - **Trust boundary is the contextBridge call**. Anything passed across must survive structured-clone serialization. No functions, no DOM nodes, no class instances — only plain JSON.
 - **Async handlers return promises**. Renderer uses `await window.api.foo(...)`. Throws cross the boundary as rejected promises; return `{ok, error}` if you want graceful failure handling on the renderer side.
-- **Never call a method on `session.pty` directly.** Go through `pty-ops.js` (`resizePty` / `killPty` / `writePty`, or the generic `withPty`). See "PTY operations race the exit" below.
+- **Never call a method on `session.pty` directly.** Go through `src/main/terminals/pty-ops.js` (`resizePty` / `killPty` / `writePty`, or the generic `withPty`). See "PTY operations race the exit" below.
 
 ### IPC path-guard inventory
 
@@ -301,15 +491,16 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 |---|---|---|
 | `read-memory` / `save-memory` | `resolveAllowedMemoryPath` (read/write the returned path, not the caller's own re-resolved one) | disk-resolved allowlist |
 | `get-memories` (the list, and the FTS bodies it indexes) | `acceptMdFile` (`scan-md-files.js`) applies `isSensitivePath` itself and the `isAllowedMemoryPath` predicate `get-memories` passes in; `scanMdFiles` is the directory-wide form of it, and the project-root `CLAUDE.md`/`GEMINI.md`/`agents.md` go through it by name | disk-resolved denylist + allowlist — a listed file is read twice more downstream, once by `read-memory` behind `resolveAllowedMemoryPath` and once by the FTS indexer behind nothing at all, so the guard belongs on the list. The denylist is not the caller's to choose: containment in an allowed project root says nothing about a cloned repo's own `.ssh`/`.env` |
+| `open-main-log` | Main chooses electron-log's path; requires a string absolute path and `!isSensitivePath` before `shell.openPath`. | no renderer-supplied path; disk-resolved denylist |
 | `open-path` / `read-file-for-panel` / `save-file-for-panel` / `watch-file` | Local: `isSensitivePath`. Remote panel reads resolve the session target and guard the literal and canonical host path. Saves refuse a resolved remote target and any path already opened through the remote panel route, even without renderer options. | disk-resolved denylist + main-side remote write refusal |
-| `resolve-terminal-paths` | `resolveTerminalPaths` / `resolveTerminalPathTarget` (`terminal-path-target.js`, async, 8 checks in flight): the session cwd for a relative path, existence, then `isSensitivePath` on the resolved path, then regular-file-ness, `PANEL_FILE_MAX_BYTES` and a NUL-byte sniff | disk-resolved denylist, strictly narrower than `read-file-for-panel` — its whole input is untrusted terminal output, and its answer decides whether a path is even offered as a link. Existence is tested before the denylist because most candidates on a line of prose are not files; a path that exists still passes the denylist before anything else is decided. A remote session is refused outright, and so is one whose working directory cannot be resolved — otherwise an unresolvable remote would fall back to stat-ing the local disk. A panel shell (`panelFor`) resolves through its owning session |
+| `resolve-terminal-paths` | `resolveTerminalPaths` / `resolveTerminalPathTarget` (`src/main/terminals/terminal-path-target.js`, async, 8 checks in flight): the session cwd for a relative path, existence, then `isSensitivePath` on the resolved path, then regular-file-ness, `PANEL_FILE_MAX_BYTES` and a NUL-byte sniff | disk-resolved denylist, strictly narrower than `read-file-for-panel` — its whole input is untrusted terminal output, and its answer decides whether a path is even offered as a link. Existence is tested before the denylist because most candidates on a line of prose are not files; a path that exists still passes the denylist before anything else is decided. A remote session is refused outright, and so is one whose working directory cannot be resolved — otherwise an unresolvable remote would fall back to stat-ing the local disk. A panel shell (`panelFor`) resolves through its owning session |
 | `check-delete-worktree` / `delete-worktree` / `worktree-status` | Shared `checkDeleteWorktree`: `WORKTREE_PATH_RE` (shape) + `isKnownProjectRoot` (disk-resolved exact match) | shape + disk-resolved allowlist |
 | `delete-session-preview` / `delete-session` | `deleteSessionGuard` then `resolveRowDeletionTargets` (`delete-session-target.js`) | full live/background/unknown-state guard + disk-resolved containment |
 | `run-schedule-now` | `resolveRunNowTarget` (`run-schedule-now-target.js`), which composes directory shape (requested path) + filename shape (requested **and** resolved) + `isSensitivePath` + `isAllowedMemoryPath` on both the resolved file and the resolved project root | disk-resolved allowlist + denylist — **the only handler in the app that both reads a file and spawns a process from a renderer-supplied path; the file's content becomes a prompt sent to the model, so the resolved target is constrained, not just its location** |
 | `read-work-file` / `delete-work-file` | `.includes('/.work-files/')` substring | ad hoc string, **not disk-resolved** — a symlinked ancestor defeats it the same way it defeated `isSensitivePath`/`isAllowedMemoryPath` before they were fixed here. Not migrated in this pass; same fix shape (`resolveOnDisk` + a `.work-files` component check instead of a substring test) would close it |
 | `read-activity-trace-file` / `delete-activity-trace-file` | `resolveTraceFilePath` (`activity-trace.js`) | ad hoc string (directory + basename pattern), **not disk-resolved** — narrower surface (one generated file family) lowers the stakes, not migrated |
 | `add-project` / `remap-project` | none on the probe (`fs.statSync`/`fs.existsSync`/`fs.lstatSync`); the actual write is confined through `encodeProjectPath` | existence/type oracle only — inherent to the feature (both accept an arbitrary disk location by design), not cheaply fixable without breaking it |
-| `open-terminal` (`preLaunchCmd`) | `validatePreLaunchCmd` (`pre-launch-cmd-guard.js`) | not a path guard — a character allowlist on a raw-shell-by-design string (the documented prefix's character set plus its analogues: `env VAR=val`, `doas`, an absolute binary path); a denylist here proved incomplete (process substitution `<(...)`/`>(...)` needed none of the blocked characters), so this is closed by construction instead of by enumeration. Known cost: bare `$VAR` expansion and quoted arguments, both previously accepted, are now refused. The real-bash test of the documented shape spawns `bash -l -c` without `-i`: it asserts that the validated prefix runs as an ordinary command line, which does not depend on interactive mode, and `-i` with no TTY is what prints "cannot set terminal process group" (job control) next to the intermittent status 2147483652; the intermittent status is handled in `test/spawn-retry.js` (#342) |
+| `open-terminal` (`preLaunchCmd`) | `validatePreLaunchCmd` (`src/main/terminals/pre-launch-cmd-guard.js`) | not a path guard — a character allowlist on a raw-shell-by-design string (the documented prefix's character set plus its analogues: `env VAR=val`, `doas`, an absolute binary path); a denylist here proved incomplete (process substitution `<(...)`/`>(...)` needed none of the blocked characters), so this is closed by construction instead of by enumeration. Known cost: bare `$VAR` expansion and quoted arguments, both previously accepted, are now refused. The real-bash test of the documented shape spawns `bash -l -c` without `-i`: it asserts that the validated prefix runs as an ordinary command line, which does not depend on interactive mode, and `-i` with no TTY is what prints "cannot set terminal process group" (job control) next to the intermittent status 2147483652; the intermittent status is handled in `test/spawn-retry.js` (#342) |
 | `read-session-jsonl` / `read-subagent-jsonl` / `start-subagent-watch` / `create-schedule-session` | none directly — path is derived from a SQLite key or built via `encodeProjectPath`, not taken verbatim from the renderer | out of scope for a path guard; flag if a renderer-controlled string is ever found reaching the derivation unencoded |
 | `git-changes-file` / `git-changes-watch` / `git-changes-unwatch` | `isSafeRevPathOperand` + `resolveTargetInsideRepo` (`git-changes-file.js`): the repo root and git directories come from `git rev-parse --show-toplevel --absolute-git-dir --git-common-dir`, a symlink at the target is refused before anything follows it, and **every remaining check runs on the disk-resolved path** — containment in the root, no `.git` segment, nothing inside a git directory, `isSensitivePath`, regular file | shape + disk-resolved containment + denylist — the operand is `<rev>:<path>`, a *revision*, not a pathspec: `--literal-pathspecs` does not reach it and `--` cannot separate it, so it carries its own guard. See `.ai/contexts/changes-view.md` ("Editing a changed file") |
 | `git-changes-save` | `isSafeRepoRelativePath` + the same `resolveTargetInsideRepo`, plus a version token that must still match the bytes on disk; the write runs on the path the guard returned, never on a re-derived one | shape + disk-resolved containment + denylist — **the only write handler in the app whose entire input is a relative path from the renderer**, so containment is the guard, not an afterthought; `save-file-for-panel` next to it has none (it takes an absolute path and checks only `isSensitivePath`) and is not the precedent to copy here |
@@ -353,7 +544,7 @@ The path that produced it: the user closes a session → the PTY exits → the
 renderer re-lays out the remaining terminals and emits one `terminal-resize` per
 tile, including for the session that just went away.
 
-`pty-ops.js` is the single place a session PTY is touched. It keeps the liveness
+`src/main/terminals/pty-ops.js` is the single place a session PTY is touched. It keeps the liveness
 check as a cheap fast path but wraps the call, the way `trigger-watcher.js`
 already reasoned about its writes ("an exit between the liveness probe and the
 write is bounded by the try/catch on the write"). Callers get a boolean instead
@@ -376,6 +567,29 @@ closes a given pty once (a `WeakSet` of killed ptys), and `resizePty` /
 `writePty` return false on a killed pty. `test/pty-ops-conpty-kill.test.js`
 proves it against the real node-pty in a child process (Windows only): with the
 guard removed the child dies with 3221226356.
+
+Both ConPTY suites use `test/pty-ops-conpty-stage.js` to copy node-pty into
+TEMP. A reusable stage requires `.complete`, `node-pty/package.json` and every
+file the source has under `lib/` and `prebuilds/<platform>-<arch>/` (the
+ConPTY suites load `conpty.node`, `conpty_console_list.node` and
+`conpty/conpty.dll` + `OpenConsole.exe` from there) (#749). Why a marker
+outlived its module on the workstation is not known, so the check covers
+every staged file rather than a guessed subset.
+An incomplete stage is renamed aside before best-effort removal and atomic
+publication of a fresh temporary copy. After relocation, the same completeness
+check runs on the displaced directory: a complete stage published in the gap
+before the rename is restored, or a complete winner already at the final path
+is reused and the displaced copy removed (#935). Restore and publication
+conflicts reuse only a complete winner; other failures propagate; a displaced
+copy that vanished before its restore (ENOENT) leads to a fresh publication.
+The sweep spares `.tmp-` and `.stale-` siblings younger than five minutes, so
+it cannot delete another process's displaced stage mid-restore. This narrows
+the race to the two renames, it does not close it: a child resolving node-pty
+between them still fails, and a loaded `.node` does not stop a directory from
+being moved aside on Windows.
+`test/pty-ops-conpty-stage.test.js` covers missing components, untouched reuse,
+relocation and publication races, including publication just before relocation
+and a competing winner during restoration.
 
 node-pty 1.2.0-beta.15 (#409) adds a mutex around the handle table
 (microsoft/node-pty#922). In 1.1.0 the shell's exit thread erases the pty's
@@ -408,6 +622,143 @@ crashes when the allocator has already reused or unmapped it. A kill holds
 the pointer across `ClosePseudoConsole`, which can wait for OpenConsole, and then
 writes to the entry; a resize holds it for one `ResizePseudoConsole` call.
 
+### Closing a local PTY on Windows (#897)
+
+Windows tab cleanup uses a resident hidden PowerShell helper and one unnamed
+native job per foreground local PTY (`src/main/terminals/`, ADR 0005).
+At app ready, main configures the singleton once and starts it without awaiting
+startup. `windowsJobHelper()` only retrieves it; configuring it again with
+different function bindings throws instead of silently keeping the first ones.
+First and restored tabs never wait for compilation. Queued assignments wait for
+`ready` (15 s startup deadline). Node reads the packaged `.ps1` with asar-aware
+fs.readFileSync; build.files includes src/**/*, and no archive path goes to
+PowerShell. The absolute System32 executable runs with -NoProfile,
+-NonInteractive, -EncodedCommand, windowsHide and SilentlyContinue; Add-Type
+compiles the P/Invoke C# once. No compilation occurs on the close path.
+Closing a tab while its assignment is still queued cancels that assignment and
+uses plain ConPTY close; hidden processes may remain. The helper warns once per
+app session for this early-close case and remains available for later tabs.
+This warning also covers a close before node-pty has submitted the root PID.
+Release before readiness cancels the assignment silently.
+
+Jobs **never** set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. They retain only
+JOB_OBJECT_LIMIT_BREAKAWAY_OK (0x800): applications that explicitly request
+CREATE_BREAKAWAY_FROM_JOB keep that ability. Node detached spawn does not request
+that flag, so ordinary detached children are still members. SILENT_BREAKAWAY_OK
+is absent because it would exempt ordinary descendants. Closing job handles,
+helper death, transport/protocol failure or timeout therefore kills no members.
+The failed singleton logs once, settles requests false and never restarts in the
+same app session; subsequent tabs degrade to plain ConPTY close. EOF/finally
+only closes handles, with no membership scan or termination. Release also just
+closes the handle; there is no limit flag to clear and no release-time flag API
+failure. Explicit protected-aware terminate is the only job cleanup operation.
+
+The protocol is assign <ptyId> <rootPid> <spawnTimeMs>,
+terminate <ptyId> [pid:procStart,...], release <ptyId>. Replies are assigned,
+terminated, released plus id, or error <id> <Win32 code>. The client buffers
+split lines, rejects invalid identities, and drops exited/released queued roots.
+Request replies have a 3 s deadline. Assignment opens the process, checks its
+GetProcessTimes creation time against spawn time plus 100 ms, checks liveness
+with WaitForSingleObject, and assigns through that same identity-pinning handle.
+Descendants born after assignment join automatically; children already born can
+escape. Removing that gap would require suspended native creation/assignment.
+
+node-pty 1.2.0-beta.15 initially returns PID zero. trackWindowsPty subscribes to
+ready_datapipe, records the connection time and assigns the real PID, with a
+5.5 s unref'd bound. Exited, released and closing roots are not assigned. Main
+does not register attach or remote PTYs. Normal root exit releases the job,
+including when native exit is known before JS exit delivery. The exit listener
+keeps a job whose explicit close has already started.
+
+Tab close/Stop marks the PTY killed, suppresses duplicate closes/writes/resizes,
+calls pty.kill synchronously, then polls native _agent.exitCode every 25 ms until
+exit (including zero) or 2000 ms. This cap is below Windows' five-second
+CTRL_CLOSE allowance. No claim is made that non-root Claude/MCP processes receive
+CTRL_CLOSE. The helper enumerates job members with QueryInformationJobObject,
+growing the buffer on ERROR_MORE_DATA, then explicitly terminates unprotected
+members. Opened GUI windows lose unsaved work. Enumeration/termination is a
+snapshot: a later child can escape. API errors are returned per job and the
+handle is closed without blindly killing unidentified members.
+An exception inspecting or terminating one member skips that member and lets the
+other members finish cleanup. Inspection failures exclude that PID from the
+termination pass. The helper reports one member-failure warning per lifetime,
+returns an error for the affected job, and always removes/closes its job handle.
+
+For each member it reads command line with NtQueryInformationProcess class 60
+(Windows 8.1+), parent PID with ProcessBasicInformation and creation FILETIME
+with GetProcessTimes. One named IsBackgroundAgent matcher uses
+CommandLineToArgvW, freed with LocalFree. It accepts claude/claude.exe, or
+node/node.exe running @anthropic-ai/claude-code/cli.js after Node options, including
+`--max-old-space-size=…` and `-r`/`--require` preload pairs. The first
+arguments after the executable/script must be daemon run, or --bg-pty-host as
+the first argument. Prompt/commit text containing these words does not qualify.
+Executable basenames use separator lookup rather than filesystem path validation,
+so malformed argv[0] values such as `bad<name.exe` do not throw. The matcher was
+checked against live daemon and worker command lines:
+`...\claude-code\bin\claude.exe daemon run --origin transient --spawned-by "{...}"`
+and `...\claude.exe --bg-pty-host \\.\pipe\cc-daemon-... 444 110 -- ...`.
+The Node CLI-entry form also has synthetic native test coverage.
+
+Main obtains the roster path from bg-agents.getDaemonRosterPath(), honoring its
+configured path. Its asynchronous best-effort read supplies worker pid/procStart
+pairs. The roster shape consumed by `bg-agents.workerSample` carries `proto`,
+`updatedAt`, `supervisorPid` and worker `pid`/`procStart` pairs; neither that code
+nor `cli-session-state` defines a supervisor creation timestamp. The supervisor
+therefore relies on argv protection. `readWindowsDaemonPids` can also forward
+`supervisorProcStart` if a future roster provides one; PID alone is never evidence.
+The optional read is bounded at 50 ms; missing,
+malformed and slow reads supply no seeds. procStart is a 17-19 digit decimal
+Windows FILETIME string (100 ns since 1601), compared to native creation time
+with the same <=100 tick tolerance as cli-session-state.procStartMatches and
+bg-worker-liveness. Stale/reused PIDs do not protect a member. Matched members
+and validated roster members seed transitive protection only through parents in
+the same snapshot whose creation time is no later than the child's. Unreadable
+command lines warn once per helper lifetime and need validated roster evidence.
+Other members are opened with terminate/query access and checked with
+IsProcessInJob on that handle immediately before TerminateProcess. No
+TerminateJobObject is used.
+
+A background agent whose launcher has already exited can lose its ancestry link
+to the daemon. If it has no own marker or roster identity, closing the originating
+tab ends it. This accepted rare case requires the daemon to have been cold-started
+from that tab; surviving ancestry cannot be reconstructed from an absent parent.
+
+Attach, detaching, backgrounding, backgrounded, hosted and non-local sessions use
+plain close. Detach releases before Ctrl-Z/write or fallback kill. Confirmed
+background handoff awaits release before scheduling its kill; continuation
+rekeying also requests release.
+
+App quit retains the existing 1500 ms shutdown drain and adds no await. It calls
+the same synchronous pty.kill; the existing unref'd 25 ms native-exit poll can
+issue best-effort protected termination if the root exits while that drain is
+still active. There is no guarantee: its 2000 ms deadline exceeds the drain, and
+Node/Electron's outer libuv job can kill the helper before EOF. Hidden descendants
+of still-open tabs can therefore survive app exit, as before this PR. No new quit
+cleanup path or stronger guarantee is claimed. Helper/parent death itself leaves
+the assigned processes alive because no job is armed. Pure-Node native parent-exit
+tests exercise this property; they are not an Electron exit measurement.
+
+Resident PowerShell with P/Invoke may be flagged by EDR/AV or ended by the user.
+There is no restart policy. No EDR product was tested.
+
+Tests load shipped production code: pty-ops-jobs covers close ordering, grace
+deadline, exclusions, detach and deferred assignment; windows-job-helper covers
+protocol, roster identity transport, singleton configuration and failure paths;
+windows-job-policy compiles the real PowerShell/C# for argv, FILETIME and ancestry
+policy. pty-job-shutdown uses the real shutdown functions with controlled external
+ports. windows-job-native uses real ConPTY/jobs, simultaneous tabs, explicit hidden
+child cleanup, valid/stale roster identities, protected daemons, release, helper
+death/EOF/timeout and parent exit. windows-job-latency runs the ten cold helper
+startup/assignment/termination samples separately so profiling does not consume
+the functional file's 120 s process budget. `windows-job-malformed` likewise
+isolates the extra malformed-argv cleanup regression from that budget. Surviving fake processes
+expire through their own fixture timers after the observation window. Processes
+have absolute safety lifetimes and fixture cleanup only targets owned PIDs.
+The native test runner owns each fixture's temporary directory and registers
+cleanup in its after hook, including when the fixture exits before its finally
+block. Both cleanup paths retry transient Windows removal failures.
+`stop-process-tree.js` is used by runClaudeCommand for command-timeout cleanup.
+
 ### Cursor-position queries
 
 The beta's bundled OpenConsole asks the terminal where its cursor is: a plain
@@ -427,7 +778,7 @@ node reader as the shell):
   reply through the same way.
 
 A visible session answers at once: xterm.js replies with a plain CPR
-(`CSI row;col R`), which `composer-state.js` does not treat as a report (see
+(`CSI row;col R`), which `src/main/terminals/composer-state.js` does not treat as a report (see
 `.ai/contexts/trigger-watcher.md`, CPR), so the answer pushes the quiet clock
 once.
 
@@ -441,7 +792,7 @@ share the matcher in `public/terminal-replay-queries.js`; see
 - `appendToHiddenAccumulator` / `replayHiddenBuffer` (`public/terminal-manager.js`)
   remove these queries from what they keep, including a query split across chunks
   and one left in the live write buffer when the session was hidden.
-- `appendToOutputBuffer` (`output-buffer.js`), main's reattach buffer, removes them
+- `appendToOutputBuffer` (`src/main/terminals/output-buffer.js`), main's reattach buffer, removes them
   on the way in, a query split across several chunks included (the last
   four code units of the buffer are checked, across entries). That buffer also
   holds the queries a visible renderer already answered.
@@ -477,7 +828,7 @@ is deliberate — the file transport is at `info` in packaged builds, so a resiz
 storm against a dying PTY costs nothing in production, and the line is there in
 dev when someone next has to diagnose this.
 
-Not covered by `pty-ops.js`, on purpose: `trigger-watcher.js` writes (already
+Not covered by `src/main/terminals/pty-ops.js`, on purpose: `trigger-watcher.js` writes (already
 bounded by their callers' try/catch, plus a `process.kill(pid, 0)` liveness
 probe) and the `clear` shim write in `open-terminal`, which happens before a
 session object exists.
@@ -662,7 +1013,7 @@ Two constraints shaped the API:
   `isSensitivePath`, because the legitimate surface here is a single generated
   file family. Both the check (`resolveTraceFilePath`) and the capped read
   (`readTraceTail`) live in `activity-trace.js` rather than inline in the
-  handler, for the same reason `fts-match.js` and `terminal-input.js` do:
+  handler, for the same reason `fts-match.js` and `src/main/terminals/terminal-input.js` do:
   a handler body cannot be unit-tested without booting Electron, and these two
   carry the parts worth testing — a non-string path must answer `null` rather
   than throw (a rejected invoke leaves the button dead with no message), and a
@@ -755,7 +1106,11 @@ throttled projects-changed notification with cause conflict, then returns only
 Preload recognizes that exact envelope and reconstructs a coded Error. Ordinary
 errors still reject; boolean arrays and the paired defaultProjects/allProjects
 reply retain their successful shapes, with compact provenance on the paired
-reply. Rejected worker results never reach placeholder/archive/attach assembly.
+reply. Its `projection.facts` map shares deciding inputs by opaque `scope|root`
+across both views (#742). Rows carry no `projectionFacts`; main's assembly and
+the renderer observer resolve representatives through the envelope's proof member
+sets. Subagents and terminals have no facts. Paired activity-trace byte counts
+include the envelope. Rejected worker results never reach placeholder/archive/attach assembly.
 
 session-projection-changed is a narrow preload send. Main requires its own
 window's webContents and main frame, validates allowlisted typed fields and logs

@@ -26,6 +26,7 @@ test('written activity survives busy, completion and attention; an older seen wa
 
 function setup(t) {
   const ctx = setupSidebarDom();
+  ctx.evalPublic('message-search.js');
   t.after(ctx.destroy);
   const row = { sessionId: 's', status: 'busy', modified: new Date().toISOString() };
   const projects = [makeSampleProject({ sessions: [row] })];

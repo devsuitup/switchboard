@@ -50,7 +50,7 @@ for (const alias of [null, 'host']) {
   test(`Parts metadata retains each transcript's own name and date (${alias || 'local'})`, t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-parts-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-    const { joinFolderKey } = require('../remote-hosts');
+    const { joinFolderKey } = require('../src/main/remote/remote-hosts');
     const base = { projectPath: dir, folder: alias ? joinFolderKey(alias, 'project') : 'project', messageCount: 1 };
     const rows = [
       { ...base, sessionId: 'A', summary: 'Root', modified: '2026-10-10T09:00:00Z' },

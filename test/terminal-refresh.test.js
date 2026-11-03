@@ -391,8 +391,8 @@ test('shared attach return skips refresh in single and grid views, including unk
 });
 
 test('shared explicit Refresh redraws locally without fitting, IPC, raw resize or ssh commands', async () => {
-  const { createTmuxAttachAdapter } = require('../remote-attach');
-  const { createTerminalResizeHandler } = require('../terminal-resize');
+  const { createTmuxAttachAdapter } = require('../src/main/remote/remote-attach');
+  const { createTerminalResizeHandler } = require('../src/main/terminals/terminal-resize');
   const rawResizes = [];
   const commands = [];
   const tasks = [];

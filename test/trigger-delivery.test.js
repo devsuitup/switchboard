@@ -14,8 +14,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { setTimeout: realSetTimeout } = require('node:timers');
 const cli = require('../cli-session-state');
-const { createTriggerContext } = require('../trigger-context');
-const { start } = require('../trigger-watcher');
+const { createTriggerContext } = require('../src/main/triggers/trigger-context');
+const { start } = require('../src/main/triggers/trigger-watcher');
 const log = { info() {}, warn() {}, error() {}, debug() {} };
 const iso = ms => new Date(ms).toISOString();
 

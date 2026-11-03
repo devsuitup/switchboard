@@ -7,7 +7,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveGitChangesTarget, isValidChangesSessionId, listSubagentWorktrees, collectSubagentChanges, checkSubagentRepo } = require('../git-changes-target');
+const { resolveGitChangesTarget, isValidChangesSessionId, listSubagentWorktrees, collectSubagentChanges, checkSubagentRepo } = require('../src/main/changes/git-changes-target');
 
 function baseDeps(overrides = {}) {
   return {

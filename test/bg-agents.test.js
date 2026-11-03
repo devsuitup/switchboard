@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const bgAgents = require('../bg-agents');
+const bgAgents = require('../src/main/bg-agents/bg-agents');
 
 function mkTmp() {
   return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sw-bg-agents-')));
@@ -84,7 +84,7 @@ test('B-F4 Stop on a working job without a descriptor keeps the main shortcut an
     sessionState.readWorkerProcessEvidence = () => ({ processTableFresh: true, tableEntry: () => undefined });
     const { cli } = boot(dir, { sessionState, homeDir: dir });
     const handlers = new Map();
-    require('../bg-agents-ipc').init({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
+    require('../src/main/bg-agents/bg-agents-ipc').init({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
       bgAgents, getMainWindow: () => null, log: silentLog,
       activeSessions: new Map([['11111111-1111-4111-8111-111111111111', {}]]) });
     assert.deepEqual(await handlers.get('check-bg-agent-verb')({}, 'stop', 'aaaaaaaa'), { ok: true });
@@ -292,7 +292,7 @@ test('job and descriptor churn keeps the job cache current without rebuilding an
     let reads = 0;
     sessionState.readAllDescriptors = () => { reads++; return []; };
     boot(dir, { sessionState });
-    require('../bg-agents-ipc').init({ ipcMain: { handle() {} }, bgAgents, getMainWindow: () => null, log: silentLog });
+    require('../src/main/bg-agents/bg-agents-ipc').init({ ipcMain: { handle() {} }, bgAgents, getMainWindow: () => null, log: silentLog });
     const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
     const projectsListener = mainSource.match(/bgAgents\.onJobsChanged\(\(\) => notifyRendererProjectsChanged\('bg-jobs'\)\);/);
     assert.ok(projectsListener);
@@ -389,16 +389,21 @@ test('macOS window close and activate preserve sidebar job watching without an A
       unsavedGuard: { committedToken: () => null, invalidate() {} },
       activeSessions: new Map(), killPty: () => assert.fail('no PTY to kill'),
       changesWatchers: { closeAll() {} }, closeAllFileWatchers() {}, subagentWatchers: new Map(),
-      bgAgents, unsubscribeBgAgents() {}, BrowserWindow: { getAllWindows: () => [] },
+      bgAgents, transcriptFollower: require('../src/main/viewer/transcript-follower').createTranscriptFollower(),
+      unsubscribeBgAgents() {}, BrowserWindow: { getAllWindows: () => [] },
       createWindow: () => { context.mainWindow = { reopened: true }; },
       app: { on: (_name, callback) => { context.activate = callback; } },
     };
     const closedStart = source.indexOf("  mainWindow.on('closed', () => {");
     const closedEnd = source.indexOf('\n  });', closedStart) + '\n  });'.length;
-    vm.runInNewContext(source.slice(closedStart, closedEnd), context);
+    vm.runInNewContext(source.slice(closedStart, closedEnd), context, {
+      filename: path.join(__dirname, '..', 'main.js'), lineOffset: source.slice(0, closedStart).split('\n').length - 1,
+    });
     const activateStart = source.indexOf("    app.on('activate', () => {");
     const activateEnd = source.indexOf('\n    });', activateStart) + '\n    });'.length;
-    vm.runInNewContext(source.slice(activateStart, activateEnd), context);
+    vm.runInNewContext(source.slice(activateStart, activateEnd), context, {
+      filename: path.join(__dirname, '..', 'main.js'), lineOffset: source.slice(0, activateStart).split('\n').length - 1,
+    });
     context.closed();
     assert.equal(bgAgents.getCachedJobs().get('aaaaaaaa')?.state, 'working', 'window close keeps the cache');
     context.activate();
@@ -477,7 +482,7 @@ for (const state of ['working', 'done']) for (const failure of ['corrupt', 'miss
         updatedAt: new Date().toISOString(), fan: [], inFlight: { tasks: 0, kinds: [] } });
       const { cli } = boot(dir, { cli: fakeCli({ list: [{ ...CLI_LIST[0], state }] }) });
       const handlers = new Map();
-      const close = require('../bg-agents-ipc').init({
+      const close = require('../src/main/bg-agents/bg-agents-ipc').init({
         ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents,
         getMainWindow: () => null, log: silentLog,
       });

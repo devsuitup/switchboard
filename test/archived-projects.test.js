@@ -12,7 +12,7 @@ const {
   archivedEntry, knownIdsForGroup, applyArchivedProjects, applyAndPersistArchived,
   clearArchivedEntry, archivePlanForGroups, reenableScheduleFiles,
 } = require('../archived-projects');
-const { scheduleFileUnlinked } = require('../schedule-runner');
+const { scheduleFileUnlinked } = require('../src/main/schedules/schedule-runner');
 
 function group(projectPath, sessions, remoteAlias = null) {
   return { projectPath, remoteAlias, sessions };

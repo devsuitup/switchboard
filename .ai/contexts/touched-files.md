@@ -1,5 +1,13 @@
 # Context: touched-files
 
+Main-process modules for this context live in `src/main/changes/` (ADR 0005, step 6).
+
+`session-touched-files.js`, `touched-transcript-cache.js` and `remote-touched-files.js`
+are siblings there. The Windows path tests in `test/git-changes-file-paths.test.js`
+assert that their eager shared-module VM stubs are consumed. The
+`./session-touched-files` require in `git-changes-file.js` stays lazy and is
+exercised by the Touched calls.
+
 **Purpose**: a per-session list of the files the session's *file tools* touched,
 in the right-hand file panel, for local and remote sessions. It answers "who touched what"
 where Changes cannot: outside any repository, in a directory with no git, when
@@ -11,7 +19,7 @@ User-facing behavior: `docs/touched-files.md`. IPC and its guard row:
 
 | File | Role |
 |---|---|
-| `session-touched-files.js` | Main-side module, no electron: `extractTouches(line)`, `resolveTouchedPath(raw, {cwd})`, `collectSessionTouchedFiles(opts)` (the walk, with every dependency injected) and `listSessionTouchedFiles(sessionId, deps)` (the IPC's target resolution). |
+| `src/main/changes/session-touched-files.js` | Main-side module, no electron: `extractTouches(line)`, `resolveTouchedPath(raw, {cwd})`, `collectSessionTouchedFiles(opts)` (the walk, with every dependency injected) and `listSessionTouchedFiles(sessionId, deps)` (the IPC's target resolution). |
 | `public/touched-files-view.js` | Renderer: the `'touched'` tab type, its container, rows (touched and opened), toggle and refresh, and `openTouchedPath`, the route every clicked file takes into the panel. Loaded after `file-panel.js`, which reaches it behind `typeof` (`initTouchedView`, `renderTouchedTab`, `hideTouchedView`, `openTouchedPath`). |
 | `read-session-file.js` | `enumerateSessionFiles(folderPath)` lists the parent and subagent transcripts (both layouts); the module keeps the entries that belong to the session. |
 

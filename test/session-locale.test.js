@@ -18,7 +18,7 @@ function load(file, globals = {}) {
 }
 
 function cleaner(platform) {
-  return load('clean-env.js', { process: { platform } }).module.exports.cleanEnv;
+  return load('src/main/shared/clean-env.js', { process: { platform } }).module.exports.cleanEnv;
 }
 
 function mainStatement(predicate) {
@@ -78,7 +78,7 @@ test('main startup supplies local sessions but never synthesizes a locale for th
     const source = { PATH: '/bin' };
     let spawnOptions;
     const context = vm.createContext({
-      require: name => name === './clean-env' ? { cleanEnv: cleaner(platform), scrubSessionEnv() {} } : {},
+      require: name => name === './src/main/shared/clean-env' ? { cleanEnv: cleaner(platform), scrubSessionEnv() {} } : {},
       process: { env: source }, module: {},
       createTmuxAttachAdapter: opts => opts,
       loadAttachProfileId() {}, app: { getPath() {} }, log: {}, os: { homedir: () => '/home/test' },
@@ -99,7 +99,7 @@ test('main startup supplies local sessions but never synthesizes a locale for th
 });
 
 test('git changes keeps LC_ALL=C even with a session UTF-8 environment', () => {
-  const context = load('git-changes-runner.js', { process });
+  const context = load('src/main/changes/git-changes-runner.js', { process });
   const env = vm.runInContext('localGitEnv', context)(cleaner('darwin')({}));
   assert.equal(env.LC_ALL, 'C');
   assert.equal(env.LANG, 'C');
@@ -110,7 +110,7 @@ test('local Claude and plain-terminal launch environments retain the UTF-8 defau
   const claude = mainStatement(n => n.type === 'VariableDeclaration' && n.declarations.some(d => d.id.name === 'ptyEnv'));
   for (const platform of ['darwin', 'linux', 'win32']) {
     const context = vm.createContext({ cleanPtyEnv: cleaner(platform)({}), shell: '/bin/sh', shellExtraArgs: [],
-      shellArgs: () => [], plainTerminalLaunch: require('../plain-terminal-shell').plainTerminalLaunch,
+      shellArgs: () => [], plainTerminalLaunch: require('../src/main/terminals/plain-terminal-shell').plainTerminalLaunch,
       ensurePlainTerminalInitFiles: () => false, PLAIN_TERMINAL_INIT_DIR: '/unused', log: {} });
     vm.runInContext(plain.source, context, { filename: plain.filename });
     vm.runInContext(claude.source, context, { filename: claude.filename });
@@ -145,12 +145,14 @@ test('schedule launch passes the UTF-8 default to the intercepted child spawn', 
 });
 
 test('relaunch does not persist a synthesized locale into the next app and its implicit SSH children', async () => {
-  const context = load('relaunch.js', {
+  let cleaned = false;
+  const context = load('src/main/app/relaunch.js', {
     process,
-    require: name => name === './clean-env' ? { cleanEnv: cleaner('linux') } : createRequire(path.join(root, 'relaunch.js'))(name),
+    require: name => name === '../shared/clean-env' ? { cleanEnv: (...args) => { cleaned = true; return cleaner('linux')(...args); } } : createRequire(path.join(root, 'src/main/app/relaunch.js'))(name),
   });
   let launched;
   await context.module.exports({ env: { PATH: '/bin' }, execPath: '/app', argv: [], cwd: '/tmp',
     spawnSync: (_file, _args, opts) => { launched = opts.env; return { status: 0 }; }, quit() {}, notify() {} });
   assert.equal(launched.LC_CTYPE, undefined);
+  assert.equal(cleaned, true, 'the relaunch fixture must use the Linux environment cleaner');
 });

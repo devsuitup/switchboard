@@ -182,7 +182,8 @@ Probes that only record an observation (`osc.title`, `osc.progress`,
 | `trace.prune-failed` | An old file could not be deleted | `file`, `error`, `retained` |
 | `main.loop` | Once per second while tracing is on | `lagMs`; `maxMs`, `p99Ms` only with `SWITCHBOARD_MAIN_LOOP_HISTOGRAM=1` at startup |
 | `projects.changed` | A throttled projects notification is sent | `cause` (distinct caller labels coalesced across the throttle window) |
-| `app.quit` | Last line of a clean shutdown | — |
+| `session-index-writer.busy` | At most once a minute when the index writer retried or gave up on `SQLITE_BUSY`, and once at writer close if counts remain | `counts` (per command name: `retries`, `exhaustions`) |
+| `app.quit` | A clean shutdown starts its last steps; `pty.exit` and a final `session-index-writer.busy` can still follow | — |
 
 ### Renderer
 
@@ -465,6 +466,12 @@ each accepted logical conversation change, combining background/merge membership
 representative/head, selected activity source and visibility facets. Omission or
 metadata-time changes alone are silent; current deciding inputs still refresh.
 These records complement the optional OSC/paint trace above.
+
+The paired projects reply shares deciding facts in `projection.facts`, keyed by
+opaque scope and graph root (#742), instead of copying them into each session
+row of both views. All top-level conversations remain observable, including
+foreground rows before a transition or split; subagents and terminals are omitted.
+The `ipc.get-projects` paired `replyBytes` measure includes this envelope.
 
 Correlate schema:1, main timestamp, cause, opaque host/project scope and graph
 root with projects generation/build and roster revision. Inputs describe exact

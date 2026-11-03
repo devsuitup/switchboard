@@ -6,7 +6,7 @@ const path = require('node:path');
 const cache = require('../session-cache');
 const { readSessionFile, mergeBridgeGroups } = require('../read-session-file');
 const { encodeProjectPath } = require('../encode-project-path');
-const { createRemoteIndexer } = require('../remote-index');
+const { createRemoteIndexer } = require('../src/main/remote/remote-index');
 const { loadDeletionHandlers } = require('./delete-session-harness');
 
 function fixture(t) {

@@ -12,8 +12,8 @@ const { spawnSync } = require('node:child_process');
 
 const {
   plainTerminalLaunch, writeInitFiles, ensureInitFiles, BASHRC, TYPED_SHIM, FISH_SHIM, HINT,
-} = require('../plain-terminal-shell');
-const { shellArgs } = require('../shell-profiles');
+} = require('../src/main/terminals/plain-terminal-shell');
+const { shellArgs } = require('../src/main/terminals/shell-profiles');
 
 const INIT = '/data/shell-init';
 const BASE_ENV = { HOME: '/home/u', PATH: '/usr/bin:/bin', TERM: 'xterm-256color' };

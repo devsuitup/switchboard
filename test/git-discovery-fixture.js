@@ -156,8 +156,8 @@ async function emptyAncestorMatrix(t) {
   const { cwd, ancestor, file } = fixture(t);
   fs.mkdirSync(path.join(cwd,'.git'));
   fs.mkdirSync(path.join(ancestor,'.git'));
-  const { readTouchedChangesFile } = require('../git-changes-file');
-  const { createGitChangesRunner, gitEntryAtOrAbove } = require('../git-changes-runner');
+  const { readTouchedChangesFile } = require('../src/main/changes/git-changes-file');
+  const { createGitChangesRunner, gitEntryAtOrAbove } = require('../src/main/changes/git-changes-runner');
   for (const stderr of [...FRENCH, 'fatal: not a git repository', '']) {
     const runGit=async()=>({code:128,stdout:'',stderr});
     await t.test('walk: '+(stderr || 'empty stderr'),()=>assert.equal(gitEntryAtOrAbove(cwd),false));

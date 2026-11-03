@@ -13,7 +13,7 @@ const os     = require('os');
 const path   = require('path');
 const fs     = require('fs');
 
-const { isSensitivePath, isAllowedMemoryPath, resolveAllowedMemoryPath, isKnownProjectRoot } = require('../ipc-path-validator');
+const { isSensitivePath, isAllowedMemoryPath, resolveAllowedMemoryPath, isKnownProjectRoot } = require('../src/main/shared/ipc-path-validator');
 
 const HOME       = os.homedir();
 const CLAUDE_DIR = path.join(HOME, '.claude');
@@ -115,7 +115,7 @@ test('isSensitivePath: rejects traversal to .ssh via .claude path', () => {
 // A name nothing on disk carries: a real ~/.claude/CLAUDE.md may be a symlink
 // out of ~/.claude, which the guard rightly refuses (see the symlink tests below).
 test('isAllowedMemoryPath: allows files under ~/.claude/', () => {
-  const { isAllowedMemoryPath: allowed } = require('../ipc-path-validator');
+  const { isAllowedMemoryPath: allowed } = require('../src/main/shared/ipc-path-validator');
   assert.equal(allowed(path.join(CLAUDE_DIR, 'sb-test-no-such-file.md'), []), true);
 });
 

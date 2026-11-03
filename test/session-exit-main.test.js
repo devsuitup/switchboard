@@ -6,9 +6,9 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const espree = require('espree');
-const { createUnsavedGuard } = require('../unsaved-guard');
-const { inventory } = require('../session-exit');
-const { applicationMenuTemplate } = require('../window-frame');
+const { createUnsavedGuard } = require('../src/main/app/unsaved-guard');
+const { inventory } = require('../src/main/app/session-exit');
+const { applicationMenuTemplate } = require('../src/main/app/window-frame');
 const source = fs.readFileSync(require.resolve('../main'), 'utf8');
 const ast = espree.parse(source, { ecmaVersion: 'latest', sourceType: 'commonjs', range: true });
 const startup = ast.body.find(n => n.id?.name === 'startApplication');
@@ -99,11 +99,13 @@ test('A4 shipped menu, updater and close wait for consent; Cancel preserves proc
     app.quit = () => app.emit('before-quit', t.event());
     Object.assign(t.context, { app, process: { platform }, mainWindow: t.win, activeSessions: t.records, closedSessions: new Map(),
       killPty: () => t.calls.push('stop-pty'), changesWatchers: { closeAll() {} }, closeAllFileWatchers() {}, unsubscribeBgAgents() {},
-      subagentWatchers: new Map(), shutdownComplete: false,
+      subagentWatchers: new Map(), transcriptFollower: require('../src/main/viewer/transcript-follower').createTranscriptFollower(), shutdownComplete: false,
       shutdownForExit: async () => { t.calls.push('shutdown'); t.context.shutdownComplete = true; }, exitOnce: () => t.calls.push('exit') });
     const start = source.indexOf("  mainWindow.on('closed'");
     const end = source.indexOf('\n  });', start) + 6;
-    vm.runInContext(source.slice(start, end), t.context);
+    vm.runInContext(source.slice(start, end), t.context, {
+      filename: require.resolve('../main'), lineOffset: source.slice(0, start).split('\n').length - 1,
+    });
     const allClosed = startup.body.body.find(n => n.expression?.arguments?.[0]?.value === 'window-all-closed');
     const beforeQuit = startup.body.body.findLast(n => n.expression?.arguments?.[0]?.value === 'before-quit');
     vm.runInContext(source.slice(...allClosed.range), t.context);
@@ -263,10 +265,13 @@ test('C2 a committed macOS native install keeps its bypass when the window close
   assert.equal(close.prevented, false, 'committed Stop consent permits the native close');
   Object.assign(t.context, { activeSessions: t.records, closedSessions: new Map(),
     killPty: () => t.calls.push('stop-pty'), changesWatchers: { closeAll() {} },
-    closeAllFileWatchers() {}, unsubscribeBgAgents() {}, subagentWatchers: new Map() });
+    closeAllFileWatchers() {}, unsubscribeBgAgents() {}, subagentWatchers: new Map(),
+    transcriptFollower: require('../src/main/viewer/transcript-follower').createTranscriptFollower() });
   const start = source.indexOf("  mainWindow.on('closed'");
   const end = source.indexOf('\n  });', start) + 6;
-  vm.runInContext(source.slice(start, end), t.context);
+  vm.runInContext(source.slice(start, end), t.context, {
+    filename: require.resolve('../main'), lineOffset: source.slice(0, start).split('\n').length - 1,
+  });
   t.win.emit('closed');
   assert.equal(t.context.updateInstalling, true, 'releasing a committed window must preserve the native install bypass');
   assert.equal(t.guard.launchAllowed(), true, 'window cleanup still releases the attempt');
@@ -327,12 +332,12 @@ test('A5 upgrades renew consent, generations are revalidated, sender and launch 
 test('#769 a confirmed handoff during an open exit dialog does not ask again after rekey', async () => {
   const t = setup();
   const session = t.records.get('local');
-  session.composerState = require('../composer-state').createComposerState();
+  session.composerState = require('../src/main/terminals/composer-state').createComposerState();
   let entered = false, time = 0;
   t.menu();
   assert.equal(t.checks().length, 1);
   assert.deepEqual(t.detail().snapshot.rows.map(row => row.id), ['local']);
-  const result = await require('../bg-handoff').sendToBackground('local', {
+  const result = await require('../src/main/bg-agents/bg-handoff').sendToBackground('local', {
     getSession: id => t.records.get(id), getStatus: () => 'idle', now: () => time,
     readContinuationIds: () => entered ? ['continuation'] : [],
     readDescriptors: () => [{ kind: 'bg', sessionId: 'continuation', jobId: '1234abcd' }],
@@ -456,7 +461,7 @@ for (const [from, to] of [['close', 'quit'], ['quit', 'update']]) {
 test('C2 shipped exit inventory classifies busy by the real CLI id after a clear rekey', () => {
   const asked = [];
   const context = vm.createContext({
-    exitInventory: null, inventory, backgroundRefusal: require('../bg-handoff').backgroundRefusal,
+    exitInventory: null, inventory, backgroundRefusal: require('../src/main/bg-agents/bg-handoff').backgroundRefusal,
     activeSessions: new Map([['tab', { kind: 'local-pty', pty: {}, realSessionId: 'real' }]]),
     cliSessionState: { getStatus: id => { asked.push(id); return { status: id === 'real' ? 'busy' : 'idle' }; } },
   });
@@ -470,7 +475,7 @@ test('C2 shipped exit inventory classifies busy by the real CLI id after a clear
 
 for (const completion of ['render-process-gone', 'destroyed', 'answer']) {
   test(`C4 ${completion} during a busy wait commits without a later background write`, async () => {
-    const { runExitHandoffs } = require('../session-exit');
+    const { runExitHandoffs } = require('../src/main/app/session-exit');
     const states = new Map([['local', 'busy'], ['written', 'idle']]);
     const writes = [], wakes = [];
     let confirm;
@@ -621,7 +626,7 @@ test('H2b an untagged exit marks committed-attempt invalidation external', async
 });
 
 test('C4 external exit resolves the real batch immediately and prevents later busy writes', async () => {
-  const { runExitHandoffs } = require('../session-exit');
+  const { runExitHandoffs } = require('../src/main/app/session-exit');
   const t = setup('win32', (ids, opts) => runExitHandoffs(ids, {
     ...opts, status: () => 'busy', now: () => 0,
     waitForChange: () => new Promise(() => {}), send: () => { t.calls.push('send'); },
@@ -659,7 +664,7 @@ for (const ok of [true, false]) {
 test('C4 an external exit supersedes user cancellation of a written batch', async () => {
   for (const cancel of ['ipc', 'invalidation']) {
     let confirm;
-    const t = setup('win32', (ids, opts) => require('../session-exit').runExitHandoffs(ids, {
+    const t = setup('win32', (ids, opts) => require('../src/main/app/session-exit').runExitHandoffs(ids, {
       ...opts, status: () => 'idle', now: () => 0, waitForChange: async () => {},
       send: () => new Promise(resolve => { confirm = resolve; }),
     }));

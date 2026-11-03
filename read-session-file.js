@@ -1,7 +1,8 @@
 const path = require('path');
 const fs = require('fs');
 const { StringDecoder } = require('string_decoder');
-const { continuationId, continuationStamp, matchesContinuationStamp } = require('./session-continuations');
+const { continuationId, continuationStamp, matchesContinuationStamp, continuationMtime } = require('./session-continuations');
+const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
 
 /** Subagent transcripts land under <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl.
  *  We surface them as first-class rows with a synthetic sessionId so they're addressable
@@ -18,6 +19,9 @@ function subagentSessionId(parentSessionId, agentId) {
 function resolveJsonlPath(projectsDir, row) {
   if (!row || !row.folder) return null;
   if (row.parentSessionId && row.agentId) {
+    if (isWorkflowRunId(row.workflowRunId)) {
+      return path.join(projectsDir, row.folder, row.parentSessionId, 'subagents', 'workflows', row.workflowRunId, `agent-${row.agentId}.jsonl`);
+    }
     return path.join(projectsDir, row.folder, row.parentSessionId, 'subagents', `agent-${row.agentId}.jsonl`);
   }
   return path.join(projectsDir, row.folder, row.sessionId + '.jsonl');
@@ -199,8 +203,9 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
   const excludedMessageUuids = opts.excludedMessageUuids;
   const excludedMessageSignatures = opts.excludedMessageSignatures;
   try {
-    const stamp = isSubagent ? null : continuationStamp(fs.statSync(filePath, { bigint: true }));
-    const stat = fs.statSync(filePath);
+    const big = fs.statSync(filePath, { bigint: true });
+    const stamp = continuationStamp(big);
+    const stat = isSubagent ? { size: Number(big.size), mtime: new Date(continuationMtime(big)), birthtime: new Date(Number((big.birthtimeNs + 500000n) / 1000000n)) } : fs.statSync(filePath);
     const fileBytes = fs.readFileSync(filePath);
     const content = fileBytes.toString('utf8');
     const lines = content.split('\n').filter(Boolean);
@@ -343,10 +348,11 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         firstPrompt: summary,
         created: stat.birthtime.toISOString(),
         modified: stat.mtime.toISOString(),
-        fileMtime: stat.mtime.toISOString(),
+        fileMtime: continuationMtime(big),
         fileSize: stat.size,
         messageCount, textContent, slug, customTitle: customTitle || '', aiTitle,
         parentSessionId: opts.parentSessionId,
+        workflowRunId: opts.workflowRunId || null,
         agentId,
         subagentType,
         description,
@@ -354,6 +360,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       };
     }
 
+    const fileMtime = continuationMtime({ mtimeNs: BigInt(stamp.mtimeNs) });
     const pending = fileBytes.subarray(fileBytes.lastIndexOf(10) + 1);
     const skipLine = pending.length > 1024 * 1024;
     const row = {
@@ -364,14 +371,14 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       // in refreshFolder). Old transcripts without timestamps fall back to stat.
       created: firstTimestamp || stat.birthtime.toISOString(),
       modified: lastTimestamp || stat.mtime.toISOString(),
-      fileMtime: stat.mtime.toISOString(),
+      fileMtime,
       fileSize: stat.size,
       messageCount, textContent, slug, scheduleSlug, customTitle: customTitle || '', aiTitle,
       continuationIndex: matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }))
         ? JSON.stringify({ format: 3, version: 3, ids: [...continuationIds], stamp,
         sealedIds: sealedContinuationIds ?? [...continuationIds], bytes: fileBytes.length,
         complete: fileBytes.length === stat.size && (!incompleteTail || skipLine), size: fileBytes.length,
-        mtime: stat.mtime.toISOString(), unresolved: continuationUnresolved,
+        mtime: fileMtime, unresolved: continuationUnresolved,
         invalid: sealedContinuationIds === null ? continuationUnresolved : continuationInvalid,
         skipLine, pending: skipLine ? '' : pending.toString('base64'),
         tail: fileBytes.subarray(Math.max(0, fileBytes.length - 64)).toString('hex'),
@@ -531,14 +538,15 @@ function enumerateSessionFiles(folderPath) {
     topEntries = fs.readdirSync(folderPath, { withFileTypes: true });
   } catch { return out; }
 
+  const add = filePath => {
+    const classified = classifyTranscriptPath(path.relative(folderPath, filePath));
+    if (classified) out.push({ filePath, sessionId: path.basename(filePath, '.jsonl'), ...classified });
+  };
+
   // Top-level .jsonl files = ordinary sessions
   for (const e of topEntries) {
     if (e.isFile() && e.name.endsWith('.jsonl')) {
-      out.push({
-        filePath: path.join(folderPath, e.name),
-        sessionId: path.basename(e.name, '.jsonl'),
-        parentSessionId: null,
-      });
+      add(path.join(folderPath, e.name));
     }
   }
 
@@ -550,14 +558,18 @@ function enumerateSessionFiles(folderPath) {
     // Preferred layout: subagents/ subfolder
     const subagentsDir = path.join(subDir, 'subagents');
     try {
-      if (fs.statSync(subagentsDir).isDirectory()) {
+      if ([subDir, subagentsDir].every(directory => {
+        const stat = fs.lstatSync(directory);
+        return stat.isDirectory() && !stat.isSymbolicLink();
+      })) {
         for (const f of fs.readdirSync(subagentsDir)) {
           if (!f.endsWith('.jsonl')) continue;
-          out.push({
-            filePath: path.join(subagentsDir, f),
-            sessionId: path.basename(f, '.jsonl'),
-            parentSessionId,
-          });
+          add(path.join(subagentsDir, f));
+        }
+        for (const runDir of workflowRunDirectories(subagentsDir)) {
+          for (const f of fs.readdirSync(runDir, { withFileTypes: true })) {
+            if (f.isFile()) add(path.join(runDir, f.name));
+          }
         }
         continue;
       }
@@ -566,16 +578,37 @@ function enumerateSessionFiles(folderPath) {
     try {
       for (const f of fs.readdirSync(subDir)) {
         if (!f.endsWith('.jsonl')) continue;
-        out.push({
-          filePath: path.join(subDir, f),
-          sessionId: path.basename(f, '.jsonl'),
-          parentSessionId,
-        });
+        add(path.join(subDir, f));
       }
     } catch {}
   }
 
   return out;
+}
+
+function workflowRunDirectories(subagentsDir) {
+  const workflows = path.join(subagentsDir, 'workflows');
+  try {
+    return fs.readdirSync(workflows, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && !entry.isSymbolicLink() && isWorkflowRunId(entry.name)
+        && isCanonicalWorkflowPath(path.dirname(path.dirname(subagentsDir)), {
+          parentSessionId: path.basename(path.dirname(subagentsDir)), workflowRunId: entry.name,
+        }))
+      .map(entry => path.join(workflows, entry.name));
+  } catch { return []; }
+}
+
+function isCanonicalWorkflowPath(folderPath, classified) {
+  if (!classified.workflowRunId) return true;
+  try {
+    let directory = folderPath;
+    for (const part of [classified.parentSessionId, 'subagents', 'workflows', classified.workflowRunId]) {
+      directory = path.join(directory, part);
+      const stat = fs.lstatSync(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    }
+    return true;
+  } catch (error) { return error.code === 'ENOENT'; }
 }
 
 // see .ai/contexts/session-cache.md ("Session names and transcript refreshes")
@@ -585,7 +618,9 @@ function readSessionDisplayHeader(filePath, opts = {}) {
   const MAX_BYTES = 256 * 1024;
   const MAX_LINES = 500;
   try {
-    const stat = fs.statSync(filePath);
+    const big = fs.statSync(filePath, { bigint: true });
+    const stat = { size: Number(big.size), mtime: new Date(continuationMtime(big)) };
+    const fileMtime = continuationMtime(big);
     const readLen = Math.min(MAX_BYTES, stat.size);
     const fd = fs.openSync(filePath, 'r');
     const buf = Buffer.alloc(readLen);
@@ -670,8 +705,10 @@ function readSessionDisplayHeader(filePath, opts = {}) {
         summary: meta.description || summary,
         firstPrompt: summary,
         modified: stat.mtime.toISOString(),
+        fileMtime,
         slug, customTitle, headTitle, tailTitle, aiTitle,
         parentSessionId: opts.parentSessionId,
+        workflowRunId: opts.workflowRunId || null,
         agentId,
         subagentType: meta.agentType || null,
         description: meta.description || null,
@@ -682,6 +719,7 @@ function readSessionDisplayHeader(filePath, opts = {}) {
       sessionId: fileBase,
       summary, firstPrompt: summary,
       modified: stat.mtime.toISOString(),
+      fileMtime,
       slug, scheduleSlug, scheduleSlugComplete, customTitle, headTitle, tailTitle, aiTitle,
     };
   } catch {
@@ -768,4 +806,4 @@ function readSessionEntrypoint(filePath, { full = false } = {}) {
   }
 }
 
-module.exports = { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, classifyUserText, subagentSessionId, resolveJsonlPath, readSubagentMeta, enumerateSessionFiles, extractDailyMetrics, isToolResultOnly, mergeBridgeGroups };
+module.exports = { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, classifyUserText, subagentSessionId, resolveJsonlPath, readSubagentMeta, enumerateSessionFiles, workflowRunDirectories, isCanonicalWorkflowPath, extractDailyMetrics, isToolResultOnly, mergeBridgeGroups };

@@ -205,13 +205,16 @@ for (const method of ['refreshNow', 'refreshHostNow']) {
       const batches = [];
       const pushes = [];
       let scans = 0;
+      const cachedRows = [{ sessionId: 'root', folder: 'host::-p' }, { sessionId: 'local', folder: '-p' }];
       const context = vm.createContext({
-        path, getAllCached: () => [{ sessionId: 'root', folder: 'host::-p' }, { sessionId: 'local', folder: '-p' }],
-        getAllMeta: () => new Map(), parseFolderKey: require('../remote-hosts').parseFolderKey,
+        refreshRemoteHeadTurnsFromCache: require('../src/main/remote/remote-index').refreshRemoteHeadTurns,
+        path, getAllCached: () => cachedRows,
+        getCachedByFolder: folder => cachedRows.filter(row => row.folder === folder),
+        getAllMeta: () => new Map(), parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
         projectsDirForFolder: () => dir,
         getAllFolderMeta: () => new Map([['host::-p', {}]]),
         getSetting: () => ({ remoteHosts: [{ alias: 'host' }] }),
-        createRemoteIndexer: options => require('../remote-index').createRemoteIndexer({
+        createRemoteIndexer: options => require('../src/main/remote/remote-index').createRemoteIndexer({
           ...options,
           sync: async () => ({ fetched: changed ? 1 : 0, unchanged: changed ? 0 : 1,
             removed: 0, failed: 0, changedFolders: new Set(changed ? ['-p'] : []),
@@ -240,11 +243,12 @@ for (const method of ['refreshNow', 'refreshHostNow']) {
         const start = source.indexOf(`const ${declaration} = `);
         assert.notEqual(start, -1);
         const end = source.indexOf('\n});', start) + 4;
-        vm.runInContext(source.slice(start, end) + `\nglobalThis.${exported} = ${declaration};`, context);
+        vm.runInContext(source.slice(start, end), context, { filename: path.join(__dirname, '../main.js') });
+        context[exported] = vm.runInContext(declaration, context);
       };
       evaluate('taskRecords', 'client');
       t.after(async () => { await context.client.dispose(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5 }); });
-      vm.runInContext(extractFunction(source, 'refreshRemoteHeadTurns'), context);
+      vm.runInContext(extractFunction(source, 'refreshRemoteHeadTurns'), context, { filename: path.join(__dirname, '../main.js') });
       evaluate('remoteIndexer', 'indexer');
       const result = await context.indexer[method](...(method === 'refreshHostNow' ? ['host'] : []));
       assert.deepEqual(result.errors || [], []);

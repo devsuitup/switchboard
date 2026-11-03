@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
-const { computeHostProfile, TMUX_MISSING_REASON } = require('../remote-host-profile');
+const { computeHostProfile, TMUX_MISSING_REASON } = require('../src/main/remote/remote-host-profile');
 
 const AT = Date.parse('2026-10-01T10:00:00Z');
 
@@ -41,7 +41,7 @@ function project(profile, s) {
 function render(ctx, profile, s) {
   ctx.window.sessionMap.set(s.sessionId, s);
   ctx.sidebar.renderProjects([project(profile, s)], true);
-  const header = ctx.document.getElementById('ph-' + ctx.sidebar.folderId('/srv/supervision'));
+  const header = ctx.document.getElementById('ph-' + ctx.sidebar.folderId('/srv/supervision', 'planificator'));
   return { header, item: ctx.document.getElementById('si-remote-1') };
 }
 

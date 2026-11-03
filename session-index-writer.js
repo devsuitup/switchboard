@@ -6,8 +6,8 @@ const { Worker } = require('node:worker_threads');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const archive = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
-const { parseFolderKey } = require('./remote-hosts');
-const { createWhatsNew } = require('./changelog');
+const { parseFolderKey } = require('./src/main/remote/remote-hosts');
+const { createWhatsNew } = require('./src/main/app/changelog');
 const { remapProjectTranscripts } = require('./project-remap');
 const { createWriterWorkerClient } = require('./session-index-writer-client');
 const { createCacheEffects } = require('./cache-effects');
@@ -15,7 +15,31 @@ const { createCacheEffects } = require('./cache-effects');
 // see .ai/contexts/session-index-writer.md
 function createSessionIndexWriter(options = {}, cache = require('./session-cache')) {
   const mirror = new Map();
+  const notify = (ids, change) => {
+    try { options.onSessionsChanged?.(ids, change); }
+    catch (error) { (options.log || console).warn('[session-index-writer] sessions observer failed: ' + (error?.message ?? String(error))); }
+  };
+  const prepareSessionsChanged = effects => {
+    if (!options.onSessionsChanged) return;
+    if (effects.some(effect => ['deleteCachedFolder', 'cleanupWorktree', 'dropRemoteFolder'].includes(effect.name))) return () => notify(null);
+    const upserts = new Set(), invalidations = new Set();
+    for (const { name, args } of effects) {
+      if (name === 'upsertCachedSessions') for (const row of args[0]) {
+        const previous = backend.getCachedFolder(row.sessionId);
+        if (previous !== null && previous !== row.folder) invalidations.add(row.sessionId);
+        upserts.add(row.sessionId);
+      }
+      else if (name === 'deleteCachedSession') invalidations.add(args[0]);
+    }
+    for (const id of invalidations) upserts.delete(id);
+    return () => {
+      if (invalidations.size) notify([...invalidations]);
+      if (upserts.size) notify([...upserts], { upsertOnly: true });
+    };
+  };
   const client = options.client || createWriterWorkerClient({
+    log: options.log || console,
+    onBusyCounts: options.onBusyCounts,
     workerFactory: options.workerFactory || (() => new Worker(path.join(__dirname, 'workers', 'session-index-writer.js'))),
     onSettings: entries => { mirror.clear(); for (const [key, value] of entries) mirror.set(key, value); if (backend) backend.applySettingsAcknowledgment(entries); },
     ...options.clientOptions,
@@ -28,12 +52,18 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
   const track = promise => { pending.add(promise); promise.finally(() => pending.delete(promise)).catch(() => {}); return promise; };
   const ready = client.ready.then(bootstrap => {
     backend = options.readonlyBackend || require('./db');
+    backend.setReadLogger?.(options.log || console);
     if (bootstrap) backend.searchFtsRecreated = bootstrap.searchFtsRecreated;
     if (!options.client) backend.applySettingsAcknowledgment([...mirror]);
     recorder = createCacheEffects(backend);
   });
   ready.catch(() => {});
-  const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(() => client.request(name, ...args)));
+  const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(async () => {
+    const notifyChanges = prepareSessionsChanged([{ name, args }]);
+    const value = await client.request(name, ...args);
+    notifyChanges?.();
+    return value;
+  }));
   const compute = (name, ...args) => {
     if (!admitted()) return Promise.reject(new Error('writer is closing'));
     const sourceVersion = backend?.getProjectsRevision?.();
@@ -60,18 +90,24 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           effects = recorder.finish();
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector);
         }
+        const notifyChanges = prepareSessionsChanged(effects);
+        let acknowledgment;
         try {
-          const acknowledgment = effects.length ? await client.request('effects', effects, revision) : null;
+          acknowledgment = effects.length ? await client.request('effects', effects, revision) : null;
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector, true);
-          combinedResult = combinedResult === true || result === true ? true : combinedResult === 'activity' || result === 'activity' ? 'activity' : result;
-          if (continuationCollector.deferred.size && !continuationRetry) {
-            continuationRetry = true;
-            attempt--;
-            continue;
-          }
-          return name === 'applyProjectsWorkerEffects' && acknowledgment?.committedRevision !== undefined ? acknowledgment : combinedResult;
         }
-        catch (error) { if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects') throw error; }
+        catch (error) {
+          if (error.code !== 'WRITER_STALE' || attempt === 2 || name === 'applyProjectsWorkerEffects') throw error;
+          continue;
+        }
+        notifyChanges?.();
+        combinedResult = combinedResult === true || result === true ? true : combinedResult === 'activity' || result === 'activity' ? 'activity' : result;
+        if (continuationCollector.deferred.size && !continuationRetry) {
+          continuationRetry = true;
+          attempt--;
+          continue;
+        }
+        return name === 'applyProjectsWorkerEffects' && acknowledgment?.committedRevision !== undefined ? acknowledgment : combinedResult;
       }
     });
     cacheTail = work.catch(() => {});
@@ -132,7 +168,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         const entries = targets.map(({ group, alias }, i) => {
           const entry = archive.archivedEntry(alias, group.projectPath);
           const disabledFiles = (offers[entry]?.disabledSchedules || []).filter(file => {
-            try { return require('./schedule-runner').parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.enabled === 'false'; } catch { return false; }
+            try { return require('./src/main/schedules/schedule-runner').parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.enabled === 'false'; } catch { return false; }
           });
           return { entry, disabledFiles, record: { archivedAt: now,
             knownSessionIds: archive.knownIdsForGroup({ projects, activeSessions: deps.activeSessions, diskIds: diskIds[i], alias, projectPath: group.projectPath }) } };
@@ -202,7 +238,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       for (const project of kept) {
         const offer = offers[archive.archivedEntry(project.remoteAlias || null, project.projectPath)];
         const names = (offer?.disabledSchedules || []).map(file => {
-          try { return require('./schedule-runner').parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.name || path.basename(file); } catch { return null; }
+          try { return require('./src/main/schedules/schedule-runner').parseFrontmatter(fs.readFileSync(file, 'utf8')).meta.name || path.basename(file); } catch { return null; }
         }).filter(Boolean);
         if (names.length) project.reenableOffer = offer.failed?.length ? { names, failed: offer.failed } : { names };
       }

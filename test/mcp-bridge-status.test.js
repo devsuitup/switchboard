@@ -16,7 +16,7 @@ process.env.HOME = home;
 process.env.USERPROFILE = home;
 
 const WebSocket = require('ws');
-const { startMcpServer, shutdownAll, getMcpState } = require('../mcp-bridge');
+const { startMcpServer, shutdownAll, getMcpState } = require('../src/main/integrations/mcp/mcp-bridge');
 
 const log = { info() {}, warn() {}, debug() {}, error() {} };
 

@@ -11,7 +11,7 @@ const path = require('path');
 
 const sessionCache = require('../session-cache');
 const { encodeProjectPath } = require('../encode-project-path');
-const { joinFolderKey } = require('../remote-hosts');
+const { joinFolderKey } = require('../src/main/remote/remote-hosts');
 
 function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-hidden-'));

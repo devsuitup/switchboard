@@ -59,7 +59,9 @@ contextBridge.exposeInMainWorld('api', {
   // the PTY never runs against a placeholder geometry. May be null.
   openTerminal: (id, projectPath, isNew, sessionOptions, initialSize) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions, initialSize),
   search: (type, query, titleOnly) => ipcRenderer.invoke('search', type, query, titleOnly),
-  readSessionJsonl: (sessionId) => ipcRenderer.invoke('read-session-jsonl', sessionId),
+  readSessionJsonl: (sessionId, options) => options === undefined
+    ? ipcRenderer.invoke('read-session-jsonl', sessionId)
+    : ipcRenderer.invoke('read-session-jsonl', sessionId, options),
   readSubagentJsonl: (parentSessionId, agentId) => ipcRenderer.invoke('read-subagent-jsonl', parentSessionId, agentId),
   listSubagents: (parentSessionId) => ipcRenderer.invoke('list-subagents', parentSessionId),
   startSubagentWatch: (parentSessionId, agentId) => ipcRenderer.invoke('start-subagent-watch', parentSessionId, agentId),
@@ -95,6 +97,7 @@ contextBridge.exposeInMainWorld('api', {
   getScheduleCreatorCommand: () => ipcRenderer.invoke('get-schedule-creator-command'),
   createScheduleSession: (projectPath) => ipcRenderer.invoke('create-schedule-session', projectPath),
   runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),
+  onScheduleRunExit: callback => ipcRenderer.on('schedule-run-exit', (_event, result) => callback(result)),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
@@ -229,6 +232,12 @@ contextBridge.exposeInMainWorld('api', {
   updaterDownload: () => ipcRenderer.invoke('updater-download'),
   updaterInstall: () => ipcRenderer.invoke('updater-install'),
   updaterClose: () => ipcRenderer.send('updater-close'),
+  openMainLog: () => ipcRenderer.invoke('open-main-log'),
+  mainErrorNoticesReady: () => { ipcRenderer.send('main-error-notices-ready'); },
+  mainErrorNoticesDismissed: ids => { ipcRenderer.send('main-error-notices-dismissed', ids); },
+  onMainProcessError: callback => {
+    ipcRenderer.on('main-process-error', (_event, notice) => callback(notice));
+  },
   onUpdaterEvent: (callback) => {
     ipcRenderer.on('updater-event', (_event, type, data) => callback(type, data));
   },

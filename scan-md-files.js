@@ -6,7 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { isSensitivePath } = require('./ipc-path-validator');
+const { isSensitivePath } = require('./src/main/shared/ipc-path-validator');
 
 /**
  * Accept `filePath` as a listable Markdown file, or return null.

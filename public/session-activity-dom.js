@@ -1,5 +1,18 @@
 const headTurns = new Map();
 
+function updateBusySpinnerAnimation() {
+  document.documentElement.classList.toggle('busy-spinners-paused',
+    document.visibilityState !== 'visible' || !document.hasFocus());
+}
+
+window.addEventListener('focus', updateBusySpinnerAnimation);
+window.addEventListener('blur', updateBusySpinnerAnimation);
+document.addEventListener('visibilitychange', updateBusySpinnerAnimation);
+for (const type of ['pointerdown', 'pointermove', 'keydown']) {
+  window.addEventListener(type, updateBusySpinnerAnimation, { capture: true, passive: true });
+}
+updateBusySpinnerAnimation();
+
 function outputSurfaceVisible(element) {
   if (!element?.isConnected || document.hidden || document.visibilityState !== 'visible') return false;
   for (let parent = element; parent; parent = parent.parentElement) {
@@ -56,6 +69,10 @@ function applyHeadTurnSnapshot(turn) {
     }
   }
   const ready = turn.state === 'closed' && previous?.state === 'open' && turn.sessionId !== activeSessionId;
+  if (turn.state === 'open' && previous?.state !== 'open') {
+    const state = localPtyStates.get(turn.sessionId);
+    if (state?.snapshot().manualUnread) state.apply({ type: 'clearUnread' });
+  }
   const changed = !previous || previous.state !== turn.state || previous.lastEntryAt !== turn.lastEntryAt;
   const observedAt = changed ? Date.now() : previous.observedAt;
   const ended = turn.state === 'closed' && (!!previous?.endArmed || !!previous?.ended);
@@ -84,7 +101,7 @@ function headActivitySnapshot(sessionId, snapshot, row, selection) {
     || turn?.state === 'open' && Number.isFinite(s.promptHintAt) && Number.isFinite(turn?.observedAt) && s.promptHintAt > turn.observedAt;
   const headTurn = idleNewer || (promptHint && (!turn || turn.state === 'unknown')) ? 'closed' : turn?.state || 'unknown';
   return { ...s, ...writtenActivitySnapshot(sessionId), headTurn, busy: alive && headTurn === 'open',
-    responseReady: !s.attention && !!turn?.ready, waitingForInput: alive && headTurn !== 'open' && (!ptyHere || !!s.waitingForInput || !!turn?.ended),
+    responseReady: !s.attention && (!!turn?.ready || !!localPtyStates.get(sessionId)?.snapshot().manualUnread), waitingForInput: alive && headTurn !== 'open' && (!ptyHere || !!s.waitingForInput || !!turn?.ended),
     liveness: alive ? 'alive' : s.liveness };
 }
 
@@ -235,7 +252,11 @@ function isSessionAlive(sessionId) {
 
 // Snapshot-driven projection — the one path for all three kinds — see .ai/contexts/session-state.md ("The local-pty adapter")
 function applyStateClasses(sessionId, snapshot) {
-  if (snapshot?.attention && typeof clearHeadUnread === 'function') clearHeadUnread(sessionId);
+  if (snapshot?.attention && typeof clearHeadUnread === 'function') {
+    clearHeadUnread(sessionId);
+    const state = localPtyStates.get(sessionId);
+    if (state?.snapshot().manualUnread) state.apply({ type: 'clearUnread' });
+  }
   const item = sessionItemEl(sessionId);
   if (!item) {
     paintTerminalHeaderStatus(sessionId, snapshot);
@@ -263,6 +284,12 @@ function applyStateClasses(sessionId, snapshot) {
   const alive = !!(snapshot && snapshot.liveness === 'alive');
   setNeedsAttention(item, attention);
   setResponseReady(item, ready);
+  const unreadButton = item.querySelector('.session-unread-btn');
+  const unreadTitle = ready ? 'Mark as read' : 'Mark as unread';
+  if (unreadButton && unreadButton.title !== unreadTitle) {
+    unreadButton.title = unreadTitle;
+    unreadButton.setAttribute('aria-label', unreadButton.title);
+  }
   setCliBusy(item, busy);
   setHasBusyAgents(item, agentsBusy);
   setIsAlive(item, alive);
@@ -365,10 +392,21 @@ function snapshotForLocal(sessionId, session, selection) {
 }
 
 // Paints an icon slot from a snapshot held by another adapter — see .ai/contexts/session-state.md ("Descriptor-owned attention")
+function rowHasRunningSchedule(row) {
+  return !row?.remoteAlias && !!row?.runningScheduleIds?.length;
+}
+
+function scheduledRunIcon(snapshot, row) {
+  const icon = renderSessionIcon(snapshot);
+  if (!rowHasRunningSchedule(row)) return icon;
+  return { ...icon, title: 'Scheduled run in progress', glyph: '\u23f1', slotClasses: ['session-icon--scheduled'] };
+}
+
 function paintSessionIconFromSnapshot(el, snapshot, title, text, session, row) {
   if (!el) return;
-  writeIconSlot(el, renderSessionIcon(snapshot), title, text, session,
-    row && rowLifecycleLabel(row.sessionId, snapshot, row));
+  const scheduled = rowHasRunningSchedule(row);
+  writeIconSlot(el, scheduledRunIcon(snapshot, row), scheduled ? 'Scheduled run in progress' : title, text, session,
+    scheduled ? null : row && rowLifecycleLabel(row.sessionId, snapshot, row));
 }
 
 // see .ai/contexts/session-state.md
@@ -381,7 +419,8 @@ function paintSessionIcon(el, sessionId, session) {
       mergedMemberIds: item.dataset.mergedMemberIds?.split(' ') || [], remoteAlias: item.dataset.remoteAlias } : { sessionId });
   const projected = mergedRowSnapshot(rowSessionIds(row), sessionId, snapshot, row);
   const label = typeof backgroundActivityLabel === 'function' && backgroundActivityLabel(rowHeadId(row), projected, row);
-  writeIconSlot(el, renderSessionIcon(projected), label?.title, label?.text,
+  const scheduled = rowHasRunningSchedule(row);
+  writeIconSlot(el, scheduledRunIcon(projected, row), scheduled ? 'Scheduled run in progress' : label?.title, label?.text,
     !label && !row.parentSessionId && localSessionForStatus(rowHeadId(row), row),
-    row.parentSessionId ? null : rowLifecycleLabel(sessionId, projected, row));
+    scheduled || row.parentSessionId ? null : rowLifecycleLabel(sessionId, projected, row));
 }

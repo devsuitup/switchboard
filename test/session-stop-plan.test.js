@@ -157,15 +157,14 @@ test('active local parts stop even when background ownership is unknown or names
   assert.equal(h.window.activePtyIds.has('C'), false);
 });
 
-test('tab Stop names the loss and location but only stops that tab of a merged conversation', async t => {
+test('tab Stop names the loss and location and stops every live part of its conversation', async t => {
   const h = setup(t);
   h.window.activePtyIds.add('A').add('B');
   await h.app.confirmAndStopSession('A');
-  assert.match(h.calls.questions[0].message, /this session.*Conversation.*in this window/is);
-  assert.doesNotMatch(h.calls.questions[0].message, /\bpart\b/i);
+  assert.match(h.calls.questions[0].message, /Stop 2 parts.*Part A in this window.*Part B in this window/s);
   assert.match(h.calls.questions[0].message, /conversation is kept/);
-  assert.deepEqual(h.calls.stopped, ['A']);
-  assert.ok(h.window.activePtyIds.has('B'));
+  assert.deepEqual(h.calls.stopped, ['A', 'B']);
+  assert.equal(h.window.activePtyIds.has('B'), false);
 });
 
 test('a plain local tab stops once after one confirmation when the job directory is unreadable', async t => {

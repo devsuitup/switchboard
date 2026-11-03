@@ -8,8 +8,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { start } = require('../trigger-watcher');
-const { createTriggerContext } = require('../trigger-context');
+const { start } = require('../src/main/triggers/trigger-watcher');
+const { createTriggerContext } = require('../src/main/triggers/trigger-context');
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 const id = 'escape-session';

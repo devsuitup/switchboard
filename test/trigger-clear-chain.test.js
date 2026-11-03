@@ -14,8 +14,8 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 
-const { start } = require('../trigger-watcher');
-const { createTriggerContext } = require('../trigger-context');
+const { start } = require('../src/main/triggers/trigger-watcher');
+const { createTriggerContext } = require('../src/main/triggers/trigger-context');
 const sessionTransitions = require('../session-transitions');
 
 function mkTmp(prefix) {

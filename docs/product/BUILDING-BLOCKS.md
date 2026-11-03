@@ -216,6 +216,8 @@ focus) with a form body.
   A fixed `#app-notices` container stacks notices at the bottom right with
   wrapping text and scrolls when they exceed the available height.
   It is an empty, persistent `aria-live="polite"` region in `index.html`.
+  The main-process error group uses `aria-live="off"` to keep count and recency
+  updates quiet; its inner `role="alert"` span announces new error ids.
   Caller ids are stored in `data-notice-id`, without assigning a DOM id.
 - **Variants.** `kind: 'error'` has `role="alert"` and remains until dismissed,
   acted on or cleared. `kind: 'info'` (the default) has `role="status"` and

@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { isJavaScript, walk, appFiles, nodes, relativeRequires } = require('./module-paths');
 const p = path.posix;
 
@@ -117,6 +118,10 @@ function rewrite(file, source, map, options = {}) {
     const stubValues = new Set([...stubNodes].map(node => node.value));
     const quote = (node, value) => `${source[node.range[0]]}${value}${source[node.range[0]]}`;
     const movedNames = new Set(Object.keys(map).flatMap(old => [old, p.basename(old)]));
+    const collisionFiles = options.sources ? Object.keys(options.sources) : options.root
+      ? [...appFiles(options.root), ...walk(options.root, 'public'), ...walk(options.root, 'test'), ...walk(options.root, 'e2e')] : [];
+    const unmappedBasenames = new Set(collisionFiles.filter(candidate => p.dirname(candidate) !== '.'
+      && !map[candidate] && !Object.values(map).includes(candidate)).map(candidate => p.basename(candidate)));
     const warnSegments = parts => {
       for (const part of parts) {
         if (part.type === 'Literal' && movedNames.has(part.value)) {
@@ -136,6 +141,11 @@ function rewrite(file, source, map, options = {}) {
       }
       const base = anchor.name === 'ROOT' ? '' : p.dirname(before);
       const old = p.join(base, ...parts.map((n) => n.value));
+      if (before === file && p.dirname(old) !== '.' && !map[old] && !Object.values(map).includes(old)
+        && movedNames.has(p.basename(old))) {
+        warnSegments(parts);
+        continue;
+      }
       const currentBase = anchor.name === 'ROOT' ? '' : p.dirname(file);
       const current = p.join(currentBase, ...parts.map((n) => n.value));
       const loadedFile = originalFile(Object.values(map).includes(current) ? current : old, map);
@@ -231,6 +241,8 @@ function rewrite(file, source, map, options = {}) {
         }
       } else if (stubNodes.has(node) && stubs.has(value)) {
         next = stubs.get(value);
+      } else if (p.basename(value) === value && movedNames.has(value) && unmappedBasenames.has(value)) {
+        options.onWarning?.(`${file}:${node.loc.start.line}: ambiguous basename ${value} also names an unmapped file; review manually`);
       } else if (map[value]) {
         next = map[value];
       } else if (value.startsWith('.')) {
@@ -250,6 +262,67 @@ function rewrite(file, source, map, options = {}) {
   return source;
 }
 
+function checkBlameIgnore(root) {
+  const file = path.join(root, '.git-blame-ignore-revs');
+  if (!fs.existsSync(file)) return true;
+  const revisions = fs.readFileSync(file, 'utf8').split(/\r?\n/)
+    .map(line => line.split('#')[0].trim()).filter(Boolean);
+  if (!revisions.length) return true;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(GIT_|HUSKY)/i.test(key)));
+  const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 10000, env });
+  if (!fs.existsSync(path.join(root, '.git'))) {
+    console.warn('SKIP .git-blame-ignore-revs: repository history is not available');
+    return true;
+  }
+  const shallow = git('rev-parse', '--is-shallow-repository');
+  if (shallow.error?.code === 'ENOENT' || /not a git repository/i.test(shallow.stderr || '')) {
+    console.warn('SKIP .git-blame-ignore-revs: repository history is not available');
+    return true;
+  }
+  if (shallow.status !== 0) throw new Error(`Cannot check blame-ignore history: ${shallow.error?.message || shallow.stderr}`);
+  if (shallow.stdout.trim() === 'true') {
+    console.warn('SKIP .git-blame-ignore-revs: shallow repository history is incomplete');
+    return true;
+  }
+  const mergePath = git('rev-parse', '--git-path', 'MERGE_HEAD');
+  if (mergePath.error || mergePath.status !== 0) throw new Error(`Cannot check blame-ignore history: ${mergePath.error?.message || mergePath.stderr}`);
+  const mergeFile = path.resolve(root, mergePath.stdout.trim());
+  const heads = ['HEAD', ...(fs.existsSync(mergeFile) ? fs.readFileSync(mergeFile, 'utf8').trim().split(/\s+/).filter(Boolean) : [])];
+  let valid = true;
+  for (const sha of revisions) {
+    if (!/^[a-f\d]{40}$/i.test(sha)) {
+      console.error(`.git-blame-ignore-revs: ${sha} must be a full 40-hex SHA`);
+      valid = false;
+      continue;
+    }
+    const commit = git('cat-file', '-e', `${sha}^{commit}`);
+    if (commit.error || commit.signal) throw new Error(`Cannot check blame-ignore history: ${commit.error?.message || commit.signal}`);
+    const reachable = commit.status === 0 && heads.some(head => {
+      const result = git('merge-base', '--is-ancestor', sha, head);
+      if (result.error || ![0, 1].includes(result.status)) throw new Error(`Cannot check blame-ignore history: ${result.error?.message || result.stderr || result.signal}`);
+      return result.status === 0;
+    });
+    if (!reachable) {
+      console.error(`.git-blame-ignore-revs: ${sha} is not a commit reachable from ${heads.length > 1 ? 'HEAD or MERGE_HEAD' : 'HEAD'}`);
+      valid = false;
+    }
+  }
+  if (!valid) return false;
+  const newest = revisions.at(-1);
+  const names = git('show', '--format=', '--find-renames=100%', '--name-status', newest);
+  const stats = git('show', '--format=', '--find-renames=100%', '--numstat', newest);
+  for (const result of [names, stats]) {
+    if (result.error || result.status !== 0) throw new Error(`Cannot check blame-ignore history: ${result.error?.message || result.stderr}`);
+  }
+  if (!names.stdout.trim()
+    || !names.stdout.trim().split('\n').every(line => line.startsWith('R100\t'))
+    || !stats.stdout.trim().split('\n').every(line => line.startsWith('0\t0\t'))) {
+    console.error(`.git-blame-ignore-revs: newest entry ${newest} must be a pure-rename commit (all R100, 0/0)`);
+    return false;
+  }
+  return true;
+}
+
 function run(argv) {
   let root = path.resolve(__dirname, '..');
   let check = false;
@@ -258,6 +331,7 @@ function run(argv) {
     else if (argv[i] === '--root' && argv[i + 1]) root = path.resolve(argv[++i]);
     else throw new Error('usage: move-modules.js [--check] [--root <repository>]');
   }
+  if (check && !checkBlameIgnore(root)) return 1;
   const map = validateMap(JSON.parse(fs.readFileSync(path.join(root, 'scripts/source-map.json'), 'utf8')));
   const pending = Object.keys(map).filter((old) => fs.existsSync(path.join(root, old)));
   for (const old of pending) console.log(`${old}: pending git mv -> ${map[old]}`);
@@ -300,4 +374,4 @@ if (require.main === module) {
   catch (error) { console.error(error.message); process.exitCode = 2; }
 }
 
-module.exports = { rewrite, validateMap };
+module.exports = { rewrite, validateMap, checkBlameIgnore };

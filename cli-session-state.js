@@ -67,11 +67,24 @@ function trackScheduleRun(sessionId, child, cwd, scheduleName) {
   const key = sessionId.toLowerCase();
   const live = { kind: 'schedule', pid: child.pid, cwd, startedAt: Date.now(), scheduleName };
   scheduledRuns.set(key, live);
+  notifyStatusesChanged();
   const release = () => {
-    if (scheduledRuns.get(key) === live) scheduledRuns.delete(key);
+    if (scheduledRuns.get(key) !== live) return;
+    scheduledRuns.delete(key);
+    notifyStatusesChanged();
   };
   child.once('exit', release);
   child.once('error', release);
+}
+
+function annotateScheduleRuns(projects) {
+  for (const project of projects) for (const session of project.sessions) {
+    const ids = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])].filter(Boolean))];
+    const live = project.remoteAlias || session.remoteAlias ? [] : ids.filter(id => scheduledRuns.has(id.toLowerCase()));
+    if (live.length) session.runningScheduleIds = live;
+    else delete session.runningScheduleIds;
+  }
+  return projects;
 }
 
 function defaultIsProcessAlive(pid) {
@@ -176,8 +189,8 @@ function refreshProcessTable({ force = false } = {}) {
       processTable = { at: now(), observedAt, map };
       processTableInFlight = null;
       if (map) {
-        const stale = JSON.stringify([...statusBySession].filter(([id, entry]) => sidebarDescriptorIsStale(id, entry))
-          .map(([id, entry]) => [id, entry.pid]).sort());
+        const stale = JSON.stringify([...known.values()].filter(entry => sidebarDescriptorIsStale(statusKey(entry.sessionId), entry))
+          .map(entry => [statusKey(entry.sessionId), entry.pid]).sort());
         const sidebarChanged = stale !== staleSidebarIdentity;
         staleSidebarIdentity = stale;
         if (sidebarChanged) notifyStatusesChanged();
@@ -437,6 +450,9 @@ function notifyStatusesChanged() {
 }
 
 function notifyOwnerExit(sessionId, pid) {
+  for (const entry of known.values()) {
+    if (entry.pid === pid && statusKey(entry.sessionId) === statusKey(sessionId)) entry.exited = true;
+  }
   if (!onOwnerExit) return;
   const key = statusKey(sessionId);
   if (pendingOwnerDeaths.has(key)) return;
@@ -446,8 +462,15 @@ function notifyOwnerExit(sessionId, pid) {
     if (!pendingOwnerDeaths.has(key)) return;
     pendingOwnerDeaths.delete(key);
     const current = statusBySession.get(key);
-    if (current && isProcessAlive(current.pid)) return;
-    if ([...known.values()].some(entry => statusKey(entry.sessionId) === key && isProcessAlive(entry.pid))) return;
+    const currentExited = current && [...known.values()].some(entry => entry.exited
+      && entry.pid === current.pid && statusKey(entry.sessionId) === key);
+    if (current && !currentExited && isProcessAlive(current.pid)) return;
+    if ([...known.values()].some(entry => statusKey(entry.sessionId) === key && !entry.exited && isProcessAlive(entry.pid))) return;
+    if (currentExited) {
+      forgetSession(key, current.pid);
+      notifyDescriptorsChanged();
+      notifyStatusesChanged();
+    }
     try { callback(key); } catch (err) { log.warn(`[cli-state] owner-exit callback failed: ${err.message}`); }
   });
 }
@@ -455,7 +478,7 @@ function notifyOwnerExit(sessionId, pid) {
 function findSession(sessionId) {
   if (!activeSessions) return null;
   for (const [key, session] of activeSessions) {
-    if (!session || session.exited || session.isPlainTerminal || !session.projectFolder) continue;
+    if (!session || session.exited || session.isPlainTerminal || session.isAttach || !session.projectFolder) continue;
     const effectiveId = session.realSessionId || key;
     if (statusKey(effectiveId) === statusKey(sessionId)) return { sessionId: effectiveId, session };
   }
@@ -467,7 +490,7 @@ function retainAfterMiss(name, deleted) {
   if (!stale) return;
   if (deleted && !isProcessAlive(stale.pid)) {
     notifyOwnerExit(stale.sessionId, stale.pid);
-    forgetSession(stale.sessionId);
+    forgetSession(stale.sessionId, stale.pid);
     known.delete(name);
     return;
   }
@@ -490,16 +513,15 @@ function handleFile(name) {
   }
 
   const prev = known.get(name);
-  if (prev && prev.sessionId && statusKey(prev.sessionId) !== statusKey(state.sessionId)) forgetSession(prev.sessionId);
-  const identity = { ...state, pidDomain: JSON.parse(text).pidDomain };
+  const identity = { ...parseDescriptor(text), ...state, pidDomain: JSON.parse(text).pidDomain };
   try { identity.descriptorMtimeMs = fs.statSync(path.join(dir, name)).mtimeMs; } catch {}
   known.set(name, identity);
+  if (prev && prev.sessionId && statusKey(prev.sessionId) !== statusKey(state.sessionId)) forgetSession(prev.sessionId, prev.pid);
   if (isProcessAlive(state.pid)) {
-    statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status,
-      statusUpdatedAt: state.statusUpdatedAt, waitingFor: state.waitingFor, pid: state.pid });
+    rememberStatus(identity);
   } else {
     notifyOwnerExit(state.sessionId, state.pid);
-    forgetSession(state.sessionId);
+    forgetSession(state.sessionId, state.pid);
   }
 
   const reused = !!prev && prev.procStart !== state.procStart;
@@ -550,14 +572,14 @@ function armLivenessProbe() {
       handleFile(name);
       const retained = known.get(name);
       if (retained && retained.missedProbes != null && ++retained.missedProbes >= 2) {
-        forgetSession(retained.sessionId);
+        forgetSession(retained.sessionId, retained.pid);
         known.delete(name);
       }
     }
     for (const [id, entry] of statusBySession) {
       if (!isProcessAlive(entry.pid)) {
         notifyOwnerExit(id, entry.pid);
-        forgetSession(id);
+        forgetSession(id, entry.pid);
       }
     }
     if (previous.size !== statusBySession.size || [...statusBySession].some(([id, entry]) => {
@@ -582,12 +604,11 @@ function seed() {
     try { text = fs.readFileSync(path.join(dir, name), 'utf8'); } catch { continue; }
     const state = parseState(text);
     if (state) {
-      const identity = { ...state, pidDomain: JSON.parse(text).pidDomain };
+      const identity = { ...parseDescriptor(text), ...state, pidDomain: JSON.parse(text).pidDomain };
       try { identity.descriptorMtimeMs = fs.statSync(path.join(dir, name)).mtimeMs; } catch {}
       known.set(name, identity);
       if (isProcessAlive(state.pid)) {
-        statusBySession.set(statusKey(state.sessionId), { ...parseDescriptor(text), status: state.status,
-          statusUpdatedAt: state.statusUpdatedAt, waitingFor: state.waitingFor, pid: state.pid });
+        rememberStatus(identity);
       } else {
         notifyOwnerExit(state.sessionId, state.pid);
       }
@@ -595,9 +616,18 @@ function seed() {
   }
 }
 
-function forgetSession(sessionId) {
-  statusBySession.delete(statusKey(sessionId));
-  lastProbeAt.delete(statusKey(sessionId));
+function rememberStatus(state) {
+  const key = statusKey(state.sessionId);
+  if (deliveryProcessIdentity(state) === 'stale') return;
+  statusBySession.set(key, { ...parseDescriptor(JSON.stringify(state)),
+    statusUpdatedAt: state.statusUpdatedAt, waitingFor: state.waitingFor });
+}
+
+function forgetSession(sessionId, pid) {
+  const key = statusKey(sessionId);
+  if (statusBySession.get(key)?.pid !== pid) return;
+  statusBySession.delete(key);
+  lastProbeAt.delete(key);
 }
 
 function ensureWatching() {
@@ -661,8 +691,24 @@ function stop() {
 // Lookup + throttled lazy liveness re-probe -- see .ai/contexts/cli-session-state.md ("the one invariant" still holds: never arms onIdle).
 function getStatus(sessionId) {
   const key = statusKey(sessionId);
-  const entry = statusBySession.get(key);
+  let entry = statusBySession.get(key);
   if (!entry) return undefined;
+
+  if ([...known.values()].some(writer => writer.exited && writer.pid === entry.pid && statusKey(writer.sessionId) === key)) {
+    notifyOwnerExit(sessionId, entry.pid);
+    forgetSession(sessionId, entry.pid);
+    notifyDescriptorsChanged();
+    notifyStatusesChanged();
+    return undefined;
+  }
+
+  if (sidebarDescriptorIsStale(key, entry)) {
+    const replacement = liveKnownDescriptors().find(state => statusKey(state.sessionId) === key);
+    if (!replacement) return undefined;
+    forgetSession(sessionId, entry.pid);
+    rememberStatus(replacement);
+    entry = statusBySession.get(key);
+  }
 
   const t = now();
   const last = lastProbeAt.get(key) || 0;
@@ -670,7 +716,7 @@ function getStatus(sessionId) {
     lastProbeAt.set(key, t);
     if (!isProcessAlive(entry.pid)) {
       notifyOwnerExit(sessionId, entry.pid);
-      forgetSession(sessionId);
+      forgetSession(sessionId, entry.pid);
       notifyDescriptorsChanged();
       notifyStatusesChanged();
       return undefined;
@@ -683,21 +729,38 @@ function sidebarStateChanged(previous, entry) {
   return !previous || ['status', 'waitingFor', 'pid', 'kind', 'jobId', 'name', 'nameSource', 'cwd'].some(field => previous[field] !== entry[field]);
 }
 
-function getSidebarDescriptors() {
+function liveKnownDescriptors() {
+  return [...known.values()].filter(entry => {
+    if (entry.exited) return false;
+    if (!isProcessAlive(entry.pid)) {
+      entry.exited = true;
+      return false;
+    }
+    return !sidebarDescriptorIsStale(statusKey(entry.sessionId), entry);
+  })
+    .sort((a, b) => (a.startedAt ?? Infinity) - (b.startedAt ?? Infinity) || a.pid - b.pid);
+}
+
+function getSidebarDescriptors({ allWriters = false } = {}) {
   startProcessTableRefresh();
+  if (allWriters) return liveKnownDescriptors().map(entry => ({ ...parseDescriptor(JSON.stringify(entry)),
+    statusUpdatedAt: entry.statusUpdatedAt, waitingFor: entry.waitingFor }));
   const descriptors = [];
-  for (const [id, entry] of statusBySession) {
-    if (getStatus(id) && !sidebarDescriptorIsStale(id, entry)) descriptors.push({ ...entry });
+  for (const id of [...statusBySession.keys()]) {
+    if (!getStatus(id)) continue;
+    const current = statusBySession.get(id);
+    if (!sidebarDescriptorIsStale(id, current)) descriptors.push({ ...current });
   }
   return descriptors;
 }
 
 function sidebarDescriptorIsStale(id, entry) {
+  const writer = [...known.values()].find(s => s.pid === entry.pid && statusKey(s.sessionId) === id);
+  if (!writer) return true;
   if (processTableEnabled && (!processTableFresh() || !processTable.map)) {
     return JSON.parse(staleSidebarIdentity).some(([sessionId, pid]) => sessionId === id && pid === entry.pid);
   }
-  const writer = [...known.values()].find(s => s.pid === entry.pid && statusKey(s.sessionId) === id);
-  return !!writer && deliveryProcessIdentity(writer) === 'stale';
+  return deliveryProcessIdentity(writer) === 'stale';
 }
 
 function canCompareProcStart(raw) {
@@ -1078,6 +1141,7 @@ module.exports = {
   readWorkerProcessEvidence,
   init,
   trackScheduleRun,
+  annotateScheduleRuns,
   findLiveProcess,
   liveElsewhere,
   liveElsewhereMany,

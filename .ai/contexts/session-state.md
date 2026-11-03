@@ -1,5 +1,232 @@
 # Session state — one domain module, one icon slot
 
+**Purpose**: `public/session-state.js` owns activity and unread transitions for
+local PTY, local transcript and remote adapters. Shared projections select one
+activity icon for each conversation head across sidebar, grid and terminal.
+
+## Live read-only message views (#814)
+
+`public/jsonl-viewer.js` owns one refresh controller for the current top-level
+message view. The existing `localTranscriptTracker` verifies writes and emits
+`session-transcript-activity` at its bounded rate. The renderer's existing local
+transcript adapter forwards these notifications to `requestLiveJsonlRefresh`;
+subagent and unrelated session writes are ignored. The viewer also listens to
+the existing `projects-changed` event so an ending process triggers its final
+snapshot even when the Sessions tab is not active.
+
+Notifications share one fixed one-second coalescing timer; reads never overlap.
+Each refresh queries the existing `getSessionLiveElsewhere` API before reading
+the session, covering both tracked schedules and another live CLI. A stopped
+session drains its final bounded snapshot, then parks its main-side
+cursor. The visible controller stays attached; a subsequent projects or matching
+activity notification checks liveness and re-arms follow when a run starts.
+Unknown/read errors
+keep the current rendering and wait for another notification. There is no
+periodic transcript or liveness poll. `drainViewerWatches` cancels the controller
+alongside nested subagent watches when the view closes or changes; identity
+checks discard pending replies, including an initial load dismissed mid-read.
+Grid dismissal also drains watches; closing the window disposes the main-side
+follower. A late stop from an old view cannot close a newer token.
+
+The existing `read-session-jsonl` IPC accepts optional `follow`, `next` and `stop`
+modes; ordinary callers retain the original response. `src/main/viewer/transcript-follower.js`
+keeps one token and cursor, without a dedicated watcher or retained file handle.
+Opening loads ordinary history once. Subsequent reads use `transcript-tail.js`'s
+verified `readRange` and API-metadata prefix filter. They consume at most 8 MiB
+including sample probes per request, in 256 KiB chunks with event-loop yields.
+Replies target 1 MiB of complete visible records (one record can reach 4 MiB).
+Partial UTF-8/JSON records are retained as bytes, capped at 4 MiB; API metadata
+is skipped without retaining its payload. Larger visible records are skipped
+with a visible notice to reopen after the run for the complete history.
+Identity, shrink and head/middle/boundary samples detect replaced/rewritten
+files and reset the rendered history. This is sampled detection, not a complete
+historical integrity scan.
+
+A known unread backlog reuses the same one-second timer until drained; it does
+not stat a quiet live file. Ending pins the final file size and accepts a valid
+last JSON record without a newline, then parks the cursor. Closing a view
+invalidates the cursor and stops an in-flight read at its next yield. Initial
+history loading retains the existing full-history cost; incremental I/O and
+pending-line memory are bounded. Re-arming sends the parked cursor's opaque token
+as `checkpoint`; the main process validates its byte offset, file identity and
+bounded samples, then returns only appended entries. The final-size boundary is
+cleared for each new run. An expired checkpoint or changed file reopens through
+the ordinary full-history path, so its first reply includes the entire history,
+including visible records larger than the incremental reader's 4 MiB limit.
+Checkpoint re-arm validates identity, size and bounded samples before consuming
+tail data; a mismatch goes directly to the full-history open without a discarded
+incremental read. A successful history replacement clears the live omission
+notice and its count, so later omissions count only the new incremental history.
+(#994)
+The renderer clears the consumed checkpoint after accepting a successful reply,
+so dismissal releases only the current token. There is at most one parked cursor, no retained file
+handle or polling, and dismissing the view releases it. The renderer retains no
+history for prefix serialization/comparison. (#986)
+
+Incremental refresh renders only new entries, retaining earlier DOM nodes,
+expanded blocks and nested watches. A tool-id index attaches a later result to
+its existing tool row without rebuilding neighboring blocks. Full replacement
+and watch draining happen only on a history reset or view change. Refresh
+re-merges a trailing unfinished local command with the next batch, replacing
+only that command's provisional nodes so caveat/input/output splits match a
+full render. Expanded subagent snapshots and watch batches use the same
+container-scoped append helper and provisional-command state as the main view.
+A non-local entry ends a consecutive local-command group, including across
+batches, preserving full-render ordering. (#986, #990)
+Refresh preserves scroll position when the reader is above
+the bottom. It updates the
+existing message-search DOM rather than closing it.
+Written-activity watermarks are captured before reading so a later write is
+not acknowledged by an older rendering. Tests in `dom-live-transcript-814.test.js`
+use the shipped viewer, hide function and activity callback in jsdom, with the
+IPC read/liveness boundary and timers controlled. `scheduled-run-liveness-814`
+also executes the shipped main IPC registration and preload with real temporary
+transcripts, including multi-megabyte API/visible records, partial UTF-8,
+replacement, final EOF and cancellation. A real Electron round trip
+and a real CLI run remain separate validation.
+
+## Unchanged sidebar refreshes (#543)
+
+`loadProjects` opts into `refreshSidebar({ skipUnchanged: true })` after committing
+the current payload, pending-session reconciliation and activity poll. Explicit
+refreshes and `resort: true` still render. Only the sidebar build/morphdom/event
+rebinding is skipped; cache updates, notices, diagnostics and timer pruning run.
+
+The sidebar observer resolves its DOM target directly before app.js loads, so `renderProjects.unchanged` and session menus initialize in index.html script order (#1014).
+`renderProjects.unchanged` compares detached JSON fields captured only after
+a successful render. The input payload (before preserved-order sorting) is
+compared first and returns immediately on a change, before computing activity
+overlays. All-project metadata has a separate JSON field. The overlay key
+includes filters/search/archived mode, sort order, limits, active/pending sessions,
+selection, remote host labels, archive operations, expanded groups and hidden
+settings. Open-tab ids and each tab's closed flag are included, so eviction of
+a closed tab immediately releases older-session Archive eligibility (#876).
+The per-row older-archive keep reason uses the same predicate as the button,
+including head/member remote liveness and descriptor fallbacks; row-level
+liveness alone does not capture every eligibility change.
+The keep-reason in the #543 skip key re-enables the older-archive button when eligibility changes; the open-tab key is a safety net (#893).
+Storage is restricted to `expandedSubagents`, `expandedSubagentRest`,
+`orphanExpanded:*` and the result of `getExpandedSlugs`.
+
+Per-row overlays contain the projected icon, row booleans, subagent activity/counts,
+background labels/badges, descriptor labels, detach availability and lifecycle
+label, including exit corrections. Raw snapshots, write watermarks and hint
+timestamps are not serialized: they invalidate only when their projection
+changes. Payload fields changed in place are still detected, including new fields;
+no mutable session references are retained in the key.
+
+A MutationObserver conservatively invalidates the key for sidebar DOM changes,
+including expansion controls whose state lives only in the DOM. This preserves
+the existing morphdom rules on the next render. A 30-second clock bucket, local
+date and each session's age-cutoff membership prevent time-sensitive filters
+from freezing. Keys are not compared across an unsuccessful render. Remote
+seeding and subagent pruning still run on every actual render; their independent
+decay/TTL timers continue between renders. Additional state that affects row
+construction must be represented in `sidebarRenderInputs` or invalidate the DOM.
+
+Evidence: `test/dom-sidebar-unchanged-543.test.js` loads the shipped sidebar and
+`refreshSidebar` through the standard jsdom helpers and spies on both the render
+and morphdom boundaries. Its IPC-reply path also runs the actual staged poll,
+busy reconciliation and running-indicator update. The 30-second label ticker
+updates descriptor ages, including merged heads, without a sidebar rebuild and
+preserves background activity labels. Time labels are written only when their
+text changes, so a no-op ticker does not dirty the DOM through the observer
+(#871/#876). The suite also exercises Mark as unread, an identical skipped
+refresh, and Mark as read through `refreshSidebar({ skipUnchanged: true })`.
+The same ticker refreshes remote-host dot titles through `remoteHostState`,
+including confirmation ages, retry countdowns and capability details, without
+rebuilding the sidebar. An equality guard avoids DOM mutations for unchanged
+titles.
+The ticker uses `renderProjects.lastProjects`, the exact input retained immediately
+after morphdom, including narrowed search sessions and Show archived projects.
+If event rebinding or grid refresh then throws, ticks still describe the payload
+already in the DOM; the skip key remains invalid until a complete render (#915).
+It does not recalculate host live counts from the default project cache.
+`folderId(projectPath, remoteAlias)` preserves local ids and encodes the remote
+alias/path tuple for remote groups. Headers prepend `ph-` to that id; ticker
+lookup, event binding, nested worktrees, archive busy keys and morphdom's group,
+header and list keys share this identity. The #543 skip key includes these
+alias-aware archive busy keys through `archivingGroupIds`.
+Project and item ordering retains the remote alias in `sortedOrder` and uses
+`projectStateKey`: local keys remain the exact project path, while remote keys
+use `folderId(projectPath, remoteAlias)`. Orphan expansion (`orphanExpanded:`)
+and orphan rest expansion (`o:` in `expandedSubagentRest`) use the same key,
+including nested worktrees. Existing local persisted expansion survives unchanged;
+remote projects start with independent state rather than adopting the shared
+path-only state. Schedule groups already use an encoded alias/path/slug tuple;
+their identity and migration remain unchanged. Evidence:
+`test/dom-sidebar-host-state-915.test.js` and the post-morphdom failure cases in
+`test/dom-sidebar-unchanged-543.test.js`.
+Grouped grid headings also use `projectStateKey` in `data-project-key`, both
+when laying out sidebar rows and when inserting a newly opened card according
+to `sortedOrder`. `data-project-path` retains the original path. Same-path hosts
+and local projects get separate headings; local keys and ordering remain paths.
+Evidence: `test/dom-grid-host-headings-921.test.js` (#921).
+Sidebar project names, grouped grid headings (layout and incremental opening),
+and grid card project labels share `projectDisplayLabel` from `public/utils.js`.
+Remote names prepend `remoteHostLabel(alias) + ': '` to the short path; local
+labels keep the short path alone. Tests assert the rendered text, including
+configured host labels, alias fallback and unchanged sidebar output (#925).
+The skip-key table independently covers background agents, active
+children, dormant rows, task counts, detach availability, both archive locks,
+age-cutoff membership, the 30-second clock bucket and the local day string;
+each added case is checked by dropping its own key term (#871).
+`refreshSidebar.counters` tracks completed
+renders and skips for the renderer lifetime; when debug tracing is enabled,
+`sidebar.refresh` records `skipped`, `renders` and `skips`. Differences between
+two counter samples give the skip rate over that interval, even after enabling
+tracing at runtime. No trace event is sent while tracing is disabled.
+Performance measurements are in the issue #543 report;
+jsdom timings do not establish Electron performance on a real session cache.
+
+## Manual unread and older-session Archive (#819)
+
+The native row button toggles **Mark as unread** / **Mark as read** on the
+conversation's head. `markUnread` is a reducer event: it sets `responseReady`
+and `manualUnread`, without changing liveness or recorded turn evidence.
+The head projection includes the local adapter's manual flag even when a
+transcript or remote adapter supplies its other facts. Reading clears it;
+real busy edges (including busy-to-idle with `armReady: false`), attention and
+a new open head clear it through the reducer. Duplicate or late idle signals
+preserve manual reminders and observed response-ready closures. Open-head and
+attention projections clear only the local adapter's manual reminder, preserving
+readiness recorded by the PTY. It uses the existing
+Response ready slot, stays in renderer memory, and survives sidebar rebuilds
+but not renderer reloads. The button is a normal Tab stop and uses the existing
+focus-visible action strip (#574).
+
+**Archive all older sessions** sits beside the keyboard-operable older-list
+toggle. The older count includes the conversation rows actually listed inside
+slug groups, excluding subagent rows. The batch captures unarchived older rows
+and keeps the active session, every tab open here (including a closed tab),
+sessions live elsewhere and remote sessions alive on their host. Membership
+checks include the head and merged parts. Pinned, PTY-here and dormant rows
+are also kept. Single-row Archive retains its existing stop policy.
+
+The `appConfirm` title counts only eligible rows. Its body names eligible,
+kept and refused sessions with reasons, caps each list at ten and adds
+`+N more`. Local liveness and archive plans are checked before and after the
+question and again per row; newly eligible rows require another confirmation.
+Preparation never publishes errors. Refusals become notices only after a
+confirmed run. With no eligible rows, a click shows one notice without asking;
+the archive button is disabled when synchronous row facts leave no candidates.
+Rendering does not query liveness elsewhere or background jobs; asynchronous
+preflight runs only on click. Confirmed batches report kept rows by name and
+reason in one info notice, including rows that become ineligible during the
+post-confirmation and per-row rechecks. Successful rows still offer Undo. Filters
+that show every item have no older action.
+
+The older batch locks its toggle id, every nested slug group through
+`archivingGroupIds`, and every row through `archivingSessionIds`, including
+during confirmation and sidebar reconstruction. It shares the archive
+confirmation recheck, refusal wording, per-row persistence errors and Undo.
+Running or attached sessions are kept by the bulk action. Its preparation
+checks rows individually so a refused background job stays unarchived while
+other rows can still archive. Folder and
+ordinary slug-group preparation retain their existing all-or-nothing preflight.
+
+Evidence: `test/sidebar-features-819.test.js`.
+
 ## Persistent row action failures (#566)
 
 Stop/Detach, Delete and Archive use `showSessionActionFailure` in
@@ -291,6 +518,55 @@ Issue #246 is closed.
 
 ## The two lifecycle verbs: detach and stop
 
+### Folder Stop all (#843)
+
+Project and nested worktree headers offer **Stop all**. The project action takes
+every conversation row from the full cached folder and its nested worktrees,
+independently of sidebar filters, and keeps the host alias in its scope. A
+worktree's own action affects its folder only. Subagent rows are excluded;
+merged parts remain one conversation, planned by `planSessionStop` with
+`jobStop: true`. `validateSessionStopPlan` and `executeSessionStopTargets` are
+shared with the single-conversation Stop in `app.js`; remote routing, job
+preflight, attached-job handling and failure-state preservation stay identical.
+
+One danger question names each candidate conversation and its locations, marks
+mid-turn work using the existing row activity projection, and lists each
+refused part with its conversation name and reason. A conversation with any
+background job is refused as a whole by default, including its foreground
+parts. This implements JB's 2026-10-30 decision: explain the refusal but allow
+an explicit force. The existing `showChoiceDialog` option radios offer **Stop
+all including background jobs** and **Stop the others only**, with the latter
+selected and Cancel focused initially. The third outcome is Cancel. This is
+the same chooser underlying `appChoose`, with its supported danger and initial
+focus settings. With no background jobs, `appConfirm` asks once instead.
+Background classification uses planned job targets that are still hosted, before
+job preflight validation; ended attached jobs only detach their tabs. Refusal
+wording never establishes that a conversation has a background job. In the folder
+batch only, an idle part with unknown daemon state and no observed live process
+is omitted, so an unreadable unrelated job cannot block a foreground conversation
+or flood an idle folder with refusals. The omitted part may be the session's own
+job in a state this build cannot read, so when nothing is left to stop the
+"Nothing is running" notice counts the unchecked parts and gives the reasons. Unknown attached jobs and processes live
+elsewhere retain their planner refusals; forcing never bypasses those checks.
+
+Execution continues after individual failures. One persistent
+`showSessionActionFailure('Stop all', project, ...)` notice names all failed
+conversations and targets and offers Retry. Retry replans only failed targets
+in the current folder, reconfirms once, and retains the existing job-stopped
+state when only detaching its tab needs retrying. Empty retries say nothing is
+running. Retry preselects the background-inclusive choice when a failed target
+still needs its job stopped. Choosing the others when every candidate has a
+background job reports how many conversations were kept and that nothing else
+was running. One unreachable-host map is shared across all conversations in the
+batch, and a fresh Retry gets a fresh map; single-row Stop keeps its own map.
+Archived conversation rows remain in the full cached folder scope. No archive
+or transcript deletion is performed.
+
+Evidence: `test/dom-project-stop-all-843.test.js`; upstream inspiration:
+Ali Basiri's ee656523 `confirmStopWork`.
+
+### Per-conversation lifecycle
+
 Two facts the domain carries separately: **process liveness** (the CLI is
 running — local pid, or a remote descriptor with an ALIVE marker, #262) and
 **attached view** (Switchboard holds a PTY / an ssh attach for it). A row is
@@ -303,8 +579,13 @@ active because the process is alive, not because a tab is open.
 
 **No new dialog component.** `public/stop-session-ui.js`'s async
 `planSessionStop(row, { attach, retryTargets, backgroundJobs, jobStop = false })`
-collects local PTYs, remote processes and background jobs. The sidebar passes its whole row; the terminal
-header and grid card pass an id and plan only that tab. `resolveSessionStop`
+collects local PTYs, remote processes and background jobs. The sidebar passes its whole row;
+`confirmAndStopSession` resolves the terminal header or grid card's id to the
+owning conversation row, including when a stale per-tab entry remains cached.
+All three surfaces use the same conversation-wide Stop plan, refusals, job
+checks, confirmation and executor (#917). The row is resolved from the member
+index, then the tab's own merged row, then any row listing it; only a tab no
+indexed row knows falls back to its open entry's session. `resolveSessionStop`
 still selects the IPC for each target and remains available to Archive/Delete.
 Confirmed-dead remote members are filtered out unless their view is still
 active; an unseeded host (`remoteHostAt === null`) is possibly live until a
@@ -385,6 +666,11 @@ byte for byte. Stop failures and retries retain their Stop notice identity;
 Detach failures and retries use Detach.
 
 ### Opening a session once
+
+A sidebar Open targets the conversation head. An older dormant member cannot
+replace that target (#918); opening clears the row's dormant markers. The existing
+reuse of an already open conversation tab and explicit restore/attach targets
+is preserved. Coverage: `test/conversation-controls-917.test.js`.
 
 `openSession` keeps the open of each session id in flight in `openingSessions`
 (id → `{ promise, byUser }`), set before its first `await` and removed when the
@@ -1274,6 +1560,17 @@ Selectors depend only on `session-icon--<rung>`, with no layout measurement.
 | idle | `session-icon--idle` | no glyph; green with `.running` — a row or grid card whose PTY is here, at rest | sidebar, grid, header and live idle Agents jobs |
 | stale | `session-icon--stale` | opaque grey dash | finished background jobs without a live descriptor, across session surfaces |
 | archived | `session-icon--archived` | base filled dot at 0.5 opacity | reserved, unused |
+
+The busy braille animation pauses while the window is hidden or unfocused
+(#544). `session-activity-dom.js` reuses `document.hasFocus()` and native
+window focus/blur, document visibilitychange and window pointerdown,
+pointermove and keydown events (capture, passive), synchronously toggling
+`busy-spinners-paused` on the document element at startup and on every event.
+CSS pauses only `.session-icon--busy::before`, across sidebar, grid, header
+and Agents, including icons rendered after the pause. Busy/attention state,
+glyphs and labels do not change. The animation resumes as soon as the document
+is both visible and focused; see ADR 0002. The regression is
+`test/dom-busy-spinner-pause.test.js`.
 
 `--state-waiting` lives in `:root` and reuses the existing attention orange;
 the attention slot and summary also reference it. The UI has one shared dark

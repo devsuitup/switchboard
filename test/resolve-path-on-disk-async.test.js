@@ -6,8 +6,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { resolveOnDisk, resolveOnDiskAsync } = require('../resolve-path-on-disk');
-const { isSensitivePath, isSensitivePathAsync } = require('../ipc-path-validator');
+const { resolveOnDisk, resolveOnDiskAsync } = require('../src/main/shared/resolve-path-on-disk');
+const { isSensitivePath, isSensitivePathAsync } = require('../src/main/shared/ipc-path-validator');
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-ondisk-')));
 const sshDir = path.join(root, '.ssh');

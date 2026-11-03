@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { parseChangelog, compareVersions } = require('../changelog');
+const { parseChangelog, compareVersions } = require('../src/main/app/changelog');
 
 function releaseNotes(text, tag) {
   const version = tag.replace(/^v/, '');

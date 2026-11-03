@@ -10,7 +10,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { computeHostProfile, attachBlockReason, sendBlockReason } = require('../remote-host-profile');
+const { computeHostProfile, attachBlockReason, sendBlockReason } = require('../src/main/remote/remote-host-profile');
 
 function extractSource() {
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');

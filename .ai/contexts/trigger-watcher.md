@@ -1,19 +1,28 @@
 # Context: trigger-watcher
 
+Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
+`src/main/triggers/` (ADR 0005, step 8). The watcher's lazy tab mutex import is
+`../terminals/tab-input-lock`; its home based trigger directory is unchanged.
+
 **Purpose**: lets external harness scripts inject keyboard input into open PTY sessions without any Electron IPC.  The primary use case is the token-usage harness calling `/compact` on a session when it detects a high context-window fill.
 
 ## Key files
 
 | File | LOC | Role |
 |---|---|---|
-| `trigger-watcher.js` | ~2170 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
-| `trigger-context.js` | ~420 | `createTriggerContext({ activeSessions, log, getCliStatus, projectsDir, getLiveDescriptor, resolveSessionId, remote })` — builds the whole `ctx` object out of `main.js`'s session map, including the pinned per-tab delivery binding (`pinDelivery`) and the descriptor fallback lookup (`lookupDeliveryFallback`). |
+| `src/main/triggers/trigger-watcher.js` | ~2170 | The entire module: directory setup, `fs.watch` listener, idle-wait logic, single + chained trigger processing, submit-with-verify busy-rise/fall polling, input validation, PTY write, result file. |
+| `src/main/triggers/trigger-context.js` | ~420 | `createTriggerContext({ activeSessions, log, getCliStatus, projectsDir, getLiveDescriptor, resolveSessionId, remote })` — builds the whole `ctx` object out of `main.js`'s session map, including the pinned per-tab delivery binding (`pinDelivery`) and the descriptor fallback lookup (`lookupDeliveryFallback`). |
 | `transcript-turn.js` | ~230 | Whether a session transcript's main turn is closed, read from its tail; backs `ctx.getTranscriptTurn` (see "Transcript fallback while the descriptor stays busy"). |
-| `terminal-input.js` | ~35 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
-| `tab-input-lock.js` | ~35 | The per-tab mutex (`acquireTabInput`), shared with the Send to background action (`tryAcquireTabInput`; see "Re-keyed sessions"). |
-| `main.js` (wiring) | ~20 | `require('./trigger-watcher').start(createTriggerContext({ … }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
+| `src/main/terminals/terminal-input.js` | ~35 | `handleTerminalInput(activeSessions, sessionId, data, now)` — the body of the `terminal-input` IPC handler; feeds `session.composerState`. |
+| `src/main/terminals/tab-input-lock.js` | ~35 | The per-tab mutex (`acquireTabInput`), shared with the Send to background action (`tryAcquireTabInput`; see "Re-keyed sessions"). |
+| `main.js` (wiring) | ~20 | `require('./src/main/triggers/trigger-watcher').start(createTriggerContext({ … }))` in the `app.whenReady` block, right after `startScheduler`, plus the one-line `terminal-input` registration. |
 
 ## Public surface
+
+Result publication uses the synchronous Windows rename retry policy documented
+in [session-cache.md](session-cache.md#atomic-rename-retries-on-windows-900).
+After retry exhaustion, the existing log-and-delete-trigger behaviour still
+loses the result; this change does not add recovery or replay.
 
 ### Escape key trigger
 
@@ -86,7 +95,7 @@ Starts the watcher.  Call once at app boot.
 
 ```js
 // main.js
-require('./trigger-watcher').start(createTriggerContext({
+require('./src/main/triggers/trigger-watcher').start(createTriggerContext({
   activeSessions, log, getCliStatus, projectsDir: PROJECTS_DIR,
   getLiveDescriptor, resolveSessionId, get remote() { /* remoteTriggers gate */ },
 }));
@@ -128,8 +137,8 @@ PTY, including a compact chain that holds its next step for descriptor idle.
 
 `isSessionBusy` reads `session._cliBusy` — the same flag that tracks OSC 0 title-change spinner chars.
 `getComposerState` reads `session.composerState`, the running model of what the
-user typed and has not submitted (`composer-state.js`, fed from
-`terminal-input.js`, called from `ipcMain.on('terminal-input')`).  It returns
+user typed and has not submitted (`src/main/terminals/composer-state.js`, fed from
+`src/main/terminals/terminal-input.js`, called from `ipcMain.on('terminal-input')`).  It returns
 `null` for an unknown or exited session, and **a `null` — or an absent `getComposerState` — means busy, never
 free**.
 
@@ -195,7 +204,7 @@ The FIFO wait remains outside `timeout_ms`; descriptor lookup, tab mutex and
 pre-text ownership waits consume the remaining command/chain budget. Different
 tabs progress independently. The mutex remains held through verification and
 result production, and canceled waiters cannot erase a still-held queue.
-The tab mutex is shared through `tab-input-lock.js` with the Send
+The tab mutex is shared through `src/main/terminals/tab-input-lock.js` with the Send
 to background action. That action refuses while automation owns the tab;
 new triggers wait behind a pending handoff and revalidate their pinned binding
 after acquiring it. See bg-agents.md, "Send to background".
@@ -571,7 +580,7 @@ single-`command` path and on every chain step. A probe taken before a wait that
 can last minutes proves nothing about the process at the moment of the write.
 The residual probe→write window is bounded by the try/catch on the write.
 
-**How the model is built, and where it is blind.** `composer-state.js` keeps a
+**How the model is built, and where it is blind.** `src/main/terminals/composer-state.js` keeps a
 copy of the composer's text and a cursor into it, and applies the editing keys
 it recognises (backspace, Delete, Ctrl+W, Ctrl+K, Alt+Backspace, Ctrl+A/Ctrl+E,
 Home/End, arrows). `pending` is that text's length in code points. A scalar
@@ -715,7 +724,7 @@ busy state were doing. The 2026-09-02 fix above was correct but aimed at 20%
 of the traffic; the dominant 59% was untouched, which is why the symptom
 outlived it.
 
-`composer-state.js`'s `reportLength()` now recognises CPR/DECXCPR the same
+`src/main/terminals/composer-state.js`'s `reportLength()` now recognises CPR/DECXCPR the same
 way it recognises SGR mouse and focus reports: a dedicated regex bounding
 every numeric field (`CPR_PARAMS_RE`), not a bare check on the final byte.
 `applyCsi` has no case for final `R` — falls through its default — so before
@@ -886,7 +895,7 @@ therefore back, on a stricter footing.
 `submitWithVerify` (`trigger-watcher.js`) reads the composer back
 unconditionally after every write — never skipped because activity was seen,
 which is exactly the inversion this module used to make. But an empty reading
-by itself proves less than it looks like it does: `composer-state.js` is fed
+by itself proves less than it looks like it does: `src/main/terminals/composer-state.js` is fed
 **only** from bytes the renderer sends (see "Politeness" above) — this
 module's own writes go straight to the PTY and are invisible to that model. So
 "the composer reads empty after our write" only rules out a *human's*
@@ -1612,14 +1621,14 @@ Tests: `test/trigger-single-readiness.test.js`.
 ### Why `composerEmptyAfterWrite` cannot be made to prove submission, even by feeding it our own writes
 
 A proposal, considered and rejected 2026-09-04: since `submitToPty` writes
-straight to the PTY, invisible to `composer-state.js`'s model (see above),
+straight to the PTY, invisible to `src/main/terminals/composer-state.js`'s model (see above),
 route the module's own writes through `noteUserInput` too, the way
 `handleTerminalInput` does for the renderer's keystrokes — then, the
 reasoning goes, `composerEmptyAfterWrite` would finally mean something: empty
 after our own Enter proves the CLI consumed it.
 
 It would not. `noteUserInput` treats **any** `\r` or `\n` byte as an
-unconditional `clearAll` (`composer-state.js`, the `c === '\r' || c === '\n'`
+unconditional `clearAll` (`src/main/terminals/composer-state.js`, the `c === '\r' || c === '\n'`
 branch) — proven by execution, not read off the source: `node -e` against
 `createComposerState`/`noteUserInput` directly, and the pre-existing test
 `test/composer-state.test.js:26` ("Enter clears the counter"), both show
@@ -2322,8 +2331,8 @@ observation layer.
 - A new write-capable call must set `writeAttempted = true` before it. A later `wrote: false` requires byte-level proof that nothing was written.
 
 - If you rename `_cliBusy` on `session` in `main.js`, update `isSessionBusy` in `trigger-context.js`.
-- If you rename `session.composerState` or stop feeding it from `terminal-input.js`, `getComposerState` returns `null` and **every trigger renounces with `not sent`** — the safe direction, but the channel goes silent.  Tests for the model live in `test/composer-state.test.js`; the handler and the ctx are exercised in `test/terminal-input-handler.test.js` and `test/trigger-context.test.js`, and `test/main-wiring-source-check.test.js` reads `main.js` as text to check the remaining glue is still written down (source only — it proves nothing at runtime).
-- If you rename `activeSessions` or change the structure (`session.pty` → `session.ptyProcess`), update `getPtyForSession` and `isSessionBusy` in `trigger-context.js`, and `handleTerminalInput` in `terminal-input.js`.
+- If you rename `session.composerState` or stop feeding it from `src/main/terminals/terminal-input.js`, `getComposerState` returns `null` and **every trigger renounces with `not sent`** — the safe direction, but the channel goes silent.  Tests for the model live in `test/composer-state.test.js`; the handler and the ctx are exercised in `test/terminal-input-handler.test.js` and `test/trigger-context.test.js`, and `test/main-wiring-source-check.test.js` reads `main.js` as text to check the remaining glue is still written down (source only — it proves nothing at runtime).
+- If you rename `activeSessions` or change the structure (`session.pty` → `session.ptyProcess`), update `getPtyForSession` and `isSessionBusy` in `trigger-context.js`, and `handleTerminalInput` in `src/main/terminals/terminal-input.js`.
 - If you rename `session.cwd` in `main.js`, update `getPtyForSession` in `trigger-context.js` — the target guard silently falls back to "indeterminate" (refuses every guarded trigger) rather than throwing, so this one fails quiet, not loud.
 - If you rename `session.projectFolder` or `session.realSessionId` in `main.js`, update `getTranscriptTurn` in `trigger-context.js` — it returns `null` and the transcript fallback silently never fires (chains wait for the descriptor as before).
 - Tests live in `test/trigger-watcher.test.js`.  They use `SWITCHBOARD_TRIGGERS_DIR` env override — do not hardcode paths there.

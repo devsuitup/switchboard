@@ -19,8 +19,8 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 
-const { start, waitForBusyFall, waitForCliIdleAfter } = require('../trigger-watcher');
-const { createTriggerContext } = require('../trigger-context');
+const { start, waitForBusyFall, waitForCliIdleAfter } = require('../src/main/triggers/trigger-watcher');
+const { createTriggerContext } = require('../src/main/triggers/trigger-context');
 const { classifyTranscriptTail, createTranscriptTurnReader, promptMatches } = require('../transcript-turn');
 
 function mkTmp(prefix) {
@@ -45,7 +45,7 @@ function apiRequestLine(bytes = 300_000) {
 
 test('i730 acceptance: transcriptOwnEntryAt finds a prompt before a 300000-byte API request in an open turn', () => {
   const vm = require('node:vm');
-  const filename = path.join(__dirname, '../trigger-watcher.js');
+  const filename = path.join(__dirname, '../src/main/triggers/trigger-watcher.js');
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8') + '\nmodule.exports.ownAt = transcriptOwnEntryAt;',
     { module, exports: module.exports, require: require('node:module').createRequire(filename), process, setTimeout, clearTimeout, Buffer }, { filename });
@@ -810,7 +810,7 @@ test('i730b: a busy chain confirms while more than 1 MiB of API records grow on 
 });
 
 function watcherInternals() {
-  const filename = path.join(__dirname, '../trigger-watcher.js');
+  const filename = path.join(__dirname, '../src/main/triggers/trigger-watcher.js');
   const module = { exports: {} };
   require('node:vm').runInNewContext(fs.readFileSync(filename, 'utf8')
     + '\nmodule.exports.pending = waitForPendingConfirmation; module.exports.submit = submitWithVerify;',

@@ -258,7 +258,7 @@ test('worktree nesting: a worktree of another host is drawn at top level, not in
     const parentGroup = ctx.document.getElementById(ctx.sidebar.folderId('/r'));
     assert.ok(parentGroup);
     assert.equal(parentGroup.querySelector('.worktree-group'), null, 'nothing may nest under the local folder');
-    const header = ctx.document.getElementById('ph-' + ctx.sidebar.folderId(WT));
+    const header = ctx.document.getElementById('ph-' + ctx.sidebar.folderId(WT, child.remoteAlias));
     assert.ok(header && header.classList.contains('project-header'), 'the worktree must be drawn as a top-level group');
   } finally { ctx.destroy(); }
 });
@@ -276,8 +276,8 @@ test('worktree nesting: a worktree whose repository is hidden on its host stays 
   const ctx = setupSidebarDom();
   try {
     render(ctx, [{ projectPath: WT, folder: 'box::-r--claude-worktrees-w', remoteAlias: 'box', hiddenRepository: true, sessions: [remote('c', 'box')] }]);
-    assert.equal(ctx.document.getElementById('ph-' + ctx.sidebar.folderId(WT)), null);
-    assert.equal(ctx.document.getElementById(ctx.sidebar.folderId(WT)), null);
+    assert.equal(ctx.document.getElementById('ph-' + ctx.sidebar.folderId(WT, 'box')), null);
+    assert.equal(ctx.document.getElementById(ctx.sidebar.folderId(WT, 'box')), null);
   } finally { ctx.destroy(); }
 });
 

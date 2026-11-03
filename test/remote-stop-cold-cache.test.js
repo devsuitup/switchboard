@@ -8,8 +8,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 const { Readable } = require('node:stream');
-const { createRemoteIndexer } = require('../remote-index');
-const { createSshTransport } = require('../remote-transport');
+const { createRemoteIndexer } = require('../src/main/remote/remote-index');
+const { createSshTransport } = require('../src/main/remote/remote-transport');
 const { setupSidebarDom, makeSampleProject } = require('./dom-setup');
 
 const mainPath = path.join(__dirname, '..', 'main.js');

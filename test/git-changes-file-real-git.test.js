@@ -12,10 +12,10 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
-const { readChangesFile, writeChangesFile, versionOf, resolveTargetInsideRepo, hasGitSegment } = require('../git-changes-file');
+const { readChangesFile, writeChangesFile, versionOf, resolveTargetInsideRepo, hasGitSegment } = require('../src/main/changes/git-changes-file');
 const { realFixture, raw, frenchLocale, git: localeGit } = require('./git-locale-fixture');
 const { savedEnv } = require('./git-discovery-fixture');
-const { localGitEnv, createGitChangesRunner } = require('../git-changes-runner');
+const { localGitEnv, createGitChangesRunner } = require('../src/main/changes/git-changes-runner');
 
 require('./git-locale-fixture').isolateGitSuite();
 
@@ -29,7 +29,7 @@ test('real git: French app locale preserves the no-repository result and C diagn
   const { cwd, file } = realFixture(t);
   const locale = frenchLocale(t, cwd);
   if (!locale) return;
-  const api = require('../git-changes-file');
+  const api = require('../src/main/changes/git-changes-file');
   savedEnv(t, { LANG: 'C', LC_ALL: 'C', LC_MESSAGES: 'C', LANGUAGE: undefined });
   const c = await api.readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES });
   savedEnv(t, { LANG: locale, LC_ALL: locale, LC_MESSAGES: locale, LANGUAGE: 'fr' });
@@ -44,7 +44,7 @@ test('real git: French app locale preserves the no-repository result and C diagn
 test('real git: refused repositories keep their discovery error under a French app locale', async t => {
   const { root, cwd } = realFixture(t);
   const locale = frenchLocale({ skip() {} }, cwd);
-  const api = require('../git-changes-file');
+  const api = require('../src/main/changes/git-changes-file');
   for (const language of ['C', ...(locale ? [locale] : [])]) {
     savedEnv(t, { LANG: language, LC_ALL: language, LC_MESSAGES: language, LANGUAGE: language === 'C' ? undefined : 'fr' });
     for (const type of ['format', 'broken', 'invalid', 'removed-main']) {
@@ -82,7 +82,7 @@ test('real git: an empty ancestor .git preserves Touched plain fallback and Chan
   for (const language of ['C', ...(locale ? [locale] : [])]) {
   savedEnv(t, { LANG: language, LC_ALL: language, LC_MESSAGES: language, LANGUAGE: language === 'C' ? undefined : 'fr' });
   assert.equal(raw(cwd, undefined, localGitEnv()).status, 128);
-  assert.deepEqual(await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES }), { ok: true, git: false });
+  assert.deepEqual(await require('../src/main/changes/git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES }), { ok: true, git: false });
   const runner = createGitChangesRunner({ kind: 'local', cwd });
   assert.deepEqual(await runner.isWorkTree(), { ok: true, isRepo: false });
   assert.equal((await runner.status()).reason, 'not-a-repo');
@@ -96,13 +96,13 @@ test('discovery: Git ceilings bound corroboration in Changes and Touched', async
   localeGit(ancestor, ['commit', '-qm', 'fixture']);
   savedEnv(t, { GIT_CEILING_DIRECTORIES: ancestor });
   assert.equal(raw(cwd).status, 128);
-  assert.deepEqual(await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES }), { ok: true, git: false });
+  assert.deepEqual(await require('../src/main/changes/git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES }), { ok: true, git: false });
   const runner = createGitChangesRunner({ kind: 'local', cwd });
   assert.deepEqual(await runner.isWorkTree(), { ok: true, isRepo: false });
   assert.equal((await runner.status()).reason, 'not-a-repo');
   process.env.GIT_CEILING_DIRECTORIES = root;
   assert.equal(raw(cwd).status, 0);
-  const pair = await require('../git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES });
+  const pair = await require('../src/main/changes/git-changes-file').readTouchedChangesFile({ absolutePath: file, maxBytes: MAX_BYTES });
   assert.equal(pair.ok, true, pair.error);
   assert.equal(pair.git, true);
 });
@@ -726,7 +726,7 @@ test('a cat-file failure that is not "absent from this tree" is an error, not an
 
 // Passes rev-parse through to real git and fails only the blob read.
 function fakeRunGit(blobResult) {
-  const realModule = require('../git-changes-file');
+  const realModule = require('../src/main/changes/git-changes-file');
   void realModule;
   return (args, opts) => {
     if (args[0] === 'rev-parse') {
@@ -1094,7 +1094,7 @@ for (const [name, current, original] of [
       initRepo(repo);
       const target = path.join(repo, name === 'untracked' ? 'new.txt' : 'f.txt');
       fs.writeFileSync(target, current);
-      const api = require('../git-changes-file');
+      const api = require('../src/main/changes/git-changes-file');
       const pair = await api.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES });
       assert.equal(pair.ok, true, pair.error);
       assert.equal(pair.git, true);
@@ -1116,7 +1116,7 @@ test('Touched falls back outside a repository and refuses missing files and git 
   try {
     const target = path.join(tmp, 'plain.txt');
     fs.writeFileSync(target, 'plain');
-    const api = require('../git-changes-file');
+    const api = require('../src/main/changes/git-changes-file');
     const pair = await api.readTouchedChangesFile({ absolutePath: target, maxBytes: MAX_BYTES });
     assert.equal(pair.ok, true, pair.error);
     assert.equal(pair.git, false);

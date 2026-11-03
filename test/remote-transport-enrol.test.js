@@ -16,8 +16,8 @@ const { spawnSyncRetryingCrash } = require('./spawn-retry');
 
 const {
   createSshTransport, ENROL_COMMAND, PROBE_COMMAND, LIST_COMMAND, parseEnrol,
-} = require('../remote-transport');
-const { resolveSshPath } = require('../remote-ssh-binary');
+} = require('../src/main/remote/remote-transport');
+const { resolveSshPath } = require('../src/main/remote/remote-ssh-binary');
 
 function fakeChild() {
   const child = new EventEmitter();

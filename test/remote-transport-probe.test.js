@@ -10,8 +10,8 @@ const { EventEmitter } = require('events');
 const { Readable } = require('stream');
 const { spawnSyncRetryingCrash } = require('./spawn-retry');
 
-const { createSshTransport, PROBE_COMMAND, parseProbe } = require('../remote-transport');
-const { resolveSshPath } = require('../remote-ssh-binary');
+const { createSshTransport, PROBE_COMMAND, parseProbe } = require('../src/main/remote/remote-transport');
+const { resolveSshPath } = require('../src/main/remote/remote-ssh-binary');
 
 function fakeChild() {
   const child = new EventEmitter();
