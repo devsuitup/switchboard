@@ -17,7 +17,7 @@ function messageCountIndex(buffer, stat, count, tailCount, filtered = false) {
 }
 
 // see .ai/contexts/session-cache.md ("Incremental message counts")
-function readMessageCount(file, previous, stat, filtered = false) {
+function readMessageCount(file, previous, stat, filtered = false, allowReplacement = false) {
   let fd;
   try {
     let index;
@@ -36,7 +36,7 @@ function readMessageCount(file, previous, stat, filtered = false) {
     const head = read(0, Math.min(size, 64));
     const oldSize = Number(index?.stamp?.size);
     const reusable = index?.version === 1 && oldSize < size
-      && ['dev', 'ino', 'birthtimeNs'].every(key => index.stamp[key] === stat[key].toString())
+      && (allowReplacement || ['dev', 'ino', 'birthtimeNs'].every(key => index.stamp[key] === stat[key].toString()))
       && head.toString('hex').startsWith(index.head)
       && read(Math.max(0, oldSize - 64), Math.min(oldSize, 64)).toString('hex') === index.tail;
     if ((filtered || index?.filtered) && (!reusable || index.bytes !== oldSize)) return { needsFullRead: true };

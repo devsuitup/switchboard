@@ -178,18 +178,33 @@ counts, byte offset, exact filesystem stamp, and 64-byte head/tail witnesses.
 An unterminated valid message counts immediately, as in a full read; completing
 or sealing its line replaces that tentative contribution. Reads use 64 KiB
 chunks and retain at most one unfinished record in memory, including large
-records. No transcript body is stored in the cursor. Same-identity growth reuses
-the cursor only with matching witnesses; replacement, shrink, or another mtime
-at the same size recounts from zero. The bounded witnesses do not prove that an
-arbitrary rewrite preserved the entire prefix. Counts also refresh for subagents
+records. No transcript body is stored in the cursor. Local growth requires the
+same file identity and matching witnesses. Remote folder keys (`alias::folder`)
+also permit identity changes on growth with matching witnesses: incremental
+transport copies the mirror, appends the fetched bytes and renames it into place.
+This retains the filtered baseline without a full read or bridge remerge on
+each fetch. Shrink, changed witnesses, or another mtime at the same size recount
+from zero. The bounded witnesses cannot prove that an arbitrary rewrite preserved
+the entire prefix, so local atomic replacements retain the identity check.
+Counts also refresh for subagents
 and when display-header parsing fails. Count changes remain activity-only and
 retain the existing 30-second notification window. FTS and daily metrics retain
 their existing refresh policy.
 
-Filtered bridge mirrors whose cursor cannot be reused (including a pending tail
-or a legacy cursor) go through the existing full-read/bridge-union merge so a
-recount does not restore their duplicated prefix. Normal sealed mirror appends
-retain the filtered count and read only the added records.
+Bridge rows whose cursor cannot be reused (including a pending tail or a legacy
+cursor) go through the existing full-read/bridge-union merge so a recount does
+not restore their duplicated prefix. `bridgeSessionId` marks this requirement
+even for UUID-filtered divergent rows with no `mergedIntoSessionId`. Normal
+sealed mirror appends retain the filtered count and read only the added records.
+A failed full read falls through to the header/mtime update, preserving the
+cached count while advancing freshness so unchanged watcher flushes do not retry
+it. Full reads share one final stamp check between their count and continuation
+indexes.
+
+The count reader remains separate from the shared continuation-byte budget.
+Remote parent refreshes may still spend that bounded 1 MiB budget rebuilding the
+continuation cursor after a rename, in addition to the bounded display reads and
+count suffix. Subagents skip continuation scanning.
 
 ## Projects query worker
 

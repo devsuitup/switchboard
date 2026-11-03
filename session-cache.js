@@ -572,7 +572,8 @@ function refreshFolder(folder, opts = {}) {
         && continuationIndex === cachedEntry.continuationIndex) { collector.accounted.add(relativeFile); continue; }
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId, workflowRunId });
-      const count = readMessageCount(filePath, cachedEntry.messageCountIndex, stat, !!cachedEntry.mergedIntoSessionId);
+      let count = readMessageCount(filePath, cachedEntry.messageCountIndex, stat,
+        !!(cachedEntry.bridgeSessionId || cachedEntry.mergedIntoSessionId), parseFolderKey(folder).alias !== null);
       collector.accounted.add(relativeFile);
       if (linked) linkedVersions.set(cachedDbId, { stat, filePath, relativeFile });
       if (count?.needsFullRead) {
@@ -580,8 +581,9 @@ function refreshFolder(folder, opts = {}) {
         if (s) {
           newFileReads.push(s);
           countRecountMtimes.set(s.sessionId, fileMtime);
+          continue;
         }
-        continue;
+        count = null;
       }
       if (h) {
         const merged = {

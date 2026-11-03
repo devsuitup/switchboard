@@ -329,7 +329,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
 
     const fallbackDate = stat.mtime.toISOString().slice(0, 10);
     const dailyMetrics = extractDailyMetrics(lines, fallbackDate, cutoff, excludedMessageUuids, excludedMessageSignatures);
-    const countIndex = matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }))
+    const stable = matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }));
+    const countIndex = stable
       ? messageCountIndex(fileBytes, big, messageCount, tailMessageCount, !!(cutoff || excludedMessageUuids || excludedMessageSignatures)) : null;
 
     if (isSubagent) {
@@ -378,7 +379,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       fileMtime,
       fileSize: stat.size,
       messageCount, messageCountIndex: countIndex, textContent, slug, scheduleSlug, customTitle: customTitle || '', aiTitle,
-      continuationIndex: matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }))
+      continuationIndex: stable
         ? JSON.stringify({ format: 3, version: 3, ids: [...continuationIds], stamp,
         sealedIds: sealedContinuationIds ?? [...continuationIds], bytes: fileBytes.length,
         complete: fileBytes.length === stat.size && (!incompleteTail || skipLine), size: fileBytes.length,
