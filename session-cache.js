@@ -573,7 +573,7 @@ function refreshFolder(folder, opts = {}) {
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId, workflowRunId });
       let count = readMessageCount(filePath, cachedEntry.messageCountIndex, stat,
-        !!(cachedEntry.bridgeSessionId || cachedEntry.mergedIntoSessionId), parseFolderKey(folder).alias !== null);
+        !!(cachedEntry.mergedIntoSessionId || (cachedEntry.bridgeSessionId && !cachedEntry.messageCountIndex)), parseFolderKey(folder).alias !== null);
       collector.accounted.add(relativeFile);
       if (linked) linkedVersions.set(cachedDbId, { stat, filePath, relativeFile });
       if (count?.needsFullRead) {
