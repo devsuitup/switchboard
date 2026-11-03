@@ -123,6 +123,42 @@ for (const kind of ['parent', 'subagent', 'merged']) {
   });
 }
 
+test('a bridge winner streams an appended partial line across refreshes without a full read', storeOptions, async t => {
+  const h = await fixture(t, true);
+  const shared = h.user('shared', '02');
+  const bridge = { type: 'bridge-session', bridgeSessionId: 'cse_fixture' };
+  const file = h.write('parent.jsonl', [h.user('opening', '01'), shared, bridge]);
+  h.write('member.jsonl', [shared, h.user('own', '03'), bridge]);
+  await h.writer.refreshFolder(h.folder);
+  const initial = h.db.getCachedSession('parent');
+  assert.equal(initial.bridgeSessionId, bridge.bridgeSessionId);
+  assert.equal(initial.mergedIntoSessionId, null);
+  assert.equal(initial.messageCount, 2);
+  assert.equal(JSON.parse(initial.messageCountIndex).filtered, false);
+  assert.equal(h.db.getCachedSession('member').mergedIntoSessionId, 'parent');
+  const totals = measureReads(t, new Set([file, path.join(h.dir, 'member.jsonl')]));
+  const pending = line(h.user('partial', '05'));
+  const split = pending.length - 3;
+  fs.appendFileSync(file, line(h.user('appended', '04')) + pending.slice(0, split));
+  fs.utimesSync(file, new Date('2030-01-01'), new Date('2030-01-01'));
+  await h.writer.refreshFolder(h.folder, { files: new Set(['parent.jsonl']) });
+  assert.equal(totals.full, 0, 'appending a partial line to a bridge winner must not trigger a full read');
+  const partial = h.db.getCachedSession('parent');
+  assert.equal(partial.messageCount, 3, 'only the complete appended message counts');
+  const cursor = JSON.parse(partial.messageCountIndex);
+  assert.ok(cursor.bytes < Number(cursor.stamp.size), 'the saved cursor ends before the partial trailing line');
+  fs.appendFileSync(file, pending.slice(split));
+  fs.utimesSync(file, new Date('2030-01-02'), new Date('2030-01-02'));
+  await h.writer.refreshFolder(h.folder, { files: new Set(['parent.jsonl']) });
+  assert.equal(totals.full, 0, 'completing a bridge winner partial line must stream-count without a full read or bridge remerge');
+  const completed = h.db.getCachedSession('parent');
+  assert.equal(completed.messageCount, 4, 'the completed trailing message counts exactly once');
+  assert.equal(completed.mergedIntoSessionId, null);
+  assert.equal(JSON.parse(completed.messageCountIndex).filtered, false);
+  assert.equal(h.db.getCachedSession('member').messageCount, 1);
+  assert.equal(h.db.getCachedSession('member').mergedIntoSessionId, 'parent');
+});
+
 test('a legacy divergent bridge row is recounted with UUID filtering', storeOptions, async t => {
   const h = await fixture(t);
   const shared = h.user('shared', '02');
@@ -137,7 +173,9 @@ test('a legacy divergent bridge row is recounted with UUID filtering', storeOpti
   h.db.upsertCachedSessions([{ ...initial, messageCountIndex: null }]);
   fs.appendFileSync(file, line(h.user('appended', '04')));
   fs.utimesSync(file, new Date('2030-01-01'), new Date('2030-01-01'));
+  const totals = measureReads(t, new Set([file]));
   await h.writer.refreshFolder(h.folder, { files: new Set(['member.jsonl']) });
+  assert.ok(totals.full > 0, 'a legacy bridge row without a cursor must still take a filtered full read');
   const refreshed = h.db.getCachedSession('member');
   assert.equal(refreshed.messageCount, 2, 'legacy recount must not restore the shared UUID');
   assert.equal(refreshed.mergedIntoSessionId, null);
