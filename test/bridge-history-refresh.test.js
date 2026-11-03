@@ -135,7 +135,7 @@ test('ordinary bridge flush uses only header reads and synchronously advances th
   let result;
   try { result = cache.refreshFolder(f.folder, { files: new Set(['a.jsonl']) }); }
   finally { fs.readFileSync = original; }
-  assert.equal(f.rows.get('a').messageCount, 2, 'cached body counts stay unchanged on header refresh');
+  assert.equal(f.rows.get('a').messageCount, 3, 'header refresh counts the appended message');
   assert.equal(result, 'activity', 'refreshFolder distinguishes the changed activity timestamp');
   assert.deepEqual(reads, [], 'ordinary flush must not read transcript bodies');
   assert.equal(f.rows.get('c').mergedIntoSessionId, 'a', 'unchanged members are not re-evaluated on ordinary flushes');

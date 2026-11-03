@@ -58,7 +58,7 @@ for (const kind of ['unlinked', 'subagent', 'linked']) {
       await writer.refreshFolder(h.folder, opts);
       const grown = h.rows.get(id);
       assert.equal(grown.fileSize, fs.statSync(file).size, 'later pinned growth is detected after adoption');
-      assert.equal(grown.messageCount, kind === 'linked' ? 1 : 2);
+      assert.equal(grown.messageCount, 2);
       assert.equal(fullReads, kind === 'linked' ? 0 : 1);
     });
   }
@@ -98,7 +98,7 @@ for (const subagent of [false, true]) {
       await writer.refreshFolder(h.folder, { files: new Set([relative]) });
       const refreshed = h.rows.get(id);
       assert.equal(fullReads, delta === 0 ? 1 : 0, 'pinned growth above the byte budget must not read the whole transcript');
-      assert.equal(refreshed.messageCount, delta === 0 ? 2 : 1);
+      assert.equal(refreshed.messageCount, 2);
       assert.equal(refreshed.customTitle, 'Fresh bounded title');
       assert.equal(refreshed.fileSize, budget + delta);
       const writes = h.effects.length;
@@ -192,8 +192,8 @@ for (const subagent of [false, true]) {
       });
       await writer.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', relative]) });
       assert.deepEqual(fullReads, scanFirst ? [] : [files[0]], 'all files share one synchronous byte budget');
-      assert.equal(h.rows.get(OTHER).messageCount, scanFirst ? 1 : 2);
-      assert.equal(h.rows.get(id).messageCount, 1, 'the second row keeps cached counts through the bounded header path');
+      assert.equal(h.rows.get(OTHER).messageCount, 2);
+      assert.equal(h.rows.get(id).messageCount, 2, 'the second row counts appended messages through the bounded header path');
       for (const sessionId of [OTHER, id]) {
         assert.equal(h.rows.get(sessionId).customTitle, 'Shared budget title');
         assert.equal(h.rows.get(sessionId).fileSize, 600 * 1024);
