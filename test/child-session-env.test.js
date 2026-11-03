@@ -107,6 +107,7 @@ function mainContext() {
     scheduleProjects: () => ({ add: async () => {} }),
     createComposerState: require('../src/main/terminals/composer-state').createComposerState,
     parseAddDirs: () => [], sessionTranscriptExists: () => true,
+    getHarness: require('../harnesses').getHarness,
     revealIfSdkSession() {}, wireSessionPty() {}, notifyRendererProjectsChanged() {},
     getMcpState: () => null, JOB_ID_RE: /^[0-9a-f]{8}$/,
   });
