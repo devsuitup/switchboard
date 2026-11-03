@@ -16,7 +16,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Unexpected application errors now share one notice with repeat counts and an **Open log** button; the app keeps running and the log may hold details. Notices survive a window reload, dismissed errors stay dismissed, and screen readers announce new errors without repeating count updates. (#896, #932)
 
 ### Fixed
-- Right-clicking a session row opens its menu again. (#1014)
+- Right-clicking a session row opens its menu again, and archiving a folder while sessions are still indexing shows its notice instead of failing. (#1014)
 - Terminal replies that Switchboard sends late no longer reach tmux panes as stray `;276;0c` text. (#1011)
 - Local commands in a live **View messages**, including expanded subagent transcripts, keep their output together when it arrives in a later update. (#986, #990)
 - Sessions Switchboard did not start — background conversations, attached in a tab or not, and sessions started in another terminal — now show their running subagent count and activity indicator. (#552)
