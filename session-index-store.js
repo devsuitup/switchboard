@@ -292,6 +292,7 @@ if (migrations.length > currentDbVersion) {
   if (!cols.has('continuationIndex')) db.exec('ALTER TABLE session_cache ADD COLUMN continuationIndex TEXT');
   if (!cols.has('customTitle')) db.exec('ALTER TABLE session_cache ADD COLUMN customTitle TEXT');
   if (!cols.has('workflowRunId')) db.exec('ALTER TABLE session_cache ADD COLUMN workflowRunId TEXT');
+  if (!cols.has('messageCountIndex')) db.exec('ALTER TABLE session_cache ADD COLUMN messageCountIndex TEXT');
   if (db.prepare("SELECT value FROM settings WHERE key = 'custom_title_backfill_version'").get()?.value !== '2') {
     db.transaction(() => {
       db.exec(`UPDATE session_meta_fields SET transcriptTitle = NULL WHERE field = 'name' AND source = 'user'
@@ -384,13 +385,14 @@ const stmts = {
   cacheCount: db.prepare('SELECT COUNT(*) as cnt FROM session_cache'),
   cacheGetAll: db.prepare('SELECT * FROM session_cache'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex, customTitle, fileSize, workflowRunId)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, parentSessionId, agentId, subagentType, description, fileMtime, bridgeSessionId, mergedIntoSessionId, entrypoint, scheduleSlug, continuationIndex, customTitle, fileSize, workflowRunId, messageCountIndex)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
+      messageCountIndex = excluded.messageCountIndex,
       aiTitle = excluded.aiTitle, fileMtime = excluded.fileMtime,
       fileSize = excluded.fileSize,
       workflowRunId = excluded.workflowRunId,
@@ -573,7 +575,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
       s.subagentType || null, s.description || null,
       s.fileMtime || null, s.bridgeSessionId || null, s.mergedIntoSessionId || null,
       typeof s.entrypoint === 'string' ? s.entrypoint : null,
-      s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null, s.fileSize ?? null, s.workflowRunId || null
+      s.scheduleSlug || null, s.continuationIndex || null, s.customTitle ?? null, s.fileSize ?? null, s.workflowRunId || null, s.messageCountIndex || null
     );
     if (next !== previous) metaFieldSet.run(s.sessionId, 'name', previous.nameRevision ?? 0, 'user', next.nameTranscriptTitle);
   }

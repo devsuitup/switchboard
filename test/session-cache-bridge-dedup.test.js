@@ -135,6 +135,15 @@ test('refreshFolder: a compaction mirror keeps its own row (mergedIntoSessionId 
 
     const mirrorSearch = searchUpserted.find(e => e.id === '1b1def07');
     assert.ok(mirrorSearch, 'the mirror still gets a search entry so its post-compaction content is findable');
+    fs.appendFileSync(mirrorPath, JSON.stringify({ type: 'user', cwd: projectPath, timestamp: '2026-09-06T22:00:00.000Z', message: 'new turn' }) + '\n'
+      + JSON.stringify({ type: 'assistant', timestamp: '2026-09-06T22:01:00.000Z', message: 'new reply' }) + '\n');
+    fs.utimesSync(mirrorPath, new Date('2030-01-01'), new Date('2030-01-01'));
+    sessionCache.refreshFolder(folder, { files: new Set(['1b1def07.jsonl']) });
+    assert.equal(store.get('1b1def07').messageCount, 4, 'growth retains the deduplicated mirror baseline');
+    fs.utimesSync(mirrorPath, new Date('2030-01-02'), new Date('2030-01-02'));
+    sessionCache.refreshFolder(folder, { files: new Set(['1b1def07.jsonl']) });
+    assert.equal(store.get('1b1def07').messageCount, 4, 'a cursor reset must retain mirror deduplication');
+    assert.equal(store.get('1b1def07').modified, '2030-01-02T00:00:00.000Z', 'a recount retains header-refresh recency');
   } finally {
     cleanup(projectsDir);
   }

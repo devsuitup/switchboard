@@ -302,6 +302,7 @@ for (const kind of ['subagent', 'remote', 'no-link', 'out-of-scope']) test('B6 p
 
 test('B2/B6 separate scan budget, bounded headers, and scoped unchanged rows', { timeout: 9000 }, async t => {
   const h = fixture(t); h.write(OLD, h.link()); h.write(OTHER); cache.refreshFolder(h.folder); h.init();
+  const appendedBytes = Buffer.byteLength(h.padding);
   h.append(OLD, h.padding); h.append(OTHER, h.padding);
   const read = fs.readSync, open = fs.openSync, descriptors = new Map(), bytes = new Map();
   t.mock.method(fs, 'openSync', (file, ...args) => { const fd = open(file, ...args); descriptors.set(fd, file); return fd; });
@@ -309,7 +310,10 @@ test('B2/B6 separate scan budget, bounded headers, and scoped unchanged rows', {
   const preparedContinuations = await cache.prepareContinuationRefresh(h.folder);
   assert.equal(preparedContinuations.size, 1); assert.ok(bytes.get(h.file(OLD)) > 2 * 1024 * 1024); assert.equal(bytes.get(h.file(OTHER)), undefined);
   bytes.clear(); cache.refreshFolder(h.folder, { files: new Set([OTHER + '.jsonl', OLD + '.jsonl']), preparedContinuations });
-  assert.ok(bytes.get(h.file(OLD)) < 600 * 1024); assert.ok(bytes.get(h.file(OTHER)) < 1600 * 1024);
+  assert.ok(bytes.get(h.file(OLD)) < appendedBytes + 600 * 1024);
+  assert.ok(bytes.get(h.file(OTHER)) < appendedBytes + 1600 * 1024);
+  assert.equal(h.rows.get(OLD).messageCount, 801);
+  assert.equal(h.rows.get(OTHER).messageCount, 801);
   bytes.clear(); assert.equal((await cache.prepareContinuationRefresh(h.folder)).size, 0); assert.equal(bytes.size, 0);
 });
 
