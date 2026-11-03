@@ -884,7 +884,7 @@ let sidebarRenderAllProjects = null;
 let sidebarRenderDirty = true;
 let sidebarScheduleRuns = new Map();
 const sidebarRenderObserver = new MutationObserver(() => { sidebarRenderDirty = true; });
-sidebarRenderObserver.observe(sidebarContent, { subtree: true, childList: true, attributes: true, characterData: true });
+sidebarRenderObserver.observe(document.getElementById('sidebar-content'), { subtree: true, childList: true, attributes: true, characterData: true });
 
 function sidebarRenderInputs(projects) {
   const now = Date.now();

@@ -36,8 +36,9 @@ const INDEX_HTML = `<!DOCTYPE html>
   </body>
 </html>`;
 
-function setupSidebarDom({ loadTaskRegistry = true } = {}) {
-  const dom = new JSDOM(INDEX_HTML, {
+function setupSidebarDom({ loadTaskRegistry = true, indexOrder = false } = {}) {
+  const indexHtml = indexOrder ? fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf8') : INDEX_HTML;
+  const dom = new JSDOM(indexHtml, {
     url: 'http://localhost/',
     runScripts: 'outside-only',
     pretendToBeVisual: true,
@@ -51,6 +52,8 @@ function setupSidebarDom({ loadTaskRegistry = true } = {}) {
   // that event — sidebar.js registers these listeners once at eval time via
   // an IIFE, so we must capture the callback before the module evaluates.
   const apiTarget = {
+    platform: process.platform,
+    whatsNewStartup: () => Promise.resolve(null),
     onMainProcessError: cb => { apiTarget._mainProcessErrorCb = cb; },
     deleteSessionPreview: id => Promise.resolve({ ok: true, partIds: [id], parts: 1, transcripts: 1, subagents: 0, running: false }),
     onTaskSnapshot: cb => { apiTarget._taskSnapshotCb = cb; },
@@ -72,6 +75,19 @@ function setupSidebarDom({ loadTaskRegistry = true } = {}) {
       return () => Promise.resolve({ ok: true });
     },
   });
+
+  if (indexOrder) {
+    try {
+      for (const script of window.document.querySelectorAll('script[src]')) {
+        const src = script.getAttribute('src');
+        if (src === 'app.js') break;
+        evalInWindow(dom, path.resolve(PUBLIC_DIR, src));
+      }
+    } catch (error) {
+      window.close();
+      throw error;
+    }
+  }
 
   // Stubs for cross-file renderer globals consumed by sidebar.js.
   // We intentionally use writable globals where sidebar.js mutates them.
@@ -125,43 +141,46 @@ function setupSidebarDom({ loadTaskRegistry = true } = {}) {
   };
 
   for (const [k, v] of Object.entries(stubGlobals)) {
-    Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
+    if (indexOrder) window[k] = v;
+    else Object.defineProperty(window, k, { value: v, writable: true, configurable: true });
   }
 
-  // morphdom: load the UMD build into the window so sidebar.js sees `morphdom` global.
-  const morphdomSrc = fs.readFileSync(MORPHDOM_PATH, 'utf8');
-  vm.runInContext(morphdomSrc, dom.getInternalVMContext(), { filename: 'morphdom-umd.js' });
+  if (!indexOrder) {
+    // morphdom: load the UMD build into the window so sidebar.js sees `morphdom` global.
+    const morphdomSrc = fs.readFileSync(MORPHDOM_PATH, 'utf8');
+    vm.runInContext(morphdomSrc, dom.getInternalVMContext(), { filename: 'morphdom-umd.js' });
 
-  // Real utils.js and icons.js — small and dependency-free.
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'icons.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'subagent-timing.js'));
+    // Real utils.js and icons.js — small and dependency-free.
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'utils.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'icons.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'subagent-timing.js'));
 
-  // session-state.js (pure domain) + session-activity-dom.js (DOM projection)
-  // + session-activity.js (the local-pty adapter: localPtyStates,
-  // setActivity/setAttention/purgeActivityFor) — load order mirrors
-  // index.html. sidebar.js and remote-activity-ui.js call
-  // setActivity/applyStateClasses/sessionItemEl from these.
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'session-state.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'process-exit.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
+    // session-state.js (pure domain) + session-activity-dom.js (DOM projection)
+    // + session-activity.js (the local-pty adapter: localPtyStates,
+    // setActivity/setAttention/purgeActivityFor) — load order mirrors
+    // index.html. sidebar.js and remote-activity-ui.js call
+    // setActivity/applyStateClasses/sessionItemEl from these.
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'session-state.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'process-exit.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity-dom.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'session-activity.js'));
 
-  // stop-session-ui.js: sidebar.js's archive/delete stop helper (issue #271, see .ai/contexts/session-state.md).
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'stop-session-ui.js'));
+    // stop-session-ui.js: sidebar.js's archive/delete stop helper (issue #271, see .ai/contexts/session-state.md).
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'stop-session-ui.js'));
 
-  // sidebar.js, then remote-activity-ui.js (seedRemoteActivity, called from
-  // renderProjects) and local-transcript-adapter.js (onSessionTranscriptActivity).
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'bridge-url.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'worktree-nesting.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'modal-stack.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'choice-dialog.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'app-dialogs.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'app-notices.js'));
-  if (loadTaskRegistry) evalInWindow(dom, path.join(PUBLIC_DIR, 'task-registry.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
-  evalInWindow(dom, path.join(PUBLIC_DIR, 'local-transcript-adapter.js'));
+    // sidebar.js, then remote-activity-ui.js (seedRemoteActivity, called from
+    // renderProjects) and local-transcript-adapter.js (onSessionTranscriptActivity).
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'bridge-url.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'worktree-nesting.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'modal-stack.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'choice-dialog.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'app-dialogs.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'app-notices.js'));
+    if (loadTaskRegistry) evalInWindow(dom, path.join(PUBLIC_DIR, 'task-registry.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'sidebar.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'remote-activity-ui.js'));
+    evalInWindow(dom, path.join(PUBLIC_DIR, 'local-transcript-adapter.js'));
+  }
   vm.runInContext('initLocalTranscriptAdapter()', dom.getInternalVMContext());
 
   const ctx = dom.getInternalVMContext();
