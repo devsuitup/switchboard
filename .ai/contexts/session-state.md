@@ -92,6 +92,7 @@ the current payload, pending-session reconciliation and activity poll. Explicit
 refreshes and `resort: true` still render. Only the sidebar build/morphdom/event
 rebinding is skipped; cache updates, notices, diagnostics and timer pruning run.
 
+The sidebar observer resolves its DOM target directly before app.js loads, so `renderProjects.unchanged` and session menus initialize in index.html script order (#1014).
 `renderProjects.unchanged` compares detached JSON fields captured only after
 a successful render. The input payload (before preserved-order sorting) is
 compared first and returns immediately on a change, before computing activity
