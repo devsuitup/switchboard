@@ -79,6 +79,53 @@ function cronMatches(cronExpr, now) {
   );
 }
 
+function cronCanMatch(expr) {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  const bounds = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
+  const values = bounds.map(([lo, hi], i) => Array.from({ length: hi - lo + 1 }, (_, n) => lo + n).filter(n => cronFieldMatches(parts[i], n)));
+  if (values.some(v => !v.length)) return false;
+  const days = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return values[3].some(month => values[2].some(day => day <= days[month - 1]));
+}
+
+function nextCronMatch(expr, afterMs, horizonMs = 366 * 24 * 60 * MINUTE_MS) {
+  if (!Number.isFinite(afterMs) || !Number.isFinite(horizonMs) || !cronCanMatch(expr)) return null;
+  const [minute, hour, dom, month, dow] = expr.trim().split(/\s+/);
+  let t = Math.floor(afterMs / MINUTE_MS) * MINUTE_MS + MINUTE_MS;
+  while (t <= afterMs + horizonMs) {
+    const date = new Date(t);
+    if (!cronFieldMatches(dom, date.getDate()) || !cronFieldMatches(month, date.getMonth() + 1) || !cronFieldMatches(dow, date.getDay())) {
+      t = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
+      continue;
+    }
+    const remaining = Array.from({ length: 60 - date.getMinutes() }, (_, i) => i + date.getMinutes());
+    if (!cronFieldMatches(hour, date.getHours()) || !remaining.some(m => cronFieldMatches(minute, m))) {
+      t += (60 - date.getMinutes()) * MINUTE_MS;
+      continue;
+    }
+    if (cronMatches(expr, date)) return t;
+    t += MINUTE_MS;
+  }
+  return null;
+}
+
+function describeCron(expr) {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5 || !cronCanMatch(expr)) return expr;
+  const [minute, hour, dom, month, dow] = parts;
+  if (hour === '*' && dom === '*' && month === '*' && dow === '*') {
+    if (minute === '*') return 'every min';
+    if (/^\*\/[1-9]\d*$/.test(minute) && Number(minute.slice(2)) <= 59) return `every ${Number(minute.slice(2))} min`;
+  }
+  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dom === '*' && month === '*') {
+    const time = `${Number(hour)}:${minute.padStart(2, '0')}`;
+    if (dow === '*') return `daily at ${time}`;
+    if (dow === '1-5') return `weekdays at ${time}`;
+  }
+  return expr;
+}
+
 /** The latest minute in (afterMs, uptoMs] that the cron expression matches, or null. */
 function latestCronMatch(cronExpr, afterMs, uptoMs) {
   for (let m = Math.floor(uptoMs / MINUTE_MS) * MINUTE_MS; m > afterMs; m -= MINUTE_MS) {
@@ -97,8 +144,15 @@ function scheduleStateKey(schedule) {
  */
 function readScheduleState(stateDir) {
   fs.mkdirSync(stateDir, { recursive: true });
+  return readScheduleStateOnly(stateDir);
+}
+
+function readScheduleStateOnly(stateDir) {
   const state = new Map();
-  for (const name of fs.readdirSync(stateDir)) {
+  let names;
+  try { names = fs.readdirSync(stateDir); }
+  catch (err) { if (err.code === 'ENOENT') return state; throw err; }
+  for (const name of names) {
     const m = name.match(/^([0-9a-f]{16})-(\d+)\.json$/);
     if (!m) continue;
     const entry = state.get(m[1]) || { handled: -Infinity, files: [] };
@@ -195,7 +249,7 @@ function initialScheduleProjects(listProjectSettingKeys) {
     try {
       if (!fs.existsSync(path.join(projectPath, '.git'))) continue;
       const commandsDir = path.join(projectPath, '.claude', 'commands');
-      if (fs.readdirSync(commandsDir).some(f => f.startsWith('schedule-') && f.endsWith('.md'))) {
+      if (fs.readdirSync(commandsDir).some(isRunnerScheduleFileName)) {
         found.add(projectPath);
       }
     } catch {}
@@ -304,6 +358,62 @@ function refusedScheduleBinds(addDirs, knownProjects, home, baseDir) {
   return scheduleBindRefusals(addDirs, knownProjects, home, baseDir).map(r => r.dir);
 }
 
+function scheduleLaunchRefusal({ sandbox, platform = process.platform, addDirs = [], projectPaths = [], home = os.homedir(), cwd = process.cwd() }) {
+  if (!sandbox) return null;
+  if (platform !== 'linux') return {
+    problem: 'sandbox needs Linux',
+    error: 'The schedule sandbox requires Linux (bubblewrap). Run it on Linux with bubblewrap, or disable Sandbox in the project or global settings and try Run now again.',
+  };
+  const refused = scheduleBindRefusals(addDirs, projectPaths, home, cwd);
+  if (!refused.length) return null;
+  const detail = refused.map(r => `${r.dir} (${r.reason})`).join(', ');
+  return { problem: `add-dirs refused: ${detail}`, error: `Sandbox add-dirs refused: ${detail}. Remove or change these add-dirs in the schedule file, then try Run now again.` };
+}
+
+function isRunnerScheduleFileName(name) {
+  return name.startsWith('schedule-') && name.endsWith('.md');
+}
+
+function scheduleFields(file, meta) {
+  return {
+    name: meta.name || file,
+    slug: meta.slug || file.replace(/^schedule-/, '').replace(/\.md$/, ''),
+    catchUp: /^(["']?)true\1$/i.test(meta['catch-up'] || ''),
+  };
+}
+
+function listScheduleFiles(projectPaths, { getSetting = () => null, defaultSandbox = false, platform = process.platform, home = os.homedir() } = {}) {
+  const schedules = [];
+  for (const projectPath of projectPaths) {
+    const commandsDir = path.join(projectPath, '.claude', 'commands');
+    let files;
+    try { files = fs.readdirSync(commandsDir).filter(isRunnerScheduleFileName); } catch { continue; }
+    for (const file of files) {
+      const filePath = path.join(commandsDir, file);
+      let content;
+      try { content = fs.readFileSync(filePath, 'utf8'); } catch { continue; }
+      const { meta, body } = parseFrontmatter(content);
+      const problems = [];
+      if (!/^---\n([\s\S]*?)\n---\n?/.test(content)) problems.push(`front matter not read${content.includes('\r\n') ? ': save with LF line endings' : ''}`);
+      if (!meta.cron) problems.push('no cron');
+      else if (!cronCanMatch(meta.cron)) problems.push('cron can never match');
+      if (!body) problems.push('no prompt');
+      const addDirs = String((meta.cli || {})['add-dirs'] || '').split(',').map(d => d.trim()).filter(Boolean);
+      const refusal = scheduleLaunchRefusal({ sandbox: resolveScheduleSandbox(projectPath, getSetting, defaultSandbox), platform, addDirs, projectPaths, home, cwd: projectPath });
+      if (refusal) problems.push(refusal.problem);
+      schedules.push({ file, filePath, projectPath, ...scheduleFields(file, meta), cron: meta.cron || '',
+        enabled: meta.enabled !== 'false', cli: meta.cli || {}, prompt: body,
+        linked: !scheduleFileUnlinked(projectPath, filePath), problems });
+    }
+  }
+  for (const row of schedules) {
+    for (const other of schedules) {
+      if (other !== row && other.projectPath === row.projectPath && other.slug === row.slug) row.problems.push(`slug shared with ${other.file}`);
+    }
+  }
+  return schedules;
+}
+
 /**
  * Scan the registered projects for schedule-*.md files and return parsed
  * schedule objects. Without a registry, nothing is scanned.
@@ -316,7 +426,7 @@ function scanSchedules(log, projectPaths = []) {
       const commandsDir = path.join(projectPath, '.claude', 'commands');
       try {
         if (!fs.existsSync(commandsDir)) continue;
-        const files = fs.readdirSync(commandsDir).filter(f => f.startsWith('schedule-') && f.endsWith('.md'));
+        const files = fs.readdirSync(commandsDir).filter(isRunnerScheduleFileName);
         for (const file of files) {
           try {
             const content = fs.readFileSync(path.join(commandsDir, file), 'utf8');
@@ -326,9 +436,7 @@ function scanSchedules(log, projectPaths = []) {
             schedules.push({
               file, filePath: path.join(commandsDir, file),
               projectPath, folder: folder.name,
-              name: meta.name || file, cron: meta.cron,
-              catchUp: /^(["']?)true\1$/i.test(meta['catch-up'] || ''),
-              slug: meta.slug || file.replace(/^schedule-/, '').replace(/\.md$/, ''),
+              ...scheduleFields(file, meta), cron: meta.cron,
               cli: meta.cli || {}, prompt: body,
             });
           } catch (err) {
@@ -664,4 +772,4 @@ function setScheduleEnabled(filePath, enabled, { projectRoot, rewrite = rewriteE
   }
 }
 
-module.exports = { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, skipMissedRuns, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };
+module.exports = { listScheduleFiles, isRunnerScheduleFileName, nextCronMatch, describeCron, scheduleLaunchRefusal, readScheduleStateOnly, latestCronMatch, scheduleStateKey, scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, skipMissedRuns, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };
