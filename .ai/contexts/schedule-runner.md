@@ -178,6 +178,69 @@ deleted files or files whose `enabled` changed are skipped without a failure.
 - The file lives in the user's repository, so a tracked schedule file shows a
   working-tree diff after an archive.
 
+## Schedule listing backend (#792, slice A1)
+
+`list-schedules` in `main.js`, exposed as `api.listSchedules()` by preload,
+calls the Electron-free `buildScheduleList(deps)` in
+`src/main/schedules/schedule-list.js`. It awaits the complete local schedule
+registry, including archived projects. Main injects the cache reader, schedule
+liveness reader, archive and known-project predicates, sandbox settings, state
+and transcript directories, and the instance's catch-up flag. The listing
+module never derives catch-up policy from the environment.
+
+`listScheduleFiles(projectPaths, deps)` in `schedule-runner.js` reads the same
+directory and parser as `scanSchedules`, retaining disabled and malformed
+schedules. Both readers and the registry seed share
+`isRunnerScheduleFileName` (case-sensitive `schedule-` prefix and `.md` suffix)
+and the effective name, slug and catch-up field helper. Only the exact parsed
+string `false` disables a schedule; quoted `"false"` remains enabled. Files and
+directories linked below the project root are listed as `linked` using the
+existing `scheduleFileUnlinked` check.
+
+Problems report unread front matter (with an LF-saving hint for CRLF), missing
+cron or prompt, impossible cron fields/calendar combinations, sandbox launch
+refusals and every other file sharing an effective slug in the project.
+Impossible cron analysis enumerates values through the existing field matcher
+and checks possible month lengths including leap February; it does not infer
+impossibility from a one-year search. The Electron-free
+`scheduleLaunchRefusal` is shared by this reader and `runScheduleCommand`:
+off-Linux sandboxes are refused; Linux sandbox add-dirs use
+`scheduleBindRefusals` and its existing reasons. Unsandboxed add-dirs are not
+judged. The launcher's error and recovery text remain the same.
+
+`nextCronMatch(expr, afterMs, horizonMs)` returns the first epoch minute strictly
+after `afterMs`, within 366 days by default. A failing day field skips to the
+next local midnight. A failing hour or an hour with no matching minute left
+skips to the next local minute zero with
+`t + (60 - new Date(t).getMinutes()) * 60000`. This retains the repeated Paris
+hour and matches in half-hour zones such as Kolkata. Day-of-month and weekday
+keep the runner's AND semantics. `describeCron` recognizes every-minute,
+minute-step, daily and weekday presets; other expressions remain raw.
+
+The catch-up state reader `readScheduleStateOnly` never creates a directory or
+claims a minute. It treats an absent or future record as the minute before the
+current one and searches the runner's seven-day window. A state read error
+leaves pending time unknown (`null`). Catch-up disabled in this instance also
+returns no pending time. The response carries the single `now` used for all
+schedule calculations.
+
+Runs are cache rows with the effective `scheduleSlug` in either the registry
+path's encoded folder or its disk-real path's encoded folder, deduplicated by
+session id, newest first, at most 20 per schedule. For these rows only, the
+listing streams the transcript until its first assistant record; both
+`type: assistant` and `type: message, role: assistant` count. A second user
+record never proves a reply. Unreadable transcripts give `replied: null`;
+readable transcripts without an assistant give `false`. The cache is not
+modified. `cliSessionState.isScheduleRunLive(sessionId)` reads the launcher's
+in-memory map without probing processes; `running` uses that export for cron
+and manual runs. Every run currently has `result: null`.
+
+This slice adds no renderer consumer, mutation IPC, result persistence or
+changelog entry. Regressions: `schedule-next-run.test.js`,
+`schedule-file-name.test.js` and `schedule-list.test.js`; they use disposable
+files and plain Node boundaries, including the real main IPC registration and
+preload exposure, without launching Electron.
+
 ## Invariants
 
 ### Running schedules in the sidebar (#814)
