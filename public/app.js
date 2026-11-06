@@ -2373,6 +2373,7 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
   syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
+  if (typeof result.generation === 'number') ptyGenerations.set(sessionId, result.generation);
 
   reveal();
   schedulePersistWorkingSet();
@@ -2692,15 +2693,27 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
 
 // see .ai/contexts/ipc-bridge.md ("Trigger session actions")
 let triggerDocumentEpoch = null;
+let triggerReady = Promise.resolve();
 
-async function signalTriggerReady() {
-  try {
-    const outcome = await window.api.triggerActionsReady();
-    if (outcome?.ok) triggerDocumentEpoch = outcome.documentEpoch;
-  } catch (error) { console.warn('[switchboard] trigger readiness failed', error); }
+function signalTriggerReady() {
+  triggerReady = (async () => {
+    try {
+      const outcome = await window.api.triggerActionsReady();
+      if (outcome?.ok) triggerDocumentEpoch = outcome.documentEpoch;
+    } catch (error) { console.warn('[switchboard] trigger readiness failed', error); }
+  })();
+  return triggerReady;
 }
 
 async function handleTriggerSessionAction(request) {
+  await triggerReady;
+  const keptFocus = document.activeElement;
+  try { return await runTriggerSessionAction(request); } finally {
+    if (keptFocus && keptFocus !== document.body && keptFocus.isConnected && document.activeElement !== keptFocus) keptFocus.focus({ preventScroll: true });
+  }
+}
+
+async function runTriggerSessionAction(request) {
   const base = { requestId: request?.requestId, documentEpoch: request?.documentEpoch, mode: request?.mode,
     requestedSessionId: request?.requestedSessionId ?? null, tabKey: request?.tabKey };
   const reply = fields => window.api.triggerSessionActionResult({ ...base, generation: null, ...fields });

@@ -58,6 +58,7 @@ test('startup recovers cached rows after two failures without a filesystem event
     return { defaultProjects: [{ projectPath: '/cached', sessions: [] }], allProjects: [] };
   };
   h.window.restoreStartupSessions = async () => { restores++; };
+  h.window.signalTriggerReady = () => {};
   h.window.refreshSidebar = () => refreshed();
   loadAppFunctions(h.context, { functions: ['loadStartupProjects', 'reloadProjects'] });
   try {
@@ -79,6 +80,7 @@ test('startup recovery stops after its bounded retry budget', async () => {
   h.window.setTimeout = callback => { timers.push(callback); return timers.length; };
   h.window.api.getProjects = async () => { calls++; throw new Error('persistent IPC failure'); };
   h.window.restoreStartupSessions = async () => {};
+  h.window.signalTriggerReady = () => {};
   loadAppFunctions(h.context, { functions: ['loadStartupProjects', 'reloadProjects'] });
   try {
     await h.window.loadStartupProjects();

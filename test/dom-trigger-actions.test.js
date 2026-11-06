@@ -53,9 +53,9 @@ function setup({ grid = false, resultFor } = {}) {
   window.cachedAllProjects = [project];
   window.sessionMap.set(A, project.sessions[0]);
   loadAppFunctions(ctx.context, {
-    declarations: ['restoreRunDepth', 'restoreMode', 'continuationRetryCancelled', 'openingSessions', 'dormantWorkingSet', 'restoreInFlight', 'triggerDocumentEpoch', 'ptyGenerations'],
+    declarations: ['restoreRunDepth', 'restoreMode', 'continuationRetryCancelled', 'openingSessions', 'dormantWorkingSet', 'restoreInFlight', 'triggerDocumentEpoch', 'triggerReady', 'ptyGenerations'],
     functions: ['openSession', 'openSessionNow', 'indexedRowOf', 'indexedSessionById', 'dormantRowIds', 'syncDormantRow', 'clearDormantRow',
-      'launchNewSession', 'handleTriggerSessionAction', 'signalTriggerReady'],
+      'launchNewSession', 'handleTriggerSessionAction', 'runTriggerSessionAction', 'signalTriggerReady'],
   });
   inContext('triggerDocumentEpoch = 9');
   const request = (extra) => ({ requestId: 'req-1', documentEpoch: 9, mode: 'resume', requestedSessionId: A, tabKey: A, generation: null,
@@ -225,5 +225,60 @@ test('an archived-group project opens through the same saved defaults as the plu
     const trigger = h.calls.openTerminal[0][3];
     const plus = await h.window.resolveDefaultSessionOptions(h.window.cachedAllProjects[0]);
     assert.deepEqual(trigger, plus);
+  } finally { h.destroy(); }
+});
+
+test('a new launch acknowledges the generation main reported for its PTY', async () => {
+  const h = setup();
+  try {
+    await h.window.handleTriggerSessionAction(h.request({ mode: 'new', requestedSessionId: null, tabKey: B, name: 'n' }));
+    assert.equal(h.calls.results[0].ok, true);
+    assert.equal(h.calls.results[0].generation, 5);
+  } finally { h.destroy(); }
+});
+
+test('an action that arrives before the ready response is processed after the handshake settles', async () => {
+  const h = setup();
+  try {
+    h.inContext('triggerDocumentEpoch = null');
+    let answer;
+    h.window.api.triggerActionsReady = () => new Promise(resolve => { answer = resolve; });
+    const ready = h.window.signalTriggerReady();
+    const action = h.window.handleTriggerSessionAction(h.request());
+    answer({ ok: true, documentEpoch: 9 });
+    await ready;
+    await action;
+    assert.equal(h.calls.results.length, 1);
+    assert.equal(h.calls.results[0].ok, true);
+  } finally { h.destroy(); }
+});
+
+test('a non-activating creation leaves keyboard focus on the control that held it', async () => {
+  const h = setup();
+  try {
+    const doc = h.window.document;
+    const control = doc.createElement('button');
+    const terminalInput = doc.createElement('textarea');
+    doc.body.append(control, terminalInput);
+    h.window.refreshSidebar = () => terminalInput.focus();
+    control.focus();
+    assert.equal(doc.activeElement, control);
+    await h.window.handleTriggerSessionAction(h.request({ mode: 'new', requestedSessionId: null, tabKey: B, name: 'n' }));
+    assert.equal(h.calls.results[0].ok, true);
+    assert.equal(doc.activeElement, control);
+  } finally { h.destroy(); }
+});
+
+test('a non-activating resume leaves keyboard focus where it was', async () => {
+  const h = setup();
+  try {
+    const doc = h.window.document;
+    const control = doc.createElement('button');
+    const terminalInput = doc.createElement('textarea');
+    doc.body.append(control, terminalInput);
+    h.window.schedulePersistWorkingSet = () => terminalInput.focus();
+    control.focus();
+    await h.window.handleTriggerSessionAction(h.request());
+    assert.equal(doc.activeElement, control);
   } finally { h.destroy(); }
 });

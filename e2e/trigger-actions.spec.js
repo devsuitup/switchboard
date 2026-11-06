@@ -36,11 +36,12 @@ test('an open-resume trigger shows an ordinary session without taking focus', as
   const preLaunchCmd = `${process.execPath} ${FIXTURE}`;
   const { app, page } = await launch();
   await page.evaluate(async ({ repoPath, prefix }) => {
-    await window.api.setSetting('project:' + repoPath, { sandbox: false, mcpEmulation: false, preLaunchCmd: prefix });
+    await window.api.setSetting('project:' + repoPath, { sandbox: false, mcpEmulation: false, permissionMode: null, preLaunchCmd: prefix });
   }, { repoPath: repo, prefix: preLaunchCmd });
   const saved = await page.evaluate(path_ => window.api.getEffectiveSettings(path_), repo);
   expect(saved.preLaunchCmd).toBe(preLaunchCmd);
   expect(saved.sandbox).toBeFalsy();
+  const permissionArgs = saved.permissionMode ? ['--permission-mode', saved.permissionMode] : [];
 
   await openPlainTerminal(page);
   const selected = await page.evaluate(() => activeSessionId);
@@ -57,7 +58,7 @@ test('an open-resume trigger shows an ordinary session without taking focus', as
   const first = await publish(env, { version: 1, action: 'open', sessionId })();
   expect(first).toMatchObject({ outcome: 'opened', ok: true, resumed: true, wrote: false, sessionId });
   await expect.poll(() => wrapperRuns(home).length).toBe(1);
-  expect(wrapperRuns(home)[0]).toEqual({ argv: ['claude', '--resume', sessionId], cwd: repo });
+  expect(wrapperRuns(home)[0]).toEqual({ argv: ['claude', '--resume', sessionId, ...permissionArgs], cwd: repo });
   await expect(page.locator(`#si-${sessionId}`)).toBeVisible();
   expect(await page.evaluate(() => activeSessionId)).toBe(selected);
   expect(await page.evaluate(() => document.activeElement?.className)).toBe(focusedBefore);

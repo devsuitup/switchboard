@@ -815,7 +815,7 @@ nothing went out; read them as `(result.steps || []).length === 0`.
 ### Failures in the watcher itself
 
 **An exception while deciding a trigger's fate** — a body that is valid JSON but
-not a usable shape, such as `null` or a non-object chain step — still ends in a
+not a usable shape, such as a non-object chain step — still ends in a
 result and a deletion: `{ "ok": false, "error": "internal error: <message>",
 "internal": true }`. Only this path sets `internal: true`, so "the watcher
 broke" can be told from "the trigger was refused" without parsing `error`.
@@ -860,8 +860,15 @@ written file from the same directory (`<uuid>.json`):
 - `stop` stops an open local session after its current turn. Without `before` it
   needs an idle session with an empty composer that has been quiet; with
   `before` the note is delivered, its turn must finish within `timeout_ms`, and
-  the session is then stopped. On a timeout the session keeps running and the
-  result says `note step not finished`. Switchboard never reads the note.
+  the session is then stopped. If the note does not finish in time the session
+  keeps running and the result says `note step not finished`. If Stop was already
+  requested but the exit was not observed before the deadline, the result says
+  `session stop not confirmed` with `uncertain: true` and the process may still
+  end; a bare stop that waits for a quiet composer past its deadline says
+  `session input not quiet`. Switchboard never reads the note.
+
+A JSON file under a request UUID whose body is not an object (`null`, an array,
+a number, a string) is answered `trigger must be an object`.
 
 The window is not raised or focused and your selection does not change.
 

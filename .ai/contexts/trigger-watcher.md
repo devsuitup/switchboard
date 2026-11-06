@@ -2139,10 +2139,11 @@ session before repeating under a new UUID.
 The window is never raised, shown or focused and the selection, active view and
 keyboard focus do not change; in grid view the new card is added without
 focusing it. A live session elsewhere, a background or attached tab, a live
-schedule run, a remote or plain-terminal target, an archived or hidden project
-and an unknown project are refused with their own reasons (see
-`trigger-actions.js`, `REASON`). A request never goes through the remote
-adapter.
+schedule run, a remote or plain-terminal target, a project the settings hide or
+remove (`project is archived`) and an unknown project are refused with their own
+reasons (see `trigger-actions.js`, `REASON`). A project that only has an
+`archivedProjects` group record is admitted, like the + action. A request never
+goes through the remote adapter.
 
 ### Execution
 
