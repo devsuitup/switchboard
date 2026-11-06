@@ -294,7 +294,7 @@ test('open-here on a sandboxed tab without a proven writer never falls back to t
 // ── Real bubblewrap: the shipped wrapper around a fake descriptor writer in its own PID namespace ──
 const { spawnSync } = require('node:child_process');
 const nodePty = require('node-pty');
-const { makeWorld, startWatcher } = require('./helpers/trigger-world');
+const { makeWorld, startWatcher, makeActions, makeEnv } = require('./helpers/trigger-world');
 
 const LINUX_HOST = process.platform === 'linux';
 const REAL_BWRAP = LINUX_HOST && spawnSync('bwrap', [
@@ -385,3 +385,14 @@ for (const [mode, , request, flag] of [
       });
   }
 }
+
+test('a bare stop of a sandboxed tab without a proven writer reports the state refusal, with no write or kill', async t => {
+  const rig = sandboxRig(t, ID_A);
+  const world = makeWorld({ real: rig });
+  world.addSession(ID_A, { sandbox: true, pid: 8000 });
+  const { actions, calls } = makeActions(world);
+  const result = await actions.run({ version: 1, action: 'stop', sessionId: ID_A }, makeEnv(Date.now() + 1000));
+  assert.equal(result.reason, 'session state unavailable');
+  assert.deepEqual(calls.stop, []);
+  assert.deepEqual(world.writes, []);
+});

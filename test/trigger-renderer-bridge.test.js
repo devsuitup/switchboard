@@ -92,6 +92,7 @@ test('a correlated acknowledgement from a spawned entry completes the request on
   const consumed = r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
   assert.equal(consumed.ok, true);
   const gate = r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
+  r.bridge.bindSession(payload.requestId, r.sessions.get(A));
   assert.equal(gate.ok, true);
   const message = { requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 7 };
   r.reply(message);
@@ -108,6 +109,7 @@ test('replies from a wrong sender, frame, epoch, request, mode or key are ignore
   const { pending, payload } = await openNew(r);
   r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
   r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
+  r.bridge.bindSession(payload.requestId, r.sessions.get(A));
   const good = { requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 7 };
   const box = settled(pending);
   r.reply(good, { sender: {}, senderFrame: r.frame });
@@ -133,6 +135,7 @@ test('a wrong generation or a replaced entry cannot complete the request: target
     const { pending, payload } = await openNew(r);
     r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
     r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
+    r.bridge.bindSession(payload.requestId, r.sessions.get(A));
     const session = r.sessions.get(A);
     arrange(r, session);
     r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 7 });
@@ -287,6 +290,7 @@ test('launchStartedAt is recorded at the guard, not at dispatch', async () => {
   await new Promise(resolve => setTimeout(resolve, 60));
   const before = Date.now();
   const gate = r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
+  r.bridge.bindSession(payload.requestId, r.sessions.get(A));
   assert.ok(gate.launchStartedAt >= before);
 });
 
@@ -338,6 +342,7 @@ test('an acknowledgement cannot authenticate a replacement entry created after t
   const { pending, payload } = await openNew(r);
   r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
   r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
+  r.bridge.bindSession(payload.requestId, r.sessions.get(A));
   r.sessions.set(A, { generation: 8, pty: {}, exited: false });
   r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 8 });
   const outcome = await pending;
@@ -350,10 +355,51 @@ test('a close committed before the acknowledgement refuses the request instead o
   const { pending, payload } = await openNew(r);
   r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
   r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
+  r.bridge.bindSession(payload.requestId, r.sessions.get(A));
   r.state.closing = true;
   r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 7 });
   const outcome = await pending;
   assert.equal(outcome.ok, false);
   assert.equal(outcome.reason, 'Switchboard is closing.');
   assert.equal(outcome.spawned, true);
+});
+
+test('the same PTY under a replacement session object and generation does not authenticate the acknowledgement', async () => {
+  const r = rig();
+  const { pending, payload } = await openNew(r);
+  r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
+  const session = spawnedSession(r);
+  r.bridge.guardedSpawn(payload.requestId, () => session.pty);
+  r.bridge.bindSession(payload.requestId, session);
+  r.sessions.set(A, { generation: 8, pty: session.pty, exited: false });
+  r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 8 });
+  const outcome = await pending;
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.reason, 'session target changed');
+});
+
+test('a close committed while no acknowledgement arrives settles the pending request as closing', async () => {
+  const r = rig();
+  const { pending } = await openNew(r, { ms: 2000 });
+  r.state.closing = true;
+  const outcome = await pending;
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.reason, 'Switchboard is closing.');
+});
+
+test('a refusal recorded by main for a permit survives the renderer failure acknowledgement', async () => {
+  const r = rig();
+  const { pending, payload } = await openNew(r);
+  r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
+  r.bridge.noteRefusal(payload.requestId, 'scheduled session is not supported');
+  r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: false, requestedSessionId: null, tabKey: A, reason: 'session open failed', error: 'x' });
+  const outcome = await pending;
+  assert.equal(outcome.reason, 'scheduled session is not supported');
+});
+
+test('a consumed permit carries its deadline for the final scans', async () => {
+  const r = rig();
+  const { payload } = await openNew(r);
+  const consumed = r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
+  assert.equal(consumed.permit.deadline, payload.deadline);
 });

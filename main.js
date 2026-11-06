@@ -579,7 +579,7 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 // --- Session cache helpers ---
 
 const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo, extractVerifiedCwdFromJsonl, resolveWorktreePath } = require('./derive-project-path');
-const { permitLaunchRefusal, runPermitSpawn, sandboxLaunchEnv } = require('./src/main/triggers/permit-spawn');
+const { permitLaunchRefusal, sandboxLaunchEnv, launchClaudeProcess } = require('./src/main/triggers/permit-spawn');
 const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -3058,6 +3058,7 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
     } else {
       // Build claude command, using array to prevent accidental shell injection
       const claudeArgs = [];
+      let transcriptKnown = false;
       if (isAttach) {
         claudeArgs.push('attach', attachJobId);
       } else {
@@ -3070,7 +3071,8 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
         // instead, reusing the id the sidebar already shows.
         const startsFresh = isNew
           || (!sessionOptions?.forkFrom && !sessionTranscriptExists(PROJECTS_DIR, sessionId));
-        const refusedLaunch = permitLaunchRefusal({ permit, isNew, forkFrom: sessionOptions?.forkFrom, transcriptExists: !startsFresh });
+        transcriptKnown = !startsFresh;
+        const refusedLaunch = permitLaunchRefusal({ permit, isNew, forkFrom: sessionOptions?.forkFrom, transcriptExists: transcriptKnown });
         if (refusedLaunch) return { ok: false, error: refusedLaunch };
         if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
           log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
@@ -3183,15 +3185,15 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
       }
       // see docs/sandbox.md ("Schedules")
       if (projectPath) await scheduleProjects().add(projectPath);
+      let sandboxLaunch = null;
       if (!isAttach && sessionOptions?.sandbox) {
         // Directories the sandboxed claude must still reach beyond the cwd:
-        // the project root when resuming inside a worktree (git metadata lives
-        // there), and any user-configured Additional Directories.
+        // the project root when resuming inside a worktree (the repository
+        // metadata lives there), and any user-configured Additional Directories.
         const extraBinds = [];
         if (projectPath && projectPath !== spawnCwd) extraBinds.push(projectPath);
         extraBinds.push(...parseAddDirs(sessionOptions.addDirs));
-        const bindEnv = sandboxBindEnv(extraBinds);
-        Object.assign(ptyEnv, sandboxLaunchEnv({ bindEnv, transcriptCwd: spawnCwd || projectPath, encodeProjectPath, triggersDir: getTriggersDir() }));
+        sandboxLaunch = { bindEnv: sandboxBindEnv(extraBinds), transcriptCwd: spawnCwd || projectPath, encodeProjectPath, triggersDir: getTriggersDir() };
       }
 
       const spawnClaude = () => spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
@@ -3204,14 +3206,11 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
         // app's minimal Electron environment won't trigger those sequences.
         env: ptyEnv,
       });
-      if (permit) {
-        const gate = await runPermitSpawn({ permit, permitId, sessionId, bridge: triggerBridge, liveV1: triggerLiveV1,
-          resolveClosed: id => resolveClosedTarget(id, triggerResolverDeps()), spawn: spawnClaude });
-        if (!gate.ok) return { ok: false, error: gate.error };
-        ptyProcess = gate.value;
-      } else {
-        ptyProcess = spawnClaude();
-      }
+      const launched = await launchClaudeProcess({ permit, permitId, sessionId, isNew, forkFrom: sessionOptions?.forkFrom,
+        transcriptExists: transcriptKnown, sandbox: sandboxLaunch, ptyEnv, spawn: spawnClaude, bridge: triggerBridge, liveV1: triggerLiveV1,
+        resolveClosed: (id, deadline) => resolveClosedTarget(id, triggerResolverDeps(deadline)) });
+      if (!launched.ok) return { ok: false, error: launched.error };
+      ptyProcess = launched.value;
 
     }
   } catch (err) {
@@ -3239,6 +3238,7 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
     host: null, kind: 'local-pty',
   };
   activeSessions.set(sessionId, session);
+  if (permitId !== null) triggerBridge.bindSession(permitId, session);
   if (!isPlainTerminal) revealIfSdkSession(sessionId);
   if (isAttach) notifyRendererProjectsChanged('session-attach');
   if (!isPlainTerminal && !panelOwnerId) activityReporter.sessionStarted({ sessionId, project: projectPath });

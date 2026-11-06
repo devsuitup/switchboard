@@ -122,9 +122,10 @@ function createTriggerContext(deps) {
     const watch = proofOnly ? ptyPid => observeSandbox(ptyPid, { sessionId: requestedId, ptyStart: start, ...deps.sandboxEdges }) : observe;
     const binding = { tab: session, entry, requestedId, effectiveId: normalizeSessionId(requestedId), reset: null,
       resetAuthorized: false, step: null, observation: null, lastDialog: null };
-    function fail(reason, background, deadline = false) {
+    function fail(reason, background, deadline = false, unproven = false) {
       const error = new Error(reason);
       error.deliveryRefusal = true;
+      error.unproven = unproven;
       error.background = background;
       error.deadline = deadline;
       throw error;
@@ -269,7 +270,7 @@ function createTriggerContext(deps) {
         }
       }
       if (outcome.outcome === 'other') fail(outcome.reason);
-      if (outcome.outcome === 'unknown' && (proofOnly || entry.keyKind !== 'direct') && !binding.reset) fail('ownership of the pinned alias writer is unknown; no further bytes were written');
+      if (outcome.outcome === 'unknown' && (proofOnly || entry.keyKind !== 'direct') && !binding.reset) fail('ownership of the pinned alias writer is unknown; no further bytes were written', null, false, true);
       return outcome;
     }
     binding.prepareText = async deadline => {

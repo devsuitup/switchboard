@@ -604,7 +604,10 @@ protect_control_tree() {
   done
   for p in "$CONTROL_DIR" "$CONTROL_DIR/processed"; do
     check_chain "$p"
-    real="$(readlink -m -- "$p")" && [ -n "$real" ] || fail "refusing to launch: cannot resolve the Switchboard triggers path '$p'."
+    real="$(readlink -m -- "$p"; printf x)"
+    real="${real%x}"
+    real="${real%$'\n'}"
+    [ -n "$real" ] || fail "refusing to launch: cannot resolve the Switchboard triggers path '$p'."
     case "$real" in *$'\n'*) fail "refusing to launch: the Switchboard triggers path '$p' resolves to a path containing a newline." ;; esac
     for i in "${!M_DEST[@]}"; do
       [ "${M_OP[i]}" = --bind ] || continue

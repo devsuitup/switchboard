@@ -205,11 +205,86 @@ test('sandbox launch env: the absolute triggers directory reaches every launch k
   }
 });
 
-test('main.js hands the boundary the real checks: final liveness reader, resolver, shared env builder at both launch sites', () => {
+test('main.js hands the scheduled launch the shared environment builder with the absolute triggers directory', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  assert.match(src, /runPermitSpawn\(\{[^}]*liveV1: triggerLiveV1[^}]*resolveClosed: id => resolveClosedTarget\(id, triggerResolverDeps\(\)\)[^}]*spawn: spawnClaude/);
-  assert.match(src, /const refusedLaunch = permitLaunchRefusal\(\{ permit, isNew/);
-  assert.equal(src.split('sandboxLaunchEnv({').length - 1, 2);
-  assert.equal(src.split('triggersDir: getTriggersDir()').length - 1, 2);
+  assert.equal(src.split('sandboxLaunchEnv({').length - 1, 1);
+  assert.match(src, /Object\.assign\(env, sandboxLaunchEnv\(\{ bindEnv, transcriptCwd: cwd, encodeProjectPath, triggersDir: getTriggersDir\(\) \}\)\);/);
   assert.match(src, /isClosing: \(\) => !unsavedGuard\.launchAllowed\(\),\s*\n\s*v1:/);
+});
+
+const { launchClaudeProcess } = require('../src/main/triggers/permit-spawn');
+const { makeProc } = require('./helpers/fake-proc');
+const realCli = require('../cli-session-state');
+
+function launchRig(overrides = {}) {
+  const calls = { spawn: 0, noted: [] };
+  const base = {
+    permit: { mode: 'resume', deadline: 100, target: { cwd: '/w', file: '/w/f.jsonl' } }, permitId: 'p', sessionId: 'sid', isNew: false, forkFrom: undefined,
+    transcriptExists: true, sandbox: null, ptyEnv: {}, spawn: () => { calls.spawn += 1; return 'pty'; },
+    bridge: { guardedSpawn: (id, spawn) => ({ ok: true, value: spawn() }), noteRefusal: (id, reason) => calls.noted.push(reason) },
+    liveV1: async () => ({ known: true, live: null }), resolveClosed: () => ({ status: 'found', cwd: '/w', file: '/w/f.jsonl' }),
+  };
+  const input = { ...base, ...overrides };
+  return { calls, input, run: () => launchClaudeProcess(input) };
+}
+
+test('launch: an ordinary launch spawns and applies the sandbox environment with the absolute triggers directory', async () => {
+  const r = launchRig({ permit: null, sandbox: { bindEnv: '/a', transcriptCwd: '/p', encodeProjectPath: v => v.replace(/\//g, '-'), triggersDir: '/ctl' } });
+  assert.deepEqual(await r.run(), { ok: true, value: 'pty' });
+  assert.equal(r.input.ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, '/ctl');
+  assert.equal(r.input.ptyEnv.SWITCHBOARD_SANDBOX_BINDS, '/a');
+  assert.equal(r.input.ptyEnv.SWITCHBOARD_SANDBOX_PROJECT_FOLDER, '-p');
+});
+
+test('launch: a permit whose transcript vanished is refused before any environment or spawn', async () => {
+  const r = launchRig({ transcriptExists: false, sandbox: { transcriptCwd: '/p', encodeProjectPath: v => v, triggersDir: '/ctl' } });
+  assert.deepEqual(await r.run(), { ok: false, error: 'no readable transcript' });
+  assert.equal(r.calls.spawn, 0);
+  assert.deepEqual(r.input.ptyEnv, {});
+});
+
+test('launch: a permit runs the final liveness check and refuses a writer that appeared', async () => {
+  const r = launchRig({ liveV1: async () => ({ known: true, live: { kind: 'interactive' } }) });
+  assert.deepEqual(await r.run(), { ok: false, error: 'session live elsewhere' });
+  assert.equal(r.calls.spawn, 0);
+});
+
+test('launch: late scheduled and background writers keep their specific refusal and reach the broker', async () => {
+  for (const [kind, reason] of [['schedule', 'scheduled session is not supported'], ['bg', 'background session is not supported']]) {
+    const r = launchRig({ liveV1: async () => ({ known: true, live: { kind } }) });
+    assert.deepEqual(await r.run(), { ok: false, error: reason });
+    assert.deepEqual(r.calls.noted, [reason]);
+  }
+});
+
+test('launch: the final scans receive the permit deadline', async () => {
+  const seen = [];
+  const r = launchRig({ liveV1: async (id, deadline) => { seen.push(['live', deadline]); return { known: true, live: null }; },
+    resolveClosed: (id, deadline) => { seen.push(['resolve', deadline]); return { status: 'found', cwd: '/w', file: '/w/f.jsonl' }; } });
+  await r.run();
+  assert.deepEqual(seen, [['live', 100], ['resolve', 100]]);
+});
+
+test('launch: the real descriptor reader stops at the deadline instead of scanning on', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-launch-'));
+  t.after(() => { realCli.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+  const dir = path.join(root, 'sessions');
+  fs.mkdirSync(dir);
+  const proc = makeProc(path.join(root, 'proc'));
+  proc.add(9000, { nspid: [9000, 42], start: '777', ns: 'pid:[99]' });
+  const sid = '01234567-89ab-cdef-0123-456789abcdef';
+  fs.writeFileSync(path.join(dir, '42.json'), JSON.stringify({ pid: 42, sessionId: sid, procStart: '777', kind: 'interactive', status: 'idle', statusUpdatedAt: 1 }));
+  realCli.init({ dir, activeSessions: new Map(), log: { info() {}, warn() {}, error() {}, debug() {} }, platform: 'linux', isProcessAlive: () => false });
+  let now = 0;
+  const r = launchRig({ sessionId: sid, permit: { mode: 'resume', deadline: 5, target: {} },
+    liveV1: (id, deadline) => realCli.liveElsewhereV1Checked(id, { procRoot: proc.root, now: () => (now += 10), deadline }) });
+  assert.deepEqual(await r.run(), { ok: false, error: 'session liveness unavailable' });
+  assert.equal(r.calls.spawn, 0);
+});
+
+test('main.js passes the real permit, sandbox description, readers and refusal handling to the launch function', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(src, /launchClaudeProcess\(\{ permit, permitId, sessionId, isNew, forkFrom: sessionOptions\?\.forkFrom,\s*\n\s*transcriptExists: transcriptKnown, sandbox: sandboxLaunch, ptyEnv, spawn: spawnClaude, bridge: triggerBridge, liveV1: triggerLiveV1,\s*\n\s*resolveClosed: \(id, deadline\) => resolveClosedTarget\(id, triggerResolverDeps\(deadline\)\) \}\);\s*\n\s*if \(!launched\.ok\) return \{ ok: false, error: launched\.error \};\s*\n\s*ptyProcess = launched\.value;/);
+  assert.match(src, /sandboxLaunch = \{ bindEnv: sandboxBindEnv\(extraBinds\), transcriptCwd: spawnCwd \|\| projectPath, encodeProjectPath, triggersDir: getTriggersDir\(\) \};/);
+  assert.match(src, /transcriptKnown = !startsFresh;\s*\n\s*const refusedLaunch = permitLaunchRefusal\(\{ permit, isNew, forkFrom: sessionOptions\?\.forkFrom, transcriptExists: transcriptKnown \}\);\s*\n\s*if \(refusedLaunch\) return \{ ok: false, error: refusedLaunch \};/);
 });

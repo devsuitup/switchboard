@@ -126,6 +126,20 @@ function validationResult(raw, reason) {
   };
 }
 
+function hasJsonRecord(fsx, file) {
+  const window = 1024 * 1024;
+  let fd;
+  try {
+    fd = fsx.openSync(file, 'r');
+    const head = Buffer.alloc(window);
+    const length = fsx.readSync(fd, head, 0, window, 0);
+    const lines = head.toString('utf8', 0, length).split('\n');
+    if (length === window) lines.pop();
+    if (!lines.length) return true;
+    return lines.some(line => { try { return object(JSON.parse(line)); } catch { return false; } });
+  } catch { return false; } finally { if (fd !== undefined) { try { fsx.closeSync(fd); } catch { /* closed */ } } }
+}
+
 function resolveClosedTarget(rawId, deps) {
   const id = String(rawId).toLowerCase();
   const fsx = deps.fs || fs;
@@ -158,18 +172,15 @@ function resolveClosedTarget(rawId, deps) {
     stat = fsx.lstatSync(file);
     if (!stat.isFile() || stat.size === 0) return refuse(REASON.NO_TRANSCRIPT);
     const fd = fsx.openSync(file, 'r');
-    try {
-      const head = Buffer.alloc(65536);
-      const length = fsx.readSync(fd, head, 0, head.length, 0);
-      const parses = head.toString('utf8', 0, length).split('\n').some(line => {
-        try { return object(JSON.parse(line)); } catch { return false; }
-      });
-      if (!parses) return refuse(REASON.NO_TRANSCRIPT);
-    } finally { fsx.closeSync(fd); }
+    try { fsx.readSync(fd, Buffer.alloc(1), 0, 1, 0); } finally { fsx.closeSync(fd); }
   } catch { return refuse(REASON.NO_TRANSCRIPT); }
-  let cwd;
-  try { cwd = deps.extractVerifiedCwd(file, matches[0].folder)?.cwd; } catch { return refuse(REASON.NO_TRANSCRIPT); }
-  if (typeof cwd !== 'string' || !cwd) return refuse(REASON.CWD_UNAVAILABLE);
+  let verified;
+  try { verified = deps.extractVerifiedCwd(file, matches[0].folder); } catch { return refuse(REASON.NO_TRANSCRIPT); }
+  const cwd = verified?.cwd;
+  if (typeof cwd !== 'string' || !cwd) {
+    if (typeof verified?.rejected === 'string' || hasJsonRecord(fsx, file)) return refuse(REASON.CWD_UNAVAILABLE);
+    return refuse(REASON.NO_TRANSCRIPT);
+  }
   return { status: 'found', sessionId: id, file, folder: matches[0].folder, cwd, projectPath: deps.resolveWorktreePath(cwd), identity: { dev: stat.dev, ino: stat.ino } };
 }
 
@@ -349,7 +360,11 @@ function createTriggerActions(deps) {
     const pctx = pinned.ctx;
     if (!pctx.getPtyForSession(requestedId)) return { refuse: REASON.CHANGED };
     try { pinned.binding.verify('stop'); }
-    catch (err) { if (!err.deliveryRefusal) throw err; return { refuse: err.message, delivery: true }; }
+    catch (err) {
+      if (!err.deliveryRefusal) throw err;
+      if (err.unproven && pinned.binding.proofOnly) return { refuse: REASON.STATE_UNAVAILABLE };
+      return { refuse: err.message, delivery: true };
+    }
     const status = typeof pctx.getCliStatus === 'function' ? pctx.getCliStatus(requestedId) : undefined;
     const flagBusy = !!pctx.isSessionBusy(requestedId);
     const transcriptDone = afterNote?.source === 'transcript';
@@ -379,7 +394,7 @@ function createTriggerActions(deps) {
         continue;
       }
       const final = sampleStop(state, afterNote);
-      if (final.ok) return null;
+      if (final.ok) return clock() >= env.deadline ? refusal(state, REASON.TIMEOUT) : null;
       if (final.refuse) return refusal(state, final.refuse);
       waited = true;
     }
@@ -392,6 +407,7 @@ function createTriggerActions(deps) {
     claim(state, 'stop-requested');
     const gate = await stopWhenEligible(state, afterNote);
     if (gate) return gate;
+    if (clock() >= env.deadline) return refusal(state, REASON.TIMEOUT);
     let result;
     try { result = await deps.stopSession(entry.tabKey ?? state.requestedId, session); }
     catch (err) { result = { ok: false, error: err.message }; }

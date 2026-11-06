@@ -406,3 +406,23 @@ test('a close committed after dispatch stops the prompt before any byte is writt
   assert.equal(result.reason, 'Switchboard is closing.');
   assert.deepEqual(flowWrites(a.events), []);
 });
+
+test('an ownership inspection that crosses the deadline after the marker cannot lead to a kill', async () => {
+  const clock = makeClock();
+  const world = makeWorld();
+  world.addSession(ID_A);
+  const deadline = clock.now() + 100;
+  let afterMarker = false;
+  world.ctx = require('../src/main/triggers/trigger-context').createTriggerContext({
+    activeSessions: world.activeSessions, isPtyAlive: () => true, getCliStatus: id => world.statuses.get(id),
+    cliSessionState: { deliveryPtyStart: pid => String(pid), refreshProcessTable: async () => {}, findDeliveryTab: () => ({}) },
+    observeTabWriter: pid => {
+      if (afterMarker) clock.t = deadline + 1;
+      return { writer: { sessionId: ID_A }, identity: String(pid) };
+    },
+  });
+  const { actions, calls } = makeActions(world, { now: clock.now, sleep: clock.sleep });
+  const result = await actions.run(stopRequest(), makeEnv(deadline, { mark: phase => { if (phase === 'stop-requested') afterMarker = true; return true; } }));
+  assert.equal(result.outcome, 'refused');
+  assert.deepEqual(calls.stop, []);
+});

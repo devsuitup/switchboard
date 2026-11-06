@@ -12,6 +12,7 @@ const REASON_ACTION_TIMEOUT = 'renderer action timed out';
 const REASON_CLOSING = 'Switchboard is closing.';
 const REASON_CHANGED = 'session target changed';
 const REASON_OPEN_FAILED = 'session open failed';
+const CLOSE_POLL_MS = 10;
 
 function createTriggerRendererBridge(deps) {
   const { ipcMain, getWindow, getSession, isClosing } = deps;
@@ -101,7 +102,8 @@ function createTriggerRendererBridge(deps) {
       return session === permit.session && session.pty === permit.pty && msg.generation === permit.generation
         && session.generation === permit.generation;
     }
-    return permit.spawned && session.pty === permit.spawnedPty && msg.generation === session.generation;
+    return permit.spawned && session === permit.boundSession && session.generation === permit.boundGeneration
+      && session.pty === permit.spawnedPty && msg.generation === session.generation;
   }
 
   function onResult(event, msg) {
@@ -116,7 +118,7 @@ function createTriggerRendererBridge(deps) {
       return;
     }
     if (msg.ok !== true) {
-      settlePermit(permit, { ok: false, reason: typeof msg.reason === 'string' && msg.reason ? msg.reason : REASON_OPEN_FAILED,
+      settlePermit(permit, { ok: false, reason: permit.refusal || (typeof msg.reason === 'string' && msg.reason ? msg.reason : REASON_OPEN_FAILED),
         ...(typeof msg.error === 'string' ? { error: msg.error } : {}), spawned: permit.spawned, preSpawn: !permit.spawnAttempted,
         ...(permit.spawnAttempted && !permit.spawned ? { uncertain: true } : {}) });
       return;
@@ -161,7 +163,9 @@ function createTriggerRendererBridge(deps) {
           ...(permit.spawnAttempted && !permit.spawned ? { uncertain: true } : {}) });
       }, Math.max(0, op.deadline - clock()));
     });
-    outcome.finally(() => { if (permit.settled) permits.delete(permit.requestId); }).catch(() => {});
+    permit.watch = setInterval(() => { if (isClosing()) revokePermit(permit, REASON_CLOSING); }, CLOSE_POLL_MS);
+    permit.watch.unref?.();
+    outcome.finally(() => { clearInterval(permit.watch); if (permit.settled) permits.delete(permit.requestId); }).catch(() => {});
     win.webContents.send(CHANNEL_ACTION, {
       requestId: permit.requestId, documentEpoch: permit.epoch, mode: permit.mode, requestedSessionId: permit.requestedSessionId,
       tabKey: permit.tabKey, generation: permit.generation,
@@ -184,7 +188,7 @@ function createTriggerRendererBridge(deps) {
     if (!accepted) return refuse('trigger permit rejected');
     permit.state = 'opening';
     return { ok: true, permit: { mode: permit.mode, tabKey: permit.tabKey, requestedSessionId: permit.requestedSessionId,
-      project: permit.project, target: permit.target } };
+      project: permit.project, target: permit.target, deadline: permit.deadline } };
   }
 
   function beforeSpawn(requestId) {
@@ -210,7 +214,17 @@ function createTriggerRendererBridge(deps) {
     return { ok: true, launchStartedAt: gate.launchStartedAt, value };
   }
 
-  return { register, ensureOpen, waitReady, consumePermit, beforeSpawn, guardedSpawn, spawned, revokeAll, isReady,
+  function noteRefusal(requestId, reason) {
+    const permit = permits.get(requestId);
+    if (permit && !permit.refusal) permit.refusal = reason;
+  }
+
+  function bindSession(requestId, session) {
+    const permit = permits.get(requestId);
+    if (permit && permit.state === 'opening' && permit.spawned) { permit.boundSession = session; permit.boundGeneration = session.generation; }
+  }
+
+  return { noteRefusal, bindSession, register, ensureOpen, waitReady, consumePermit, beforeSpawn, guardedSpawn, spawned, revokeAll, isReady,
     channels: { ready: CHANNEL_READY, action: CHANNEL_ACTION, result: CHANNEL_RESULT } };
 }
 

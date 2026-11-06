@@ -237,3 +237,20 @@ test('a candidate appearing after resolution and before dispatch makes zero brid
   assert.equal(checks, 2);
   assert.deepEqual(a.calls, []);
 });
+
+test('resolver: a readable transcript whose first record exceeds 64 KiB remains resumable', t => {
+  const r = transcriptRoot(t);
+  r.write(SID_A, { content: JSON.stringify({ type: 'user', sessionId: SID_A, cwd: r.cwd, message: { role: 'user', content: 'x'.repeat(70000) } }) + '\n' });
+  const found = resolveClosedTarget(SID_A, r.deps());
+  assert.equal(found.status, 'found');
+  assert.equal(found.cwd, r.cwd);
+});
+
+test('resolver: a valid record without a verifiable cwd is cwd unavailable, only non-JSON content is unreadable', t => {
+  const r = transcriptRoot(t);
+  r.write(SID_A, { content: JSON.stringify({ type: 'user', sessionId: SID_A, message: { role: 'user', content: 'no cwd' } }) + '\n' });
+  assert.equal(resolveClosedTarget(SID_A, r.deps()).reason, 'session cwd unavailable');
+  const q = transcriptRoot(t);
+  q.write(SID_A, { content: 'garbage\nmore garbage\n' });
+  assert.equal(resolveClosedTarget(SID_A, q.deps()).reason, 'no readable transcript');
+});

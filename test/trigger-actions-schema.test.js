@@ -64,3 +64,16 @@ test('exact boundaries are accepted and their neighbours refused in every mode',
     assert.equal(validateTriggerAction({ ...valid, timeout_ms: value }, filename).reason, reason, String(value));
   }
 });
+
+test('CR, LF, NUL and ESC are each refused in prompt and before with the exact reason', () => {
+  const forbidden = '\\r \\n \\0 \\x1b';
+  for (const [name, character] of [['CR', '\r'], ['LF', '\n'], ['NUL', '\0'], ['ESC', '\x1b']]) {
+    for (const [mode, request, field] of [
+      ['resume', { ...valid, prompt: `a${character}b` }, 'prompt'],
+      ['new', { version: 1, action: 'open', new: { project: '/x', name: 'n' }, prompt: `a${character}b` }, 'prompt'],
+      ['stop', { version: 1, action: 'stop', sessionId: id, before: `a${character}b` }, 'before'],
+    ]) {
+      assert.equal(validateTriggerAction(request, filename).reason, `${field} contains forbidden control characters (${forbidden})`, `${mode} ${name}`);
+    }
+  }
+});

@@ -1990,3 +1990,18 @@ test('control tree: a control path that cannot be represented exactly (trailing 
   assert.equal(res.status, 125);
   assert.match(res.stderr, /claude-sandbox: .*newline/);
 });
+
+test('control tree: a processed directory resolving to a path ending in a newline is refused, not replaced by its neighbour', { skip: !LINUX && 'linux only' }, t => {
+  const rig = makeRig({ recordArgs: true });
+  t.after(() => rig.cleanup());
+  fs.mkdirSync(path.join(rig.home, '.claude'));
+  const ctl = path.join(rig.root, 'stable-control');
+  const target = path.join(rig.proj, 'results\n');
+  fs.mkdirSync(ctl);
+  fs.mkdirSync(target);
+  fs.mkdirSync(path.join(rig.proj, 'results'));
+  fs.symlinkSync(target, path.join(ctl, 'processed'));
+  const res = rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: ctl });
+  assert.equal(res.status, 125);
+  assert.match(res.stderr, /claude-sandbox: .*newline/);
+});
