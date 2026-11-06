@@ -3160,7 +3160,7 @@ test('a chain step that is not an object throws, but the entry is still resolved
 
     const uuid         = 'null-body-' + Date.now();
     const triggerPath  = path.join(tmp, uuid + '.json');
-    fs.writeFileSync(triggerPath, JSON.stringify({ sessionId: 'any-session', chain: [null] }), 'utf8'); // valid JSON; reading the step throws
+    fs.writeFileSync(triggerPath, JSON.stringify({ sessionId: 'any-session', chain: [null] }), 'utf8');
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 2000);

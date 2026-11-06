@@ -1502,7 +1502,7 @@ function renderProjects(projects, resort) {
   // interacting with an input/textarea (search box, rename input, dialogs, etc.)
   const ae = document.activeElement;
   const isUserTyping = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable || ae.closest('.modal-overlay'));
-  if (activeSessionId && openSessions.has(activeSessionId) && !isUserTyping) {
+  if (activeSessionId && openSessions.has(activeSessionId) && !isUserTyping && !window._triggerFocusHold) {
     openSessions.get(activeSessionId).terminal.focus();
   }
   sidebarRenderKey = JSON.stringify(sidebarRenderInputs(inputProjects));

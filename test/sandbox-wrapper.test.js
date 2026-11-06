@@ -1806,8 +1806,6 @@ test('sandbox wrapper: from inside a real sandbox, an opted-in skills linked to 
     }
   });
 
-// ── Trigger control directory: protected at every visible alias (no Podman socket exposed) ──
-
 function controlRig(t, layout) {
   const rig = makeRig({ recordArgs: true });
   t.after(() => rig.cleanup());

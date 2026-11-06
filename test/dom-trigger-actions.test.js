@@ -1,12 +1,14 @@
 // see .ai/contexts/ipc-bridge.md ("Trigger session actions")
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { setupSidebarDom } = require('./dom-setup');
-const { loadAppFunctions } = require('./app-source');
+const { loadAppFunctions, extractFunction } = require('./app-source');
 
 const PROJECT = '/home/dev/proj';
 const A = '01234567-89ab-cdef-0123-456789abcdef';
@@ -217,17 +219,6 @@ test('an expired request is not acknowledged', async () => {
   } finally { h.destroy(); }
 });
 
-test('an archived-group project opens through the same saved defaults as the plus action', async () => {
-  const h = setup();
-  try {
-    h.window.cachedAllProjects[0].archivedGroup = true;
-    await h.window.handleTriggerSessionAction(h.request({ mode: 'new', requestedSessionId: null, tabKey: B, name: 'n' }));
-    const trigger = h.calls.openTerminal[0][3];
-    const plus = await h.window.resolveDefaultSessionOptions(h.window.cachedAllProjects[0]);
-    assert.deepEqual(trigger, plus);
-  } finally { h.destroy(); }
-});
-
 test('a new launch acknowledges the generation main reported for its PTY', async () => {
   const h = setup();
   try {
@@ -253,32 +244,97 @@ test('an action that arrives before the ready response is processed after the ha
   } finally { h.destroy(); }
 });
 
-test('a non-activating creation leaves keyboard focus on the control that held it', async () => {
-  const h = setup();
+test('focus never leaves the user control while a new session opens, through the real sidebar renderer', async () => {
+  let release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const h = setup({ resultFor: () => { entered(); return new Promise(resolve => { release = resolve; }); } });
   try {
     const doc = h.window.document;
     const control = doc.createElement('button');
     const terminalInput = doc.createElement('textarea');
+    control.id = 'user-control';
     doc.body.append(control, terminalInput);
-    h.window.refreshSidebar = () => terminalInput.focus();
+    h.window.openSessions.set('other', { session: { sessionId: 'other', projectPath: PROJECT }, closed: false, terminal: { focus: () => terminalInput.focus() } });
+    h.window.refreshSidebar = () => h.window.renderProjects(h.window.cachedProjects, true);
     control.focus();
-    assert.equal(doc.activeElement, control);
-    await h.window.handleTriggerSessionAction(h.request({ mode: 'new', requestedSessionId: null, tabKey: B, name: 'n' }));
-    assert.equal(h.calls.results[0].ok, true);
-    assert.equal(doc.activeElement, control);
+    const action = h.window.handleTriggerSessionAction(h.request({ mode: 'new', requestedSessionId: null, tabKey: B, name: 'n' }));
+    await started;
+    assert.equal(doc.activeElement.id, 'user-control');
+    release({ ok: true, generation: 5 });
+    await action;
+    assert.equal(doc.activeElement.id, 'user-control');
   } finally { h.destroy(); }
 });
 
-test('a non-activating resume leaves keyboard focus where it was', async () => {
-  const h = setup();
+test('a focus the user chose during a pending resume is not overwritten afterwards', async () => {
+  let release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const h = setup({ resultFor: () => { entered(); return new Promise(resolve => { release = resolve; }); } });
   try {
     const doc = h.window.document;
-    const control = doc.createElement('button');
-    const terminalInput = doc.createElement('textarea');
-    doc.body.append(control, terminalInput);
-    h.window.schedulePersistWorkingSet = () => terminalInput.focus();
-    control.focus();
-    await h.window.handleTriggerSessionAction(h.request());
-    assert.equal(doc.activeElement, control);
+    const oldControl = doc.createElement('button');
+    const newControl = doc.createElement('input');
+    newControl.id = 'user-new-control';
+    doc.body.append(oldControl, newControl);
+    oldControl.focus();
+    const action = h.window.handleTriggerSessionAction(h.request());
+    await started;
+    newControl.focus();
+    release({ ok: true, generation: 5 });
+    await action;
+    assert.equal(doc.activeElement.id, 'user-new-control');
+  } finally { h.destroy(); }
+});
+
+function revealRig(grid) {
+  const ctx = setupSidebarDom();
+  const { window } = ctx;
+  const calls = { show: 0, focusCard: 0, wrap: [], fit: 0 };
+  Object.assign(window, {
+    gridViewActive: grid, gridCards: new Map(), gridViewerCount: window.document.createElement('span'),
+    showSession: () => { calls.show += 1; }, focusGridCard: () => { calls.focusCard += 1; },
+    wrapInGridCard: id => { calls.wrap.push(id); window.gridCards.set(id, {}); }, fitAndScroll: () => { calls.fit += 1; },
+  });
+  vm.runInContext(extractFunction(fs.readFileSync(path.join(__dirname, '..', 'public', 'terminal-manager.js'), 'utf8'), 'revealWithoutActivating'), ctx.context);
+  window.openSessions.set(A, { closed: false, session: { sessionId: A } });
+  return { window, calls, destroy: () => ctx.destroy() };
+}
+
+test('the reveal helper adds a grid card without selecting or focusing, and does nothing in single view', () => {
+  const grid = revealRig(true);
+  try {
+    grid.window.revealWithoutActivating(A);
+    grid.window.revealWithoutActivating(A);
+    assert.deepEqual(grid.calls, { show: 0, focusCard: 0, wrap: [A], fit: 1 });
+    assert.equal(grid.window.gridViewerCount.textContent, '1 session');
+  } finally { grid.destroy(); }
+  const single = revealRig(false);
+  try {
+    single.window.revealWithoutActivating(A);
+    assert.deepEqual(single.calls, { show: 0, focusCard: 0, wrap: [], fit: 0 });
+  } finally { single.destroy(); }
+});
+
+test('the saved defaults of the requested project reach the launch exactly as the plus action resolves them', async () => {
+  const h = setup();
+  try {
+    const dialogs = fs.readFileSync(path.join(__dirname, '..', 'public', 'dialogs.js'), 'utf8');
+    h.inContext(extractFunction(dialogs, 'resolveDefaultSessionOptions'));
+    const settings = {
+      [PROJECT]: { permissionMode: 'plan', sandbox: true, worktree: true, worktreeName: 'wt', addDirs: '/x', preLaunchCmd: 'env', chrome: true },
+      '/wrong-project': { permissionMode: 'acceptEdits', sandbox: false, worktree: false },
+    };
+    const asked = [];
+    h.window.api.platform = 'linux';
+    h.window.api.getEffectiveSettings = async projectPath => { asked.push(projectPath); return settings[projectPath]; };
+    h.window.cachedAllProjects[0].archived = true;
+    const plus = await h.window.resolveDefaultSessionOptions(h.window.cachedAllProjects[0]);
+    asked.length = 0;
+    await h.window.handleTriggerSessionAction(h.request({ mode: 'new', requestedSessionId: null, tabKey: B, name: 'n' }));
+    assert.deepEqual(asked, [PROJECT]);
+    assert.deepEqual(JSON.parse(JSON.stringify(h.calls.openTerminal[0][3])), JSON.parse(JSON.stringify(plus)));
+    assert.equal(h.calls.openTerminal[0][3].permissionMode, 'plan');
+    assert.equal(h.calls.openTerminal[0][3].sandbox, true);
+    assert.deepEqual(h.calls.rename, []);
   } finally { h.destroy(); }
 });

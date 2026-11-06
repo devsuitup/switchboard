@@ -2097,8 +2097,11 @@ and nothing prunes them.
 
 ## Versioned actions (open and stop)
 
-A request with a `version` or an `action` property is a versioned action;
-anything else is a legacy trigger and keeps every behavior described above.
+A request with a `version` or an `action` property is a versioned action, and so
+is a JSON body that is not an object (`null`, an array, a number, a string),
+which is answered `trigger must be an object`. Only a non-null, non-array object
+with neither property is a legacy trigger, and it keeps every behavior described
+above.
 The request file is `<triggersDir>/<uuid>.json` with a lowercase UUID stem
 (the request identity; a duplicate UUID is the same action and its first result
 wins). Three shapes exist:

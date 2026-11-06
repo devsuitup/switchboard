@@ -48,25 +48,30 @@ test('an open-resume trigger shows an ordinary session without taking focus', as
   await app.evaluate(({ BrowserWindow }) => {
     globalThis.focusCalls = 0;
     const win = BrowserWindow.getAllWindows()[0];
-    for (const name of ['focus', 'show', 'restore']) {
+    for (const name of ['focus', 'show', 'showInactive', 'restore', 'flashFrame', 'moveTop']) {
       const original = win[name].bind(win);
       win[name] = (...args) => { globalThis.focusCalls += 1; return original(...args); };
     }
   });
-  const focusedBefore = await page.evaluate(() => document.activeElement?.className);
+  const focusedBefore = await page.evaluateHandle(() => document.activeElement);
+  const unchanged = async () => {
+    expect(await page.evaluate(() => activeSessionId)).toBe(selected);
+    expect(await page.evaluate(element => document.activeElement === element, focusedBefore)).toBe(true);
+    expect(await page.evaluate(() => document.querySelectorAll('#terminals .terminal-container.visible').length)).toBe(1);
+    expect(await app.evaluate(() => globalThis.focusCalls)).toBe(0);
+  };
 
   const first = await publish(env, { version: 1, action: 'open', sessionId })();
   expect(first).toMatchObject({ outcome: 'opened', ok: true, resumed: true, wrote: false, sessionId });
   await expect.poll(() => wrapperRuns(home).length).toBe(1);
   expect(wrapperRuns(home)[0]).toEqual({ argv: ['claude', '--resume', sessionId, ...permissionArgs], cwd: repo });
   await expect(page.locator(`#si-${sessionId}`)).toBeVisible();
-  expect(await page.evaluate(() => activeSessionId)).toBe(selected);
-  expect(await page.evaluate(() => document.activeElement?.className)).toBe(focusedBefore);
-  expect(await app.evaluate(() => globalThis.focusCalls)).toBe(0);
+  await unchanged();
 
   const second = await publish(env, { version: 1, action: 'open', sessionId })();
   expect(second).toMatchObject({ outcome: 'opened', resumed: false });
   expect(wrapperRuns(home)).toHaveLength(1);
+  await unchanged();
 
   await page.locator(`#si-${sessionId}`).click();
   await expect.poll(() => page.evaluate(() => activeSessionId)).toBe(sessionId);

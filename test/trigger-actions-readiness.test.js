@@ -106,7 +106,7 @@ test('a deadline between the text and its Enter withholds the Enter and keeps th
   const startedAt = Date.now();
   const a = arrange(t, {
     autoTurn: false,
-    onWrite(world, key, data) { if (data !== '\r') { while (Date.now() < startedAt + 1500) { /* hold the text write open past the deadline */ } } },
+    onWrite(world, key, data) { if (data !== '\r') { while (Date.now() < startedAt + 1500) {} } },
   });
   a.world.addSession(ID_A);
   const result = await a.submit({ version: 1, action: 'open', sessionId: ID_A, prompt: 'cut', timeout_ms: 1200 });
@@ -157,7 +157,6 @@ test('a new session obtains its descriptor like a resumed one', async t => {
   assert.equal(result.outcome, 'opened');
 });
 
-// ── Sandboxed targets: readiness comes from the PTY-scoped raw descriptor proof ──
 const fs = require('node:fs');
 const path = require('node:path');
 const { tempRoot } = require('./helpers/trigger-world');
@@ -183,7 +182,7 @@ function sandboxRig(t, sessionId) {
     try {
       fs.writeFileSync(path.join(dir, '42.json'), JSON.stringify({
         pid: 42, sessionId, kind: 'interactive', status, statusUpdatedAt, procStart: '777', cwd: '/work/project', ...extra }));
-    } catch { /* the rig was already removed by a finished test */ }
+    } catch {}
   };
   return { proc, dir, descriptor, cli: realCli, edges: { procRoot: proc.root } };
 }
@@ -291,7 +290,6 @@ test('open-here on a sandboxed tab without a proven writer never falls back to t
   assert.deepEqual(writes(a.events), []);
 });
 
-// ── Real bubblewrap: the shipped wrapper around a fake descriptor writer in its own PID namespace ──
 const { spawnSync } = require('node:child_process');
 const nodePty = require('node-pty');
 const { makeWorld, startWatcher, makeActions, makeEnv } = require('./helpers/trigger-world');
@@ -346,7 +344,7 @@ for (const [mode, , request, flag] of [
         const world = makeWorld({ real: { cli: realCli, edges: {} } });
         realCli.init({ dir: sessions, activeSessions: new Map(), log: { info() {}, warn() {}, error() {}, debug() {} }, platform: 'linux', isProcessAlive: () => false });
         const spawned = [];
-        t.after(() => { realCli.stop(); for (const p of spawned) { try { p.kill(); } catch { /* already gone */ } } });
+        t.after(() => { realCli.stop(); for (const p of spawned) { try { p.kill(); } catch {} } });
         const bridge = {
           waitReady: async () => ({ ok: true }),
           async ensureOpen(op) {

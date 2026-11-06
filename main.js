@@ -3188,8 +3188,8 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
       let sandboxLaunch = null;
       if (!isAttach && sessionOptions?.sandbox) {
         // Directories the sandboxed claude must still reach beyond the cwd:
-        // the project root when resuming inside a worktree (the repository
-        // metadata lives there), and any user-configured Additional Directories.
+        // the project root when resuming inside a worktree (git metadata lives
+        // there), and any user-configured Additional Directories.
         const extraBinds = [];
         if (projectPath && projectPath !== spawnCwd) extraBinds.push(projectPath);
         extraBinds.push(...parseAddDirs(sessionOptions.addDirs));

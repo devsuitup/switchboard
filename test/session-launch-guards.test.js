@@ -85,7 +85,6 @@ test('main.js: --worktree is dropped in a non-git directory instead of failing t
     'the non-git branch must not push --worktree');
 });
 
-// ── Permit-bound launches (versioned trigger actions) ──
 const { launchModeFor } = require('../derive-project-path');
 const { createTriggerRendererBridge } = require('../src/main/triggers/trigger-renderer-bridge');
 
@@ -126,7 +125,6 @@ test('getTriggersDir resolves a relative override against the app, not against a
   }
 });
 
-// ── The permit-bound preparation and spawn boundary main.js calls ──
 const { permitLaunchRefusal, runPermitSpawn, sandboxLaunchEnv } = require('../src/main/triggers/permit-spawn');
 
 function spawnRig(overrides = {}) {

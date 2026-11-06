@@ -2707,10 +2707,8 @@ function signalTriggerReady() {
 
 async function handleTriggerSessionAction(request) {
   await triggerReady;
-  const keptFocus = document.activeElement;
-  try { return await runTriggerSessionAction(request); } finally {
-    if (keptFocus && keptFocus !== document.body && keptFocus.isConnected && document.activeElement !== keptFocus) keptFocus.focus({ preventScroll: true });
-  }
+  window._triggerFocusHold = (window._triggerFocusHold || 0) + 1;
+  try { return await runTriggerSessionAction(request); } finally { window._triggerFocusHold -= 1; }
 }
 
 async function runTriggerSessionAction(request) {

@@ -50,5 +50,4 @@ function arrange(t, options = {}) {
   return { world, events, spawns, renderer, hooks, saved, ...watcher, root, projectsDir };
 }
 
-
 module.exports = { arrange, found, ID_C };

@@ -156,7 +156,6 @@ test('a marker that cannot be saved refuses the action before any side effect', 
   assert.equal(result.resumed, false);
 });
 
-// ── Review round 1 ──
 test('an aged duplicate input cannot overwrite its committed v1 result', async t => {
   const dirs = layout(t);
   const world = makeWorld();

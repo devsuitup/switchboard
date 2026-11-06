@@ -137,7 +137,7 @@ function hasJsonRecord(fsx, file) {
     if (length === window) lines.pop();
     if (!lines.length) return true;
     return lines.some(line => { try { return object(JSON.parse(line)); } catch { return false; } });
-  } catch { return false; } finally { if (fd !== undefined) { try { fsx.closeSync(fd); } catch { /* closed */ } } }
+  } catch { return false; } finally { if (fd !== undefined) { try { fsx.closeSync(fd); } catch {} } }
 }
 
 function resolveClosedTarget(rawId, deps) {

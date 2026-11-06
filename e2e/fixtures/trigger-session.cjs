@@ -1,7 +1,6 @@
 'use strict';
 
-// Stands in for the `claude` command in the trigger-actions journey: records how it was
-// started and stays attached to stdin. It never runs the arguments it receives.
+// see docs/e2e.md ("Trigger actions journey")
 const fs = require('fs');
 const path = require('path');
 

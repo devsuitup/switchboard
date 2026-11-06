@@ -690,7 +690,6 @@ test('clearOwner: uses the Windows process table to identify the PTY owner', asy
   }
 });
 
-// ── Versioned session actions: raw descriptor liveness and sandbox writer observation ──
 const { makeProc, HOST_NS } = require('./helpers/fake-proc');
 
 const NS_BOX = 'pid:[4026532001]';
@@ -707,7 +706,6 @@ function v1Fixture(t, platform = 'linux') {
   f.descriptor = (inner, fields = {}) => fs.writeFileSync(path.join(dir, `${inner}.json`), JSON.stringify({
     pid: inner, sessionId: SID, kind: 'interactive', status: 'idle', statusUpdatedAt: 1000, procStart: '777', cwd: '/work', startedAt: 5, ...fields,
   }));
-  // PTY 8000 -> bwrap 8100 -> host writer 9000 (inner pid 42 inside its own namespace)
   f.sandbox = () => {
     proc.add(8000, { start: '500', ppid: 1 });
     proc.add(8100, { start: '600', ppid: 8000 });

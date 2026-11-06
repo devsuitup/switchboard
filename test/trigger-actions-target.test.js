@@ -31,7 +31,6 @@ test('unavailable project snapshot or provenance refuses admission', async () =>
   assert.equal(await checkProject(project, async () => ({ allProjects: [] }), () => true), 'project lookup unavailable');
 });
 
-// ── Strict closed-session resolver and refusals before any lifecycle call ──
 const fsx = require('node:fs');
 const pathx = require('node:path');
 const { resolveClosedTarget } = require('../src/main/triggers/trigger-actions');
@@ -185,7 +184,6 @@ test('transcript, remote and plain-terminal refusals reach the caller with zero 
   }
 });
 
-// Real descriptor module and procfs: no stubbed liveness verdict.
 const NS_BOX = 'pid:[4026532001]';
 function liveRig(t, inner = 42) {
   const root = tempRoot(t);
