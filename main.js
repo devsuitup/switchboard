@@ -578,7 +578,8 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 
 // --- Session cache helpers ---
 
-const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo, extractVerifiedCwdFromJsonl, resolveWorktreePath, launchModeFor } = require('./derive-project-path');
+const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo, extractVerifiedCwdFromJsonl, resolveWorktreePath } = require('./derive-project-path');
+const { permitLaunchRefusal, runPermitSpawn, sandboxLaunchEnv } = require('./src/main/triggers/permit-spawn');
 const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -3069,7 +3070,7 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
         // instead, reusing the id the sidebar already shows.
         const startsFresh = isNew
           || (!sessionOptions?.forkFrom && !sessionTranscriptExists(PROJECTS_DIR, sessionId));
-        const refusedLaunch = launchModeFor({ isNew, forkFrom: sessionOptions?.forkFrom, transcriptExists: !startsFresh, permitMode: permit?.mode }).refuse;
+        const refusedLaunch = permitLaunchRefusal({ permit, isNew, forkFrom: sessionOptions?.forkFrom, transcriptExists: !startsFresh });
         if (refusedLaunch) return { ok: false, error: refusedLaunch };
         if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
           log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
@@ -3190,10 +3191,7 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
         if (projectPath && projectPath !== spawnCwd) extraBinds.push(projectPath);
         extraBinds.push(...parseAddDirs(sessionOptions.addDirs));
         const bindEnv = sandboxBindEnv(extraBinds);
-        if (bindEnv) ptyEnv.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
-        ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = getTriggersDir();
-        const transcriptCwd = spawnCwd || projectPath;
-        if (transcriptCwd) ptyEnv.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(transcriptCwd);
+        Object.assign(ptyEnv, sandboxLaunchEnv({ bindEnv, transcriptCwd: spawnCwd || projectPath, encodeProjectPath, triggersDir: getTriggersDir() }));
       }
 
       const spawnClaude = () => spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
@@ -3207,16 +3205,9 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
         env: ptyEnv,
       });
       if (permit) {
-        // see .ai/contexts/trigger-watcher.md ("Versioned actions")
-        if (permit.mode === 'resume') {
-          const live = await triggerLiveV1(sessionId).catch(() => ({ known: false }));
-          if (!live.known) return { ok: false, error: 'session liveness unavailable' };
-          if (live.live) return { ok: false, error: 'session live elsewhere' };
-          const again = resolveClosedTarget(sessionId, triggerResolverDeps());
-          if (again.status !== 'found' || again.cwd !== permit.target?.cwd || again.file !== permit.target?.file) return { ok: false, error: 'no readable transcript' };
-        }
-        const gate = triggerBridge.guardedSpawn(permitId, spawnClaude);
-        if (!gate.ok) return { ok: false, error: gate.reason };
+        const gate = await runPermitSpawn({ permit, permitId, sessionId, bridge: triggerBridge, liveV1: triggerLiveV1,
+          resolveClosed: id => resolveClosedTarget(id, triggerResolverDeps()), spawn: spawnClaude });
+        if (!gate.ok) return { ok: false, error: gate.error };
         ptyProcess = gate.value;
       } else {
         ptyProcess = spawnClaude();
@@ -3992,9 +3983,7 @@ if (!app.isPackaged) {
           return { ok: false, error: `Sandbox add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}. Remove or change these add-dirs in the schedule file, then try Run now again.` };
         }
         const bindEnv = sandboxBindEnv(addDirs);
-        if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
-        env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = getTriggersDir();
-        env.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(cwd);
+        Object.assign(env, sandboxLaunchEnv({ bindEnv, transcriptCwd: cwd, encodeProjectPath, triggersDir: getTriggersDir() }));
       }
       const args = shellArgs(shell, cmd, profile.args || []);
 
@@ -4057,6 +4046,7 @@ if (!app.isPackaged) {
     // app.whenReady (auto-updater, etc. would otherwise be silently lost).
     try {
       require('./src/main/triggers/trigger-watcher').start(createTriggerContext({
+        isClosing: () => !unsavedGuard.launchAllowed(),
         v1: {
         bridge: triggerBridge,
         getSnapshot: async () => {
