@@ -45,6 +45,9 @@ const { windowFrameOptions, applicationMenuTemplate, zoomKey, nextZoomLevel, men
 const { createUnsavedGuard } = require('./src/main/app/unsaved-guard');
 const { inventory, runExitHandoffs } = require('./src/main/app/session-exit');
 const { backgroundRefusal } = require('./src/main/bg-agents/bg-handoff');
+const { createTriggerRendererBridge, createPendingOpens } = require('./src/main/triggers/trigger-renderer-bridge');
+const { resolveClosedTarget } = require('./src/main/triggers/trigger-actions');
+const { getTriggersDir } = require('./src/main/triggers/trigger-watcher');
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: attempt => { quitAttemptToken = attempt; app.quit(); },
   inventory: () => exitInventory(), background: (ids, opts) => runExitBackground(ids, opts), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; } });
 let exitInventory = () => ({ rows: [], counts: {}, remote: {} });
@@ -575,7 +578,7 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 
 // --- Session cache helpers ---
 
-const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
+const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo, extractVerifiedCwdFromJsonl, resolveWorktreePath } = require('./derive-project-path');
 const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -1336,7 +1339,7 @@ ipcMain.handle('rebuild-cache', async () => {
 
 ipcMain.handle('get-indexing-state', () => ({ finished: isIndexingFinished() }));
 
-ipcMain.handle('get-projects', async (_event, showArchived) => {
+async function listProjects(showArchived) {
   const started = TRACE.on ? performance.now() : null;
   try {
     const repairFolders = getSetting('bridge_uuid_reindex_folders');
@@ -1394,7 +1397,9 @@ ipcMain.handle('get-projects', async (_event, showArchived) => {
     console.error('Error listing projects:', err);
     throw err;
   }
-});
+}
+
+ipcMain.handle('get-projects', (_event, showArchived) => listProjects(showArchived));
 
 // --- IPC: get-stats-from-db ---
 // Builds a stats object from session_cache so the heatmap reflects real usage
@@ -1961,7 +1966,7 @@ async function runExitBackgroundBatch(ids, opts) {
 }
 runExitBackground = runExitBackgroundBatch;
 
-ipcMain.handle('stop-session', (_event, sessionId) => {
+function stopLocalSession(sessionId) {
   const session = activeSessions.get(sessionId);
   if (!session || session.exited) return { ok: false, error: 'not running' };
   // see .ai/contexts/bg-agents.md ("Detach")
@@ -1974,7 +1979,9 @@ ipcMain.handle('stop-session', (_event, sessionId) => {
   session.stopRequested = true;
   killPty(session, sessionId);
   return { ok: true };
-});
+}
+
+ipcMain.handle('stop-session', (_event, sessionId) => stopLocalSession(sessionId));
 
 const REMOTE_STOP_SYNC_TIMEOUT_MS = 20000;
 
@@ -2825,9 +2832,28 @@ function registerRemoteAttachSession(sessionId, { alias, projectPath, cwd, ptyPr
   return remoteSession;
 }
 
-ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions, initialSize) => {
+// see .ai/contexts/ipc-bridge.md ("Trigger session actions")
+const triggerBridge = createTriggerRendererBridge({ ipcMain, getWindow: () => mainWindow, getSession: key => activeSessions.get(key), isClosing: () => !unsavedGuard.launchAllowed() });
+triggerBridge.register();
+const serializeOpen = createPendingOpens();
+const triggerResolverDeps = deadline => ({ projectsDir: PROJECTS_DIR, getCachedSession, getCachedFolder, isRemoteFolder,
+  extractVerifiedCwd: extractVerifiedCwdFromJsonl, resolveWorktreePath, deadline });
+const triggerLiveV1 = (id, deadline) => cliSessionState.liveElsewhereV1Checked(id, { ptyPids: cliSessionState.makePtyPids(activeSessions), deadline });
+
+ipcMain.handle('open-terminal', (event, sessionId, projectPath, isNew, sessionOptions, initialSize, triggerRequestId) =>
+  serializeOpen(sessionId, () => openTerminalNow(event, sessionId, projectPath, isNew, sessionOptions, initialSize, triggerRequestId)));
+
+async function openTerminalNow(event, sessionId, projectPath, isNew, sessionOptions, initialSize, triggerRequestId) {
   if (!mainWindow) return { ok: false, error: 'no window' };
   if (!unsavedGuard.launchAllowed()) return { ok: false, error: 'Switchboard is closing.' };
+  let permit = null;
+  const permitId = triggerRequestId == null ? null : String(triggerRequestId);
+  if (permitId !== null) {
+    if (!event?.senderFrame || event.senderFrame !== mainWindow.webContents.mainFrame) return { ok: false, error: 'trigger permit rejected' };
+    const consumed = triggerBridge.consumePermit(permitId, { sessionId, isNew, sessionOptions });
+    if (!consumed.ok) return { ok: false, error: consumed.error };
+    permit = consumed.permit;
+  }
 
   // Reattach to existing session
   if (activeSessions.has(sessionId)) {
@@ -2879,6 +2905,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       ? parseFolderKey(cachedFolder).alias
       : (cachedFolder ? null : remoteIndexer.findSessionAlias(sessionId));
     if (alias) {
+      if (permit) return { ok: false, error: 'remote sessions are not supported' };
       const descriptor = remoteIndexer.getRemoteSessions(alias).sessions.find(s => s.sessionId === sessionId);
       const localPtySize = normalizePtySize(initialSize);
       const attachResult = descriptor
@@ -2917,6 +2944,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     );
     if (realCwd && fs.existsSync(realCwd)) spawnCwd = realCwd;
   }
+  if (permit?.mode === 'resume' && spawnCwd !== permit.target?.cwd) return { ok: false, error: 'session cwd changed' };
 
   // see .ai/contexts/bg-agents.md ("Attach")
   const isAttach = sessionOptions?.type === 'attach';
@@ -3043,6 +3071,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         // instead, reusing the id the sidebar already shows.
         const startsFresh = isNew
           || (!sessionOptions?.forkFrom && !sessionTranscriptExists(PROJECTS_DIR, sessionId));
+        if (permit?.mode === 'resume' && startsFresh) return { ok: false, error: 'no readable transcript' };
         if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
           log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
         }
@@ -3163,11 +3192,12 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         extraBinds.push(...parseAddDirs(sessionOptions.addDirs));
         const bindEnv = sandboxBindEnv(extraBinds);
         if (bindEnv) ptyEnv.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
+        ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = getTriggersDir();
         const transcriptCwd = spawnCwd || projectPath;
         if (transcriptCwd) ptyEnv.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(transcriptCwd);
       }
 
-      ptyProcess = spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
+      const spawnClaude = () => spawnPty(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
         name: 'xterm-256color',
         cols: spawnCols,
         rows: spawnRows,
@@ -3177,6 +3207,21 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         // app's minimal Electron environment won't trigger those sequences.
         env: ptyEnv,
       });
+      if (permit) {
+        // see .ai/contexts/trigger-watcher.md ("Versioned actions")
+        if (permit.mode === 'resume') {
+          const live = await triggerLiveV1(sessionId).catch(() => ({ known: false }));
+          if (!live.known) return { ok: false, error: 'session liveness unavailable' };
+          if (live.live) return { ok: false, error: 'session live elsewhere' };
+          const again = resolveClosedTarget(sessionId, triggerResolverDeps());
+          if (again.status !== 'found' || again.cwd !== permit.target?.cwd || again.file !== permit.target?.file) return { ok: false, error: 'no readable transcript' };
+        }
+        const gate = triggerBridge.guardedSpawn(permitId, spawnClaude);
+        if (!gate.ok) return { ok: false, error: gate.reason };
+        ptyProcess = gate.value;
+      } else {
+        ptyProcess = spawnClaude();
+      }
 
     }
   } catch (err) {
@@ -3226,7 +3271,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     mcpError,
     generation: session.generation,
   };
-});
+}
 
 // --- IPC: activity-trace (fire-and-forget, opt-in) ---
 // Registered unconditionally — see .ai/contexts/ipc-bridge.md "Activity trace".
@@ -3948,6 +3993,7 @@ if (!app.isPackaged) {
         }
         const bindEnv = sandboxBindEnv(addDirs);
         if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
+        env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = getTriggersDir();
         env.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(cwd);
       }
       const args = shellArgs(shell, cmd, profile.args || []);
@@ -4010,7 +4056,7 @@ if (!app.isPackaged) {
     // I3: wrapped in try/catch so a boot failure here doesn't abort
     // app.whenReady (auto-updater, etc. would otherwise be silently lost).
     try {
-      require('./src/main/triggers/trigger-watcher').start(createTriggerContext({
+      const triggerCtx = createTriggerContext({
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
         resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
@@ -4027,7 +4073,23 @@ if (!app.isPackaged) {
           }
           return undefined;
         },
-      }));
+      });
+      triggerCtx.v1 = {
+        bridge: triggerBridge,
+        getSnapshot: async () => {
+          const projects = await listProjects('both');
+          const global = getSetting('global') || {};
+          return { allProjects: projects.allProjects, global: { hiddenProjects: global.hiddenProjects || [], hiddenProjectKinds: global.hiddenProjectKinds || {} } };
+        },
+        directoryExists: dir => { try { return fs.statSync(dir).isDirectory(); } catch (err) { if (err.code === 'ENOENT') return false; throw err; } },
+        liveV1: (id, { deadline }) => triggerLiveV1(id, deadline),
+        resolveClosed: (id, { deadline }) => resolveClosedTarget(id, triggerResolverDeps(deadline)),
+        isRemoteTarget: id => { const folder = getCachedFolder(id); return isRemoteFolder(folder) || (!folder && !!remoteIndexer.findSessionAlias(id)); },
+        reserveId: () => require('crypto').randomUUID(),
+        saveName: (id, name) => writer.renameSession([id], name),
+        stopSession: (key, session) => (activeSessions.get(key) === session && !session.isAttach ? stopLocalSession(key) : { ok: false, error: 'session target changed' }),
+      };
+      require('./src/main/triggers/trigger-watcher').start(triggerCtx);
     } catch (err) {
       log.error('[trigger-watcher] Failed to start trigger watcher:', err.message);
     }

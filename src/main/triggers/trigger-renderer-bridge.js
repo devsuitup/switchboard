@@ -174,9 +174,9 @@ function createTriggerRendererBridge(deps) {
     if (clock() >= permit.deadline) { permit.state = 'revoked'; return refuse('trigger permit expired'); }
     if (permit.tabKey !== sessionId) return refuse('trigger permit rejected');
     const options = sessionOptions || {};
-    const accepted = permit.mode === 'new' ? isNew === true
-      : permit.mode === 'resume' ? isNew === false && !options.forkFrom && !options.type
-      : isNew === false && options.reattachOnly === true;
+    const accepted = !options.forkFrom && !options.type && (permit.mode === 'new' ? isNew === true
+      : permit.mode === 'resume' ? isNew === false
+        : isNew === false && options.reattachOnly === true);
     if (!accepted) return refuse('trigger permit rejected');
     permit.state = 'opening';
     return { ok: true, permit: { mode: permit.mode, tabKey: permit.tabKey, requestedSessionId: permit.requestedSessionId,

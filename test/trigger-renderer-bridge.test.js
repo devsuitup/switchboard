@@ -237,7 +237,9 @@ test('a permit is single use and bound to its tab key and mode', async () => {
   const { payload } = await openNew(r);
   assert.equal(r.bridge.consumePermit(payload.requestId, { sessionId: B, isNew: true, sessionOptions: {} }).ok, false);
   assert.equal(r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: false, sessionOptions: {} }).ok, false);
-  assert.equal(r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: { forkFrom: B } }).ok, true);
+  assert.equal(r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: { forkFrom: B } }).ok, false);
+  assert.equal(r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: { type: 'terminal' } }).ok, false);
+  assert.equal(r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} }).ok, true);
   assert.equal(r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} }).ok, false);
   assert.equal(r.bridge.consumePermit('nope', { sessionId: A, isNew: true }).ok, false);
 });
