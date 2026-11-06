@@ -403,3 +403,76 @@ test('a consumed permit carries its deadline for the final scans', async () => {
   const consumed = r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
   assert.equal(consumed.permit.deadline, payload.deadline);
 });
+
+test('a close committed while waiting for the readiness handshake settles as closing, not as not ready', async () => {
+  const r = rig();
+  const pending = r.bridge.ensureOpen({ mode: 'new', tabKey: A, deadline: Date.now() + 2000 });
+  await tick();
+  r.state.closing = true;
+  const outcome = await pending;
+  assert.equal(outcome.reason, 'Switchboard is closing.');
+  assert.deepEqual(r.sent, []);
+});
+
+test('readiness is revoked once a close is committed', async () => {
+  const r = rig();
+  await r.ready();
+  assert.equal(r.bridge.isReady(), true);
+  r.state.closing = true;
+  assert.equal(r.bridge.isReady(), false);
+});
+
+test('revoking on the close commit settles readiness waiters and pending permits with the closing reason', async () => {
+  const r = rig();
+  const waiting = r.bridge.ensureOpen({ mode: 'new', tabKey: A, deadline: Date.now() + 2000 });
+  await tick();
+  r.bridge.revokeAll('Switchboard is closing.');
+  assert.equal((await waiting).reason, 'Switchboard is closing.');
+});
+
+test('the exit attempt reports its commit so main can revoke trigger work', async () => {
+  const { createExitAttempts } = require('../src/main/app/session-exit');
+  let committed = 0;
+  const attempts = createExitAttempts({ snapshot: () => ({ rows: [], counts: {}, remote: {} }), check: async () => ({ proceed: true }),
+    cancelCheck() {}, invalidateRenderer() {}, onCommitted: () => { committed += 1; } });
+  const outcome = await attempts.request({}, 'quit');
+  assert.equal(outcome.proceed, true);
+  assert.equal(committed, 1);
+});
+
+test('an object replaced at the same generation and PTY does not authenticate the acknowledgement', async () => {
+  const r = rig();
+  const { pending, payload } = await openNew(r);
+  r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
+  const original = spawnedSession(r);
+  r.bridge.guardedSpawn(payload.requestId, () => original.pty);
+  r.bridge.bindSession(payload.requestId, original);
+  r.sessions.set(A, { ...original });
+  r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 7 });
+  assert.equal((await pending).reason, 'session target changed');
+});
+
+test('a generation changed on the bound object with the same PTY does not authenticate the acknowledgement', async () => {
+  const r = rig();
+  const { pending, payload } = await openNew(r);
+  r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
+  const original = spawnedSession(r);
+  r.bridge.guardedSpawn(payload.requestId, () => original.pty);
+  r.bridge.bindSession(payload.requestId, original);
+  original.generation = 8;
+  r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 8 });
+  assert.equal((await pending).reason, 'session target changed');
+});
+
+test('a vanished-transcript refusal reaches the failure acknowledgement through the launch function', async () => {
+  const { launchClaudeProcess } = require('../src/main/triggers/permit-spawn');
+  const r = rig();
+  await r.ready();
+  const pending = r.bridge.ensureOpen({ mode: 'resume', requestedSessionId: A, tabKey: A, target: { cwd: '/w', file: '/f' }, deadline: Date.now() + 1000 });
+  await tick();
+  const payload = r.payload();
+  const { permit } = r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: false, sessionOptions: {} });
+  const launched = await launchClaudeProcess({ permit, permitId: payload.requestId, sessionId: A, isNew: false, transcriptExists: false, bridge: r.bridge, spawn: () => { throw new Error('unexpected spawn'); } });
+  r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'resume', ok: false, requestedSessionId: A, tabKey: A, reason: 'session open failed', error: launched.error });
+  assert.equal((await pending).reason, 'no readable transcript');
+});

@@ -37,7 +37,7 @@ function createTriggerRendererBridge(deps) {
   };
   const isReady = () => {
     const win = liveWindow();
-    return !!ready && !!win && ready.webContents === win.webContents && ready.frame === win.webContents.mainFrame;
+    return !isClosing() && !!ready && !!win && ready.webContents === win.webContents && ready.frame === win.webContents.mainFrame;
   };
 
   function settlePermit(permit, outcome) {
@@ -84,8 +84,10 @@ function createTriggerRendererBridge(deps) {
     if (isReady()) return Promise.resolve({ ok: true, documentEpoch: ready.epoch });
     return new Promise(resolve => {
       const waiter = {
-        finish(result) { unschedule(waiter.timer); readyWaiters.delete(waiter); resolve(result); },
+        finish(result) { unschedule(waiter.timer); clearInterval(waiter.watch); readyWaiters.delete(waiter); resolve(result); },
       };
+      waiter.watch = setInterval(() => { if (isClosing()) waiter.finish({ ok: false, reason: REASON_CLOSING }); }, CLOSE_POLL_MS);
+      waiter.watch.unref?.();
       waiter.timer = schedule(() => waiter.finish({ ok: false, reason: REASON_NOT_READY }), Math.max(0, deadline - clock()));
       readyWaiters.add(waiter);
     });

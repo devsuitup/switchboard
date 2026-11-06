@@ -91,7 +91,7 @@ async function runExitHandoffs(ids, { send, status, waitForChange, now = Date.no
   finally { signal?.removeEventListener('abort', abort); }
 }
 
-function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer }) {
+function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer, onCommitted = () => {} }) {
   let current = null;
   let nextId = 1;
   const rank = { close: 0, quit: 1, update: 2 };
@@ -150,6 +150,7 @@ function createExitAttempts({ snapshot, check, cancelCheck, invalidateRenderer }
         continue;
       }
       attempt.phase = 'committed';
+      try { onCommitted(); } catch {}
       return { ...result, token: attempt.id, action: attempt.action };
     }
     return { proceed: false };

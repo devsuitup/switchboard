@@ -338,3 +338,94 @@ test('the saved defaults of the requested project reach the launch exactly as th
     assert.deepEqual(h.calls.rename, []);
   } finally { h.destroy(); }
 });
+
+test('the first transcript refresh after the acknowledgement keeps the focus the user holds outside the sidebar', async () => {
+  const h = setup();
+  try {
+    const doc = h.window.document;
+    const control = doc.createElement('button');
+    control.id = 'user-control';
+    const terminalInput = doc.createElement('textarea');
+    doc.body.append(control, terminalInput);
+    h.window.openSessions.set('other', { session: { sessionId: 'other', projectPath: PROJECT }, closed: false, terminal: { focus: () => terminalInput.focus() } });
+    h.window.showArchived = false;
+    h.inContext(extractFunction(fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8'), 'refreshSidebar'));
+    control.focus();
+    await h.window.handleTriggerSessionAction(h.request({ mode: 'new', requestedSessionId: null, tabKey: B, name: 'n' }));
+    assert.equal(doc.activeElement, control);
+    assert.equal(h.window._triggerFocusHold, 0);
+    h.window.sessionMap.get(B).messageCount = 1;
+    h.window.refreshSidebar({ skipUnchanged: true });
+    assert.equal(doc.activeElement.id, 'user-control');
+  } finally { h.destroy(); }
+});
+
+test('a refresh still returns the terminal focus when the focus was lost in the sidebar', async () => {
+  const h = setup();
+  try {
+    const doc = h.window.document;
+    const terminalInput = doc.createElement('textarea');
+    doc.body.append(terminalInput);
+    h.window.openSessions.set('other', { session: { sessionId: 'other', projectPath: PROJECT }, closed: false, terminal: { focus: () => terminalInput.focus() } });
+    h.window.showArchived = false;
+    h.inContext(extractFunction(fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8'), 'refreshSidebar'));
+    h.window.refreshSidebar();
+    assert.equal(doc.activeElement, terminalInput);
+  } finally { h.destroy(); }
+});
+
+function writeRecorder(h) {
+  const writes = [];
+  for (const name of Object.keys(h.window.api)) {
+    if (typeof h.window.api[name] !== 'function' || /^(openTerminal|getEffectiveSettings|triggerSessionActionResult|platform)$/.test(name)) continue;
+    const original = h.window.api[name];
+    h.window.api[name] = (...args) => { writes.push([name, JSON.stringify(args)]); return original(...args); };
+  }
+  h.window.api.setSetting = async (...args) => { writes.push(['setSetting', JSON.stringify(args)]); };
+  return writes;
+}
+
+test('with real archive records, the trigger path writes the same settings as the plus path', async () => {
+  const dialogs = fs.readFileSync(path.join(__dirname, '..', 'public', 'dialogs.js'), 'utf8');
+  const prepare = h => {
+    h.inContext(extractFunction(dialogs, 'resolveDefaultSessionOptions'));
+    h.window.api.platform = 'linux';
+    h.window.api.getEffectiveSettings = async () => ({ ...SAVED });
+    h.window.cachedAllProjects[0].archivedProjects = { [PROJECT]: { archivedAt: 1 }, '/foreign': { archivedAt: 2 } };
+    return writeRecorder(h);
+  };
+  const plus = setup();
+  const trigger = setup();
+  try {
+    const plusWrites = prepare(plus);
+    await plus.window.launchNewSession(plus.window.cachedAllProjects[0], await plus.window.resolveDefaultSessionOptions(plus.window.cachedAllProjects[0]));
+    const triggerWrites = prepare(trigger);
+    await trigger.window.handleTriggerSessionAction(trigger.request({ mode: 'new', requestedSessionId: null, tabKey: B, name: 'n' }));
+    assert.deepEqual(triggerWrites, plusWrites);
+    assert.deepEqual(JSON.parse(JSON.stringify(trigger.calls.openTerminal[0][3])), JSON.parse(JSON.stringify(plus.calls.openTerminal[0][3])));
+  } finally { plus.destroy(); trigger.destroy(); }
+});
+
+test('the grid view, its focused card and an open modal are untouched during the deferred open and after the acknowledgement', async () => {
+  let release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const h = setup({ grid: true, resultFor: () => { entered(); return new Promise(resolve => { release = resolve; }); } });
+  try {
+    const doc = h.window.document;
+    const modal = doc.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'open-modal';
+    doc.body.append(modal);
+    h.window.gridFocusedSessionId = 'card-1';
+    const snapshot = () => [h.window.gridViewActive, h.window.gridFocusedSessionId, h.window.activeSessionId, !!doc.getElementById('open-modal')];
+    const before = snapshot();
+    const action = h.window.handleTriggerSessionAction(h.request({ mode: 'new', requestedSessionId: null, tabKey: B, name: 'n' }));
+    await started;
+    assert.deepEqual(snapshot(), before);
+    release({ ok: true, generation: 5 });
+    await action;
+    assert.deepEqual(snapshot(), before);
+    assert.deepEqual(h.calls.show, []);
+    assert.deepEqual(h.calls.focusCard, []);
+  } finally { h.destroy(); }
+});

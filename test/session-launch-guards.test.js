@@ -284,5 +284,39 @@ test('main.js passes the real permit, sandbox description, readers and refusal h
   const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   assert.match(src, /launchClaudeProcess\(\{ permit, permitId, sessionId, isNew, forkFrom: sessionOptions\?\.forkFrom,\s*\n\s*transcriptExists: transcriptKnown, sandbox: sandboxLaunch, ptyEnv, spawn: spawnClaude, bridge: triggerBridge, liveV1: triggerLiveV1,\s*\n\s*resolveClosed: \(id, deadline\) => resolveClosedTarget\(id, triggerResolverDeps\(deadline\)\) \}\);\s*\n\s*if \(!launched\.ok\) return \{ ok: false, error: launched\.error \};\s*\n\s*ptyProcess = launched\.value;/);
   assert.match(src, /sandboxLaunch = \{ bindEnv: sandboxBindEnv\(extraBinds\), transcriptCwd: spawnCwd \|\| projectPath, encodeProjectPath, triggersDir: getTriggersDir\(\) \};/);
-  assert.match(src, /transcriptKnown = !startsFresh;\s*\n\s*const refusedLaunch = permitLaunchRefusal\(\{ permit, isNew, forkFrom: sessionOptions\?\.forkFrom, transcriptExists: transcriptKnown \}\);\s*\n\s*if \(refusedLaunch\) return \{ ok: false, error: refusedLaunch \};/);
+  assert.match(src, /transcriptKnown = !startsFresh;\s*\n\s*const refusedLaunch = permitLaunchRefusal\(\{ permit, isNew, forkFrom: sessionOptions\?\.forkFrom, transcriptExists: transcriptKnown \}\);\s*\n\s*if \(refusedLaunch\) \{ triggerBridge\.noteRefusal\(permitId, refusedLaunch\); return \{ ok: false, error: refusedLaunch \}; \}/);
+});
+
+test('main\'s own final liveness reader blocks a raw namespace writer that appears during preparation', async t => {
+  const vm = require('node:vm');
+  const { tempRoot } = require('./helpers/trigger-world');
+  const cli = require('../cli-session-state');
+  const root = tempRoot(t);
+  const dir = path.join(root, 'sessions');
+  fs.mkdirSync(dir);
+  const proc = makeProc(path.join(root, 'proc'));
+  proc.add(9000, { nspid: [9000, 42], start: '777', ns: 'pid:[99]' });
+  cli.init({ dir, activeSessions: new Map(), platform: 'linux', isProcessAlive: () => false, log: { info() {}, warn() {}, error() {}, debug() {} } });
+  t.after(() => cli.stop());
+  const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const definition = source.match(/^const triggerLiveV1 = .*;$/m)[0];
+  const context = vm.createContext({ activeSessions: new Map(), cliSessionState: { ...cli, liveElsewhereV1Checked: (id, options) => cli.liveElsewhereV1Checked(id, { ...options, procRoot: proc.root }) } });
+  vm.runInContext(definition + '\nglobalThis.reader = triggerLiveV1;', context);
+  const sid = '01234567-89ab-cdef-0123-456789abcdef';
+  assert.equal((await context.reader(sid, Date.now() + 1000)).live, null);
+  fs.writeFileSync(path.join(dir, '42.json'), JSON.stringify({ pid: 42, sessionId: sid, procStart: '777', kind: 'interactive', status: 'idle', statusUpdatedAt: 1 }));
+  let spawns = 0;
+  const found = { status: 'found', file: '/f', cwd: '/w' };
+  const result = await launchClaudeProcess({ permit: { mode: 'resume', deadline: Date.now() + 1000, target: found }, permitId: 'p', sessionId: sid, isNew: false, transcriptExists: true,
+    liveV1: context.reader, resolveClosed: () => found, bridge: { guardedSpawn: (id, spawn) => ({ ok: true, value: spawn() }) }, spawn: () => { spawns += 1; return {}; } });
+  assert.deepEqual(result, { ok: false, error: 'session live elsewhere' });
+  assert.equal(spawns, 0);
+});
+
+test('main binds the registered session to the broker right after registering it, and hands the broker the refusal of an early launch check', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(src, /activeSessions\.set\(sessionId, session\);\s*\n\s*if \(permitId !== null\) triggerBridge\.bindSession\(permitId, session\);/);
+  assert.match(src, /if \(refusedLaunch\) \{ triggerBridge\.noteRefusal\(permitId, refusedLaunch\); return/);
+  assert.match(src, /onCommitted: \(\) => revokeTriggerWork\(\)/);
+  assert.match(src, /revokeTriggerWork = \(\) => triggerBridge\.revokeAll\('Switchboard is closing\.'\);/);
 });

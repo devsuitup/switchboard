@@ -49,7 +49,8 @@ const { createTriggerRendererBridge, createPendingOpens } = require('./src/main/
 const { resolveClosedTarget } = require('./src/main/triggers/trigger-actions');
 const { getTriggersDir } = require('./src/main/triggers/trigger-watcher');
 const unsavedGuard = createUnsavedGuard({ ipcMain, quit: attempt => { quitAttemptToken = attempt; app.quit(); },
-  inventory: () => exitInventory(), background: (ids, opts) => runExitBackground(ids, opts), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; } });
+  inventory: () => exitInventory(), background: (ids, opts) => runExitBackground(ids, opts), externalFlush: () => flushForLogoff(), onAttemptReleased: () => { updateInstalling = false; }, onCommitted: () => revokeTriggerWork() });
+let revokeTriggerWork = () => {};
 let exitInventory = () => ({ rows: [], counts: {}, remote: {} });
 let runExitBackground = async () => [];
 let flushForLogoff = () => Promise.resolve();
@@ -2835,12 +2836,15 @@ function registerRemoteAttachSession(sessionId, { alias, projectPath, cwd, ptyPr
 // see .ai/contexts/ipc-bridge.md ("Trigger session actions")
 const triggerBridge = createTriggerRendererBridge({ ipcMain, getWindow: () => mainWindow, getSession: key => activeSessions.get(key), isClosing: () => !unsavedGuard.launchAllowed() });
 triggerBridge.register();
+revokeTriggerWork = () => triggerBridge.revokeAll('Switchboard is closing.');
 const serializeOpen = createPendingOpens();
 const triggerResolverDeps = deadline => ({ projectsDir: PROJECTS_DIR, getCachedSession, getCachedFolder, isRemoteFolder,
   extractVerifiedCwd: extractVerifiedCwdFromJsonl, resolveWorktreePath, deadline });
 const triggerLiveV1 = (id, deadline) => cliSessionState.liveElsewhereV1Checked(id, { ptyPids: cliSessionState.makePtyPids(activeSessions), deadline });
 
 ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, sessionOptions, initialSize, triggerRequestId) => {
+  if (!mainWindow) return { ok: false, error: 'no window' };
+  if (!unsavedGuard.launchAllowed()) return { ok: false, error: 'Switchboard is closing.' };
   const releaseOpen = await serializeOpen.acquire(sessionId);
   try {
   if (!mainWindow) return { ok: false, error: 'no window' };
@@ -3073,7 +3077,7 @@ ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, ses
           || (!sessionOptions?.forkFrom && !sessionTranscriptExists(PROJECTS_DIR, sessionId));
         transcriptKnown = !startsFresh;
         const refusedLaunch = permitLaunchRefusal({ permit, isNew, forkFrom: sessionOptions?.forkFrom, transcriptExists: transcriptKnown });
-        if (refusedLaunch) return { ok: false, error: refusedLaunch };
+        if (refusedLaunch) { triggerBridge.noteRefusal(permitId, refusedLaunch); return { ok: false, error: refusedLaunch }; }
         if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
           log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
         }

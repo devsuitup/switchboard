@@ -10,7 +10,7 @@ const DEFAULT_DIALOG_CEILING_MS = 5 * 60 * 1000;
 const REASON_RANK = { reload: 0, close: 1, quit: 2 };
 const LOGOFF_CANCEL_MS = 60000;
 
-function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs = DEFAULT_PROBE_MS, dialogCeilingMs = DEFAULT_DIALOG_CEILING_MS, logoffCancelMs = LOGOFF_CANCEL_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {}, inventory = () => ({ rows: [], counts: {}, remote: {} }), background = async () => [], externalFlush = () => {}, onAttemptReleased = () => {} }) {
+function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs = DEFAULT_PROBE_MS, dialogCeilingMs = DEFAULT_DIALOG_CEILING_MS, logoffCancelMs = LOGOFF_CANCEL_MS, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout, quit = () => {}, inventory = () => ({ rows: [], counts: {}, remote: {} }), background = async () => [], externalFlush = () => {}, onAttemptReleased = () => {}, onCommitted = () => {} }) {
   const pending = new Map();
   const probes = new Map();
   const dialogs = new WeakSet();
@@ -34,7 +34,7 @@ function createUnsavedGuard({ ipcMain, timeoutMs = DEFAULT_TIMEOUT_MS, probeMs =
       } else controller.abort({ external });
     }
   };
-  const attempts = createExitAttempts({ snapshot: inventory, check: askFull,
+  const attempts = createExitAttempts({ snapshot: inventory, check: askFull, onCommitted,
     cancelCheck: win => {
       if (current?.win === win) current.finish(false);
       for (const release of reasonWaits.values()) if (release.wc === win?.webContents) release(false);

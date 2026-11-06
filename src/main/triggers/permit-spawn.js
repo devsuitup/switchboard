@@ -41,7 +41,7 @@ function sandboxLaunchEnv({ bindEnv, transcriptCwd, encodeProjectPath, triggersD
 
 async function launchClaudeProcess({ permit, permitId, sessionId, isNew, forkFrom, transcriptExists, sandbox, ptyEnv, spawn, bridge, liveV1, resolveClosed }) {
   const refusal = permitLaunchRefusal({ permit, isNew, forkFrom, transcriptExists });
-  if (refusal) return { ok: false, error: refusal };
+  if (refusal) { bridge?.noteRefusal?.(permitId, refusal); return { ok: false, error: refusal }; }
   if (sandbox) Object.assign(ptyEnv, sandboxLaunchEnv(sandbox));
   if (!permit) return { ok: true, value: spawn() };
   return runPermitSpawn({ permit, permitId, sessionId, bridge, liveV1, resolveClosed, spawn });
