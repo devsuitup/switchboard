@@ -342,6 +342,7 @@ const rendererCrossFileGlobals = {
   showGridView: 'readonly',
   toggleGridView: 'readonly',
   focusGridCard: 'readonly',
+  revealWithoutActivating: 'readonly',
   wrapInGridCard: 'readonly',
   initGridObservers: 'readonly',
   initGridGroupToggle: 'readonly',

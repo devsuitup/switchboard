@@ -84,3 +84,31 @@ test('main.js: --worktree is dropped in a non-git directory instead of failing t
   assert.doesNotMatch(block.split('} else if')[0], /claudeArgs\.push\('--worktree'\)/,
     'the non-git branch must not push --worktree');
 });
+
+// ── Permit-bound launches (versioned trigger actions) ──
+const { launchModeFor } = require('../derive-project-path');
+const { createTriggerRendererBridge } = require('../src/main/triggers/trigger-renderer-bridge');
+
+test('launchModeFor: an ordinary resume of a vanished transcript still starts it fresh, as before', () => {
+  assert.deepEqual(launchModeFor({ isNew: false, forkFrom: undefined, transcriptExists: false }), { startsFresh: true });
+  assert.deepEqual(launchModeFor({ isNew: false, forkFrom: undefined, transcriptExists: true }), { startsFresh: false });
+  assert.deepEqual(launchModeFor({ isNew: true, forkFrom: undefined, transcriptExists: false }), { startsFresh: true });
+  assert.deepEqual(launchModeFor({ isNew: false, forkFrom: 'x', transcriptExists: false }), { startsFresh: false });
+});
+
+test('launchModeFor: a resume permit whose transcript disappeared is refused, never --session-id', () => {
+  assert.deepEqual(launchModeFor({ isNew: false, forkFrom: undefined, transcriptExists: false, permitMode: 'resume' }), { refuse: 'no readable transcript' });
+  assert.deepEqual(launchModeFor({ isNew: false, forkFrom: undefined, transcriptExists: true, permitMode: 'resume' }), { startsFresh: false });
+  assert.deepEqual(launchModeFor({ isNew: true, forkFrom: undefined, transcriptExists: false, permitMode: 'new' }), { startsFresh: true });
+});
+
+test('a permit refuses a revoked or expired request before the spawn callback runs', () => {
+  const { EventEmitter } = require('node:events');
+  const frame = {};
+  const wc = Object.assign(new EventEmitter(), { mainFrame: frame, send() {}, isDestroyed: () => false });
+  const win = Object.assign(new EventEmitter(), { webContents: wc, isDestroyed: () => false });
+  const bridge = createTriggerRendererBridge({ ipcMain: { handle() {}, on() {} }, getWindow: () => win, getSession: () => null, isClosing: () => false });
+  let spawns = 0;
+  assert.equal(bridge.guardedSpawn('missing', () => { spawns += 1; }).ok, false);
+  assert.equal(spawns, 0);
+});

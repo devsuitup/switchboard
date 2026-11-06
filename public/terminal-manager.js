@@ -1578,6 +1578,15 @@ function showSession(sessionId) {
   }
 }
 
+// see .ai/contexts/ipc-bridge.md ("Trigger session actions")
+function revealWithoutActivating(sessionId) {
+  const entry = openSessions.get(sessionId);
+  if (!entry || entry.closed || !gridViewActive || gridCards.has(sessionId)) return;
+  wrapInGridCard(sessionId);
+  fitAndScroll(entry);
+  gridViewerCount.textContent = gridCards.size + ' session' + (gridCards.size !== 1 ? 's' : '');
+}
+
 function setupDragAndDrop(container, getSessionId) {
   let dragCounter = 0;
   container.addEventListener('dragenter', (e) => {

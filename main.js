@@ -578,7 +578,7 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 
 // --- Session cache helpers ---
 
-const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo, extractVerifiedCwdFromJsonl, resolveWorktreePath } = require('./derive-project-path');
+const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo, extractVerifiedCwdFromJsonl, resolveWorktreePath, launchModeFor } = require('./derive-project-path');
 const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -3071,7 +3071,8 @@ async function openTerminalNow(event, sessionId, projectPath, isNew, sessionOpti
         // instead, reusing the id the sidebar already shows.
         const startsFresh = isNew
           || (!sessionOptions?.forkFrom && !sessionTranscriptExists(PROJECTS_DIR, sessionId));
-        if (permit?.mode === 'resume' && startsFresh) return { ok: false, error: 'no readable transcript' };
+        const refusedLaunch = launchModeFor({ isNew, forkFrom: sessionOptions?.forkFrom, transcriptExists: !startsFresh, permitMode: permit?.mode }).refuse;
+        if (refusedLaunch) return { ok: false, error: refusedLaunch };
         if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
           log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
         }

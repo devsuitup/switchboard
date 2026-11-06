@@ -288,4 +288,11 @@ function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {
   return null;
 }
 
-module.exports = { deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath, extractCwdFromJsonl, extractVerifiedCwdFromJsonl, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo };
+// A resume permit never starts a conversation fresh: a vanished transcript is a refusal, not `--session-id`.
+function launchModeFor({ isNew, forkFrom, transcriptExists, permitMode }) {
+  const startsFresh = isNew || (!forkFrom && !transcriptExists);
+  if (permitMode === 'resume' && startsFresh) return { refuse: 'no readable transcript' };
+  return { startsFresh };
+}
+
+module.exports = { launchModeFor, deriveProjectPath, storedProjectPathMatchesFolder, resolveWorktreePath, extractCwdFromJsonl, extractVerifiedCwdFromJsonl, resolveSessionRealCwd, sessionTranscriptExists, isGitRepo };

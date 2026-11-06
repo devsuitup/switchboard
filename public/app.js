@@ -2317,15 +2317,15 @@ async function reloadProjects(options) {
 // rebindSidebarEvents, buildSessionItem, startRename) → sidebar.js
 
 
-async function launchNewSession(project, sessionOptions, restoreSessionId) {
-  const sessionId = crypto.randomUUID();
+async function launchNewSession(project, sessionOptions, restoreSessionId, flags = {}) {
+  const sessionId = flags.sessionId || crypto.randomUUID();
   const projectPath = project.projectPath;
   const session = {
     sessionId,
     summary: 'New session',
     firstPrompt: '',
     projectPath,
-    name: null,
+    name: flags.name ?? null,
     starred: 0,
     archived: 0,
     messageCount: 0,
@@ -2359,21 +2359,22 @@ async function launchNewSession(project, sessionOptions, restoreSessionId) {
   // Open terminal in main process with session options
   let result;
   try {
-    result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize);
+    result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null, entry.initialSize, flags.permit);
   } finally {
     delete pendingSessions.get(sessionId)?.openingActive;
   }
+  const reveal = () => (flags.activate === false ? revealWithoutActivating(sessionId) : showSession(sessionId));
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
-    showSession(sessionId);
+    reveal();
     return null;
   }
   syncPtySizeAfterOpen(entry, result);
   if (typeof setSessionMcpState === 'function') setSessionMcpState(sessionId, result.mcpState, result.mcpError);
   setSessionSandboxed(sessionId, result.sandbox);
 
-  showSession(sessionId);
+  reveal();
   schedulePersistWorkingSet();
   pollActiveSessions();
   return sessionId;
@@ -2490,7 +2491,7 @@ function settleContinuedInFlight(item) {
   schedulePersistWorkingSet();
 }
 
-async function openSessionNow(session, customOptions, { automatic = false, fromRestore = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false, backgroundRestoreJobId } = {}, open = null) {
+async function openSessionNow(session, customOptions, { automatic = false, fromRestore = false, live, continuationResolved = false, chooseAgain = false, allowBgAttach = false, activate = true, activeFrom, onBlocked, onHold, onOpenError, reattachOnly = false, backgroundRestoreJobId, triggerPermit } = {}, open = null) {
   const restoreNoticeSessions = [session];
   let freshLive = false;
   if (!fromRestore && !restoreRunDepth) sessionOpenedOutsideRestore = true;
@@ -2522,6 +2523,7 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   const backgroundHeld = !backgroundRestoreJobId && !reattachOnly && customOptions?.type !== 'attach'
     && (dormantWorkingSet.get(session.sessionId) || skippedWorkingSetEntries.get(session.sessionId));
   if (backgroundHeld?.item?.bg === true) {
+    if (triggerPermit) return false;
     skippedWorkingSetEntries.set(session.sessionId, backgroundHeld);
     const background = await prepareBackgroundRestore(session, backgroundHeld.item);
     if (!background) return false;
@@ -2627,7 +2629,7 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   beginPtyOpen(sessionId);
   let result;
   try {
-    result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize);
+    result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions, entry.initialSize, triggerPermit);
   } catch (err) {
     if (!automatic && !entry.attach) {
       settlePtyOpen(sessionId, null);
@@ -2683,9 +2685,58 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
   setSessionSandboxed(sessionId, result.sandbox);
 
   if (mayShow()) showSession(sessionId);
+  else if (triggerPermit) revealWithoutActivating(sessionId);
   schedulePersistWorkingSet();
   pollActiveSessions();
 }
+
+// see .ai/contexts/ipc-bridge.md ("Trigger session actions")
+let triggerDocumentEpoch = null;
+
+async function signalTriggerReady() {
+  try {
+    const outcome = await window.api.triggerActionsReady();
+    if (outcome?.ok) triggerDocumentEpoch = outcome.documentEpoch;
+  } catch (error) { console.warn('[switchboard] trigger readiness failed', error); }
+}
+
+async function handleTriggerSessionAction(request) {
+  const base = { requestId: request?.requestId, documentEpoch: request?.documentEpoch, mode: request?.mode,
+    requestedSessionId: request?.requestedSessionId ?? null, tabKey: request?.tabKey };
+  const reply = fields => window.api.triggerSessionActionResult({ ...base, generation: null, ...fields });
+  const valid = request && typeof request.requestId === 'string' && ['resume', 'new', 'reattach'].includes(request.mode)
+    && typeof request.tabKey === 'string' && request.tabKey && request.documentEpoch === triggerDocumentEpoch
+    && Number.isFinite(request.deadline);
+  if (!valid) return reply({ ok: false, reason: 'session open failed', error: 'invalid request' });
+  const expired = () => Date.now() >= request.deadline;
+  let failure = null;
+  const view = () => {
+    const row = sessionMap.get(request.tabKey);
+    return { ...(row || { summary: '', firstPrompt: '', name: null }), sessionId: request.tabKey, headSessionId: request.tabKey, mergedMemberIds: [],
+      projectPath: row?.projectPath || request.session?.projectPath || request.project };
+  };
+  try {
+    if (request.mode === 'new') {
+      const project = cachedAllProjects.find(p => p.projectPath === request.project && !p.remoteAlias)
+        || { projectPath: request.project, folder: encodeProjectPath(request.project), sessions: [] };
+      const options = await resolveDefaultSessionOptions(project);
+      if (expired()) return;
+      await launchNewSession(project, options, undefined, { sessionId: request.tabKey, name: request.name, permit: request.requestId, activate: false });
+    } else {
+      const existing = openSessions.get(request.tabKey);
+      if (request.mode === 'resume' || !existing || existing.closed) {
+        await openSession(view(), null, { automatic: true, activate: false, continuationResolved: true, allowBgAttach: false,
+          reattachOnly: request.mode === 'reattach', triggerPermit: request.requestId, onOpenError: message => { failure = message; } });
+      }
+    }
+  } catch (error) { failure = error.message || String(error); }
+  if (expired()) return;
+  const entry = openSessions.get(request.tabKey);
+  if (!entry || entry.closed) return reply({ ok: false, reason: 'session open failed', ...(failure || entry?.openError ? { error: failure || entry.openError } : {}) });
+  return reply({ ok: true, generation: ptyGenerations.get(request.tabKey) ?? null });
+}
+
+window.api.onTriggerSessionAction(handleTriggerSessionAction);
 
 // --- Terminal geometry re-sync ---
 // All three listeners funnel into refitOpenTerminals() (terminal-manager.js),
@@ -2957,11 +3008,13 @@ async function loadStartupProjects() {
   }
   try { await restoreStartupSessions({ projectsLoaded: loaded }); }
   catch (error) { console.warn('[switchboard] startup restore failed', error); }
+  if (loaded) signalTriggerReady();
   if (!loaded) {
     const retry = async remaining => {
       if (await reloadProjects()) {
         try { await restoreStartupSessions(); }
         catch (error) { console.warn('[switchboard] startup restore failed', error); }
+        signalTriggerReady();
         return;
       }
       if (remaining > 1) setTimeout(() => retry(remaining - 1), 1000);
