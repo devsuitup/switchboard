@@ -242,3 +242,120 @@ test('stop of a closed known session is not-found "session not open here", of an
   assert.deepEqual(known.calls.ensureOpen, []);
   assert.deepEqual(known.calls.deliver, []);
 });
+
+const { arrange } = require('./helpers/trigger-flow');
+const flowWrites = events => events.filter(event => event[0] === 'write').map(event => event[2]);
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function flow(t, options = {}) {
+  process.env.SWITCHBOARD_SUBMIT_ENTER_DELAY_MS = '1';
+  process.env.SWITCHBOARD_SUBMIT_VERIFY_MS = '2000';
+  process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS = '100';
+  process.env.SWITCHBOARD_TRIGGER_QUIET_MS = '0';
+  const stops = [];
+  const a = arrange(t, { ...options, deps: { stopSession: async (key, session) => { stops.push(key); session.exited = true; return { ok: true }; }, ...options.deps } });
+  const session = a.world.addSession(ID_A);
+  return { ...a, stops, session };
+}
+
+test('stop with a note waits for a busy target, delivers the note once, then stops the same pinned entry', async t => {
+  const a = flow(t, { turnMs: 250 });
+  a.session._cliBusy = true;
+  a.world.statuses.set(ID_A, { status: 'busy', statusUpdatedAt: Date.now() });
+  setTimeout(() => { a.session._cliBusy = false; a.world.statuses.set(ID_A, { status: 'idle', statusUpdatedAt: Date.now() }); }, 400);
+  const result = await a.submit({ version: 1, action: 'stop', sessionId: ID_A, before: 'save a note', timeout_ms: 8000 });
+  assert.equal(result.outcome, 'closed');
+  assert.equal(result.reason, null);
+  assert.equal(result.steps_total, 1);
+  assert.equal(result.wrote, true);
+  assert.deepEqual(flowWrites(a.events), ['save a note', '\r']);
+  assert.deepEqual(a.stops, [ID_A]);
+});
+
+test('a turn that never ends within the deadline prevents the stop and reports the note unfinished', async t => {
+  const a = flow(t, { turnMs: 60000 });
+  const result = await a.submit({ version: 1, action: 'stop', sessionId: ID_A, before: 'long note', timeout_ms: 1600 });
+  assert.equal(result.outcome, 'refused');
+  assert.equal(result.reason, 'note step not finished');
+  assert.equal(result.uncertain, true);
+  assert.equal(result.delivery.timedOut, true);
+  assert.deepEqual(a.stops, []);
+  await wait(400);
+  assert.deepEqual(a.stops, [], 'no delayed kill');
+});
+
+test('an absorbed Enter that never starts a turn leaves the session running', async t => {
+  const a = flow(t, { autoTurn: false });
+  const result = await a.submit({ version: 1, action: 'stop', sessionId: ID_A, before: 'absorbed', timeout_ms: 1500 });
+  assert.equal(result.reason, 'note step not finished');
+  assert.equal(result.submitted, 'assumed');
+  assert.equal(result.text_written, true);
+  assert.equal(result.enter_written, true);
+  assert.deepEqual(a.stops, []);
+  await wait(300);
+  assert.deepEqual(a.stops, []);
+});
+
+test('a dialog open at the note readiness gate refuses the note and keeps the process', async t => {
+  const a = flow(t);
+  a.world.statuses.set(ID_A, { status: 'waiting', statusUpdatedAt: Date.now() });
+  const result = await a.submit({ version: 1, action: 'stop', sessionId: ID_A, before: 'x', timeout_ms: 700 });
+  assert.equal(result.reason, 'note step not finished');
+  assert.match(result.delivery.reason, /dialog open/);
+  assert.deepEqual(flowWrites(a.events), []);
+  assert.deepEqual(a.stops, []);
+});
+
+test('a new turn, a dirty composer or a changed state after the note prevents the kill', async () => {
+  for (const [name, mutate, reason] of [
+    ['new turn', (world, session) => { session._cliBusy = true; world.statuses.set(ID_A, { status: 'busy', statusUpdatedAt: Date.now() + 10 }); }, 'session busy'],
+    ['dialog', world => world.statuses.set(ID_A, { status: 'waiting', statusUpdatedAt: Date.now() }), 'session waiting on a dialog'],
+    ['shell', world => world.statuses.set(ID_A, { status: 'shell', statusUpdatedAt: Date.now() }), 'session running a shell command'],
+    ['pending input', (world, session) => { session.composerState.pending = 3; }, 'session has unsubmitted input'],
+  ]) {
+    const world = makeWorld();
+    const session = world.addSession(ID_A);
+    const { actions, calls } = makeActions(world, {
+      helpers: { normalizeCwd: v => v, getQuietMs: () => 0, deliverPrompt: async () => { mutate(world, session); return { ok: true, evidence: { wrote: true }, source: 'descriptor', stamp: Date.now() - 1000 }; } },
+    });
+    const result = await actions.run(stopRequest({ before: 'note' }), makeEnv(Date.now() + 5000));
+    assert.equal(result.reason, reason, name);
+    assert.deepEqual(calls.stop, [], name);
+    assert.equal(result.wrote, true, name);
+  }
+});
+
+test('a stale busy descriptor already accounted for by the transcript does not block the stop forever', async () => {
+  const world = makeWorld();
+  const session = world.addSession(ID_A);
+  session._cliBusy = true;
+  world.statuses.set(ID_A, { status: 'busy', statusUpdatedAt: 500 });
+  const { actions, calls } = makeActions(world, {
+    helpers: { normalizeCwd: v => v, getQuietMs: () => 0, deliverPrompt: async () => ({ ok: true, evidence: { wrote: true }, source: 'transcript', stamp: 500 }) },
+  });
+  const result = await actions.run(stopRequest({ before: 'note' }), makeEnv(Date.now() + 5000));
+  assert.equal(result.outcome, 'closed');
+  assert.deepEqual(calls.stop, [ID_A]);
+});
+
+test('a natural exit after the confirmed note counts as closed without a kill request', async () => {
+  const world = makeWorld();
+  const session = world.addSession(ID_A);
+  const { actions, calls } = makeActions(world, {
+    helpers: { normalizeCwd: v => v, getQuietMs: () => 0, deliverPrompt: async () => { session.exited = true; return { ok: true, evidence: { wrote: true }, source: 'descriptor', stamp: 1 }; } },
+  });
+  const result = await actions.run(stopRequest({ before: 'note' }), makeEnv(Date.now() + 5000));
+  assert.equal(result.outcome, 'closed');
+  assert.deepEqual(calls.stop, []);
+});
+
+test('a note whose delivery ends in session exit does not establish a finished note', async () => {
+  const world = makeWorld();
+  world.addSession(ID_A);
+  const { actions, calls } = makeActions(world, {
+    helpers: { normalizeCwd: v => v, getQuietMs: () => 0, deliverPrompt: async () => ({ ok: false, cause: 'refused', reason: 'the session exited while waiting; nothing more was written', evidence: { wrote: true } }) },
+  });
+  const result = await actions.run(stopRequest({ before: 'note' }), makeEnv(Date.now() + 5000));
+  assert.equal(result.reason, 'note step not finished');
+  assert.deepEqual(calls.stop, []);
+});

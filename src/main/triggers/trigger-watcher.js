@@ -1108,12 +1108,13 @@ async function deliverV1Prompt({ id, pinned, entry, text, deadline, startupAfter
     waitedMs += verified.waited_ms || 0;
     const sentAt = Number.isFinite(verified.enterAt) ? new Date(verified.enterAt).toISOString() : new Date().toISOString();
     let current = verified;
-    const submitEvidence = () => evidence({
+    const submitEvidence = (extra = {}) => evidence({
       submitted: classifySubmitted(!!current.composerConfirmed, !!current.sawBusy), sent_at: sentAt,
       submit_retries: current.submit_retries || 0, turn_observed: !!current.sawBusy,
       ...(current.confirmed === null || current.confirmed === undefined ? {} : { submit_confirmed: current.confirmed }),
       ...(current.confirmSource ? { confirm_source: current.confirmSource } : {}),
       ...(current.recoverySkipped ? { recovery_reason: current.recoveryReason } : {}),
+      ...extra,
     });
     if (verified.timedOut || Date.now() >= deadline && !verified.sawBusy) {
       return { ok: false, cause: 'verify-timeout', reason: 'the action deadline passed while the submission was being verified',
