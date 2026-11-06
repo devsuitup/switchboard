@@ -212,12 +212,19 @@ function createTriggerRendererBridge(deps) {
 
 function createPendingOpens() {
   const pending = new Map();
-  return async function serialized(sessionId, open) {
-    while (pending.has(sessionId)) await pending.get(sessionId).catch(() => {});
-    const run = Promise.resolve().then(open);
-    pending.set(sessionId, run);
-    try { return await run; } finally { if (pending.get(sessionId) === run) pending.delete(sessionId); }
-  };
+  async function acquire(sessionId) {
+    while (pending.has(sessionId)) await pending.get(sessionId);
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    pending.set(sessionId, held);
+    return () => { if (pending.get(sessionId) === held) pending.delete(sessionId); release(); };
+  }
+  async function serialized(sessionId, open) {
+    const release = await acquire(sessionId);
+    try { return await open(); } finally { release(); }
+  }
+  serialized.acquire = acquire;
+  return serialized;
 }
 
 module.exports = { createTriggerRendererBridge, createPendingOpens };

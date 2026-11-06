@@ -91,6 +91,7 @@ function createTriggerContext(deps) {
       return { pending, lastInputAt };
     },
   };
+  if (deps.v1) ctx.v1 = deps.v1;
   ctx.lookupDeliveryFallback = async (id, deadline) => {
     const tabs = live().filter(eligible);
     function find(hint) {

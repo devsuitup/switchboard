@@ -1966,7 +1966,8 @@ async function runExitBackgroundBatch(ids, opts) {
 }
 runExitBackground = runExitBackgroundBatch;
 
-function stopLocalSession(sessionId) {
+let stopLocalSession;
+ipcMain.handle('stop-session', stopLocalSession = (_event, sessionId) => {
   const session = activeSessions.get(sessionId);
   if (!session || session.exited) return { ok: false, error: 'not running' };
   // see .ai/contexts/bg-agents.md ("Detach")
@@ -1979,9 +1980,7 @@ function stopLocalSession(sessionId) {
   session.stopRequested = true;
   killPty(session, sessionId);
   return { ok: true };
-}
-
-ipcMain.handle('stop-session', (_event, sessionId) => stopLocalSession(sessionId));
+});
 
 const REMOTE_STOP_SYNC_TIMEOUT_MS = 20000;
 
@@ -2840,10 +2839,9 @@ const triggerResolverDeps = deadline => ({ projectsDir: PROJECTS_DIR, getCachedS
   extractVerifiedCwd: extractVerifiedCwdFromJsonl, resolveWorktreePath, deadline });
 const triggerLiveV1 = (id, deadline) => cliSessionState.liveElsewhereV1Checked(id, { ptyPids: cliSessionState.makePtyPids(activeSessions), deadline });
 
-ipcMain.handle('open-terminal', (event, sessionId, projectPath, isNew, sessionOptions, initialSize, triggerRequestId) =>
-  serializeOpen(sessionId, () => openTerminalNow(event, sessionId, projectPath, isNew, sessionOptions, initialSize, triggerRequestId)));
-
-async function openTerminalNow(event, sessionId, projectPath, isNew, sessionOptions, initialSize, triggerRequestId) {
+ipcMain.handle('open-terminal', async (event, sessionId, projectPath, isNew, sessionOptions, initialSize, triggerRequestId) => {
+  const releaseOpen = await serializeOpen.acquire(sessionId);
+  try {
   if (!mainWindow) return { ok: false, error: 'no window' };
   if (!unsavedGuard.launchAllowed()) return { ok: false, error: 'Switchboard is closing.' };
   let permit = null;
@@ -3272,7 +3270,8 @@ async function openTerminalNow(event, sessionId, projectPath, isNew, sessionOpti
     mcpError,
     generation: session.generation,
   };
-}
+  } finally { releaseOpen(); }
+});
 
 // --- IPC: activity-trace (fire-and-forget, opt-in) ---
 // Registered unconditionally — see .ai/contexts/ipc-bridge.md "Activity trace".
@@ -4057,7 +4056,22 @@ if (!app.isPackaged) {
     // I3: wrapped in try/catch so a boot failure here doesn't abort
     // app.whenReady (auto-updater, etc. would otherwise be silently lost).
     try {
-      const triggerCtx = createTriggerContext({
+      require('./src/main/triggers/trigger-watcher').start(createTriggerContext({
+        v1: {
+        bridge: triggerBridge,
+        getSnapshot: async () => {
+          const projects = await listProjects('both');
+          const global = getSetting('global') || {};
+          return { allProjects: projects.allProjects, global: { hiddenProjects: global.hiddenProjects || [], hiddenProjectKinds: global.hiddenProjectKinds || {} } };
+        },
+        directoryExists: dir => { try { return fs.statSync(dir).isDirectory(); } catch (err) { if (err.code === 'ENOENT') return false; throw err; } },
+        liveV1: (id, { deadline }) => triggerLiveV1(id, deadline),
+        resolveClosed: (id, { deadline }) => resolveClosedTarget(id, triggerResolverDeps(deadline)),
+        isRemoteTarget: id => { const folder = getCachedFolder(id); return isRemoteFolder(folder) || (!folder && !!remoteIndexer.findSessionAlias(id)); },
+        reserveId: () => require('crypto').randomUUID(),
+        saveName: (id, name) => writer.renameSession([id], name),
+        stopSession: (key, session) => (activeSessions.get(key) === session && !session.isAttach ? stopLocalSession(null, key) : { ok: false, error: 'session target changed' }),
+      },
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
         resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
@@ -4074,23 +4088,7 @@ if (!app.isPackaged) {
           }
           return undefined;
         },
-      });
-      triggerCtx.v1 = {
-        bridge: triggerBridge,
-        getSnapshot: async () => {
-          const projects = await listProjects('both');
-          const global = getSetting('global') || {};
-          return { allProjects: projects.allProjects, global: { hiddenProjects: global.hiddenProjects || [], hiddenProjectKinds: global.hiddenProjectKinds || {} } };
-        },
-        directoryExists: dir => { try { return fs.statSync(dir).isDirectory(); } catch (err) { if (err.code === 'ENOENT') return false; throw err; } },
-        liveV1: (id, { deadline }) => triggerLiveV1(id, deadline),
-        resolveClosed: (id, { deadline }) => resolveClosedTarget(id, triggerResolverDeps(deadline)),
-        isRemoteTarget: id => { const folder = getCachedFolder(id); return isRemoteFolder(folder) || (!folder && !!remoteIndexer.findSessionAlias(id)); },
-        reserveId: () => require('crypto').randomUUID(),
-        saveName: (id, name) => writer.renameSession([id], name),
-        stopSession: (key, session) => (activeSessions.get(key) === session && !session.isAttach ? stopLocalSession(key) : { ok: false, error: 'session target changed' }),
-      };
-      require('./src/main/triggers/trigger-watcher').start(triggerCtx);
+      }));
     } catch (err) {
       log.error('[trigger-watcher] Failed to start trigger watcher:', err.message);
     }
