@@ -1951,3 +1951,42 @@ echo ok > "${rig.proj}/allowed.txt"
     fs.writeFileSync(path.join(ctl, 'host-new.json'), '{}\n');
     fs.writeFileSync(path.join(ctl, 'processed', 'host.result.json'), '{}\n');
   });
+
+test('control tree: a control tree reached through a symlinked state target is read-only', { skip: !LINUX && 'linux only' }, t => {
+  const rig = makeRig({ recordArgs: true });
+  t.after(() => rig.cleanup());
+  const cli = path.join(rig.home, '.claude');
+  fs.mkdirSync(cli);
+  const sessions = path.join(rig.root, 'external', 'sessions');
+  const ctl = path.join(sessions, 'triggers');
+  fs.mkdirSync(path.join(ctl, 'processed'), { recursive: true });
+  fs.symlinkSync(sessions, path.join(cli, 'sessions'));
+  const res = rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: ctl });
+  assert.equal(res.status, 0, res.stderr);
+  const ops = parseMounts(rig.lastBwrapArgs());
+  assert.equal(accessAt(ops, path.join(ctl, 'processed', 'x.result.json')), '--ro-bind');
+  assert.equal(accessAt(ops, path.join(ctl, 'new.json')), '--ro-bind');
+});
+
+test('control tree: a writable mount below the control tree is refused, never left to reopen it', { skip: !LINUX && 'linux only' }, t => {
+  const rig = makeRig({ recordArgs: true });
+  t.after(() => rig.cleanup());
+  fs.mkdirSync(path.join(rig.home, '.claude'));
+  const ctl = path.join(rig.proj, 'triggers');
+  fs.mkdirSync(path.join(ctl, 'processed', '.claude', 'worktrees'), { recursive: true });
+  const res = rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: ctl });
+  assert.equal(res.status, 125);
+  assert.match(res.stderr, /claude-sandbox: .*triggers/);
+});
+
+test('control tree: a control path that cannot be represented exactly (trailing newline) is refused', { skip: !LINUX && 'linux only' }, t => {
+  const rig = makeRig({ recordArgs: true });
+  t.after(() => rig.cleanup());
+  fs.mkdirSync(path.join(rig.home, '.claude'));
+  const ctl = path.join(rig.proj, 'triggers\n');
+  fs.mkdirSync(path.join(ctl, 'processed'), { recursive: true });
+  fs.mkdirSync(path.join(rig.proj, 'triggers', 'processed'), { recursive: true });
+  const res = rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: ctl });
+  assert.equal(res.status, 125);
+  assert.match(res.stderr, /claude-sandbox: .*newline/);
+});

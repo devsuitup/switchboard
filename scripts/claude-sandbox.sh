@@ -204,6 +204,7 @@ done
 # see docs/sandbox.md ("Trigger control directory")
 CONTROL_DIR="${SWITCHBOARD_SANDBOX_TRIGGERS_DIR:-${SWITCHBOARD_TRIGGERS_DIR:-$HOME/.switchboard/triggers}}"
 case "$CONTROL_DIR" in
+  *$'\n'*) fail "refusing to launch: the Switchboard triggers directory contains a newline, which cannot be protected exactly." ;;
   /*) ;;
   *) fail "refusing to launch: the Switchboard triggers directory '$CONTROL_DIR' is not an absolute path." ;;
 esac
@@ -590,10 +591,30 @@ protect_path() {
 
 # Mounts the trigger control tree read-only wherever a writable mount shows it.
 protect_control_tree() {
-  local p real
+  local p real i src dest r idx known
+  # Every writable bind of the plan, state-link targets included, is a root.
+  for i in "${!M_DEST[@]}"; do
+    [ "${M_OP[i]}" = --bind ] || continue
+    src="$(readlink -f -- "${M_SRC[i]}" 2>/dev/null)" || continue
+    [ -n "$src" ] || continue
+    dest="${M_DEST[i]}"
+    known=0
+    for idx in "${!WRITABLE_ROOTS[@]}"; do
+      [ "${WRITABLE_ROOTS[idx]}" = "$dest" ] && [ "${WRITABLE_REALS[idx]}" = "$src" ] && known=1
+    done
+    if [ "$known" = 0 ]; then WRITABLE_ROOTS+=("$dest"); WRITABLE_REALS+=("$src"); fi
+  done
   for p in "$CONTROL_DIR" "$CONTROL_DIR/processed"; do
     check_chain "$p"
     real="$(readlink -m -- "$p")" && [ -n "$real" ] || fail "refusing to launch: cannot resolve the Switchboard triggers path '$p'."
+    case "$real" in *$'\n'*) fail "refusing to launch: the Switchboard triggers path '$p' resolves to a path containing a newline." ;; esac
+    for i in "${!M_DEST[@]}"; do
+      [ "${M_OP[i]}" = --bind ] || continue
+      r="$(readlink -f -- "${M_SRC[i]}" 2>/dev/null)" || continue
+      case "$r/" in
+        "$real"/?*) fail "refusing to launch: a writable mount at '${M_DEST[i]}' lies below the Switchboard triggers path '$p', which the sandbox keeps read-only." ;;
+      esac
+    done
     if [ -e "$real" ]; then
       protect_resolved "$real" || true
     elif sandbox_view "$real"; then
