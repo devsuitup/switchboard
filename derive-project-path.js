@@ -288,7 +288,6 @@ function resolveSessionRealCwd(projectsDir, sessionId, preferredFolder) {
   return null;
 }
 
-// A resume permit never starts a conversation fresh: a vanished transcript is a refusal, not `--session-id`.
 function launchModeFor({ isNew, forkFrom, transcriptExists, permitMode }) {
   const startsFresh = isNew || (!forkFrom && !transcriptExists);
   if (permitMode === 'resume' && startsFresh) return { refuse: 'no readable transcript' };

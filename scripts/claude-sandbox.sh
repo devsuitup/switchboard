@@ -200,7 +200,6 @@ for d in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
   done <<<"$_d_forms"
 done
 
-# The host watcher's control tree: trigger inputs, results and action markers.
 # see docs/sandbox.md ("Trigger control directory")
 CONTROL_DIR="${SWITCHBOARD_SANDBOX_TRIGGERS_DIR:-${SWITCHBOARD_TRIGGERS_DIR:-$HOME/.switchboard/triggers}}"
 case "$CONTROL_DIR" in
@@ -589,10 +588,9 @@ protect_path() {
   fi
 }
 
-# Mounts the trigger control tree read-only wherever a writable mount shows it.
+# see docs/sandbox.md ("Trigger control directory")
 protect_control_tree() {
   local p real i src dest r idx known
-  # Every writable bind of the plan, state-link targets included, is a root.
   for i in "${!M_DEST[@]}"; do
     [ "${M_OP[i]}" = --bind ] || continue
     src="$(readlink -f -- "${M_SRC[i]}" 2>/dev/null)" || continue

@@ -2330,7 +2330,6 @@ function start(ctx) {
   // see docs/decisions/0003-trigger-delivery-per-tab.md
   const { acquireTabInput: acquireTabLock } = require('../terminals/tab-input-lock');
 
-  // A waiter that gives up must still release its place in the queue when it is finally reached.
   function acquireSessionLockBounded(sessionId, deadline) {
     const pendingLock = acquireSessionLock(sessionId);
     let timer;

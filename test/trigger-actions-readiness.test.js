@@ -290,3 +290,98 @@ test('open-here on a sandboxed tab without a proven writer never falls back to t
   assert.equal(result.outcome, 'refused');
   assert.deepEqual(writes(a.events), []);
 });
+
+// ── Real bubblewrap: the shipped wrapper around a fake descriptor writer in its own PID namespace ──
+const { spawnSync } = require('node:child_process');
+const nodePty = require('node-pty');
+const { makeWorld, startWatcher } = require('./helpers/trigger-world');
+
+const LINUX_HOST = process.platform === 'linux';
+const REAL_BWRAP = LINUX_HOST && spawnSync('bwrap', [
+  '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--unshare-all', '--share-net', '--dir', '/var',
+  '--ro-bind', '/usr', '/usr', '--ro-bind', '/etc', '/etc',
+  '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
+  '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/sbin', '/sbin',
+  '/bin/true',
+], { encoding: 'utf8' }).status === 0;
+
+test('real bwrap readiness fixture: CI that asks for it gets it, not a skip',
+  { skip: !process.env.SWITCHBOARD_REQUIRE_REAL_BWRAP && 'only when SWITCHBOARD_REQUIRE_REAL_BWRAP is set' }, () => {
+    assert.ok(REAL_BWRAP, 'bwrap with unprivileged user namespaces must work on this runner');
+  });
+
+const FAKE_CLAUDE = [
+  '#!/usr/bin/env bash',
+  'sid="$FIXTURE_SESSION_ID"',
+  'dir="$HOME/.claude/sessions"',
+  'mkdir -p "$dir"',
+  'stat=$(</proc/self/stat); rest=${stat##*) }; set -- $rest',
+  'start="${20}"',
+  '[ -n "${FIXTURE_BAD_START:-}" ] && start="$FIXTURE_BAD_START"',
+  'write() {',
+  `  printf '{"pid":%s,"sessionId":"%s","kind":"interactive","status":"%s","statusUpdatedAt":%s,"procStart":"%s","cwd":"%s"}' "$$" "$sid" "$1" "$(date +%s%3N)" "$start" "$PWD" > "$dir/$$.json.tmp"`,
+  '  mv "$dir/$$.json.tmp" "$dir/$$.json"',
+  '}',
+  'write busy; sleep 0.4; write idle',
+  'while IFS= read -r line; do',
+  `  printf '%s\\n' "$line" >> "$PWD/received.log"`,
+  '  write busy; sleep 0.3; write idle',
+  'done',
+].join('\n') + '\n';
+
+for (const [mode, , request, flag] of [
+  ['resumed', ID_A, { version: 1, action: 'open', sessionId: ID_A, prompt: 'real sandbox prompt' }, 'resumed'],
+  ['new', ID_B, { version: 1, action: 'open', new: { project: '/work/project', name: 'n' }, prompt: 'real sandbox prompt' }, 'created'],
+]) {
+  for (const bad of [false, true]) {
+    test(`real bwrap (${mode}${bad ? ', mismatched start identity' : ''}): ${bad ? 'no byte reaches the PTY and readiness expires' : 'one prompt reaches only that PTY after settled fresh idle'}`,
+      { skip: !REAL_BWRAP && 'requires a usable unprivileged user namespace' }, async t => {
+        const root = tempRoot(t);
+        const home = path.join(root, 'home');
+        const proj = path.join(root, 'proj');
+        const bin = path.join(root, 'bin');
+        for (const dir of [path.join(home, '.claude'), proj, bin]) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(bin, 'claude'), FAKE_CLAUDE, { mode: 0o755 });
+        const sessions = path.join(home, '.claude', 'sessions');
+        const world = makeWorld({ real: { cli: realCli, edges: {} } });
+        realCli.init({ dir: sessions, activeSessions: new Map(), log: { info() {}, warn() {}, error() {}, debug() {} }, platform: 'linux', isProcessAlive: () => false });
+        const spawned = [];
+        t.after(() => { realCli.stop(); for (const p of spawned) { try { p.kill(); } catch { /* already gone */ } } });
+        const bridge = {
+          waitReady: async () => ({ ok: true }),
+          async ensureOpen(op) {
+            if (op.mode === 'reattach') return { ok: true, generation: op.generation, spawned: false };
+            const launchStartedAt = Date.now();
+            const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, FIXTURE_SESSION_ID: op.tabKey,
+              ...(bad ? { FIXTURE_BAD_START: '1' } : {}) };
+            for (const key of Object.keys(env)) if (/^(GIT_|HUSKY|SWITCHBOARD_)/.test(key)) delete env[key];
+            const ptyProcess = nodePty.spawn('bash', [path.join(__dirname, '..', 'scripts', 'claude-sandbox.sh'), '--resume', op.tabKey], { cwd: proj, env, cols: 80, rows: 24 });
+            spawned.push(ptyProcess);
+            const session = world.addSession(op.tabKey, { sandbox: true, cwd: proj });
+            const handle = { pid: ptyProcess.pid, dead: false, write: data => ptyProcess.write(data) };
+            ptyProcess.onExit(() => { handle.dead = true; session.exited = true; });
+            session.pty = handle;
+            return { ok: true, generation: session.generation, spawned: true, launchStartedAt };
+          },
+        };
+        const watcher = startWatcher(t, world, { bridge, resolveClosed: async id => ({ status: 'found', sessionId: id, cwd: '/work/project', projectPath: '/work/project' }) }, root);
+        const result = await watcher.submit({ ...request, timeout_ms: bad ? 5000 : 30000 });
+        const received = fs.existsSync(path.join(proj, 'received.log')) ? fs.readFileSync(path.join(proj, 'received.log'), 'utf8').trim().split('\n') : [];
+        if (bad) {
+          assert.equal(result.outcome, 'refused');
+          assert.equal(result.reason, 'session readiness unavailable');
+          assert.equal(result[flag], true);
+          assert.deepEqual(received, []);
+          return;
+        }
+        assert.equal(result.outcome, 'opened', JSON.stringify(result));
+        assert.equal(result[flag], true);
+        assert.deepEqual(received, ['real sandbox prompt']);
+        const [descriptorName] = fs.readdirSync(sessions).filter(name => /^\d+\.json$/.test(name));
+        const innerPid = Number(path.basename(descriptorName, '.json'));
+        const seen = realCli.observeSandboxWriterV1(spawned[0].pid, { sessionId: result.sessionId, ptyStart: null });
+        assert.equal(seen.writer.pid, innerPid);
+        assert.notEqual(seen.writer.hostPid, innerPid, 'the writer has a distinct host PID');
+      });
+  }
+}
