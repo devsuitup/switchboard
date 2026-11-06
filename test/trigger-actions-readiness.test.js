@@ -156,3 +156,104 @@ test('a new session obtains its descriptor like a resumed one', async t => {
   assert.equal(result.sessionId, ID_B);
   assert.equal(result.outcome, 'opened');
 });
+
+// ── Sandboxed targets: readiness comes from the PTY-scoped raw descriptor proof ──
+const fs = require('node:fs');
+const path = require('node:path');
+const { tempRoot } = require('./helpers/trigger-world');
+const { makeProc } = require('./helpers/fake-proc');
+const realCli = require('../cli-session-state');
+
+const NS_BOX = 'pid:[4026532001]';
+
+function sandboxRig(t, sessionId) {
+  const root = tempRoot(t);
+  const dir = path.join(root, 'sessions');
+  fs.mkdirSync(dir);
+  const proc = makeProc(path.join(root, 'proc'));
+  const field = (pid, index) => {
+    const stat = fs.readFileSync(path.join(proc.root, String(pid), 'stat'), 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[index];
+  };
+  realCli.init({ dir, activeSessions: new Map(), log: { info() {}, warn() {}, error() {}, debug() {} }, platform: 'linux',
+    isProcessAlive: () => true, readProcStart: pid => field(pid, 19), readParentPid: pid => Number(field(pid, 1)), readCliProcess: () => false });
+  t.after(() => realCli.stop());
+  proc.add(8000, { start: '500' }).add(8100, { start: '600', ppid: 8000 }).add(9000, { nspid: [9000, 42], start: '777', ppid: 8100, ns: NS_BOX });
+  const descriptor = (status, statusUpdatedAt, extra = {}) => {
+    try {
+      fs.writeFileSync(path.join(dir, '42.json'), JSON.stringify({
+        pid: 42, sessionId, kind: 'interactive', status, statusUpdatedAt, procStart: '777', cwd: '/work/project', ...extra }));
+    } catch { /* the rig was already removed by a finished test */ }
+  };
+  return { proc, dir, descriptor, cli: realCli, edges: { procRoot: proc.root } };
+}
+
+const MODES = [
+  ['resumed', ID_A, { version: 1, action: 'open', sessionId: ID_A, prompt: 'sandboxed' }, { resumed: true }],
+  ['new', ID_B, { version: 1, action: 'open', new: { project: '/work/project', name: 'n' }, prompt: 'sandboxed' }, { created: true }],
+];
+
+for (const [mode, id, request, flags] of MODES) {
+  for (const occupied of [false, true]) {
+    test(`sandboxed ${mode} (host N ${occupied ? 'occupied by another process' : 'absent'}): bytes only after a proven fresh settled idle, exactly one pair`, async t => {
+      const rig = sandboxRig(t, id);
+      if (occupied) rig.proc.add(42, { start: '999' });
+      const timeline = [];
+      const a = arrange(t, {
+        world: { real: rig }, spawnSession: { sandbox: true, pid: 8000 },
+        afterSpawn({ launchStartedAt }) {
+          const at = (ms, fn) => setTimeout(fn, ms);
+          at(250, () => rig.descriptor('idle', launchStartedAt - 5000));
+          at(450, () => rig.descriptor('busy', Date.now()));
+          at(650, () => rig.descriptor('waiting', Date.now()));
+          at(850, () => rig.descriptor('idle', Date.now()));
+        },
+        onWrite(world, key, data) {
+          if (data !== '\r') { timeline.push(rig.cli.observeSandboxWriterV1(8000, { sessionId: id, ptyStart: '500', ...rig.edges }).writer?.status); return; }
+          rig.descriptor('busy', Date.now());
+          setTimeout(() => rig.descriptor('idle', Date.now()), 80);
+        },
+      });
+      const started = Date.now();
+      const result = await a.submit(request);
+      assert.equal(result.outcome, 'opened');
+      for (const [flag, value] of Object.entries(flags)) assert.equal(result[flag], value);
+      assert.deepEqual(timeline, ['idle']);
+      assert.ok(Date.now() - started >= 850);
+      assert.deepEqual(writes(a.events).map(event => event[2]), ['sandboxed', '\r']);
+    });
+  }
+}
+
+test('sandboxed targets without a proven mapping never receive bytes and refuse readiness', async t => {
+  const cases = [
+    ['inner pid mismatch', rig => rig.proc.add(9000, { nspid: [9000, 43], start: '777', ppid: 8100, ns: NS_BOX })],
+    ['namespace missing', rig => rig.proc.add(9000, { nspid: [9000, 42], start: '777', ppid: 8100, ns: null })],
+    ['start mismatch', rig => rig.proc.add(9000, { nspid: [9000, 42], start: '778', ppid: 8100, ns: NS_BOX })],
+    ['outside the pty tree', rig => rig.proc.add(9000, { nspid: [9000, 42], start: '777', ppid: 1, ns: NS_BOX })],
+    ['descriptor start differs', rig => rig.descriptor('idle', Date.now() + 100000, { procStart: '778' })],
+    ['procfs unreadable', rig => { rig.proc.add(7000, { start: '1' }); rig.proc.unreadable(7000); }],
+    ['second eligible writer', rig => { rig.proc.add(9100, { nspid: [9100, 43], start: '888', ppid: 8100, ns: NS_BOX }); fs.writeFileSync(path.join(rig.dir, '43.json'), JSON.stringify({ pid: 43, sessionId: ID_A, kind: 'interactive', status: 'idle', statusUpdatedAt: Date.now() + 100000, procStart: '888' })); }],
+  ];
+  for (const [name, break_] of cases) {
+    const rig = sandboxRig(t, ID_A);
+    const a = arrange(t, {
+      world: { real: rig }, spawnSession: { sandbox: true, pid: 8000 },
+      afterSpawn() { rig.descriptor('idle', Date.now() + 100000); break_(rig); },
+    });
+    const result = await a.submit({ version: 1, action: 'open', sessionId: ID_A, prompt: 'never', timeout_ms: 1200 });
+    assert.equal(result.outcome, 'refused', name);
+    assert.equal(result.resumed, true, name);
+    assert.deepEqual(writes(a.events), [], name);
+    assert.ok(/readiness|ownership|binding/.test(result.reason), `${name}: ${result.reason}`);
+  }
+});
+
+test('a nested interactive descriptor below the writer does not make the sandbox proof ambiguous', async t => {
+  const rig = sandboxRig(t, ID_A);
+  rig.descriptor('idle', Date.now());
+  rig.proc.add(9100, { nspid: [9100, 43], start: '888', ppid: 9000, ns: NS_BOX });
+  fs.writeFileSync(path.join(rig.dir, '43.json'), JSON.stringify({ pid: 43, sessionId: 'other', kind: 'interactive', status: 'busy', statusUpdatedAt: 1, procStart: '888' }));
+  const seen = rig.cli.observeSandboxWriterV1(8000, { sessionId: ID_A, ptyStart: '500', ...rig.edges });
+  assert.equal(seen.writer.hostPid, 9000);
+});
