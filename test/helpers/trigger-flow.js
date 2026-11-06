@@ -32,7 +32,7 @@ function arrange(t, options = {}) {
       await hooks.beforeAck?.(op);
       if (op.mode === 'reattach') { renderer.add(op.tabKey); return { ok: true, generation: op.generation, spawned: false }; }
       const launchStartedAt = Date.now();
-      const session = world.addSession(op.tabKey);
+      const session = world.addSession(op.tabKey, options.spawnSession || {});
       if (options.afterSpawn) options.afterSpawn({ world, key: op.tabKey, launchStartedAt, session, events });
       else world.statuses.set(op.tabKey, { status: 'idle', statusUpdatedAt: launchStartedAt + 5 });
       spawns.push(op.tabKey);

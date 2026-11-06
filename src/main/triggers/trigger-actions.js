@@ -220,7 +220,7 @@ function createTriggerActions(deps) {
   }
 
   async function pin(state, entry, requestedId) {
-    const pinned = ctx.pinDelivery(requestedId, entry, false);
+    const pinned = ctx.pinDelivery(requestedId, entry, false, { v1: true });
     state.pinned = pinned;
     state.entry = entry;
     const unlock = await state.env.acquireTabLock(pinned.binding.tab, state.env.deadline);

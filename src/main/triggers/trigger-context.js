@@ -43,6 +43,7 @@ function createTriggerContext(deps) {
   const resolve = id => normalizeSessionId((deps.resolveSessionId || (value => value))(normalizeSessionId(id)));
   const source = deps.cliSessionState || cliSessionState;
   const observe = deps.observeTabWriter || ((pid) => source.observeTabWriter(pid));
+  const observeSandbox = deps.observeSandboxWriter || ((pid, options) => source.observeSandboxWriterV1(pid, options));
   const eligible = session => !session.isPlainTerminal && session.host == null && !session.isAttach;
   const live = () => [...new Set([...activeSessions.values()].filter(session => session && !session.exited))];
   const matching = id => [...new Set([...activeSessions].filter(([key, session]) => normalizeSessionId(key) === normalizeSessionId(id)
@@ -109,13 +110,15 @@ function createTriggerContext(deps) {
     }
     return found.tab ? { entry: makeEntry(found.tab, 'descriptor') } : found;
   };
-  ctx.pinDelivery = (requestedId, entry, chain) => {
+  ctx.pinDelivery = (requestedId, entry, chain, options = {}) => {
     const session = entry.session;
     const pty = entry.ptyProcess;
     const generation = session.generation;
     const pid = pty?.pid;
     const own = eligible(session);
     let start = own ? source.deliveryPtyStart(pid) : null;
+    const proofOnly = options.v1 === true && own && session.sandbox === true;
+    const watch = proofOnly ? ptyPid => observeSandbox(ptyPid, { sessionId: requestedId, ptyStart: start, ...deps.sandboxEdges }) : observe;
     const binding = { tab: session, entry, requestedId, effectiveId: normalizeSessionId(requestedId), reset: null,
       resetAuthorized: false, step: null, observation: null, lastDialog: null };
     function fail(reason, background, deadline = false) {
@@ -212,7 +215,7 @@ function createTriggerContext(deps) {
       if (!own) return { outcome: 'mine' };
       resetBookkeeping();
       let observation;
-      try { observation = observe(pid); } catch { return { outcome: 'unknown' }; }
+      try { observation = watch(pid); } catch { return { outcome: 'unknown' }; }
       binding.observation = observation;
       const writer = observation?.writer;
       if (!writer) return { outcome: 'unknown' };
@@ -264,7 +267,7 @@ function createTriggerContext(deps) {
         }
       }
       if (outcome.outcome === 'other') fail(outcome.reason);
-      if (outcome.outcome === 'unknown' && entry.keyKind !== 'direct' && !binding.reset) fail('ownership of the pinned alias writer is unknown; no further bytes were written');
+      if (outcome.outcome === 'unknown' && (proofOnly || entry.keyKind !== 'direct') && !binding.reset) fail('ownership of the pinned alias writer is unknown; no further bytes were written');
       return outcome;
     }
     binding.prepareText = async deadline => {
@@ -274,7 +277,7 @@ function createTriggerContext(deps) {
         const observation = inspect();
         if (Date.now() >= deadline) fail('the ownership inspection exhausted the delivery deadline; nothing more was written', null, true);
         if (observation.outcome === 'other') fail(observation.reason);
-        if (observation.outcome === 'mine' || entry.keyKind === 'direct' || binding.reset) return;
+        if (observation.outcome === 'mine' || (!proofOnly && (entry.keyKind === 'direct' || binding.reset))) return;
         if (Date.now() >= deadline) fail('ownership of the pinned alias writer stayed unknown at the deadline; nothing more was written');
         await bounded(source.refreshProcessTable(), Math.min(deadline, Date.now() + 50));
         await bounded(new Promise(resolve => setTimeout(resolve, 10)), deadline);
@@ -283,7 +286,7 @@ function createTriggerContext(deps) {
     binding.admit = async deadline => {
       if (own) {
         let observation;
-        try { observation = observe(pid); } catch {}
+        try { observation = watch(pid); } catch {}
         const writer = observation?.writer;
         if (!writer || normalizeSessionId(writer.sessionId) !== normalizeSessionId(requestedId) || observation.hasBackground) {
           const continuation = graph(normalizeSessionId(requestedId));
@@ -294,6 +297,7 @@ function createTriggerContext(deps) {
           }
         }
       }
+      if (proofOnly) return;
       await binding.prepareText(deadline);
       check();
     };
@@ -352,7 +356,10 @@ function createTriggerContext(deps) {
       getCliStatus: () => {
         const observed = inspect();
         const unavailable = binding.reset || observed.outcome === 'other';
-        const status = unavailable ? undefined : ctx.getCliStatus?.(requestedId, binding);
+        const proven = proofOnly ? binding.observation?.writer : null;
+        const status = unavailable ? undefined
+          : proofOnly ? (observed.outcome === 'mine' && proven ? { status: proven.status, statusUpdatedAt: proven.statusUpdatedAt, waitingFor: proven.waitingFor } : undefined)
+            : ctx.getCliStatus?.(requestedId, binding);
         if (status?.status === 'waiting') binding.lastDialog = status;
         else if (status) binding.lastDialog = null;
         return status || binding.lastDialog || undefined;

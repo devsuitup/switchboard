@@ -689,3 +689,171 @@ test('clearOwner: uses the Windows process table to identify the PTY owner', asy
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Versioned session actions: raw descriptor liveness and sandbox writer observation ──
+const { makeProc, HOST_NS } = require('./helpers/fake-proc');
+
+const NS_BOX = 'pid:[4026532001]';
+const SID = '01234567-89ab-cdef-0123-456789abcdef';
+
+function v1Fixture(t, platform = 'linux') {
+  const root = mkTmp();
+  const dir = path.join(root, 'sessions');
+  fs.mkdirSync(dir);
+  const proc = makeProc(path.join(root, 'proc'));
+  cliSessionState.init({ dir, activeSessions: new Map(), log: silentLog, platform, isProcessAlive: () => false });
+  t.after(() => { cliSessionState.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+  const f = { root, dir, proc, edges: { procRoot: proc.root } };
+  f.descriptor = (inner, fields = {}) => fs.writeFileSync(path.join(dir, `${inner}.json`), JSON.stringify({
+    pid: inner, sessionId: SID, kind: 'interactive', status: 'idle', statusUpdatedAt: 1000, procStart: '777', cwd: '/work', startedAt: 5, ...fields,
+  }));
+  // PTY 8000 -> bwrap 8100 -> host writer 9000 (inner pid 42 inside its own namespace)
+  f.sandbox = () => {
+    proc.add(8000, { start: '500', ppid: 1 });
+    proc.add(8100, { start: '600', ppid: 8000 });
+    proc.add(9000, { nspid: [9000, 42], start: '777', ppid: 8100, ns: NS_BOX });
+    f.descriptor(42);
+  };
+  return f;
+}
+
+test('v1 liveness: a namespace writer is live elsewhere although its raw PID is absent on the host', async (t) => {
+  const f = v1Fixture(t);
+  f.sandbox();
+  f.proc.remove(8000).remove(8100);
+  const verdict = await cliSessionState.liveElsewhereV1Checked(SID, f.edges);
+  assert.equal(verdict.known, true);
+  assert.equal(verdict.live.pid, 9000);
+  assert.equal(verdict.live.rawPid, 42);
+  assert.equal(verdict.live.kind, 'interactive');
+});
+
+test('v1 liveness: an unrelated host process at the raw PID with another start does not hide the writer', async (t) => {
+  const f = v1Fixture(t);
+  f.sandbox();
+  f.proc.add(42, { start: '999' });
+  const verdict = await cliSessionState.liveElsewhereV1Checked(SID, f.edges);
+  assert.equal(verdict.known, true);
+  assert.equal(verdict.live.pid, 9000);
+});
+
+test('v1 liveness: an unrelated local tab does not exclude the writer; the conversation own PTY does', async (t) => {
+  const f = v1Fixture(t);
+  f.sandbox();
+  const other = await cliSessionState.liveElsewhereV1Checked(SID, { ...f.edges, ptyPids: () => [31337] });
+  assert.equal(other.live.pid, 9000);
+  const own = await cliSessionState.liveElsewhereV1Checked(SID, { ...f.edges, ptyPids: () => [8000] });
+  assert.deepEqual(own, { known: true, live: null });
+});
+
+test('v1 liveness: an unresolved raw descriptor is never known absence', async (t) => {
+  const cases = [
+    ['inner pid mismatch', f => f.proc.add(9000, { nspid: [9000, 43], start: '777', ppid: 8100, ns: NS_BOX })],
+    ['start mismatch', f => f.proc.add(9000, { nspid: [9000, 42], start: '778', ppid: 8100, ns: NS_BOX })],
+    ['no host process', f => f.proc.remove(9000)],
+    ['two matches', f => f.proc.add(9001, { nspid: [9001, 42], start: '777', ppid: 8100, ns: NS_BOX })],
+    ['namespace unreadable', f => f.proc.add(9000, { nspid: [9000, 42], start: '777', ppid: 8100, ns: null })],
+    ['procfs unreadable', f => { f.proc.add(7000, { start: '1' }); f.proc.unreadable(7000); }],
+  ];
+  for (const [name, arrange] of cases) {
+    const f = v1Fixture(t);
+    f.sandbox();
+    arrange(f);
+    const verdict = await cliSessionState.liveElsewhereV1Checked(SID, f.edges);
+    assert.equal(verdict.known, false, name);
+    assert.equal(typeof verdict.reason, 'string', name);
+  }
+});
+
+test('v1 liveness: a descriptor that changes during revalidation and a scan past its deadline are unknown', async (t) => {
+  const f = v1Fixture(t);
+  f.sandbox();
+  let reads = 0;
+  const flipping = { ...fs, readFileSync: (file, enc) => {
+    const text = fs.readFileSync(file, enc);
+    if (String(file).endsWith('42.json') && ++reads > 1) return text.replace('"idle"', '"busy"');
+    return text;
+  } };
+  const changed = await cliSessionState.liveElsewhereV1Checked(SID, { ...f.edges, fs: flipping });
+  assert.equal(changed.known, false);
+  let tickNow = 0;
+  const late = await cliSessionState.liveElsewhereV1Checked(SID, { ...f.edges, now: () => (tickNow += 500), deadline: 800 });
+  assert.equal(late.known, false);
+});
+
+test('v1 liveness: known absence needs a complete scan; other conversations and an empty directory are absence', async (t) => {
+  const f = v1Fixture(t);
+  assert.deepEqual(await cliSessionState.liveElsewhereV1Checked(SID, f.edges), { known: true, live: null });
+  f.sandbox();
+  f.descriptor(55, { sessionId: 'fedcba98-7654-3210-fedc-ba9876543210' });
+  const other = await cliSessionState.liveElsewhereV1Checked('fedcba98-7654-3210-fedc-ba9876543211', f.edges);
+  assert.deepEqual(other, { known: true, live: null });
+  fs.writeFileSync(path.join(f.dir, '77.json'), '{not json');
+  assert.equal((await cliSessionState.liveElsewhereV1Checked('fedcba98-7654-3210-fedc-ba9876543211', f.edges)).known, false);
+});
+
+test('v1 liveness: a background descriptor and a tracked schedule keep their kind', async (t) => {
+  const f = v1Fixture(t);
+  f.sandbox();
+  f.descriptor(42, { kind: 'bg', jobId: 'job-1' });
+  const verdict = await cliSessionState.liveElsewhereV1Checked(SID, f.edges);
+  assert.equal(verdict.live.kind, 'bg');
+  const g = v1Fixture(t);
+  cliSessionState.trackScheduleRun(SID, Object.assign(new (require('node:events'))(), { pid: 12 }), '/work', 'nightly');
+  const scheduled = await cliSessionState.liveElsewhereV1Checked(SID, g.edges);
+  assert.equal(scheduled.live.kind, 'schedule');
+});
+
+test('v1 sandbox observation translates the namespace writer through verified host ancestry, with host N absent or occupied', async (t) => {
+  for (const occupy of [false, true]) {
+    const f = v1Fixture(t);
+    f.sandbox();
+    if (occupy) f.proc.add(42, { start: '999' });
+    f.descriptor(42, { status: 'busy', statusUpdatedAt: 2222, waitingFor: 'x' });
+    const seen = cliSessionState.observeSandboxWriterV1(8000, { sessionId: SID, ptyStart: '500', ...f.edges });
+    assert.equal(seen.supported, true);
+    assert.equal(seen.uncertain, false);
+    assert.equal(seen.writer.sessionId, SID);
+    assert.equal(seen.writer.hostPid, 9000);
+    assert.equal(seen.writer.pid, 42, 'the raw namespace pid is kept apart from the host pid');
+    assert.equal(seen.writer.status, 'busy');
+    assert.equal(seen.writer.statusUpdatedAt, 2222);
+    assert.equal(seen.writer.waitingFor, 'x');
+    assert.match(seen.identity, /^8000:500:/);
+  }
+});
+
+test('v1 sandbox observation proves nothing when ancestry, namespace, start or uniqueness evidence is missing', async (t) => {
+  const cases = [
+    ['pty start differs', f => ({ ptyStart: '501' })],
+    ['writer outside the pty tree', f => { f.proc.add(9000, { nspid: [9000, 42], start: '777', ppid: 1, ns: NS_BOX }); return {}; }],
+    ['writer in the host namespace', f => { f.proc.add(9000, { nspid: [9000, 42], start: '777', ppid: 8100, ns: HOST_NS }); f.proc.add(8000, { start: '500', ppid: 1, ns: HOST_NS }); return {}; }],
+    ['second eligible writer', f => { f.proc.add(9100, { nspid: [9100, 43], start: '888', ppid: 8100, ns: NS_BOX }); f.descriptor(43, { procStart: '888' }); return {}; }],
+    ['start mismatch', f => { f.proc.add(9000, { nspid: [9000, 42], start: '778', ppid: 8100, ns: NS_BOX }); return {}; }],
+    ['child older than parent', f => { f.proc.add(8100, { start: '900', ppid: 8000 }); return {}; }],
+    ['namespace unreadable', f => { f.proc.add(9000, { nspid: [9000, 42], start: '777', ppid: 8100, ns: null }); return {}; }],
+  ];
+  for (const [name, arrange] of cases) {
+    const f = v1Fixture(t);
+    f.sandbox();
+    const extra = arrange(f) || {};
+    const seen = cliSessionState.observeSandboxWriterV1(8000, { sessionId: SID, ptyStart: '500', ...extra, ...f.edges });
+    assert.equal(seen.writer, undefined, name);
+    if (name !== 'writer outside the pty tree') assert.equal(seen.uncertain, true, name);
+  }
+});
+
+test('v1 sandbox observation ignores a descriptor of another sandbox with the same inner pid and a different start', async (t) => {
+  const f = v1Fixture(t);
+  f.sandbox();
+  f.proc.add(9500, { nspid: [9500, 42], start: '1234', ppid: 1, ns: 'pid:[4026532999]' });
+  const seen = cliSessionState.observeSandboxWriterV1(8000, { sessionId: SID, ptyStart: '500', ...f.edges });
+  assert.equal(seen.writer.hostPid, 9000);
+});
+
+test('v1 readers leave the global status cache and legacy readers untouched', async (t) => {
+  const f = v1Fixture(t);
+  f.sandbox();
+  assert.equal(cliSessionState.getStatus(SID), undefined);
+  assert.deepEqual(cliSessionState.readAllDescriptors(), []);
+});

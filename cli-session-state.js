@@ -1136,7 +1136,187 @@ async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
   return result;
 }
 
+// Versioned session actions — see .ai/contexts/cli-session-state.md, "Versioned session actions".
+const V1_MAX_DESCRIPTORS = 1000;
+const V1_DECIMAL = /^\d+$/;
+
+function v1Edges(edges = {}) {
+  return {
+    fsx: edges.fs || fs, procRoot: edges.procRoot || '/proc', clock: edges.now || now,
+    limit: Number.isFinite(edges.deadline) ? edges.deadline : Infinity,
+  };
+}
+
+function readRawDescriptorsV1(edges = {}) {
+  const { fsx, clock, limit } = v1Edges(edges);
+  let names;
+  try { names = fsx.readdirSync(dir).sort(); } catch (err) {
+    return err && err.code === 'ENOENT' ? { complete: true, records: [] } : { complete: false, records: [], reason: `cannot read ${dir}` };
+  }
+  const records = [];
+  let reason = null;
+  let seen = 0;
+  for (const name of names) {
+    if (!STATE_FILE_RE.test(name)) continue;
+    if (clock() >= limit) return { complete: false, records, reason: 'descriptor scan deadline' };
+    if (++seen > V1_MAX_DESCRIPTORS) return { complete: false, records, reason: 'descriptor scan truncated' };
+    const file = path.join(dir, name);
+    let text;
+    try { text = fsx.readFileSync(file, 'utf8'); } catch (err) {
+      if (!(err && err.code === 'ENOENT')) reason ||= `cannot read ${file}`;
+      continue;
+    }
+    const parsed = parseDescriptor(text);
+    if (!parsed) { reason ||= `malformed descriptor ${file}`; continue; }
+    records.push({ name, text, raw: JSON.parse(text), state: parseState(text) });
+  }
+  return { complete: reason === null, records, reason };
+}
+
+function readHostProcessV1(pid, edges) {
+  const { fsx, procRoot } = edges;
+  const base = path.join(procRoot, String(pid));
+  try {
+    const status = fsx.readFileSync(path.join(base, 'status'), 'utf8');
+    const line = /^NSpid:\s*(.*)$/m.exec(status);
+    const nspid = line ? line[1].trim().split(/\s+/).map(Number) : [];
+    const stat = fsx.readFileSync(path.join(base, 'stat'), 'utf8');
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    if (!nspid.length || nspid.some(value => !Number.isInteger(value)) || !V1_DECIMAL.test(fields[19] || '') || !V1_DECIMAL.test(fields[1] || '')) return { unreadable: true };
+    return { pid, nspid, ppid: Number(fields[1]), start: fields[19] };
+  } catch (err) {
+    return err && err.code === 'ENOENT' ? { gone: true } : { unreadable: true };
+  }
+}
+
+function readNamespaceV1(pid, edges) {
+  try {
+    const link = edges.fsx.readlinkSync(path.join(edges.procRoot, String(pid), 'ns', 'pid'));
+    return typeof link === 'string' && link ? link : null;
+  } catch { return null; }
+}
+
+function readProcTableV1(edges) {
+  let pids;
+  try { pids = edges.fsx.readdirSync(edges.procRoot).filter(name => V1_DECIMAL.test(name)).map(Number); }
+  catch { return { ok: false, reason: 'the process table cannot be read' }; }
+  const procs = new Map();
+  let unreadable = false;
+  for (const pid of pids) {
+    if (edges.clock() >= edges.limit) return { ok: false, reason: 'process scan deadline' };
+    const info = readHostProcessV1(pid, edges);
+    if (info.gone) continue;
+    if (info.unreadable) { unreadable = true; continue; }
+    procs.set(pid, info);
+  }
+  return { ok: true, procs, unreadable };
+}
+
+function proveHostWriterV1(record, table, edges) {
+  const raw = record.raw;
+  if (platform !== 'linux' || raw.procStart == null || !V1_DECIMAL.test(String(raw.procStart))) {
+    return { state: 'unknown', reason: `descriptor ${record.name} has no comparable start identity` };
+  }
+  if (!table.ok) return { state: 'unknown', reason: table.reason };
+  const matches = [...table.procs.values()].filter(info => info.nspid[info.nspid.length - 1] === raw.pid && info.start === String(raw.procStart));
+  if (matches.length > 1) return { state: 'multiple', reason: `descriptor ${record.name} matches more than one process` };
+  if (table.unreadable) return { state: 'unknown', reason: 'part of the process table cannot be read' };
+  if (!matches.length) return { state: 'none', reason: `descriptor ${record.name} matches no host process` };
+  const writer = { ...matches[0], ns: readNamespaceV1(matches[0].pid, edges) };
+  if (!writer.ns) return { state: 'unknown', reason: `the namespace of process ${writer.pid} cannot be read` };
+  let again;
+  try { again = edges.fsx.readFileSync(path.join(dir, record.name), 'utf8'); } catch { again = null; }
+  const after = readHostProcessV1(writer.pid, edges);
+  if (again !== record.text || after.start !== writer.start || after.nspid?.join(' ') !== writer.nspid.join(' ') || readNamespaceV1(writer.pid, edges) !== writer.ns) {
+    return { state: 'unknown', reason: `descriptor ${record.name} changed during revalidation` };
+  }
+  return { state: 'unique', writer };
+}
+
+function reachesProcV1(pid, targets, edges) {
+  let current = readHostProcessV1(pid, edges);
+  for (let depth = 0; depth < 64 && !current.gone && !current.unreadable; depth++) {
+    if (targets.has(current.pid)) return { reached: true, depth };
+    if (current.ppid <= 1) return { reached: false };
+    const parent = readHostProcessV1(current.ppid, edges);
+    if (parent.gone) return { reached: false };
+    if (parent.unreadable || BigInt(current.start) < BigInt(parent.start)) return { reached: false, unknown: true };
+    current = parent;
+  }
+  return { reached: false, unknown: !!current.unreadable };
+}
+
+function matchesKeyV1(raw, key) {
+  return raw.sessionId.toLowerCase() === key || (bridgeSessionKey(key) !== null && bridgeSessionKey(key) === bridgeSessionKey(raw.bridgeSessionId));
+}
+
+async function liveElsewhereV1Checked(sessionId, { ptyPids = () => [], ...edgeOptions } = {}) {
+  if (typeof sessionId !== 'string' || !sessionId) return { known: true, live: null };
+  const key = bridgeSessionKey(sessionId) !== null ? sessionId : sessionId.toLowerCase();
+  const scheduled = scheduledRuns.get(sessionId.toLowerCase());
+  if (scheduled) return { known: true, live: scheduled };
+  if (platform !== 'linux') return liveElsewhereChecked(sessionId, () => false, ptyPids);
+  const edges = v1Edges(edgeOptions);
+  const scan = readRawDescriptorsV1(edgeOptions);
+  const own = new Set(ptyPids(key));
+  const matching = scan.records.filter(candidate => matchesKeyV1(candidate.raw, key));
+  const table = matching.length ? readProcTableV1(edges) : null;
+  let unresolved = null;
+  for (const record of matching) {
+    const proof = proveHostWriterV1(record, table, edges);
+    if (proof.state !== 'unique') { unresolved ||= proof.reason; continue; }
+    if (own.size && reachesProcV1(proof.writer.pid, own, edges).reached) continue;
+    const raw = record.raw;
+    return { known: true, live: {
+      pid: proof.writer.pid, rawPid: raw.pid, cwd: typeof raw.cwd === 'string' ? raw.cwd : null,
+      startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
+      kind: typeof raw.kind === 'string' && raw.kind ? raw.kind : null, jobId: typeof raw.jobId === 'string' && raw.jobId ? raw.jobId : null,
+    } };
+  }
+  if (unresolved) return { known: false, reason: unresolved };
+  if (!scan.complete) return { known: false, reason: scan.reason };
+  return { known: true, live: null };
+}
+
+function observeSandboxWriterV1(ptyPid, { sessionId, ptyStart, ...edgeOptions } = {}) {
+  if (platform !== 'linux' || !Number.isInteger(ptyPid)) return { supported: false };
+  const edges = v1Edges(edgeOptions);
+  const key = typeof sessionId === 'string' ? sessionId.toLowerCase() : null;
+  const pty = readHostProcessV1(ptyPid, edges);
+  if (pty.gone || pty.unreadable || (ptyStart != null && String(ptyStart) !== pty.start)) return { supported: true, uncertain: true };
+  const ptyNs = readNamespaceV1(ptyPid, edges);
+  if (!ptyNs) return { supported: true, uncertain: true };
+  const scan = readRawDescriptorsV1(edgeOptions);
+  const table = readProcTableV1(edges);
+  let uncertain = !scan.complete;
+  const eligible = [];
+  for (const record of scan.records) {
+    const proof = proveHostWriterV1(record, table, edges);
+    const relevant = key !== null && matchesKeyV1(record.raw, key);
+    if (proof.state !== 'unique') { if (relevant || proof.state === 'multiple') uncertain = uncertain || relevant; continue; }
+    const reach = reachesProcV1(proof.writer.pid, new Set([ptyPid]), edges);
+    if (reach.unknown) { uncertain = true; continue; }
+    if (!reach.reached) continue;
+    if (record.raw.kind !== 'interactive') continue;
+    if (proof.writer.ns === ptyNs) { uncertain = true; continue; }
+    eligible.push({ record, writer: proof.writer, depth: reach.depth });
+  }
+  const background = scan.records.some(record => record.raw.kind === 'bg');
+  const hostPids = eligible.map(candidate => candidate.writer.pid);
+  const outermost = eligible.filter(candidate => !reachesProcV1(candidate.writer.pid, new Set(hostPids.filter(pid => pid !== candidate.writer.pid)), edges).reached);
+  if (outermost.length !== 1) return { supported: true, uncertain: true };
+  const [{ record, writer }] = outermost;
+  return {
+    supported: true, uncertain, hasBackground: background,
+    identity: `${pty.pid}:${pty.start}:${ptyNs}:${writer.pid}:${writer.start}:${writer.ns}:${record.raw.pid}`,
+    writer: { ...record.raw, ...record.state, hostPid: writer.pid, hostStart: writer.start, namespace: writer.ns },
+  };
+}
+
 module.exports = {
+  liveElsewhereV1Checked,
+  observeSandboxWriterV1,
+  readRawDescriptorsV1,
   procStartMatches,
   readWorkerProcessEvidence,
   init,

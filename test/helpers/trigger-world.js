@@ -26,22 +26,25 @@ function makeWorld(options = {}) {
       generation: 1, host: null, isPlainTerminal: false, isAttach: false, cwd: '/work/project', projectFolder: 'proj',
       exited: false, _cliBusy: false, composerState: createComposerState(), ...overrides,
     };
-    session.pty = { pid, dead: false, write(data) { writes.push({ key, data }); world.onWrite?.(key, data); } };
+    session.pty = { pid: overrides.pid ?? pid, dead: false, write(data) { writes.push({ key, data }); world.onWrite?.(key, data); } };
     activeSessions.set(key, session);
     writers.set(pid, overrides.writerId || key);
     statuses.set(key, { status: 'idle', statusUpdatedAt: Date.now() - 60000 });
     return session;
   };
 
+  const real = options.real;
   world.ctx = createTriggerContext({
     activeSessions, log, isPtyAlive: pty => !pty.dead,
-    getCliStatus: id => statuses.get(id),
+    getCliStatus: real ? () => undefined : id => statuses.get(id),
     resolveSessionId: options.resolveSessionId, projectsDir: options.projectsDir,
-    observeTabWriter: pid => ({ writer: { sessionId: writers.get(pid) }, identity: `${pid}:${pid}` }),
-    cliSessionState: {
-      findDeliveryTab: () => ({}), refreshProcessTable: async () => {}, deliveryPtyStart: pid => String(pid),
-      observeTabWriter: () => ({ supported: false }),
-    },
+    ...(real ? { cliSessionState: real.cli, sandboxEdges: real.edges } : {
+      observeTabWriter: pid => ({ writer: { sessionId: writers.get(pid) }, identity: `${pid}:${pid}` }),
+      cliSessionState: {
+        findDeliveryTab: () => ({}), refreshProcessTable: async () => {}, deliveryPtyStart: pid => String(pid),
+        observeTabWriter: () => ({ supported: false }),
+      },
+    }),
   });
   return world;
 }
