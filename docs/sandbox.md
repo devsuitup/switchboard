@@ -418,6 +418,59 @@ whatever they hold.
   nvm installs the binary's directory is read-only.
 - **`/etc`** is readable, like on the host.
 
+## Trigger control directory
+
+The directory the trigger watcher reads (`~/.switchboard/triggers`, or the
+non-empty `SWITCHBOARD_TRIGGERS_DIR`) holds request files, `processed/` results
+and action markers. It is a host control surface: a sandboxed session that
+could write there could answer its own requests or forge results.
+
+Switchboard resolves the effective directory once, in the main process, and
+hands the absolute path to every `claude-sandbox.sh` launch (new, resume, fork
+and scheduled) as `SWITCHBOARD_SANDBOX_TRIGGERS_DIR`. The wrapper:
+
+- mounts the directory and `processed/` read-only at every place a writable
+  mount shows them, including each symlinked alias of a bound directory and a
+  `processed` link that resolves elsewhere;
+- pins every directory between a writable mount and the protected path, so
+  neither can be renamed and replaced;
+- refuses, with status 125 and a `claude-sandbox:` message before the CLI
+  starts, a working directory or extra bind at or below the control path, a
+  missing control path below a writable mount, a path reached through a symbolic
+  link the sandbox can rewrite, a relative path, and any path it cannot resolve.
+  It never retries without the sandbox and never changes the saved options.
+
+A path outside every writable mount needs no mount and stays invisible. The
+host watcher keeps writing normally. A sandbox that is already running keeps
+the mounts it was started with; the protection applies from the next launch.
+
+When `SWITCHBOARD_SANDBOX_PODMAN=1` exposes the Podman socket, this protection
+does not hold: the service can mount any host path writable in another
+container, as described under [What is not isolated](#what-is-not-isolated).
+The opt-in keeps working and a launch that exposes the socket is not refused.
+
+### Session state of a sandboxed CLI
+
+A sandboxed CLI writes its descriptor with the PID it has inside its own PID
+namespace. The status cache and the host-PID checks of other readers therefore
+cannot match it. The versioned session actions use two v1-only readers that do
+not rely on that number:
+
+- before resuming a closed session, a raw-descriptor scan matches a descriptor
+  to its host process through `NSpid`, the process start time and the
+  namespace, without needing a local PTY. An identity that cannot be proven
+  (no match, several matches, unreadable or changing `/proc`, a scan past its
+  deadline) refuses with `session liveness unavailable`; it is never read as
+  absence;
+- for a sandboxed target, delivery reads status only from the descriptor whose
+  host writer descends from the pinned PTY, with a different PID namespace and
+  matching start identities. Without that proof nothing is written
+  (`session readiness unavailable`, or `session state unavailable` for a bare
+  stop).
+
+The global status cache, the sidebar and the legacy triggers keep their
+current behaviour.
+
 ## Limits
 
 - `git commit` has no identity unless the repository sets `user.name` and

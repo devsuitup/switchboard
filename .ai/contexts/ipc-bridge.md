@@ -1077,6 +1077,25 @@ What Switchboard sets *after* cleaning stays: the plain terminal's `CLAUDECODE=1
 
 `test/child-session-env.test.js` sets markers in real `process.env`, evaluates the shipped main-process startup and launch handlers with the process/PTY boundary intercepted, and inspects each resulting child environment. A real Node child verifies implicit inheritance without launching Electron, Claude or an installer. The script launchers are exercised without starting their external tools. This tests the spawn boundary; it does not qualify CLI metadata writes or remote host startup files. A user shell profile that explicitly exports session markers again after startup is outside this inherited-environment fix.
 
+## Trigger session actions
+
+The versioned file triggers (see [trigger-watcher.md](trigger-watcher.md),
+"Versioned actions") reach the renderer through
+`src/main/triggers/trigger-renderer-bridge.js`.
+
+| Direction | API / channel | Payload |
+|---|---|---|
+| renderer to main | `triggerActionsReady()` / `trigger-actions-ready` (invoke) | after the initial project load and the startup restore; main binds readiness to the window's WebContents and main frame and returns `documentEpoch` |
+| main to renderer | `onTriggerSessionAction(cb)` / `trigger-session-action` | `{requestId, documentEpoch, mode: resume\|new\|reattach, requestedSessionId, tabKey, generation, session, project, name, deadline}` |
+| renderer to main | `triggerSessionActionResult(result)` / `trigger-session-action-result` | one correlated acknowledgement with the same tuple and the generation of the registered entry |
+| renderer to main | `openTerminal(..., initialSize, triggerRequestId)` | optional last argument naming a single-use permit; ordinary callers keep five arguments |
+
+The sender must be the current window's main frame. Navigation, renderer death
+and window destruction revoke readiness and pending permits. `open-terminal`
+calls for one id are serialized so a click and a trigger cannot both spawn it.
+The renderer handler is `handleTriggerSessionAction` in `public/app.js`; it never
+calls `showSession` or `focusGridCard` for a trigger.
+
 ## If you change this, also check
 
 - **Three places per new IPC**: handler in `main.js`, bridge entry in `preload.js`, caller in `public/*.js` (and maybe `eslint.config.js` if you expose a new global).

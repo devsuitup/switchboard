@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- File triggers can reopen a closed session, start a named session in a known project, or stop an open session after an optional final prompt. Opened sessions appear in the sidebar without taking focus. (#1022)
+
 ### Fixed
 - A conversation's message count in the sidebar now grows as the conversation does, including remote conversations without recounting their entire transcript on each fetch. Conversations sharing copied history keep duplicate messages out of their counts. (#1017)
 

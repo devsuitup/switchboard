@@ -701,6 +701,36 @@ reader knows immediately to look outward rather than hunt a bug in Switchboard.
 Add one whenever you build on an undocumented external artefact; do not add one
 for an assumption a normal unit test can pin.
 
+## Versioned session actions
+
+Two readers serve the versioned file triggers only; the status cache, the
+sidebar descriptors, `liveElsewhereChecked` and the legacy triggers are
+unchanged.
+
+- `readRawDescriptorsV1` parses the real descriptor files before any host PID
+  or start filter. A directory or file that cannot be read, or a scan past its
+  deadline, makes the scan incomplete.
+- `liveElsewhereV1Checked(sessionId, {ptyPids, ...edges})` returns
+  `{known:true, live}`, `{known:true, live:null}` or `{known:false, reason}`.
+  On Linux it searches the host processes for the one whose innermost `NSpid`
+  equals the descriptor's PID and whose start time equals `procStart`, reads its
+  PID namespace, and re-reads the descriptor and the process before accepting
+  it. Zero, several or unprovable matches are `known:false`: a namespace writer
+  is not dead because its raw PID is absent on the host. A tracked schedule run
+  answers without a descriptor. The conversation's own local PTY excludes only a
+  writer proven to descend from it.
+- `observeSandboxWriterV1(ptyPid, {sessionId, ptyStart, ...edges})` is the
+  PTY-scoped observation `createTriggerContext` uses for a sandboxed target
+  pinned with `{v1:true}`: the writer must descend from the pinned PTY through
+  parent and start identities, live in a different PID namespace, and be the
+  only outermost interactive writer. The result keeps the raw namespace PID
+  (`pid`) apart from the host PID (`hostPid`) and supplies status,
+  `statusUpdatedAt` and `waitingFor` from the same observation. Without proof the
+  context supplies no state and never falls back to the direct-key path.
+
+Procfs, the filesystem and the clock are injectable (`procRoot`, `fs`, `now`,
+`deadline`).
+
 ## Conversation continuations
 
 A proven typed `/bg` and confirmed button share captured-source index persistence

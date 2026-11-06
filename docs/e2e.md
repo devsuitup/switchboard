@@ -158,3 +158,22 @@ journey on that mutation, applied alone on top of 69610d2 (draft PR #514).
 | E6: vertical zoom | Give `#tool-bar` a negative strip-height top margin | [run](https://github.com/devsuitup/switchboard/actions/runs/37949930693) |
 | E7: focused grid card | Hide `#tool-bar` in grid mode | [run](https://github.com/devsuitup/switchboard/actions/runs/37950194588) |
 | E8: native Tab traversal | Set every visible enabled tool button's `tabindex` to `0` | [run](https://github.com/devsuitup/switchboard/actions/runs/37950466975) |
+
+
+### Trigger actions journey
+
+`e2e/trigger-actions.spec.js` is the one journey that opens a session. Because
+the real CLI must never run, the fixture project's saved settings set sandbox
+off, MCP emulation off and a pre-launch command made of the test runner's Node
+executable and the absolute path of `e2e/fixtures/trigger-session.cjs`
+(accepted by the prefix guard in `src/main/terminals/pre-launch-cmd-guard.js`,
+which is not weakened). Main builds its normal command, Node runs the script
+with `claude --resume <id>` as arguments, and the script records its argv and
+cwd under the fixture home, stays attached to stdin and never executes them.
+The journey publishes an open-resume request without a prompt while a plain
+terminal is selected, then asserts one attached terminal, a selectable row, an
+unchanged selection, focused control and native focus-call count, the exact
+argv and cwd, and an `opened` result with `resumed:true` and `wrote:false`; a
+second request for the same id reports `resumed:false` with one wrapper process
+in total. Descriptor readiness, prompt bytes, final-note completion and
+termination stay in the node:test cases.

@@ -2095,6 +2095,98 @@ cannot both hold there, and "never twice" wins.
 `processed/` **has no retention policy** — result files accumulate without bound
 and nothing prunes them.
 
+## Versioned actions (open and stop)
+
+A request with a `version` or an `action` property is a versioned action;
+anything else is a legacy trigger and keeps every behavior described above.
+The request file is `<triggersDir>/<uuid>.json` with a lowercase UUID stem
+(the request identity; a duplicate UUID is the same action and its first result
+wins). Three shapes exist:
+
+```json
+{"version":1,"action":"open","sessionId":"<uuid>","prompt":"...","timeout_ms":300000,"expectedCwd":"/work/project"}
+{"version":1,"action":"open","new":{"project":"/work/project","name":"Follow-up"},"prompt":"...","timeout_ms":300000}
+{"version":1,"action":"stop","sessionId":"<uuid>","before":"...","timeout_ms":300000,"expectedCwd":"/work/project"}
+```
+
+`prompt` is optional only for resume; `before` is optional. Any other field is
+refused (`unsupported field: <path>`), as are a name instead of a UUID, control
+characters, text over 4096 characters and a `timeout_ms` outside 1-600000. The
+caller resolves names; the request carries ids and project paths only, and no
+launch option: a new session uses the defaults of the project's + Claude action
+and a resume the saved defaults of a sidebar resume.
+
+### Result
+
+`processed/<uuid>.result.json` carries `version`, `action`, `ok`, `outcome`
+(`opened`, `closed`, `refused`, `not-found`), `reason` (null on success), the
+`sessionId` (the requested id, or the reserved id of a new session), `resumed`
+(open of an id) or `created` (new), the delivery evidence (`submitted`, `wrote`,
+`steps_total`, `sent_at`, ...) and `uncertain` when an action may already have
+taken effect. `refused` is not proof that no process or prompt exists. A missing
+result means unknown, never success: poll with a finite bound and inspect the
+session before repeating under a new UUID.
+
+### Behavior
+
+| Request | Effect |
+|---|---|
+| open, id already open here | re-acknowledged by the renderer, optional prompt delivered, `resumed:false` |
+| open, closed id with a readable transcript | spawned once in its recorded cwd as an ordinary sidebar session, then the prompt; `resumed:true` after the spawn |
+| open, `new` | a main-reserved id, the display name saved, the prompt delivered; `created:true` |
+| stop | after an optional `before` turn, the sidebar Stop backend on the same pinned entry; `closed` only after that entry exits |
+
+The window is never raised, shown or focused and the selection, active view and
+keyboard focus do not change; in grid view the new card is added without
+focusing it. A live session elsewhere, a background or attached tab, a live
+schedule run, a remote or plain-terminal target, an archived or hidden project
+and an unknown project are refused with their own reasons (see
+`trigger-actions.js`, `REASON`). A request never goes through the remote
+adapter.
+
+### Execution
+
+The watcher owns one request and one result. The absolute deadline starts when
+the parsed request enters action processing and covers the session FIFO, the
+renderer handshake, the launch, delivery and the stop confirmation. Main issues
+a single-use permit per request; the renderer acknowledges with the requested
+id, the tab key and the generation of the entry it registered, and a stale,
+foreign or late reply is ignored. `open-terminal` re-checks the permit, the
+transcript and `liveElsewhereV1Checked` after its awaited preparation and again,
+synchronously, before `spawnPty`. A resume never starts a conversation fresh.
+
+A newly spawned session receives its prompt only after a descriptor written
+after `launchStartedAt` reports a settled idle and the composer is empty and
+quiet; opening without a prompt skips that gate. A deadline reached after Enter
+is `session action timed out` with `uncertain:true` (a note: `note step not
+finished`); nothing is written afterwards.
+
+A bare stop needs an idle descriptor, no busy flag and an empty composer that
+has been quiet for `SWITCHBOARD_TRIGGER_QUIET_MS`; busy, waiting, shell and
+unknown state, pending input and an unobservable composer each have a reason.
+With `before` the note is delivered, its turn must be observed ending (a
+`no_rise` is not enough), and the same pinned entry is stopped only if it is
+still idle.
+
+New sessions are limited by a per-watcher bucket of 3 tokens refilled one per
+20 s; resume, open-here and stop consume none.
+
+### Recovery
+
+Before any renderer work, text or stop, `processed/<uuid>.action.json` records
+the phase. Result publication is: result temp file, rename, remove the input,
+remove the marker; a failed publication keeps the input and the marker and
+suppresses replay. At startup a marker without a result is settled as
+`interrupted by restart` with `uncertain:true`; nothing is resent, resumed or
+stopped. A committed result is immutable.
+
+### Sandboxes and Podman
+
+The directory is a host control surface; see
+[Trigger control directory](../../docs/sandbox.md#trigger-control-directory).
+Its protection does not hold when `SWITCHBOARD_SANDBOX_PODMAN=1` exposes the
+Podman socket; that opt-in and its launches are unchanged.
+
 ## Invariants
 
 - **Never throws out of the watcher callback** — `processTriggerFile()`'s body runs inside one `try`/`catch`; any exception, anticipated or not, lands in the result file via `writeResult()` before the function returns. `dispatch()`'s own `.catch()` is a backstop for the case that should no longer occur.

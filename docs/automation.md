@@ -831,3 +831,48 @@ themselves.
 
 The main use is context-management harnesses: a hook that sees a full context
 window and injects `/compact`, then a resume prompt, into its own session.
+
+
+### Versioned actions: open and stop
+
+A file with a `version` or an `action` property is a versioned action. It opens
+a session as an ordinary visible session, or stops one. It cannot carry
+`command`, `chain`, `key`, launch options or a window-focus request, and names
+are not resolved: pass the session id (a UUID) and, for a new session, the
+project path of a project Switchboard already lists.
+
+Write the file under a lowercase UUID name, preferably by renaming a fully
+written file from the same directory (`<uuid>.json`):
+
+```json
+{"version":1,"action":"open","sessionId":"01234567-89ab-cdef-0123-456789abcdef","prompt":"Continue the task"}
+{"version":1,"action":"open","new":{"project":"/work/project","name":"Follow-up"},"prompt":"Investigate the failure"}
+{"version":1,"action":"stop","sessionId":"01234567-89ab-cdef-0123-456789abcdef","before":"Save a resume note and finish this turn"}
+```
+
+- `open` with an id re-acknowledges an open session, or resumes a closed one in
+  its recorded working directory. The prompt is optional; without it nothing is
+  typed. `resumed` in the result says whether this request started the process.
+- `open` with `new` starts a session with the project's saved + Claude defaults
+  and the given display name; the prompt is required. `created` and `sessionId`
+  in the result name it. At most 3 new sessions start in a burst, then one per
+  20 s; the rest are refused with `new session rate limit exceeded`.
+- `stop` stops an open local session after its current turn. Without `before` it
+  needs an idle session with an empty composer that has been quiet; with
+  `before` the note is delivered, its turn must finish within `timeout_ms`, and
+  the session is then stopped. On a timeout the session keeps running and the
+  result says `note step not finished`. Switchboard never reads the note.
+
+The window is not raised or focused and your selection does not change.
+
+Read `processed/<uuid>.result.json`: `outcome` is `opened`, `closed`, `refused`
+or `not-found`, `reason` names the refusal, and `uncertain: true` means the
+action may already have happened (do not retry automatically). Poll with a
+finite bound (the maximum age plus `timeout_ms` plus a few seconds); a missing
+result means unknown, so look at the session before sending the request again
+under a new UUID. After an app restart a request that was in flight is answered
+`interrupted by restart` and is never replayed.
+
+Sandboxed sessions cannot write into the triggers directory; see
+[Trigger control directory](sandbox.md#trigger-control-directory), including
+the Podman limit.
