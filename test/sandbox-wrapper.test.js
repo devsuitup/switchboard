@@ -1805,3 +1805,149 @@ test('sandbox wrapper: from inside a real sandbox, an opted-in skills linked to 
       rig.cleanup();
     }
   });
+
+// ── Trigger control directory: protected at every visible alias (no Podman socket exposed) ──
+
+function controlRig(t, layout) {
+  const rig = makeRig({ recordArgs: true });
+  t.after(() => rig.cleanup());
+  fs.mkdirSync(path.join(rig.home, '.claude'));
+  return { rig, ...layout(rig) };
+}
+
+function launch(rig, env) {
+  const res = rig.run(['-p', 'x'], env);
+  return { ...res, ops: res.status === 0 ? parseMounts(rig.lastBwrapArgs()) : [] };
+}
+
+const mkTree = (...dirs) => dirs.forEach(dir => fs.mkdirSync(dir, { recursive: true }));
+
+test('control tree: a default control root outside every writable mount adds no mount and does not refuse', { skip: !LINUX && 'linux only' }, t => {
+  const { rig } = controlRig(t, () => ({}));
+  const { status, ops } = launch(rig, {});
+  assert.equal(status, 0);
+  assert.equal(ops.some(o => o.dest.includes('.switchboard')), false);
+});
+
+test('control tree: a root inside the project is read-only together with processed, behind its pinned ancestors and after the project bind', { skip: !LINUX && 'linux only' }, t => {
+  const { rig, ctl } = controlRig(t, r => { const ctl = path.join(r.proj, 'a b', 'deep', 'triggers'); mkTree(path.join(ctl, 'processed')); return { ctl }; });
+  const { status, stderr, ops } = launch(rig, { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: ctl });
+  assert.equal(status, 0, stderr);
+  assert.equal(accessAt(ops, ctl), '--ro-bind');
+  assert.equal(accessAt(ops, path.join(ctl, 'processed')), '--ro-bind');
+  assert.equal(accessAt(ops, path.join(ctl, 'processed', 'x.result.json')), '--ro-bind');
+  const projIndex = ops.find(o => o.op === '--bind' && o.dest === rig.proj).index;
+  const pinTop = ops.find(o => o.dest === path.join(rig.proj, 'a b'));
+  const pinDeep = ops.find(o => o.dest === path.join(rig.proj, 'a b', 'deep'));
+  const protect = ops.find(o => o.dest === ctl);
+  assert.ok(pinTop && pinDeep, 'every ancestor is pinned');
+  assert.ok(projIndex < pinTop.index && pinTop.index < pinDeep.index && pinDeep.index < protect.index, 'pins are ordered before the protection');
+  assert.equal(ops.at(-1).index, ops.length - 1);
+});
+
+test('control tree: every alias of a writable root exposes the tree read-only', { skip: !LINUX && 'linux only' }, t => {
+  const { rig, real, alias } = controlRig(t, r => {
+    const real = path.join(r.root, 'shared'); const alias = path.join(r.root, 'alias');
+    mkTree(path.join(real, 'ctl', 'processed'));
+    fs.symlinkSync(real, alias);
+    return { real, alias };
+  });
+  const { status, stderr, ops } = launch(rig, { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: path.join(real, 'ctl'), SWITCHBOARD_SANDBOX_BINDS: `${real}:${alias}` });
+  assert.equal(status, 0, stderr);
+  assert.equal(accessAt(ops, path.join(real, 'ctl', 'processed')), '--ro-bind');
+  assert.equal(accessAt(ops, path.join(alias, 'ctl', 'processed')), '--ro-bind');
+});
+
+test('control tree: several overlapping control roots and a processed directory resolved elsewhere are all protected', { skip: !LINUX && 'linux only' }, t => {
+  const { rig, ctl, elsewhere } = controlRig(t, r => {
+    const ctl = path.join(r.proj, 'ctl'); const elsewhere = path.join(r.proj, 'results-elsewhere');
+    mkTree(ctl, elsewhere);
+    fs.symlinkSync(elsewhere, path.join(ctl, 'processed'));
+    return { ctl, elsewhere };
+  });
+  const { status, stderr, ops } = launch(rig, { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: ctl });
+  assert.equal(status, 0, stderr);
+  assert.equal(accessAt(ops, ctl), '--ro-bind');
+  assert.equal(accessAt(ops, elsewhere), '--ro-bind');
+});
+
+test('control tree: the effective path is the nonempty override or the default, never the session cwd', { skip: !LINUX && 'linux only' }, t => {
+  const { rig, ctl } = controlRig(t, r => { const ctl = path.join(r.proj, 'ctl'); mkTree(path.join(ctl, 'processed')); return { ctl }; });
+  assert.equal(launch(rig, { SWITCHBOARD_TRIGGERS_DIR: ctl }).status, 0);
+  assert.equal(accessAt(parseMounts(rig.lastBwrapArgs()), ctl), '--ro-bind');
+  const relative = rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: 'ctl' });
+  assert.equal(relative.status, 125);
+  assert.match(relative.stderr, /claude-sandbox: .*not an absolute path/);
+});
+
+test('control tree: a cwd, an extra bind or an alias at or below the control root is refused before the CLI runs', { skip: !LINUX && 'linux only' }, t => {
+  const { rig, ctl } = controlRig(t, r => { const ctl = path.join(r.root, 'ctl'); mkTree(path.join(ctl, 'processed', 'sub')); return { ctl }; });
+  const below = rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: ctl }, path.join(ctl, 'processed', 'sub'));
+  assert.equal(below.status, 125);
+  assert.match(below.stderr, /claude-sandbox: refusing to bind .*Switchboard triggers path/);
+  const extra = rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: ctl, SWITCHBOARD_SANDBOX_BINDS: ctl });
+  assert.equal(extra.status, 125);
+  const link = path.join(rig.root, 'ctl-link');
+  fs.symlinkSync(ctl, link);
+  const aliased = rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: ctl, SWITCHBOARD_SANDBOX_BINDS: link });
+  assert.equal(aliased.status, 125);
+  assert.equal(fs.existsSync(path.join(rig.root, 'bwrap-args')) && fs.readdirSync(path.join(rig.root, 'bwrap-args')).length, 0, 'bwrap never ran');
+});
+
+test('control tree: a missing control path below a writable mount, a mutable symlink chain and an unresolvable path refuse', { skip: !LINUX && 'linux only' }, t => {
+  const { rig } = controlRig(t, () => ({}));
+  const missing = rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: path.join(rig.proj, 'not-created') });
+  assert.equal(missing.status, 125);
+  assert.match(missing.stderr, /claude-sandbox: .*does not exist below a directory the sandbox can write/);
+  const noProcessed = path.join(rig.proj, 'half');
+  fs.mkdirSync(noProcessed);
+  assert.equal(rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: noProcessed }).status, 125);
+  const real = path.join(rig.proj, 'real'); mkTree(path.join(real, 'triggers', 'processed'));
+  fs.symlinkSync(real, path.join(rig.proj, 'link'));
+  const chain = rig.run(['-p', 'x'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: path.join(rig.proj, 'link', 'triggers') });
+  assert.equal(chain.status, 125);
+  assert.match(chain.stderr, /claude-sandbox: .*symbolic link/);
+});
+
+test('control tree: the successful Podman opt-in launch is unchanged', { skip: !LINUX && 'linux only' }, t => {
+  const { rig } = controlRig(t, () => ({}));
+  assert.equal(launch(rig, {}).status, 0);
+});
+
+test('control tree (real bwrap): the session cannot create, replace, overwrite, unlink or move anything in the control tree; allowed writes still land',
+  { skip: !realBwrapWorks && 'requires a usable unprivileged user namespace' }, t => {
+    const rig = makeRig({ claudeRunsArg: true });
+    t.after(() => rig.cleanup());
+    fs.mkdirSync(path.join(rig.home, '.claude'));
+    const ctl = path.join(rig.proj, 'nest', 'triggers');
+    mkTree(path.join(ctl, 'processed'));
+    fs.writeFileSync(path.join(ctl, 'processed', 'r.result.json'), 'host\n');
+    fs.writeFileSync(path.join(ctl, 'processed', 'r.action.json'), 'host\n');
+    fs.writeFileSync(path.join(ctl, 'in.json'), 'host\n');
+    const alias = path.join(rig.root, 'alias');
+    fs.symlinkSync(rig.proj, alias);
+    const script = String.raw`
+attempt() { local name="$1"; shift; if ( eval "$*" ) 2>/dev/null; then echo "$name: written"; else echo "$name: refused"; fi; }
+for base in "${rig.proj}" "${alias}"; do
+  T="$base/nest/triggers"
+  attempt "create-$base" 'echo x > "$T/new.json"'
+  attempt "rename-in-$base" 'echo x > "$base/nest/tmp-file" && mv "$base/nest/tmp-file" "$T/new2.json"'
+  attempt "overwrite-result-$base" 'echo evil > "$T/processed/r.result.json"'
+  attempt "unlink-marker-$base" 'rm "$T/processed/r.action.json"'
+  attempt "unlink-input-$base" 'rm "$T/in.json"'
+  attempt "move-processed-$base" 'mv "$T/processed" "$T/processed-x"'
+  attempt "move-root-$base" 'mv "$T" "$base/nest/triggers-x"'
+  attempt "replace-ancestor-$base" 'mv "$base/nest" "$base/nest-x"'
+done
+echo ok > "${rig.proj}/allowed.txt"
+`;
+    const res = rig.run([script], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: ctl, SWITCHBOARD_SANDBOX_BINDS: alias });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal((res.stdout.match(/: written/g) || []).length, 0, res.stdout);
+    assert.equal((res.stdout.match(/: refused/g) || []).length, 16, res.stdout);
+    assert.equal(fs.readFileSync(path.join(ctl, 'processed', 'r.result.json'), 'utf8'), 'host\n');
+    assert.ok(fs.existsSync(path.join(ctl, 'processed', 'r.action.json')) && fs.existsSync(path.join(ctl, 'in.json')));
+    assert.equal(fs.readFileSync(path.join(rig.proj, 'allowed.txt'), 'utf8'), 'ok\n');
+    fs.writeFileSync(path.join(ctl, 'host-new.json'), '{}\n');
+    fs.writeFileSync(path.join(ctl, 'processed', 'host.result.json'), '{}\n');
+  });

@@ -112,3 +112,25 @@ test('a permit refuses a revoked or expired request before the spawn callback ru
   assert.equal(bridge.guardedSpawn('missing', () => { spawns += 1; }).ok, false);
   assert.equal(spawns, 0);
 });
+
+test('every sandbox launch site hands the wrapper the watcher\'s absolute triggers directory', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const sandboxLaunches = src.split('sandboxScriptPath()').length - 2;
+  const handed = src.split('SWITCHBOARD_SANDBOX_TRIGGERS_DIR = getTriggersDir()').length - 1;
+  assert.equal(sandboxLaunches, 2, 'manual/trigger/fork sessions and scheduled runs are the launch sites');
+  assert.equal(handed, sandboxLaunches, 'each launch site passes the shared resolver result');
+  assert.doesNotMatch(src, /\.switchboard['"], ?['"]triggers/, 'main does not rebuild the default path');
+});
+
+test('getTriggersDir resolves a relative override against the app, not against a session cwd', () => {
+  const { getTriggersDir } = require('../src/main/triggers/trigger-watcher');
+  const previous = process.env.SWITCHBOARD_TRIGGERS_DIR;
+  try {
+    process.env.SWITCHBOARD_TRIGGERS_DIR = 'relative/dir';
+    assert.equal(getTriggersDir(), path.resolve('relative/dir'));
+    process.env.SWITCHBOARD_TRIGGERS_DIR = '';
+    assert.equal(getTriggersDir(), path.join(os.homedir(), '.switchboard', 'triggers'));
+  } finally {
+    if (previous === undefined) delete process.env.SWITCHBOARD_TRIGGERS_DIR; else process.env.SWITCHBOARD_TRIGGERS_DIR = previous;
+  }
+});

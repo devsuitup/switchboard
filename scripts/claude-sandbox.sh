@@ -200,6 +200,27 @@ for d in ${EXTRA_BINDS[@]+"${EXTRA_BINDS[@]}"}; do
   done <<<"$_d_forms"
 done
 
+# The host watcher's control tree: trigger inputs, results and action markers.
+# see docs/sandbox.md ("Trigger control directory")
+CONTROL_DIR="${SWITCHBOARD_SANDBOX_TRIGGERS_DIR:-${SWITCHBOARD_TRIGGERS_DIR:-$HOME/.switchboard/triggers}}"
+case "$CONTROL_DIR" in
+  /*) ;;
+  *) fail "refusing to launch: the Switchboard triggers directory '$CONTROL_DIR' is not an absolute path." ;;
+esac
+for _cp in "$CONTROL_DIR" "$CONTROL_DIR/processed"; do
+  _ctl_forms="$(path_forms "$_cp")" || fail "refusing to launch: the Switchboard triggers path '$_cp' cannot be resolved."
+  for d in ${RW_DIRS[@]+"${RW_DIRS[@]}"}; do
+    _d_forms="$(path_forms "$d")" || fail "refusing to bind '$d' — its real path cannot be resolved."
+    while IFS= read -r _df; do
+      while IFS= read -r _cf; do
+        case "$_df/" in
+          "$_cf"/*) fail "refusing to bind '$d' — it is at or below the Switchboard triggers path '$_cp', which the sandbox keeps read-only." ;;
+        esac
+      done <<<"$_ctl_forms"
+    done <<<"$_d_forms"
+  done
+done
+
 # True when $1 is at or below one of the read-write state dirs.
 under_rw_state() {
   local candidate="$1/" d
@@ -567,6 +588,20 @@ protect_path() {
   fi
 }
 
+# Mounts the trigger control tree read-only wherever a writable mount shows it.
+protect_control_tree() {
+  local p real
+  for p in "$CONTROL_DIR" "$CONTROL_DIR/processed"; do
+    check_chain "$p"
+    real="$(readlink -m -- "$p")" && [ -n "$real" ] || fail "refusing to launch: cannot resolve the Switchboard triggers path '$p'."
+    if [ -e "$real" ]; then
+      protect_resolved "$real" || true
+    elif sandbox_view "$real"; then
+      fail "refusing to launch: the Switchboard triggers path '$p' does not exist below a directory the sandbox can write; start Switchboard so it creates it, then retry."
+    fi
+  done
+}
+
 # What git runs on its own: the repository's config, its hooks directory and
 # the one core.hooksPath names, and, for every linked worktree, the files that
 # point git at the shared repository.
@@ -842,6 +877,7 @@ build_bwrap_args() {
   for d in ${GIT_WORKTREES[@]+"${GIT_WORKTREES[@]}"}; do
     protect_git "$d"
   done
+  protect_control_tree
   pin_protected_paths
   check_opt_in_binds
 
