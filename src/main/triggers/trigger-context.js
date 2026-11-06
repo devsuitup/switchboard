@@ -49,8 +49,9 @@ function createTriggerContext(deps) {
     && session && !session.exited).map(([, session]) => session))];
   const indexes = new Map();
   let indexBytes = 0;
+  const keyOf = session => [...activeSessions].find(([, held]) => held === session)?.[0];
   const makeEntry = (session, keyKind = 'direct') => ({ session, generation: session.generation, ptyProcess: session.pty,
-    cwd: session.cwd, keyKind, handle: session.host == null ? createLocalSessionHandle(session.pty) : session.handle });
+    cwd: session.cwd, keyKind, tabKey: keyOf(session), handle: session.host == null ? createLocalSessionHandle(session.pty) : session.handle });
   function transcriptPath(session, id) {
     const folder = path.join(projectsDir, session.projectFolder);
     const expected = path.join(folder, id + '.jsonl');
@@ -244,7 +245,7 @@ function createTriggerContext(deps) {
       return { outcome: 'mine', writer };
     }
     function check(phase) {
-      const boundedWrite = phase === 'text';
+      const boundedWrite = phase === 'text' || binding.boundAll === true;
       if (boundedWrite && Number.isFinite(binding.deadline) && Date.now() >= binding.deadline) fail('the delivery deadline passed; no further bytes were written', null, true);
       if (!valid()) fail('the pinned tab/PTY generation binding changed; no further bytes were written');
       if (!(isPtyAlive ? isPtyAlive(pty) : entry.handle.isAlive())) fail('the pinned tab process exited; no further bytes were written');
@@ -296,6 +297,7 @@ function createTriggerContext(deps) {
       await binding.prepareText(deadline);
       check();
     };
+    binding.verify = check;
     binding.beginStep = command => { binding.resetCompletionObserved = false; binding.step = { command, text_written: false, enter_written: false, written: false }; };
     async function waitKeyProcessTable(deadline) {
       if (!own || source.deliveryProcessTableFresh?.() !== false) return;

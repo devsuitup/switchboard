@@ -38,6 +38,7 @@ const path = require('path');
 const os   = require('os');
 
 const { createLocalSessionHandle } = require('./trigger-context');
+const { createTriggerActions, validateTriggerAction, validationResult } = require('./trigger-actions');
 const { promptMatches } = require('../../../transcript-turn');
 
 const DEFAULT_TRIGGERS_DIR   = path.join(os.homedir(), '.switchboard', 'triggers');
@@ -932,7 +933,7 @@ function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs, turnObserved = f
 }
 
 function getTriggersDir() {
-  return process.env.SWITCHBOARD_TRIGGERS_DIR || DEFAULT_TRIGGERS_DIR;
+  return path.resolve(process.env.SWITCHBOARD_TRIGGERS_DIR || DEFAULT_TRIGGERS_DIR);
 }
 
 function getIdleTimeout() {
@@ -1040,6 +1041,238 @@ function safeLogError(ctx, ...args) {
   } catch {}
 }
 
+
+// Prompt delivery for the versioned open/stop actions — see .ai/contexts/trigger-watcher.md, "Versioned actions".
+const STARTUP_POLL_MS = 100;
+const REASON_READINESS = 'session readiness unavailable';
+
+async function deliverV1Prompt({ id, pinned, entry, text, deadline, startupAfterMs, finalTurn }) {
+  const { binding, handle, ctx: pctx } = pinned;
+  binding.deadline = deadline;
+  binding.boundAll = true;
+  let waitedMs = 0;
+  const evidence = (extra = {}) => {
+    const step = binding.step || {};
+    return {
+      wrote: !!step.text_written, text_written: !!step.text_written, enter_written: !!step.enter_written, written: !!step.written,
+      submitted: step.written ? SUBMITTED_ASSUMED : SUBMITTED_NO, waited_ms: waitedMs, ...extra,
+    };
+  };
+  const refuse = (reason, error = ERROR_NOT_SENT, extra = {}) => ({ ok: false, cause: 'refused', reason, error, evidence: evidence(extra) });
+  const fromRefusal = err => {
+    const step = binding.step || {};
+    const partial = step.text_written && !step.enter_written;
+    return refuse(err.message + (partial ? '; partial text remains in the composer; Enter was withheld and no cleanup was performed' : ''),
+      step.text_written ? ERROR_UNCONFIRMED : ERROR_NOT_SENT);
+  };
+  const exited = () => refuse('the session exited while waiting; nothing more was written', 'session exited during wait');
+
+  binding.beginStep(text);
+  try {
+    if (!isEntryAlive(pctx, entry, handle)) return refuse('target process not running', 'target process not running');
+    const idle = await waitForIdle(id, pctx, Math.max(0, deadline - Date.now()));
+    waitedMs += idle.waited_ms;
+    if (idle.sessionExited) return exited();
+    if (idle.timedOut) return refuse(idle.waitingSeen ? REASON_DIALOG_OPEN : REASON_CLI_BUSY);
+    const polite = await waitForComposerFree(id, pctx, deadline);
+    waitedMs += polite.waited_ms;
+    if (!polite.free) return refuse(polite.reason);
+    if (!isEntryAlive(pctx, entry, handle)) return refuse('target process not running', 'target process not running');
+
+    const settleMs = Math.max(0, Math.min(getBusyFallSettleMs(), deadline - Date.now() - 1));
+    let ready;
+    if (startupAfterMs === null) {
+      ready = await waitForCliIdleAfter(id, pctx, -Infinity, deadline, settleMs, true);
+    } else {
+      for (;;) {
+        ready = await waitForCliIdleAfter(id, pctx, startupAfterMs - 1, deadline, settleMs);
+        if (ready.available !== false || Date.now() >= deadline) break;
+        await new Promise(resolve => setTimeout(resolve, STARTUP_POLL_MS));
+      }
+    }
+    waitedMs += ready.waited_ms;
+    if (ready.sessionExited) return exited();
+    if (!ready.ready) {
+      const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
+      if (dialog) return refuse(REASON_DIALOG_OPEN);
+      if (ready.lastStatus === 'busy') return refuse(REASON_CLI_BUSY);
+      if (startupAfterMs !== null || ready.available === false) return refuse(REASON_READINESS);
+      return refuse(ready.lastStatus === 'idle' ? REASON_IDLE_UNSETTLED : REASON_CLI_NOT_IDLE);
+    }
+    if (Date.now() >= deadline) return refuse(REASON_DEADLINE_BEFORE_WRITE);
+
+    binding.deadline = deadline;
+    const ownEntry = {};
+    const verified = await submitWithVerify(handle, id, text, pctx, deadline, { transcriptReaction: finalTurn, ownEntry });
+    if (verified.writeError) return fromRefusal(verified.writeError);
+    waitedMs += verified.waited_ms || 0;
+    const sentAt = Number.isFinite(verified.enterAt) ? new Date(verified.enterAt).toISOString() : new Date().toISOString();
+    let current = verified;
+    const submitEvidence = () => evidence({
+      submitted: classifySubmitted(!!current.composerConfirmed, !!current.sawBusy), sent_at: sentAt,
+      submit_retries: current.submit_retries || 0, turn_observed: !!current.sawBusy,
+      ...(current.confirmed === null || current.confirmed === undefined ? {} : { submit_confirmed: current.confirmed }),
+      ...(current.confirmSource ? { confirm_source: current.confirmSource } : {}),
+      ...(current.recoverySkipped ? { recovery_reason: current.recoveryReason } : {}),
+    });
+    if (verified.timedOut || Date.now() >= deadline && !verified.sawBusy) {
+      return { ok: false, cause: 'verify-timeout', reason: 'the action deadline passed while the submission was being verified',
+        evidence: submitEvidence({ timedOut: true }) };
+    }
+    if (verified.sessionExited) return { ...exited(), evidence: submitEvidence() };
+    if (isCompactCommand(text) && verified.compactionObserved !== true) {
+      return { ok: false, cause: 'refused', error: ERROR_UNCONFIRMED, reason: verified.compactionReason || 'compaction was not observed', evidence: submitEvidence() };
+    }
+    if (!finalTurn) return { ok: true, evidence: submitEvidence() };
+
+    if (!current.sawBusy && current.confirmed === false && current.recoverySkipped
+      && cliReadsBusyOrShell(pctx, id) && readTranscriptTurn(pctx, id) !== null) {
+      const pending = await waitForPendingConfirmation(id, pctx, verified.enterAt, text, deadline, ownEntry);
+      waitedMs += pending.waited_ms;
+      if (pending.confirmed) current = { ...verified, confirmed: true, composerConfirmed: true, sawBusy: true, recoverySkipped: false, confirmSource: pending.source };
+      else if (pending.sessionExited) return { ...exited(), evidence: submitEvidence() };
+      else return { ok: false, cause: 'verify-timeout', reason: REASON_UNCONFIRMED_BEFORE_DEADLINE, evidence: submitEvidence({ timedOut: true }) };
+    }
+    if (!current.sawBusy) {
+      return { ok: false, cause: 'refused', error: ERROR_UNCONFIRMED, reason: 'the note was typed but no turn was observed starting', evidence: submitEvidence() };
+    }
+    const fall = await waitForBusyFall(id, pctx, deadline, verified.enterAt, true);
+    waitedMs += fall.waited_ms;
+    if (fall.timedOut) return { ok: false, cause: 'verify-timeout', reason: 'the note turn did not finish before the action deadline', evidence: submitEvidence({ timedOut: true }) };
+    if (fall.sessionExited) return { ...exited(), evidence: submitEvidence() };
+    if (fall.source === 'no_rise') {
+      return { ok: false, cause: 'refused', error: ERROR_UNCONFIRMED, reason: 'the note turn was never observed completing', evidence: submitEvidence() };
+    }
+    const status = readCliStatus(pctx, id);
+    return { ok: true, source: fall.source, stamp: status ? status.statusUpdatedAt : -Infinity, evidence: submitEvidence({ idle_source: fall.source }) };
+  } catch (err) {
+    if (err.deliveryRefusal || binding.step?.text_written) return fromRefusal(err);
+    throw err;
+  }
+}
+
+const v1Helpers = { normalizeCwd, getQuietMs, deliverPrompt: deliverV1Prompt };
+
+// Versioned (v1) request processing — see .ai/contexts/trigger-watcher.md, "Versioned actions".
+const MARKER_PREFIX = 'marker:';
+const UUID_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function isVersionedRequest(trigger) {
+  return trigger !== null && typeof trigger === 'object' && !Array.isArray(trigger)
+    && (Object.hasOwn(trigger, 'version') || Object.hasOwn(trigger, 'action'));
+}
+
+function createV1Publisher({ ctx, processedDir, triggersDir, uuid, onEntryRetained }) {
+  const resultPath = path.join(processedDir, uuid + '.result.json');
+  const markerPath = path.join(processedDir, uuid + '.action.json');
+  const inputPath = path.join(triggersDir, uuid + '.json');
+  const removeQuietly = (file, retain) => {
+    try { fs.unlinkSync(file); }
+    catch (err) {
+      if (err.code === 'ENOENT') return;
+      if (retain && onEntryRetained) onEntryRetained();
+      safeLogError(ctx, '[trigger-watcher] Could not remove a processed file:', file, err.message);
+    }
+  };
+  const cleanup = () => { removeQuietly(inputPath, true); removeQuietly(markerPath, false); };
+  return {
+    resultPath, markerPath, inputPath, cleanup,
+    resultExists: () => fs.existsSync(resultPath),
+    publish(result) {
+      if (fs.existsSync(resultPath)) { cleanup(); return false; }
+      const tmp = resultPath + '.tmp';
+      try {
+        fs.writeFileSync(tmp, JSON.stringify(result) + '\n', 'utf8');
+        renameWithRetry(tmp, resultPath);
+      } catch (err) {
+        if (onEntryRetained) onEntryRetained();
+        safeLogError(ctx, '[trigger-watcher] Failed to publish the result, input and action marker are kept:', uuid, err.message);
+        return false;
+      }
+      cleanup();
+      return true;
+    },
+  };
+}
+
+function interruptedResult(marker) {
+  const evidence = marker && typeof marker.evidence === 'object' && marker.evidence ? marker.evidence : {};
+  return {
+    version: 1, action: marker?.action ?? null, ok: false, outcome: 'refused', reason: 'interrupted by restart', uncertain: true,
+    sessionId: marker?.sessionId ?? marker?.tabKey ?? null,
+    ...(evidence.resumed === true ? { resumed: true } : marker?.mode === 'resume' ? { resumed: false } : {}),
+    ...(evidence.created === true ? { created: true } : marker?.mode === 'new' ? { created: false } : {}),
+    interrupted_phase: marker?.phase ?? null,
+    submitted: SUBMITTED_NO, wrote: false, steps_total: marker?.stepsTotal ?? 0,
+  };
+}
+
+function recoverInterrupted(ctx, publisher) {
+  if (publisher.resultExists()) { publisher.cleanup(); return; }
+  let marker = null;
+  try { marker = JSON.parse(fs.readFileSync(publisher.markerPath, 'utf8')); } catch {}
+  publisher.publish(interruptedResult(marker));
+}
+
+function createMarker(publisher, req, deadline) {
+  const state = {
+    version: 1, uuid: path.basename(publisher.inputPath, '.json'), action: req.action,
+    mode: req.action === 'stop' ? 'stop' : req.new ? 'new' : 'resume', sessionId: req.sessionId ?? null, tabKey: null,
+    stepsTotal: (req.prompt !== undefined || req.before !== undefined) ? 1 : 0, deadline, phase: 'claimed', evidence: {},
+  };
+  let failed = false;
+  return function mark(phase, evidence = {}) {
+    if (failed) return false;
+    const { mode, tabKey, ...rest } = evidence;
+    if (mode) state.mode = mode === 'reattach' ? state.mode : mode;
+    if (tabKey) state.tabKey = tabKey;
+    state.phase = phase;
+    Object.assign(state.evidence, rest);
+    const tmp = publisher.markerPath + '.tmp';
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(state), 'utf8');
+      renameWithRetry(tmp, publisher.markerPath);
+      return true;
+    } catch {
+      if (phase === 'claimed') failed = true;
+      return phase !== 'claimed';
+    }
+  };
+}
+
+async function processVersioned({ trigger, name, uuid, ctx, v1, stat, triggersDir, processedDir, onEntryRetained }) {
+  const publisher = createV1Publisher({ ctx, processedDir, triggersDir, uuid, onEntryRetained });
+  if (publisher.resultExists()) { publisher.cleanup(); return; }
+  const started = Date.now();
+  const checked = validateTriggerAction(trigger, name);
+  if (checked.reason) { publisher.publish(validationResult(trigger, checked.reason)); return; }
+  const req = checked.value;
+  if (!v1.actions) {
+    publisher.publish({ ...validationResult(trigger, 'session actions are not available'), version: 1, action: req.action });
+    return;
+  }
+  const deadline = started + (req.timeout_ms !== undefined ? req.timeout_ms : getIdleTimeout());
+  const maxAgeMs = getTriggerMaxAgeMs();
+  const env = {
+    deadline,
+    mark: createMarker(publisher, req, deadline),
+    acquireSessionLock: (id, limit) => v1.acquireSessionLock(id, limit),
+    acquireTabLock: (tab, limit) => v1.acquireTabLock(tab, limit),
+    staleCheck() {
+      const ageMs = Date.now() - stat.mtimeMs;
+      return ageMs > maxAgeMs
+        ? `trigger is ${Math.round(ageMs)}ms old, older than the ${maxAgeMs}ms staleness limit; refused rather than act on a request that may no longer target the intended session state`
+        : null;
+    },
+  };
+  let result;
+  try { result = await v1.actions.run(req, env); }
+  catch (err) {
+    result = { ...validationResult(trigger, 'internal error: ' + (err && err.message)), version: 1, action: req.action, sessionId: req.sessionId ?? null };
+  }
+  publisher.publish(result);
+}
+
 /**
  * Process a single trigger file (by basename, e.g. "abc-123.json").
  * Never throws — all errors land in the result file.
@@ -1049,13 +1282,17 @@ function safeLogError(ctx, ...args) {
  *        `finally` below so a second trigger for the same session cannot
  *        touch its PTY/composer until this one is fully done.
  */
-async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryRetained, acquireSessionLock, acquireTabLock) {
+async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryRetained, acquireSessionLock, acquireTabLock, v1) {
   // Only handle *.json files, ignore the processed/ subdir itself and
   // any stray files.
   if (!name.endsWith('.json')) return;
 
   const triggerPath = path.join(triggersDir, name);
   const uuid        = name.slice(0, -5); // strip ".json"
+  if (v1 && UUID_NAME.test(uuid) && fs.existsSync(path.join(processedDir, uuid + '.action.json'))) {
+    recoverInterrupted(ctx, createV1Publisher({ ctx, processedDir, triggersDir, uuid, onEntryRetained }));
+    return;
+  }
   const resultPath  = path.join(processedDir, uuid + '.result.json');
   const resultTmp   = resultPath + '.tmp'; // I1: atomic write temp path
 
@@ -1175,6 +1412,11 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   if (lastParseErr) {
     ctx.log.warn('[trigger-watcher] Unreadable/unparseable trigger:', name, lastParseErr.message);
     await writeResult({ ok: false, error: 'invalid JSON: ' + lastParseErr.message });
+    return;
+  }
+
+  if (v1 && isVersionedRequest(trigger)) {
+    await processVersioned({ trigger, name, uuid, ctx, v1, stat, triggersDir, processedDir, onEntryRetained });
     return;
   }
 
@@ -2081,6 +2323,24 @@ function start(ctx) {
   // see docs/decisions/0003-trigger-delivery-per-tab.md
   const { acquireTabInput: acquireTabLock } = require('../terminals/tab-input-lock');
 
+  // A waiter that gives up must still release its place in the queue when it is finally reached.
+  function acquireSessionLockBounded(sessionId, deadline) {
+    const pendingLock = acquireSessionLock(sessionId);
+    let timer;
+    const expiry = new Promise((resolve) => { timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now())); });
+    return Promise.race([pendingLock, expiry]).then((release) => {
+      clearTimeout(timer);
+      if (release === null) { pendingLock.then((late) => late()); return null; }
+      if (Date.now() >= deadline) { release(); return null; }
+      return release;
+    });
+  }
+  const v1 = {
+    actions: ctx.v1 ? createTriggerActions({ ctx, helpers: v1Helpers, ...ctx.v1 }) : null,
+    acquireSessionLock: acquireSessionLockBounded,
+    acquireTabLock,
+  };
+
   function scheduleNext() {
     while (waitQueue.length > 0 && inFlight.size < MAX_INFLIGHT) {
       const filename = waitQueue.shift();
@@ -2092,7 +2352,13 @@ function start(ctx) {
 
   function dispatch(filename) {
     inFlight.add(filename);
-    processTriggerFile(filename, ctx, triggersDir, processedDir, () => retained.add(filename), acquireSessionLock, acquireTabLock)
+    const work = filename.startsWith(MARKER_PREFIX)
+      ? Promise.resolve().then(() => {
+        const uuid = filename.slice(MARKER_PREFIX.length);
+        recoverInterrupted(ctx, createV1Publisher({ ctx, processedDir, triggersDir, uuid, onEntryRetained: () => retained.add(filename) }));
+      })
+      : processTriggerFile(filename, ctx, triggersDir, processedDir, () => retained.add(filename), acquireSessionLock, acquireTabLock, v1);
+    work
       .catch((err) => {
         retained.add(filename);
         safeLogError(ctx, '[trigger-watcher] Trigger processing threw, will not be run again:',
@@ -2135,6 +2401,13 @@ function start(ctx) {
     dispatch(filename);
   }
 
+  function enqueueMarker(uuid) {
+    const key = MARKER_PREFIX + uuid;
+    if (inFlight.has(key) || retained.has(key)) return;
+    if (inFlight.size >= MAX_INFLIGHT) { waitQueue.push(key); return; }
+    dispatch(key);
+  }
+
   let watcher;
   try {
     watcher = fs.watch(triggersDir, { persistent: true }, (eventType, filename) => {
@@ -2158,6 +2431,14 @@ function start(ctx) {
   // only ever returns its direct children, and the '.json' filter in
   // handleFile() additionally excludes the 'processed' directory entry itself.
   try {
+    for (const name of fs.readdirSync(processedDir)) {
+      const match = /^([0-9a-f-]{36})\.action\.json$/.exec(name);
+      if (match && UUID_NAME.test(match[1])) enqueueMarker(match[1]);
+    }
+  } catch (err) {
+    ctx.log.error('[trigger-watcher] Action marker scan failed:', err.message);
+  }
+  try {
     const names = fs.readdirSync(triggersDir);
     for (const name of names) handleFile(name);
   } catch (err) {
@@ -2171,4 +2452,4 @@ function start(ctx) {
   };
 }
 
-module.exports = { start, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };
+module.exports = { start, getTriggersDir, v1Helpers, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };
