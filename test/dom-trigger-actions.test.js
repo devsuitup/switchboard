@@ -31,6 +31,7 @@ function setup({ grid = false, resultFor } = {}) {
     revealWithoutActivating: id => calls.reveal.push(id),
     focusGridCard: id => calls.focusCard.push(id),
     destroySession: id => { window.openSessions.delete(id); },
+    prepareBackgroundRestore: async () => ({ live: null, backgroundRestoreJobId: 'abcd1234' }),
     guardResume: async (session, options) => { calls.guard.push([session.sessionId, options.automatic, options.allowBgAttach]); return true; },
     resolveResumeSession: async session => { calls.continuation += 1; return session; },
     resolveDefaultSessionOptions: async () => ({ ...SAVED }),
@@ -86,6 +87,7 @@ test('a closed resume opens the exact id through the guarded lifecycle without a
 test('a dormant background record refuses the trigger open instead of attaching', async () => {
   const h = setup();
   try {
+    h.window.guardResume = async () => ({ attach: 'abcd1234', cwd: PROJECT });
     h.inContext('dormantWorkingSet').set(A, { item: { sessionId: A, projectPath: PROJECT, bg: true, attachJobId: 'abcd1234' } });
     await h.window.handleTriggerSessionAction(h.request());
     assert.equal(h.calls.openTerminal.length, 0);

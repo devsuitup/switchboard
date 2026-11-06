@@ -22,3 +22,12 @@ test('new-session bucket reserves atomically, refills at 20 seconds and refunds 
   assert.ok(limiter.reserve());
   assert.equal(limiter.reserve(), null);
 });
+
+test('a long idle period refills to the capacity of three and no further', () => {
+  let now = 0;
+  const limiter = createNewSessionLimiter(() => now);
+  for (let i = 0; i < 3; i++) assert.ok(limiter.reserve());
+  now = 1_000_000;
+  for (let i = 0; i < 3; i++) assert.ok(limiter.reserve());
+  assert.equal(limiter.reserve(), null);
+});

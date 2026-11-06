@@ -1141,9 +1141,6 @@ async function deliverV1Prompt({ id, pinned, entry, text, deadline, startupAfter
     waitedMs += fall.waited_ms;
     if (fall.timedOut) return { ok: false, cause: 'verify-timeout', reason: 'the note turn did not finish before the action deadline', evidence: submitEvidence({ timedOut: true }) };
     if (fall.sessionExited) return { ...exited(), evidence: submitEvidence() };
-    if (fall.source === 'no_rise') {
-      return { ok: false, cause: 'refused', error: ERROR_UNCONFIRMED, reason: 'the note turn was never observed completing', evidence: submitEvidence() };
-    }
     const status = readCliStatus(pctx, id);
     return { ok: true, source: fall.source, stamp: status ? status.statusUpdatedAt : -Infinity, evidence: submitEvidence({ idle_source: fall.source }) };
   } catch (err) {

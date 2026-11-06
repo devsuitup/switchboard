@@ -257,3 +257,17 @@ test('a nested interactive descriptor below the writer does not make the sandbox
   const seen = rig.cli.observeSandboxWriterV1(8000, { sessionId: ID_A, ptyStart: '500', ...rig.edges });
   assert.equal(seen.writer.hostPid, 9000);
 });
+
+test('losing the sandbox proof between the text and its Enter withholds the Enter', async t => {
+  const rig = sandboxRig(t, ID_A);
+  const a = arrange(t, {
+    world: { real: rig }, spawnSession: { sandbox: true, pid: 8000 }, autoTurn: false,
+    afterSpawn({ launchStartedAt }) { rig.descriptor('idle', launchStartedAt + 5); },
+    onWrite(world, key, data) { if (data !== '\r') rig.proc.add(9000, { nspid: [9000, 42], start: '777', ppid: 8100, ns: null }); },
+  });
+  const result = await a.submit({ version: 1, action: 'open', sessionId: ID_A, prompt: 'half', timeout_ms: 3000 });
+  assert.equal(result.outcome, 'refused');
+  assert.equal(result.text_written, true);
+  assert.equal(result.enter_written, false);
+  assert.deepEqual(writes(a.events).map(event => event[2]), ['half']);
+});

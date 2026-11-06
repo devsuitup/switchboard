@@ -310,3 +310,24 @@ test('a failing open does not block the next open of the same id', async () => {
   await assert.rejects(serialized(A, async () => { throw new Error('boom'); }));
   assert.equal(await serialized(A, async () => 'ok'), 'ok');
 });
+
+test('the final pre-spawn guard refuses an expired permit on its own clock even when no timer has fired', async () => {
+  const { EventEmitter } = require('node:events');
+  const frame = {};
+  const wc = Object.assign(new EventEmitter(), { mainFrame: frame, send() {}, isDestroyed: () => false });
+  const win = Object.assign(new EventEmitter(), { webContents: wc, isDestroyed: () => false });
+  const handlers = {};
+  let clock = 1000;
+  const bridge = createTriggerRendererBridge({ ipcMain: { handle: (c, f) => { handlers[c] = f; }, on() {} }, getWindow: () => win,
+    getSession: () => null, isClosing: () => false, now: () => clock, setTimeout: () => 0, clearTimeout() {}, randomUUID: () => 'fixed' });
+  bridge.register();
+  await handlers['trigger-actions-ready']({ sender: wc, senderFrame: frame });
+  void bridge.ensureOpen({ mode: 'new', tabKey: A, deadline: 2000 });
+  await tick();
+  assert.equal(bridge.consumePermit('fixed', { sessionId: A, isNew: true, sessionOptions: {} }).ok, true);
+  clock = 2000;
+  let spawns = 0;
+  const gate = bridge.guardedSpawn('fixed', () => { spawns += 1; });
+  assert.equal(gate.ok, false);
+  assert.equal(spawns, 0);
+});
