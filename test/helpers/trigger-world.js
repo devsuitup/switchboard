@@ -37,7 +37,7 @@ function makeWorld(options = {}) {
   world.ctx = createTriggerContext({
     activeSessions, log, isPtyAlive: pty => !pty.dead,
     getCliStatus: real ? () => undefined : id => statuses.get(id),
-    resolveSessionId: options.resolveSessionId, projectsDir: options.projectsDir,
+    resolveSessionId: options.resolveSessionId, projectsDir: options.projectsDir, isClosing: options.isClosing,
     ...(real ? { cliSessionState: real.cli, sandboxEdges: real.edges } : {
       observeTabWriter: pid => ({ writer: { sessionId: writers.get(pid) }, identity: `${pid}:${pid}` }),
       cliSessionState: {

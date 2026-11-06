@@ -91,7 +91,7 @@ test('a correlated acknowledgement from a spawned entry completes the request on
   const { pending, payload } = await openNew(r);
   const consumed = r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
   assert.equal(consumed.ok, true);
-  const gate = r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r));
+  const gate = r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
   assert.equal(gate.ok, true);
   const message = { requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 7 };
   r.reply(message);
@@ -107,7 +107,7 @@ test('replies from a wrong sender, frame, epoch, request, mode or key are ignore
   const r = rig();
   const { pending, payload } = await openNew(r);
   r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
-  r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r));
+  r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
   const good = { requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 7 };
   const box = settled(pending);
   r.reply(good, { sender: {}, senderFrame: r.frame });
@@ -132,7 +132,8 @@ test('a wrong generation or a replaced entry cannot complete the request: target
     const r = rig();
     const { pending, payload } = await openNew(r);
     r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
-    const session = r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r)).value;
+    r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
+    const session = r.sessions.get(A);
     arrange(r, session);
     r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 7 });
     const outcome = await pending;
@@ -285,7 +286,7 @@ test('launchStartedAt is recorded at the guard, not at dispatch', async () => {
   r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
   await new Promise(resolve => setTimeout(resolve, 60));
   const before = Date.now();
-  const gate = r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r));
+  const gate = r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
   assert.ok(gate.launchStartedAt >= before);
 });
 
@@ -330,4 +331,29 @@ test('the final pre-spawn guard refuses an expired permit on its own clock even 
   const gate = bridge.guardedSpawn('fixed', () => { spawns += 1; });
   assert.equal(gate.ok, false);
   assert.equal(spawns, 0);
+});
+
+test('an acknowledgement cannot authenticate a replacement entry created after the spawn', async () => {
+  const r = rig();
+  const { pending, payload } = await openNew(r);
+  r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
+  r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
+  r.sessions.set(A, { generation: 8, pty: {}, exited: false });
+  r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 8 });
+  const outcome = await pending;
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.reason, 'session target changed');
+});
+
+test('a close committed before the acknowledgement refuses the request instead of acknowledging it', async () => {
+  const r = rig();
+  const { pending, payload } = await openNew(r);
+  r.bridge.consumePermit(payload.requestId, { sessionId: A, isNew: true, sessionOptions: {} });
+  r.bridge.guardedSpawn(payload.requestId, () => spawnedSession(r).pty);
+  r.state.closing = true;
+  r.reply({ requestId: payload.requestId, documentEpoch: payload.documentEpoch, mode: 'new', ok: true, requestedSessionId: null, tabKey: A, generation: 7 });
+  const outcome = await pending;
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.reason, 'Switchboard is closing.');
+  assert.equal(outcome.spawned, true);
 });

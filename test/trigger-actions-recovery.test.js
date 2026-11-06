@@ -155,3 +155,51 @@ test('a marker that cannot be saved refuses the action before any side effect', 
   assert.deepEqual(calls, []);
   assert.equal(result.resumed, false);
 });
+
+// ── Review round 1 ──
+test('an aged duplicate input cannot overwrite its committed v1 result', async t => {
+  const dirs = layout(t);
+  const world = makeWorld();
+  world.addSession(ID_A);
+  const watcher = startWatcher(t, world, {}, dirs.root);
+  const uuid = randomUUID();
+  const request = { version: 1, action: 'open', sessionId: ID_A };
+  await watcher.submit(request, uuid);
+  const first = fs.readFileSync(watcher.resultOf(uuid), 'utf8');
+  const temp = path.join(watcher.triggers, uuid + '.tmp');
+  fs.writeFileSync(temp, JSON.stringify(request));
+  const old = new Date(Date.now() - 700000);
+  fs.utimesSync(temp, old, old);
+  fs.renameSync(temp, path.join(watcher.triggers, uuid + '.json'));
+  const end = Date.now() + 3000;
+  while (fs.existsSync(path.join(watcher.triggers, uuid + '.json')) && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(fs.readFileSync(watcher.resultOf(uuid), 'utf8'), first);
+});
+
+test('a legacy payload under a completed v1 request uuid is not executed and does not replace the result', async t => {
+  const dirs = layout(t);
+  const world = makeWorld();
+  world.addSession(ID_A);
+  const watcher = startWatcher(t, world, {}, dirs.root);
+  const uuid = randomUUID();
+  await watcher.submit({ version: 1, action: 'open', sessionId: ID_A }, uuid);
+  const first = fs.readFileSync(watcher.resultOf(uuid), 'utf8');
+  fs.writeFileSync(path.join(watcher.triggers, uuid + '.tmp'), JSON.stringify({ sessionId: ID_A, command: 'replayed' }));
+  fs.renameSync(path.join(watcher.triggers, uuid + '.tmp'), path.join(watcher.triggers, uuid + '.json'));
+  const end = Date.now() + 3000;
+  while (fs.existsSync(path.join(watcher.triggers, uuid + '.json')) && Date.now() < end) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(fs.readFileSync(watcher.resultOf(uuid), 'utf8'), first);
+  assert.deepEqual(world.writes, []);
+});
+
+test('non-object JSON under a request uuid gets the specified shape refusal', async t => {
+  const dirs = layout(t);
+  const watcher = startWatcher(t, makeWorld(), {}, dirs.root);
+  for (const body of [null, [], 3, 'text']) {
+    const result = await watcher.submit(body);
+    assert.equal(result.outcome, 'refused');
+    assert.equal(result.reason, 'trigger must be an object');
+    assert.equal(result.version, null);
+    assert.equal(result.action, null);
+  }
+});

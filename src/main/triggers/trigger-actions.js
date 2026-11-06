@@ -158,7 +158,14 @@ function resolveClosedTarget(rawId, deps) {
     stat = fsx.lstatSync(file);
     if (!stat.isFile() || stat.size === 0) return refuse(REASON.NO_TRANSCRIPT);
     const fd = fsx.openSync(file, 'r');
-    try { fsx.readSync(fd, Buffer.alloc(1), 0, 1, 0); } finally { fsx.closeSync(fd); }
+    try {
+      const head = Buffer.alloc(65536);
+      const length = fsx.readSync(fd, head, 0, head.length, 0);
+      const parses = head.toString('utf8', 0, length).split('\n').some(line => {
+        try { return object(JSON.parse(line)); } catch { return false; }
+      });
+      if (!parses) return refuse(REASON.NO_TRANSCRIPT);
+    } finally { fsx.closeSync(fd); }
   } catch { return refuse(REASON.NO_TRANSCRIPT); }
   let cwd;
   try { cwd = deps.extractVerifiedCwd(file, matches[0].folder)?.cwd; } catch { return refuse(REASON.NO_TRANSCRIPT); }
@@ -378,11 +385,13 @@ function createTriggerActions(deps) {
     }
   }
 
-  async function performStop(state) {
+  async function performStop(state, afterNote) {
     const { entry, env } = state;
     const session = entry.session;
     if (!targetIntact(state)) return refusal(state, REASON.CHANGED);
     claim(state, 'stop-requested');
+    const gate = await stopWhenEligible(state, afterNote);
+    if (gate) return gate;
     let result;
     try { result = await deps.stopSession(entry.tabKey ?? state.requestedId, session); }
     catch (err) { result = { ok: false, error: err.message }; }
@@ -406,7 +415,7 @@ function createTriggerActions(deps) {
       const gate = await stopWhenEligible(state, null);
       if (gate) return gate;
       if (!claim(state, 'claimed', { mode: 'stop', tabKey })) return refusal(state, REASON.MARKER);
-      return performStop(state);
+      return performStop(state, null);
     }
     if (!claim(state, 'claimed', { mode: 'stop', tabKey })) return refusal(state, REASON.MARKER);
     const refused = await admitDelivery(state);
@@ -415,9 +424,10 @@ function createTriggerActions(deps) {
     if (!d.ok) return promptFailure(state, d, { note: true });
     Object.assign(state.out, evidenceOf(d));
     if (entry.session.exited) return success(state, 'closed');
-    const gate = await stopWhenEligible(state, { source: d.source, stamp: d.stamp ?? -Infinity });
+    const afterNote = { source: d.source, stamp: d.stamp ?? -Infinity };
+    const gate = await stopWhenEligible(state, afterNote);
     if (gate) return gate;
-    return performStop(state);
+    return performStop(state, afterNote);
   }
 
   async function runExisting(state) {

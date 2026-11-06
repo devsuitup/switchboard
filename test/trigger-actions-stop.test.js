@@ -359,3 +359,50 @@ test('a note whose delivery ends in session exit does not establish a finished n
   assert.equal(result.reason, 'note step not finished');
   assert.deepEqual(calls.stop, []);
 });
+
+test('a stop whose deadline passes while its marker is written is not executed', async () => {
+  const clock = makeClock();
+  const world = makeWorld();
+  world.addSession(ID_A);
+  const { actions, calls } = makeActions(world, { now: clock.now, sleep: clock.sleep });
+  const deadline = clock.now() + 100;
+  const env = makeEnv(deadline, { mark: () => { clock.t = deadline + 1; return true; } });
+  const result = await actions.run(stopRequest(), env);
+  assert.equal(result.outcome, 'refused');
+  assert.deepEqual(calls.stop, []);
+});
+
+test('a stop is rechecked after its marker: state that changes while it is written prevents the kill', async () => {
+  const world = makeWorld();
+  const session = world.addSession(ID_A);
+  const { actions, calls } = makeActions(world);
+  const env = makeEnv(Date.now() + 5000, { mark: () => { session._cliBusy = true; return true; } });
+  const result = await actions.run(stopRequest(), env);
+  assert.equal(result.reason, 'session busy');
+  assert.deepEqual(calls.stop, []);
+});
+
+test('a close committed after admission prevents a bare stop and a note', async () => {
+  let closing = false;
+  const world = makeWorld({ isClosing: () => closing });
+  world.addSession(ID_A);
+  const { actions, calls } = makeActions(world);
+  const bare = await actions.run(stopRequest(), makeEnv(Date.now() + 5000, { mark: () => { closing = true; return true; } }));
+  assert.equal(bare.reason, 'Switchboard is closing.');
+  assert.deepEqual(calls.stop, []);
+  closing = false;
+  const noted = makeActions(world, { helpers: { normalizeCwd: v => v, getQuietMs: () => 0, deliverPrompt: async () => { closing = true; return { ok: true, evidence: {}, source: 'descriptor', stamp: 1 }; } } });
+  const result = await noted.actions.run(stopRequest({ before: 'n' }), makeEnv(Date.now() + 5000));
+  assert.equal(result.reason, 'Switchboard is closing.');
+  assert.deepEqual(noted.calls.stop, []);
+});
+
+test('a close committed after dispatch stops the prompt before any byte is written', async t => {
+  let closing = false;
+  const a = arrange(t, { world: { isClosing: () => closing } });
+  a.hooks.beforeAck = async () => { closing = true; };
+  a.world.addSession(ID_A);
+  const result = await a.submit({ version: 1, action: 'open', sessionId: ID_A, prompt: 'after closing' });
+  assert.equal(result.reason, 'Switchboard is closing.');
+  assert.deepEqual(flowWrites(a.events), []);
+});

@@ -90,7 +90,7 @@ test('resolver: unknown id, known id without transcript, empty, directory and un
   assert.equal(resolveClosedTarget(lie, r.deps()).reason, 'session cwd unavailable');
   const bad = '33333333-2222-3333-4444-555555555555';
   r.write(bad, { content: 'not json\n' });
-  assert.equal(resolveClosedTarget(bad, r.deps()).reason, 'session cwd unavailable');
+  assert.equal(resolveClosedTarget(bad, r.deps()).reason, 'no readable transcript');
 });
 
 test('resolver: duplicate transcripts across folders or by case are ambiguous, never the first one', t => {

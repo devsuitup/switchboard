@@ -101,7 +101,7 @@ function createTriggerRendererBridge(deps) {
       return session === permit.session && session.pty === permit.pty && msg.generation === permit.generation
         && session.generation === permit.generation;
     }
-    return permit.spawned && msg.generation === session.generation;
+    return permit.spawned && session.pty === permit.spawnedPty && msg.generation === session.generation;
   }
 
   function onResult(event, msg) {
@@ -111,6 +111,10 @@ function createTriggerRendererBridge(deps) {
     if (!ready || msg.documentEpoch !== permit.epoch || permit.epoch !== ready.epoch) return;
     if (!expectedTuple(permit, msg)) return;
     if (clock() >= permit.deadline) return;
+    if (isClosing()) {
+      settlePermit(permit, { ok: false, reason: REASON_CLOSING, spawned: permit.spawned, preSpawn: !permit.spawnAttempted });
+      return;
+    }
     if (msg.ok !== true) {
       settlePermit(permit, { ok: false, reason: typeof msg.reason === 'string' && msg.reason ? msg.reason : REASON_OPEN_FAILED,
         ...(typeof msg.error === 'string' ? { error: msg.error } : {}), spawned: permit.spawned, preSpawn: !permit.spawnAttempted,
@@ -193,16 +197,16 @@ function createTriggerRendererBridge(deps) {
     return { ok: true, launchStartedAt: permit.launchStartedAt };
   }
 
-  function spawned(requestId) {
+  function spawned(requestId, spawnedPty) {
     const permit = permits.get(requestId);
-    if (permit && permit.state === 'opening') permit.spawned = true;
+    if (permit && permit.state === 'opening') { permit.spawned = true; permit.spawnedPty = spawnedPty; }
   }
 
   function guardedSpawn(requestId, spawn) {
     const gate = beforeSpawn(requestId);
     if (!gate.ok) return gate;
     const value = spawn();
-    spawned(requestId);
+    spawned(requestId, value);
     return { ok: true, launchStartedAt: gate.launchStartedAt, value };
   }
 

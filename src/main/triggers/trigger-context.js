@@ -249,6 +249,7 @@ function createTriggerContext(deps) {
       return { outcome: 'mine', writer };
     }
     function check(phase) {
+      if (options.v1 === true && deps.isClosing?.()) fail('Switchboard is closing.');
       const boundedWrite = phase === 'text' || binding.boundAll === true;
       if (boundedWrite && Number.isFinite(binding.deadline) && Date.now() >= binding.deadline) fail('the delivery deadline passed; no further bytes were written', null, true);
       if (!valid()) fail('the pinned tab/PTY generation binding changed; no further bytes were written');
@@ -273,6 +274,7 @@ function createTriggerContext(deps) {
     }
     binding.prepareText = async deadline => {
       while (true) {
+        if (options.v1 === true && deps.isClosing?.()) fail('Switchboard is closing.');
         if (Date.now() >= deadline) fail('the ownership wait exhausted the delivery deadline; nothing more was written', null, true);
         if (!valid()) fail('the pinned tab/PTY generation binding changed; nothing more was written');
         const observation = inspect();
@@ -303,6 +305,7 @@ function createTriggerContext(deps) {
       check();
     };
     binding.verify = check;
+    binding.proofOnly = proofOnly;
     binding.beginStep = command => { binding.resetCompletionObserved = false; binding.step = { command, text_written: false, enter_written: false, written: false }; };
     async function waitKeyProcessTable(deadline) {
       if (!own || source.deliveryProcessTableFresh?.() !== false) return;

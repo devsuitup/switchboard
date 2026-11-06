@@ -3147,7 +3147,7 @@ test('a throwing ctx yields a definitive result (no unhandled rejection), and a 
 // leave the trigger on disk forever with no result file. See
 // .ai/contexts/trigger-watcher.md, "Removing the entry".
 
-test('trigger body is JSON null: destructuring throws, but the entry is still resolved', async () => {
+test('a chain step that is not an object throws, but the entry is still resolved', async () => {
   const tmp = mkTmp();
   let watcher;
   try {
@@ -3160,7 +3160,7 @@ test('trigger body is JSON null: destructuring throws, but the entry is still re
 
     const uuid         = 'null-body-' + Date.now();
     const triggerPath  = path.join(tmp, uuid + '.json');
-    fs.writeFileSync(triggerPath, 'null', 'utf8'); // valid JSON; destructuring it throws
+    fs.writeFileSync(triggerPath, JSON.stringify({ sessionId: 'any-session', chain: [null] }), 'utf8'); // valid JSON; reading the step throws
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
     await waitForFile(resultPath, 2000);
@@ -3170,7 +3170,7 @@ test('trigger body is JSON null: destructuring throws, but the entry is still re
     assert.match(result.error, /internal error/i);
     assert.equal(fs.existsSync(triggerPath), false,
       'trigger file must be deleted, not left behind forever');
-    assert.deepEqual(ctx._written, [], 'no PTY write for a null trigger body');
+    assert.deepEqual(ctx._written, [], 'no PTY write for a malformed chain step');
 
   } finally {
     if (watcher) watcher.close();
@@ -3568,7 +3568,7 @@ test('internal field: the generic catch marks internal:true; a validation refusa
     // the generic catch at the end of processTriggerFile.
     const uuidInternal        = 'internal-flag-' + Date.now();
     const triggerPathInternal = path.join(tmp, uuidInternal + '.json');
-    fs.writeFileSync(triggerPathInternal, 'null', 'utf8');
+    fs.writeFileSync(triggerPathInternal, JSON.stringify({ sessionId: 'any-session', chain: [null] }), 'utf8');
     const resultPathInternal  = path.join(tmp, 'processed', uuidInternal + '.result.json');
     await waitForFile(resultPathInternal, 2000);
     const internalResult = readResult(path.join(tmp, 'processed'), uuidInternal);
@@ -3628,7 +3628,7 @@ test('outer generic-catch log call cannot escape even when ctx.log.error throws 
     // is the site under test.
     const uuid        = 'outer-catch-log-throws-' + Date.now();
     const triggerPath = path.join(tmp, uuid + '.json');
-    fs.writeFileSync(triggerPath, 'null', 'utf8');
+    fs.writeFileSync(triggerPath, JSON.stringify({ sessionId: 'any-session', chain: [null] }), 'utf8');
 
     const processedDir = path.join(tmp, 'processed');
     const resultPath   = path.join(processedDir, uuid + '.result.json');

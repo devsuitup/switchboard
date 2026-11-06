@@ -271,3 +271,22 @@ test('losing the sandbox proof between the text and its Enter withholds the Ente
   assert.equal(result.enter_written, false);
   assert.deepEqual(writes(a.events).map(event => event[2]), ['half']);
 });
+
+test('open-here keeps the legacy fallback when no usable descriptor exists at the first read', async t => {
+  const a = arrange(t);
+  a.world.addSession(ID_A);
+  a.world.statuses.delete(ID_A);
+  const result = await a.submit({ version: 1, action: 'open', sessionId: ID_A, prompt: 'hello', timeout_ms: 3000 });
+  assert.equal(result.outcome, 'opened');
+  assert.equal(result.resumed, false);
+  assert.deepEqual(writes(a.events).map(event => event[2]), ['hello', '\r']);
+});
+
+test('open-here on a sandboxed tab without a proven writer never falls back to typing', async t => {
+  const rig = sandboxRig(t, ID_A);
+  const a = arrange(t, { world: { real: rig } });
+  a.world.addSession(ID_A, { sandbox: true, pid: 8000 });
+  const result = await a.submit({ version: 1, action: 'open', sessionId: ID_A, prompt: 'never', timeout_ms: 1500 });
+  assert.equal(result.outcome, 'refused');
+  assert.deepEqual(writes(a.events), []);
+});

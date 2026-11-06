@@ -1092,7 +1092,8 @@ async function deliverV1Prompt({ id, pinned, entry, text, deadline, startupAfter
     }
     waitedMs += ready.waited_ms;
     if (ready.sessionExited) return exited();
-    if (!ready.ready) {
+    const legacyFallback = !ready.ready && startupAfterMs === null && ready.available === false && !ready.timedOut && !binding.proofOnly;
+    if (!ready.ready && !legacyFallback) {
       const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
       if (dialog) return refuse(REASON_DIALOG_OPEN);
       if (ready.lastStatus === 'busy') return refuse(REASON_CLI_BUSY);
@@ -1156,8 +1157,12 @@ const MARKER_PREFIX = 'marker:';
 const UUID_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function isVersionedRequest(trigger) {
-  return trigger !== null && typeof trigger === 'object' && !Array.isArray(trigger)
-    && (Object.hasOwn(trigger, 'version') || Object.hasOwn(trigger, 'action'));
+  return trigger === null || typeof trigger !== 'object' || Array.isArray(trigger)
+    || Object.hasOwn(trigger, 'version') || Object.hasOwn(trigger, 'action');
+}
+
+function hasPublishedV1Result(resultPath) {
+  try { return JSON.parse(fs.readFileSync(resultPath, 'utf8')).version === 1; } catch { return false; }
 }
 
 function createV1Publisher({ ctx, processedDir, triggersDir, uuid, onEntryRetained }) {
@@ -1287,6 +1292,10 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   const triggerPath = path.join(triggersDir, name);
   const uuid        = name.slice(0, -5); // strip ".json"
+  if (v1 && UUID_NAME.test(uuid) && hasPublishedV1Result(path.join(processedDir, uuid + '.result.json'))) {
+    createV1Publisher({ ctx, processedDir, triggersDir, uuid, onEntryRetained }).cleanup();
+    return;
+  }
   if (v1 && UUID_NAME.test(uuid) && fs.existsSync(path.join(processedDir, uuid + '.action.json'))) {
     recoverInterrupted(ctx, createV1Publisher({ ctx, processedDir, triggersDir, uuid, onEntryRetained }));
     return;
