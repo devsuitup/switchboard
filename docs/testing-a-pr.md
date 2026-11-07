@@ -10,6 +10,28 @@ The default mode keeps your real HOME and transcript history. `ISOLATED` takes
 `1` for fixture mode or `0` for the default mode; unset or empty also selects
 the default. Other values produce a usage error before any git command.
 
+## Obtaining a PR installer
+
+PR installers are built only when a PR to `main` changes packaging files:
+`package.json`, `package-lock.json`, `postinstall.js`, `scripts/**`, `build/**`
+or `.github/workflows/build.yml`. Shipped source such as `main.js` or `public/`
+does not trigger a build. Other PRs have no automatic build artifacts. Build is
+not a required check. To build a PR branch on demand:
+
+```bash
+gh workflow run build.yml --repo devsuitup/switchboard --ref <branch>
+gh run list --repo devsuitup/switchboard --workflow build.yml --branch <branch> --event workflow_dispatch --limit 5
+gh run watch <run-id> --repo devsuitup/switchboard --exit-status
+gh run download <run-id> --repo devsuitup/switchboard --dir .work-files/pr-installer
+```
+
+Select the dispatched run for the intended commit from the list. Dispatches
+build Windows, Linux x64 and Linux arm64, and never publish a release, even
+when dispatched on a tag ref. macOS installers are built on version-tag pushes.
+PR artifacts expire after 3 days; dispatch and tag artifacts after 14 days.
+Dispatch again if an artifact has expired. Installing a downloaded installer
+can replace the installed app; the source task below runs an isolated instance.
+
 ## From source, not a build
 
 Electron receives the absolute worktree path and `--no-sandbox` to run the
@@ -29,7 +51,7 @@ the launch with an error. It rebuilds even when a bundle already exists,
 so the file viewers use the PR's current inputs. A failed bundle build stops
 the launch and reports the worktree path and build error.
 
-The task does not package the app or rebuild native modules, which other
+The task does not download CI artifacts, package the app or rebuild native modules, which other
 instances may have loaded (see
 [Development](development.md#building-and-replacing-while-an-installed-copy-runs)).
 

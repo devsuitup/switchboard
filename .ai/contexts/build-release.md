@@ -1,12 +1,33 @@
 # Build and release workflow
 
-`.github/workflows/build.yml` uses one event-dependent `build` matrix. PRs
-include Windows, Linux x64 and Linux arm64; version-tag pushes also include
-macOS. The JSON arrays in `matrix.include` must keep the non-mac entries in
-sync. Each matrix job has `timeout-minutes: 60`, including macOS.
+`.github/workflows/build.yml` runs on version-tag pushes, manual dispatches
+and packaging-related PRs to `main`. PRs and dispatches include Windows,
+Linux x64 and Linux arm64. Only a `push` whose ref starts with `refs/tags/v`
+adds macOS; dispatching on a tag ref still uses the three-job matrix. The
+JSON arrays in `matrix.include` must keep the non-mac entries in sync.
 
-`publish` keeps `needs: build` and the default success gate. A failed or
-cancelled macOS tag build blocks automatic publication; no partial-publish or
+The PR path filter covers `package.json`, `package-lock.json`, the requested
+root `postinstall.js` path, `scripts/**` and the build workflow itself. The
+actual postinstall is `scripts/postinstall.js`; `scripts/**` also covers the
+`scripts/after-pack.js` hook and icon generators. `build/**` covers icons, macOS
+entitlements and the DMG background. The builder configuration is inline in
+`package.json`; there is no separate electron-builder config. Dependencies are
+covered by the lockfile. The filter is packaging only: application source
+(`*.js`, `src/**`, `workers/**`, `public/**`, `harnesses/**`) and `CHANGELOG.md`
+are deliberately absent, so a code PR builds no installers. A packaging break
+caused by source surfaces at the tag, where strict publish blocks it (accepted
+risk, maintainer decision).
+
+Each matrix job retains `timeout-minutes: 60`. These are parallel jobs, not
+dependent stages: the budget must fit installation/native rebuilds, both
+viewer bundles and packaging, including macOS arm64+x64 DMG/ZIP and Windows
+x64+arm64 NSIS. Retaining the existing hour avoids cutting the tag-build
+budget without measured runner timings; it is not a measured duration.
+`publish`, the only downstream job (`needs: build`), has a 10-minute bound.
+
+`publish` requires a version-tag **push** and keeps `needs: build` and the
+default success gate. A manual dispatch never publishes, even on a tag ref.
+A failed or cancelled macOS tag build blocks automatic publication; no partial-publish or
 `continue-on-error` path exists. Recovery and manifest consistency requirements
 are in [releasing.md](../../docs/releasing.md).
 
@@ -17,13 +38,42 @@ module rebuild between architectures applies only to the first target type;
 multiple targets in one multi-architecture invocation can reuse modules from
 the wrong architecture (issue #18).
 
-`test/build-workflow.test.js` parses the actual workflow using `js-yaml` and
-evaluates its expression for a PR and a tag push. It checks the exact matrices,
-timeout, triggers, failure propagation configuration and strict publish
-dependency. It evaluates the expression as JavaScript, not with the Actions
-expression engine, so it is a configuration guard only: the proof that Actions
-accepts the expression is a PR run's job list (no mac job), and the tag branch
-is first seen at the next tag. It does not verify runner queue behavior either;
+Both workflows group PR runs per PR number (`pr-<number>`) and give every other
+run its own group (`github.run_id`), and cancel older runs only for `pull_request`.
+Tag pushes, main pushes and dispatches never cancel in-progress runs. Every
+upload explicitly retains PR artifacts for 3 days and other artifacts for
+14 days. Tag artifacts feed `publish` through `actions/download-artifact` in
+the same run, so the 14-day retention does not change that dependency.
+
+`test.yml` has no path filter. PRs run Node 20/Linux and Node 22/Linux+Windows;
+main pushes run Node 22/Linux+Windows. Matrix keys remain `node-version`, then
+`os`, with no job-name override, retaining contexts such as
+`test (22, ubuntu-latest)`. No step depends on a Node 20 or Windows/Node 20
+cell. Linux real-bwrap enforcement stays on every Linux test cell; patch
+coverage stays on PR Node 22/Linux only. Lint and e2e still run for every PR
+and main push; changelog stays PR-only. Test jobs have 25 minutes; lint,
+changelog and e2e have 10 each.
+
+The required-check list is documented in [releasing.md](../../docs/releasing.md).
+Build is not a required check. JB owns the external settings update that removes
+`test (20, windows-2022)` from both ruleset 17240725 (`main-protection`) and the
+classic branch protection on `main` (`required_status_checks.contexts`); both
+must be updated together whenever the test matrix changes. Changing these
+workflows does not update those settings.
+This CI-only change takes the `no-changelog` PR label.
+
+To obtain an installer for any branch, dispatch the build and download that
+run's artifacts; see [testing-a-pr.md](../../docs/testing-a-pr.md#obtaining-a-pr-installer).
+`task test-pr` runs sources and has no artifact dependency.
+
+`test/build-workflow.test.js` parses both actual workflows using `js-yaml`
+and evaluates their JSON matrix literals for PRs, pushes and dispatches,
+including dispatch on a tag. It checks matrices, timeouts, triggers, retention,
+concurrency, unchanged Test gates, failure propagation and strict publish
+dependency. It evaluates expressions as JavaScript, not with the Actions
+expression engine, so it is a configuration guard only. An Actions run's job
+list must verify expression acceptance and context names; the full release
+remains a tag-run check. It does not verify runner queue behavior either;
 `timeout-minutes` bounds a hung build on a runner, not time spent queued.
 
 Trade-off: the macOS-only "Test postinstall helpers" step now runs on tags

@@ -4,6 +4,28 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
+## Schedules (#792, slice A1)
+
+| IPC | Args | Returns | Preload |
+| --- | --- | --- | --- |
+| `list-schedules` | none | `{ now, catchUpActive, projects: [{ projectPath, shortName, archived, sandboxed, known, schedules: [{ filePath, file, name, slug, cron, cronText, enabled, catchUp, cli, prompt, linked, problems, nextRunMs, catchUpDueMs, runs: [{ sessionId, created, messageCount, replied, running, result }] }] }] }` | `api.listSchedules()` |
+
+Main registers the handler and calls the Electron-free
+`src/main/schedules/schedule-list.js` export `buildScheduleList(deps)`. The
+renderer supplies no paths: projects come from the awaited local schedule
+registry, cache folders from its listed and real paths. Archived and unknown
+projects remain listed with explicit flags. This read creates no catch-up
+state and changes no schedule or transcript. `now` is epoch milliseconds;
+next/pending times are epoch milliseconds or `null`. Runs are deduplicated,
+newest first, capped at 20 per schedule. `replied` is an assistant-record check
+(`null` on an unreadable transcript); `running` reads this instance's scheduled
+child map. `result` is always `null` until the separate run-result slice lands.
+
+`run-schedule-now`, `read-memory`, `save-memory` and `schedule-run-exit` keep
+their existing contracts. A1 exposes no schedule mutation channel or renderer
+consumer. See [schedule-runner.md](schedule-runner.md), "Schedule listing
+backend", for field parsing, refusal rules, time-zone semantics and tests.
+
 ## Main-process error backstop (#896)
 
 `src/main/app/main-error-handlers.js` installs `uncaughtException` and `unhandledRejection`
