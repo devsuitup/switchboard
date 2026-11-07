@@ -50,14 +50,13 @@ every matching id. A missing record releases the held entry, with a notice;
 a later sidebar click follows the ordinary guarded resume path.
 
 `conversationCheck(id, { workerLiveness: 'all' })` requests S1a's classifier
-for terminal states too. Live attaches; only a dead `working` job goes through
-the existing `checkVerb('respawn')` and `runVerb` guards. Dead `running` is
-ambiguous, `blocked` requires intervention, and `done`, `failed` and `stopped`
-have ended or been stopped: all require explicit Respawn through the existing
-button. Unknown states or worker liveness refuse. Only the
-restore check passes its classified worker evidence to `liveJobCheck`, keyed
-by job id; Delete and ordinary Respawn retain their conservative defaults. Dead
-non-working jobs offer explicit Respawn; unknown never respawns. A per-session promise
+for terminal states too. Live attaches; dead `working`, `done` and `running` jobs go through
+the existing `checkVerb('respawn')` and `runVerb` guards, preserving #796 recovery
+after a reboot or daemon death. A live continuation prevents a duplicate respawn.
+Dead `blocked`, `failed` and `stopped` jobs require explicit Respawn through the
+existing button. Unknown states or worker liveness refuse. Restore and manual
+Respawn pass their classified worker evidence to `liveJobCheck`, keyed by job id;
+Delete retains its conservative default. Unknown never respawns. A per-session promise
 coalesces overlapping requests. Descriptor observation subscribes before its
 initial read, matches this job through `liveWorkerDescriptor`, waits at most
 15 seconds and always releases the listener. A successful respawn without a
@@ -97,9 +96,9 @@ M1 evidence (2026-10-25, CLI 2.1.302; untracked scratch notes in the
 primary checkout's `.work-files/m1-785-report.md`, not in the repository) measured dead `working` surviving daemon death,
 respawn cold-starting the daemon, retaining job/session/name, then producing
 a usable background descriptor. This implementation uses those recorded facts;
-it does not repeat the live acceptance run. Issue #1020 explicitly retains
-manual recovery for stopped jobs and extends it to every dead state other than
-`working`.
+it does not repeat the live acceptance run. The #1020 policy retains #796's
+automatic recovery for dead `working`, `done` and `running`, with manual recovery
+for dead `blocked`, `failed` and `stopped`.
 
 ## Invariants
 
@@ -187,9 +186,12 @@ Stop or Close action. See `test/dom-agents-view.test.js` (#566/S5).
     check but before the CLI runs. This reduces stale-roster mistakes; it is
     not an atomic lock on the conversation. Respawn additionally scans fresh
     transcript continuations transitively, checking every reachable id through
-    `liveJobCheck`. A live continuation refuses both preview and execution,
-    including automatic restore and the handoff helper. Missing/unreadable
-    transcripts or unknown continuation ownership refuse; a 64-member bound
+    `liveJobCheck`, using the same worker classifier as restore for each reachable job
+    and excluding the job being respawned. Dead working/blocked forks do not count
+    as running. A live continuation refuses both preview and execution,
+    including automatic restore and the handoff helper. Missing transcripts with
+    known unowned continuations permit recovery. Unreadable existing transcripts
+    or unknown continuation liveness refuse with recovery guidance; a 64-member bound
     fails closed. This scan uses `resolveTranscriptPath`, independently of the
     cached continuation index. Fresh identity includes a validated raw
     `resumeSessionId` even when the job's transcript id differs. Bridge aliases
@@ -1076,6 +1078,14 @@ The route runs under the existing tab input lock, followed by a bound-tab and
 eligibility recheck. The same command-parameterized composer/300 ms/Enter guard
 handles `/bg` and `/exit`. The respawn path waits up to 15 seconds for
 `session.exited`, then observes the fresh transcript for another 10 seconds.
+Before writing either command, main checks existing continuations with worker
+evidence and excludes the source job. A unique live fork with one matching bg
+descriptor is adopted without writing or killing the source PTY; unknown or
+ambiguous ownership refuses before `/exit`. At the 15-second exit timeout the
+same 10-second continuation observation still runs. It can adopt a confirmed
+fork even if the source has not exited. Once the original exit budget expires,
+this path can only adopt or refuse; even a later source exit cannot authorize
+respawn before its own post-exit grace. No exit budget was increased.
 The CLI fork link was measured at 5.5 seconds after `/exit` on 2026-11-07;
 the 10-second grace after detected exit allows that delay plus margin. Polling
 uses the injected clock and change waiter. A new continuation, excluding the
@@ -1086,14 +1096,17 @@ Observed links remain held even if a later rewrite drops them. Only a complete
 final read with no new continuation permits the checked respawn. This is a
 bounded observation, not a CLI-level atomic writer lock; the shared guard
 re-reads continuations immediately before the CLI verb as another check.
+The reader ignores an unparsable final unterminated line, retaining sealed
+continuation records and reconsidering the tail when the file grows. A malformed
+sealed continuation record still refuses.
 The helper exposed as `unsubscribeBgAgents.respawnForHandoff(job, extraSessionIds)`
 is shared with S1b's restore IPC: checked respawn, runVerb, then descriptor wait
 using the full job identity (including descriptors without jobId). S2 passes
 the source id and raw resumeTarget as extra ids; after exit, the verb checks
 their lowercased, deduplicated union with fresh check.sessionIds. The optional
 extra ids default to empty, preserving ordinary Agents-view Respawn/Delete
-and S1b restore identity guards. Restore retains its action shapes and now holds
-every dead state except `working` for explicit Respawn.
+and S1b restore identity guards. Restore retains its action shapes and automatic
+recovery for dead `working`, `done` and `running`; dead `blocked` waits for Respawn.
 
 Respawn success sets `backgrounded` and returns the same conversation id with
 `respawned:true` and `attached`. Main skips transition detection and
@@ -1107,8 +1120,9 @@ failure uses `respawn-failed` and releases the held exit unsuppressed. The
 exit batch counts that row as started and leaves other unwritten rows eligible.
 The checked-refusal notice says the job was not relaunched; a verb failure or
 60-second timeout says it may still start and directs the user to check Agents
-before respawning again. An exit timeout uses `exit-timeout` and never
-relaunches anything. No rename-back workaround or pending-restore trigger wait
+before respawning again. An exit timeout without a confirmed continuation uses
+`exit-timeout`, reports the continuation observation and never relaunches a live source.
+No rename-back workaround or pending-restore trigger wait
 (S4) is part of this slice.
 
 

@@ -457,13 +457,13 @@ test('S2-T3 refused route preserves reason and writes nothing', async () => {
 });
 
 test('S2-T4 source that never exits times out without respawn or kill', async () => {
-  const h = setup();
+  const h = setup({ ids: [], descriptors: [] });
   h.deps.decideRoute = async () => ({ route: 'respawn', job: { id: 'aaaaaaaa' } });
   const calls = [];
   h.deps.respawnJob = async job => { calls.push(job); return { ok: true }; };
   const result = await sendToBackground('old', h.deps);
   assert.equal(result.code, 'exit-timeout');
-  assert.equal(h.deps.now(), 600);
+  assert.equal(h.deps.now(), 10600);
   assert.deepEqual(h.writes, ['/exit', '\r']);
   assert.deepEqual(calls, []);
   assert.deepEqual(h.kills, []);

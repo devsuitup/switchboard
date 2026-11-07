@@ -40,12 +40,12 @@ function fixture(t, state = 'stopped') {
     writeJob('bbbbbbbb', NEXT, 'working');
     descriptors.push({ kind: 'bg', sessionId: NEXT, jobId: 'bbbbbbbb', cwd: root });
   };
-  const calls = [], handlers = new Map();
+  const calls = [], handlers = new Map(), delivery = { autoAttach: false };
   init({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
-    bgAgents: { ...bg, runVerb: async (...args) => { calls.push(args); return { ok: true }; } },
+    bgAgents: { ...bg, runVerb: async (...args) => { calls.push(args); if (delivery.autoAttach) descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: bg.findRestoreJob(SID, 'aaaaaaaa').job.sessionId }); return { ok: true }; } },
     cliSessionState: cli, getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
     sessionHasPty: () => false, ptyPids: () => [], getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }) });
-  return { root, file, descriptors, fork, calls, handlers };
+  return { root, file, descriptors, fork, calls, handlers, writeJob, cli, delivery };
 }
 
 function handoff(h, { exitAt = 600, forkAt = Infinity, uncertain = false, descriptor = true, prior = false } = {}) {
@@ -127,7 +127,7 @@ test('1020 restore refuses a live continuation of a dead working job', async t =
   assert.equal(result.action, 'refuse');
 });
 
-for (const state of ['blocked', 'running', 'done', 'failed']) {
+for (const state of ['blocked', 'failed']) {
   test('1020 dead ' + state + ' needs explicit Respawn', async t => {
     const h = fixture(t, state);
     const result = await h.handlers.get('restore-background-job')({}, SID);
@@ -136,3 +136,93 @@ for (const state of ['blocked', 'running', 'done', 'failed']) {
     assert.equal(result.recovery, 'respawn');
   });
 }
+
+for (const state of ['working', 'running', 'done']) {
+  test('1020fix restore respawns and attaches dead ' + state, async t => {
+    const h = fixture(t, state);
+    h.delivery.autoAttach = true;
+    const result = await h.handlers.get('restore-background-job')({}, SID);
+    assert.equal(result.action, 'attach', 'restore must retain #796 recovery');
+    assert.deepEqual(h.calls, [['respawn', 'aaaaaaaa']]);
+  });
+}
+
+for (const state of ['blocked', 'working', 'running', 'done', 'failed', 'stopped']) {
+  test('1020fix dead ' + state + ' can use manual Respawn after restore', async t => {
+    const h = fixture(t, state);
+    if (state === 'blocked') {
+      const notice = await h.handlers.get('restore-background-job')({}, SID);
+      assert.equal(notice.recovery, 'respawn');
+      assert.deepEqual(h.calls, []);
+    }
+    assert.equal((await h.handlers.get('check-bg-agent-verb')({}, 'respawn', 'aaaaaaaa')).ok, true, 'Respawn preview must accept dead workers');
+    assert.equal((await h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa')).ok, true, 'the notice recovery must reach respawn');
+    assert.deepEqual(h.calls, [['respawn', 'aaaaaaaa']]);
+  });
+}
+
+for (const tail of ['{"type":"assistant","mess', '{"type":"continued-in","sessionId":"' + SID + '","continuedInSessionId":"']) {
+  test('1020fix torn final line permits manual recovery ' + tail, async t => {
+    const h = fixture(t, 'done');
+    fs.appendFileSync(h.file, tail);
+    assert.deepEqual(await createContinuationReader(h.file, SID)(), [], 'an incomplete final record cannot invalidate sealed evidence');
+    assert.equal((await h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa')).ok, true);
+    assert.deepEqual(h.calls, [['respawn', 'aaaaaaaa']]);
+  });
+}
+
+for (const missing of ['resolved-path', 'dangling-link']) {
+  test('1020fix deleted continuation permits recovery ' + missing, async t => {
+    const h = fixture(t);
+    fs.appendFileSync(h.file, link(NEXT));
+    if (missing === 'dangling-link') bg.init({ jobsDir: path.join(h.root, 'jobs'), homeDir: h.root, cliSessionState: h.cli,
+      resolveTranscriptPath: id => id === NEXT ? null : h.file });
+    assert.equal((await h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa')).ok, true, 'missing unowned continuation must permit recovery');
+    assert.deepEqual(h.calls, [['respawn', 'aaaaaaaa']]);
+  });
+}
+
+for (const state of ['working', 'blocked']) {
+  test('1020fix dead ' + state + ' fork does not block manual Respawn', async t => {
+    const h = fixture(t);
+    h.fork(); h.descriptors.length = 0;
+    h.writeJob('bbbbbbbb', NEXT, state);
+    assert.equal((await h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa')).ok, true, 'dead forks are not running');
+    assert.deepEqual(h.calls, [['respawn', 'aaaaaaaa']]);
+  });
+}
+
+test('1020fix dead fork does not refuse its own resume ancestry', async t => {
+  const h = fixture(t, 'working');
+  fs.appendFileSync(h.file, link(NEXT));
+  fs.writeFileSync(path.join(h.root, NEXT + '.jsonl'), line({ type: 'user', sessionId: NEXT }));
+  fs.writeFileSync(path.join(h.root, 'jobs', 'aaaaaaaa', 'state.json'), line({ state: 'working', sessionId: NEXT, resumeSessionId: SID,
+    linkScanPath: path.join(h.root, NEXT + '.jsonl') }));
+  h.delivery.autoAttach = true;
+  const result = await h.handlers.get('restore-background-job')({}, SID);
+  assert.equal(result.action, 'attach', 'a dead job must not block itself through A -> B');
+  assert.deepEqual(h.calls, [['respawn', 'aaaaaaaa']]);
+});
+
+test('1020fix blocked restore notice Respawn click reaches the verb and attaches', async t => {
+  const h = fixture(t, 'blocked');
+  h.delivery.autoAttach = true;
+  let notice;
+  const opened = [];
+  const ctx = require('node:vm').createContext({
+    window: { api: {
+      restoreBackgroundJob: (sid, options) => h.handlers.get('restore-background-job')({}, sid, options),
+      bgAgentVerb: (verb, id) => h.handlers.get('bg-agent-verb')({}, verb, id),
+      getSessionLiveElsewhere: async () => h.descriptors[0],
+    } },
+    sessionActionNoticeId: () => 'restore', sessionActionDescription: () => 'fixture',
+    showAppNotice: value => { notice = value; }, openSession: async (...args) => opened.push(args),
+  });
+  const { prepareBackgroundRestore } = require('./app-source').loadAppFunctions(ctx, { functions: ['prepareBackgroundRestore'] });
+  await prepareBackgroundRestore({ sessionId: SID }, { sessionId: SID });
+  assert.equal(notice.actionLabel, 'Respawn');
+  await notice.onAction();
+  assert.deepEqual(h.calls, [['respawn', 'aaaaaaaa']], 'clicking the notice must invoke respawn');
+  assert.equal(opened.length, 1, 'recovery attaches the resulting live fork');
+  assert.equal(opened[0][2].backgroundRestoreJobId, 'aaaaaaaa');
+});

@@ -56,6 +56,10 @@ function createContinuationReader(file, id) {
         index = JSON.parse(serialized);
         if (index.bytes < index.size) await new Promise(resolve => setImmediate(resolve));
       } while (index.bytes < index.size);
+      if (!index.complete && index.pending && !index.invalid) {
+        try { JSON.parse(Buffer.from(index.pending, 'base64').toString('utf8')); }
+        catch { return index.sealedIds; }
+      }
       return index.complete && !index.unresolved ? index.ids : null;
     } catch { serialized = previous = undefined; return null; }
   };
@@ -97,9 +101,10 @@ async function respawnHandoff(session, sessionId, oldId, job, previous, deps) {
   const exitTimeoutMs = deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS;
   const exitBy = deps.now() + exitTimeoutMs;
   while (!session.exited) {
-    if (deps.now() >= exitBy) return { ok: false, code: 'exit-timeout', jobId, error: 'Sent /exit, but the terminal did not exit within ' + (exitTimeoutMs / 1000) + ' s; nothing was relaunched. Check the terminal.' };
+    if (deps.now() >= exitBy) break;
     await deps.waitForChange(Math.max(0, Math.min(100, exitBy - deps.now())));
   }
+  const exitTimedOut = !session.exited;
   const continuationBy = deps.now() + (deps.continuationWaitMs ?? BG_RESPAWN_CONTINUATION_WAIT_MS);
   let uncertain = true;
   const newIds = new Set();
@@ -122,6 +127,8 @@ async function respawnHandoff(session, sessionId, oldId, job, previous, deps) {
     if (deps.now() >= continuationBy) break;
     await deps.waitForChange(Math.min(100, continuationBy - deps.now()));
   }
+  if (exitTimedOut || !session.exited) return { ok: false, code: 'exit-timeout', jobId,
+    error: 'Sent /exit, but the terminal did not exit within ' + (exitTimeoutMs / 1000) + ' s. No continuation was confirmed during the following 10 s; nothing was relaunched. Check the terminal and the Agents view.' };
   if (uncertain || newIds.size) return { ok: false, code: 'respawn-failed', jobId,
     error: 'The terminal exited, but its continuation could not be confirmed. The job was not respawned. Check the Agents view or open the conversation from the sidebar before retrying.' };
   let result;
@@ -166,6 +173,14 @@ async function sendToBackground(sessionId, deps) {
     const afterRoute = backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId));
     if (afterRoute || !bound() || deps.now() >= deadline) return { ok: false, code: 'refused', error: afterRoute || 'The tab changed or its handoff deadline passed. Check the terminal, then try again.' };
     if (route.route === 'refuse') return { ok: false, code: 'refused', error: route.error };
+    if (route.route === 'adopt') {
+      const continuation = route.continuation;
+      session.backgrounded = true;
+      await releaseWindowsPty(session.pty);
+      deps.onConfirmed?.(continuation);
+      return { ok: true, oldSessionId: sessionId, sessionId: continuation.sessionId,
+        jobId: continuation.jobId, cwd: continuation.cwd || session.cwd };
+    }
     const command = route.route === 'respawn' ? '/exit' : '/bg';
     dispose = deps.tapOutput(session, text => { output = (output + text).slice(-16384); });
     const composer = session.composerState;

@@ -33,10 +33,10 @@ never added just because they exist in the Agents view.
 nothing. **Restore on click** waits until the saved row is opened. **Don't
 restore** starts nothing, including for the remembered active background tab.
 
-A live worker is attached. A worker proven dead is respawned as the same job,
-with the same conversation and name, then attached. Background restore never
+A live worker is attached. A working, done or running job proven dead is respawned as the same job,
+with the same conversation and name, then attached, unless a live continuation holds it. Background restore never
 opens an interactive `--resume` tab or sends `/bg`. A stopped job is not
-respawned automatically: its notice offers **Respawn**, which checks that the
+respawned automatically, and neither is a dead blocked or failed job: its notice offers **Respawn**, which checks that the
 conversation can be restarted before doing so.
 
 Unknown worker liveness, conflicting records and a refused

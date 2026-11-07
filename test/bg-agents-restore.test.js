@@ -162,10 +162,8 @@ for (const state of ['working', 'blocked']) {
       cliSessionState: { readAllDescriptors: () => descriptors, onDescriptorsChanged: () => () => {},
         liveElsewhereChecked: async () => ({ known: true, live: null }) },
     });
-    for (const verb of ['rm', 'respawn']) {
-      const ordinary = await handlers.get('bg-agent-verb')({}, verb, 'aaaaaaaa');
-      assert.equal(ordinary.ok, false, `GUARD ordinary ${verb} retains no-evidence refusal`);
-    }
+    const ordinary = await handlers.get('bg-agent-verb')({}, 'rm', 'aaaaaaaa');
+    assert.equal(ordinary.ok, false, 'GUARD ordinary rm retains no-evidence refusal');
     assert.deepEqual(calls, []);
     const result = await handlers.get('restore-background-job')({}, SID);
     assert.deepEqual(calls, state === 'working' ? [['respawn', 'aaaaaaaa']] : []);

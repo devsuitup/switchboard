@@ -1912,9 +1912,24 @@ async function handleSendToBackground(_event, sessionId) {
     kill: entry => killPty(entry, sessionId),
     decideRoute: async (id, entry) => {
       const lookup = bgAgents.findRestoreJob(id, undefined, { ignoreUnrelatedInvalid: true });
-      if (!lookup.known || !lookup.job) return respawnRoute({ oldId: id, lookup });
-      const check = await bgAgents.conversationCheck(lookup.job.id, { workerLiveness: 'all' });
-      if (!check.known) return respawnRoute({ oldId: id, lookup, check });
+      if (!lookup.known && !lookup.missing) return respawnRoute({ oldId: id, lookup });
+      const check = lookup.job ? await bgAgents.conversationCheck(lookup.job.id, { workerLiveness: 'all' }) : null;
+      if (lookup.job && !check.known) return respawnRoute({ oldId: id, lookup, check });
+      const continuations = new Map();
+      for (const sid of new Set([id, lookup.job?.resumeTarget, ...(check?.continuationSessionIds || [])].filter(Boolean))) {
+        const continuation = await bgAgents.continuationJobCheck(sid, {
+          excludeJobId: lookup.job?.id, workerLiveness: new Map(lookup.job ? [[lookup.job.id, check.workerLiveness]] : []),
+        });
+        if (!continuation.known) return { route: 'refuse', error: `Cannot check conversation continuations (${continuation.reason}). Check the Agents view, then retry.` };
+        if (continuation.job) continuations.set(continuation.job.id, continuation.job);
+      }
+      if (continuations.size) {
+        const job = continuations.values().next().value;
+        const matches = cliSessionState.readAllDescriptors().filter(d => d.kind === 'bg' && d.jobId === job.id && d.sessionId.toLowerCase() === job.sessionId.toLowerCase());
+        if (continuations.size === 1 && matches.length === 1) return { route: 'adopt', continuation: matches[0] };
+        return { route: 'refuse', error: 'A continuation already runs in the background. Attach to it from the Agents view.' };
+      }
+      if (!lookup.job) return respawnRoute({ oldId: id, lookup });
       let owned = { known: true, job: null };
       for (const sid of new Set([id, ...check.sessionIds].map(s => s.toLowerCase()))) {
         owned = bgAgents.liveJobCheck(sid, { workerLiveness: new Map([[lookup.job.id, check.workerLiveness]]) });
