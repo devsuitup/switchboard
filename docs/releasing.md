@@ -23,10 +23,14 @@ request first, because `main` is protected.
    `test/changelog.test.js` fails when `CHANGELOG.md` has no section for the
    version in `package.json`, so a bump without its section does not pass CI.
 
-   The `main-protection` ruleset requires the checks `lint`,
-   `test (20, ubuntu-latest)`, `test (20, windows-2022)`, `test (22, ubuntu-latest)`,
-   `test (22, windows-2022)`, `changelog` and `e2e`, and no approving review, so
-   `gh pr merge --auto --squash` can be armed as soon as the checks run.
+   The required PR checks for this workflow are `lint`,
+   `test (20, ubuntu-latest)`, `test (22, ubuntu-latest)`,
+   `test (22, windows-2022)`, `changelog` and `e2e`. Build is not required.
+   JB must remove the obsolete `test (20, windows-2022)` context from the
+   external `main-protection` ruleset when adopting this matrix; workflow
+   changes do not change repository settings. The documented ruleset requires
+   no approving review, so `gh pr merge --auto --squash` can be armed once the
+   required checks run. CI-only PRs use the `no-changelog` label.
 
 2. **Run the app before tagging.** The tag is what publishes, and nothing
    between the merge and the tag looks at the assembled whole; the test suite
@@ -45,11 +49,19 @@ request first, because `main` is protected.
 
 4. **Wait for the build.** The tag starts `.github/workflows/build.yml`: macOS
    (macos-14), Windows (windows-2022), and Linux x64 and arm64 on separate
-   runners. Pull requests build only Windows and both Linux architectures;
-   macOS remains part of every tag build. Each build job has a 60-minute timeout.
+   runners. Packaging-related pull requests and manual dispatches build only
+   Windows and both Linux architectures; macOS remains part of every tag push
+   build. A dispatch never publishes, even on a tag ref. For a PR installer,
+   see [Testing a PR live](testing-a-pr.md#obtaining-a-pr-installer).
+   Each build job retains its 60-minute timeout for native rebuilds and
+   multi-architecture packaging; publish has a 10-minute timeout.
    The publish job keeps `needs: build`: all matrix entries must succeed before
    it runs. If macOS fails, is cancelled or times out, nothing is published
    automatically, even when Windows and Linux succeed.
+
+   Tag artifacts are downloaded by publish in the same run and retained for
+   14 days (PR artifacts: 3 days). Only older PR runs are cancelled by newer
+   runs on their branch; tag and main pushes never cancel in-progress runs.
 
    To recover, re-run the failed macOS job in the tag's Actions run (or re-run
    failed jobs) and let the dependent publish job run once every build succeeds.

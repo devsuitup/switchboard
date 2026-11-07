@@ -3,8 +3,20 @@ name: Build & Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
   pull_request:
     branches: [main]
+    paths:
+      - package.json
+      - package-lock.json
+      - postinstall.js
+      - scripts/**
+      - .github/workflows/build.yml
+      - build/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -17,7 +29,7 @@ jobs:
       # see .ai/contexts/build-release.md
       matrix:
         include: >-
-          ${{ fromJSON(github.event_name != 'pull_request' &&
+          ${{ fromJSON(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') &&
           '[{"os":"macos-14","platform":"mac"},{"os":"windows-2022","platform":"win"},{"os":"ubuntu-latest","platform":"linux","arch":"x64"},{"os":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"}]' ||
           '[{"os":"windows-2022","platform":"win"},{"os":"ubuntu-latest","platform":"linux","arch":"x64"},{"os":"ubuntu-24.04-arm","platform":"linux","arch":"arm64"}]') }}
 
@@ -84,11 +96,13 @@ jobs:
             dist/*.pacman
             dist/latest*.yml
           if-no-files-found: ignore
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
 
   publish:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
