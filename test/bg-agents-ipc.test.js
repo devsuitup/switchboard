@@ -20,6 +20,7 @@ function fakeBgAgents() {
     conversationCheck: () => ({ known: true, state: 'working', hosted: true, sessionIds: ['s-1'] }),
     dispatch: async (fields) => { calls.push(['dispatch', fields]); return { ok: true, id: 'aaaaaaaa' }; },
     liveJobCheck: (sessionId) => { calls.push(['liveJobCheck', sessionId]); return { known: true, job: null }; },
+    continuationJobCheck: async () => ({ known: true, job: null }),
     onChange: (l) => { listener = l; return () => { listener = null; }; },
     fire: (snap) => listener && listener(snap),
   };
@@ -72,12 +73,12 @@ for (const state of ['working', 'blocked', 'running', 'done', 'failed', 'stopped
     test(`B main restore ${state}/${liveness} follows the classifier and checked verb`, async t => {
       const h = restoreFixture(t, { state, liveness, descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }] });
       const result = await h.restore();
-      const shouldRespawn = liveness === 'dead' && state !== 'stopped';
+      const shouldRespawn = liveness === 'dead' && state === 'working';
       const shouldAttach = liveness === 'live' || shouldRespawn;
       assert.equal(result.action, shouldAttach ? 'attach' : 'refuse');
       assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), shouldRespawn ? [['respawn', 'aaaaaaaa']] : []);
       assert.ok(h.seen.some(call => call[0] === 'check' && call[1]?.workerLiveness === 'all'), 'S1a classifies every restore state');
-      if (state === 'stopped' && liveness === 'dead') assert.equal(result.recovery, 'respawn');
+      if (state !== 'working' && liveness === 'dead') assert.equal(result.recovery, 'respawn');
       if (!shouldAttach) assert.match(result.reason, new RegExp(`aaaaaaaa.*${state}`));
     });
   }

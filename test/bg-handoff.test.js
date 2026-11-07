@@ -385,6 +385,7 @@ for (const failure of ['throw', 'false']) {
 const S2_SID = '11111111-1111-4111-8111-111111111111';
 function respawnSetup(respawnResult) {
   const h = setup();
+  h.deps.readContinuationIds = () => [];
   h.deps.decideRoute = async () => ({ route: 'respawn', jobId: 'aaaaaaaa', job: { id: 'aaaaaaaa', sessionId: 'old' } });
   h.deps.write = (_, text) => { h.writes.push(text); if (text === '\r') h.session.exited = true; return true; };
   h.deps.respawnJob = async () => respawnResult;

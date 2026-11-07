@@ -12,7 +12,8 @@ function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bg-restore-785-'));
   const jobsDir = path.join(home, 'jobs');
   fs.mkdirSync(jobsDir);
-  bg.init({ jobsDir, homeDir: home, cliSessionState: { readAllDescriptors: () => [],
+  fs.writeFileSync(path.join(home, SID + '.jsonl'), JSON.stringify({ type: 'user', sessionId: SID }) + '\n');
+  bg.init({ jobsDir, homeDir: home, resolveTranscriptPath: id => path.join(home, id + '.jsonl'), cliSessionState: { readAllDescriptors: () => [],
     refreshProcessTable: async () => {}, readWorkerProcessEvidence: () => ({ processTableFresh: true, tableEntry: () => undefined }) } });
   fs.mkdirSync(path.join(home, 'daemon'));
   fs.writeFileSync(path.join(home, 'daemon', 'roster.json'), JSON.stringify({ proto: 1, updatedAt: '2000-01-01T00:00:00Z', workers: {} }));
@@ -167,8 +168,9 @@ for (const state of ['working', 'blocked']) {
     }
     assert.deepEqual(calls, []);
     const result = await handlers.get('restore-background-job')({}, SID);
-    assert.deepEqual(calls, [['respawn', 'aaaaaaaa']]);
-    assert.equal(result.action, 'attach');
+    assert.deepEqual(calls, state === 'working' ? [['respawn', 'aaaaaaaa']] : []);
+    assert.equal(result.action, state === 'working' ? 'attach' : 'refuse');
+    if (state === 'blocked') assert.equal(result.recovery, 'respawn');
   });
 }
 

@@ -10,6 +10,7 @@ const {
 } = require('./bg-agents-roster');
 const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('../../../project-root');
 const { classifyWorkerLiveness, workerTimestamp } = require('./bg-worker-liveness');
+const { createContinuationReader } = require('./bg-handoff');
 
 const DEFAULT_JOBS_DIR = path.join(os.homedir(), '.claude', 'jobs');
 const FLUSH_MS = 250;
@@ -374,8 +375,15 @@ async function workerEvidence(job, allStates = false) {
 async function conversationCheck(id, { workerLiveness = true } = {}) {
   if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { known: false, reason: 'invalid background session id' };
   const gen = generation;
-  let job;
-  try { job = parseJobState(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch (err) {
+  let job, resumeSessionId;
+  try {
+    const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
+    job = parseJobState(text);
+    if (job?.state) {
+      const target = JSON.parse(text).resumeSessionId;
+      if (typeof target === 'string' && SESSION_ID_RE.test(target)) resumeSessionId = target.toLowerCase();
+    }
+  } catch (err) {
     return { known: false, reason: `cannot read job ${id}: ${err.message}` };
   }
   if (!job || !job.state) return { known: false, reason: `job ${id} has an unknown or unreadable state` };
@@ -387,7 +395,28 @@ async function conversationCheck(id, { workerLiveness = true } = {}) {
   const evidence = workerLiveness ? await workerEvidence(identified, workerLiveness === 'all') : undefined;
   if (gen !== generation) return { known: false, reason: 'background agent service changed while checking the worker' };
   return { known: true, sessionIds, state: job.state, workerLiveness: evidence,
+    continuationSessionIds: [...new Set([...sessionIds.filter(sid => SESSION_ID_RE.test(sid)), resumeSessionId].filter(Boolean))],
     hosted: isHostedJob(identified, liveDescriptors(), evidence) };
+}
+
+async function continuationJobCheck(sessionId) {
+  const pending = [sessionId], seen = new Set();
+  while (pending.length) {
+    const id = pending.shift().toLowerCase();
+    if (seen.has(id)) continue;
+    if (seen.size >= 64) return { known: false, reason: 'too many conversation continuations' };
+    seen.add(id);
+    if (id !== sessionId.toLowerCase()) {
+      const owner = liveJobCheck(id);
+      if (!owner.known || owner.job) return owner;
+    }
+    const file = resolveTranscriptPath?.(id);
+    if (!file) return { known: false, reason: 'continuation transcript unavailable for ' + id };
+    const ids = await createContinuationReader(file, id)();
+    if (!ids) return { known: false, reason: 'cannot read conversation continuations for ' + id };
+    pending.push(...ids);
+  }
+  return { known: true, job: null };
 }
 
 function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false } = {}) {
@@ -539,6 +568,6 @@ function liveJobCheck(sessionId, { workerLiveness = new Map() } = {}) {
 module.exports = {
   getDaemonRosterPath: () => daemonRosterPath,
   invalidateTranscripts,
-  init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck, findRestoreJob,
+  init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck, continuationJobCheck, findRestoreJob,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };

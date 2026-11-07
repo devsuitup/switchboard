@@ -39,8 +39,9 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
         if (check.hosted) {
           return { ok: false, error: `cannot ${action} a ${check.state} session; stop it first` };
         }
-        const sessionIds = extraSessionIds.length
-          ? new Set([...check.sessionIds, ...extraSessionIds].map(s => s.toLowerCase())) : check.sessionIds;
+        const sessionIds = new Set(extraSessionIds.length
+          ? [...check.sessionIds, ...extraSessionIds].map(s => s.toLowerCase()) : check.sessionIds);
+        if (verb === 'respawn') for (const sid of check.continuationSessionIds || []) sessionIds.add(sid);
         for (const sessionId of sessionIds) {
           const refusal = await deleteSessionRefusal(sessionId, {
             activeSessions: verb === 'stop' ? new Map([...activeSessions || []].filter(([, session]) =>
@@ -52,6 +53,13 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
           if (refusal) return { ok: false, error: verb === 'stop'
             ? refusal.replace(/ — [^—]*(?:retry Delete|not deleted)$/, ' — not stopped')
             : refusal.replace('not deleted', declined).replace(/then retry Delete$/, verb === 'respawn' ? 'then retry Respawn' : 'then retry Delete') };
+        }
+        if (verb === 'respawn') {
+          for (const sessionId of new Set([...(check.continuationSessionIds || check.sessionIds), ...extraSessionIds].map(s => s.toLowerCase()))) {
+            const continuation = await bgAgents.continuationJobCheck(sessionId);
+            if (!continuation.known) return { ok: false, error: `cannot check conversation continuations (${continuation.reason}) — not respawned` };
+            if (continuation.job) return { ok: false, error: `continuation job ${continuation.job.id} still runs this conversation — not respawned` };
+          }
         }
       } catch (err) {
         if (verb === 'stop' && !check) return { ok: true };
@@ -119,7 +127,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       if (check.workerLiveness !== 'live' && check.workerLiveness !== 'dead') return refuse('worker liveness unknown — not respawned');
       if (check.workerLiveness === 'dead') {
         if (attachOnly) return refuse('worker is not live — not attached');
-        if (check.state === 'stopped') return refuse('stopped job was not respawned automatically', 'respawn');
+        if (check.state !== 'working') return refuse(check.state + ' job was not respawned automatically', 'respawn');
         const result = await respawnForHandoff(job);
         if (!result.ok) return refuse(result.error);
         return result.attached ? { action: 'attach', sessionId, jobId: job.id }

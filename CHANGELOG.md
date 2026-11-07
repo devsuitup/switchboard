@@ -5,6 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
+- Sending a resumed session to the background no longer leaves two copies of the conversation running. (#1020)
 - A conversation's message count in the sidebar now grows as the conversation does, including remote conversations without recounting their entire transcript on each fetch. Conversations sharing copied history keep duplicate messages out of their counts. (#1017)
 
 ## v0.0.103 — 2026-11-03
