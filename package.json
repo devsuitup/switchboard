@@ -80,6 +80,7 @@
     "files": [
       "src/**/*",
       "*.js",
+      "harnesses/**",
       "CHANGELOG.md",
       "workers/**/*",
       "public/**/*",

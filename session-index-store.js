@@ -290,6 +290,8 @@ if (migrations.length > currentDbVersion) {
   if (!cols.has('entrypoint')) db.exec('ALTER TABLE session_cache ADD COLUMN entrypoint TEXT');
   if (!cols.has('scheduleSlug')) db.exec('ALTER TABLE session_cache ADD COLUMN scheduleSlug TEXT');
   if (!cols.has('continuationIndex')) db.exec('ALTER TABLE session_cache ADD COLUMN continuationIndex TEXT');
+  if (!cols.has('runtime')) db.exec("ALTER TABLE session_cache ADD COLUMN runtime TEXT DEFAULT 'claude'");
+  if (!cols.has('sessionFile')) db.exec('ALTER TABLE session_cache ADD COLUMN sessionFile TEXT');
   if (!cols.has('customTitle')) db.exec('ALTER TABLE session_cache ADD COLUMN customTitle TEXT');
   if (!cols.has('workflowRunId')) db.exec('ALTER TABLE session_cache ADD COLUMN workflowRunId TEXT');
   if (!cols.has('messageCountIndex')) db.exec('ALTER TABLE session_cache ADD COLUMN messageCountIndex TEXT');
