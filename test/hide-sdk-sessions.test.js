@@ -9,6 +9,7 @@ const path = require('path');
 const { readSessionFile, readSessionEntrypoint } = require('../read-session-file');
 const sessionCache = require('../session-cache');
 const { encodeProjectPath } = require('../encode-project-path');
+const openStore = require('./fixtures/conversation-store.cjs');
 
 function mkTmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-sdk-'));
@@ -331,36 +332,25 @@ test('backfillEntrypoints fills the rows cached before the column existed', asyn
   }
 });
 
-test('adding the entrypoint column keeps the cached sessions', () => {
-  const { spawnSync } = require('child_process');
-  const electronBin = require('electron');
-  const appDir = path.join(__dirname, '..');
+test('adding the entrypoint column keeps the cached sessions',
+  { skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22' }, () => {
   const dir = mkTmp();
-  const run = (code) => spawnSync(electronBin, ['-e', code], {
-    cwd: appDir,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: dir },
-    encoding: 'utf8',
-  });
-  const loadDb = `require(${JSON.stringify(path.join(appDir, 'test/fixtures/writer-store.cjs'))})`;
+  const previous = process.env.SWITCHBOARD_DATA_DIR;
+  process.env.SWITCHBOARD_DATA_DIR = dir;
+  let db;
   try {
-    assert.equal(run(loadDb).status, 0);
-    const seed = run(`
-      const Database = require('better-sqlite3');
-      const db = new Database(require('path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'));
-      db.exec('ALTER TABLE session_cache DROP COLUMN entrypoint');
-      db.prepare('INSERT INTO session_cache (sessionId, folder, projectPath, summary, modified) VALUES (?, ?, ?, ?, ?)')
-        .run('kept', 'f1', '/tmp/p1', 'hello', '2026-10-07T10:00:00.000Z');
-    `);
-    assert.equal(seed.status, 0, seed.stderr);
-    assert.equal(run(loadDb).status, 0);
-    const r = run(`
-      const Database = require('better-sqlite3');
-      const db = new Database(require('path').join(process.env.SWITCHBOARD_DATA_DIR, 'switchboard.db'), { readonly: true });
-      console.log(JSON.stringify(db.prepare('SELECT sessionId, entrypoint FROM session_cache').all()));
-    `);
-    assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(JSON.parse(r.stdout.trim().split('\n').pop()), [{ sessionId: 'kept', entrypoint: null }]);
+    db = openStore();
+    db.connection.exec('ALTER TABLE session_cache DROP COLUMN entrypoint');
+    db.connection.prepare('INSERT INTO session_cache (sessionId, folder, projectPath, summary, modified) VALUES (?, ?, ?, ?, ?)')
+      .run('kept', 'f1', '/tmp/p1', 'hello', '2026-10-07T10:00:00.000Z');
+    db.closeDb();
+    db = openStore();
+    const rows = db.connection.prepare('SELECT sessionId, entrypoint FROM session_cache').all();
+    assert.deepEqual(rows.map(row => ({ ...row })), [{ sessionId: 'kept', entrypoint: null }]);
   } finally {
+    db?.closeDb();
+    if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR;
+    else process.env.SWITCHBOARD_DATA_DIR = previous;
     cleanup(dir);
   }
 });
