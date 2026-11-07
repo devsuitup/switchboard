@@ -31,7 +31,8 @@ Electron's ABI. `postinstall` swallows a failed rebuild, and without that check
 a failed rebuild would show up as an app that does not start. When a journey
 fails, the job uploads `switchboard-e2e-results/` under the runner's temporary
 directory (a `trace.zip` and a `failure.png` for each failed journey) and the
-HTML report as the `e2e-results` artifact.
+HTML report as the `e2e-results` artifact, retained for 3 days on PRs and
+14 days on main pushes. The job has a 10-minute timeout.
 Open a trace with `npx playwright show-trace trace.zip`. It has the DOM and a
 screenshot for each step.
 
