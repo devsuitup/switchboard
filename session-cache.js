@@ -30,6 +30,7 @@ const { setRemappedProjectReader } = require('./encode-project-path');
 const { deriveProjectPath, storedProjectPathMatchesFolder } = require('./derive-project-path');
 const { readSessionFile, readSessionDisplayHeader, readSessionEntrypoint, isSdkEntrypoint, enumerateSessionFiles, resolveJsonlPath, mergeBridgeGroups, isCanonicalWorkflowPath } = require('./read-session-file');
 const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
+const { readMessageCount } = require('./src/main/session-index/message-count');
 const { encodeProjectPath, decodeProjectFolderBestEffort } = require('./encode-project-path');
 const { parseFolderKey, joinFolderKey } = require('./src/main/remote/remote-hosts');
 const { isPanelShellSession } = require('./src/main/terminals/panel-terminal-target');
@@ -445,7 +446,7 @@ function refreshFolder(folder, opts = {}) {
   for (const row of cachedSessions) {
     const filePath = jsonlPathFor(row);
     // Keep the full row so refresh can merge display-only header updates with
-    // unchanged fields (created, messageCount, textContent) without re-reading
+    // unchanged fields (created, textContent) without re-reading
     // the file body.
     cachedMap.set(row.sessionId, { ...row, filePath });
     filePathToDbId.set(filePath, row.sessionId);
@@ -487,6 +488,7 @@ function refreshFolder(folder, opts = {}) {
   const sizesToAdopt = [];
   const metricsToReplace = [];
   const linkedVersions = new Map();
+  const countRecountMtimes = new Map();
   // Full reads only (the "NEW file" branch below) -- kept separate from
   // sessionsToUpsert so mergeBridgeGroups never sees a header-only-refreshed
   // row and mistakes it for a safe-to-reread fresh read (it isn't: the whole
@@ -570,12 +572,23 @@ function refreshFolder(folder, opts = {}) {
         && continuationIndex === cachedEntry.continuationIndex) { collector.accounted.add(relativeFile); continue; }
       // EXISTING -- header-only refresh.
       const h = readSessionDisplayHeader(filePath, { parentSessionId, workflowRunId });
+      let count = readMessageCount(filePath, cachedEntry.messageCountIndex, stat,
+        !!(cachedEntry.mergedIntoSessionId || (cachedEntry.bridgeSessionId && !cachedEntry.messageCountIndex)), parseFolderKey(folder).alias !== null);
       collector.accounted.add(relativeFile);
       if (linked) linkedVersions.set(cachedDbId, { stat, filePath, relativeFile });
+      if (count?.needsFullRead) {
+        const s = readSessionFile(filePath, folder, projectPath, { parentSessionId, workflowRunId });
+        if (s) {
+          newFileReads.push(s);
+          countRecountMtimes.set(s.sessionId, fileMtime);
+          continue;
+        }
+        count = null;
+      }
       if (h) {
-        // Merge: keep cached body/messageCount/created, overlay fresh display fields.
         const merged = {
           ...cachedEntry,
+          ...count,
           continuationIndex,
           folder, projectPath,
           summary: h.summary || cachedEntry.summary,
@@ -611,8 +624,8 @@ function refreshFolder(folder, opts = {}) {
         // Header read couldn't extract signal -- just bump mtime so sort order
         // stays current. fileMtime has to move too, otherwise this file stays
         // permanently "dirty" and gets re-read on every watcher flush.
-        if (changedSize || continuationIndex !== cachedEntry.continuationIndex) {
-          sessionsToUpsert.push({ ...cachedEntry, continuationIndex, modified: fileMtime, fileMtime, fileSize });
+        if (count || changedSize || continuationIndex !== cachedEntry.continuationIndex) {
+          sessionsToUpsert.push({ ...cachedEntry, ...count, continuationIndex, modified: fileMtime, fileMtime, fileSize });
         } else sessionsToTouch.push({ sessionId: cachedDbId, fileMtime });
       }
       continue;
@@ -684,6 +697,7 @@ function refreshFolder(folder, opts = {}) {
   // already-cached member re-derived because its recorded mergedIntoSessionId
   // disagreed with the winner just computed (see mergeBridgeGroups).
   for (const s of mergedRows) {
+    if (countRecountMtimes.has(s.sessionId)) s.modified = countRecountMtimes.get(s.sessionId);
     sessionsToUpsert.push(s);
     metricsToReplace.push({ sessionId: s.sessionId, dailyMetrics: s.dailyMetrics });
     const name = getMeta(s.sessionId)?.name || s.customTitle || s.aiTitle || '';

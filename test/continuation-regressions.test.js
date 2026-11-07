@@ -149,8 +149,10 @@ test('R2 header refresh skips subagents and bounds synchronous continuation read
   const subfile = path.join(subdir, 'agent-a.jsonl');
   fs.writeFileSync(subfile, JSON.stringify({ type: 'user', isSidechain: true, agentId: 'a', message: { content: 'subagent' } }) + '\n');
   cache.refreshFolder(h.folder);
-  const file = append(h, JSON.stringify({ padding: 'x'.repeat(5 * 1024 * 1024), type: 'assistant' }) + '\n');
-  fs.appendFileSync(subfile, JSON.stringify({ padding: 'x'.repeat(5 * 1024 * 1024), type: 'assistant' }) + '\n');
+  const appended = JSON.stringify({ padding: 'x'.repeat(5 * 1024 * 1024), type: 'assistant' }) + '\n';
+  const appendedBytes = Buffer.byteLength(appended);
+  const file = append(h, appended);
+  fs.appendFileSync(subfile, appended);
   fs.utimesSync(file, new Date('2030-01-01'), new Date('2030-01-01'));
   fs.utimesSync(subfile, new Date('2030-01-01'), new Date('2030-01-01'));
   const descriptors = new Map(), bytes = new Map();
@@ -162,21 +164,26 @@ test('R2 header refresh skips subagents and bounds synchronous continuation read
     return n;
   });
   cache.refreshFolder(h.folder, { files: new Set([path.join('old', 'subagents', 'agent-a.jsonl'), 'old.jsonl']) });
-  assert.ok(bytes.get(file) <= 1024 * 1024 + 512 * 1024 + 128 + 1, 'top-level head/tail and one alignment byte plus at most 1 MiB continuation work');
-  assert.ok(bytes.get(subfile) <= 512 * 1024 + 1, 'subagents receive only the bounded display head/tail and one alignment byte');
+  assert.ok(bytes.get(file) <= appendedBytes + 1024 * 1024 + 512 * 1024 + 320 + 1, 'bounded display/continuation reads plus appended count bytes and witnesses');
+  assert.ok(bytes.get(subfile) <= appendedBytes + 512 * 1024 + 192 + 1, 'bounded subagent display reads plus appended count bytes and witnesses');
+  assert.equal(h.rows.get('old').messageCount, 3);
+  assert.equal(h.rows.get('sub:old:a').messageCount, 2);
 });
 
 test('R2 one refresh shares a 1 MiB continuation budget across changed parents', { timeout: 9000 }, t => {
   const h = setup(t, { old: [], other: [] });
+  const appended = JSON.stringify({ padding: 'x'.repeat(2 * 1024 * 1024), type: 'assistant' }) + '\n';
   for (const id of ['old', 'other']) {
     const file = path.join(h.root, h.folder, id + '.jsonl');
-    fs.appendFileSync(file, JSON.stringify({ padding: 'x'.repeat(2 * 1024 * 1024), type: 'assistant' }) + '\n');
+    fs.appendFileSync(file, appended);
     fs.utimesSync(file, new Date('2030-01-01'), new Date('2030-01-01'));
   }
   const read = t.mock.method(fs, 'readSync');
   cache.refreshFolder(h.folder, { files: new Set(['old.jsonl', 'other.jsonl']) });
   const bytes = read.mock.calls.reduce((sum, call) => sum + call.result, 0);
-  assert.ok(bytes <= 1024 * 1024 + 2 * (512 * 1024 + 1) + 128, 'one continuation pacing budget plus two bounded display head/tail reads with alignment bytes');
+  assert.ok(bytes <= 2 * Buffer.byteLength(appended) + 1024 * 1024 + 2 * (512 * 1024 + 193) + 128, 'one continuation budget, bounded display reads, and appended count bytes with witnesses');
+  assert.equal(h.rows.get('old').messageCount, 3);
+  assert.equal(h.rows.get('other').messageCount, 3);
 });
 
 test('R2 yielded continuation indexing preserves fresher display fields', { timeout: 9000 }, async t => {

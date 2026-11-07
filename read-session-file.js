@@ -3,6 +3,7 @@ const fs = require('fs');
 const { StringDecoder } = require('string_decoder');
 const { continuationId, continuationStamp, matchesContinuationStamp, continuationMtime } = require('./session-continuations');
 const { classifyTranscriptPath, isWorkflowRunId } = require('./subagent-attribution');
+const { isCountedMessage, messageCountIndex } = require('./src/main/session-index/message-count');
 
 /** Subagent transcripts land under <folder>/<parentSessionId>/subagents/agent-<agentId>.jsonl.
  *  We surface them as first-class rows with a synthetic sessionId so they're addressable
@@ -216,6 +217,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
     let inheritedCommandSummary = '';
     let assistantSeen = false;
     let messageCount = 0;
+    let tailMessageCount = 0;
     const messageUuids = [];
     let messageUuidsComplete = true;
     let textContent = '';
@@ -290,8 +292,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         if (candidate.kind === 'prompt' && !inheritedSummary) inheritedSummary = candidate.text;
         else if (candidate.kind === 'command' && !inheritedCommandSummary) inheritedCommandSummary = candidate.text;
       }
-      const isMessage = entry.type === 'user' || entry.type === 'assistant' ||
-        (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'));
+      const isMessage = isCountedMessage(entry);
       if (isMessage) {
         if (typeof entry.uuid === 'string' && entry.uuid) messageUuids.push(entry.uuid);
         else {
@@ -303,6 +304,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       if (isMessage && excludedBySignature(entry, excludedMessageSignatures)) continue;
       if (isMessage) {
         messageCount++;
+        if (isTail) tailMessageCount++;
       }
       if (entry.type === 'assistant' || (entry.type === 'message' && entry.role === 'assistant')) {
         assistantSeen = true;
@@ -327,6 +329,9 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
 
     const fallbackDate = stat.mtime.toISOString().slice(0, 10);
     const dailyMetrics = extractDailyMetrics(lines, fallbackDate, cutoff, excludedMessageUuids, excludedMessageSignatures);
+    const stable = matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }));
+    const countIndex = stable
+      ? messageCountIndex(fileBytes, big, messageCount, tailMessageCount, !!(cutoff || excludedMessageUuids || excludedMessageSignatures)) : null;
 
     if (isSubagent) {
       // Sidechain marker must be present — otherwise the file lives under a
@@ -350,7 +355,7 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
         modified: stat.mtime.toISOString(),
         fileMtime: continuationMtime(big),
         fileSize: stat.size,
-        messageCount, textContent, slug, customTitle: customTitle || '', aiTitle,
+        messageCount, messageCountIndex: countIndex, textContent, slug, customTitle: customTitle || '', aiTitle,
         parentSessionId: opts.parentSessionId,
         workflowRunId: opts.workflowRunId || null,
         agentId,
@@ -373,8 +378,8 @@ function readSessionFile(filePath, folder, projectPath, opts = {}) {
       modified: lastTimestamp || stat.mtime.toISOString(),
       fileMtime,
       fileSize: stat.size,
-      messageCount, textContent, slug, scheduleSlug, customTitle: customTitle || '', aiTitle,
-      continuationIndex: matchesContinuationStamp(stamp, fs.statSync(filePath, { bigint: true }))
+      messageCount, messageCountIndex: countIndex, textContent, slug, scheduleSlug, customTitle: customTitle || '', aiTitle,
+      continuationIndex: stable
         ? JSON.stringify({ format: 3, version: 3, ids: [...continuationIds], stamp,
         sealedIds: sealedContinuationIds ?? [...continuationIds], bytes: fileBytes.length,
         complete: fileBytes.length === stat.size && (!incompleteTail || skipLine), size: fileBytes.length,

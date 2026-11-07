@@ -119,7 +119,7 @@ subagent preview selection; sidebar/group/grid-card labels use `formatDate`
 (just now, whole minutes, hours, days, then a date). Sidebar time labels already
 tick every 30s. The resume guard also includes the cached ISO timestamp in its
 confirmation text. `messageCount` appears as an exact integer on session and
-subagent rows; ordinary header refreshes already preserve the cached count.
+subagent rows; header refreshes update counts using a persisted append cursor.
 No session `fileMtime` renderer consumer exists. These uses tolerate the 30s
 activity window; busy/attention and running-subagent counts use separate events.
 Merged compaction mirrors choose `headSessionId` from the latest `modified`;
@@ -161,6 +161,50 @@ folder, even with no rows.
 Every notifier caller supplies a cause; see `docs/activity-trace.md` for
 `projects.changed` and the renderer frame probe. The `activity` cause selects
 the deferred path; the other labels identify structural notification producers.
+
+## Incremental message counts
+
+`src/main/session-index/message-count.js` shares the full reader's counting predicate: user and
+assistant records, including legacy `message` records with those roles, count;
+summary and other bookkeeping records do not. Full reads seed a nullable JSON
+`session_cache.messageCountIndex` alongside the count, including filtered bridge
+mirror baselines. The writer persists both through the existing row upsert;
+the scan worker uses the same reader. Adding the column preserves existing rows.
+On a changed legacy row without a cursor, the counter scans once to establish it.
+
+Header refreshes count appended bytes from the last sealed newline, preserving
+the filtered baseline on growth. The cursor stores the sealed and tentative
+counts, byte offset, exact filesystem stamp, and 64-byte head/tail witnesses.
+An unterminated valid message counts immediately, as in a full read; completing
+or sealing its line replaces that tentative contribution. Reads use 64 KiB
+chunks and retain at most one unfinished record in memory, including large
+records. No transcript body is stored in the cursor. Local growth requires the
+same file identity and matching witnesses. Remote folder keys (`alias::folder`)
+also permit identity changes on growth with matching witnesses: incremental
+transport copies the mirror, appends the fetched bytes and renames it into place.
+This retains the filtered baseline without a full read or bridge remerge on
+each fetch. Shrink, changed witnesses, or another mtime at the same size recount
+from zero. The bounded witnesses cannot prove that an arbitrary rewrite preserved
+the entire prefix, so local atomic replacements retain the identity check.
+Counts also refresh for subagents
+and when display-header parsing fails. Count changes remain activity-only and
+retain the existing 30-second notification window. FTS and daily metrics retain
+their existing refresh policy.
+
+Bridge rows whose cursor cannot be reused (including a pending tail or a legacy
+cursor) go through the existing full-read/bridge-union merge so a recount does
+not restore their duplicated prefix. `bridgeSessionId` marks this requirement
+even for UUID-filtered divergent rows with no `mergedIntoSessionId`. Normal
+sealed mirror appends retain the filtered count and read only the added records.
+A failed full read falls through to the header/mtime update, preserving the
+cached count while advancing freshness so unchanged watcher flushes do not retry
+it. Full reads share one final stamp check between their count and continuation
+indexes.
+
+The count reader remains separate from the shared continuation-byte budget.
+Remote parent refreshes may still spend that bounded 1 MiB budget rebuilding the
+continuation cursor after a rename, in addition to the bounded display reads and
+count suffix. Subagents skip continuation scanning.
 
 ## Projects query worker
 
