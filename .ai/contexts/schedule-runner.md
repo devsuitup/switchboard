@@ -23,7 +23,7 @@ From `schedule-runner.js`:
 - `scanSchedules(log, projectPaths)` — scan the given projects for `<project>/.claude/commands/schedule-*.md`, parse frontmatter, return `Schedule[]`. Without `projectPaths` it scans nothing. `startScheduler` passes its `projects()` option, which `main.js` fills from the registry below.
 - `scheduleRegistry(getSetting, setSetting, seed)` — the `scheduleProjects` setting: `list()`, `add(path)`, `remove(path)`. `main.js` reaches it through the session index writer (`scheduleProjects()` → `writer.scheduleRegistry(seed)` in `session-index-writer.js`), so its three methods are asynchronous there. `main.js` adds a project when it spawns a Claude session in it and on `add-project`, removes it on `remove-project`. Transcripts never add one: their `cwd`, and a folder name derived from it, are written by whoever ran claude, a sandboxed session included (see [docs/sandbox.md](../../docs/sandbox.md), "Schedules").
 - `initialScheduleProjects(listProjectSettingKeys)` — the seed, read once while the setting has never been written. It is the union of the `project:<path>` settings keys whose path is an existing local directory (`main.js` passes `listSettingKeys('project:')`; a key carries no host alias, so a remote project whose path also exists locally registers that local directory — the user's own directory, low harm), and of the `~/.claude/projects` folders whose recorded path, resolved, encodes back to the folder's name, holds a schedule and contains a `.git` entry (directory or file). Its recorded path comes through `verifiedTranscriptCwd`, the same rule as every other transcript cwd (`.ai/contexts/session-cache.md`, "Transcript cwd trust"). The second source exists because v0.0.85 ran schedules from every transcript folder, so dropping it would silently stop the schedules of an upgrading user. The `.git` requirement only keeps out schedule directories that are not repositories: a folder planted before the upgrade (under v0.0.85 a sandboxed session could write both `~/.claude/projects` and its project directory) that holds a `.git` and a schedule is still registered, once, at the first read, and inherits the enclosing project's sandbox setting. Accepted residual (maintainer decision 2026-10-02); after the upgrade `~/.claude/projects` is read-only to sandboxed sessions except their own folder, so nothing new is planted. Any other project is registered at its first launch from the app.
-- `refusedScheduleBinds(addDirs, projects, home, baseDir)` / `scheduleBindRefusals` (with the reason, used by `main.js`) — the `add-dirs` that are at or inside a `.claude` or `.git` (judged as spelled and by real path, anywhere), or under `home` and neither a registered project nor inside one (real paths). `main.js` skips a sandboxed run when it is not empty.
+- `refusedScheduleBinds(addDirs, projects, home, baseDir)` / `scheduleBindRefusals` (with the reason) — the `add-dirs` that are at or inside a `.claude` or `.git` (judged as spelled and by real path, anywhere), or under `home` and neither a registered project nor inside one (real paths). `scheduleLaunchRefusal` uses these rules; `main.js` and the listing share that refusal helper.
 - `createScheduleSession(schedule, dueMs)` — write a pre-seeded JSONL into `~/.claude/projects/<encoded>/<uuid>.jsonl` with the schedule's prompt as the first user message, prefixed `Scheduled Task: `, or `Scheduled Task (catch-up: due …, started …): ` when `dueMs` is set. Returns `{ sessionId, jsonlPath }`.
 - `buildScheduleCommand(sessionId, schedule)` — build the Claude argv, returned as `{ claudeArgs }` and shell-quoted by the caller: `--resume <sid> -p "Run the scheduled task" --permission-mode <mode> --allowedTools <tools>`, plus `--model`, `--max-budget-usd`, `--append-system-prompt` and `--add-dir` from the `cli:` block. The mode defaults to `auto` and the tools to `Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch` when the schedule names none.
 - `resolveScheduleSandbox(cwd, getSetting, defaultValue)` — whether a run in `cwd` is sandboxed: the nearest `project:` setting at or above `cwd` that sets `sandbox`, then the global setting, then the default.
@@ -178,6 +178,69 @@ deleted files or files whose `enabled` changed are skipped without a failure.
 - The file lives in the user's repository, so a tracked schedule file shows a
   working-tree diff after an archive.
 
+## Schedule listing backend (#792, slice A1)
+
+`list-schedules` in `main.js`, exposed as `api.listSchedules()` by preload,
+calls the Electron-free `buildScheduleList(deps)` in
+`src/main/schedules/schedule-list.js`. It awaits the complete local schedule
+registry, including archived projects. Main injects the cache reader, schedule
+liveness reader, archive and known-project predicates, sandbox settings, state
+and transcript directories, and the instance's catch-up flag. The listing
+module never derives catch-up policy from the environment.
+
+`listScheduleFiles(projectPaths, deps)` in `schedule-runner.js` reads the same
+directory and parser as `scanSchedules`, retaining disabled and malformed
+schedules. Both readers and the registry seed share
+`isRunnerScheduleFileName` (case-sensitive `schedule-` prefix and `.md` suffix)
+and the effective name, slug and catch-up field helper. Only the exact parsed
+string `false` disables a schedule; quoted `"false"` remains enabled. Files and
+directories linked below the project root are listed as `linked` using the
+existing `scheduleFileUnlinked` check.
+
+Problems report unread front matter (with an LF-saving hint for CRLF), missing
+cron or prompt, impossible cron fields/calendar combinations, sandbox launch
+refusals and every other file sharing an effective slug in the project.
+Impossible cron analysis enumerates values through the existing field matcher
+and checks possible month lengths including leap February; it does not infer
+impossibility from a one-year search. The Electron-free
+`scheduleLaunchRefusal` is shared by this reader and `runScheduleCommand`:
+off-Linux sandboxes are refused; Linux sandbox add-dirs use
+`scheduleBindRefusals` and its existing reasons. Unsandboxed add-dirs are not
+judged. The launcher's error and recovery text remain the same.
+
+`nextCronMatch(expr, afterMs, horizonMs)` returns the first epoch minute strictly
+after `afterMs`, within 366 days by default. A failing day field skips to the
+next local midnight. A failing hour or an hour with no matching minute left
+skips to the next local minute zero with
+`t + (60 - new Date(t).getMinutes()) * 60000`. This retains the repeated Paris
+hour and matches in half-hour zones such as Kolkata. Day-of-month and weekday
+keep the runner's AND semantics. `describeCron` recognizes every-minute,
+minute-step, daily and weekday presets; other expressions remain raw.
+
+The catch-up state reader `readScheduleStateOnly` never creates a directory or
+claims a minute. It treats an absent or future record as the minute before the
+current one and searches the runner's seven-day window. A state read error
+leaves pending time unknown (`null`). Catch-up disabled in this instance also
+returns no pending time. The response carries the single `now` used for all
+schedule calculations.
+
+Runs are cache rows with the effective `scheduleSlug` in either the registry
+path's encoded folder or its disk-real path's encoded folder, deduplicated by
+session id, newest first, at most 20 per schedule. For these rows only, the
+listing streams the transcript until its first assistant record; both
+`type: assistant` and `type: message, role: assistant` count. A second user
+record never proves a reply. Unreadable transcripts give `replied: null`;
+readable transcripts without an assistant give `false`. The cache is not
+modified. `cliSessionState.isScheduleRunLive(sessionId)` reads the launcher's
+in-memory map without probing processes; `running` uses that export for cron
+and manual runs. Every run currently has `result: null`.
+
+This slice adds no renderer consumer, mutation IPC, result persistence or
+changelog entry. Regressions: `schedule-next-run.test.js`,
+`schedule-file-name.test.js` and `schedule-list.test.js`; they use disposable
+files and plain Node boundaries, including the real main IPC registration and
+preload exposure, without launching Electron.
+
 ## Invariants
 
 ### Running schedules in the sidebar (#814)
@@ -329,8 +392,8 @@ empty window. The record is created with `writeFileSync(..., { flag: 'wx' })`:
 a second claim of the same minute gets `EEXIST`, logs `already triggered for
 that minute` and skips.
 
-**Isolated instances.** `startScheduler` turns catch-up off when `process.env.SWITCHBOARD_DATA_DIR` is
-set, whatever its value, and logs `catch-up is off` once. `main.js` sets that
+**Isolated instances.** `startScheduler` and the listing turn catch-up off when `process.env.SWITCHBOARD_DATA_DIR` is
+truthy; an absent or empty value keeps it on. The scheduler logs `catch-up is off` once. `main.js` sets that
 variable to `~/.switchboard-dev` for any unpackaged run, so `task dev`,
 `task test-pr` and `npm start` all run with catch-up off; only the installed
 app (no variable) catches up. With it off, no record is read or written and an
@@ -375,3 +438,32 @@ record.
 
 Tests: `test/schedule-catch-up.test.js` (fake `Date`/timers, `HOME` pointed at a
 temporary directory).
+
+## Read-only schedule listing (#792, slice A1)
+
+`listScheduleFiles` retains malformed files. A non-string cron is listed with
+`cron must be a string` and an empty cron value, so it cannot break another
+file's description or next-run analysis. Each file dry-runs
+`buildScheduleCommand` with a fixed validation session ID; its error message
+becomes a problem without creating a transcript or launching a process.
+
+`buildScheduleList` withholds next-run and catch-up timestamps when file or
+launch validation reports a problem. The existing shared-slug diagnostic is
+the exception: it does not prevent the runner from launching (slice A2 will
+revisit its presentation). Archived projects, disabled schedules and schedules
+without a prompt have no catch-up timestamp. A state-read error remains
+unknown, rather than an empty catch-up map; an unreadable transcript likewise
+keeps `replied: null` rather than claiming no reply.
+
+The `list-schedules` handler snapshots `getKnownProjectPaths()` once per request
+and uses the existing exact-root validator against that snapshot. It refreshes
+on the next request; it never rescans transcript folders for each registry row.
+Launch-site functions and their extraction anchors are unchanged.
+
+Cron descriptions use fixed-interval wording only for steps that divide sixty.
+Other steps retain their raw expression (`*/45` fires at :00 and :45).
+Numeric clock fields are formatted by value, so `007 09 * * *` says `daily at 9:07`.
+
+Tests: `test/schedule-list.test.js` (real disposable schedule, state and transcript
+files, main handler extracted into a VM with filename attribution; counts
+PROJECTS_DIR scans), `test/schedule-next-run.test.js` (descriptions and DST).
