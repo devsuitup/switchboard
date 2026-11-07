@@ -3937,18 +3937,18 @@ if (!app.isPackaged) {
       const env = { ...cleanPtyEnv, FORCE_COLOR: '0' };
 
       const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
-      const addDirs = [];
-      for (let i = 0; i < claudeArgv.length - 1; i++) {
-        if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
-      }
-      const refusal = scheduleLaunchRefusal({ sandbox, addDirs, platform: process.platform,
-        projectPaths: sandbox && process.platform === 'linux' ? await scheduleProjects().list() : [], home: os.homedir(), cwd });
-      if (refusal) {
-        log.error(`[schedule] ${runName}: skipped — ${refusal.problem}`);
-        if (onDone) onDone();
-        return { ok: false, error: refusal.error };
-      }
       if (sandbox) {
+        const addDirs = [];
+        for (let i = 0; i < claudeArgv.length - 1; i++) {
+          if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
+        }
+        const refusal = scheduleLaunchRefusal({ sandbox, addDirs, platform: process.platform,
+          projectPaths: process.platform === 'linux' ? await scheduleProjects().list() : [], home: os.homedir(), cwd });
+        if (refusal) {
+          log.error(`[schedule] ${runName}: skipped — ${refusal.problem}`);
+          if (onDone) onDone();
+          return { ok: false, error: refusal.error };
+        }
         cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
         const bindEnv = sandboxBindEnv(addDirs);
         if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
