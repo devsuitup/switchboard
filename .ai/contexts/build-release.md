@@ -38,8 +38,8 @@ module rebuild between architectures applies only to the first target type;
 multiple targets in one multi-architecture invocation can reuse modules from
 the wrong architecture (issue #18).
 
-Both workflows use `${{ github.workflow }}-${{ github.head_ref || github.ref }}`
-as their concurrency group and cancel older runs only for `pull_request`.
+Both workflows group PR runs per PR number (`pr-<number>`) and give every other
+run its own group (`github.run_id`), and cancel older runs only for `pull_request`.
 Tag pushes, main pushes and dispatches never cancel in-progress runs. Every
 upload explicitly retains PR artifacts for 3 days and other artifacts for
 14 days. Tag artifacts feed `publish` through `actions/download-artifact` in

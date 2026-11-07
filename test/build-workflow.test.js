@@ -148,7 +148,6 @@ test('Test uses three PR cells and two main-push cells with stable context names
   assert.equal(typeof matrix.include, 'string');
   assert.deepEqual(evaluate(matrix.include, 'pull_request'), [{ 'node-version': 20, os: 'ubuntu-latest' }, ...cells]);
   assert.deepEqual(evaluate(matrix.include, 'push'), cells);
-  // Job context names follow key order; deepEqual ignores it.
   for (const event of ['pull_request', 'push']) {
     for (const cell of evaluate(matrix.include, event)) {
       assert.deepEqual(Object.keys(cell), ['node-version', 'os'], `${event}: ${JSON.stringify(cell)}`);

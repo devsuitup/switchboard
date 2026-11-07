@@ -62,8 +62,8 @@ request first, because `main` is protected.
    automatically, even when Windows and Linux succeed.
 
    Tag artifacts are downloaded by publish in the same run and retained for
-   14 days (PR artifacts: 3 days). Only older PR runs are cancelled by newer
-   runs on their branch; tag and main pushes never cancel in-progress runs.
+   14 days (PR artifacts: 3 days). Only older runs of the same PR are cancelled
+   by its newer runs; tag and main pushes never cancel in-progress runs.
 
    To recover, re-run the failed macOS job in the tag's Actions run (or re-run
    failed jobs) and let the dependent publish job run once every build succeeds.
