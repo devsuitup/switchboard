@@ -1603,13 +1603,17 @@ const fileListsClient = {
   shutdown: () => Promise.all([...fileListClients.values()].map(client => client.shutdown())),
 };
 
-ipcMain.handle('list-schedules', () => buildScheduleList({
-  scheduleProjects, getCachedByFolder, isScheduleRunLive: cliSessionState.isScheduleRunLive,
-  catchUpActive: process.env.SWITCHBOARD_DATA_DIR === undefined,
-  stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), projectsDir: PROJECTS_DIR,
-  getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox,
-  isArchived: isProjectSettingsArchived, isKnownProject: isKnownProjectRoot,
-}));
+ipcMain.handle('list-schedules', () => {
+  const knownProjectPaths = [...getKnownProjectPaths()];
+  return buildScheduleList({
+    scheduleProjects, getCachedByFolder, isScheduleRunLive: cliSessionState.isScheduleRunLive,
+    catchUpActive: !process.env.SWITCHBOARD_DATA_DIR,
+    stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), projectsDir: PROJECTS_DIR,
+    getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox,
+    isArchived: isProjectSettingsArchived,
+    isKnownProject: projectPath => _isKnownProjectRoot(projectPath, knownProjectPaths),
+  });
+});
 
 // --- IPC: get-memories ---
 ipcMain.handle('get-memories', async () => {

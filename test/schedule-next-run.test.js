@@ -53,3 +53,13 @@ test('cron descriptions recognize only supported presets', () => {
   assert.equal(runner.describeCron('30 2 * * *'), 'daily at 2:30');
   for (const expr of ['0 9 1 * 1', '5,35 */3 * 6-8 0,6', '@daily', '*/0 * * * *']) assert.equal(runner.describeCron(expr), expr);
 });
+
+test('non-divisor steps retain the raw cron rather than promising a fixed interval', () => {
+  assert.equal(runner.describeCron('*/45 * * * *'), '*/45 * * * *');
+  assert.equal(runner.describeCron('*/7 * * * *'), '*/7 * * * *');
+  assert.equal(runner.describeCron('*/20 * * * *'), 'every 20 min');
+});
+
+test('padded cron numbers describe the numeric launch time', () => {
+  assert.equal(runner.describeCron('007 09 * * *'), 'daily at 9:07');
+});

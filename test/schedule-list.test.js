@@ -10,6 +10,7 @@ const { EventEmitter } = require('node:events');
 const vm = require('node:vm');
 const runner = require('../src/main/schedules/schedule-runner');
 const { encodeProjectPath } = require('../encode-project-path');
+const { extractFunction } = require('./app-source');
 
 function fixture(t) {
   assert.equal(typeof runner.listScheduleFiles, 'function');
@@ -209,7 +210,7 @@ test('main registers list-schedules with the real backend and instance dependenc
   const source = fs.readFileSync(filename, 'utf8');
   const start = source.indexOf("ipcMain.handle('list-schedules'");
   assert.ok(start >= 0);
-  const end = source.indexOf('\n}));', start) + '\n}));'.length;
+  const end = source.indexOf('// --- IPC: get-memories ---', start);
   const handlers = new Map();
   vm.runInNewContext(source.slice(start, end), {
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
@@ -219,10 +220,129 @@ test('main registers list-schedules with the real backend and instance dependenc
     path, DB_PATH: path.join(f.root, 'db'), PROJECTS_DIR: path.join(f.root, 'transcripts'),
     getSetting: f.deps.getSetting, SETTING_DEFAULTS: { sandbox: false },
     isProjectSettingsArchived: () => true, isKnownProjectRoot: () => false,
+    getKnownProjectPaths: () => [], _isKnownProjectRoot: () => false,
   }, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
   const reply = await handlers.get('list-schedules')();
   assert.equal(reply.catchUpActive, false);
   assert.equal(reply.projects[0].archived, true);
   assert.equal(reply.projects[0].known, false);
   assert.equal(reply.projects[0].schedules[0].file, 'schedule-job.md');
+});
+
+test('nested cron stays listed without rejecting other projects', async t => {
+  const f = fixture(t);
+  f.write('nested', 'cron:\n  every: day\ncatch-up: true');
+  const other = path.join(f.root, 'other');
+  fs.mkdirSync(path.join(other, '.claude', 'commands'), { recursive: true });
+  fs.writeFileSync(path.join(other, '.claude', 'commands', 'schedule-valid.md'), '---\ncron: * * * * *\n---\nPrompt');
+  let reply, error;
+  try { reply = await f.build({ scheduleProjects: () => ({ list: async () => [f.project, other] }) }); }
+  catch (err) { error = err; }
+  assert.equal(error, undefined, 'malformed cron must not reject list-schedules');
+  const bad = reply.projects[0].schedules[0];
+  assert.ok(bad.problems.includes('cron must be a string'));
+  assert.equal(bad.nextRunMs, null);
+  assert.equal(bad.catchUpDueMs, null);
+  assert.equal(reply.projects[1].schedules[0].nextRunMs, reply.now + 60000);
+});
+
+for (const [name, cli, message] of [
+  ['invalid budget', 'max-budget-usd: 5$', 'Schedule field "max-budget-usd" must be a number, got: 5$'],
+  ['control character', 'model: so\x01nnet', 'Schedule field "model" contains unsafe characters'],
+]) {
+  test(`listing dry-runs command validation for ${name} without writing files`, async t => {
+    const f = fixture(t);
+    f.write('bad', `cron: * * * * *\ncatch-up: true\ncli:\n  ${cli}`);
+    f.write('good');
+    const before = fs.readdirSync(f.root, { recursive: true });
+    const writes = [];
+    for (const method of ['mkdirSync', 'writeFileSync', 'appendFileSync']) {
+      t.mock.method(fs, method, () => {
+        writes.push(method);
+        throw new Error('listing attempted a filesystem write');
+      });
+    }
+    const reply = await f.build();
+    const bad = reply.projects[0].schedules.find(s => s.file === 'schedule-bad.md');
+    assert.ok(bad.problems.includes(message), JSON.stringify(bad.problems));
+    assert.equal(bad.nextRunMs, null);
+    assert.equal(bad.catchUpDueMs, null);
+    assert.equal(reply.projects[0].schedules.find(s => s.file === 'schedule-good.md').nextRunMs, reply.now + 60000);
+    assert.deepEqual(fs.readdirSync(f.root, { recursive: true }), before);
+    assert.deepEqual(writes, []);
+    assert.ok(f.list().find(s => s.file === 'schedule-bad.md').problems.includes(message));
+  });
+}
+
+for (const kind of ['archived', 'no prompt']) {
+  test(`catch-up is null for ${kind} schedules with no recorded state`, async t => {
+    const f = fixture(t);
+    f.write('job', 'cron: * * * * *\ncatch-up: true', kind === 'no prompt' ? '' : 'Prompt');
+    const reply = await f.build({ isArchived: () => kind === 'archived' });
+    assert.equal(reply.projects[0].schedules[0].catchUpDueMs, null);
+  });
+}
+
+test('unreadable transcript remains unknown rather than no reply', async t => {
+  const f = fixture(t);
+  f.write('job');
+  const reply = await f.build({ getCachedByFolder: () => [{ sessionId: 'missing', scheduleSlug: 'job', created: '2026-11-03T00:00Z' }] });
+  assert.equal(reply.projects[0].schedules[0].runs[0].replied, null);
+});
+
+test('unreadable state remains unknown rather than an unrecorded catch-up', async t => {
+  const f = fixture(t);
+  f.write('job', 'cron: * * * * *\ncatch-up: true');
+  fs.writeFileSync(f.stateDir, 'not a directory');
+  assert.equal((await f.build()).projects[0].schedules[0].catchUpDueMs, null);
+});
+
+function mainListing(f, env) {
+  const filename = path.join(__dirname, '..', 'main.js');
+  const source = fs.readFileSync(filename, 'utf8');
+  const start = source.indexOf("ipcMain.handle('list-schedules'");
+  const handlers = new Map();
+  let scans = 0;
+  const known = [f.project, path.join(f.root, 'second')];
+  const context = vm.createContext({
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    buildScheduleList: require('../src/main/schedules/schedule-list').buildScheduleList,
+    scheduleProjects: () => ({ list: async () => [...known, path.join(f.root, 'unknown')] }),
+    getCachedByFolder: () => [], cliSessionState: { isScheduleRunLive: () => false },
+    process: { env }, path, DB_PATH: path.join(f.root, 'db'), PROJECTS_DIR: path.join(f.root, 'transcripts'),
+    getSetting: f.deps.getSetting, SETTING_DEFAULTS: { sandbox: false }, isProjectSettingsArchived: () => false,
+    activeSessions: new Map(), fs: { existsSync: () => true, readdirSync: () => {
+      scans++;
+      return known.map(name => ({ name, isDirectory: () => true }));
+    } },
+    require: name => {
+      assert.equal(name, './derive-project-path');
+      return { deriveProjectPath: (_folder, name) => name };
+    },
+    _isKnownProjectRoot: require('../src/main/shared/ipc-path-validator').isKnownProjectRoot,
+  });
+  for (const name of ['getKnownProjectPaths', 'isKnownProjectRoot']) {
+    vm.runInContext(extractFunction(source, name), context, { filename });
+  }
+  vm.runInContext(source.slice(start, source.indexOf('// --- IPC: get-memories ---', start)), context, { filename });
+  return { list: handlers.get('list-schedules'), scans: () => scans };
+}
+
+test('main scans known project folders once per listing, including fresh subsequent calls', async t => {
+  const f = fixture(t);
+  f.write('job');
+  const h = mainListing(f, {});
+  assert.deepEqual((await h.list()).projects.map(p => p.known), [true, true, false]);
+  assert.equal(h.scans(), 1, 'one PROJECTS_DIR scan per listing');
+  await h.list();
+  assert.equal(h.scans(), 2, 'each listing refreshes its snapshot');
+});
+
+test('main catch-up flag matches runner truthiness for an empty isolation variable', async t => {
+  const f = fixture(t);
+  f.write('job', 'cron: * * * * *\ncatch-up: true');
+  const h = mainListing(f, { SWITCHBOARD_DATA_DIR: '' });
+  const reply = await h.list();
+  assert.equal(reply.catchUpActive, true);
+  assert.equal(reply.projects[0].schedules[0].catchUpDueMs, reply.now - reply.now % 60000);
 });

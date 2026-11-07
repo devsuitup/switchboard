@@ -116,10 +116,10 @@ function describeCron(expr) {
   const [minute, hour, dom, month, dow] = parts;
   if (hour === '*' && dom === '*' && month === '*' && dow === '*') {
     if (minute === '*') return 'every min';
-    if (/^\*\/[1-9]\d*$/.test(minute) && Number(minute.slice(2)) <= 59) return `every ${Number(minute.slice(2))} min`;
+    if (/^\*\/[1-9]\d*$/.test(minute) && 60 % Number(minute.slice(2)) === 0) return `every ${Number(minute.slice(2))} min`;
   }
   if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dom === '*' && month === '*') {
-    const time = `${Number(hour)}:${minute.padStart(2, '0')}`;
+    const time = `${Number(hour)}:${String(Number(minute)).padStart(2, '0')}`;
     if (dow === '*') return `daily at ${time}`;
     if (dow === '1-5') return `weekdays at ${time}`;
   }
@@ -396,12 +396,15 @@ function listScheduleFiles(projectPaths, { getSetting = () => null, defaultSandb
       const problems = [];
       if (!/^---\n([\s\S]*?)\n---\n?/.test(content)) problems.push(`front matter not read${content.includes('\r\n') ? ': save with LF line endings' : ''}`);
       if (!meta.cron) problems.push('no cron');
+      else if (typeof meta.cron !== 'string') problems.push('cron must be a string');
       else if (!cronCanMatch(meta.cron)) problems.push('cron can never match');
       if (!body) problems.push('no prompt');
+      try { buildScheduleCommand('schedule-list-validation', { cli: meta.cli || {} }); }
+      catch (err) { problems.push(err.message); }
       const addDirs = String((meta.cli || {})['add-dirs'] || '').split(',').map(d => d.trim()).filter(Boolean);
       const refusal = scheduleLaunchRefusal({ sandbox: resolveScheduleSandbox(projectPath, getSetting, defaultSandbox), platform, addDirs, projectPaths, home, cwd: projectPath });
       if (refusal) problems.push(refusal.problem);
-      schedules.push({ file, filePath, projectPath, ...scheduleFields(file, meta), cron: meta.cron || '',
+      schedules.push({ file, filePath, projectPath, ...scheduleFields(file, meta), cron: typeof meta.cron === 'string' ? meta.cron : '',
         enabled: meta.enabled !== 'false', cli: meta.cli || {}, prompt: body,
         linked: !scheduleFileUnlinked(projectPath, filePath), problems });
     }

@@ -35,6 +35,7 @@ async function buildScheduleList(deps) {
   }
   const projects = [];
   for (const projectPath of projectPaths) {
+    const archived = isArchived(projectPath);
     const folders = new Set([encodeProjectPath(projectPath)]);
     try { folders.add(encodeProjectPath(fs.realpathSync(projectPath))); } catch {}
     const cached = new Map();
@@ -54,15 +55,16 @@ async function buildScheduleList(deps) {
           running: isScheduleRunLive(row.sessionId), result: null });
       }
       let catchUpDueMs = null;
-      if (catchUpActive && state && schedule.enabled && schedule.catchUp && schedule.cron) {
+      const runnable = !schedule.problems.some(problem => !problem.startsWith('slug shared with '));
+      if (catchUpActive && state && !archived && runnable && schedule.enabled && schedule.prompt && schedule.catchUp && schedule.cron) {
         const recorded = state.get(scheduleStateKey(schedule));
         const handled = !recorded || recorded.handled > nowMinute ? nowMinute - MINUTE_MS : recorded.handled;
         catchUpDueMs = latestCronMatch(schedule.cron, Math.max(handled, nowMinute - 7 * 24 * 60 * MINUTE_MS), nowMinute);
       }
-      schedules.push({ ...schedule, cronText: describeCron(schedule.cron), nextRunMs: schedule.cron ? nextCronMatch(schedule.cron, now) : null,
+      schedules.push({ ...schedule, cronText: describeCron(schedule.cron), nextRunMs: runnable && schedule.cron ? nextCronMatch(schedule.cron, now) : null,
         catchUpDueMs, runs });
     }
-    projects.push({ projectPath, shortName: path.basename(projectPath), archived: isArchived(projectPath),
+    projects.push({ projectPath, shortName: path.basename(projectPath), archived,
       sandboxed: resolveScheduleSandbox(projectPath, getSetting, defaultSandbox), known: isKnownProject(projectPath), schedules });
   }
   return { now, catchUpActive, projects };
