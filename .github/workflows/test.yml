@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     # Separate job, not an npm pre-hook: `npm run coverage` (below) has no
@@ -13,6 +17,7 @@ jobs:
     # ran in CI. A dedicated job can't be skipped by a future script rename —
     # it shows up as its own entry in the checks list.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +39,7 @@ jobs:
     # see docs/changelog.md ("The CI check")
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +55,7 @@ jobs:
   e2e:
     # see docs/e2e.md
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -90,16 +96,19 @@ jobs:
           path: |
             ${{ runner.temp }}/switchboard-e2e-results/
             e2e/playwright-report/
-          retention-days: 14
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
 
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
 
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22]
-        os: [ubuntu-latest, windows-2022]
+        include: >-
+          ${{ fromJSON(github.event_name == 'pull_request' &&
+          '[{"node-version":20,"os":"ubuntu-latest"},{"node-version":22,"os":"ubuntu-latest"},{"node-version":22,"os":"windows-2022"}]' ||
+          '[{"node-version":22,"os":"ubuntu-latest"},{"node-version":22,"os":"windows-2022"}]') }}
 
     steps:
       - uses: actions/checkout@v4

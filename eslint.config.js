@@ -784,6 +784,7 @@ module.exports = [
   {
     files: [
       '*.js',
+      'harnesses/**/*.js',
       'workers/**/*.js',
       'scripts/**/*.{js,cjs}',
       'src/main/**/*.js',

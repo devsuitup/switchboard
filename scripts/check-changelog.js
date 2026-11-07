@@ -7,7 +7,7 @@ const { execFileSync } = require('child_process');
 const WAIVER_LABEL = 'no-changelog';
 
 function isAppPath(file) {
-  if (file.startsWith('public/') || file.startsWith('workers/') || file.startsWith('src/')) return true;
+  if (file.startsWith('public/') || file.startsWith('workers/') || file.startsWith('src/') || file.startsWith('harnesses/')) return true;
   if (file === 'scripts/claude-sandbox.sh') return true;
   return /^[^/]+\.js$/.test(file) && file !== 'eslint.config.js';
 }

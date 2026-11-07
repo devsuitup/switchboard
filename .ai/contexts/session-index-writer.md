@@ -4,6 +4,10 @@ Scope: one writable WAL connection in a Node worker; one main-side readonly
 connection remains for the existing synchronous reads. Independent read workers,
 removal of main's connection, durable receipts and outcome recovery belong to step 2.
 
+The #820 column reconcile adds `runtime TEXT DEFAULT 'claude'` and `sessionFile TEXT`
+on writable opens only, without setting `mustReindex` or deleting rows. Existing
+named-column upserts are unchanged. See [cli-harnesses.md](cli-harnesses.md).
+
 ## Ownership and startup
 
 main.js acquires the single-instance lock before starting the writer. It awaits
