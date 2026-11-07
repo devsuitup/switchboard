@@ -3158,6 +3158,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         // Directories the sandboxed claude must still reach beyond the cwd:
         // the project root when resuming inside a worktree (git metadata lives
         // there), and any user-configured Additional Directories.
+        ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
+        fs.mkdirSync(path.join(ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
         const extraBinds = [];
         if (projectPath && projectPath !== spawnCwd) extraBinds.push(projectPath);
         extraBinds.push(...parseAddDirs(sessionOptions.addDirs));
@@ -3934,6 +3936,8 @@ if (!app.isPackaged) {
         return { ok: false, error: 'The schedule sandbox requires Linux (bubblewrap). Run it on Linux with bubblewrap, or disable Sandbox in the project or global settings and try Run now again.' };
       }
       if (sandbox) {
+        env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
+        fs.mkdirSync(path.join(env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
         cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
         const addDirs = [];
         for (let i = 0; i < claudeArgv.length - 1; i++) {

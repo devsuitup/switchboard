@@ -14,6 +14,137 @@ const { spawnSync } = require('node:child_process');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'claude-sandbox.sh');
 const LINUX = process.platform === 'linux';
+const GIT_BASH = 'C:/Program Files/Git/bin/bash.exe';
+const FAKE_BWRAP_SUPPORTED = LINUX || (process.platform === 'win32' && fs.existsSync(GIT_BASH));
+const bashPath = p => process.platform === 'win32'
+  ? p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase()) : p;
+
+function controlRig(t) {
+  const rig = makeRig({ recordArgs: true });
+  t.after(() => rig.cleanup());
+  fs.mkdirSync(path.join(rig.home, '.claude'));
+  if (!LINUX) {
+    for (const d of ['.config/claude', '.cache/claude', '.local/share/claude',
+      '.claude/projects/fixture', '.claude/todos', '.claude/statsig', '.claude/file-history',
+      '.claude/sessions', '.claude/plans', '.claude/tasks', '.claude/ide']) {
+      fs.mkdirSync(path.join(rig.home, d), { recursive: true });
+    }
+    fs.mkdirSync(path.join(rig.proj, '.claude'));
+  }
+  return rig;
+}
+
+for (const placement of ['project', 'extra', 'state', 'opt-in']) {
+  test(`control mounts: ${placement} protects the whole tree and pins ancestors`,
+    { skip: !FAKE_BWRAP_SUPPORTED && 'requires bash and POSIX tools' }, t => {
+      const rig = controlRig(t);
+      const parent = placement === 'state' ? path.join(rig.home, '.cache', 'claude')
+        : placement === 'opt-in' ? path.join(rig.home, '.claude', 'skills')
+          : placement === 'extra' ? path.join(rig.root, 'extra') : rig.proj;
+      const control = path.join(parent, 'ancestor', 'control with spaces');
+      fs.mkdirSync(path.join(control, 'processed'), { recursive: true });
+      if (!LINUX && placement === 'extra') fs.mkdirSync(path.join(parent, '.claude'));
+      const env = { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: bashPath(control) };
+      if (placement === 'extra') env.SWITCHBOARD_SANDBOX_BINDS = bashPath(parent);
+      if (placement === 'opt-in') env.SWITCHBOARD_SANDBOX_RW_SKILLS = '1';
+      const res = rig.run(['--version'], env);
+      assert.equal(res.status, 0, res.stderr);
+      const mounts = parseMounts(rig.lastBwrapArgs());
+      for (const p of [control, path.join(control, 'processed', 'result.json'), path.join(control, 'action.marker')]) {
+        assert.equal(accessAt(mounts, bashPath(p)), '--ro-bind', `control path stays read-only: ${p}`);
+      }
+      const pin = mountAt(mounts, bashPath(path.dirname(control)));
+      assert.equal(pin?.op, '--bind', 'intervening ancestor is pinned');
+      assert.ok(pin.index < mountAt(mounts, bashPath(control)).index, 'pin is emitted before protection');
+    });
+}
+
+for (const kind of ['cwd', 'extra', 'missing root', 'missing processed', 'relative internal', 'filesystem root', 'non-directory ancestor', 'newline', 'dangling', 'loop']) {
+  test(`control refusal: ${kind} fails closed before bwrap`,
+    { skip: !FAKE_BWRAP_SUPPORTED || (!LINUX && ['dangling', 'loop'].includes(kind))
+      ? 'requires Linux symlinks or bash and POSIX tools' : false }, t => {
+      const rig = controlRig(t);
+      let control = path.join(rig.proj, 'control');
+      fs.mkdirSync(path.join(control, 'processed'), { recursive: true });
+      const env = {};
+      let cwd = rig.proj;
+      if (kind === 'cwd') cwd = path.join(control, 'processed');
+      if (kind === 'extra') env.SWITCHBOARD_SANDBOX_BINDS = bashPath(path.join(control, 'processed'));
+      if (kind === 'missing root') fs.rmSync(control, { recursive: true });
+      if (kind === 'missing processed') fs.rmdirSync(path.join(control, 'processed'));
+      if (kind === 'relative internal') control = 'control';
+      if (kind === 'filesystem root') control = '/';
+      if (kind === 'non-directory ancestor') {
+        const ancestor = path.join(rig.root, 'outside-file');
+        fs.writeFileSync(ancestor, 'file');
+        control = path.join(ancestor, 'control');
+      }
+      if (kind === 'newline') control += '\nother';
+      if (kind === 'dangling' || kind === 'loop') {
+        fs.rmSync(control, { recursive: true });
+        fs.symlinkSync(kind === 'loop' ? control : path.join(rig.proj, 'absent'), control);
+      }
+      env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = kind === 'relative internal' ? control : bashPath(control);
+      const homeBefore = fs.readdirSync(rig.home);
+      const res = rig.run(['--version'], env, cwd);
+      assert.equal(res.status, 125, 'unsafe control path must refuse');
+      assert.match(res.stderr, /claude-sandbox:.*control/i, 'diagnostic identifies the control path');
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'no sandbox or CLI execution');
+      assert.deepEqual(fs.readdirSync(rig.home), homeBefore, 'preflight refusal has no host state effects');
+    });
+}
+
+test('control mounts: standalone override and default outside writable mounts stay unexposed',
+  { skip: !FAKE_BWRAP_SUPPORTED && 'requires bash and POSIX tools' }, t => {
+    const rig = controlRig(t);
+    for (const env of [{}, { SWITCHBOARD_TRIGGERS_DIR: bashPath(path.join(rig.root, 'outside')) }]) {
+      const res = rig.run(['--version'], env);
+      assert.equal(res.status, 0, res.stderr);
+      assert.equal(accessAt(parseMounts(rig.lastBwrapArgs()), bashPath(path.join(rig.root, 'outside'))), undefined);
+    }
+    const control = path.join(rig.proj, 'relative-control');
+    fs.mkdirSync(path.join(control, 'processed'), { recursive: true });
+    const res = rig.run(['--version'], { SWITCHBOARD_TRIGGERS_DIR: 'relative-control', SWITCHBOARD_SANDBOX_DEBUG: '1' });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(accessAt(parseMounts(rig.lastBwrapArgs()), bashPath(control)), '--ro-bind', res.stderr);
+  });
+
+test('control mounts: private CLI trees stay unexposed and the visible default is protected',
+  { skip: !FAKE_BWRAP_SUPPORTED && 'requires bash and POSIX tools' }, t => {
+    const rig = controlRig(t);
+    const privateControl = path.join(rig.home, '.claude', 'shell-snapshots', 'control');
+    fs.mkdirSync(path.join(privateControl, 'processed'), { recursive: true });
+    let res = rig.run(['--version'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: bashPath(privateControl) });
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(!parseMounts(rig.lastBwrapArgs()).some(op => op.src === bashPath(privateControl)), 'a private CLI tree must not expose host control files');
+    const defaultControl = path.join(rig.home, '.switchboard', 'triggers');
+    fs.mkdirSync(path.join(defaultControl, 'processed'), { recursive: true });
+    if (!LINUX) fs.mkdirSync(path.join(rig.home, '.switchboard', '.claude'));
+    res = rig.run(['--version'], { SWITCHBOARD_SANDBOX_BINDS: bashPath(path.dirname(defaultControl)), SWITCHBOARD_TRIGGERS_DIR: '' });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(accessAt(parseMounts(rig.lastBwrapArgs()), bashPath(defaultControl)), '--ro-bind');
+  });
+
+test('control mounts: final plan rechecks a control tree moved after preflight',
+  { skip: !FAKE_BWRAP_SUPPORTED && 'requires bash and POSIX tools' }, t => {
+    const rig = controlRig(t);
+    const control = path.join(rig.proj, 'control');
+    fs.mkdirSync(path.join(control, 'processed'), { recursive: true });
+    if (LINUX) {
+      for (const d of ['.config/claude', '.cache/claude', '.local/share/claude',
+        '.claude/projects/fixture', '.claude/todos', '.claude/statsig', '.claude/file-history',
+        '.claude/sessions', '.claude/plans', '.claude/tasks', '.claude/ide']) {
+        fs.mkdirSync(path.join(rig.home, d), { recursive: true });
+      }
+      fs.mkdirSync(path.join(rig.proj, '.claude'));
+    }
+    const fake = path.join(rig.root, 'bin', 'bwrap');
+    fs.writeFileSync(fake, read0(fake).replace(/\nexit 0\n$/, `\n[ "$n" != 0 ] || mv -- "${bashPath(control)}" "${bashPath(control)}.gone"\nexit 0\n`));
+    const res = rig.run(['--version'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: bashPath(control), SWITCHBOARD_SANDBOX_PROJECT_FOLDER: 'fixture' });
+    assert.equal(res.status, 125, 'a control path lost after preflight refuses the CLI launch');
+    assert.match(res.stderr, /missing visible control path/);
+    assert.equal(fs.readdirSync(path.join(rig.root, 'bwrap-args')).length, 1, 'only the preflight ran');
+  });
 
 /**
  * The environment every child of these tests runs with: no inherited GIT_* or
@@ -68,8 +199,8 @@ function makeRig({ bwrapExit = null, recordArgs = false, claudeRunsArg = false }
     fs.writeFileSync(path.join(bin, 'bwrap'), [
       '#!/usr/bin/env bash',
       '[ "${1:-}" = "--version" ] && { echo "bubblewrap 0.11.1"; exit 0; }',
-      `n=$(ls "${argsDir}" | wc -l)`,
-      `printf '%s\\0' "$@" > "${argsDir}/$n"`,
+      `n=$(ls "${bashPath(argsDir)}" | wc -l)`,
+      `printf '%s\\0' "$@" > "${bashPath(argsDir)}/$n"`,
       'exit 0',
     ].join('\n') + '\n');
     fs.chmodSync(path.join(bin, 'bwrap'), 0o755);
@@ -89,13 +220,15 @@ function makeRig({ bwrapExit = null, recordArgs = false, claudeRunsArg = false }
     root, home, proj,
     /** Run the wrapper; returns { status, stdout, stderr }. */
     run(args = ['--version'], env = {}, cwd = proj) {
-      const res = spawnSync('bash', [SCRIPT, ...args], {
+      const res = spawnSync(process.platform === 'win32' ? GIT_BASH : 'bash', [bashPath(SCRIPT), ...args], {
         cwd,
         encoding: 'utf8',
         env: cleanEnv({
-          HOME: home,
-          PATH: `${bin}:${process.env.PATH}`,
+          HOME: bashPath(home),
+          PWD: bashPath(cwd),
+          PATH: process.platform === 'win32' ? `${bashPath(bin)}:/usr/bin:/bin` : `${bin}:${process.env.PATH}`,
           SWITCHBOARD_SANDBOX_DEBUG: '0',
+          ...(!LINUX ? { SWITCHBOARD_SANDBOX_PROJECT_FOLDER: 'fixture' } : {}),
           GIT_CONFIG_NOSYSTEM: '1',
           GIT_CONFIG_GLOBAL: '/dev/null',
           ...env,
@@ -1804,4 +1937,111 @@ test('sandbox wrapper: from inside a real sandbox, an opted-in skills linked to 
     } finally {
       rig.cleanup();
     }
+  });
+
+function aliasedControlRig(t, real = false) {
+  const rig = real ? makeRig({ claudeRunsArg: true }) : makeRig({ recordArgs: true });
+  t.after(() => rig.cleanup());
+  fs.mkdirSync(path.join(rig.home, '.claude'));
+  const control = path.join(rig.proj, 'ancestor', 'control with spaces');
+  const results = path.join(rig.root, 'results', 'ancestor', 'store');
+  const alias = path.join(rig.root, 'stable-project-alias');
+  const lexical = path.join(rig.root, 'stable-control-link');
+  const cwd = path.join(rig.proj, 'worktree');
+  fs.mkdirSync(control, { recursive: true });
+  fs.mkdirSync(results, { recursive: true });
+  fs.mkdirSync(cwd);
+  fs.symlinkSync(rig.proj, alias);
+  fs.symlinkSync(control, lexical);
+  fs.symlinkSync(results, path.join(control, 'processed'));
+  fs.writeFileSync(path.join(control, 'action.marker'), 'marker');
+  fs.writeFileSync(path.join(results, 'result.json'), 'result');
+  const env = {
+    SWITCHBOARD_SANDBOX_TRIGGERS_DIR: lexical,
+    SWITCHBOARD_SANDBOX_BINDS: [rig.proj, alias, path.dirname(path.dirname(results))].join(':'),
+  };
+  return { rig, control, results, alias, lexical, cwd, env };
+}
+
+test('control aliases: every overlapping project/worktree alias and separate processed target is protected',
+  { skip: !LINUX && 'requires Linux symlinks' }, t => {
+    const { rig, control, results, alias, cwd, env } = aliasedControlRig(t);
+    const res = rig.run(['--version'], env, cwd);
+    assert.equal(res.status, 0, res.stderr);
+    const ops = parseMounts(rig.lastBwrapArgs());
+    for (const view of [control, path.join(alias, 'ancestor', 'control with spaces'), results]) {
+      assert.equal(accessAt(ops, path.join(view, 'new.json')), '--ro-bind', view);
+      const pin = mountAt(ops, path.dirname(view));
+      assert.equal(pin?.op, '--bind');
+      assert.ok(pin.index < mountAt(ops, view).index);
+      assert.ok(!ops.some(op => op.op === '--bind' && op.dest.startsWith(view + '/')), 'no writable descendant reopens protection');
+    }
+    for (const [extra, spawnCwd] of [[control, cwd], [path.join(alias, 'ancestor', 'control with spaces'), cwd],
+      [results, cwd], [rig.proj, control], [rig.proj, path.join(alias, 'ancestor', 'control with spaces')]]) {
+      const refused = rig.run(['--version'], { ...env, SWITCHBOARD_SANDBOX_BINDS: extra }, spawnCwd);
+      assert.equal(refused.status, 125, `requested writable control alias refuses: ${refused.stderr}`);
+      assert.match(refused.stderr, /control path/);
+    }
+  });
+
+test('control aliases: mutable links and writable state descendants refuse before any bwrap execution',
+  { skip: !LINUX && 'requires Linux symlinks' }, t => {
+    const rig = controlRig(t);
+    const control = path.join(rig.proj, 'control');
+    fs.mkdirSync(path.join(control, 'processed'), { recursive: true });
+    fs.symlinkSync(control, path.join(rig.proj, 'mutable'));
+    let res = rig.run(['--version'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: path.join(rig.proj, 'mutable') });
+    assert.equal(res.status, 125, res.stderr);
+    assert.match(res.stderr, /symbolic link.*sandbox can write/);
+    const cache = path.join(rig.home, '.cache', 'claude');
+    fs.mkdirSync(path.dirname(cache), { recursive: true });
+    fs.mkdirSync(path.join(control, 'descendant'));
+    fs.symlinkSync(path.join(control, 'descendant'), cache);
+    res = rig.run(['--version'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: control });
+    assert.equal(res.status, 125, res.stderr);
+    assert.match(res.stderr, /overlaps control path|reopens control path/);
+    assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), []);
+  });
+
+test('control filesystem: real bwrap denies writes and replacements through all aliases while host publication and normal writes work',
+  { skip: !realBwrapWorks && 'requires a usable Linux unprivileged user namespace and real bwrap' }, t => {
+    const { rig, control, results, alias, cwd, env } = aliasedControlRig(t, true);
+    const views = [control, path.join(alias, 'ancestor', 'control with spaces'), results];
+    const attempts = [];
+    for (const [i, view] of views.entries()) {
+      const target = i < 2 ? 'action.marker' : 'result.json';
+      attempts.push(`attempt create-${i} 'echo evil > "${view}/new.json"'`);
+      attempts.push(`attempt publish-${i} 'echo staged > "$PWD/staged-${i}" && mv "$PWD/staged-${i}" "${view}/new.json"'`);
+      attempts.push(`attempt overwrite-${i} 'echo evil > "${view}/${target}"'`);
+      attempts.push(`attempt unlink-${i} 'rm "${view}/${target}"'`);
+      attempts.push(`attempt replace-${i} 'mv "${view}" "${view}-old" && mkdir "${view}"'`);
+      const ancestor = path.dirname(view);
+      attempts.push(`attempt ancestor-${i} 'mv "${ancestor}" "${ancestor}-old" && mkdir "${ancestor}"'`);
+      if (i < 2) {
+        attempts.push(`attempt result-overwrite-${i} 'echo evil > "${view}/processed/result.json"'`);
+        attempts.push(`attempt result-unlink-${i} 'rm "${view}/processed/result.json"'`);
+        attempts.push(`attempt processed-${i} 'mv "${view}/processed" "${view}/processed-old" && mkdir "${view}/processed"'`);
+      }
+    }
+    const payload = [
+      'attempt() { if bash -c "$2" >/dev/null 2>&1; then echo "UNEXPECTED:$1"; else echo "DENIED:$1"; fi; }',
+      ...attempts,
+      'echo ordinary > "$PWD/ordinary.txt"',
+      'echo transcript >> "$HOME/.claude/projects/$SWITCHBOARD_SANDBOX_PROJECT_FOLDER/session.jsonl"',
+    ].join('\n');
+    const res = rig.run([payload], { ...env, SWITCHBOARD_SANDBOX_PROJECT_FOLDER: 'fixture' }, cwd);
+    assert.equal(res.status, 0, res.stderr);
+    assert.doesNotMatch(res.stdout, /UNEXPECTED:/);
+    assert.equal(res.stdout.split('\n').filter(line => line.startsWith('DENIED:')).length, attempts.length);
+    assert.equal(read0(path.join(control, 'action.marker')), 'marker');
+    assert.equal(read0(path.join(results, 'result.json')), 'result');
+    assert.equal(fs.existsSync(path.join(control, 'new.json')), false);
+    assert.equal(read0(path.join(cwd, 'ordinary.txt')), 'ordinary\n');
+    assert.equal(read0(path.join(rig.home, '.claude/projects/fixture/session.jsonl')), 'transcript\n');
+    fs.writeFileSync(path.join(control, 'host.tmp'), 'host-trigger');
+    fs.renameSync(path.join(control, 'host.tmp'), path.join(control, 'host.json'));
+    fs.writeFileSync(path.join(results, 'host.tmp'), 'host-result');
+    fs.renameSync(path.join(results, 'host.tmp'), path.join(control, 'processed', 'host.result.json'));
+    assert.equal(read0(path.join(control, 'host.json')), 'host-trigger');
+    assert.equal(read0(path.join(results, 'host.result.json')), 'host-result');
   });

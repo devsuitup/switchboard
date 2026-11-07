@@ -302,6 +302,16 @@ WRITABLE_REALS=()
 for _r in "${WRITABLE_ROOTS[@]}"; do
   WRITABLE_REALS+=("$(readlink -f "$_r" 2>/dev/null || true)")
 done
+BASE_WRITABLE_ROOTS=("${WRITABLE_ROOTS[@]}")
+
+CONTROL_DIR="${SWITCHBOARD_SANDBOX_TRIGGERS_DIR:-${SWITCHBOARD_TRIGGERS_DIR:-$HOME/.switchboard/triggers}}"
+case "$CONTROL_DIR" in
+  *$'\n'*|*$'\r'*) fail "unrepresentable control path: $CONTROL_DIR" ;;
+esac
+if [ -n "${SWITCHBOARD_SANDBOX_TRIGGERS_DIR:-}" ]; then
+  case "$CONTROL_DIR" in /*) ;; *) fail "control path must be absolute: $CONTROL_DIR" ;; esac
+fi
+case "$CONTROL_DIR" in /*) ;; *) CONTROL_DIR="$PWD/$CONTROL_DIR" ;; esac
 
 # Sets SV_VIEW to where the resolved host path $1 appears inside the sandbox,
 # and SV_IDX to its writable root, when it lies under one; fails otherwise.
@@ -368,8 +378,8 @@ check_chain() {
     esac
     if [ -L "$cur/$comp" ]; then
       hops=$((hops + 1))
-      [ "$hops" -le 40 ] || return 0
-      if sandbox_view "${cur:-/}" && ! inside_ro_area "$SV_VIEW/$comp"; then
+      [ "$hops" -le 40 ] || fail "cannot resolve protected path: $orig"
+      if chain_link_writable "${cur:-/}" "$comp" "${2:-}"; then
         fail "refusing to launch: $cur/$comp is a symbolic link in a directory the sandbox can write, on the way to $orig, which it protects; the session could re-point it. Replace the link with what it points to (for git hooks, set core.hooksPath to that directory instead), or turn Sandbox off for this session."
       fi
       link="$(readlink "$cur/$comp")"
@@ -389,6 +399,7 @@ protect_resolved() {
   [ -n "${PROTECTED_SEEN[$real]:-}" ] && return 1
   PROTECTED_SEEN["$real"]=1
   for i in "${!WRITABLE_ROOTS[@]}"; do
+    [ "$i" -ge "${2:-0}" ] || continue
     root="${WRITABLE_REALS[i]}"
     [ -n "$root" ] || continue
     case "$real" in
@@ -402,6 +413,118 @@ protect_resolved() {
   done
   [ "$found" = 0 ] || debug "$real is not visible in the sandbox"
   return "$found"
+}
+
+control_path_forms() {
+  local p="$1" forms real ancestor
+  forms="$(path_forms "$p")" || fail "cannot resolve control path: $p"
+  real="$(readlink -e -- "$p" 2>/dev/null || true)"
+  [ "$real" != / ] || fail "control path covers the filesystem root: $p"
+  case "$real" in *$'\n'*|*$'\r'*) fail "unrepresentable control path: $p" ;; esac
+  if [ -z "$real" ]; then
+    check_chain "$p" control
+    ancestor="$p"
+    while [ ! -e "$ancestor" ] && [ ! -L "$ancestor" ] && [ "$ancestor" != / ]; do
+      ancestor="${ancestor%/*}"
+      [ -n "$ancestor" ] || ancestor=/
+    done
+    [ -d "$ancestor" ] && [ -x "$ancestor" ] || fail "cannot resolve control path: $p"
+    [ ! -e "$p" ] && [ ! -L "$p" ] || fail "cannot resolve control path: $p"
+  elif [ ! -d "$real" ]; then
+    fail "control path is not a directory: $p"
+  fi
+  CONTROL_FORMS="$forms"
+  CONTROL_REAL="$real"
+}
+
+chain_link_writable() {
+  local parent="$1" comp="$2" i root view
+  if [ "$3" != control ]; then
+    sandbox_view "$parent" && ! inside_ro_area "$SV_VIEW/$comp"
+    return
+  fi
+  for ((i = CONTROL_ROOT_START; i < ${#WRITABLE_REALS[@]}; i++)); do
+    root="${WRITABLE_REALS[i]}"
+    case "$parent" in
+      "$root") view="${WRITABLE_ROOTS[i]}" ;;
+      "$root"/*) view="${WRITABLE_ROOTS[i]}${parent#"$root"}" ;;
+      *) continue ;;
+    esac
+    inside_ro_area "$view/$comp" || return 0
+  done
+  return 1
+}
+
+control_visible() {
+  local i root
+  for ((i = CONTROL_ROOT_START; i < ${#WRITABLE_REALS[@]}; i++)); do
+    root="${WRITABLE_REALS[i]}"
+    case "$1/" in "$root"/*) return 0 ;; esac
+  done
+  return 1
+}
+
+protect_control_tree() {
+  local i real p forms control requested request_form root pin_start
+  local -a controls=() control_forms=()
+  CONTROL_ROOT_START="${#WRITABLE_ROOTS[@]}"
+  for i in "${!M_OP[@]}"; do
+    [ "${M_OP[i]}" = --bind ] || continue
+    real="$(readlink -e -- "${M_SRC[i]}" 2>/dev/null)" && [ -n "$real" ] || fail "cannot resolve writable mount for control path $CONTROL_DIR: ${M_SRC[i]}"
+    case "$real${M_DEST[i]}" in *$'\n'*|*$'\r'*) fail "unrepresentable mount for control path: $CONTROL_DIR" ;; esac
+    WRITABLE_ROOTS+=("${M_DEST[i]}"); WRITABLE_REALS+=("$real")
+  done
+  control_path_forms "$CONTROL_DIR"
+  debug "control: $CONTROL_DIR -> $CONTROL_REAL ($CONTROL_FORMS)"
+  forms="$CONTROL_FORMS"
+  controls+=("$CONTROL_REAL"); control_forms+=("$forms")
+  control_path_forms "$CONTROL_DIR/processed"
+  controls+=("$CONTROL_REAL"); control_forms+=("$CONTROL_FORMS")
+  for i in "${!control_forms[@]}"; do
+    forms="${control_forms[i]}"; real="${controls[i]}"
+    while IFS= read -r control; do
+      for requested in "${RW_DIRS[@]}"; do
+        p="$(path_forms "$requested")" || fail "cannot resolve requested mount for control path: $CONTROL_DIR"
+        while IFS= read -r request_form; do
+          case "$request_form/" in "$control"/*) fail "refusing writable mount '$requested' at or below control path: $CONTROL_DIR" ;; esac
+        done <<<"$p"
+      done
+      if [ -z "$real" ] && control_visible "$control"; then
+        fail "missing visible control path: $CONTROL_DIR${i:+ (including processed)}"
+      fi
+    done <<<"$forms"
+    [ -n "$real" ] || continue
+    for ((p = CONTROL_ROOT_START; p < ${#WRITABLE_REALS[@]}; p++)); do
+      root="${WRITABLE_REALS[p]}"
+      case "$root/" in "$real"/*) fail "writable mount '${WRITABLE_ROOTS[p]}' overlaps control path: $CONTROL_DIR" ;; esac
+    done
+    p="$CONTROL_DIR"
+    [ "$i" = 0 ] || p="$CONTROL_DIR/processed"
+    check_chain "$p" control
+    unset 'PROTECTED_SEEN[$real]'
+    pin_start="${#PIN_VIEWS[@]}"
+    protect_resolved "$real" "$CONTROL_ROOT_START" || true
+    CONTROL_VIEWS+=("${PIN_VIEWS[@]:pin_start}")
+  done
+}
+
+verify_control_mounts() {
+  local k i view dest best depth best_depth
+  for k in "${!CONTROL_VIEWS[@]}"; do
+    view="${CONTROL_VIEWS[k]}"
+    best=""; best_depth=-1
+    for i in "${!M_OP[@]}"; do
+      dest="${M_DEST[i]}"
+      case "$view/" in "$dest"/*)
+        depth="${dest//[!\/]/}"
+        if [ "${#depth}" -ge "$best_depth" ]; then best="$i"; best_depth="${#depth}"; fi ;;
+      esac
+      case "$dest/" in "$view"/*)
+        [ "${M_OP[i]}" = --ro-bind ] || fail "mount '$dest' reopens control path: $CONTROL_DIR" ;;
+      esac
+    done
+    [ -n "$best" ] && [ "${M_OP[best]}" = --ro-bind ] || fail "unprotected control path: $CONTROL_DIR ($view)"
+  done
 }
 
 # Link $1, resolved to $2: its target read-only, and every link below that
@@ -796,6 +919,10 @@ build_bwrap_args() {
   GIT_WORKTREES=()
   OPT_IN_BINDS=()
   PRIVATE_LINKS=()
+  CONTROL_VIEWS=()
+  WRITABLE_ROOTS=("${BASE_WRITABLE_ROOTS[@]}")
+  WRITABLE_REALS=()
+  for d in "${WRITABLE_ROOTS[@]}"; do WRITABLE_REALS+=("$(readlink -m -- "$d" 2>/dev/null || true)"); done
   local d name i
   mount_op --dev "" /dev
   mount_op --proc "" /proc
@@ -842,7 +969,9 @@ build_bwrap_args() {
   for d in ${GIT_WORKTREES[@]+"${GIT_WORKTREES[@]}"}; do
     protect_git "$d"
   done
+  protect_control_tree
   pin_protected_paths
+  verify_control_mounts
   check_opt_in_binds
 
   BWRAP_ARGS=(--unshare-all --share-net --die-with-parent)
@@ -908,5 +1037,6 @@ for _pass in 1 2 3; do
   done
   build_bwrap_args
 done
+build_bwrap_args
 [ "${#MISSING_DIRS[@]}" -eq 0 ] || fail "could not prepare the mount points: ${MISSING_DIRS[*]}"
 exec bwrap "${BWRAP_ARGS[@]}" "$CLAUDE_REAL" "$@" 9< <(claude_json_source)

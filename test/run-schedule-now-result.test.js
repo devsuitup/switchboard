@@ -54,6 +54,7 @@ function setup(t, { sandbox = false, platform = 'linux', refused = [], spawnErro
   const handlers = new Map(), children = [], events = [], messages = [], logs = [], activities = [];
   const log = { info: (...args) => logs.push(args), warn: (...args) => logs.push(args), error: (...args) => logs.push(args) };
   const ctx = vm.createContext({
+    require: createRequire(path.join(__dirname, '..', 'main.js')), fs, path,
     getSetting: () => ({}), isProjectSettingsArchived: () => archived, Date,
     mainWindow: windowState === 'absent' ? null : {
       isDestroyed: () => windowState === 'destroyed',

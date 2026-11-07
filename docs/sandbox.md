@@ -418,6 +418,38 @@ whatever they hold.
   nvm installs the binary's directory is read-only.
 - **`/etc`** is readable, like on the host.
 
+## File-trigger control directory
+
+Fresh sandbox launches cannot write, rename, replace or publish files in the
+effective triggers directory, including `processed/` results and action markers,
+through their filesystem mounts. Manual new, resumed and forked sessions and
+schedules use the same absolute directory as the trigger watcher: a nonempty
+`SWITCHBOARD_TRIGGERS_DIR`, or `~/.switchboard/triggers`. Switchboard prepares it
+and passes it as the internal single-path `SWITCHBOARD_SANDBOX_TRIGGERS_DIR`.
+Standalone wrapper launches use the same override/default policy, resolving a
+relative override from their own working directory.
+
+The wrapper protects the entire tree at every visible writable-mount alias,
+including project/worktree, additional-directory and CLI-state mounts. It also
+protects a separately resolved `processed` target and pins intervening ancestor
+directories against rename and replacement. A control path outside the sandbox
+stays unexposed. A cwd or explicit extra bind at or below a control path, mutable
+symlink chain, missing visible control directory, unresolved or unrepresentable
+path, or writable mount that would reopen the tree refuses launch with status
+125 and a `claude-sandbox:` diagnostic. Paths are checked again when the final
+mount plan is built. There is no retry without Sandbox or saved-option change.
+The wrapper creates no host state before its pre-flight succeeds; Switchboard's
+host-side directory preparation and watcher publication remain writable.
+
+**This protection does not hold when `SWITCHBOARD_SANDBOX_PODMAN=1` exposes the
+Podman socket.** The service can mount host paths writable in another container,
+including triggers, results and markers. The existing Podman opt-in and successful
+socket-exposing launch behavior are unchanged; exposing the socket alone does
+not refuse launch. The sandbox's own mount-plan checks still apply.
+
+Existing sandbox namespaces retain their original mounts. This protection takes
+effect on fresh launches; it does not terminate already-running sessions.
+
 ## Limits
 
 - `git commit` has no identity unless the repository sets `user.name` and
