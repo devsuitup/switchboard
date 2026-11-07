@@ -26,9 +26,11 @@ request first, because `main` is protected.
    The required PR checks for this workflow are `lint`,
    `test (20, ubuntu-latest)`, `test (22, ubuntu-latest)`,
    `test (22, windows-2022)`, `changelog` and `e2e`. Build is not required.
-   JB must remove the obsolete `test (20, windows-2022)` context from the
-   external `main-protection` ruleset when adopting this matrix; workflow
-   changes do not change repository settings. The documented ruleset requires
+   JB must remove the obsolete `test (20, windows-2022)` context from both
+   places that require it: ruleset 17240725 (`main-protection`) and the classic
+   branch protection on `main` (`required_status_checks.contexts`). Both must
+   be updated together whenever the test matrix changes; workflow changes do
+   not change repository settings. The documented ruleset requires
    no approving review, so `gh pr merge --auto --squash` can be armed once the
    required checks run. CI-only PRs use the `no-changelog` label.
 

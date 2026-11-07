@@ -55,8 +55,11 @@ and main push; changelog stays PR-only. Test jobs have 25 minutes; lint,
 changelog and e2e have 10 each.
 
 The required-check list is documented in [releasing.md](../../docs/releasing.md).
-Build is not a required check. JB owns the external ruleset update that removes
-`test (20, windows-2022)`; changing these workflows does not update that setting.
+Build is not a required check. JB owns the external settings update that removes
+`test (20, windows-2022)` from both ruleset 17240725 (`main-protection`) and the
+classic branch protection on `main` (`required_status_checks.contexts`); both
+must be updated together whenever the test matrix changes. Changing these
+workflows does not update those settings.
 This CI-only change takes the `no-changelog` PR label.
 
 To obtain an installer for any branch, dispatch the build and download that

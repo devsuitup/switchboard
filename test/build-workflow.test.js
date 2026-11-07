@@ -15,11 +15,12 @@ const nonMac = [
   { os: 'ubuntu-24.04-arm', platform: 'linux', arch: 'arm64' },
 ];
 
-function evaluate(value, eventName, ref = 'refs/tags/v1.0.0', headRef = '') {
+function evaluate(value, eventName, ref = 'refs/tags/v1.0.0', headRef = '', extra = {}) {
   const expression = value.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/);
   return vm.runInNewContext(expression[1], {
-    github: { event_name: eventName, ref, head_ref: headRef, workflow: 'Workflow' },
+    github: { event_name: eventName, ref, head_ref: headRef, workflow: 'Workflow', ...extra },
     fromJSON: JSON.parse,
+    format: (template, ...args) => template.replace(/\{(\d+)\}/g, (_, i) => args[i]),
     startsWith: (value, prefix) => value.startsWith(prefix),
   }, { filename: workflowPath, timeout: 1000 });
 }
@@ -107,12 +108,22 @@ test('every artifact has explicit three-day PR and fourteen-day other retention'
   }
 });
 
-test('both workflows only cancel older pull requests on the same branch', () => {
+test('both workflows group PRs by number and give every other run its own group', () => {
   for (const [name, config] of Object.entries(workflows)) {
     assert.deepEqual(config.concurrency, {
-      group: '${{ github.workflow }}-${{ github.head_ref || github.ref }}',
+      group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
       'cancel-in-progress': "${{ github.event_name == 'pull_request' }}",
     }, name);
+    const group = (event, extra) => config.concurrency.group.replace(/\$\{\{([\s\S]*?)\}\}/g,
+      (_, body) => evaluate('${{' + body + '}}', event, 'refs/heads/main', 'same-branch', extra));
+    const fork = (number) => ({ event: { pull_request: { number } }, run_id: 1 });
+    assert.equal(group('pull_request', fork(7)), 'Workflow-pr-7', name);
+    assert.equal(group('pull_request', fork(7)), group('pull_request', { ...fork(7), run_id: 2 }), name);
+    assert.notEqual(group('pull_request', fork(7)), group('pull_request', fork(8)), `${name}: same head branch name`);
+    for (const event of ['push', 'workflow_dispatch']) {
+      assert.notEqual(group(event, { run_id: 1 }), group(event, { run_id: 2 }), `${name}: ${event}`);
+      assert.equal(group(event, { run_id: 5 }), 'Workflow-5', name);
+    }
     for (const event of ['pull_request', 'push', 'workflow_dispatch']) {
       assert.equal(evaluate(config.concurrency['cancel-in-progress'], event), event === 'pull_request', name);
     }
@@ -137,6 +148,12 @@ test('Test uses three PR cells and two main-push cells with stable context names
   assert.equal(typeof matrix.include, 'string');
   assert.deepEqual(evaluate(matrix.include, 'pull_request'), [{ 'node-version': 20, os: 'ubuntu-latest' }, ...cells]);
   assert.deepEqual(evaluate(matrix.include, 'push'), cells);
+  // Job context names follow key order; deepEqual ignores it.
+  for (const event of ['pull_request', 'push']) {
+    for (const cell of evaluate(matrix.include, event)) {
+      assert.deepEqual(Object.keys(cell), ['node-version', 'os'], `${event}: ${JSON.stringify(cell)}`);
+    }
+  }
   assert.equal(testWorkflow.jobs.test.name, undefined);
   assert.equal(testWorkflow.jobs.test['runs-on'], '${{ matrix.os }}');
 });

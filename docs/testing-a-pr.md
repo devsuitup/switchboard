@@ -12,10 +12,11 @@ the default. Other values produce a usage error before any git command.
 
 ## Obtaining a PR installer
 
-Installer builds run automatically only when a PR to `main` changes packaging
-inputs (including shipped source, assets, dependencies or build scripts).
-Other PRs have no automatic build artifacts. Build is not a required check.
-To build a PR branch explicitly:
+PR installers are built only when a PR to `main` changes packaging files:
+`package.json`, `package-lock.json`, `postinstall.js`, `scripts/**`, `build/**`
+or `.github/workflows/build.yml`. Shipped source such as `main.js` or `public/`
+does not trigger a build. Other PRs have no automatic build artifacts. Build is
+not a required check. To build a PR branch on demand:
 
 ```bash
 gh workflow run build.yml --repo devsuitup/switchboard --ref <branch>
