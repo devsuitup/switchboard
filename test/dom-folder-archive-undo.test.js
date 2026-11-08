@@ -110,7 +110,7 @@ test('PR5b Q4 idle options are configuration without danger or Undo', async t =>
   assert.deepEqual(ctx.calls, [['folder', [{ projectPath: '/p', folderKey: '-p' }], { disableSchedules: ['/x'] }]]);
 });
 
-test('PR5b Q5 Undo restores this click only and names disabled schedules and worktrees', async t => {
+test('PR5b Q5 Undo restores this click only, counts disabled schedules and names worktrees', async t => {
   const child = { projectPath: '/p/.claude/worktrees/w', folder: '-p-w', sessions: [] };
   const ctx = setup(t, [{ sessionId: 'S' }, { sessionId: 'old', archived: 1 }], [{ name: 'X', filePath: '/x', disableable: true }], [child]);
   ctx.window.activePtyIds.add('S');
@@ -120,7 +120,8 @@ test('PR5b Q5 Undo restores this click only and names disabled schedules and wor
   await pending;
   assert.ok(undo(ctx), 'confirmed Archive offers Undo');
   assert.match(undo(ctx).parentElement.textContent, /stay stopped/);
-  assert.match(undo(ctx).parentElement.textContent, /X/);
+  assert.match(undo(ctx).parentElement.textContent, /1 schedule turned off; Undo turns them back on. See the Schedules tab/);
+  assert.doesNotMatch(undo(ctx).parentElement.textContent, /X/);
   assert.match(undo(ctx).parentElement.textContent, /\/p\/\.claude\/worktrees\/w/);
   undo(ctx).click();
   await settle();
@@ -242,12 +243,12 @@ test('PR5b review stale folder Undo explains that nothing changed without retry 
   assert.equal(ctx.calls.some(call => call[0] === 'archive' && call[2] === 0), false);
 });
 
-test('PR5b review R2 empty folder keeps the reason a schedule stays enabled in its notice', async t => {
+test('PR5b review R2 empty folder points to Schedules with the count that stays enabled', async t => {
   const ctx = setup(t, [], [{ name: 'Y', disableable: false, reason: 'remote schedules are read-only' }]);
   await archive(ctx);
   assert.equal(ctx.document.querySelector('.modal-overlay'), null);
   assert.ok(undo(ctx));
-  assert.match(undo(ctx).parentElement.textContent, /Y stays enabled: remote schedules are read-only/);
+  assert.match(undo(ctx).parentElement.textContent, /1 schedule stays enabled; see the Schedules tab/);
 });
 
 for (const remembered of ['0', '1']) {

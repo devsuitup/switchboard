@@ -546,7 +546,7 @@ concept. Each entry gives:
   `docs/automation.md:14-180`.
 - **Today**: "Create scheduled task" (`public/sidebar.js:903`), "schedule" in
   docs and the archive dialog ("Disable the N enabled schedules",
-  `public/sidebar.js:1184`), **Run now** in Agent Files. A run is a session
+  `public/sidebar.js:1184`), **Run now**, enable/disable and Open in the Schedules tab. A run is a session
   row in a slug group; it cannot be stopped or attached (m7).
 
 ### Trigger

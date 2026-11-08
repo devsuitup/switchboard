@@ -138,6 +138,11 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../preload.js'), 'utf8'), { process,
     require: () => ({ contextBridge: { exposeInMainWorld: (_key, value) => { bridge = value; } }, ipcRenderer: transport }) });
   const w = h.window, timers = [];
+  const schedulesContent = w.document.createElement('div');
+  schedulesContent.id = 'schedules-content';
+  w.document.body.append(schedulesContent);
+  const schedulesFilename = path.join(__dirname, '../public/schedules-view.js');
+  vm.runInContext(fs.readFileSync(schedulesFilename, 'utf8'), h.context, { filename: schedulesFilename });
   w.cachedProjects = [{ projectPath: 'accepted', sessions: [] }]; w.cachedAllProjects = w.cachedProjects;
   w.loadingStatus = w.document.createElement('div');
   for (const name of ['reportActivityFocus', 'reportActivityTitles', 'refreshSidebar', 'renderDefaultStatus', 'maybeRetryRestoreWorkingSet']) w[name] = () => {};
@@ -147,9 +152,10 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
   w.setTimeout = callback => { timers.push(callback); return timers.length; }; w.clearTimeout = () => {};
   w.activeTab = away ? 'stats' : 'sessions';
   loadAppFunctions(h.context, { declarations: ['searchGeneration'], functions: ['dedup', 'loadProjects', 'reloadProjects'] });
-  const app = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
+  const appFilename = path.join(__dirname, '../public/app.js');
+  const app = fs.readFileSync(appFilename, 'utf8');
   const eventStart = app.indexOf('let projectsChangedTimer = null;');
-  vm.runInContext(app.slice(eventStart, app.indexOf('\n});', eventStart) + 4), h.context);
+  vm.runInContext(app.slice(eventStart, app.indexOf('\n});', eventStart) + 4), h.context, { filename: appFilename });
   const initial = w.reloadProjects();
   for (let i = 0; i < 3; i++) { await flush(); f.change(); f.reply(i, readonly); }
   assert.equal(await initial, false); assert.equal(w.cachedProjects[0].projectPath, 'accepted');
@@ -159,7 +165,7 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
     for (const name of ['searchBar', 'workFilesContent', 'sessionFilters', 'placeholder']) w[name] = w.document.createElement('div');
     w.searchInput = w.document.createElement('input'); w.hideAllViewers = () => {}; w.gridViewActive = false;
     const tabsStart = app.indexOf("document.querySelectorAll('.sidebar-tab').forEach(tab => {");
-    vm.runInContext(app.slice(tabsStart, app.indexOf('\n// Grid view →', tabsStart)), h.context);
+    vm.runInContext(app.slice(tabsStart, app.indexOf('\n// Grid view →', tabsStart)), h.context, { filename: appFilename });
     tab.click(); await flush(); assert.equal(w.activeTab, 'sessions');
   } else { timers.shift()(); await flush(); }
   assert.equal(f.messages.length, 4, 'recovery dispatch requires no unrelated source event');

@@ -284,7 +284,7 @@ stopped` notice now uses this persistent error variant, with its wording
 unchanged and no console-only duplicate.
 
 Stop, Detach, Delete and Archive failures use B8 and clear only the successful
-action's own notice. Run now reports success only after an `ok` reply; a refusal,
+action's own notice. Run now in the Schedules tab reports success only after an `ok` reply; a refusal,
 rejected IPC or absent result restores the button and leaves a B8 error naming
 the schedule, reason and how to retry. Restore's pending indexing notice clears
 after its retry runs; an early return moves held members into persistent
@@ -303,7 +303,7 @@ records the other feedback mechanisms from the measured baseline.
 | Mechanism | Where | Notes |
 |---|---|---|
 | B8 persistent action failure | Stop/Detach, Delete, Archive and restore (`app.js`, `sidebar.js`) | reason and recovery stay visible after pointer leave; successful actions clear their own member |
-| B8 persistent Run now failure | `buildMemoryItem` (`memory-workfiles-view.js`) | restores the play button; no success check mark or Launched! on failure |
+| B8 persistent Run now failure | `runScheduleFromTab` (`schedules-view.js`) | restores the play button; no success check mark or Launched! on failure |
 | Button flash success | `flashButtonText` (`viewer-toolbar.js:28-39`): `Saved!` (`file-panel.js:446, 2089`, `viewer-toolbar.js:266`), `✓` / `Copied!` (`viewer-toolbar.js:271, 276`) | on `.icon-btn` it always flashes **green**, whatever the text; today no `Failed` caller is an `.icon-btn` (verified from the caller list) |
 | `window.alert` | 12 sites: `sidebar.js:1158, 1225, 1227, 1230, 1305, 1349`; `viewer-panel.js:290, 293`; `file-panel.js:448, 451`; `activity-trace-panel.js:70, 133` | blocking, OS-styled |
 | Inline error, persistent | Agents (`agents-view.js:349`, `.agents-detail-error`); dialog error lines (Add project `dialogs.js:647-665`, New agent `dialogs.js:803-875`); worktree dialog `.dwt-error` (`sidebar.js:1985, 1999`) | stays until the next attempt |

@@ -21,8 +21,18 @@ function setup(t) {
     },
   }, { filename: preload });
   const filename = path.join(__dirname, '../public/memory-workfiles-view.js');
+  let reloads = 0;
+  h.window.queueSchedulesReload = () => { reloads++; };
   vm.runInContext(fs.readFileSync(filename, 'utf8'), h.context, { filename });
-  return { ...h, exit: payload => ipcRenderer.emit('schedule-run-exit', {}, payload) };
+  return { ...h, get reloads() { return reloads; }, exit: payload => ipcRenderer.emit('schedule-run-exit', {}, payload) };
+}
+
+for (const code of [0, 42]) {
+  test(`schedule exit ${code} queues a schedules reload`, t => {
+    const h = setup(t);
+    h.exit({ name: 'Nightly', sessionId: 'refresh', code, failure: 'exit' });
+    assert.equal(h.reloads, 1, 'every scheduled exit queues a tab refresh, including success');
+  });
 }
 
 for (const [failure, code, hint] of [
@@ -62,11 +72,13 @@ test('a fast failure survives the later successful launch acknowledgement', asyn
   };
   h.window.formatDate = () => 'today';
   h.window.ICONS = { schedule: () => '<svg></svg>' };
-  const item = h.window.buildMemoryItem({ filename: 'schedule-nightly.md', filePath: '/p/schedule-nightly.md' });
+  const filename = path.join(__dirname, '../public/schedules-view.js');
+  vm.runInContext(fs.readFileSync(filename, 'utf8'), h.context, { filename });
+  const item = h.window.buildScheduleItem({ projectPath: '/p', known: true, archived: false }, { file: 'schedule-nightly.md', filePath: '/p/schedule-nightly.md', name: 'Nightly', slug: 'nightly', cron: '* * * * *', cronText: 'every min', problems: [], enabled: true, linked: false, catchUp: false, nextRunMs: Date.now() + 60000, runs: [] }, { now: Date.now(), catchUpActive: true });
   h.document.body.append(item);
-  item.querySelector('.schedule-play-btn').click();
+  item.querySelector('.schedule-run-btn').click();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(item.querySelector('.schedule-play-btn').title, 'Launched!');
+  assert.equal(item.querySelector('.schedule-run-btn').title, 'Launched!');
   assert.match(h.document.querySelector('[role="alert"]')?.textContent || '', /Nightly.*127.*PATH/);
 });
 

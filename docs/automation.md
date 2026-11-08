@@ -180,8 +180,27 @@ session.
 
 ### Run now
 
-The **Agent Files** tab lists the schedule files with a clock icon and a **Run
-now** button, which starts a run at once. **Run now** ignores `cron` and
+The **Schedules** tab (clock icon, after Agent Files) lists scheduled tasks by
+project, including disabled tasks and archived projects. Each task shows its
+schedule in plain words, local next-run time, enabled state and up to 20 recent
+runs. **Run now** starts a run at once. **Turn on** and **Turn off** edit its
+front matter; turning it back on skips runs missed while it was off, including
+after Archive and Undo. **Open** edits the schedule file. Linked files can be
+opened and run, but must be enabled or disabled at their source.
+
+The tab refreshes on open, after actions, on project changes and every minute
+while visible. No search is offered here. Invalid files show their problems;
+unknown projects cannot be run or opened. Archived projects stay suspended even
+if their schedules are enabled. The Work Files tab remains available.
+
+A running task says **Running**. Other runs say **No result recorded** with a
+transcript hint, including **replied; exit code unknown** when a reply exists.
+Reply text does not prove a successful exit. Results are not yet stored. Use
+**Show history in Sessions** for older runs; runs predating v0.0.90 have no
+schedule marker and cannot be attributed. Creation still uses the project
+header’s **Create scheduled task** command.
+
+**Run now** ignores `cron` and
 `enabled`, and does not wait for a run of the same schedule that is still going.
 The button shows a check mark (tooltip **Launched!**) only after the configured shell
 process starts. This acknowledges the shell launch, not that Claude has started

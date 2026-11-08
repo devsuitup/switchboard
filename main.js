@@ -874,7 +874,7 @@ async function unarchivedScheduleProjects(projectPath) {
 
 function skipMissedScheduleRuns(projects) {
   try {
-    require('./src/main/schedules/schedule-runner').skipMissedRuns(log, projects, path.join(path.dirname(DB_PATH), 'schedule-state'));
+    require('./src/main/schedules/schedule-runner').skipMissedRuns(log, projects, path.join(path.dirname(DB_PATH), 'schedule-state'), stopScheduler?.getLastTickMinute());
   } catch (err) {
     log.warn('[schedule] Cannot reset the catch-up record after unarchive:', err.message);
   }
@@ -990,6 +990,7 @@ async function projectArchivePlan(groups) {
 
 function archiveDeps() {
   return {
+    reenable: (files, projectRoot) => require('./archived-projects').reenableScheduleFiles(files, projectRoot, { stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), getLastTickMinute: () => stopScheduler?.getLastTickMinute() }),
     isInitialScanComplete,
     seedProjects: () => initialScheduleProjects(() => listSettingKeys('project:')),
     scan: projectPath => scanSchedules(log, [projectPath]),
@@ -1624,6 +1625,11 @@ const fileListsClient = {
   request: ({ kind }) => fileListClients.get(kind).request(),
   shutdown: () => Promise.all([...fileListClients.values()].map(client => client.shutdown())),
 };
+
+ipcMain.handle('set-schedule-enabled', (_event, filePath, enabled) =>
+  require('./src/main/schedules/schedule-runner').setListedScheduleEnabled(filePath, enabled, {
+    scheduleProjects, stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), getLastTickMinute: () => stopScheduler?.getLastTickMinute(),
+  }));
 
 ipcMain.handle('list-schedules', () => {
   const knownProjectPaths = [...getKnownProjectPaths()];

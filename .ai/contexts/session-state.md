@@ -266,7 +266,7 @@ recovery step. The headline is Archived, but not stopped; Unarchive clears only
 its member from that host's notice. A single-row Archive persistence failure
 after a successful Stop explicitly says the process stopped but the row is not
 archived. Folder partial success uses Archive folder partly done, refers to
-schedule-*.md in Agent Files, and names Settings → Archived projects for restoring
+schedules in the Schedules tab, and names Settings → Archived projects for restoring
 the folder. Folder descriptions include the project path once.
 
 Evidence: `test/dom-row-action-errors.test.js`,

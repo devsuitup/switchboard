@@ -6,6 +6,7 @@ const path = require('node:path');
 const { deriveProjectPath } = require('./derive-project-path');
 const { isAllowedMemoryPath: _isAllowedMemoryPath } = require('./src/main/shared/ipc-path-validator');
 const { scanMdFiles: scanMarkdown, acceptMdFile: acceptMarkdown } = require('./scan-md-files');
+const { isRunnerScheduleFileName } = require('./src/main/schedules/schedule-runner');
 
 function getKnownProjectPaths(options) {
   const roots = new Set(options.activeProjectPaths || []);
@@ -128,6 +129,7 @@ function listMemories(options, readContent) {
           const commandsDir = path.join(dotClaudeDir, 'commands');
           const commandFiles = scanMdFiles(commandsDir, isAllowed);
           for (const f of commandFiles) {
+            if (isRunnerScheduleFileName(f.filename)) continue;
             if (!seenPaths.has(f.filePath)) {
               files.push({ ...listed(f), displayPath: shortName + '/.claude/commands/', source: 'project' });
               seenPaths.add(f.filePath);

@@ -4,10 +4,11 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
-## Schedules (#792, slice A1)
+## Schedules (#792, slices A1 and A2)
 
 | IPC | Args | Returns | Preload |
 | --- | --- | --- | --- |
+| `set-schedule-enabled` | `filePath, enabled` (boolean) | `{ ok }` or `{ ok: false, error }`; exact current listing path, linked-file and front-matter guards; re-enable skips missed catch-up before writing | `api.setScheduleEnabled(filePath, enabled)` |
 | `list-schedules` | none | `{ now, catchUpActive, projects: [{ projectPath, shortName, archived, sandboxed, known, schedules: [{ filePath, file, name, slug, cron, cronText, enabled, catchUp, cli, prompt, linked, problems, nextRunMs, catchUpDueMs, runs: [{ sessionId, created, messageCount, replied, running, result }] }] }] }` | `api.listSchedules()` |
 
 Main registers the handler and calls the Electron-free
@@ -22,8 +23,8 @@ newest first, capped at 20 per schedule. `replied` is an assistant-record check
 child map. `result` is always `null` until the separate run-result slice lands.
 
 `run-schedule-now`, `read-memory`, `save-memory` and `schedule-run-exit` keep
-their existing contracts. A1 exposes no schedule mutation channel or renderer
-consumer. See [schedule-runner.md](schedule-runner.md), "Schedule listing
+their existing contracts. A2 adds the Schedules renderer and the guarded
+enable operation; creation and deletion are later slices. See [schedule-runner.md](schedule-runner.md), "Schedule listing
 backend", for field parsing, refusal rules, time-zone semantics and tests.
 
 ## Main-process error backstop (#896)
@@ -475,6 +476,11 @@ An unknown remote target never falls back to local disk IO.
 
 `terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
 
+`onProjectsChanged(callback)` forwards the main-side `{ cause: string[] }`
+payload. Schedules filters these causes before queuing a bounded debounce;
+see [schedule-runner.md](schedule-runner.md), "Schedules tab". Other subscribers
+may ignore the payload.
+
 `remote-resize-allowed(sessionId)` is emitted once when a live remote attach
 promotes from shared to solo. `preload.onRemoteResizeAllowed` forwards the id
 to the renderer, which enables solo sizing and schedules a fitted resize.
@@ -518,6 +524,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 
 | IPC | Guard | Kind |
 |---|---|---|
+| `set-schedule-enabled` | `listScheduleFiles(await scheduleProjects().list())` exact path equality, boolean argument, unlinked file and readable front matter; skip missed catch-up before enabling | current registry listing + disk-resolved link guard |
 | `read-memory` / `save-memory` | `resolveAllowedMemoryPath` (read/write the returned path, not the caller's own re-resolved one) | disk-resolved allowlist |
 | `get-memories` (the list, and the FTS bodies it indexes) | `acceptMdFile` (`scan-md-files.js`) applies `isSensitivePath` itself and the `isAllowedMemoryPath` predicate `get-memories` passes in; `scanMdFiles` is the directory-wide form of it, and the project-root `CLAUDE.md`/`GEMINI.md`/`agents.md` go through it by name | disk-resolved denylist + allowlist — a listed file is read twice more downstream, once by `read-memory` behind `resolveAllowedMemoryPath` and once by the FTS indexer behind nothing at all, so the guard belongs on the list. The denylist is not the caller's to choose: containment in an allowed project root says nothing about a cloned repo's own `.ssh`/`.env` |
 | `open-main-log` | Main chooses electron-log's path; requires a string absolute path and `!isSensitivePath` before `shell.openPath`. | no renderer-supplied path; disk-resolved denylist |
@@ -1151,3 +1158,6 @@ raw prompts, names, CLI strings, paths, sockets, keys or liveVersion. Lists are
 capped at 128 with complete counts/truncation flags; oversized legitimate records
 compact before transport and remain below 64 KiB after main's timestamp. Invalid
 records or transport failures cannot break publication.
+
+Schedules reuse `run-schedule-now`, `read-memory`, `save-memory` and
+`schedule-run-exit` unchanged. Delete/create IPCs are not part of A2.

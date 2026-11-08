@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   getUsage: () => ipcRenderer.invoke('get-usage'),
   getMemories: () => ipcRenderer.invoke('get-memories'),
   listSchedules: () => ipcRenderer.invoke('list-schedules'),
+  setScheduleEnabled: (filePath, enabled) => ipcRenderer.invoke('set-schedule-enabled', filePath, enabled),
   readMemory: (filePath) => ipcRenderer.invoke('read-memory', filePath),
   saveMemory: (filePath, content, expected) => ipcRenderer.invoke('save-memory', filePath, content, expected),
   getWorkFiles: () => ipcRenderer.invoke('get-work-files'),
@@ -180,7 +181,7 @@ contextBridge.exposeInMainWorld('api', {
   onSubagentWatchEvent: (cb) => ipcRenderer.on('subagent-watch-event', (_e, payload) => cb(payload)),
   onBgAgentsChanged: (cb) => ipcRenderer.on('bg-agents-changed', (_e, payload) => cb(payload)),
   onProjectsChanged: (callback) => {
-    ipcRenderer.on('projects-changed', () => callback());
+    ipcRenderer.on('projects-changed', (_event, payload) => callback(payload));
   },
   onRemoteActivity: (callback) => {
     ipcRenderer.on('remote-activity', (_event, payload) => callback(payload));

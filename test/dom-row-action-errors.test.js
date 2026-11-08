@@ -38,7 +38,7 @@ function setup(t, extra = {}) {
     assert.match(el.textContent, /Work|s1|\/project/);
     assert.match(el.textContent, /\/project/);
     assert.ok(el.querySelector('.app-notice-dismiss'));
-    assert.match(el.textContent, /retry (?:Stop|Detach|Delete|Unarchive|Archive(?: folder)?)|try again (?:once|when)|own terminal|open (?:it|the (?:session|conversation)) from the sidebar|Agent Files|Reindex all sessions/i);
+    assert.match(el.textContent, /retry (?:Stop|Detach|Delete|Unarchive|Archive(?: folder)?)|try again (?:once|when)|own terminal|open (?:it|the (?:session|conversation)) from the sidebar|Schedules tab|Reindex all sessions/i);
     assert.doesNotMatch(el.textContent, /schedules in Settings|reload the sidebar|eligible/i);
     assert.equal(h.document.activeElement, expectedFocus);
     el.dispatchEvent(new h.window.MouseEvent('mouseleave'));
@@ -391,7 +391,7 @@ test('a failed Unarchive names that action and preserves its archived state', as
   assert.equal(h.session.archived, 1);
 });
 
-test('folder partial success names Agent Files and uses a partial headline with one path', async t => {
+test('folder partial success names Schedules tab and uses a partial headline with one path', async t => {
   const h = setup(t);
   h.window.api.getProjectArchivePlan = async () => ({ schedules: [] });
   h.window.api.archiveProject = async () => ({ ok: true, failed: [{ name: 'nightly', error: 'EACCES' }] });
@@ -400,7 +400,7 @@ test('folder partial success names Agent Files and uses a partial headline with 
   await pending;
   const el = h.document.querySelector('[role="alert"]');
   assert.match(el.textContent, /^Archive folder partly done/);
-  assert.match(el.textContent, /schedule-.*\.md.*Agent Files/);
+  assert.match(el.textContent, /Schedules tab/);
   assert.doesNotMatch(el.textContent, /schedules in Settings|Archive folder failed/);
   assert.equal(el.textContent.split('/project').length - 1, 1);
 });

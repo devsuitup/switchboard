@@ -1522,7 +1522,7 @@ function buildReenableNotice(project, fId) {
   el.id = 'sro-' + fId;
   const text = document.createElement('div');
   text.className = 'schedule-reenable-text';
-  text.textContent = `${n} schedule${n === 1 ? ' was' : 's were'} turned off when this folder was archived: ${offer.names.join(', ')}`;
+  text.textContent = `${n} schedule${n === 1 ? ' was' : 's were'} turned off when this folder was archived. See the Schedules tab.`;
   el.appendChild(text);
   if (Array.isArray(offer.failed) && offer.failed.length > 0) {
     const failed = document.createElement('div');
@@ -1540,7 +1540,12 @@ function buildReenableNotice(project, fId) {
   dismiss.type = 'button';
   dismiss.className = 'schedule-reenable-dismiss';
   dismiss.textContent = 'Dismiss';
-  actions.append(on, dismiss);
+  const show = document.createElement('button');
+  show.type = 'button';
+  show.className = 'schedule-reenable-show';
+  show.textContent = 'Show in Schedules';
+  show.addEventListener('click', () => showSchedules(project.projectPath));
+  actions.append(show, on, dismiss);
   el.appendChild(actions);
   return el;
 }
@@ -1554,7 +1559,7 @@ function showFolderArchiveUndo(project, groups, archivedAt, rows, didStop, child
     message: [`Folder "${shortProjectPath(project.projectPath)}" archived.`,
       ...(didStop ? ['Stopped processes stay stopped.'] : []),
       ...(children.length ? [`Worktrees archived with it: ${children.map(child => child.projectPath).join(', ')}.`] : []),
-      ...(disabled.length ? [`Schedules turned off: ${disabled.join(', ')}. Undo turns them back on.`] : []),
+      ...(disabled.length ? [`${disabled.length} schedule${disabled.length === 1 ? '' : 's'} turned off; Undo turns them back on. See the Schedules tab.`] : []),
       ...staysEnabled].join(' '),
     actionLabel: 'Undo',
     onAction: async () => {
@@ -1610,7 +1615,8 @@ async function archiveProjectFolder(project, button) {
     }
     const schedules = plan.schedules || [];
     const disableable = schedules.filter(s => s.disableable);
-    const staysEnabled = schedules.filter(s => !s.disableable).map(s => `${s.name} stays enabled: ${s.reason}`);
+    const enabledCount = schedules.filter(s => !s.disableable).length;
+    const staysEnabled = enabledCount ? [`${enabledCount} schedule${enabledCount === 1 ? '' : 's'} stay${enabledCount === 1 ? 's' : ''} enabled; see the Schedules tab`] : [];
 
     const message = ['The folder is hidden from the sidebar until it is added again or a new session starts in it.', ...staysEnabled];
     if (children.length > 0) {
@@ -1627,7 +1633,7 @@ async function archiveProjectFolder(project, button) {
       if (disableable.length > 0) {
         choices.push({
           id: 'disableSchedules',
-          label: `Disable the ${disableable.length} enabled schedule${disableable.length === 1 ? '' : 's'}: ${disableable.map(s => s.name).join(', ')}`,
+          label: `Disable the ${disableable.length} enabled schedule${disableable.length === 1 ? '' : 's'} (listed in the Schedules tab)`,
           checked: true,
           rememberKey: 'archiveFolder.disableSchedules',
         });
@@ -1703,10 +1709,10 @@ async function archiveProjectFolder(project, button) {
     if (!res || res.ok === false || res.error) {
       const reason = res?.error === 'indexing' ? ARCHIVE_INDEXING_MESSAGE : 'The folder could not be archived: ' + (res?.error || 'The backend returned no result');
       const disabled = res?.disabled?.length ? '. These schedules were turned off: ' + res.disabled.join(', ') : '';
-      showSessionActionFailure('Archive folder', project, reason + disabled, 'Check schedule-*.md in the Agent Files tab, then retry Archive folder.');
+      showSessionActionFailure('Archive folder', project, reason + disabled, 'Check the schedules in the Schedules tab, then retry Archive folder.');
     } else if (res.failed?.length) {
       showSessionActionFailure('Archive folder', project, 'The folder is archived, but these schedules could not be disabled: ' + res.failed.map(f => f.name + ': ' + f.error).join('; '),
-        'Review schedule-*.md in the Agent Files tab. Restore the folder from Settings → Archived projects if you need to retry Archive folder.', undefined, { headline: 'Archive folder partly done' });
+        'Review the schedules in the Schedules tab. Restore the folder from Settings → Archived projects if you need to retry Archive folder.', undefined, { headline: 'Archive folder partly done' });
     } else {
       clearAppNotice(sessionActionNoticeId('Archive folder', project));
     }
