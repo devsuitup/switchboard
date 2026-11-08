@@ -26,6 +26,7 @@ const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .c
 const rendererCrossFileGlobals = {
   setSchedulesVisible: 'readonly',
   loadSchedules: 'readonly',
+  queueSchedulesReload: 'readonly',
   showSchedules: 'readonly',
   openScheduleMemory: 'readonly',
   openScheduleRun: 'readonly',

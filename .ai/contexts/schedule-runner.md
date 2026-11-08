@@ -431,10 +431,10 @@ caught up again.
 **Failure.** If the directory cannot be read or a record cannot be written, the
 schedule falls back to plain cron matching on ticks and a warning is logged.
 
-**Not covered.** A disabled schedule is dropped by `scanSchedules` before the
-check, so re-enabling one catches up a run missed while disabled (within seven
-days). `run-schedule-now` goes through `schedule-ipc.js` and does not touch the
-record.
+**Re-enable.** Disabled schedules are dropped by `scanSchedules`. Re-enabling
+through the tab, an archive offer or Undo first skips missed minutes through
+the shared helper described below. `run-schedule-now` goes through
+`schedule-ipc.js` and does not touch the record.
 
 Tests: `test/schedule-catch-up.test.js` (fake `Date`/timers, `HOME` pointed at a
 temporary directory).
@@ -472,7 +472,7 @@ PROJECTS_DIR scans), `test/schedule-next-run.test.js` (descriptions and DST).
 ## Schedules tab (#792, slice A2)
 
 `public/schedules-view.js` consumes `list-schedules` on open, after each action,
-on projects-changed and on minute boundaries while visible. The clock tab follows
+on projects-changed (coalesced over 900 ms) and on minute boundaries while visible. The clock tab follows
 Agent Files; Work Files is preserved. Search is hidden. Rows show cron, local
 next-run and relative time, disabled/archive/validation reasons, shared-slug
 diagnostics, catch-up status and the newest 20 runs from the main-side list.
@@ -485,6 +485,12 @@ fresh indexed session and goes through openSession, preserving resume guards.
 listScheduleFiles over the registry at call time. Linked/unread front matter is
 refused. Before enabling a disabled catch-up schedule, skipMissedRunsOf claims
 the prior-minute baseline, then setScheduleEnabled atomically rewrites the file.
+When re-enable happens after the start of a due minute, that current minute is
+claimed too, so its tick missed while off cannot replay on the next check. At
+the exact minute boundary the previous-minute baseline still lets the tick run.
+Unarchive uses the same helper and therefore the same rule. Missing stateDir
+refuses a catch-up re-enable with MissingScheduleStateDir. Archive parsing uses
+the runner's shared scheduleFields helper.
 This ordering also applies in isolated instances. Archive offers and Undo receive
 the same stateDir via archiveDeps.reenable and reenableScheduleFiles; the writer
 continues to perform file effects outside SQL. Skip failure prevents enabling.
@@ -499,6 +505,15 @@ Slice A2 keeps result null. Running uses the live map; otherwise the renderer
 says No result recorded and gives the assistant/seed/started/unknown transcript
 hint. It never infers Exit 0. Persistent outcomes, deletion, the creation form
 and creator-template migration are later slices.
+
+Action state is keyed by filePath across renders: a pending launch stays disabled,
+success shows the check mark and Launched! for two seconds, and a refusal restores
+Run now with the persistent notice. A new launch invalidates the previous success
+timer. Pending toggles likewise stay disabled. A render restores each row's open
+history and focused control by filePath and control identity. An unmatched project
+focus request is consumed by that render. Guard refusal reasons are visible row text.
+Next-run wording uses minutes below an hour, then today's time, tomorrow's time,
+a weekday within the following week, or a date for later runs.
 
 History navigation maps the listed run IDs to local indexed project paths, so a
 registry alias and its resolved transcript folder expand the same visible group.

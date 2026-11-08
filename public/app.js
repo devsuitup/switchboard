@@ -2978,7 +2978,7 @@ loadStartupProjects();
 let projectsChangedTimer = null;
 let projectsChangedWhileAway = false;
 window.api.onProjectsChanged(() => {
-  if (activeTab === 'schedules') loadSchedules();
+  if (activeTab === 'schedules') queueSchedulesReload();
   // Debounce to avoid rapid re-renders during bulk changes
   if (projectsChangedTimer) clearTimeout(projectsChangedTimer);
   if (activeTab !== 'sessions') {

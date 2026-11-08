@@ -336,7 +336,6 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 | IPC | Returns |
 |---|---|
 | `get-memories` | `{global, projects}` |
-| `set-schedule-enabled` | `listScheduleFiles(await scheduleProjects().list())` exact path equality, boolean argument, unlinked file and readable front matter; skip missed catch-up before enabling | current registry listing + disk-resolved link guard |
 | `read-memory` / `save-memory` | content / `{ok}` |
 | `get-work-files` | `{projects: WorkFilesProject[]}` — **dedupes by projectPath** since PR #15. Walks `<projectPath>/.work-files/` recursively, capped at 200 files per project. |
 | `read-work-file` / `delete-work-file` | content (with `.work-files/` path guard) / `{ok}` |
@@ -513,6 +512,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 
 | IPC | Guard | Kind |
 |---|---|---|
+| `set-schedule-enabled` | `listScheduleFiles(await scheduleProjects().list())` exact path equality, boolean argument, unlinked file and readable front matter; skip missed catch-up before enabling | current registry listing + disk-resolved link guard |
 | `read-memory` / `save-memory` | `resolveAllowedMemoryPath` (read/write the returned path, not the caller's own re-resolved one) | disk-resolved allowlist |
 | `get-memories` (the list, and the FTS bodies it indexes) | `acceptMdFile` (`scan-md-files.js`) applies `isSensitivePath` itself and the `isAllowedMemoryPath` predicate `get-memories` passes in; `scanMdFiles` is the directory-wide form of it, and the project-root `CLAUDE.md`/`GEMINI.md`/`agents.md` go through it by name | disk-resolved denylist + allowlist — a listed file is read twice more downstream, once by `read-memory` behind `resolveAllowedMemoryPath` and once by the FTS indexer behind nothing at all, so the guard belongs on the list. The denylist is not the caller's to choose: containment in an allowed project root says nothing about a cloned repo's own `.ssh`/`.env` |
 | `open-main-log` | Main chooses electron-log's path; requires a string absolute path and `!isSensitivePath` before `shell.openPath`. | no renderer-supplied path; disk-resolved denylist |
@@ -1147,7 +1147,3 @@ records or transport failures cannot break publication.
 
 Schedules reuse `run-schedule-now`, `read-memory`, `save-memory` and
 `schedule-run-exit` unchanged. Delete/create IPCs are not part of A2.
-
-IPC path-guard inventory addition: `set-schedule-enabled` matches the supplied
-path exactly against `listScheduleFiles(await scheduleProjects().list())` at
-call time and refuses linked files and unread front matter before writing.

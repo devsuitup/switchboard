@@ -9,7 +9,7 @@ const { loadAppFunctions, extractFunction } = require('./app-source');
 
 function setup(t, run = () => ({ ok: true })) {
   const dom = new JSDOM('<body><div id="app-notices"></div><div id="schedules-content"></div></body>', { runScripts: 'outside-only', url: 'http://localhost' });
-  t.after(() => dom.window.close());
+  t.after(() => { dom.window.setSchedulesVisible(false); dom.window.close(); });
   const ctx = dom.getInternalVMContext();
   const calls = [];
   const project = { projectPath: '/p', shortName: 'p', known: true, archived: false, schedules: [] };
@@ -43,8 +43,166 @@ function setup(t, run = () => ({ ok: true })) {
   const titles = [];
   new w.MutationObserver(records => titles.push(...records.map(record => record.oldValue), button.title))
     .observe(button, { attributes: true, attributeFilter: ['title'], attributeOldValue: true });
-  return { dom, w, project, schedule, data, calls, button, titles, opened };
+  w.setSchedulesVisible(true);
+  return { dom, w, project, schedule, data, calls, get button() { return w.document.querySelector('.schedule-run-btn'); }, titles, opened };
 }
+
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('visible successful launch retains its acknowledgement after the action reload', async t => {
+  const h = setup(t);
+  h.w.setSchedulesVisible(true);
+  await settle();
+  h.w.document.querySelector('.schedule-run-btn').click();
+  await settle();
+  assert.equal(h.w.document.querySelector('.schedule-run-btn').title, 'Launched!', 'visible success survives action reload');
+});
+
+test('visible Run now stays in flight across refreshes and shows launch success until its timer expires', async t => {
+  let finish;
+  const h = setup(t, () => new Promise(resolve => { finish = resolve; }));
+  h.w.setSchedulesVisible(true);
+  await settle();
+  const button = () => h.w.document.querySelector('.schedule-run-btn');
+  button().click();
+  await h.w.loadSchedules();
+  assert.equal(button().disabled, true, 'visible in-flight launch cannot be clicked again');
+  assert.equal(button().title, 'Running...');
+  assert.equal(button().classList.contains('running'), true);
+  button().click();
+  assert.equal(h.calls.length, 1);
+  finish({ ok: true });
+  await settle();
+  assert.equal(button().title, 'Launched!', 'visible row retains launch acknowledgement after action reload');
+  assert.equal(button().textContent, '\u2713');
+  assert.equal(button().disabled, false);
+  await h.w.loadSchedules();
+  assert.equal(button().classList.contains('done'), true);
+  await new Promise(resolve => h.w.setTimeout(resolve, 2100));
+  assert.equal(button().title, 'Run now');
+  assert.equal(button().classList.contains('done'), false);
+});
+
+for (const [label, result] of [['refusal', { ok: false, error: 'refused' }], ['missing reply', undefined]]) {
+  test(`visible Run now ${label} restores the current row and leaves the notice`, async t => {
+    let finish;
+    const h = setup(t, () => new Promise(resolve => { finish = resolve; }));
+    h.w.setSchedulesVisible(true);
+    await settle();
+    h.w.document.querySelector('.schedule-run-btn').click();
+    await h.w.loadSchedules();
+    assert.equal(h.w.document.querySelector('.schedule-run-btn').disabled, true, 'pending state survives refresh');
+    finish(result);
+    await settle();
+    const button = h.w.document.querySelector('.schedule-run-btn');
+    assert.equal(button.disabled, false);
+    assert.equal(button.title, 'Run now');
+    assert.equal(button.classList.contains('running'), false);
+    assert.equal(button.classList.contains('done'), false);
+    assert.equal(h.w.document.querySelector('[role="alert"]').dataset.noticeId, 'RunSchedule:/p/schedule-nightly.md');
+  });
+}
+
+test('visible history stays open across a refresh', async t => {
+  const h = setup(t);
+  h.w.setSchedulesVisible(true);
+  await settle();
+  h.w.document.querySelector('details').open = true;
+  await h.w.loadSchedules();
+  assert.equal(h.w.document.querySelector('details').open, true, 'open history survives refresh');
+});
+
+test('a visible pending toggle recovers its current button even if the following reload fails', async t => {
+  const h = setup(t);
+  await settle();
+  let finish;
+  h.w.api.setScheduleEnabled = () => new Promise(resolve => { finish = resolve; });
+  h.w.document.querySelector('.schedule-toggle-btn').click();
+  await h.w.loadSchedules();
+  assert.equal(h.w.document.querySelector('.schedule-toggle-btn').disabled, true, 'pending toggle survives refresh');
+  h.w.api.listSchedules = async () => { throw new Error('offline'); };
+  finish({ ok: true });
+  await settle();
+  assert.equal(h.w.document.querySelector('.schedule-toggle-btn').disabled, false, 'settled toggle restores the visible control despite reload failure');
+});
+
+test('visible focused row controls keep focus across refreshes', async t => {
+  const h = setup(t);
+  h.schedule.runs = [{ sessionId: 'focused', created: '2026-11-08T12:00Z', replied: true, result: null }];
+  h.w.setSchedulesVisible(true);
+  await settle();
+  for (const selector of ['.schedule-run-btn', '.schedule-toggle-btn', '.schedule-open-btn', 'summary', '.schedule-history-run', 'details button:last-child']) {
+    h.w.document.querySelector('details').open = true;
+    h.w.document.querySelector(selector).focus();
+    await h.w.loadSchedules();
+    assert.equal(h.w.document.activeElement, h.w.document.querySelector(selector), `${selector} keeps focus`);
+  }
+});
+
+test('projects-changed bursts coalesce into one visible schedule reload', async t => {
+  const h = setup(t);
+  h.w.setSchedulesVisible(false);
+  const timers = new Map();
+  let timerId = 0;
+  h.w.setTimeout = (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id; };
+  h.w.clearTimeout = id => timers.delete(id);
+  h.w.setSchedulesVisible(true);
+  await settle();
+  let calls = 0;
+  h.w.api.listSchedules = async () => { calls++; return h.data; };
+  const filename = path.join(__dirname, '../public/app.js');
+  const source = fs.readFileSync(filename, 'utf8');
+  const start = source.indexOf('let projectsChangedTimer =');
+  const end = source.indexOf('\n});', start) + '\n});'.length;
+  let changed;
+  h.w.api.onProjectsChanged = handler => { changed = handler; };
+  vm.runInContext(source.slice(start, end), h.dom.getInternalVMContext(), { filename,
+    lineOffset: source.slice(0, start).split('\n').length - 1 });
+  for (let i = 0; i < 8; i++) changed();
+  await settle();
+  assert.equal(calls, 0, 'burst waits for the debounce window');
+  const pending = [...timers.values()].filter(timer => timer.delay === 900);
+  assert.equal(pending.length, 1, 'one pending debounce timer');
+  pending[0].callback();
+  await settle();
+  assert.equal(calls, 1, 'one list-schedules request per burst');
+});
+
+test('next-run wording uses minutes, today, tomorrow, weekday and date', t => {
+  const h = setup(t);
+  const now = new Date(2026, 10, 8, 8, 0).getTime();
+  for (const [date, expected] of [
+    [new Date(2026, 10, 8, 8, 12), /\(in 12 min\)$/],
+    [new Date(2026, 10, 8, 9, 0), /\(today 9:00\)$/],
+    [new Date(2026, 10, 8, 23, 0), /\(today 23:00\)$/],
+    [new Date(2026, 10, 9, 9, 0), /\(tomorrow 9:00\)$/],
+    [new Date(2026, 10, 13, 9, 0), /\(Friday 9:00\)$/],
+    [new Date(2026, 11, 1, 9, 0), /\(Dec 1, 2026 9:00\)$/],
+  ]) assert.match(h.w.scheduleTime(date.getTime(), now), expected);
+  h.schedule.cron = '0 9 * * 5';
+  h.schedule.cronText = 'weekly on Friday at 9:00';
+  h.schedule.nextRunMs = new Date(2026, 10, 13, 9, 0).getTime();
+  h.data.now = now;
+  h.w.renderSchedules(h.data);
+  assert.match(h.w.document.querySelector('.schedule-state').textContent, /Friday 9:00/);
+});
+
+test('unknown project refusal is visible in row text', t => {
+  const h = setup(t);
+  h.project.known = false;
+  h.w.renderSchedules(h.data);
+  assert.match(h.w.document.querySelector('.schedule-item').textContent, /not a known project/);
+});
+
+test('an unmatched project focus request is cleared after rendering', async t => {
+  const h = setup(t);
+  h.w.showSchedules('/missing');
+  h.w.renderSchedules(h.data);
+  h.project.projectPath = '/missing';
+  h.w.renderSchedules(h.data);
+  assert.equal(h.w.document.activeElement, h.w.document.body, 'a stale unmatched request cannot steal focus later');
+  await settle();
+});
 
 for (const [label, run, reason] of [
   ['backend refusal', () => ({ ok: false, error: 'boom' }), 'boom'],
@@ -130,6 +288,7 @@ test('unknown projects and unread front matter disable their guarded actions', t
   h.project.known = true;
   h.schedule.problems = ['front matter not read: save with LF line endings'];
   h.w.renderSchedules(h.data);
+  assert.match(h.w.document.querySelector('.schedule-item').textContent, /front matter not read: save with LF line endings/);
   for (const cls of ['.schedule-run-btn', '.schedule-toggle-btn']) assert.equal(h.w.document.querySelector(cls).disabled, true, cls);
   h.schedule.problems = [];
   h.schedule.linked = true;

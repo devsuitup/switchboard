@@ -565,7 +565,10 @@ function skipMissedRuns(log, projects, stateDir) {
 
 function skipMissedRunsOf(schedule, stateDir) {
   if (!schedule.catchUp) return;
-  const baseline = Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS - MINUTE_MS;
+  if (!stateDir) throw new Error('MissingScheduleStateDir: cannot skip missed schedule runs');
+  const now = Date.now();
+  const minute = Math.floor(now / MINUTE_MS) * MINUTE_MS;
+  const baseline = now > minute && typeof schedule.cron === 'string' && cronMatches(schedule.cron, new Date(minute)) ? minute : minute - MINUTE_MS;
   const state = readScheduleState(stateDir);
   const key = scheduleStateKey(schedule);
   const entry = state.get(key);
@@ -791,4 +794,4 @@ function setScheduleEnabled(filePath, enabled, { projectRoot, rewrite = rewriteE
   }
 }
 
-module.exports = { setListedScheduleEnabled, skipMissedRunsOf, listScheduleFiles, isRunnerScheduleFileName, nextCronMatch, describeCron, scheduleLaunchRefusal, readScheduleStateOnly, latestCronMatch, scheduleStateKey, scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, skipMissedRuns, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };
+module.exports = { scheduleFields, setListedScheduleEnabled, skipMissedRunsOf, listScheduleFiles, isRunnerScheduleFileName, nextCronMatch, describeCron, scheduleLaunchRefusal, readScheduleStateOnly, latestCronMatch, scheduleStateKey, scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, skipMissedRuns, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };

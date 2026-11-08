@@ -5,7 +5,7 @@ const path = require('path');
 const { joinFolderKey, parseFolderKey } = require('./src/main/remote/remote-hosts');
 const { encodeProjectPath } = require('./encode-project-path');
 const { worktreeParentPath, isHiddenRepositoryWorktree } = require('./public/worktree-nesting');
-const { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, skipMissedRunsOf } = require('./src/main/schedules/schedule-runner');
+const { scheduleFields, scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, skipMissedRunsOf } = require('./src/main/schedules/schedule-runner');
 
 const SETTING_KEY = 'archivedProjects';
 const OFFERS_KEY = 'scheduleReenableOffers';
@@ -152,9 +152,9 @@ function reenableScheduleFiles(filePaths, projectRoot, { stateDir } = {}) {
     try { meta = parseFrontmatter(fs.readFileSync(filePath, 'utf8')).meta; } catch { continue; }
     if (meta.enabled !== 'false') continue;
     const name = meta.name || path.basename(filePath);
-    if (stateDir && scheduleFileUnlinked(projectRoot, filePath)) {
+    if (scheduleFileUnlinked(projectRoot, filePath)) {
       try {
-        skipMissedRunsOf({ filePath, name, catchUp: /^(["']?)true\1$/i.test(meta['catch-up'] || '') }, stateDir);
+        skipMissedRunsOf({ ...scheduleFields(path.basename(filePath), meta), filePath, cron: meta.cron }, stateDir);
       } catch (error) {
         failed.push({ name, filePath, error: error.message });
         continue;
