@@ -27,15 +27,51 @@ function fixture(t, catchUp = true) {
 const at = (h, m, s = 0, ms = 0) => new Date(2026, 10, 8, h, m, s, ms).getTime();
 const quiet = { info() {}, warn() {}, error() {} };
 
-function schedulerClock(t, h, runs, projects = () => [h.project]) {
+function schedulerClock(t, h, runs, projects = () => [h.project], resumeSource) {
   let initial;
   let interval;
   t.mock.method(global, 'setTimeout', callback => { initial = callback; return {}; });
   t.mock.method(global, 'setInterval', callback => { interval = callback; return {}; });
-  const stop = runner.startScheduler(quiet, (...args) => { runs.push(args); args[3](); }, { stateDir: h.stateDir, projects });
+  const stop = runner.startScheduler(quiet, (...args) => { runs.push(args); args[3](); }, { stateDir: h.stateDir, projects, resumeSource });
   t.after(stop);
   return { stop, tick(time) { t.mock.timers.setTime(time); (interval || initial)(); } };
 }
+
+for (const check of ['startup', 'resume']) {
+  test(`enable after the ${check} check consumed the due minute does not replay it`, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: at(9, check === 'startup' ? 15 : 10, 20) });
+    const isolation = process.env.SWITCHBOARD_DATA_DIR;
+    delete process.env.SWITCHBOARD_DATA_DIR;
+    t.after(() => { if (isolation === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = isolation; });
+    const h = fixture(t);
+    const runs = [];
+    const resumeSource = new (require('node:events').EventEmitter)();
+    const clock = schedulerClock(t, h, runs, () => [h.project], resumeSource);
+    if (check === 'resume') {
+      clock.tick(at(9, 11));
+      t.mock.timers.setTime(at(9, 15, 20));
+      resumeSource.emit('resume');
+    }
+    t.mock.timers.setTime(at(9, 15, 30));
+    assert.equal((await runner.setListedScheduleEnabled(h.file, true, { ...h.deps, getLastTickMinute: () => clock.stop.getLastTickMinute() })).ok, true);
+    clock.tick(at(9, 16));
+    assert.equal(runs.length, 0, 'a due minute already evaluated while disabled cannot replay at 9:16');
+  });
+}
+
+test('an already enabled schedule still runs once at startup in its due minute', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: at(9, 15, 20) });
+  const isolation = process.env.SWITCHBOARD_DATA_DIR;
+  delete process.env.SWITCHBOARD_DATA_DIR;
+  t.after(() => { if (isolation === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = isolation; });
+  const h = fixture(t);
+  runner.setScheduleEnabled(h.file, true, { projectRoot: h.project });
+  const runs = [];
+  const clock = schedulerClock(t, h, runs);
+  assert.equal(runs.length, 1, 'startup retains the current due run for an enabled schedule');
+  clock.tick(at(9, 16));
+  assert.equal(runs.length, 1, 'the startup run is not repeated by the next tick');
+});
 
 for (const [timeline, start, enable, tick] of [
   ['A before the due minute', [14, 0, 500], [14, 59], [15, 0, 500]],

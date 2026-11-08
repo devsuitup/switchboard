@@ -226,7 +226,9 @@ function buildScheduleItem(project, schedule, data) {
       const btn = event.currentTarget;
       if (actionState.toggling) return;
       actionState.toggling = true;
+      const focused = document.activeElement === btn;
       btn.disabled = true;
+      if (focused) focusScheduleControl(schedule.filePath, btn.dataset.scheduleControl);
       const id = `SetSchedule:${schedule.filePath}`;
       try {
         const result = await window.api.setScheduleEnabled(schedule.filePath, !schedule.enabled);

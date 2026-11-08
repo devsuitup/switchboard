@@ -25,7 +25,10 @@ function showScheduleRunExit({ name, projectPath, sessionId, manual = false, cod
   showAppNotice({ id, kind: 'error', message: `${subject} ${repeats}${result}: ${hint}` });
 }
 
-window.api.onScheduleRunExit?.(showScheduleRunExit);
+window.api.onScheduleRunExit?.(payload => {
+  queueSchedulesReload();
+  showScheduleRunExit(payload);
+});
 
 function hideAllViewers() {
   statsViewer.style.display = 'none';

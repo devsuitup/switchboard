@@ -476,8 +476,9 @@ PROJECTS_DIR scans), `test/schedule-next-run.test.js` (descriptions and DST).
 Run now/toggle while visible, on relevant projects-changed events (900 ms debounce, 3000 ms maximum
 wait) and on minute boundaries while visible. The event allowlist is `archive`,
 `project-added`, `project-deleted`, `project-remap`, `worktree-deleted`, `watcher`,
-`session-exit`, `session-attach` and `cli-status`: changes to the registry,
-archive state, run history or child liveness. Scan progress (`scan`), activity,
+`session-exit` and `session-attach`: changes to the registry,
+archive state or run history. CLI status changes do not reload the tab; scheduled-run
+liveness is read at list time and the minute refresh picks it up. Scan progress (`scan`), activity,
 metadata backfills/repair, remote updates and background-job events do not
 reload this local tab; its minute refresh still picks up indexed scan results.
 Preload forwards the `{ cause }` payload. Mixed-cause payloads refresh if any
@@ -489,7 +490,9 @@ Agent Files; Work Files is preserved. Search is hidden. Rows show cron, local
 next-run and relative time, disabled/archive/validation reasons, shared-slug
 diagnostics, catch-up status and the newest 20 runs from the main-side list.
 Run now retains `RunSchedule:<filePath>` and the persistent error contract;
-exit notices still subscribe once from memory-workfiles-view.js. Open checks a
+exit notices still subscribe once from memory-workfiles-view.js. Every scheduled-run
+exit, including success, queues the same visible-tab reload before displaying any
+failure notice. Open checks a
 nonempty read-memory response before opening memoryPanel. History resolves a
 fresh indexed session and goes through openSession, preserving resume guards.
 
@@ -497,12 +500,15 @@ fresh indexed session and goes through openSession, preserving resume guards.
 listScheduleFiles over the registry at call time. Linked/unread front matter is
 refused. Before enabling a disabled catch-up schedule, skipMissedRunsOf claims
 the prior-minute baseline, then setScheduleEnabled atomically rewrites the file.
-The scheduler owns an in-memory last tick minute, exposed by the returned stop
-function's `getLastTickMinute()`. Only an actual cron tick records it, after
-project selection resolves and before schedules are scanned; startup and resume
-catch-up checks do not. Main passes its getter through the existing enable and
+The scheduler owns an in-memory last evaluated minute, exposed by the returned stop
+function's `getLastTickMinute()`. Every check records its minute, after
+project selection resolves and before schedules are scanned: cron ticks, startup
+and resume catch-up checks use the same scheduler-owned state. A minute is evaluated
+once for re-enable purposes, even if the schedule was disabled during that check.
+An already enabled schedule still receives its normal startup catch-up run.
+Main passes its getter through the existing enable and
 archive deps, and its value to unarchive's skip. The current due minute is
-claimed only if it equals the last minute actually ticked. Before a fractional
+claimed only if it equals the last minute evaluated. Before a fractional
 or delayed tick (9:15:00.900 or 9:15:40), enabling in that same minute preserves
 the due run; after that tick it is consumed. At 9:15:00.000, the ordering of the
 tick and enable still decides: before the tick it may run, after the tick it
@@ -532,7 +538,8 @@ timer. Pending toggles likewise stay disabled. A render restores each row's open
 history and focused control by filePath and control identity. If the control is
 disabled, focus moves to its row (`tabIndex=-1`) and the control remains the
 pending focus target across renders. Re-enabling restores it while focus stays
-on that row; a newer focus choice takes precedence. An unmatched project
+on that row; a newer focus choice takes precedence. The on/off toggle uses this
+same focus hand-off as soon as its focused button becomes disabled. An unmatched project
 focus request is consumed by that render. Guard refusal reasons are visible row text.
 Next-run wording uses minutes below an hour, then today's time, tomorrow's time,
 a weekday within the following week, or a date for later runs.

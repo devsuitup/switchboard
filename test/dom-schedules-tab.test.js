@@ -168,6 +168,25 @@ test('projects-changed bursts coalesce into one visible schedule reload', async 
 });
 
 for (const outcome of ['success', 'failure']) {
+  test(`pending toggle focus uses its row immediately and returns after ${outcome}`, async t => {
+    const h = setup(t);
+    await settle();
+    let finish;
+    h.w.api.setScheduleEnabled = () => new Promise(resolve => { finish = resolve; });
+    const button = () => h.w.document.querySelector('.schedule-toggle-btn');
+    button().focus();
+    button().click();
+    assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-item'), 'pending toggle hands focus to its row immediately');
+    await h.w.loadSchedules();
+    assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-item'), 'pending toggle retains row focus across refresh');
+    finish(outcome === 'success' ? { ok: true } : { ok: false, error: 'refused' });
+    await settle();
+    assert.equal(button().disabled, false);
+    assert.equal(h.w.document.activeElement, button(), 'settled toggle restores focus to its enabled control');
+  });
+}
+
+for (const outcome of ['success', 'failure']) {
   test(`pending Run now focus uses its row during refresh and returns after ${outcome}`, async t => {
     let finish;
     const h = setup(t, () => new Promise(resolve => { finish = resolve; }));
@@ -250,7 +269,7 @@ test('scan and unrelated projects-changed causes do not rebuild schedules even a
   await settle();
   let calls = 0;
   h.w.api.listSchedules = async () => { calls++; return h.data; };
-  for (const cause of ['scan', 'activity', 'entrypoint-backfill', 'title-backfill', 'sdk-reveal', 'bridge-repair', 'remote', 'bg-jobs']) {
+  for (const cause of ['scan', 'activity', 'entrypoint-backfill', 'title-backfill', 'sdk-reveal', 'bridge-repair', 'remote', 'bg-jobs', 'cli-status']) {
     h.changed({ cause: [cause] });
     await h.advance(1500);
   }
@@ -258,7 +277,7 @@ test('scan and unrelated projects-changed causes do not rebuild schedules even a
   h.changed({ cause: ['unknown-future-cause'] });
   await h.advance(4000);
   assert.equal(calls, 0, 'scan and unrelated events never request list-schedules');
-  for (const cause of ['archive', 'project-added', 'project-deleted', 'project-remap', 'worktree-deleted', 'watcher', 'session-exit', 'session-attach', 'cli-status']) {
+  for (const cause of ['archive', 'project-added', 'project-deleted', 'project-remap', 'worktree-deleted', 'watcher', 'session-exit', 'session-attach']) {
     const before = calls;
     h.changed({ cause: ['scan', cause] });
     await h.advance(900);

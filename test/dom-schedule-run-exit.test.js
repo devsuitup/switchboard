@@ -21,8 +21,18 @@ function setup(t) {
     },
   }, { filename: preload });
   const filename = path.join(__dirname, '../public/memory-workfiles-view.js');
+  let reloads = 0;
+  h.window.queueSchedulesReload = () => { reloads++; };
   vm.runInContext(fs.readFileSync(filename, 'utf8'), h.context, { filename });
-  return { ...h, exit: payload => ipcRenderer.emit('schedule-run-exit', {}, payload) };
+  return { ...h, get reloads() { return reloads; }, exit: payload => ipcRenderer.emit('schedule-run-exit', {}, payload) };
+}
+
+for (const code of [0, 42]) {
+  test(`schedule exit ${code} queues a schedules reload`, t => {
+    const h = setup(t);
+    h.exit({ name: 'Nightly', sessionId: 'refresh', code, failure: 'exit' });
+    assert.equal(h.reloads, 1, 'every scheduled exit queues a tab refresh, including success');
+  });
 }
 
 for (const [failure, code, hint] of [
