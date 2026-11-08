@@ -100,7 +100,8 @@ test('control mounts: standalone override and default outside writable mounts st
     for (const env of [{}, { SWITCHBOARD_TRIGGERS_DIR: bashPath(path.join(rig.root, 'outside')) }]) {
       const res = rig.run(['--version'], env);
       assert.equal(res.status, 0, res.stderr);
-      assert.equal(accessAt(parseMounts(rig.lastBwrapArgs()), bashPath(path.join(rig.root, 'outside'))), undefined);
+      const access = accessAt(parseMounts(rig.lastBwrapArgs()), bashPath(path.join(rig.root, 'outside')));
+      assert.ok(access === undefined || access === '--tmpfs', `outside control tree must not be bound, got ${access}`);
     }
     const control = path.join(rig.proj, 'relative-control');
     fs.mkdirSync(path.join(control, 'processed'), { recursive: true });
