@@ -989,6 +989,7 @@ async function projectArchivePlan(groups) {
 
 function archiveDeps() {
   return {
+    reenable: (files, projectRoot) => require('./archived-projects').reenableScheduleFiles(files, projectRoot, { stateDir: path.join(path.dirname(DB_PATH), 'schedule-state') }),
     isInitialScanComplete,
     seedProjects: () => initialScheduleProjects(() => listSettingKeys('project:')),
     scan: projectPath => scanSchedules(log, [projectPath]),
@@ -1603,6 +1604,11 @@ const fileListsClient = {
   request: ({ kind }) => fileListClients.get(kind).request(),
   shutdown: () => Promise.all([...fileListClients.values()].map(client => client.shutdown())),
 };
+
+ipcMain.handle('set-schedule-enabled', (_event, filePath, enabled) =>
+  require('./src/main/schedules/schedule-runner').setListedScheduleEnabled(filePath, enabled, {
+    scheduleProjects, stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
+  }));
 
 ipcMain.handle('list-schedules', () => {
   const knownProjectPaths = [...getKnownProjectPaths()];

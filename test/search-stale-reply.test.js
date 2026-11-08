@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
 const vm = require('node:vm');
 const { setupSidebarDom } = require('./dom-setup');
 const { loadAppFunctions, readAppSource } = require('./app-source');
@@ -17,7 +18,11 @@ function setup(t, activeTab = 'sessions') {
   const ctx = setupSidebarDom();
   t.after(() => ctx.destroy());
   const { window, document } = ctx;
+  const schedulesContent = document.createElement('div');
+  schedulesContent.id = 'schedules-content';
+  document.body.append(schedulesContent);
   const requests = [], renders = [], frames = new Map(), timers = new Map();
+  const delays = [];
   let nextId = 1;
   for (const name of ['searchInput', 'searchBar', 'workFilesContent', 'sessionFilters',
     'terminalHeader', 'gridViewer', 'terminalArea', 'memoryViewer', 'settingsViewer', 'statsViewer']) {
@@ -29,7 +34,7 @@ function setup(t, activeTab = 'sessions') {
     button.id = id;
     document.body.append(button);
   }
-  for (const name of ['sessions', 'memory', 'work-files', 'stats']) {
+  for (const name of ['sessions', 'memory', 'schedules', 'work-files', 'stats']) {
     const button = document.createElement('button');
     button.className = 'sidebar-tab';
     button.dataset.tab = name;
@@ -46,7 +51,7 @@ function setup(t, activeTab = 'sessions') {
     renderMemories: ids => renders.push({ tab: 'memory', ids }),
     renderWorkFiles: ids => renders.push({ tab: 'work-files', ids }),
     loadMemories() {}, loadWorkFiles() {}, loadStats() {}, hideAllViewers() {}, fitAndScroll() {},
-    setTimeout: cb => { const id = nextId++; timers.set(id, cb); return id; },
+    setTimeout: (cb, ms) => { const id = nextId++; delays.push(ms); timers.set(id, cb); return id; },
     clearTimeout: id => timers.delete(id),
     requestAnimationFrame: cb => { const id = nextId++; frames.set(id, cb); return id; },
     cancelAnimationFrame: id => frames.delete(id),
@@ -59,6 +64,8 @@ function setup(t, activeTab = 'sessions') {
   };
   window.api.getSetting = async () => false;
   window.api.setSetting = async () => {};
+  const schedulesFilename = path.join(__dirname, '..', 'public', 'schedules-view.js');
+  vm.runInContext(fs.readFileSync(schedulesFilename, 'utf8'), ctx.context, { filename: schedulesFilename });
   const src = readAppSource();
   function section(start, end) {
     const from = src.indexOf(start);
@@ -77,7 +84,7 @@ function setup(t, activeTab = 'sessions') {
   section("searchInput.addEventListener('input'", 'let rebuildInFlight =');
   section("document.querySelectorAll('.sidebar-tab').forEach(tab =>", '// Grid view');
   return {
-    ...ctx, ...fns, requests, renders,
+    ...ctx, ...fns, requests, renders, delays,
     start(query) { window.searchInput.value = query; return fns.runSearchQuery(); },
     type(query) {
       window.searchInput.value = query;
@@ -259,4 +266,28 @@ test('rebuild searches the current text and does not revive the query it interru
   assert.equal(ctx.requests.length, 1);
   assert.equal(ids(ctx), null);
   assert.equal(ctx.renders.length, count);
+});
+
+test('Schedules tab drives the real listing lifecycle, hides search and leaves Work Files available', async t => {
+  const ctx = setup(t);
+  Object.defineProperty(ctx.document, 'hidden', { configurable: true, value: false });
+  ctx.window.Date.now = () => 1500;
+  let listed = 0;
+  ctx.window.api.listSchedules = async () => { listed++; return { now: 1500, catchUpActive: false, projects: [] }; };
+  ctx.switchTab('schedules');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(listed, 1, 'opening the tab lists schedules');
+  assert.equal(ctx.window.searchBar.style.display, 'none');
+  assert.equal(ctx.document.getElementById('schedules-content').style.display, '');
+  assert.match(ctx.document.getElementById('schedules-content').textContent, /No schedules found/);
+  assert.equal(ctx.delays.at(-1), 58500, 'the refresh aligns with the next minute');
+  ctx.flushTimers();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(listed, 2, 'a visible minute refresh lists again');
+  ctx.switchTab('work-files');
+  assert.equal(ctx.document.getElementById('schedules-content').style.display, 'none');
+  assert.equal(ctx.window.workFilesContent.style.display, '');
+  ctx.flushTimers();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(listed, 2, 'leaving the tab stops its refresh');
 });

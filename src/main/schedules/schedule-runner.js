@@ -560,15 +560,31 @@ function buildScheduleCommand(sessionId, schedule) {
  * see .ai/contexts/schedule-runner.md ("Archive")
  */
 function skipMissedRuns(log, projects, stateDir) {
+  for (const schedule of scanSchedules(log, projects)) skipMissedRunsOf(schedule, stateDir);
+}
+
+function skipMissedRunsOf(schedule, stateDir) {
+  if (!schedule.catchUp) return;
   const baseline = Math.floor(Date.now() / MINUTE_MS) * MINUTE_MS - MINUTE_MS;
   const state = readScheduleState(stateDir);
-  for (const schedule of scanSchedules(log, projects)) {
-    if (!schedule.catchUp) continue;
-    const key = scheduleStateKey(schedule);
-    const entry = state.get(key);
-    if (entry && entry.handled >= baseline) continue;
-    claimScheduleMinute(stateDir, key, baseline, { file: schedule.filePath, name: schedule.name });
-    if (entry) pruneScheduleState(stateDir, entry);
+  const key = scheduleStateKey(schedule);
+  const entry = state.get(key);
+  if (entry && entry.handled >= baseline) return;
+  claimScheduleMinute(stateDir, key, baseline, { file: schedule.filePath, name: schedule.name });
+  if (entry) pruneScheduleState(stateDir, entry);
+}
+
+async function setListedScheduleEnabled(filePath, enabled, { scheduleProjects, stateDir, setEnabled = setScheduleEnabled }) {
+  if (typeof filePath !== 'string' || typeof enabled !== 'boolean') return { ok: false, error: 'invalid schedule or enabled value' };
+  try {
+    const schedule = listScheduleFiles(await scheduleProjects().list()).find(s => s.filePath === filePath);
+    if (!schedule) return { ok: false, error: 'schedule is not listed' };
+    if (schedule.linked) return { ok: false, error: 'linked file: edit it at its source' };
+    if (schedule.problems.some(p => p.startsWith('front matter not read'))) return { ok: false, error: 'front matter not read' };
+    if (enabled && !schedule.enabled) skipMissedRunsOf(schedule, stateDir);
+    return setEnabled(filePath, enabled, { projectRoot: schedule.projectPath });
+  } catch (error) {
+    return { ok: false, error: error.message };
   }
 }
 
@@ -775,4 +791,4 @@ function setScheduleEnabled(filePath, enabled, { projectRoot, rewrite = rewriteE
   }
 }
 
-module.exports = { listScheduleFiles, isRunnerScheduleFileName, nextCronMatch, describeCron, scheduleLaunchRefusal, readScheduleStateOnly, latestCronMatch, scheduleStateKey, scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, skipMissedRuns, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };
+module.exports = { setListedScheduleEnabled, skipMissedRunsOf, listScheduleFiles, isRunnerScheduleFileName, nextCronMatch, describeCron, scheduleLaunchRefusal, readScheduleStateOnly, latestCronMatch, scheduleStateKey, scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, skipMissedRuns, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };

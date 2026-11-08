@@ -81,7 +81,7 @@ No existing schedule event could carry asynchronous completion: `run-schedule-no
 is a request/reply that has already acknowledged spawn and is never invoked by
 cron. The new event stays in the existing schedule IPC module and is exposed as
 `onScheduleRunExit` in preload. `public/memory-workfiles-view.js` subscribes once
-at script load, independently of whether Agent Files is open, and shows a
+at script load, independently of whether the Schedules tab is open, and shows a
 persistent B8 error with the schedule name, code (or signal) and recovery hint.
 Manual notices use `ScheduleRun:<sessionId>` and say "Manual run of schedule".
 Cron notices use `ScheduleRun:<projectPath>:<name>`: each failure replaces the
@@ -313,7 +313,7 @@ Scheduled runs from before v0.0.90 are listed one per row. They have no `schedul
 - **Sidebar run groups use runner provenance.** `createScheduleSession` seeds `scheduleSlug` alongside the CLI `slug` on its first user record, for regular, catch-up and run-now launches. Full and bounded header readers carry this marker through SQLite and the renderer payload; `public/sidebar.js` groups by `scheduleSlug`, names the header with it, and shows the header even for one visible run. A typed `Scheduled Task:` prompt never establishes provenance, and a changed or absent CLI slug does not change the schedule identity. Ordinary conversations each keep a separate row, even when CLI slugs match. Schedule DOM IDs encode the host alias, project path and raw schedule slug together without losing punctuation. Archived filtering stays upstream, and the grid lists individual sessions.
 - **Existing transcripts have no safe schedule backfill.** The runner previously wrote no provenance marker, including before it added the prompt prefix. Those runs remain separate rows even after re-indexing; neither a prompt prefix nor a matching schedule filename proves their origin. Schema reconciliation adds a nullable `scheduleSlug` column without clearing old rows. Previously indexed rows start with a null marker, and a later full read or changed-file header refresh copies a marker if their transcript actually carries one. Deleted schedule files do not remove marked historical groups; renaming a file without a stable frontmatter slug gives future runs a new identity.
 - **Legacy expansion migrates once without crossing schedule scopes.** An unscoped `slug-<sanitized slug>` key cannot identify its original project, host or raw punctuation. Inheritance is allowed only when all known projects (including those filtered out of the current render) identify exactly one matching host/project/raw-slug group. Ambiguous keys leave the groups collapsed. `migratedScheduleSlugs` records both visited scoped IDs and consumed legacy keys, so an explicit collapse survives and a schedule discovered later cannot reuse another scope's legacy expansion. Subsequent expand/collapse choices use independent scoped keys; already persisted scoped expansions are retained.
-- **A schedule file may be a symlink.** `scanSchedules` lists names and reads through them, so a `schedule-*.md` linked in from a versioned dotfiles repo fires on cron like any other. The two places that *don't* go through that scanner had to be taught the same thing: the brain tab's listing (`scan-md-files.js` — accepted entries on `dirent.isFile()`, false for a symlink, so a linked-in schedule was invisible in the UI while still firing weekly) and the run-now guard (`run-schedule-now-target.js` — checked the `.claude/commands` shape against the resolved target instead of the listed path). If you add a third reader of these files, resolve the link rather than the dirent.
+- **A schedule file may be a symlink.** `scanSchedules` lists names and reads through them, so a `schedule-*.md` linked in from a versioned dotfiles repo fires on cron like any other. The two places that *don't* go through that scanner had to be taught the same thing: Agent Files' former listing (`scan-md-files.js` — accepted entries on `dirent.isFile()`, false for a symlink, so a linked-in schedule was invisible in the UI while still firing weekly) and the run-now guard (`run-schedule-now-target.js` — checked the `.claude/commands` shape against the resolved target instead of the listed path). If you add a third reader of these files, resolve the link rather than the dirent.
 - **`run-schedule-now` resolves the file and the cwd separately, and they may differ.** `resolveRunNowTarget` takes the schedule's bytes from the link's target and roots the spawn at the project whose `.claude/commands` lists it; each is disk-resolved and allowlisted in its own right, neither is derived from the other. With `projA/.claude/commands/schedule-x.md -> projB/.claude/commands/schedule-x.md` and both projects known, the run executes projB's content with `cwd = projA`. That is the semantic, not an oversight — `test/run-schedule-now-target.test.js` pins it so it is not "corrected" in either direction by accident.
 - **Hand-rolled cron parser** in `cronFieldMatches` / `cronMatches`. Supports `*`, comma lists (`1,2,3`), ranges (`1-5`), steps (`*/5`). No support for `@daily`/`@hourly` aliases. No DST awareness — `new Date()` is local-time.
 - **No persistence across app close, unless opted in** — the scheduler runs in-process. If Switchboard isn't running at 9am, the 9am schedule doesn't fire, and a suspended machine loses the minutes it sleeps through. `catch-up: true` changes that for one schedule; without it the behaviour is the original one, because some tasks are useless late.
@@ -346,8 +346,8 @@ only be detected through the CLI's own descriptors, with their existing limits.
 ## If you change this, also check
 
 - `public/dialogs.js` (`launchScheduleCreator`) — UI entry point for the schedule creator flow
-- `public/memory-workfiles-view.js` brain tab — lists existing `schedule-*.md` files, surfaces the "run now" play button
-- `scan-md-files.js` — what that brain tab list is actually built from (`get-memories` in `main.js`); it decides whether a schedule file is visible at all, and takes the memory allowlist so the list carries nothing the readers behind it would refuse to open
+- `public/schedules-view.js` — lists schedules, runs them, toggles enabled and opens their file; `memory-workfiles-view.js` keeps the independent exit-notice subscription
+- `file-lists.js` — excludes runner schedule names from project commands before `listed()`, removing them from Agent Files and its FTS input; other scopes are unchanged
 - `public/sidebar.js` — `.project-schedule-btn` clock icon wiring per project
 - `archived-projects.js` (`archivePlanForGroups`) and `test/schedule-disable.test.js` — if you change `parseFrontmatter`, the rewrite in `setScheduleEnabled` follows the same state machine
 - `schedule-ipc.js` `SCHEDULE_CREATOR_TEMPLATE` — if you change the schedule file format, update the template's instructions
@@ -449,8 +449,8 @@ becomes a problem without creating a transcript or launching a process.
 
 `buildScheduleList` withholds next-run and catch-up timestamps when file or
 launch validation reports a problem. The existing shared-slug diagnostic is
-the exception: it does not prevent the runner from launching (slice A2 will
-revisit its presentation). Archived projects, disabled schedules and schedules
+the exception: it does not prevent the runner from launching. A2 shows the
+shared-slug diagnostic without calling the schedule unrunnable. Archived projects, disabled schedules and schedules
 without a prompt have no catch-up timestamp. A state-read error remains
 unknown, rather than an empty catch-up map; an unreadable transcript likewise
 keeps `replied: null` rather than claiming no reply.
@@ -467,3 +467,48 @@ Numeric clock fields are formatted by value, so `007 09 * * *` says `daily at 9:
 Tests: `test/schedule-list.test.js` (real disposable schedule, state and transcript
 files, main handler extracted into a VM with filename attribution; counts
 PROJECTS_DIR scans), `test/schedule-next-run.test.js` (descriptions and DST).
+
+
+## Schedules tab (#792, slice A2)
+
+`public/schedules-view.js` consumes `list-schedules` on open, after each action,
+on projects-changed and on minute boundaries while visible. The clock tab follows
+Agent Files; Work Files is preserved. Search is hidden. Rows show cron, local
+next-run and relative time, disabled/archive/validation reasons, shared-slug
+diagnostics, catch-up status and the newest 20 runs from the main-side list.
+Run now retains `RunSchedule:<filePath>` and the persistent error contract;
+exit notices still subscribe once from memory-workfiles-view.js. Open checks a
+nonempty read-memory response before opening memoryPanel. History resolves a
+fresh indexed session and goes through openSession, preserving resume guards.
+
+`set-schedule-enabled` requires a boolean and exact equality with a path from
+listScheduleFiles over the registry at call time. Linked/unread front matter is
+refused. Before enabling a disabled catch-up schedule, skipMissedRunsOf claims
+the prior-minute baseline, then setScheduleEnabled atomically rewrites the file.
+This ordering also applies in isolated instances. Archive offers and Undo receive
+the same stateDir via archiveDeps.reenable and reenableScheduleFiles; the writer
+continues to perform file effects outside SQL. Skip failure prevents enabling.
+
+Archive choices keep their default and file lists, but display counts and a
+Schedules tab reference. Undo uses a count; the re-enable offer adds Show in
+Schedules for its project. Failure text continues to name failed schedules.
+
+## Run results
+
+Slice A2 keeps result null. Running uses the live map; otherwise the renderer
+says No result recorded and gives the assistant/seed/started/unknown transcript
+hint. It never infers Exit 0. Persistent outcomes, deletion, the creation form
+and creator-template migration are later slices.
+
+History navigation maps the listed run IDs to local indexed project paths, so a
+registry alias and its resolved transcript folder expand the same visible group.
+Opening a run selects a local indexed row before openSession; remote copies of
+the same session ID do not participate in this local Schedules surface.
+
+Open checks read-memory before changing viewers. On a valid read it uses
+hideAllViewers before memoryPanel, so a previous Work Files or transcript viewer
+does not cover the schedule editor. The existing save and watch contract stays.
+
+History navigation resolves physical run IDs through `rowSessionIds` in local
+merged rows. It passes the full row to `openSession`, preserving the existing
+continuation and live-elsewhere resume guards.

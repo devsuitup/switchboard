@@ -129,7 +129,7 @@ test('archive folder: no schedule box without a disableable schedule; a linked o
     const done = archiveButton(ctx, '/p').onclick(new ctx.window.MouseEvent('click'));
     await new Promise(r => setTimeout(r, 0));
     assert.deepEqual(boxIds(ctx), ['archiveSessions']);
-    assert.match(ctx.document.querySelector('.modal-overlay').textContent, /b stays enabled: linked file or directory/);
+    assert.match(ctx.document.querySelector('.modal-overlay').textContent, /1 schedule stays enabled; see the Schedules tab/);
     await answerChoiceDialog(ctx, { confirm: false });
     await done;
   } finally { ctx.destroy(); }
@@ -434,7 +434,7 @@ test('re-enable notice: a project carrying an offer shows it, and Turn back on a
 
     const el = notice(ctx, '/p');
     assert.ok(el, 'the notice must render under the header');
-    assert.match(el.textContent, /2 schedules were turned off when this folder was archived: nightly, weekly/);
+    assert.match(el.textContent, /2 schedules were turned off when this folder was archived\. See the Schedules tab\./);
     await el.querySelector('.schedule-reenable-on').onclick(new ctx.window.MouseEvent('click'));
 
     assert.deepEqual(named(calls, 'reenableProjectSchedules').map(c => plain(c.args)), [['/p', '-p']]);
@@ -458,7 +458,7 @@ test('re-enable notice: Dismiss deletes the offer and turns nothing on', async (
     render(ctx, [project]);
     const el = notice(ctx, '/p');
     assert.ok(el, 'the notice must render under the header');
-    assert.match(el.textContent, /1 schedule was turned off when this folder was archived: nightly/);
+    assert.match(el.textContent, /1 schedule was turned off when this folder was archived\. See the Schedules tab\./);
     await el.querySelector('.schedule-reenable-dismiss').onclick(new ctx.window.MouseEvent('click'));
 
     assert.deepEqual(named(calls, 'dismissScheduleReenableOffer').map(c => plain(c.args)), [['/p', '-p']]);

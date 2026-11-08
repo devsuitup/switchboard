@@ -3602,66 +3602,8 @@ body { display: flex; flex-direction: column; }
   color: #8888a8;
 }
 
-.memory-schedule-icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  margin-top: 5px;
-  color: #e0a030;
-}
 
-.schedule-play-btn {
-  flex-shrink: 0;
-  background: transparent;
-  border: 1px solid rgba(100,220,120,0.3);
-  color: #5ec46a;
-  width: 24px;
-  height: 24px;
-  border-radius: 5px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  line-height: 0;
-  opacity: 0;
-  transition: all 0.15s;
-  margin-left: auto;
-  align-self: center;
-}
 
-.memory-item:hover .schedule-play-btn,
-.schedule-play-btn:focus-visible {
-  opacity: 0.7;
-}
-
-.schedule-play-btn:hover {
-  opacity: 1 !important;
-  background: rgba(100,220,120,0.1);
-  color: #5ec46a;
-}
-
-.schedule-play-btn.running {
-  opacity: 1 !important;
-  color: #e0a030;
-  border-color: rgba(224,160,48,0.3);
-}
-
-.schedule-play-btn.running svg {
-  animation: spin-schedule 1s linear infinite;
-}
-
-.schedule-play-btn.done {
-  opacity: 1 !important;
-  color: #5ec46a;
-  border-color: rgba(100,220,120,0.4);
-  background: rgba(100,220,120,0.1);
-}
-
-@keyframes spin-schedule {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
 
 .memory-file-count {
   font-size: 10px;
@@ -5868,3 +5810,15 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 .mermaid-diagram > svg { display: block; max-width: none !important; }
 .mermaid-error { color: var(--text-muted); font-size: 12px; }
 .mermaid-render-scratch { position: fixed; left: -100000px; top: 0; visibility: hidden; pointer-events: none; }
+
+#schedules-content { overflow-y: auto; flex: 1; min-height: 0; padding: 12px; }
+.schedule-project { margin-bottom: 20px; }
+.schedule-project-title, .schedule-name { font-weight: 600; }
+.schedule-item { padding: 12px 0; border-bottom: 1px solid var(--hairline); overflow-wrap: anywhere; }
+.schedule-help, .schedule-path { color: var(--text-muted); font-size: 11px; }
+.schedule-state, .schedule-problems, .schedule-catch-up { margin: 6px 0; }
+.schedule-problems { color: #e0a030; }
+.schedule-actions { display: flex; gap: 6px; margin: 8px 0; opacity: 0; }
+.schedule-item:hover .schedule-actions, .schedule-actions:has(:focus-visible) { opacity: 1; }
+.schedule-history-run { display: block; text-align: left; margin: 6px 0; width: 100%; }
+.schedule-actions button:disabled { cursor: default; }

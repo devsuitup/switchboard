@@ -5,7 +5,7 @@ const path = require('path');
 const { joinFolderKey, parseFolderKey } = require('./src/main/remote/remote-hosts');
 const { encodeProjectPath } = require('./encode-project-path');
 const { worktreeParentPath, isHiddenRepositoryWorktree } = require('./public/worktree-nesting');
-const { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter } = require('./src/main/schedules/schedule-runner');
+const { scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, skipMissedRunsOf } = require('./src/main/schedules/schedule-runner');
 
 const SETTING_KEY = 'archivedProjects';
 const OFFERS_KEY = 'scheduleReenableOffers';
@@ -144,7 +144,7 @@ function clearArchivedEntry(getSetting, setSetting, alias, projectPath) {
  * Turn back on the offered schedule files that still read `enabled: false`.
  * A vanished file, or one whose `enabled` was changed since, is left as it is.
  */
-function reenableScheduleFiles(filePaths, projectRoot) {
+function reenableScheduleFiles(filePaths, projectRoot, { stateDir } = {}) {
   const enabled = [];
   const failed = [];
   for (const filePath of filePaths || []) {
@@ -152,6 +152,14 @@ function reenableScheduleFiles(filePaths, projectRoot) {
     try { meta = parseFrontmatter(fs.readFileSync(filePath, 'utf8')).meta; } catch { continue; }
     if (meta.enabled !== 'false') continue;
     const name = meta.name || path.basename(filePath);
+    if (stateDir && scheduleFileUnlinked(projectRoot, filePath)) {
+      try {
+        skipMissedRunsOf({ filePath, name, catchUp: /^(["']?)true\1$/i.test(meta['catch-up'] || '') }, stateDir);
+      } catch (error) {
+        failed.push({ name, filePath, error: error.message });
+        continue;
+      }
+    }
     const res = setScheduleEnabled(filePath, true, { projectRoot });
     if (res.ok) enabled.push(name);
     else failed.push({ name, filePath, error: res.error });

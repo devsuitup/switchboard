@@ -4,10 +4,11 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
-## Schedules (#792, slice A1)
+## Schedules (#792, slices A1 and A2)
 
 | IPC | Args | Returns | Preload |
 | --- | --- | --- | --- |
+| `set-schedule-enabled` | `filePath, enabled` (boolean) | `{ ok }` or `{ ok: false, error }`; exact current listing path, linked-file and front-matter guards; re-enable skips missed catch-up before writing | `api.setScheduleEnabled(filePath, enabled)` |
 | `list-schedules` | none | `{ now, catchUpActive, projects: [{ projectPath, shortName, archived, sandboxed, known, schedules: [{ filePath, file, name, slug, cron, cronText, enabled, catchUp, cli, prompt, linked, problems, nextRunMs, catchUpDueMs, runs: [{ sessionId, created, messageCount, replied, running, result }] }] }] }` | `api.listSchedules()` |
 
 Main registers the handler and calls the Electron-free
@@ -22,8 +23,8 @@ newest first, capped at 20 per schedule. `replied` is an assistant-record check
 child map. `result` is always `null` until the separate run-result slice lands.
 
 `run-schedule-now`, `read-memory`, `save-memory` and `schedule-run-exit` keep
-their existing contracts. A1 exposes no schedule mutation channel or renderer
-consumer. See [schedule-runner.md](schedule-runner.md), "Schedule listing
+their existing contracts. A2 adds the Schedules renderer and the guarded
+enable operation; creation and deletion are later slices. See [schedule-runner.md](schedule-runner.md), "Schedule listing
 backend", for field parsing, refusal rules, time-zone semantics and tests.
 
 ## Main-process error backstop (#896)
@@ -335,6 +336,7 @@ uninitialised submodule refuses preview/deletion before force can hide its files
 | IPC | Returns |
 |---|---|
 | `get-memories` | `{global, projects}` |
+| `set-schedule-enabled` | `listScheduleFiles(await scheduleProjects().list())` exact path equality, boolean argument, unlinked file and readable front matter; skip missed catch-up before enabling | current registry listing + disk-resolved link guard |
 | `read-memory` / `save-memory` | content / `{ok}` |
 | `get-work-files` | `{projects: WorkFilesProject[]}` — **dedupes by projectPath** since PR #15. Walks `<projectPath>/.work-files/` recursively, capped at 200 files per project. |
 | `read-work-file` / `delete-work-file` | content (with `.work-files/` path guard) / `{ok}` |
@@ -1142,3 +1144,10 @@ raw prompts, names, CLI strings, paths, sockets, keys or liveVersion. Lists are
 capped at 128 with complete counts/truncation flags; oversized legitimate records
 compact before transport and remain below 64 KiB after main's timestamp. Invalid
 records or transport failures cannot break publication.
+
+Schedules reuse `run-schedule-now`, `read-memory`, `save-memory` and
+`schedule-run-exit` unchanged. Delete/create IPCs are not part of A2.
+
+IPC path-guard inventory addition: `set-schedule-enabled` matches the supplied
+path exactly against `listScheduleFiles(await scheduleProjects().list())` at
+call time and refuses linked files and unread front matter before writing.

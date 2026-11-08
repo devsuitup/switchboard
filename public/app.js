@@ -2712,6 +2712,8 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
     if (tabName === activeTab) return;
     searchGeneration++;
     activeTab = tabName;
+    document.getElementById('schedules-content').style.display = tabName === 'schedules' ? '' : 'none';
+    setSchedulesVisible(tabName === 'schedules');
     document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
 
     // Clear search on tab switch
@@ -2976,6 +2978,7 @@ loadStartupProjects();
 let projectsChangedTimer = null;
 let projectsChangedWhileAway = false;
 window.api.onProjectsChanged(() => {
+  if (activeTab === 'schedules') loadSchedules();
   // Debounce to avoid rapid re-renders during bulk changes
   if (projectsChangedTimer) clearTimeout(projectsChangedTimer);
   if (activeTab !== 'sessions') {
@@ -3190,3 +3193,38 @@ quotaGaugeEl.addEventListener('click', () => {
 
 // --- Initialize file panel (MCP bridge UI) ---
 if (typeof initFilePanel === 'function') initFilePanel();
+
+async function showScheduleSessions(projectPath, slug, sessionIds = []) {
+  document.querySelector('.sidebar-tab[data-tab="sessions"]')?.click();
+  await loadProjects();
+  const ids = new Set(sessionIds);
+  const targets = cachedAllProjects.filter(p => !p.remoteAlias
+    && (p.projectPath === projectPath || p.sessions.some(s => rowSessionIds(s).some(id => ids.has(id)))));
+  const paths = new Set([...targets.map(p => p.projectPath), projectPath]);
+  const expanded = getExpandedSlugs();
+  let scrolled = false;
+  for (const target of paths) {
+    const id = 'schedule-' + encodeURIComponent(JSON.stringify(['', target, slug]));
+    expanded.add(id);
+    const group = document.getElementById(id);
+    if (!group) continue;
+    group.classList.remove('collapsed');
+    group.closest('.project-group')?.classList.remove('collapsed');
+    if (!scrolled) group.scrollIntoView?.({ block: 'start' });
+    scrolled = true;
+  }
+  sessionStorage.setItem('expandedSlugs', JSON.stringify([...expanded]));
+}
+
+async function openScheduleRun(project, schedule, run) {
+  try {
+    await showScheduleSessions(project.projectPath, schedule.slug, [run.sessionId]);
+    const session = cachedAllProjects.filter(p => !p.remoteAlias).flatMap(p => p.sessions).find(s => rowSessionIds(s).includes(run.sessionId));
+    if (!session) throw new Error('The recorded session is no longer in the index');
+    await openSession(session);
+  } catch (error) {
+    showAppNotice({ id: 'OpenScheduleRun:' + run.sessionId, kind: 'error', message: 'Could not open the scheduled run: ' + (error?.message || error) + '. Retry from Sessions.' });
+  }
+}
+
+document.querySelector('.sidebar-tab[data-tab="schedules"]').innerHTML = ICONS.schedule(18);

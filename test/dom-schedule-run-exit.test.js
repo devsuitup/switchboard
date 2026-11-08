@@ -62,11 +62,13 @@ test('a fast failure survives the later successful launch acknowledgement', asyn
   };
   h.window.formatDate = () => 'today';
   h.window.ICONS = { schedule: () => '<svg></svg>' };
-  const item = h.window.buildMemoryItem({ filename: 'schedule-nightly.md', filePath: '/p/schedule-nightly.md' });
+  const filename = path.join(__dirname, '../public/schedules-view.js');
+  vm.runInContext(fs.readFileSync(filename, 'utf8'), h.context, { filename });
+  const item = h.window.buildScheduleItem({ projectPath: '/p', known: true, archived: false }, { file: 'schedule-nightly.md', filePath: '/p/schedule-nightly.md', name: 'Nightly', slug: 'nightly', cron: '* * * * *', cronText: 'every min', problems: [], enabled: true, linked: false, catchUp: false, nextRunMs: Date.now() + 60000, runs: [] }, { now: Date.now(), catchUpActive: true });
   h.document.body.append(item);
-  item.querySelector('.schedule-play-btn').click();
+  item.querySelector('.schedule-run-btn').click();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(item.querySelector('.schedule-play-btn').title, 'Launched!');
+  assert.equal(item.querySelector('.schedule-run-btn').title, 'Launched!');
   assert.match(h.document.querySelector('[role="alert"]')?.textContent || '', /Nightly.*127.*PATH/);
 });
 
