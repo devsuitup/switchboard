@@ -25,6 +25,73 @@ const fixtureGitFiles = {
 const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const { fakeTouchedShell } = require('./remote-touched-shell');
 
+const PNG_1025 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64');
+
+for (const prefix of ['GIF87a', 'GIF89a', 'RIFF1234WEBP']) {
+  test('fix1025: NUL-free signature text stays editable: ' + prefix, async t => {
+    const { dir } = fixture(t);
+    const target = path.join(dir, 'notes.txt');
+    const text = prefix + ' is ordinary text\n';
+    fs.writeFileSync(target, text);
+    const result = await panelHandlers().read(target, { editor: true, image: true });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.image, undefined, 'NUL-free text must not become an image');
+    assert.equal(result.current, text);
+  });
+  test('fix1025: binary signature remains an image: ' + prefix, async t => {
+    const { dir } = fixture(t);
+    const target = path.join(dir, 'shot.bin');
+    const bytes = Buffer.from(prefix + '\0');
+    fs.writeFileSync(target, bytes);
+    const result = await panelHandlers().read(target, { editor: true, image: true });
+    assert.equal(result.image?.mime, prefix.startsWith('GIF') ? 'image/gif' : 'image/webp');
+    assert.deepEqual(Buffer.from(result.image.base64, 'base64'), bytes);
+  });
+}
+
+test('T2: an image read returns the exact PNG bytes', async t => {
+  const { dir } = fixture(t);
+  const target = path.join(dir, 'shot.png');
+  fs.writeFileSync(target, PNG_1025);
+  const result = await panelHandlers().read(target, { editor: true, image: true });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.image?.mime, 'image/png');
+  assert.equal(result.image.size, PNG_1025.length);
+  assert.deepEqual(Buffer.from(result.image.base64, 'base64'), PNG_1025);
+});
+
+test('T3: the same PNG without the image flag stays binary', async t => {
+  const { dir } = fixture(t);
+  const target = path.join(dir, 'shot.png');
+  fs.writeFileSync(target, PNG_1025);
+  const result = await panelHandlers().read(target, { editor: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'binary file');
+  assert.equal(result.reason, 'binary');
+});
+
+test('T4: sensitive image paths are refused before reading', async t => {
+  const { dir } = fixture(t);
+  const target = path.join(dir, 'shot.png');
+  fs.writeFileSync(target, PNG_1025);
+  let reads = 0;
+  const api = panelHandlers({ ...fs, readFileSync: () => { reads++; throw new Error('must not read'); } },
+    fixtureGitFiles, null, { isSensitivePath: () => true });
+  const result = await api.read(target, { editor: true, image: true });
+  assert.equal(result.error, 'access to sensitive path denied');
+  assert.equal(reads, 0);
+});
+
+test('T5: oversized PNG is refused before image sniffing', async t => {
+  const { dir } = fixture(t);
+  const target = path.join(dir, 'shot.png');
+  fs.writeFileSync(target, Buffer.concat([PNG_1025, Buffer.alloc(MAX_BYTES)]));
+  const result = await panelHandlers().read(target, { editor: true, image: true });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /too large/);
+  assert.equal(result.reason, 'too-large');
+});
+
 for (const [label, probe] of [
   ['removed cwd', { code: 128, stderr: 'fatal: cannot change to cwd: No such file or directory' }],
   ['missing git', { code: 127, stderr: 'git: command not found' }],
@@ -272,11 +339,12 @@ test('round 2 s1: resolved remote key paths are refused by the shell guard', asy
   }
 });
 
-function panelHandlers(fsOps = fs, gitOps = fixtureGitFiles, remoteExec = null) {
+function panelHandlers(fsOps = fs, gitOps = fixtureGitFiles, remoteExec = null, overrides = {}) {
   const handlers = new Map();
   const context = {
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
-    fs: fsOps, path, isSensitivePath, gitChangesFile: gitOps, PANEL_FILE_MAX_BYTES: MAX_BYTES,
+    fs: fsOps, path, isSensitivePath: overrides.isSensitivePath || isSensitivePath, gitChangesFile: gitOps, PANEL_FILE_MAX_BYTES: MAX_BYTES,
+    sniffPanelImage: require('../src/main/files/panel-image').sniffPanelImage,
     panelSaves: createMainPanelSaves({ getKnownProjectPaths: () => [], invalidateFtsSignature() {} }),
     invalidateFtsSignature() {},
     remotePanelPaths: new Set(),

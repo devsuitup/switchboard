@@ -4,6 +4,10 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+
+- Images opened from a link or from the Touched list now show in the panel. Other files the panel can't show offer **Open with system viewer** for pictures and PDFs, and **Show in folder** for the rest. (#1025)
+
 ### Fixed
 - A conversation's message count in the sidebar now grows as the conversation does, including remote conversations without recounting their entire transcript on each fetch. Conversations sharing copied history keep duplicate messages out of their counts. (#1017)
 
