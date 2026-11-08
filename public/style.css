@@ -5868,3 +5868,8 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 .mermaid-diagram > svg { display: block; max-width: none !important; }
 .mermaid-error { color: var(--text-muted); font-size: 12px; }
 .mermaid-render-scratch { position: fixed; left: -100000px; top: 0; visibility: hidden; pointer-events: none; }
+
+#changes-diff-host.panel-image-host { overflow: auto; }
+.panel-image { align-self: flex-start; flex-shrink: 0; max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
+.panel-image.panel-image-actual { max-width: none; max-height: none; cursor: zoom-out; }
+.panel-file-refusal { display: flex; align-items: center; gap: 8px; padding: 8px; }

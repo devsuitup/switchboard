@@ -1367,6 +1367,22 @@ function openTouchedEditor(sessionId, absolutePath, pair, returnList, { line = n
   }
 }
 
+function openTouchedImage(sessionId, absolutePath, image, returnList) {
+  const state = getSessionState(sessionId);
+  if (currentPanelSessionId === sessionId) snapshotPanelList(document.getElementById('touched-list'), returnList);
+  destroyCurrentTab(state, { stash: false });
+  const tab = createChangesTab();
+  Object.assign(tab, { returnList, label: 'Touched files', absolutePath, filePath: absolutePath,
+    selectedFile: { path: absolutePath }, loading: false, image, editable: false, noDiff: true });
+  state.currentTab = tab;
+  state.panelVisible = true;
+  watchChangesFile(sessionId, tab, absolutePath);
+  if (currentPanelSessionId === sessionId) {
+    showPanel(state);
+    renderPanel(sessionId);
+  }
+}
+
 function applyChangesPair(tab, pair) {
   tab.diffLoading = false;
   tab.editable = true;
@@ -1385,7 +1401,7 @@ function applyChangesPair(tab, pair) {
 async function readChangesPair(sessionId, tab, file) {
   try {
     return tab.absolutePath
-      ? await window.api.readFileForPanel(tab.absolutePath, { editor: true, ...(tab.remote ? { sessionId } : {}) })
+      ? await window.api.readFileForPanel(tab.absolutePath, { editor: true, ...(tab.image ? { image: true } : {}), ...(tab.remote ? { sessionId } : {}) })
       : await window.api.gitChangesFile(sessionId, file.path, { staged: !!file.staged });
   } catch (err) {
     return { ok: false, error: err?.message || 'this file could not be read' };
@@ -1428,7 +1444,7 @@ async function refreshChanges(sessionId) {
 
 // A refresh may never replace what the user is typing into — see .ai/contexts/changes-view.md
 async function syncOpenChangesFile(sessionId, tab) {
-  if (!tab.selectedFile || !tab.editable) return;
+  if (!tab.selectedFile || (!tab.editable && !tab.image)) return;
 
   if (!isChangesBufferDirty(tab)) repointSelectedFile(tab);
 
@@ -1440,10 +1456,18 @@ async function syncOpenChangesFile(sessionId, tab) {
 
   if (!result || result.ok === false) {
     tab.fileError = (result && result.error) || 'this file could not be read';
+    if (tab.image) tab.imageRefusal = ['binary', 'encoding', 'too-large'].includes(result?.reason);
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);
     return;
   }
   tab.fileError = null;
+
+  if (tab.image) {
+    tab.image = result.image || tab.image;
+    tab.imageRefusal = !result.image;
+    if (currentPanelSessionId === sessionId) renderPanel(sessionId);
+    return;
+  }
 
   if (isChangesBufferDirty(tab)) {
     tab.externalChange = tab.absolutePath && !tab.gitFile && !tab.version
@@ -1479,7 +1503,7 @@ function repointSelectedFile(tab) {
 function handleChangesFileChanged(sessionId, filePath) {
   const state = filePanelState.get(sessionId);
   const tab = state && state.currentTab;
-  if (!tab || tab.type !== 'changes' || !tab.editable || !tab.selectedFile) return;
+  if (!tab || tab.type !== 'changes' || (!tab.editable && !tab.image) || !tab.selectedFile) return;
   if (tab.selectedFile.path !== filePath || tab.saving) return;
   return syncOpenChangesFile(sessionId, tab).catch(() => {});
 }
@@ -2016,6 +2040,37 @@ function buildChangesDiffChrome() {
 
 function renderChangesDiff(sessionId, tab) {
   window.setViewerPath(changesDiffTitleEl, tab.selectedFile.path);
+
+  changesDiffHostEl.classList.toggle('panel-image-host', !!tab.image);
+  if (tab.image) {
+    for (const button of [changesDiffFormatBtn, changesDiffModeBtn, changesDiffSaveBtn, changesDiffReloadBtn]) button.style.display = 'none';
+    changesDiffHostEl.style.display = '';
+    changesDiffPreviewEl.style.display = 'none';
+    changesDiffNoticeEl.style.display = 'none';
+    changesDiffHostEl.replaceChildren();
+    destroyChangesEditor(tab);
+    if (tab.imageRefusal) {
+      renderPanelFileRefusal(changesDiffHostEl, tab.absolutePath);
+    } else if (tab.fileError) {
+      changesDiffHostEl.textContent = `This file can no longer be read: ${tab.fileError}`;
+    } else {
+      const img = document.createElement('img');
+      img.className = 'panel-image';
+      img.alt = tab.absolutePath.split(/[/\\]/).pop();
+      img.src = `data:${tab.image.mime};base64,${tab.image.base64}`;
+      img.classList.toggle('panel-image-actual', !!tab.imageActual);
+      img.addEventListener('click', () => {
+        tab.imageActual = !tab.imageActual;
+        img.classList.toggle('panel-image-actual', tab.imageActual);
+      });
+      img.onerror = () => {
+        tab.imageRefusal = true;
+        if (filePanelState.get(sessionId)?.currentTab === tab && currentPanelSessionId === sessionId) renderPanel(sessionId);
+      };
+      changesDiffHostEl.appendChild(img);
+    }
+    return;
+  }
 
   const markdown = isMarkdownPath(tab.absolutePath);
   const formatted = markdown && !!tab.formatted;

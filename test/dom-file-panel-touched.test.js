@@ -273,10 +273,12 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
     observe(element) { observed.set(element, this.callback); this.targets.add(element); }
     disconnect() { for (const element of this.targets) observed.delete(element); }
   };
-  const calls = { touched: [], readFile: [], readOptions: [], save: [], gitFile: [], status: [], resolve: [], diffResponse: [], revealed: [], confirm: 0 };
+  const calls = { touched: [], readFile: [], readOptions: [], save: [], gitFile: [], status: [], resolve: [], diffResponse: [], revealed: [], confirm: 0, openPath: [], showItem: [] };
   let mcpOpenFile = null;
 
   window.api = {
+    openPath: (...args) => { calls.openPath.push(args); return Promise.resolve(); },
+    showItemInFolder: (...args) => { calls.showItem.push(args); return Promise.resolve(); },
     onMcpOpenDiff: () => {},
     onMcpOpenFile: (handler) => { mcpOpenFile = handler; },
     onMcpCloseAllDiffs: () => {},
@@ -293,7 +295,7 @@ function setupDom({ touchedImpl, readImpl, confirmImpl, storedRatio, storageThro
     readFileForPanel: (filePath, options) => {
       calls.readOptions.push(options);
       calls.readFile.push(filePath);
-      return Promise.resolve((readImpl || (() => ({ ok: true, original: 'before\n', current: 'file body', version: 'v1', git: true })))(filePath));
+      return Promise.resolve((readImpl || (() => ({ ok: true, original: 'before\n', current: 'file body', version: 'v1', git: true })))(filePath, options));
     },
   };
   const watchCalls = [];
@@ -392,6 +394,98 @@ function clickRow(ctx, filePath) {
   assert.ok(el, `a row for ${filePath}`);
   el.dispatchEvent(new ctx.window.Event('click', { bubbles: true }));
 }
+
+function imageResult(base64 = 'cG5n') {
+  return { ok: true, image: { mime: 'image/png', base64, size: 3 } };
+}
+
+test('T6: a linked image opens as data in an image tab with an Opened row', async () => {
+  const ctx = setupDom({ readImpl: (_p, opts) => opts?.image ? imageResult() : { ok: false, reason: 'binary', error: 'binary file' } });
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/shot.png');
+    const imgs = ctx.document.querySelectorAll('img.panel-image');
+    assert.equal(imgs.length, 1);
+    assert.match(imgs[0].src, /^data:image\/png;base64,/);
+    assert.equal(imgs[0].alt, 'shot.png');
+    assert.equal(ctx.document.querySelector('.cm-editor'), null);
+    assert.ok(rows(ctx).some(r => r.dataset.path === '/work/shot.png'));
+    assert.equal(ctx.stateOf('s1').currentTab.editable, false);
+    for (const id of ['changes-diff-format-btn', 'changes-diff-mode-btn', 'changes-diff-save-btn', 'changes-diff-reload-btn']) {
+      assert.equal(ctx.document.getElementById(id)?.style.display, 'none', id);
+    }
+    imgs[0].click();
+    assert.ok(imgs[0].classList.contains('panel-image-actual'));
+    imgs[0].click();
+    assert.equal(imgs[0].classList.contains('panel-image-actual'), false);
+    assert.deepEqual(ctx.watchCalls, [['watch', '/work/shot.png']]);
+  } finally { ctx.destroy(); }
+});
+
+test('T7: a refused PDF offers the system viewer with its flag', async () => {
+  const ctx = setupDom({ readImpl: () => ({ ok: false, reason: 'binary', error: 'binary file' }) });
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/doc.pdf');
+    const refusal = ctx.document.querySelector('.panel-file-refusal');
+    assert.ok(refusal);
+    assert.equal(refusal.firstChild.textContent, "This file can't be shown here.");
+    const button = refusal.querySelector('button');
+    assert.equal(button.textContent, 'Open with system viewer');
+    button.click();
+    assert.equal(JSON.stringify(ctx.calls.openPath), JSON.stringify([['/work/doc.pdf', { viewer: true }]]));
+    assert.equal(ctx.calls.showItem.length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('T8: non-viewer files only offer Show in folder', async () => {
+  for (const target of ['/work/tool.exe', '/work/x.pif', '/work/site.url', '/work/a.bin', '/work/no-extension', '/work/.pdf']) {
+    const ctx = setupDom({ readImpl: () => ({ ok: false, reason: 'binary', error: 'binary file' }) });
+    try {
+      ctx.window.switchPanel('s1');
+    await openLink(ctx, target);
+      const button = ctx.document.querySelector('.panel-file-refusal button');
+      assert.ok(button, target);
+      assert.equal(button.textContent, 'Show in folder', target);
+      button.click();
+      assert.deepEqual(ctx.calls.showItem, [[target]]);
+      assert.equal(ctx.calls.openPath.length, 0);
+    } finally { ctx.destroy(); }
+  }
+});
+
+test('T9: file-changed rereads an image with the image flag and replaces its source', async () => {
+  let bytes = 'b2xk';
+  const ctx = setupDom({ readImpl: (_p, opts) => opts?.image ? imageResult(bytes) : { ok: false, reason: 'binary', error: 'binary file' } });
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/shot.png');
+    const before = ctx.document.querySelector('img.panel-image');
+    assert.ok(before);
+    bytes = 'bmV3';
+    ctx.changed('/work/shot.png');
+    await flush();
+    assert.equal(ctx.calls.readFile.length, 2);
+    assert.equal(ctx.calls.readOptions.at(-1).image, true);
+    assert.equal(ctx.document.querySelector('img.panel-image')?.src, 'data:image/png;base64,bmV3');
+  } finally { ctx.destroy(); }
+});
+
+test('T10: image decode failure shows the refusal and system action', async () => {
+  const ctx = setupDom({ readImpl: () => imageResult() });
+  try {
+    ctx.window.switchPanel('s1');
+    await openLink(ctx, '/work/shot.png');
+    const img = ctx.document.querySelector('img.panel-image');
+    assert.ok(img);
+    img.dispatchEvent(new ctx.window.Event('error'));
+    assert.equal(ctx.document.querySelector('img.panel-image'), null);
+    const refusal = ctx.document.querySelector('#changes-diff-host .panel-file-refusal');
+    assert.ok(refusal);
+    assert.equal(refusal.firstChild.textContent, "This file can't be shown here.");
+    assert.equal(refusal.querySelector('button').textContent, 'Open with system viewer');
+  } finally { ctx.destroy(); }
+});
 
 test('Touched uses the shared select style', async () => {
   const ctx = setupDom();
@@ -2356,7 +2450,7 @@ test('a file the session opens over a clean editor replaces it without asking', 
     await flush();
     assert.equal(ctx.calls.confirm, 0);
     assert.equal(ctx.stateOf('s1').currentTab?.absolutePath, '/work/b.txt');
-    assert.deepEqual({ ...ctx.calls.readOptions.at(-1) }, { editor: true });
+    assert.deepEqual({ ...ctx.calls.readOptions.at(-1) }, { editor: true, image: true });
   } finally { ctx.destroy(); }
 });
 
