@@ -559,16 +559,16 @@ function buildScheduleCommand(sessionId, schedule) {
  * so a run that fell due while a project was archived is not replayed.
  * see .ai/contexts/schedule-runner.md ("Archive")
  */
-function skipMissedRuns(log, projects, stateDir) {
-  for (const schedule of scanSchedules(log, projects)) skipMissedRunsOf(schedule, stateDir);
+function skipMissedRuns(log, projects, stateDir, lastTickMinute = null) {
+  for (const schedule of scanSchedules(log, projects)) skipMissedRunsOf(schedule, stateDir, lastTickMinute);
 }
 
-function skipMissedRunsOf(schedule, stateDir) {
+function skipMissedRunsOf(schedule, stateDir, lastTickMinute = null) {
   if (!schedule.catchUp) return;
   if (!stateDir) throw new Error('MissingScheduleStateDir: cannot skip missed schedule runs');
   const now = Date.now();
   const minute = Math.floor(now / MINUTE_MS) * MINUTE_MS;
-  const baseline = now > minute && typeof schedule.cron === 'string' && cronMatches(schedule.cron, new Date(minute)) ? minute : minute - MINUTE_MS;
+  const baseline = lastTickMinute === minute && typeof schedule.cron === 'string' && cronMatches(schedule.cron, new Date(minute)) ? minute : minute - MINUTE_MS;
   const state = readScheduleState(stateDir);
   const key = scheduleStateKey(schedule);
   const entry = state.get(key);
@@ -577,14 +577,14 @@ function skipMissedRunsOf(schedule, stateDir) {
   if (entry) pruneScheduleState(stateDir, entry);
 }
 
-async function setListedScheduleEnabled(filePath, enabled, { scheduleProjects, stateDir, setEnabled = setScheduleEnabled }) {
+async function setListedScheduleEnabled(filePath, enabled, { scheduleProjects, stateDir, getLastTickMinute = () => null, setEnabled = setScheduleEnabled }) {
   if (typeof filePath !== 'string' || typeof enabled !== 'boolean') return { ok: false, error: 'invalid schedule or enabled value' };
   try {
     const schedule = listScheduleFiles(await scheduleProjects().list()).find(s => s.filePath === filePath);
     if (!schedule) return { ok: false, error: 'schedule is not listed' };
     if (schedule.linked) return { ok: false, error: 'linked file: edit it at its source' };
     if (schedule.problems.some(p => p.startsWith('front matter not read'))) return { ok: false, error: 'front matter not read' };
-    if (enabled && !schedule.enabled) skipMissedRunsOf(schedule, stateDir);
+    if (enabled && !schedule.enabled) skipMissedRunsOf(schedule, stateDir, getLastTickMinute());
     return setEnabled(filePath, enabled, { projectRoot: schedule.projectPath });
   } catch (error) {
     return { ok: false, error: error.message };
@@ -603,6 +603,7 @@ async function setListedScheduleEnabled(filePath, enabled, { scheduleProjects, s
  */
 function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = {}) {
   let running = true;
+  let lastTickMinute = null;
   const runningTasks = new Set();
   // see .ai/contexts/schedule-runner.md ("Isolated instances")
   const catchUpOn = !process.env.SWITCHBOARD_DATA_DIR;
@@ -674,6 +675,7 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
 
   function checkProjects(onTick, paths, now) {
     if (!running) return;
+    if (onTick) lastTickMinute = Math.floor(now.getTime() / MINUTE_MS) * MINUTE_MS;
     const schedules = scanSchedules(log, paths);
     let state = null;
     if (catchUpOn && schedules.some(s => s.catchUp)) {
@@ -717,11 +719,13 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
     return checked;
   }, msUntilNextMinute);
 
-  return function stop() {
+  function stop() {
     running = false;
     clearTimeout(initialTimer);
     if (initialTimer._interval) clearInterval(initialTimer._interval);
-  };
+  }
+  stop.getLastTickMinute = () => lastTickMinute;
+  return stop;
 }
 
 /**

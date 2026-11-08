@@ -290,7 +290,8 @@ they do not launch Electron, Claude or a real schedule.
   `fs.realpathSync.native` and is case-insensitive. Already running commands
   continue. Unarchive clears the entry and passes over the catch-up record of the
   project's schedules (`skipMissedRuns` in `schedule-runner.js` claims the
-  previous minute), so a run that fell due while archived is not replayed and the
+  previous minute, or the current due minute if its tick already ran), so a run
+  that fell due while archived is not replayed and the
   next due minute runs normally. The reset passes the registry's own spellings
   of the project and its nested worktrees, selected with the same real-path,
   case-insensitive-on-Windows comparison as suspension, because the catch-up key
@@ -471,8 +472,19 @@ PROJECTS_DIR scans), `test/schedule-next-run.test.js` (descriptions and DST).
 
 ## Schedules tab (#792, slice A2)
 
-`public/schedules-view.js` consumes `list-schedules` on open, after each action,
-on projects-changed (coalesced over 900 ms) and on minute boundaries while visible. The clock tab follows
+`public/schedules-view.js` consumes `list-schedules` on open, after Open, after
+Run now/toggle while visible, on relevant projects-changed events (900 ms debounce, 3000 ms maximum
+wait) and on minute boundaries while visible. The event allowlist is `archive`,
+`project-added`, `project-deleted`, `project-remap`, `worktree-deleted`, `watcher`,
+`session-exit`, `session-attach` and `cli-status`: changes to the registry,
+archive state, run history or child liveness. Scan progress (`scan`), activity,
+metadata backfills/repair, remote updates and background-job events do not
+reload this local tab; its minute refresh still picks up indexed scan results.
+Preload forwards the `{ cause }` payload. Mixed-cause payloads refresh if any
+cause is allowed. Hiding the tab cancels both
+reload timers, invalidates pending requests and clears the requested project
+focus. A pending toggle completed while hidden waits for reopening to reload.
+The clock tab follows
 Agent Files; Work Files is preserved. Search is hidden. Rows show cron, local
 next-run and relative time, disabled/archive/validation reasons, shared-slug
 diagnostics, catch-up status and the newest 20 runs from the main-side list.
@@ -485,9 +497,16 @@ fresh indexed session and goes through openSession, preserving resume guards.
 listScheduleFiles over the registry at call time. Linked/unread front matter is
 refused. Before enabling a disabled catch-up schedule, skipMissedRunsOf claims
 the prior-minute baseline, then setScheduleEnabled atomically rewrites the file.
-When re-enable happens after the start of a due minute, that current minute is
-claimed too, so its tick missed while off cannot replay on the next check. At
-the exact minute boundary the previous-minute baseline still lets the tick run.
+The scheduler owns an in-memory last tick minute, exposed by the returned stop
+function's `getLastTickMinute()`. Only an actual cron tick records it, after
+project selection resolves and before schedules are scanned; startup and resume
+catch-up checks do not. Main passes its getter through the existing enable and
+archive deps, and its value to unarchive's skip. The current due minute is
+claimed only if it equals the last minute actually ticked. Before a fractional
+or delayed tick (9:15:00.900 or 9:15:40), enabling in that same minute preserves
+the due run; after that tick it is consumed. At 9:15:00.000, the ordering of the
+tick and enable still decides: before the tick it may run, after the tick it
+must not replay. A previous-minute tick never consumes the new minute.
 Unarchive uses the same helper and therefore the same rule. Missing stateDir
 refuses a catch-up re-enable with MissingScheduleStateDir. Archive parsing uses
 the runner's shared scheduleFields helper.
@@ -510,7 +529,10 @@ Action state is keyed by filePath across renders: a pending launch stays disable
 success shows the check mark and Launched! for two seconds, and a refusal restores
 Run now with the persistent notice. A new launch invalidates the previous success
 timer. Pending toggles likewise stay disabled. A render restores each row's open
-history and focused control by filePath and control identity. An unmatched project
+history and focused control by filePath and control identity. If the control is
+disabled, focus moves to its row (`tabIndex=-1`) and the control remains the
+pending focus target across renders. Re-enabling restores it while focus stays
+on that row; a newer focus choice takes precedence. An unmatched project
 focus request is consumed by that render. Guard refusal reasons are visible row text.
 Next-run wording uses minutes below an hour, then today's time, tomorrow's time,
 a weekday within the following week, or a date for later runs.

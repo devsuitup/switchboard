@@ -2977,8 +2977,8 @@ loadStartupProjects();
 // Live-reload sidebar when filesystem changes are detected
 let projectsChangedTimer = null;
 let projectsChangedWhileAway = false;
-window.api.onProjectsChanged(() => {
-  if (activeTab === 'schedules') queueSchedulesReload();
+window.api.onProjectsChanged(payload => {
+  if (activeTab === 'schedules' && payload?.cause?.some(cause => ['archive', 'project-added', 'project-deleted', 'project-remap', 'worktree-deleted', 'watcher', 'session-exit', 'session-attach', 'cli-status'].includes(cause))) queueSchedulesReload();
   // Debounce to avoid rapid re-renders during bulk changes
   if (projectsChangedTimer) clearTimeout(projectsChangedTimer);
   if (activeTab !== 'sessions') {

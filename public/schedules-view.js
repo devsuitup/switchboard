@@ -5,6 +5,8 @@ let schedulesTimer = null;
 let schedulesRequest = 0;
 let schedulesProject = null;
 let schedulesReloadTimer = null;
+let schedulesReloadMaxTimer = null;
+let schedulesPendingFocus = null;
 const schedulesActions = new Map();
 
 function setSchedulesVisible(visible) {
@@ -13,7 +15,9 @@ function setSchedulesVisible(visible) {
   schedulesTimer = null;
   clearTimeout(schedulesReloadTimer);
   schedulesReloadTimer = null;
-  if (!visible) { schedulesRequest++; return; }
+  clearTimeout(schedulesReloadMaxTimer);
+  schedulesReloadMaxTimer = null;
+  if (!visible) { schedulesRequest++; schedulesProject = null; schedulesPendingFocus = null; return; }
   loadSchedules();
   scheduleSchedulesRefresh();
 }
@@ -21,10 +25,11 @@ function setSchedulesVisible(visible) {
 function queueSchedulesReload() {
   if (!schedulesVisible) return;
   clearTimeout(schedulesReloadTimer);
-  schedulesReloadTimer = setTimeout(() => {
-    schedulesReloadTimer = null;
+  const reload = () => {
     if (schedulesVisible) loadSchedules();
-  }, 900);
+  };
+  schedulesReloadTimer = setTimeout(reload, 900);
+  if (schedulesReloadMaxTimer === null) schedulesReloadMaxTimer = setTimeout(reload, 3000);
 }
 
 function scheduleSchedulesRefresh() {
@@ -38,6 +43,8 @@ function scheduleSchedulesRefresh() {
 async function loadSchedules() {
   clearTimeout(schedulesReloadTimer);
   schedulesReloadTimer = null;
+  clearTimeout(schedulesReloadMaxTimer);
+  schedulesReloadMaxTimer = null;
   const request = ++schedulesRequest;
   try {
     const data = await window.api.listSchedules();
@@ -97,7 +104,7 @@ function renderSchedules(data) {
   const focused = document.activeElement;
   const focusedRow = focused?.closest('.schedule-item');
   const focusedPath = container.contains(focusedRow) ? focusedRow.dataset.filepath : null;
-  const focusedControl = focused?.dataset.scheduleControl;
+  const focusedControl = focused?.dataset.scheduleControl || (focusedPath === schedulesPendingFocus?.filePath ? schedulesPendingFocus.control : null);
   const projectFocus = schedulesProject;
   schedulesProject = null;
   container.replaceChildren();
@@ -125,14 +132,28 @@ function renderSchedules(data) {
   }
   if (!count) scheduleText(container, 'plans-empty', 'No schedules found.');
   if (!projectFocus && focusedPath && focusedControl) {
-    const row = [...container.querySelectorAll('.schedule-item')].find(item => item.dataset.filepath === focusedPath);
-    [...(row?.querySelectorAll('[data-schedule-control]') || [])]
-      .find(control => control.dataset.scheduleControl === focusedControl)?.focus({ preventScroll: true });
-  }
+    focusScheduleControl(focusedPath, focusedControl);
+  } else schedulesPendingFocus = null;
   const paths = new Set(data.projects.flatMap(project => project.schedules.map(schedule => schedule.filePath)));
   for (const [filePath, state] of schedulesActions) {
     if (!paths.has(filePath) && state.run !== 'running' && !state.toggling) schedulesActions.delete(filePath);
   }
+}
+
+function focusScheduleControl(filePath, controlName) {
+  const row = [...document.querySelectorAll('#schedules-content .schedule-item')].find(item => item.dataset.filepath === filePath);
+  const control = [...(row?.querySelectorAll('[data-schedule-control]') || [])].find(el => el.dataset.scheduleControl === controlName);
+  schedulesPendingFocus = control?.disabled ? { filePath, control: controlName } : null;
+  if (control?.disabled) row.focus({ preventScroll: true });
+  else control?.focus({ preventScroll: true });
+}
+
+function restorePendingScheduleFocus() {
+  if (!schedulesPendingFocus) return;
+  const { filePath, control } = schedulesPendingFocus;
+  const focused = document.activeElement;
+  if (focused?.matches('.schedule-item') && focused.dataset.filepath === filePath) focusScheduleControl(filePath, control);
+  else schedulesPendingFocus = null;
 }
 
 function scheduleActionState(filePath) {
@@ -146,17 +167,21 @@ function updateScheduleRunButtons(filePath, original) {
     .filter(button => button.closest('.schedule-item').dataset.filepath === filePath));
   if (original) buttons.add(original);
   for (const button of buttons) {
+    const focused = document.activeElement === button;
     button.disabled = button.dataset.unavailable === 'true' || state.run === 'running';
     button.classList.toggle('running', state.run === 'running');
     button.classList.toggle('done', state.run === 'done');
     button.textContent = state.run === 'running' ? 'Running...' : state.run === 'done' ? '\u2713' : 'Run now';
     button.title = state.run === 'running' ? 'Running...' : state.run === 'done' ? 'Launched!' : button.dataset.reason;
+    if (focused && button.disabled) focusScheduleControl(filePath, button.dataset.scheduleControl);
   }
+  restorePendingScheduleFocus();
 }
 
 function buildScheduleItem(project, schedule, data) {
   const item = document.createElement('article');
   item.className = 'schedule-item';
+  item.tabIndex = -1;
   item.dataset.filepath = schedule.filePath;
   scheduleText(item, 'schedule-name', schedule.name);
   scheduleText(item, 'schedule-path', schedule.filePath);
@@ -215,7 +240,8 @@ function buildScheduleItem(project, schedule, data) {
         for (const current of document.querySelectorAll('.schedule-toggle-btn')) {
           if (current.closest('.schedule-item').dataset.filepath === schedule.filePath) current.disabled = current.dataset.unavailable === 'true';
         }
-        await loadSchedules();
+        restorePendingScheduleFocus();
+        if (schedulesVisible) await loadSchedules();
       }
     });
   toggle.disabled ||= !!actionState.toggling;

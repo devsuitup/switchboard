@@ -154,11 +154,10 @@ test('projects-changed bursts coalesce into one visible schedule reload', async 
   const source = fs.readFileSync(filename, 'utf8');
   const start = source.indexOf('let projectsChangedTimer =');
   const end = source.indexOf('\n});', start) + '\n});'.length;
-  let changed;
-  h.w.api.onProjectsChanged = handler => { changed = handler; };
+  const changed = connectProjectsChanged(h.w);
   vm.runInContext(source.slice(start, end), h.dom.getInternalVMContext(), { filename,
     lineOffset: source.slice(0, start).split('\n').length - 1 });
-  for (let i = 0; i < 8; i++) changed();
+  for (let i = 0; i < 8; i++) changed({ cause: ['archive'] });
   await settle();
   assert.equal(calls, 0, 'burst waits for the debounce window');
   const pending = [...timers.values()].filter(timer => timer.delay === 900);
@@ -166,6 +165,156 @@ test('projects-changed bursts coalesce into one visible schedule reload', async 
   pending[0].callback();
   await settle();
   assert.equal(calls, 1, 'one list-schedules request per burst');
+});
+
+for (const outcome of ['success', 'failure']) {
+  test(`pending Run now focus uses its row during refresh and returns after ${outcome}`, async t => {
+    let finish;
+    const h = setup(t, () => new Promise(resolve => { finish = resolve; }));
+    await settle();
+    h.button.focus();
+    h.button.click();
+    await h.w.loadSchedules();
+    assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-item'), 'disabled focused control falls back to its row');
+    await h.w.loadSchedules();
+    finish(outcome === 'success' ? { ok: true } : { ok: false, error: 'refused' });
+    await settle();
+    assert.equal(h.w.document.activeElement, h.button, 'settled launch restores the pending focus target');
+  });
+}
+
+test('pending Run now focus yields to a different focused control', async t => {
+  let finish;
+  const h = setup(t, () => new Promise(resolve => { finish = resolve; }));
+  await settle();
+  h.button.focus();
+  h.button.click();
+  await h.w.loadSchedules();
+  assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-item'), 'pending launch focuses its row');
+  h.w.document.querySelector('.schedule-open-btn').focus();
+  finish({ ok: true });
+  await settle();
+  assert.equal(h.w.document.activeElement, h.w.document.querySelector('.schedule-open-btn'), 'completion does not steal a newer focus choice');
+});
+
+function connectProjectsChanged(w) {
+  let bridge;
+  const listeners = new Map();
+  const preload = path.join(__dirname, '../preload.js');
+  vm.runInNewContext(fs.readFileSync(preload, 'utf8'), {
+    process: { platform: process.platform, argv: [] },
+    require: name => {
+      assert.equal(name, 'electron');
+      return { contextBridge: { exposeInMainWorld: (_name, api) => { bridge = api; } },
+        ipcRenderer: { invoke() {}, on: (channel, handler) => listeners.set(channel, handler), send() {}, removeListener() {} } };
+    },
+  }, { filename: preload });
+  w.api.onProjectsChanged = bridge.onProjectsChanged;
+  return payload => listeners.get('projects-changed')({}, payload);
+}
+
+function projectsChangedHarness(t) {
+  const h = setup(t);
+  h.w.setSchedulesVisible(false);
+  let now = 0;
+  let id = 0;
+  const timers = new Map();
+  h.w.Date.now = () => now;
+  h.w.setTimeout = (callback, delay) => { timers.set(++id, { callback, due: now + delay }); return id; };
+  h.w.clearTimeout = key => timers.delete(key);
+  const advance = async ms => {
+    const end = now + ms;
+    for (;;) {
+      const next = [...timers].filter(([, timer]) => timer.due <= end).sort((a, b) => a[1].due - b[1].due)[0];
+      if (!next) break;
+      now = next[1].due;
+      timers.delete(next[0]);
+      next[1].callback();
+      await settle();
+    }
+    now = end;
+  };
+  const filename = path.join(__dirname, '../public/app.js');
+  const source = fs.readFileSync(filename, 'utf8');
+  const start = source.indexOf('let projectsChangedTimer =');
+  const end = source.indexOf('\n});', start) + '\n});'.length;
+  const changed = connectProjectsChanged(h.w);
+  vm.runInContext(source.slice(start, end), h.dom.getInternalVMContext(), { filename,
+    lineOffset: source.slice(0, start).split('\n').length - 1 });
+  h.w.setSchedulesVisible(true);
+  return { ...h, changed, advance };
+}
+
+test('scan and unrelated projects-changed causes do not rebuild schedules even at the main throttle cadence', async t => {
+  const h = projectsChangedHarness(t);
+  await settle();
+  let calls = 0;
+  h.w.api.listSchedules = async () => { calls++; return h.data; };
+  for (const cause of ['scan', 'activity', 'entrypoint-backfill', 'title-backfill', 'sdk-reveal', 'bridge-repair', 'remote', 'bg-jobs']) {
+    h.changed({ cause: [cause] });
+    await h.advance(1500);
+  }
+  h.changed();
+  h.changed({ cause: ['unknown-future-cause'] });
+  await h.advance(4000);
+  assert.equal(calls, 0, 'scan and unrelated events never request list-schedules');
+  for (const cause of ['archive', 'project-added', 'project-deleted', 'project-remap', 'worktree-deleted', 'watcher', 'session-exit', 'session-attach', 'cli-status']) {
+    const before = calls;
+    h.changed({ cause: ['scan', cause] });
+    await h.advance(900);
+    assert.equal(calls, before + 1, `${cause} can refresh schedules in a mixed payload`);
+  }
+});
+
+test('continuous relevant projects-changed burst refreshes within the maximum wait', async t => {
+  const h = projectsChangedHarness(t);
+  await settle();
+  let calls = 0;
+  h.w.api.listSchedules = async () => { calls++; return h.data; };
+  for (let i = 0; i < 7; i++) {
+    h.changed({ cause: ['archive'] });
+    await h.advance(600);
+  }
+  assert.ok(calls >= 1, 'a continuous burst refreshes within 3000 ms');
+  assert.ok(calls <= 2, 'burst remains coalesced');
+  await h.advance(900);
+  assert.equal(calls, 2, 'the trailing burst gets one final refresh');
+  h.changed({ cause: ['archive'] });
+  h.w.setSchedulesVisible(false);
+  await h.advance(4000);
+  assert.equal(calls, 2, 'hiding clears both debounce and maximum-wait timers');
+});
+
+test('hiding schedules clears a pending project focus request before reopening', async t => {
+  const h = setup(t);
+  await settle();
+  let finish;
+  h.w.api.listSchedules = () => new Promise(resolve => { finish = resolve; });
+  h.w.showSchedules(h.project.projectPath);
+  h.w.setSchedulesVisible(false);
+  finish(h.data);
+  await settle();
+  h.w.api.listSchedules = async () => h.data;
+  h.w.setSchedulesVisible(true);
+  await settle();
+  assert.equal(h.w.document.activeElement, h.w.document.body, 'a hidden tab drops its project focus request');
+});
+
+test('a toggle completed while schedules are hidden does not reload until reopening', async t => {
+  const h = setup(t);
+  await settle();
+  let finish;
+  h.w.api.setScheduleEnabled = () => new Promise(resolve => { finish = resolve; });
+  h.w.document.querySelector('.schedule-toggle-btn').click();
+  h.w.setSchedulesVisible(false);
+  let calls = 0;
+  h.w.api.listSchedules = async () => { calls++; return h.data; };
+  finish({ ok: true });
+  await settle();
+  assert.equal(calls, 0, 'a hidden toggle completion does not reload schedules');
+  h.w.setSchedulesVisible(true);
+  await settle();
+  assert.equal(calls, 1, 'reopening requests fresh schedule state');
 });
 
 test('next-run wording uses minutes, today, tomorrow, weekday and date', t => {

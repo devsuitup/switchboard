@@ -24,6 +24,51 @@ function fixture(t, catchUp = true) {
   return { project, file, stateDir, deps };
 }
 
+const at = (h, m, s = 0, ms = 0) => new Date(2026, 10, 8, h, m, s, ms).getTime();
+const quiet = { info() {}, warn() {}, error() {} };
+
+function schedulerClock(t, h, runs, projects = () => [h.project]) {
+  let initial;
+  let interval;
+  t.mock.method(global, 'setTimeout', callback => { initial = callback; return {}; });
+  t.mock.method(global, 'setInterval', callback => { interval = callback; return {}; });
+  const stop = runner.startScheduler(quiet, (...args) => { runs.push(args); args[3](); }, { stateDir: h.stateDir, projects });
+  t.after(stop);
+  return { stop, tick(time) { t.mock.timers.setTime(time); (interval || initial)(); } };
+}
+
+for (const [timeline, start, enable, tick] of [
+  ['A before the due minute', [14, 0, 500], [14, 59], [15, 0, 500]],
+  ['B before the fractional tick', [14, 0, 900], [15, 0, 400], [15, 0, 900]],
+  ['B2 before a drifted tick', [14, 40], [15, 10], [15, 40]],
+  ['C next every-minute run', [14, 0, 500], [15, 30], [16, 0, 500]],
+  ['D exact minute boundary before tick', [14, 0, 300], [15, 0], [15, 0, 300]],
+]) {
+  for (const operation of ['listed enable', 'archive offer', 'unarchive']) {
+    test(`${operation} ${timeline} preserves the unticked run`, async t => {
+      t.mock.timers.enable({ apis: ['Date'], now: at(9, ...start) });
+      const isolation = process.env.SWITCHBOARD_DATA_DIR;
+      delete process.env.SWITCHBOARD_DATA_DIR;
+      t.after(() => { if (isolation === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = isolation; });
+      const h = fixture(t);
+      if (timeline.startsWith('C')) fs.writeFileSync(h.file, '---\ncron: * * * * *\nenabled: false\ncatch-up: true\n---\nPrompt');
+      if (operation === 'unarchive') runner.setScheduleEnabled(h.file, true, { projectRoot: h.project });
+      let archived = operation === 'unarchive';
+      const runs = [];
+      const clock = schedulerClock(t, h, runs, () => archived ? [] : [h.project]);
+      const { stop } = clock;
+      const deps = { ...h.deps, getLastTickMinute: () => stop.getLastTickMinute?.() };
+      if (timeline.startsWith('C')) clock.tick(at(9, 15, 0, 500));
+      t.mock.timers.setTime(at(9, ...enable));
+      if (operation === 'listed enable') assert.equal((await runner.setListedScheduleEnabled(h.file, true, deps)).ok, true);
+      else if (operation === 'archive offer') assert.equal(reenableScheduleFiles([h.file], h.project, deps).failed.length, 0);
+      else { runner.skipMissedRuns(quiet, [h.project], h.stateDir, deps.getLastTickMinute()); archived = false; }
+      clock.tick(at(9, ...tick));
+      assert.equal(runs.length, 1, 'the due minute whose tick has not passed must run once');
+    });
+  }
+}
+
 test('set-schedule-enabled skips missed catch-up minutes and non-catch-up creates no state', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 10, 8, 9, 16, 30).getTime() });
   assert.equal(typeof runner.setListedScheduleEnabled, 'function', 'the listed-path enable operation exists');
@@ -73,28 +118,30 @@ test('the catch-up baseline exists before the enable write, including isolated i
   assert.equal(result.ok, true);
 });
 
-for (const operation of ['listed enable', 'archive offer', 'unarchive']) {
-  test(`${operation} during an already ticked due minute does not replay it at the next check`, async t => {
-    t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 10, 8, 9, 15, 0).getTime() });
-    const isolation = process.env.SWITCHBOARD_DATA_DIR;
-    delete process.env.SWITCHBOARD_DATA_DIR;
-    t.after(() => { if (isolation === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = isolation; });
-    const h = fixture(t);
-    const runs = [];
-    const check = () => runner.startScheduler({ info() {}, warn() {}, error() {} }, (...args) => runs.push(args),
-      { stateDir: h.stateDir, projects: () => [h.project] })();
-    check();
-    t.mock.timers.setTime(new Date(2026, 10, 8, 9, 15, 30).getTime());
-    if (operation === 'listed enable') assert.equal((await runner.setListedScheduleEnabled(h.file, true, h.deps)).ok, true);
-    else if (operation === 'archive offer') assert.equal(reenableScheduleFiles([h.file], h.project, { stateDir: h.stateDir }).failed.length, 0);
-    else {
-      runner.setScheduleEnabled(h.file, true, { projectRoot: h.project });
-      runner.skipMissedRuns({ info() {}, warn() {}, error() {} }, [h.project], h.stateDir);
-    }
-    t.mock.timers.setTime(new Date(2026, 10, 8, 9, 16, 0).getTime());
-    check();
-    assert.equal(runs.length, 0, 'the 9:15 tick missed while off cannot replay at 9:16');
-  });
+for (const [timing, delay] of [['during', 30000], ['at the boundary of', 0]]) {
+  for (const operation of ['listed enable', 'archive offer', 'unarchive']) {
+    test(`${operation} ${timing} an already ticked due minute does not replay it at the next check`, async t => {
+      t.mock.timers.enable({ apis: ['Date'], now: at(9, 14) });
+      const isolation = process.env.SWITCHBOARD_DATA_DIR;
+      delete process.env.SWITCHBOARD_DATA_DIR;
+      t.after(() => { if (isolation === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = isolation; });
+      const h = fixture(t);
+      const runs = [];
+      const clock = schedulerClock(t, h, runs);
+      const { stop } = clock;
+      const deps = { ...h.deps, getLastTickMinute: () => stop.getLastTickMinute?.() };
+      clock.tick(at(9, 15));
+      t.mock.timers.setTime(at(9, 15) + delay);
+      if (operation === 'listed enable') assert.equal((await runner.setListedScheduleEnabled(h.file, true, deps)).ok, true);
+      else if (operation === 'archive offer') assert.equal(reenableScheduleFiles([h.file], h.project, deps).failed.length, 0);
+      else {
+        runner.setScheduleEnabled(h.file, true, { projectRoot: h.project });
+        runner.skipMissedRuns(quiet, [h.project], h.stateDir, deps.getLastTickMinute());
+      }
+      clock.tick(at(9, 16));
+      assert.equal(runs.length, 0, 'the 9:15 tick missed while off cannot replay at 9:16');
+    });
+  }
 }
 
 test('archive catch-up re-enable refuses a missing state directory with a named error', t => {
@@ -117,6 +164,7 @@ test('archive catch-up parsing uses the shared schedule fields for quoted true v
 
 for (const operation of ['offer', 'Undo']) {
   test(`main archiveDeps passes the instance state directory through the ${operation} re-enable`, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: at(9, 15, 30) });
     const vm = require('node:vm');
     const { createRequire } = require('node:module');
     const archive = require('../archived-projects');
@@ -133,6 +181,7 @@ for (const operation of ['offer', 'Undo']) {
     const handlers = new Map();
     vm.runInNewContext(source.slice(start, end), {
       require: createRequire(filename), path, DB_PATH: path.join(path.dirname(h.stateDir), 'db'),
+      stopScheduler: { getLastTickMinute: () => at(9, 15) },
       isInitialScanComplete: () => true, initialScheduleProjects() {}, listSettingKeys() {},
       scanSchedules: runner.scanSchedules, log: { info() {}, warn() {} }, fs,
       setScheduleEnabled: runner.setScheduleEnabled, mergePlaceholderSessions: value => value,
@@ -149,6 +198,7 @@ for (const operation of ['offer', 'Undo']) {
     assert.equal(result.failed.length, 0, 'main re-enable succeeds with stateDir');
     assert.equal(result.enabled.length, 1);
     assert.ok(runner.readScheduleStateOnly(stateDir).has(runner.scheduleStateKey({ filePath: h.file })), 'main archiveDeps writes the instance skip record');
+    assert.equal(runner.readScheduleStateOnly(stateDir).get(runner.scheduleStateKey({ filePath: h.file })).handled, at(9, 15), 'archive wiring passes the scheduler tick minute');
   });
 }
 
@@ -160,7 +210,29 @@ test('offered and Undo catch-up schedules skip missed minutes before re-enabling
   assert.ok(handled >= Math.floor(Date.now() / 60000) * 60000 - 60000, 'offered schedules receive a baseline');
 });
 
+test('main unarchive skip passes the last minute actually ticked', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: at(9, 15, 30) });
+  const h = fixture(t);
+  runner.setScheduleEnabled(h.file, true, { projectRoot: h.project });
+  const filename = path.join(__dirname, '..', 'main.js');
+  const { extractFunction } = require('./app-source');
+  const vm = require('node:vm');
+  const { createRequire } = require('node:module');
+  const source = fs.readFileSync(filename, 'utf8');
+  const ctx = {
+    require: createRequire(filename), path, DB_PATH: path.join(path.dirname(h.stateDir), 'db'),
+    stopScheduler: { getLastTickMinute: () => at(9, 15) }, log: quiet,
+  };
+  vm.runInNewContext(extractFunction(source, 'skipMissedScheduleRuns'), ctx, { filename,
+    lineOffset: source.slice(0, source.indexOf('function skipMissedScheduleRuns')).split('\n').length - 1 });
+  ctx.skipMissedScheduleRuns([h.project]);
+  const stateDir = path.join(path.dirname(h.stateDir), 'schedule-state');
+  assert.equal(runner.readScheduleStateOnly(stateDir).get(runner.scheduleStateKey({ filePath: h.file }))?.handled,
+    at(9, 15), 'unarchive wiring passes the scheduler tick minute');
+});
+
 test('the enable IPC wires listing guards and instance state through main and preload', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: at(9, 15, 30) });
   const vm = require('node:vm');
   const { createRequire } = require('node:module');
   const h = fixture(t);
@@ -173,12 +245,15 @@ test('the enable IPC wires listing guards and instance state through main and pr
   vm.runInNewContext(source.slice(start, end), {
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     require: createRequire(filename), scheduleProjects: h.deps.scheduleProjects,
+    stopScheduler: { getLastTickMinute: () => at(9, 15) },
     path, DB_PATH: path.join(path.dirname(h.stateDir), 'db'),
   }, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
   const result = await handlers.get('set-schedule-enabled')({}, h.file, true);
   assert.equal(result.ok, true);
   assert.ok(runner.readScheduleStateOnly(path.join(path.dirname(h.stateDir), 'schedule-state'))
     .has(runner.scheduleStateKey({ filePath: h.file })), 'main passes this instance state directory');
+  assert.equal(runner.readScheduleStateOnly(path.join(path.dirname(h.stateDir), 'schedule-state'))
+    .get(runner.scheduleStateKey({ filePath: h.file })).handled, at(9, 15), 'enable IPC passes the scheduler tick minute');
   assert.equal((await handlers.get('set-schedule-enabled')({}, path.join(h.project, 'outside.md'), true)).ok, false);
   let api;
   const calls = [];

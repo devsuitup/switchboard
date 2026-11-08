@@ -474,6 +474,11 @@ An unknown remote target never falls back to local disk IO.
 
 `terminal-data`, `session-detected`, `process-exited`, `remote-resize-allowed`, `terminal-notification`, `cli-busy-state`, `session-forked`, `subagent-spawned`, `subagent-completed`, `subagent-watch-event`, `projects-changed`, `status-update`, `indexing-progress`, `file-changed`, `mcp-open-diff`, `mcp-open-file`, `mcp-close-all-diffs`, `mcp-close-tab`, `updater-event`, `main-process-error`, `show-whats-new`, `session-transcript-activity`, `bg-agents-changed`, `bg-handoff-notice`, `git-changes-file-changed`, `remote-activity`, `activity-trace-state`, `indexing-finished`, `task-snapshot`, `task-rekey`, `mcp-status`, `full-screen-changed`, `exit-background-progress`, `exit-attempt-invalidated`, `exit-flush`, `unsaved-check`, `unsaved-check-reason`, `unsaved-ping`
 
+`onProjectsChanged(callback)` forwards the main-side `{ cause: string[] }`
+payload. Schedules filters these causes before queuing a bounded debounce;
+see [schedule-runner.md](schedule-runner.md), "Schedules tab". Other subscribers
+may ignore the payload.
+
 `remote-resize-allowed(sessionId)` is emitted once when a live remote attach
 promotes from shared to solo. `preload.onRemoteResizeAllowed` forwards the id
 to the renderer, which enables solo sizing and schedules a fitted resize.
