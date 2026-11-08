@@ -89,8 +89,15 @@ function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024
       tailValid = consume(pending);
       tailUnresolved = invalid && !before;
       if (!tailValid) {
-        const type = pending.toString('utf8').match(/^\s*\{\s*"type"\s*:\s*("(?:[^"\\]|\\.)*")/);
-        try { tailUnresolved ||= !type || JSON.parse(type[1]) === 'continued-in'; }
+        const text = pending.toString('utf8');
+        const firstKey = text.match(/^\s*\{\s*("(?:[^"\\]|\\.)*")\s*:/);
+        const type = text.match(/^\s*\{\s*"type"\s*:\s*("(?:[^"\\]|\\.)*")/);
+        try {
+          const ordinary = (firstKey && JSON.parse(firstKey[1]) !== 'type')
+            || /"(?:parentUuid|message)"\s*:/.test(text)
+            || (type && JSON.parse(type[1]) !== 'continued-in');
+          tailUnresolved = !ordinary;
+        }
         catch { tailUnresolved = true; }
       }
       invalid = before;

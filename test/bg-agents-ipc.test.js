@@ -415,3 +415,71 @@ test('S2d checked handoff lowercases and deduplicates extra conversation ids', a
     { ok: true, attached: true });
   assert.deepEqual(checked, ['s-1', 'extra-id']);
 });
+
+for (const scenario of ['manual with extra ids', 'manual without extra ids', 'handoff with new extra ids']) {
+  test('1020fix4 joining ' + scenario + ' waits then runs its own guard', async () => {
+    const { handlers, ipcMain } = fakeIpc();
+    const bg = fakeBgAgents();
+    const checks = [], ids = [];
+    let release, started;
+    const running = new Promise(resolve => { started = resolve; });
+    const wait = new Promise(resolve => { release = resolve; });
+    bg.conversationCheck = (_id, options) => {
+      checks.push(options.workerLiveness);
+      return { known: true, state: 'done', hosted: false, workerLiveness: 'dead', sessionIds: ['s1'] };
+    };
+    bg.runVerb = async () => { bg.calls.push(['verb']); started(); await wait; return { ok: true }; };
+    let extraLive = false;
+    const unsubscribe = init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} },
+      activeSessions: new Map(), sessionHasPty: () => false, ptyPids: () => [],
+      cliSessionState: { readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }],
+        onDescriptorsChanged: () => () => {},
+        liveElsewhereChecked: async sid => { ids.push(sid); return { known: true, live: extraLive && sid === 'extra' ? { pid: 777 } : null }; } },
+    });
+    const job = { id: 'aaaaaaaa', sessionId: 's1' };
+    const first = scenario.startsWith('manual') ? handlers.get('bg-agent-verb')({}, 'respawn', job.id)
+      : unsubscribe.respawnForHandoff(job, ['s1']);
+    await running;
+    const second = unsubscribe.respawnForHandoff(job, scenario === 'manual without extra ids' ? [] : ['EXTRA']);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(checks.length, 1, 'the joiner must wait for the flight');
+    extraLive = true;
+    release();
+    await first;
+    const result = await second;
+    assert.equal(checks.length, 2, 'different parameters must run their own check');
+    assert.deepEqual(checks, scenario.startsWith('manual') ? [true, 'all'] : ['all', 'all']);
+    assert.equal(result.ok, scenario === 'manual without extra ids');
+    if (scenario !== 'manual without extra ids') {
+      assert.equal(result.refused, true);
+      assert.ok(ids.includes('extra'), 'the new extra id must be checked');
+      assert.equal(bg.calls.filter(call => call[0] === 'verb').length, 1, 'refused joiner cannot respawn');
+    }
+  });
+}
+
+test('1020fix4 compatible subset joins the same respawn result', async () => {
+  const { ipcMain } = fakeIpc();
+  const bg = fakeBgAgents();
+  let release, started, checks = 0;
+  const running = new Promise(resolve => { started = resolve; });
+  const wait = new Promise(resolve => { release = resolve; });
+  bg.conversationCheck = () => {
+    checks++;
+    return { known: true, state: 'done', hosted: false, workerLiveness: 'dead', sessionIds: ['s1'] };
+  };
+  bg.runVerb = async () => { bg.calls.push(['verb']); started(); await wait; return { ok: true }; };
+  const unsubscribe = init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} },
+    activeSessions: new Map(), sessionHasPty: () => false, ptyPids: () => [],
+    cliSessionState: { readAllDescriptors: () => [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }],
+      onDescriptorsChanged: () => () => {}, liveElsewhereChecked: async () => ({ known: true, live: null }) },
+  });
+  const job = { id: 'aaaaaaaa', sessionId: 's1' };
+  const first = unsubscribe.respawnForHandoff(job, ['EXTRA', 'other']);
+  await running;
+  const second = unsubscribe.respawnForHandoff(job, ['extra', 'EXTRA']);
+  release();
+  assert.deepEqual(await Promise.all([first, second]), [{ ok: true, attached: true }, { ok: true, attached: true }]);
+  assert.equal(checks, 1);
+  assert.deepEqual(bg.calls.filter(call => call[0] === 'verb'), [['verb']]);
+});

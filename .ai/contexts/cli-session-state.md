@@ -738,7 +738,10 @@ It traverses indexed links in record order, deduplicates terminal ids and bounds
 traversal to 32 edges / 128 node visits. Cycles, missing continuation rows/files
 and malformed continuation records return `unresolved`. Unrelated sealed JSON
 parse failures do not block resume. An unparsable unterminated tail is unresolved
-unless its leading complete type proves it is not `continued-in`.
+unless its first complete key (including the colon) is not `type`, it carries
+a complete `parentUuid` or `message` key, or its leading complete type proves
+it is not `continued-in`. A cut inside the first key stays uncertain; see
+bg-agents.md, "Background continuations", for the record-order contract.
 File scanning yields between
 chunks and has no total byte cap; chunk size only controls pacing.
 

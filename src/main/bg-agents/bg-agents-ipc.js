@@ -78,12 +78,18 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
   const respawning = new Map();
   const runRespawn = (id, restoring = false, extraSessionIds = []) => {
     const key = String(id).toLowerCase();
-    if (respawning.has(key)) return respawning.get(key);
+    const extraIds = new Set(extraSessionIds.map(sid => sid.toLowerCase()));
+    const flight = respawning.get(key);
+    if (flight) {
+      if (flight.restoring === restoring && [...extraIds].every(sid => flight.extraIds.has(sid))) return flight.pending;
+      const retry = () => runRespawn(id, restoring, extraSessionIds);
+      return flight.pending.then(retry, retry);
+    }
     const pending = (async () => {
       const check = await checkVerb('respawn', id, restoring, extraSessionIds);
       return { result: check.ok ? await bgAgents.runVerb('respawn', id) : check, refused: !check.ok };
     })().finally(() => respawning.delete(key));
-    respawning.set(key, pending);
+    respawning.set(key, { pending, restoring, extraIds });
     return pending;
   };
   ipcMain.handle('bg-agent-verb', async (_event, verb, id) => {

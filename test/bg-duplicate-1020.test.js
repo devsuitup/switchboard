@@ -207,6 +207,71 @@ test('1020fix3 every continued-in byte cut stays uncertain until completion', as
   assert.deepEqual(h.calls, [], 'no torn continuation may respawn');
 });
 
+for (const consumer of ['handoff reader', 'session-cache traversal']) {
+for (const role of ['assistant', 'user']) {
+  for (const cutAt of ['first key', 'half', 'last byte']) {
+    test(`1020fix4 real ${role} torn after ${cutAt} retains sealed evidence through ${consumer}`, async t => {
+      const h = fixture(t, 'done');
+      const record = JSON.stringify({ parentUuid: PRIOR, isSidechain: false, sessionId: SID,
+        message: { ...(role === 'assistant' ? { model: 'claude' } : {}), role, content: 'hello from the CLI' },
+        type: role, uuid: NEXT, timestamp: '2026-11-08T00:00:00Z' });
+      const cut = cutAt === 'first key' ? '{"parentUuid":'.length
+        : cutAt === 'half' ? Math.floor(record.length / 2) : record.length - 1;
+      fs.writeFileSync(h.file, link(NEXT) + record.slice(0, cut));
+      fs.writeFileSync(path.join(h.root, NEXT + '.jsonl'), line({ type: 'user', sessionId: NEXT }));
+      const read = createContinuationReader(h.file, SID);
+      const { scanContinuationIndex, resolveContinuations } = require('../session-continuations');
+      const walk = () => resolveContinuations(SID, id => ({ index: JSON.parse(scanContinuationIndex(path.join(h.root, id + '.jsonl'), id)) }));
+      if (consumer === 'handoff reader') assert.deepEqual(await read(), [NEXT], 'handoff reader must retain sealed evidence');
+      assert.equal((await walk()).unresolved, false, 'session-cache traversal must retain sealed evidence');
+      assert.deepEqual((await walk()).candidates.map(row => row.sessionId), [NEXT]);
+      assert.deepEqual(await read(), [NEXT], 'handoff reader must retain sealed evidence');
+      fs.appendFileSync(h.file, record.slice(cut) + '\r\n');
+      assert.deepEqual(await read(), [NEXT], 'completed ordinary CRLF tail retains the link');
+      assert.equal((await walk()).unresolved, false);
+    });
+  }
+}
+}
+
+for (const tail of ['{"uuid":', '{"type":null,"parentUuid":', '{"type":null,"message":']) {
+  test('1020fix4 ordinary key proves a non-continuation tail ' + tail, async t => {
+    const h = fixture(t);
+    fs.appendFileSync(h.file, tail);
+    assert.deepEqual(await createContinuationReader(h.file, SID)(), []);
+  });
+}
+
+test('1020fix4 tail inside the first key stays uncertain and recovers', async t => {
+  const h = fixture(t, 'done');
+  fs.writeFileSync(h.file, link(NEXT) + '{"par');
+  const read = createContinuationReader(h.file, SID);
+  const { scanContinuationIndex, resolveContinuations } = require('../session-continuations');
+  assert.equal(await read(), null);
+  const result = await resolveContinuations(SID, id => id === SID
+    ? { index: JSON.parse(scanContinuationIndex(h.file, SID)) } : { index: { ids: [] } });
+  assert.equal(result.unresolved, true);
+  fs.appendFileSync(h.file, 'entUuid":');
+  assert.deepEqual(await read(), [NEXT], 'a complete first key proves an ordinary record');
+});
+
+for (const prefix of ['{"parentUuid":null,"message":', '{"type":"assistant","message":', '{"type":null,"message":']) {
+  for (const consumer of ['handoff reader', 'session-cache traversal']) {
+    test('1020fix4 ordinary proof overrides a nested continuation tag through ' + consumer + ' ' + prefix, async t => {
+      const h = fixture(t, 'done');
+      fs.writeFileSync(h.file, link(NEXT) + prefix + '{"input":{"type":"continued-in"}}');
+      fs.writeFileSync(path.join(h.root, NEXT + '.jsonl'), line({ type: 'user', sessionId: NEXT }));
+      if (consumer === 'handoff reader') assert.deepEqual(await createContinuationReader(h.file, SID)(), [NEXT], 'an ordinary outer record cannot be a continuation');
+      else {
+        const { scanContinuationIndex, resolveContinuations } = require('../session-continuations');
+        const result = await resolveContinuations(SID, id => ({ index: JSON.parse(scanContinuationIndex(path.join(h.root, id + '.jsonl'), id)) }));
+        assert.equal(result.unresolved, false, 'a nested tag cannot override the ordinary record proof');
+        assert.deepEqual(result.candidates.map(row => row.sessionId), [NEXT]);
+      }
+    });
+  }
+}
+
 for (const mode of ['clicks', 'click and restore', 'restore and click']) {
   test('1020fix3 concurrent ' + mode + ' invoke one respawn per job', async t => {
     const h = fixture(t, 'done');
@@ -216,13 +281,22 @@ for (const mode of ['clicks', 'click and restore', 'restore and click']) {
     const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
     const restore = () => h.handlers.get('restore-background-job')({}, SID);
     const first = mode === 'restore and click' ? restore() : click();
+    await new Promise(resolve => setImmediate(resolve));
     const second = mode === 'click and restore' ? restore() : click();
     await new Promise(resolve => setImmediate(resolve));
     const count = h.calls.length;
     release();
     const results = await Promise.all([first, second]);
     assert.equal(count, 1, 'concurrent requests must invoke ONE respawn');
-    assert.ok(results.every(result => result.ok || result.action === 'attach'));
+    assert.ok(results[0].ok || results[0].action === 'attach');
+    if (mode === 'clicks') assert.equal(results[1].ok, true);
+    else if (mode === 'click and restore') {
+      assert.equal(results[1].action, 'refuse', 'restore rechecks the worker started by the manual flight');
+      assert.match(results[1].reason, /cannot respawn.*session; stop it first/);
+    } else {
+      assert.equal(results[1].ok, false, 'manual joiner rechecks the worker started by restore');
+      assert.match(results[1].error, /cannot respawn.*session; stop it first/);
+    }
     h.descriptors.length = 0;
     assert.equal((await click()).ok, true, 'a completed flight must allow a later retry');
     assert.equal(h.calls.length, 2);
