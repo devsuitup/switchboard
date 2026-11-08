@@ -85,9 +85,9 @@ marker must retain the explicit opt-in: `task-review-regressions.test.js`
 retains the #650 reader/worker regression family, and
 `derive-project-path.test.js` exercises the separator expression in
 `resolveWorktreePath` using real tmpdir paths, without a `process.platform`
-branch. No production-module exclusion list is applied. The fix-round inventory
-is recorded in `.work-files/codex-report-1026s2fix.md`; selection above roughly
-75% requires reporting contributors before considering justified exclusions.
+branch. No production-module exclusion list is applied. The selection was 368
+of 556 files when this was written; selection above roughly 75% requires
+reporting contributors before considering justified exclusions.
 
 To force Windows execution, add a relevant strong marker or the explicit test
 source comment `// platform: windows`; extend the exported marker set when a
