@@ -45,7 +45,7 @@ test('VM loader rejects an unused lazy stub key after the operation', () => {
   assert.throws(() => assertLazyStubsLoaded(api), /lazy stubs must be loaded/);
 });
 
-function setup(t, { sandbox = false, platform = 'linux', refused = [], spawnError, syncError, archived = false, noReply = false, deferSpawn = false, windowState = 'open' } = {}) {
+function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnError, syncError, archived = false, noReply = false, deferSpawn = false, windowState = 'open' } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-run-result-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, '.claude', 'commands', 'schedule-test.md');
@@ -64,7 +64,8 @@ function setup(t, { sandbox = false, platform = 'linux', refused = [], spawnErro
     quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, cmd) => [cmd],
     cleanPtyEnv: {}, resolveScheduleSandbox: () => sandbox, process: { platform },
     sandboxScriptPath: () => '/sandbox.sh', scheduleProjects: () => ({ list: async () => [root] }),
-    scheduleBindRefusals: () => refused, os, sandboxBindEnv: () => '', encodeProjectPath: () => 'project',
+    scheduleLaunchRefusal: require('../src/main/schedules/schedule-runner').scheduleLaunchRefusal,
+    os, sandboxBindEnv: () => '', encodeProjectPath: () => 'project',
     cpSpawn: () => {
       if (syncError) throw new Error(syncError);
       const child = new EventEmitter();
@@ -89,7 +90,7 @@ function setup(t, { sandbox = false, platform = 'linux', refused = [], spawnErro
     [SCHEDULE_RUNNER]: {
       parseFrontmatter: require('../src/main/schedules/schedule-runner').parseFrontmatter,
       createScheduleSession: () => ({ sessionId: 'manual-session' }),
-      buildScheduleCommand: () => ({ claudeArgs: ['--resume', 'manual-session', '--add-dir', '/refused'] }),
+      buildScheduleCommand: () => ({ claudeArgs: ['--resume', 'manual-session', '--add-dir', refused ? path.join(root, '.claude') : '/refused'] }),
     },
   }, [SCHEDULE_RUNNER]);
   ctx.scheduleIpc = ipc;
@@ -113,10 +114,10 @@ test('Run now returns a Linux sandbox refusal with recovery and never spawns', a
 });
 
 test('Run now returns refused add-dirs with the offending path and recovery', async t => {
-  const h = setup(t, { sandbox: true, refused: [{ dir: '/refused', reason: 'protected path' }] });
+  const h = setup(t, { sandbox: true, refused: true });
   const result = await h.run();
   assert.equal(result.ok, false);
-  assert.match(result.error, /add-dirs.*\/refused.*protected path/i);
+  assert.match(result.error, /add-dirs.*\.claude.*at or inside a \.claude or \.git directory/i);
   assert.match(result.error, /remove|change/i);
   assert.equal(h.children.length, 0);
 });

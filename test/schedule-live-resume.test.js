@@ -48,6 +48,8 @@ function setup(t, { sandbox = false } = {}) {
     shellArgs: (_shell, cmd) => [cmd],
     cleanPtyEnv: {},
     resolveScheduleSandbox: () => sandbox,
+    scheduleLaunchRefusal: require('../src/main/schedules/schedule-runner').scheduleLaunchRefusal,
+    os,
     process: { platform: 'win32' },
     activityReporter: { sessionStarted() {}, sessionEnded() {} },
     log,

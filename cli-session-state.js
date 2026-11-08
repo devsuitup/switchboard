@@ -77,6 +77,10 @@ function trackScheduleRun(sessionId, child, cwd, scheduleName) {
   child.once('error', release);
 }
 
+function isScheduleRunLive(sessionId) {
+  return scheduledRuns.has(sessionId.toLowerCase());
+}
+
 function annotateScheduleRuns(projects) {
   for (const project of projects) for (const session of project.sessions) {
     const ids = [...new Set([session.sessionId, session.headSessionId, ...(session.mergedMemberIds || [])].filter(Boolean))];
@@ -1141,6 +1145,7 @@ module.exports = {
   readWorkerProcessEvidence,
   init,
   trackScheduleRun,
+  isScheduleRunLive,
   annotateScheduleRuns,
   findLiveProcess,
   liveElsewhere,

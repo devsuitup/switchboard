@@ -81,7 +81,8 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./src/main/terminals/shell-profiles');
-const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
+const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
+const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
@@ -1602,6 +1603,18 @@ const fileListsClient = {
   request: ({ kind }) => fileListClients.get(kind).request(),
   shutdown: () => Promise.all([...fileListClients.values()].map(client => client.shutdown())),
 };
+
+ipcMain.handle('list-schedules', () => {
+  const knownProjectPaths = [...getKnownProjectPaths()];
+  return buildScheduleList({
+    scheduleProjects, getCachedByFolder, isScheduleRunLive: cliSessionState.isScheduleRunLive,
+    catchUpActive: !process.env.SWITCHBOARD_DATA_DIR,
+    stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), projectsDir: PROJECTS_DIR,
+    getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox,
+    isArchived: isProjectSettingsArchived,
+    isKnownProject: projectPath => _isKnownProjectRoot(projectPath, knownProjectPaths),
+  });
+});
 
 // --- IPC: get-memories ---
 ipcMain.handle('get-memories', async () => {
@@ -3890,24 +3903,19 @@ if (!app.isPackaged) {
       const env = { ...cleanPtyEnv, FORCE_COLOR: '0' };
 
       const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
-      if (sandbox && process.platform !== 'linux') {
-        log.error(`[schedule] ${runName}: skipped — sandbox is enabled but requires Linux (bubblewrap)`);
-        if (onDone) onDone();
-        return { ok: false, error: 'The schedule sandbox requires Linux (bubblewrap). Run it on Linux with bubblewrap, or disable Sandbox in the project or global settings and try Run now again.' };
-      }
       if (sandbox) {
-        cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
         const addDirs = [];
         for (let i = 0; i < claudeArgv.length - 1; i++) {
           if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
         }
-        // see docs/sandbox.md ("Schedules")
-        const refused = scheduleBindRefusals(addDirs, await scheduleProjects().list(), os.homedir(), cwd);
-        if (refused.length) {
-          log.error(`[schedule] ${runName}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
+        const refusal = scheduleLaunchRefusal({ sandbox, addDirs, platform: process.platform,
+          projectPaths: process.platform === 'linux' ? await scheduleProjects().list() : [], home: os.homedir(), cwd });
+        if (refusal) {
+          log.error(`[schedule] ${runName}: skipped — ${refusal.problem}`);
           if (onDone) onDone();
-          return { ok: false, error: `Sandbox add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}. Remove or change these add-dirs in the schedule file, then try Run now again.` };
+          return { ok: false, error: refusal.error };
         }
+        cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
         const bindEnv = sandboxBindEnv(addDirs);
         if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
         env.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(cwd);
