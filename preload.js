@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('api', {
   refreshStats: () => ipcRenderer.invoke('refresh-stats'),
   getUsage: () => ipcRenderer.invoke('get-usage'),
   getMemories: () => ipcRenderer.invoke('get-memories'),
+  listSchedules: () => ipcRenderer.invoke('list-schedules'),
   readMemory: (filePath) => ipcRenderer.invoke('read-memory', filePath),
   saveMemory: (filePath, content, expected) => ipcRenderer.invoke('save-memory', filePath, content, expected),
   getWorkFiles: () => ipcRenderer.invoke('get-work-files'),

@@ -135,7 +135,12 @@ jobs:
           echo "SWITCHBOARD_REQUIRE_REAL_BWRAP=1" >> "$GITHUB_ENV"
 
       - name: Run tests with coverage
+        if: runner.os == 'Linux'
         run: npm run coverage
+
+      - name: Run platform-specific tests
+        if: runner.os != 'Linux'
+        run: node scripts/run-tests.js --platform-only
 
       # Gate only NEW/changed lines (patch coverage), not the whole codebase:
       # main.js (Electron IPC/native) and the DOM glue cannot be unit-tested, so
