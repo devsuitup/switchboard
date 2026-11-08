@@ -73,7 +73,7 @@ for (const state of ['working', 'blocked', 'running', 'done', 'failed', 'stopped
     test(`B main restore ${state}/${liveness} follows the classifier and checked verb`, async t => {
       const h = restoreFixture(t, { state, liveness, descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }] });
       const result = await h.restore();
-      const shouldRespawn = liveness === 'dead' && ['working', 'running', 'done'].includes(state);
+      const shouldRespawn = liveness === 'dead' && ['working', 'running', 'done', 'failed'].includes(state);
       const shouldAttach = liveness === 'live' || shouldRespawn;
       assert.equal(result.action, shouldAttach ? 'attach' : 'refuse');
       assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), shouldRespawn ? [['respawn', 'aaaaaaaa']] : []);

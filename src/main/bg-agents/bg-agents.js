@@ -416,6 +416,7 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
         try { job = parseJobState(fs.readFileSync(path.join(jobsDir, jobId, 'state.json'), 'utf8')); } catch {}
         const sid = job?.sessionId || roster.find(entry => entry.id === jobId)?.sessionId;
         if (sid?.toLowerCase() !== id) continue;
+        if (['stopped', 'failed'].includes(job?.state)) continue;
         const liveness = await workerEvidence({ ...job, id: jobId, sessionId: sid }, true);
         if (liveness !== 'live' && liveness !== 'dead') return { known: false, reason: 'worker liveness unknown for continuation job ' + jobId };
         evidence.set(jobId, liveness);

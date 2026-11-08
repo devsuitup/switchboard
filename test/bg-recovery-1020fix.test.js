@@ -58,19 +58,21 @@ function setup(t, { forkAt = 0, exitAt = Infinity, descriptor = true, unknown = 
   });
   const { handleSendToBackground } = loadAppFunctions(ctx, { declarations: ['backgroundHandoffs'],
     functions: ['handleSendToBackground', 'persistBackgroundHandoff', 'readBackgroundHandoffStamp'], sourcePath: path.join(__dirname, '../main.js') });
-  return { send: async () => { await advance(0); return handleSendToBackground({}, 'tab'); }, writes, respawns, kills, session, time: () => now };
+  return { send: async () => { await advance(0); return handleSendToBackground({}, 'tab'); }, writes, respawns, kills, session, activeSessions: ctx.activeSessions, time: () => now };
 }
 
-test('1020fix shipped handler adopts an earlier live fork before typing exit', async t => {
+test('1020fix2 shipped handler refuses an earlier live fork and leaves the tab untouched', async t => {
   const h = setup(t);
+  const before = { ...h.session, composerState: { ...h.session.composerState }, backgrounding: false };
   const result = await h.send();
-  assert.equal(result.ok, true, 'an earlier live continuation must be adopted');
-  assert.equal(result.sessionId, NEXT);
-  assert.equal(result.jobId, 'bbbbbbbb');
-  assert.notEqual(result.respawned, true);
-  assert.deepEqual(h.writes, [], 'adoption must leave the source terminal untouched');
+  assert.equal(result.ok, false, 'an earlier live continuation must refuse the handoff');
+  assert.equal(result.code, 'refused');
+  assert.equal(result.error, 'This conversation already runs in the background; open it from the sidebar.');
+  assert.deepEqual(h.writes, [], 'refusal must write neither /exit nor /bg');
   assert.deepEqual(h.respawns, []);
   assert.deepEqual(h.kills, []);
+  assert.equal(h.activeSessions.get('tab'), h.session, 'the foreground tab must remain registered');
+  assert.deepEqual(h.session, before, 'the foreground CLI and composer must remain unchanged');
 });
 
 test('1020fix shipped handler refuses unknown continuation liveness before typing exit', async t => {

@@ -10,7 +10,7 @@ Switchboard, and acts on them without a terminal.
 ## Restoring saved background tabs
 
 After a restart or reboot, startup restore reopens only background jobs whose
-attach tabs were saved, including tabs opened from the Agents view. A live worker is attached. A dead working, done or running job is
+attach tabs were saved, including tabs opened from the Agents view. A live worker is attached. A dead working, done, running or failed job is
 respawned as the same job and conversation, retaining its name, then attached,
 unless a live continuation already holds the conversation.
 Automatic mode does this without a click, Ask waits for Restore, Restore on
@@ -18,7 +18,7 @@ click waits for the saved row, and Don't restore starts nothing.
 
 A persistent Restore notice names the job and reason when its worker cannot
 be classified or a respawn is refused. Conflicting legacy records list their
-ids. Dead blocked, failed and stopped jobs offer **Respawn** and are never restarted automatically.
+ids. Dead blocked and stopped jobs offer **Respawn** and are never restarted automatically.
 Respawn checks worker liveness and continuations again; a deleted, unowned continuation does not prevent recovery.
 **Respawned, not attached** means the job started but its live background
 descriptor did not appear within 15 seconds; **Attach** retries attachment
@@ -221,6 +221,9 @@ is working: send it to the background once it is idle. If subagents are running,
 Switchboard asks before sending: Claude may stop them during the move.
 If Claude asks for confirmation in the terminal, answer Background or Stay
 there; Switchboard does not answer that dialog for you.
+
+If a live continuation already runs in the background, Switchboard refuses the
+move and asks you to open it from the sidebar, leaving this tab and its CLI untouched.
 
 Before typing, Switchboard refuses an ambiguous or unreadable job lookup,
 a job that would resume another conversation, an unknown conversation or job

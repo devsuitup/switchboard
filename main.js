@@ -1937,10 +1937,7 @@ async function handleSendToBackground(_event, sessionId) {
         if (continuation.job) continuations.set(continuation.job.id, continuation.job);
       }
       if (continuations.size) {
-        const job = continuations.values().next().value;
-        const matches = cliSessionState.readAllDescriptors().filter(d => d.kind === 'bg' && d.jobId === job.id && d.sessionId.toLowerCase() === job.sessionId.toLowerCase());
-        if (continuations.size === 1 && matches.length === 1) return { route: 'adopt', continuation: matches[0] };
-        return { route: 'refuse', error: 'A continuation already runs in the background. Attach to it from the Agents view.' };
+        return { route: 'refuse', error: 'This conversation already runs in the background; open it from the sidebar.' };
       }
       if (!lookup.job) return respawnRoute({ oldId: id, lookup });
       let owned = { known: true, job: null };

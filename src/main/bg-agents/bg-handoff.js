@@ -56,7 +56,7 @@ function createContinuationReader(file, id) {
         index = JSON.parse(serialized);
         if (index.bytes < index.size) await new Promise(resolve => setImmediate(resolve));
       } while (index.bytes < index.size);
-      if (!index.complete && index.pending && !index.invalid) {
+      if (!index.complete && index.pending && !index.invalid && !index.unresolved) {
         try { JSON.parse(Buffer.from(index.pending, 'base64').toString('utf8')); }
         catch { return index.sealedIds; }
       }
@@ -173,14 +173,6 @@ async function sendToBackground(sessionId, deps) {
     const afterRoute = backgroundRefusal({ ...session, backgrounding: false }, deps.getStatus(oldId));
     if (afterRoute || !bound() || deps.now() >= deadline) return { ok: false, code: 'refused', error: afterRoute || 'The tab changed or its handoff deadline passed. Check the terminal, then try again.' };
     if (route.route === 'refuse') return { ok: false, code: 'refused', error: route.error };
-    if (route.route === 'adopt') {
-      const continuation = route.continuation;
-      session.backgrounded = true;
-      await releaseWindowsPty(session.pty);
-      deps.onConfirmed?.(continuation);
-      return { ok: true, oldSessionId: sessionId, sessionId: continuation.sessionId,
-        jobId: continuation.jobId, cwd: continuation.cwd || session.cwd };
-    }
     const command = route.route === 'respawn' ? '/exit' : '/bg';
     dispose = deps.tapOutput(session, text => { output = (output + text).slice(-16384); });
     const composer = session.composerState;

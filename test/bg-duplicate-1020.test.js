@@ -127,7 +127,7 @@ test('1020 restore refuses a live continuation of a dead working job', async t =
   assert.equal(result.action, 'refuse');
 });
 
-for (const state of ['blocked', 'failed']) {
+for (const state of ['blocked']) {
   test('1020 dead ' + state + ' needs explicit Respawn', async t => {
     const h = fixture(t, state);
     const result = await h.handlers.get('restore-background-job')({}, SID);
@@ -137,7 +137,7 @@ for (const state of ['blocked', 'failed']) {
   });
 }
 
-for (const state of ['working', 'running', 'done']) {
+for (const state of ['working', 'running', 'done', 'failed']) {
   test('1020fix restore respawns and attaches dead ' + state, async t => {
     const h = fixture(t, state);
     h.delivery.autoAttach = true;
@@ -161,12 +161,42 @@ for (const state of ['blocked', 'working', 'running', 'done', 'failed', 'stopped
   });
 }
 
-for (const tail of ['{"type":"assistant","mess', '{"type":"continued-in","sessionId":"' + SID + '","continuedInSessionId":"']) {
+for (const tail of ['{"type":"assistant","mess']) {
   test('1020fix torn final line permits manual recovery ' + tail, async t => {
     const h = fixture(t, 'done');
     fs.appendFileSync(h.file, tail);
     assert.deepEqual(await createContinuationReader(h.file, SID)(), [], 'an incomplete final record cannot invalidate sealed evidence');
     assert.equal((await h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa')).ok, true);
+    assert.deepEqual(h.calls, [['respawn', 'aaaaaaaa']]);
+  });
+}
+
+test('1020fix2 unresolved continued-in tail refuses recovery until completed', async t => {
+  const h = fixture(t, 'done');
+  const record = link(NEXT);
+  fs.appendFileSync(h.file, record.slice(0, 40));
+  const read = createContinuationReader(h.file, SID);
+  assert.equal(await read(), null, 'a partial continued-in record is uncertain');
+  for (const channel of ['check-bg-agent-verb', 'bg-agent-verb']) {
+    assert.equal((await h.handlers.get(channel)({}, 'respawn', 'aaaaaaaa')).ok, false, 'uncertainty must refuse Respawn');
+  }
+  assert.deepEqual(h.calls, [], 'uncertainty must never respawn');
+  fs.appendFileSync(h.file, record.slice(40));
+  assert.deepEqual(await read(), [NEXT], 'the same reader must recognize the completed continuation');
+});
+
+for (const state of ['stopped', 'failed']) {
+  test('1020fix2 ' + state + ' continuation permits Respawn while daemon runs', async t => {
+    const h = fixture(t);
+    h.fork(); h.descriptors.length = 0;
+    h.writeJob('bbbbbbbb', NEXT, state);
+    fs.writeFileSync(path.join(h.root, 'daemon', 'roster.json'), line({ proto: 1,
+      updatedAt: new Date().toISOString(), supervisorPid: 4242, workers: {} }));
+    h.cli.readWorkerProcessEvidence = () => ({ processTableFresh: true,
+      tableEntry: pid => pid === 4242 ? { created: 'daemon' } : undefined });
+    for (const channel of ['check-bg-agent-verb', 'bg-agent-verb']) {
+      assert.equal((await h.handlers.get(channel)({}, 'respawn', 'aaaaaaaa')).ok, true, 'terminal continuations cannot host workers');
+    }
     assert.deepEqual(h.calls, [['respawn', 'aaaaaaaa']]);
   });
 }
