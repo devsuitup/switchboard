@@ -31,6 +31,8 @@ const rendererCrossFileGlobals = {
   openScheduleMemory: 'readonly',
   openScheduleRun: 'readonly',
   showScheduleSessions: 'readonly',
+  openTouchedImage: 'readonly',
+  renderPanelFileRefusal: 'readonly',
   validateSessionStopPlan: 'readonly',
   executeSessionStopTargets: 'readonly',
   confirmAndStopProjectFolder: 'readonly',

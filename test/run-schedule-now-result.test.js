@@ -48,12 +48,19 @@ test('VM loader rejects an unused lazy stub key after the operation', () => {
 function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnError, syncError, archived = false, noReply = false, deferSpawn = false, windowState = 'open' } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-run-result-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const previousTriggers = process.env.SWITCHBOARD_TRIGGERS_DIR;
+  process.env.SWITCHBOARD_TRIGGERS_DIR = path.join(root, 'triggers');
+  t.after(() => {
+    if (previousTriggers === undefined) delete process.env.SWITCHBOARD_TRIGGERS_DIR;
+    else process.env.SWITCHBOARD_TRIGGERS_DIR = previousTriggers;
+  });
   const file = path.join(root, '.claude', 'commands', 'schedule-test.md');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, '---\nname: test\n---\nDo the task');
   const handlers = new Map(), children = [], events = [], messages = [], logs = [], activities = [];
   const log = { info: (...args) => logs.push(args), warn: (...args) => logs.push(args), error: (...args) => logs.push(args) };
   const ctx = vm.createContext({
+    require: createRequire(path.join(__dirname, '..', 'main.js')), fs, path,
     getSetting: () => ({}), isProjectSettingsArchived: () => archived, Date,
     mainWindow: windowState === 'absent' ? null : {
       isDestroyed: () => windowState === 'destroyed',

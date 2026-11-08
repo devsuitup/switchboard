@@ -5819,3 +5819,7 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 .schedule-item:hover .schedule-actions, .schedule-actions:has(:focus-visible) { opacity: 1; }
 .schedule-history-run { display: block; text-align: left; margin: 6px 0; width: 100%; }
 .schedule-actions button:disabled { cursor: default; }
+#changes-diff-host.panel-image-host { overflow: auto; }
+.panel-image { align-self: flex-start; flex-shrink: 0; max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
+.panel-image.panel-image-actual { max-width: none; max-height: none; cursor: zoom-out; }
+.panel-file-refusal { display: flex; align-items: center; gap: 8px; padding: 8px; }

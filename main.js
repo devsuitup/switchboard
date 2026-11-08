@@ -5,6 +5,7 @@ const { createMainLoopMonitor } = require('./src/main/app/main-loop-monitor');
 const { execFile, spawn: spawnChild } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { sniffPanelImage, SYSTEM_VIEWER_EXTENSIONS } = require('./src/main/files/panel-image');
 const os = require('os');
 const pty = require('node-pty');
 const log = require('electron-log');
@@ -1185,13 +1186,29 @@ ipcMain.handle('open-main-log', async () => {
 });
 
 // --- IPC: open a local file in the OS default app (terminal right-click menu) ---
-ipcMain.handle('open-path', (_event, filePath) => {
+ipcMain.handle('open-path', (_event, filePath, opts) => {
   if (typeof filePath !== 'string' || !filePath) return;
   const resolved = path.resolve(filePath);
+  if (opts?.viewer && !SYSTEM_VIEWER_EXTENSIONS.includes(path.extname(resolved).toLowerCase())) return;
   // Mirror the read/save-file-for-panel guard: never hand a sensitive path
   // (~/.ssh, credentials, etc.) to the OS default opener.
   if (isSensitivePath(resolved)) return;
   return shell.openPath(resolved);
+});
+
+ipcMain.handle('show-item-in-folder', (_event, filePath) => {
+  try {
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return { ok: false, reason: 'invalid-path' };
+    const resolved = path.resolve(filePath);
+    if (gitChangesFile.hasGitSegment(filePath)) return { ok: false, reason: 'git-dir' };
+    if (gitChangesFile.hasGitSegment(fs.realpathSync.native(resolved))) return { ok: false, reason: 'git-dir' };
+    if (isSensitivePath(resolved)) return { ok: false, reason: 'sensitive' };
+    if (!fs.statSync(resolved).isFile()) return { ok: false, reason: 'not-file' };
+    shell.showItemInFolder(resolved);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error.message || String(error) };
+  }
 });
 
 // --- IPC: read clipboard (terminal right-click paste; see clipboard-write-text) ---
@@ -1250,10 +1267,14 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath, opts) => {
     const stat = fs.statSync(resolved);
     if (!stat.isFile()) return { ok: false, error: 'not a regular file' };
     if (stat.size > PANEL_FILE_MAX_BYTES) {
-      return { ok: false, error: 'file too large to display' };
+      return { ok: false, error: 'file too large to display', reason: 'too-large' };
     }
     const buf = fs.readFileSync(resolved);
-    if (buf.includes(0)) return { ok: false, error: 'binary file' };
+    if (opts?.image) {
+      const mime = sniffPanelImage(buf);
+      if (mime && (!['image/gif', 'image/webp'].includes(mime) || buf.includes(0))) return { ok: true, image: { mime, base64: buf.toString('base64'), size: buf.length } };
+    }
+    if (buf.includes(0)) return { ok: false, error: 'binary file', reason: 'binary' };
     const content = gitChangesFile.decodeUtf8(buf);
     if (content === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
     if (opts?.editor) {
@@ -3136,6 +3157,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       // see docs/sandbox.md ("Schedules")
       if (projectPath) await scheduleProjects().add(projectPath);
       if (!isAttach && sessionOptions?.sandbox) {
+        ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
+        fs.mkdirSync(path.join(ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
         // Directories the sandboxed claude must still reach beyond the cwd:
         // the project root when resuming inside a worktree (git metadata lives
         // there), and any user-configured Additional Directories.
@@ -3921,6 +3944,8 @@ if (!app.isPackaged) {
           if (onDone) onDone();
           return { ok: false, error: refusal.error };
         }
+        env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
+        fs.mkdirSync(path.join(env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
         cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
         const bindEnv = sandboxBindEnv(addDirs);
         if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
