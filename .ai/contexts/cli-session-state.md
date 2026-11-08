@@ -736,8 +736,10 @@ not CLI drift; the test suite does not sample real conversation transcripts.
 `session-continuations` IPC calls `sessionCache.resolveSessionContinuations`.
 It traverses indexed links in record order, deduplicates terminal ids and bounds
 traversal to 32 edges / 128 node visits. Cycles, missing continuation rows/files
-and malformed continuation records return `unresolved`. Unrelated JSON parse
-failures and incomplete tails do not block resume. File scanning yields between
+and malformed continuation records return `unresolved`. Unrelated sealed JSON
+parse failures do not block resume. An unparsable unterminated tail is unresolved
+unless its leading complete type proves it is not `continued-in`.
+File scanning yields between
 chunks and has no total byte cap; chunk size only controls pacing.
 
 The traversal also returns `missing: true` when an all-missing branch was seen

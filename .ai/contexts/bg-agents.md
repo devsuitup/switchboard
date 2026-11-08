@@ -56,8 +56,12 @@ after a reboot or daemon death. A live continuation prevents a duplicate respawn
 Dead `blocked` and `stopped` jobs require explicit Respawn through the
 existing button. Unknown states or worker liveness refuse. Restore and manual
 Respawn pass their classified worker evidence to `liveJobCheck`, keyed by job id;
-Delete retains its conservative default. Unknown never respawns. A per-session promise
-coalesces overlapping requests. Descriptor observation subscribes before its
+  Delete retains its conservative default. Unknown never respawns. A per-session promise
+  coalesces overlapping restore requests. A per-job promise covers the check and CLI
+  respawn shared by manual Respawn, restore and handoff, releasing on success or failure.
+  This does not coalesce distinct dead jobs in one continuation chain: selecting its
+  newest saved member requires a proven chain lookup before choosing the job.
+  Descriptor observation subscribes before its
 initial read, matches this job through `liveWorkerDescriptor`, waits at most
 15 seconds and always releases the listener. A successful respawn without a
 descriptor returns `respawned-not-attached`. Attach retries set `attachOnly`
@@ -1085,8 +1089,10 @@ foreground CLI untouched. Unknown or ambiguous ownership also refuses before
 `/exit`. Stopped and failed continuation jobs cannot be hosted and skip worker
 liveness sampling; they do not prevent manual Respawn while the daemon runs.
 At the 15-second exit timeout the
-same 10-second continuation observation still runs. It can adopt a confirmed
-fork even if the source has not exited. Once the original exit budget expires,
+  same 10-second continuation observation still runs. It can adopt a confirmed
+  fork even if the source has not exited. Adoption schedules the same 15-second
+  cleanup as `/bg`, killing the old source only if it still has not exited.
+  Once the original exit budget expires,
 this path can only adopt or refuse; even a later source exit cannot authorize
 respawn before its own post-exit grace. No exit budget was increased.
 The CLI fork link was measured at 5.5 seconds after `/exit` on 2026-11-07;
@@ -1099,9 +1105,11 @@ Observed links remain held even if a later rewrite drops them. Only a complete
 final read with no new continuation permits the checked respawn. This is a
 bounded observation, not a CLI-level atomic writer lock; the shared guard
 re-reads continuations immediately before the CLI verb as another check.
-The reader ignores an unparsable final unterminated ordinary line, retaining
-sealed continuation records and reconsidering the tail when the file grows.
-An unresolved `continued-in` tail returns uncertainty and prevents respawn;
+The reader retains sealed continuation evidence for an unparsable final line
+only when its leading complete `type` value proves it is not `continued-in`.
+A tail cut before that type is known returns uncertainty and prevents respawn,
+as does an unresolved `continued-in` tail. A nested type tag is not proof.
+The tail is reconsidered when the file grows;
 the same reader recognizes the continuation once the record is completed.
 A malformed sealed continuation record still refuses.
 The helper exposed as `unsubscribeBgAgents.respawnForHandoff(job, extraSessionIds)`

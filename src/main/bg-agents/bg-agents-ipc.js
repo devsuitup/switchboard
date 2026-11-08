@@ -75,7 +75,19 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { ok: false, error: 'invalid background session id' };
     return checkVerb(verb, id);
   });
+  const respawning = new Map();
+  const runRespawn = (id, restoring = false, extraSessionIds = []) => {
+    const key = String(id).toLowerCase();
+    if (respawning.has(key)) return respawning.get(key);
+    const pending = (async () => {
+      const check = await checkVerb('respawn', id, restoring, extraSessionIds);
+      return { result: check.ok ? await bgAgents.runVerb('respawn', id) : check, refused: !check.ok };
+    })().finally(() => respawning.delete(key));
+    respawning.set(key, pending);
+    return pending;
+  };
   ipcMain.handle('bg-agent-verb', async (_event, verb, id) => {
+    if (verb === 'respawn') return (await runRespawn(id)).result;
     const check = await checkVerb(verb, id);
     return check.ok ? bgAgents.runVerb(verb, id) : check;
   });
@@ -104,10 +116,8 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
   });
   const respawnForHandoff = async (job, extraSessionIds = []) => {
     try {
-      const permission = await checkVerb('respawn', job.id, true, extraSessionIds);
-      if (!permission.ok) return { ok: false, refused: true, error: permission.error };
-      const result = await bgAgents.runVerb('respawn', job.id);
-      if (!result?.ok) return { ok: false, error: result?.error || 'respawn returned no result' };
+      const { result, refused } = await runRespawn(job.id, true, extraSessionIds);
+      if (!result?.ok) return { ok: false, ...(refused ? { refused: true } : {}), error: result?.error || 'respawn returned no result' };
       return { ok: true, attached: await waitForDescriptor(job) };
     } catch (err) { return { ok: false, error: err.message || String(err) }; }
   };

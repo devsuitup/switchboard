@@ -26,7 +26,7 @@ function setup(t, { forkAt = 0, exitAt = Infinity, descriptor = true, unknown = 
   const file = path.join(root, 'folder', SID + '.jsonl');
   fs.writeFileSync(file, line({ type: 'user', sessionId: SID }));
   let now = 0, forked = false;
-  const descriptors = [], writes = [], respawns = [], kills = [];
+  const descriptors = [], writes = [], respawns = [], kills = [], scheduled = [];
   const session = { kind: 'local-pty', realSessionId: SID, projectFolder: 'folder', cwd: root,
     composerState: require('../src/main/terminals/composer-state').createComposerState(), pty: { pid: 4242, onData: () => ({ dispose() {} }) } };
   const advance = async ms => {
@@ -46,7 +46,7 @@ function setup(t, { forkAt = 0, exitAt = Infinity, descriptor = true, unknown = 
   bg.init({ jobsDir, homeDir: root, cliSessionState: cli, resolveTranscriptPath: id => path.join(root, 'folder', id + '.jsonl') });
   t.after(() => { bg.stop(); fs.rmSync(root, { recursive: true, force: true }); });
   const ctx = vm.createContext({ fs, path, require: createRequire(path.join(__dirname, '../main.js')), PROJECTS_DIR: root,
-    Date: { now: () => now }, Promise, setTimeout, clearTimeout,
+    Date: { now: () => now }, Promise, setTimeout: (fn, ms) => { scheduled.push({ fn, ms }); return { unref() {} }; }, clearTimeout,
     activeSessions: new Map([['tab', session]]), cliSessionState: cli, bgAgents: bg,
     sessionHasPty: () => false, ptyPids: () => [], mainWindow: null, log: { warn() {} },
     writePty: (_, text) => { writes.push(text); return true; }, killPty: () => kills.push(true),
@@ -58,7 +58,7 @@ function setup(t, { forkAt = 0, exitAt = Infinity, descriptor = true, unknown = 
   });
   const { handleSendToBackground } = loadAppFunctions(ctx, { declarations: ['backgroundHandoffs'],
     functions: ['handleSendToBackground', 'persistBackgroundHandoff', 'readBackgroundHandoffStamp'], sourcePath: path.join(__dirname, '../main.js') });
-  return { send: async () => { await advance(0); return handleSendToBackground({}, 'tab'); }, writes, respawns, kills, session, activeSessions: ctx.activeSessions, time: () => now };
+  return { send: async () => { await advance(0); return handleSendToBackground({}, 'tab'); }, writes, respawns, kills, scheduled, session, activeSessions: ctx.activeSessions, time: () => now };
 }
 
 test('1020fix2 shipped handler refuses an earlier live fork and leaves the tab untouched', async t => {
@@ -92,7 +92,10 @@ test('1020fix shipped handler adopts a fork at the exit timeout without respawni
   assert.equal(result.jobId, 'bbbbbbbb');
   assert.deepEqual(h.writes, ['/exit', '\r']);
   assert.deepEqual(h.respawns, []);
-  assert.deepEqual(h.kills, []);
+  assert.equal(h.scheduled.length, 1, 'adoption must schedule cleanup of the old CLI');
+  assert.equal(h.scheduled[0].ms, 15000);
+  h.scheduled[0].fn();
+  assert.deepEqual(h.kills, [true], 'the old-id CLI must be killed after adoption');
   assert.ok(h.time() >= 15400 && h.time() <= 25300, 'keep the 15 second exit budget and 10 second observation bound');
 });
 

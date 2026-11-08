@@ -88,6 +88,11 @@ function scanContinuationIndex(file, sessionId, previous, maxBytes = 1024 * 1024
       const before = invalid;
       tailValid = consume(pending);
       tailUnresolved = invalid && !before;
+      if (!tailValid) {
+        const type = pending.toString('utf8').match(/^\s*\{\s*"type"\s*:\s*("(?:[^"\\]|\\.)*")/);
+        try { tailUnresolved ||= !type || JSON.parse(type[1]) === 'continued-in'; }
+        catch { tailUnresolved = true; }
+      }
       invalid = before;
     }
     return JSON.stringify({ format: 3, version: 3, ids: [...ids], sealedIds, bytes: position,

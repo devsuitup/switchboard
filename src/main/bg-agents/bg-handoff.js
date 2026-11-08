@@ -120,6 +120,7 @@ async function respawnHandoff(session, sessionId, oldId, job, previous, deps) {
         session.backgrounded = true;
         await releaseWindowsPty(session.pty);
         deps.onConfirmed?.(continuation);
+        deps.schedule?.(() => { if (!session.exited) deps.kill(session); }, deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS);
         return { ok: true, oldSessionId: sessionId, jobId: continuation.jobId,
           sessionId: continuation.sessionId, cwd: continuation.cwd || session.cwd };
       }

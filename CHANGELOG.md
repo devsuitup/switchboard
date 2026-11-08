@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Fixed
-- Sending a resumed session to the background leaves its tab untouched when the conversation already runs in the background, with a message directing you to the sidebar. After a reboot or daemon death, working, done, running and failed jobs recover automatically when no live continuation holds them; blocked jobs wait for the notice's Respawn button. (#1020)
+- Sending a resumed background conversation to the background no longer starts a second copy. After a reboot or daemon death, working, done, running and failed jobs recover automatically when no live continuation holds them; blocked jobs wait for the notice's Respawn button. (#1020)
 - A conversation's message count in the sidebar now grows as the conversation does, including remote conversations without recounting their entire transcript on each fetch. Conversations sharing copied history keep duplicate messages out of their counts. (#1017)
 
 ## v0.0.103 — 2026-11-03

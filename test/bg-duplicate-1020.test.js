@@ -40,9 +40,9 @@ function fixture(t, state = 'stopped') {
     writeJob('bbbbbbbb', NEXT, 'working');
     descriptors.push({ kind: 'bg', sessionId: NEXT, jobId: 'bbbbbbbb', cwd: root });
   };
-  const calls = [], handlers = new Map(), delivery = { autoAttach: false };
+  const calls = [], handlers = new Map(), delivery = { autoAttach: false, wait: null };
   init({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
-    bgAgents: { ...bg, runVerb: async (...args) => { calls.push(args); if (delivery.autoAttach) descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: bg.findRestoreJob(SID, 'aaaaaaaa').job.sessionId }); return { ok: true }; } },
+    bgAgents: { ...bg, runVerb: async (...args) => { calls.push(args); if (delivery.wait) await delivery.wait; if (delivery.autoAttach) descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: bg.findRestoreJob(SID, 'aaaaaaaa').job.sessionId }); return { ok: true }; } },
     cliSessionState: cli, getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
     sessionHasPty: () => false, ptyPids: () => [], getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }) });
   return { root, file, descriptors, fork, calls, handlers, writeJob, cli, delivery };
@@ -184,6 +184,50 @@ test('1020fix2 unresolved continued-in tail refuses recovery until completed', a
   fs.appendFileSync(h.file, record.slice(40));
   assert.deepEqual(await read(), [NEXT], 'the same reader must recognize the completed continuation');
 });
+
+test('1020fix3 every continued-in byte cut stays uncertain until completion', async t => {
+  const h = fixture(t, 'done');
+  const sealed = line({ type: 'user', sessionId: SID });
+  const record = JSON.stringify({ type: 'continued-in', sessionId: SID,
+    continuedInSessionId: NEXT, timestamp: '2026-11-08T00:00:00Z' });
+  const { scanContinuationIndex } = require('../session-continuations');
+  for (let cut = 1; cut <= Buffer.byteLength(record); cut++) {
+    fs.writeFileSync(h.file, sealed + record.slice(0, cut));
+    const read = createContinuationReader(h.file, SID);
+    assert.deepEqual(await read(), cut === record.length ? [NEXT] : null, 'continuation uncertainty at byte ' + cut);
+    if (cut < record.length) {
+      assert.equal(JSON.parse(scanContinuationIndex(h.file, SID)).unresolved, true, 'index uncertainty at byte ' + cut);
+      for (const channel of ['check-bg-agent-verb', 'bg-agent-verb']) {
+        assert.equal((await h.handlers.get(channel)({}, 'respawn', 'aaaaaaaa')).ok, false, 'refuse recovery at byte ' + cut);
+      }
+    }
+    fs.appendFileSync(h.file, record.slice(cut) + '\r\n');
+    assert.deepEqual(await read(), [NEXT], 'recover completed CRLF record at byte ' + cut);
+  }
+  assert.deepEqual(h.calls, [], 'no torn continuation may respawn');
+});
+
+for (const mode of ['clicks', 'click and restore', 'restore and click']) {
+  test('1020fix3 concurrent ' + mode + ' invoke one respawn per job', async t => {
+    const h = fixture(t, 'done');
+    h.delivery.autoAttach = true;
+    let release;
+    h.delivery.wait = new Promise(resolve => { release = resolve; });
+    const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+    const restore = () => h.handlers.get('restore-background-job')({}, SID);
+    const first = mode === 'restore and click' ? restore() : click();
+    const second = mode === 'click and restore' ? restore() : click();
+    await new Promise(resolve => setImmediate(resolve));
+    const count = h.calls.length;
+    release();
+    const results = await Promise.all([first, second]);
+    assert.equal(count, 1, 'concurrent requests must invoke ONE respawn');
+    assert.ok(results.every(result => result.ok || result.action === 'attach'));
+    h.descriptors.length = 0;
+    assert.equal((await click()).ok, true, 'a completed flight must allow a later retry');
+    assert.equal(h.calls.length, 2);
+  });
+}
 
 for (const state of ['stopped', 'failed']) {
   test('1020fix2 ' + state + ' continuation permits Respawn while daemon runs', async t => {
