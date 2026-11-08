@@ -2064,6 +2064,7 @@ function renderChangesDiff(sessionId, tab) {
         img.classList.toggle('panel-image-actual', tab.imageActual);
       });
       img.onerror = () => {
+        if (!img.isConnected) return;
         tab.imageRefusal = true;
         if (filePanelState.get(sessionId)?.currentTab === tab && currentPanelSessionId === sessionId) renderPanel(sessionId);
       };

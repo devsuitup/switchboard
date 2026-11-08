@@ -31,8 +31,16 @@ function renderPanelFileRefusal(host, filePath) {
   const button = document.createElement('button');
   button.className = 'viewer-toolbar-btn fp-toolbar-btn';
   button.textContent = viewer ? 'Open with system viewer' : 'Show in folder';
-  button.addEventListener('click', () => {
-    Promise.resolve(viewer ? window.api.openPath(filePath, { viewer: true }) : window.api.showItemInFolder(filePath)).catch(() => {});
+  button.addEventListener('click', async () => {
+    refusal.querySelector('.changes-error')?.remove();
+    try {
+      const result = await (viewer ? window.api.openPath(filePath, { viewer: true }) : window.api.showItemInFolder(filePath));
+      if (viewer ? result === '' : result?.ok === true) return;
+    } catch {}
+    const error = document.createElement('div');
+    error.className = 'changes-error';
+    error.textContent = viewer ? 'Could not open the file in the system viewer.' : 'Could not show the file in its folder.';
+    refusal.appendChild(error);
   });
   refusal.appendChild(button);
   host.appendChild(refusal);
@@ -244,6 +252,7 @@ async function refreshTouched(sessionId) {
 
   tab.loading = true;
   tab.openError = null;
+  tab.openRefusal = null;
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 
   let result;

@@ -1196,14 +1196,17 @@ ipcMain.handle('open-path', (_event, filePath, opts) => {
 
 ipcMain.handle('show-item-in-folder', (_event, filePath) => {
   try {
-    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return;
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return { ok: false, reason: 'invalid-path' };
     const resolved = path.resolve(filePath);
-    if (gitChangesFile.hasGitSegment(filePath)) return;
-    if (gitChangesFile.hasGitSegment(fs.realpathSync.native(resolved))) return;
-    if (isSensitivePath(resolved)) return;
-    if (!fs.statSync(resolved).isFile()) return;
+    if (gitChangesFile.hasGitSegment(filePath)) return { ok: false, reason: 'git-dir' };
+    if (gitChangesFile.hasGitSegment(fs.realpathSync.native(resolved))) return { ok: false, reason: 'git-dir' };
+    if (isSensitivePath(resolved)) return { ok: false, reason: 'sensitive' };
+    if (!fs.statSync(resolved).isFile()) return { ok: false, reason: 'not-file' };
     shell.showItemInFolder(resolved);
-  } catch {}
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error.message || String(error) };
+  }
 });
 
 // --- IPC: read clipboard (terminal right-click paste; see clipboard-write-text) ---
@@ -1267,7 +1270,7 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath, opts) => {
     const buf = fs.readFileSync(resolved);
     if (opts?.image) {
       const mime = sniffPanelImage(buf);
-      if (mime) return { ok: true, image: { mime, base64: buf.toString('base64'), size: buf.length } };
+      if (mime && (!['image/gif', 'image/webp'].includes(mime) || buf.includes(0))) return { ok: true, image: { mime, base64: buf.toString('base64'), size: buf.length } };
     }
     if (buf.includes(0)) return { ok: false, error: 'binary file', reason: 'binary' };
     const content = gitChangesFile.decodeUtf8(buf);

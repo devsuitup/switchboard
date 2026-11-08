@@ -93,13 +93,23 @@ for (const kind of ['relative', 'raw git', 'real git', 'sensitive', 'directory',
       },
     });
     const target = kind === 'relative' ? 'file.txt' : kind === 'raw git' ? path.resolve('.git/config') : api.absolute;
-    await api.show(target);
+    const result = await api.show(target);
     assert.deepEqual(api.calls.show, kind === 'regular' ? [target] : []);
     const order = { relative: [], 'raw git': [], 'real git': ['realpath'], sensitive: ['realpath', 'sensitive'],
       directory: ['realpath', 'sensitive', 'stat'], regular: ['realpath', 'sensitive', 'stat'] };
     assert.deepEqual(api.calls.order, order[kind]);
+    assert.equal(result?.ok, kind === 'regular', 'the handler must report success or refusal');
+    if (kind !== 'regular') assert.equal(typeof result.reason, 'string');
   });
 }
+
+test('fix1025: Show in folder reports an IO failure', () => {
+  const api = shellHandlers({ fs: { realpathSync: { native() { throw new Error('missing file'); } } } });
+  const result = api.show(api.absolute);
+  assert.equal(result?.ok, false, 'IO failure must be reported');
+  assert.equal(result.reason, 'missing file');
+  assert.deepEqual(api.calls.show, []);
+});
 
 test('T8d: renderer and main system-viewer extensions match', () => {
   assert.ok(Array.isArray(panelImage.SYSTEM_VIEWER_EXTENSIONS));

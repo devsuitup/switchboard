@@ -27,6 +27,28 @@ const { fakeTouchedShell } = require('./remote-touched-shell');
 
 const PNG_1025 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64');
 
+for (const prefix of ['GIF87a', 'GIF89a', 'RIFF1234WEBP']) {
+  test('fix1025: NUL-free signature text stays editable: ' + prefix, async t => {
+    const { dir } = fixture(t);
+    const target = path.join(dir, 'notes.txt');
+    const text = prefix + ' is ordinary text\n';
+    fs.writeFileSync(target, text);
+    const result = await panelHandlers().read(target, { editor: true, image: true });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.image, undefined, 'NUL-free text must not become an image');
+    assert.equal(result.current, text);
+  });
+  test('fix1025: binary signature remains an image: ' + prefix, async t => {
+    const { dir } = fixture(t);
+    const target = path.join(dir, 'shot.bin');
+    const bytes = Buffer.from(prefix + '\0');
+    fs.writeFileSync(target, bytes);
+    const result = await panelHandlers().read(target, { editor: true, image: true });
+    assert.equal(result.image?.mime, prefix.startsWith('GIF') ? 'image/gif' : 'image/webp');
+    assert.deepEqual(Buffer.from(result.image.base64, 'base64'), bytes);
+  });
+}
+
 test('T2: an image read returns the exact PNG bytes', async t => {
   const { dir } = fixture(t);
   const target = path.join(dir, 'shot.png');

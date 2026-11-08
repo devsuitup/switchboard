@@ -419,6 +419,8 @@ An unknown remote target never falls back to local disk IO.
 |---|---|
 | `open-external` | Opens https:// URLs in OS browser |
 | `open-main-log` | No arguments; opens the main-selected, validated application log path and returns `{ok, error?}`. |
+| `open-path` | Resolves a non-empty string path, applies the extension allowlist when `viewer` is set, then `isSensitivePath`, before `shell.openPath`. Returns the OS error string (empty on success), or `undefined` on refusal. |
+| `show-item-in-folder` | Requires a string absolute path, resolves it, checks raw Git segments, native-realpath Git segments, `isSensitivePath`, then regular-file status, in that order, before `shell.showItemInFolder`. Returns `{ok:true}` or `{ok:false, reason}` including IO failures. |
 | `clipboard-write-text` | Main-process clipboard write (Wayland fix, PR #18) |
 | `get-app-version` | From package.json |
 | `whats-new-startup` / `whats-new-dismissed` | The What's new dialog: the `CHANGELOG.md` sections to show on startup (or `null`), and recording the running version as `lastSeenVersion` when it closes. Help → What's new sends `show-whats-new` with the running version's section. See `docs/changelog.md` |
@@ -485,6 +487,11 @@ adapter applies it.
 
 ### IPC path-guard inventory
 
+Main applies the `open-path` extension allowlist only when the caller sends
+`viewer`. It guards against a renderer bug, not a hostile renderer, which can
+omit the flag. The terminal menu's unflagged call retains its existing behavior
+(#1025 spec section 3).
+
 Every handler that takes a renderer-supplied path or derives a spawn location from one, and what guards it as of this pass:
 
 | IPC | Guard | Kind |
@@ -492,7 +499,9 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 | `read-memory` / `save-memory` | `resolveAllowedMemoryPath` (read/write the returned path, not the caller's own re-resolved one) | disk-resolved allowlist |
 | `get-memories` (the list, and the FTS bodies it indexes) | `acceptMdFile` (`scan-md-files.js`) applies `isSensitivePath` itself and the `isAllowedMemoryPath` predicate `get-memories` passes in; `scanMdFiles` is the directory-wide form of it, and the project-root `CLAUDE.md`/`GEMINI.md`/`agents.md` go through it by name | disk-resolved denylist + allowlist — a listed file is read twice more downstream, once by `read-memory` behind `resolveAllowedMemoryPath` and once by the FTS indexer behind nothing at all, so the guard belongs on the list. The denylist is not the caller's to choose: containment in an allowed project root says nothing about a cloned repo's own `.ssh`/`.env` |
 | `open-main-log` | Main chooses electron-log's path; requires a string absolute path and `!isSensitivePath` before `shell.openPath`. | no renderer-supplied path; disk-resolved denylist |
-| `open-path` / `read-file-for-panel` / `save-file-for-panel` / `watch-file` | Local: `isSensitivePath`. Remote panel reads resolve the session target and guard the literal and canonical host path. Saves refuse a resolved remote target and any path already opened through the remote panel route, even without renderer options. | disk-resolved denylist + main-side remote write refusal |
+| `open-path` | Non-empty string, `path.resolve`, then, only with `opts.viewer`, an extension allowlist (`.png .jpg .jpeg .gif .webp .bmp .pdf`, case insensitive), then `isSensitivePath`, before `shell.openPath`. | caller-selected allowlist + disk-resolved denylist |
+| `show-item-in-folder` | String and `path.isAbsolute`, `path.resolve`, raw `hasGitSegment`, `hasGitSegment(fs.realpathSync.native(resolved))`, `isSensitivePath`, then `fs.statSync(resolved).isFile()`, before `shell.showItemInFolder`. IO failures return `{ok:false, reason}`. | shape + raw/canonical Git metadata refusal + disk-resolved denylist + regular-file check |
+| `read-file-for-panel` / `save-file-for-panel` / `watch-file` | Local: `isSensitivePath`. Remote panel reads resolve the session target and guard the literal and canonical host path. Saves refuse a resolved remote target and any path already opened through the remote panel route, even without renderer options. | disk-resolved denylist + main-side remote write refusal |
 | `resolve-terminal-paths` | `resolveTerminalPaths` / `resolveTerminalPathTarget` (`src/main/terminals/terminal-path-target.js`, async, 8 checks in flight): the session cwd for a relative path, existence, then `isSensitivePath` on the resolved path, then regular-file-ness, `PANEL_FILE_MAX_BYTES` and a NUL-byte sniff | disk-resolved denylist, strictly narrower than `read-file-for-panel` — its whole input is untrusted terminal output, and its answer decides whether a path is even offered as a link. Existence is tested before the denylist because most candidates on a line of prose are not files; a path that exists still passes the denylist before anything else is decided. A remote session is refused outright, and so is one whose working directory cannot be resolved — otherwise an unresolvable remote would fall back to stat-ing the local disk. A panel shell (`panelFor`) resolves through its owning session |
 | `check-delete-worktree` / `delete-worktree` / `worktree-status` | Shared `checkDeleteWorktree`: `WORKTREE_PATH_RE` (shape) + `isKnownProjectRoot` (disk-resolved exact match) | shape + disk-resolved allowlist |
 | `delete-session-preview` / `delete-session` | `deleteSessionGuard` then `resolveRowDeletionTargets` (`delete-session-target.js`) | full live/background/unknown-state guard + disk-resolved containment |
