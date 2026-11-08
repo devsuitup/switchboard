@@ -167,6 +167,18 @@ test('Test keeps its triggers, real-bwrap, patch coverage, lint and e2e conditio
   assert.match(bwrap.run, /SWITCHBOARD_REQUIRE_REAL_BWRAP=1/);
   assert.equal(steps.find(step => step.name?.startsWith('Patch coverage gate')).if,
     "matrix.node-version == 22 && matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'");
-  assert.equal(steps.find(step => step.run === 'npm run coverage').if, undefined);
+  assert.equal(steps.find(step => step.run === 'npm run coverage').if, "runner.os == 'Linux'");
   assert.equal(testWorkflow.jobs.e2e.steps.find(step => step.uses?.startsWith('actions/upload-artifact@')).if, 'failure()');
+});
+
+test('Windows runs platform-only without coverage and Linux retains coverage', () => {
+  const steps = testWorkflow.jobs.test.steps;
+  const windows = steps.find(step => step.if === "runner.os == 'Windows'");
+  assert.ok(windows, 'Windows must have its own platform-only test step');
+  assert.equal(windows.run, 'node scripts/run-tests.js --platform-only');
+  const linux = steps.find(step => step.name === 'Run tests with coverage');
+  assert.equal(linux.if, "runner.os == 'Linux'");
+  assert.equal(linux.run, 'npm run coverage');
+  assert.deepEqual(windows.env, linux.env);
+  assert.equal(testWorkflow.jobs.test.name, undefined);
 });

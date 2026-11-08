@@ -16,6 +16,7 @@ const { spawnSync } = require('child_process');
 const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
+const { selectPlatformTests } = require('./platform-tests');
 
 const TEST_DIR = path.join(__dirname, '..', 'test');
 const ISOLATED_FILES = ['trigger-watcher.test.js', 'trigger-delivery.test.js', 'trigger-continuation-delivery.test.js'];
@@ -36,27 +37,43 @@ function stageOneConcurrency() {
   return Math.max(1, Math.min(DEFAULT_CONCURRENCY, available));
 }
 
-const mainFiles = fs.readdirSync(TEST_DIR)
-  .filter((name) => name.endsWith('.js') && !ISOLATED_FILES.includes(name))
-  .map((name) => path.join('test', name));
-
 function run(args) {
   const result = spawnSync(process.execPath, args, { stdio: 'inherit' });
   if (result.error) throw result.error;
   return result.status === null ? 1 : result.status;
 }
 
-if (require.main === module) {
-  const mainStatus = run(['--test', `--test-concurrency=${stageOneConcurrency()}`, ...mainFiles]);
+function runSuite() {
+  let files = fs.readdirSync(TEST_DIR)
+    .filter(name => name.endsWith('.js'))
+    .map(name => path.join('test', name));
+  if (process.argv.includes('--platform-only')) {
+    try {
+      const selected = selectPlatformTests(files);
+      console.log(`platform-only: ${selected.length} of ${files.length} test files`);
+      files = selected;
+    } catch (error) {
+      console.error(`run-tests: ${error.message}`);
+      return { mainStatus: 1, isolatedStatus: 0 };
+    }
+  }
+  const mainFiles = files.filter(file => !ISOLATED_FILES.includes(path.basename(file)));
+  const isolatedFiles = ISOLATED_FILES.map(name => path.join('test', name)).filter(file => files.includes(file));
+  const mainStatus = mainFiles.length ? run(['--test', `--test-concurrency=${stageOneConcurrency()}`, ...mainFiles]) : 0;
 
   // No --test-timeout: with an explicit file operand node applies it to the
   // file-level entry too, and this file legitimately runs for minutes on CI.
-  const isolatedStatus = run([
+  const isolatedStatus = isolatedFiles.length ? run([
     '--test',
     '--test-concurrency=1',
-    ...ISOLATED_FILES.map((name) => path.join('test', name)),
-  ]);
+    ...isolatedFiles,
+  ]) : 0;
 
+  return { mainStatus, isolatedStatus };
+}
+
+if (require.main === module) {
+  const { mainStatus, isolatedStatus } = runSuite();
   process.exit(mainStatus !== 0 ? mainStatus : isolatedStatus);
 }
 
