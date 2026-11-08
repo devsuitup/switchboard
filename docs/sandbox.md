@@ -433,11 +433,14 @@ The wrapper protects the entire tree at every visible writable-mount alias,
 including project/worktree, additional-directory and CLI-state mounts. It also
 protects a separately resolved `processed` target and pins intervening ancestor
 directories against rename and replacement. A control path outside the sandbox
-stays unexposed. A cwd or explicit extra bind at or below a control path, mutable
+stays unexposed. A control tree inside a project or another writable directory
+can launch with read-only protection; only unsafe layouts are refused. A cwd or
+explicit extra bind at or below a control path, mutable
 symlink chain, missing visible control directory, unresolved or unrepresentable
-path, or writable mount that would reopen the tree refuses launch with status
-125 and a `claude-sandbox:` diagnostic. Paths are checked again when the final
-mount plan is built. There is no retry without Sandbox or saved-option change.
+control path, an unrepresentable overlapping mount, or a writable mount that
+would reopen the tree refuses launch with status 125 and a `claude-sandbox:` diagnostic. Paths are checked again when the final
+mount plan is built. Unrelated writable paths containing newlines remain allowed.
+There is no retry without Sandbox or saved-option change.
 The wrapper creates no host state before its pre-flight succeeds; Switchboard's
 host-side directory preparation and watcher publication remain writable.
 

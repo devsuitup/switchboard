@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### Changed
-- Sandboxed sessions can no longer write to the triggers directory, and a launch whose mounts would expose it is refused. (#1022)
+- New sandboxed sessions protect the triggers directory even when it sits inside a project or another writable directory, and refuse layouts that cannot protect it safely. This protection does not apply when Podman access is enabled. (#1022)
 
 ### Fixed
 - A conversation's message count in the sidebar now grows as the conversation does, including remote conversations without recounting their entire transcript on each fetch. Conversations sharing copied history keep duplicate messages out of their counts. (#1017)

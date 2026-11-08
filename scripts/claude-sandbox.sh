@@ -465,13 +465,12 @@ control_visible() {
 }
 
 protect_control_tree() {
-  local i real p forms control requested request_form root pin_start
+  local i real p forms control requested request_form request_lexical request_real root pin_start
   local -a controls=() control_forms=()
   CONTROL_ROOT_START="${#WRITABLE_ROOTS[@]}"
   for i in "${!M_OP[@]}"; do
     [ "${M_OP[i]}" = --bind ] || continue
     real="$(readlink -e -- "${M_SRC[i]}" 2>/dev/null)" && [ -n "$real" ] || fail "cannot resolve writable mount for control path $CONTROL_DIR: ${M_SRC[i]}"
-    case "$real${M_DEST[i]}" in *$'\n'*|*$'\r'*) fail "unrepresentable mount for control path: $CONTROL_DIR" ;; esac
     WRITABLE_ROOTS+=("${M_DEST[i]}"); WRITABLE_REALS+=("$real")
   done
   control_path_forms "$CONTROL_DIR"
@@ -484,10 +483,11 @@ protect_control_tree() {
     forms="${control_forms[i]}"; real="${controls[i]}"
     while IFS= read -r control; do
       for requested in "${RW_DIRS[@]}"; do
-        p="$(path_forms "$requested")" || fail "cannot resolve requested mount for control path: $CONTROL_DIR"
-        while IFS= read -r request_form; do
+        request_lexical="$(realpath -m -s -- "$requested" 2>/dev/null)" && [ -n "$request_lexical" ] &&
+          request_real="$(readlink -m -- "$requested" 2>/dev/null)" && [ -n "$request_real" ] || fail "cannot resolve requested mount for control path: $CONTROL_DIR"
+        for request_form in "$request_lexical" "$request_real"; do
           case "$request_form/" in "$control"/*) fail "refusing writable mount '$requested' at or below control path: $CONTROL_DIR" ;; esac
-        done <<<"$p"
+        done
       done
       if [ -z "$real" ] && control_visible "$control"; then
         fail "missing visible control path: $CONTROL_DIR${i:+ (including processed)}"
@@ -497,6 +497,9 @@ protect_control_tree() {
     for ((p = CONTROL_ROOT_START; p < ${#WRITABLE_REALS[@]}; p++)); do
       root="${WRITABLE_REALS[p]}"
       case "$root/" in "$real"/*) fail "writable mount '${WRITABLE_ROOTS[p]}' overlaps control path: $CONTROL_DIR" ;; esac
+      case "$real/" in "$root"/*)
+        case "$root${WRITABLE_ROOTS[p]}" in *$'\n'*|*$'\r'*) fail "unrepresentable overlapping mount for control path: $CONTROL_DIR" ;; esac ;;
+      esac
     done
     p="$CONTROL_DIR"
     [ "$i" = 0 ] || p="$CONTROL_DIR/processed"

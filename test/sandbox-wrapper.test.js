@@ -15,7 +15,7 @@ const { spawnSync } = require('node:child_process');
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'claude-sandbox.sh');
 const LINUX = process.platform === 'linux';
 const GIT_BASH = 'C:/Program Files/Git/bin/bash.exe';
-const FAKE_BWRAP_SUPPORTED = LINUX || (process.platform === 'win32' && fs.existsSync(GIT_BASH));
+const FAKE_BWRAP_SUPPORTED = LINUX;
 const bashPath = p => process.platform === 'win32'
   ? p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase()) : p;
 
@@ -322,7 +322,7 @@ test('sandbox wrapper: restricted-userns failure points at the sysctl and AppArm
 });
 
 test('sandbox wrapper: extra binds survive a newline in a path and missing ones are reported', { skip: !LINUX && 'linux only' }, () => {
-  const rig = makeRig({ bwrapExit: 1 });
+  const rig = makeRig({ recordArgs: true });
   try {
     fs.mkdirSync(path.join(rig.home, '.claude'));
     // 'IFS=: read -a' without -d '' stops at the first newline, silently
@@ -332,10 +332,11 @@ test('sandbox wrapper: extra binds survive a newline in a path and missing ones 
     fs.mkdirSync(weird);
     fs.mkdirSync(after);
 
-    const { stderr } = rig.run(['--version'], {
+    const { status, stderr } = rig.run(['--version'], {
       SWITCHBOARD_SANDBOX_DEBUG: '1',
       SWITCHBOARD_SANDBOX_BINDS: `${weird}:${after}:${path.join(rig.root, 'gone')}`,
     });
+    assert.equal(status, 0, 'unrelated newline bind must launch: ' + stderr);
     assert.ok(stderr.includes(`rw-bind ${weird}`), 'a path containing a newline must be bound whole');
     assert.ok(stderr.includes(`rw-bind ${after}`), 'binds after a newline-containing one must not be dropped');
     assert.match(stderr, /skipping bind — does not exist/, 'a missing extra bind must be reported, not mkdir\'d');
@@ -344,6 +345,26 @@ test('sandbox wrapper: extra binds survive a newline in a path and missing ones 
     rig.cleanup();
   }
 });
+
+test('control mounts: an unrelated newline project launches but an overlapping newline alias refuses',
+  { skip: !LINUX && 'requires Linux newline filenames and symlinks' }, t => {
+    const rig = controlRig(t);
+    const project = path.join(rig.root, 'project\nname');
+    fs.mkdirSync(project);
+    let res = rig.run(['--version'], {}, project);
+    assert.equal(res.status, 0, 'unrelated newline project must launch: ' + res.stderr);
+    const parent = path.join(rig.root, 'control-parent');
+    const control = path.join(parent, 'control');
+    fs.mkdirSync(path.join(control, 'processed'), { recursive: true });
+    const alias = path.join(rig.root, 'alias\nname');
+    fs.symlinkSync(parent, alias);
+    res = rig.run(['--version'], {
+      SWITCHBOARD_SANDBOX_TRIGGERS_DIR: control,
+      SWITCHBOARD_SANDBOX_BINDS: alias,
+    });
+    assert.equal(res.status, 125, 'unrepresentable overlapping alias must refuse');
+    assert.match(res.stderr, /unrepresentable overlapping mount for control path/);
+  });
 
 test('sandbox wrapper: refuses an extra bind at or under a .claude or .git, however the path is spelled', { skip: !LINUX && 'linux only' }, () => {
   const rig = makeRig({ bwrapExit: 1 });
@@ -2008,8 +2029,16 @@ test('control filesystem: real bwrap denies writes and replacements through all 
     const { rig, control, results, alias, cwd, env } = aliasedControlRig(t, true);
     const views = [control, path.join(alias, 'ancestor', 'control with spaces'), results];
     const attempts = [];
+    const reads = [];
+    const siblings = [];
     for (const [i, view] of views.entries()) {
       const target = i < 2 ? 'action.marker' : 'result.json';
+      reads.push(`test "$(cat '${view}/${target}')" = '${i < 2 ? 'marker' : 'result'}' || exit 81`);
+      siblings.push(path.join(path.dirname(view), `sibling-${i}.txt`));
+      reads.push(`echo sibling-${i} > '${siblings.at(-1)}' || exit 82`);
+      siblings.push(path.join(path.dirname(path.dirname(view)), `ancestor-sibling-${i}.txt`));
+      reads.push(`echo ancestor-sibling-${i} > '${siblings.at(-1)}' || exit 83`);
+      if (i < 2) reads.push(`test "$(cat '${view}/processed/result.json')" = 'result' || exit 84`);
       attempts.push(`attempt create-${i} 'echo evil > "${view}/new.json"'`);
       attempts.push(`attempt publish-${i} 'echo staged > "$PWD/staged-${i}" && mv "$PWD/staged-${i}" "${view}/new.json"'`);
       attempts.push(`attempt overwrite-${i} 'echo evil > "${view}/${target}"'`);
@@ -2025,6 +2054,7 @@ test('control filesystem: real bwrap denies writes and replacements through all 
     }
     const payload = [
       'attempt() { if bash -c "$2" >/dev/null 2>&1; then echo "UNEXPECTED:$1"; else echo "DENIED:$1"; fi; }',
+      ...reads,
       ...attempts,
       'echo ordinary > "$PWD/ordinary.txt"',
       'echo transcript >> "$HOME/.claude/projects/$SWITCHBOARD_SANDBOX_PROJECT_FOLDER/session.jsonl"',
@@ -2032,6 +2062,10 @@ test('control filesystem: real bwrap denies writes and replacements through all 
     const res = rig.run([payload], { ...env, SWITCHBOARD_SANDBOX_PROJECT_FOLDER: 'fixture' }, cwd);
     assert.equal(res.status, 0, res.stderr);
     assert.doesNotMatch(res.stdout, /UNEXPECTED:/);
+    for (const [i, sibling] of siblings.entries()) {
+      const label = i % 2 === 0 ? `sibling-${Math.floor(i / 2)}` : `ancestor-sibling-${Math.floor(i / 2)}`;
+      assert.equal(read0(sibling), `${label}\n`, 'pinned ancestors and their parents still allow sibling writes');
+    }
     assert.equal(res.stdout.split('\n').filter(line => line.startsWith('DENIED:')).length, attempts.length);
     assert.equal(read0(path.join(control, 'action.marker')), 'marker');
     assert.equal(read0(path.join(results, 'result.json')), 'result');
