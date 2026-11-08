@@ -139,7 +139,7 @@ jobs:
         run: npm run coverage
 
       - name: Run platform-specific tests
-        if: runner.os == 'Windows'
+        if: runner.os != 'Linux'
         run: node scripts/run-tests.js --platform-only
 
       # Gate only NEW/changed lines (patch coverage), not the whole codebase:

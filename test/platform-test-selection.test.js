@@ -36,6 +36,34 @@ test('October Windows regressions remain selected without executing their source
   assert.deepEqual(selector().selectPlatformTests(files, { minimum: 0 }), files);
 });
 
+for (const name of ['run-to-exit', 'trigger-continuation-delivery', 'task-transcript-reader',
+  'task-review-regressions', 'transcript-cwd-trust', 'transcript-cwd-trust-cache', 'derive-project-path']) {
+  test(`Windows bug regression ${name} remains selected`, () => {
+    const file = `test/${name}.test.js`;
+    assert.deepEqual(selector().selectPlatformTests([file], { minimum: 0 }), [file]);
+  });
+}
+
+for (const name of ['continuation-choice-menu', 'continuation-memory', 'get-projects-cold-start-reconcile',
+  'projection-envelope-742', 'refusals-before-dialogs', 'reload-notices', 'restore-in-flight-persist',
+  'restore-pending-notice-666', 'send-to-background-renderer']) {
+  test(`production platform dependency through a test helper selects ${name}`, () => {
+    const file = `test/${name}.test.js`;
+    assert.deepEqual(selector().selectPlatformTests([file], { minimum: 0 }), [file]);
+  });
+}
+
+test('test helpers forward production dependencies without opting callers into helper-only platform code', t => {
+  const options = fixture(t, {
+    'test/through.js': "require('./bridge.cjs')",
+    'test/bridge.cjs': "require('../src/platform')",
+    'src/platform.js': 'process.platform',
+    'test/only.js': "require('./only.cjs')",
+    'test/only.cjs': 'process.platform',
+  });
+  assert.deepEqual(selector().selectPlatformTests(['test/through.js', 'test/only.js'], options), ['test/through.js']);
+});
+
 test('generic sources and physical CRLF line endings stay out', t => {
   const options = fixture(t, { 'test/plain.js': "'use strict';\nconst value = 1;\n",
     'test/crlf.js': "'use strict';\r\nconst value = 'https://example.com';\r\n" });
@@ -51,7 +79,9 @@ test('each strong marker and the explicit comment opt-in select a file', t => {
   const samples = ["process.platform", "'win32'", 'path.win32', 'C:\\repo', 'C:/repo', 'RUNNER~1',
     'conpty', 'node-pty', 'cmd.exe', 'powershell', 'junction', 'symlink', 'EPERM', 'EBUSY',
     'EACCES', 'USERPROFILE', 'APPDATA', 'TEMP', String.raw`'\r\n'`, 'case-insensitive',
-    '// platform: windows'];
+    '// platform: windows', 'spawn(', 'spawnSync(', 'execFile(', 'execFileSync(',
+    'child.kill(', 'fs.rename(', 'fs.renameSync(', 'fs.promises.rename(',
+    'fs.realpathSync(', 'stat.birthtime', '{ bigint: true }', 'os.tmpdir(); realpath()'];
   const sources = Object.fromEntries(samples.map((source, i) => [`test/marker-${i}.js`, source]));
   const options = fixture(t, sources);
   const files = Object.keys(sources);
@@ -59,7 +89,7 @@ test('each strong marker and the explicit comment opt-in select a file', t => {
   assert.ok(Object.keys(selector().STRONG_MARKERS).length > 0);
 });
 
-test('only a direct production dependency with process.platform adds generic tests', t => {
+test('production platform dependencies are followed transitively through cycles and index modules', t => {
   const options = fixture(t, {
     'test/direct.js': "require('../src/direct')",
     'test/indirect.js': "require('../src/indirect')",
@@ -69,10 +99,12 @@ test('only a direct production dependency with process.platform adds generic tes
     'src/direct.js': 'process.platform',
     'src/indirect.js': "require('./direct')",
     'src/shell.js': "'powershell'",
+    'test/cycle.js': "require('../src/cycle')",
+    'src/cycle/index.js': "require('../cycle'); require('../indirect')",
   });
   assert.deepEqual(selector().selectPlatformTests([
-    'test/direct.js', 'test/indirect.js', 'test/helper.js', 'test/shell.js',
-  ], options), ['test/direct.js']);
+    'test/direct.js', 'test/indirect.js', 'test/helper.js', 'test/shell.js', 'test/cycle.js',
+  ], options), ['test/direct.js', 'test/indirect.js', 'test/cycle.js']);
 });
 
 test('missing listed files fail closed', t => {
@@ -135,11 +167,21 @@ test('selection read errors fail before any test process starts', () => {
 });
 
 test('ordinary runner retains both unfiltered stages', () => {
-  const result = runRunner(false, ['plain.test.js', 'trigger-watcher.test.js'], []);
+  const result = runRunner(false, ['plain.test.js', ...require('../scripts/run-tests').ISOLATED_FILES], []);
   assert.equal(result.calls.length, 2);
   assert.ok(result.calls[0].includes(path.join('test', 'plain.test.js')));
   assert.ok(result.calls[1].includes(path.join('test', 'trigger-watcher.test.js')));
 });
+
+for (const missing of require('../scripts/run-tests').ISOLATED_FILES) {
+  test(`ordinary runner fails closed when isolated file ${missing} is missing`, () => {
+    const inventory = ['plain.test.js', ...require('../scripts/run-tests').ISOLATED_FILES.filter(file => file !== missing)];
+    const result = runRunner(false, inventory, []);
+    assert.equal(result.status, 1, 'missing isolated file must fail the run');
+    assert.deepEqual(result.calls, [], 'missing inventory entry must fail before launching tests');
+    assert.ok(result.logs.some(line => line.includes(missing)), 'failure must name the missing isolated file');
+  });
+}
 
 test('the excluded canary source harness can still intercept the runner exit', () => {
   const consumer = fs.readFileSync(path.join(root, 'test/canary-cli-capabilities-fast.test.js'), 'utf8');

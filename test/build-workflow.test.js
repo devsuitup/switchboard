@@ -173,12 +173,26 @@ test('Test keeps its triggers, real-bwrap, patch coverage, lint and e2e conditio
 
 test('Windows runs platform-only without coverage and Linux retains coverage', () => {
   const steps = testWorkflow.jobs.test.steps;
-  const windows = steps.find(step => step.if === "runner.os == 'Windows'");
+  const windows = steps.find(step => step.run === 'node scripts/run-tests.js --platform-only');
   assert.ok(windows, 'Windows must have its own platform-only test step');
   assert.equal(windows.run, 'node scripts/run-tests.js --platform-only');
   const linux = steps.find(step => step.name === 'Run tests with coverage');
   assert.equal(linux.if, "runner.os == 'Linux'");
   assert.equal(linux.run, 'npm run coverage');
-  assert.deepEqual(windows.env, linux.env);
   assert.equal(testWorkflow.jobs.test.name, undefined);
+});
+
+test('every matrix OS and a future OS run exactly one test step', () => {
+  const steps = testWorkflow.jobs.test.steps.filter(step =>
+    step.run === 'npm run coverage' || step.run === 'node scripts/run-tests.js --platform-only');
+  assert.equal(steps.length, 2);
+  const runnerOs = os => os.startsWith('ubuntu-') ? 'Linux' : os.startsWith('windows-') ? 'Windows' : 'macOS';
+  for (const event of ['pull_request', 'push', 'workflow_dispatch']) {
+    const operatingSystems = evaluate(testWorkflow.jobs.test.strategy.matrix.include, event).map(cell => runnerOs(cell.os));
+    for (const os of [...operatingSystems, 'macOS', 'FutureOS']) {
+      const matched = steps.filter(step => vm.runInNewContext(step.if, { runner: { os } }, { timeout: 1000 }));
+      assert.equal(matched.length, 1, `${event}: ${os} must run exactly one test step`);
+      assert.equal(matched[0].run, os === 'Linux' ? 'npm run coverage' : 'node scripts/run-tests.js --platform-only');
+    }
+  }
 });

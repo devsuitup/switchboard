@@ -47,7 +47,13 @@ function runSuite() {
   let files = fs.readdirSync(TEST_DIR)
     .filter(name => name.endsWith('.js'))
     .map(name => path.join('test', name));
-  if (process.argv.includes('--platform-only')) {
+  const platformOnly = process.argv.includes('--platform-only');
+  const missing = ISOLATED_FILES.filter(name => !files.includes(path.join('test', name)));
+  if (!platformOnly && missing.length) {
+    console.error(`run-tests: missing isolated test files: ${missing.join(', ')}`);
+    return { mainStatus: 1, isolatedStatus: 0 };
+  }
+  if (platformOnly) {
     try {
       const selected = selectPlatformTests(files);
       console.log(`platform-only: ${selected.length} of ${files.length} test files`);
