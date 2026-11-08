@@ -54,6 +54,60 @@ coverage stays on PR Node 22/Linux only. Lint and e2e still run for every PR
 and main push; changelog stays PR-only. Test jobs have 25 minutes; lint,
 changelog and e2e have 10 each.
 
+Linux runs the full Node suite with coverage. Every non-Linux runner runs
+`node scripts/run-tests.js --platform-only` without c8; its matrix and job
+name stay unchanged, including `test (22, windows-2022)`. The coverage step
+previously had no explicit environment; both test steps retain that inherited
+environment. The PR patch gate reads `coverage/lcov.info` only on Node 22/Linux.
+
+`scripts/platform-tests.js` computes rule C from current files, with no stored
+allowlist. It strips physical carriage returns before scanning each test for
+strong platform markers: platform checks, Windows paths, conpty/node-pty,
+Windows shells, links and filesystem errors, Windows environment variables,
+escaped CRLF and case-insensitive paths. Real process calls (`spawn`,
+`spawnSync`, `execFile`, `execFileSync`, `.kill`) and filesystem identity or
+rename markers (`fs.rename`, sync/promises variants, `realpath`, `birthtime`,
+`bigint: true`) also select a test. A tmpdir fixture using realpath therefore
+stays selected, including on Windows with an 8.3 TEMP path.
+The exported `STRONG_MARKERS` retains the study's POSIX/platform variants.
+Relative production requires are followed transitively with a per-test visited
+set: reaching a production file containing `process.platform` selects the test.
+Test helpers are traversed to reach production dependencies, but their own
+platform markers do not opt a caller in. Node_modules are excluded. Literal requires
+resolve files, `.js`, `.cjs` and `index.js`; unresolved literals in test fixtures
+are ignored. The read/dependency caches are scoped to one selection call.
+
+Limits: this is a source heuristic, not a JavaScript parser or proof that all
+Windows-sensitive behavior is covered. It does not follow dynamic imports,
+non-relative packages, worker filenames or source-extraction reads. It can
+overselect dead code and mocked calls. Windows bug regressions with no visible
+marker must retain the explicit opt-in: `task-review-regressions.test.js`
+retains the #650 reader/worker regression family, and
+`derive-project-path.test.js` exercises the separator expression in
+`resolveWorktreePath` using real tmpdir paths, without a `process.platform`
+branch. No production-module exclusion list is applied. The selection was 368
+of 556 files when this was written; selection above roughly 75% requires
+reporting contributors before considering justified exclusions.
+
+To force Windows execution, add a relevant strong marker or the explicit test
+source comment `// platform: windows`; extend the exported marker set when a
+new category is needed. Physical CRLF endings alone do not opt in. The runner
+filters both ordinary and isolated files, prints `platform-only: N of M test
+files`, and refuses fewer than 150 selected files or any listed-file read
+failure. Empty stages never fall back to Node's implicit test discovery.
+Normal mode also refuses a missing `ISOLATED_FILES` inventory entry, naming it
+before launching any stage; platform mode may intentionally filter that entry.
+`test/platform-test-selection.test.js` pins selection, floor and stage behavior;
+`test/build-workflow.test.js` pins coverage and the Windows command.
+Its routing guard evaluates every matrix OS plus macOS and an unknown future
+OS, requiring exactly one of coverage (`runner.os == 'Linux'`) and platform-only
+(`runner.os != 'Linux'`). Matrix JSON, key order and job names stay unchanged.
+
+The fast CLI canary's source harness intercepts the runner's exit expression
+before compiling it. The runner retains that expression outside `runSuite()`;
+the platform-selection tests read the consumer's interception anchor and check
+that it remains present, without executing the locally excluded canary.
+
 The required-check list is documented in [releasing.md](../../docs/releasing.md).
 Build is not a required check. JB owns the external settings update that removes
 `test (20, windows-2022)` from both ruleset 17240725 (`main-protection`) and the

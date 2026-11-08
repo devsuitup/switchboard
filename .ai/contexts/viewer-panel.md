@@ -601,3 +601,14 @@ inline styles permitted, no eval permission.
 stubbing only the lazy Mermaid module edge. It covers strict config, laziness,
 frontmatter, raw-HTML lookalikes, errors, hostile SVG, ID/reference isolation,
 async replacement, cleanup, theme changes, scrolling CSS and build wiring.
+
+## Bounds
+
+read-file-for-panel refuses non-regular files and files above 2 MiB after the
+Git metadata and sensitive-path guards, before reading. Binary and invalid
+UTF-8 files are refused. Its optional image flag enables signature-based raster
+responses after those guards and before the binary check; only local Touched
+requests that flag. Responses contain MIME, base64 bytes and byte size.
+Without image, the text route is retained. Size and binary errors retain their
+messages and add reasons too-large and binary. ViewerPanel does not request
+images; its preview route remains owned by #827.

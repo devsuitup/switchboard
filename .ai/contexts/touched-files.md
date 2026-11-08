@@ -76,7 +76,7 @@ listing *does* with it.
   it.
 - **Listing is not opening.** Only a row with `openable === true` and
   `state === 'present'` has a click handler. It calls `readFileForPanel`
-  with `{editor: true}`; the main handler retains its sensitive-path,
+  with `{editor: true, image: true}` locally; the main handler retains its sensitive-path,
   regular-file, size and binary guards. An unsuccessful read leaves the list
   visible with the refusal. Gone, unreadable, refused and non-file rows keep
   their existing state and cannot be opened. The absolute path is one main
@@ -579,3 +579,40 @@ real `marked` and `DOMPurify` builds; `window.marked` is set only by the
 The tool entry point is the right-hand bar, using the shown terminal owner.
 Changes and Touched park an unanswered Diff; its conditional button restores
 the same editor. See [tool-bar.md](tool-bar.md).
+
+## Images
+
+Local Touched opens request { editor: true, image: true }; remote reads retain
+their session ID and never request images. The main read preserves the existing
+Git metadata, sensitive-path, regular-file and 2 MiB guards before sniffing bytes.
+panel-image.js recognizes PNG, JPEG, GIF, WebP and BMP signatures, independently
+of the extension. SVG stays editable text; ICO and other binary formats are refused.
+GIF and WebP signatures become images only when the read buffer also contains
+a NUL byte; NUL-free UTF-8 text beginning with those signatures stays editable.
+
+openTouchedImage shares the Changes tab layout and Touched return list. It sets
+image, editable=false and noDiff=true, watches the local file and re-reads with
+the image flag on file-changed. Rendering uses an img.panel-image with a data:
+source; it changes neither CSP nor ViewerPanel (#827). Images fit the pane and
+click to toggle intrinsic size with scrolling. Format, Mode, Save and Reload
+are hidden. A decode failure shows the same refusal as an unsupported format.
+Errors from detached images are ignored so an earlier render cannot refuse the
+currently displayed image. Refresh clears both earlier open errors and refusals.
+
+Binary, encoding and size refusals show "This file can't be shown here." with
+one action. PNG/JPG/JPEG/GIF/WebP/BMP/PDF extensions, case insensitive, offer
+Open with system viewer via openPath(path, { viewer: true }); all others offer
+Show in folder. SYSTEM_VIEWER_EXTENSIONS lives in the pure main module and a
+classic-script copy in touched-files-view.js; panel-image.test.js compares them.
+Main enforces the same viewer allowlist. Unflagged terminal openPath is unchanged.
+
+show-item-in-folder validates string and absolute path before resolving, then
+refuses raw and native-realpath Git segments, sensitive paths, and non-regular
+files, in that order, before calling shell.showItemInFolder. The handler returns
+{ ok: true } or { ok: false, reason }, including IO failures. Either action shows
+a short inline error if refused, rejected, or unsuccessful; a successful retry
+clears it. Other Touched read failures keep their existing message with no action.
+Source-extracted IPC tests inject the sniff module and sensitivity guard; DOM
+fixtures forward read options and record both system actions. Image DOM cases
+live in test/dom-file-panel-images.test.js and share touched-panel-harness.js
+with test/dom-file-panel-touched.test.js.

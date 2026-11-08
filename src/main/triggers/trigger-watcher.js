@@ -932,7 +932,7 @@ function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs, turnObserved = f
 }
 
 function getTriggersDir() {
-  return process.env.SWITCHBOARD_TRIGGERS_DIR || DEFAULT_TRIGGERS_DIR;
+  return path.resolve(process.env.SWITCHBOARD_TRIGGERS_DIR || DEFAULT_TRIGGERS_DIR);
 }
 
 function getIdleTimeout() {
@@ -2171,4 +2171,4 @@ function start(ctx) {
   };
 }
 
-module.exports = { start, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };
+module.exports = { start, getTriggersDir, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };

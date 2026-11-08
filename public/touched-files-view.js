@@ -16,6 +16,35 @@ const TOUCHED_DAY_MS = 24 * 60 * 60 * 1000;
 const TOUCHED_RELATIVE_THRESHOLD_MS = TOUCHED_DAY_MS;
 const TOUCHED_MINUTE_MS = 60 * 1000;
 const TOUCHED_OPENED_MAX = 50;
+const SYSTEM_VIEWER_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.pdf']);
+
+function renderPanelFileRefusal(host, filePath) {
+  const refusal = document.createElement('div');
+  refusal.className = 'panel-file-refusal';
+  const message = document.createElement('span');
+  message.textContent = "This file can't be shown here.";
+  refusal.appendChild(message);
+  const basename = filePath.split(/[/\\]/).pop();
+  const match = /\.[^.]+$/.exec(basename);
+  const extension = match?.index > 0 ? match[0].toLowerCase() : '';
+  const viewer = SYSTEM_VIEWER_EXTENSIONS.includes(extension);
+  const button = document.createElement('button');
+  button.className = 'viewer-toolbar-btn fp-toolbar-btn';
+  button.textContent = viewer ? 'Open with system viewer' : 'Show in folder';
+  button.addEventListener('click', async () => {
+    refusal.querySelector('.changes-error')?.remove();
+    try {
+      const result = await (viewer ? window.api.openPath(filePath, { viewer: true }) : window.api.showItemInFolder(filePath));
+      if (viewer ? result === '' : result?.ok === true) return;
+    } catch {}
+    const error = document.createElement('div');
+    error.className = 'changes-error';
+    error.textContent = viewer ? 'Could not open the file in the system viewer.' : 'Could not show the file in its folder.';
+    refusal.appendChild(error);
+  });
+  refusal.appendChild(button);
+  host.appendChild(refusal);
+}
 
 function formatTouchedTime(timestamp, now = Date.now()) {
   if (!Number.isFinite(timestamp)) return 'Time unknown';
@@ -223,6 +252,7 @@ async function refreshTouched(sessionId) {
 
   tab.loading = true;
   tab.openError = null;
+  tab.openRefusal = null;
   if (currentPanelSessionId === sessionId) renderPanel(sessionId);
 
   let result;
@@ -322,7 +352,7 @@ async function openTouchedFile(sessionId, tab, filePath, { line = null, origin =
   tab.opening = true;
   let result;
   try {
-    result = await window.api.readFileForPanel(filePath, { editor: true, ...(tab.data?.kind === 'remote' ? { sessionId } : {}) });
+    result = await window.api.readFileForPanel(filePath, { editor: true, ...(tab.data?.kind === 'remote' ? { sessionId } : { image: true }) });
   } catch (err) {
     result = { ok: false, error: (err && err.message) || 'could not read the file' };
   }
@@ -330,10 +360,13 @@ async function openTouchedFile(sessionId, tab, filePath, { line = null, origin =
   if (state.currentTab !== current) return;
   if (!result || !result.ok) {
     const reason = (result && result.error) || 'could not read the file';
-    tab.openError = origin === 'row' ? `${filePath}: ${reason}` : `Could not open the file: ${reason}`;
+    tab.openRefusal = tab.data?.kind !== 'remote' && ['binary', 'encoding', 'too-large'].includes(result?.reason) ? filePath : null;
+    tab.openError = tab.openRefusal ? "This file can't be shown here." : origin === 'row' ? `${filePath}: ${reason}` : `Could not open the file: ${reason}`;
     if (currentPanelSessionId === sessionId) renderPanel(sessionId);
     return;
   }
+  tab.openError = null;
+  if (tab.openRefusal) tab.openRefusal = null;
   if (origin !== 'row') addTouchedOpened(state, filePath);
   const keep = asks
     ? readChangesEditorContent(current) !== agreedContent && (hasUnsavedChangesEdits(current) && !await confirmDiscardChangesEdits(current))
@@ -344,7 +377,8 @@ async function openTouchedFile(sessionId, tab, filePath, { line = null, origin =
   }
   tab.selection = filePath;
   if (currentPanelSessionId === sessionId) markTouchedSelection(tab);
-  openTouchedEditor(sessionId, filePath, result, tab, { line });
+  if (result.image) openTouchedImage(sessionId, filePath, result.image, tab);
+  else openTouchedEditor(sessionId, filePath, result, tab, { line });
 }
 
 function addTouchedOpened(state, filePath) {
@@ -478,14 +512,16 @@ function buildTouchedUnresolvedRow(entry) {
 
 function renderTouchedContent(sessionId, tab) {
   const state = filePanelState.get(sessionId);
-  const signature = [tab.data, tab.loading, tab.error, tab.openError, tab.sort, tab.windowStart, state?.touchedOpenedRevision];
+  const signature = [tab.data, tab.loading, tab.error, tab.openError, tab.openRefusal, tab.sort, tab.windowStart, state?.touchedOpenedRevision];
   document.getElementById('touched-sort').value = tab.sort;
   if (window.reusePanelList(touchedListEl, touchedSummaryEl, tab, signature)) {
     markTouchedSelection(tab);
     return;
   }
   touchedSummaryEl.textContent = touchedSummaryText(tab);
-  if (tab.openError) {
+  if (tab.openRefusal) {
+    renderPanelFileRefusal(touchedSummaryEl, tab.openRefusal);
+  } else if (tab.openError) {
     const err = document.createElement('div');
     err.className = 'changes-error';
     err.textContent = tab.openError;
