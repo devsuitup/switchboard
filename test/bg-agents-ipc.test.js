@@ -416,19 +416,29 @@ test('S2d checked handoff lowercases and deduplicates extra conversation ids', a
   assert.deepEqual(checked, ['s-1', 'extra-id']);
 });
 
+for (const outcome of ['succeeded', 'refused', 'rejected']) {
 for (const scenario of ['manual with extra ids', 'manual without extra ids', 'handoff with new extra ids']) {
-  test('1020fix4 joining ' + scenario + ' waits then runs its own guard', async () => {
+  test('1020fix5 joining ' + scenario + ' after flight ' + outcome, async () => {
     const { handlers, ipcMain } = fakeIpc();
     const bg = fakeBgAgents();
     const checks = [], ids = [];
     let release, started;
     const running = new Promise(resolve => { started = resolve; });
     const wait = new Promise(resolve => { release = resolve; });
-    bg.conversationCheck = (_id, options) => {
+    bg.conversationCheck = async (_id, options) => {
       checks.push(options.workerLiveness);
+      if (checks.length === 1 && outcome === 'refused') {
+        started();
+        await wait;
+        return { known: false, reason: 'first flight refused' };
+      }
       return { known: true, state: 'done', hosted: false, workerLiveness: 'dead', sessionIds: ['s1'] };
     };
-    bg.runVerb = async () => { bg.calls.push(['verb']); started(); await wait; return { ok: true }; };
+    bg.runVerb = async () => {
+      bg.calls.push(['verb']); started(); await wait;
+      if (outcome === 'rejected' && bg.calls.filter(call => call[0] === 'verb').length === 1) throw Error('first flight rejected');
+      return { ok: true };
+    };
     let extraLive = false;
     const unsubscribe = init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} },
       activeSessions: new Map(), sessionHasPty: () => false, ptyPids: () => [],
@@ -437,25 +447,36 @@ for (const scenario of ['manual with extra ids', 'manual without extra ids', 'ha
         liveElsewhereChecked: async sid => { ids.push(sid); return { known: true, live: extraLive && sid === 'extra' ? { pid: 777 } : null }; } },
     });
     const job = { id: 'aaaaaaaa', sessionId: 's1' };
-    const first = scenario.startsWith('manual') ? handlers.get('bg-agent-verb')({}, 'respawn', job.id)
-      : unsubscribe.respawnForHandoff(job, ['s1']);
+    const first = (scenario.startsWith('manual') ? handlers.get('bg-agent-verb')({}, 'respawn', job.id)
+      : unsubscribe.respawnForHandoff(job, ['s1'])).catch(error => ({ ok: false, error: error.message }));
     await running;
     const second = unsubscribe.respawnForHandoff(job, scenario === 'manual without extra ids' ? [] : ['EXTRA']);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(checks.length, 1, 'the joiner must wait for the flight');
     extraLive = true;
     release();
-    await first;
+    const firstResult = await first;
+    assert.equal(firstResult.ok, outcome === 'succeeded');
     const result = await second;
+    if (outcome === 'succeeded') {
+      assert.equal(checks.length, 1, 'a successful flight must satisfy every joiner');
+      assert.equal(result.ok, true);
+      assert.equal(result.attached, true);
+      assert.equal(ids.includes('extra'), false, 'success must not run a second guard');
+      assert.equal(bg.calls.filter(call => call[0] === 'verb').length, 1);
+      return;
+    }
     assert.equal(checks.length, 2, 'different parameters must run their own check');
     assert.deepEqual(checks, scenario.startsWith('manual') ? [true, 'all'] : ['all', 'all']);
     assert.equal(result.ok, scenario === 'manual without extra ids');
     if (scenario !== 'manual without extra ids') {
       assert.equal(result.refused, true);
       assert.ok(ids.includes('extra'), 'the new extra id must be checked');
-      assert.equal(bg.calls.filter(call => call[0] === 'verb').length, 1, 'refused joiner cannot respawn');
     }
+    assert.equal(bg.calls.filter(call => call[0] === 'verb').length,
+      (outcome === 'rejected' ? 1 : 0) + (scenario === 'manual without extra ids' ? 1 : 0), 'only a permitted joiner may retry');
   });
+}
 }
 
 test('1020fix4 compatible subset joins the same respawn result', async () => {

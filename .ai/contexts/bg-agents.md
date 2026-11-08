@@ -59,9 +59,12 @@ Respawn pass their classified worker evidence to `liveJobCheck`, keyed by job id
 Delete retains its conservative default. Unknown never respawns. A per-session promise
 coalesces overlapping restore requests. A per-job promise covers the check and CLI
 respawn shared by manual Respawn, restore and handoff, releasing on success or failure.
-Callers share that result only with the same restore mode and a subset of the
-flight's lowercased extra session ids. Other callers wait for it to settle, then
-run their own checked respawn, including after a rejected flight.
+All joiners share a successful respawn, even with different restore modes or extra
+session ids and before the daemon publishes its new worker. Restore then waits
+for its descriptor; manual Respawn returns success. Same-mode callers with a subset
+of the flight's lowercased extra session ids also share refusals and failures.
+Other callers wait for settlement and run their own checked respawn only if the
+flight refused, failed or rejected.
 This does not coalesce distinct dead jobs in one continuation chain: selecting its
 newest saved member requires a proven chain lookup before choosing the job.
 Descriptor observation subscribes before its
@@ -1111,8 +1114,9 @@ re-reads continuations immediately before the CLI verb as another check.
 The reader retains sealed continuation evidence for an unparsable final line
 when its first complete key (including the colon) is not `type`, it carries a
 complete `parentUuid` or `message` key, or its leading complete `type` value
-proves it is not `continued-in`. CLI continuation records are type-first
-(`type`, `sessionId`, `continuedInSessionId`, `timestamp`); ordinary user and
+proves it is not `continued-in`. CLI continuation records are type-first; the
+remaining key order varies by CLI version (2.1.302: `type`, `timestamp`, `sessionId`,
+`continuedInSessionId`). The torn-tail rule depends only on `type` being first; ordinary user and
 assistant records can start with `parentUuid` and put `type` after `message`.
 A tail cut inside the first key, such as `{"par`, stays uncertain until that
 key is complete. Every cut of a type-first continuation stays uncertain until

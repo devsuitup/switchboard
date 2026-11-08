@@ -83,7 +83,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     if (flight) {
       if (flight.restoring === restoring && [...extraIds].every(sid => flight.extraIds.has(sid))) return flight.pending;
       const retry = () => runRespawn(id, restoring, extraSessionIds);
-      return flight.pending.then(retry, retry);
+      return flight.pending.then(value => !value.refused && value.result?.ok ? value : retry(), retry);
     }
     const pending = (async () => {
       const check = await checkVerb('respawn', id, restoring, extraSessionIds);

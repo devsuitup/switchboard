@@ -726,8 +726,9 @@ No-link `/clear` and explicit fork still use their existing owner checks.
 See bg-agents.md, "Background
 continuations", for the transactional metadata migration and renderer state.
 
-CLI 2.1.289 and 2.1.295 append `{type:"continued-in", sessionId:<old>,
-continuedInSessionId:<new>, timestamp:...}` to the old transcript. These records
+CLI continuation records appended to the old transcript are type-first; the
+remaining key order varies by CLI version (2.1.302: `type`, `timestamp`, `sessionId`,
+`continuedInSessionId`). The torn-tail rule depends only on `type` being first. These records
 can be mid-file and repeated; the new transcript has no back-link. This is an
 observed interface, pinned by an always-running synthetic fixture in
 `test/session-continuation-index.test.js`. That fixture proves parser agreement,

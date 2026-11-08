@@ -28,8 +28,8 @@ function fixture(t, state = 'stopped') {
     fs.writeFileSync(path.join(jobsDir, id, 'state.json'), line({ state: jobState, sessionId, resumeSessionId: sessionId, linkScanPath: path.join(root, sessionId + '.jsonl') }));
   };
   writeJob('aaaaaaaa', SID, state);
-  const descriptors = [];
-  const cli = { readAllDescriptors: () => descriptors, onDescriptorsChanged: () => () => {},
+  const descriptors = [], descriptorListeners = new Set();
+  const cli = { readAllDescriptors: () => descriptors, onDescriptorsChanged: fn => { descriptorListeners.add(fn); return () => descriptorListeners.delete(fn); },
     liveElsewhereChecked: async () => ({ known: true, live: null }),
     refreshProcessTable: async () => {}, readWorkerProcessEvidence: () => ({ processTableFresh: true, tableEntry: () => undefined }) };
   bg.init({ jobsDir, homeDir: root, cliSessionState: cli, resolveTranscriptPath: id => path.join(root, id + '.jsonl') });
@@ -45,7 +45,11 @@ function fixture(t, state = 'stopped') {
     bgAgents: { ...bg, runVerb: async (...args) => { calls.push(args); if (delivery.wait) await delivery.wait; if (delivery.autoAttach) descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: bg.findRestoreJob(SID, 'aaaaaaaa').job.sessionId }); return { ok: true }; } },
     cliSessionState: cli, getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
     sessionHasPty: () => false, ptyPids: () => [], getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }) });
-  return { root, file, descriptors, fork, calls, handlers, writeJob, cli, delivery };
+  const publishWorker = () => {
+    descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID });
+    for (const fn of descriptorListeners) fn();
+  };
+  return { root, file, descriptors, fork, calls, handlers, writeJob, cli, delivery, publishWorker };
 }
 
 function handoff(h, { exitAt = 600, forkAt = Infinity, uncertain = false, descriptor = true, prior = false } = {}) {
@@ -272,10 +276,11 @@ for (const prefix of ['{"parentUuid":null,"message":', '{"type":"assistant","mes
   }
 }
 
+for (const publication of ['immediate', 'delayed']) {
 for (const mode of ['clicks', 'click and restore', 'restore and click']) {
-  test('1020fix3 concurrent ' + mode + ' invoke one respawn per job', async t => {
+  test('1020fix5 concurrent ' + mode + ' with ' + publication + ' worker publication invoke one respawn per job', async t => {
     const h = fixture(t, 'done');
-    h.delivery.autoAttach = true;
+    h.delivery.autoAttach = publication === 'immediate';
     let release;
     h.delivery.wait = new Promise(resolve => { release = resolve; });
     const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
@@ -286,21 +291,24 @@ for (const mode of ['clicks', 'click and restore', 'restore and click']) {
     await new Promise(resolve => setImmediate(resolve));
     const count = h.calls.length;
     release();
+    await new Promise(resolve => setImmediate(resolve));
+    const settledCount = h.calls.length;
+    if (publication === 'delayed') h.publishWorker();
     const results = await Promise.all([first, second]);
     assert.equal(count, 1, 'concurrent requests must invoke ONE respawn');
+    assert.equal(settledCount, 1, 'joiners must not respawn again before worker publication');
     assert.ok(results[0].ok || results[0].action === 'attach');
     if (mode === 'clicks') assert.equal(results[1].ok, true);
     else if (mode === 'click and restore') {
-      assert.equal(results[1].action, 'refuse', 'restore rechecks the worker started by the manual flight');
-      assert.match(results[1].reason, /cannot respawn.*session; stop it first/);
+      assert.equal(results[1].action, 'attach', 'restore joins the successful manual flight');
     } else {
-      assert.equal(results[1].ok, false, 'manual joiner rechecks the worker started by restore');
-      assert.match(results[1].error, /cannot respawn.*session; stop it first/);
+      assert.equal(results[1].ok, true, 'manual joiner shares the successful restore flight');
     }
     h.descriptors.length = 0;
     assert.equal((await click()).ok, true, 'a completed flight must allow a later retry');
     assert.equal(h.calls.length, 2);
   });
+}
 }
 
 for (const state of ['stopped', 'failed']) {
