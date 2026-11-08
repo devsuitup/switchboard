@@ -3151,11 +3151,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       // see docs/sandbox.md ("Schedules")
       if (projectPath) await scheduleProjects().add(projectPath);
       if (!isAttach && sessionOptions?.sandbox) {
+        ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
+        fs.mkdirSync(path.join(ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
         // Directories the sandboxed claude must still reach beyond the cwd:
         // the project root when resuming inside a worktree (git metadata lives
         // there), and any user-configured Additional Directories.
-        ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
-        fs.mkdirSync(path.join(ptyEnv.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
         const extraBinds = [];
         if (projectPath && projectPath !== spawnCwd) extraBinds.push(projectPath);
         extraBinds.push(...parseAddDirs(sessionOptions.addDirs));

@@ -72,7 +72,7 @@ for (const mode of ['new', 'resume', 'fork', 'schedule']) {
       quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, command) => ['-c', command],
       sandboxScriptPath: () => '/sandbox.sh', cleanPtyEnv: {},
       scheduleProjects: () => ({ add: async () => {}, list: async () => [] }),
-      scheduleBindRefusals: () => [], resolveScheduleSandbox: () => true,
+      resolveScheduleSandbox: () => true,
       scheduleLaunchRefusal: require('../src/main/schedules/schedule-runner').scheduleLaunchRefusal,
       getHarness: require('../harnesses').getHarness,
       isProjectSettingsArchived: () => false,
