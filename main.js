@@ -5,6 +5,7 @@ const { createMainLoopMonitor } = require('./src/main/app/main-loop-monitor');
 const { execFile, spawn: spawnChild } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const { sniffPanelImage, SYSTEM_VIEWER_EXTENSIONS } = require('./src/main/files/panel-image');
 const os = require('os');
 const pty = require('node-pty');
 const log = require('electron-log');
@@ -81,7 +82,8 @@ function spawnPty(file, args, opts) {
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./src/main/terminals/shell-profiles');
-const { startScheduler, scheduleBindRefusals, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
+const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialScheduleProjects, scanSchedules, setScheduleEnabled } = require('./src/main/schedules/schedule-runner');
+const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
 const { SETTING_DEFAULTS } = require('./public/setting-defaults');
@@ -576,6 +578,7 @@ ipcMain.handle('whats-new-dismissed', async () => await whatsNew.dismissed());
 // --- Session cache helpers ---
 
 const { resolveSessionRealCwd, sessionTranscriptExists, isGitRepo } = require('./derive-project-path');
+const { getHarness } = require('./harnesses');
 const { resolveRowDeletionTargets } = require('./delete-session-target');
 
 // Session cache → session-cache.js
@@ -1182,13 +1185,29 @@ ipcMain.handle('open-main-log', async () => {
 });
 
 // --- IPC: open a local file in the OS default app (terminal right-click menu) ---
-ipcMain.handle('open-path', (_event, filePath) => {
+ipcMain.handle('open-path', (_event, filePath, opts) => {
   if (typeof filePath !== 'string' || !filePath) return;
   const resolved = path.resolve(filePath);
+  if (opts?.viewer && !SYSTEM_VIEWER_EXTENSIONS.includes(path.extname(resolved).toLowerCase())) return;
   // Mirror the read/save-file-for-panel guard: never hand a sensitive path
   // (~/.ssh, credentials, etc.) to the OS default opener.
   if (isSensitivePath(resolved)) return;
   return shell.openPath(resolved);
+});
+
+ipcMain.handle('show-item-in-folder', (_event, filePath) => {
+  try {
+    if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return { ok: false, reason: 'invalid-path' };
+    const resolved = path.resolve(filePath);
+    if (gitChangesFile.hasGitSegment(filePath)) return { ok: false, reason: 'git-dir' };
+    if (gitChangesFile.hasGitSegment(fs.realpathSync.native(resolved))) return { ok: false, reason: 'git-dir' };
+    if (isSensitivePath(resolved)) return { ok: false, reason: 'sensitive' };
+    if (!fs.statSync(resolved).isFile()) return { ok: false, reason: 'not-file' };
+    shell.showItemInFolder(resolved);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error.message || String(error) };
+  }
 });
 
 // --- IPC: read clipboard (terminal right-click paste; see clipboard-write-text) ---
@@ -1247,10 +1266,14 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath, opts) => {
     const stat = fs.statSync(resolved);
     if (!stat.isFile()) return { ok: false, error: 'not a regular file' };
     if (stat.size > PANEL_FILE_MAX_BYTES) {
-      return { ok: false, error: 'file too large to display' };
+      return { ok: false, error: 'file too large to display', reason: 'too-large' };
     }
     const buf = fs.readFileSync(resolved);
-    if (buf.includes(0)) return { ok: false, error: 'binary file' };
+    if (opts?.image) {
+      const mime = sniffPanelImage(buf);
+      if (mime && (!['image/gif', 'image/webp'].includes(mime) || buf.includes(0))) return { ok: true, image: { mime, base64: buf.toString('base64'), size: buf.length } };
+    }
+    if (buf.includes(0)) return { ok: false, error: 'binary file', reason: 'binary' };
     const content = gitChangesFile.decodeUtf8(buf);
     if (content === null) return { ok: false, error: 'file is not valid UTF-8', reason: 'encoding' };
     if (opts?.editor) {
@@ -1601,6 +1624,18 @@ const fileListsClient = {
   request: ({ kind }) => fileListClients.get(kind).request(),
   shutdown: () => Promise.all([...fileListClients.values()].map(client => client.shutdown())),
 };
+
+ipcMain.handle('list-schedules', () => {
+  const knownProjectPaths = [...getKnownProjectPaths()];
+  return buildScheduleList({
+    scheduleProjects, getCachedByFolder, isScheduleRunLive: cliSessionState.isScheduleRunLive,
+    catchUpActive: !process.env.SWITCHBOARD_DATA_DIR,
+    stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), projectsDir: PROJECTS_DIR,
+    getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox,
+    isArchived: isProjectSettingsArchived,
+    isKnownProject: projectPath => _isKnownProjectRoot(projectPath, knownProjectPaths),
+  });
+});
 
 // --- IPC: get-memories ---
 ipcMain.handle('get-memories', async () => {
@@ -2568,8 +2603,7 @@ function sandboxScriptPath() {
 // point so the claude `--add-dir` args and the sandbox bind list can never
 // disagree about what the user typed.
 function parseAddDirs(value) {
-  if (!value) return [];
-  return String(value).split(',').map(d => d.trim()).filter(Boolean);
+  return getHarness().parseAddDirs(value);
 }
 
 // SWITCHBOARD_SANDBOX_BINDS is colon-separated (env vars cannot carry NUL), so
@@ -3046,50 +3080,12 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         if (!isNew && startsFresh && !sessionOptions?.forkFrom) {
           log.info(`[open-terminal] ${sessionId} has no transcript — starting it instead of resuming`);
         }
-        if (sessionOptions?.forkFrom) {
-          claudeArgs.push('--resume', String(sessionOptions.forkFrom), '--fork-session');
-        } else if (startsFresh) {
-          claudeArgs.push('--session-id', String(sessionId));
-        } else {
-          claudeArgs.push('--resume', String(sessionId));
+        let launchOptions = sessionOptions;
+        if (startsFresh && sessionOptions?.worktree && !isGitRepo(spawnCwd)) {
+          log.warn(`[open-terminal] ${spawnCwd} is not a git repository — launching without --worktree`);
+          launchOptions = { ...sessionOptions, worktree: false };
         }
-
-        if (sessionOptions) {
-          if (sessionOptions.dangerouslySkipPermissions) {
-            claudeArgs.push('--dangerously-skip-permissions');
-          } else if (sessionOptions.permissionMode) {
-            claudeArgs.push('--permission-mode', String(sessionOptions.permissionMode));
-          }
-          // --worktree only applies when STARTING a session — it creates a fresh
-          // isolated git worktree. Resuming (isNew === false) must reuse the
-          // session's existing directory, so ignore the worktree option on resume
-          // regardless of which call site supplied it (sidebar click, schedule
-          // creator, fork, …). Otherwise a resume tries to spin up a new worktree
-          // and fails to attach.
-          if (startsFresh && sessionOptions.worktree && !isGitRepo(spawnCwd)) {
-            // Worktree is commonly enabled globally, but plenty of projects are
-            // not git repos. Passing --worktree there makes claude refuse to start
-            // at all ("Can only use --worktree in a git repository"), which turns
-            // one global convenience toggle into a broken project. Drop the flag
-            // and run unisolated rather than fail the launch.
-            log.warn(`[open-terminal] ${spawnCwd} is not a git repository — launching without --worktree`);
-          } else if (startsFresh && sessionOptions.worktree) {
-            claudeArgs.push('--worktree');
-            if (sessionOptions.worktreeName) {
-              claudeArgs.push(String(sessionOptions.worktreeName));
-            }
-          }
-          if (sessionOptions.chrome) {
-            claudeArgs.push('--chrome');
-          }
-          for (const dir of parseAddDirs(sessionOptions.addDirs)) {
-            claudeArgs.push('--add-dir', dir);
-          }
-        }
-
-        if (sessionOptions?.appendSystemPrompt) {
-          claudeArgs.push('--append-system-prompt', String(sessionOptions.appendSystemPrompt));
-        }
+        claudeArgs.push(...getHarness().buildLaunchArgs({ sessionId, isNew: startsFresh, options: launchOptions }));
       }
 
       let claudeCmd = 'claude ' + quoteArgvForShell(shell, claudeArgs);
@@ -3930,26 +3926,21 @@ if (!app.isPackaged) {
       const env = { ...cleanPtyEnv, FORCE_COLOR: '0' };
 
       const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
-      if (sandbox && process.platform !== 'linux') {
-        log.error(`[schedule] ${runName}: skipped — sandbox is enabled but requires Linux (bubblewrap)`);
-        if (onDone) onDone();
-        return { ok: false, error: 'The schedule sandbox requires Linux (bubblewrap). Run it on Linux with bubblewrap, or disable Sandbox in the project or global settings and try Run now again.' };
-      }
       if (sandbox) {
-        env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
-        fs.mkdirSync(path.join(env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
-        cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
         const addDirs = [];
         for (let i = 0; i < claudeArgv.length - 1; i++) {
           if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
         }
-        // see docs/sandbox.md ("Schedules")
-        const refused = scheduleBindRefusals(addDirs, await scheduleProjects().list(), os.homedir(), cwd);
-        if (refused.length) {
-          log.error(`[schedule] ${runName}: skipped — add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}`);
+        const refusal = scheduleLaunchRefusal({ sandbox, addDirs, platform: process.platform,
+          projectPaths: process.platform === 'linux' ? await scheduleProjects().list() : [], home: os.homedir(), cwd });
+        if (refusal) {
+          log.error(`[schedule] ${runName}: skipped — ${refusal.problem}`);
           if (onDone) onDone();
-          return { ok: false, error: `Sandbox add-dirs refused: ${refused.map(r => `${r.dir} (${r.reason})`).join(', ')}. Remove or change these add-dirs in the schedule file, then try Run now again.` };
+          return { ok: false, error: refusal.error };
         }
+        env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
+        fs.mkdirSync(path.join(env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
+        cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
         const bindEnv = sandboxBindEnv(addDirs);
         if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
         env.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(cwd);

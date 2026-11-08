@@ -73,6 +73,8 @@ for (const mode of ['new', 'resume', 'fork', 'schedule']) {
       sandboxScriptPath: () => '/sandbox.sh', cleanPtyEnv: {},
       scheduleProjects: () => ({ add: async () => {}, list: async () => [] }),
       scheduleBindRefusals: () => [], resolveScheduleSandbox: () => true,
+      scheduleLaunchRefusal: require('../src/main/schedules/schedule-runner').scheduleLaunchRefusal,
+      getHarness: require('../harnesses').getHarness,
       isProjectSettingsArchived: () => false,
       log: { info() {}, warn() {}, error() {} },
       cliSessionState: { trackScheduleRun() {}, ensureWatching: () => true },

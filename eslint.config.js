@@ -24,6 +24,8 @@ const ACTIVITY_CLASS_MESSAGE = 'Only public/session-activity-dom.js may write .c
 // public/sidebar.js (and equivalents). Kept readonly so reassignment
 // from another file gets flagged.
 const rendererCrossFileGlobals = {
+  openTouchedImage: 'readonly',
+  renderPanelFileRefusal: 'readonly',
   validateSessionStopPlan: 'readonly',
   executeSessionStopTargets: 'readonly',
   confirmAndStopProjectFolder: 'readonly',
@@ -784,6 +786,7 @@ module.exports = [
   {
     files: [
       '*.js',
+      'harnesses/**/*.js',
       'workers/**/*.js',
       'scripts/**/*.{js,cjs}',
       'src/main/**/*.js',

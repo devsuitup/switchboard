@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const os = require('node:os');
+const { extractFunction } = require('./app-source');
 const { listSessionTouchedFiles } = require('../src/main/changes/session-touched-files');
 const { isRemoteFolder } = require('../src/main/remote/remote-hosts');
 
@@ -75,7 +76,10 @@ test('index.html loads the touched tab after the file panel it hooks into', () =
 test('the touched tab opens a file only through readFileForPanel', () => {
   const src = read('public/touched-files-view.js');
   const apis = [...src.matchAll(/window\.api\.(\w+)/g)].map((m) => m[1]);
-  assert.deepEqual([...new Set(apis)].sort(), ['readFileForPanel', 'resolveTerminalPaths', 'sessionTouchedFiles']);
+  assert.deepEqual([...new Set(apis)].sort(), ['openPath', 'readFileForPanel', 'resolveTerminalPaths', 'sessionTouchedFiles', 'showItemInFolder']);
+  const opening = extractFunction(src, 'openTouchedFile');
+  const openingApis = [...opening.matchAll(/window\.api\.(\w+)/g)].map(m => m[1]);
+  assert.deepEqual([...new Set(openingApis)], ['readFileForPanel']);
 });
 
 test('a path is shown in its own bidi isolate, so an override in it cannot reorder the row', () => {

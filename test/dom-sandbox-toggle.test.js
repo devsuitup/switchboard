@@ -285,8 +285,9 @@ test('main.js: sandbox defaults to off and wraps the claude command with the asa
   // Additional Directories is parsed once, so the --add-dir args and the
   // sandbox bind list can't disagree about what the user typed.
   assert.match(src, /function parseAddDirs/, 'the shared addDirs parser must exist');
-  assert.equal((src.match(/parseAddDirs\(sessionOptions\.addDirs\)/g) || []).length, 2,
-    'both the --add-dir args and the sandbox bind list must go through parseAddDirs');
+  assert.match(src, /return getHarness\(\)\.parseAddDirs\(value\)/, 'the sandbox uses the adapter shared parser');
+  assert.equal((src.match(/parseAddDirs\(sessionOptions\.addDirs\)/g) || []).length, 1,
+    'the sandbox bind list must use the same parser as the characterized argv builder');
 
   // Scheduled (headless) runs must honor the effective sandbox setting too,
   // not just interactive sessions — they share the wrapper via the helper.
@@ -300,11 +301,19 @@ test('main.js: sandbox defaults to off and wraps the claude command with the asa
   // unconfined one — nobody is watching the log during an unattended run.
   assert.doesNotMatch(scheduleBody, /sandbox = false/,
     'off-linux must not downgrade a scheduled sandbox run to unconfined');
-  const offLinuxStart = scheduleBody.indexOf("process.platform !== 'linux'");
+  const offLinuxStart = scheduleBody.indexOf('scheduleLaunchRefusal({');
   assert.ok(offLinuxStart !== -1);
-  const offLinux = scheduleBody.slice(offLinuxStart, scheduleBody.indexOf('if (sandbox) {', offLinuxStart));
+  const wrapperStart = scheduleBody.indexOf('sandboxScriptPath()', offLinuxStart);
+  assert.ok(wrapperStart !== -1, 'the refusal must be judged before the sandbox wrapper is assembled');
+  const offLinux = scheduleBody.slice(offLinuxStart, wrapperStart);
+  assert.match(offLinux, /platform: process\.platform\b/, 'the refusal must judge the real platform');
   assert.match(offLinux, /log\.error[\s\S]*?return \{ ok: false,/,
     'off-linux must log an error and return before spawning');
+  const { scheduleLaunchRefusal } = require('../src/main/schedules/schedule-runner');
+  for (const platform of ['win32', 'darwin']) {
+    assert.match(scheduleLaunchRefusal({ sandbox: true, platform }).error, /requires Linux/, `${platform} must refuse a sandboxed run`);
+  }
+  assert.equal(scheduleLaunchRefusal({ sandbox: true, platform: 'linux' }), null, 'linux must not refuse a sandboxed run for its platform');
 });
 
 test('package.json: the sandbox script ships in builds and is asar-unpacked so bash can execute it', () => {
