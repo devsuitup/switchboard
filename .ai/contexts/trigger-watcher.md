@@ -19,6 +19,41 @@ Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 
 ## Public surface
 
+### Sandbox control directory
+
+`getTriggersDir()` is exported and resolves the nonempty
+`SWITCHBOARD_TRIGGERS_DIR` override or `~/.switchboard/triggers` to an absolute
+main-process path. The manual sandbox launch path (new/resume/fork) and the
+schedule launcher prepare its `processed/` directory and pass that same path
+as `SWITCHBOARD_SANDBOX_TRIGGERS_DIR`; a relative app override is never resolved
+against a different session cwd. Legacy dispatch and result paths are unchanged.
+
+The wrapper protects the whole control tree and separately resolved `processed`
+target read-only through every visible writable mount alias, pins ancestors,
+and refuses unsafe overlaps, mutable symlinks and missing visible paths with
+status 125 before CLI execution. Final mount-plan rebuilding rechecks protection.
+A control directory inside the project can launch protected read-only. Unrelated
+newline-containing writable paths remain allowed; unrepresentable overlapping
+mounts refuse. The full final rebuild is retained: rechecking only control
+paths would need to validate cached mount sources and ancestor pins after
+symlink changes as well as newly materialised state mounts.
+Host watcher publication stays writable. Only fresh sandbox launches acquire
+these mounts; existing sessions are not terminated or remounted.
+
+Launch coverage evaluates the shipped complete `open-terminal` registration and
+`runScheduleCommand` with injected spawn ports. Each new/resume/fork case asserts
+its CLI arguments, spawn cwd and control path at `spawnPty`; the schedule case
+checks `cpSpawn`. Wrapper cases use Linux-only skips, including fake-bwrap cases,
+so Windows CI does not pay Git Bash startup and mount-plan costs. Real-bwrap
+coverage reads a sentinel through every view and writes beside pinned ancestors
+before checking denied control writes, ruling out absent or broadly read-only views.
+
+Protection of triggers, results and markers **does not hold when the Podman
+socket is exposed** by `SWITCHBOARD_SANDBOX_PODMAN=1`: that service can mount host
+paths writable in another container. The Podman opt-in and successful launch
+behavior remain unchanged, with no refusal solely for exposing the socket and
+no retry without Sandbox. See [sandbox.md](../../docs/sandbox.md#file-trigger-control-directory).
+
 Result publication uses the synchronous Windows rename retry policy documented
 in [session-cache.md](session-cache.md#atomic-rename-retries-on-windows-900).
 After retry exhaustion, the existing log-and-delete-trigger behaviour still
