@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
-- A Schedules tab lists scheduled tasks by project with their schedule in plain words, next run, enabled state and recent runs; run, turn on or off, and open a schedule there. Schedule files no longer appear in Agent Files. (#792)
+- A Schedules tab lists scheduled tasks by project with their schedule in plain words, next run, enabled state and recent runs, including how runs ended, kept across restarts; run, turn on or off, and open a schedule there. Schedule files no longer appear in Agent Files. (#792)
 - Images opened from a link or from the Touched list now show in the panel. Other files the panel can't show offer **Open with system viewer** for pictures and PDFs, and **Show in folder** for the rest. (#1025)
 
 ### Changed

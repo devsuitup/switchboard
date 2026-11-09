@@ -628,7 +628,7 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
       runningTasks.add(taskKey);
       const launched = runCommand(claudeArgs, schedule.projectPath, schedule.name, () => {
         runningTasks.delete(taskKey);
-      });
+      }, { filePath: schedule.filePath, slug: schedule.slug, dueMs });
       if (launched?.catch) launched.catch(err => {
         runningTasks.delete(taskKey);
         log.error(`[schedule] Failed to run ${schedule.name}:`, err);

@@ -60,7 +60,7 @@ function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnE
   const handlers = new Map(), children = [], events = [], messages = [], logs = [], activities = [];
   const log = { info: (...args) => logs.push(args), warn: (...args) => logs.push(args), error: (...args) => logs.push(args) };
   const ctx = vm.createContext({
-    require: createRequire(path.join(__dirname, '..', 'main.js')), fs, path,
+    require: createRequire(path.join(__dirname, '..', 'main.js')), fs, path, DB_PATH: path.join(root, 'db'),
     getSetting: () => ({}), isProjectSettingsArchived: () => archived, Date,
     mainWindow: windowState === 'absent' ? null : {
       isDestroyed: () => windowState === 'destroyed',
@@ -101,15 +101,24 @@ function setup(t, { sandbox = false, platform = 'linux', refused = false, spawnE
     },
   }, [SCHEDULE_RUNNER]);
   ctx.scheduleIpc = ipc;
-  ipc.init(log, noReply ? async () => undefined : ctx.runScheduleCommand, () => true, () => false);
+  let identity;
+  ipc.init(log, noReply ? async () => undefined : (...args) => { identity = args[4]; return ctx.runScheduleCommand(...args); }, () => true, () => false);
   return { run: async () => {
     const result = await handlers.get('run-schedule-now')(null, file);
     assertLazyStubsLoaded(ipc);
     return result;
   },
     cron: () => ctx.runScheduleCommand(['--resume', 'cron-session'], root, 'Nightly cron', () => {}),
-    children, events, messages, logs, activities, root };
+    children, events, messages, logs, activities, root, get identity() { return identity; } };
 }
+
+test('Run now passes the resolved schedule identity as the fifth launcher argument', async t => {
+  const h = setup(t);
+  assert.equal((await h.run()).ok, true);
+  assert.equal(h.identity.manual, true);
+  assert.equal(h.identity.slug, 'test');
+  assert.equal(h.identity.filePath, fs.realpathSync(path.join(h.root, '.claude', 'commands', 'schedule-test.md')));
+});
 
 test('Run now returns a Linux sandbox refusal with recovery and never spawns', async t => {
   const h = setup(t, { sandbox: true, platform: 'win32' });

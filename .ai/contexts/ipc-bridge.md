@@ -4,7 +4,7 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
-## Schedules (#792, slices A1 and A2)
+## Schedules (#792, slices A1, A2 and D)
 
 | IPC | Args | Returns | Preload |
 | --- | --- | --- | --- |
@@ -20,7 +20,14 @@ state and changes no schedule or transcript. `now` is epoch milliseconds;
 next/pending times are epoch milliseconds or `null`. Runs are deduplicated,
 newest first, capped at 20 per schedule. `replied` is an assistant-record check
 (`null` on an unreadable transcript); `running` reads this instance's scheduled
-child map. `result` is always `null` until the separate run-result slice lands.
+child map. `result` is the persisted v1 run record, `null` when none is recorded,
+or `{ unreadable: true }` when the record cannot be read or validated. Records
+contain `v, sessionId, file, name, slug, manual, dueMs, startedAt, endedAt,
+outcome, exitCode, signal, failure, error`; timestamps are ISO strings, `dueMs`
+is epoch milliseconds or null, and exit codes are integers or null. Outcomes
+are `exited`, `signal`, `spawn-error` and `refused`. Listing reads only the
+requested session IDs in this instance's `schedule-runs` directory and creates
+nothing. A directory read error marks the requested results unreadable.
 
 `run-schedule-now`, `read-memory`, `save-memory` and `schedule-run-exit` keep
 their existing contracts. A2 adds the Schedules renderer and the guarded

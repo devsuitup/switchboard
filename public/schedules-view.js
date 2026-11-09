@@ -81,6 +81,23 @@ function scheduleTime(ms, now) {
 
 function scheduleOutcome(run) {
   if (run.running) return 'Running';
+  const result = run.result;
+  if (result) {
+    if (result.unreadable) return 'Unknown: result record unreadable';
+    if (result.outcome === 'refused') return `Refused: ${result.error}`;
+    if (result.outcome === 'spawn-error') return `Failed to start: ${result.error}`;
+    if (result.outcome === 'signal') return `Stopped: ${result.signal}`;
+    if (result.outcome === 'exited' && Number.isInteger(result.exitCode)) {
+      if (result.exitCode === 0) return 'Exit 0';
+      const hint = result.failure === 'claude-path'
+        ? 'claude not found on the shell PATH. Check that Claude Code is installed and on PATH in the configured shell profile, then try Run now again.'
+        : result.failure === 'sandbox'
+          ? 'Check Linux bubblewrap and the sandbox settings; see the log for details, then try Run now again.'
+          : 'See the log for details, then try Run now again.';
+      return `Failed: exit ${result.exitCode} — ${hint}`;
+    }
+    return 'Unknown: result record unreadable';
+  }
   const hint = run.replied === true ? 'replied; exit code unknown'
     : run.replied === null ? 'Unknown'
       : run.messageCount === 1 ? '(refused or not started, run by another instance, run before results were kept, or Switchboard closed during the run)'

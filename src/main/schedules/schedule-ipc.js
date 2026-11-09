@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const { encodeProjectPath } = require('../../../encode-project-path');
+const { classifyRunExit } = require('./schedule-run-results');
 const { resolveRunNowTarget } = require('./run-schedule-now-target');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
@@ -212,7 +213,7 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
       const { sessionId } = createScheduleSession(schedule);
       const { claudeArgs } = buildScheduleCommand(sessionId, schedule);
 
-      const result = await runCommand(claudeArgs, projectPath, schedule.name, () => {}, { manual: true });
+      const result = await runCommand(claudeArgs, projectPath, schedule.name, () => {}, { manual: true, filePath: realPath, slug: schedule.slug });
       if (!result?.ok) return { ok: false, error: result?.error || 'The schedule launcher returned no result. Check the shell settings and project folder, then try Run now again.' };
 
       log.info(`[schedule] Manual run triggered: ${schedule.name} (session ${sessionId})`);
@@ -226,22 +227,9 @@ function init(log, runCommand, isPathAllowed, isProjectArchived = () => false) {
 
 function reportRunExit(window, { name, projectPath, sessionId, manual = false, code, signal, sandbox, stderr }) {
   if (code === 0 || !window || window.isDestroyed() || window.webContents.isDestroyed()) return;
-  const sandboxPath = /^\s*claude-sandbox: claude not found in PATH(?:\s|$)/m.test(stderr || '');
-  const sandboxFailure = sandbox && (/^\s*bwrap:/m.test(stderr || '') ||
-    code === 125 && /^\s*claude-sandbox:(?! claude not found in PATH(?:\s|$))/m.test(stderr || ''));
-  const missingClaude = !sandboxFailure && (sandboxPath || code === 127 || [
-    /^\s*spawn\s+claude\s+ENOENT\b/im,
-    /^\s*(?:(?:\/[^\s:]+\/)?(?:bash|sh|dash|ksh|zsh)(?::\s*(?:line\s+)?\d+)?:\s*)?claude:\s*(?:command not found|not found)\s*$/im,
-    /^\s*zsh:\s*(?:\d+:\s*)?command not found: claude\s*$/im,
-    /^\s*fish: Unknown command: claude\s*$/im,
-    /^\s*(?:\/[^\s:]+\/)?env: (?:['"‘]claude['"’]|claude): No such file or directory\s*$/im,
-    /^\s*['"]claude['"] is not recognized as an internal or external command\b/im,
-    /^\s*claude\s*:\s*The term ['"]claude['"] is not recognized as (?:a|the) name of a cmdlet\b/im,
-    /^\s*\+?\s*CategoryInfo\s*:\s*ObjectNotFound:\s*\(claude:String\)\s*\[\],\s*CommandNotFoundException\b/im,
-  ].some(pattern => pattern.test(stderr || '')));
   window.webContents.send('schedule-run-exit', {
     name, projectPath, sessionId, manual, code, signal: signal || null,
-    failure: missingClaude ? 'claude-path' : sandboxFailure ? 'sandbox' : 'exit',
+    failure: classifyRunExit({ code, sandbox, stderr }),
   });
 }
 

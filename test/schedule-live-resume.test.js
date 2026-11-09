@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 const { JSDOM } = require('jsdom');
 const { extractFunction, loadAppFunctions } = require('./app-source');
@@ -25,9 +26,15 @@ function setup(t, { sandbox = false } = {}) {
   const handlers = new Map();
   const spawns = [];
   const done = [];
+  const ipcFile = path.join(ROOT, 'src/main/schedules/schedule-ipc.js');
+  const ipcModule = { exports: {} };
+  vm.runInNewContext(read('src/main/schedules/schedule-ipc.js'), {
+    module: ipcModule, exports: ipcModule.exports,
+    require: name => name === 'electron' ? { ipcMain: { handle() {} } } : createRequire(ipcFile)(name),
+  }, { filename: ipcFile });
   const main = vm.createContext({
     cliSessionState,
-    scheduleIpc: require('../src/main/schedules/schedule-ipc'), mainWindow: null,
+    scheduleIpc: ipcModule.exports, mainWindow: null,
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     sessionHasPty: () => false,
     ptyPids: () => [],

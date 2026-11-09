@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
 const { encodeProjectPath } = require('../../../encode-project-path');
+const { readScheduleRunResults } = require('./schedule-run-results');
 const { listScheduleFiles, nextCronMatch, describeCron, readScheduleStateOnly, latestCronMatch, scheduleStateKey, resolveScheduleSandbox } = require('./schedule-runner');
 const MINUTE_MS = 60000;
 
@@ -67,6 +68,11 @@ async function buildScheduleList(deps) {
     projects.push({ projectPath, shortName: path.basename(projectPath), archived,
       sandboxed: resolveScheduleSandbox(projectPath, getSetting, defaultSandbox), known: isKnownProject(projectPath), schedules });
   }
+  const runs = projects.flatMap(project => project.schedules.flatMap(schedule => schedule.runs));
+  let results;
+  try { results = readScheduleRunResults(deps.runsDir, runs.map(run => run.sessionId)); }
+  catch { results = new Map(runs.map(run => [run.sessionId, { unreadable: true }])); }
+  for (const run of runs) run.result = results.get(run.sessionId) || null;
   return { now, catchUpActive, projects };
 }
 

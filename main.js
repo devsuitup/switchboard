@@ -1637,6 +1637,7 @@ ipcMain.handle('list-schedules', () => {
     scheduleProjects, getCachedByFolder, isScheduleRunLive: cliSessionState.isScheduleRunLive,
     catchUpActive: !process.env.SWITCHBOARD_DATA_DIR,
     stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), projectsDir: PROJECTS_DIR,
+    runsDir: path.join(path.dirname(DB_PATH), 'schedule-runs'),
     getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox,
     isArchived: isProjectSettingsArchived,
     isKnownProject: projectPath => _isKnownProjectRoot(projectPath, knownProjectPaths),
@@ -3928,13 +3929,23 @@ if (!app.isPackaged) {
 
     // Shared runCommand for cron scheduler and "run now" — takes argv, not a shell string
     const { spawn: cpSpawn } = require('child_process');
-    async function runScheduleCommand(claudeArgv, cwd, name, onDone, { manual = false } = {}) {
+    async function runScheduleCommand(claudeArgv, cwd, name, onDone, { manual = false, filePath, slug, dueMs = null } = {}) {
+      const startedAtMs = Date.now();
+      const sessionId = claudeArgv[claudeArgv.indexOf('--resume') + 1];
+      const recordResult = details => {
+        if (!filePath) return;
+        require('./src/main/schedules/schedule-run-results').writeScheduleRunResult(
+          path.join(path.dirname(DB_PATH), 'schedule-runs'),
+          { sessionId, filePath, name, slug, manual, dueMs, startedAtMs, ...details }, log);
+      };
       const runName = manual ? `Manual run ${name}` : name;
       const globalSettings = getSetting('global') || {};
       if (isProjectSettingsArchived(cwd)) {
         log.info(`[schedule] ${runName} suspended: project is archived`);
+        const error = 'Project is archived; unarchive it before running schedules.';
+        recordResult({ outcome: 'refused', error });
         if (onDone) onDone();
-        return { ok: false, error: 'Project is archived; unarchive it before running schedules.' };
+        return { ok: false, error };
       }
       const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
       const profile = resolveShell(profileId);
@@ -3953,6 +3964,7 @@ if (!app.isPackaged) {
           projectPaths: process.platform === 'linux' ? await scheduleProjects().list() : [], home: os.homedir(), cwd });
         if (refusal) {
           log.error(`[schedule] ${runName}: skipped — ${refusal.problem}`);
+          recordResult({ outcome: 'refused', error: refusal.error });
           if (onDone) onDone();
           return { ok: false, error: refusal.error };
         }
@@ -3976,6 +3988,7 @@ if (!app.isPackaged) {
         });
       } catch (err) {
         log.error(`[schedule] ${runName} error:`, err.message);
+        recordResult({ outcome: 'spawn-error', error: spawnFailure(err).error });
         if (onDone) onDone();
         return spawnFailure(err);
       }
@@ -3990,6 +4003,7 @@ if (!app.isPackaged) {
       child.on('exit', (code, signal) => {
         if (stderr.trim()) log.error(`[schedule] ${runName} stderr:\n${stderr.trim()}`);
         log.info(`[schedule] ${runName} finished (exit ${code})`);
+        recordResult({ outcome: signal ? 'signal' : 'exited', code, signal, sandbox, stderr });
         scheduleIpc.reportRunExit(mainWindow, {
           name, projectPath: cwd, sessionId: claudeArgv[claudeArgv.indexOf('--resume') + 1],
           manual, code, signal, sandbox, stderr,
@@ -4002,6 +4016,7 @@ if (!app.isPackaged) {
         child.once('spawn', () => resolve({ ok: true }));
         child.on('error', (err) => {
           log.error(`[schedule] ${runName} error:`, err.message);
+          recordResult({ outcome: 'spawn-error', error: spawnFailure(err).error });
           activityReporter.sessionEnded(activityId);
           if (onDone) onDone();
           resolve(spawnFailure(err));

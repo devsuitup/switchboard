@@ -37,6 +37,24 @@ function fixture(t) {
   return { root, project, commands, stateDir, deps, write, list, build };
 }
 
+test('listing reads persistent results by session id across schedule path aliases and keeps missing distinct from corrupt', async t => {
+  const f = fixture(t);
+  f.write('job');
+  const runsDir = path.join(f.root, 'schedule-runs');
+  fs.mkdirSync(runsDir);
+  const ids = Array.from({ length: 3 }, () => crypto.randomUUID());
+  const record = { v: 1, sessionId: ids[0], file: path.join(f.root, 'alias', 'schedule-job.md'), name: 'Job', slug: 'job', manual: true,
+    dueMs: null, startedAt: new Date(100000).toISOString(), endedAt: new Date(101000).toISOString(), outcome: 'exited', exitCode: 2, signal: null, failure: 'exit', error: null };
+  const key = runner.scheduleStateKey({ filePath: record.file });
+  fs.writeFileSync(path.join(runsDir, `${key}-100000-${ids[0]}.json`), JSON.stringify(record) + '\n');
+  fs.writeFileSync(path.join(runsDir, `${key}-100001-${ids[1]}.json`), '{');
+  const listing = await f.build({ runsDir, getCachedByFolder: () => ids.map(sessionId => ({ sessionId, scheduleSlug: 'job', messageCount: 1, created: '2026-11-03T11:00Z' })) });
+  const runs = listing.projects[0].schedules[0].runs;
+  assert.deepEqual(runs.find(r => r.sessionId === ids[0]).result, record, 'lookup uses session identity rather than the listed file key');
+  assert.deepEqual(runs.find(r => r.sessionId === ids[1]).result, { unreadable: true });
+  assert.equal(runs.find(r => r.sessionId === ids[2]).result, null);
+});
+
 test('listing retains disabled, no-cron, CRLF and empty-prompt files', t => {
   const f = fixture(t);
   f.write('off', 'cron: * * * * *\nenabled: false');
