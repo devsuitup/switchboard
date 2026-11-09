@@ -374,6 +374,99 @@ function isRunnerScheduleFileName(name) {
   return name.startsWith('schedule-') && name.endsWith('.md');
 }
 
+async function createScheduleFile(projectPath, fields, deps) {
+  let tmp;
+  let field = 'projectPath';
+  const fail = (field, error) => ({ ok: false, field, error });
+  try {
+    const { scheduleProjects, getSetting = () => null, defaultSandbox = false, isArchived = () => false,
+      platform = process.platform, home = os.homedir(), stateDir, runsDir, link = fs.linkSync } = deps;
+    const projectPaths = await scheduleProjects().list();
+    if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) return fail(field, 'Choose a registered project');
+    const registered = projectPaths.find(p => normalizeProjectPath(p) === normalizeProjectPath(projectPath));
+    if (!registered) return fail(field, 'Choose a registered project');
+    projectPath = registered;
+    if (isArchived(projectPath)) return fail(field, 'This project is archived; unarchive it first');
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) return fail('name', 'Schedule fields are required');
+    const scalar = (key, value, required = false) => {
+      field = key;
+      if (value == null && !required) return '';
+      if (typeof value !== 'string' || !isSafeScalar(value) || /[\r\n]/.test(value)) throw new Error('Enter a single line without control characters');
+      const result = value.trim();
+      if (required && !result) throw new Error('This field is required');
+      return result;
+    };
+    const name = scalar('name', fields.name, true);
+    const slug = scalar('slug', fields.slug, true);
+    if (slug.length > 64 || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) return fail('slug', 'Use at most 64 lowercase letters, digits and single hyphens');
+    const cron = scalar('cron', fields.cron, true);
+    if (!cronCanMatch(cron)) return fail('cron', 'cron can never match');
+    for (const key of ['enabled', 'catch-up']) {
+      if (fields[key] !== undefined && typeof fields[key] !== 'boolean') return fail(key, 'Choose on or off');
+    }
+    const cli = {};
+    if (fields.cli != null && (typeof fields.cli !== 'object' || Array.isArray(fields.cli))) return fail('cli', 'CLI fields must be an object');
+    for (const key of ['permission-mode', 'allowed-tools', 'model', 'max-budget-usd', 'append-system-prompt']) {
+      const value = scalar(`cli.${key}`, fields.cli?.[key]);
+      if (value) cli[key] = value;
+    }
+    if (cli['max-budget-usd'] && !/^\d+(\.\d+)?$/.test(cli['max-budget-usd'])) return fail('cli.max-budget-usd', 'Enter a non-negative number');
+    const rawDirs = fields.cli?.['add-dirs'];
+    let addDirs = [];
+    if (rawDirs !== undefined) {
+      if (!Array.isArray(rawDirs)) return fail('cli.add-dirs', 'Enter one directory per line');
+      addDirs = rawDirs.map(value => scalar('cli.add-dirs', value, true));
+      if (addDirs.some(dir => dir.includes(','))) return fail('cli.add-dirs', 'A directory cannot contain a comma');
+      if (addDirs.length) cli['add-dirs'] = addDirs.join(',');
+    }
+    field = 'prompt';
+    if (typeof fields.prompt !== 'string' || !fields.prompt.trim()) return fail(field, 'Enter a prompt');
+    const prompt = fields.prompt.replace(/\r\n?/g, '\n').trim();
+    const refusal = scheduleLaunchRefusal({ sandbox: resolveScheduleSandbox(projectPath, getSetting, defaultSandbox), platform, addDirs, projectPaths, home, cwd: projectPath });
+    if (refusal) return fail(refusal.problem === 'sandbox needs Linux' ? 'projectPath' : 'cli.add-dirs', refusal.error);
+    if (listScheduleFiles([projectPath]).some(schedule => schedule.slug === slug)) return fail('slug', 'A schedule with this slug already exists');
+    const lines = ['---', `name: ${name}`, `cron: ${cron}`, `slug: ${slug}`, `enabled: ${fields.enabled !== false}`, `catch-up: ${fields['catch-up'] === true}`];
+    if (Object.keys(cli).length) lines.push('cli:', ...Object.entries(cli).map(([key, value]) => `  ${key}: ${value}`));
+    const content = lines.join('\n') + '\n---\n\n' + prompt + '\n';
+    const parsed = parseFrontmatter(content);
+    for (const [key, value] of Object.entries({ name, cron, slug, enabled: String(fields.enabled !== false), 'catch-up': String(fields['catch-up'] === true) })) {
+      if (parsed.meta[key] !== value) return fail(key, 'This value cannot round trip through the schedule parser');
+    }
+    if (parsed.body !== prompt) return fail('prompt', 'This prompt cannot round trip through the schedule parser');
+    for (const [key, value] of Object.entries(cli)) {
+      if (parsed.meta.cli?.[key] !== value) return fail(`cli.${key}`, 'This value cannot round trip through the schedule parser');
+    }
+    buildScheduleCommand('schedule-create-validation', { cli: parsed.meta.cli || {} });
+    field = 'projectPath';
+    const commandsDir = path.join(projectPath, '.claude', 'commands');
+    fs.mkdirSync(commandsDir, { recursive: true });
+    if (fs.realpathSync(commandsDir) !== path.join(fs.realpathSync(projectPath), '.claude', 'commands')) return fail(field, 'The commands directory is linked outside the project');
+    const filePath = path.join(commandsDir, `schedule-${slug}.md`);
+    field = 'slug';
+    tmp = path.join(commandsDir, `.schedule-${crypto.randomUUID()}.tmp`);
+    fs.writeFileSync(tmp, content, { flag: 'wx' });
+    try { link(tmp, filePath); }
+    catch (error) {
+      if (['EPERM', 'ENOTSUP', 'ENOSYS'].includes(error.code)) return fail('projectPath', `This project's filesystem does not support hard links (${error.code}). Choose a project on a filesystem that supports hard links.`);
+      throw error;
+    }
+    try {
+      if (stateDir) {
+        const entry = readScheduleStateOnly(stateDir).get(scheduleStateKey({ filePath }));
+        if (entry) pruneScheduleState(stateDir, entry);
+      }
+      if (runsDir) require('./schedule-run-results').pruneScheduleRunResults(runsDir, scheduleStateKey({ filePath }), 0);
+    } catch (error) {
+      console.warn(`[schedule] Created ${filePath}, but could not prune stale records:`, error.code, error.message);
+    }
+    return { ok: true, filePath };
+  } catch (error) {
+    return fail(field, error.code === 'EEXIST' ? 'A schedule with this slug already exists' : `${error.code ? error.code + ': ' : ''}${error.message}`);
+  } finally {
+    if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
+  }
+}
+
 function scheduleFields(file, meta) {
   return {
     name: meta.name || file,
@@ -798,4 +891,4 @@ function setScheduleEnabled(filePath, enabled, { projectRoot, rewrite = rewriteE
   }
 }
 
-module.exports = { scheduleFields, setListedScheduleEnabled, skipMissedRunsOf, listScheduleFiles, isRunnerScheduleFileName, nextCronMatch, describeCron, scheduleLaunchRefusal, readScheduleStateOnly, latestCronMatch, scheduleStateKey, scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, skipMissedRuns, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };
+module.exports = { createScheduleFile, scheduleFields, setListedScheduleEnabled, skipMissedRunsOf, listScheduleFiles, isRunnerScheduleFileName, nextCronMatch, describeCron, scheduleLaunchRefusal, readScheduleStateOnly, latestCronMatch, scheduleStateKey, scheduleFileUnlinked, setScheduleEnabled, parseFrontmatter, cronMatches, scanSchedules, startScheduler, skipMissedRuns, createScheduleSession, buildScheduleCommand, claimScheduleMinute, initialScheduleProjects, refusedScheduleBinds, scheduleBindRefusals, resolveScheduleSandbox, scheduleRegistry };

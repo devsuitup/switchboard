@@ -1,2 +1,3 @@
 docs/evidence/session-capabilities/** -text
 resources/session-capabilities.json -text
+test/fixtures/schedule-creator/** -text

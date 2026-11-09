@@ -19,6 +19,189 @@ Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 
 ## Public surface
 
+### Versioned requests (issue #1022, slice B)
+
+The watcher dispatches parsed objects with an own `version` or `action` property
+to `src/main/triggers/trigger-actions.js`, before legacy command validation or
+remote delivery. Objects with neither property still use the existing legacy
+command/chain/key path, including its delivery, locking and publication rules.
+Session ruling for #1022BFIX: spec §3 (line 161) takes precedence. Neither
+`version` nor `action` means legacy dispatch, including arrays, null, numbers
+and strings under UUID-shaped filenames of either case. They retain their
+exact legacy result shapes, including null's generic internal-error result
+and logging. The standalone v1 validator still rejects non-objects first.
+Regular-file, 64 KiB, age and parse/retry guards remain transport guards before
+dispatch. Unparseable, oversized or non-regular input cannot be classified into
+the versioned family; those errors retain the legacy transport envelope.
+
+Supported schemas (publish UTF-8 JSON by same-directory atomic rename):
+
+```json
+{"version":1,"action":"open","sessionId":"01234567-89ab-cdef-0123-456789abcdef","prompt":"Continue","timeout_ms":300000,"expectedCwd":"/work/project"}
+{"version":1,"action":"open","new":{"project":"/work/project","name":"Follow-up"},"prompt":"Investigate"}
+{"version":1,"action":"stop","sessionId":"01234567-89ab-cdef-0123-456789abcdef","before":"Save a note"}
+```
+
+The filename stem must be a lowercase UUID of shape
+`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` (hexadecimal, no UUID version restriction).
+Session IDs accept either case and normalize to lowercase. Prompt is optional
+for resume, required for new; `before` is optional for stop. Explicit null/empty
+text is invalid. Prompts remain verbatim; validated names are trimmed by the
+future lifecycle storage path. New projects must be absolute native paths.
+There are no launch flags or focus field. `expectedCwd` is allowed only with an
+existing ID. Explicit `timeout_ms` must be an integer in 1–600000.
+
+The first failing schema check wins in this exact order:
+
+| Check | Stable reason |
+|---|---|
+| Non-null, non-array object | `trigger must be an object` |
+| Strict numeric version 1 | `unsupported version` |
+| Action `open` or `stop` | `unsupported action` |
+| Lowercase UUID filename | `trigger filename must be a lowercase UUID` |
+| Open has exactly one own target property | `open requires exactly one of sessionId or new` |
+| Stop has own ID property | `missing required field: sessionId` |
+| Allowed properties for the mode, including `new` keys | `unsupported field: <path>` |
+| ID shape | `sessionId must be a UUID` |
+| New is an object | `new must be an object` |
+| Absolute project | `new.project must be an absolute path` |
+| Nonblank name | `new.name must be a non-empty string` |
+| Name length at most 256 JS characters | `new.name too long (max 256 characters)` |
+| Name excludes U+0000–001F and U+007F | `new.name contains control characters` |
+| Required/present text nonblank | `<field> must be a non-empty string` |
+| Text length at most 4096 JS characters | `<field> too long (max 4 KB)` |
+| Text excludes CR/LF/NUL/ESC | `<field> contains forbidden control characters (\r \n \0 \x1b)` |
+| Explicit timeout | `invalid timeout_ms` |
+| Present expected cwd nonblank string | `expectedCwd must be a non-empty string when present` |
+
+`<path>` is the lexicographically first unsupported dotted path. Enumerate
+nested keys only for a valid object. `<field>` is `prompt` or `before`. Own
+null/false properties still count as present. Stop rejects `new` and `prompt`;
+resume rejects `before`; new rejects `expectedCwd`. All modes reject arbitrary
+properties, including legacy command/key/chain, options, cli, wait and focus.
+
+**This build performs no v1 lifecycle action or prompt delivery.** After schema
+validation, every valid open/resume/new/stop returns `outcome:"refused"`,
+`reason:"session action not implemented in this build"`. This new stable reason
+is specific to this intermediate build. It means zero PTY writes, spawns,
+resumes, stops or renderer requests. The refusal occurs before target/liveness
+resolution, ID allocation and token reservation. No user-facing feature or
+setting is enabled; this slice takes `no-changelog`.
+
+Every classified result echoes the requested `version` and `action` (null when
+missing, unsupported values unchanged), with `ok:false`, `outcome:"refused"`,
+stable `reason`, canonical valid requested `sessionId` or null, `submitted:"no"`,
+`wrote:false`, and `steps_total` zero until the permitted prompt/before has
+passed text validation, then one. Rejected fields, blank/oversized/control
+text, and text not reached in validation order contribute zero. Later timeout
+or cwd failures preserve one already validated text step.
+Open-resume has `resumed:false`; open-new has `created:false`. No new ID is
+allocated by this build. OS/parser details belong in `error`, not stable codes.
+No `opened` or `closed` result is produced by this slice.
+
+Versioned terminal results use the existing temporary-write/rename-retry helper
+at `processed/<uuid>.result.json`. Publication precedes input removal, and
+marker removal follows successful input removal. A committed v1 result is
+immutable and wins over duplicate canonical v1 input,
+and over any action marker. Publication failure retains input/marker and
+suppresses replay in memory; cleanup failure also suppresses reprocessing.
+Legacy publication, including deletion after a failed result write, is unchanged.
+
+Recovery applies to inputs only after they parse as versioned and only when
+their filenames already use the canonical lowercase UUID spelling. Legacy
+inputs never read or obey v1 recovery state, even when they reuse its UUID.
+Recovery reads lstat each result/marker before opening it, then open with
+`O_RDONLY | O_NOFOLLOW | O_NONBLOCK` where available on POSIX, or `O_RDONLY`
+alone on Windows. Descriptor fstat must still identify a regular file of at
+most 64 KiB. Reads use that descriptor with a 64 KiB + 1 byte ceiling, reject
+overflow even after file growth, and always close the descriptor. The initial
+lstat rejects symlinks, FIFOs and other types before opening them; POSIX open
+flags also protect against path replacement. A parsed legacy result without
+`version` is no recovery state. Inspection/read/parse failures are logged and
+remembered; schema-valid v1 requests refuse with
+`trigger recovery state unavailable`, with OS/parser details in `error`.
+Schema errors take precedence over recovery and staleness refusals. Invalid
+orphan state without an input is logged without replaying an action.
+Stale v1 requests run schema validation before their age refusal, including
+strict version and lowercase filename checks. V1 publication always uses the
+canonical lowercase spelling: a stale or invalid v1 file named in uppercase
+gets its result only at the lowercase path. Legacy publication keeps its
+original filename behavior.
+
+The schema integration tests poll the canonical lowercase result path and
+compare its exact directory-entry spelling. Checking existence alone hides an
+uppercase expectation on Windows and then times out on a case-sensitive host.
+Their helper is named `runTrigger`: the default-runner canary reserves the
+`await run(t,` source pattern for opt-in CLI journeys. The actual recovery FIFO
+test runs on Linux (`mkfifo`) and skips Windows with an explicit reason.
+
+Startup recovery scans `processed/<uuid>.action.json` through the same filename
+queue and eight-file backpressure, including orphan markers. An input present
+in the startup scan owns its dispatch; the marker scan does not dispatch it
+again, including a case alias on Windows. Orphan recovery is unchanged. Recovery precedes
+age checks and produces `refused`, `interrupted by restart`, `uncertain:true`;
+it preserves the normalized ID and recorded boolean lifecycle/write evidence,
+submission rank and step count. The recovery record uses `version`, `action`,
+`mode` (`new`/`resume`/`stop`), `sessionId`, `deadline` and confirmed evidence
+fields. This build creates no action markers because it initiates no actions.
+The later lifecycle slice must atomically claim/update a marker before effects;
+this recovery reader alone does not provide exactly-once execution or a
+power-loss guarantee.
+
+`resolveLocalTarget(id, deps)` is a read-only closed-transcript resolver. It
+accepts injected filesystem, clocks/deadline, cache readers, verified-cwd parser,
+worktree resolver and project snapshot. It returns the exact local top-level
+transcript, recorded cwd and project separately. It scans only direct project
+folders for the normalized UUID basename, including cold cache and duplicate
+case/folder detection, and never descends into subagents or remote `alias::`
+folders. A cached local placeholder is known but is not transcript proof.
+Read/list errors fail closed; regular readable JSONL is checked within a bounded
+256 KiB head, then the existing bounded `extractVerifiedCwdFromJsonl` verifies
+cwd. Duplicate transcripts refuse `ambiguous session transcript`; known
+missing/empty/unreadable/unusable transcripts refuse `no readable transcript`;
+unknown IDs return `not-found`, `session not found`; unverifiable cwd refuses
+`session cwd unavailable`. Remote-only cache evidence refuses
+`remote sessions are not supported`.
+
+`resolveProject(project, deps)` requires a consistent snapshot with local
+`allProjects` entries (`projectPath`, optional `remoteAlias`), `hiddenProjects`
+and `hiddenProjectKinds`. Snapshot errors/missing provenance refuse
+`project lookup unavailable`. Exact normalized local hidden membership is checked
+before known membership and directory existence, with `project is archived`
+for archive/delete/legacy hidden entries. Kind-only and remote-qualified entries
+do not deny a local path; group archive records do not deny known projects.
+Unknown membership refuses `unknown project`; missing project/recorded worktree
+cwd refuses `project directory does not exist`. Deadline checks refuse
+`session action timed out`. Cache and project-snapshot promises share the supplied
+deadline, with injectable timer functions; a stalled async port cannot hang
+resolution. This helper does not import projects or fall back
+to a parent cwd for launch.
+An exact known worktree project takes precedence over its collapsed repository
+root, so a settings-hidden ancestor does not deny that distinct visible project.
+An exact settings-hidden recorded cwd still refuses before root fallback.
+
+The resolver is deliberately not wired as launch admission: the current
+`get-projects('both')` implementation queries the projects worker and then
+assembles placeholders/archive effects; it does not expose a consistent public
+snapshot with hidden-settings provenance. That extraction, v1 checked raw
+liveness, existing-tab ownership, expected-cwd rechecks, session/tab locks,
+renderer readiness/acknowledgement, permits, name persistence, actual-cwd spawn,
+prompt verification, stop/final-note completion and cancellation belong to later
+slices. A successful read-only resolution must never be interpreted as permission
+to launch or write. The current unconditional build refusal keeps those paths
+closed.
+
+Each watcher owns one `createNewSessionLimiter` bucket: capacity three,
+continuous refill of one token per 20000 ms, capped at three, reset on restart.
+Its synchronous `reserve()` is atomic in one JS event loop and returns null on
+exhaustion. A reservation's `refund()` is idempotent for definite pre-spawn
+failure; `retain()` makes it nonrefundable once spawn may have happened. There
+is no timer, refill queue, setting or open-session cap. The later new-session
+path must reserve after schema/project validation and before dispatch, return
+`new session rate limit exceeded` on exhaustion, and retain uncertain effects.
+Resume, stop and manual + never consume a token. This refusal-only build consumes
+none. Tests use injected clocks for burst/refill/refund and parallel reservation.
+
 ### Sandbox control directory
 
 `getTriggersDir()` is exported and resolves the nonempty

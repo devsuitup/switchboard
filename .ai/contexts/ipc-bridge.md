@@ -20,10 +20,11 @@ validates nonnegative safe-integer counters and gap, truncates/sanitizes ids,
 and emits one bounded `[power]` line with an ISO timestamp. There is no terminal
 content, invoke return payload, file access or application action.
 
-## Schedules (#792, slices A1, A2, B and D)
+## Schedules (#792, slices A1, A2, B, C and D)
 
 | IPC | Args | Returns | Preload |
 | --- | --- | --- | --- |
+| `create-schedule-file` | `projectPath, fields` | `{ ok: true, filePath }` or `{ ok: false, field, error }`; registered, unarchived project; runner validation and sandbox refusals; guarded commands directory and exclusive hard-link publication | `api.createScheduleFile(projectPath, fields)` |
 | `set-schedule-enabled` | `filePath, enabled` (boolean) | `{ ok }` or `{ ok: false, error }`; exact current listing path, linked-file and front-matter guards; re-enable skips missed catch-up before writing | `api.setScheduleEnabled(filePath, enabled)` |
 | `delete-schedule-file` | `filePath` | `{ ok }` or `{ ok: false, error }`; exact current listing path and disk-resolved link guard; removes the file and its catch-up/run-result records, preserving transcripts | `api.deleteScheduleFile(filePath)` |
 | `list-schedules` | none | `{ now, catchUpActive, projects: [{ projectPath, shortName, archived, sandboxed, known, schedules: [{ filePath, file, name, slug, cron, cronText, enabled, catchUp, cli, prompt, linked, problems, nextRunMs, catchUpDueMs, runs: [{ sessionId, created, messageCount, replied, running, result }] }] }] }` | `api.listSchedules()` |
@@ -48,7 +49,7 @@ nothing. A directory read error marks the requested results unreadable.
 
 `run-schedule-now`, `read-memory`, `save-memory` and `schedule-run-exit` keep
 their existing contracts. A2 adds the Schedules renderer and the guarded
-enable operation; creation and deletion are later slices. See [schedule-runner.md](schedule-runner.md), "Schedule listing
+enable operation; B adds deletion and C adds the creation form. See [schedule-runner.md](schedule-runner.md), "Schedule listing
 backend", for field parsing, refusal rules, time-zone semantics and tests.
 
 ## Main-process error backstop (#896)
@@ -568,6 +569,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 |---|---|---|
 | `set-schedule-enabled` | `listScheduleFiles(await scheduleProjects().list())` exact path equality, boolean argument, unlinked file and readable front matter; skip missed catch-up before enabling | current registry listing + disk-resolved link guard |
 | `delete-schedule-file` | `listScheduleFiles(await scheduleProjects().list())` exact path equality, then `scheduleFileUnlinked(projectRoot, filePath)` immediately before file operations; linked files return `linked file: edit it at its source` | current registry listing + disk-resolved link guard |
+| `create-schedule-file` | `projectPath` must match the awaited schedule registry by `normalizeProjectPath`; reject archived projects; require `realpath(commandsDir) === join(realpath(projectPath), '.claude', 'commands')`; target filename comes only from a validated slug; publish by `linkSync` without overwriting | current registry + realpath directory guard + exclusive publication |
 | `read-memory` / `save-memory` | `resolveAllowedMemoryPath` (read/write the returned path, not the caller's own re-resolved one) | disk-resolved allowlist |
 | `get-memories` (the list, and the FTS bodies it indexes) | `acceptMdFile` (`scan-md-files.js`) applies `isSensitivePath` itself and the `isAllowedMemoryPath` predicate `get-memories` passes in; `scanMdFiles` is the directory-wide form of it, and the project-root `CLAUDE.md`/`GEMINI.md`/`agents.md` go through it by name | disk-resolved denylist + allowlist — a listed file is read twice more downstream, once by `read-memory` behind `resolveAllowedMemoryPath` and once by the FTS indexer behind nothing at all, so the guard belongs on the list. The denylist is not the caller's to choose: containment in an allowed project root says nothing about a cloned repo's own `.ssh`/`.env` |
 | `open-main-log` | Main chooses electron-log's path; requires a string absolute path and `!isSensitivePath` before `shell.openPath`. | no renderer-supplied path; disk-resolved denylist |
