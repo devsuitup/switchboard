@@ -14,7 +14,7 @@ const newBase = { version: 1, action: 'open', new: { project: path.resolve('proj
 const stop = { version: 1, action: 'stop', sessionId: id };
 const log = { info() {}, warn() {}, error() {} };
 
-async function run(t, payload, name = request) {
+async function runTrigger(t, payload, name = request) {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-v1-schema-')));
   const previous = process.env.SWITCHBOARD_TRIGGERS_DIR;
   process.env.SWITCHBOARD_TRIGGERS_DIR = dir;
@@ -28,12 +28,14 @@ async function run(t, payload, name = request) {
     else process.env.SWITCHBOARD_TRIGGERS_DIR = previous;
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  const resultFile = path.join(dir, 'processed', name + '.result.json');
+  const resultFile = path.join(dir, 'processed', name.toLowerCase() + '.result.json');
   const deadline = performance.now() + 2500;
   while (!fs.existsSync(resultFile)) {
     assert.ok(performance.now() < deadline, 'one terminal result must be published');
     await new Promise(resolve => setTimeout(resolve, 5));
   }
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'processed')).filter(file => file.endsWith('.result.json')),
+    [path.basename(resultFile)], 'result filename must match the exact canonical spelling');
   return { result: JSON.parse(fs.readFileSync(resultFile, 'utf8')), effects };
 }
 
@@ -78,7 +80,7 @@ for (const [name, payload, expected, filename] of [
   ['text never reached after invalid filename', { ...base, prompt: 'valid text' }, 0, request.toUpperCase()],
 ]) {
   test(`steps_total counts validated text: ${name}`, async t => {
-    const { result } = await run(t, payload, filename);
+    const { result } = await runTrigger(t, payload, filename);
     assert.equal(result.steps_total, expected, 'only text that passed validation counts as a step');
   });
 }
@@ -94,7 +96,7 @@ for (const ch of ['\r', '\n', '\0', '\x1b']) cases.push([`control ${JSON.stringi
 
 for (const [name, payload, reason, filename] of cases) {
   test(`v1 validation: ${name}`, async t => {
-    const { result, effects } = await run(t, payload, filename);
+    const { result, effects } = await runTrigger(t, payload, filename);
     assert.equal(result.reason, reason);
     assert.equal(result.outcome, 'refused');
     assert.equal(result.ok, false);
@@ -110,7 +112,7 @@ for (const payload of [base, { ...base, sessionId: id.toUpperCase(), prompt: ' a
   { ...base, prompt: 'a'.repeat(4096), timeout_ms: 600000, expectedCwd: 'x' },
   newBase, { ...newBase, new: { ...newBase.new, name: 'a'.repeat(256) } }, stop, { ...stop, before: 'Save' }]) {
   test(`v1 accepts schema then explicitly refuses unavailable action: ${JSON.stringify(payload).slice(0, 140)}`, async t => {
-    const { result, effects } = await run(t, payload);
+    const { result, effects } = await runTrigger(t, payload);
     assert.equal(result.reason, 'session action not implemented in this build');
     assert.equal(result.outcome, 'refused');
     assert.equal(result.ok, false);

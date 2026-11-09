@@ -128,6 +128,13 @@ canonical lowercase spelling: a stale or invalid v1 file named in uppercase
 gets its result only at the lowercase path. Legacy publication keeps its
 original filename behavior.
 
+The schema integration tests poll the canonical lowercase result path and
+compare its exact directory-entry spelling. Checking existence alone hides an
+uppercase expectation on Windows and then times out on a case-sensitive host.
+Their helper is named `runTrigger`: the default-runner canary reserves the
+`await run(t,` source pattern for opt-in CLI journeys. The actual recovery FIFO
+test runs on Linux (`mkfifo`) and skips Windows with an explicit reason.
+
 Startup recovery scans `processed/<uuid>.action.json` through the same filename
 queue and eight-file backpressure, including orphan markers. An input present
 in the startup scan owns its dispatch; the marker scan does not dispatch it
