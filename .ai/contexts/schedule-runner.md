@@ -479,8 +479,12 @@ Global Settings → **Schedules tab** persists `global.schedulesTab`, defaulting
 to `SETTING_DEFAULTS.schedulesTab` (false). Only renderer surfaces are gated.
 The startup settings restore and Settings Save call `_applySchedulesTab`:
 hidden/disabled clock tab with tabindex -1 when off, no programmatic route,
-and a return to Sessions when the active tab is disabled. Saving applies live,
-reloads Agent Files if open, cancels schedule refreshes and refreshes sidebar notices.
+and a return to Sessions when the active tab is disabled. Only an effective
+value change reloads Agent Files if open, cancels schedule refreshes and refreshes
+sidebar notices. Startup applies it after restoring sidebar width and shortcuts,
+so a tab failure cannot interrupt their restore. Global Save's separate sidebar
+refresh runs only when visible count, maximum age or remote hosts changed (an SDK
+visibility change still reloads projects).
 `file-lists.js` always supplies project command schedules, marked `schedule`;
 Agent Files filters those entries only when the tab is on. Its file search
 index keeps them available so switching requires no reindex. With the tab off,

@@ -704,7 +704,8 @@
         }
         if (settings.hideSdkSessions !== hideSdkValue && typeof loadProjects === 'function') {
           await Promise.resolve(loadProjects()).catch(error => { if (!loadProjects.state?.reportedErrors?.has(error)) console.warn('[switchboard] project reload failed', error); });
-        } else if (typeof refreshSidebar === 'function') {
+        } else if ((settings.visibleSessionCount !== visCountValue || settings.sessionMaxAgeDays !== maxAgeValue
+          || JSON.stringify(settings.remoteHosts) !== JSON.stringify(current.remoteHosts || [])) && typeof refreshSidebar === 'function') {
           refreshSidebar();
         }
         // Re-arm the remote refresher so a host added here pulls immediately.

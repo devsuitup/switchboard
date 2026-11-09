@@ -5,7 +5,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
-- The Schedules tab is off by default; turn on **Schedules tab** in Global Settings to list scheduled tasks by project with their next run, enabled state and recent results, and to run, turn on or off, open, or delete a schedule there, with confirmation before deletion and past runs kept in Sessions. With it off, schedule files and Run now remain in Agent Files; run results are kept across restarts either way. (#792)
+- New optional Schedules tab (Global Settings → **Schedules tab**, off by default): lists scheduled tasks by project with their next run, enabled state and how recent runs ended, and lets you run, turn on or off, open or delete a schedule there, with confirmation before deletion and past runs kept in Sessions. While it is off, schedule files and Run now stay in Agent Files. (#792)
 - Images opened from a link or from the Touched list now show in the panel. Other files the panel can't show offer **Open with system viewer** for pictures and PDFs, and **Show in folder** for the rest. (#1025)
 
 ### Changed

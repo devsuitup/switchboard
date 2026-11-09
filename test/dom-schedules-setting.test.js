@@ -12,7 +12,7 @@ const { listMemories } = require('../file-lists');
 const root = path.join(__dirname, '..');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-async function setup(t, settings = {}) {
+async function setup(t, settings = {}, beforeInit = () => {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'schedules-setting-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const project = path.join(dir, 'project');
@@ -53,6 +53,7 @@ async function setup(t, settings = {}) {
   const evalSlice = (start, end) => vm.runInContext(src.slice(start, end), ctx, { filename, lineOffset: src.slice(0, start).split('\n').length - 1 });
   const tabs = src.indexOf("document.querySelectorAll('.sidebar-tab').forEach(tab => {");
   evalSlice(tabs, src.indexOf('\n});', tabs) + 4);
+  beforeInit(w);
   const init = src.indexOf('(async () => {', src.indexOf('// --- Init: restore settings ---'));
   evalSlice(init, src.indexOf('})();', init) + 5);
   await settle();
@@ -100,6 +101,46 @@ test('default Agent Files exposes schedule files and Run now', async t => {
   assert.ok(schedule, 'default Agent Files restores schedule-nightly.md');
   assert.ok(schedule.querySelector('[title="Run now"]'), 'default schedule has Run now');
 });
+
+test('startup with the default setting does not rebuild the sidebar', async t => {
+  let renders = 0;
+  await setup(t, {}, w => { w.refreshSidebar = () => { renders++; }; });
+  assert.equal(renders, 0, 'unchanged startup setting does not re-render');
+});
+
+test('startup restores sidebar width and shortcuts before applying the Schedules tab', async t => {
+  let observed;
+  const shortcuts = { changesToggle: { key: 'q' } };
+  await setup(t, { schedulesTab: true, sidebarWidth: 321, shortcuts }, w => {
+    let restoredShortcuts;
+    w.setAppShortcuts = value => { restoredShortcuts = value; };
+    const apply = w._applySchedulesTab;
+    w._applySchedulesTab = enabled => {
+      observed = { width: w.document.getElementById('sidebar').style.width, shortcuts: restoredShortcuts };
+      apply(enabled);
+    };
+  });
+  assert.equal(observed.width, '321px', 'sidebar width is restored before the tab can throw');
+  assert.deepEqual(observed.shortcuts, shortcuts, 'shortcuts are restored before the tab can throw');
+});
+
+for (const enabled of [false, true]) {
+  test(`global Save with schedulesTab=${enabled} unchanged does not rebuild sidebar or Agent Files`, async t => {
+    const h = await setup(t, { schedulesTab: enabled });
+    let sidebarRenders = 0;
+    let memoryLoads = 0;
+    h.w.refreshSidebar = () => { sidebarRenders++; };
+    const getMemories = h.w.api.getMemories;
+    h.w.api.getMemories = (...args) => { memoryLoads++; return getMemories(...args); };
+    h.w.activeTab = 'memory';
+    await h.w.openSettingsViewer('global');
+    h.w.document.querySelector('#sv-save-btn').click();
+    await settle();
+    assert.equal(h.saved.schedulesTab, enabled);
+    assert.equal(sidebarRenders, 0, 'unchanged Save does not rebuild the sidebar');
+    assert.equal(memoryLoads, 0, 'unchanged Save does not reload Agent Files');
+  });
+}
 
 test('global Settings saves the toggle and switches surfaces live in both directions', async t => {
   const h = await setup(t);

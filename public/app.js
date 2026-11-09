@@ -2912,7 +2912,6 @@ setTimeout(() => {
 // --- Init: restore settings ---
 (async () => {
   const global = await window.api.getSetting('global');
-  window._applySchedulesTab(global?.schedulesTab ?? SETTING_DEFAULTS.schedulesTab);
   if (global) {
     if (global.sidebarWidth) {
       document.getElementById('sidebar').style.width = global.sidebarWidth + 'px';
@@ -2930,6 +2929,7 @@ setTimeout(() => {
     terminalRightClickMode = global.terminalRightClick || SETTING_DEFAULTS.terminalRightClick;
     if (global.shortcuts) setAppShortcuts(global.shortcuts);
   }
+  window._applySchedulesTab(global?.schedulesTab ?? SETTING_DEFAULTS.schedulesTab);
 })();
 
 // Let the settings panel push updated key bindings live (no restart needed).

@@ -64,6 +64,8 @@ views (CodeMirror):
 
 ## Schedules
 
+This section applies when **Schedules tab** is on in Global Settings (off by default).
+
 Tab reaches **Run now**, **Turn on/Turn off**, **Open** and **Delete** in each
 schedule row. Enter or Space activates the focused button and keyboard focus
 reveals the row's actions. Delete opens a confirmation naming the file and

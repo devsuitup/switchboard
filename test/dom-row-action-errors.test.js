@@ -406,6 +406,29 @@ test('folder partial success names Schedules tab and uses a partial headline wit
   assert.equal(el.textContent.split('/project').length - 1, 1);
 });
 
+for (const partial of [false, true]) {
+  test(`off-mode folder archive ${partial ? 'partly done' : 'failure'} points to Agent Files`, async t => {
+    const h = setup(t);
+    h.window.schedulesTabEnabled = false;
+    h.window.api.getProjectArchivePlan = async () => ({ schedules: [] });
+    h.window.api.archiveProject = async () => partial
+      ? { ok: true, failed: [{ name: 'nightly', error: 'EACCES' }] }
+      : { ok: false, error: 'database locked' };
+    const pending = h.click('.project-archive-btn');
+    await answerChoiceDialog(h, { confirm: true });
+    await pending;
+    const el = h.document.querySelector('[role="alert"]');
+    assert.ok(el, 'archive recovery stays visible');
+    assert.match(el.textContent, partial
+      ? /Review schedule-\*\.md in the Agent Files tab/
+      : /Check schedule-\*\.md in the Agent Files tab/);
+    assert.match(el.textContent, partial ? /^Archive folder partly done/ : /^Archive folder failed/);
+    assert.match(el.textContent, partial ? /nightly: EACCES/ : /database locked/);
+    assert.match(el.textContent, /retry Archive folder/);
+    assert.doesNotMatch(el.textContent, /Schedules tab/);
+  });
+}
+
 test('an Archive database failure after Stop says the process stopped and the row is not archived', async t => {
   const h = setup(t);
   h.window.activePtyIds.add('s1');

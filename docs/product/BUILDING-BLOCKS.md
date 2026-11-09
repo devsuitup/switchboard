@@ -249,7 +249,7 @@ focus) with a form body.
   batches merge by member id, updating repeated members. Clearing a member's
   operation id removes its direct notice and its membership in every group,
   retaining other members and removing empty groups. Folder partial success says Archive folder partly done
-  and points to the Schedules tab for scheduled tasks. Waiting for indexing and a handoff
+  and points to the Schedules tab for scheduled tasks when `schedulesTab` is on (off by default). Waiting for indexing and a handoff
   in progress use informational status, without a failure headline; only
   automatic indexing retries enter the pending group, which indexing completion
   clears. Holds requiring a sidebar choice remain persistent errors.
