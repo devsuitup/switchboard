@@ -29,10 +29,12 @@ function fixture(t, state = 'stopped') {
   };
   writeJob('aaaaaaaa', SID, state);
   const descriptors = [], descriptorListeners = new Set();
+  const cliCalls = [];
   const cli = { readAllDescriptors: () => descriptors, onDescriptorsChanged: fn => { descriptorListeners.add(fn); return () => descriptorListeners.delete(fn); },
     liveElsewhereChecked: async () => ({ known: true, live: null }),
     refreshProcessTable: async () => {}, readWorkerProcessEvidence: () => ({ processTableFresh: true, tableEntry: () => undefined }) };
-  bg.init({ jobsDir, homeDir: root, cliSessionState: cli, resolveTranscriptPath: id => path.join(root, id + '.jsonl') });
+  bg.init({ jobsDir, homeDir: root, cliSessionState: cli, resolveTranscriptPath: id => path.join(root, id + '.jsonl'),
+    runClaude: async args => { cliCalls.push(args); return { code: 0, stdout: '[]', stderr: '' }; } });
   t.after(() => { bg.stop(); fs.rmSync(root, { recursive: true, force: true }); });
   const fork = () => {
     fs.appendFileSync(file, line({ type: 'system', subtype: 'session_cron_carry', sessionId: SID }) + link(NEXT));
@@ -40,19 +42,36 @@ function fixture(t, state = 'stopped') {
     writeJob('bbbbbbbb', NEXT, 'working');
     descriptors.push({ kind: 'bg', sessionId: NEXT, jobId: 'bbbbbbbb', cwd: root });
   };
-  const calls = [], handlers = new Map(), delivery = { autoAttach: false, wait: null };
+  const calls = [], checks = [], handlers = new Map(), delivery = { autoAttach: false, wait: null, result: { ok: true }, settled: 0 };
   init({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
-    bgAgents: { ...bg, runVerb: async (...args) => { calls.push(args); if (delivery.wait) await delivery.wait; if (delivery.autoAttach) descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: bg.findRestoreJob(SID, 'aaaaaaaa').job.sessionId }); return { ok: true }; } },
+    bgAgents: { ...bg,
+      conversationCheck: (...args) => {
+        checks.push(args);
+        if (delivery.checkReject) throw null;
+        if (delivery.checkThrow) throw new Error('check failed');
+        return bg.conversationCheck(...args);
+      },
+      runVerb: async (...args) => {
+        calls.push(args);
+        if (delivery.wait) await delivery.wait;
+        if (delivery.autoAttach) descriptors.push({ kind: 'bg', pid: 1001, jobId: 'aaaaaaaa', sessionId: bg.findRestoreJob(SID, 'aaaaaaaa').job.sessionId });
+        try {
+          if (delivery.invoke) return await delivery.invoke(...args);
+          if (delivery.throw) throw new Error('reconcile failed after CLI success');
+          return delivery.result;
+        } finally { delivery.settled++; }
+      } },
     cliSessionState: cli, getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
     sessionHasPty: () => false, ptyPids: () => [], getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }) });
-  const publishWorker = () => {
-    descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID });
+  let workerPid = 2000;
+  const publishWorker = (pid = ++workerPid) => {
+    descriptors.push({ kind: 'bg', pid, jobId: 'aaaaaaaa', sessionId: SID });
     for (const fn of descriptorListeners) fn();
   };
-  return { root, file, descriptors, fork, calls, handlers, writeJob, cli, delivery, publishWorker };
+  return { root, file, descriptors, fork, calls, checks, cliCalls, handlers, writeJob, cli, delivery, publishWorker };
 }
 
-function handoff(h, { exitAt = 600, forkAt = Infinity, uncertain = false, descriptor = true, prior = false } = {}) {
+function handoff(h, { exitAt = 600, forkAt = Infinity, uncertain = false, descriptor = true, prior = false, respawnResult } = {}) {
   let now = 0, forked = false;
   const session = { kind: 'local-pty', realSessionId: SID, cwd: h.root, composerState: createComposerState() };
   if (prior) fs.appendFileSync(h.file, link(PRIOR));
@@ -67,7 +86,7 @@ function handoff(h, { exitAt = 600, forkAt = Infinity, uncertain = false, descri
     readContinuationIds: () => uncertain && session.exited ? null : read(), readDescriptors: () => h.descriptors,
     now: () => now, delay: advance, waitForChange: advance,
     decideRoute: async () => ({ route: 'respawn', job: { id: 'aaaaaaaa' } }),
-    respawnJob: async () => { h.calls.push(['respawn']); return { ok: true, attached: true }; },
+    respawnJob: async () => { h.calls.push(['respawn']); return respawnResult || { ok: true, attached: true }; },
   }).then(result => ({ result, now }));
 }
 
@@ -304,12 +323,199 @@ for (const mode of ['clicks', 'click and restore', 'restore and click']) {
     } else {
       assert.equal(results[1].ok, true, 'manual joiner shares the successful restore flight');
     }
+    h.publishWorker();
     h.descriptors.length = 0;
-    assert.equal((await click()).ok, true, 'a completed flight must allow a later retry');
+    assert.equal((await click()).ok, true, 'a published worker clears the marker and allows later recovery');
     assert.equal(h.calls.length, 2);
   });
 }
 }
+
+for (const timedOut of [false, true]) {
+  test('1033 click two seconds after ' + (timedOut ? 'timed-out' : 'successful') + ' restore respawn shares its result', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = fixture(t, 'done');
+    if (timedOut) h.delivery.result = { ok: false, error: 'claude respawn timed out after 60000ms' };
+    const restore = h.handlers.get('restore-background-job')({}, SID);
+    while (!h.delivery.settled) await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(h.delivery.settled, 1, 'the CLI verb has settled before the delayed click');
+    t.mock.timers.tick(2000);
+    const result = await h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+    assert.equal(h.calls.length, 1, 'a delayed click must not respawn again before publication');
+    assert.equal(result.ok, !timedOut);
+    if (timedOut) {
+      assert.match(result.error, /unknown.*Agents view/i);
+      assert.match((await restore).reason, /unknown.*Agents view/i);
+    } else {
+      h.publishWorker();
+      assert.equal((await restore).action, 'attach');
+    }
+  });
+
+  test('1033 unpublished ' + (timedOut ? 'uncertain' : 'successful') + ' respawn expires after fifteen seconds', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = fixture(t, 'done');
+    if (timedOut) h.delivery.result = { ok: false, error: 'verb timeout' };
+    const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+    await click();
+    t.mock.timers.tick(14999);
+    await click();
+    assert.equal(h.calls.length, 1, 'the marker must last the whole descriptor window');
+    t.mock.timers.tick(1);
+    await new Promise(resolve => setImmediate(resolve));
+    await click();
+    assert.equal(h.calls.length, 2, 'an unpublished worker can be retried after fifteen seconds');
+  });
+
+  for (const verb of ['stop', 'rm']) {
+  test('1033 ' + verb + ' clears an unpublished ' + (timedOut ? 'uncertain' : 'successful') + ' respawn marker', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = fixture(t, 'done');
+    if (timedOut) h.delivery.result = { ok: false, error: 'verb timeout' };
+    const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+    await click();
+    await click();
+    assert.equal(h.calls.length, 1, 'the unpublished respawn must be held before Stop');
+    h.delivery.result = { ok: true };
+    await h.handlers.get('bg-agent-verb')({}, verb, 'aaaaaaaa');
+    await click();
+    assert.deepEqual(h.calls.map(call => call[0]), ['respawn', verb, 'respawn'], verb + ' permits immediate explicit recovery');
+  });
+  }
+}
+
+for (const state of ['stopped', 'failed']) {
+  for (const publication of ['old worker remains', 'new worker before state update']) {
+    for (const uncertain of [false, true]) {
+      test(`1033fix ${state}: ${publication}, ${uncertain ? 'uncertain' : 'successful'} result uses the pre-CLI pid snapshot`, async t => {
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const h = fixture(t, state);
+        h.descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID, pid: 4242 });
+        h.cli.readWorkerProcessEvidence = () => ({ processTableFresh: true, tableEntry: pid => pid === 4242 ? { created: 'old-worker' } : undefined });
+        h.delivery.autoAttach = publication === 'new worker before state update';
+        if (uncertain) h.delivery.result = { ok: false, error: 'verb timed out' };
+        const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+        await click();
+        h.delivery.autoAttach = false;
+        if (publication === 'new worker before state update') {
+          h.descriptors.length = 0;
+          await click();
+          assert.equal(h.calls.length, 2, 'a worker published during the CLI call releases the hold before state update');
+          return;
+        }
+        t.mock.timers.tick(2000);
+        await click();
+        assert.equal(h.calls.length, 1, 'a descriptor present before the CLI call must not release the hold');
+        h.publishWorker(4242);
+        await click();
+        assert.equal(h.calls.length, 1, 'republishing the old pid must keep the hold');
+        h.publishWorker();
+        h.descriptors.length = 0;
+        await click();
+        assert.equal(h.calls.length, 2, 'a different worker pid releases the hold even in a terminal state');
+      });
+    }
+  }
+}
+
+for (const exit of ['unknown verb', 'invalid id', 'generation change', 'unknown worker', 'hosted job']) {
+  test('1033fix real runVerb refusal is immediately rechecked: ' + exit, async t => {
+    const h = fixture(t, 'done');
+    let refused;
+    h.delivery.invoke = async (verb, id) => {
+      if (exit === 'generation change' || exit === 'unknown worker') h.writeJob(id, SID, 'running');
+      if (exit === 'generation change') h.cli.refreshProcessTable = async () => bg.stop();
+      if (exit === 'unknown worker') h.cli.readWorkerProcessEvidence = () => ({ processTableFresh: false });
+      if (exit === 'hosted job') {
+        h.writeJob(id, SID, 'working');
+        h.descriptors.push({ kind: 'bg', jobId: id, sessionId: SID, pid: 4242 });
+      }
+      refused = await bg.runVerb(exit === 'unknown verb' ? 'bogus' : verb, exit === 'invalid id' ? 'invalid' : id);
+      h.writeJob(id, SID, 'done');
+      h.descriptors.length = 0;
+      h.cli.refreshProcessTable = async () => {};
+      h.cli.readWorkerProcessEvidence = () => ({ processTableFresh: true, tableEntry: () => undefined });
+      h.delivery.invoke = (...args) => bg.runVerb(...args);
+      return refused;
+    };
+    const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+    await click();
+    const checks = h.checks.length;
+    const retry = await click();
+    assert.ok(h.checks.length > checks, 'a certain refusal must permit a fresh check on immediate retry');
+    assert.equal(refused.refused, true, 'the real runVerb marks its pre-CLI exit as refused');
+    assert.equal(refused.error, {
+      'unknown verb': 'unknown verb: bogus',
+      'invalid id': 'invalid background session id',
+      'generation change': 'background agent service changed while checking the worker; retry the action',
+      'unknown worker': "cannot tell whether job aaaaaaaa's worker is running — not respawned",
+      'hosted job': 'cannot respawn a working session; stop it first',
+    }[exit]);
+    assert.equal(retry.ok, true);
+    assert.equal(h.cliCalls.filter(args => args[0] === 'respawn').length, 1);
+  });
+}
+
+test('1033fix a runVerb throw is held for a joiner and the next click', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const h = fixture(t, 'done');
+  h.delivery.invoke = async (...args) => {
+    await bg.runVerb(...args);
+    throw new Error('reconcile failed after CLI success');
+  };
+  const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+  const results = await Promise.allSettled([click(), click()]);
+  assert.ok(results.every(result => result.status === 'fulfilled'), 'post-CLI throws must return a held unknown result');
+  const result = await click();
+  assert.equal(result.ok, false);
+  assert.match(result.error, /unknown.*reconcile failed.*Agents view/i);
+  assert.deepEqual(results.map(item => item.value), [result, result]);
+  assert.equal(h.cliCalls.filter(args => args[0] === 'respawn').length, 1);
+});
+
+test('1033fix a thrown conversation check is refused without a hold', async t => {
+  const h = fixture(t, 'done');
+  h.delivery.checkThrow = true;
+  const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+  assert.equal((await click()).ok, false);
+  h.delivery.checkThrow = false;
+  assert.equal((await click()).ok, true, 'a check failure permits an immediate fresh check');
+  assert.equal(h.checks.length, 2);
+  assert.equal(h.calls.length, 1);
+});
+
+test('1033fix a rejection escaping checkVerb is not held', async t => {
+  const h = fixture(t, 'done');
+  h.delivery.checkReject = true;
+  const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+  await assert.rejects(click(), TypeError);
+  assert.equal(h.calls.length, 0, 'a rejected check cannot reach the CLI');
+  h.delivery.checkReject = false;
+  assert.equal((await click()).ok, true, 'a rejected check permits an immediate retry');
+  assert.equal(h.checks.length, 2);
+  assert.equal(h.calls.length, 1);
+});
+
+test('1033fix handoff keeps unknown-result advice once with no double period', async t => {
+  const h = fixture(t);
+  const { result } = await handoff(h, { respawnResult: { ok: false,
+    error: 'Respawn result is unknown (timeout). Check the Agents view before retrying.' } });
+  assert.doesNotMatch(result.error, /\.\./, 'handoff must not duplicate the final period');
+  assert.equal((result.error.match(/check the Agents view/ig) || []).length, 1, 'handoff must give the recovery advice only once');
+});
+
+test('1033fix2 refused handoff strips the final period of a real checkVerb error', async t => {
+  const h = fixture(t, 'running');
+  h.cli.readWorkerProcessEvidence = () => ({ processTableFresh: false });
+  const refusal = await h.handlers.get('check-bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+  assert.equal(refusal.ok, false);
+  assert.match(refusal.error, /Check the Agents view, then retry\.$/);
+  const { result } = await handoff(h, { respawnResult: { ...refusal, refused: true } });
+  assert.equal(result.code, 'respawn-failed');
+  assert.doesNotMatch(result.error, /\.\./, 'a real checkVerb refusal must not duplicate the final period');
+  assert.ok(result.error.includes(refusal.error + ' Respawn it from the Agents view'));
+});
 
 for (const state of ['stopped', 'failed']) {
   test('1020fix2 ' + state + ' continuation permits Respawn while daemon runs', async t => {

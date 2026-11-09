@@ -58,13 +58,32 @@ existing button. Unknown states or worker liveness refuse. Restore and manual
 Respawn pass their classified worker evidence to `liveJobCheck`, keyed by job id;
 Delete retains its conservative default. Unknown never respawns. A per-session promise
 coalesces overlapping restore requests. A per-job promise covers the check and CLI
-respawn shared by manual Respawn, restore and handoff, releasing on success or failure.
+respawn shared by manual Respawn, restore and handoff. After the verb returns,
+a per-job marker holds its result until this job's background descriptor is
+published with a pid absent from all live background descriptors captured immediately
+before the CLI respawn call, or the shared 15-second descriptor wait expires.
+A worker published during the CLI call releases the marker immediately, including
+when state.json still says stopped or failed. A worker present before that call
+cannot release it. Capturing all background pids also keeps an existing descriptor
+old when a joiner updates the held job's session id. A successful Stop or Delete (`rm`)
+also clears the marker. After the verb returns, observation subscribes before checking
+for a different pid. An unreadable
+initial snapshot holds the marker until expiry.
+Publication and expiry release the marker's listener and timer. Missing descriptor
+observation keeps the marker until expiry. Other jobs retain independent flights.
 All joiners share a successful respawn, even with different restore modes or extra
 session ids and before the daemon publishes its new worker. Restore then waits
-for its descriptor; manual Respawn returns success. Same-mode callers with a subset
-of the flight's lowercased extra session ids also share refusals and failures.
-Other callers wait for settlement and run their own checked respawn only if the
-flight refused, failed or rejected.
+for its descriptor; manual Respawn returns success. The unknown-verb, invalid-id,
+service-generation, unknown-worker and hosted-job guards in `runVerb` mark their
+refusal with `refused: true`, keeping their existing error text.
+A returned failure without `refused: true` (including a timeout), or an exception
+from `runVerb` (including post-CLI reconciliation), is uncertain: it holds the same marker and returns
+an unknown-result failure asking the caller to check the Agents view. Joiners
+share that failure without another CLI call. Same-mode callers with a subset of
+the flight's lowercased extra session ids also share refusals. Other callers retry
+their checked respawn only if the flight refused or its pre-CLI check rejected.
+Check failures never hold a marker; caught conversation-check errors return the
+existing refusal, while a rejection escaping `checkVerb` remains a rejection.
 This does not coalesce distinct dead jobs in one continuation chain: selecting its
 newest saved member requires a proven chain lookup before choosing the job.
 Descriptor observation subscribes before its
@@ -1145,7 +1164,8 @@ the exit-batch same-id rekey keeps the entry so `markExitBackground` saves
 A pre-write refusal uses `refused`; a post-exit checked refusal or verb
 failure uses `respawn-failed` and releases the held exit unsuppressed. The
 exit batch counts that row as started and leaves other unwritten rows eligible.
-The checked-refusal notice says the job was not relaunched; a verb failure or
+The checked-refusal notice says the job was not relaunched and strips the reason's
+trailing periods and whitespace before appending recovery guidance; a verb failure or
 60-second timeout says it may still start and directs the user to check Agents
 before respawning again. An exit timeout without a confirmed continuation uses
 `exit-timeout`, reports the continuation observation and never relaunches a live source.

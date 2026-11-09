@@ -45,7 +45,8 @@ function restoreFixture(t, { saved = [{ sessionId: 's1', bg: true, attachJobId: 
   t.after(() => assert.equal(listeners.size, 0, 'descriptor listener released'));
   const restore = handlers.get('restore-background-job');
   assert.equal(typeof restore, 'function', 'B-T7 restore IPC registered');
-  return { handoff: job => unsubscribe.respawnForHandoff(job), restore: (id = 's1', options) => restore({}, id, options), bg, seen, live, listeners,
+  return { manual: () => handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa'),
+    handoff: job => unsubscribe.respawnForHandoff(job), restore: (id = 's1', options) => restore({}, id, options), bg, seen, live, listeners,
     publish: value => { live.value = value; for (const fn of listeners) fn(); } };
 }
 
@@ -78,11 +79,76 @@ for (const state of ['working', 'blocked', 'running', 'done', 'failed', 'stopped
       assert.equal(result.action, shouldAttach ? 'attach' : 'refuse');
       assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), shouldRespawn ? [['respawn', 'aaaaaaaa']] : []);
       assert.ok(h.seen.some(call => call[0] === 'check' && call[1]?.workerLiveness === 'all'), 'S1a classifies every restore state');
+      if (shouldRespawn) {
+        assert.equal(h.listeners.size, 1, 'the descriptor present before the CLI call cannot release its marker');
+        h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1', pid: 4242 }]);
+        assert.equal(h.listeners.size, 0, 'a different pid releases the marker');
+      }
       if (!shouldRespawn && liveness === 'dead') assert.equal(result.recovery, 'respawn');
       if (!shouldAttach) assert.match(result.reason, new RegExp(`aaaaaaaa.*${state}`));
     });
   }
 }
+
+for (const state of ['working', 'done', 'stopped', 'failed']) {
+  test(`1033fix2 ${state}: publication during the CLI call immediately releases the hold`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = restoreFixture(t, { state });
+    let calls = 0;
+    h.bg.runVerb = async () => {
+      calls++;
+      await new Promise(resolve => setImmediate(resolve));
+      h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1', pid: 4242 }]);
+      return { ok: true };
+    };
+    assert.equal((await h.manual()).ok, true);
+    assert.equal(h.listeners.size, 0, 'a worker published during the CLI call must immediately release the hold');
+    h.publish([]);
+    assert.equal((await h.manual()).ok, true);
+    assert.equal(calls, 2, 'a worker that already died must permit a fresh manual respawn');
+  });
+}
+
+test('1033fix2 updating the held session id cannot release on a previously unrelated bg pid', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const old = { kind: 'bg', sessionId: 'new-session', pid: 4242 };
+  const h = restoreFixture(t, { descriptors: [old] });
+  await h.manual();
+  assert.deepEqual(await h.handoff({ id: 'aaaaaaaa', sessionId: 'new-session' }), { ok: true, attached: true });
+  assert.equal(h.listeners.size, 1, 'a pid present before the CLI call must stay old after the job session id changes');
+  h.publish([]);
+  await h.manual();
+  assert.equal(h.seen.filter(call => call[0] === 'respawn').length, 1, 'the old unrelated pid must not enable another respawn');
+  h.publish([{ ...old, pid: 4243 }]);
+  assert.equal(h.listeners.size, 0, 'a genuinely new pid matching the updated session id releases the hold');
+});
+
+test('1033fix2 an unreadable pre-CLI snapshot retains the hold until expiry', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { handlers, ipcMain } = fakeIpc();
+  const bg = fakeBgAgents();
+  const listeners = new Set();
+  let unreadable = true;
+  bg.conversationCheck = () => ({ known: true, state: 'done', hosted: false, sessionIds: [] });
+  bg.runVerb = async () => { bg.calls.push(['respawn']); unreadable = false; return { ok: true }; };
+  init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} },
+    cliSessionState: {
+      readAllDescriptors: () => { if (unreadable) throw Error('snapshot unavailable'); return [{ kind: 'bg', jobId: 'aaaaaaaa', pid: 4242 }]; },
+      onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+    },
+  });
+  const click = () => handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+  await click();
+  t.mock.timers.tick(14999);
+  await click();
+  assert.equal(bg.calls.length, 1, 'snapshot failure must retain the full conservative window');
+  assert.equal(listeners.size, 1);
+  t.mock.timers.tick(1);
+  await click();
+  assert.equal(bg.calls.length, 2);
+  t.mock.timers.tick(15000);
+  assert.equal(listeners.size, 0);
+});
 
 test('B dead worker respawn repeats the existing conversation guard', async t => {
   const h = restoreFixture(t);
@@ -104,9 +170,9 @@ test('B respawn waits for its own bg descriptor then releases its listener', asy
   const result = h.restore();
   await invoked;
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(h.listeners.size, 1);
+  assert.equal(h.listeners.size, 2, 'attachment and the respawn marker both observe publication');
   h.publish([{ kind: 'interactive', sessionId: 's1' }, { kind: 'bg', jobId: 'bbbbbbbb', sessionId: 's1' }]);
-  assert.equal(h.listeners.size, 1, 'neither interactive nor another job is attachment proof');
+  assert.equal(h.listeners.size, 2, 'neither interactive nor another job is attachment proof');
   h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }]);
   assert.deepEqual(await result, { action: 'attach', sessionId: 's1', jobId: 'aaaaaaaa' });
 });
@@ -117,16 +183,19 @@ test('B missing descriptor after 15 seconds reports respawned-not-attached', asy
   const result = h.restore();
   await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(14999);
-  assert.equal(h.listeners.size, 1);
+  assert.equal(h.listeners.size, 2, 'attachment and the respawn marker share the fifteen-second bound');
   t.mock.timers.tick(1);
   assert.deepEqual(await result, { action: 'respawned-not-attached', jobId: 'aaaaaaaa' });
 });
 
-test('B CLI refusal is visible and never waits for attachment', async t => {
+test('B uncertain CLI failure is visible without waiting for attachment and releases its marker', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const h = restoreFixture(t, { verbResult: { ok: false, error: 'cannot open: running in another terminal' } });
   const result = await h.restore();
   assert.equal(result.action, 'refuse');
   assert.match(result.reason, /aaaaaaaa.*working.*running in another terminal/);
+  assert.match(result.reason, /unknown.*Agents view/);
+  t.mock.timers.tick(15000);
 });
 
 test('B GUARD overlapping restore requests share one respawn', async t => {
@@ -135,6 +204,8 @@ test('B GUARD overlapping restore requests share one respawn', async t => {
   assert.equal(results[0].action, 'attach');
   assert.equal(results[1].action, 'attach');
   assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), [['respawn', 'aaaaaaaa']]);
+  assert.equal(h.listeners.size, 1, 'overlapping restores retain the marker for the existing descriptor');
+  h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1', pid: 4242 }]);
 });
 
 test('B GUARD attach-only retry cannot respawn a dead worker', async t => {
@@ -364,10 +435,13 @@ test('S2 shared checked respawn matches a descriptor without jobId using full jo
   const h = restoreFixture(t, { state: 'stopped', descriptors: [{ kind: 'bg', sessionId: 's1' }] });
   assert.deepEqual(await h.handoff({ id: 'aaaaaaaa', sessionId: 's1' }), { ok: true, attached: true });
   assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), [['respawn', 'aaaaaaaa']]);
+  assert.equal(h.listeners.size, 1, 'a legacy descriptor present at hold start is retained');
+  h.publish([{ kind: 'bg', sessionId: 's1', pid: 4242 }]);
 });
 
 for (const failure of ['refuse', 'fail', 'throw']) {
   test('S2 shared checked respawn preserves failure kind: ' + failure, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
     const h = restoreFixture(t, { state: 'stopped', verbResult: { ok: false, error: 'verb failed' } });
     if (failure === 'refuse') h.bg.conversationCheck = () => ({ known: false, reason: 'unknown owner' });
     if (failure === 'throw') h.bg.runVerb = async () => { throw new Error('verb threw'); };
@@ -376,6 +450,10 @@ for (const failure of ['refuse', 'fail', 'throw']) {
     assert.equal(result.refused === true, failure === 'refuse');
     assert.match(result.error, failure === 'refuse' ? /unknown owner/ : failure === 'fail' ? /verb failed/ : /verb threw/);
     if (failure === 'refuse') assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), []);
+    if (failure !== 'refuse') {
+      assert.match(result.error, /unknown.*Agents view/);
+      t.mock.timers.tick(15000);
+    }
   });
 }
 
@@ -416,7 +494,7 @@ test('S2d checked handoff lowercases and deduplicates extra conversation ids', a
   assert.deepEqual(checked, ['s-1', 'extra-id']);
 });
 
-for (const outcome of ['succeeded', 'refused', 'rejected']) {
+for (const outcome of ['succeeded', 'refused', 'threw']) {
 for (const scenario of ['manual with extra ids', 'manual without extra ids', 'handoff with new extra ids']) {
   test('1020fix5 joining ' + scenario + ' after flight ' + outcome, async () => {
     const { handlers, ipcMain } = fakeIpc();
@@ -436,7 +514,7 @@ for (const scenario of ['manual with extra ids', 'manual without extra ids', 'ha
     };
     bg.runVerb = async () => {
       bg.calls.push(['verb']); started(); await wait;
-      if (outcome === 'rejected' && bg.calls.filter(call => call[0] === 'verb').length === 1) throw Error('first flight rejected');
+      if (outcome === 'threw' && bg.calls.filter(call => call[0] === 'verb').length === 1) throw Error('first verb threw');
       return { ok: true };
     };
     let extraLive = false;
@@ -458,6 +536,14 @@ for (const scenario of ['manual with extra ids', 'manual without extra ids', 'ha
     const firstResult = await first;
     assert.equal(firstResult.ok, outcome === 'succeeded');
     const result = await second;
+    if (outcome === 'threw') {
+      assert.equal(checks.length, 1, 'an uncertain flight must satisfy every joiner without another check');
+      assert.equal(result.ok, false);
+      assert.match(result.error, /unknown.*first verb threw.*Agents view/);
+      assert.equal(ids.includes('extra'), false, 'uncertainty must not run a second guard');
+      assert.equal(bg.calls.filter(call => call[0] === 'verb').length, 1);
+      return;
+    }
     if (outcome === 'succeeded') {
       assert.equal(checks.length, 1, 'a successful flight must satisfy every joiner');
       assert.equal(result.ok, true);
@@ -474,7 +560,7 @@ for (const scenario of ['manual with extra ids', 'manual without extra ids', 'ha
       assert.ok(ids.includes('extra'), 'the new extra id must be checked');
     }
     assert.equal(bg.calls.filter(call => call[0] === 'verb').length,
-      (outcome === 'rejected' ? 1 : 0) + (scenario === 'manual without extra ids' ? 1 : 0), 'only a permitted joiner may retry');
+      scenario === 'manual without extra ids' ? 1 : 0, 'only a permitted joiner may retry');
   });
 }
 }

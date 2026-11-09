@@ -367,6 +367,48 @@ test('control mounts: an unrelated newline project launches but an overlapping n
     assert.match(res.stderr, /unrepresentable overlapping mount for control path/);
   });
 
+for (const [character, label] of [['\n', 'newline'], ['\r', 'CR']]) {
+  for (const exists of [false, true]) {
+    for (const form of ['resolved alias', 'requested']) {
+      test(`control refusal: ${exists ? 'existing' : 'missing'} ${form} with ${label} fails before bwrap`,
+        { skip: !FAKE_BWRAP_SUPPORTED && 'requires Linux newline filenames and symlinks' }, t => {
+          const rig = controlRig(t);
+          const project = path.join(rig.root, form === 'resolved alias' ? `project${character}name` : 'project-name');
+          fs.mkdirSync(project);
+          const alias = path.join(rig.root, 'link');
+          fs.symlinkSync(project, alias);
+          const control = path.join(project, 'triggers');
+          if (exists) fs.mkdirSync(path.join(control, 'processed'), { recursive: true });
+          const requested = form === 'resolved alias' ? path.join(alias, 'triggers')
+            : `${project}/discard${character}/../triggers`;
+          const res = rig.run(['--version'], {
+            SWITCHBOARD_SANDBOX_TRIGGERS_DIR: requested,
+          }, project);
+          assert.equal(res.status, 125, 'unrepresentable control path must refuse');
+          assert.match(res.stderr, /claude-sandbox: unrepresentable control path:/);
+          assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'no bwrap call');
+          assert.equal(fs.existsSync(control), exists, 'refusal does not create the control directory');
+        });
+    }
+  }
+}
+
+for (const exists of [false, true]) {
+  test(`control refusal: ${exists ? 'existing' : 'missing'} alias ending in newline fails before bwrap`,
+    { skip: !FAKE_BWRAP_SUPPORTED && 'requires Linux newline filenames and symlinks' }, t => {
+      const rig = controlRig(t);
+      const control = path.join(rig.proj, 'triggers\n');
+      if (exists) fs.mkdirSync(path.join(control, 'processed'), { recursive: true });
+      const alias = path.join(rig.root, 'link');
+      fs.symlinkSync(control, alias);
+      const res = rig.run(['--version'], { SWITCHBOARD_SANDBOX_TRIGGERS_DIR: alias });
+      assert.equal(res.status, 125, 'a trailing newline in the resolved control path must refuse');
+      assert.match(res.stderr, /claude-sandbox: unrepresentable control path:/);
+      assert.deepEqual(fs.readdirSync(path.join(rig.root, 'bwrap-args')), [], 'no bwrap call');
+      assert.equal(fs.existsSync(control), exists, 'refusal does not create the control directory');
+    });
+}
+
 test('sandbox wrapper: refuses an extra bind at or under a .claude or .git, however the path is spelled', { skip: !LINUX && 'linux only' }, () => {
   const rig = makeRig({ bwrapExit: 1 });
   try {
