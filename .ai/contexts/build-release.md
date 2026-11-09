@@ -72,8 +72,13 @@ stays selected, including on Windows with an 8.3 TEMP path.
 The exported `STRONG_MARKERS` retains the study's POSIX/platform variants.
 Relative production requires are followed transitively with a per-test visited
 set: reaching a production file containing `process.platform` selects the test.
-Test helpers are traversed to reach production dependencies, but their own
-platform markers do not opt a caller in. Node_modules are excluded. Literal requires
+Test helpers are traversed to reach production dependencies. Their
+`processes`, `filesystem`, `conpty` and `links` markers also select callers
+transitively, as do those markers in production dependencies. Helper-only
+`platform` and `winpath` markers do not propagate: `dom-setup.js` must not
+select every jsdom caller solely for its platform setup. Other marker categories
+remain direct-test checks; production `process.platform` remains transitive.
+Node_modules are excluded. Literal requires
 resolve files, `.js`, `.cjs` and `index.js`; unresolved literals in test fixtures
 are ignored. The read/dependency caches are scoped to one selection call.
 
@@ -85,9 +90,19 @@ marker must retain the explicit opt-in: `task-review-regressions.test.js`
 retains the #650 reader/worker regression family, and
 `derive-project-path.test.js` exercises the separator expression in
 `resolveWorktreePath` using real tmpdir paths, without a `process.platform`
-branch. No production-module exclusion list is applied. The selection was 368
-of 556 files when this was written; selection above roughly 75% requires
-reporting contributors before considering justified exclusions.
+branch. No production-module exclusion list is applied. The selection is 387
+of 570 files at #1029 (379 before the change: 13 added, 5 removed); selection
+above roughly 75% requires reporting contributors before considering justified
+exclusions.
+
+The FILETIME conversion and comparison live in the pure
+`src/main/cli/proc-start.js`, re-exported by `cli-session-state.js`.
+`bg-worker-liveness.js` imports the pure module, so roster/UI tests no longer
+reach process probes just to compare creation timestamps. With only this split,
+selection falls to 341 files; the transitive marker rule brings back 33 and adds
+13. `remote-attach.js` still uses `remote-ssh-binary.js` to resolve the actual SSH
+executable; its platform-specific executable checks and search paths are not a
+pure-helper dependency and remain selected.
 
 To force Windows execution, add a relevant strong marker or the explicit test
 source comment `// platform: windows`; extend the exported marker set when a
