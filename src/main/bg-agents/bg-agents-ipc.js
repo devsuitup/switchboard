@@ -4,6 +4,7 @@
 const { deleteSessionRefusal } = require('../../../delete-session-guard');
 const { JOB_ID_RE } = require('./bg-agents-roster');
 const { liveWorkerDescriptor } = require('./bg-worker-liveness');
+const DESCRIPTOR_WAIT_MS = 15000;
 
 function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessionState, sessionHasPty, ptyPids, getSetting }) {
   const push = (snapshot) => {
@@ -76,26 +77,59 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     return checkVerb(verb, id);
   });
   const respawning = new Map();
-  const runRespawn = (id, restoring = false, extraSessionIds = []) => {
+  const justRespawned = new Map();
+  const holdRespawn = (key, value, job) => {
+    let unsubscribe;
+    const clear = () => {
+      clearTimeout(timer);
+      unsubscribe?.();
+      if (justRespawned.get(key)?.value === value) justRespawned.delete(key);
+    };
+    const timer = setTimeout(clear, DESCRIPTOR_WAIT_MS);
+    timer.unref?.();
+    const check = () => {
+      try { if (liveWorkerDescriptor(job, cliSessionState.readAllDescriptors())) clear(); } catch {}
+    };
+    justRespawned.set(key, { value, clear, job, check });
+    try { unsubscribe = cliSessionState.onDescriptorsChanged(check); } catch {}
+    check();
+  };
+  const runRespawn = (id, restoring = false, extraSessionIds = [], job = { id }) => {
     const key = String(id).toLowerCase();
+    const recent = justRespawned.get(key);
+    if (recent) {
+      Object.assign(recent.job, job);
+      recent.check();
+      return Promise.resolve(recent.value);
+    }
     const extraIds = new Set(extraSessionIds.map(sid => sid.toLowerCase()));
     const flight = respawning.get(key);
     if (flight) {
+      Object.assign(flight.job, job);
       if (flight.restoring === restoring && [...extraIds].every(sid => flight.extraIds.has(sid))) return flight.pending;
-      const retry = () => runRespawn(id, restoring, extraSessionIds);
-      return flight.pending.then(value => !value.refused && value.result?.ok ? value : retry(), retry);
+      const retry = () => runRespawn(id, restoring, extraSessionIds, job);
+      return flight.pending.then(value => !value.refused ? value : retry(), retry);
     }
     const pending = (async () => {
       const check = await checkVerb('respawn', id, restoring, extraSessionIds);
-      return { result: check.ok ? await bgAgents.runVerb('respawn', id) : check, refused: !check.ok };
+      if (!check.ok) return { result: check, refused: true };
+      const result = await bgAgents.runVerb('respawn', id);
+      if (result?.refused) return { result, refused: true };
+      const value = { result: result?.ok ? result : { ok: false,
+        error: `Respawn result is unknown (${result?.error || 'no result'}). Check the Agents view before retrying.` }, refused: false };
+      holdRespawn(key, value, job);
+      return value;
     })().finally(() => respawning.delete(key));
-    respawning.set(key, { pending, restoring, extraIds });
+    respawning.set(key, { pending, restoring, extraIds, job });
     return pending;
   };
   ipcMain.handle('bg-agent-verb', async (_event, verb, id) => {
     if (verb === 'respawn') return (await runRespawn(id)).result;
     const check = await checkVerb(verb, id);
-    return check.ok ? bgAgents.runVerb(verb, id) : check;
+    if (!check.ok) return check;
+    const result = await bgAgents.runVerb(verb, id);
+    if (verb === 'stop' && result?.ok) justRespawned.get(String(id).toLowerCase())?.clear();
+    return result;
   });
   ipcMain.handle('dispatch-bg-agent', (_event, fields) => bgAgents.dispatch(fields));
   ipcMain.handle('bg-agent-live-job', (_event, sessionId) => bgAgents.liveJobCheck(String(sessionId || '')));
@@ -116,13 +150,13 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     };
     try {
       unsubscribe = cliSessionState.onDescriptorsChanged(check);
-      timer = setTimeout(() => finish(false), 15000);
+      timer = setTimeout(() => finish(false), DESCRIPTOR_WAIT_MS);
       check();
     } catch { finish(false); }
   });
   const respawnForHandoff = async (job, extraSessionIds = []) => {
     try {
-      const { result, refused } = await runRespawn(job.id, true, extraSessionIds);
+      const { result, refused } = await runRespawn(job.id, true, extraSessionIds, { ...job });
       if (!result?.ok) return { ok: false, ...(refused ? { refused: true } : {}), error: result?.error || 'respawn returned no result' };
       return { ok: true, attached: await waitForDescriptor(job) };
     } catch (err) { return { ok: false, error: err.message || String(err) }; }

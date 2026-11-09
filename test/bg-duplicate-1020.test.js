@@ -40,9 +40,9 @@ function fixture(t, state = 'stopped') {
     writeJob('bbbbbbbb', NEXT, 'working');
     descriptors.push({ kind: 'bg', sessionId: NEXT, jobId: 'bbbbbbbb', cwd: root });
   };
-  const calls = [], handlers = new Map(), delivery = { autoAttach: false, wait: null };
+  const calls = [], handlers = new Map(), delivery = { autoAttach: false, wait: null, result: { ok: true } };
   init({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
-    bgAgents: { ...bg, runVerb: async (...args) => { calls.push(args); if (delivery.wait) await delivery.wait; if (delivery.autoAttach) descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: bg.findRestoreJob(SID, 'aaaaaaaa').job.sessionId }); return { ok: true }; } },
+    bgAgents: { ...bg, runVerb: async (...args) => { calls.push(args); if (delivery.wait) await delivery.wait; if (delivery.autoAttach) descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: bg.findRestoreJob(SID, 'aaaaaaaa').job.sessionId }); return delivery.result; } },
     cliSessionState: cli, getMainWindow: () => null, log: { warn() {} }, activeSessions: new Map(),
     sessionHasPty: () => false, ptyPids: () => [], getSetting: () => ({ openWorkingSet: [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }] }) });
   const publishWorker = () => {
@@ -304,11 +304,62 @@ for (const mode of ['clicks', 'click and restore', 'restore and click']) {
     } else {
       assert.equal(results[1].ok, true, 'manual joiner shares the successful restore flight');
     }
+    h.publishWorker();
     h.descriptors.length = 0;
-    assert.equal((await click()).ok, true, 'a completed flight must allow a later retry');
+    assert.equal((await click()).ok, true, 'a published worker clears the marker and allows later recovery');
     assert.equal(h.calls.length, 2);
   });
 }
+}
+
+for (const timedOut of [false, true]) {
+  test('1033 click two seconds after ' + (timedOut ? 'timed-out' : 'successful') + ' restore respawn shares its result', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = fixture(t, 'done');
+    if (timedOut) h.delivery.result = { ok: false, error: 'claude respawn timed out after 60000ms' };
+    const restore = h.handlers.get('restore-background-job')({}, SID);
+    await new Promise(resolve => setImmediate(resolve));
+    t.mock.timers.tick(2000);
+    const result = await h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+    assert.equal(h.calls.length, 1, 'a delayed click must not respawn again before publication');
+    assert.equal(result.ok, !timedOut);
+    if (timedOut) {
+      assert.match(result.error, /unknown.*Agents view/i);
+      assert.match((await restore).reason, /unknown.*Agents view/i);
+    } else {
+      h.publishWorker();
+      assert.equal((await restore).action, 'attach');
+    }
+  });
+
+  test('1033 unpublished ' + (timedOut ? 'uncertain' : 'successful') + ' respawn expires after fifteen seconds', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = fixture(t, 'done');
+    if (timedOut) h.delivery.result = { ok: false, error: 'verb timeout' };
+    const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+    await click();
+    t.mock.timers.tick(14999);
+    await click();
+    assert.equal(h.calls.length, 1, 'the marker must last the whole descriptor window');
+    t.mock.timers.tick(1);
+    await new Promise(resolve => setImmediate(resolve));
+    await click();
+    assert.equal(h.calls.length, 2, 'an unpublished worker can be retried after fifteen seconds');
+  });
+
+  test('1033 stop clears an unpublished ' + (timedOut ? 'uncertain' : 'successful') + ' respawn marker', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = fixture(t, 'done');
+    if (timedOut) h.delivery.result = { ok: false, error: 'verb timeout' };
+    const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+    await click();
+    await click();
+    assert.equal(h.calls.length, 1, 'the unpublished respawn must be held before Stop');
+    h.delivery.result = { ok: true };
+    await h.handlers.get('bg-agent-verb')({}, 'stop', 'aaaaaaaa');
+    await click();
+    assert.deepEqual(h.calls.map(call => call[0]), ['respawn', 'stop', 'respawn'], 'Stop permits immediate explicit recovery');
+  });
 }
 
 for (const state of ['stopped', 'failed']) {

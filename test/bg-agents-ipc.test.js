@@ -104,9 +104,9 @@ test('B respawn waits for its own bg descriptor then releases its listener', asy
   const result = h.restore();
   await invoked;
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(h.listeners.size, 1);
+  assert.equal(h.listeners.size, 2, 'attachment and the respawn marker both observe publication');
   h.publish([{ kind: 'interactive', sessionId: 's1' }, { kind: 'bg', jobId: 'bbbbbbbb', sessionId: 's1' }]);
-  assert.equal(h.listeners.size, 1, 'neither interactive nor another job is attachment proof');
+  assert.equal(h.listeners.size, 2, 'neither interactive nor another job is attachment proof');
   h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }]);
   assert.deepEqual(await result, { action: 'attach', sessionId: 's1', jobId: 'aaaaaaaa' });
 });
@@ -117,16 +117,19 @@ test('B missing descriptor after 15 seconds reports respawned-not-attached', asy
   const result = h.restore();
   await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(14999);
-  assert.equal(h.listeners.size, 1);
+  assert.equal(h.listeners.size, 2, 'attachment and the respawn marker share the fifteen-second bound');
   t.mock.timers.tick(1);
   assert.deepEqual(await result, { action: 'respawned-not-attached', jobId: 'aaaaaaaa' });
 });
 
-test('B CLI refusal is visible and never waits for attachment', async t => {
+test('B uncertain CLI failure is visible without waiting for attachment and releases its marker', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const h = restoreFixture(t, { verbResult: { ok: false, error: 'cannot open: running in another terminal' } });
   const result = await h.restore();
   assert.equal(result.action, 'refuse');
   assert.match(result.reason, /aaaaaaaa.*working.*running in another terminal/);
+  assert.match(result.reason, /unknown.*Agents view/);
+  t.mock.timers.tick(15000);
 });
 
 test('B GUARD overlapping restore requests share one respawn', async t => {
@@ -368,6 +371,7 @@ test('S2 shared checked respawn matches a descriptor without jobId using full jo
 
 for (const failure of ['refuse', 'fail', 'throw']) {
   test('S2 shared checked respawn preserves failure kind: ' + failure, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
     const h = restoreFixture(t, { state: 'stopped', verbResult: { ok: false, error: 'verb failed' } });
     if (failure === 'refuse') h.bg.conversationCheck = () => ({ known: false, reason: 'unknown owner' });
     if (failure === 'throw') h.bg.runVerb = async () => { throw new Error('verb threw'); };
@@ -376,6 +380,10 @@ for (const failure of ['refuse', 'fail', 'throw']) {
     assert.equal(result.refused === true, failure === 'refuse');
     assert.match(result.error, failure === 'refuse' ? /unknown owner/ : failure === 'fail' ? /verb failed/ : /verb threw/);
     if (failure === 'refuse') assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), []);
+    if (failure === 'fail') {
+      assert.match(result.error, /unknown.*Agents view/);
+      t.mock.timers.tick(15000);
+    }
   });
 }
 
