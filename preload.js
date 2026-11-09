@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('api', {
     return reply;
   },
   sessionProjectionChanged: record => ipcRenderer.send('session-projection-changed', record),
+  reportTerminalGap: record => ipcRenderer.send('terminal-timer-gap', record),
   rebuildCache: () => ipcRenderer.invoke('rebuild-cache'),
   getActiveSessions: () => ipcRenderer.invoke('get-active-sessions'),
   getSessionLiveElsewhere: (id) => ipcRenderer.invoke('session-live-elsewhere', id),

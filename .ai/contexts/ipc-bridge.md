@@ -4,6 +4,16 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
+## Terminal timer gaps (#1037)
+
+`terminal-timer-gap` (#1037) is a one-way diagnostic sent by
+`api.reportTerminalGap({ gapMs, sessions, omitted })`. Each session has
+`{ id, chunks, chars }`; the renderer includes at most 20 eight-character ids.
+Only the active window's main frame is accepted. `src/main/app/power-log.js`
+validates nonnegative safe-integer counters and gap, truncates/sanitizes ids,
+and emits one bounded `[power]` line with an ISO timestamp. There is no terminal
+content, return payload, file access or application action.
+
 ## Schedules (#792, slices A1 and A2)
 
 | IPC | Args | Returns | Preload |

@@ -36,6 +36,8 @@ if (process.env.SWITCHBOARD_DATA_DIR) {
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 const LOG_DEBUG_ON = log.transports.file.level === 'debug' || log.transports.console.level === 'debug';
+const { createPowerLog } = require('./src/main/app/power-log');
+let powerLog;
 
 // Opt-in activity trace — see docs/activity-trace.md.
 const activityTrace = require('./src/main/shared/activity-trace');
@@ -421,6 +423,9 @@ function createWindow() {
       additionalArguments: TRACE.on ? ['--switchboard-activity-trace'] : [],
     },
   });
+
+  powerLog ||= createPowerLog({ powerMonitor, logger: log });
+  powerLog.observeWindow(mainWindow);
 
   // Set position after creation to prevent macOS from clamping size
   if (restorePosition) {
@@ -3253,6 +3258,12 @@ ipcMain.on('session-projection-changed', (event, record) => {
     if (!require('./public/session-projection-diagnostics').validateSessionProjectionRecord(record)) return;
     log.info('[session-projection] ' + JSON.stringify({ ...record, at: new Date().toISOString() }));
   } catch {}
+});
+
+ipcMain.on('terminal-timer-gap', (event, record) => {
+  if (!mainWindow || mainWindow.isDestroyed() || !event.senderFrame || event.sender !== mainWindow.webContents
+    || event.senderFrame !== mainWindow.webContents.mainFrame) return;
+  powerLog?.rendererGap(record);
 });
 
 ipcMain.on('activity-trace', (_event, cat, sid, fields) => {

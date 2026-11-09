@@ -7,6 +7,47 @@ running, with `aria-disabled` and a tooltip explaining why. The sidebar menu
 disables its entry when no terminal is open or its entry is closed. Neither
 control starts a process. A hidden open terminal is revealed for refresh.
 
+## Pending output and standby (#1037)
+
+`terminal-manager.js` keeps the usual 33 ms flush cadence. Each requested
+animation frame also has a 1000 ms timer fallback; the first callback to run
+flushes and cancels the other. Incoming ordinary chunks keep that deadline.
+A cadence delay can add at most 33 ms before the frame and fallback are armed.
+These are scheduling bounds while the renderer event loop runs, not guarantees
+while Windows suspends execution. Rekey, hidden-buffer migration and destruction
+cancel both callbacks. Sync updates retain their separate 500 ms safety timer.
+
+Visible single-view, grid and panel-terminal queues have a 4 MiB UTF-16 payload
+budget (two bytes per JS code unit), beside the existing hidden 2 Mi-code-unit
+limit. A running character count avoids repeatedly walking the chunk array;
+more than 4096 chunks coalesce even below the payload cap. On payload overflow,
+the existing `trimHiddenBuffer` chooses the last safe full-redraw marker, or
+an ANSI/surrogate-safe tail with a terminal reset when no marker fits. Reset
+state survives migration into the hidden accumulator. Trimming can discard
+unseen scrollback and, without a self-contained redraw, cannot reconstruct
+arbitrary lost cursor/attribute state; the reset fallback is the same compromise
+as hidden output. Single incoming IPC chunks and transient joins are outside
+the retained-payload budget.
+
+Trimmed output terminates any stale synchronized update, then starts a fresh
+one around the retained tail. A completed update carries its end marker;
+an open update retains the original sync depth and safety timeout, so further
+chunks and the eventual end still use the existing sync scheduling path.
+
+An always-on 1000 ms wall-clock interval detects observed gaps over 5000 ms.
+It sends one `terminal-timer-gap` summary with the full observed gap in ms,
+pending chunk/character counts for at most 20 sessions (eight-character ids),
+and the omitted-session count. It sends no terminal text. Main logs this with
+`[power]` and an ISO timestamp, alongside suspend/resume, lock/unlock, AC/battery
+and window responsive/unresponsive events. A timer gap is evidence of delayed
+renderer execution, not proof of a Windows suspend. No background throttling
+or power policy is changed. The existing unsaved quit guard keeps its listener.
+
+Tests: `test/terminal-standby.test.js`, `test/power-log.test.js` and the existing
+terminal lifecycle, hidden replay, rekey and render-stat suites. Live S0 standby,
+GPU behavior and the size of the main-to-renderer IPC queue require a separately
+authorized live reproduction.
+
 ## Solo and shared tmux attachments
 
 The attach probe determines initial sizing at attach time. A solo attachment

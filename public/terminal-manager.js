@@ -527,6 +527,7 @@ const terminalWriteBuffers = new Map(); // sessionId → { chunks, syncDepth, ra
 // Measured: compositor burns 40-60% of a core at 60 fps; 33 ms doubles parse-batch
 // size and is imperceptible for streaming text (worst-case added latency: 33 ms).
 const MIN_FLUSH_INTERVAL_MS = 33; // ~30 fps
+const FLUSH_FALLBACK_MS = 1000;
 const lastFlushAt = new Map(); // sessionId → performance.now() of last flush
 
 // A session that is neither the focused single-view terminal nor part of an
@@ -606,6 +607,7 @@ function flushTerminalBuffer(sessionId) {
   if (!entry) return;
 
   const data = buf.chunks.join('');
+  if (buf.reset) entry.terminal.reset();
   if (window.ATRACE) noteRenderWrite(sessionId, buf.chunks.length, data.length);
   lastFlushAt.set(sessionId, performance.now());
   const wasAtBottom = isAtBottom(entry.terminal);
@@ -637,7 +639,12 @@ function rekeyTerminalBuffers(oldId, newId) {
     cancelAnimationFrame(buffer.rafId);
     clearTimeout(buffer.timerId);
     buffer.timerId = 0;
-    buffer.rafId = requestAnimationFrame(() => flushTerminalBuffer(newId));
+    buffer.rafId = 0;
+    if (buffer.syncDepth > 0) {
+      buffer.timerId = setTimeout(() => flushTerminalBuffer(newId), SYNC_BUFFER_TIMEOUT);
+    } else {
+      scheduleFlush(newId, buffer);
+    }
   }
   const index = lruOrder.indexOf(oldId);
   if (index !== -1) lruOrder[index] = newId;
@@ -651,18 +658,22 @@ function scheduleFlush(sessionId, buf) {
   // If a timer or rAF is already pending, don't stack another.
   if (buf.timerId || buf.rafId) return;
 
+  const requestFrame = () => {
+    buf.rafId = requestAnimationFrame(() => flushTerminalBuffer(sessionId));
+    buf.timerId = setTimeout(() => flushTerminalBuffer(sessionId), FLUSH_FALLBACK_MS);
+  };
   const last = lastFlushAt.get(sessionId);
   const elapsed = last === undefined ? Infinity : performance.now() - last;
   if (elapsed >= MIN_FLUSH_INTERVAL_MS) {
     // Enough time has passed — flush on the next animation frame (current behavior).
-    buf.rafId = requestAnimationFrame(() => flushTerminalBuffer(sessionId));
+    requestFrame();
   } else {
     // Too soon — schedule a timer for the remaining interval, then rAF from there.
     // Reuses buf.timerId so destroySession/flushTerminalBuffer teardown works unchanged.
     const remaining = MIN_FLUSH_INTERVAL_MS - elapsed;
     buf.timerId = setTimeout(() => {
       buf.timerId = 0;
-      buf.rafId = requestAnimationFrame(() => flushTerminalBuffer(sessionId));
+      requestFrame();
     }, remaining);
   }
 }
@@ -704,6 +715,38 @@ const hiddenAccumulators = new Map(); // sessionId → { raw, reset }
 // overwhelming majority of overflow events — trimHiddenBuffer's reset+tail
 // fallback exists for the rare non-TUI full-throughput dump.
 const HIDDEN_BUFFER_MAX_LEN = 2 * 1024 * 1024; // ~2 MB per hidden session
+const VISIBLE_BUFFER_MAX_BYTES = 4 * 1024 * 1024;
+const VISIBLE_BUFFER_MAX_CHUNKS = 4096;
+
+function boundVisibleBuffer(buf) {
+  if (buf.chars * 2 <= VISIBLE_BUFFER_MAX_BYTES && buf.chunks.length <= VISIBLE_BUFFER_MAX_CHUNKS) return;
+  const raw = buf.chunks.join('');
+  const maxLen = VISIBLE_BUFFER_MAX_BYTES / 2;
+  if (raw.length <= maxLen) {
+    buf.chunks = [raw];
+    return;
+  }
+  const trimmed = trimHiddenBuffer(raw, maxLen - ESC_SYNC_START.length - 2 * ESC_SYNC_END.length);
+  buf.reset = buf.reset || trimmed.reset;
+  const data = ESC_SYNC_END + ESC_SYNC_START + trimmed.data + (buf.syncDepth > 0 ? '' : ESC_SYNC_END);
+  buf.chunks = [data];
+  buf.chars = data.length;
+}
+
+let terminalTimerLastAt = Date.now();
+function checkTerminalTimerGap() {
+  const now = Date.now();
+  const gapMs = now - terminalTimerLastAt;
+  terminalTimerLastAt = now;
+  if (gapMs <= 5000 || !window.api?.reportTerminalGap) return;
+  const sessions = [];
+  for (const [id, buf] of terminalWriteBuffers) {
+    if (sessions.length === 20) break;
+    sessions.push({ id: id.slice(0, 8), chunks: buf.chunks.length, chars: buf.chars ?? buf.chunks.reduce((n, chunk) => n + chunk.length, 0) });
+  }
+  window.api.reportTerminalGap({ gapMs, sessions, omitted: Math.max(0, terminalWriteBuffers.size - sessions.length) });
+}
+if (typeof window !== 'undefined') window.setInterval(checkTerminalTimerGap, 1000);
 
 // Full-redraw markers: once one of these has been written, everything
 // visible afterward is rebuilt from scratch, so cutting the buffer to start
@@ -872,6 +915,7 @@ function drainLiveBufferIntoHiddenAccumulator(sessionId) {
     hiddenAccumulators.set(sessionId, acc);
   }
   acc.raw = buf.chunks.join('') + acc.raw; // leftover is older — goes first
+  acc.reset = acc.reset || !!buf.reset;
 }
 
 // see .ai/contexts/terminal-refresh.md
@@ -1019,11 +1063,14 @@ function handleTerminalData(sessionId, data) {
       buf = { chunks: [], syncDepth: 0, rafId: 0, timerId: 0 };
       terminalWriteBuffers.set(sessionId, buf);
     }
+    buf.chars = (buf.chars ?? buf.chunks.reduce((n, chunk) => n + chunk.length, 0)) + data.length;
     buf.chunks.push(data);
+    const wasSync = buf.syncDepth > 0;
 
     // Track sync start/end nesting
     if (data.includes(ESC_SYNC_START)) buf.syncDepth++;
     if (data.includes(ESC_SYNC_END)) buf.syncDepth = Math.max(0, buf.syncDepth - 1);
+    boundVisibleBuffer(buf);
 
     if (buf.syncDepth > 0) {
       // Inside a synchronized update — keep buffering.
@@ -1033,13 +1080,19 @@ function handleTerminalData(sessionId, data) {
       // stale id here would permanently block every future flush (frozen
       // terminal) once the sync block closes.
       buf.rafId = 0;
+      if (!wasSync) {
+        clearTimeout(buf.timerId);
+        buf.timerId = 0;
+      }
       if (!buf.timerId) {
         buf.timerId = setTimeout(() => flushTerminalBuffer(sessionId), SYNC_BUFFER_TIMEOUT);
       }
     } else {
       // Not in a sync block (or sync just ended) — flush on next frame.
-      clearTimeout(buf.timerId);
-      buf.timerId = 0;
+      if (wasSync) {
+        clearTimeout(buf.timerId);
+        buf.timerId = 0;
+      }
       scheduleFlush(sessionId, buf);
     }
   }
