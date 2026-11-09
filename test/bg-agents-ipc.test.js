@@ -78,6 +78,11 @@ for (const state of ['working', 'blocked', 'running', 'done', 'failed', 'stopped
       assert.equal(result.action, shouldAttach ? 'attach' : 'refuse');
       assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), shouldRespawn ? [['respawn', 'aaaaaaaa']] : []);
       assert.ok(h.seen.some(call => call[0] === 'check' && call[1]?.workerLiveness === 'all'), 'S1a classifies every restore state');
+      if (shouldRespawn) {
+        assert.equal(h.listeners.size, 1, 'the descriptor already present at hold start cannot release its marker');
+        h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1', pid: 4242 }]);
+        assert.equal(h.listeners.size, 0, 'a different pid releases the marker');
+      }
       if (!shouldRespawn && liveness === 'dead') assert.equal(result.recovery, 'respawn');
       if (!shouldAttach) assert.match(result.reason, new RegExp(`aaaaaaaa.*${state}`));
     });
@@ -138,6 +143,8 @@ test('B GUARD overlapping restore requests share one respawn', async t => {
   assert.equal(results[0].action, 'attach');
   assert.equal(results[1].action, 'attach');
   assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), [['respawn', 'aaaaaaaa']]);
+  assert.equal(h.listeners.size, 1, 'overlapping restores retain the marker for the existing descriptor');
+  h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1', pid: 4242 }]);
 });
 
 test('B GUARD attach-only retry cannot respawn a dead worker', async t => {
@@ -367,6 +374,8 @@ test('S2 shared checked respawn matches a descriptor without jobId using full jo
   const h = restoreFixture(t, { state: 'stopped', descriptors: [{ kind: 'bg', sessionId: 's1' }] });
   assert.deepEqual(await h.handoff({ id: 'aaaaaaaa', sessionId: 's1' }), { ok: true, attached: true });
   assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), [['respawn', 'aaaaaaaa']]);
+  assert.equal(h.listeners.size, 1, 'a legacy descriptor present at hold start is retained');
+  h.publish([{ kind: 'bg', sessionId: 's1', pid: 4242 }]);
 });
 
 for (const failure of ['refuse', 'fail', 'throw']) {
@@ -380,7 +389,7 @@ for (const failure of ['refuse', 'fail', 'throw']) {
     assert.equal(result.refused === true, failure === 'refuse');
     assert.match(result.error, failure === 'refuse' ? /unknown owner/ : failure === 'fail' ? /verb failed/ : /verb threw/);
     if (failure === 'refuse') assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), []);
-    if (failure === 'fail') {
+    if (failure !== 'refuse') {
       assert.match(result.error, /unknown.*Agents view/);
       t.mock.timers.tick(15000);
     }
@@ -424,7 +433,7 @@ test('S2d checked handoff lowercases and deduplicates extra conversation ids', a
   assert.deepEqual(checked, ['s-1', 'extra-id']);
 });
 
-for (const outcome of ['succeeded', 'refused', 'rejected']) {
+for (const outcome of ['succeeded', 'refused', 'threw']) {
 for (const scenario of ['manual with extra ids', 'manual without extra ids', 'handoff with new extra ids']) {
   test('1020fix5 joining ' + scenario + ' after flight ' + outcome, async () => {
     const { handlers, ipcMain } = fakeIpc();
@@ -444,7 +453,7 @@ for (const scenario of ['manual with extra ids', 'manual without extra ids', 'ha
     };
     bg.runVerb = async () => {
       bg.calls.push(['verb']); started(); await wait;
-      if (outcome === 'rejected' && bg.calls.filter(call => call[0] === 'verb').length === 1) throw Error('first flight rejected');
+      if (outcome === 'threw' && bg.calls.filter(call => call[0] === 'verb').length === 1) throw Error('first verb threw');
       return { ok: true };
     };
     let extraLive = false;
@@ -466,6 +475,14 @@ for (const scenario of ['manual with extra ids', 'manual without extra ids', 'ha
     const firstResult = await first;
     assert.equal(firstResult.ok, outcome === 'succeeded');
     const result = await second;
+    if (outcome === 'threw') {
+      assert.equal(checks.length, 1, 'an uncertain flight must satisfy every joiner without another check');
+      assert.equal(result.ok, false);
+      assert.match(result.error, /unknown.*first verb threw.*Agents view/);
+      assert.equal(ids.includes('extra'), false, 'uncertainty must not run a second guard');
+      assert.equal(bg.calls.filter(call => call[0] === 'verb').length, 1);
+      return;
+    }
     if (outcome === 'succeeded') {
       assert.equal(checks.length, 1, 'a successful flight must satisfy every joiner');
       assert.equal(result.ok, true);
@@ -482,7 +499,7 @@ for (const scenario of ['manual with extra ids', 'manual without extra ids', 'ha
       assert.ok(ids.includes('extra'), 'the new extra id must be checked');
     }
     assert.equal(bg.calls.filter(call => call[0] === 'verb').length,
-      (outcome === 'rejected' ? 1 : 0) + (scenario === 'manual without extra ids' ? 1 : 0), 'only a permitted joiner may retry');
+      scenario === 'manual without extra ids' ? 1 : 0, 'only a permitted joiner may retry');
   });
 }
 }

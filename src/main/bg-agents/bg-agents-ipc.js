@@ -79,6 +79,11 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
   const respawning = new Map();
   const justRespawned = new Map();
   const holdRespawn = (key, value, job) => {
+    let previousPids;
+    try {
+      previousPids = new Set(cliSessionState.readAllDescriptors()
+        .filter(d => liveWorkerDescriptor(job, [d])).map(d => d.pid));
+    } catch {}
     let unsubscribe;
     const clear = () => {
       clearTimeout(timer);
@@ -88,7 +93,10 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     const timer = setTimeout(clear, DESCRIPTOR_WAIT_MS);
     timer.unref?.();
     const check = () => {
-      try { if (liveWorkerDescriptor(job, cliSessionState.readAllDescriptors())) clear(); } catch {}
+      try {
+        if (previousPids && liveWorkerDescriptor(job, cliSessionState.readAllDescriptors()
+          .filter(d => !previousPids.has(d?.pid)))) clear();
+      } catch {}
     };
     justRespawned.set(key, { value, clear, job, check });
     try { unsubscribe = cliSessionState.onDescriptorsChanged(check); } catch {}
@@ -113,7 +121,9 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     const pending = (async () => {
       const check = await checkVerb('respawn', id, restoring, extraSessionIds);
       if (!check.ok) return { result: check, refused: true };
-      const result = await bgAgents.runVerb('respawn', id);
+      let result;
+      try { result = await bgAgents.runVerb('respawn', id); }
+      catch (err) { result = { ok: false, error: err?.message || String(err) }; }
       if (result?.refused) return { result, refused: true };
       const value = { result: result?.ok ? result : { ok: false,
         error: `Respawn result is unknown (${result?.error || 'no result'}). Check the Agents view before retrying.` }, refused: false };
@@ -128,7 +138,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     const check = await checkVerb(verb, id);
     if (!check.ok) return check;
     const result = await bgAgents.runVerb(verb, id);
-    if (verb === 'stop' && result?.ok) justRespawned.get(String(id).toLowerCase())?.clear();
+    if ((verb === 'stop' || verb === 'rm') && result?.ok) justRespawned.get(String(id).toLowerCase())?.clear();
     return result;
   });
   ipcMain.handle('dispatch-bg-agent', (_event, fields) => bgAgents.dispatch(fields));

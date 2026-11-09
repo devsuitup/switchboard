@@ -500,8 +500,8 @@ function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false
 }
 
 async function runVerb(verb, id) {
-  if (!VERBS.has(verb)) return { ok: false, error: `unknown verb: ${String(verb)}` };
-  if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { ok: false, error: 'invalid background session id' };
+  if (!VERBS.has(verb)) return { ok: false, refused: true, error: `unknown verb: ${String(verb)}` };
+  if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { ok: false, refused: true, error: 'invalid background session id' };
   const gen = generation;
   if (verb === 'transcript') {
     readJob(id);
@@ -515,12 +515,12 @@ async function runVerb(verb, id) {
   const job = { ...live, ...fresh, id, state: fresh?.state || live?.state,
     sessionId: fresh?.sessionId || live?.sessionId };
   const evidence = verb === 'stop' ? undefined : await workerEvidence(job);
-  if (gen !== generation) return { ok: false, error: 'background agent service changed while checking the worker; retry the action' };
+  if (gen !== generation) return { ok: false, refused: true, error: 'background agent service changed while checking the worker; retry the action' };
   if (verb !== 'stop' && job.state === 'running' && evidence === 'unknown') {
-    return { ok: false, error: `cannot tell whether job ${id}'s worker is running — not ${verb === 'rm' ? 'deleted' : 'respawned'}` };
+    return { ok: false, refused: true, error: `cannot tell whether job ${id}'s worker is running — not ${verb === 'rm' ? 'deleted' : 'respawned'}` };
   }
   if (verb !== 'stop' && isHostedJob(job, liveDescriptors(), evidence)) {
-    return { ok: false, error: `cannot ${verb === 'rm' ? 'delete' : verb} a ${fresh?.state || live?.state || 'hosted'} session; stop it first` };
+    return { ok: false, refused: true, error: `cannot ${verb === 'rm' ? 'delete' : verb} a ${fresh?.state || live?.state || 'hosted'} session; stop it first` };
   }
   const result = await run([verb, id], { cwd: verb === 'rm' ? homeDir : cwdFor(id), timeout: VERB_TIMEOUT_MS });
   const ok = result.code === 0;

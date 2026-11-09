@@ -136,9 +136,11 @@ async function respawnHandoff(session, sessionId, oldId, job, previous, deps) {
   try { result = await deps.respawnJob(job); }
   catch (err) { result = { ok: false, error: err.message || String(err) }; }
   if (!result?.ok) {
+    const error = (result?.error || 'no result').replace(/[.\s]+$/, '');
     return { ok: false, code: 'respawn-failed', jobId, error: result?.refused
       ? 'The session left its terminal, but job ' + jobId + ' was not relaunched: ' + result.error + '. Respawn it from the Agents view, or open the conversation from the sidebar.'
-      : 'The session left its terminal, and relaunching job ' + jobId + ' failed or timed out: ' + (result?.error || 'no result') + '. It may still start; check the Agents view before respawning it.' };
+      : 'The session left its terminal, and relaunching job ' + jobId + ' failed or timed out: ' + error
+        + (/check the Agents view/i.test(error) ? '.' : '. It may still start; check the Agents view before respawning it.') };
   }
   session.backgrounded = true;
   return { ok: true, oldSessionId: sessionId, jobId, sessionId: oldId, cwd: result.cwd || session.cwd, respawned: true, attached: result.attached === true };

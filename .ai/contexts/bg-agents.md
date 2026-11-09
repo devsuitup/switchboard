@@ -60,18 +60,28 @@ Delete retains its conservative default. Unknown never respawns. A per-session p
 coalesces overlapping restore requests. A per-job promise covers the check and CLI
 respawn shared by manual Respawn, restore and handoff. After the verb returns,
 a per-job marker holds its result until this job's background descriptor is
-published or the shared 15-second descriptor wait expires. A successful Stop
-also clears the marker. Observation subscribes before reading descriptors;
-publication and expiry release the marker's listener and timer. Missing descriptor
+published with a pid absent from this job's matching descriptors when the marker
+started, or the shared 15-second descriptor wait expires. This includes descriptors
+published before the verb returned while state.json still says stopped or failed:
+their presence alone cannot release the marker. A successful Stop or Delete (`rm`)
+also clears the marker. The initial matching pids are captured before subscribing;
+observation then subscribes before checking for a different pid. An unreadable
+initial snapshot holds the marker until expiry.
+Publication and expiry release the marker's listener and timer. Missing descriptor
 observation keeps the marker until expiry. Other jobs retain independent flights.
 All joiners share a successful respawn, even with different restore modes or extra
 session ids and before the daemon publishes its new worker. Restore then waits
-for its descriptor; manual Respawn returns success. A non-refusal failure from
-the verb (including a timeout) is uncertain: it holds the same marker and returns
+for its descriptor; manual Respawn returns success. The unknown-verb, invalid-id,
+service-generation, unknown-worker and hosted-job guards in `runVerb` mark their
+refusal with `refused: true`, keeping their existing error text.
+A returned failure without `refused: true` (including a timeout), or an exception
+from `runVerb` (including post-CLI reconciliation), is uncertain: it holds the same marker and returns
 an unknown-result failure asking the caller to check the Agents view. Joiners
 share that failure without another CLI call. Same-mode callers with a subset of
 the flight's lowercased extra session ids also share refusals. Other callers retry
-their checked respawn only if the flight refused or rejected.
+their checked respawn only if the flight refused or its pre-CLI check rejected.
+Check failures never hold a marker; caught conversation-check errors return the
+existing refusal, while a rejection escaping `checkVerb` remains a rejection.
 This does not coalesce distinct dead jobs in one continuation chain: selecting its
 newest saved member requires a proven chain lookup before choosing the job.
 Descriptor observation subscribes before its
