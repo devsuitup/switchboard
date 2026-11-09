@@ -35,7 +35,7 @@ test('pull requests build exactly Windows and both Linux architectures', () => {
 
 test('tag pushes also build macOS on the existing runner', () => {
   assert.deepEqual(matrixFor('push'), [
-    { os: 'macos-14', platform: 'mac' }, ...nonMac,
+    { os: 'macos-15', platform: 'mac' }, ...nonMac,
   ]);
   assert.equal(workflow.jobs.build['runs-on'], '${{ matrix.os }}');
   assert.equal(workflow.jobs.build.if, undefined, 'tag builds cannot skip macOS');
