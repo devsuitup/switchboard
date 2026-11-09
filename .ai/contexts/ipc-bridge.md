@@ -4,6 +4,22 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
+## Terminal backlog (#1037)
+
+`terminal-backlog` is a one-way renderer-to-main diagnostic sent by
+`api.reportTerminalBacklog({ gapMs, sessions, omitted })`. Each session has
+`{ id, chunks, chars }`; the renderer includes at most 20 eight-character ids.
+Counts combine visible queues and hidden accumulators. Main sends the no-payload
+`terminal-backlog-request` event on powerMonitor `resume` and `unlock-screen`;
+`api.onTerminalBacklogRequest(callback)` delivers it to the renderer, which
+responds with `gapMs: 0`. The renderer also reports after returning from more
+than 60 seconds hidden, using that hidden duration as `gapMs`. This is not a
+measurement of a system freeze, and there is no polling interval.
+Only the active window's main frame is accepted. `src/main/app/power-log.js`
+validates nonnegative safe-integer counters and gap, truncates/sanitizes ids,
+and emits one bounded `[power]` line with an ISO timestamp. There is no terminal
+content, invoke return payload, file access or application action.
+
 ## Schedules (#792, slices A1, A2 and D)
 
 | IPC | Args | Returns | Preload |

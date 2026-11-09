@@ -249,6 +249,7 @@ function setupTerminalDom(opts = {}) {
   if (opts.filePanel) files.unshift('header-controls.js', 'tool-bar.js', 'process-exit.js', 'viewer-toolbar.js', 'file-panel.js', 'touched-files-view.js');
   if (opts.filePanel) files.push('splitter.js', 'panel-terminal.js');
   if (!window.registerModal) files.unshift('modal-stack.js');
+  if (opts.beforeLoad) opts.beforeLoad(window);
   for (const file of files) {
     const fullPath = path.join(PUBLIC_DIR, file);
     // Absolute filename: what c8/V8 attributes the coverage of these files to.

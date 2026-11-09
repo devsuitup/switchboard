@@ -296,14 +296,34 @@ test('overflow cuts at the last safe redraw marker (alt-screen) and never mid-es
 
     // Push past HIDDEN_BUFFER_MAX_LEN (2 MB) with junk, then a real alt-screen
     // redraw near the end — the kept buffer should start at that marker.
-    window.handleTerminalData('hidden', 'x'.repeat(2 * 1024 * 1024 + 100));
     const tail = '\x1b[?1049hALT-SCREEN-CONTENT';
-    window.handleTerminalData('hidden', tail);
+    window.handleTerminalData('hidden', 'x'.repeat(2 * 1024 * 1024 + 100) + tail);
 
     window.showSession('hidden');
 
     assert.strictEqual(spies.write, 1);
-    assert.strictEqual(spies.writes[0], tail, 'replay starts exactly at the alt-screen marker, junk dropped');
+    assert.strictEqual(spies.writes[0], '\x1b[?1049h' + tail, 'mode restoration precedes the exact alt-screen redraw, junk dropped');
+  } finally {
+    destroy();
+  }
+});
+
+test('overflow followed by a redraw in a later chunk retains the hysteresis tail and reset', () => {
+  const { window, spies, destroy } = setupTerminalDom();
+  try {
+    window.createTerminalEntry({ sessionId: 'hidden' });
+    window.createTerminalEntry({ sessionId: 'active' });
+    window.activeSessionId = 'active';
+    window.gridViewActive = false;
+    const tail = '\x1b[2J\x1b[HNEW-SCREEN';
+    window.handleTerminalData('hidden', 'x'.repeat(2 * 1024 * 1024 + 100));
+    window.handleTerminalData('hidden', tail);
+    assert.strictEqual(spies.write, 0, 'both chunks remain suspended');
+    window.showSession('hidden');
+    assert.strictEqual(spies.reset, 1, 'the initial unsafe cut still requires a reset');
+    assert.strictEqual(spies.write, 1);
+    assert.strictEqual(spies.writes[0], 'x'.repeat(1024 * 1024) + tail,
+      'a later marker below the cap does not cause another trim');
   } finally {
     destroy();
   }

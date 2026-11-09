@@ -527,6 +527,7 @@ const terminalWriteBuffers = new Map(); // sessionId → { chunks, syncDepth, ra
 // Measured: compositor burns 40-60% of a core at 60 fps; 33 ms doubles parse-batch
 // size and is imperceptible for streaming text (worst-case added latency: 33 ms).
 const MIN_FLUSH_INTERVAL_MS = 33; // ~30 fps
+const FLUSH_FALLBACK_MS = 1000;
 const lastFlushAt = new Map(); // sessionId → performance.now() of last flush
 
 // A session that is neither the focused single-view terminal nor part of an
@@ -605,7 +606,8 @@ function flushTerminalBuffer(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry) return;
 
-  const data = buf.chunks.join('');
+  if (buf.reset) resetTerminalForReplay(entry);
+  const data = (buf.trimmed || buf.reset ? terminalModeDifference(entry) : '') + buf.chunks.join('');
   if (window.ATRACE) noteRenderWrite(sessionId, buf.chunks.length, data.length);
   lastFlushAt.set(sessionId, performance.now());
   const wasAtBottom = isAtBottom(entry.terminal);
@@ -623,6 +625,7 @@ function flushTerminalBuffer(sessionId) {
     }
     if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(entry);
   });
+  recordTerminalPrivateModes(entry, data, 'writtenModes', 'writtenModeTail');
 }
 
 function rekeyTerminalBuffers(oldId, newId) {
@@ -637,7 +640,12 @@ function rekeyTerminalBuffers(oldId, newId) {
     cancelAnimationFrame(buffer.rafId);
     clearTimeout(buffer.timerId);
     buffer.timerId = 0;
-    buffer.rafId = requestAnimationFrame(() => flushTerminalBuffer(newId));
+    buffer.rafId = 0;
+    if (buffer.syncDepth > 0) {
+      buffer.timerId = setTimeout(() => flushTerminalBuffer(newId), SYNC_BUFFER_TIMEOUT);
+    } else {
+      scheduleFlush(newId, buffer);
+    }
   }
   const index = lruOrder.indexOf(oldId);
   if (index !== -1) lruOrder[index] = newId;
@@ -651,18 +659,22 @@ function scheduleFlush(sessionId, buf) {
   // If a timer or rAF is already pending, don't stack another.
   if (buf.timerId || buf.rafId) return;
 
+  const requestFrame = () => {
+    buf.rafId = requestAnimationFrame(() => flushTerminalBuffer(sessionId));
+    buf.timerId = setTimeout(() => flushTerminalBuffer(sessionId), FLUSH_FALLBACK_MS);
+  };
   const last = lastFlushAt.get(sessionId);
   const elapsed = last === undefined ? Infinity : performance.now() - last;
   if (elapsed >= MIN_FLUSH_INTERVAL_MS) {
     // Enough time has passed — flush on the next animation frame (current behavior).
-    buf.rafId = requestAnimationFrame(() => flushTerminalBuffer(sessionId));
+    requestFrame();
   } else {
     // Too soon — schedule a timer for the remaining interval, then rAF from there.
     // Reuses buf.timerId so destroySession/flushTerminalBuffer teardown works unchanged.
     const remaining = MIN_FLUSH_INTERVAL_MS - elapsed;
     buf.timerId = setTimeout(() => {
       buf.timerId = 0;
-      buf.rafId = requestAnimationFrame(() => flushTerminalBuffer(sessionId));
+      requestFrame();
     }, remaining);
   }
 }
@@ -704,6 +716,51 @@ const hiddenAccumulators = new Map(); // sessionId → { raw, reset }
 // overwhelming majority of overflow events — trimHiddenBuffer's reset+tail
 // fallback exists for the rare non-TUI full-throughput dump.
 const HIDDEN_BUFFER_MAX_LEN = 2 * 1024 * 1024; // ~2 MB per hidden session
+const VISIBLE_BUFFER_MAX_BYTES = 4 * 1024 * 1024;
+const VISIBLE_BUFFER_MAX_CHUNKS = 4096;
+
+function boundVisibleBuffer(buf) {
+  if (buf.chars * 2 <= VISIBLE_BUFFER_MAX_BYTES && buf.chunks.length <= VISIBLE_BUFFER_MAX_CHUNKS) return;
+  const raw = buf.chunks.join('');
+  const maxLen = VISIBLE_BUFFER_MAX_BYTES / 2;
+  if (raw.length <= maxLen) {
+    buf.chunks = [raw];
+    return;
+  }
+  const trimmed = trimHiddenBuffer(raw, maxLen / 2 - ESC_SYNC_START.length - 2 * ESC_SYNC_END.length);
+  buf.trimmed = true;
+  buf.reset = buf.reset || trimmed.reset;
+  const data = ESC_SYNC_END + ESC_SYNC_START + trimmed.data + (buf.syncDepth > 0 ? '' : ESC_SYNC_END);
+  buf.chunks = [data];
+  buf.chars = data.length;
+}
+
+function reportTerminalBacklog(gapMs = 0) {
+  if (!window.api?.reportTerminalBacklog) return;
+  const sessions = [];
+  const ids = new Set([...terminalWriteBuffers.keys(), ...hiddenAccumulators.keys()]);
+  for (const id of ids) {
+    if (sessions.length === 20) break;
+    const buf = terminalWriteBuffers.get(id);
+    const acc = hiddenAccumulators.get(id);
+    sessions.push({ id: id.slice(0, 8), chunks: (buf?.chunks.length || 0) + (acc?.raw ? 1 : 0),
+      chars: (buf ? buf.chars ?? buf.chunks.reduce((n, chunk) => n + chunk.length, 0) : 0) + (acc?.raw.length || 0) });
+  }
+  window.api.reportTerminalBacklog({ gapMs, sessions, omitted: Math.max(0, ids.size - sessions.length) });
+}
+if (typeof window !== 'undefined') {
+  window.api?.onTerminalBacklogRequest?.(() => reportTerminalBacklog());
+  let terminalHiddenAt = document.hidden ? Date.now() : null;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      terminalHiddenAt ??= Date.now();
+      return;
+    }
+    const gapMs = terminalHiddenAt === null ? 0 : Date.now() - terminalHiddenAt;
+    terminalHiddenAt = null;
+    if (gapMs > 60000) reportTerminalBacklog(gapMs);
+  });
+}
 
 // Full-redraw markers: once one of these has been written, everything
 // visible afterward is rebuilt from scratch, so cutting the buffer to start
@@ -872,6 +929,8 @@ function drainLiveBufferIntoHiddenAccumulator(sessionId) {
     hiddenAccumulators.set(sessionId, acc);
   }
   acc.raw = buf.chunks.join('') + acc.raw; // leftover is older — goes first
+  acc.reset = acc.reset || !!buf.reset;
+  acc.trimmed = acc.trimmed || !!buf.trimmed;
 }
 
 // see .ai/contexts/terminal-refresh.md
@@ -894,9 +953,10 @@ function appendToHiddenAccumulator(sessionId, data) {
   const head = split ? acc.raw.slice(0, -split.prefix) : acc.raw;
   acc.raw = head + removeCursorPositionQueries(split ? data.slice(split.remainder) : data);
   if (acc.raw.length > HIDDEN_BUFFER_MAX_LEN) {
-    const trimmed = trimHiddenBuffer(acc.raw, HIDDEN_BUFFER_MAX_LEN);
+    const trimmed = trimHiddenBuffer(acc.raw, HIDDEN_BUFFER_MAX_LEN / 2);
     acc.raw = trimmed.data;
-    acc.reset = trimmed.reset;
+    acc.reset = acc.reset || trimmed.reset;
+    acc.trimmed = true;
   }
 }
 
@@ -954,9 +1014,10 @@ function replayHiddenBuffer(sessionId) {
   if (!acc || !acc.raw) return;
   const entry = openSessions.get(sessionId);
   if (!entry) return; // destroySession may have removed it first
-  const raw = removeCursorPositionQueries(acc.raw);
+  let raw = removeCursorPositionQueries(acc.raw);
   if (!raw && !acc.reset) return;
-  if (acc.reset) entry.terminal.reset();
+  if (acc.reset) resetTerminalForReplay(entry);
+  if (acc.trimmed || acc.reset) raw = terminalModeDifference(entry) + raw;
   if (window.ATRACE) noteRenderWrite(sessionId, 1, raw.length);
   const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(sessionId).writtenWatermark : 0;
   entry.pendingWrittenRenders = (entry.pendingWrittenRenders || 0) + 1;
@@ -965,6 +1026,7 @@ function replayHiddenBuffer(sessionId) {
     entry.renderedWrittenWatermark = Math.max(entry.renderedWrittenWatermark || 0, watermark);
     if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(entry);
   });
+  recordTerminalPrivateModes(entry, raw, 'writtenModes', 'writtenModeTail');
 }
 
 const LIVE_QUERY_REPLY_WINDOW_MS = 4000;
@@ -978,6 +1040,36 @@ function recordLiveTerminalQuery(entry, data) {
     entry.lastLiveQueryAt = performance.now();
   }
   entry.liveQueryTail = (tail + data.slice(-LIVE_QUERY_TAIL_LIMIT)).slice(-LIVE_QUERY_TAIL_LIMIT);
+}
+
+function recordTerminalPrivateModes(entry, data, modesKey = 'privateModes', tailKey = 'privateModeTail') {
+  const stream = (entry[tailKey] || '') + data;
+  const modes = entry[modesKey] ||= new Set();
+  for (const match of stream.matchAll(/\x1b\[\?([0-9;]+)([hl])|\x1bc|\x1b\[!p/g)) {
+    if (!match[1]) {
+      modes.clear();
+      continue;
+    }
+    for (const mode of match[1].split(';').map(Number)) {
+      if (!/^(?:1|47|1000|1002|1003|1004|1006|1049|2004)$/.test(String(mode))) continue;
+      modes.delete(mode);
+      if (match[2] === 'h') modes.add(mode);
+    }
+  }
+  entry[tailKey] = /\x1b(?:\[(?:\??[0-9;]*|!))?$/.exec(stream.slice(-128))?.[0] || '';
+}
+
+function terminalModeDifference(entry) {
+  const live = entry.privateModes || new Set();
+  const written = entry.writtenModes || new Set();
+  return Array.from(written).filter(mode => !live.has(mode)).map(mode => `\x1b[?${mode}l`).join('')
+    + Array.from(live).filter(mode => !written.has(mode)).map(mode => `\x1b[?${mode}h`).join('');
+}
+
+function resetTerminalForReplay(entry) {
+  entry.terminal.reset();
+  entry.writtenModes = new Set();
+  entry.writtenModeTail = '';
 }
 
 function terminalQueryReplyKind(data) {
@@ -1004,6 +1096,7 @@ function handleTerminalData(sessionId, data) {
   }
   if (entry) {
     recordLiveTerminalQuery(entry, data);
+    recordTerminalPrivateModes(entry, data);
     if (hidden) {
       // Fully suspended — accumulate only, never call terminal.write().
       // drainLiveBufferIntoHiddenAccumulator folds in whatever was left
@@ -1019,11 +1112,14 @@ function handleTerminalData(sessionId, data) {
       buf = { chunks: [], syncDepth: 0, rafId: 0, timerId: 0 };
       terminalWriteBuffers.set(sessionId, buf);
     }
+    buf.chars = (buf.chars ?? buf.chunks.reduce((n, chunk) => n + chunk.length, 0)) + data.length;
     buf.chunks.push(data);
+    const wasSync = buf.syncDepth > 0;
 
     // Track sync start/end nesting
     if (data.includes(ESC_SYNC_START)) buf.syncDepth++;
     if (data.includes(ESC_SYNC_END)) buf.syncDepth = Math.max(0, buf.syncDepth - 1);
+    boundVisibleBuffer(buf);
 
     if (buf.syncDepth > 0) {
       // Inside a synchronized update — keep buffering.
@@ -1033,13 +1129,19 @@ function handleTerminalData(sessionId, data) {
       // stale id here would permanently block every future flush (frozen
       // terminal) once the sync block closes.
       buf.rafId = 0;
+      if (!wasSync) {
+        clearTimeout(buf.timerId);
+        buf.timerId = 0;
+      }
       if (!buf.timerId) {
         buf.timerId = setTimeout(() => flushTerminalBuffer(sessionId), SYNC_BUFFER_TIMEOUT);
       }
     } else {
       // Not in a sync block (or sync just ended) — flush on next frame.
-      clearTimeout(buf.timerId);
-      buf.timerId = 0;
+      if (wasSync) {
+        clearTimeout(buf.timerId);
+        buf.timerId = 0;
+      }
       scheduleFlush(sessionId, buf);
     }
   }
