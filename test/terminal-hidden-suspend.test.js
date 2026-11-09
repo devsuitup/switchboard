@@ -296,9 +296,8 @@ test('overflow cuts at the last safe redraw marker (alt-screen) and never mid-es
 
     // Push past HIDDEN_BUFFER_MAX_LEN (2 MB) with junk, then a real alt-screen
     // redraw near the end — the kept buffer should start at that marker.
-    window.handleTerminalData('hidden', 'x'.repeat(2 * 1024 * 1024 + 100));
     const tail = '\x1b[?1049hALT-SCREEN-CONTENT';
-    window.handleTerminalData('hidden', tail);
+    window.handleTerminalData('hidden', 'x'.repeat(2 * 1024 * 1024 + 100) + tail);
 
     window.showSession('hidden');
 

@@ -4,8 +4,13 @@ const { setupTerminalDom } = require('./terminal-manager-harness');
 
 function setup() {
   const intervals = [];
+  const reports = [];
+  let requestBacklog;
   const h = setupTerminalDom({ beforeLoad: window => {
     window.setInterval = (fn, ms) => { intervals.push({ fn, ms }); return intervals.length; };
+  }, api: {
+    onTerminalBacklogRequest: callback => { requestBacklog = callback; },
+    reportTerminalBacklog: report => reports.push(report),
   } });
   const timers = new Map();
   const frames = new Map();
@@ -16,7 +21,7 @@ function setup() {
   h.window.cancelAnimationFrame = key => frames.delete(key);
   h.window.activeSessionId = 'session-123456789';
   h.window.createTerminalEntry({ sessionId: h.window.activeSessionId });
-  return { ...h, timers, frames, intervals, send: data => h.window.handleTerminalData(h.window.activeSessionId, data) };
+  return { ...h, timers, frames, intervals, reports, requestBacklog: () => requestBacklog?.(), send: data => h.window.handleTerminalData(h.window.activeSessionId, data) };
 }
 
 test('visible backlog is bounded and retains the last safe redraw', () => {
@@ -69,25 +74,23 @@ test('overflow without a redraw resets and keeps an ANSI-safe tail', () => {
   } finally { h.destroy(); }
 });
 
-test('a renderer timer gap reports bounded pending counts without terminal contents', () => {
+test('a main request reports bounded pending counts without terminal contents or polling', () => {
   const h = setup();
   try {
-    const reports = [];
-    h.window.api.reportTerminalGap = report => reports.push(report);
     h.send('secret');
     h.send('123');
-    h.window.Date.now = () => 1000000000000000;
-    const interval = h.intervals.find(t => t.ms === 1000);
-    assert.ok(interval, 'renderer installs a timer-gap observer');
-    interval.fn();
-    assert.equal(reports.length, 1);
-    assert.equal(reports[0].sessions[0].id, 'session-');
-    assert.equal(reports[0].sessions[0].chunks, 2);
-    assert.equal(reports[0].sessions[0].chars, 9);
-    assert.ok(reports[0].gapMs > 5000);
-    assert.ok(!JSON.stringify(reports).includes('secret'));
-    interval.fn();
-    assert.equal(reports.length, 1);
+    h.window.createTerminalEntry({ sessionId: 'hidden-123456789' });
+    h.window.handleTerminalData('hidden-123456789', 'hidden secret');
+    h.requestBacklog();
+    assert.equal(h.reports.length, 1, 'main request produces one backlog summary');
+    assert.equal(h.reports[0].sessions[0].id, 'session-');
+    assert.equal(h.reports[0].sessions[0].chunks, 2);
+    assert.equal(h.reports[0].sessions[0].chars, 9);
+    assert.equal(h.reports[0].sessions[1].id, 'hidden-1');
+    assert.equal(h.reports[0].sessions[1].chunks, 1);
+    assert.equal(h.reports[0].sessions[1].chars, 13);
+    assert.ok(!JSON.stringify(h.reports).includes('secret'));
+    assert.equal(h.intervals.length, 0, 'backlog diagnostics install no polling interval');
   } finally { h.destroy(); }
 });
 
@@ -204,18 +207,115 @@ test('grid and panel sessions share the visible payload bound', () => {
   }
 });
 
-test('gap summaries include at most twenty sessions and count omitted sessions', () => {
+test('backlog summaries include at most twenty sessions and count omitted sessions', () => {
   const h = setup();
   try {
-    const reports = [];
-    h.window.api.reportTerminalGap = report => reports.push(report);
     h.inCtx(`for (let i = 0; i < 30; i++) terminalWriteBuffers.set('session-' + i, { chunks: ['abc'], chars: 3 })`);
-    h.window.Date.now = () => 1000000000000000;
-    assert.equal(typeof h.window.checkTerminalTimerGap, 'function');
-    h.window.checkTerminalTimerGap();
-    assert.equal(reports.length, 1);
-    assert.equal(reports[0].sessions.length, 20);
-    assert.equal(reports[0].omitted, 10);
-    assert.ok(JSON.stringify(reports[0]).length < 2048);
+    h.requestBacklog();
+    assert.equal(h.reports.length, 1, 'main request produces a bounded summary');
+    assert.equal(h.reports[0].sessions.length, 20);
+    assert.equal(h.reports[0].omitted, 10);
+    assert.ok(JSON.stringify(h.reports[0]).length < 2048);
+  } finally { h.destroy(); }
+});
+
+for (const mode of ['visible', 'hidden']) {
+  test(`${mode} overflow amortizes trim work across subsequent chunks`, () => {
+    const h = setup();
+    try {
+      if (mode === 'hidden') h.window.activeSessionId = 'other';
+      const send = data => h.window.handleTerminalData('session-123456789', data);
+      send('x'.repeat(2 * 1024 * 1024));
+      let trims = 0;
+      const trim = h.window.trimHiddenBuffer;
+      h.window.trimHiddenBuffer = (...args) => { trims++; return trim(...args); };
+      for (let i = 0; i < 256; i++) send('y'.repeat(4096));
+      assert.ok(trims <= 4, `${mode}: at most four trims per Mi units appended, got ${trims}`);
+      if (mode === 'visible') h.window.flushTerminalBuffer('session-123456789');
+      else h.window.replayHiddenBuffer('session-123456789');
+      assert.ok(h.spies.writes.at(-1).includes('y'.repeat(4096)), 'recent output survives amortized trimming');
+    } finally { h.destroy(); }
+  });
+
+  test(`${mode} reset restores enabled DEC modes before the retained tail`, () => {
+    const h = setup();
+    try {
+      h.send('\x1b[?2004;1004;1000;1002;1003;1006;1;1049;47;25h');
+      h.window.flushTerminalBuffer(h.window.activeSessionId);
+      h.spies.writes.length = 0;
+      if (mode === 'hidden') h.window.activeSessionId = 'other';
+      h.window.handleTerminalData('session-123456789', 'x'.repeat(3 * 1024 * 1024) + 'retained-tail');
+      if (mode === 'visible') h.window.flushTerminalBuffer('session-123456789');
+      else h.window.replayHiddenBuffer('session-123456789');
+      assert.equal(h.spies.reset, 1);
+      const written = h.spies.writes.join('');
+      for (const decMode of [2004, 1004, 1000, 1002, 1003, 1006, 1, 1049, 47]) {
+        assert.ok(written.includes(`\x1b[?${decMode}h`), `reset restores DEC mode ${decMode}`);
+        assert.ok(written.indexOf(`\x1b[?${decMode}h`) < written.indexOf('x'), 'mode restoration precedes retained output');
+      }
+      assert.ok(!written.includes('\x1b[?25h'), 'only allowlisted modes are restored');
+    } finally { h.destroy(); }
+  });
+}
+
+test('a reset respects the latest split DEC reset and per-session mode state', () => {
+  const h = setup();
+  try {
+    h.send('\x1b[?2004;1000h');
+    h.window.flushTerminalBuffer(h.window.activeSessionId);
+    h.send('\x1b[?200');
+    h.send('4l\x1b[?1006h');
+    h.send('x'.repeat(3 * 1024 * 1024));
+    h.window.flushTerminalBuffer(h.window.activeSessionId);
+    const written = h.spies.writes.at(-1);
+    assert.ok(written.includes('\x1b[?1000h'), 'mouse tracking remains enabled');
+    assert.ok(written.includes('\x1b[?1006h'), 'newest mode state is restored');
+    assert.ok(!written.includes('\x1b[?2004h'), 'a split reset keeps bracketed paste disabled');
+    h.window.createTerminalEntry({ sessionId: 'other' });
+    h.window.handleTerminalData('other', 'x'.repeat(3 * 1024 * 1024));
+    h.window.replayHiddenBuffer('other');
+    assert.ok(!h.spies.writes.at(-1).includes('\x1b[?1000h'), 'mode state does not leak across sessions');
+  } finally { h.destroy(); }
+});
+
+test('visibility reports once after more than sixty seconds hidden and never polls', () => {
+  const h = setup();
+  try {
+    let now = 1000;
+    let hidden = false;
+    h.window.Date.now = () => now;
+    Object.defineProperty(h.window.document, 'hidden', { get: () => hidden, configurable: true });
+    const change = () => h.window.document.dispatchEvent(new h.window.Event('visibilitychange'));
+    change();
+    assert.equal(h.reports.length, 0);
+    hidden = true;
+    change();
+    now += 60000;
+    hidden = false;
+    change();
+    assert.equal(h.reports.length, 0, 'sixty seconds exactly is below the reporting threshold');
+    hidden = true;
+    change();
+    now += 60001;
+    hidden = false;
+    change();
+    assert.equal(h.reports.length, 1, 'a long hidden period produces one summary');
+    assert.equal(h.reports[0].gapMs, 60001);
+    change();
+    assert.equal(h.reports.length, 1, 'duplicate visible events do not repeat the summary');
+    assert.equal(h.intervals.length, 0, 'visibility diagnostics install no polling interval');
+  } finally { h.destroy(); }
+});
+
+test('entering a sync block replaces the pending fallback with its safety timer', () => {
+  const h = setup();
+  try {
+    h.send('ordinary');
+    const fallback = [...h.timers.keys()][0];
+    h.send('\x1b[?2026hframe');
+    assert.ok(!h.timers.has(fallback));
+    assert.equal(h.frames.size, 0);
+    assert.equal(h.timers.size, 1);
+    assert.equal([...h.timers.values()][0].ms, 500);
   } finally { h.destroy(); }
 });

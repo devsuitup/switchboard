@@ -3260,10 +3260,10 @@ ipcMain.on('session-projection-changed', (event, record) => {
   } catch {}
 });
 
-ipcMain.on('terminal-timer-gap', (event, record) => {
+ipcMain.on('terminal-backlog', (event, record) => {
   if (!mainWindow || mainWindow.isDestroyed() || !event.senderFrame || event.sender !== mainWindow.webContents
     || event.senderFrame !== mainWindow.webContents.mainFrame) return;
-  powerLog?.rendererGap(record);
+  powerLog?.rendererBacklog(record);
 });
 
 ipcMain.on('activity-trace', (_event, cat, sid, fields) => {

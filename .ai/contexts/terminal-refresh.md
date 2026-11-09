@@ -13,35 +13,54 @@ control starts a process. A hidden open terminal is revealed for refresh.
 animation frame also has a 1000 ms timer fallback; the first callback to run
 flushes and cancels the other. Incoming ordinary chunks keep that deadline.
 A cadence delay can add at most 33 ms before the frame and fallback are armed.
-These are scheduling bounds while the renderer event loop runs, not guarantees
-while Windows suspends execution. Rekey, hidden-buffer migration and destruction
-cancel both callbacks. Sync updates retain their separate 500 ms safety timer.
+The fallback helps only while rAF is paused and timers still run, such as an
+occluded or minimized window. It does nothing during a true Windows S0 freeze.
+Rekey, hidden-buffer migration and destruction cancel both callbacks. Entering
+a sync block also cancels any pending cadence or fallback timer and animation
+frame; sync updates retain their separate 500 ms safety timer.
 
 Visible single-view, grid and panel-terminal queues have a 4 MiB UTF-16 payload
 budget (two bytes per JS code unit), beside the existing hidden 2 Mi-code-unit
 limit. A running character count avoids repeatedly walking the chunk array;
-more than 4096 chunks coalesce even below the payload cap. On payload overflow,
-the existing `trimHiddenBuffer` chooses the last safe full-redraw marker, or
-an ANSI/surrogate-safe tail with a terminal reset when no marker fits. Reset
-state survives migration into the hidden accumulator. Trimming can discard
-unseen scrollback and, without a self-contained redraw, cannot reconstruct
-arbitrary lost cursor/attribute state; the reset fallback is the same compromise
-as hidden output. Single incoming IPC chunks and transient joins are outside
-the retained-payload budget.
+more than 4096 chunks coalesce even below the payload cap. Both visible and
+hidden buffers trim to about half their cap on overflow. This hysteresis leaves
+about 1 Mi code units before another payload trim, rather than rejoining and
+rescanning the whole retained buffer on every incoming chunk at the cap.
+`trimHiddenBuffer` chooses the last safe full-redraw marker that fits the target,
+or an ANSI/surrogate-safe tail with a terminal reset when no marker fits. Reset
+state survives migration into the hidden accumulator. Before either replay path
+resets, the entry's last live-stream DEC mode state is available; enabled modes
+are re-emitted after the reset, before the retained tail. The exact allowlist is
+2004 (bracketed paste), 1004 (focus reporting), 1000/1002/1003/1006 (mouse),
+1 (application cursor keys), and 1049/47 (alternate screen). Multi-parameter
+set/reset sequences are tracked per entry, with up to 128 code units of pending
+sequence carried across chunks; rekeying keeps the entry and its mode state.
+This is a narrow CSI matcher, not a VT parser; sequences embedded inside OSC/DCS
+payloads are not distinguished. Trimming can discard unseen scrollback and,
+without a self-contained redraw, cannot reconstruct arbitrary lost cursor or
+attribute state. Single incoming IPC chunks and transient joins are outside
+the retained-payload budget. The cap bounds retained work to parse at wake;
+it does not prove that the standby incident is fixed.
 
 Trimmed output terminates any stale synchronized update, then starts a fresh
 one around the retained tail. A completed update carries its end marker;
 an open update retains the original sync depth and safety timeout, so further
 chunks and the eventual end still use the existing sync scheduling path.
 
-An always-on 1000 ms wall-clock interval detects observed gaps over 5000 ms.
-It sends one `terminal-timer-gap` summary with the full observed gap in ms,
-pending chunk/character counts for at most 20 sessions (eight-character ids),
-and the omitted-session count. It sends no terminal text. Main logs this with
-`[power]` and an ISO timestamp, alongside suspend/resume, lock/unlock, AC/battery
-and window responsive/unresponsive events. A timer gap is evidence of delayed
-renderer execution, not proof of a Windows suspend. No background throttling
-or power policy is changed. The existing unsaved quit guard keeps its listener.
+There is no polling timer. Main requests a `terminal-backlog-request` summary
+on powerMonitor `resume` and `unlock-screen`. The renderer also reports once
+when `visibilitychange` returns to visible after more than 60 seconds hidden.
+The `terminal-backlog` response includes pending chunk/character counts for at
+most 20 sessions (eight-character ids), combining live and hidden queues, and
+the omitted-session count. It sends no terminal text. `gapMs` is the observed
+hidden duration for a visibility return, and zero for a main request; it is not
+a measured S0 freeze duration. Main retains sender/main-frame checks and payload
+validation, and logs each summary as one `[power]` line with an ISO timestamp,
+alongside suspend/resume, lock/unlock, AC/battery and window
+responsive/unresponsive events. Logging is intended to attribute the next
+occurrence; no live standby reproduction has established the incident's cause
+or resolution. No background throttling or power policy is changed. The
+existing unsaved quit guard keeps its listener.
 
 Tests: `test/terminal-standby.test.js`, `test/power-log.test.js` and the existing
 terminal lifecycle, hidden replay, rekey and render-stat suites. Live S0 standby,

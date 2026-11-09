@@ -606,8 +606,7 @@ function flushTerminalBuffer(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry) return;
 
-  const data = buf.chunks.join('');
-  if (buf.reset) entry.terminal.reset();
+  const data = (buf.reset ? resetTerminalForReplay(entry) : '') + buf.chunks.join('');
   if (window.ATRACE) noteRenderWrite(sessionId, buf.chunks.length, data.length);
   lastFlushAt.set(sessionId, performance.now());
   const wasAtBottom = isAtBottom(entry.terminal);
@@ -726,27 +725,39 @@ function boundVisibleBuffer(buf) {
     buf.chunks = [raw];
     return;
   }
-  const trimmed = trimHiddenBuffer(raw, maxLen - ESC_SYNC_START.length - 2 * ESC_SYNC_END.length);
+  const trimmed = trimHiddenBuffer(raw, maxLen / 2 - ESC_SYNC_START.length - 2 * ESC_SYNC_END.length);
   buf.reset = buf.reset || trimmed.reset;
   const data = ESC_SYNC_END + ESC_SYNC_START + trimmed.data + (buf.syncDepth > 0 ? '' : ESC_SYNC_END);
   buf.chunks = [data];
   buf.chars = data.length;
 }
 
-let terminalTimerLastAt = Date.now();
-function checkTerminalTimerGap() {
-  const now = Date.now();
-  const gapMs = now - terminalTimerLastAt;
-  terminalTimerLastAt = now;
-  if (gapMs <= 5000 || !window.api?.reportTerminalGap) return;
+function reportTerminalBacklog(gapMs = 0) {
+  if (!window.api?.reportTerminalBacklog) return;
   const sessions = [];
-  for (const [id, buf] of terminalWriteBuffers) {
+  const ids = new Set([...terminalWriteBuffers.keys(), ...hiddenAccumulators.keys()]);
+  for (const id of ids) {
     if (sessions.length === 20) break;
-    sessions.push({ id: id.slice(0, 8), chunks: buf.chunks.length, chars: buf.chars ?? buf.chunks.reduce((n, chunk) => n + chunk.length, 0) });
+    const buf = terminalWriteBuffers.get(id);
+    const acc = hiddenAccumulators.get(id);
+    sessions.push({ id: id.slice(0, 8), chunks: (buf?.chunks.length || 0) + (acc?.raw ? 1 : 0),
+      chars: (buf ? buf.chars ?? buf.chunks.reduce((n, chunk) => n + chunk.length, 0) : 0) + (acc?.raw.length || 0) });
   }
-  window.api.reportTerminalGap({ gapMs, sessions, omitted: Math.max(0, terminalWriteBuffers.size - sessions.length) });
+  window.api.reportTerminalBacklog({ gapMs, sessions, omitted: Math.max(0, ids.size - sessions.length) });
 }
-if (typeof window !== 'undefined') window.setInterval(checkTerminalTimerGap, 1000);
+if (typeof window !== 'undefined') {
+  window.api?.onTerminalBacklogRequest?.(() => reportTerminalBacklog());
+  let terminalHiddenAt = document.hidden ? Date.now() : null;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      terminalHiddenAt ??= Date.now();
+      return;
+    }
+    const gapMs = terminalHiddenAt === null ? 0 : Date.now() - terminalHiddenAt;
+    terminalHiddenAt = null;
+    if (gapMs > 60000) reportTerminalBacklog(gapMs);
+  });
+}
 
 // Full-redraw markers: once one of these has been written, everything
 // visible afterward is rebuilt from scratch, so cutting the buffer to start
@@ -938,7 +949,7 @@ function appendToHiddenAccumulator(sessionId, data) {
   const head = split ? acc.raw.slice(0, -split.prefix) : acc.raw;
   acc.raw = head + removeCursorPositionQueries(split ? data.slice(split.remainder) : data);
   if (acc.raw.length > HIDDEN_BUFFER_MAX_LEN) {
-    const trimmed = trimHiddenBuffer(acc.raw, HIDDEN_BUFFER_MAX_LEN);
+    const trimmed = trimHiddenBuffer(acc.raw, HIDDEN_BUFFER_MAX_LEN / 2);
     acc.raw = trimmed.data;
     acc.reset = trimmed.reset;
   }
@@ -998,9 +1009,9 @@ function replayHiddenBuffer(sessionId) {
   if (!acc || !acc.raw) return;
   const entry = openSessions.get(sessionId);
   if (!entry) return; // destroySession may have removed it first
-  const raw = removeCursorPositionQueries(acc.raw);
+  let raw = removeCursorPositionQueries(acc.raw);
   if (!raw && !acc.reset) return;
-  if (acc.reset) entry.terminal.reset();
+  if (acc.reset) raw = resetTerminalForReplay(entry) + raw;
   if (window.ATRACE) noteRenderWrite(sessionId, 1, raw.length);
   const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(sessionId).writtenWatermark : 0;
   entry.pendingWrittenRenders = (entry.pendingWrittenRenders || 0) + 1;
@@ -1022,6 +1033,24 @@ function recordLiveTerminalQuery(entry, data) {
     entry.lastLiveQueryAt = performance.now();
   }
   entry.liveQueryTail = (tail + data.slice(-LIVE_QUERY_TAIL_LIMIT)).slice(-LIVE_QUERY_TAIL_LIMIT);
+}
+
+function recordTerminalPrivateModes(entry, data) {
+  const stream = (entry.privateModeTail || '') + data;
+  entry.privateModes ||= new Set();
+  for (const match of stream.matchAll(/\x1b\[\?([0-9;]+)([hl])/g)) {
+    for (const mode of match[1].split(';').map(Number)) {
+      if (!/^(?:1|47|1000|1002|1003|1004|1006|1049|2004)$/.test(String(mode))) continue;
+      entry.privateModes.delete(mode);
+      if (match[2] === 'h') entry.privateModes.add(mode);
+    }
+  }
+  entry.privateModeTail = /\x1b(?:\[\??[0-9;]*)?$/.exec(stream.slice(-128))?.[0] || '';
+}
+
+function resetTerminalForReplay(entry) {
+  entry.terminal.reset();
+  return Array.from(entry.privateModes || [], mode => `\x1b[?${mode}h`).join('');
 }
 
 function terminalQueryReplyKind(data) {
@@ -1048,6 +1077,7 @@ function handleTerminalData(sessionId, data) {
   }
   if (entry) {
     recordLiveTerminalQuery(entry, data);
+    recordTerminalPrivateModes(entry, data);
     if (hidden) {
       // Fully suspended — accumulate only, never call terminal.write().
       // drainLiveBufferIntoHiddenAccumulator folds in whatever was left
