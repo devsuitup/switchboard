@@ -70,6 +70,36 @@ test('generic sources and physical CRLF line endings stay out', t => {
   assert.deepEqual(selector().selectPlatformTests(['test/plain.js', 'test/crlf.js'], options), []);
 });
 
+for (const [marker, source] of Object.entries({
+  processes: 'spawn(command, args)',
+  filesystem: 'fs.realpathSync(dir)',
+  conpty: "require('node-pty')",
+  links: 'fs.symlinkSync(target, link)',
+})) {
+  test(`a transitive test helper with ${marker} selects its caller`, t => {
+    const options = fixture(t, {
+      'test/caller.js': "require('./bridge.cjs')",
+      'test/bridge.cjs': "require('./helper'); require('./caller')",
+      'test/helper/index.js': source,
+    });
+    assert.deepEqual(selector().selectPlatformTests(['test/caller.js'], options), ['test/caller.js']);
+  });
+}
+
+test('helper-only platform and Windows path markers do not select callers', t => {
+  const options = fixture(t, {
+    'test/platform.js': "require('./platform.cjs')",
+    'test/platform.cjs': "process.platform; path.win32; 'win32'",
+    'test/winpath.js': "require('./winpath.cjs')",
+    'test/winpath.cjs': String.raw`'C:\repo'; 'RUNNER~1'`,
+  });
+  assert.deepEqual(selector().selectPlatformTests(['test/platform.js', 'test/winpath.js'], options), []);
+});
+
+test('pure worker liveness does not import platform process probes', () => {
+  assert.deepEqual(selector().selectPlatformTests(['test/bg-worker-liveness.test.js'], { minimum: 0 }), []);
+});
+
 test('carriage returns are stripped before strong-marker matching', t => {
   const options = fixture(t, { 'test/normalized.js': 'process.\rplatform' });
   assert.deepEqual(selector().selectPlatformTests(['test/normalized.js'], options), ['test/normalized.js']);
