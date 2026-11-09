@@ -726,8 +726,9 @@ No-link `/clear` and explicit fork still use their existing owner checks.
 See bg-agents.md, "Background
 continuations", for the transactional metadata migration and renderer state.
 
-CLI 2.1.289 and 2.1.295 append `{type:"continued-in", sessionId:<old>,
-continuedInSessionId:<new>, timestamp:...}` to the old transcript. These records
+CLI continuation records appended to the old transcript are type-first; the
+remaining key order varies by CLI version (2.1.302: `type`, `timestamp`, `sessionId`,
+`continuedInSessionId`). The torn-tail rule depends only on `type` being first. These records
 can be mid-file and repeated; the new transcript has no back-link. This is an
 observed interface, pinned by an always-running synthetic fixture in
 `test/session-continuation-index.test.js`. That fixture proves parser agreement,
@@ -736,8 +737,13 @@ not CLI drift; the test suite does not sample real conversation transcripts.
 `session-continuations` IPC calls `sessionCache.resolveSessionContinuations`.
 It traverses indexed links in record order, deduplicates terminal ids and bounds
 traversal to 32 edges / 128 node visits. Cycles, missing continuation rows/files
-and malformed continuation records return `unresolved`. Unrelated JSON parse
-failures and incomplete tails do not block resume. File scanning yields between
+and malformed continuation records return `unresolved`. Unrelated sealed JSON
+parse failures do not block resume. An unparsable unterminated tail is unresolved
+unless its first complete key (including the colon) is not `type`, it carries
+a complete `parentUuid` or `message` key, or its leading complete type proves
+it is not `continued-in`. A cut inside the first key stays uncertain; see
+bg-agents.md, "Background continuations", for the record-order contract.
+File scanning yields between
 chunks and has no total byte cap; chunk size only controls pacing.
 
 The traversal also returns `missing: true` when an all-missing branch was seen

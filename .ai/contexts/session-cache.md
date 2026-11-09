@@ -2498,6 +2498,11 @@ Coverage: `test/continuation-rows-564.test.js` (graph and bounds), `test/continu
 
 ## Continuation index (#518B)
 
+An unparsable unterminated tail remains unresolved until its leading complete
+`type` value proves it is an ordinary record. A cut before the type is known
+cannot establish that no continuation exists. Completing the same tail clears
+this transient uncertainty; sealed malformed continuation records remain invalid.
+
 Changed cached local parent rows with format/version 3 and known links receive
 `prepareContinuationRefresh` before synchronous refresh. The shared yielded
 scanner uses at most 1 MiB per chunk, exact BigInt stamps, persisted identity/head

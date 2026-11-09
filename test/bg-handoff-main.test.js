@@ -107,7 +107,8 @@ function ipcSetup(t, { status = 'idle', sessionCache, writer, onTransitions = ()
     },
     log: { warn: (...args) => warned.push(args.join(' ')) },
     sessionHasPty: () => false, ptyPids: () => [],
-    bgAgents: { findRestoreJob: () => ({ known: false, missing: true, reason: 'no background job record' }) },
+    bgAgents: { findRestoreJob: () => ({ known: false, missing: true, reason: 'no background job record' }),
+      continuationJobCheck: async () => ({ known: true, job: null }) },
     activeSessions: new Map([['tab', session]]),
     mainWindow: { isDestroyed: () => false, webContents: { send() {} } },
     writePty: (entry, text) => {
@@ -371,6 +372,7 @@ test('S2-T9 shipped respawn handler releases the real PTY exit without persistin
       findRestoreJob: () => ({ known: true, job: { id: 'aaaaaaaa', resumeTarget: 'old', sessionId: 'OLD' } }),
       conversationCheck: async () => ({ known: true, state: 'stopped', workerLiveness: 'dead', sessionIds: ['OLD'] }),
       liveJobCheck: () => ({ known: true, job: null }),
+      continuationJobCheck: async () => ({ known: true, job: null }),
     },
     unsubscribeBgAgents: { respawnForHandoff: async job => { calls.push(job.id); assert.equal(h.session.exited, true); return { ok: true, attached: true }; } },
     detectSessionTransitions: () => assert.fail('respawn must not detect a new continuation'),

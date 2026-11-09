@@ -10,6 +10,7 @@ const {
 } = require('./bg-agents-roster');
 const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('../../../project-root');
 const { classifyWorkerLiveness, workerTimestamp } = require('./bg-worker-liveness');
+const { createContinuationReader } = require('./bg-handoff');
 
 const DEFAULT_JOBS_DIR = path.join(os.homedir(), '.claude', 'jobs');
 const FLUSH_MS = 250;
@@ -374,8 +375,15 @@ async function workerEvidence(job, allStates = false) {
 async function conversationCheck(id, { workerLiveness = true } = {}) {
   if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { known: false, reason: 'invalid background session id' };
   const gen = generation;
-  let job;
-  try { job = parseJobState(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch (err) {
+  let job, resumeSessionId;
+  try {
+    const text = fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8');
+    job = parseJobState(text);
+    if (job?.state) {
+      const target = JSON.parse(text).resumeSessionId;
+      if (typeof target === 'string' && SESSION_ID_RE.test(target)) resumeSessionId = target.toLowerCase();
+    }
+  } catch (err) {
     return { known: false, reason: `cannot read job ${id}: ${err.message}` };
   }
   if (!job || !job.state) return { known: false, reason: `job ${id} has an unknown or unreadable state` };
@@ -387,7 +395,46 @@ async function conversationCheck(id, { workerLiveness = true } = {}) {
   const evidence = workerLiveness ? await workerEvidence(identified, workerLiveness === 'all') : undefined;
   if (gen !== generation) return { known: false, reason: 'background agent service changed while checking the worker' };
   return { known: true, sessionIds, state: job.state, workerLiveness: evidence,
+    continuationSessionIds: [...new Set([...sessionIds.filter(sid => SESSION_ID_RE.test(sid)), resumeSessionId].filter(Boolean))],
     hosted: isHostedJob(identified, liveDescriptors(), evidence) };
+}
+
+async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = new Map() } = {}) {
+  const pending = [sessionId], seen = new Set(), owners = new Map();
+  const evidence = new Map(workerLiveness);
+  while (pending.length) {
+    const id = pending.shift().toLowerCase();
+    if (seen.has(id)) continue;
+    if (seen.size >= 64) return { known: false, reason: 'too many conversation continuations' };
+    seen.add(id);
+    if (id !== sessionId.toLowerCase()) {
+      let names;
+      try { names = fs.readdirSync(jobsDir); }
+      catch (err) { if (err.code !== 'ENOENT') return { known: false, reason: 'cannot read background jobs' }; names = []; }
+      for (const jobId of names.filter(name => JOB_ID_RE.test(name) && name !== excludeJobId)) {
+        let job;
+        try { job = parseJobState(fs.readFileSync(path.join(jobsDir, jobId, 'state.json'), 'utf8')); } catch {}
+        const sid = job?.sessionId || roster.find(entry => entry.id === jobId)?.sessionId;
+        if (sid?.toLowerCase() !== id) continue;
+        if (['stopped', 'failed'].includes(job?.state)) continue;
+        const liveness = await workerEvidence({ ...job, id: jobId, sessionId: sid }, true);
+        if (liveness !== 'live' && liveness !== 'dead') return { known: false, reason: 'worker liveness unknown for continuation job ' + jobId };
+        evidence.set(jobId, liveness);
+      }
+      const owner = liveJobCheck(id, { workerLiveness: evidence, excludeJobId });
+      if (!owner.known) return owner;
+      if (owner.job) owners.set(owner.job.id, { ...owner.job, sessionId: id });
+    }
+    const file = resolveTranscriptPath?.(id);
+    if (!file) continue;
+    try { fs.statSync(file); }
+    catch (err) { if (err.code === 'ENOENT') continue; return { known: false, reason: 'cannot read continuation transcript for ' + id }; }
+    const ids = await createContinuationReader(file, id)();
+    if (!ids) return { known: false, reason: 'cannot read conversation continuations for ' + id };
+    pending.push(...ids);
+  }
+  if (owners.size > 1) return { known: false, reason: 'multiple live continuation jobs; check the Agents view' };
+  return { known: true, job: owners.values().next().value || null };
 }
 
 function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false } = {}) {
@@ -502,7 +549,7 @@ async function dispatch(fields) {
   return { ok: true, id };
 }
 
-function liveJobCheck(sessionId, { workerLiveness = new Map() } = {}) {
+function liveJobCheck(sessionId, { workerLiveness = new Map(), excludeJobId } = {}) {
   const key = typeof sessionId === 'string' ? sessionId.toLowerCase() : '';
   if (!key) return { known: true, job: null };
   const sameSession = (sid) => typeof sid === 'string' && sid.toLowerCase() === key;
@@ -511,13 +558,13 @@ function liveJobCheck(sessionId, { workerLiveness = new Map() } = {}) {
   let names;
   try { names = fs.readdirSync(jobsDir); } catch (err) {
     if (!(err && err.code === 'ENOENT')) return { known: false, reason: `cannot read ${jobsDir}: ${err && err.message}` };
-    const cached = roster.find(e => isHostedJob(e, descriptors, workerLiveness.get(e.id)) && sameSession(e.sessionId));
+    const cached = roster.find(e => e.id !== excludeJobId && isHostedJob(e, descriptors, workerLiveness.get(e.id)) && sameSession(e.sessionId));
     return { known: true, job: cached ? { id: cached.id, state: cached.state } : null };
   }
   let unknown = null;
   const read = new Set();
   for (const id of names) {
-    if (!JOB_ID_RE.test(id)) continue;
+    if (!JOB_ID_RE.test(id) || id === excludeJobId) continue;
     let parsed;
     try { parsed = parseJobState(fs.readFileSync(path.join(jobsDir, id, 'state.json'), 'utf8')); } catch (err) {
       if (!(err && err.code === 'ENOENT')) unknown = unknown || `cannot read job ${id}`;
@@ -531,7 +578,7 @@ function liveJobCheck(sessionId, { workerLiveness = new Map() } = {}) {
     if (!sid) { unknown = unknown || `live job ${id} does not name its session`; continue; }
     if (sameSession(sid)) return { known: true, job: { id, state: parsed.state } };
   }
-  const cached = roster.find(e => !read.has(e.id) && isHostedJob(e, descriptors, workerLiveness.get(e.id)) && sameSession(e.sessionId));
+  const cached = roster.find(e => e.id !== excludeJobId && !read.has(e.id) && isHostedJob(e, descriptors, workerLiveness.get(e.id)) && sameSession(e.sessionId));
   if (cached) return { known: true, job: { id: cached.id, state: cached.state } };
   return unknown ? { known: false, reason: unknown } : { known: true, job: null };
 }
@@ -539,6 +586,6 @@ function liveJobCheck(sessionId, { workerLiveness = new Map() } = {}) {
 module.exports = {
   getDaemonRosterPath: () => daemonRosterPath,
   invalidateTranscripts,
-  init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck, findRestoreJob,
+  init, start, stop, onChange, onJobsChanged, getSnapshot, getCachedJobs, reconcile, runVerb, dispatch, liveJobCheck, conversationCheck, continuationJobCheck, findRestoreJob,
   DEFAULT_JOBS_DIR, FLUSH_MS, MAX_JOBS, ROOT_CACHE_MAX, LIST_TIMEOUT_MS, VERB_TIMEOUT_MS,
 };

@@ -20,11 +20,12 @@ const OTHER_SID = 'bbbbbbbb-1234-4321-abcd-123456789abc';
 const JOB = 'aaaaaaaa';
 const PID = 987654;
 
-function fixture(t, { state = 'stopped', live = true, own = false, ownDescriptor = false, bridge = false, unknown = false, resolveTranscriptPath } = {}) {
+function fixture(t, { state = 'stopped', live = true, own = false, ownDescriptor = false, bridge = false, unknown = false, resolveTranscriptPath, withTranscript = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-522-'));
   const jobs = path.join(dir, 'jobs');
   const sessions = path.join(dir, 'sessions');
   const transcript = path.join(dir, SID + '.jsonl');
+  if (withTranscript) fs.writeFileSync(transcript, JSON.stringify({ type: 'user', sessionId: SID }) + '\n');
   fs.mkdirSync(path.join(jobs, JOB), { recursive: true });
   fs.mkdirSync(sessions);
   fs.writeFileSync(path.join(jobs, JOB, 'state.json'), JSON.stringify({
@@ -40,7 +41,7 @@ function fixture(t, { state = 'stopped', live = true, own = false, ownDescriptor
   cliSessionState.init({ dir: sessions, activeSessions, onIdle() {}, isProcessAlive: () => live, readProcStartMany: async () => new Map(), platform: 'win32' });
   const calls = [];
   bgAgents.init({
-    jobsDir: jobs, homeDir: dir, cliSessionState, resolveProjectRoots: async () => null, resolveTranscriptPath,
+    jobsDir: jobs, homeDir: dir, cliSessionState, resolveProjectRoots: async () => null, resolveTranscriptPath: resolveTranscriptPath || (withTranscript ? () => transcript : undefined),
     makeIsOwnPid: () => pid => ownDescriptor && pid === PID,
     runClaude: async (args) => {
       calls.push(args);
@@ -84,7 +85,7 @@ for (const state of ['stopped', 'done', 'failed']) {
 for (const verb of ['rm', 'respawn', 'stop']) {
   for (const scenario of ['external', 'own', 'own-descriptor', 'bridge', 'unknown']) {
     test(`[522] IPC ${verb} refuses ${scenario}, then allows a checked stopped conversation`, { timeout: 9000 }, async (t) => {
-      const f = fixture(t, { own: scenario === 'own', ownDescriptor: scenario === 'own-descriptor', bridge: scenario === 'bridge', unknown: scenario === 'unknown' });
+      const f = fixture(t, { own: scenario === 'own', ownDescriptor: scenario === 'own-descriptor', bridge: scenario === 'bridge', unknown: scenario === 'unknown', withTranscript: true });
       const invoke = () => f.handlers.get('bg-agent-verb')({}, verb, JOB);
       const refusal = await invoke();
       assert.equal(refusal.ok, false, 'the shipped IPC must refuse before invoking the CLI');

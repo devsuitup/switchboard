@@ -34,24 +34,34 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
         if (verb === 'stop' && (!check.known || check.hosted)) return { ok: true };
         if (!check.known) return { ok: false, error: `cannot tell whether this conversation is running (${check.reason}) — ${declined}` };
         if (verb !== 'stop' && check.state === 'running' && check.workerLiveness === 'unknown') {
-          return { ok: false, error: `cannot tell whether this conversation's worker is running — ${declined}` };
+          return { ok: false, error: `cannot tell whether this conversation's worker is running — ${declined}. Check the Agents view, then retry.` };
         }
         if (check.hosted) {
           return { ok: false, error: `cannot ${action} a ${check.state} session; stop it first` };
         }
-        const sessionIds = extraSessionIds.length
-          ? new Set([...check.sessionIds, ...extraSessionIds].map(s => s.toLowerCase())) : check.sessionIds;
+        const sessionIds = new Set(extraSessionIds.length
+          ? [...check.sessionIds, ...extraSessionIds].map(s => s.toLowerCase()) : check.sessionIds);
+        if (verb === 'respawn') for (const sid of check.continuationSessionIds || []) sessionIds.add(sid);
         for (const sessionId of sessionIds) {
           const refusal = await deleteSessionRefusal(sessionId, {
             activeSessions: verb === 'stop' ? new Map([...activeSessions || []].filter(([, session]) =>
               !(session?.isAttach && String(session.attachJobId).toLowerCase() === id.toLowerCase()))) : activeSessions,
-            liveJobCheck: sid => bgAgents.liveJobCheck(sid, restoring
+            liveJobCheck: sid => bgAgents.liveJobCheck(sid, restoring || verb === 'respawn'
               ? { workerLiveness: new Map([[id, check.workerLiveness]]) } : undefined), describeLiveProcess: true,
             liveElsewhereChecked: sid => cliSessionState.liveElsewhereChecked(sid, sessionHasPty, ptyPids, { includeOwnProcesses: true }),
           });
           if (refusal) return { ok: false, error: verb === 'stop'
             ? refusal.replace(/ — [^—]*(?:retry Delete|not deleted)$/, ' — not stopped')
             : refusal.replace('not deleted', declined).replace(/then retry Delete$/, verb === 'respawn' ? 'then retry Respawn' : 'then retry Delete') };
+        }
+        if (verb === 'respawn') {
+          for (const sessionId of new Set([...(check.continuationSessionIds || check.sessionIds), ...extraSessionIds].map(s => s.toLowerCase()))) {
+            const continuation = await bgAgents.continuationJobCheck(sessionId, {
+              excludeJobId: id, workerLiveness: new Map([[id, check.workerLiveness]]),
+            });
+            if (!continuation.known) return { ok: false, error: `cannot check conversation continuations (${continuation.reason}) — not respawned. Check the Agents view, then retry.` };
+            if (continuation.job) return { ok: false, error: `continuation job ${continuation.job.id} still runs this conversation — not respawned. Attach to it or stop it from the Agents view, then retry.` };
+          }
         }
       } catch (err) {
         if (verb === 'stop' && !check) return { ok: true };
@@ -65,7 +75,25 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     if (typeof id !== 'string' || !JOB_ID_RE.test(id)) return { ok: false, error: 'invalid background session id' };
     return checkVerb(verb, id);
   });
+  const respawning = new Map();
+  const runRespawn = (id, restoring = false, extraSessionIds = []) => {
+    const key = String(id).toLowerCase();
+    const extraIds = new Set(extraSessionIds.map(sid => sid.toLowerCase()));
+    const flight = respawning.get(key);
+    if (flight) {
+      if (flight.restoring === restoring && [...extraIds].every(sid => flight.extraIds.has(sid))) return flight.pending;
+      const retry = () => runRespawn(id, restoring, extraSessionIds);
+      return flight.pending.then(value => !value.refused && value.result?.ok ? value : retry(), retry);
+    }
+    const pending = (async () => {
+      const check = await checkVerb('respawn', id, restoring, extraSessionIds);
+      return { result: check.ok ? await bgAgents.runVerb('respawn', id) : check, refused: !check.ok };
+    })().finally(() => respawning.delete(key));
+    respawning.set(key, { pending, restoring, extraIds });
+    return pending;
+  };
   ipcMain.handle('bg-agent-verb', async (_event, verb, id) => {
+    if (verb === 'respawn') return (await runRespawn(id)).result;
     const check = await checkVerb(verb, id);
     return check.ok ? bgAgents.runVerb(verb, id) : check;
   });
@@ -94,10 +122,8 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
   });
   const respawnForHandoff = async (job, extraSessionIds = []) => {
     try {
-      const permission = await checkVerb('respawn', job.id, true, extraSessionIds);
-      if (!permission.ok) return { ok: false, refused: true, error: permission.error };
-      const result = await bgAgents.runVerb('respawn', job.id);
-      if (!result?.ok) return { ok: false, error: result?.error || 'respawn returned no result' };
+      const { result, refused } = await runRespawn(job.id, true, extraSessionIds);
+      if (!result?.ok) return { ok: false, ...(refused ? { refused: true } : {}), error: result?.error || 'respawn returned no result' };
       return { ok: true, attached: await waitForDescriptor(job) };
     } catch (err) { return { ok: false, error: err.message || String(err) }; }
   };
@@ -119,7 +145,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       if (check.workerLiveness !== 'live' && check.workerLiveness !== 'dead') return refuse('worker liveness unknown — not respawned');
       if (check.workerLiveness === 'dead') {
         if (attachOnly) return refuse('worker is not live — not attached');
-        if (check.state === 'stopped') return refuse('stopped job was not respawned automatically', 'respawn');
+        if (!['working', 'done', 'running', 'failed'].includes(check.state)) return refuse(check.state + ' job was not respawned automatically', 'respawn');
         const result = await respawnForHandoff(job);
         if (!result.ok) return refuse(result.error);
         return result.attached ? { action: 'attach', sessionId, jobId: job.id }

@@ -25,11 +25,12 @@ function setup(t, { jobs = {}, outside = [], others = [], listed = [], checkedRe
     fs.writeFileSync(path.join(jobsDir, id, 'state.json'), JSON.stringify(fields));
   }
   const cliCalls = [];
-  bg.init({ jobsDir, homeDir: root, runClaude: async (...args) => { cliCalls.push(args); return { code: 0, stdout: JSON.stringify(listed) }; }, cliSessionState: { readAllDescriptors: () => [], onDescriptorsChanged: () => () => {}, ensureWatching() {},
+  bg.init({ jobsDir, homeDir: root, resolveTranscriptPath: id => path.join(root, 'folder', id + '.jsonl'), runClaude: async (...args) => { cliCalls.push(args); return { code: 0, stdout: JSON.stringify(listed) }; }, cliSessionState: { readAllDescriptors: () => [], onDescriptorsChanged: () => () => {}, ensureWatching() {},
     refreshProcessTable: async () => {}, readWorkerProcessEvidence: () => ({ processTableFresh: true, tableEntry: () => undefined }) } });
   const folder = 'folder';
   fs.mkdirSync(path.join(root, folder));
   fs.writeFileSync(path.join(root, folder, SID + '.jsonl'), JSON.stringify({ type: 'user', message: { content: 'hello' } }) + '\n');
+  fs.writeFileSync(path.join(root, folder, OTHER + '.jsonl'), JSON.stringify({ type: 'user', message: { content: 'hello' } }) + '\n');
   const writes = [], respawned = [], exitedAtRespawn = [], listeners = new Set();
   const session = { kind: 'local-pty', realSessionId: SID, projectFolder: folder, exitDrain: Promise.resolve(),
     composerState: require('../src/main/terminals/composer-state').createComposerState(),
@@ -63,7 +64,7 @@ function setup(t, { jobs = {}, outside = [], others = [], listed = [], checkedRe
       },
     },
     ...require('../src/main/bg-agents/bg-handoff'),
-    sendToBackground: (id, deps) => require('../src/main/bg-agents/bg-handoff').sendToBackground(id, { ...deps, timeoutMs: 1000, exitTimeoutMs: 300 }),
+    sendToBackground: (id, deps) => require('../src/main/bg-agents/bg-handoff').sendToBackground(id, { ...deps, timeoutMs: 1000, exitTimeoutMs: 300, continuationWaitMs: 0 }),
   });
   const { handleSendToBackground } = loadAppFunctions(ctx, { declarations: ['backgroundHandoffs'],
     functions: ['handleSendToBackground', 'persistBackgroundHandoff', 'readBackgroundHandoffStamp'], sourcePath: path.join(__dirname, '../main.js') });

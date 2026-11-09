@@ -385,6 +385,7 @@ for (const failure of ['throw', 'false']) {
 const S2_SID = '11111111-1111-4111-8111-111111111111';
 function respawnSetup(respawnResult) {
   const h = setup();
+  h.deps.readContinuationIds = () => [];
   h.deps.decideRoute = async () => ({ route: 'respawn', jobId: 'aaaaaaaa', job: { id: 'aaaaaaaa', sessionId: 'old' } });
   h.deps.write = (_, text) => { h.writes.push(text); if (text === '\r') h.session.exited = true; return true; };
   h.deps.respawnJob = async () => respawnResult;
@@ -456,13 +457,13 @@ test('S2-T3 refused route preserves reason and writes nothing', async () => {
 });
 
 test('S2-T4 source that never exits times out without respawn or kill', async () => {
-  const h = setup();
+  const h = setup({ ids: [], descriptors: [] });
   h.deps.decideRoute = async () => ({ route: 'respawn', job: { id: 'aaaaaaaa' } });
   const calls = [];
   h.deps.respawnJob = async job => { calls.push(job); return { ok: true }; };
   const result = await sendToBackground('old', h.deps);
   assert.equal(result.code, 'exit-timeout');
-  assert.equal(h.deps.now(), 600);
+  assert.equal(h.deps.now(), 10600);
   assert.deepEqual(h.writes, ['/exit', '\r']);
   assert.deepEqual(calls, []);
   assert.deepEqual(h.kills, []);

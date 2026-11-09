@@ -11,6 +11,7 @@ const { releaseWindowsPty } = require('../terminals/pty-ops');
 const BG_HANDOFF_TIMEOUT_MS = 120000;
 const BG_HANDOFF_EXIT_TIMEOUT_MS = 15000;
 const BG_CONFIRM_NOTICE_MS = 1000;
+const BG_RESPAWN_CONTINUATION_WAIT_MS = 10000;
 
 function backgroundRefusal(session, status) {
   if (!session || session.exited) return 'This session is not running.';
@@ -55,6 +56,10 @@ function createContinuationReader(file, id) {
         index = JSON.parse(serialized);
         if (index.bytes < index.size) await new Promise(resolve => setImmediate(resolve));
       } while (index.bytes < index.size);
+      if (!index.complete && index.pending && !index.invalid && !index.unresolved) {
+        try { JSON.parse(Buffer.from(index.pending, 'base64').toString('utf8')); }
+        catch { return index.sealedIds; }
+      }
       return index.complete && !index.unresolved ? index.ids : null;
     } catch { serialized = previous = undefined; return null; }
   };
@@ -91,14 +96,42 @@ function respawnRoute({ oldId, lookup, check, owned, elsewhere = [] }) {
   return { route: 'respawn', jobId: job.id, job };
 }
 
-async function respawnHandoff(session, sessionId, oldId, job, deps) {
+async function respawnHandoff(session, sessionId, oldId, job, previous, deps) {
   const jobId = job.id;
   const exitTimeoutMs = deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS;
   const exitBy = deps.now() + exitTimeoutMs;
   while (!session.exited) {
-    if (deps.now() >= exitBy) return { ok: false, code: 'exit-timeout', jobId, error: 'Sent /exit, but the terminal did not exit within ' + (exitTimeoutMs / 1000) + ' s; nothing was relaunched. Check the terminal.' };
+    if (deps.now() >= exitBy) break;
     await deps.waitForChange(Math.max(0, Math.min(100, exitBy - deps.now())));
   }
+  const exitTimedOut = !session.exited;
+  const continuationBy = deps.now() + (deps.continuationWaitMs ?? BG_RESPAWN_CONTINUATION_WAIT_MS);
+  let uncertain = true;
+  const newIds = new Set();
+  for (;;) {
+    const ids = await deps.readContinuationIds(oldId, session);
+    uncertain = !ids;
+    for (const id of ids || []) {
+      if (id.toLowerCase() !== oldId.toLowerCase() && !previous.has(id.toLowerCase())) newIds.add(id.toLowerCase());
+    }
+    if (!uncertain && newIds.size === 1) {
+      const continuation = findHandoff(deps.readDescriptors(), [...newIds]);
+      if (continuation) {
+        session.backgrounded = true;
+        await releaseWindowsPty(session.pty);
+        deps.onConfirmed?.(continuation);
+        deps.schedule?.(() => { if (!session.exited) deps.kill(session); }, deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS);
+        return { ok: true, oldSessionId: sessionId, jobId: continuation.jobId,
+          sessionId: continuation.sessionId, cwd: continuation.cwd || session.cwd };
+      }
+    }
+    if (deps.now() >= continuationBy) break;
+    await deps.waitForChange(Math.min(100, continuationBy - deps.now()));
+  }
+  if (exitTimedOut || !session.exited) return { ok: false, code: 'exit-timeout', jobId,
+    error: 'Sent /exit, but the terminal did not exit within ' + (exitTimeoutMs / 1000) + ' s. No continuation was confirmed during the following 10 s; nothing was relaunched. Check the terminal and the Agents view.' };
+  if (uncertain || newIds.size) return { ok: false, code: 'respawn-failed', jobId,
+    error: 'The terminal exited, but its continuation could not be confirmed. The job was not respawned. Check the Agents view or open the conversation from the sidebar before retrying.' };
   let result;
   try { result = await deps.respawnJob(job); }
   catch (err) { result = { ok: false, error: err.message || String(err) }; }
@@ -161,7 +194,7 @@ async function sendToBackground(sessionId, deps) {
     }
     if (!deps.write(session, '\r')) return { ok: false, code: 'write-failed', error: 'Could not submit ' + command + ' to the terminal. Check the terminal before trying again.' };
     if (composer) noteUserInput(composer, '\r', deps.now());
-    if (route.route === 'respawn') return await respawnHandoff(session, sessionId, oldId, route.job, deps);
+    if (route.route === 'respawn') return await respawnHandoff(session, sessionId, oldId, route.job, previous, deps);
     for (;;) {
       if (session.exited && exitDeadline === Infinity) exitDeadline = deps.now() + (deps.exitTimeoutMs ?? BG_HANDOFF_EXIT_TIMEOUT_MS);
       if (deps.now() >= Math.min(deadline, exitDeadline)) {
