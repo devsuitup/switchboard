@@ -279,10 +279,10 @@ test('30fps cap: scheduleFlush takes rAF path when interval has elapsed, timerId
     inCtx(`terminalWriteBuffers.set('s1', { chunks: ['a'], syncDepth: 0, rafId: 0, timerId: 0 })`);
     inCtx(`scheduleFlush('s1', terminalWriteBuffers.get('s1'))`);
     assert.ok(inCtx(`terminalWriteBuffers.get('s1').rafId`) !== 0, 'rAF scheduled when no prior flush');
-    assert.strictEqual(inCtx(`terminalWriteBuffers.get('s1').timerId`), 0, 'no timerId on first call');
+    assert.ok(inCtx(`terminalWriteBuffers.get('s1').timerId`) !== 0, 'fallback timer backs the first frame');
 
     // Cancel the pending rAF so we can re-use the entry.
-    inCtx(`cancelAnimationFrame(terminalWriteBuffers.get('s1').rafId); terminalWriteBuffers.get('s1').rafId = 0`);
+    inCtx(`cancelAnimationFrame(terminalWriteBuffers.get('s1').rafId); clearTimeout(terminalWriteBuffers.get('s1').timerId); terminalWriteBuffers.get('s1').rafId = 0`);
 
     // Case 2: stamp lastFlushAt as just-now → elapsed < MIN_FLUSH_INTERVAL_MS → timer path.
     inCtx(`lastFlushAt.set('s1', performance.now())`);
@@ -296,7 +296,7 @@ test('30fps cap: scheduleFlush takes rAF path when interval has elapsed, timerId
     inCtx(`terminalWriteBuffers.set('s1', { chunks: ['c'], syncDepth: 0, rafId: 0, timerId: 0 })`);
     inCtx(`scheduleFlush('s1', terminalWriteBuffers.get('s1'))`);
     assert.ok(inCtx(`terminalWriteBuffers.get('s1').rafId`) !== 0, 'rAF scheduled when interval has elapsed');
-    assert.strictEqual(inCtx(`terminalWriteBuffers.get('s1').timerId`), 0, 'no timerId when rAF path taken');
+    assert.ok(inCtx(`terminalWriteBuffers.get('s1').timerId`) !== 0, 'fallback timer backs the frame');
   } finally {
     destroy();
   }

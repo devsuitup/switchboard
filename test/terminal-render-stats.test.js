@@ -13,7 +13,7 @@ function setup({ on }) {
   window.atrace = (cat, sid, fields) => { traced.push({ cat, sid, fields }); };
   const realSetTimeout = window.setTimeout.bind(window);
   window.setTimeout = (fn, ms) => {
-    if (ms !== 1000) return realSetTimeout(fn, ms);
+    if (fn !== window.emitRenderStats) return realSetTimeout(fn, ms);
     timers.push({ fn, ms });
     return timers.length;
   };
