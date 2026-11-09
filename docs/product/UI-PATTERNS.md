@@ -284,7 +284,7 @@ stopped` notice now uses this persistent error variant, with its wording
 unchanged and no console-only duplicate.
 
 Stop, Detach, Delete and Archive failures use B8 and clear only the successful
-action's own notice. Run now in the Schedules tab reports success only after an `ok` reply; a refusal,
+action's own notice. Run now in the Schedules tab (behind `schedulesTab`, off by default) reports success only after an `ok` reply; a refusal,
 rejected IPC or absent result restores the button and leaves a B8 error naming
 the schedule, reason and how to retry. Restore's pending indexing notice clears
 after its retry runs; an early return moves held members into persistent

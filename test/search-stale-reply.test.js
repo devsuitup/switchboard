@@ -64,6 +64,8 @@ function setup(t, activeTab = 'sessions') {
   };
   window.api.getSetting = async () => false;
   window.api.setSetting = async () => {};
+  const defaultsFilename = path.join(__dirname, '../public/setting-defaults.js');
+  vm.runInContext(fs.readFileSync(defaultsFilename, 'utf8'), ctx.context, { filename: defaultsFilename });
   const schedulesFilename = path.join(__dirname, '..', 'public', 'schedules-view.js');
   const hintsFilename = path.join(__dirname, '..', 'public', 'memory-workfiles-view.js');
   vm.runInContext(extractFunction(fs.readFileSync(hintsFilename, 'utf8'), 'scheduleRunFailureHint'), ctx.context, { filename: hintsFilename });
@@ -272,6 +274,7 @@ test('rebuild searches the current text and does not revive the query it interru
 
 test('Schedules tab drives the real listing lifecycle, hides search and leaves Work Files available', async t => {
   const ctx = setup(t);
+  ctx.window.schedulesTabEnabled = true;
   Object.defineProperty(ctx.document, 'hidden', { configurable: true, value: false });
   ctx.window.Date.now = () => 1500;
   let listed = 0;

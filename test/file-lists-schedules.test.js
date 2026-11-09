@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { encodeProjectPath } = require('../encode-project-path');
 
-test('Agent Files and its FTS files omit only runner schedules in project commands', t => {
+test('Agent Files and its FTS supply schedules for the renderer setting', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'file-schedules-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const oldHome = process.env.HOME;
@@ -28,7 +28,7 @@ test('Agent Files and its FTS files omit only runner schedules in project comman
   fs.writeFileSync(path.join(claudeDir, 'schedule-global.md'), 'keep');
   const result = listMemories({ claudeDir, projectsDir, activeProjectPaths: [project] }, p => fs.readFileSync(p, 'utf8'));
   for (const files of [result.files, result.view.projects.flatMap(p => p.files)]) {
-    assert.equal(files.some(f => f.filename === 'schedule-a.md'), false, 'runner schedules leave Agent Files and FTS');
+    assert.equal(files.some(f => f.filename === 'schedule-a.md'), true, 'schedule files remain available to the renderer');
     for (const name of ['deploy.md', 'Schedule-B.md', 'schedule-root.md']) assert.ok(files.some(f => f.filename === name), name);
   }
   assert.ok(result.view.global.files.some(f => f.filename === 'schedule-global.md'));

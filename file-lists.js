@@ -129,9 +129,8 @@ function listMemories(options, readContent) {
           const commandsDir = path.join(dotClaudeDir, 'commands');
           const commandFiles = scanMdFiles(commandsDir, isAllowed);
           for (const f of commandFiles) {
-            if (isRunnerScheduleFileName(f.filename)) continue;
             if (!seenPaths.has(f.filePath)) {
-              files.push({ ...listed(f), displayPath: shortName + '/.claude/commands/', source: 'project' });
+              files.push({ ...listed(f), displayPath: shortName + '/.claude/commands/', source: 'project', ...(isRunnerScheduleFileName(f.filename) ? { schedule: true } : {}) });
               seenPaths.add(f.filePath);
             }
           }

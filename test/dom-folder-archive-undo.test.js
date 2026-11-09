@@ -11,6 +11,7 @@ async function settle() {
 }
 function setup(t, sessions = [], schedules = [], children = []) {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   t.after(() => ctx.destroy());
   const rows = sessions.map(s => ({ name: s.sessionId, projectPath: '/p', modified: new Date().toISOString(), ...s }));
   const project = { projectPath: '/p', folder: '-p', sessions: rows };

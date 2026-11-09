@@ -70,6 +70,7 @@ function boxIds(ctx) {
 
 test('archive folder: both boxes archive the sessions, then archive the folder with its schedules', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = makeSampleProject({ projectPath: '/p', folder: '-p' });
     const calls = installApi(ctx, {
@@ -89,6 +90,7 @@ test('archive folder: both boxes archive the sessions, then archive the folder w
 
 test('archive folder: one refused stop archives nothing at all', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [remote('r1', 'vps'), session('s2')] };
     ctx.window.activePtyIds.add('s2');
@@ -103,6 +105,7 @@ test('archive folder: one refused stop archives nothing at all', async () => {
 
 test('archive folder: with the sessions box unticked nothing is stopped or archived, the folder still is', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     ctx.window.activePtyIds.add('s1');
@@ -120,6 +123,7 @@ test('archive folder: with the sessions box unticked nothing is stopped or archi
 
 test('archive folder: no schedule box without a disableable schedule; a linked one is named as staying enabled', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     installApi(ctx, {
@@ -137,6 +141,7 @@ test('archive folder: no schedule box without a disableable schedule; a linked o
 
 test('archive folder: a folder without sessions or schedules archives without a dialog', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [] };
     const calls = installApi(ctx);
@@ -151,6 +156,7 @@ test('archive folder: a folder without sessions or schedules archives without a 
 
 test('archive folder: Cancel calls nothing but the plan', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     ctx.window.activePtyIds.add('s1');
@@ -164,6 +170,7 @@ test('archive folder: Cancel calls nothing but the plan', async () => {
 
 test('archive folder: with the schedules box unticked no schedule is disabled', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     const calls = installApi(ctx, {
@@ -178,6 +185,7 @@ test('archive folder: with the schedules box unticked no schedule is disabled', 
 
 test('archive folder: the schedules box starts from the remembered answer', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     ctx.window.localStorage.setItem('archiveFolder.disableSchedules', '0');
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
@@ -199,6 +207,7 @@ const WT = '/r/.claude/worktrees/w';
 
 test('archive folder: the worktrees of the folder are archived with it', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const parent = { projectPath: '/r', folder: '-r', sessions: [session('a')] };
     const child = { projectPath: WT, folder: '-r--claude-worktrees-w', sessions: [session('c')] };
@@ -216,6 +225,7 @@ test('archive folder: the worktrees of the folder are archived with it', async (
 
 test('archive folder: a refused stop in a worktree archives nothing, and the folder\'s running session was stopped', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const parent = { projectPath: '/r', folder: '-r', sessions: [session('a')] };
     const child = { projectPath: WT, folder: '-r--claude-worktrees-w', sessions: [session('c')] };
@@ -235,6 +245,7 @@ test('archive folder: a refused stop in a worktree archives nothing, and the fol
 
 test('archive folder: while indexing, a persistent notice and no mutation', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     const calls = installApi(ctx, { getProjectArchivePlan: () => Promise.resolve({ indexing: true }) });
@@ -250,6 +261,7 @@ test('archive folder: while indexing, a persistent notice and no mutation', asyn
 
 test('worktree nesting: a worktree of another host is drawn at top level, not inside the local folder', () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const parent = { projectPath: '/r', folder: '-r', remoteAlias: null, sessions: [session('a')] };
     const child = { projectPath: WT, folder: 'planificator::-r--claude-worktrees-w', remoteAlias: 'planificator', sessions: [remote('c', 'planificator')] };
@@ -265,6 +277,7 @@ test('worktree nesting: a worktree of another host is drawn at top level, not in
 
 test('worktree nesting: a worktree whose repository is not listed is drawn at top level', () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     render(ctx, [{ projectPath: WT, folder: '-r--claude-worktrees-w', sessions: [session('c')] }]);
     const header = ctx.document.getElementById('ph-' + ctx.sidebar.folderId(WT));
@@ -274,6 +287,7 @@ test('worktree nesting: a worktree whose repository is not listed is drawn at to
 
 test('worktree nesting: a worktree whose repository is hidden on its host stays hidden', () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     render(ctx, [{ projectPath: WT, folder: 'box::-r--claude-worktrees-w', remoteAlias: 'box', hiddenRepository: true, sessions: [remote('c', 'box')] }]);
     assert.equal(ctx.document.getElementById('ph-' + ctx.sidebar.folderId(WT, 'box')), null);
@@ -283,6 +297,7 @@ test('worktree nesting: a worktree whose repository is hidden on its host stays 
 
 test('archive folder: a worktree of another host at the same path is not archived with the folder', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const parent = { projectPath: '/r', folder: '-r', sessions: [session('a')] };
     const child = { projectPath: WT, folder: 'planificator::-r--claude-worktrees-w', remoteAlias: 'planificator', sessions: [remote('c', 'planificator')] };
@@ -298,6 +313,7 @@ test('archive folder: a worktree of another host at the same path is not archive
 
 test('archive folder: the sessions box starts from the remembered answer', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     ctx.window.localStorage.setItem('archiveFolder.archiveSessions', '0');
     installApi(ctx);
@@ -314,6 +330,7 @@ test('archive folder: the sessions box starts from the remembered answer', async
 
 test('archive folder: an archive that failed after disabling schedules names them', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     installApi(ctx, { archiveProject: () => Promise.resolve({ error: 'SQLITE_BUSY', disabled: ['nightly'] }) });
     ctx.window.appAlert = async () => { assert.fail('an Archive failure must be a notice, not a dialog'); };
@@ -327,6 +344,7 @@ test('archive folder: an archive that failed after disabling schedules names the
 
 test('worktree nesting: a same-host worktree still nests under its folder', () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const parent = { projectPath: '/r', folder: '-r', sessions: [session('a')] };
     const child = { projectPath: WT, folder: '-r--claude-worktrees-w', sessions: [session('c')] };
@@ -339,6 +357,7 @@ test('worktree nesting: a same-host worktree still nests under its folder', () =
 
 test('archive folder: groups and sessions come from every cached session, not the search projection', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const parent = { projectPath: '/r', folder: '-r', sessions: [session('a'), session('b')] };
     const child = { projectPath: WT, folder: '-r--claude-worktrees-w', sessions: [session('c')] };
@@ -358,6 +377,7 @@ test('archive folder: groups and sessions come from every cached session, not th
 
 test('archive folder: a header with no cached group reloads and does nothing else', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/r', folder: '-r', sessions: [session('a')] };
     ctx.window.activePtyIds.add('a');
@@ -375,6 +395,7 @@ test('archive folder: a header with no cached group reloads and does nothing els
 
 test('archive folder: a schedule that could not be disabled is reported', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     installApi(ctx, {
@@ -391,6 +412,7 @@ test('archive folder: a schedule that could not be disabled is reported', async 
 
 test('archive folder: an archive refused for indexing is reported', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     installApi(ctx, { archiveProject: () => Promise.resolve({ error: 'indexing' }) });
@@ -404,6 +426,7 @@ test('archive folder: an archive refused for indexing is reported', async () => 
 
 test('archive folder: an archive that failed in the main process is reported', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')] };
     installApi(ctx, { archiveProject: () => Promise.resolve({ error: 'SQLITE_BUSY' }) });
@@ -425,6 +448,7 @@ function notice(ctx, projectPath) {
 
 test('re-enable notice: a project carrying an offer shows it, and Turn back on asks main for that folder', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')], reenableOffer: { names: ['nightly', 'weekly'] } };
     const calls = installApi(ctx, { reenableProjectSchedules: () => Promise.resolve({ ok: true, enabled: ['nightly', 'weekly'], failed: [] }) });
@@ -444,6 +468,7 @@ test('re-enable notice: a project carrying an offer shows it, and Turn back on a
 
 test('re-enable notice: no offer, no notice', () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     render(ctx, [{ projectPath: '/p', folder: '-p', sessions: [session('s1')] }]);
     assert.equal(notice(ctx, '/p'), null);
@@ -452,6 +477,7 @@ test('re-enable notice: no offer, no notice', () => {
 
 test('re-enable notice: Dismiss deletes the offer and turns nothing on', async () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const project = { projectPath: '/p', folder: '-p', sessions: [session('s1')], reenableOffer: { names: ['nightly'] } };
     const calls = installApi(ctx);
@@ -468,6 +494,7 @@ test('re-enable notice: Dismiss deletes the offer and turns nothing on', async (
 
 test('re-enable notice: failures are reported, and every name is text', () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const img = '<img src="x" onerror="window.__pwned = 1">';
     const project = {
@@ -484,6 +511,7 @@ test('re-enable notice: failures are reported, and every name is text', () => {
 
 test('re-enable notice: a nested worktree carrying an offer shows it too', () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     const parent = { projectPath: '/r', folder: '-r', sessions: [session('a')] };
     const child = { projectPath: WT, folder: '-r--claude-worktrees-w', sessions: [session('c')], reenableOffer: { names: ['wt-job'] } };
@@ -495,6 +523,7 @@ test('re-enable notice: a nested worktree carrying an offer shows it too', () =>
 
 test('re-enable notice: a stale folder carrying an offer is not auto-collapsed, without an offer it is', () => {
   const ctx = setupSidebarDom();
+  ctx.window.schedulesTabEnabled = true;
   try {
     ctx.window.sessionMaxAgeDays = 1;
     const withOffer = { projectPath: '/p', folder: '-p', sessions: [session('s1')], reenableOffer: { names: ['nightly'] } };

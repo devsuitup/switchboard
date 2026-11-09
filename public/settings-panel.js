@@ -79,6 +79,7 @@
     const rightClickValue = fieldValue('terminalRightClick');
     const restoreStartupValue = fieldValue('restoreOnStartup');
     const mcpEmulationValue = fieldValue('mcpEmulation');
+    const schedulesTabValue = fieldValue('schedulesTab');
     const autoUpdateValue = fieldValue('autoUpdate');
     const receiveBetaVersionsValue = fieldValue('receiveBetaVersions');
     const shellProfileValue = fieldValue('shellProfile');
@@ -304,6 +305,16 @@
           </div>
           <div class="settings-field-control">
             <label class="settings-toggle"><input type="checkbox" id="sv-hide-sdk" ${hideSdkValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Schedules tab</span>
+            <div class="settings-description">Show the optional Schedules tab instead of schedule files in Agent Files. Off by default. Takes effect when saved, without a restart; scheduled tasks keep running either way.</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-schedules-tab" ${schedulesTabValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
           </div>
         </div>
 
@@ -638,6 +649,7 @@
         settings.restoreOnStartup = settingsViewerBody.querySelector('#sv-restore-startup').value || SETTING_DEFAULTS.restoreOnStartup;
         settings.hideSdkSessions = settingsViewerBody.querySelector('#sv-hide-sdk').checked;
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
+        settings.schedulesTab = settingsViewerBody.querySelector('#sv-schedules-tab').checked;
         settings.autoUpdate = settingsViewerBody.querySelector('#sv-auto-update').checked;
         settings.receiveBetaVersions = settingsViewerBody.querySelector('#sv-receive-beta-versions').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || SETTING_DEFAULTS.shellProfile;
@@ -674,6 +686,7 @@
 
       // Update visibleSessionCount, sessionMaxAgeDays, and theme
       if (!isProject) {
+        window._applySchedulesTab?.(settings.schedulesTab);
         if (settings.visibleSessionCount && typeof window._setVisibleSessionCount === 'function') {
           window._setVisibleSessionCount(settings.visibleSessionCount);
         }
