@@ -675,7 +675,7 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
 
   function checkProjects(onTick, paths, now) {
     if (!running) return;
-    lastTickMinute = Math.floor(now.getTime() / MINUTE_MS) * MINUTE_MS;
+    lastTickMinute = Math.max(lastTickMinute ?? -Infinity, Math.floor(now.getTime() / MINUTE_MS) * MINUTE_MS);
     const schedules = scanSchedules(log, paths);
     let state = null;
     if (catchUpOn && schedules.some(s => s.catchUp)) {
