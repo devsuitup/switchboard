@@ -5,7 +5,7 @@
 
 // --- New session dialog ---
 async function resolveDefaultSessionOptions(project) {
-  const effective = await window.api.getEffectiveSettings(project.projectPath);
+  const effective = normalizeBrowserSettings(await window.api.getEffectiveSettings(project.projectPath));
   const options = {};
   if (effective.dangerouslySkipPermissions) {
     options.dangerouslySkipPermissions = true;
@@ -16,7 +16,7 @@ async function resolveDefaultSessionOptions(project) {
     options.worktree = true;
     if (effective.worktreeName) options.worktreeName = effective.worktreeName;
   }
-  if (effective.chrome) options.chrome = true;
+  options.browserMode = effective.browserMode === undefined ? SETTING_DEFAULTS.browserMode : effective.browserMode;
   if (effective.sandbox && window.api.platform === 'linux') options.sandbox = true;
   if (effective.preLaunchCmd) options.preLaunchCmd = effective.preLaunchCmd;
   if (effective.addDirs) options.addDirs = effective.addDirs;
@@ -225,7 +225,7 @@ async function launchTerminalSession(project) {
 
 async function showNewSessionDialog(project, opener = document.activeElement) {
   const openerHeaderId = opener?.closest('.project-header, .worktree-header')?.id;
-  const effective = await window.api.getEffectiveSettings(project.projectPath);
+  const effective = normalizeBrowserSettings(await window.api.getEffectiveSettings(project.projectPath));
 
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
@@ -265,11 +265,13 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
     </div>
     <div class="settings-field">
       <div class="settings-field-info">
-        <span class="settings-label">Chrome</span>
-        <div class="settings-description">Enable Chrome browser automation</div>
+        <span class="settings-label">Browser</span>
+        <div class="settings-description">Choose browser automation for this session</div>
       </div>
       <div class="settings-field-control">
-        <label class="settings-toggle"><input type="checkbox" id="nsd-chrome" ${effective.chrome ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+        <select class="settings-select control-select" id="nsd-browser-mode" aria-label="Browser">
+          ${BROWSER_MODES.filter(mode => mode.value !== 'managed').map(mode => `<option value="${mode.value}" ${effective.browserMode === mode.value ? 'selected' : ''}>${mode.label}</option>`).join('')}
+        </select>
       </div>
     </div>
     ${window.api.platform === 'linux' ? `<div class="settings-field">
@@ -358,9 +360,7 @@ async function showNewSessionDialog(project, opener = document.activeElement) {
       options.worktree = true;
       options.worktreeName = dialog.querySelector('#nsd-worktree-name').value.trim();
     }
-    if (dialog.querySelector('#nsd-chrome').checked) {
-      options.chrome = true;
-    }
+    options.browserMode = dialog.querySelector('#nsd-browser-mode').value;
     const sandboxToggle = dialog.querySelector('#nsd-sandbox');
     if (sandboxToggle && sandboxToggle.checked) {
       options.sandbox = true;
@@ -491,7 +491,7 @@ function showRemoteLaunchDialog(project) {
 }
 
 async function showResumeSessionDialog(session) {
-  const effective = await window.api.getEffectiveSettings(session.projectPath);
+  const effective = normalizeBrowserSettings(await window.api.getEffectiveSettings(session.projectPath));
 
   const overlay = document.createElement('div');
   overlay.className = 'new-session-overlay';
@@ -523,11 +523,13 @@ async function showResumeSessionDialog(session) {
     </div>
     <div class="settings-field">
       <div class="settings-field-info">
-        <span class="settings-label">Chrome</span>
-        <div class="settings-description">Enable Chrome browser automation</div>
+        <span class="settings-label">Browser</span>
+        <div class="settings-description">Choose browser automation for this session</div>
       </div>
       <div class="settings-field-control">
-        <label class="settings-toggle"><input type="checkbox" id="rsd-chrome" ${effective.chrome ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+        <select class="settings-select control-select" id="rsd-browser-mode" aria-label="Browser">
+          ${BROWSER_MODES.filter(mode => mode.value !== 'managed').map(mode => `<option value="${mode.value}" ${effective.browserMode === mode.value ? 'selected' : ''}>${mode.label}</option>`).join('')}
+        </select>
       </div>
     </div>
     ${window.api.platform === 'linux' ? `<div class="settings-field">
@@ -595,9 +597,7 @@ async function showResumeSessionDialog(session) {
     } else if (selectedMode) {
       options.permissionMode = selectedMode;
     }
-    if (dialog.querySelector('#rsd-chrome').checked) {
-      options.chrome = true;
-    }
+    options.browserMode = dialog.querySelector('#rsd-browser-mode').value;
     const sandboxToggle = dialog.querySelector('#rsd-sandbox');
     if (sandboxToggle && sandboxToggle.checked) {
       options.sandbox = true;

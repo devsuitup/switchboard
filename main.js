@@ -88,7 +88,7 @@ const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialSc
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
-const { SETTING_DEFAULTS } = require('./public/setting-defaults');
+const { SETTING_DEFAULTS, normalizeBrowserSettings } = require('./public/setting-defaults');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./src/main/shared/ipc-path-validator');
 const { validatePreLaunchCmd } = require('./src/main/terminals/pre-launch-cmd-guard');
 const { normalizePtySize } = require('./src/main/terminals/pty-size');
@@ -1833,9 +1833,21 @@ ipcMain.handle('get-shell-profiles', () => {
   return getShellProfiles();
 });
 
+const warnedBrowserModes = new Set();
+
+function normalizeStoredBrowserSettings(scope) {
+  const settings = scope ? (getSetting(scope) || {}) : {};
+  return normalizeBrowserSettings(settings, message => {
+    const key = JSON.stringify([scope, settings.browserMode]);
+    if (warnedBrowserModes.has(key)) return;
+    warnedBrowserModes.add(key);
+    log.warn(message);
+  });
+}
+
 ipcMain.handle('get-effective-settings', (_event, projectPath) => {
-  const global = getSetting('global') || {};
-  const project = projectPath ? (getSetting('project:' + projectPath) || {}) : {};
+  const global = normalizeStoredBrowserSettings('global');
+  const project = normalizeStoredBrowserSettings(projectPath ? 'project:' + projectPath : null);
   const effective = { ...SETTING_DEFAULTS };
   for (const key of Object.keys(SETTING_DEFAULTS)) {
     // Only `undefined` (key never saved at this scope) falls through to the

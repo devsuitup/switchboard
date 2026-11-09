@@ -431,6 +431,8 @@ const rendererCrossFileGlobals = {
 
   // The one table of setting defaults (public/setting-defaults.js)
   SETTING_DEFAULTS: 'readonly',
+  BROWSER_MODES: 'readonly',
+  normalizeBrowserSettings: 'readonly',
 
   // Terminal right-click context menu (public/terminal-context-menu.js)
   terminalRightClickMode: 'writable',
@@ -652,6 +654,8 @@ module.exports = [
       globals: {
         module: 'writable',
         SETTING_DEFAULTS: 'off',
+        BROWSER_MODES: 'off',
+        normalizeBrowserSettings: 'off',
       },
     },
     rules: {

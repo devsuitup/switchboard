@@ -8,6 +8,13 @@ const vm = require('node:vm');
 
 const filename = path.join(__dirname, '../main.js');
 const cases = [
+  ['browser extension', true, true, true, { browserMode: 'claude-in-chrome' }, ['--session-id', 'session', '--chrome']],
+  ['browser resume', false, true, true, { browserMode: 'claude-in-chrome' }, ['--resume', 'session', '--chrome']],
+  ['browser fork', true, true, true, { browserMode: 'claude-in-chrome', forkFrom: 'source' }, ['--resume', 'source', '--fork-session', '--chrome']],
+  ['explicit off defeats legacy chrome', true, true, true, { browserMode: 'off', chrome: true }, ['--session-id', 'session']],
+  ['managed is inert', true, true, true, { browserMode: 'managed', chrome: true }, ['--session-id', 'session']],
+  ['invalid is safe off', true, true, true, { browserMode: null, chrome: true }, ['--session-id', 'session']],
+  ['string false is not chrome', true, true, true, { chrome: 'false' }, ['--session-id', 'session']],
   ['new', true, true, true, {}, ['--session-id', 'session']],
   ['resume', false, true, true, { worktree: true }, ['--resume', 'session']],
   ['start-fresh', false, false, true, {}, ['--session-id', 'session']],

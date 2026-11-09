@@ -397,6 +397,26 @@ An explicitly saved `null` (permission mode "Default", which omits
 `--permission-mode`) is a value, not an absence: the merge overrides on
 `!== undefined` only, so it is never promoted to the table's `'auto'`.
 
+Browser compatibility: `browserMode` defaults to `off`. The shared
+`normalizeBrowserSettings` returns a copy and normalizes each stored scope
+before main or the panel merges it. An explicit valid mode wins over legacy
+`chrome`; exact legacy true maps to `claude-in-chrome`, false to `off`, and
+an absent browser choice stays absent so it inherits. Invalid modes, including
+null, report a diagnostic and become explicit Off. Main warns once per stored
+scope and invalid JSON value for the lifetime of the process, including across
+changes back to a previously diagnosed value. Other settings retain
+their existing null semantics. Saving either scope removes `chrome`; global
+save retains unrelated keys, while project save keeps only overridden fields.
+Use global removes the project browser override. Reads never write settings.
+
+Global/project settings and New/Resume dialogs offer Browser: Off / Claude in
+Chrome on every platform. Managed is recognized for forward compatibility but
+is not offered or activated. A stored Managed choice displays Off in
+these controls without rewriting storage on open; an explicit save/launch
+uses the displayed choice. Settings affect subsequent launches. Fork, restore,
+ordinary open and the interactive schedule creator use the shared default
+resolver. There is no managed browser lifecycle, browser IPC or MCP handoff.
+
 `receiveBetaVersions` is global-only in the panel and defaults to false in
 the shared table. `set-setting('global', ...)` re-reads the saved row and
 applies its channel to `autoUpdater.allowPrerelease` immediately. Startup

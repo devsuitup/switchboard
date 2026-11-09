@@ -36,10 +36,14 @@ transcript.
 | Permission Mode | `--permission-mode <mode>`, or nothing for **Default** |
 | Dangerous Skip | `--dangerously-skip-permissions`, instead of a permission mode |
 | Worktree, with an optional name | `--worktree [name]` — see [Worktree sessions](worktrees.md) |
-| Chrome | `--chrome` |
+| Browser: Off / Claude in Chrome | Off passes no browser flag; Claude in Chrome passes `--chrome` |
 | Sandbox (Linux only) | the session runs under bubblewrap — see [Sandbox](sandbox.md) |
 | Pre-launch Command | written in front of the `claude` command |
 | Additional Directories | one `--add-dir <dir>` per comma-separated entry |
+
+The Browser default uses the `browserMode` setting (`off` or `claude-in-chrome`).
+A saved `chrome` setting is read as the matching choice: `true` selects
+**Claude in Chrome**, and `false` selects **Off**.
 
 **Start** (or Enter outside a text field) launches; **Cancel** or Esc closes the
 dialog. The values apply to this launch only; they are not saved.
@@ -91,8 +95,8 @@ That covers a wrapper (`aws-vault exec profile --`), an environment assignment
 ## Resume dialog
 
 **Resume with config** on a session row opens the Resume dialog: Permission
-Mode, Chrome, Sandbox (Linux), Pre-launch Command and Additional Directories,
-applied to this resume only. It has no Worktree option: a resumed session keeps
+Mode, Browser (Off / Claude in Chrome), Sandbox (Linux), Pre-launch Command and
+Additional Directories, applied to this resume only. It has no Worktree option: a resumed session keeps
 the directory it was started in.
 
 ## Fork
