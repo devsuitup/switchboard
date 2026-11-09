@@ -53,8 +53,8 @@ function rig(schedule) {
     error: (...a) => lines.push(a.join(' ')),
   };
   let hold = false;
-  const run = (argv, cwd, name, onDone) => {
-    runs.push({ argv, cwd, name });
+  const run = (argv, cwd, name, onDone, identity) => {
+    runs.push({ argv, cwd, name, identity });
     if (hold) pending.push(onDone); else onDone();
   };
   return {
@@ -71,6 +71,21 @@ function rig(schedule) {
 function fakeClock(t, now) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now });
 }
+
+test('cron and catch-up pass file, slug and due-minute identity to the launcher', t => {
+  const r = rig({ cron: '0 20 * * *' });
+  fakeClock(t, at(5, 12, 0, 30));
+  r.start()();
+  t.mock.timers.setTime(at(8, 9, 0, 30));
+  const stop = r.start();
+  stop();
+  assert.deepEqual(r.runs[0].identity, { filePath: path.join(COMMANDS, 'schedule-report.md'), slug: 'report', dueMs: at(7, 20, 0) });
+  const cron = rig({ cron: '* * * * *', catchUp: false });
+  const stopCron = cron.start();
+  t.mock.timers.tick(60000);
+  stopCron();
+  assert.deepEqual(cron.runs[0].identity, { filePath: path.join(COMMANDS, 'schedule-report.md'), slug: 'report', dueMs: null });
+});
 
 test('catch-up: three missed daily runs while Switchboard was closed give one run at the next launch', (t) => {
   const r = rig({ cron: '0 20 * * *' });

@@ -13,6 +13,7 @@ test uses a module-specific loader and checks eager and lazy stub consumption.
 |---|---|---|
 | `src/main/schedules/schedule-runner.js` | ~670 | The cron loop, cron parser, file scanner, catch-up record, session pre-seeder, command builder. |
 | `src/main/schedules/schedule-ipc.js` | ~225 | IPC handlers + the inline `SCHEDULE_CREATOR_TEMPLATE` (an embedded Claude command that teaches Claude how to write schedule files). |
+| `src/main/schedules/schedule-run-results.js` | ~130 | Run-result persistence, read-only lookup, pruning and the shared exit classifier. |
 
 ## Public surface
 
@@ -53,8 +54,8 @@ manual and cron runs. Any non-zero exit, regardless of elapsed time, sends
 `schedule-run-exit` while the window and its web contents exist. Exit 0 is silent;
 signal terminations include the signal. The payload carries `name`, `projectPath`,
 `sessionId`, `manual`, `code`, `signal` and `failure`. The launcher receives the
-plain schedule name and an optional fifth argument `{ manual: true }` from Run
-now; cron defaults to `manual: false`. `failure` is `claude-path` for code 127
+plain schedule name and a fifth argument with filePath, slug and dueMs, plus
+`manual: true` from Run now; cron defaults to `manual: false`. `failure` is `claude-path` for code 127
 or a shell lookup diagnostic naming exactly `claude` (bash/sh command-not-found,
 including shell paths such as `/bin/bash`, zsh/fish command-last forms including
 `zsh:1:`, quoted or unquoted env missing-executable, Windows spawn ENOENT /
@@ -90,7 +91,8 @@ the renderer loaded and the latest exit/signal and hint. Dismissing a notice or 
 successful exit does not reset that count. Both ids differ from the launch-refusal
 id `RunSchedule:<filePath>`: a fast exit arriving before the launch reply, or a
 later retry, cannot clear an exit failure. No modal or exit-success toast is used.
-With no live window the exit is logged only, without queuing a notice for restart.
+With no live window the exit is logged and its run result persisted, without
+queuing a notice for restart (see "Run results").
 
 Tests: `test/run-schedule-now-result.test.js` loads the
 shipped launcher and IPC handler with disposable schedule files and a simulated
@@ -233,9 +235,10 @@ record never proves a reply. Unreadable transcripts give `replied: null`;
 readable transcripts without an assistant give `false`. The cache is not
 modified. `cliSessionState.isScheduleRunLive(sessionId)` reads the launcher's
 in-memory map without probing processes; `running` uses that export for cron
-and manual runs. Every run currently has `result: null`.
+and manual runs. Slice A1 introduced `result: null`; slice D fills it from the
+instance's persistent record (see "Run results").
 
-This slice adds no renderer consumer, mutation IPC, result persistence or
+Slice A1 added no renderer consumer, mutation IPC, result persistence or
 changelog entry. Regressions: `schedule-next-run.test.js`,
 `schedule-file-name.test.js` and `schedule-list.test.js`; they use disposable
 files and plain Node boundaries, including the real main IPC registration and
@@ -527,10 +530,61 @@ Schedules for its project. Failure text continues to name failed schedules.
 
 ## Run results
 
-Slice A2 keeps result null. Running uses the live map; otherwise the renderer
-says No result recorded and gives the assistant/seed/started/unknown transcript
-hint. It never infers Exit 0. Persistent outcomes, deletion, the creation form
-and creator-template migration are later slices.
+`src/main/schedules/schedule-run-results.js` owns persistent v1 results and the
+shared `classifyRunExit({ code, sandbox, stderr })` used by the exit notice.
+`runScheduleCommand` captures its start time before refusals or spawning. Its
+fifth argument carries `{ manual, filePath, slug, dueMs }`: cron uses the listed
+file and due minute (null for a current cron tick), Run now uses the resolved
+file with manual true. Archive, platform and add-dir refusals after the seed,
+synchronous spawn failure, pre-spawn child error and child exit all write through this
+same identity. Write failure warns without changing launch, onDone or notice.
+Preparation throws or rejections (including shell resolution, project listing,
+trigger-directory creation and live-run tracking) record spawn-error with the
+message and rethrow, preserving the existing rejection and callback behavior.
+After the child's spawn event, an error is logged but does not publish a result
+or call onDone; the actual exit remains authoritative for completion.
+
+Records live under `<dirname(DB_PATH)>/schedule-runs`, isolated per instance.
+Both launcher and listing use `scheduleRunsDir(dataDir)` from the results module.
+Names are `<scheduleStateKey>-<startedAtMs>-<sessionId>.json`. Payloads are one
+JSON line plus LF: `{ v: 1, sessionId, file, name, slug, manual, dueMs,
+startedAt, endedAt, outcome, exitCode, signal, failure, error }`. Times are ISO
+strings; exitCode is an integer or null; outcome is exited, signal, spawn-error
+or refused. Stderr stays only in the log. Failure is exit, claude-path, sandbox
+or null. Refusal/spawn error text is the launcher's returned recovery text.
+Preparation exceptions retain their original message. Signal outcomes require
+a non-empty signal string, refused/spawn-error require string error text, and
+exited requires an integer exitCode; inconsistent records are unreadable.
+
+Publication uses a same-directory temp file written with wx, then
+renameWithRetry. A per-result wx lock serializes publishers; an existing final
+file is kept. This preserves first-completion semantics without exposing a
+partial JSON destination or allowing rename to replace a previous result on
+Windows. Temp and owned lock files are removed on failure. A process killed
+during publication can leave a temp/lock file; readers ignore it. Per-key pruning
+removes that key's publication temp/lock files whose mtime is older than ten
+minutes, retaining recent artifacts, unrelated names and other keys.
+After a write, pruning keeps the 20 newest starts of that key and ignores
+unlink errors. `pruneScheduleRunResults(dir, key, 0)` also supports the later
+delete slice. Other keys and transcripts are untouched; renamed files can
+leave their old key's bounded history behind.
+
+`readScheduleRunResults(dir, sessionIds)` performs one readdir, parses only
+requested IDs, validates their record and identity, and never mkdirs. Missing
+directory means no results. Broken or unreadable records return
+`{ unreadable: true }`; listing handles directory errors with that same marker.
+Lookup uses session ID, so cron/Run now paths through aliases still find results.
+
+Running uses the live map. Otherwise the renderer shows Exit 0, Failed: exit
+code with the existing PATH/sandbox/log recovery hint, Stopped: signal,
+Refused: error, Failed to start: error, or Unknown: result record unreadable.
+Without a record it keeps No result recorded and the assistant/seed/started/
+unknown transcript hint. It never infers Exit 0. Runs alive when Switchboard
+quits, older runs and runs from another instance have no result here. Deletion,
+the creation form and creator-template migration remain later slices.
+`scheduleRunFailureHint(failure)` is a classic-script global defined in
+memory-workfiles-view.js, loaded before schedules-view.js in index.html. Both
+exit notices and persistent history use it for the same recovery wording.
 
 Action state is keyed by filePath across renders: a pending launch stays disabled,
 success shows the check mark and Launched! for two seconds, and a refusal restores

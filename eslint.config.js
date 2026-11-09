@@ -28,6 +28,7 @@ const rendererCrossFileGlobals = {
   loadSchedules: 'readonly',
   queueSchedulesReload: 'readonly',
   showSchedules: 'readonly',
+  scheduleRunFailureHint: 'readonly',
   openScheduleMemory: 'readonly',
   openScheduleRun: 'readonly',
   showScheduleSessions: 'readonly',

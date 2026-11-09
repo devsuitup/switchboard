@@ -9,17 +9,21 @@ let currentMemoryContent = "";
 const memoryCollapsedState = new Map();
 const scheduleRunFailureCounts = new Map();
 
+function scheduleRunFailureHint(failure) {
+  return failure === 'claude-path'
+    ? 'claude not found on the shell PATH. Check that Claude Code is installed and on PATH in the configured shell profile, then try Run now again.'
+    : failure === 'sandbox'
+      ? 'Check Linux bubblewrap and the sandbox settings; see the log for details, then try Run now again.'
+      : 'See the log for details, then try Run now again.';
+}
+
 function showScheduleRunExit({ name, projectPath, sessionId, manual = false, code, signal, failure }) {
   if (code === 0) return;
   const id = manual ? `ScheduleRun:${sessionId}` : `ScheduleRun:${projectPath}:${name}`;
   const count = manual ? 1 : (scheduleRunFailureCounts.get(id) || 0) + 1;
   if (!manual) scheduleRunFailureCounts.set(id, count);
   const result = signal ? `terminated by ${signal}` : `exited with code ${code}`;
-  const hint = failure === 'claude-path'
-    ? 'claude not found on the shell PATH. Check that Claude Code is installed and on PATH in the configured shell profile, then try Run now again.'
-    : failure === 'sandbox'
-      ? 'Check Linux bubblewrap and the sandbox settings; see the log for details, then try Run now again.'
-      : 'See the log for details, then try Run now again.';
+  const hint = scheduleRunFailureHint(failure);
   const subject = manual ? `Manual run of schedule ${name}` : `Schedule ${name}`;
   const repeats = count > 1 ? `failed ${count} times, last: ` : '';
   showAppNotice({ id, kind: 'error', message: `${subject} ${repeats}${result}: ${hint}` });
