@@ -27,8 +27,8 @@
   async function openSettingsViewer(scope, projectPath, folderKey) {
     const isProject = scope === 'project';
     const settingsKey = isProject ? 'project:' + projectPath : 'global';
-    const current = (await window.api.getSetting(settingsKey)) || {};
-    const globalSettings = isProject ? ((await window.api.getSetting('global')) || {}) : {};
+    const current = normalizeBrowserSettings((await window.api.getSetting(settingsKey)) || {});
+    const globalSettings = normalizeBrowserSettings(isProject ? ((await window.api.getSetting('global')) || {}) : {});
 
     const shortName = isProject
       ? shortProjectPath(projectPath)
@@ -67,7 +67,7 @@
     const permModeValue = fieldValue('permissionMode');
     const worktreeValue = fieldValue('worktree');
     const worktreeNameValue = fieldValue('worktreeName');
-    const chromeValue = fieldValue('chrome');
+    const browserModeValue = fieldValue('browserMode');
     const sandboxValue = fieldValue('sandbox');
     const isLinux = window.api.platform === 'linux';
     const preLaunchValue = fieldValue('preLaunchCmd');
@@ -161,13 +161,15 @@
         <div class="settings-field">
           <div class="settings-field-info">
             <div class="settings-field-header">
-              <span class="settings-label">Chrome</span>
-              ${useGlobalCheckbox('chrome')}
+              <span class="settings-label">Browser</span>
+              ${useGlobalCheckbox('browserMode')}
             </div>
-            <div class="settings-description">Enable Chrome browser automation</div>
+            <div class="settings-description">Choose browser automation for the next session launch. Existing sessions keep their launch settings.</div>
           </div>
           <div class="settings-field-control">
-            <label class="settings-toggle"><input type="checkbox" id="sv-chrome" ${chromeValue ? 'checked' : ''} ${fieldDisabled('chrome')}><span class="settings-toggle-slider"></span></label>
+            <select class="settings-select control-select" id="sv-browser-mode" aria-label="Browser" ${fieldDisabled('browserMode')}>
+              ${BROWSER_MODES.filter(mode => mode.value !== 'managed').map(mode => `<option value="${mode.value}" ${(browserModeValue === mode.value || (browserModeValue === 'managed' && mode.value === 'off')) ? 'selected' : ''}>${mode.label}</option>`).join('')}
+            </select>
           </div>
         </div>
 
@@ -554,7 +556,7 @@
           permissionMode: 'sv-perm-mode',
           worktree: 'sv-worktree',
           worktreeName: 'sv-worktree-name',
-          chrome: 'sv-chrome',
+          browserMode: 'sv-browser-mode',
           sandbox: 'sv-sandbox',
           preLaunchCmd: 'sv-pre-launch',
           addDirs: 'sv-add-dirs',
@@ -625,7 +627,7 @@
               permissionMode: () => settingsViewerBody.querySelector('#sv-perm-mode').value || null,
               worktree: () => settingsViewerBody.querySelector('#sv-worktree').checked,
               worktreeName: () => settingsViewerBody.querySelector('#sv-worktree-name').value.trim(),
-              chrome: () => settingsViewerBody.querySelector('#sv-chrome').checked,
+              browserMode: () => settingsViewerBody.querySelector('#sv-browser-mode').value,
               sandbox: () => settingsViewerBody.querySelector('#sv-sandbox').checked,
               preLaunchCmd: () => settingsViewerBody.querySelector('#sv-pre-launch').value.trim(),
               addDirs: () => settingsViewerBody.querySelector('#sv-add-dirs').value.trim(),
@@ -637,7 +639,7 @@
         settings.permissionMode = settingsViewerBody.querySelector('#sv-perm-mode').value || null;
         settings.worktree = settingsViewerBody.querySelector('#sv-worktree').checked;
         settings.worktreeName = settingsViewerBody.querySelector('#sv-worktree-name').value.trim();
-        settings.chrome = settingsViewerBody.querySelector('#sv-chrome').checked;
+        settings.browserMode = settingsViewerBody.querySelector('#sv-browser-mode').value;
         const sandboxToggle = settingsViewerBody.querySelector('#sv-sandbox');
         if (sandboxToggle) settings.sandbox = sandboxToggle.checked;
         settings.preLaunchCmd = settingsViewerBody.querySelector('#sv-pre-launch').value.trim();
@@ -681,6 +683,7 @@
         settings = { ...existing, ...settings };
       }
 
+      delete settings.chrome;
       await window.api.setSetting(settingsKey, settings);
       if (!isProject) setRemoteHostLabels(settings.remoteHosts);
 

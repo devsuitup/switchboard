@@ -68,6 +68,14 @@ the same golden arrays before and after extraction.
 The sandbox bind list delegates to the adapter's shared `parseAddDirs()` so
 the two consumers keep identical comma-splitting and whitespace handling.
 
+Browser settings compatibility (#812 S1) uses the shared non-mutating
+normalizer from `public/setting-defaults.js`. Claude's pure builder emits
+`--chrome` only for `claude-in-chrome`, including an old exact `chrome: true`
+option when no explicit mode exists. Off, invalid and Managed modes emit no
+browser flag; an explicit mode always wins over legacy Chrome. This slice
+adds no MCP configuration, browser process or capability contract. Main's
+launch extraction anchors and synchronous builder call are unchanged.
+
 No session-cache, sidebar background-session, trigger, schedule or renderer
 routing changes here. No Codex adapter is registered in this phase.
 `harnesses/**` ships in `build.files`, receives Node ESLint rules and is

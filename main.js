@@ -88,7 +88,7 @@ const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialSc
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
-const { SETTING_DEFAULTS } = require('./public/setting-defaults');
+const { SETTING_DEFAULTS, normalizeBrowserSettings } = require('./public/setting-defaults');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./src/main/shared/ipc-path-validator');
 const { validatePreLaunchCmd } = require('./src/main/terminals/pre-launch-cmd-guard');
 const { normalizePtySize } = require('./src/main/terminals/pty-size');
@@ -1827,8 +1827,8 @@ ipcMain.handle('get-shell-profiles', () => {
 });
 
 ipcMain.handle('get-effective-settings', (_event, projectPath) => {
-  const global = getSetting('global') || {};
-  const project = projectPath ? (getSetting('project:' + projectPath) || {}) : {};
+  const global = normalizeBrowserSettings(getSetting('global') || {}, message => log.warn(message));
+  const project = normalizeBrowserSettings(projectPath ? (getSetting('project:' + projectPath) || {}) : {}, message => log.warn(message));
   const effective = { ...SETTING_DEFAULTS };
   for (const key of Object.keys(SETTING_DEFAULTS)) {
     // Only `undefined` (key never saved at this scope) falls through to the
