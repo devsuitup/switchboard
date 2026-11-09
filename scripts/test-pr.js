@@ -6,6 +6,7 @@ const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 const { isDeepStrictEqual } = require('node:util');
 const { scrubSessionEnv } = require('../src/main/shared/clean-env');
+const { cleanupDataDir } = require('../src/main/browser/managed-browser');
 
 function validatePr(pr) {
   if (!/^\d+$/.test(String(pr ?? ''))) throw new Error('PR must be numeric: task test-pr PR=<number>');
@@ -160,12 +161,14 @@ function parseBundleScript(script) {
   return options;
 }
 
-function cleanWorktree({ checkout, pr, home = process.env.HOME || os.homedir(), run = runCommand }) {
+async function cleanWorktree({ checkout, pr, home = process.env.HOME || os.homedir(), run = runCommand, stopBrowser = cleanupDataDir }) {
   validatePr(pr);
+  const data = path.join(home, `.switchboard-dev-pr${pr}`);
+  if (!await stopBrowser(data)) throw new Error(`Browser exit uncertain; retaining ${data} and worktree`);
   const worktree = path.join(checkout, '.worktrees', `pr-${pr}-test`);
   unlinkNodeModules(worktree);
   run('git', ['worktree', 'remove', '--force', worktree], { cwd: checkout, stdio: 'inherit' });
-  fs.rmSync(path.join(home, `.switchboard-dev-pr${pr}`), { recursive: true, force: true });
+  fs.rmSync(data, { recursive: true, force: true });
 }
 
 function runElectron(executable, args, options) {
@@ -193,6 +196,7 @@ function runElectron(executable, args, options) {
 
 async function main({ checkout = path.resolve(__dirname, '..'), env = process.env,
   clean = false, run = runCommand, launch = runElectron, fixtures = prepareFixtures,
+  stopBrowser = cleanupDataDir,
   log = console.log, warn = console.error,
   removeDir = dir => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) } = {}) {
   const pr = env.PR;
@@ -201,7 +205,7 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
   const allowClaude = validateAllowClaude(env.ALLOW_CLAUDE, isolated);
   const home = env.HOME || os.homedir();
   if (clean) {
-    cleanWorktree({ checkout, pr, home, run });
+    await cleanWorktree({ checkout, pr, home, run, stopBrowser });
     log(`Cleaned up worktree and data dir for PR #${pr}`);
     return 0;
   }
@@ -236,10 +240,11 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
   }
   let tempHome;
   let launchCwd;
+  let config;
   try {
     launchCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `sb-pr-${pr}-`)));
     if (isolated) tempHome = launchCwd;
-    const config = buildLaunch({ pr, home, env, isolated, allowClaude, tempHome, port: env.DEBUG_PORT || 9223,
+    config = buildLaunch({ pr, home, env, isolated, allowClaude, tempHome, port: env.DEBUG_PORT || 9223,
       entry: path.resolve(worktree) });
     if (isolated) {
       fixtures(tempHome, config.env, { allowClaude });
@@ -254,7 +259,13 @@ async function main({ checkout = path.resolve(__dirname, '..'), env = process.en
     const executable = require(path.join(worktree, 'node_modules', 'electron'));
     return await launch(executable, config.args, { cwd: launchCwd, env: config.env });
   } finally {
-    if (launchCwd) {
+    let stopped = true;
+    if (config) {
+      try { stopped = await stopBrowser(config.env.SWITCHBOARD_DATA_DIR); }
+      catch (error) { stopped = false; warn(`Browser cleanup failed: ${error.message}`); }
+      if (!stopped) warn(`Browser exit uncertain; retaining ${launchCwd} and ${config.env.SWITCHBOARD_DATA_DIR}. Stop the verified browser before removing them.`);
+    }
+    if (launchCwd && stopped) {
       try {
         removeDir(launchCwd);
       } catch (error) {

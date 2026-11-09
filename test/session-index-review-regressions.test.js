@@ -260,6 +260,7 @@ function lifecycleFixture(extra = {}) {
   const nativeUpdater = new EventEmitter();
   const noop = () => {};
   const context = vm.createContext({
+    managedBrowser: { stopForQuit() {} },
     ...clock, console, Promise, process: { pid: 6166, kill: (pid, signal) => calls.push(`kill:${pid}:${signal}`) }, appQuitting: false, activityFlushedForQuit: false, quitAttemptToken: null, exitInventory: null, inventory: () => ({}), flushForLogoff: null,
     updateInstalling: false, updateInstallPromise: null, updateWaitTimer: null,
     app: { removeListener: noop, on: (_name, fn) => { context.quit = fn; }, exit: () => calls.push('exit'), quit: () => calls.push('quit') },

@@ -261,6 +261,7 @@ async function sweepContinuationChoices() {
 // The trace file sits next to switchboard.db — DB_PATH is the one resolution
 // of SWITCHBOARD_DATA_DIR, never re-derived here.
 const TRACE_DIR = path.dirname(DB_PATH);
+const managedBrowser = require('./src/main/browser/managed-browser').createManager({ dataDir: TRACE_DIR, isPackaged: app.isPackaged });
 const PLAIN_TERMINAL_INIT_DIR = path.join(path.dirname(DB_PATH), 'shell-init');
 activityTrace.init(TRACE_DIR);
 activityTrace.setEnabled(
@@ -4215,6 +4216,7 @@ function drainForUpdate() {
 }
 function shutdownForExit() {
   if (shutdownPromise) return shutdownPromise;
+  managedBrowser.stopForQuit();
   shutdownPromise = boundedShutdown(() => writer.beginShutdown(async () => {
     appQuitting = true;
     if (TRACE.on) trace('app.quit', null, {});
