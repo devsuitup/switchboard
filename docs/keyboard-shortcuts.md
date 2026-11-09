@@ -66,6 +66,14 @@ views (CodeMirror):
 
 This section applies when **Schedules tab** is on in Global Settings (off by default).
 
+Tab reaches **Create schedule** before the rows. Enter or Space opens its form
+with Project focused. Tab and Shift+Tab cycle through its fields, Cancel and
+Create; Escape cancels and restores focus to Create schedule. Enter in a
+text field does not submit; Enter in either multiline field inserts a newline.
+Focus Create and press Enter or Space to submit. During submission the controls
+are disabled and Escape waits for the result. Rejected fields receive focus
+and an inline error; their values stay available for correction.
+
 Tab reaches **Run now**, **Turn on/Turn off**, **Open** and **Delete** in each
 schedule row. Enter or Space activates the focused button and keyboard focus
 reveals the row's actions. Delete opens a confirmation naming the file and
