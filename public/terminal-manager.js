@@ -606,7 +606,8 @@ function flushTerminalBuffer(sessionId) {
   const entry = openSessions.get(sessionId);
   if (!entry) return;
 
-  const data = (buf.reset ? resetTerminalForReplay(entry) : '') + buf.chunks.join('');
+  if (buf.reset) resetTerminalForReplay(entry);
+  const data = (buf.trimmed || buf.reset ? terminalModeDifference(entry) : '') + buf.chunks.join('');
   if (window.ATRACE) noteRenderWrite(sessionId, buf.chunks.length, data.length);
   lastFlushAt.set(sessionId, performance.now());
   const wasAtBottom = isAtBottom(entry.terminal);
@@ -624,6 +625,7 @@ function flushTerminalBuffer(sessionId) {
     }
     if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(entry);
   });
+  recordTerminalPrivateModes(entry, data, 'writtenModes', 'writtenModeTail');
 }
 
 function rekeyTerminalBuffers(oldId, newId) {
@@ -726,6 +728,7 @@ function boundVisibleBuffer(buf) {
     return;
   }
   const trimmed = trimHiddenBuffer(raw, maxLen / 2 - ESC_SYNC_START.length - 2 * ESC_SYNC_END.length);
+  buf.trimmed = true;
   buf.reset = buf.reset || trimmed.reset;
   const data = ESC_SYNC_END + ESC_SYNC_START + trimmed.data + (buf.syncDepth > 0 ? '' : ESC_SYNC_END);
   buf.chunks = [data];
@@ -927,6 +930,7 @@ function drainLiveBufferIntoHiddenAccumulator(sessionId) {
   }
   acc.raw = buf.chunks.join('') + acc.raw; // leftover is older — goes first
   acc.reset = acc.reset || !!buf.reset;
+  acc.trimmed = acc.trimmed || !!buf.trimmed;
 }
 
 // see .ai/contexts/terminal-refresh.md
@@ -951,7 +955,8 @@ function appendToHiddenAccumulator(sessionId, data) {
   if (acc.raw.length > HIDDEN_BUFFER_MAX_LEN) {
     const trimmed = trimHiddenBuffer(acc.raw, HIDDEN_BUFFER_MAX_LEN / 2);
     acc.raw = trimmed.data;
-    acc.reset = trimmed.reset;
+    acc.reset = acc.reset || trimmed.reset;
+    acc.trimmed = true;
   }
 }
 
@@ -1011,7 +1016,8 @@ function replayHiddenBuffer(sessionId) {
   if (!entry) return; // destroySession may have removed it first
   let raw = removeCursorPositionQueries(acc.raw);
   if (!raw && !acc.reset) return;
-  if (acc.reset) raw = resetTerminalForReplay(entry) + raw;
+  if (acc.reset) resetTerminalForReplay(entry);
+  if (acc.trimmed || acc.reset) raw = terminalModeDifference(entry) + raw;
   if (window.ATRACE) noteRenderWrite(sessionId, 1, raw.length);
   const watermark = typeof writtenActivitySnapshot === 'function' ? writtenActivitySnapshot(sessionId).writtenWatermark : 0;
   entry.pendingWrittenRenders = (entry.pendingWrittenRenders || 0) + 1;
@@ -1020,6 +1026,7 @@ function replayHiddenBuffer(sessionId) {
     entry.renderedWrittenWatermark = Math.max(entry.renderedWrittenWatermark || 0, watermark);
     if (typeof markTerminalOutputSeen === 'function') markTerminalOutputSeen(entry);
   });
+  recordTerminalPrivateModes(entry, raw, 'writtenModes', 'writtenModeTail');
 }
 
 const LIVE_QUERY_REPLY_WINDOW_MS = 4000;
@@ -1035,22 +1042,34 @@ function recordLiveTerminalQuery(entry, data) {
   entry.liveQueryTail = (tail + data.slice(-LIVE_QUERY_TAIL_LIMIT)).slice(-LIVE_QUERY_TAIL_LIMIT);
 }
 
-function recordTerminalPrivateModes(entry, data) {
-  const stream = (entry.privateModeTail || '') + data;
-  entry.privateModes ||= new Set();
-  for (const match of stream.matchAll(/\x1b\[\?([0-9;]+)([hl])/g)) {
+function recordTerminalPrivateModes(entry, data, modesKey = 'privateModes', tailKey = 'privateModeTail') {
+  const stream = (entry[tailKey] || '') + data;
+  const modes = entry[modesKey] ||= new Set();
+  for (const match of stream.matchAll(/\x1b\[\?([0-9;]+)([hl])|\x1bc|\x1b\[!p/g)) {
+    if (!match[1]) {
+      modes.clear();
+      continue;
+    }
     for (const mode of match[1].split(';').map(Number)) {
       if (!/^(?:1|47|1000|1002|1003|1004|1006|1049|2004)$/.test(String(mode))) continue;
-      entry.privateModes.delete(mode);
-      if (match[2] === 'h') entry.privateModes.add(mode);
+      modes.delete(mode);
+      if (match[2] === 'h') modes.add(mode);
     }
   }
-  entry.privateModeTail = /\x1b(?:\[\??[0-9;]*)?$/.exec(stream.slice(-128))?.[0] || '';
+  entry[tailKey] = /\x1b(?:\[(?:\??[0-9;]*|!))?$/.exec(stream.slice(-128))?.[0] || '';
+}
+
+function terminalModeDifference(entry) {
+  const live = entry.privateModes || new Set();
+  const written = entry.writtenModes || new Set();
+  return Array.from(written).filter(mode => !live.has(mode)).map(mode => `\x1b[?${mode}l`).join('')
+    + Array.from(live).filter(mode => !written.has(mode)).map(mode => `\x1b[?${mode}h`).join('');
 }
 
 function resetTerminalForReplay(entry) {
   entry.terminal.reset();
-  return Array.from(entry.privateModes || [], mode => `\x1b[?${mode}h`).join('');
+  entry.writtenModes = new Set();
+  entry.writtenModeTail = '';
 }
 
 function terminalQueryReplyKind(data) {

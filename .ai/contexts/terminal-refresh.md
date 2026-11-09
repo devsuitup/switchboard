@@ -26,16 +26,24 @@ more than 4096 chunks coalesce even below the payload cap. Both visible and
 hidden buffers trim to about half their cap on overflow. This hysteresis leaves
 about 1 Mi code units before another payload trim, rather than rejoining and
 rescanning the whole retained buffer on every incoming chunk at the cap.
+A redraw marker arriving in a later chunk below the cap stays appended to the
+retained tail, without another trim, and any pending reset still applies.
 `trimHiddenBuffer` chooses the last safe full-redraw marker that fits the target,
 or an ANSI/surrogate-safe tail with a terminal reset when no marker fits. Reset
-state survives migration into the hidden accumulator. Before either replay path
-resets, the entry's last live-stream DEC mode state is available; enabled modes
-are re-emitted after the reset, before the retained tail. The exact allowlist is
+and trim state survive migration into the hidden accumulator. Each entry tracks
+both live-stream DEC modes and the modes in data actually handed to xterm.
+On either replay path, any cut (including a redraw-marker cut without reset)
+prepends the difference from written modes to live modes: `h` for enabled modes
+and `l` for disabled modes, before the retained tail. A terminal reset empties
+the written state first. Written state is updated by scanning each actual write,
+independently of received chunks. The exact allowlist is
 2004 (bracketed paste), 1004 (focus reporting), 1000/1002/1003/1006 (mouse),
 1 (application cursor keys), and 1049/47 (alternate screen). Multi-parameter
 set/reset sequences are tracked per entry, with up to 128 code units of pending
-sequence carried across chunks; rekeying keeps the entry and its mode state.
-This is a narrow CSI matcher, not a VT parser; sequences embedded inside OSC/DCS
+sequence carried across chunks; application RIS (`ESC c`) and DECSTR (`ESC[!p`)
+clear tracked modes in the same ordered scan, including split sequences.
+Rekeying keeps the entry and its mode state.
+This is a narrow mode matcher, not a VT parser; sequences embedded inside OSC/DCS
 payloads are not distinguished. Trimming can discard unseen scrollback and,
 without a self-contained redraw, cannot reconstruct arbitrary lost cursor or
 attribute state. Single incoming IPC chunks and transient joins are outside

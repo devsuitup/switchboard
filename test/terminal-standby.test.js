@@ -319,3 +319,69 @@ test('entering a sync block replaces the pending fallback with its safety timer'
     assert.equal([...h.timers.values()][0].ms, 500);
   } finally { h.destroy(); }
 });
+
+for (const visibility of ['visible', 'hidden']) {
+  const flush = h => visibility === 'visible'
+    ? h.window.flushTerminalBuffer('session-123456789')
+    : h.window.replayHiddenBuffer('session-123456789');
+
+  test(`${visibility} marker trim restores modes enabled in the discarded head`, () => {
+    const h = setup();
+    try {
+      if (visibility === 'hidden') h.window.activeSessionId = 'other';
+      h.window.handleTerminalData('session-123456789', '\x1b[?2004h\x1b[?1000h' + 'x'.repeat(2 * 1024 * 1024 - 100));
+      h.window.handleTerminalData('session-123456789', '\x1b[2Jprompt$ ' + 'y'.repeat(200));
+      flush(h);
+      assert.equal(h.spies.reset, 0, 'a retained redraw does not reset xterm');
+      const written = h.spies.writes.join('');
+      for (const mode of [2004, 1000]) {
+        assert.ok(written.includes(`\x1b[?${mode}h`), `marker trim restores discarded DEC mode ${mode}`);
+        assert.ok(written.indexOf(`\x1b[?${mode}h`) < written.indexOf('prompt$'), 'modes precede the prompt');
+      }
+      assert.ok(!written.includes('x'), 'discarded head is absent');
+    } finally { h.destroy(); }
+  });
+
+  for (const altMode of [1049, 47]) {
+    test(`${visibility} marker trim exits written alternate screen ${altMode}`, () => {
+      const h = setup();
+      try {
+        h.send(`\x1b[?${altMode}h`);
+        h.window.flushTerminalBuffer('session-123456789');
+        h.spies.writes.length = 0;
+        if (visibility === 'hidden') h.window.activeSessionId = 'other';
+        h.window.handleTerminalData('session-123456789', `\x1b[?${altMode}l` + 'x'.repeat(2 * 1024 * 1024 - 100));
+        h.window.handleTerminalData('session-123456789', '\x1b[2Jprompt$ ' + 'y'.repeat(200));
+        flush(h);
+        assert.equal(h.spies.reset, 0, 'alternate-screen exit uses the marker path');
+        const written = h.spies.writes.join('');
+        assert.ok(written.includes(`\x1b[?${altMode}l`), `marker trim restores discarded DEC mode ${altMode} exit`);
+        assert.ok(written.indexOf(`\x1b[?${altMode}l`) < written.indexOf('prompt$'), 'exit precedes the prompt');
+        h.spies.writes.length = 0;
+        h.window.handleTerminalData('session-123456789', 'z'.repeat(3 * 1024 * 1024) + '\x1b[2Jnext prompt');
+        flush(h);
+        assert.ok(!h.spies.writes.join('').includes(`\x1b[?${altMode}l`), 'the previous write updated the written mode state');
+      } finally { h.destroy(); }
+    });
+  }
+
+  for (const [resetName, chunks] of [['RIS', ['\x1b', 'c']], ['DECSTR', ['\x1b[!', 'p']]]) {
+    test(`${visibility} application ${resetName} clears tracked modes across chunks`, () => {
+      const h = setup();
+      try {
+        h.send('\x1b[?2004;1000h');
+        h.window.flushTerminalBuffer('session-123456789');
+        h.spies.writes.length = 0;
+        if (visibility === 'hidden') h.window.activeSessionId = 'other';
+        for (const chunk of chunks) h.window.handleTerminalData('session-123456789', chunk);
+        h.window.handleTerminalData('session-123456789', '\x1b[?1006h' + 'x'.repeat(3 * 1024 * 1024));
+        flush(h);
+        assert.equal(h.spies.reset, 1);
+        const written = h.spies.writes.join('');
+        assert.ok(!written.includes('\x1b[?2004h'), `${resetName} clears bracketed paste before replay`);
+        assert.ok(!written.includes('\x1b[?1000h'), `${resetName} clears mouse tracking before replay`);
+        assert.ok(written.includes('\x1b[?1006h'), 'modes enabled after the application reset survive');
+      } finally { h.destroy(); }
+    });
+  }
+}
