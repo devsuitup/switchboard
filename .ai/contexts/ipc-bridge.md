@@ -4,6 +4,32 @@
 
 This file is the **canonical inventory** of the IPC surface. When you add a new IPC, you change three places — main handler, preload bridge, renderer caller — and every IPC name should appear here.
 
+## Trigger renderer broker (#1022, partial slice C)
+
+These APIs are exposed by preload. Their main handlers are registered by
+`createTriggerRendererBridge` when instantiated; `main.js` does not instantiate
+it yet and the renderer does not call them. Activation is blocked on slice D's
+v1 liveness/namespace reader. All v1 lifecycle triggers retain slice B's refusal.
+
+| Direction | Channel | Preload API / payload |
+| --- | --- | --- |
+| Renderer → main, invoke | `trigger-actions-ready` | `api.triggerActionsReady()`; returns `{documentEpoch}` for the current window/main frame, otherwise null |
+| Main → renderer | `trigger-session-action` | `api.onTriggerSessionAction(cb)`; `{requestId, documentEpoch, mode, requestedSessionId, tabKey, generation, session, project, name, deadline}`; returns a function that removes only this callback |
+| Renderer → main, send | `trigger-session-action-result` | `api.triggerSessionActionResult(ack)`; `{requestId, documentEpoch, mode, ok, requestedSessionId, tabKey, generation, reason?, error?}` |
+
+The broker correlates the current main frame and document epoch as well as
+the request/target tuple. Historical requested ID A may address a pinned tab B;
+an ACK must retain both identities. Main-owned entry, PTY and generation checks
+prevent a renderer ACK from authorizing a replacement. Resume/new ACKs require
+main-recorded spawn evidence. Permits are private to main, single-use, bounded
+by the action deadline and revoked on document/window loss. No external
+protocol or injected JavaScript is used.
+
+The existing five-argument `openTerminal` exposure is unchanged. Its permit
+extension, main launch rechecks, renderer handler and startup-ready call remain
+deferred; exposing the broker APIs does not enable a launch path. See
+[trigger-watcher.md](trigger-watcher.md), “Renderer broker foundation”.
+
 ## Terminal backlog (#1037)
 
 `terminal-backlog` is a one-way renderer-to-main diagnostic sent by

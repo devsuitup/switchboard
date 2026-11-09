@@ -19,6 +19,54 @@ Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 
 ## Public surface
 
+### Renderer broker foundation (issue #1022, partial slice C)
+
+`src/main/triggers/trigger-renderer-bridge.js` is an Electron-free request
+owner with injected IPC, window/session lookup, launch admission, clock and
+timers. It is not instantiated by `main.js` yet. The watcher still returns
+`session action not implemented in this build` for all valid v1 lifecycle
+actions, including open, new and stop. Legacy delivery is unchanged.
+
+The missing prerequisite is spec §7's `liveElsewhereV1Checked` and the raw
+descriptor/namespace writer proof, assigned to slice D. The existing
+`liveElsewhereChecked` cannot authorize closed resume, even without a prompt;
+sandboxed prompt readiness also needs the v1 proof. Slice C stops at that
+boundary rather than enabling a launch path with an incomplete liveness gate.
+
+The broker registers `trigger-actions-ready` (invoke) and
+`trigger-session-action-result` (send), and emits `trigger-session-action`.
+`attach(win)` binds a window once. Readiness comes only from that window's
+current main frame, not loading the document. An absolute deadline bounds the
+ready wait, marker callback and action ACK. No window is created or focused.
+The main caller must supply already resolved local metadata and persist its
+action marker before dispatch, using the awaited `beforeDispatch` callback.
+
+`request(operation, beforeDispatch)` keeps the requested ID, exact map key and
+pinned generation separate. Reattach pins the actual entry and PTY before
+dispatch; ACK acceptance rechecks them. Resume/new require a single-use
+`consumePermit` call from the current main frame and main-only `markOpened`
+evidence before a successful ACK. `checkPermit` is the final synchronous
+deadline/closing/target check for a future launch integration; it does not
+itself prove liveness, transcript validity, defaults, eligibility or readiness.
+The launch owner must supply those checks and pending-open deduplication.
+
+Navigation, renderer exit, window destruction/closure, explicit `revoke` and
+deadline settle once and abort the permit signal. The eventual exit integration
+must call `revoke(win, 'Switchboard is closing.')` at close commitment.
+Opened evidence comes from main's entry, never renderer flags; interruption
+after permit consumption conservatively carries uncertainty. Explicit backend
+failure preserves its known effects without that interruption flag. Late/duplicate/wrong-document or
+wrong-target replies cannot complete another request. `dispose()` removes the
+registered IPC and window listeners.
+
+Preload exposes the three named APIs and a per-subscription cleanup function.
+Renderer registration, startup-ready signalling, the permit-bearing
+`open-terminal` path, nonactivating ordinary session lifecycle, name storage,
+shared prompt delivery and end-to-end result orchestration remain deferred
+with the missing reader. There is no new user-visible behavior or changelog
+entry in this partial slice; a future PR for this foundation takes
+`no-changelog`.
+
 ### Versioned requests (issue #1022, slice B)
 
 The watcher dispatches parsed objects with an own `version` or `action` property

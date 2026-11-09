@@ -29,6 +29,13 @@ contextBridge.exposeInMainWorld('api', {
   onTerminalBacklogRequest: callback => ipcRenderer.on('terminal-backlog-request', (_event) => callback()),
   rebuildCache: () => ipcRenderer.invoke('rebuild-cache'),
   getActiveSessions: () => ipcRenderer.invoke('get-active-sessions'),
+  triggerActionsReady: () => ipcRenderer.invoke('trigger-actions-ready'),
+  triggerSessionActionResult: result => ipcRenderer.send('trigger-session-action-result', result),
+  onTriggerSessionAction: callback => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('trigger-session-action', listener);
+    return () => ipcRenderer.removeListener('trigger-session-action', listener);
+  },
   getSessionLiveElsewhere: (id) => ipcRenderer.invoke('session-live-elsewhere', id),
   getSessionContinuations: (id) => ipcRenderer.invoke('session-continuations', id),
   getSessionsLiveElsewhere: (ids) => ipcRenderer.invoke('sessions-live-elsewhere', ids),
