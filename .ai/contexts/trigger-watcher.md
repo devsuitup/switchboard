@@ -32,6 +32,7 @@ The wrapper protects the whole control tree and separately resolved `processed`
 target read-only through every visible writable mount alias, pins ancestors,
 and refuses unsafe overlaps, mutable symlinks and missing visible paths with
 status 125 before CLI execution. Final mount-plan rebuilding rechecks protection.
+Requested, lexical and `readlink -m` control-path forms containing LF or CR refuse even when the control directory does not exist yet; NUL-terminated resolution preserves trailing LF for this check.
 A control directory inside the project can launch protected read-only. Unrelated
 newline-containing writable paths remain allowed; unrepresentable overlapping
 mounts refuse. The full final rebuild is retained: rechecking only control

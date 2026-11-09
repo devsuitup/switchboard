@@ -37,6 +37,34 @@ function schedulerClock(t, h, runs, projects = () => [h.project], resumeSource) 
   return { stop, tick(time) { t.mock.timers.setTime(time); (interval || initial)(); } };
 }
 
+test('a delayed resume resolving after a newer tick does not replay that tick on re-enable', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: at(9, 14, 20) });
+  const isolation = process.env.SWITCHBOARD_DATA_DIR;
+  delete process.env.SWITCHBOARD_DATA_DIR;
+  t.after(() => { if (isolation === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = isolation; });
+  const h = fixture(t);
+  fs.writeFileSync(h.file, '---\ncron: 16 9 * * *\nenabled: false\ncatch-up: true\n---\nPrompt');
+  const runs = [];
+  const resumeSource = new (require('node:events').EventEmitter)();
+  let resolveResume;
+  const resumeProjects = new Promise(resolve => { resolveResume = resolve; });
+  let delaySelection = false;
+  const clock = schedulerClock(t, h, runs, () => delaySelection ? resumeProjects : [h.project], resumeSource);
+  t.mock.timers.setTime(at(9, 15, 59, 950));
+  delaySelection = true;
+  resumeSource.emit('resume');
+  delaySelection = false;
+  clock.tick(at(9, 16));
+  resolveResume([h.project]);
+  await resumeProjects;
+  t.mock.timers.setTime(at(9, 16, 10));
+  assert.equal((await runner.setListedScheduleEnabled(h.file, true, {
+    ...h.deps, getLastTickMinute: () => clock.stop.getLastTickMinute(),
+  })).ok, true);
+  clock.tick(at(9, 17));
+  assert.equal(runs.length, 0, 'the 9:16 minute evaluated while disabled cannot replay at 9:17 after a delayed resume');
+});
+
 for (const check of ['startup', 'resume']) {
   test(`enable after the ${check} check consumed the due minute does not replay it`, async t => {
     t.mock.timers.enable({ apis: ['Date'], now: at(9, check === 'startup' ? 15 : 10, 20) });
