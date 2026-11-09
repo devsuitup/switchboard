@@ -91,6 +91,11 @@ function setupPanel(stored = {}, onSave = async () => ({ ok: true })) {
 // test in this file.
 const EFFECTIVE_WITH_NOTHING_STORED = { ...SETTING_DEFAULTS };
 
+test('Browser defaults are shared and the legacy Chrome default is retired', () => {
+  assert.equal(SETTING_DEFAULTS.browserMode, 'off');
+  assert.equal(Object.hasOwn(SETTING_DEFAULTS, 'chrome'), false);
+});
+
 function displayed(el) {
   assert.ok(el, 'control must render');
   if (el.type === 'checkbox') return { kind: 'boolean', value: el.checked };

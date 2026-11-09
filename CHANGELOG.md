@@ -5,7 +5,11 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
+- A schedule can now be created from the optional Schedules tab (Global Settings → Schedules tab). (#792)
 - File triggers can open an exact local conversation or create a named session in a known project and deliver a prompt, without changing your selection or keyboard focus. (#1022)
+
+### Changed
+- The Browser choice replaces Chrome in settings and session dialogs, keeping your saved choices as Off or Claude in Chrome. (#812)
 
 ## v0.0.104 — 2026-11-09
 

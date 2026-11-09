@@ -13,7 +13,7 @@ const SETTING_DEFAULTS = {
   dangerouslySkipPermissions: false,
   worktree: false,
   worktreeName: '',
-  chrome: false,
+  browserMode: 'off',
   sandbox: false,
   preLaunchCmd: '',
   addDirs: '',
@@ -37,6 +37,26 @@ const SETTING_DEFAULTS = {
   lastSeenVersion: null, // see docs/changelog.md
 };
 
+const BROWSER_MODES = Object.freeze([
+  Object.freeze({ value: 'off', label: 'Off' }),
+  Object.freeze({ value: 'claude-in-chrome', label: 'Claude in Chrome' }),
+  Object.freeze({ value: 'managed', label: 'Managed browser' }),
+]);
+
+function normalizeBrowserSettings(settings, diagnostic = message => console.warn(message)) {
+  const normalized = { ...settings };
+  if (normalized.browserMode !== undefined) {
+    if (!BROWSER_MODES.some(mode => mode.value === normalized.browserMode)) {
+      diagnostic('[settings] Invalid browserMode; using Off');
+      normalized.browserMode = SETTING_DEFAULTS.browserMode;
+    }
+  } else if (normalized.chrome !== undefined) {
+    normalized.browserMode = normalized.chrome === true ? 'claude-in-chrome' : SETTING_DEFAULTS.browserMode;
+  }
+  delete normalized.chrome;
+  return normalized;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { SETTING_DEFAULTS };
+  module.exports = { SETTING_DEFAULTS, BROWSER_MODES, normalizeBrowserSettings };
 }

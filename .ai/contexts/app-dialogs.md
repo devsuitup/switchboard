@@ -2,7 +2,7 @@
 
 `public/modal-stack.js` loads before every renderer consumer. It owns the modal stack and the only modal `keydown` listener, installed on `document` in capture phase. Each modal calls `registerModal({ overlay, cancel, enter, bodyEnter })` after mounting and calls the returned unregister function on every close path. The stack's last registration owns the keys; neither DOM class order nor the current event target chooses another modal.
 
-Registered surfaces are the choice dialog (including `appConfirm` and `appAlert`), New Session, Resume, remote launch, Send a prompt, Add Project, dispatch-agent, the unsaved-edits guard, session/worktree deletion, Touched info, What's new, and fullscreen transcript images. The New session popover is a menu and retains its own arrow-key navigation.
+Registered surfaces are the choice dialog (including `appConfirm` and `appAlert`), New Session, Resume, remote launch, Send a prompt, Add Project, dispatch-agent, schedule creation, the unsaved-edits guard, session/worktree deletion, Touched info, What's new, and fullscreen transcript images. The New session popover is a menu and retains its own arrow-key navigation.
 
 The B6 chooser uses `appChoose({ title, message, options, selectedId, confirmLabel })` from `public/app-dialogs.js`. It shares the question queue, focuses Open initially, and returns `{ choice: id }` on acceptance or `null` on cancellation. The adapter defaults the title to Choose and the action to Open, and splits string messages into lines. Manual continuation opens use it for one part chooser. The resolved choice is remembered per row as a `continuationChoice:<rowKey>` setting, and the row menu's **Choose part to open…** asks again (see [cli-session-state](cli-session-state.md)).
 

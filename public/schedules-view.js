@@ -139,6 +139,13 @@ function renderSchedules(data) {
   const projectFocus = schedulesProject;
   schedulesProject = null;
   container.replaceChildren();
+  const create = document.createElement('button');
+  create.type = 'button';
+  create.className = 'schedule-create-btn';
+  create.textContent = 'Create schedule';
+  create.disabled = !data.projects.some(project => !project.archived);
+  create.addEventListener('click', () => openScheduleCreateForm(data.projects));
+  container.appendChild(create);
   scheduleText(container, 'schedule-help', 'Runs before v0.0.90 carry no schedule marker and are not listed. Runs before results were kept, runs of another instance and runs alive when Switchboard closes have no result recorded.');
   let count = 0;
   for (const project of data.projects) {
@@ -177,6 +184,129 @@ function renderSchedules(data) {
   for (const [filePath, state] of schedulesActions) {
     if (!paths.has(filePath) && state.run !== 'running' && !state.toggling && !state.deleting) schedulesActions.delete(filePath);
   }
+}
+
+function openScheduleCreateForm(projects) {
+  if (document.querySelector('.schedule-create-form')) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  const form = document.createElement('form');
+  form.className = 'modal-dialog schedule-create-form';
+  form.setAttribute('role', 'dialog');
+  form.setAttribute('aria-modal', 'true');
+  form.setAttribute('aria-labelledby', 'schedule-create-title');
+  const title = scheduleText(form, 'modal-title', 'Create schedule');
+  title.id = 'schedule-create-title';
+  const controls = new Map();
+  const errors = new Map();
+  const add = (name, label, kind = 'input', type = 'text') => {
+    const row = document.createElement('div');
+    row.className = 'schedule-form-field';
+    const caption = document.createElement('label');
+    caption.htmlFor = `schedule-create-${name}`;
+    caption.textContent = label;
+    const control = document.createElement(kind);
+    if (type !== 'checkbox') control.className = kind === 'select' ? 'settings-select' : 'settings-input';
+    control.name = name;
+    control.id = caption.htmlFor;
+    if (kind === 'input') control.type = type;
+    const error = document.createElement('div');
+    error.className = 'schedule-field-error';
+    error.id = `${control.id}-error`;
+    error.setAttribute('aria-live', 'polite');
+    control.setAttribute('aria-describedby', error.id);
+    row.append(caption, control, error);
+    form.appendChild(row);
+    controls.set(name, control);
+    errors.set(name, error);
+    return control;
+  };
+  const project = add('projectPath', 'Project', 'select');
+  for (const entry of projects) {
+    const option = document.createElement('option');
+    option.value = entry.projectPath;
+    option.textContent = `${entry.shortName} — ${entry.projectPath}${entry.archived ? ' (archived; unarchive it first)' : ''}`;
+    option.disabled = entry.archived;
+    project.appendChild(option);
+  }
+  project.value = projects.find(entry => !entry.archived)?.projectPath || '';
+  add('name', 'Name');
+  add('slug', 'Slug (lowercase letters, digits and hyphens; at most 64 characters)');
+  add('cron', 'Cron (5 fields, machine local time)');
+  add('enabled', 'Enabled', 'input', 'checkbox').checked = true;
+  add('catch-up', 'Catch up once when a run was missed', 'input', 'checkbox');
+  add('prompt', 'Prompt', 'textarea');
+  const mode = add('cli.permission-mode', 'Permission mode', 'select');
+  for (const entry of PERMISSION_MODES) {
+    const option = document.createElement('option');
+    option.value = entry.value || '';
+    option.textContent = entry.value === null ? 'Default (auto)' : entry.label;
+    mode.appendChild(option);
+  }
+  add('cli.allowed-tools', 'Allowed tools (comma-separated; blank uses runner defaults)');
+  add('cli.model', 'Model (optional)');
+  add('cli.max-budget-usd', 'Maximum budget in USD (optional)');
+  add('cli.append-system-prompt', 'Append system prompt (one line, optional)');
+  add('cli.add-dirs', 'Additional directories (one per line; no commas)', 'textarea');
+  const error = scheduleText(form, 'schedule-field-error', '');
+  error.setAttribute('role', 'alert');
+  const actions = document.createElement('div');
+  actions.className = 'modal-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = 'Cancel';
+  const submit = document.createElement('button');
+  submit.type = 'submit';
+  submit.textContent = 'Create';
+  actions.append(cancel, submit);
+  form.appendChild(actions);
+  overlay.appendChild(form);
+  document.body.appendChild(overlay);
+  let busy = false;
+  const close = () => {
+    if (busy) return;
+    overlay.remove();
+    unregister();
+    document.querySelector('.schedule-create-btn')?.focus();
+  };
+  const unregister = registerModal({ overlay, cancel: close, enter: event => event.target.matches('input') });
+  cancel.addEventListener('click', close);
+  project.focus();
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (busy) return;
+    busy = true;
+    for (const [name, control] of controls) {
+      control.removeAttribute('aria-invalid');
+      errors.get(name).textContent = '';
+      control.disabled = true;
+    }
+    submit.disabled = cancel.disabled = true;
+    error.textContent = '';
+    const value = name => controls.get(name).value;
+    const fields = { name: value('name'), slug: value('slug'), cron: value('cron'), prompt: value('prompt'),
+      enabled: controls.get('enabled').checked, 'catch-up': controls.get('catch-up').checked, cli: {} };
+    for (const key of ['permission-mode', 'allowed-tools', 'model', 'max-budget-usd', 'append-system-prompt']) {
+      if (value(`cli.${key}`).trim()) fields.cli[key] = value(`cli.${key}`);
+    }
+    fields.cli['add-dirs'] = value('cli.add-dirs').split(/\r?\n/).map(dir => dir.trim()).filter(Boolean);
+    let result;
+    try { result = await window.api.createScheduleFile(value('projectPath'), fields); }
+    catch (failure) { result = { ok: false, error: failure?.message || String(failure) }; }
+    busy = false;
+    for (const control of controls.values()) control.disabled = false;
+    submit.disabled = cancel.disabled = false;
+    if (result?.ok) {
+      close();
+      await loadSchedules();
+      document.querySelector('.schedule-create-btn')?.focus();
+    } else {
+      const control = controls.get(result?.field);
+      (errors.get(result?.field) || error).textContent = result?.error || 'The backend returned no result. Try Create again.';
+      if (control) { control.setAttribute('aria-invalid', 'true'); control.focus(); }
+      else submit.focus();
+    }
+  });
 }
 
 function focusScheduleControl(filePath, controlName) {

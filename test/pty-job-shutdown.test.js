@@ -92,6 +92,7 @@ test('real shutdown function closes three PTYs synchronously and flushes within 
   const filename = require.resolve('../main');
   const source = fs.readFileSync(filename, 'utf8');
   const context = vm.createContext({ Promise, Map, setTimeout, clearTimeout,
+    managedBrowser: { stopForQuit() {} },
     shutdownPromise: null, appQuitting: false, shutdownComplete: false, TRACE: {}, updateInstalling: false,
     log: { error: (...args) => events.push(args.join(' ')) }, stopNonDatabaseResources() {},
     closedSessions: new Map(), activeSessions: sessions, killPty: (session, id) => killPty(session, id, { platform: 'win32' }),

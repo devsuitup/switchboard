@@ -204,8 +204,20 @@ launch refusal or spawn failure and are kept across restarts. Runs without a
 record say **No result recorded** with a transcript hint, including **replied;
 exit code unknown** when a reply exists. Reply text does not prove a successful exit. Use
 **Show history in Sessions** for older runs; runs predating v0.0.90 have no
-schedule marker and cannot be attributed. Creation still uses the project
-header’s **Create scheduled task** command.
+schedule marker and cannot be attributed.
+
+Use **Create schedule** at the top of the tab to choose a registered project,
+name, slug, five-field cron expression and prompt. Enabled defaults to on;
+catch-up defaults to off. Optional CLI fields cover permission mode, allowed
+tools, model, budget, a one-line appended system prompt and additional
+directories (one per line, with no commas). **Default (auto)** uses the
+runner's auto permission mode. Invalid fields stay in the form with an error.
+Archived projects must be unarchived first, and sandbox restrictions match
+those of a scheduled run. Existing filenames and effective slugs are preserved.
+The project header's **Create scheduled task** command remains available.
+Switchboard updates its installed creator command only when its exact bytes
+match an official shipped template; customized commands are kept. Its text
+points to the Schedules tab (Global Settings → Schedules tab).
 
 **Run now** ignores `cron` and
 `enabled`, and does not wait for a run of the same schedule that is still going.

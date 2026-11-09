@@ -11,6 +11,7 @@ const { liveElsewhere } = require('../cli-session-state');
 const { getCachedJobs } = require('../src/main/bg-agents/bg-agents');
 const { resolveWindowsClaude } = require('../claude-binary');
 const { classifyTitleActivity } = require('../classify-title-activity');
+const { normalizeBrowserSettings } = require('../public/setting-defaults');
 
 function parseAddDirs(value) {
   if (!value) return [];
@@ -28,7 +29,7 @@ function buildLaunchArgs({ sessionId, isNew, options }) {
     args.push('--worktree');
     if (options.worktreeName) args.push(String(options.worktreeName));
   }
-  if (options?.chrome) args.push('--chrome');
+  if (normalizeBrowserSettings(options, () => {}).browserMode === 'claude-in-chrome') args.push('--chrome');
   for (const dir of parseAddDirs(options?.addDirs)) args.push('--add-dir', dir);
   if (options?.appendSystemPrompt) args.push('--append-system-prompt', String(options.appendSystemPrompt));
   return args;

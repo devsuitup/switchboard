@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   listSchedules: () => ipcRenderer.invoke('list-schedules'),
   setScheduleEnabled: (filePath, enabled) => ipcRenderer.invoke('set-schedule-enabled', filePath, enabled),
   deleteScheduleFile: (filePath) => ipcRenderer.invoke('delete-schedule-file', filePath),
+  createScheduleFile: (projectPath, fields) => ipcRenderer.invoke('create-schedule-file', projectPath, fields),
   readMemory: (filePath) => ipcRenderer.invoke('read-memory', filePath),
   saveMemory: (filePath, content, expected) => ipcRenderer.invoke('save-memory', filePath, content, expected),
   getWorkFiles: () => ipcRenderer.invoke('get-work-files'),

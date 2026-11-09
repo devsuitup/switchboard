@@ -90,7 +90,7 @@ const { startScheduler, scheduleLaunchRefusal, resolveScheduleSandbox, initialSc
 const { buildScheduleList } = require('./src/main/schedules/schedule-list');
 const { archivePlanForGroups, validArchiveGroups } = require('./archived-projects');
 const { encodeProjectPath } = require('./encode-project-path');
-const { SETTING_DEFAULTS } = require('./public/setting-defaults');
+const { SETTING_DEFAULTS, normalizeBrowserSettings } = require('./public/setting-defaults');
 const { isSensitivePath, isSensitivePathAsync, isAllowedMemoryPath: _isAllowedMemoryPath, resolveAllowedMemoryPath: _resolveAllowedMemoryPath, isKnownProjectRoot: _isKnownProjectRoot } = require('./src/main/shared/ipc-path-validator');
 const { validatePreLaunchCmd } = require('./src/main/terminals/pre-launch-cmd-guard');
 const { normalizePtySize } = require('./src/main/terminals/pty-size');
@@ -263,6 +263,7 @@ async function sweepContinuationChoices() {
 // The trace file sits next to switchboard.db — DB_PATH is the one resolution
 // of SWITCHBOARD_DATA_DIR, never re-derived here.
 const TRACE_DIR = path.dirname(DB_PATH);
+const managedBrowser = require('./src/main/browser/managed-browser').createManager({ dataDir: TRACE_DIR, isPackaged: app.isPackaged });
 const PLAIN_TERMINAL_INIT_DIR = path.join(path.dirname(DB_PATH), 'shell-init');
 activityTrace.init(TRACE_DIR);
 activityTrace.setEnabled(
@@ -1669,6 +1670,13 @@ const fileListsClient = {
   shutdown: () => Promise.all([...fileListClients.values()].map(client => client.shutdown())),
 };
 
+ipcMain.handle('create-schedule-file', (_event, projectPath, fields) =>
+  require('./src/main/schedules/schedule-runner').createScheduleFile(projectPath, fields, {
+    scheduleProjects, getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox, isArchived: isProjectSettingsArchived,
+    stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
+    runsDir: require('./src/main/schedules/schedule-run-results').scheduleRunsDir(path.dirname(DB_PATH)),
+  }));
+
 ipcMain.handle('set-schedule-enabled', (_event, filePath, enabled) =>
   require('./src/main/schedules/schedule-runner').setListedScheduleEnabled(filePath, enabled, {
     scheduleProjects, stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), getLastTickMinute: () => stopScheduler?.getLastTickMinute(),
@@ -1864,9 +1872,21 @@ ipcMain.handle('get-shell-profiles', () => {
   return getShellProfiles();
 });
 
+const warnedBrowserModes = new Set();
+
+function normalizeStoredBrowserSettings(scope) {
+  const settings = scope ? (getSetting(scope) || {}) : {};
+  return normalizeBrowserSettings(settings, message => {
+    const key = JSON.stringify([scope, settings.browserMode]);
+    if (warnedBrowserModes.has(key)) return;
+    warnedBrowserModes.add(key);
+    log.warn(message);
+  });
+}
+
 ipcMain.handle('get-effective-settings', (_event, projectPath) => {
-  const global = getSetting('global') || {};
-  const project = projectPath ? (getSetting('project:' + projectPath) || {}) : {};
+  const global = normalizeStoredBrowserSettings('global');
+  const project = normalizeStoredBrowserSettings(projectPath ? 'project:' + projectPath : null);
   const effective = { ...SETTING_DEFAULTS };
   for (const key of Object.keys(SETTING_DEFAULTS)) {
     // Only `undefined` (key never saved at this scope) falls through to the
@@ -4275,6 +4295,7 @@ function drainForUpdate() {
 }
 function shutdownForExit() {
   if (shutdownPromise) return shutdownPromise;
+  try { managedBrowser.stopForQuit(); } catch (error) { log.error('[shutdown] managed browser quit failed', error); }
   shutdownPromise = boundedShutdown(() => writer.beginShutdown(async () => {
     appQuitting = true;
     if (TRACE.on) trace('app.quit', null, {});

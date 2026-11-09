@@ -705,7 +705,7 @@ take: `isPlainTerminal = sessionOptions?.type === 'terminal'` picks a login
 shell, anything else runs `claude --resume <sessionId>`. The type lives on the
 session object in the renderer, and every path that reopens one has to carry it
 across the IPC boundary — `resolveDefaultSessionOptions` (`public/dialogs.js`)
-resolves *Claude launch* options (permission mode, worktree, chrome, sandbox,
+resolves *Claude launch* options (permission mode, worktree, browserMode, sandbox,
 preLaunchCmd, addDirs, MCP emulation) and deliberately says nothing about the
 session type, because it is also what a Claude resume uses.
 

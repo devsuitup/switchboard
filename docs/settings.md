@@ -22,9 +22,12 @@ for one launch — see [Launching sessions](launching-sessions.md).
 | Permission Mode | `permissionMode` | `auto` until a value is saved | `--permission-mode`; **Default (none)** passes no flag — see [permission modes](launching-sessions.md#permission-modes) |
 | Worktree | `worktree` | off | Starts new sessions with `--worktree` — see [Worktree sessions](worktrees.md) |
 | Worktree Name | `worktreeName` | empty (`auto`) | The name passed after `--worktree` |
-| Chrome | `chrome` | off | `--chrome` |
+| Browser | `browserMode` | Off (`off`) | **Off** passes no browser flag; **Claude in Chrome** (`claude-in-chrome`) passes `--chrome` |
 | Sandbox (Linux only) | `sandbox` | off | Runs `claude` under bubblewrap — see [Sandbox](sandbox.md) |
 | Additional Directories | `addDirs` | empty | Comma-separated; one `--add-dir` each |
+
+A saved `chrome` setting is read as the matching Browser choice: `true` selects
+**Claude in Chrome**, and `false` selects **Off**.
 
 ### Session Launch
 
@@ -129,7 +132,7 @@ only migrates forward.
 ## Project Settings
 
 Project Settings override, for one project, the fields of **Claude CLI Options**
-and **Session Launch**: Permission Mode, Worktree, Worktree Name, Chrome, Sandbox
+and **Session Launch**: Permission Mode, Worktree, Worktree Name, Browser, Sandbox
 (Linux only), Additional Directories and Pre-launch Command. Each field has a
 **Use global default** box; while it is checked the field shows the global value
 and nothing is stored for the project.

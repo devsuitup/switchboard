@@ -163,6 +163,7 @@ async function run(mode) {
       const events = [], filename = require.resolve('../../main'), source = fs.readFileSync(filename, 'utf8');
       const record = name => async () => { events.push(name); };
       const context = vm.createContext({ Promise, Map, setTimeout, clearTimeout, shutdownPromise: null,
+        managedBrowser: { stopForQuit() {} },
         shutdownComplete: false, appQuitting: false, TRACE: {}, updateInstalling: false,
         log: { error: (...args) => events.push(args.join(' ')) }, stopNonDatabaseResources() {},
         closedSessions: new Map(), activeSessions: new Map(cases.map((c, i) => [String(i), c.session])), killPty,

@@ -51,10 +51,11 @@ validates nonnegative safe-integer counters and gap, truncates/sanitizes ids,
 and emits one bounded `[power]` line with an ISO timestamp. There is no terminal
 content, invoke return payload, file access or application action.
 
-## Schedules (#792, slices A1, A2, B and D)
+## Schedules (#792, slices A1, A2, B, C and D)
 
 | IPC | Args | Returns | Preload |
 | --- | --- | --- | --- |
+| `create-schedule-file` | `projectPath, fields` | `{ ok: true, filePath }` or `{ ok: false, field, error }`; registered, unarchived project; runner validation and sandbox refusals; guarded commands directory and exclusive hard-link publication | `api.createScheduleFile(projectPath, fields)` |
 | `set-schedule-enabled` | `filePath, enabled` (boolean) | `{ ok }` or `{ ok: false, error }`; exact current listing path, linked-file and front-matter guards; re-enable skips missed catch-up before writing | `api.setScheduleEnabled(filePath, enabled)` |
 | `delete-schedule-file` | `filePath` | `{ ok }` or `{ ok: false, error }`; exact current listing path and disk-resolved link guard; removes the file and its catch-up/run-result records, preserving transcripts | `api.deleteScheduleFile(filePath)` |
 | `list-schedules` | none | `{ now, catchUpActive, projects: [{ projectPath, shortName, archived, sandboxed, known, schedules: [{ filePath, file, name, slug, cron, cronText, enabled, catchUp, cli, prompt, linked, problems, nextRunMs, catchUpDueMs, runs: [{ sessionId, created, messageCount, replied, running, result }] }] }] }` | `api.listSchedules()` |
@@ -79,7 +80,7 @@ nothing. A directory read error marks the requested results unreadable.
 
 `run-schedule-now`, `read-memory`, `save-memory` and `schedule-run-exit` keep
 their existing contracts. A2 adds the Schedules renderer and the guarded
-enable operation; creation and deletion are later slices. See [schedule-runner.md](schedule-runner.md), "Schedule listing
+enable operation; B adds deletion and C adds the creation form. See [schedule-runner.md](schedule-runner.md), "Schedule listing
 backend", for field parsing, refusal rules, time-zone semantics and tests.
 
 ## Main-process error backstop (#896)
@@ -427,6 +428,26 @@ An explicitly saved `null` (permission mode "Default", which omits
 `--permission-mode`) is a value, not an absence: the merge overrides on
 `!== undefined` only, so it is never promoted to the table's `'auto'`.
 
+Browser compatibility: `browserMode` defaults to `off`. The shared
+`normalizeBrowserSettings` returns a copy and normalizes each stored scope
+before main or the panel merges it. An explicit valid mode wins over legacy
+`chrome`; exact legacy true maps to `claude-in-chrome`, false to `off`, and
+an absent browser choice stays absent so it inherits. Invalid modes, including
+null, report a diagnostic and become explicit Off. Main warns once per stored
+scope and invalid JSON value for the lifetime of the process, including across
+changes back to a previously diagnosed value. Other settings retain
+their existing null semantics. Saving either scope removes `chrome`; global
+save retains unrelated keys, while project save keeps only overridden fields.
+Use global removes the project browser override. Reads never write settings.
+
+Global/project settings and New/Resume dialogs offer Browser: Off / Claude in
+Chrome on every platform. Managed is recognized for forward compatibility but
+is not offered or activated. A stored Managed choice displays Off in
+these controls without rewriting storage on open; an explicit save/launch
+uses the displayed choice. Settings affect subsequent launches. Fork, restore,
+ordinary open and the interactive schedule creator use the shared default
+resolver. There is no managed browser lifecycle, browser IPC or MCP handoff.
+
 `receiveBetaVersions` is global-only in the panel and defaults to false in
 the shared table. `set-setting('global', ...)` re-reads the saved row and
 applies its channel to `autoUpdater.allowPrerelease` immediately. Startup
@@ -581,6 +602,7 @@ Every handler that takes a renderer-supplied path or derives a spawn location fr
 |---|---|---|
 | `set-schedule-enabled` | `listScheduleFiles(await scheduleProjects().list())` exact path equality, boolean argument, unlinked file and readable front matter; skip missed catch-up before enabling | current registry listing + disk-resolved link guard |
 | `delete-schedule-file` | `listScheduleFiles(await scheduleProjects().list())` exact path equality, then `scheduleFileUnlinked(projectRoot, filePath)` immediately before file operations; linked files return `linked file: edit it at its source` | current registry listing + disk-resolved link guard |
+| `create-schedule-file` | `projectPath` must match the awaited schedule registry by `normalizeProjectPath`; reject archived projects; require `realpath(commandsDir) === join(realpath(projectPath), '.claude', 'commands')`; target filename comes only from a validated slug; publish by `linkSync` without overwriting | current registry + realpath directory guard + exclusive publication |
 | `read-memory` / `save-memory` | `resolveAllowedMemoryPath` (read/write the returned path, not the caller's own re-resolved one) | disk-resolved allowlist |
 | `get-memories` (the list, and the FTS bodies it indexes) | `acceptMdFile` (`scan-md-files.js`) applies `isSensitivePath` itself and the `isAllowedMemoryPath` predicate `get-memories` passes in; `scanMdFiles` is the directory-wide form of it, and the project-root `CLAUDE.md`/`GEMINI.md`/`agents.md` go through it by name | disk-resolved denylist + allowlist — a listed file is read twice more downstream, once by `read-memory` behind `resolveAllowedMemoryPath` and once by the FTS indexer behind nothing at all, so the guard belongs on the list. The denylist is not the caller's to choose: containment in an allowed project root says nothing about a cloned repo's own `.ssh`/`.env` |
 | `open-main-log` | Main chooses electron-log's path; requires a string absolute path and `!isSensitivePath` before `shell.openPath`. | no renderer-supplied path; disk-resolved denylist |
