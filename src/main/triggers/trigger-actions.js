@@ -11,11 +11,11 @@ const UNAVAILABLE = 'session action not implemented in this build';
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const own = (value, key) => object(value) && Object.hasOwn(value, key);
 
-function isVersioned(trigger, stem) {
-  return (!object(trigger) && UUID.test(stem)) || own(trigger, 'version') || own(trigger, 'action');
+function isVersioned(trigger) {
+  return own(trigger, 'version') || own(trigger, 'action');
 }
 
-function validateTrigger(trigger, stem) {
+function validateTrigger(trigger, stem, evidence = {}) {
   if (!object(trigger)) return 'trigger must be an object';
   if (trigger.version !== 1) return 'unsupported version';
   if (trigger.action !== 'open' && trigger.action !== 'stop') return 'unsupported action';
@@ -48,6 +48,7 @@ function validateTrigger(trigger, stem) {
     if (typeof text !== 'string' || !text.trim()) return field + ' must be a non-empty string';
     if (text.length > 4096) return field + ' too long (max 4 KB)';
     if (/[\r\n\x00\x1b]/.test(text)) return field + ' contains forbidden control characters (\\r \\n \\0 \\x1b)';
+    evidence.steps_total = 1;
   }
   if (own(trigger, 'timeout_ms') && (!Number.isInteger(trigger.timeout_ms) || trigger.timeout_ms < 1 || trigger.timeout_ms > 600000)) return 'invalid timeout_ms';
   if (own(trigger, 'expectedCwd') && (typeof trigger.expectedCwd !== 'string' || !trigger.expectedCwd.trim())) return 'expectedCwd must be a non-empty string when present';
@@ -62,7 +63,7 @@ function refusal(trigger, reason, extra = {}) {
     ok: false, outcome: 'refused', reason,
     sessionId: hasId ? trigger.sessionId.toLowerCase() : null,
     submitted: 'no', wrote: false,
-    steps_total: own(trigger, 'prompt') || own(trigger, 'before') ? 1 : 0,
+    steps_total: 0,
   };
   if (trigger?.action === 'open') {
     if (own(trigger, 'sessionId') && !own(trigger, 'new')) result.resumed = false;
@@ -229,14 +230,20 @@ function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.
     }
   }
   function readState(resultPath, markerPath) {
+    function read(file) {
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile()) throw new Error('recovery state must be a regular file');
+      if (stat.size > 64 * 1024) throw new Error('recovery state too large (max 64 KB)');
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    }
     try {
-      const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+      const result = read(resultPath);
       if (object(result) && own(result, 'version')) return { result, committed: true };
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
     try {
-      const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+      const marker = read(markerPath);
       if (!object(marker) || marker.version !== 1) throw new Error('invalid v1 action marker');
       const result = refusal(marker, 'interrupted by restart', { uncertain: true });
       if (marker.mode === 'new') { delete result.resumed; result.created = marker.created === true; }
@@ -265,7 +272,10 @@ function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.
     return true;
   }
   return { limiter, readState, publish, refusal,
-    execute(trigger, stem) { return refusal(trigger, validateTrigger(trigger, stem) || UNAVAILABLE); },
+    execute(trigger, stem) {
+      const evidence = { steps_total: 0 };
+      return refusal(trigger, validateTrigger(trigger, stem, evidence) || UNAVAILABLE, evidence);
+    },
   };
 }
 

@@ -25,11 +25,11 @@ The watcher dispatches parsed objects with an own `version` or `action` property
 to `src/main/triggers/trigger-actions.js`, before legacy command validation or
 remote delivery. Objects with neither property still use the existing legacy
 command/chain/key path, including its delivery, locking and publication rules.
-Non-object JSON under a UUID-shaped filename receives `trigger must be an
-object` in the v1 envelope. Non-UUID legacy filenames retain their previous
-non-object error handling, including null's generic internal-error result and
-logging. This compatibility boundary preserves the existing legacy regression
-tests; the standalone v1 validator always rejects non-objects first.
+Session ruling for #1022BFIX: spec §3 (line 161) takes precedence. Neither
+`version` nor `action` means legacy dispatch, including arrays, null, numbers
+and strings under UUID-shaped filenames of either case. They retain their
+exact legacy result shapes, including null's generic internal-error result
+and logging. The standalone v1 validator still rejects non-objects first.
 Regular-file, 64 KiB, age and parse/retry guards remain transport guards before
 dispatch. Unparseable, oversized or non-regular input cannot be classified into
 the versioned family; those errors retain the legacy transport envelope.
@@ -91,7 +91,10 @@ setting is enabled; this slice takes `no-changelog`.
 Every classified result echoes the requested `version` and `action` (null when
 missing, unsupported values unchanged), with `ok:false`, `outcome:"refused"`,
 stable `reason`, canonical valid requested `sessionId` or null, `submitted:"no"`,
-`wrote:false`, and `steps_total` zero without prompt/before or one with it.
+`wrote:false`, and `steps_total` zero until the permitted prompt/before has
+passed text validation, then one. Rejected fields, blank/oversized/control
+text, and text not reached in validation order contribute zero. Later timeout
+or cwd failures preserve one already validated text step.
 Open-resume has `resumed:false`; open-new has `created:false`. No new ID is
 allocated by this build. OS/parser details belong in `error`, not stable codes.
 No `opened` or `closed` result is produced by this slice.
@@ -103,6 +106,20 @@ immutable and wins over duplicate input, even if its payload changes to legacy,
 and over any action marker. Publication failure retains input/marker and
 suppresses replay in memory; cleanup failure also suppresses reprocessing.
 Legacy publication, including deletion after a failed result write, is unchanged.
+
+Recovery reads lstat each result/marker before reading: only regular files
+of at most 64 KiB are accepted; symlinks, FIFOs and other types refuse without
+opening them. A parsed legacy result without `version` is no recovery state.
+Other inspection/read/parse failures are logged and remembered while the
+input's normal transport guards and classification proceed. Legacy requests
+continue unchanged; schema-valid v1 requests refuse with
+`trigger recovery state unavailable`, with OS/parser details in `error`.
+Schema errors take precedence over recovery and staleness refusals. Invalid
+orphan state without an input is logged without replaying an action.
+Stale v1 requests run schema validation before their age refusal, including
+strict version and lowercase filename checks. UUID result/marker lookup and
+v1 publication use the canonical lowercase spelling; legacy publication keeps
+its original filename behavior.
 
 Startup recovery scans `processed/<uuid>.action.json` through the same filename
 queue and eight-file backpressure, including orphan markers. Recovery precedes

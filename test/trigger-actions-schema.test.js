@@ -38,9 +38,6 @@ async function run(t, payload, name = request) {
 }
 
 const cases = [
-  ['null', null, 'trigger must be an object'],
-  ['array', [], 'trigger must be an object'],
-  ['number', 1, 'trigger must be an object'],
   ['action without version', { action: 'open' }, 'unsupported version'],
   ['string version before action', { version: '1', action: 'bad', cli: true }, 'unsupported version'],
   ['null version', { version: null }, 'unsupported version'],
@@ -68,6 +65,23 @@ const cases = [
   ['timeout before cwd', { ...base, timeout_ms: 0, expectedCwd: '' }, 'invalid timeout_ms'],
   ['cwd invalid', { ...base, expectedCwd: null }, 'expectedCwd must be a non-empty string when present'],
 ];
+
+for (const [name, payload, expected, filename] of [
+  ['blank prompt', { ...base, prompt: ' ' }, 0],
+  ['null prompt', { ...base, prompt: null }, 0],
+  ['oversized prompt', { ...base, prompt: 'a'.repeat(4097) }, 0],
+  ['control in before', { ...stop, before: 'a\n' }, 0],
+  ['rejected before field', { ...base, before: 'valid text' }, 0],
+  ['rejected prompt field', { ...stop, prompt: 'valid text' }, 0],
+  ['valid prompt before invalid timeout', { ...base, prompt: 'valid text', timeout_ms: 0 }, 1],
+  ['text never reached after unsupported field', { ...base, prompt: 'valid text', focus: true }, 0],
+  ['text never reached after invalid filename', { ...base, prompt: 'valid text' }, 0, request.toUpperCase()],
+]) {
+  test(`steps_total counts validated text: ${name}`, async t => {
+    const { result } = await run(t, payload, filename);
+    assert.equal(result.steps_total, expected, 'only text that passed validation counts as a step');
+  });
+}
 for (const field of ['command', 'key', 'chain', 'cli', 'options', 'focus', 'wait', 'before']) {
   cases.push([`resume rejects ${field}`, { ...base, [field]: null }, `unsupported field: ${field}`]);
 }

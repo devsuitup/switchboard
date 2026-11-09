@@ -38,7 +38,7 @@ const path = require('path');
 const os   = require('os');
 
 const { createLocalSessionHandle } = require('./trigger-context');
-const { createTriggerActions, isVersioned } = require('./trigger-actions');
+const { createTriggerActions, isVersioned, validateTrigger } = require('./trigger-actions');
 const { promptMatches } = require('../../../transcript-turn');
 
 const DEFAULT_TRIGGERS_DIR   = path.join(os.homedir(), '.switchboard', 'triggers');
@@ -1057,15 +1057,24 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   const triggerPath = path.join(triggersDir, name);
   const uuid        = name.slice(0, -5); // strip ".json"
-  const resultPath  = path.join(processedDir, uuid + '.result.json');
+  let resultPath  = path.join(processedDir, uuid + '.result.json');
   const resultTmp   = resultPath + '.tmp'; // I1: atomic write temp path
-  const markerPath = path.join(processedDir, uuid + '.action.json');
+  let markerPath = path.join(processedDir, uuid + '.action.json');
   let versioned = false;
+  let recoveryError;
+
+  function canonicalizePaths() {
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+      resultPath = path.join(processedDir, uuid.toLowerCase() + '.result.json');
+      markerPath = path.join(processedDir, uuid.toLowerCase() + '.action.json');
+    }
+  }
 
   // I1: atomic result write — write to .tmp then rename so pollers never
   // observe a partial JSON file.
   async function writeResult(result) {
     if (versioned) {
+      canonicalizePaths();
       actions.publish({ result, resultPath, triggerPath, markerPath, retained: onEntryRetained });
       return;
     }
@@ -1114,15 +1123,17 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
     try {
-      const state = actions.readState(resultPath, markerPath);
+      const canonicalResult = path.join(processedDir, uuid.toLowerCase() + '.result.json');
+      const canonicalMarker = path.join(processedDir, uuid.toLowerCase() + '.action.json');
+      const state = actions.readState(canonicalResult, canonicalMarker);
       if (state) {
+        canonicalizePaths();
         actions.publish({ ...state, resultPath, triggerPath, markerPath, retained: onEntryRetained });
         return;
       }
     } catch (err) {
-      onEntryRetained?.();
+      recoveryError = err;
       safeLogError(ctx, '[trigger-watcher] v1 recovery state unavailable:', name, err.message);
-      return;
     }
   }
 
@@ -1172,7 +1183,10 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
                  'staleness limit; refused rather than act on a request that may no ' +
                  'longer target the intended session state',
     };
-    await writeResult(versioned ? actions.refusal(staleTrigger, stale.reason, { error: stale.error }) : stale);
+    const evidence = { steps_total: 0 };
+    await writeResult(versioned ? actions.refusal(staleTrigger,
+      validateTrigger(staleTrigger, uuid, evidence) || (recoveryError ? 'trigger recovery state unavailable' : stale.reason),
+      { ...evidence, error: recoveryError ? recoveryError.message : stale.error }) : stale);
     return;
   }
 
@@ -1207,7 +1221,10 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   if (isVersioned(trigger, uuid)) {
     versioned = true;
-    await writeResult(actions.execute(trigger, uuid));
+    const evidence = { steps_total: 0 };
+    await writeResult(recoveryError ? actions.refusal(trigger,
+      validateTrigger(trigger, uuid, evidence) || 'trigger recovery state unavailable',
+      { ...evidence, error: recoveryError.message }) : actions.execute(trigger, uuid));
     return;
   }
 
