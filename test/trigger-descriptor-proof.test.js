@@ -376,3 +376,43 @@ test('chain: an Enter that never starts a turn is reported "not confirmed submit
     assert.equal(result.submitted, 'assumed');
   }
 });
+
+function unconfirmedOnEnter(session) {
+  return (n, desc) => {
+    if (n === 1) {
+      desc.status = 'busy'; desc.statusUpdatedAt = Date.now();
+      setTimeout(() => { session.setBusy(false); desc.status = 'idle'; desc.statusUpdatedAt = Date.now(); }, 100);
+    }
+  };
+}
+
+test('chain: /compact then a resume whose Enter never starts a turn ends ok:false "step not confirmed", never ok:true', async () => {
+  const uuid = 'sess-desc-final-unconfirmed-' + Date.now();
+  const session = chainSession(uuid, { log: recordingLog(), onEnter: (...a) => unconfirmedOnEnter(session)(...a) });
+
+  const result = await runChain([{ command: '/compact' }, { command: 'resume the work' }], session, uuid);
+
+  assert.equal(result.steps[0].submit_confirmed, true);
+  assert.equal(result.steps[1].submitted, 'assumed');
+  assert.equal(result.steps[1].submit_confirmed, false);
+  assert.equal(result.steps[1].turn_observed, false);
+  assert.deepEqual(result.unconfirmed_steps, [1]);
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.equal(result.error, 'step not confirmed');
+  assert.match(result.reason, /step 1/);
+});
+
+test('an unconfirmed final step reports the same ok:false and error whether the recovery Enter was sent or withheld', async () => {
+  const retriedUuid = 'sess-desc-agree-retried-' + Date.now();
+  const retried = chainSession(retriedUuid, { log: recordingLog(), onEnter: (...a) => unconfirmedOnEnter(retried)(...a) });
+  const retriedResult = await runChain([{ command: 'first step' }, { command: 'second step' }], retried, retriedUuid);
+
+  const withheldUuid = 'sess-desc-agree-withheld-' + Date.now();
+  const withheld = chainSession(withheldUuid, { log: recordingLog(), onEnter(n, desc) { desc.status = 'busy'; } });
+  const withheldResult = await runChain([{ command: 'first step' }, { command: 'second step' }], withheld, withheldUuid, 4000);
+
+  for (const r of [retriedResult, withheldResult]) {
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.error, 'step not confirmed');
+  }
+});
