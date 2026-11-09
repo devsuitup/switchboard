@@ -190,8 +190,10 @@ project, including disabled tasks and archived projects. Each task shows its
 schedule in plain words, local next-run time, enabled state and up to 20 recent
 runs. **Run now** starts a run at once. **Turn on** and **Turn off** edit its
 front matter; turning it back on skips runs missed while it was off, including
-after Archive and Undo. **Open** edits the schedule file. Linked files can be
-opened and run, but must be enabled or disabled at their source.
+after Archive and Undo. **Open** edits the schedule file. **Delete** asks for
+confirmation, then removes the file and its catch-up and run-result records;
+past runs stay in Sessions. Linked files can be opened and run, but must be
+enabled, disabled or deleted at their source.
 
 The tab refreshes on open, after actions, on project changes and every minute
 while visible. No search is offered here. Invalid files show their problems;

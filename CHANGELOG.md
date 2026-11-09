@@ -5,13 +5,14 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 ## Unreleased
 
 ### New
-- The Schedules tab is off by default; turn on **Schedules tab** in Global Settings to list scheduled tasks by project with their next run, enabled state and recent results, and to run, turn on or off, or open a schedule there. With it off, schedule files and Run now remain in Agent Files; run results are kept across restarts either way. (#792)
+- The Schedules tab is off by default; turn on **Schedules tab** in Global Settings to list scheduled tasks by project with their next run, enabled state and recent results, and to run, turn on or off, open, or delete a schedule there, with confirmation before deletion and past runs kept in Sessions. With it off, schedule files and Run now remain in Agent Files; run results are kept across restarts either way. (#792)
 - Images opened from a link or from the Touched list now show in the panel. Other files the panel can't show offer **Open with system viewer** for pictures and PDFs, and **Show in folder** for the rest. (#1025)
 
 ### Changed
 - New sandboxed sessions protect the triggers directory even when it sits inside a project or another writable directory, and refuse layouts that cannot protect it safely. This protection does not apply when Podman access is enabled. (#1022)
 
 ### Fixed
+- An automation that resumes a session after compaction now learns when the resume prompt was not confirmed, instead of being told it succeeded: a chain whose step was typed but never confirmed ends with `ok: false` and `step not confirmed`. (#980)
 - Terminals limit accumulated output to keep catch-up work bounded while preserving paste, mouse and alternate-screen modes; after a long sleep, a terminal may show only its recent output. Catch-up can also continue in minimized windows when timers still run, but the standby freeze is not proven fixed. (#1037)
 - Repeated Respawn clicks while a background conversation is starting no longer start another copy, including when the first request times out. (#1033)
 - Sending a resumed background conversation to the background no longer starts a second copy. When it already runs in the background, the tab is left untouched with a pointer to the sidebar; after a reboot or daemon death, working, done, running and failed jobs recover automatically when no live continuation holds them, while blocked jobs wait for the notice's Respawn button. (#1020)
