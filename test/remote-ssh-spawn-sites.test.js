@@ -34,6 +34,9 @@ const HOW_TO_FIX = 'Route the program through resolveSshPath()/resolveScpPath() 
 
 // Sites whose program is not ssh or scp and cannot be proven so statically — file -> enclosing function.
 const UNRESOLVED_ALLOWED = {
+  'src/main/browser/managed-browser.js': {
+    start: 'validated Chromium executable from browser discovery, or literal systemd-run; not a remote transport',
+  },
   'main.js': {
     spawnPty: 'node-pty wrapper: the shell of a local session, or the attach adapter\'s resolved ssh',
     runScheduleCommand: 'the shell of the schedule\'s shell profile',

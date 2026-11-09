@@ -57,6 +57,7 @@ test('window close releases the Agents subscriber and app quit stops the job wat
   const end = MAIN.indexOf('\n  });', idx) + '\n  });'.length;
   let closed, _beforeQuit, unsubscribed = 0, stopped = 0;
   const context = {
+    managedBrowser: { stopForQuit() {} },
     mainWindow: { on: (_name, callback) => { closed = callback; } },
     activeSessions: new Map(), closedSessions: new Map(), changesWatchers: { closeAll() {} }, closeAllFileWatchers() {},
     transcriptFollower: require('../src/main/viewer/transcript-follower').createTranscriptFollower(),
