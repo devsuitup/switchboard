@@ -38,7 +38,7 @@ const { SETTING_DEFAULTS } = require('./public/setting-defaults');
 const { scanContinuationIndex, resolveContinuations, validId, continuationStamp, matchesContinuationStamp, continuationMtime, continuationRollup } = require('./session-continuations');
 const { mergeLocalBackgroundSessions, conversationGroups, conversationMemberIds: resolveConversationMemberIds, scopedConversationRows } = require('./sidebar-bg-sessions');
 const { projectionScope } = require('./public/session-projection-diagnostics');
-const { isProjectHidden } = require('./public/worktree-nesting');
+const { projectHiddenMatcher } = require('./public/worktree-nesting');
 const { conversationMeta } = require('./conversation-meta');
 const { cleanDisplayName } = require('./public/utils');
 const { isHostedJob } = require('./src/main/bg-agents/bg-agents-roster');
@@ -989,7 +989,7 @@ function buildProjectsFromCache(showArchived) {
     return workflowNames.get(file).title;
   };
   const global = getSetting('global') || {};
-  const hiddenProjects = new Set(global.hiddenProjects || []);
+  const hidden = projectHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes);
 
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
@@ -1067,7 +1067,7 @@ function buildProjectsFromCache(showArchived) {
       sdkOnlyProjectKeys.add(groupKey(alias, row.projectPath));
       continue;
     }
-    if (isProjectHidden(hiddenProjects, alias, row.projectPath, global.hiddenProjectScopes)) { exclude(row, 'hidden-project'); continue; }
+    if (hidden(alias, row.projectPath)) { exclude(row, 'hidden-project'); continue; }
     const meta = metadataFor(row.sessionId);
     const children = mergedChildrenByParent.get(row.sessionId) || [];
     const orderedChildren = [...children].sort((a, b) =>
@@ -1168,7 +1168,7 @@ function buildProjectsFromCache(showArchived) {
           }
         }
         if (!projectPath) continue;
-        if (isProjectHidden(hiddenProjects, alias, projectPath, global.hiddenProjectScopes)) continue;
+        if (hidden(alias, projectPath)) continue;
         const key = groupKey(alias, projectPath);
         if (projectMap.has(key) || sdkOnlyProjectKeys.has(key)) continue;
         // For a placeholder the on-disk name IS the ground truth — re-encoding
@@ -1192,7 +1192,7 @@ function buildProjectsFromCache(showArchived) {
     // see .ai/contexts/panel-terminal.md ("A panel shell is not a session")
     if (isPanelShellSession(session)) continue;
     if (!session.projectPath) continue;
-    if (isProjectHidden(hiddenProjects, null, session.projectPath, global.hiddenProjectScopes)) continue;
+    if (hidden(null, session.projectPath)) continue;
     const localKey = groupKey(null, session.projectPath);
     if (!projectMap.has(localKey)) {
       projectMap.set(localKey, {
@@ -1215,7 +1215,7 @@ function buildProjectsFromCache(showArchived) {
   }
 
   const projects = mergeLocalBackgroundSessions([...projectMap.values()], cachedRows, localDescriptors, {
-    hiddenProjects, hiddenProjectScopes: global.hiddenProjectScopes, metaMap, showArchived, jobs: localJobs, conversations,
+    hiddenMatcher: hidden, metaMap, showArchived, jobs: localJobs, conversations,
   });
   for (const proj of projects) {
     for (const session of proj.sessions) {

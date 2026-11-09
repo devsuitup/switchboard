@@ -19,7 +19,7 @@ function isProjectHidden(hiddenProjects, alias, projectPath, hiddenProjectScopes
   return projectHiddenMatcher(hiddenProjects, hiddenProjectScopes, normalize)(alias, projectPath);
 }
 
-function projectHiddenMatcher(hiddenProjects, hiddenProjectScopes = {}, normalize = value => value) {
+function projectHiddenMatcher(hiddenProjects, hiddenProjectScopes = {}, normalize = value => value, normalizeTarget = normalize) {
   const entries = [];
   for (const entry of hiddenProjects || []) {
     if (typeof entry !== 'string') continue;
@@ -31,7 +31,7 @@ function projectHiddenMatcher(hiddenProjects, hiddenProjectScopes = {}, normaliz
   }
   if (!entries.length) return () => false;
   return (alias, projectPath) => {
-    const target = normalize(projectPath);
+    const target = normalizeTarget(projectPath);
     return entries.some(entry => (entry.alias === null || entry.alias === alias)
       && (!entry.scope || !Object.prototype.hasOwnProperty.call(entry.scope, 'alias') || entry.scope.alias === alias)
       && entry.path === target);

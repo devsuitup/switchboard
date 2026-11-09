@@ -33,6 +33,29 @@ test('trigger resolution refuses local history under a local scoped bare mark', 
   assert.equal((await resolveLocalTarget(id, r.deps)).reason, 'project is archived', 'local scope must refuse a local trigger target');
 });
 
+test('trigger resolution ignores relative hidden entries that resolve to a known project', async t => {
+  const r = rig(t);
+  const relative = path.relative(process.cwd(), r.project);
+  assert.equal(path.isAbsolute(relative), false);
+  r.snapshot.hiddenProjects = [relative];
+  const result = await resolveLocalTarget(id, r.deps);
+  assert.equal(result.ok, true, 'a relative hidden entry must not archive a known absolute project');
+  assert.equal(result.project, r.project);
+});
+
+test('trigger resolution ignores relative hidden entries for recorded worktree selection', async t => {
+  const r = rig(t);
+  const cwd = path.join(r.project, '.worktrees', 'next');
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(r.transcript, JSON.stringify({ cwd }) + '\n');
+  r.deps.extractVerifiedCwdFromJsonl = () => ({ complete: true, cwd });
+  r.snapshot.hiddenProjects = [path.relative(process.cwd(), cwd)];
+  const result = await resolveLocalTarget(id, r.deps);
+  assert.equal(result.ok, true, 'a relative hidden entry must not select an unknown recorded worktree');
+  assert.equal(result.project, r.project);
+  assert.equal(result.cwd, cwd);
+});
+
 test('strict resolver admits cold-cache readable local top-level transcript and canonical ID', async t => {
   const r = rig(t);
   const target = await resolveLocalTarget(id.toUpperCase(), r.deps);

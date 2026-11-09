@@ -889,7 +889,7 @@ function isProjectSettingsArchived(projectPath) {
   const global = getSetting('global') || {};
   if (!global.hiddenProjects?.length) return false;
   const { projectHiddenMatcher, worktreeParentPath } = require('./public/worktree-nesting');
-  const hidden = projectHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes, normalizeArchivedProjectPath);
+  const hidden = projectHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes, normalizeArchivedProjectPath, value => value);
   const target = normalizeArchivedProjectPath(projectPath);
   return hidden(null, target) || hidden(null, worktreeParentPath(target));
 }

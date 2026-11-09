@@ -2246,6 +2246,13 @@ stored entries once per policy call. Descriptor filtering and local admission
 reuse that matcher for the project and its worktree parent, and empty hidden
 lists bypass path normalization.
 
+Local admission normalizes its target once and compares the derived worktree
+parent as-is, preserving the existing comparison when the worktree is missing
+but its repository exists. The matcher accepts a separate target normalizer for
+callers that already normalized their query. A project-cache pass shares one
+matcher across cached rows, empty groups, terminals and the background merge;
+each Memory or Work Files list call builds one matcher for all its folders.
+
 The cache, archive projection, pending groups, working-set reload, worktree
 nesting, background descriptors, file lists and trigger resolver all use this
 matcher. Working-set fallback uses the persisted local project identity.

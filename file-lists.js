@@ -7,7 +7,7 @@ const { deriveProjectPath } = require('./derive-project-path');
 const { isAllowedMemoryPath: _isAllowedMemoryPath } = require('./src/main/shared/ipc-path-validator');
 const { scanMdFiles: scanMarkdown, acceptMdFile: acceptMarkdown } = require('./scan-md-files');
 const { isRunnerScheduleFileName } = require('./src/main/schedules/schedule-runner');
-const { isProjectHidden } = require('./public/worktree-nesting');
+const { projectHiddenMatcher } = require('./public/worktree-nesting');
 
 function getKnownProjectPaths(options) {
   const roots = new Set(options.activeProjectPaths || []);
@@ -65,7 +65,7 @@ function listMemories(options, readContent) {
   const PROJECTS_DIR = options.projectsDir;
   const scanMdFiles = (dir, allowed) => scanMarkdown(dir, allowed, readContent);
   const acceptMdFile = (file, allowed) => acceptMarkdown(file, allowed, readContent);
-  const hiddenProjects = options.hiddenProjects || [];
+  const hidden = projectHiddenMatcher(options.hiddenProjects, options.hiddenProjectScopes);
 
   const knownRoots = getKnownProjectPaths(options);
   const isAllowed = (filePath) => _isAllowedMemoryPath(filePath, knownRoots);
@@ -88,7 +88,7 @@ function listMemories(options, readContent) {
       for (const folder of folders) {
         const folderPath = path.join(PROJECTS_DIR, folder);
         const projectPath = deriveProjectPath(folderPath, folder);
-        if (projectPath && isProjectHidden(hiddenProjects, null, projectPath, options.hiddenProjectScopes)) continue;
+        if (projectPath && hidden(null, projectPath)) continue;
 
         const shortName = projectPath
           ? projectPath.split(/[\\/]/).filter(Boolean).slice(-2).join('/')
@@ -159,7 +159,7 @@ function listMemories(options, readContent) {
 function listWorkFiles(options) {
   const PROJECTS_DIR = options.projectsDir;
 
-  const hiddenProjects = options.hiddenProjects || [];
+  const hidden = projectHiddenMatcher(options.hiddenProjects, options.hiddenProjectScopes);
   const seen = new Set();
   const projects = [];
 
@@ -173,7 +173,7 @@ function listWorkFiles(options) {
         const folderPath = path.join(PROJECTS_DIR, folder);
         const projectPath = deriveProjectPath(folderPath, folder);
         if (!projectPath) continue;
-        if (isProjectHidden(hiddenProjects, null, projectPath, options.hiddenProjectScopes)) continue;
+        if (hidden(null, projectPath)) continue;
         if (seen.has(projectPath)) continue;
         seen.add(projectPath);
 

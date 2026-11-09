@@ -95,6 +95,17 @@ test('Delete Project preserves legacy every-host marks without adding a scope', 
   assert.equal(applyAndPersistArchived([remote], true, h).length, 0, 'local Delete still hides a same-path remote group');
 });
 
+test('Delete Project from an empty hidden list writes an every-host mark without a scope', async t => {
+  const h = setup(t);
+  assert.deepEqual(h.getSetting('global').hiddenProjects, []);
+  assert.equal((await h.invoke('remove-project', h.projectPath, h.folder)).ok, true);
+  const global = h.getSetting('global');
+  assert.deepEqual(global.hiddenProjects, [h.projectPath]);
+  assert.equal(Object.hasOwn(global.hiddenProjectScopes || {}, h.projectPath), false, 'new Delete entry must stay unscoped');
+  const remote = { remoteAlias: 'box', projectPath: h.projectPath, sessions: [] };
+  assert.equal(applyAndPersistArchived([remote], true, h).length, 0, 'new local Delete must hide a same-path remote group');
+});
+
 test('archive keeps persisted project settings, cache, search and schedule registration', async t => {
   const h = setup(t);
   const before = h.getSetting('project:' + h.projectPath);

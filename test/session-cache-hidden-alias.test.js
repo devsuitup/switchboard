@@ -42,16 +42,45 @@ function makeFakeDb({ cachedRows = [], folderMeta = new Map(), hiddenProjects = 
   };
 }
 
-function initCache(projectsDir, db) {
+function initCache(projectsDir, db, extra = {}) {
   sessionCache.init({
     PROJECTS_DIR: projectsDir,
     activeSessions: new Map(),
     getMainWindow: () => null,
     log: { info: () => {}, debug: () => {}, warn: () => {}, error: () => {} },
     db,
+    ...extra,
   });
   sessionCache.setRemoteRoots(new Map());
 }
+
+test('a project pass builds one hidden matcher across rows, placeholders, terminals and background descriptors', t => {
+  const projectsDir = mkTmp();
+  t.after(() => cleanup(projectsDir));
+  const projectPath = '/srv/visible';
+  const folder = encodeProjectPath(projectPath);
+  fs.mkdirSync(path.join(projectsDir, folder));
+  const hiddenPath = '/srv/hidden';
+  let reads = 0;
+  const hiddenProjectScopes = { get [hiddenPath]() { reads++; return { alias: null }; } };
+  const descriptors = [1, 2].map(i => ({ kind: 'bg', jobId: '0000000' + i,
+    sessionId: `00000000-0000-4000-8000-00000000000${i}`, cwd: '/srv/background-' + i }));
+  const db = makeFakeDb({ hiddenProjects: [hiddenPath], hiddenProjectScopes,
+    cachedRows: Array.from({ length: 10 }, (_, i) => row('visible-' + i, folder, projectPath)),
+    folderMeta: new Map([[folder, { projectPath }], [joinFolderKey('box', folder), { projectPath: '/srv/empty' }]]) });
+  initCache(projectsDir, db, { getLocalDescriptors: () => descriptors,
+    activeSessions: new Map([['terminal', { isPlainTerminal: true, projectPath: '/srv/terminal', _openedAt: 0 }]]) });
+  sessionCache.setRemoteRoots(new Map([['box', projectsDir]]));
+  for (let pass = 0; pass < 2; pass++) {
+    reads = 0;
+    const projects = sessionCache.buildProjectsFromCache(true);
+    assert.equal(projects.find(p => p.projectPath === projectPath).sessions.length, 10);
+    for (const expected of ['/srv/empty', '/srv/terminal', ...descriptors.map(d => d.cwd)]) {
+      assert.ok(projects.some(p => p.projectPath === expected), 'pass must exercise ' + expected);
+    }
+    assert.equal(reads, 1, 'one project pass must read each hidden scope once, including the background merge');
+  }
+});
 
 function row(sessionId, folder, projectPath) {
   return {

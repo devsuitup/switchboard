@@ -148,12 +148,26 @@ function mainPolicy(global, descriptors, normalize) {
   const filename = path.join(__dirname, '..', 'main.js');
   const source = fs.readFileSync(filename, 'utf8');
   const context = vm.createContext({ getSetting: () => global, normalizeArchivedProjectPath: normalize,
+    parseFolderKey: require('../src/main/remote/remote-hosts').parseFolderKey,
     cliSessionState: { getSidebarDescriptors: () => descriptors }, require: createRequire(filename) });
   vm.runInContext(extractFunction(source, 'isProjectSettingsArchived'), context, { filename });
   const start = source.indexOf('getLiveDescriptors: () => {', source.indexOf('sessionTransitions.init({')) + 'getLiveDescriptors: '.length;
   const end = source.indexOf('\n  },', start) + 4;
   return { archived: context.isProjectSettingsArchived, descriptors: vm.runInContext(source.slice(start, end), context, { filename }) };
 }
+
+test('local admission preserves the base parent comparison for a missing Windows worktree',
+  { skip: process.platform !== 'win32' }, t => {
+    const h = storage(t, {});
+    const repo = path.join(h.dir, 'MixedCaseRepo');
+    fs.mkdirSync(repo);
+    const missing = path.join(repo, '.claude', 'worktrees', 'missing');
+    const normalize = require('../src/main/shared/normalize-project-path').normalizeProjectPath;
+    const policy = mainPolicy({ hiddenProjects: [repo] }, [], normalize);
+    assert.equal(fs.existsSync(missing), false);
+    assert.equal(policy.archived(repo), true, 'the existing repository itself stays hidden');
+    assert.equal(policy.archived(missing), false, 'the normalized missing-worktree parent must not be canonicalized again');
+  });
 
 for (const kind of ['descriptors', 'admission']) test(`${kind} policy normalizes each hidden entry once per call`, () => {
   const hiddenProjects = Array.from({ length: 40 }, (_, i) => '/missing/' + i);
