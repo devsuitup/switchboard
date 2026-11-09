@@ -534,12 +534,14 @@ async function reopenActiveSessionAfterReload() {
   let session = indexedSessionById(activeSessionId);
   if (!session) {
     const item = g?.openWorkingSet?.find(entry => entry.sessionId === activeSessionId);
-    if (!item || g?.hiddenProjects?.includes(item.projectPath)) return;
+    if (!item || isProjectHidden(g?.hiddenProjects, item.remoteAlias || null, item.projectPath, g?.hiddenProjectScopes)) return;
     let live;
     try { live = await window.api.getActiveSessions(); } catch { return; }
     if (live.some(entry => entry.sessionId === item.sessionId)) {
-      session = { sessionId: item.sessionId, projectPath: item.projectPath, summary: 'New session' };
-      pendingSessions.set(item.sessionId, { session, projectPath: item.projectPath, folder: encodeProjectPath(item.projectPath) });
+      session = { sessionId: item.sessionId, projectPath: item.projectPath, summary: 'New session',
+        ...(item.remoteAlias ? { remoteAlias: item.remoteAlias } : {}) };
+      const folder = (item.remoteAlias ? item.remoteAlias + '::' : '') + encodeProjectPath(item.projectPath);
+      pendingSessions.set(item.sessionId, { session, projectPath: item.projectPath, folder });
       sessionMap.set(item.sessionId, session);
       await openSession(session, undefined, { automatic: true, reattachOnly: true, continuationResolved: true });
       return;
@@ -2178,8 +2180,7 @@ async function loadProjects({ resort = false } = {}) {
         if (openSessions.has(sid)) schedulePersistWorkingSet();
       } else {
         const alias = pending.session.remoteAlias || null;
-        if (hiddenProjects.includes(pending.projectPath)
-          || (alias && hiddenProjects.includes(alias + '::' + pending.projectPath))) continue;
+        if (isProjectHidden(hiddenProjects, alias, pending.projectPath, globalSettings?.hiddenProjectScopes)) continue;
         hasReinjected = true;
         // Still pending — re-inject into cached data
         for (const projList of [cachedProjects, cachedAllProjects]) {
@@ -2191,7 +2192,7 @@ async function loadProjects({ resort = false } = {}) {
             // Project not in list (no other sessions) — create a synthetic entry
             proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
             if (pendingAlias) proj.remoteAlias = pendingAlias;
-            if (isHiddenRepositoryWorktree(pending.projectPath, pendingAlias, hiddenProjects)) proj.hiddenRepository = true;
+            if (isHiddenRepositoryWorktree(pending.projectPath, pendingAlias, hiddenProjects, globalSettings?.hiddenProjectScopes)) proj.hiddenRepository = true;
             projList.unshift(proj);
           }
           if (!proj.sessions.some(s => s.sessionId === sid)) {
@@ -2227,7 +2228,7 @@ async function loadProjects({ resort = false } = {}) {
     }
     if (typeof observeSessionProjection === 'function') observeSessionProjection({ generation: job.generation, cause: 'projects', provenance: response.projection });
     refreshSidebar({ resort: job.resort, skipUnchanged: true,
-      hiddenSettings: [globalSettings?.hiddenProjects, globalSettings?.hiddenProjectKinds] });
+      hiddenSettings: [globalSettings?.hiddenProjects, globalSettings?.hiddenProjectKinds, globalSettings?.hiddenProjectScopes] });
     renderDefaultStatus();
     return state.outcome;
   };

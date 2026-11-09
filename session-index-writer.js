@@ -212,6 +212,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       for (let attempt = 0; ; attempt++) {
         const archived = backend.getSetting('archivedProjects') || {};
         const snapshot = { archivedProjects: archived, hiddenProjects: (backend.getSetting('global') || {}).hiddenProjects || [],
+          hiddenProjectScopes: (backend.getSetting('global') || {}).hiddenProjectScopes || {},
           scheduleReenableOffers: backend.getSetting('scheduleReenableOffers') || {} };
         const updates = new Map();
         const copies = projects.map(project => {

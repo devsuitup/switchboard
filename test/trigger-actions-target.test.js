@@ -26,6 +26,13 @@ function rig(t) {
   return { dir, project, projectsDir, folder, transcript, snapshot, deps };
 }
 
+test('trigger resolution permits local history under a remote scoped bare mark', async t => {
+  const r = rig(t);
+  r.snapshot.hiddenProjects = [r.project];
+  r.snapshot.hiddenProjectScopes = { [r.project]: { alias: 'box' } };
+  assert.equal((await resolveLocalTarget(id, r.deps)).ok, true, 'remote scope must not refuse a local trigger target');
+});
+
 test('strict resolver admits cold-cache readable local top-level transcript and canonical ID', async t => {
   const r = rig(t);
   const target = await resolveLocalTarget(id.toUpperCase(), r.deps);

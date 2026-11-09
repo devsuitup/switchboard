@@ -21,7 +21,7 @@ function cleanup(dir) {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-function makeFakeDb({ cachedRows = [], folderMeta = new Map(), hiddenProjects = [] } = {}) {
+function makeFakeDb({ cachedRows = [], folderMeta = new Map(), hiddenProjects = [], hiddenProjectScopes = {} } = {}) {
   return {
     deleteCachedFolder: () => {},
     getCachedByFolder: () => [],
@@ -36,7 +36,7 @@ function makeFakeDb({ cachedRows = [], folderMeta = new Map(), hiddenProjects = 
     getAllFolderMeta: () => folderMeta,
     getAllMeta: () => new Map(),
     getAllCached: () => cachedRows,
-    getSetting: (key) => (key === 'global' ? { hiddenProjects } : {}),
+    getSetting: (key) => (key === 'global' ? { hiddenProjects, hiddenProjectScopes } : {}),
     getMeta: () => null,
     setName: () => {},
   };
@@ -87,6 +87,22 @@ test('hiding <alias>::<path> hides only that host group, not local or a differen
   } finally {
     cleanup(projectsDir);
   }
+});
+
+test('scoped local delete keeps same-path remote cache rows and empty groups', () => {
+  const projectsDir = mkTmp();
+  try {
+    const projectPath = '/srv/scoped';
+    const folder = encodeProjectPath(projectPath);
+    fs.mkdirSync(path.join(projectsDir, folder));
+    const db = makeFakeDb({ hiddenProjects: [projectPath], hiddenProjectScopes: { [projectPath]: { alias: null } },
+      cachedRows: [row('local', folder, projectPath), row('remote', joinFolderKey('box', folder), projectPath)],
+      folderMeta: new Map([[joinFolderKey('empty', folder), { projectPath }]]) });
+    initCache(projectsDir, db);
+    sessionCache.setRemoteRoots(new Map([['empty', projectsDir]]));
+    assert.deepEqual(sessionCache.buildProjectsFromCache(true).filter(p => p.projectPath === projectPath).map(p => p.remoteAlias).sort(),
+      ['box', 'empty'], 'local scope must preserve remote rows and empty folder metadata');
+  } finally { cleanup(projectsDir); }
 });
 
 test('hiding a bare path (legacy entry) still hides it on every host', () => {

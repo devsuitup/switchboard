@@ -4,6 +4,7 @@ const nativeFs = require('fs');
 const path = require('path');
 const { extractVerifiedCwdFromJsonl, resolveWorktreePath } = require('../../../derive-project-path');
 const { normalizeProjectPath } = require('../shared/normalize-project-path');
+const { isProjectHidden } = require('../../../public/worktree-nesting');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FILENAME_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -129,10 +130,10 @@ async function resolveProject(project, deps) {
     && typeof entry.projectPath === 'string' && normalize(entry.projectPath) === key);
   if (typeof deps.recordedCwd === 'string') {
     const cwdKey = normalize(deps.recordedCwd);
-    if (knownPath(cwdKey) || snapshot.hiddenProjects.some(entry => typeof entry === 'string' && path.isAbsolute(entry) && normalize(entry) === cwdKey)) project = deps.recordedCwd;
+    if (knownPath(cwdKey) || isProjectHidden(snapshot.hiddenProjects, null, cwdKey, snapshot.hiddenProjectScopes, normalize)) project = deps.recordedCwd;
   }
   const key = normalize(project);
-  if (snapshot.hiddenProjects.some(entry => typeof entry === 'string' && path.isAbsolute(entry) && normalize(entry) === key)) return fail('project is archived');
+  if (isProjectHidden(snapshot.hiddenProjects, null, key, snapshot.hiddenProjectScopes, normalize)) return fail('project is archived');
   if (!knownPath(key)) return fail('unknown project');
   try {
     if (!fs.statSync(project).isDirectory()) return fail('project directory does not exist');

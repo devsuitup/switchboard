@@ -8,6 +8,15 @@ The #820 column reconcile adds `runtime TEXT DEFAULT 'claude'` and `sessionFile 
 on writable opens only, without setting `mustReindex` or deleting rows. Existing
 named-column upserts are unchanged. See [cli-harnesses.md](cli-harnesses.md).
 
+For #474 A1, `hideProject(entry, kind, scope?)` persists optional `{ alias }`
+records in `global.hiddenProjectScopes` through the existing writer command.
+Archive retirement compares scopes in both the facade snapshot and writer-side
+stale check. Unhide, re-add and local worktree cleanup clear only their matching
+scope; local cleanup preserves remote rows sharing the same path. Legacy callers
+without a scope keep the prior global-record shape. Matching is shared with the
+renderer through `public/worktree-nesting.js`; see session-cache.md, Project
+Archive and Delete.
+
 ## Ownership and startup
 
 main.js acquires the single-instance lock before starting the writer. It awaits

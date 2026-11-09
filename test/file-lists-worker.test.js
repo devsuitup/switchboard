@@ -81,6 +81,15 @@ function shipped(t, options, observed = false) {
   };
 }
 
+test('file-list workers keep local memory and work files when the bare mark has a remote scope', async t => {
+  const f = fixture(t);
+  const query = shipped(t, f.options);
+  for (const kind of ['memory', 'work-file']) {
+    const result = await query(kind, { hiddenProjects: [f.project], hiddenProjectScopes: { [f.project]: { alias: 'box' } } });
+    assert.ok(result.view.projects.some(p => p.projectPath === f.project), 'remote scope must not remove local file-list sentinel: ' + kind);
+  }
+});
+
 test('worker lists equal the pre-change synchronous fixture including hidden projects, worktree dedupe and cap', async t => {
   const f = fixture(t);
   const old = baseline(f.options);

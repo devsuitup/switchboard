@@ -15,13 +15,27 @@ function worktreeName(projectPath) {
 }
 
 // see .ai/contexts/session-cache.md ("Project Archive and Delete")
-function isHiddenRepositoryWorktree(projectPath, alias, hiddenProjects) {
+function isProjectHidden(hiddenProjects, alias, projectPath, hiddenProjectScopes = {}, normalize = value => value) {
+  const target = normalize(projectPath);
+  for (const entry of hiddenProjects || []) {
+    if (typeof entry !== 'string') continue;
+    const separator = entry.indexOf('::');
+    const entryAlias = separator < 0 ? null : entry.slice(0, separator);
+    const entryPath = separator < 0 ? entry : entry.slice(separator + 2);
+    if (entryAlias !== null && entryAlias !== alias) continue;
+    const scope = Object.prototype.hasOwnProperty.call(hiddenProjectScopes || {}, entry) ? hiddenProjectScopes[entry] : null;
+    if (scope && Object.prototype.hasOwnProperty.call(scope, 'alias') && scope.alias !== alias) continue;
+    if (normalize(entryPath) === target) return true;
+  }
+  return false;
+}
+
+function isHiddenRepositoryWorktree(projectPath, alias, hiddenProjects, hiddenProjectScopes) {
   const parentPath = worktreeParentPath(projectPath);
   if (parentPath === null) return false;
-  const hidden = Array.isArray(hiddenProjects) ? hiddenProjects : [];
-  return hidden.includes(parentPath) || !!(alias && hidden.includes(alias + '::' + parentPath));
+  return isProjectHidden(hiddenProjects, alias, parentPath, hiddenProjectScopes);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { SIDEBAR_WORKTREE_RE, worktreeParentPath, worktreeName, isHiddenRepositoryWorktree };
+  module.exports = { SIDEBAR_WORKTREE_RE, worktreeParentPath, worktreeName, isProjectHidden, isHiddenRepositoryWorktree };
 }
