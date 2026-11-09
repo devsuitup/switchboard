@@ -12,6 +12,8 @@ repeat guard and before starting the bounded drain. Only an owner of a verified
 child-mode browser with its own matching spawner identity sends SIGTERM there.
 Scope/detached browsers and followers receive no quit signal. Source-extraction
 fixtures must supply the manager when evaluating this shutdown function.
+The quit call is caught and logged so a manager exception cannot prevent the
+remaining bounded shutdown or the repeat guard from taking effect.
 
 Operations are queued. Linux starts on explicit Open or ensureStarted only;
 other platforms return an unsupported result without touching storage or
@@ -19,9 +21,12 @@ spawning. Results include status, role, port, binary, mode, survival, notice
 and error. Errors stay recoverable values. Browser-open is best-effort HTTP
 activation, with a PUT new-page fallback; compositor focus is unverified.
 
-Discovery accepts an absolute executable or numeric-descending Chromium cache
-revisions. An explicit cache root is authoritative. Symlink hops, directory
-links and final targets are checked for Snap; no installed-browser fallback,
+Discovery accepts an absolute ELF executable or numeric-descending Chromium cache
+revisions. Executable launcher scripts are refused with a request to configure
+the real Chromium ELF binary, for example `/usr/lib/chromium/chromium`, rather
+than `/usr/bin/chromium`. Only the four-byte ELF magic is checked, not the ELF
+architecture or browser provenance. An explicit cache root is authoritative.
+Symlink hops, directory links and final targets are checked for Snap; no installed-browser fallback,
 download, headless-shell or personal profile is used. A private canonical data
 directory holds profile, output, state and a per-start truncated log. Directory
 modes are 0700, file modes 0600; foreign owners and symlinks are refused.
@@ -47,9 +52,16 @@ pathname race. Neither is a cross-user security boundary.
 
 State schema version 1 records a persistent port, canonical profile/binary,
 PID/startTime/boot identity, spawner identity, mode, unit and start time. A port
-reservation may have no PID. A pending ambiguous launch is retained and blocks
-automatic profile deletion and duplicate starts. Reserve before discovery;
-reuse across Stop/Open. Foreign occupation replaces the port and returns a
+reservation may have no PID. Start time and boot ID, rather than PID existence,
+decide whether a recorded browser still exists. A reused PID or another boot
+resets the state to a port-only reservation without signalling the replacement.
+An owner reconciles a pending ambiguous launch before Start or Stop: in the same
+boot, scan for the exact binary/profile/port and adopt a verified match; no
+match clears the pending state to a port-only reservation. A different boot
+clears it without scanning. Missing boot identity or an adoption verification
+failure retains data. Followers cannot reconcile or write pending state. An
+exited launcher is also scanned before its pending reservation can be cleared.
+Reserve before discovery; reuse across Stop/Open. Foreign occupation replaces the port and returns a
 restart-sessions notice. Bind/spawn races are checked against the actual
 listener, with at most three allocations in the start budget.
 
@@ -67,11 +79,22 @@ stdio; every command argument doubles dollars. Only a definite missing-user-bus
 failure before a browser exists permits one detached fallback. It is marked as
 not surviving restart. FATAL/sandbox errors and ambiguous timeouts never cause
 a detached or no-sandbox retry. Chromium's sandbox remains enabled.
+Dollar handling is NOT verified against real systemd: `--scope` may not perform
+the environment expansion that doubling dollars assumes. The escaping behavior
+is preserved pending a real systemd check, including literal-dollar paths.
 
 Normal Stop re-verifies the endpoint, sends Browser.close, waits five seconds,
 then re-verifies immediately before TERM (three seconds) and KILL (one second).
-Verified descendants are captured before close and signalled by positive PID
-only if still their original identity. Uncertain/reused identities retain data.
+Descendant ancestry is captured before close, but ancestry alone does not
+authorize a signal: a descendant must have the browser executable, an exact
+profile argument, or a Chromium `--type=` argument. Start time, boot ID and
+these executable/argv markers are checked again immediately before each
+positive-PID signal. Unrelated native-messaging hosts and download handlers,
+including descendants that exec into them during close, are left alive.
+When the browser identity still verifies but its listener has already closed,
+Stop skips CDP and waits up to five seconds for exit before the usual verified
+TERM/KILL escalation. A listener disappearing during endpoint verification uses
+the same path. A foreign listener or identity change still refuses signalling.
 Without pidfd, identity-check-to-signal races remain; no process group, name or
 scope-wide kill is used. The twenty-second start readiness budget and bounded
 HTTP responses do not prove Linux sandbox, cgroup or signed-in survival.

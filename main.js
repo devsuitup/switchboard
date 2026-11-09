@@ -4216,7 +4216,7 @@ function drainForUpdate() {
 }
 function shutdownForExit() {
   if (shutdownPromise) return shutdownPromise;
-  managedBrowser.stopForQuit();
+  try { managedBrowser.stopForQuit(); } catch (error) { log.error('[shutdown] managed browser quit failed', error); }
   shutdownPromise = boundedShutdown(() => writer.beginShutdown(async () => {
     appQuitting = true;
     if (TRACE.on) trace('app.quit', null, {});

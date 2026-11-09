@@ -87,16 +87,40 @@ function createManager({ dataDir, platform = process.platform, isPackaged = fals
     while (proc.alive(candidate) && now() < deadline) await sleep(Math.min(50, deadline - now()));
     return !proc.identity(candidate.pid);
   }
+  function reservePort() {
+    state = { version: 1, port: state.port, pid: null, profile }; write();
+  }
+  function recoverPending() {
+    if (!state?.launchPending) return;
+    if (owner.role !== 'owner') throw new Error('Browser launch recovery requires its owner');
+    const boot = proc.self()?.boot, pendingBoot = state.boot || state.spawnedBy?.boot;
+    if (!boot || !pendingBoot) throw new Error('Browser launch boot identity uncertain; data retained');
+    if (boot === pendingBoot) {
+      const pid = proc.findBrowser(state);
+      if (pid) {
+        const candidate = { ...state, ...proc.identity(pid) };
+        if (!proc.verify(candidate)) throw new Error('Pending browser identity changed during recovery; data retained');
+        delete candidate.launchPending;
+        state = candidate; write(); return;
+      }
+    }
+    reservePort();
+  }
   async function stopOwned() {
-    if (state?.launchPending) return snapshot('error', { error: 'Browser launch exit uncertain; data retained' });
+    recoverPending();
     if (!state?.pid) return snapshot('stopped');
-    if (!proc.identity(state.pid)) { state = { version: 1, port: state.port, pid: null, profile }; write(); return snapshot('stopped'); }
-    if (!proc.verify(state) || proc.listener(state) !== 'owned') return snapshot('foreign', { error: 'Browser identity or listener ownership changed; data retained' });
+    if (!proc.alive(state)) { reservePort(); return snapshot('stopped'); }
+    if (!proc.verify(state) || proc.listener(state) === 'foreign') return snapshot('foreign', { error: 'Browser identity or listener ownership changed; data retained' });
     const descendants = proc.descendants(state);
-    const version = await ready(state);
-    if (!version) return snapshot('foreign', { error: 'Browser endpoint could not be verified; data retained' });
-    if (!proc.verify(state) || proc.listener(state) !== 'owned') return snapshot('foreign', { error: 'Browser ownership changed' });
-    try { await closeBrowser(state, version); } catch {}
+    if (proc.listener(state) === 'owned') {
+      const version = await ready(state);
+      if (!proc.alive(state)) { reservePort(); return snapshot('stopped'); }
+      if (!proc.verify(state) || proc.listener(state) === 'foreign') return snapshot('foreign', { error: 'Browser ownership changed' });
+      if (proc.listener(state) === 'owned') {
+        if (!version) return snapshot('foreign', { error: 'Browser endpoint could not be verified; data retained' });
+        try { await closeBrowser(state, version); } catch {}
+      }
+    }
     let gone = await waitGone(state, 5000);
     for (const [kind, delay] of [['SIGTERM', 3000], ['SIGKILL', 1000]]) {
       if (gone) break;
@@ -105,12 +129,11 @@ function createManager({ dataDir, platform = process.platform, isPackaged = fals
     }
     if (!gone) return snapshot('error', { error: 'Browser exit uncertain; data retained' });
     for (const child of descendants) {
-      if (!proc.identity(child.pid)) continue;
-      if (!proc.alive(child)) return snapshot('error', { error: 'Browser descendant identity changed; data retained' });
-      try { if (proc.alive(child)) proc.signal(child.pid, 'SIGTERM'); } catch {}
+      if (!proc.verifyDescendant(child, state)) continue;
+      try { if (proc.verifyDescendant(child, state)) proc.signal(child.pid, 'SIGTERM'); } catch {}
       if (!await waitGone(child, 3000)) {
-        if (!proc.alive(child)) return snapshot('error', { error: 'Browser descendant identity changed; data retained' });
-        try { if (proc.alive(child)) proc.signal(child.pid, 'SIGKILL'); } catch {}
+        if (!proc.verifyDescendant(child, state)) continue;
+        try { if (proc.verifyDescendant(child, state)) proc.signal(child.pid, 'SIGKILL'); } catch {}
         if (!await waitGone(child, 1000)) return snapshot('error', { error: 'Browser descendant exit uncertain; data retained' });
       }
     }
@@ -118,8 +141,8 @@ function createManager({ dataDir, platform = process.platform, isPackaged = fals
   }
   async function start(options = {}, explicit = false) {
     await initialize();
-    if (state?.launchPending) return snapshot('error', { error: 'Previous browser launch exit uncertain; data retained' });
-    if (state?.pid && proc.identity(state.pid)) {
+    recoverPending();
+    if (state?.pid && proc.alive(state)) {
       const version = await ready(state);
       if (!version) return snapshot('foreign', { error: 'Existing browser identity or listener conflict; no duplicate start' });
       if (owner.role === 'owner' && state.mode === 'child' && !sameIdentity(state.spawnedBy, proc.self())) {
@@ -198,8 +221,9 @@ function createManager({ dataDir, platform = process.platform, isPackaged = fals
               notice = 'Browser port changed; restart existing sessions'; break;
             }
           }
-          if (!launch && ((spawnError && !child.pid) || (exited && (mode !== 'scope' ? !proc.identity(child.pid) : proc.findBrowser && !proc.findBrowser(candidate))))) {
-            state = { version: 1, port: state.port, pid: null, profile }; write();
+          if (!launch && (spawnError || exited)) {
+            if (spawnError && !child.pid) reservePort();
+            else recoverPending();
           }
           throw new Error(`Browser did not become ready: ${spawnError?.message || (exited ? `exit ${exited.code}` : '20-second start deadline')}${tail ? `; ${tail}` : ''}`);
         }

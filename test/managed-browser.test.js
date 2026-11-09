@@ -27,6 +27,7 @@ function setup(t, extra = {}) {
     verify: state => proc.alive(state) && processes.get(state.pid)?.profile === state.profile && processes.get(state.pid)?.binary === state.binary,
     listener: state => proc.verify(state) && processes.get(state.pid)?.port === state.port ? 'owned' : processes.get(state.pid)?.conflict ? 'foreign' : 'missing',
     listenerPid: state => [...processes].find(([, p]) => p.port === state.port && p.profile === state.profile)?.[0],
+    findBrowser: state => [...processes].find(([pid]) => proc.verify({ ...state, ...proc.identity(pid) }))?.[0],
     descendants: () => [],
     signal: (n, signal) => { calls.push(['signal', n, signal]); processes.delete(n); },
   };
@@ -212,11 +213,20 @@ test('Linux discovery sorts revisions numerically and honors explicit roots and 
   const f = setup(t);
   const { discoverBrowser } = require('../src/main/browser/discovery');
   const root = path.join(f.dataDir, 'cache');
+  const modes = new Map();
+  const posixFs = { ...fs,
+    writeFileSync: (file, data, options) => { modes.set(file, options?.mode ?? 0o666); fs.writeFileSync(file, data, options); },
+    accessSync: (file, mode) => {
+      assert.equal(mode, fs.constants.X_OK);
+      if (!(modes.get(file) & 0o111)) throw Object.assign(new Error('POSIX X_OK: EACCES'), { code: 'EACCES' });
+    },
+  };
   for (const rev of [999, 1234]) {
     const binary = path.join(root, `chromium-${rev}`, 'chrome-linux64', 'chrome');
-    fs.mkdirSync(path.dirname(binary), { recursive: true }); fs.writeFileSync(binary, 'fake');
+    fs.mkdirSync(path.dirname(binary), { recursive: true }); posixFs.writeFileSync(binary, '\x7fELF', { mode: 0o755 });
   }
-  const result = discoverBrowser({ fs, home: f.dataDir, env: { PLAYWRIGHT_BROWSERS_PATH: root } });
+  let result;
+  assert.doesNotThrow(() => { result = discoverBrowser({ fs: posixFs, home: f.dataDir, env: { PLAYWRIGHT_BROWSERS_PATH: root } }); }, 'fake executables must pass POSIX X_OK on Windows too');
   assert.ok(result.binary.includes('1234'));
   assert.throws(() => discoverBrowser({ fs, binaryPath: 'relative', home: f.dataDir, env: {} }), /absolute/);
   assert.throws(() => discoverBrowser({ fs, binaryPath: path.join(root, 'missing'), home: f.dataDir, env: { PLAYWRIGHT_BROWSERS_PATH: root } }), /executable/);
@@ -270,7 +280,7 @@ test('a verified missing user bus falls back once; Chromium FATAL never falls ba
   }
 });
 
-test('ambiguous scope timeout retains pending launch and cleanup cannot delete its profile', async t => {
+test('ambiguous scope timeout retains pending launch until an owner rescan proves it absent', async t => {
   const f = setup(t, { isPackaged: true, spawn: () => {
     const child = new EventEmitter(); child.pid = 200; child.unref = () => {}; return child;
   } });
@@ -278,7 +288,8 @@ test('ambiguous scope timeout retains pending launch and cleanup cannot delete i
   assert.equal(result.status, 'error');
   const stored = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'managed-browser/state.json')));
   assert.equal(stored.launchPending, true);
-  assert.equal((await f.manager.stop()).status, 'error');
+  assert.equal((await f.manager.stop()).status, 'stopped');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'managed-browser/state.json'))).launchPending, undefined);
   assert.equal((await f.manager.open()).status, 'error');
 });
 
@@ -407,4 +418,141 @@ test('Linux procfs parser agrees with independent uptime oracle', { skip: proces
   const uptime = Number(fs.readFileSync('/proc/uptime', 'utf8').split(' ')[0]);
   const age = uptime - Number(identity.startTime) / hz;
   assert.ok(Math.abs(age - process.uptime()) < 5);
+});
+
+for (const changed of ['reused PID', 'different boot']) {
+  for (const operation of ['start', 'stop', 'cleanup']) {
+    test(`stale ${changed} resets the reservation during ${operation} without touching its replacement`, async t => {
+      const f = setup(t); const first = await f.manager.open();
+      await f.manager.dispose();
+      const replacement = f.processes.get(first.pid);
+      if (changed === 'reused PID') replacement.identity.startTime = '99999';
+      else { f.self.boot = 'new-boot'; replacement.identity.boot = 'new-boot'; }
+      const manager = api().createManager(f.options); t.after(() => manager.dispose());
+      const before = f.calls.length;
+      if (operation === 'cleanup') assert.equal(await api().cleanupDataDir(f.dataDir, f.options), true);
+      else assert.equal((await (operation === 'start' ? manager.open() : manager.stop())).status, operation === 'start' ? 'running' : 'stopped');
+      const stored = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'managed-browser/state.json')));
+      assert.equal(stored.port, first.port);
+      assert.equal(operation === 'start' ? stored.pid !== first.pid : stored.pid === null, true);
+      assert.equal(f.processes.get(first.pid), replacement);
+      assert.equal(f.calls.slice(before).some(c => ['signal', 'close'].includes(c[0]) && c[1] === first.pid), false);
+    });
+  }
+}
+
+for (const recovery of ['adopt', 'same boot absent', 'different boot']) {
+  test(`pending launch recovery: ${recovery}`, async t => {
+    const f = setup(t); const spawn = f.options.spawn; let first = true;
+    const manager = api().createManager({ ...f.options, spawn: (...args) => {
+      const child = spawn(...args);
+      if (first) { first = false; f.processes.get(child.pid).binary = '/wrapper/sh'; }
+      return child;
+    } });
+    t.after(() => manager.dispose());
+    assert.equal((await manager.open()).status, 'error');
+    const file = path.join(f.dataDir, 'managed-browser/state.json');
+    const pending = JSON.parse(fs.readFileSync(file)); assert.equal(pending.launchPending, true);
+    if (recovery === 'adopt') {
+      f.processes.set(220, { identity: { pid: 220, startTime: '2200', boot: 'boot' }, binary: pending.binary, profile: pending.profile, port: pending.port });
+    } else if (recovery === 'different boot') {
+      f.self.boot = 'new-boot';
+      f.proc.findBrowser = () => assert.fail('a pending launch from another boot must not be scanned or adopted');
+    }
+    if (recovery === 'adopt') {
+      const running = await manager.ensureStarted();
+      assert.equal(running.status, 'running'); assert.equal(running.pid, 220);
+      assert.equal(f.calls.filter(c => c[0] === 'spawn').length, 1);
+    } else {
+      assert.equal((await manager.stop()).status, 'stopped');
+      assert.equal(JSON.parse(fs.readFileSync(file)).pid, null);
+      assert.equal((await manager.open()).status, 'running');
+    }
+    assert.equal(JSON.parse(fs.readFileSync(file)).launchPending, undefined);
+  });
+}
+
+test('discovery refuses executable shell wrappers and names the real ELF binary to configure', t => {
+  const f = setup(t); const { discoverBrowser } = require('../src/main/browser/discovery');
+  const binary = path.join(f.dataDir, 'chromium');
+  fs.writeFileSync(binary, '#!/bin/sh\nexec /usr/lib/chromium/chromium "$@"\n', { mode: 0o755 });
+  assert.throws(() => discoverBrowser({ binaryPath: binary }), /ELF.*real.*binary.*\/usr\/lib\/chromium\/chromium/);
+});
+
+test('an exited launcher cannot clear a pending browser that the owner scan can adopt', async t => {
+  const f = setup(t); const spawn = f.options.spawn;
+  const manager = api().createManager({ ...f.options, spawn: (...args) => {
+    const child = spawn(...args); const browser = f.processes.get(child.pid);
+    f.processes.delete(child.pid);
+    f.processes.set(220, { ...browser, identity: { pid: 220, startTime: '2200', boot: 'boot' } });
+    queueMicrotask(() => child.emit('exit', 0)); return child;
+  } });
+  t.after(() => manager.dispose());
+  await manager.open();
+  const stored = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'managed-browser/state.json')));
+  assert.equal(stored.pid, 220, 'exited launcher must not erase the live browser reservation');
+  assert.equal(stored.launchPending, undefined);
+  assert.equal((await manager.ensureStarted()).status, 'running');
+  assert.equal(f.calls.filter(c => c[0] === 'spawn').length, 1);
+});
+
+for (const outcome of ['exits', 'needs TERM', 'PID reused']) {
+  test(`stop with verified identity and missing listener ${outcome}`, async t => {
+    const f = setup(t); const running = await f.manager.open();
+    let waited = 0;
+    f.processes.get(running.pid).port = null;
+    const manager = api().createManager({ ...f.options, sleep: async ms => {
+      waited += ms;
+      f.advance(ms);
+      if (outcome === 'exits') f.processes.delete(running.pid);
+      if (outcome === 'PID reused') f.processes.get(running.pid).identity.startTime = 'reused';
+    } });
+    await f.manager.dispose(); t.after(() => manager.dispose());
+    const stopped = await manager.stop();
+    assert.ok(waited > 0, 'missing listener must allow a bounded wait for the verified browser to exit');
+    assert.equal(stopped.status, outcome === 'PID reused' ? 'foreign' : 'stopped');
+    assert.equal(f.calls.some(c => c[0] === 'close'), false);
+    assert.deepEqual(f.calls.filter(c => c[0] === 'signal'), outcome === 'needs TERM' ? [['signal', running.pid, 'SIGTERM']] : []);
+  });
+}
+
+test('Stop leaves unrelated descendants alive and rechecks browser markers before signalling', async t => {
+  const f = setup(t); const running = await f.manager.open();
+  const { createProc } = require('../src/main/browser/linux-process');
+  const rows = new Map([
+    [running.pid, { parentPid: 80, exe: running.binary, argv: [running.binary, `--user-data-dir=${path.join(f.dataDir, 'managed-browser/profile')}`, `--remote-debugging-port=${running.port}`] }],
+    [201, { parentPid: running.pid, exe: '/native/host', argv: ['/native/host'] }],
+    [202, { parentPid: running.pid, exe: running.binary, argv: [running.binary] }],
+    [203, { parentPid: 201, exe: '/helper', argv: ['/helper', '--type=renderer'] }],
+    [204, { parentPid: running.pid, exe: '/helper', argv: ['/helper', `--user-data-dir=${path.join(f.dataDir, 'managed-browser/profile')}`] }],
+    [205, { parentPid: running.pid, exe: '/download', argv: ['/download', `--user-data-dir=${path.join(f.dataDir, 'managed-browser/profile')}-other`, '--typewriter=yes'] }],
+    [206, { parentPid: running.pid, exe: running.binary, argv: [running.binary] }],
+  ]);
+  const procFs = {
+    readdirSync: () => [...rows.keys()].map(String),
+    realpathSync: file => rows.get(Number(file.split('/')[2])).exe,
+    readFileSync: file => {
+      if (file.endsWith('boot_id')) return 'boot';
+      const pid = Number(file.split('/')[2]), row = rows.get(pid);
+      if (!row) throw new Error('ESRCH');
+      if (file.endsWith('/stat')) return `${pid} (name) S ${row.parentPid} ${Array(17).fill('0').join(' ')} ${pid * 10}`;
+      if (file.endsWith('/cmdline')) return row.argv.join('\0') + '\0';
+      throw new Error(file);
+    },
+  };
+  const proc = createProc({ fs: procFs, kill: (pid, kind) => { f.calls.push(['signal', pid, kind]); rows.delete(pid); } });
+  f.proc.descendants = state => proc.descendants(state);
+  f.proc.alive = state => state.pid === running.pid ? f.processes.has(state.pid) : proc.alive(state);
+  f.proc.identity = pid => pid === running.pid ? f.processes.get(pid)?.identity : proc.identity(pid);
+  f.proc.verifyDescendant = (child, state) => proc.verifyDescendant(child, state);
+  f.proc.signal = proc.signal;
+  f.options.closeBrowser = async state => {
+    f.processes.delete(state.pid); rows.delete(state.pid);
+    rows.get(206).exe = '/download'; rows.get(206).argv = ['/download'];
+  };
+  await f.manager.dispose();
+  const manager = api().createManager(f.options); t.after(() => manager.dispose());
+  assert.equal((await manager.stop()).status, 'stopped');
+  assert.deepEqual(f.calls.filter(c => c[0] === 'signal').map(c => c[1]), [202, 203, 204]);
+  assert.deepEqual([...rows.keys()], [201, 205, 206]);
 });

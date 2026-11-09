@@ -28,6 +28,10 @@ function executable(file, fs) {
     if (snap(real) || /headless[_-]shell/.test(real)) throw new Error('Snap and headless-shell browsers are unsupported');
     if (!fs.statSync(real).isFile()) throw new Error('Browser is not an executable file');
     fs.accessSync(real, fs.constants?.X_OK ?? 1);
+    const fd = fs.openSync(real, 'r');
+    const magic = Buffer.alloc(4);
+    try { fs.readSync(fd, magic, 0, magic.length, 0); } finally { fs.closeSync(fd); }
+    if (!magic.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) throw new Error(`Browser ${real} is not ELF; configure the real Chromium binary (for example /usr/lib/chromium/chromium), not its launcher script`);
     return real;
   }
   throw new Error('Browser symlink chain is too long');

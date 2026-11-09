@@ -70,6 +70,19 @@ function createProc({ fs = require('node:fs'), pid = process.pid, kill = process
     } catch {}
     return null;
   }
+  function verifyDescendant(child, state) {
+    if (!alive(child) || child.boot !== state.boot) return false;
+    try {
+      if (fs.realpathSync(`/proc/${child.pid}/exe`) === state.binary) return true;
+      const cmdline = read(`/proc/${child.pid}/cmdline`);
+      if (cmdline.length > 65536) return false;
+      const args = cmdline.split('\0').filter(Boolean);
+      if (args.length > 256) return false;
+      if (args.length > 1) return args.includes(`--user-data-dir=${state.profile}`) || args.some(arg => /^--type=\S+$/.test(arg));
+      return /(?:^| )--type=\S+(?: |$)/.test(cmdline) ||
+        (` ${cmdline} `).includes(` --user-data-dir=${state.profile} `);
+    } catch { return false; }
+  }
   function descendants(state) {
     const found = [], parents = new Set([state.pid]);
     let entries;
@@ -78,13 +91,13 @@ function createProc({ fs = require('node:fs'), pid = process.pid, kill = process
       let added = false;
       for (const entry of entries) {
         if (parents.has(entry.pid) || !parents.has(entry.parentPid) || entry.boot !== state.boot) continue;
-        parents.add(entry.pid); found.push(entry); added = true;
+        parents.add(entry.pid); if (verifyDescendant(entry, state)) found.push(entry); added = true;
       }
       if (!added) break;
     }
     return found;
   }
-  return { self: () => identity(pid), identity, alive, verify, listener, findBrowser, listenerPid: findBrowser, descendants, signal: kill };
+  return { self: () => identity(pid), identity, alive, verify, listener, findBrowser, listenerPid: findBrowser, descendants, verifyDescendant, signal: kill };
 }
 
 module.exports = { parseStat, matchesArgv, createProc };

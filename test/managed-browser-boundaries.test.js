@@ -97,7 +97,7 @@ test('Snap intermediary symlinks cannot be hidden by a non-Snap real target', ()
   const { discoverBrowser } = require('../src/main/browser/discovery');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'browser-discovery-'));
   try {
-    const binary = path.join(root, 'chrome'); fs.writeFileSync(binary, 'fake');
+    const binary = path.join(root, 'chrome'); fs.writeFileSync(binary, '\x7fELF', { mode: 0o755 });
     const snapPath = path.join(root, 'snap', 'launcher');
     const fake = { ...fs, lstatSync: file => file === binary ? { isSymbolicLink: () => true } : fs.lstatSync(file),
       readlinkSync: file => file === binary ? snapPath : fs.readlinkSync(file), realpathSync: () => binary,
