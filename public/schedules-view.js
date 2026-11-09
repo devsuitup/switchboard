@@ -81,6 +81,19 @@ function scheduleTime(ms, now) {
 
 function scheduleOutcome(run) {
   if (run.running) return 'Running';
+  const result = run.result;
+  if (result) {
+    if (result.unreadable) return 'Unknown: result record unreadable';
+    if (result.outcome === 'refused') return `Refused: ${result.error}`;
+    if (result.outcome === 'spawn-error') return `Failed to start: ${result.error}`;
+    if (result.outcome === 'signal') return `Stopped: ${result.signal}`;
+    if (result.outcome === 'exited' && Number.isInteger(result.exitCode)) {
+      if (result.exitCode === 0) return 'Exit 0';
+      const hint = scheduleRunFailureHint(result.failure);
+      return `Failed: exit ${result.exitCode} — ${hint}`;
+    }
+    return 'Unknown: result record unreadable';
+  }
   const hint = run.replied === true ? 'replied; exit code unknown'
     : run.replied === null ? 'Unknown'
       : run.messageCount === 1 ? '(refused or not started, run by another instance, run before results were kept, or Switchboard closed during the run)'

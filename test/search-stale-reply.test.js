@@ -6,7 +6,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { setupSidebarDom } = require('./dom-setup');
-const { loadAppFunctions, readAppSource } = require('./app-source');
+const { loadAppFunctions, readAppSource, extractFunction } = require('./app-source');
 
 function deferred() {
   let resolve, reject;
@@ -65,6 +65,8 @@ function setup(t, activeTab = 'sessions') {
   window.api.getSetting = async () => false;
   window.api.setSetting = async () => {};
   const schedulesFilename = path.join(__dirname, '..', 'public', 'schedules-view.js');
+  const hintsFilename = path.join(__dirname, '..', 'public', 'memory-workfiles-view.js');
+  vm.runInContext(extractFunction(fs.readFileSync(hintsFilename, 'utf8'), 'scheduleRunFailureHint'), ctx.context, { filename: hintsFilename });
   vm.runInContext(fs.readFileSync(schedulesFilename, 'utf8'), ctx.context, { filename: schedulesFilename });
   const src = readAppSource();
   function section(start, end) {

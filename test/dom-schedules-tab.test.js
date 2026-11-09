@@ -49,6 +49,46 @@ function setup(t, run = () => ({ ok: true })) {
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+for (const [result, expected] of [
+  [{ outcome: 'exited', exitCode: 0, failure: null }, /^Exit 0$/],
+  [{ outcome: 'exited', exitCode: 1, failure: 'claude-path' }, /Failed: exit 1.*claude not found on the shell PATH.*Check/i],
+  [{ outcome: 'exited', exitCode: 2, failure: 'sandbox' }, /Failed: exit 2.*Check Linux bubblewrap/i],
+  [{ outcome: 'signal', exitCode: null, signal: 'SIGTERM' }, /^Stopped: SIGTERM$/],
+  [{ outcome: 'refused', error: '<archived>' }, /^Refused: <archived>$/],
+  [{ outcome: 'spawn-error', error: 'spawn ENOENT' }, /^Failed to start: spawn ENOENT$/],
+  [{ unreadable: true }, /^Unknown: result record unreadable$/],
+]) {
+  test(`recorded schedule outcome is shown faithfully: ${JSON.stringify(result)}`, t => {
+    const h = setup(t);
+    const run = { sessionId: 'outcome', created: '2026-11-08T12:00Z', replied: true, messageCount: 2, running: false, result };
+    assert.match(h.w.scheduleOutcome(run), expected);
+    h.schedule.runs = [run];
+    h.w.renderSchedules(h.data);
+    assert.equal(h.w.document.querySelector('.schedule-history-run > *'), null, 'outcome text must not create markup');
+    assert.match(h.w.document.querySelector('.schedule-history-run').textContent.split(' — ').slice(1).join(' — '), expected);
+    assert.equal(h.w.scheduleOutcome({ ...run, running: true }), 'Running');
+  });
+}
+
+test('failure notices and history use the same renderer recovery hint', t => {
+  const h = setup(t);
+  assert.equal(typeof h.w.scheduleRunFailureHint, 'function', 'shared failure hint must exist');
+  const original = h.w.scheduleRunFailureHint;
+  const seen = [];
+  h.w.scheduleRunFailureHint = failure => { seen.push(failure); return original(failure); };
+  for (const [failure, expected] of [
+    ['claude-path', /claude not found on the shell PATH/],
+    ['sandbox', /Check Linux bubblewrap/], ['exit', /See the log/],
+  ]) {
+    h.w.showScheduleRunExit({ name: 'Job', sessionId: failure, manual: true, code: 2, failure });
+    const hint = original(failure);
+    assert.match(hint, expected);
+    assert.ok(h.w.document.querySelector(`[data-notice-id="ScheduleRun:${failure}"]`).textContent.includes(hint));
+    assert.ok(h.w.scheduleOutcome({ result: { outcome: 'exited', exitCode: 2, failure } }).includes(hint));
+  }
+  assert.deepEqual(seen, ['claude-path', 'claude-path', 'sandbox', 'sandbox', 'exit', 'exit']);
+});
+
 test('visible successful launch retains its acknowledgement after the action reload', async t => {
   const h = setup(t);
   h.w.setSchedulesVisible(true);

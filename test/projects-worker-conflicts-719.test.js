@@ -5,6 +5,7 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { extractFunction } = require('./app-source');
 const { createProjectsWorkerClient } = require('../projects-worker-client');
 const loadGetProjectsHandler = require('./get-projects-handler.cjs');
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -142,6 +143,8 @@ for (const away of [false, true]) test(`T5.5/T5.6 main conflict envelope survive
   schedulesContent.id = 'schedules-content';
   w.document.body.append(schedulesContent);
   const schedulesFilename = path.join(__dirname, '../public/schedules-view.js');
+  const hintsFilename = path.join(__dirname, '../public/memory-workfiles-view.js');
+  vm.runInContext(extractFunction(fs.readFileSync(hintsFilename, 'utf8'), 'scheduleRunFailureHint'), h.context, { filename: hintsFilename });
   vm.runInContext(fs.readFileSync(schedulesFilename, 'utf8'), h.context, { filename: schedulesFilename });
   w.cachedProjects = [{ projectPath: 'accepted', sessions: [] }]; w.cachedAllProjects = w.cachedProjects;
   w.loadingStatus = w.document.createElement('div');
