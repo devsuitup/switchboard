@@ -51,16 +51,27 @@ last backstop, not the locking protocol. Socket close has a similar unavoidable
 pathname race. Neither is a cross-user security boundary.
 
 State schema version 1 records a persistent port, canonical profile/binary,
-PID/startTime/boot identity, spawner identity, mode, unit and start time. A port
+PID/startTime/boot identity, spawner identity, mode, unit and start time. Pending
+launches also record the launcher's PID/startTime/boot immediately after spawn,
+before readiness polling. A port
 reservation may have no PID. Start time and boot ID, rather than PID existence,
 decide whether a recorded browser still exists. A reused PID or another boot
 resets the state to a port-only reservation without signalling the replacement.
 An owner reconciles a pending ambiguous launch before Start or Stop: in the same
-boot, scan for the exact binary/profile/port and adopt a verified match; no
-match clears the pending state to a port-only reservation. A different boot
-clears it without scanning. Missing boot identity or an adoption verification
-failure retains data. Followers cannot reconcile or write pending state. An
-exited launcher is also scanned before its pending reservation can be cleared.
+boot, a still-live launcher or an unavailable launcher identity blocks recovery
+with an error, retaining the pending state and profile. Once the recorded
+launcher identity is gone (including PID reuse), scan for the exact
+binary/profile/port and adopt a verified match; no match clears the pending
+state to a port-only reservation. A different boot clears it without scanning.
+Missing boot identity or an adoption verification failure retains data.
+Followers cannot reconcile or write pending state. Stop and cleanup therefore
+cannot authorize profile deletion while a slow launcher could still exec the
+browser, and another Open cannot spawn a duplicate. Legacy pending states
+without a recorded launcher remain uncertain within the same boot.
+An unverified failed/timed-out launch receives a best-effort positive-PID TERM
+only when the recorded launcher identity still matches, rechecked immediately
+before signalling. Its pending state remains available for owner recovery,
+including when the launcher ignores TERM; a reused launcher PID is not signalled.
 Reserve before discovery; reuse across Stop/Open. Foreign occupation replaces the port and returns a
 restart-sessions notice. Bind/spawn races are checked against the actual
 listener, with at most three allocations in the start budget.
@@ -87,7 +98,12 @@ Normal Stop re-verifies the endpoint, sends Browser.close, waits five seconds,
 then re-verifies immediately before TERM (three seconds) and KILL (one second).
 Descendant ancestry is captured before close, but ancestry alone does not
 authorize a signal: a descendant must have the browser executable, an exact
-profile argument, or a Chromium `--type=` argument. Start time, boot ID and
+profile argument, or a Chromium `--type=` argument on a crashpad handler
+(`chrome_crashpad_handler` or `crashpad_handler`) alongside the browser binary.
+An arbitrary executable's `--type=` is insufficient. Only verified descendants
+become parents for further traversal: the walk stops at a native-messaging host
+even if its children use the browser executable or Electron type markers.
+Start time, boot ID and
 these executable/argv markers are checked again immediately before each
 positive-PID signal. Unrelated native-messaging hosts and download handlers,
 including descendants that exec into them during close, are left alive.

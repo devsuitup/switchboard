@@ -20,6 +20,7 @@ function validState(state, profile) {
   const positive = value => Number.isSafeInteger(value) && value > 0;
   const identity = value => value && positive(value.pid) && typeof value.startTime === 'string' && /^\d+$/.test(value.startTime) && typeof value.boot === 'string' && value.boot.length > 0;
   if (state.version !== 1 || !positive(state.port) || state.port > 65535 || state.profile !== profile ||
+      (state.launcher != null && !identity(state.launcher)) ||
       (state.pid !== null && (!identity(state) || !identity(state.spawnedBy) || !path.isAbsolute(state.binary) ||
        !['child', 'scope', 'detached'].includes(state.mode) || typeof state.startedAt !== 'number' ||
        (state.mode === 'scope' && !/^switchboard-browser-[a-f0-9]+-\d+-[a-f0-9]+$/.test(state.unit))))) throw new Error('Invalid managed-browser state; retaining data for inspection');
@@ -93,9 +94,10 @@ function createManager({ dataDir, platform = process.platform, isPackaged = fals
   function recoverPending() {
     if (!state?.launchPending) return;
     if (owner.role !== 'owner') throw new Error('Browser launch recovery requires its owner');
-    const boot = proc.self()?.boot, pendingBoot = state.boot || state.spawnedBy?.boot;
+    const boot = proc.self()?.boot, pendingBoot = state.launcher?.boot || state.boot || state.spawnedBy?.boot;
     if (!boot || !pendingBoot) throw new Error('Browser launch boot identity uncertain; data retained');
     if (boot === pendingBoot) {
+      if (!state.launcher || proc.alive(state.launcher)) throw new Error('Browser launcher is alive or its identity is uncertain; data retained');
       const pid = proc.findBrowser(state);
       if (pid) {
         const candidate = { ...state, ...proc.identity(pid) };
@@ -178,7 +180,7 @@ function createManager({ dataDir, platform = process.platform, isPackaged = fals
           if (quitting) throw new Error('Browser start cancelled by quit');
           const fd = storage.log(); let child, exited, spawnError;
           try {
-            state = { ...state, launchPending: true, binary, mode, unit: mode === 'scope' ? unit : null,
+            state = { ...state, launchPending: true, launcher: null, binary, mode, unit: mode === 'scope' ? unit : null,
               spawnedBy: { ...proc.self() }, startedAt: now() }; write();
             const argv = mode === 'scope' ? ['--user', '--scope', '--quiet', '--collect', `--unit=${unit}`, '--', ...[binary, ...args].map(arg => arg.replace(/\$/g, () => '$$'))] : args;
             try {
@@ -188,6 +190,9 @@ function createManager({ dataDir, platform = process.platform, isPackaged = fals
             }
             child.once('exit', (code, sig) => { exited = { code, sig }; });
             child.once('error', error => { spawnError = error; });
+            const launcher = proc.identity(child.pid);
+            state.launcher = launcher ? { pid: launcher.pid, startTime: launcher.startTime, boot: launcher.boot } : null;
+            write();
             if (mode !== 'child') child.unref();
           } finally { storage.close(fd); }
           const candidate = { version: 1, port: state.port, profile, binary, mode, unit: mode === 'scope' ? unit : null,
@@ -230,6 +235,9 @@ function createManager({ dataDir, platform = process.platform, isPackaged = fals
       }
       throw new Error('Browser port collision retry budget exhausted');
     } catch (error) {
+      if (!launch && state?.launchPending && state.launcher && proc.alive(state.launcher)) {
+        try { if (proc.alive(state.launcher)) proc.signal(state.launcher.pid, 'SIGTERM'); } catch {}
+      }
       if (launch && proc.verify(launch)) {
         if (signal(launch, 'SIGTERM') && await waitGone(launch, 3000)) {
           state = { version: 1, port: state.port, pid: null, profile };

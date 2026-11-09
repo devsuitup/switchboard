@@ -282,12 +282,15 @@ test('a verified missing user bus falls back once; Chromium FATAL never falls ba
 
 test('ambiguous scope timeout retains pending launch until an owner rescan proves it absent', async t => {
   const f = setup(t, { isPackaged: true, spawn: () => {
+    f.processes.set(200, { identity: { pid: 200, startTime: '2000', boot: 'boot' } });
     const child = new EventEmitter(); child.pid = 200; child.unref = () => {}; return child;
   } });
+  f.proc.signal = (pid, kind) => f.calls.push(['signal', pid, kind]);
   const result = await f.manager.open();
   assert.equal(result.status, 'error');
   const stored = JSON.parse(fs.readFileSync(path.join(f.dataDir, 'managed-browser/state.json')));
   assert.equal(stored.launchPending, true);
+  f.processes.delete(200);
   assert.equal((await f.manager.stop()).status, 'stopped');
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.dataDir, 'managed-browser/state.json'))).launchPending, undefined);
   assert.equal((await f.manager.open()).status, 'error');
@@ -453,6 +456,7 @@ for (const recovery of ['adopt', 'same boot absent', 'different boot']) {
     assert.equal((await manager.open()).status, 'error');
     const file = path.join(f.dataDir, 'managed-browser/state.json');
     const pending = JSON.parse(fs.readFileSync(file)); assert.equal(pending.launchPending, true);
+    f.processes.delete(101);
     if (recovery === 'adopt') {
       f.processes.set(220, { identity: { pid: 220, startTime: '2200', boot: 'boot' }, binary: pending.binary, profile: pending.profile, port: pending.port });
     } else if (recovery === 'different boot') {
@@ -482,10 +486,13 @@ test('discovery refuses executable shell wrappers and names the real ELF binary 
 test('an exited launcher cannot clear a pending browser that the owner scan can adopt', async t => {
   const f = setup(t); const spawn = f.options.spawn;
   const manager = api().createManager({ ...f.options, spawn: (...args) => {
-    const child = spawn(...args); const browser = f.processes.get(child.pid);
-    f.processes.delete(child.pid);
-    f.processes.set(220, { ...browser, identity: { pid: 220, startTime: '2200', boot: 'boot' } });
-    queueMicrotask(() => child.emit('exit', 0)); return child;
+    const child = spawn(...args); const browser = { ...f.processes.get(child.pid) };
+    f.processes.get(child.pid).binary = '/wrapper/sh';
+    queueMicrotask(() => {
+      f.processes.delete(child.pid);
+      f.processes.set(220, { ...browser, identity: { pid: 220, startTime: '2200', boot: 'boot' } });
+      child.emit('exit', 0);
+    }); return child;
   } });
   t.after(() => manager.dispose());
   await manager.open();
@@ -553,6 +560,79 @@ test('Stop leaves unrelated descendants alive and rechecks browser markers befor
   await f.manager.dispose();
   const manager = api().createManager(f.options); t.after(() => manager.dispose());
   assert.equal((await manager.stop()).status, 'stopped');
-  assert.deepEqual(f.calls.filter(c => c[0] === 'signal').map(c => c[1]), [202, 203, 204]);
-  assert.deepEqual([...rows.keys()], [201, 205, 206]);
+  assert.deepEqual(f.calls.filter(c => c[0] === 'signal').map(c => c[1]), [202, 204]);
+  assert.deepEqual([...rows.keys()], [201, 203, 205, 206]);
+});
+
+test('a live timed-out launcher blocks Stop, cleanup and duplicate Open without losing data', async t => {
+  const f = setup(t, { isPackaged: true, spawn: () => {
+    f.calls.push(['spawn']);
+    f.processes.set(200, { identity: { pid: 200, startTime: '2000', boot: 'boot' } });
+    const child = new EventEmitter(); child.pid = 200; child.unref = () => {}; return child;
+  } });
+  f.proc.signal = (pid, kind) => f.calls.push(['signal', pid, kind]);
+  assert.equal((await f.manager.open()).status, 'error');
+  const file = path.join(f.dataDir, 'managed-browser/state.json');
+  const before = fs.readFileSync(file, 'utf8');
+  const profileFile = path.join(f.dataDir, 'managed-browser/profile/keep');
+  fs.writeFileSync(profileFile, 'signed-in data');
+  assert.equal((await f.manager.stop()).status, 'error', 'live launcher must block Stop');
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  await f.manager.dispose();
+  assert.equal(await api().cleanupDataDir(f.dataDir, f.options), false, 'live launcher must block cleanup');
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.equal(fs.readFileSync(profileFile, 'utf8'), 'signed-in data');
+  const next = api().createManager(f.options); t.after(() => next.dispose());
+  assert.equal((await next.open()).status, 'error');
+  assert.equal(f.calls.filter(c => c[0] === 'spawn').length, 1);
+  const pending = JSON.parse(before);
+  assert.deepEqual(pending.launcher, { pid: 200, startTime: '2000', boot: 'boot' });
+  assert.deepEqual(f.calls.filter(c => c[0] === 'signal'), [['signal', 200, 'SIGTERM']]);
+});
+
+test('an unverified timed-out launcher receives TERM only after its identity verifies', async t => {
+  const f = setup(t, { isPackaged: true, spawn: () => {
+    f.processes.set(200, { identity: { pid: 200, startTime: '2000', boot: 'boot' } });
+    const child = new EventEmitter(); child.pid = 200; child.unref = () => {}; return child;
+  } });
+  assert.equal((await f.manager.open()).status, 'error');
+  assert.deepEqual(f.calls.filter(c => c[0] === 'signal'), [['signal', 200, 'SIGTERM']], 'unverified timeout must terminate its identity-verified launcher');
+  assert.equal(f.processes.has(200), false);
+});
+
+test('a launcher whose PID was reused is never signalled after its start deadline', async t => {
+  const f = setup(t, { isPackaged: true, spawn: () => {
+    f.processes.set(200, { identity: { pid: 200, startTime: '2000', boot: 'boot' } });
+    const child = new EventEmitter(); child.pid = 200; child.unref = () => {}; return child;
+  }, sleep: async ms => { f.advance(ms); f.processes.get(200).identity.startTime = '3000'; } });
+  assert.equal((await f.manager.open()).status, 'error');
+  assert.equal(f.calls.some(c => c[0] === 'signal'), false);
+  assert.equal((await f.manager.stop()).status, 'stopped');
+  assert.equal(f.processes.get(200).identity.startTime, '3000');
+});
+
+test('descendant traversal stops at foreign parents and type markers need a browser executable', () => {
+  const { createProc } = require('../src/main/browser/linux-process');
+  const state = { pid: 100, startTime: '1000', boot: 'boot', binary: '/chrome/chrome', profile: '/profile' };
+  const rows = new Map([
+    [201, { parent: 100, exe: '/native/host', args: [] }],
+    [202, { parent: 201, exe: state.binary, args: [] }],
+    [203, { parent: 100, exe: '/electron/helper', args: ['--type=renderer'] }],
+    [204, { parent: 100, exe: '/chrome/chrome_crashpad_handler', args: ['--type=crashpad-handler'] }],
+    [205, { parent: 100, exe: '/other/chrome_crashpad_handler', args: ['--type=crashpad-handler'] }],
+    [206, { parent: 204, exe: state.binary, args: [] }],
+  ]);
+  for (const separator of ['\0', ' ']) {
+    const proc = createProc({ fs: {
+      readdirSync: () => [...rows.keys()].reverse().map(String),
+      realpathSync: file => rows.get(Number(file.split('/')[2])).exe,
+      readFileSync: file => {
+        if (file.endsWith('boot_id')) return 'boot';
+        const pid = Number(file.split('/')[2]), row = rows.get(pid);
+        if (file.endsWith('/stat')) return `${pid} (name) S ${row.parent} ${Array(17).fill('0').join(' ')} ${pid * 10}`;
+        return [row.exe, ...row.args].join(separator);
+      },
+    } });
+    assert.deepEqual(proc.descendants(state).map(child => child.pid).sort(), [204, 206], 'foreign helper and descendants of native hosts must survive');
+  }
 });

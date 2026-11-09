@@ -1,5 +1,7 @@
 'use strict';
 
+const path = require('node:path').posix;
+
 function parseStat(text) {
   const end = text.lastIndexOf(')');
   const fields = text.slice(end + 1).trim().split(/\s+/);
@@ -73,13 +75,15 @@ function createProc({ fs = require('node:fs'), pid = process.pid, kill = process
   function verifyDescendant(child, state) {
     if (!alive(child) || child.boot !== state.boot) return false;
     try {
-      if (fs.realpathSync(`/proc/${child.pid}/exe`) === state.binary) return true;
+      const exe = fs.realpathSync(`/proc/${child.pid}/exe`);
+      if (exe === state.binary) return true;
+      const typeAllowed = path.dirname(exe) === path.dirname(state.binary) && /^(?:chrome_)?crashpad_handler$/.test(path.basename(exe));
       const cmdline = read(`/proc/${child.pid}/cmdline`);
       if (cmdline.length > 65536) return false;
       const args = cmdline.split('\0').filter(Boolean);
       if (args.length > 256) return false;
-      if (args.length > 1) return args.includes(`--user-data-dir=${state.profile}`) || args.some(arg => /^--type=\S+$/.test(arg));
-      return /(?:^| )--type=\S+(?: |$)/.test(cmdline) ||
+      if (args.length > 1) return args.includes(`--user-data-dir=${state.profile}`) || (typeAllowed && args.some(arg => /^--type=\S+$/.test(arg)));
+      return (typeAllowed && /(?:^| )--type=\S+(?: |$)/.test(cmdline)) ||
         (` ${cmdline} `).includes(` --user-data-dir=${state.profile} `);
     } catch { return false; }
   }
@@ -91,7 +95,8 @@ function createProc({ fs = require('node:fs'), pid = process.pid, kill = process
       let added = false;
       for (const entry of entries) {
         if (parents.has(entry.pid) || !parents.has(entry.parentPid) || entry.boot !== state.boot) continue;
-        parents.add(entry.pid); if (verifyDescendant(entry, state)) found.push(entry); added = true;
+        if (!verifyDescendant(entry, state)) continue;
+        parents.add(entry.pid); found.push(entry); added = true;
       }
       if (!added) break;
     }
