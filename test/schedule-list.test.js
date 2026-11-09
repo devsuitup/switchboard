@@ -8,6 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 const vm = require('node:vm');
+const { createRequire } = require('node:module');
 const runner = require('../src/main/schedules/schedule-runner');
 const { encodeProjectPath } = require('../encode-project-path');
 const { extractFunction } = require('./app-source');
@@ -223,7 +224,8 @@ test('preload listSchedules invokes the registered backend channel', async () =>
 
 test('main registers list-schedules with the real backend and instance dependencies', async t => {
   const f = fixture(t);
-  f.write('job');
+  const filePath = f.write('job');
+  const sessionId = crypto.randomUUID();
   const filename = path.join(__dirname, '..', 'main.js');
   const source = fs.readFileSync(filename, 'utf8');
   const start = source.indexOf("ipcMain.handle('list-schedules'");
@@ -233,18 +235,47 @@ test('main registers list-schedules with the real backend and instance dependenc
   vm.runInNewContext(source.slice(start, end), {
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     buildScheduleList: require('../src/main/schedules/schedule-list').buildScheduleList,
-    scheduleProjects: () => ({ list: async () => [f.project] }), getCachedByFolder: () => [],
+    scheduleProjects: () => ({ list: async () => [f.project] }),
+    getCachedByFolder: () => [{ sessionId, scheduleSlug: 'job', messageCount: 1, created: new Date().toISOString() }],
     cliSessionState: { isScheduleRunLive: () => false }, process: { env: { SWITCHBOARD_DATA_DIR: 'isolated' } },
     path, DB_PATH: path.join(f.root, 'db'), PROJECTS_DIR: path.join(f.root, 'transcripts'),
     getSetting: f.deps.getSetting, SETTING_DEFAULTS: { sandbox: false },
     isProjectSettingsArchived: () => true, isKnownProjectRoot: () => false,
     getKnownProjectPaths: () => [], _isKnownProjectRoot: () => false,
+    require: createRequire(filename),
   }, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
+  const children = [];
+  const launchContext = vm.createContext({
+    require: createRequire(filename), path, DB_PATH: path.join(f.root, 'db'),
+    getSetting: () => ({}), isProjectSettingsArchived: () => false, SETTING_DEFAULTS: {},
+    resolveShell: () => ({ path: 'fixture-shell' }), quoteArgvForShell: (_shell, argv) => argv.join(' '),
+    shellArgs: (_shell, cmd) => [cmd], cleanPtyEnv: {}, resolveScheduleSandbox: () => false,
+    log: { info() {}, error() {}, warn() {} }, cliSessionState: { trackScheduleRun() {} },
+    activityReporter: { sessionStarted() {}, sessionEnded() {} },
+    scheduleIpc: { reportRunExit() {} }, mainWindow: null,
+    cpSpawn: () => {
+      const child = new EventEmitter();
+      child.stderr = new EventEmitter();
+      children.push(child);
+      queueMicrotask(() => child.emit('spawn'));
+      return child;
+    },
+  });
+  const launchSource = source.replace(/^    (async )?function runScheduleCommand/m, '$1function runScheduleCommand');
+  vm.runInContext(extractFunction(launchSource, 'runScheduleCommand'), launchContext, { filename });
+  assert.equal((await launchContext.runScheduleCommand(['--resume', sessionId], f.project, 'Job', null,
+    { filePath, slug: 'job', manual: true })).ok, true);
+  children[0].emit('exit', 2);
   const reply = await handlers.get('list-schedules')();
   assert.equal(reply.catchUpActive, false);
   assert.equal(reply.projects[0].archived, true);
   assert.equal(reply.projects[0].known, false);
   assert.equal(reply.projects[0].schedules[0].file, 'schedule-job.md');
+  const result = reply.projects[0].schedules[0].runs[0].result;
+  assert.ok(result, 'registered listing must read the launcher result');
+  assert.equal(result.sessionId, sessionId);
+  assert.equal(result.outcome, 'exited');
+  assert.equal(result.exitCode, 2);
 });
 
 test('nested cron stays listed without rejecting other projects', async t => {
@@ -334,6 +365,7 @@ function mainListing(f, env) {
       return known.map(name => ({ name, isDirectory: () => true }));
     } },
     require: name => {
+      if (name === './src/main/schedules/schedule-run-results') return require('../src/main/schedules/schedule-run-results');
       assert.equal(name, './derive-project-path');
       return { deriveProjectPath: (_folder, name) => name };
     },

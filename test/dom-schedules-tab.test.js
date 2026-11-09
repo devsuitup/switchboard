@@ -64,11 +64,30 @@ for (const [result, expected] of [
     assert.match(h.w.scheduleOutcome(run), expected);
     h.schedule.runs = [run];
     h.w.renderSchedules(h.data);
+    assert.equal(h.w.document.querySelector('.schedule-history-run > *'), null, 'outcome text must not create markup');
     assert.match(h.w.document.querySelector('.schedule-history-run').textContent.split(' — ').slice(1).join(' — '), expected);
     assert.equal(h.w.scheduleOutcome({ ...run, running: true }), 'Running');
-    assert.equal(h.w.document.querySelector('archived'), null);
   });
 }
+
+test('failure notices and history use the same renderer recovery hint', t => {
+  const h = setup(t);
+  assert.equal(typeof h.w.scheduleRunFailureHint, 'function', 'shared failure hint must exist');
+  const original = h.w.scheduleRunFailureHint;
+  const seen = [];
+  h.w.scheduleRunFailureHint = failure => { seen.push(failure); return original(failure); };
+  for (const [failure, expected] of [
+    ['claude-path', /claude not found on the shell PATH/],
+    ['sandbox', /Check Linux bubblewrap/], ['exit', /See the log/],
+  ]) {
+    h.w.showScheduleRunExit({ name: 'Job', sessionId: failure, manual: true, code: 2, failure });
+    const hint = original(failure);
+    assert.match(hint, expected);
+    assert.ok(h.w.document.querySelector(`[data-notice-id="ScheduleRun:${failure}"]`).textContent.includes(hint));
+    assert.ok(h.w.scheduleOutcome({ result: { outcome: 'exited', exitCode: 2, failure } }).includes(hint));
+  }
+  assert.deepEqual(seen, ['claude-path', 'claude-path', 'sandbox', 'sandbox', 'exit', 'exit']);
+});
 
 test('visible successful launch retains its acknowledgement after the action reload', async t => {
   const h = setup(t);

@@ -18,7 +18,7 @@ const ROOT = path.join(__dirname, '..');
 const SID = '39757294-494b-4918-b426-e0ff559e9324';
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 
-function setup(t, { sandbox = false } = {}) {
+function setup(t, { sandbox = false, spawnError = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'i484-live-'));
   const children = [];
   const log = { info() {}, error() {}, warn() {}, debug() {} };
@@ -44,7 +44,7 @@ function setup(t, { sandbox = false } = {}) {
       child.pid = 4242 + children.length;
       child.stderr = new EventEmitter();
       children.push(child);
-      queueMicrotask(() => child.emit('spawn'));
+      queueMicrotask(() => child.emit(spawnError ? 'error' : 'spawn', ...(spawnError ? [new Error('spawn failed')] : [])));
       return child;
     },
     getSetting: () => ({}),
@@ -255,10 +255,9 @@ test('a scheduled child without a CLI descriptor is visible under either session
 });
 
 test('a spawn error clears the scheduled run so its session can be opened', async (t) => {
-  const h = setup(t);
+  const h = setup(t, { spawnError: true });
   (await h.start());
-  assert.equal((await h.query())?.kind, 'schedule');
-  h.child.emit('error', new Error('spawn failed'));
+  assert.equal(h.spawns.length, 1);
   assert.equal(await h.query(), null);
   await h.open();
   assert.equal(h.openTerminalCalls.length, 1);

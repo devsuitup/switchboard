@@ -89,11 +89,7 @@ function scheduleOutcome(run) {
     if (result.outcome === 'signal') return `Stopped: ${result.signal}`;
     if (result.outcome === 'exited' && Number.isInteger(result.exitCode)) {
       if (result.exitCode === 0) return 'Exit 0';
-      const hint = result.failure === 'claude-path'
-        ? 'claude not found on the shell PATH. Check that Claude Code is installed and on PATH in the configured shell profile, then try Run now again.'
-        : result.failure === 'sandbox'
-          ? 'Check Linux bubblewrap and the sandbox settings; see the log for details, then try Run now again.'
-          : 'See the log for details, then try Run now again.';
+      const hint = scheduleRunFailureHint(result.failure);
       return `Failed: exit ${result.exitCode} — ${hint}`;
     }
     return 'Unknown: result record unreadable';

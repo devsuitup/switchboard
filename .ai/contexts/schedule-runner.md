@@ -536,23 +536,34 @@ shared `classifyRunExit({ code, sandbox, stderr })` used by the exit notice.
 fifth argument carries `{ manual, filePath, slug, dueMs }`: cron uses the listed
 file and due minute (null for a current cron tick), Run now uses the resolved
 file with manual true. Archive, platform and add-dir refusals after the seed,
-synchronous spawn failure, child error and child exit all write through this
+synchronous spawn failure, pre-spawn child error and child exit all write through this
 same identity. Write failure warns without changing launch, onDone or notice.
+Preparation throws or rejections (including shell resolution, project listing,
+trigger-directory creation and live-run tracking) record spawn-error with the
+message and rethrow, preserving the existing rejection and callback behavior.
+After the child's spawn event, an error is logged but does not publish a result
+or call onDone; the actual exit remains authoritative for completion.
 
 Records live under `<dirname(DB_PATH)>/schedule-runs`, isolated per instance.
+Both launcher and listing use `scheduleRunsDir(dataDir)` from the results module.
 Names are `<scheduleStateKey>-<startedAtMs>-<sessionId>.json`. Payloads are one
 JSON line plus LF: `{ v: 1, sessionId, file, name, slug, manual, dueMs,
 startedAt, endedAt, outcome, exitCode, signal, failure, error }`. Times are ISO
 strings; exitCode is an integer or null; outcome is exited, signal, spawn-error
 or refused. Stderr stays only in the log. Failure is exit, claude-path, sandbox
 or null. Refusal/spawn error text is the launcher's returned recovery text.
+Preparation exceptions retain their original message. Signal outcomes require
+a non-empty signal string, refused/spawn-error require string error text, and
+exited requires an integer exitCode; inconsistent records are unreadable.
 
 Publication uses a same-directory temp file written with wx, then
 renameWithRetry. A per-result wx lock serializes publishers; an existing final
 file is kept. This preserves first-completion semantics without exposing a
 partial JSON destination or allowing rename to replace a previous result on
 Windows. Temp and owned lock files are removed on failure. A process killed
-during publication can leave a temp/lock file; readers and pruning ignore it.
+during publication can leave a temp/lock file; readers ignore it. Per-key pruning
+removes that key's publication temp/lock files whose mtime is older than ten
+minutes, retaining recent artifacts, unrelated names and other keys.
 After a write, pruning keeps the 20 newest starts of that key and ignores
 unlink errors. `pruneScheduleRunResults(dir, key, 0)` also supports the later
 delete slice. Other keys and transcripts are untouched; renamed files can
@@ -571,6 +582,9 @@ Without a record it keeps No result recorded and the assistant/seed/started/
 unknown transcript hint. It never infers Exit 0. Runs alive when Switchboard
 quits, older runs and runs from another instance have no result here. Deletion,
 the creation form and creator-template migration remain later slices.
+`scheduleRunFailureHint(failure)` is a classic-script global defined in
+memory-workfiles-view.js, loaded before schedules-view.js in index.html. Both
+exit notices and persistent history use it for the same recovery wording.
 
 Action state is keyed by filePath across renders: a pending launch stays disabled,
 success shows the check mark and Launched! for two seconds, and a refusal restores

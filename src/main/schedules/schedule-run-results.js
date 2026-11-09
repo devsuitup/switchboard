@@ -7,6 +7,11 @@ const { renameWithRetry } = require('../shared/atomic-write');
 const { scheduleStateKey } = require('./schedule-runner');
 
 const RESULT_NAME = /^([0-9a-f]{16})-(\d+)-([0-9a-f-]{36})\.json$/;
+const PUBLICATION_NAME = /^(?:([0-9a-f]{16})-\d+-[0-9a-f-]{36}\.json\.lock|\.([0-9a-f]{16})-\d+-[0-9a-f-]{36}\.json\.[0-9a-f-]{36}\.tmp)$/;
+
+function scheduleRunsDir(dataDir) {
+  return path.join(dataDir, 'schedule-runs');
+}
 
 function classifyRunExit({ code, sandbox, stderr }) {
   if (code === 0) return null;
@@ -29,6 +34,15 @@ function classifyRunExit({ code, sandbox, stderr }) {
 function pruneScheduleRunResults(runsDir, key, keep = 20) {
   let files;
   try { files = fs.readdirSync(runsDir); } catch { return; }
+  const staleBefore = Date.now() - 10 * 60 * 1000;
+  for (const file of files) {
+    const match = PUBLICATION_NAME.exec(file);
+    if (!match || (match[1] || match[2]) !== key) continue;
+    try {
+      const filename = path.join(runsDir, file);
+      if (fs.statSync(filename).mtimeMs < staleBefore) fs.unlinkSync(filename);
+    } catch {}
+  }
   const own = files.map(file => ({ file, match: RESULT_NAME.exec(file) }))
     .filter(({ match }) => match && match[1] === key)
     .sort((a, b) => Number(b.match[2]) - Number(a.match[2]) || b.file.localeCompare(a.file));
@@ -86,6 +100,9 @@ function validRecord(record, match) {
     && typeof record.startedAt === 'string' && Date.parse(record.startedAt) === Number(match[2])
     && typeof record.endedAt === 'string' && Number.isFinite(Date.parse(record.endedAt))
     && ['exited', 'signal', 'spawn-error', 'refused'].includes(record.outcome)
+    && (record.outcome !== 'signal' || typeof record.signal === 'string' && record.signal.length > 0)
+    && (!['refused', 'spawn-error'].includes(record.outcome) || typeof record.error === 'string')
+    && (record.outcome !== 'exited' || Number.isInteger(record.exitCode))
     && (record.exitCode === null || Number.isInteger(record.exitCode))
     && (record.signal === null || typeof record.signal === 'string')
     && [null, 'exit', 'claude-path', 'sandbox'].includes(record.failure)
@@ -113,4 +130,4 @@ function readScheduleRunResults(runsDir, sessionIds) {
   return results;
 }
 
-module.exports = { classifyRunExit, writeScheduleRunResult, pruneScheduleRunResults, readScheduleRunResults };
+module.exports = { scheduleRunsDir, classifyRunExit, writeScheduleRunResult, pruneScheduleRunResults, readScheduleRunResults };

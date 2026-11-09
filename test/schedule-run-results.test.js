@@ -43,21 +43,22 @@ function launcher(t, options = {}) {
   vm.runInNewContext(fs.readFileSync(ipcFile, 'utf8'), { module: ipcModule, exports: ipcModule.exports,
     require: name => name === 'electron' ? { ipcMain: { handle: (name, handler) => handlers.set(name, handler) } } : createRequire(ipcFile)(name),
   }, { filename: ipcFile });
-  const ctx = vm.createContext({ require: createRequire(filename), fs, path, os, process: { platform: options.platform || 'linux' },
+  const fail = stage => { if (options.failAt === stage) throw new Error(`${stage} failed`); };
+  const ctx = vm.createContext({ require: createRequire(filename), fs: { ...fs, mkdirSync: (...args) => { fail('mkdir'); return fs.mkdirSync(...args); } }, path, os, process: { platform: options.platform || 'linux' },
     DB_PATH: path.join(f.root, 'db'), getSetting: () => ({}), isProjectSettingsArchived: () => !!options.archived,
-    SETTING_DEFAULTS: {}, resolveShell: () => ({ path: 'fake-shell' }), quoteArgvForShell: (_shell, argv) => argv.join(' '),
+    SETTING_DEFAULTS: {}, resolveShell: () => { fail('shell'); return { path: 'fake-shell' }; }, quoteArgvForShell: (_shell, argv) => argv.join(' '),
     shellArgs: (_shell, cmd) => [cmd], cleanPtyEnv: {}, resolveScheduleSandbox: () => !!options.sandbox,
     scheduleLaunchRefusal: require('../src/main/schedules/schedule-runner').scheduleLaunchRefusal,
-    scheduleProjects: () => ({ list: async () => [] }), sandboxScriptPath: () => 'sandbox', sandboxBindEnv: () => '',
+    scheduleProjects: () => ({ list: async () => { fail('projects'); return []; } }), sandboxScriptPath: () => 'sandbox', sandboxBindEnv: () => '',
     encodeProjectPath: () => 'project', scheduleIpc: ipcModule.exports,
     mainWindow: options.noWindow ? null : { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: (...args) => f.messages.push(args) } },
-    log: f.log, cliSessionState: { trackScheduleRun() {} }, activityReporter: { sessionStarted() {}, sessionEnded() {} },
+    log: f.log, cliSessionState: { trackScheduleRun() { fail('track'); } }, activityReporter: { sessionStarted() {}, sessionEnded() {} },
     cpSpawn: () => {
       if (options.syncError) throw new Error('sync spawn failure');
       const child = new EventEmitter();
       child.stderr = new EventEmitter();
       children.push(child);
-      queueMicrotask(() => child.emit('spawn'));
+      if (!options.deferSpawn) queueMicrotask(() => child.emit('spawn'));
       return child;
     },
   });
@@ -103,9 +104,10 @@ for (const options of [{ archived: true }, { sandbox: true, platform: 'win32' },
 }
 
 test('error then exit at different end times keeps the first result and filename', async t => {
-  const h = launcher(t);
-  await h.run();
+  const h = launcher(t, { deferSpawn: true });
+  const pending = h.run();
   h.children[0].emit('error', new Error('async spawn failure'));
+  assert.equal((await pending).ok, false);
   assert.equal(h.records().length, 1, 'spawn error must be recorded');
   const filename = h.records()[0];
   const bytes = fs.readFileSync(path.join(h.runsDir, filename));
@@ -115,6 +117,70 @@ test('error then exit at different end times keeps the first result and filename
   assert.deepEqual(fs.readFileSync(path.join(h.runsDir, filename)), bytes, 'the first result wins');
   assert.equal(h.read()[0].outcome, 'spawn-error');
 });
+
+test('error after spawn leaves the actual exit as the only result and releases once', async t => {
+  const h = launcher(t);
+  assert.equal((await h.run()).ok, true);
+  h.children[0].emit('error', new Error('kill EPERM'));
+  assert.equal(h.records().length, 0, 'post-spawn error must not claim the result');
+  assert.equal(h.done, 0, 'post-spawn error must not release a live run');
+  h.children[0].emit('exit', 2);
+  assert.equal(h.read()[0].outcome, 'exited');
+  assert.equal(h.read()[0].exitCode, 2);
+  assert.equal(h.done, 1);
+});
+
+for (const stage of ['shell', 'projects', 'mkdir', 'track']) {
+  test(`launcher records and rethrows a ${stage} preparation failure`, async t => {
+    const h = launcher(t, { failAt: stage, sandbox: ['projects', 'mkdir'].includes(stage) });
+    const previous = process.env.SWITCHBOARD_TRIGGERS_DIR;
+    process.env.SWITCHBOARD_TRIGGERS_DIR = path.join(h.root, 'triggers');
+    t.after(() => {
+      if (previous === undefined) delete process.env.SWITCHBOARD_TRIGGERS_DIR;
+      else process.env.SWITCHBOARD_TRIGGERS_DIR = previous;
+    });
+    await assert.rejects(h.run(), new RegExp(`${stage} failed`));
+    assert.equal(h.records().length, 1, `${stage} failure must produce a result`);
+    assert.equal(h.read()[0].outcome, 'spawn-error');
+    assert.equal(h.read()[0].error, `${stage} failed`);
+    assert.equal(h.done, 0, 'preparation rejection keeps the existing callback behavior');
+  });
+}
+
+test('pruning removes only stale publication artifacts for its own key', t => {
+  const f = fixture(t), a = api();
+  a.writeScheduleRunResult(f.runsDir, f.input, f.log);
+  const name = f.records()[0];
+  const other = name.replace(/^[0-9a-f]{16}/, 'ffffffffffffffff');
+  const old = new Date(Date.now() - 601000);
+  const stale = [name + '.lock', `.${name}.${crypto.randomUUID()}.tmp`];
+  const preserved = [other + '.lock', `.${other}.${crypto.randomUUID()}.tmp`, name + '.new.lock', 'unrelated.tmp'];
+  for (const file of [...stale, ...preserved, name + '.lock.recent', `.${name}.${crypto.randomUUID()}.tmp`]) {
+    fs.writeFileSync(path.join(f.runsDir, file), '');
+    if ([...stale, ...preserved].includes(file)) fs.utimesSync(path.join(f.runsDir, file), old, old);
+  }
+  const recentLock = name.replace('-100000-', '-100001-') + '.lock';
+  fs.writeFileSync(path.join(f.runsDir, recentLock), '');
+  const before = fs.readdirSync(f.runsDir);
+  a.writeScheduleRunResult(f.runsDir, { ...f.input, sessionId: crypto.randomUUID() }, f.log);
+  for (const file of stale) assert.equal(fs.existsSync(path.join(f.runsDir, file)), false, `stale artifact removed: ${file}`);
+  for (const file of before.filter(file => !stale.includes(file))) assert.ok(fs.existsSync(path.join(f.runsDir, file)), `preserved: ${file}`);
+});
+
+for (const fields of [
+  { outcome: 'signal', signal: null }, { outcome: 'signal', signal: '' },
+  { outcome: 'refused', error: null }, { outcome: 'spawn-error', error: null },
+  { outcome: 'exited', exitCode: null },
+]) {
+  test(`reader marks inconsistent outcome fields unreadable: ${JSON.stringify(fields)}`, t => {
+    const f = fixture(t), a = api();
+    a.writeScheduleRunResult(f.runsDir, f.input, f.log);
+    const file = path.join(f.runsDir, f.records()[0]);
+    const record = { ...f.read()[0], ...fields };
+    fs.writeFileSync(file, JSON.stringify(record));
+    assert.deepEqual(a.readScheduleRunResults(f.runsDir, [f.input.sessionId]).get(f.input.sessionId), { unreadable: true }, 'inconsistent outcome must be Unknown');
+  });
+}
 
 test('signal and successful exits keep their actual outcome', async t => {
   for (const [code, signal, outcome] of [[0, null, 'exited'], [null, 'SIGTERM', 'signal']]) {

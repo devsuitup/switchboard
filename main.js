@@ -1637,7 +1637,7 @@ ipcMain.handle('list-schedules', () => {
     scheduleProjects, getCachedByFolder, isScheduleRunLive: cliSessionState.isScheduleRunLive,
     catchUpActive: !process.env.SWITCHBOARD_DATA_DIR,
     stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), projectsDir: PROJECTS_DIR,
-    runsDir: path.join(path.dirname(DB_PATH), 'schedule-runs'),
+    runsDir: require('./src/main/schedules/schedule-run-results').scheduleRunsDir(path.dirname(DB_PATH)),
     getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox,
     isArchived: isProjectSettingsArchived,
     isKnownProject: projectPath => _isKnownProjectRoot(projectPath, knownProjectPaths),
@@ -3934,94 +3934,102 @@ if (!app.isPackaged) {
       const sessionId = claudeArgv[claudeArgv.indexOf('--resume') + 1];
       const recordResult = details => {
         if (!filePath) return;
-        require('./src/main/schedules/schedule-run-results').writeScheduleRunResult(
-          path.join(path.dirname(DB_PATH), 'schedule-runs'),
+        const { scheduleRunsDir, writeScheduleRunResult } = require('./src/main/schedules/schedule-run-results');
+        writeScheduleRunResult(
+          scheduleRunsDir(path.dirname(DB_PATH)),
           { sessionId, filePath, name, slug, manual, dueMs, startedAtMs, ...details }, log);
       };
-      const runName = manual ? `Manual run ${name}` : name;
-      const globalSettings = getSetting('global') || {};
-      if (isProjectSettingsArchived(cwd)) {
-        log.info(`[schedule] ${runName} suspended: project is archived`);
-        const error = 'Project is archived; unarchive it before running schedules.';
-        recordResult({ outcome: 'refused', error });
-        if (onDone) onDone();
-        return { ok: false, error };
-      }
-      const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
-      const profile = resolveShell(profileId);
-      const shell = profile.path;
-      // see .ai/contexts/schedule-runner.md
-      let cmd = 'claude ' + quoteArgvForShell(shell, claudeArgv);
-      const env = { ...cleanPtyEnv, FORCE_COLOR: '0' };
-
-      const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
-      if (sandbox) {
-        const addDirs = [];
-        for (let i = 0; i < claudeArgv.length - 1; i++) {
-          if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
-        }
-        const refusal = scheduleLaunchRefusal({ sandbox, addDirs, platform: process.platform,
-          projectPaths: process.platform === 'linux' ? await scheduleProjects().list() : [], home: os.homedir(), cwd });
-        if (refusal) {
-          log.error(`[schedule] ${runName}: skipped — ${refusal.problem}`);
-          recordResult({ outcome: 'refused', error: refusal.error });
-          if (onDone) onDone();
-          return { ok: false, error: refusal.error };
-        }
-        env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
-        fs.mkdirSync(path.join(env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
-        cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
-        const bindEnv = sandboxBindEnv(addDirs);
-        if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
-        env.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(cwd);
-      }
-      const args = shellArgs(shell, cmd, profile.args || []);
-
-      log.info(`[schedule] Running: ${shell} ${args.join(' ')}`);
-      const spawnFailure = err => ({ ok: false, error: `Could not start the schedule: ${err.message || String(err)}. Check the shell settings and project folder, then try Run now again.` });
-      let child;
       try {
-        child = cpSpawn(shell, args, {
-          cwd,
-          stdio: ['ignore', 'ignore', 'pipe'],
-          env,
-        });
-      } catch (err) {
-        log.error(`[schedule] ${runName} error:`, err.message);
-        recordResult({ outcome: 'spawn-error', error: spawnFailure(err).error });
-        if (onDone) onDone();
-        return spawnFailure(err);
-      }
-      cliSessionState.trackScheduleRun(claudeArgv[claudeArgv.indexOf('--resume') + 1], child, cwd, runName);
-      // see .ai/contexts/activitywatch.md ("Running")
-      const activityId = `schedule:${runName}:${Date.now()}`;
-      activityReporter.sessionStarted({ sessionId: activityId, project: cwd, name: `Scheduled: ${runName}` });
+        const runName = manual ? `Manual run ${name}` : name;
+        const globalSettings = getSetting('global') || {};
+        if (isProjectSettingsArchived(cwd)) {
+          log.info(`[schedule] ${runName} suspended: project is archived`);
+          const error = 'Project is archived; unarchive it before running schedules.';
+          recordResult({ outcome: 'refused', error });
+          if (onDone) onDone();
+          return { ok: false, error };
+        }
+        const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
+        const profile = resolveShell(profileId);
+        const shell = profile.path;
+        // see .ai/contexts/schedule-runner.md
+        let cmd = 'claude ' + quoteArgvForShell(shell, claudeArgv);
+        const env = { ...cleanPtyEnv, FORCE_COLOR: '0' };
 
-      let stderr = '';
-      child.stderr.on('data', (data) => { stderr += data.toString(); });
+        const sandbox = resolveScheduleSandbox(cwd, getSetting, SETTING_DEFAULTS.sandbox);
+        if (sandbox) {
+          const addDirs = [];
+          for (let i = 0; i < claudeArgv.length - 1; i++) {
+            if (claudeArgv[i] === '--add-dir') addDirs.push(claudeArgv[i + 1]);
+          }
+          const refusal = scheduleLaunchRefusal({ sandbox, addDirs, platform: process.platform,
+            projectPaths: process.platform === 'linux' ? await scheduleProjects().list() : [], home: os.homedir(), cwd });
+          if (refusal) {
+            log.error(`[schedule] ${runName}: skipped — ${refusal.problem}`);
+            recordResult({ outcome: 'refused', error: refusal.error });
+            if (onDone) onDone();
+            return { ok: false, error: refusal.error };
+          }
+          env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR = require('./src/main/triggers/trigger-watcher').getTriggersDir();
+          fs.mkdirSync(path.join(env.SWITCHBOARD_SANDBOX_TRIGGERS_DIR, 'processed'), { recursive: true });
+          cmd = quoteArgvForShell(shell, ['bash', sandboxScriptPath()]) + ' ' + quoteArgvForShell(shell, claudeArgv);
+          const bindEnv = sandboxBindEnv(addDirs);
+          if (bindEnv) env.SWITCHBOARD_SANDBOX_BINDS = bindEnv;
+          env.SWITCHBOARD_SANDBOX_PROJECT_FOLDER = encodeProjectPath(cwd);
+        }
+        const args = shellArgs(shell, cmd, profile.args || []);
 
-      child.on('exit', (code, signal) => {
-        if (stderr.trim()) log.error(`[schedule] ${runName} stderr:\n${stderr.trim()}`);
-        log.info(`[schedule] ${runName} finished (exit ${code})`);
-        recordResult({ outcome: signal ? 'signal' : 'exited', code, signal, sandbox, stderr });
-        scheduleIpc.reportRunExit(mainWindow, {
-          name, projectPath: cwd, sessionId: claudeArgv[claudeArgv.indexOf('--resume') + 1],
-          manual, code, signal, sandbox, stderr,
-        });
-        activityReporter.sessionEnded(activityId);
-        if (onDone) onDone();
-      });
-
-      return new Promise(resolve => {
-        child.once('spawn', () => resolve({ ok: true }));
-        child.on('error', (err) => {
+        log.info(`[schedule] Running: ${shell} ${args.join(' ')}`);
+        const spawnFailure = err => ({ ok: false, error: `Could not start the schedule: ${err.message || String(err)}. Check the shell settings and project folder, then try Run now again.` });
+        let child;
+        try {
+          child = cpSpawn(shell, args, {
+            cwd,
+            stdio: ['ignore', 'ignore', 'pipe'],
+            env,
+          });
+        } catch (err) {
           log.error(`[schedule] ${runName} error:`, err.message);
           recordResult({ outcome: 'spawn-error', error: spawnFailure(err).error });
+          if (onDone) onDone();
+          return spawnFailure(err);
+        }
+        cliSessionState.trackScheduleRun(claudeArgv[claudeArgv.indexOf('--resume') + 1], child, cwd, runName);
+        // see .ai/contexts/activitywatch.md ("Running")
+        const activityId = `schedule:${runName}:${Date.now()}`;
+        activityReporter.sessionStarted({ sessionId: activityId, project: cwd, name: `Scheduled: ${runName}` });
+
+        let stderr = '';
+        child.stderr.on('data', (data) => { stderr += data.toString(); });
+
+        child.on('exit', (code, signal) => {
+          if (stderr.trim()) log.error(`[schedule] ${runName} stderr:\n${stderr.trim()}`);
+          log.info(`[schedule] ${runName} finished (exit ${code})`);
+          recordResult({ outcome: signal ? 'signal' : 'exited', code, signal, sandbox, stderr });
+          scheduleIpc.reportRunExit(mainWindow, {
+            name, projectPath: cwd, sessionId: claudeArgv[claudeArgv.indexOf('--resume') + 1],
+            manual, code, signal, sandbox, stderr,
+          });
           activityReporter.sessionEnded(activityId);
           if (onDone) onDone();
-          resolve(spawnFailure(err));
         });
-      });
+
+        let spawned = false;
+        return new Promise(resolve => {
+          child.once('spawn', () => { spawned = true; resolve({ ok: true }); });
+          child.on('error', (err) => {
+            log.error(`[schedule] ${runName} error:`, err.message);
+            if (spawned) return;
+            recordResult({ outcome: 'spawn-error', error: spawnFailure(err).error });
+            activityReporter.sessionEnded(activityId);
+            if (onDone) onDone();
+            resolve(spawnFailure(err));
+          });
+        });
+      } catch (err) {
+        recordResult({ outcome: 'spawn-error', error: err.message || String(err) });
+        throw err;
+      }
     }
 
     scheduleIpc.init(log, runScheduleCommand, isAllowedMemoryPath, isProjectSettingsArchived);
