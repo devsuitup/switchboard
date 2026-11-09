@@ -1992,15 +1992,20 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     steps.push({ idx: i, command: step.command, sent_at: stepSentAt, waited_ms: stepWaitedMs, submit_retries: submitRetries, submitted: stepSubmitted, ...(stepConfirmed === null ? {} : { submit_confirmed: stepConfirmed }), ...sources });
   }
 
+  // see .ai/contexts/trigger-watcher.md, "Unconfirmed steps never report ok"
   await writeResult({
-    ok:               true,
+    ok:               unconfirmedSteps.length === 0,
     submitted:        chainSubmitted,
     sessionId,
     sent_at:          step0SentAt,
     steps,
     steps_completed: steps.length,
     total_waited_ms:  totalWaitedMs,
-    ...(unconfirmedSteps.length ? { unconfirmed_steps: unconfirmedSteps } : {}),
+    ...(unconfirmedSteps.length ? {
+      error: ERROR_UNCONFIRMED,
+      reason: `chain step ${unconfirmedSteps.join(', ')} was typed but its submission was not confirmed`,
+      unconfirmed_steps: unconfirmedSteps,
+    } : {}),
   });
 
   } catch (err) {

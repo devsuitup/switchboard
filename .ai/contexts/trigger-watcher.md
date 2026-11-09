@@ -1303,6 +1303,14 @@ state was the cause.
   typed into that composer. The step's text may be sitting there. The
   recovery Enter is also withheld when input of the user's own is pending in
   the composer (`waitForComposerFree`), which stops the chain the same way.
+- **Unconfirmed steps never report ok.** A step whose recovery Enter WAS sent
+  but still showed no turn (`submitted: "assumed"`, `submit_confirmed: false`,
+  `turn_observed: false`) does not stop the chain, but the chain's final
+  result is `ok: false`, `error` `step not confirmed`, a `reason` naming the
+  steps, and `unconfirmed_steps` (indexes) kept. This is the same verdict as
+  the withheld case, so a caller reading `ok` re-triggers either way (#980).
+  A single-step trigger is not changed: it keeps `ok: true` with
+  `submit_confirmed: false` unless it is a `/compact` without observed effect.
 - **No usable descriptor at the FIRST read of the wait** (the wait owns this decision: there is no separate precheck, so a descriptor read once and lost at the next sample is "not idle", never the legacy path) (`getCliStatus` absent,
   `undefined`, or a `statusUpdatedAt` that is not an integer): no wait, today's
   behaviour (`available: false`). A descriptor lost AFTER it was read (the CLI
