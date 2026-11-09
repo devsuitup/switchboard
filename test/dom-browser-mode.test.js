@@ -62,7 +62,7 @@ test('defaults, fork and interactive schedule creator carry the browser mode', a
   } finally { ctx.destroy(); }
 });
 
-test('restore/open resolves the current browser default into the terminal IPC', async () => {
+test('resumed restore/open resolves the current browser default into the terminal IPC', async () => {
   const ctx = setup({ effective: { chrome: true } });
   try {
     const session = { sessionId: 's', projectPath: '/fixture' };
@@ -80,5 +80,23 @@ test('restore/open resolves the current browser default into the terminal IPC', 
     const open = ctx.calls.find(c => c[0] === 'open');
     assert.ok(open, 'restore/open must spawn the terminal');
     assert.equal(open[4].browserMode, 'claude-in-chrome');
+  } finally { ctx.destroy(); }
+});
+
+test('startsFresh restore resolves the current browser default into the new launch', async () => {
+  const ctx = setup({ effective: { chrome: true, worktree: true, worktreeName: 'saved' } });
+  try {
+    Object.assign(ctx.window, { liveElsewhereMany: async () => new Map() });
+    const functions = loadAppFunctions(ctx.context, { functions: ['runRestore'],
+      declarations: ['restoreRunDepth', 'restoreIndexingDone', 'restoreInFlight', 'restoreSavedIndex', 'RESTORE_STAGGER_MS'] });
+    await functions.runRestore([{ sessionId: 'fresh', projectPath: '/fixture', fresh: true }], { retryAfterIndexing: false });
+    assert.equal(ctx.launched.length, 1, 'startsFresh restore must launch a new session');
+    const [project, options, sessionId] = ctx.launched[0];
+    assert.equal(project.projectPath, '/fixture');
+    assert.equal(sessionId, 'fresh');
+    assert.equal(options.browserMode, 'claude-in-chrome', 'startsFresh restore must carry the current browser default');
+    assert.equal(Object.hasOwn(options, 'chrome'), false);
+    assert.equal(Object.hasOwn(options, 'worktree'), false);
+    assert.equal(Object.hasOwn(options, 'worktreeName'), false);
   } finally { ctx.destroy(); }
 });

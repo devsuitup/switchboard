@@ -382,7 +382,7 @@ any running session, so you land in it.
 - The directory may only contain letters, digits, space and `. _ + @ : , = / -`,
   must be absolute and must not contain a `..` segment. Anything else is refused
   before ssh runs.
-- Only the permission mode maps to a CLI flag. The local dialog's worktree, Chrome,
+- Only the permission mode maps to a CLI flag. The local dialog's worktree, Browser,
   sandbox, pre-launch command and additional directories do not apply to a remote
   launch.
 - Stop works as for any remote session: it kills the pane, never the tmux

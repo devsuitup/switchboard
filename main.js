@@ -1833,9 +1833,21 @@ ipcMain.handle('get-shell-profiles', () => {
   return getShellProfiles();
 });
 
+const warnedBrowserModes = new Set();
+
+function normalizeStoredBrowserSettings(scope) {
+  const settings = scope ? (getSetting(scope) || {}) : {};
+  return normalizeBrowserSettings(settings, message => {
+    const key = JSON.stringify([scope, settings.browserMode]);
+    if (warnedBrowserModes.has(key)) return;
+    warnedBrowserModes.add(key);
+    log.warn(message);
+  });
+}
+
 ipcMain.handle('get-effective-settings', (_event, projectPath) => {
-  const global = normalizeBrowserSettings(getSetting('global') || {}, message => log.warn(message));
-  const project = normalizeBrowserSettings(projectPath ? (getSetting('project:' + projectPath) || {}) : {}, message => log.warn(message));
+  const global = normalizeStoredBrowserSettings('global');
+  const project = normalizeStoredBrowserSettings(projectPath ? 'project:' + projectPath : null);
   const effective = { ...SETTING_DEFAULTS };
   for (const key of Object.keys(SETTING_DEFAULTS)) {
     // Only `undefined` (key never saved at this scope) falls through to the
