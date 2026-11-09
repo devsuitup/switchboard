@@ -12,6 +12,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - New sandboxed sessions protect the triggers directory even when it sits inside a project or another writable directory, and refuse layouts that cannot protect it safely. This protection does not apply when Podman access is enabled. (#1022)
 
 ### Fixed
+- Repeated Respawn clicks while a background conversation is starting no longer start another copy, including when the first request times out. (#1033)
 - Sending a resumed background conversation to the background no longer starts a second copy. When it already runs in the background, the tab is left untouched with a pointer to the sidebar; after a reboot or daemon death, working, done, running and failed jobs recover automatically when no live continuation holds them, while blocked jobs wait for the notice's Respawn button. (#1020)
 - A conversation's message count in the sidebar now grows as the conversation does, including remote conversations without recounting their entire transcript on each fetch. Conversations sharing copied history keep duplicate messages out of their counts. (#1017)
 
