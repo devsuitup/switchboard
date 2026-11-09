@@ -49,6 +49,108 @@ function setup(t, run = () => ({ ok: true })) {
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
+test('Delete waits for the destructive confirmation naming the file and preserving past runs, then refreshes', async t => {
+  const h = setup(t);
+  let answer;
+  let question;
+  const deleted = [];
+  h.w.appConfirm = options => { question = options; return new Promise(resolve => { answer = resolve; }); };
+  h.w.api.deleteScheduleFile = async filePath => { deleted.push(filePath); h.project.schedules = []; return { ok: true }; };
+  const button = h.w.document.querySelector('.schedule-delete-btn');
+  assert.ok(button, 'Schedules offers Delete');
+  button.focus();
+  button.click();
+  await settle();
+  assert.equal(question.danger, true);
+  assert.equal(question.confirmLabel, 'Delete');
+  assert.ok(question.message.includes(h.schedule.file));
+  assert.match(question.message, /past runs stay in Sessions/i);
+  assert.deepEqual(deleted, [], 'nothing is unlinked before confirmation resolves');
+  await h.w.loadSchedules();
+  assert.equal(h.w.document.querySelector('.schedule-delete-btn').disabled, true, 'pending confirmation survives refresh');
+  answer(true);
+  await settle();
+  assert.deepEqual(deleted, [h.schedule.filePath]);
+  assert.equal(h.w.document.querySelector('.schedule-item'), null);
+});
+
+for (const [position, count, expected] of [[0, 3, 1], [1, 3, 2], [2, 3, 1], [0, 1, null]]) {
+  test(`successful Delete at row ${position + 1} of ${count} moves focus to ${expected === null ? 'the list' : `Delete in row ${expected + 1}`}`, async t => {
+    const h = setup(t);
+    await settle();
+    h.project.schedules = Array.from({ length: count }, (_, index) => ({ ...h.schedule,
+      file: `schedule-${index}.md`, filePath: `/p/schedule-${index}.md` }));
+    const deleted = h.project.schedules[position].filePath;
+    const target = expected === null ? null : h.project.schedules[expected].filePath;
+    h.w.appConfirm = async () => true;
+    h.w.api.deleteScheduleFile = async filePath => {
+      h.project.schedules = h.project.schedules.filter(schedule => schedule.filePath !== filePath);
+      return { ok: true };
+    };
+    h.w.renderSchedules(h.data);
+    const button = h.w.document.querySelectorAll('.schedule-delete-btn')[position];
+    button.focus();
+    button.click();
+    await settle();
+    const rows = [...h.w.document.querySelectorAll('.schedule-item')];
+    assert.equal(rows.some(row => row.dataset.filepath === deleted), false);
+    const focused = target === null ? h.w.document.getElementById('schedules-content')
+      : rows.find(row => row.dataset.filepath === target).querySelector('.schedule-delete-btn');
+    assert.equal(h.w.document.activeElement, focused, 'successful deletion keeps keyboard focus in the schedules list');
+  });
+}
+
+test('cancelling Delete keeps the schedule and makes the action available again', async t => {
+  const h = setup(t);
+  let deleted = false;
+  h.w.appConfirm = async () => false;
+  h.w.api.deleteScheduleFile = async () => { deleted = true; return { ok: true }; };
+  const button = h.w.document.querySelector('.schedule-delete-btn');
+  assert.ok(button, 'Schedules offers Delete');
+  button.click();
+  await settle();
+  assert.equal(deleted, false);
+  assert.equal(h.w.document.querySelector('.schedule-delete-btn').disabled, false);
+  assert.ok(h.w.document.querySelector('.schedule-item'));
+});
+
+for (const reply of [{ ok: false, error: 'unlink denied' }, undefined, new Error('backend unavailable')]) {
+  test(`Delete failure stays visible and restores the action: ${String(reply?.error || reply)}`, async t => {
+    const h = setup(t);
+    h.w.appConfirm = async () => true;
+    h.w.api.deleteScheduleFile = async () => { if (reply instanceof Error) throw reply; return reply; };
+    const button = h.w.document.querySelector('.schedule-delete-btn');
+    assert.ok(button, 'Schedules offers Delete');
+    button.click();
+    await settle();
+    assert.equal(h.w.document.querySelector('.schedule-delete-btn').disabled, false);
+    const notice = h.w.document.querySelector('[role="alert"]');
+    assert.ok(notice);
+    assert.ok(notice.textContent.includes(h.schedule.file));
+    assert.match(notice.textContent, /could not delete/i);
+  });
+}
+
+test('Delete refuses linked files but remains available for disabled, malformed and unknown-project rows', t => {
+  const h = setup(t);
+  h.schedule.linked = true;
+  h.w.renderSchedules(h.data);
+  let button = h.w.document.querySelector('.schedule-delete-btn');
+  assert.ok(button, 'Schedules offers Delete');
+  assert.equal(button.disabled, true);
+  assert.equal(button.title, 'linked file: edit it at its source');
+  h.schedule.linked = false;
+  h.schedule.enabled = false;
+  h.schedule.problems = ['front matter not read'];
+  h.project.known = false;
+  h.w.renderSchedules(h.data);
+  button = h.w.document.querySelector('.schedule-delete-btn');
+  assert.equal(button.disabled, false);
+  assert.equal(button.dataset.scheduleControl, 'schedule-delete-btn');
+  button.focus();
+  assert.equal(h.w.document.activeElement, button, 'Delete participates in keyboard focus');
+});
+
 for (const [result, expected] of [
   [{ outcome: 'exited', exitCode: 0, failure: null }, /^Exit 0$/],
   [{ outcome: 'exited', exitCode: 1, failure: 'claude-path' }, /Failed: exit 1.*claude not found on the shell PATH.*Check/i],

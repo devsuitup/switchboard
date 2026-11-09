@@ -1636,6 +1636,12 @@ ipcMain.handle('set-schedule-enabled', (_event, filePath, enabled) =>
     scheduleProjects, stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), getLastTickMinute: () => stopScheduler?.getLastTickMinute(),
   }));
 
+ipcMain.handle('delete-schedule-file', (_event, filePath) =>
+  require('./src/main/schedules/schedule-delete-file').deleteListedScheduleFile(filePath, {
+    scheduleProjects, stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
+    runsDir: require('./src/main/schedules/schedule-run-results').scheduleRunsDir(path.dirname(DB_PATH)),
+  }));
+
 ipcMain.handle('list-schedules', () => {
   const knownProjectPaths = [...getKnownProjectPaths()];
   return buildScheduleList({
