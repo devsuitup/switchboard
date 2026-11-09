@@ -416,8 +416,11 @@ protect_resolved() {
 }
 
 control_path_forms() {
-  local p="$1" forms real ancestor
-  forms="$(path_forms "$p")" || fail "cannot resolve control path: $p"
+  local p="$1" lexical resolved real ancestor
+  case "$p" in *$'\n'*|*$'\r'*) fail "unrepresentable control path: $p" ;; esac
+  IFS= read -r -d '' lexical < <(realpath -m -s -z -- "$p" 2>/dev/null) && [ -n "$lexical" ] &&
+    IFS= read -r -d '' resolved < <(readlink -m -z -- "$p" 2>/dev/null) && [ -n "$resolved" ] || fail "cannot resolve control path: $p"
+  case "$lexical$resolved" in *$'\n'*|*$'\r'*) fail "unrepresentable control path: $p" ;; esac
   real="$(readlink -e -- "$p" 2>/dev/null || true)"
   [ "$real" != / ] || fail "control path covers the filesystem root: $p"
   case "$real" in *$'\n'*|*$'\r'*) fail "unrepresentable control path: $p" ;; esac
@@ -433,7 +436,7 @@ control_path_forms() {
   elif [ ! -d "$real" ]; then
     fail "control path is not a directory: $p"
   fi
-  CONTROL_FORMS="$forms"
+  CONTROL_FORMS="$(printf '%s\n%s\n' "$lexical" "$resolved")"
   CONTROL_REAL="$real"
 }
 
