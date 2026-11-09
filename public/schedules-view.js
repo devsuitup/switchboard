@@ -1,5 +1,22 @@
 'use strict';
 
+window.schedulesTabEnabled = SETTING_DEFAULTS.schedulesTab;
+
+window._applySchedulesTab = enabled => {
+  if (window.schedulesTabEnabled === enabled) return;
+  window.schedulesTabEnabled = enabled;
+  const tab = document.querySelector('.sidebar-tab[data-tab="schedules"]');
+  tab.hidden = !enabled;
+  tab.disabled = !enabled;
+  tab.tabIndex = enabled ? 0 : -1;
+  if (!enabled) {
+    setSchedulesVisible(false);
+    if (activeTab === 'schedules') document.querySelector('.sidebar-tab[data-tab="sessions"]').click();
+  }
+  if (activeTab === 'memory') loadMemories();
+  if (typeof refreshSidebar === 'function') refreshSidebar();
+};
+
 let schedulesVisible = false;
 let schedulesTimer = null;
 let schedulesRequest = 0;
@@ -58,6 +75,7 @@ async function loadSchedules() {
 }
 
 function showSchedules(projectPath) {
+  if (!window.schedulesTabEnabled) return;
   schedulesProject = projectPath || null;
   document.querySelector('.sidebar-tab[data-tab="schedules"]')?.click();
   loadSchedules();
@@ -145,11 +163,19 @@ function renderSchedules(data) {
   }
   if (!count) scheduleText(container, 'plans-empty', 'No schedules found.');
   if (!projectFocus && focusedPath && focusedControl) {
-    focusScheduleControl(focusedPath, focusedControl);
+    const currentRows = [...container.querySelectorAll('.schedule-item')];
+    const target = currentRows.find(row => row.dataset.filepath === focusedPath)
+      || currentRows[Math.min(rows.indexOf(focusedRow), currentRows.length - 1)];
+    if (target) focusScheduleControl(target.dataset.filepath, focusedControl);
+    else {
+      schedulesPendingFocus = null;
+      container.tabIndex = -1;
+      container.focus({ preventScroll: true });
+    }
   } else schedulesPendingFocus = null;
   const paths = new Set(data.projects.flatMap(project => project.schedules.map(schedule => schedule.filePath)));
   for (const [filePath, state] of schedulesActions) {
-    if (!paths.has(filePath) && state.run !== 'running' && !state.toggling) schedulesActions.delete(filePath);
+    if (!paths.has(filePath) && state.run !== 'running' && !state.toggling && !state.deleting) schedulesActions.delete(filePath);
   }
 }
 
@@ -272,6 +298,9 @@ function buildScheduleItem(project, schedule, data) {
       showAppNotice({ id, kind: 'error', message: `Could not open "${schedule.file}": ${error?.message || error}. Check the file and retry Open.` });
     }
   });
+  const remove = action('schedule-delete-btn', 'Delete', schedule.linked,
+    'linked file: edit it at its source', () => deleteScheduleFromTab(schedule));
+  remove.disabled ||= !!actionState.deleting;
   item.appendChild(actions);
   const history = document.createElement('details');
   const summary = document.createElement('summary');
@@ -296,6 +325,37 @@ function buildScheduleItem(project, schedule, data) {
   history.appendChild(sessions);
   item.appendChild(history);
   return item;
+}
+
+async function deleteScheduleFromTab(schedule) {
+  const state = scheduleActionState(schedule.filePath);
+  if (state.deleting) return;
+  state.deleting = true;
+  const update = () => {
+    for (const button of document.querySelectorAll('.schedule-delete-btn')) {
+      if (button.closest('.schedule-item').dataset.filepath === schedule.filePath) {
+        const focused = document.activeElement === button;
+        button.disabled = button.dataset.unavailable === 'true' || state.deleting;
+        if (focused && button.disabled) focusScheduleControl(schedule.filePath, button.dataset.scheduleControl);
+      }
+    }
+    restorePendingScheduleFocus();
+  };
+  update();
+  const id = `DeleteSchedule:${schedule.filePath}`;
+  try {
+    if (!await appConfirm({ title: 'Delete schedule',
+      message: `Delete "${schedule.file}"? Past runs stay in Sessions.`, confirmLabel: 'Delete', danger: true })) return;
+    const result = await window.api.deleteScheduleFile(schedule.filePath);
+    if (!result?.ok) throw new Error(result?.error || 'The backend returned no result');
+    clearAppNotice(id);
+  } catch (error) {
+    showAppNotice({ id, kind: 'error', message: `Could not delete "${schedule.file}": ${error?.message || error}. Check the file and retry Delete in the Schedules tab.` });
+  } finally {
+    state.deleting = false;
+    update();
+    if (schedulesVisible) await loadSchedules();
+  }
 }
 
 async function runScheduleFromTab(schedule, button) {

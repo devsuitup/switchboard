@@ -472,6 +472,11 @@ Two rules share that snapshot and must not be confused:
   descriptor of an asked session belongs to a conversation that has a PTY
   (`exclude.needsProcessTable`), then applies the filter. Nothing is spawned
   otherwise.
+- **Pure creation-time comparison.** `src/main/cli/proc-start.js` owns
+  `toCreated`, `procStartMatches`, `WINDOWS_FILETIME_RE` and
+  `PROC_START_TOLERANCE`, with no filesystem, process or platform dependencies.
+  `cli-session-state.js` re-exports them; `bg-worker-liveness.js` imports the
+  pure module directly so roster consumers do not load process probes.
 - **Identity, for the guards.** Pid numbers are not identities. A guard treats a
   descriptor as own only when: the table holds its pid with a creation time within
   `PROC_START_TOLERANCE` (100 ticks, 10 us) of the descriptor's `procStart` (`pidDomain: "win32:anchor"` FILETIME); every link up

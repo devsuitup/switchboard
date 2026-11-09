@@ -17,6 +17,7 @@ const STRONG_MARKERS = {
   filesystem: /\bfs\.(?:promises\.)?rename(?:Sync)?\s*\(|\brealpath(?:Sync)?\b|\bbirthtime(?:Ms|Ns)?\b|\bbigint\s*:\s*true/,
 };
 const MIN_PLATFORM_TESTS = 150;
+const TRANSITIVE_MARKERS = ['processes', 'filesystem', 'conpty', 'links'].map(name => STRONG_MARKERS[name]);
 
 function selectPlatformTests(files, { root = path.resolve(__dirname, '..'), minimum = MIN_PLATFORM_TESTS } = {}) {
   const sources = new Map();
@@ -44,7 +45,8 @@ function selectPlatformTests(files, { root = path.resolve(__dirname, '..'), mini
     if (visited.has(file)) return false;
     visited.add(file);
     return relativeDependencies(file).some(dependency =>
-      (!dependency.startsWith(testDir) && /process\.platform/.test(read(dependency))) || reachesPlatform(dependency, visited));
+      (!dependency.startsWith(testDir) && /process\.platform/.test(read(dependency)))
+      || TRANSITIVE_MARKERS.some(marker => marker.test(read(dependency))) || reachesPlatform(dependency, visited));
   };
   const selected = files.filter(file => {
     const absolute = path.resolve(root, file);

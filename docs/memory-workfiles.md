@@ -21,10 +21,12 @@ they live:
 
 No directory is scanned recursively. Archived and deleted projects are left out.
 
-Project command files named `schedule-*.md` appear in the **Schedules** tab
-instead of Agent Files or its search results. Run, turn them on or off, and
-open them there — see [Automation](automation.md#schedules). The filename
-match is case-sensitive; other Markdown files remain here.
+With **Schedules tab** off in Global Settings (the default), project command
+files named `schedule-*.md` stay in Agent Files and its search results, with
+**Run now** and the editor. Turning the setting on moves them to the
+**Schedules** tab, where you can run, turn them on or off, and open them — see
+[Automation](automation.md#schedules). The filename match is case-sensitive;
+other Markdown files remain here.
 
 The editor offers:
 

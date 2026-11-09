@@ -6,6 +6,7 @@ const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
 const { bridgeSessionKey } = require('./bridge-session-id');
+const { procStartMatches, toCreated, WINDOWS_FILETIME_RE, PROC_START_TOLERANCE } = require('./src/main/cli/proc-start');
 
 const DEFAULT_DIR = path.join(os.homedir(), '.claude', 'sessions');
 const STATE_FILE_RE = /^\d+\.json$/;
@@ -18,11 +19,8 @@ const MAX_LIVE_QUERY_IDS = 200;
 const GET_STATUS_PROBE_THROTTLE_MS = 5000;
 const MAX_PROBE_PIDS = 64;
 const PROBE_TIMEOUT_MS = 5000;
-const WINDOWS_FILETIME_RE = /^\d{17,19}$/;
 const PROCESS_TABLE_TTL_MS = 3000;
 const PROCESS_TABLE_MAX_BUFFER = 4 << 20;
-const PROC_START_TOLERANCE = 100n;
-const abs = (n) => (n < 0n ? -n : n);
 
 let dir = DEFAULT_DIR;
 let activeSessions = null;
@@ -110,12 +108,6 @@ function defaultReadParentPid(pid) {
   } catch {
     return null;
   }
-}
-
-// see .ai/contexts/cli-session-state.md ("Own descendants outside Linux")
-function toCreated(value) {
-  if (value == null || value === '') return null;
-  try { return BigInt(value); } catch { return null; }
 }
 
 const TABLE_LINE_RE = /^\s*(\d+)\s+(\d+)(?:\s+(\d+))?\s*(?:\t(.*))?$/;
@@ -214,12 +206,6 @@ function startProcessTableRefresh() {
 
 function tableEntry(pid) {
   return processTable && processTable.map ? processTable.map.get(pid) : undefined;
-}
-
-function procStartMatches(created, procStart) {
-  const value = toCreated(created);
-  return value !== null && typeof procStart === 'string' && WINDOWS_FILETIME_RE.test(procStart)
-    && abs(value - BigInt(procStart)) <= PROC_START_TOLERANCE;
 }
 
 function readWorkerProcessEvidence() {
@@ -1142,6 +1128,9 @@ async function liveElsewhereMany(sessionIds, hasPty, ptyPids = () => []) {
 
 module.exports = {
   procStartMatches,
+  toCreated,
+  WINDOWS_FILETIME_RE,
+  PROC_START_TOLERANCE,
   readWorkerProcessEvidence,
   init,
   trackScheduleRun,

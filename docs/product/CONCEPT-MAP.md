@@ -394,7 +394,7 @@ working-set restore…").
 **States**: enabled / disabled (`enabled:` front matter); no per-run state of
 its own (`docs/automation.md:41-55`).
 
-**Actions**: **Create scheduled task** (project header); **Run now**, enable/disable and Open (Schedules tab, `docs/automation.md`); disable via Archive folder;
+**Actions**: **Create scheduled task** (project header); **Run now**, enable/disable and Open (Schedules tab when `schedulesTab` is on, off by default; `docs/automation.md`); disable via Archive folder;
 **Turn back on** notice. A run: row in a slug group; open → info-only dialog
 (§11); no Stop that works (m7, S for the "Failed" flash).
 

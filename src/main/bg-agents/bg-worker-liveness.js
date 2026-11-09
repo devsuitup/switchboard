@@ -1,6 +1,6 @@
 'use strict';
 
-const { procStartMatches } = require('../../../cli-session-state');
+const { procStartMatches } = require('../cli/proc-start');
 
 const WINDOWS_FILETIME_RE = /^\d{17,19}$/;
 const timestamp = value => typeof value === 'number' && Number.isFinite(value) ? value

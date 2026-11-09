@@ -2709,6 +2709,7 @@ window.addEventListener('focus', () => refitOpenTerminals({ fitOffscreen: true }
 document.querySelectorAll('.sidebar-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     const tabName = tab.dataset.tab;
+    if (tabName === 'schedules' && !window.schedulesTabEnabled) return;
     if (tabName === activeTab) return;
     searchGeneration++;
     activeTab = tabName;
@@ -2928,6 +2929,7 @@ setTimeout(() => {
     terminalRightClickMode = global.terminalRightClick || SETTING_DEFAULTS.terminalRightClick;
     if (global.shortcuts) setAppShortcuts(global.shortcuts);
   }
+  window._applySchedulesTab(global?.schedulesTab ?? SETTING_DEFAULTS.schedulesTab);
 })();
 
 // Let the settings panel push updated key bindings live (no restart needed).

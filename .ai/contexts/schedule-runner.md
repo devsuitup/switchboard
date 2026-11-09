@@ -475,8 +475,26 @@ PROJECTS_DIR scans), `test/schedule-next-run.test.js` (descriptions and DST).
 
 ## Schedules tab (#792, slice A2)
 
+Global Settings → **Schedules tab** persists `global.schedulesTab`, defaulting
+to `SETTING_DEFAULTS.schedulesTab` (false). Only renderer surfaces are gated.
+The startup settings restore and Settings Save call `_applySchedulesTab`:
+hidden/disabled clock tab with tabindex -1 when off, no programmatic route,
+and a return to Sessions when the active tab is disabled. Only an effective
+value change reloads Agent Files if open, cancels schedule refreshes and refreshes
+sidebar notices. Startup applies it after restoring sidebar width and shortcuts,
+so a tab failure cannot interrupt their restore. Global Save's separate sidebar
+refresh runs only when visible count, maximum age or remote hosts changed (an SDK
+visibility change still reloads projects).
+`file-lists.js` always supplies project command schedules, marked `schedule`;
+Agent Files filters those entries only when the tab is on. Its file search
+index keeps them available so switching requires no reindex. With the tab off,
+the prior schedule icon, Run now and editor are restored. Archive choices,
+Undo, re-enable offers and recovery hints use their pre-A2 names and Agent
+Files wording; when on they retain the A2 counts and Schedules links.
+No main-side scheduler, IPC, result persistence or re-enable skip is gated.
+
 `public/schedules-view.js` consumes `list-schedules` on open, after Open, after
-Run now/toggle while visible, on relevant projects-changed events (900 ms debounce, 3000 ms maximum
+Run now/toggle/Delete while visible, on relevant projects-changed events (900 ms debounce, 3000 ms maximum
 wait) and on minute boundaries while visible. The event allowlist is `archive`,
 `project-added`, `project-deleted`, `project-remap`, `worktree-deleted`, `watcher`,
 `session-exit` and `session-attach`: changes to the registry,
@@ -524,9 +542,44 @@ This ordering also applies in isolated instances. Archive offers and Undo receiv
 the same stateDir via archiveDeps.reenable and reenableScheduleFiles; the writer
 continues to perform file effects outside SQL. Skip failure prevents enabling.
 
-Archive choices keep their default and file lists, but display counts and a
+With the tab enabled, Archive choices keep their default and file lists, but display counts and a
 Schedules tab reference. Undo uses a count; the re-enable offer adds Show in
 Schedules for its project. Failure text continues to name failed schedules.
+
+## Delete a schedule (#792, slice B)
+
+The Schedules tab offers Delete beside Open. It awaits a danger `appConfirm`
+naming the file and saying past runs stay in Sessions. The action stays disabled
+while the question or IPC is pending, including across a refresh; failures keep
+a persistent `DeleteSchedule:<filePath>` notice with the file, reason and retry.
+Linked files show `linked file: edit it at its source` and cannot be deleted.
+Disabled, malformed and unknown-project schedules can still be deleted.
+
+Main registers `delete-schedule-file` and supplies this instance's `schedule-state`
+and `scheduleRunsDir(dirname(DB_PATH))`. `deleteListedScheduleFile` refreshes the
+registry and requires exact equality with a `listScheduleFiles` path. The separate
+`deleteScheduleFile(filePath, { projectRoot, stateDir, runsDir })` export has no IPC,
+window or registry dependency, so project-folder deletion (#474) can reuse it.
+It rechecks `scheduleFileUnlinked`, removes that key's catch-up claims via
+`readScheduleStateOnly`, unlinks the listed path, then calls the existing
+`pruneScheduleRunResults(runsDir, key, 0)`. A claim unlink failure other than
+ENOENT returns the error with the schedule file and run results still present,
+so the row stays available for retry. A schedule-file unlink failure also
+returns the error and keeps run results; the removed claims can cost at most
+one catch-up. Run-result pruning errors stay ignored. Missing record directories
+are not created. Other keys, transcripts and Sessions grouping remain intact. A file
+recreated at the same path inherits no retained catch-up or run-result records.
+Publication debris follows D's existing ten-minute stale-file policy; a running
+child is not stopped by deleting its schedule.
+
+Delete is a native button in the existing `.schedule-actions` keyboard inventory:
+Tab reaches it, Enter/Space activates it, and `:has(:focus-visible)` reveals the
+action container. If a refresh removes the focused row after deletion, focus
+moves to the same control in the next row, otherwise the previous row, otherwise
+the list container (`tabIndex=-1`). The shared confirmation focuses Cancel and
+owns Escape and the modal Tab loop. Tests: `test/schedule-delete-file.test.js` and
+`test/dom-schedules-tab.test.js`; the existing `test/keyboard-focus-css.test.js`
+covers the shared action container.
 
 ## Run results
 
