@@ -125,7 +125,7 @@ test('startup restores sidebar width and shortcuts before applying the Schedules
 });
 
 for (const enabled of [false, true]) {
-  test(`global Save with schedulesTab=${enabled} unchanged does not rebuild sidebar or Agent Files`, async t => {
+  test(`global Save with schedulesTab=${enabled} unchanged rebuilds the sidebar once and leaves Agent Files alone`, async t => {
     const h = await setup(t, { schedulesTab: enabled });
     let sidebarRenders = 0;
     let memoryLoads = 0;
@@ -137,7 +137,7 @@ for (const enabled of [false, true]) {
     h.w.document.querySelector('#sv-save-btn').click();
     await settle();
     assert.equal(h.saved.schedulesTab, enabled);
-    assert.equal(sidebarRenders, 0, 'unchanged Save does not rebuild the sidebar');
+    assert.equal(sidebarRenders, 1, 'unchanged Save keeps the one sidebar refresh every Save does, and adds none');
     assert.equal(memoryLoads, 0, 'unchanged Save does not reload Agent Files');
   });
 }
