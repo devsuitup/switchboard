@@ -505,6 +505,7 @@ function's `getLastTickMinute()`. Every check records its minute, after
 project selection resolves and before schedules are scanned: cron ticks, startup
 and resume catch-up checks use the same scheduler-owned state. A minute is evaluated
 once for re-enable purposes, even if the schedule was disabled during that check.
+The recorded minute only moves forward, so an older asynchronous project selection resolving after a newer check cannot make re-enabling replay an already evaluated minute.
 An already enabled schedule still receives its normal startup catch-up run.
 Main passes its getter through the existing enable and
 archive deps, and its value to unarchive's skip. The current due minute is
