@@ -38,6 +38,7 @@ const path = require('path');
 const os   = require('os');
 
 const { createLocalSessionHandle } = require('./trigger-context');
+const { createTriggerActions, isVersioned } = require('./trigger-actions');
 const { promptMatches } = require('../../../transcript-turn');
 
 const DEFAULT_TRIGGERS_DIR   = path.join(os.homedir(), '.switchboard', 'triggers');
@@ -1049,7 +1050,7 @@ function safeLogError(ctx, ...args) {
  *        `finally` below so a second trigger for the same session cannot
  *        touch its PTY/composer until this one is fully done.
  */
-async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryRetained, acquireSessionLock, acquireTabLock) {
+async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryRetained, acquireSessionLock, acquireTabLock, actions) {
   // Only handle *.json files, ignore the processed/ subdir itself and
   // any stray files.
   if (!name.endsWith('.json')) return;
@@ -1058,10 +1059,16 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   const uuid        = name.slice(0, -5); // strip ".json"
   const resultPath  = path.join(processedDir, uuid + '.result.json');
   const resultTmp   = resultPath + '.tmp'; // I1: atomic write temp path
+  const markerPath = path.join(processedDir, uuid + '.action.json');
+  let versioned = false;
 
   // I1: atomic result write — write to .tmp then rename so pollers never
   // observe a partial JSON file.
   async function writeResult(result) {
+    if (versioned) {
+      actions.publish({ result, resultPath, triggerPath, markerPath, retained: onEntryRetained });
+      return;
+    }
     // Every result carries `submitted`; an unstated one is the safe value.
     if (result.submitted === undefined) result.submitted = SUBMITTED_NO;
     if (result.wrote === undefined) result.wrote = writeAttempted;
@@ -1105,6 +1112,20 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   try {
 
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+    try {
+      const state = actions.readState(resultPath, markerPath);
+      if (state) {
+        actions.publish({ ...state, resultPath, triggerPath, markerPath, retained: onEntryRetained });
+        return;
+      }
+    } catch (err) {
+      onEntryRetained?.();
+      safeLogError(ctx, '[trigger-watcher] v1 recovery state unavailable:', name, err.message);
+      return;
+    }
+  }
+
   // ── 1. lstat + size guard (C1 + C2) ──────────────────────────────────────
   let stat;
   try {
@@ -1138,14 +1159,20 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   if (ageMs > maxAgeMs) {
     ctx.log.warn('[trigger-watcher] Stale trigger refused:', name,
       Math.round(ageMs) + 'ms old, max ' + maxAgeMs + 'ms');
-    await writeResult({
+    let staleTrigger;
+    try {
+      staleTrigger = JSON.parse(fs.readFileSync(triggerPath, 'utf8'));
+      versioned = isVersioned(staleTrigger, uuid);
+    } catch {}
+    const stale = {
       ok:        false,
       submitted: SUBMITTED_NO,
       error:     ERROR_NOT_SENT,
       reason:    `trigger is ${Math.round(ageMs)}ms old, older than the ${maxAgeMs}ms ` +
                  'staleness limit; refused rather than act on a request that may no ' +
                  'longer target the intended session state',
-    });
+    };
+    await writeResult(versioned ? actions.refusal(staleTrigger, stale.reason, { error: stale.error }) : stale);
     return;
   }
 
@@ -1175,6 +1202,12 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   if (lastParseErr) {
     ctx.log.warn('[trigger-watcher] Unreadable/unparseable trigger:', name, lastParseErr.message);
     await writeResult({ ok: false, error: 'invalid JSON: ' + lastParseErr.message });
+    return;
+  }
+
+  if (isVersioned(trigger, uuid)) {
+    versioned = true;
+    await writeResult(actions.execute(trigger, uuid));
     return;
   }
 
@@ -2040,6 +2073,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 function start(ctx) {
   const triggersDir  = getTriggersDir();
   const processedDir = path.join(triggersDir, 'processed');
+  const actions = createTriggerActions({ fs, renameWithRetry, log: ctx.log });
 
   // Ensure directories exist
   try {
@@ -2092,7 +2126,7 @@ function start(ctx) {
 
   function dispatch(filename) {
     inFlight.add(filename);
-    processTriggerFile(filename, ctx, triggersDir, processedDir, () => retained.add(filename), acquireSessionLock, acquireTabLock)
+    processTriggerFile(filename, ctx, triggersDir, processedDir, () => retained.add(filename), acquireSessionLock, acquireTabLock, actions)
       .catch((err) => {
         retained.add(filename);
         safeLogError(ctx, '[trigger-watcher] Trigger processing threw, will not be run again:',
@@ -2124,7 +2158,8 @@ function start(ctx) {
     try {
       fs.accessSync(filePath, fs.constants.R_OK);
     } catch {
-      return; // File gone or not readable yet — skip
+      try { fs.accessSync(path.join(processedDir, filename.slice(0, -5) + '.action.json'), fs.constants.R_OK); }
+      catch { return; }
     }
 
     if (inFlight.size >= MAX_INFLIGHT) {
@@ -2160,6 +2195,9 @@ function start(ctx) {
   try {
     const names = fs.readdirSync(triggersDir);
     for (const name of names) handleFile(name);
+    for (const name of fs.readdirSync(processedDir)) {
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.action\.json$/.test(name)) handleFile(name.replace(/\.action\.json$/, '.json'));
+    }
   } catch (err) {
     ctx.log.error('[trigger-watcher] Startup scan failed:', err.message);
   }
