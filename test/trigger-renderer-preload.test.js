@@ -55,3 +55,11 @@ test('the action subscription strips the IPC event and its cleanup preserves oth
   removeSecond();
   assert.equal(r.ipcRenderer.listenerCount('trigger-session-action'), 0);
 });
+
+test('openTerminal preserves ordinary argument count and forwards the private permit only when supplied', async () => {
+  const r = loadPreloadBody();
+  await r.api.openTerminal('id', '/project', false, {}, null);
+  assert.equal(r.invoked[0].length, 6);
+  await r.api.openTerminal('id', '/project', false, {}, null, 'permit');
+  assert.deepEqual(r.invoked[1], ['open-terminal', 'id', '/project', false, {}, null, 'permit']);
+});

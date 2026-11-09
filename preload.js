@@ -69,7 +69,9 @@ contextBridge.exposeInMainWorld('api', {
   deleteSessionPreview: (id) => ipcRenderer.invoke('delete-session-preview', id),
   // initialSize: { cols, rows } measured by the renderer before the spawn, so
   // the PTY never runs against a placeholder geometry. May be null.
-  openTerminal: (id, projectPath, isNew, sessionOptions, initialSize) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions, initialSize),
+  openTerminal: (id, projectPath, isNew, sessionOptions, initialSize, triggerRequestId) => triggerRequestId === undefined
+    ? ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions, initialSize)
+    : ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions, initialSize, triggerRequestId),
   search: (type, query, titleOnly) => ipcRenderer.invoke('search', type, query, titleOnly),
   readSessionJsonl: (sessionId, options) => options === undefined
     ? ipcRenderer.invoke('read-session-jsonl', sessionId)

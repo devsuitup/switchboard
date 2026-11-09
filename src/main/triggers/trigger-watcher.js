@@ -653,7 +653,7 @@ function cliForbidsRecoveryEnter(ctx, sessionId) {
 }
 
 // see .ai/contexts/trigger-watcher.md, "Readiness before every step" (return shape, descriptor loss, deadline)
-function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, trustIdleStamp = false, transcript = null) {
+function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, trustIdleStamp = false, transcript = null, { startup = false } = {}) {
   const start = Date.now();
   let idleSince = null;
   let idleStamp = null;
@@ -669,7 +669,8 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
       return resolve({ ready: false, available: true, timedOut: false, sessionExited: true, waited_ms, lastStatus, waitingSeen });
     }
     const s = dialog.sample(now);
-    if (!s && !everRead) {
+    const startupEvidence = startup ? { fresh: !!s && Number.isInteger(s.statusUpdatedAt) && s.statusUpdatedAt >= afterMs } : {};
+    if (!s && !everRead && !startup) {
       return resolve({ ready: false, available: false, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen });
     }
     let idleHeld = false;
@@ -679,7 +680,7 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
     } else {
       everRead = true;
       lastStatus = s.status;
-      if (s.status === 'idle' && s.statusUpdatedAt > afterMs) {
+      if (s.status === 'idle' && (startup ? s.statusUpdatedAt >= afterMs : s.statusUpdatedAt > afterMs)) {
         if (idleSince === null || idleStamp !== s.statusUpdatedAt) {
           idleSince = (trustIdleStamp && firstIdleRead) ? Math.min(now, s.statusUpdatedAt) : now;
           idleStamp = s.statusUpdatedAt;
@@ -698,7 +699,7 @@ function waitForCliIdleAfter(sessionId, ctx, afterMs, deadlineMs, settleMs = 0, 
       return resolve({ ready: true, available: true, timedOut: false, sessionExited: false, waited_ms, lastStatus, waitingSeen, source });
     }
     if (now >= deadlineMs) {
-      return resolve({ ready: false, available: true, timedOut: true, sessionExited: false, waited_ms, lastStatus, waitingSeen: dialog.seen(now) });
+      return resolve({ ready: false, available: true, timedOut: true, sessionExited: false, waited_ms, lastStatus, waitingSeen: dialog.seen(now), ...startupEvidence });
     }
     scheduleNext();
   });
@@ -1041,6 +1042,165 @@ function safeLogError(ctx, ...args) {
   } catch {}
 }
 
+async function deliverSingle({ ctx, sessionId, command, wait = 'idle', entry: sessionEntry, handle, delivery, deliveryDeadline, startup = false, launchStartedAt, v1 = false, onWriteAttempt = () => {}, failure }) {
+  const deliveryFailure = failure || (err => {
+    const step = delivery?.step;
+    return { ok: false, sessionId, reason: err.message, error: err.message, wrote: !!step?.text_written,
+      text_written: !!step?.text_written, enter_written: !!step?.enter_written, submitted: step?.enter_written ? SUBMITTED_ASSUMED : SUBMITTED_NO };
+  });
+  let waited_ms = 0;
+  const commandDeadline = deliveryDeadline;
+  if (wait === 'idle') {
+    const result = await waitForIdle(sessionId, ctx, Math.max(0, commandDeadline - Date.now()));
+    waited_ms += result.waited_ms;
+
+    if (result.sessionExited) {
+      ctx.log.warn('[trigger-watcher] Session exited during wait:', sessionId);
+      return ({
+        ok: false,
+        submitted: SUBMITTED_NO,
+        error: 'session exited during wait',
+        reason: 'the session exited while waiting for it to go idle; nothing was written',
+        sessionId, waited_ms,
+      });
+    }
+
+    if (result.timedOut) {
+      ctx.log.warn('[trigger-watcher] Idle timeout for session, nothing sent:', sessionId);
+      const status = startup ? readCliStatusRaw(ctx, sessionId) : null;
+      const startupUnknown = startup && (!status || !Number.isInteger(status.statusUpdatedAt) || status.statusUpdatedAt < launchStartedAt);
+      return ({
+        ok: false,
+        submitted: SUBMITTED_NO,
+        error: ERROR_NOT_SENT,
+        reason: startupUnknown ? 'session readiness unavailable' : result.waitingSeen ? REASON_DIALOG_OPEN
+          : startup && status.status === 'busy' ? REASON_CLI_BUSY : 'timeout waiting for idle; nothing was written',
+        sessionId, waited_ms,
+      });
+    }
+  }
+
+  const polite = await waitForComposerFree(sessionId, ctx, commandDeadline);
+  waited_ms += polite.waited_ms;
+  if (!polite.free) {
+    ctx.log.warn('[trigger-watcher] Composer never free, nothing sent:', sessionId, polite.reason);
+    return ({
+      ok:        false,
+      submitted: SUBMITTED_NO,
+      error:     ERROR_NOT_SENT,
+      reason:    polite.reason,
+      sessionId,
+      waited_ms,
+    });
+  }
+
+  if (!isEntryAlive(ctx, sessionEntry, handle)) {
+    ctx.log.warn('[trigger-watcher] Target process exited during wait:', sessionId);
+    return ({ ok: false, error: 'target process not running', sessionId, waited_ms });
+  }
+
+  if (wait === 'idle') {
+    const settleMs = startup ? getBusyFallSettleMs() : Math.max(0, Math.min(getBusyFallSettleMs(), commandDeadline - Date.now() - 1));
+    const ready = await waitForCliIdleAfter(sessionId, ctx, startup ? launchStartedAt : -Infinity, commandDeadline, settleMs, !startup, null, { startup });
+    waited_ms += ready.waited_ms;
+    if (ready.sessionExited) {
+      ctx.log.warn('[trigger-watcher] Session exited waiting for the CLI to be ready:', sessionId);
+      return ({ ok: false, error: 'session exited during wait', sessionId, waited_ms });
+    }
+    if (!ready.available) {
+      ctx.log.info(`[trigger-watcher] No usable CLI descriptor for ${sessionId} at the start of the readiness wait`);
+    }
+    if (startup && !ready.ready && !ready.fresh) return { ok: false, wrote: false, submitted: SUBMITTED_NO, reason: 'session readiness unavailable', sessionId, waited_ms };
+    if (ready.timedOut) {
+      const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
+      let reason = REASON_CLI_NOT_IDLE;
+      if (dialog) reason = REASON_DIALOG_OPEN;
+      else if (ready.lastStatus === 'busy') reason = REASON_CLI_BUSY;
+      else if (ready.lastStatus === 'idle') reason = REASON_IDLE_UNSETTLED;
+      ctx.log.warn(`[trigger-watcher] CLI not ready (${ready.lastStatus}) after ${ready.waited_ms} ms, nothing sent:`, sessionId);
+      return ({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId, waited_ms });
+    }
+  } else {
+    const clear = await waitForNoDialog(sessionId, ctx, commandDeadline);
+    waited_ms += clear.waited_ms;
+    if (clear.sessionExited) {
+      ctx.log.warn('[trigger-watcher] Session exited waiting for a dialog to close:', sessionId);
+      return ({ ok: false, error: 'session exited during wait', sessionId, waited_ms });
+    }
+    if (clear.timedOut) {
+      ctx.log.warn('[trigger-watcher] Dialog still open at the deadline, nothing sent:', sessionId);
+      return ({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: REASON_DIALOG_OPEN, sessionId, waited_ms });
+    }
+  }
+  if (Date.now() >= commandDeadline) {
+    ctx.log.warn('[trigger-watcher] Deadline passed before the command could be written:', sessionId);
+    return ({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: REASON_DEADLINE_BEFORE_WRITE, sessionId, waited_ms });
+  }
+
+  let submitRetries = 0;
+  let sawBusy = false;
+  let composerConfirmed = false;
+  let recoverySkipped = false;
+  let recoveryReason = null;
+  let submitConfirmed = null;
+  let compactionEvidence = {};
+  let compactionReason = null;
+  let verification;
+  try {
+    if (delivery) { delivery.beginStep(command); delivery.deadline = commandDeadline; }
+    onWriteAttempt();
+    const v = await submitWithVerify(handle, sessionId, command, ctx, v1 || isCompactCommand(command) ? commandDeadline : undefined);
+    verification = v;
+    submitRetries     = v.submit_retries;
+    submitConfirmed   = v.confirmed;
+    sawBusy           = v.sawBusy;
+    composerConfirmed = !!v.composerConfirmed;
+    recoverySkipped   = !!v.recoverySkipped;
+    recoveryReason    = v.recoveryReason || null;
+    if (isCompactCommand(command)) {
+      compactionEvidence = { compaction_observed: v.compactionObserved === true, submit_confirmed: v.compactionObserved === true,
+        ...(v.confirmSource ? { confirm_source: v.confirmSource } : {}) };
+      compactionReason = v.compactionReason || (v.sessionExited ? 'the session exited before compaction was observed; the command was written' : null);
+    }
+    waited_ms        += v.waited_ms;
+    if (v.writeError) throw v.writeError;
+  } catch (err) {
+    if (err.deliveryRefusal || delivery?.step?.text_written) {
+      return ({ ...deliveryFailure(err), waited_ms });
+    }
+    ctx.log.error('[trigger-watcher] PTY write failed:', err.message);
+    return ({ ok: false, error: 'pty write failed: ' + err.message, sessionId });
+  }
+
+  if (recoverySkipped) {
+    ctx.log.warn('[trigger-watcher] Recovery Enter withheld for ' + sessionId + ': ' + recoveryReason);
+  }
+  if (submitConfirmed === false) {
+    ctx.log.warn(`[trigger-watcher] Command not confirmed submitted to ${sessionId}: ${command}` +
+      (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
+  } else {
+    ctx.log.info(`[trigger-watcher] ${submitConfirmed ? 'Submitted' : 'Sent'} command to ${sessionId}: ${command}` +
+      (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
+  }
+
+  return ({
+    ok:             isCompactCommand(command) ? compactionEvidence.compaction_observed : true,
+    submitted:      classifySubmitted(composerConfirmed, sawBusy),
+    sessionId,
+    command,
+    sent_at:        new Date().toISOString(),
+    waited_ms,
+    submit_retries: submitRetries,
+    written: true,
+    ...(v1 ? { wrote: true, text_written: true, enter_written: true, timedOut: !!verification?.timedOut, enterAt: verification?.enterAt } : {}),
+    turn_observed: sawBusy,
+    ...(submitConfirmed === null ? {} : { submit_confirmed: submitConfirmed }),
+    ...(recoverySkipped ? { reason: recoveryReason } : {}),
+    ...compactionEvidence,
+    ...(compactionReason ? { error: ERROR_UNCONFIRMED, reason: compactionReason } : {}),
+  });
+}
+
 /**
  * Process a single trigger file (by basename, e.g. "abc-123.json").
  * Never throws — all errors land in the result file.
@@ -1226,6 +1386,21 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
     versioned = true;
     if (canonicalName && recoverState()) return;
     const evidence = { steps_total: 0 };
+    if (!recoveryError && !validateTrigger(trigger, uuid, evidence) && trigger.action === 'open' && ctx.lifecycle) {
+      const deadline = Date.now() + (trigger.timeout_ms ?? getIdleTimeout());
+      await actions.execute(trigger, uuid, { ctx, deadline, acquireSessionLock, acquireTabLock, publish: writeResult,
+        saveMarker: marker => {
+          fs.writeFileSync(markerPath + '.tmp', JSON.stringify(marker) + '\n', 'utf8');
+          renameWithRetry(markerPath + '.tmp', markerPath);
+        },
+        deliver: async ({ pinned, deadline: deliveryDeadline, ...options }) => {
+          const scoped = pinned.ctx;
+          if (!(options.startup && options.sandbox)) await pinned.binding.admit(deliveryDeadline);
+          return deliverSingle({ ...options, ctx: scoped, delivery: pinned.binding, handle: pinned.handle, deliveryDeadline, v1: true });
+        },
+      });
+      return;
+    }
     await writeResult(recoveryError ? actions.refusal(trigger,
       validateTrigger(trigger, uuid, evidence) || 'trigger recovery state unavailable',
       { ...evidence, error: recoveryError.message }) : actions.execute(trigger, uuid));
@@ -1541,176 +1716,8 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   // ── 5. Single-command path ────────────────────────────────────────────────
   if (command !== undefined) {
-    let waited_ms = 0;
-    const commandDeadline = deliveryDeadline;
-    if (wait === 'idle') {
-      const result = await waitForIdle(sessionId, ctx, Math.max(0, commandDeadline - Date.now()));
-      waited_ms += result.waited_ms;
-
-      // Nothing is written yet — see .ai/contexts/trigger-watcher.md.
-      // W5: session exited during wait
-      if (result.sessionExited) {
-        ctx.log.warn('[trigger-watcher] Session exited during wait:', sessionId);
-        await writeResult({
-          ok: false,
-          submitted: SUBMITTED_NO,
-          error: 'session exited during wait',
-          reason: 'the session exited while waiting for it to go idle; nothing was written',
-          sessionId, waited_ms,
-        });
-        return;
-      }
-
-      if (result.timedOut) {
-        ctx.log.warn('[trigger-watcher] Idle timeout for session, nothing sent:', sessionId);
-        await writeResult({
-          ok: false,
-          submitted: SUBMITTED_NO,
-          error: ERROR_NOT_SENT,
-          reason: result.waitingSeen ? REASON_DIALOG_OPEN : 'timeout waiting for idle; nothing was written',
-          sessionId, waited_ms,
-        });
-        return;
-      }
-    }
-
-    // Politeness — never write over input the user typed and did not submit.
-    const polite = await waitForComposerFree(sessionId, ctx, commandDeadline);
-    waited_ms += polite.waited_ms;
-    if (!polite.free) {
-      ctx.log.warn('[trigger-watcher] Composer never free, nothing sent:', sessionId, polite.reason);
-      await writeResult({
-        ok:        false,
-        submitted: SUBMITTED_NO,
-        error:     ERROR_NOT_SENT,
-        reason:    polite.reason,
-        sessionId,
-        waited_ms,
-      });
-      return;
-    }
-
-    // W7 — re-check liveness right before writing.  The idle wait can be up to
-    // 10 min (MAX_TRIGGER_TIMEOUT) and the politeness wait runs to the same
-    // deadline; the child may have exited during either while busy-was-true
-    // never flipped.  This probe belongs AFTER both waits: run before them it
-    // proves nothing about the moment of the write.
-    if (!isEntryAlive(ctx, sessionEntry, handle)) {
-      ctx.log.warn('[trigger-watcher] Target process exited during wait:', sessionId);
-      await writeResult({ ok: false, error: 'target process not running', sessionId, waited_ms });
-      return;
-    }
-
-    // see .ai/contexts/trigger-watcher.md, "Readiness before a single trigger"
-    if (wait === 'idle') {
-      const settleMs = Math.max(0, Math.min(getBusyFallSettleMs(), commandDeadline - Date.now() - 1));
-      const ready = await waitForCliIdleAfter(sessionId, ctx, -Infinity, commandDeadline, settleMs, true);
-      waited_ms += ready.waited_ms;
-      if (ready.sessionExited) {
-        ctx.log.warn('[trigger-watcher] Session exited waiting for the CLI to be ready:', sessionId);
-        await writeResult({ ok: false, error: 'session exited during wait', sessionId, waited_ms });
-        return;
-      }
-      if (!ready.available) {
-        ctx.log.info(`[trigger-watcher] No usable CLI descriptor for ${sessionId} at the start of the readiness wait`);
-      }
-      if (ready.timedOut) {
-        const dialog = ready.waitingSeen || ready.lastStatus === 'waiting';
-        let reason = REASON_CLI_NOT_IDLE;
-        if (dialog) reason = REASON_DIALOG_OPEN;
-        else if (ready.lastStatus === 'busy') reason = REASON_CLI_BUSY;
-        else if (ready.lastStatus === 'idle') reason = REASON_IDLE_UNSETTLED;
-        ctx.log.warn(`[trigger-watcher] CLI not ready (${ready.lastStatus}) after ${ready.waited_ms} ms, nothing sent:`, sessionId);
-        await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason, sessionId, waited_ms });
-        return;
-      }
-    } else {
-      const clear = await waitForNoDialog(sessionId, ctx, commandDeadline);
-      waited_ms += clear.waited_ms;
-      if (clear.sessionExited) {
-        ctx.log.warn('[trigger-watcher] Session exited waiting for a dialog to close:', sessionId);
-        await writeResult({ ok: false, error: 'session exited during wait', sessionId, waited_ms });
-        return;
-      }
-      if (clear.timedOut) {
-        ctx.log.warn('[trigger-watcher] Dialog still open at the deadline, nothing sent:', sessionId);
-        await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: REASON_DIALOG_OPEN, sessionId, waited_ms });
-        return;
-      }
-    }
-    if (Date.now() >= commandDeadline) {
-      ctx.log.warn('[trigger-watcher] Deadline passed before the command could be written:', sessionId);
-      await writeResult({ ok: false, submitted: SUBMITTED_NO, error: ERROR_NOT_SENT, reason: REASON_DEADLINE_BEFORE_WRITE, sessionId, waited_ms });
-      return;
-    }
-
-    // Write to PTY: text, then Enter as a discrete keypress (see submitToPty),
-    // then verify the submission actually started a turn — retrying the Enter
-    // once if busy is never observed (the 2026-06-04 "text stuck in
-    // composer, Enter absorbed" incident).
-    let submitRetries = 0;
-    let sawBusy = false;
-    let composerConfirmed = false;
-    let recoverySkipped = false;
-    let recoveryReason = null;
-    let submitConfirmed = null;
-    let compactionEvidence = {};
-    let compactionReason = null;
-    try {
-      if (delivery) { delivery.beginStep(command); delivery.deadline = commandDeadline; }
-      writeAttempted = true;
-      const v = await submitWithVerify(handle, sessionId, command, ctx, isCompactCommand(command) ? commandDeadline : undefined);
-      submitRetries     = v.submit_retries;
-      submitConfirmed   = v.confirmed;
-      sawBusy           = v.sawBusy;
-      composerConfirmed = !!v.composerConfirmed;
-      recoverySkipped   = !!v.recoverySkipped;
-      recoveryReason    = v.recoveryReason || null;
-      if (isCompactCommand(command)) {
-        compactionEvidence = { compaction_observed: v.compactionObserved === true, submit_confirmed: v.compactionObserved === true,
-          ...(v.confirmSource ? { confirm_source: v.confirmSource } : {}) };
-        compactionReason = v.compactionReason || (v.sessionExited ? 'the session exited before compaction was observed; the command was written' : null);
-      }
-      // The submit-verify poll (and its retry, if any) is time this trigger
-      // spent too -- see "waited_ms" in docs/automation.md.
-      waited_ms        += v.waited_ms;
-      if (v.writeError) throw v.writeError;
-    } catch (err) {
-      if (err.deliveryRefusal || delivery?.step?.text_written) {
-        await writeResult({ ...deliveryFailure(err), waited_ms });
-        return;
-      }
-      ctx.log.error('[trigger-watcher] PTY write failed:', err.message);
-      await writeResult({ ok: false, error: 'pty write failed: ' + err.message, sessionId });
-      return;
-    }
-
-    if (recoverySkipped) {
-      ctx.log.warn('[trigger-watcher] Recovery Enter withheld for ' + sessionId + ': ' + recoveryReason);
-    }
-    if (submitConfirmed === false) {
-      ctx.log.warn(`[trigger-watcher] Command not confirmed submitted to ${sessionId}: ${command}` +
-        (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
-    } else {
-      ctx.log.info(`[trigger-watcher] ${submitConfirmed ? 'Submitted' : 'Sent'} command to ${sessionId}: ${command}` +
-        (submitRetries ? ` (submit retried ${submitRetries}x)` : ''));
-    }
-
-    await writeResult({
-      ok:             isCompactCommand(command) ? compactionEvidence.compaction_observed : true,
-      submitted:      classifySubmitted(composerConfirmed, sawBusy),
-      sessionId,
-      command,
-      sent_at:        new Date().toISOString(),
-      waited_ms,
-      submit_retries: submitRetries,
-      written: true,
-      turn_observed: sawBusy,
-      ...(submitConfirmed === null ? {} : { submit_confirmed: submitConfirmed }),
-      ...(recoverySkipped ? { reason: recoveryReason } : {}),
-      ...compactionEvidence,
-      ...(compactionReason ? { error: ERROR_UNCONFIRMED, reason: compactionReason } : {}),
-    });
+    await writeResult(await deliverSingle({ ctx, sessionId, command, wait, entry: sessionEntry, handle, delivery, deliveryDeadline,
+      onWriteAttempt: () => { writeAttempted = true; }, failure: deliveryFailure }));
     return;
   }
 
@@ -2238,4 +2245,4 @@ function start(ctx) {
   };
 }
 
-module.exports = { start, getTriggersDir, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };
+module.exports = { deliverSingle, start, getTriggersDir, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };

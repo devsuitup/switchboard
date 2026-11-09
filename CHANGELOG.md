@@ -4,6 +4,9 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 
 ## Unreleased
 
+### New
+- File triggers can open an exact local conversation or create a named session in a known project and deliver a prompt, without changing your selection or keyboard focus. (#1022)
+
 ## v0.0.104 — 2026-11-09
 
 ### New

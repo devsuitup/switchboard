@@ -214,7 +214,10 @@ async function resolveLocalTarget(sessionId, deps = {}) {
   try { if (!fs.statSync(cwd).isDirectory()) return fail('project directory does not exist'); }
   catch { return fail('project directory does not exist'); }
   if (expired()) return fail('session action timed out');
-  return { ok: true, sessionId, cwd, project: admitted.project, ...target };
+  let identity;
+  try { const stat = fs.lstatSync(target.transcript); identity = [stat.dev, stat.ino, stat.birthtimeMs].join(':'); }
+  catch (error) { return { ...fail('no readable transcript'), error: error.message }; }
+  return { ok: true, sessionId, cwd, project: admitted.project, ...target, transcriptIdentity: identity };
 }
 
 function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.now } = {}) {
@@ -289,11 +292,200 @@ function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.
     return true;
   }
   return { limiter, readState, publish, refusal,
-    execute(trigger, stem) {
+    execute(trigger, stem, execution) {
       const evidence = { steps_total: 0 };
-      return refusal(trigger, validateTrigger(trigger, stem, evidence) || UNAVAILABLE, evidence);
+      const invalid = validateTrigger(trigger, stem, evidence);
+      if (!invalid && trigger.action === 'open' && execution?.ctx.lifecycle) {
+        return executeOpen(trigger, { ...execution, limiter, now, evidence, requestId: stem });
+      }
+      return refusal(trigger, invalid || UNAVAILABLE, evidence);
     },
   };
+}
+
+async function executeOpen(trigger, execution) {
+  const { ctx, deadline, now, limiter, evidence } = execution;
+  const deps = ctx.lifecycle;
+  const isNew = own(trigger, 'new');
+  let id = isNew ? null : trigger.sessionId.toLowerCase();
+  let effects = { ...evidence };
+  let releaseSession, releaseTab, reservation, pinned;
+  const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, sessionId: id, ok: false, outcome: 'refused', reason, ...extra });
+  const expired = () => now() >= deadline;
+  const admitted = () => !expired() && deps.launchAllowed();
+  const check = () => {
+    if (!deps.launchAllowed()) throw Object.assign(new Error('Switchboard is closing.'), { refusal: true });
+    if (expired()) throw Object.assign(new Error('session action timed out'), { refusal: true });
+  };
+  const bound = read => boundedRead(read, { now, deadline });
+  async function lock(acquire, key) {
+    const pending = Promise.resolve(acquire(key, deadline));
+    let obtained = false;
+    try { const release = await bound(() => pending); obtained = true; return release; }
+    finally { if (!obtained) void pending.then(release => release?.()).catch(() => {}); }
+  }
+  async function liveness() {
+    let checked;
+    try { checked = await bound(() => deps.liveElsewhere(id, deadline)); }
+    catch (error) { return fail(error.code === 'TRIGGER_DEADLINE' ? 'session action timed out' : 'session liveness unavailable', { error: error.message }); }
+    if (!checked?.known) return fail('session liveness unavailable');
+    if (checked.live) return fail(checked.live.kind === 'schedule' ? 'scheduled session is not supported'
+      : checked.live.kind === 'bg' ? 'background session is not supported' : 'session live elsewhere');
+    return null;
+  }
+  function eligibility(session) {
+    return session.host != null ? 'remote sessions are not supported'
+      : session.isPlainTerminal ? 'plain terminal sessions are not supported'
+        : session.isAttach || session.backgrounding || session.backgrounded ? 'background session is not supported' : null;
+  }
+  function cwdFailure(cwd) {
+    if (!own(trigger, 'expectedCwd')) return null;
+    const normalize = require('./trigger-watcher').normalizeCwd;
+    const actual = normalize(cwd);
+    return actual === null ? fail("this session's cwd could not be determined; refusing rather than risk targeting the wrong session")
+      : normalize(trigger.expectedCwd) !== actual ? fail("expectedCwd does not match this session's actual cwd") : null;
+  }
+  async function pin(entry) {
+    pinned = ctx.pinDelivery(id, entry, false, { v1: true, deadline });
+    releaseTab = await lock(execution.acquireTabLock, entry.session);
+    if (!releaseTab) return fail('session action timed out');
+    pinned.binding.deadline = deadline;
+    pinned.binding.expectedCwd = trigger.expectedCwd;
+    return null;
+  }
+  async function run() {
+    check();
+    let target;
+    if (isNew) {
+      target = await resolveProject(trigger.new.project, { ...deps, now, deadline });
+      if (!target.ok) return fail(target.reason, target.error ? { error: target.error } : {});
+      reservation = limiter.reserve();
+      if (!reservation) return fail('new session rate limit exceeded');
+      id = (deps.randomUUID || require('node:crypto').randomUUID)().toLowerCase();
+      effects.created = false;
+    }
+    releaseSession = await lock(execution.acquireSessionLock, id);
+    if (!releaseSession) return fail('session action timed out');
+    check();
+    let entry = isNew ? null : ctx.getPtyForSession(id);
+    if (entry?.ambiguous) return fail('ambiguous normalized local tab id; nothing was written');
+    if (!isNew && !entry && ctx.lookupDeliveryFallback) {
+      const found = await bound(() => ctx.lookupDeliveryFallback(id, deadline, { v1: true }));
+      if (found.background) return fail('background session is not supported');
+      if (found.ambiguous) return fail('ambiguous descriptor-to-tab ownership; nothing was written');
+      entry = found.entry;
+    }
+    let tabKey = id;
+    let mode = isNew ? 'new' : 'resume';
+    if (entry) {
+      const reason = eligibility(entry.session);
+      if (reason) return fail(reason);
+      const matches = [...deps.activeSessions].filter(([, session]) => session === entry.session);
+      if (matches.length !== 1) return fail('session target changed');
+      tabKey = matches[0][0]; mode = 'reattach';
+      const cwd = cwdFailure(entry.cwd); if (cwd) return cwd;
+      const failure = await pin(entry); if (failure) return failure;
+    } else if (!isNew) {
+      if (await bound(() => deps.remoteTarget(id))) return fail('remote sessions are not supported');
+      const live = await liveness(); if (live) return live;
+      target = await (deps.resolveTarget || resolveLocalTarget)(id, { ...deps, now, deadline });
+      if (!target.ok) return fail(target.reason, { outcome: target.outcome || 'refused', ...(target.error ? { error: target.error } : {}) });
+      const cwd = cwdFailure(target.cwd); if (cwd) return cwd;
+      const again = await liveness(); if (again) return again;
+    }
+    check();
+    const operation = { mode, requestedSessionId: isNew ? null : id, tabKey,
+      generation: entry?.session.generation ?? null, entry: entry?.session,
+      project: mode === 'reattach' ? entry.session.projectPath : target.project,
+      session: { sessionId: tabKey, headSessionId: tabKey, mergedMemberIds: [], projectPath: mode === 'reattach' ? entry.session.projectPath : target.project },
+      target, name: isNew ? trigger.new.name.trim() : undefined, deadline };
+    const marker = () => {
+      const saved = { version: 1, action: 'open', requestId: execution.requestId,
+        requestedSessionId: isNew ? null : id, sessionId: id, tabKey, deadline,
+        mode: isNew ? 'new' : 'resume', phase: effects.enter_written ? 'submitted' : effects.created || effects.resumed ? 'spawned' : 'claimed' };
+      for (const key of ['created', 'resumed', 'wrote', 'text_written', 'enter_written', 'submitted', 'steps_total']) {
+        if (effects[key] !== undefined) saved[key] = effects[key];
+      }
+      execution.saveMarker(saved);
+    };
+    operation.onOpened = () => {
+      effects[isNew ? 'created' : 'resumed'] = true;
+      reservation?.retain();
+      marker();
+    };
+    if (mode === 'resume') operation.verifyJoined = async session => {
+      check();
+      if (eligibility(session)) return fail(eligibility(session));
+      if (session.launchMode !== 'resume' || String(session.launchSourceId).toLowerCase() !== id || session.forkFrom
+        || session.cwd !== target.cwd || session.projectPath !== target.project) return fail('session target changed');
+      const live = await liveness(); if (live) return live;
+      const fresh = await (deps.resolveTarget || resolveLocalTarget)(id, { ...deps, now, deadline });
+      if (!fresh.ok) return fail(fresh.reason, fresh.error ? { error: fresh.error } : {});
+      check();
+      if (fresh.transcript !== target.transcript || fresh.transcriptIdentity !== target.transcriptIdentity
+        || fresh.cwd !== target.cwd || fresh.project !== target.project) return fail('session target changed');
+      return { ok: true };
+    };
+    const ack = await deps.broker.request(operation, async () => {
+      check();
+      if (mode === 'resume') { const refusal = await liveness(); if (refusal) return refusal; }
+      check();
+      marker();
+    });
+    if (ack?.created) { effects.created = true; reservation?.retain(); }
+    if (ack?.resumed) effects.resumed = true;
+    if (!ack?.ok) {
+      if (ack?.uncertain) reservation?.retain();
+      return fail(ack?.reason || 'session open failed', { ...(ack?.error ? { error: ack.error } : {}), ...(ack?.uncertain ? { uncertain: true } : {}) });
+    }
+    check();
+    const session = deps.activeSessions.get(tabKey);
+    if (!session || session.exited || session.generation !== ack.generation || (entry && session !== entry.session)) return fail('session target changed');
+    if (eligibility(session)) return fail(eligibility(session));
+    marker();
+    if (!pinned) {
+      entry = ctx.getPtyForSession(id);
+      if (entry?.session !== session) return fail('session target changed');
+      const failure = await pin(entry); if (failure) return failure;
+    }
+    if (isNew) {
+      try {
+        check();
+        const saved = await bound(() => deps.saveName(id, operation.name));
+        if (saved?.name !== operation.name) return fail('session name could not be saved');
+      } catch (error) { return fail(error.code === 'TRIGGER_DEADLINE' ? 'session action timed out' : 'session name could not be saved', { error: error.message }); }
+    }
+    check();
+    const cwd = cwdFailure(session.cwd); if (cwd) return cwd;
+    if (own(trigger, 'prompt')) {
+      const result = await execution.deliver({ sessionId: id, command: trigger.prompt, wait: 'idle', expectedCwd: trigger.expectedCwd,
+        entry, pinned, deadline, startup: mode !== 'reattach', launchStartedAt: session.launchStartedAt, sandbox: !!session.sandbox });
+      effects = { ...effects, ...result };
+      marker();
+      if (result.timedOut || (expired() && result.enter_written)) return fail('session action timed out', { ...(result.enter_written ? { uncertain: true } : {}) });
+      if (!result.ok) return fail(result.reason || result.error || 'session open failed');
+      check();
+    }
+    if (!admitted()) { check(); }
+    return { ...fail(null), ok: true, outcome: 'opened', reason: null };
+  }
+  let result;
+  try {
+    try { result = await run(); }
+    catch (error) {
+      const step = pinned?.binding.step;
+      result = fail(error.refusal || error.code === 'TRIGGER_DEADLINE' ? error.code === 'TRIGGER_DEADLINE' ? 'session action timed out' : error.message
+        : error.deliveryRefusal ? error.message : 'session open failed', { error: error.message,
+        ...(step?.text_written ? { wrote: true, text_written: true, enter_written: !!step.enter_written,
+          submitted: step.enter_written ? 'assumed' : 'no', ...(expired() && step.enter_written ? { uncertain: true } : {}) } : {}) });
+    }
+    await execution.publish(result);
+    return result;
+  } finally {
+    reservation?.refund();
+    try { pinned?.ctx.forgetTranscriptTurn?.(id); } catch {}
+    releaseTab?.(); releaseSession?.();
+  }
 }
 
 module.exports = { createNewSessionLimiter, resolveLocalTarget, resolveProject, createTriggerActions, isVersioned, validateTrigger, refusal };

@@ -53,7 +53,8 @@ test('add-project: clears the archived entry of the folder', () => {
 });
 
 test('get-projects: applies the archived folders with the requested showArchived', () => {
-  const body = handlerBody('get-projects');
+  assert.match(handlerBody('get-projects'), /return getProjectsSnapshot\(showArchived\)/);
+  const body = functionBody(read('main.js'), 'getProjectsSnapshot');
   assert.match(body, /const merged = mergePlaceholderSessions\(projects\)/);
   assert.match(body, /await writer\.applyAndPersistArchived\(merged, archived\)/);
   assert.match(body, /assemble\(result.defaultProjects, false\)/);

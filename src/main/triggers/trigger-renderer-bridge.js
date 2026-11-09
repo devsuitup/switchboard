@@ -17,7 +17,8 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
     if (!pending.delete(record.requestId)) return;
     clearTimeoutFn(record.timer);
     record.controller.abort();
-    const evidence = record.opened ? { [record.mode === 'new' ? 'created' : 'resumed']: true } : {};
+    const evidence = record.opened ? { [record.mode === 'new' ? 'created' : 'resumed']: true }
+      : record.ensured ? { resumed: false } : {};
     record.resolve({ ...result, ...evidence,
       ...(interrupted && !result.ok && record.mode !== 'reattach' && record.phase === 'opening' ? { uncertain: true } : {}) });
   }
@@ -59,7 +60,7 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
 
   function targetMatches(record) {
     const entry = getSession(record.tabKey);
-    const pinned = record.mode === 'reattach' ? record.pinned : record.opened;
+    const pinned = record.mode === 'reattach' ? record.pinned : record.opened || record.ensured;
     return !!pinned && entry === pinned.entry && !entry.exited
       && entry.pty === pinned.pty && entry.generation === pinned.generation;
   }
@@ -80,7 +81,7 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
       finish(record, failure('renderer unavailable'), true);
       return false;
     }
-    if ((record.mode === 'reattach' || record.opened) && !targetMatches(record)) {
+    if ((record.mode === 'reattach' || record.opened || record.ensured) && !targetMatches(record)) {
       finish(record, failure('session target changed'), true);
       return false;
     }
@@ -91,6 +92,7 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
     return Object.freeze({ requestId: record.requestId, documentEpoch: record.epoch,
       mode: record.mode, requestedSessionId: record.requestedSessionId, tabKey: record.tabKey,
       generation: record.generation, project: record.project, deadline: record.deadline,
+      target: record.target,
       signal: record.controller.signal });
   }
 
@@ -100,7 +102,10 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
     record.epoch = record.document.epoch;
     if (!valid(record)) return;
     try {
-      if (record.beforeDispatch) await record.beforeDispatch(permitView(record));
+      if (record.beforeDispatch) {
+        const admitted = await record.beforeDispatch(permitView(record));
+        if (admitted?.ok === false) { finish(record, admitted); return; }
+      }
     } catch (error) {
       finish(record, failure('action state could not be saved', error.message));
       return;
@@ -127,7 +132,23 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
     return { documentEpoch: state.epoch };
   }
 
-  function reply(event, ack) {
+  async function ensureJoined(requestId, entry) {
+    const record = pending.get(requestId);
+    if (!record || record.mode !== 'resume' || record.opened || !record.verifyJoined || !valid(record)) return failure('session target changed');
+    if (record.ensured) return targetMatches(record) ? { ok: true } : failure('session target changed');
+    if (record.checkingJoin || !entry?.pty || entry.exited || getSession(record.tabKey) !== entry) return failure('session target changed');
+    const pinned = { entry, pty: entry.pty, generation: entry.generation };
+    record.checkingJoin = true;
+    let checked;
+    try { checked = await record.verifyJoined(entry); }
+    catch (error) { checked = failure(error.refusal ? error.message : 'session open failed', error.message); }
+    if (!valid(record)) return failure('renderer unavailable');
+    if (!checked?.ok) { finish(record, checked || failure('session open failed')); return checked || failure('session open failed'); }
+    record.ensured = pinned;
+    return valid(record) ? { ok: true } : failure('session target changed');
+  }
+
+  async function reply(event, ack) {
     if (!ack || typeof ack !== 'object') return;
     const record = pending.get(ack.requestId);
     if (!record || !record.sent || !senderMatches(record.document, event)) return;
@@ -135,7 +156,15 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
       || ack.requestedSessionId !== record.requestedSessionId || ack.tabKey !== record.tabKey
       || typeof ack.ok !== 'boolean') return;
     if (!valid(record)) return;
-    const generation = record.mode === 'reattach' ? record.generation : record.opened?.generation ?? null;
+    if (ack.ok && record.mode === 'resume' && !record.opened && !record.ensured && record.verifyJoined) {
+      if (record.checkingJoin) return;
+      const entry = getSession(record.tabKey);
+      if (!entry?.pty || entry.exited || entry.generation !== ack.generation) return;
+      const checked = await ensureJoined(record.requestId, entry);
+      if (!valid(record)) return;
+      if (!checked?.ok) { finish(record, checked || failure('session open failed')); return; }
+    }
+    const generation = record.mode === 'reattach' ? record.generation : record.opened?.generation ?? record.ensured?.generation ?? null;
     if (ack.generation !== generation) return;
     if (!ack.ok) {
       finish(record, failure(typeof ack.reason === 'string' ? ack.reason : 'session open failed',
@@ -189,10 +218,12 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
 
   function markOpened(requestId, entry) {
     const record = pending.get(requestId);
-    if (!record || record.mode === 'reattach' || record.phase !== 'opening' || record.opened || !valid(record)
+    if (!record || record.mode === 'reattach' || record.phase !== 'opening' || record.opened || record.ensured
       || getSession(record.tabKey) !== entry || !entry?.pty || entry.exited || entry.generation == null) return false;
     record.opened = { entry, pty: entry.pty, generation: entry.generation };
-    return true;
+    try { record.onOpened?.(entry); }
+    catch (error) { finish(record, failure('action state could not be saved', error.message)); return false; }
+    return valid(record);
   }
 
   function dispose() {
@@ -204,7 +235,7 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
 
   ipcMain.handle('trigger-actions-ready', ready);
   ipcMain.on('trigger-session-action-result', reply);
-  return { attach, request, consumePermit, checkPermit, markOpened, revoke, dispose };
+  return { attach, request, consumePermit, checkPermit, markOpened, ensureJoined, revoke, dispose };
 }
 
 module.exports = { createTriggerRendererBridge };

@@ -62,6 +62,7 @@ function rig() {
   const payload = () => sent.at(-1)?.payload;
   const ack = (changes = {}) => ({ ...payload(), ok: true, generation: 7, ...changes });
   return { bridge, handlers, ipcMain, wc, win, sent, sessions, entry, event, ready, reply, request, flush, tick, payload, ack, timers,
+    advance: time => { at = time; },
     noWindow: () => { currentWindow = null; }, closing: () => { allowed = false; } };
 }
 
@@ -305,3 +306,42 @@ for (const spawned of [false, true]) {
     r.bridge.dispose();
   });
 }
+
+test('before-dispatch admission refusal sends no renderer request', async () => {
+  const r = rig(); r.ready();
+  const result = r.request({}, () => ({ ok: false, reason: 'session live elsewhere' }));
+  await r.flush();
+  assert.equal(r.sent.length, 0, 'rechecking admission must precede renderer dispatch');
+  assert.equal((await result).reason, 'session live elsewhere');
+  r.bridge.dispose();
+});
+
+test('main spawn evidence updates the durable marker before any renderer ACK', async () => {
+  const r = rig(); r.sessions.clear(); r.ready();
+  let marked = false;
+  const result = r.request({ mode: 'new', requestedSessionId: null, generation: null, entry: undefined, onOpened: () => { marked = true; } });
+  await r.flush(); const id = r.payload().requestId;
+  r.bridge.consumePermit(id, r.event(), { sessionId: B, projectPath: project, isNew: true });
+  r.sessions.set(B, r.entry); r.bridge.markOpened(id, r.entry);
+  assert.equal(marked, true);
+  r.reply(r.ack()); assert.equal((await result).created, true); r.bridge.dispose();
+});
+
+test('synchronous spawn confirmation retains true effects when the deadline elapsed before timer dispatch', async () => {
+  const r = rig(); r.sessions.clear(); r.ready();
+  const result = r.request({ mode: 'resume', generation: null, entry: undefined });
+  await r.flush(); const id = r.payload().requestId;
+  r.bridge.consumePermit(id, r.event(), { sessionId: B, projectPath: project, isNew: false });
+  r.sessions.set(B, r.entry); r.advance(201); r.bridge.markOpened(id, r.entry);
+  const done = await result; assert.equal(done.resumed, true); assert.equal(done.uncertain, true); r.bridge.dispose();
+});
+
+test('a joined ordinary exact resume can ACK only after main validates that existing generation', async () => {
+  const r = rig(); r.sessions.clear(); r.ready(); let checked = 0;
+  const result = r.request({ mode: 'resume', generation: null, entry: undefined, verifyJoined: async entry => {
+    assert.equal(entry, r.entry); checked++; return { ok: true };
+  } });
+  await r.flush(); r.sessions.set(B, r.entry); r.reply(r.ack()); await r.flush();
+  assert.equal(checked, 1, 'the broker must verify a joined ordinary open, rather than ignore its ACK');
+  const done = await result; assert.equal(done.ok, true); assert.equal(done.resumed, false); r.bridge.dispose();
+});

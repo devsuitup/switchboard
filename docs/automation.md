@@ -4,9 +4,8 @@ Two mechanisms run Claude without you at the keyboard:
 
 - **Schedules** — recurring headless runs, defined as Markdown files and fired
   by a scheduler inside the app.
-- **Triggers** — one-shot text typed into a session that is already open,
-  requested by dropping a JSON file in a directory. Meant for scripts and
-  harnesses.
+- **Triggers** — one-shot requests to open a local session, create one or type
+  into an open session, published as JSON files. Meant for scripts and harnesses.
 
 Both live in the running app: when Switchboard is not running, nothing fires. A
 schedule can ask to [catch up](#catching-up-a-missed-run) a run it missed.
@@ -238,6 +237,56 @@ run and remain until dismissed, including when a fast failure arrives before
 the launch acknowledgement or another run is launched successfully.
 
 ## Triggers
+
+### Open or create a visible local session
+
+Publish a UTF-8 JSON file named with a fresh lowercase UUID in the triggers
+directory, preferably by renaming a completed temporary file in that directory.
+Never reuse the request UUID. The running app opens an ordinary selectable
+terminal without changing your selection, view or keyboard focus.
+
+Resume an exact local session ID, optionally delivering one prompt:
+
+```json
+{"version":1,"action":"open","sessionId":"01234567-89ab-cdef-0123-456789abcdef","prompt":"Continue the task","timeout_ms":300000}
+```
+
+Omit `prompt` to open alone. An already-open session is ensured open without
+spawning another CLI. Closed sessions need a readable local transcript, verified
+recorded cwd and a known project. Live external, background, scheduled, remote
+and plain-terminal targets are refused. Unknown liveness is refused too.
+
+Create a session in an existing known local project using its ordinary saved
+defaults (replace the path with an absolute path native to your host):
+
+```json
+{"version":1,"action":"open","new":{"project":"C:\\work\\project","name":"Follow-up"},"prompt":"Investigate the failure"}
+```
+
+New requires a nonempty name (maximum 256 characters) and prompt. Prompt length
+is at most 4096 JS characters and may not contain CR, LF, NUL or ESC. Launch
+flags and `focus` are not accepted. Settings-hidden/removed projects are refused;
+a visible archived group with its ordinary + action remains eligible. New has
+a bucket of three launches, refilling one token every 20 seconds.
+
+Read `processed/<request-uuid>.result.json`. v1 results carry `version`, `action`,
+`ok`, `outcome`, `reason`, `sessionId`, `resumed` or `created`, `submitted`,
+`wrote` and `steps_total`, plus delivery evidence. `opened` means the terminal
+was acknowledged and any requested prompt finished submission verification;
+it does not mean the answer is complete. `submitted:"assumed"` stays assumed.
+The one deadline covers queueing, opening, startup and delivery (default 300000
+ms, explicit 1–600000 ms). An optional `expectedCwd` for resume must match the
+actual cwd, including a worktree.
+
+If startup, saving the name or delivery fails after spawn, the session remains
+open and the refusal retains its ID and true `created`/`resumed` evidence.
+`uncertain:true` means an interrupted action may have taken effect: do not retry
+automatically. A repeated UUID reuses its first terminal result; a persisted
+action marker interrupted by restart is refused without replay. v1 `stop`
+remains unavailable in this build and returns
+`session action not implemented in this build`.
+
+### Send to an already-open session (legacy)
 
 The trigger watcher lets a script type into an open session's terminal. Drop a
 JSON file into `~/.switchboard/triggers/` (or `SWITCHBOARD_TRIGGERS_DIR`):
