@@ -189,6 +189,8 @@ const rendererCrossFileGlobals = {
   worktreeParentPath: 'readonly',
   worktreeName: 'readonly',
   isHiddenRepositoryWorktree: 'readonly',
+  isProjectHidden: 'readonly',
+  projectHiddenMatcher: 'readonly',
   formatIndexingBannerText: 'readonly',
   PERMISSION_MODES: 'readonly',
   showSession: 'readonly',
@@ -483,7 +485,6 @@ const rendererCrossFileGlobals = {
 };
 
 module.exports = [
-  { files: ['public/app.js'], languageOptions: { globals: { isProjectHidden: 'readonly' } } },
   { files: ['public/task-registry.js', 'public/utils.js'], languageOptions: { globals: { module: 'writable' } } },
   { files: ['public/grid-view.js'], languageOptions: { globals: { localMergedMemberRows: 'readonly' } } },
   // Ignore generated/vendored bundles and binaries
@@ -679,6 +680,8 @@ module.exports = [
         worktreeParentPath: 'off',
         worktreeName: 'off',
         isHiddenRepositoryWorktree: 'off',
+        isProjectHidden: 'off',
+        projectHiddenMatcher: 'off',
       },
     },
     rules: {

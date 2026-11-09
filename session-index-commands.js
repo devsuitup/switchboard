@@ -4,7 +4,6 @@ const archive = require('./archived-projects');
 const { scheduleRegistry } = require('./src/main/schedules/schedule-runner');
 const { whatsNewOnStartup } = require('./src/main/app/changelog');
 const { isProjectHidden } = require('./public/worktree-nesting');
-const { parseFolderKey } = require('./src/main/remote/remote-hosts');
 
 // see .ai/contexts/session-index-writer.md
 function createWriterCommands(db) {
@@ -15,13 +14,13 @@ function createWriterCommands(db) {
     cleanupWorktree(projectPath) {
       let removed = 0;
       for (const row of db.getAllCached()) {
-        if (row.projectPath !== projectPath || parseFolderKey(row.folder).alias !== null) continue;
+        if (row.projectPath !== projectPath) continue;
         db.deleteCachedSession(row.sessionId);
         db.deleteSearchSession(row.sessionId);
         removed++;
       }
       const global = db.getSetting('global') || {};
-      if (isProjectHidden(global.hiddenProjects, null, projectPath, global.hiddenProjectScopes)) {
+      if (global.hiddenProjects?.includes(projectPath)) {
         const kinds = { ...global.hiddenProjectKinds };
         delete kinds[projectPath];
         const fields = { hiddenProjects: global.hiddenProjects.filter(p => p !== projectPath) };
@@ -54,7 +53,7 @@ function createWriterCommands(db) {
       const fields = {};
       if (scope || global.hiddenProjectScopes) {
         fields.hiddenProjectScopes = { ...global.hiddenProjectScopes };
-        if (scope) fields.hiddenProjectScopes[entry] = scope;
+        if (scope && (!(global.hiddenProjects || []).includes(entry) || Object.hasOwn(global.hiddenProjectScopes || {}, entry))) fields.hiddenProjectScopes[entry] = scope;
         else delete fields.hiddenProjectScopes[entry];
       }
       patch({ hiddenProjects: [...new Set([...(global.hiddenProjects || []), entry])],

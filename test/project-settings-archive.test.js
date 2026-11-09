@@ -85,6 +85,16 @@ function setup(t, { hidden = [], cron = '* * * * *', registered = true,
     invoke, archive, scheduleFile, scheduleBytes, notices: () => notices };
 }
 
+test('Delete Project preserves legacy every-host marks without adding a scope', async t => {
+  const h = setup(t);
+  h.setSetting('global', { hiddenProjects: [h.projectPath] });
+  assert.equal((await h.invoke('remove-project', h.projectPath, h.folder)).ok, true);
+  const global = h.getSetting('global');
+  assert.equal(Object.hasOwn(global.hiddenProjectScopes || {}, h.projectPath), false, 'existing bare entry stays bare after Delete');
+  const remote = { remoteAlias: 'box', projectPath: h.projectPath, sessions: [] };
+  assert.equal(applyAndPersistArchived([remote], true, h).length, 0, 'local Delete still hides a same-path remote group');
+});
+
 test('archive keeps persisted project settings, cache, search and schedule registration', async t => {
   const h = setup(t);
   const before = h.getSetting('project:' + h.projectPath);

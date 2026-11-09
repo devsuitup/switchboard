@@ -534,13 +534,12 @@ async function reopenActiveSessionAfterReload() {
   let session = indexedSessionById(activeSessionId);
   if (!session) {
     const item = g?.openWorkingSet?.find(entry => entry.sessionId === activeSessionId);
-    if (!item || isProjectHidden(g?.hiddenProjects, item.remoteAlias || null, item.projectPath, g?.hiddenProjectScopes)) return;
+    if (!item || isProjectHidden(g?.hiddenProjects, null, item.projectPath, g?.hiddenProjectScopes)) return;
     let live;
     try { live = await window.api.getActiveSessions(); } catch { return; }
     if (live.some(entry => entry.sessionId === item.sessionId)) {
-      session = { sessionId: item.sessionId, projectPath: item.projectPath, summary: 'New session',
-        ...(item.remoteAlias ? { remoteAlias: item.remoteAlias } : {}) };
-      const folder = (item.remoteAlias ? item.remoteAlias + '::' : '') + encodeProjectPath(item.projectPath);
+      session = { sessionId: item.sessionId, projectPath: item.projectPath, summary: 'New session' };
+      const folder = encodeProjectPath(item.projectPath);
       pendingSessions.set(item.sessionId, { session, projectPath: item.projectPath, folder });
       sessionMap.set(item.sessionId, session);
       await openSession(session, undefined, { automatic: true, reattachOnly: true, continuationResolved: true });

@@ -887,10 +887,11 @@ function skipMissedScheduleRuns(projects) {
 
 function isProjectSettingsArchived(projectPath) {
   const global = getSetting('global') || {};
-  const { isProjectHidden, worktreeParentPath } = require('./public/worktree-nesting');
+  if (!global.hiddenProjects?.length) return false;
+  const { projectHiddenMatcher, worktreeParentPath } = require('./public/worktree-nesting');
+  const hidden = projectHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes, normalizeArchivedProjectPath);
   const target = normalizeArchivedProjectPath(projectPath);
-  return isProjectHidden(global.hiddenProjects, null, target, global.hiddenProjectScopes, normalizeArchivedProjectPath)
-    || isProjectHidden(global.hiddenProjects, null, worktreeParentPath(target), global.hiddenProjectScopes, normalizeArchivedProjectPath);
+  return hidden(null, target) || hidden(null, worktreeParentPath(target));
 }
 
 // see .ai/contexts/session-cache.md ("Project Archive and Delete")
@@ -968,7 +969,7 @@ ipcMain.handle('remove-project', async (_event, projectPath, folderKey) => {
     // Add to hidden projects list
     const { alias } = folderKey ? parseFolderKey(folderKey) : { alias: null };
     const hiddenEntry = alias === null ? projectPath : joinFolderKey(alias, projectPath);
-    await writer.hideProject(hiddenEntry, 'delete', { alias });
+    await writer.hideProject(hiddenEntry, 'delete');
 
     // Clean up DB cache and search index for this folder
     const folder = folderKey || encodeProjectPath(projectPath);
@@ -3540,13 +3541,13 @@ sessionTransitions.init({
   PROJECTS_DIR, activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
   getLiveDescriptors: () => {
     const global = getSetting('global') || {};
-    const { isProjectHidden, worktreeParentPath } = require('./public/worktree-nesting');
     const descriptors = cliSessionState.getSidebarDescriptors({ allWriters: true });
+    if (!global.hiddenProjects?.length) return descriptors;
+    const { projectHiddenMatcher, worktreeParentPath } = require('./public/worktree-nesting');
+    const hidden = projectHiddenMatcher(global.hiddenProjects, global.hiddenProjectScopes, normalizeArchivedProjectPath);
     return descriptors.filter(descriptor => {
-      const cwd = normalizeArchivedProjectPath(descriptor.cwd);
       const parent = worktreeParentPath(descriptor.cwd?.replace(/\\/g, '/'));
-      return !isProjectHidden(global.hiddenProjects, null, cwd, global.hiddenProjectScopes, normalizeArchivedProjectPath)
-        && !isProjectHidden(global.hiddenProjects, null, parent, global.hiddenProjectScopes, normalizeArchivedProjectPath);
+      return !hidden(null, descriptor.cwd) && !hidden(null, parent);
     });
   },
   onDescriptorSession: async (sessionId, session, folderPath) => {

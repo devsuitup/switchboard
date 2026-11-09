@@ -81,12 +81,12 @@ function shipped(t, options, observed = false) {
   };
 }
 
-test('file-list workers keep local memory and work files when the bare mark has a remote scope', async t => {
+test('file-list workers hide local memory and work files under a local scope', async t => {
   const f = fixture(t);
   const query = shipped(t, f.options);
   for (const kind of ['memory', 'work-file']) {
-    const result = await query(kind, { hiddenProjects: [f.project], hiddenProjectScopes: { [f.project]: { alias: 'box' } } });
-    assert.ok(result.view.projects.some(p => p.projectPath === f.project), 'remote scope must not remove local file-list sentinel: ' + kind);
+    const result = await query(kind, { hiddenProjects: [f.project], hiddenProjectScopes: { [f.project]: { alias: null } } });
+    assert.equal(result.view.projects.some(p => p.projectPath === f.project), false, 'local scope must hide the local file list: ' + kind);
   }
 });
 
