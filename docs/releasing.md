@@ -50,7 +50,7 @@ request first, because `main` is protected.
    ```
 
 4. **Wait for the build.** The tag starts `.github/workflows/build.yml`: macOS
-   (macos-14), Windows (windows-2022), and Linux x64 and arm64 on separate
+   (macos-15), Windows (windows-2022), and Linux x64 and arm64 on separate
    runners. Packaging-related pull requests and manual dispatches build only
    Windows and both Linux architectures; macOS remains part of every tag push
    build. A dispatch never publishes, even on a tag ref. For a PR installer,
