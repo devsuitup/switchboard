@@ -220,7 +220,7 @@ test('dependency sharing preserves a private install without creating nested lin
   assert.deepEqual(fs.readdirSync(target), ['private']);
 });
 
-test('cleanup removes the dependency link before git removes the worktree, preserving its source', (t) => {
+test('cleanup removes the dependency link before git removes the worktree, preserving its source', async (t) => {
   const root = temp(t);
   const source = path.join(root, 'source');
   fs.mkdirSync(source);
@@ -230,7 +230,7 @@ test('cleanup removes the dependency link before git removes the worktree, prese
   tooling().linkNodeModules(worktree, source);
   assert.ok(fs.lstatSync(path.join(worktree, 'node_modules')).isSymbolicLink());
   const calls = [];
-  tooling().cleanWorktree({ checkout: root, pr: '122', home: root, run: (file, args) => {
+  await tooling().cleanWorktree({ checkout: root, pr: '122', home: root, run: (file, args) => {
     calls.push([file, args]);
     assert.equal(fs.existsSync(path.join(worktree, 'node_modules')), false);
     assert.equal(fs.readFileSync(path.join(source, 'sentinel'), 'utf8'), 'keep');
@@ -289,6 +289,61 @@ function workflow(t, script = bundleScript) {
   return { checkout, home, env, run, calls, messages,
     log: message => messages.push(message), warn: message => messages.push(message) };
 }
+
+for (const reject of [false, true]) {
+  test(`browser cleanup awaits captured data directory before removing HOME on launch rejection=${reject}`, async t => {
+    const setup = workflow(t), effects = [];
+    let cwd, data, release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const running = tooling().main({ ...setup, env: { ...setup.env, ISOLATED: '1' }, fixtures() {},
+      launch: async (_file, _args, options) => {
+        cwd = options.cwd; data = options.env.SWITCHBOARD_DATA_DIR;
+        if (reject) throw new Error('launch rejected'); return 0;
+      },
+      stopBrowser: async captured => { effects.push(['stop', captured]); await gate; return true; },
+      removeDir: target => { effects.push(['delete', target]); fs.rmSync(target, { recursive: true, force: true }); },
+    });
+    running.catch(() => {});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(effects, [['stop', data]]);
+    assert.equal(fs.existsSync(cwd), true);
+    release();
+    if (reject) await assert.rejects(running, /launch rejected/); else assert.equal(await running, 0);
+    assert.deepEqual(effects, [['stop', data], ['delete', cwd]]);
+  });
+}
+
+test('uncertain browser cleanup retains HOME and reports recovery, including cleanup rejection', async t => {
+  for (const fail of ['false', 'throw']) {
+    const setup = workflow(t); let cwd;
+    await tooling().main({ ...setup, env: { ...setup.env, ISOLATED: '1' }, fixtures() {},
+      launch: async (_file, _args, options) => { cwd = options.cwd; return 0; },
+      stopBrowser: async () => { if (fail === 'throw') throw new Error('uncertain'); return false; },
+      removeDir: target => fs.rmSync(target, { recursive: true, force: true }),
+    });
+    assert.equal(fs.existsSync(cwd), true);
+    assert.ok(setup.messages.some(message => /browser.*retain|retain.*browser/i.test(message)));
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('clean awaits browser exit before removing worktree/junction and persistent data', async t => {
+  const setup = workflow(t), effects = [];
+  await tooling().main({ ...setup, clean: true,
+    stopBrowser: async data => { effects.push(data); return false; },
+    run: () => assert.fail('uncertain cleanup must not remove worktree'),
+  }).then(() => assert.fail('clean must refuse uncertain browser exit'), error => assert.match(error.message, /browser/i));
+  assert.deepEqual(effects, [path.join(setup.home, '.switchboard-dev-pr122')]);
+});
+
+test('fixture failure after config capture still stops the captured browser data directory', async t => {
+  const setup = workflow(t); let data, stopped;
+  await assert.rejects(tooling().main({ ...setup, env: { ...setup.env, ISOLATED: '1' },
+    fixtures: (_home, env) => { data = env.SWITCHBOARD_DATA_DIR; throw new Error('fixtures failed'); },
+    stopBrowser: async dir => { stopped = dir; return true; },
+  }), /fixtures failed/);
+  assert.equal(stopped, data);
+});
 
 for (const isolated of ['0', '1']) {
   test(`mode ISOLATED=${isolated} confines relative native writes outside the checkout and cleans them on exit`, async (t) => {
