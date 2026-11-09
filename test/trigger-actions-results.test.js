@@ -23,11 +23,14 @@ async function rig(t, options = {}) {
   if (options.prior) fs.writeFileSync(output, JSON.stringify(options.prior) + '\n');
   if (options.marker) fs.writeFileSync(marker, JSON.stringify(options.marker));
   if (options.readError) fs.writeFileSync(options.errorOnMarker ? marker : output, '{}');
-  if (!options.orphan) fs.writeFileSync(input, JSON.stringify(Object.hasOwn(options, 'payload') ? options.payload : payload));
-  options.setup?.({ input, output, marker });
+  const body = JSON.stringify(Object.hasOwn(options, 'payload') ? options.payload : payload);
+  if (!options.orphan && !options.live) fs.writeFileSync(input, body);
+  if (!options.live) options.setup?.({ input, output, marker });
   if (options.stale && !options.orphan) fs.utimesSync(input, new Date(0), new Date(0));
   let notify;
   let publications = 0;
+  let recoveryReads = 0;
+  const descriptors = new Map();
   const events = [];
   const errors = [];
   const filename = path.resolve(__dirname, '../src/main/triggers/trigger-watcher.js');
@@ -35,9 +38,21 @@ async function rig(t, options = {}) {
   const module = { exports: {} };
   const fakeFs = { ...fs,
     readFileSync(file, ...args) {
+      if (file === marker || file === output) recoveryReads++;
       if (options.readError && file === (options.errorOnMarker ? marker : output)) throw options.readError;
       return fs.readFileSync(file, ...args);
     },
+    openSync(file, ...args) {
+      if (file === marker || file === output) recoveryReads++;
+      const fd = fs.openSync(file, ...args);
+      descriptors.set(fd, file);
+      return fd;
+    },
+    readSync(fd, ...args) {
+      if (options.readError && descriptors.get(fd) === (options.errorOnMarker ? marker : output)) throw options.readError;
+      return fs.readSync(fd, ...args);
+    },
+    closeSync(fd) { descriptors.delete(fd); return fs.closeSync(fd); },
     watch: (_dir, _opts, callback) => { notify = callback; return { on() {}, close() {} }; },
     unlinkSync(file) {
       events.push(path.basename(file));
@@ -59,26 +74,152 @@ async function rig(t, options = {}) {
     Buffer, console, setTimeout, clearTimeout, setInterval, clearInterval, setImmediate,
   }, { filename });
   const watcher = module.exports.start({ log: { info() {}, warn() {}, error: (...args) => errors.push(args) },
-    getPtyForSession() { return null; }, isSessionBusy: () => false });
+    getPtyForSession() { return null; }, isSessionBusy: () => false, ...options.ctx });
   t.after(() => { watcher.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  if (options.live) {
+    options.setup?.({ input, output, marker });
+    fs.writeFileSync(input, body);
+    notify('rename', name + '.json');
+  }
   async function settle() { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); }
   await settle();
-  return { input, output, marker, events, errors, publications: () => publications, notify: () => notify('rename', request + '.json'), settle };
+  return { input, output, marker, events, errors, publications: () => publications, recoveryReads: () => recoveryReads, notify: () => notify('rename', request + '.json'), settle };
 }
+
+for (const state of ['result', 'marker']) {
+  test(`uppercase v1 refuses its filename despite existing ${state}`, async t => {
+    const r = await rig(t, { name: request.toUpperCase(), live: true,
+      setup({ output, marker }) {
+        fs.writeFileSync(state === 'result' ? output : marker, JSON.stringify({ ...payload, mode: 'resume' }));
+      },
+    });
+    assert.equal(JSON.parse(fs.readFileSync(r.output, 'utf8')).reason, 'trigger filename must be a lowercase UUID', 'uppercase v1 must validate instead of recovering canonical state');
+    assert.ok(fs.readdirSync(path.dirname(r.output)).includes(request + '.result.json'));
+  });
+  for (const [live, name] of [true, false].flatMap(live => [request.toUpperCase(), request].map(name => [live, name]))) {
+    test(`legacy ${name} runs despite v1 ${state} for its UUID; ${live ? 'live' : 'startup'}`, async t => {
+      const written = [];
+      const r = await rig(t, { name, live, payload: { sessionId: id, command: 'legacy command' },
+        setup({ output, marker }) {
+          fs.writeFileSync(state === 'result' ? output : marker, JSON.stringify({ ...payload, mode: 'resume' }));
+        },
+        ctx: {
+          getPtyForSession: () => ({ handle: { isAlive: () => true, write: text => written.push(text) } }),
+          getComposerState: () => ({ pending: 0, lastInputAt: 0 }),
+          isSessionBusy: () => true,
+        },
+      });
+      const legacyOutput = path.join(path.dirname(r.output), name + '.result.json');
+      const deadline = performance.now() + 2500;
+      while (fs.existsSync(r.input) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+      assert.deepEqual(written, ['legacy command', '\r'], 'legacy input must execute despite unrelated v1 recovery state');
+      if (live) assert.equal(r.recoveryReads(), 0, 'legacy input never reads v1 recovery state');
+      assert.equal(fs.existsSync(legacyOutput), true, 'legacy client must receive its own result');
+      const result = JSON.parse(fs.readFileSync(legacyOutput, 'utf8'));
+      assert.equal(result.ok, true);
+      assert.equal(Object.hasOwn(result, 'version'), false);
+      assert.ok(fs.readdirSync(path.dirname(r.output)).includes(name + '.result.json'), 'legacy publication keeps the original filename spelling');
+    });
+  }
+}
+
+for (const location of ['output', 'marker']) {
+  test(`recovery rejects ${location} that grows beyond 64 KiB when read`, t => {
+    const { createTriggerActions } = require('../src/main/triggers/trigger-actions');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-state-growth-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const output = path.join(dir, 'output');
+    const marker = path.join(dir, 'marker');
+    const target = location === 'output' ? output : marker;
+    fs.writeFileSync(target, JSON.stringify(payload));
+    const large = JSON.stringify(payload) + ' '.repeat(65537);
+    let requested = 0;
+    let closed = 0;
+    const actions = createTriggerActions({ fs: { ...fs,
+      readFileSync(file, ...args) {
+        fs.writeFileSync(target, large);
+        return fs.readFileSync(file, ...args);
+      },
+      readSync(fd, ...args) {
+        fs.writeFileSync(target, large);
+        requested += args[2];
+        return fs.readSync(fd, ...args);
+      },
+      closeSync(fd) { closed++; return fs.closeSync(fd); },
+    } });
+    assert.throws(() => actions.readState(output, marker), /recovery state too large/, 'state that grows during reading must be refused');
+    assert.equal(requested, 65537, 'the read budget includes exactly one overflow byte');
+    assert.equal(closed, 1, 'overflow must close its descriptor');
+  });
+}
+
+for (const kind of ['directory', 'oversize']) {
+  test(`recovery rechecks opened descriptor after path becomes ${kind}`, t => {
+    const { createTriggerActions } = require('../src/main/triggers/trigger-actions');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-state-fstat-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const target = path.join(dir, 'state');
+    fs.writeFileSync(target, JSON.stringify(payload));
+    let reads = 0;
+    let closed = 0;
+    const actions = createTriggerActions({ fs: { ...fs,
+      fstatSync: () => ({ isFile: () => kind !== 'directory', size: kind === 'oversize' ? 65537 : 0 }),
+      readSync() { reads++; return 0; },
+      closeSync(fd) { closed++; return fs.closeSync(fd); },
+    } });
+    assert.throws(() => actions.readState(target, path.join(dir, 'missing')), kind === 'directory' ? /regular file/ : /too large/);
+    assert.equal(reads, 0, 'unsafe opened state must not be read');
+    assert.equal(closed, 1, 'fstat refusal must close the opened descriptor');
+  });
+}
+
+test('recovery reads a complete 64 KiB state through short descriptor reads', t => {
+  const { createTriggerActions } = require('../src/main/triggers/trigger-actions');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-state-short-read-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const target = path.join(dir, 'state');
+  const data = JSON.stringify(payload);
+  fs.writeFileSync(target, data + ' '.repeat(65536 - Buffer.byteLength(data)));
+  let closed = 0;
+  let reads = 0;
+  const actions = createTriggerActions({ fs: { ...fs,
+    readFileSync() { assert.fail('recovery must read the opened descriptor'); },
+    openSync(file, flags) {
+      const expected = process.platform === 'win32' ? fs.constants.O_RDONLY
+        : fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
+      assert.equal(flags, expected, 'recovery must use the platform-safe open flags');
+      return fs.openSync(file, flags);
+    },
+    readSync(fd, buffer, offset, length, position) {
+      reads++;
+      assert.ok(offset + length <= 65537, 'descriptor read stays within the overflow sentinel');
+      return fs.readSync(fd, buffer, offset, Math.min(length, 1024), position);
+    },
+    closeSync(fd) { closed++; return fs.closeSync(fd); },
+  } });
+  assert.deepEqual(actions.readState(target, path.join(dir, 'missing')), { result: payload, committed: true });
+  assert.ok(reads > 1, 'short reads must be continued until EOF or the byte ceiling');
+  assert.equal(closed, 1);
+});
 
 for (const location of ['output', 'marker']) {
   for (const kind of ['oversize', 'directory', 'symlink']) {
     test(`recovery rejects ${kind} ${location} before reading`, () => {
       const { createTriggerActions } = require('../src/main/triggers/trigger-actions');
       let reads = 0;
-      const actions = createTriggerActions({ fs: {
+      const stat = { isFile: () => kind === 'oversize', size: kind === 'oversize' ? 65537 : 0 };
+      const actions = createTriggerActions({ fs: { ...fs,
         lstatSync(file) {
           if (file !== location) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
-          return { isFile: () => kind === 'oversize', size: kind === 'oversize' ? 65537 : 0 };
+          return stat;
         },
+        openSync() { return 42; },
+        fstatSync() { return stat; },
+        readSync() { reads++; throw new Error('unsafe read attempted'); },
+        closeSync() {},
         readFileSync() { reads++; throw new Error('unsafe read attempted'); },
       } });
-      assert.throws(() => actions.readState('output', 'marker'));
+      assert.throws(() => actions.readState('output', 'marker'), kind === 'oversize' ? /too large/ : /regular file/);
       assert.equal(reads, 0, 'unsafe recovery state must never be read');
     });
   }
@@ -92,8 +233,14 @@ test('recovery rejects an actual FIFO without opening it', { skip: process.platf
   const fifo = path.join(dir, 'fifo');
   assert.equal(spawnSync('mkfifo', [fifo]).status, 0);
   let reads = 0;
-  const actions = createTriggerActions({ fs: { ...fs, readFileSync() { reads++; throw new Error('FIFO opened'); } } });
+  let opens = 0;
+  const actions = createTriggerActions({ fs: { ...fs,
+    openSync(...args) { opens++; return fs.openSync(...args); },
+    readSync() { reads++; throw new Error('FIFO read attempted'); },
+    readFileSync() { reads++; throw new Error('FIFO read attempted'); },
+  } });
   assert.throws(() => actions.readState(fifo, path.join(dir, 'missing')));
+  assert.equal(opens, 0, 'FIFO must be rejected by lstat without opening it');
   assert.equal(reads, 0, 'FIFO must be rejected by lstat without opening it');
 });
 
@@ -184,7 +331,7 @@ test('v1 publishes once before removing input and never overwrites a result on d
   const original = fs.readFileSync(r.output, 'utf8');
   assert.equal(JSON.parse(original).outcome, 'refused');
   assert.deepEqual(r.events.slice(0, 2), ['publication', request + '.json']);
-  fs.writeFileSync(r.input, JSON.stringify({ sessionId: id, command: 'do not route to legacy' }));
+  fs.writeFileSync(r.input, JSON.stringify({ ...payload, action: 'stop' }));
   r.notify();
   await r.settle();
   assert.equal(r.publications(), 1, 'a duplicate UUID must reuse its first result');

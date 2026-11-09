@@ -1062,6 +1062,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   let markerPath = path.join(processedDir, uuid + '.action.json');
   let versioned = false;
   let recoveryError;
+  const canonicalName = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid);
 
   function canonicalizePaths() {
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
@@ -1119,30 +1120,31 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   let compactStepsTotal = 0;
   let writeAttempted = false;
 
-  try {
-
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+  function recoverState() {
     try {
-      const canonicalResult = path.join(processedDir, uuid.toLowerCase() + '.result.json');
-      const canonicalMarker = path.join(processedDir, uuid.toLowerCase() + '.action.json');
-      const state = actions.readState(canonicalResult, canonicalMarker);
+      const state = actions.readState(resultPath, markerPath);
       if (state) {
-        canonicalizePaths();
         actions.publish({ ...state, resultPath, triggerPath, markerPath, retained: onEntryRetained });
-        return;
+        return true;
       }
     } catch (err) {
       recoveryError = err;
       safeLogError(ctx, '[trigger-watcher] v1 recovery state unavailable:', name, err.message);
     }
+    return false;
   }
+
+  try {
 
   // ── 1. lstat + size guard (C1 + C2) ──────────────────────────────────────
   let stat;
   try {
     stat = fs.lstatSync(triggerPath); // C2: lstat does NOT follow symlinks
   } catch (err) {
-    if (err.code === 'ENOENT') return; // gone before we could inspect it
+    if (err.code === 'ENOENT') {
+      if (canonicalName) recoverState();
+      return;
+    }
     ctx.log.error('[trigger-watcher] Trigger file could not be inspected:', name, err.message);
     await writeResult({ ok: false, error: 'trigger could not be inspected: ' + err.message });
     return;
@@ -1175,6 +1177,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       staleTrigger = JSON.parse(fs.readFileSync(triggerPath, 'utf8'));
       versioned = isVersioned(staleTrigger, uuid);
     } catch {}
+    if (versioned && canonicalName && recoverState()) return;
     const stale = {
       ok:        false,
       submitted: SUBMITTED_NO,
@@ -1221,6 +1224,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   if (isVersioned(trigger, uuid)) {
     versioned = true;
+    if (canonicalName && recoverState()) return;
     const evidence = { steps_total: 0 };
     await writeResult(recoveryError ? actions.refusal(trigger,
       validateTrigger(trigger, uuid, evidence) || 'trigger recovery state unavailable',
@@ -2213,7 +2217,10 @@ function start(ctx) {
     const names = fs.readdirSync(triggersDir);
     for (const name of names) handleFile(name);
     for (const name of fs.readdirSync(processedDir)) {
-      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.action\.json$/.test(name)) handleFile(name.replace(/\.action\.json$/, '.json'));
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.action\.json$/.test(name)) {
+        const inputName = name.replace(/\.action\.json$/, '.json');
+        if (!names.some(input => (process.platform === 'win32' ? input.toLowerCase() : input) === inputName)) handleFile(inputName);
+      }
     }
   } catch (err) {
     ctx.log.error('[trigger-watcher] Startup scan failed:', err.message);

@@ -234,7 +234,24 @@ function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.
       const stat = fs.lstatSync(file);
       if (!stat.isFile()) throw new Error('recovery state must be a regular file');
       if (stat.size > 64 * 1024) throw new Error('recovery state too large (max 64 KB)');
-      return JSON.parse(fs.readFileSync(file, 'utf8'));
+      let fd;
+      try {
+        const flags = process.platform === 'win32' ? fs.constants.O_RDONLY
+          : fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
+        fd = fs.openSync(file, flags);
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile()) throw new Error('recovery state must be a regular file');
+        if (opened.size > 64 * 1024) throw new Error('recovery state too large (max 64 KB)');
+        const buffer = Buffer.alloc(64 * 1024 + 1);
+        let size = 0;
+        while (size < buffer.length) {
+          const count = fs.readSync(fd, buffer, size, buffer.length - size, size);
+          if (count === 0) break;
+          size += count;
+        }
+        if (size > 64 * 1024) throw new Error('recovery state too large (max 64 KB)');
+        return JSON.parse(buffer.toString('utf8', 0, size));
+      } finally { if (fd !== undefined) fs.closeSync(fd); }
     }
     try {
       const result = read(resultPath);

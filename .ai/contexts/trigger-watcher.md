@@ -102,27 +102,36 @@ No `opened` or `closed` result is produced by this slice.
 Versioned terminal results use the existing temporary-write/rename-retry helper
 at `processed/<uuid>.result.json`. Publication precedes input removal, and
 marker removal follows successful input removal. A committed v1 result is
-immutable and wins over duplicate input, even if its payload changes to legacy,
+immutable and wins over duplicate canonical v1 input,
 and over any action marker. Publication failure retains input/marker and
 suppresses replay in memory; cleanup failure also suppresses reprocessing.
 Legacy publication, including deletion after a failed result write, is unchanged.
 
-Recovery reads lstat each result/marker before reading: only regular files
-of at most 64 KiB are accepted; symlinks, FIFOs and other types refuse without
-opening them. A parsed legacy result without `version` is no recovery state.
-Other inspection/read/parse failures are logged and remembered while the
-input's normal transport guards and classification proceed. Legacy requests
-continue unchanged; schema-valid v1 requests refuse with
+Recovery applies to inputs only after they parse as versioned and only when
+their filenames already use the canonical lowercase UUID spelling. Legacy
+inputs never read or obey v1 recovery state, even when they reuse its UUID.
+Recovery reads lstat each result/marker before opening it, then open with
+`O_RDONLY | O_NOFOLLOW | O_NONBLOCK` where available on POSIX, or `O_RDONLY`
+alone on Windows. Descriptor fstat must still identify a regular file of at
+most 64 KiB. Reads use that descriptor with a 64 KiB + 1 byte ceiling, reject
+overflow even after file growth, and always close the descriptor. The initial
+lstat rejects symlinks, FIFOs and other types before opening them; POSIX open
+flags also protect against path replacement. A parsed legacy result without
+`version` is no recovery state. Inspection/read/parse failures are logged and
+remembered; schema-valid v1 requests refuse with
 `trigger recovery state unavailable`, with OS/parser details in `error`.
 Schema errors take precedence over recovery and staleness refusals. Invalid
 orphan state without an input is logged without replaying an action.
 Stale v1 requests run schema validation before their age refusal, including
-strict version and lowercase filename checks. UUID result/marker lookup and
-v1 publication use the canonical lowercase spelling; legacy publication keeps
-its original filename behavior.
+strict version and lowercase filename checks. V1 publication always uses the
+canonical lowercase spelling: a stale or invalid v1 file named in uppercase
+gets its result only at the lowercase path. Legacy publication keeps its
+original filename behavior.
 
 Startup recovery scans `processed/<uuid>.action.json` through the same filename
-queue and eight-file backpressure, including orphan markers. Recovery precedes
+queue and eight-file backpressure, including orphan markers. An input present
+in the startup scan owns its dispatch; the marker scan does not dispatch it
+again, including a case alias on Windows. Orphan recovery is unchanged. Recovery precedes
 age checks and produces `refused`, `interrupted by restart`, `uncertain:true`;
 it preserves the normalized ID and recorded boolean lifecycle/write evidence,
 submission rank and step count. The recovery record uses `version`, `action`,
