@@ -10,11 +10,11 @@ function deleteScheduleFile(filePath, { projectRoot, stateDir, runsDir }) {
   try {
     const key = scheduleStateKey({ filePath });
     const state = readScheduleStateOnly(stateDir).get(key);
-    fs.unlinkSync(filePath);
     for (const name of state?.files || []) {
       try { fs.unlinkSync(path.join(stateDir, name)); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
+    fs.unlinkSync(filePath);
     runResults.pruneScheduleRunResults(runsDir, key, 0);
     return { ok: true };
   } catch (error) {

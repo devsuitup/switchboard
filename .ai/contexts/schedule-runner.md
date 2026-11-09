@@ -542,18 +542,24 @@ and `scheduleRunsDir(dirname(DB_PATH))`. `deleteListedScheduleFile` refreshes th
 registry and requires exact equality with a `listScheduleFiles` path. The separate
 `deleteScheduleFile(filePath, { projectRoot, stateDir, runsDir })` export has no IPC,
 window or registry dependency, so project-folder deletion (#474) can reuse it.
-It rechecks `scheduleFileUnlinked` before unlinking the listed path, removes that
-key's catch-up claims via `readScheduleStateOnly`, and calls the existing
-`pruneScheduleRunResults(runsDir, key, 0)`. Missing record directories are not
-created. Other keys, transcripts and Sessions grouping remain intact. A file
+It rechecks `scheduleFileUnlinked`, removes that key's catch-up claims via
+`readScheduleStateOnly`, unlinks the listed path, then calls the existing
+`pruneScheduleRunResults(runsDir, key, 0)`. A claim unlink failure other than
+ENOENT returns the error with the schedule file and run results still present,
+so the row stays available for retry. A schedule-file unlink failure also
+returns the error and keeps run results; the removed claims can cost at most
+one catch-up. Run-result pruning errors stay ignored. Missing record directories
+are not created. Other keys, transcripts and Sessions grouping remain intact. A file
 recreated at the same path inherits no retained catch-up or run-result records.
 Publication debris follows D's existing ten-minute stale-file policy; a running
 child is not stopped by deleting its schedule.
 
 Delete is a native button in the existing `.schedule-actions` keyboard inventory:
 Tab reaches it, Enter/Space activates it, and `:has(:focus-visible)` reveals the
-action container. The shared confirmation focuses Cancel and owns Escape and
-the modal Tab loop. Tests: `test/schedule-delete-file.test.js` and
+action container. If a refresh removes the focused row after deletion, focus
+moves to the same control in the next row, otherwise the previous row, otherwise
+the list container (`tabIndex=-1`). The shared confirmation focuses Cancel and
+owns Escape and the modal Tab loop. Tests: `test/schedule-delete-file.test.js` and
 `test/dom-schedules-tab.test.js`; the existing `test/keyboard-focus-css.test.js`
 covers the shared action container.
 

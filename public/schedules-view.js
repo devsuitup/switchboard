@@ -145,7 +145,15 @@ function renderSchedules(data) {
   }
   if (!count) scheduleText(container, 'plans-empty', 'No schedules found.');
   if (!projectFocus && focusedPath && focusedControl) {
-    focusScheduleControl(focusedPath, focusedControl);
+    const currentRows = [...container.querySelectorAll('.schedule-item')];
+    const target = currentRows.find(row => row.dataset.filepath === focusedPath)
+      || currentRows[Math.min(rows.indexOf(focusedRow), currentRows.length - 1)];
+    if (target) focusScheduleControl(target.dataset.filepath, focusedControl);
+    else {
+      schedulesPendingFocus = null;
+      container.tabIndex = -1;
+      container.focus({ preventScroll: true });
+    }
   } else schedulesPendingFocus = null;
   const paths = new Set(data.projects.flatMap(project => project.schedules.map(schedule => schedule.filePath)));
   for (const [filePath, state] of schedulesActions) {

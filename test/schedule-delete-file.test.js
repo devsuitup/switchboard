@@ -113,22 +113,52 @@ test('deletion needs no registry or window in its reusable helper and creates no
   assert.equal(fs.existsSync(f.runsDir), false);
 });
 
-test('unlink errors return a failure and retain catch-up state', t => {
+test('claim unlink errors leave the schedule file and run results available for retry', async t => {
   const f = fixture(t);
   fs.mkdirSync(f.stateDir);
   const record = path.join(f.stateDir, `${f.key}-60000.json`);
   fs.writeFileSync(record, '{}');
+  fs.mkdirSync(f.runsDir);
+  const result = path.join(f.runsDir, `${f.key}-60000-${f.id}.json`);
+  fs.writeFileSync(result, '{}');
+  const unlink = fs.unlinkSync;
+  t.mock.method(fs, 'unlinkSync', candidate => {
+    if (candidate === record) throw Object.assign(new Error('claim busy'), { code: 'EBUSY' });
+    return unlink(candidate);
+  });
+  assert.deepEqual(await backend().deleteListedScheduleFile(f.filePath, f.deps), { ok: false, error: 'claim busy' });
+  assert.equal(fs.existsSync(f.filePath), true, 'claim failure leaves the schedule file available for retry');
+  assert.equal(fs.existsSync(record), true);
+  assert.equal(fs.existsSync(result), true, 'claim failure preserves run results');
+});
+
+test('file unlink errors return a failure after clearing claims and leave run results visible', async t => {
+  const f = fixture(t);
+  fs.mkdirSync(f.stateDir);
+  const record = path.join(f.stateDir, `${f.key}-60000.json`);
+  fs.writeFileSync(record, '{}');
+  fs.mkdirSync(f.runsDir);
+  const result = path.join(f.runsDir, `${f.key}-60000-${f.id}.json`);
+  fs.writeFileSync(result, '{}');
   const unlink = fs.unlinkSync;
   t.mock.method(fs, 'unlinkSync', candidate => {
     if (candidate === f.filePath) throw new Error('unlink denied');
     return unlink(candidate);
   });
-  assert.deepEqual(backend().deleteScheduleFile(f.filePath, f.deps), { ok: false, error: 'unlink denied' });
-  assert.equal(fs.existsSync(record), true);
+  assert.deepEqual(await backend().deleteListedScheduleFile(f.filePath, f.deps), { ok: false, error: 'unlink denied' });
+  assert.equal(fs.existsSync(f.filePath), true);
+  assert.equal(fs.existsSync(result), true, 'file unlink failure preserves run results');
+  assert.equal(fs.existsSync(record), false, 'claims are cleared before attempting to unlink the schedule file');
 });
 
 test('main deletion channel uses the guarded helper and instance directories; preload forwards the exact argument', async t => {
   const f = fixture(t);
+  fs.mkdirSync(f.stateDir);
+  const record = path.join(f.stateDir, `${f.key}-60000.json`);
+  fs.writeFileSync(record, '{}');
+  fs.mkdirSync(f.runsDir);
+  const result = path.join(f.runsDir, `${f.key}-60000-${f.id}.json`);
+  fs.writeFileSync(result, '{}');
   const filename = path.join(__dirname, '../main.js');
   const source = fs.readFileSync(filename, 'utf8');
   const start = source.indexOf("ipcMain.handle('delete-schedule-file'");
@@ -142,6 +172,8 @@ test('main deletion channel uses the guarded helper and instance directories; pr
   }, { filename, lineOffset: source.slice(0, start).split('\n').length - 1 });
   assert.equal((await handlers.get('delete-schedule-file')(null, f.filePath)).ok, true);
   assert.equal(fs.existsSync(f.filePath), false);
+  assert.equal(fs.existsSync(record), false, 'main deletes catch-up claims under the database instance root');
+  assert.equal(fs.existsSync(result), false, 'main deletes run results under the database instance root');
   let api;
   const calls = [];
   const preload = path.join(__dirname, '../preload.js');

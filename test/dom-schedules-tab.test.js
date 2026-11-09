@@ -74,6 +74,32 @@ test('Delete waits for the destructive confirmation naming the file and preservi
   assert.equal(h.w.document.querySelector('.schedule-item'), null);
 });
 
+for (const [position, count, expected] of [[0, 3, 1], [1, 3, 2], [2, 3, 1], [0, 1, null]]) {
+  test(`successful Delete at row ${position + 1} of ${count} moves focus to ${expected === null ? 'the list' : `Delete in row ${expected + 1}`}`, async t => {
+    const h = setup(t);
+    await settle();
+    h.project.schedules = Array.from({ length: count }, (_, index) => ({ ...h.schedule,
+      file: `schedule-${index}.md`, filePath: `/p/schedule-${index}.md` }));
+    const deleted = h.project.schedules[position].filePath;
+    const target = expected === null ? null : h.project.schedules[expected].filePath;
+    h.w.appConfirm = async () => true;
+    h.w.api.deleteScheduleFile = async filePath => {
+      h.project.schedules = h.project.schedules.filter(schedule => schedule.filePath !== filePath);
+      return { ok: true };
+    };
+    h.w.renderSchedules(h.data);
+    const button = h.w.document.querySelectorAll('.schedule-delete-btn')[position];
+    button.focus();
+    button.click();
+    await settle();
+    const rows = [...h.w.document.querySelectorAll('.schedule-item')];
+    assert.equal(rows.some(row => row.dataset.filepath === deleted), false);
+    const focused = target === null ? h.w.document.getElementById('schedules-content')
+      : rows.find(row => row.dataset.filepath === target).querySelector('.schedule-delete-btn');
+    assert.equal(h.w.document.activeElement, focused, 'successful deletion keeps keyboard focus in the schedules list');
+  });
+}
+
 test('cancelling Delete keeps the schedule and makes the action available again', async t => {
   const h = setup(t);
   let deleted = false;
