@@ -45,7 +45,8 @@ function restoreFixture(t, { saved = [{ sessionId: 's1', bg: true, attachJobId: 
   t.after(() => assert.equal(listeners.size, 0, 'descriptor listener released'));
   const restore = handlers.get('restore-background-job');
   assert.equal(typeof restore, 'function', 'B-T7 restore IPC registered');
-  return { handoff: job => unsubscribe.respawnForHandoff(job), restore: (id = 's1', options) => restore({}, id, options), bg, seen, live, listeners,
+  return { manual: () => handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa'),
+    handoff: job => unsubscribe.respawnForHandoff(job), restore: (id = 's1', options) => restore({}, id, options), bg, seen, live, listeners,
     publish: value => { live.value = value; for (const fn of listeners) fn(); } };
 }
 
@@ -79,7 +80,7 @@ for (const state of ['working', 'blocked', 'running', 'done', 'failed', 'stopped
       assert.deepEqual(h.seen.filter(call => call[0] === 'respawn'), shouldRespawn ? [['respawn', 'aaaaaaaa']] : []);
       assert.ok(h.seen.some(call => call[0] === 'check' && call[1]?.workerLiveness === 'all'), 'S1a classifies every restore state');
       if (shouldRespawn) {
-        assert.equal(h.listeners.size, 1, 'the descriptor already present at hold start cannot release its marker');
+        assert.equal(h.listeners.size, 1, 'the descriptor present before the CLI call cannot release its marker');
         h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1', pid: 4242 }]);
         assert.equal(h.listeners.size, 0, 'a different pid releases the marker');
       }
@@ -88,6 +89,66 @@ for (const state of ['working', 'blocked', 'running', 'done', 'failed', 'stopped
     });
   }
 }
+
+for (const state of ['working', 'done', 'stopped', 'failed']) {
+  test(`1033fix2 ${state}: publication during the CLI call immediately releases the hold`, async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const h = restoreFixture(t, { state });
+    let calls = 0;
+    h.bg.runVerb = async () => {
+      calls++;
+      await new Promise(resolve => setImmediate(resolve));
+      h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1', pid: 4242 }]);
+      return { ok: true };
+    };
+    assert.equal((await h.manual()).ok, true);
+    assert.equal(h.listeners.size, 0, 'a worker published during the CLI call must immediately release the hold');
+    h.publish([]);
+    assert.equal((await h.manual()).ok, true);
+    assert.equal(calls, 2, 'a worker that already died must permit a fresh manual respawn');
+  });
+}
+
+test('1033fix2 updating the held session id cannot release on a previously unrelated bg pid', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const old = { kind: 'bg', sessionId: 'new-session', pid: 4242 };
+  const h = restoreFixture(t, { descriptors: [old] });
+  await h.manual();
+  assert.deepEqual(await h.handoff({ id: 'aaaaaaaa', sessionId: 'new-session' }), { ok: true, attached: true });
+  assert.equal(h.listeners.size, 1, 'a pid present before the CLI call must stay old after the job session id changes');
+  h.publish([]);
+  await h.manual();
+  assert.equal(h.seen.filter(call => call[0] === 'respawn').length, 1, 'the old unrelated pid must not enable another respawn');
+  h.publish([{ ...old, pid: 4243 }]);
+  assert.equal(h.listeners.size, 0, 'a genuinely new pid matching the updated session id releases the hold');
+});
+
+test('1033fix2 an unreadable pre-CLI snapshot retains the hold until expiry', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { handlers, ipcMain } = fakeIpc();
+  const bg = fakeBgAgents();
+  const listeners = new Set();
+  let unreadable = true;
+  bg.conversationCheck = () => ({ known: true, state: 'done', hosted: false, sessionIds: [] });
+  bg.runVerb = async () => { bg.calls.push(['respawn']); unreadable = false; return { ok: true }; };
+  init({ ipcMain, bgAgents: bg, getMainWindow: () => null, log: { warn() {} },
+    cliSessionState: {
+      readAllDescriptors: () => { if (unreadable) throw Error('snapshot unavailable'); return [{ kind: 'bg', jobId: 'aaaaaaaa', pid: 4242 }]; },
+      onDescriptorsChanged: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+    },
+  });
+  const click = () => handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+  await click();
+  t.mock.timers.tick(14999);
+  await click();
+  assert.equal(bg.calls.length, 1, 'snapshot failure must retain the full conservative window');
+  assert.equal(listeners.size, 1);
+  t.mock.timers.tick(1);
+  await click();
+  assert.equal(bg.calls.length, 2);
+  t.mock.timers.tick(15000);
+  assert.equal(listeners.size, 0);
+});
 
 test('B dead worker respawn repeats the existing conversation guard', async t => {
   const h = restoreFixture(t);

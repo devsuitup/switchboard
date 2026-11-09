@@ -78,12 +78,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
   });
   const respawning = new Map();
   const justRespawned = new Map();
-  const holdRespawn = (key, value, job) => {
-    let previousPids;
-    try {
-      previousPids = new Set(cliSessionState.readAllDescriptors()
-        .filter(d => liveWorkerDescriptor(job, [d])).map(d => d.pid));
-    } catch {}
+  const holdRespawn = (key, value, job, previousPids) => {
     let unsubscribe;
     const clear = () => {
       clearTimeout(timer);
@@ -121,13 +116,18 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     const pending = (async () => {
       const check = await checkVerb('respawn', id, restoring, extraSessionIds);
       if (!check.ok) return { result: check, refused: true };
+      let previousPids;
+      try {
+        previousPids = new Set(cliSessionState.readAllDescriptors()
+          .filter(d => d?.kind === 'bg').map(d => d.pid));
+      } catch {}
       let result;
       try { result = await bgAgents.runVerb('respawn', id); }
       catch (err) { result = { ok: false, error: err?.message || String(err) }; }
       if (result?.refused) return { result, refused: true };
       const value = { result: result?.ok ? result : { ok: false,
         error: `Respawn result is unknown (${result?.error || 'no result'}). Check the Agents view before retrying.` }, refused: false };
-      holdRespawn(key, value, job);
+      holdRespawn(key, value, job, previousPids);
       return value;
     })().finally(() => respawning.delete(key));
     respawning.set(key, { pending, restoring, extraIds, job });

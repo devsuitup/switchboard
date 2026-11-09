@@ -388,7 +388,7 @@ for (const timedOut of [false, true]) {
 for (const state of ['stopped', 'failed']) {
   for (const publication of ['old worker remains', 'new worker before state update']) {
     for (const uncertain of [false, true]) {
-      test(`1033fix ${state}: ${publication}, ${uncertain ? 'uncertain' : 'successful'} result holds until a different pid`, async t => {
+      test(`1033fix ${state}: ${publication}, ${uncertain ? 'uncertain' : 'successful'} result uses the pre-CLI pid snapshot`, async t => {
         t.mock.timers.enable({ apis: ['setTimeout'] });
         const h = fixture(t, state);
         h.descriptors.push({ kind: 'bg', jobId: 'aaaaaaaa', sessionId: SID, pid: 4242 });
@@ -398,9 +398,15 @@ for (const state of ['stopped', 'failed']) {
         const click = () => h.handlers.get('bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
         await click();
         h.delivery.autoAttach = false;
+        if (publication === 'new worker before state update') {
+          h.descriptors.length = 0;
+          await click();
+          assert.equal(h.calls.length, 2, 'a worker published during the CLI call releases the hold before state update');
+          return;
+        }
         t.mock.timers.tick(2000);
         await click();
-        assert.equal(h.calls.length, 1, 'a descriptor present at hold start must not release the hold');
+        assert.equal(h.calls.length, 1, 'a descriptor present before the CLI call must not release the hold');
         h.publishWorker(4242);
         await click();
         assert.equal(h.calls.length, 1, 'republishing the old pid must keep the hold');
@@ -497,6 +503,18 @@ test('1033fix handoff keeps unknown-result advice once with no double period', a
     error: 'Respawn result is unknown (timeout). Check the Agents view before retrying.' } });
   assert.doesNotMatch(result.error, /\.\./, 'handoff must not duplicate the final period');
   assert.equal((result.error.match(/check the Agents view/ig) || []).length, 1, 'handoff must give the recovery advice only once');
+});
+
+test('1033fix2 refused handoff strips the final period of a real checkVerb error', async t => {
+  const h = fixture(t, 'running');
+  h.cli.readWorkerProcessEvidence = () => ({ processTableFresh: false });
+  const refusal = await h.handlers.get('check-bg-agent-verb')({}, 'respawn', 'aaaaaaaa');
+  assert.equal(refusal.ok, false);
+  assert.match(refusal.error, /Check the Agents view, then retry\.$/);
+  const { result } = await handoff(h, { respawnResult: { ...refusal, refused: true } });
+  assert.equal(result.code, 'respawn-failed');
+  assert.doesNotMatch(result.error, /\.\./, 'a real checkVerb refusal must not duplicate the final period');
+  assert.ok(result.error.includes(refusal.error + ' Respawn it from the Agents view'));
 });
 
 for (const state of ['stopped', 'failed']) {

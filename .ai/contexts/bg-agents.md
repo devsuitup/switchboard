@@ -60,12 +60,14 @@ Delete retains its conservative default. Unknown never respawns. A per-session p
 coalesces overlapping restore requests. A per-job promise covers the check and CLI
 respawn shared by manual Respawn, restore and handoff. After the verb returns,
 a per-job marker holds its result until this job's background descriptor is
-published with a pid absent from this job's matching descriptors when the marker
-started, or the shared 15-second descriptor wait expires. This includes descriptors
-published before the verb returned while state.json still says stopped or failed:
-their presence alone cannot release the marker. A successful Stop or Delete (`rm`)
-also clears the marker. The initial matching pids are captured before subscribing;
-observation then subscribes before checking for a different pid. An unreadable
+published with a pid absent from all live background descriptors captured immediately
+before the CLI respawn call, or the shared 15-second descriptor wait expires.
+A worker published during the CLI call releases the marker immediately, including
+when state.json still says stopped or failed. A worker present before that call
+cannot release it. Capturing all background pids also keeps an existing descriptor
+old when a joiner updates the held job's session id. A successful Stop or Delete (`rm`)
+also clears the marker. After the verb returns, observation subscribes before checking
+for a different pid. An unreadable
 initial snapshot holds the marker until expiry.
 Publication and expiry release the marker's listener and timer. Missing descriptor
 observation keeps the marker until expiry. Other jobs retain independent flights.
@@ -1162,7 +1164,8 @@ the exit-batch same-id rekey keeps the entry so `markExitBackground` saves
 A pre-write refusal uses `refused`; a post-exit checked refusal or verb
 failure uses `respawn-failed` and releases the held exit unsuppressed. The
 exit batch counts that row as started and leaves other unwritten rows eligible.
-The checked-refusal notice says the job was not relaunched; a verb failure or
+The checked-refusal notice says the job was not relaunched and strips the reason's
+trailing periods and whitespace before appending recovery guidance; a verb failure or
 60-second timeout says it may still start and directs the user to check Agents
 before respawning again. An exit timeout without a confirmed continuation uses
 `exit-timeout`, reports the continuation observation and never relaunches a live source.
