@@ -423,7 +423,7 @@ async function createScheduleFile(projectPath, fields, deps) {
     if (typeof fields.prompt !== 'string' || !fields.prompt.trim()) return fail(field, 'Enter a prompt');
     const prompt = fields.prompt.replace(/\r\n?/g, '\n').trim();
     const refusal = scheduleLaunchRefusal({ sandbox: resolveScheduleSandbox(projectPath, getSetting, defaultSandbox), platform, addDirs, projectPaths, home, cwd: projectPath });
-    if (refusal) return fail('cli.add-dirs', refusal.error);
+    if (refusal) return fail(refusal.problem === 'sandbox needs Linux' ? 'projectPath' : 'cli.add-dirs', refusal.error);
     if (listScheduleFiles([projectPath]).some(schedule => schedule.slug === slug)) return fail('slug', 'A schedule with this slug already exists');
     const lines = ['---', `name: ${name}`, `cron: ${cron}`, `slug: ${slug}`, `enabled: ${fields.enabled !== false}`, `catch-up: ${fields['catch-up'] === true}`];
     if (Object.keys(cli).length) lines.push('cli:', ...Object.entries(cli).map(([key, value]) => `  ${key}: ${value}`));
@@ -445,12 +445,20 @@ async function createScheduleFile(projectPath, fields, deps) {
     field = 'slug';
     tmp = path.join(commandsDir, `.schedule-${crypto.randomUUID()}.tmp`);
     fs.writeFileSync(tmp, content, { flag: 'wx' });
-    link(tmp, filePath);
-    if (stateDir) {
-      const entry = readScheduleStateOnly(stateDir).get(scheduleStateKey({ filePath }));
-      if (entry) pruneScheduleState(stateDir, entry);
+    try { link(tmp, filePath); }
+    catch (error) {
+      if (['EPERM', 'ENOTSUP', 'ENOSYS'].includes(error.code)) return fail('projectPath', `This project's filesystem does not support hard links (${error.code}). Choose a project on a filesystem that supports hard links.`);
+      throw error;
     }
-    if (runsDir) require('./schedule-run-results').pruneScheduleRunResults(runsDir, scheduleStateKey({ filePath }), 0);
+    try {
+      if (stateDir) {
+        const entry = readScheduleStateOnly(stateDir).get(scheduleStateKey({ filePath }));
+        if (entry) pruneScheduleState(stateDir, entry);
+      }
+      if (runsDir) require('./schedule-run-results').pruneScheduleRunResults(runsDir, scheduleStateKey({ filePath }), 0);
+    } catch (error) {
+      console.warn(`[schedule] Created ${filePath}, but could not prune stale records:`, error.code, error.message);
+    }
     return { ok: true, filePath };
   } catch (error) {
     return fail(field, error.code === 'EEXIST' ? 'A schedule with this slug already exists' : `${error.code ? error.code + ': ' : ''}${error.message}`);

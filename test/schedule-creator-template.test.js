@@ -36,6 +36,29 @@ test('every historical hash is pinned and a missing template is installed with d
   h.api.ensureScheduleCreatorCommand();
   assert.equal(fs.statSync(h.file).mtimeMs, before);
 });
+
+test('current creator template hash requires explicit migration inventory maintenance', t => {
+  const h = setup(t);
+  h.api.ensureScheduleCreatorCommand();
+  assert.equal(hash(fs.readFileSync(h.file)), 'eb28b0b4d916fb22e7b1f3a84d2aa2852436c311ebbc873587a332d3da5950d7',
+    'Append the old hash to SHIPPED_CREATOR_TEMPLATE_SHA256 and update this pin whenever SCHEDULE_CREATOR_TEMPLATE changes');
+});
+
+test('a symlink to a byte-identical historical template is preserved', t => {
+  const h = setup(t);
+  const target = path.join(path.dirname(h.file), 'historical.md');
+  fs.writeFileSync(target, fixtures[0]);
+  try { fs.symlinkSync(target, h.file, 'file'); }
+  catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP', 'ENOSYS'].includes(error.code)) { t.skip(`File symlinks unavailable on this platform: ${error.code}`); return; }
+    throw error;
+  }
+  h.api.ensureScheduleCreatorCommand();
+  assert.equal(fs.lstatSync(h.file).isSymbolicLink(), true, 'installed symlink must remain a symlink');
+  assert.equal(fs.readlinkSync(h.file), target);
+  assert.deepEqual(fs.readFileSync(h.file), fixtures[0]);
+  assert.deepEqual(fs.readFileSync(target), fixtures[0]);
+});
 for (const [index, bytes] of fixtures.entries()) test(`replaces historical template ${hashes[index]}`, t => {
   const h = setup(t);
   fs.writeFileSync(h.file, bytes);

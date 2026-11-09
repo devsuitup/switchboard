@@ -70,6 +70,24 @@ test('submission is single flight and a backend failure allows retry', async t =
   assert.match(h.form.textContent, /no result/i);
   assert.equal(h.form.querySelector('[type="submit"]').disabled, false);
 });
+
+for (const failure of ['unknown field', 'no field', 'exception', 'no result']) test(`creation failure with ${failure} focuses Create for retry`, async t => {
+  const h = setup(t);
+  h.w.api.createScheduleFile = async () => {
+    if (failure === 'exception') throw new Error('Unavailable');
+    if (failure === 'no result') return undefined;
+    return { ok: false, field: failure === 'unknown field' ? 'unrecognized' : undefined, error: 'Unavailable' };
+  };
+  h.fill();
+  h.field('prompt').focus();
+  h.submit();
+  await settle();
+  const button = h.form.querySelector('[type="submit"]');
+  assert.equal(h.w.document.activeElement, button, 'unmapped failure must focus Create');
+  assert.equal(button.disabled, false);
+  assert.match(h.form.textContent, /Unavailable|no result/i);
+  assert.equal(h.field('name').value, 'Nightly');
+});
 test('modal keyboard keeps textarea Enter, traps Tab and cancels on Escape with restored focus', t => {
   const h = setup(t);
   h.field('name').focus();

@@ -125,11 +125,13 @@ function ensureScheduleCreatorCommand() {
   let tmp;
   try {
     const commandPath = path.join(SCHEDULE_COMMANDS_DIR, 'create-switchboard-schedule.md');
-    if (!fs.existsSync(commandPath)) {
+    const stat = fs.lstatSync(commandPath, { throwIfNoEntry: false });
+    if (!stat) {
       fs.mkdirSync(SCHEDULE_COMMANDS_DIR, { recursive: true });
       fs.writeFileSync(commandPath, SCHEDULE_CREATOR_TEMPLATE, { flag: 'wx' });
       return;
     }
+    if (!stat.isFile()) return;
     const bytes = fs.readFileSync(commandPath);
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     if (hash === crypto.createHash('sha256').update(SCHEDULE_CREATOR_TEMPLATE).digest('hex')) return;

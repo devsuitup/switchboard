@@ -304,6 +304,7 @@ function openScheduleCreateForm(projects) {
       const control = controls.get(result?.field);
       (errors.get(result?.field) || error).textContent = result?.error || 'The backend returned no result. Try Create again.';
       if (control) { control.setAttribute('aria-invalid', 'true'); control.focus(); }
+      else submit.focus();
     }
   });
 }

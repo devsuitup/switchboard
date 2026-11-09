@@ -70,10 +70,12 @@ test('existing effective slug and link-time collision preserve the winner and re
   assert.deepEqual(fs.readdirSync(dir), ['schedule-nightly.md']);
 });
 
-for (const code of ['EPERM', 'ENOTSUP']) test(`hard-link ${code} is refused without a leftover temp`, async t => {
+for (const code of ['EPERM', 'ENOTSUP', 'ENOSYS']) test(`hard-link ${code} is refused without a leftover temp`, async t => {
   const h = setup(t);
   const result = await h.create(h.fields, { link: () => { const error = new Error(code); error.code = code; throw error; } });
   assert.equal(result.ok, false);
+  assert.equal(result.field, 'projectPath', 'unsupported hard links must focus the project');
+  assert.match(result.error, /this project.s filesystem does not support hard links/i);
   assert.match(result.error, new RegExp(code));
   assert.deepEqual(fs.readdirSync(path.join(h.root, '.claude', 'commands')), []);
 });
@@ -86,6 +88,7 @@ test('creation shares sandbox refusals and permits home add-dirs without a sandb
     const result = await h.create(fields, { getSetting: () => ({ sandbox: true }), platform, home: h.root });
     assert.equal(result.ok, false);
     assert.equal(result.error, expected.error);
+    assert.equal(result.field, platform === 'linux' ? 'cli.add-dirs' : 'projectPath', 'sandbox platform refusal must focus the project');
   }
   assert.equal((await h.create(fields, { platform: 'linux', home: h.root })).ok, true);
 });
@@ -93,14 +96,39 @@ test('creation shares sandbox refusals and permits home add-dirs without a sandb
 test('creation prunes only the new key stale catch-up and result records', async t => {
   const h = setup(t);
   const key = runner.scheduleStateKey({ filePath: path.join(h.root, '.claude', 'commands', 'schedule-nightly.md') });
+  const otherKey = runner.scheduleStateKey({ filePath: path.join(h.root, '.claude', 'commands', 'schedule-weekly.md') });
+  const otherState = `${otherKey}-60000.json`;
+  const otherResult = `${otherKey}-60000-12345678-1234-1234-1234-123456789abc.json`;
   fs.mkdirSync(h.deps.stateDir);
   fs.mkdirSync(h.deps.runsDir);
   fs.writeFileSync(path.join(h.deps.stateDir, `${key}-60000.json`), JSON.stringify({ key, minuteMs: 60000 }));
   fs.writeFileSync(path.join(h.deps.runsDir, `${key}-60000-12345678-1234-1234-1234-123456789abc.json`), '{}');
   fs.writeFileSync(path.join(h.deps.runsDir, 'other'), 'keep');
+  fs.writeFileSync(path.join(h.deps.stateDir, otherState), JSON.stringify({ key: otherKey, minuteMs: 60000 }));
+  fs.writeFileSync(path.join(h.deps.runsDir, otherResult), '{}');
   assert.equal((await h.create()).ok, true);
-  assert.deepEqual(fs.readdirSync(h.deps.stateDir), []);
-  assert.deepEqual(fs.readdirSync(h.deps.runsDir), ['other']);
+  assert.deepEqual(fs.readdirSync(h.deps.stateDir), [otherState], 'another schedule catch-up record survives');
+  assert.deepEqual(fs.readdirSync(h.deps.runsDir).sort(), [otherResult, 'other'].sort(), 'another schedule result survives');
+});
+
+for (const directory of ['stateDir', 'runsDir']) test(`creation stays successful when ${directory} cleanup throws EACCES after publication`, async t => {
+  const h = setup(t);
+  const filename = path.join(__dirname, '../src/main/schedules/schedule-runner.js');
+  const nativeRequire = createRequire(filename);
+  const module = { exports: {} };
+  const warnings = [];
+  const denied = () => { const error = new Error('injected cleanup denied'); error.code = 'EACCES'; throw error; };
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, exports: module.exports, process, console: { ...console, warn: (...args) => warnings.push(args.join(' ')) },
+    require: name => name === 'fs' ? { ...fs, readdirSync: candidate => candidate === h.deps.stateDir && directory === 'stateDir' ? denied() : fs.readdirSync(candidate) }
+      : name === './schedule-run-results' && directory === 'runsDir' ? { pruneScheduleRunResults: denied } : nativeRequire(name),
+  }, { filename });
+  const result = await module.exports.createScheduleFile(h.root, h.fields, h.deps);
+  assert.equal(result.ok, true, 'publication must stay successful after cleanup EACCES');
+  assert.equal(result.filePath, path.join(h.root, '.claude', 'commands', 'schedule-nightly.md'));
+  assert.equal(runner.parseFrontmatter(fs.readFileSync(result.filePath, 'utf8')).meta.slug, 'nightly');
+  assert.deepEqual(fs.readdirSync(path.dirname(result.filePath)), ['schedule-nightly.md']);
+  assert.equal(warnings.length, 1, 'cleanup failure is logged once');
+  assert.match(warnings[0], /EACCES/);
 });
 
 test('a redirected commands directory is refused without publication', async t => {
