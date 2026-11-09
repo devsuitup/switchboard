@@ -1631,6 +1631,13 @@ const fileListsClient = {
   shutdown: () => Promise.all([...fileListClients.values()].map(client => client.shutdown())),
 };
 
+ipcMain.handle('create-schedule-file', (_event, projectPath, fields) =>
+  require('./src/main/schedules/schedule-runner').createScheduleFile(projectPath, fields, {
+    scheduleProjects, getSetting, defaultSandbox: SETTING_DEFAULTS.sandbox, isArchived: isProjectSettingsArchived,
+    stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'),
+    runsDir: require('./src/main/schedules/schedule-run-results').scheduleRunsDir(path.dirname(DB_PATH)),
+  }));
+
 ipcMain.handle('set-schedule-enabled', (_event, filePath, enabled) =>
   require('./src/main/schedules/schedule-runner').setListedScheduleEnabled(filePath, enabled, {
     scheduleProjects, stateDir: path.join(path.dirname(DB_PATH), 'schedule-state'), getLastTickMinute: () => stopScheduler?.getLastTickMinute(),

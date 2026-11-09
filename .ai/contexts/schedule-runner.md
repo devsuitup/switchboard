@@ -473,6 +473,51 @@ files, main handler extracted into a VM with filename attribution; counts
 PROJECTS_DIR scans), `test/schedule-next-run.test.js` (descriptions and DST).
 
 
+## Schedule creation (#792, slice C)
+
+The optional tab offers Create schedule even when the registry projects have
+no schedules. The modal uses `registerModal`, labelled native controls and
+`PERMISSION_MODES`; Default is labelled Default (auto) and omits the CLI key.
+Project receives focus; Tab is trapped, Escape cancels, textarea Enter stays
+native, and only the focused Create button submits from the keyboard. Pending
+submission disables controls and blocks cancellation; errors from main are
+shown at their named field with `aria-invalid` and focus. Other failures stay
+in the form. Success closes, refreshes the list and focuses Create schedule.
+
+`create-schedule-file` calls the Electron-free `createScheduleFile` export in
+`schedule-runner.js`. It awaits the registry, canonicalizes spelling with
+`normalizeProjectPath`, rejects archived projects and calls the same
+`scheduleLaunchRefusal` as the launcher (A1 consolidated the sandbox checks
+there). Non-sandboxed add-dirs are not judged. Scalars are single-line,
+slug is at most 64 lowercase kebab-case characters, cron must be able to match,
+budget must be non-negative decimal, and prompt must contain text. Add-dirs
+arrive as an array of paths without commas and serialize as a comma list.
+Permission mode, allowed tools, model, budget and appended system prompt are
+optional. Enabled defaults on; catch-up defaults off. LF serialization must
+round trip through `parseFrontmatter` and `buildScheduleCommand` before mkdir.
+
+The target must not share an effective slug with another listed schedule.
+After mkdir, the commands directory realpath must equal the real project root
+plus `.claude/commands`. A same-directory exclusive temp is linked to the
+destination, never renamed: a concurrent winner is preserved. EEXIST is a
+slug error; unsupported hard links are an explicit refusal. Temp files are
+unlinked in finally. The new key's stale catch-up and run-result records are
+pruned; transcripts are preserved. Main injects this instance's state paths.
+
+`ensureScheduleCreatorCommand` hashes installed bytes as a Buffer. Missing
+commands are exclusively created. Known historical hashes are replaced with
+the new template through a same-directory temp and `renameWithRetry`. Current
+bytes need no write. Edited, BOM, CRLF or unreadable files remain unchanged;
+the decision is logged. The four historical templates live in
+`test/fixtures/schedule-creator`, extracted from their original git commits;
+`schedule-creator-template.test.js` pins all four hashes. Future edits retain
+the replaced template's hash. Every Schedules tab mention in the template and
+welcome text explains Global Settings → Schedules tab, because it defaults off.
+
+Coverage: `schedule-create-file.test.js`, `schedule-creator-template.test.js`
+and `dom-schedule-create.test.js` load shipped code with require or filename-tagged
+VM evaluation; creator tests use disposable homes and stub Electron.
+
 ## Schedules tab (#792, slice A2)
 
 Global Settings → **Schedules tab** persists `global.schedulesTab`, defaulting

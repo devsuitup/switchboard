@@ -5882,6 +5882,14 @@ body.window-frameless :is(.new-session-popover, .terminal-context-menu, .new-ses
 .schedule-item:hover .schedule-actions, .schedule-actions:has(:focus-visible) { opacity: 1; }
 .schedule-history-run { display: block; text-align: left; margin: 6px 0; width: 100%; }
 .schedule-actions button:disabled { cursor: default; }
+.schedule-create-form { width: min(640px, 90vw); max-height: 85vh; overflow-y: auto; padding: 20px; }
+.schedule-create-form .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.schedule-create-form .settings-select { width: 100%; }
+.schedule-form-field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.schedule-form-field input, .schedule-form-field select, .schedule-form-field textarea { box-sizing: border-box; width: 100%; }
+.schedule-form-field input[type="checkbox"] { width: auto; align-self: flex-start; }
+.schedule-form-field textarea { min-height: 90px; resize: vertical; }
+.schedule-field-error { color: var(--danger, #e06060); font-size: 12px; }
 #changes-diff-host.panel-image-host { overflow: auto; }
 .panel-image { align-self: flex-start; flex-shrink: 0; max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; }
 .panel-image.panel-image-actual { max-width: none; max-height: none; cursor: zoom-out; }

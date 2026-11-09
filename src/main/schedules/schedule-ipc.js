@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const { renameWithRetry } = require('../shared/atomic-write');
 const { encodeProjectPath } = require('../../../encode-project-path');
 const { classifyRunExit } = require('./schedule-run-results');
 const { resolveRunNowTarget } = require('./run-schedule-now-target');
@@ -25,7 +26,7 @@ Welcome! I'll help you set up a scheduled task for this project. Tell me:
 - **What** the task should do
 - **When** it should run (e.g. "every weekday at 9am", "hourly", "every Sunday night")
 
-I'll generate the schedule file and save it. You can always edit it later from the brain tab.
+I'll generate the schedule file and save it. You can always edit it later from the Schedules tab (Global Settings → Schedules tab).
 
 ## How to create the task
 
@@ -85,7 +86,7 @@ Default permission-mode is \`auto\` (Claude classifies each action, allowing rou
 - The prompt in the body must be fully self-contained — it runs without any conversation history
 - If the \`.claude/commands/\` directory doesn't exist, create it
 - Add \`catch-up: true\` only if the user wants a run that fell due while Switchboard was closed or the machine asleep to happen once, late, when it is back; leave it out for a task that is useless late (a reminder)
-- After saving, tell the user: "Your scheduled task is saved! It will appear in Switchboard's brain tab with a schedule icon. You can enable/disable it or edit the schedule from there."
+- After saving, tell the user: "Your scheduled task is saved! It will appear in Switchboard's Schedules tab (Global Settings → Schedules tab). You can enable/disable it or edit the schedule from there."
 - If the user wants to see existing schedules, list any \`schedule-*.md\` files in \`.claude/commands/\`
 `;
 
@@ -97,7 +98,7 @@ Welcome! This session will help you create a **scheduled task** that runs automa
 - Describe **what** you want the task to do and **when** it should run
 - I'll generate a schedule file with the right cron expression and prompt
 - The schedule file gets saved to this project's \`.claude/commands/\` directory as a command — so it can also be run manually from any Claude session using \`/schedule-<name>\`
-- Once saved, it appears in the **brain tab** with a clock icon where you can edit it directly
+- Once saved, it appears in the Schedules tab (Global Settings → Schedules tab) where you can edit it directly
 - To edit, you can also ask use this schedule claude session to ask to edit existing commands.
 - Switchboard runs matching schedules automatically in the background — each run creates a session grouped under the task's slug
 
@@ -113,15 +114,37 @@ Just describe the task you have in mind, or try one of these:
 - **"Create a task that runs the test suite every morning at 8am"** — create a new one
 - **"Disable schedule-repo-health"** — toggle a schedule off`;
 
+const SHIPPED_CREATOR_TEMPLATE_SHA256 = [
+  '4432f59e494f84aa61d2023af7a3455e1e476eb913869c8ec51e2fefbebf75e7',
+  'fa7685454d5e4dc3fdac9c90908eae8ae0cbcb3344bec39573850a5788db1221',
+  'd2395a41213ee87e034310cb1d3c5cd28d476e98f1057d85b34aee2ebbac3eff',
+  'c7050c07b3ca19b7306c9d67ab44de00d013547077a32a906cf7809a9d20a8da',
+];
+
 function ensureScheduleCreatorCommand() {
+  let tmp;
   try {
     const commandPath = path.join(SCHEDULE_COMMANDS_DIR, 'create-switchboard-schedule.md');
     if (!fs.existsSync(commandPath)) {
       fs.mkdirSync(SCHEDULE_COMMANDS_DIR, { recursive: true });
-      fs.writeFileSync(commandPath, SCHEDULE_CREATOR_TEMPLATE);
+      fs.writeFileSync(commandPath, SCHEDULE_CREATOR_TEMPLATE, { flag: 'wx' });
+      return;
     }
+    const bytes = fs.readFileSync(commandPath);
+    const hash = crypto.createHash('sha256').update(bytes).digest('hex');
+    if (hash === crypto.createHash('sha256').update(SCHEDULE_CREATOR_TEMPLATE).digest('hex')) return;
+    if (!SHIPPED_CREATOR_TEMPLATE_SHA256.includes(hash)) {
+      console.info('[schedule] Keeping customized schedule creator command');
+      return;
+    }
+    tmp = path.join(SCHEDULE_COMMANDS_DIR, `.create-switchboard-schedule-${crypto.randomUUID()}.tmp`);
+    fs.writeFileSync(tmp, SCHEDULE_CREATOR_TEMPLATE, { flag: 'wx' });
+    renameWithRetry(tmp, commandPath);
+    console.info('[schedule] Updated shipped schedule creator command');
   } catch (err) {
-    console.error('[schedule] Failed to create schedule command:', err);
+    console.info('[schedule] Schedule creator command left unchanged:', err.message);
+  } finally {
+    if (tmp) { try { fs.unlinkSync(tmp); } catch {} }
   }
 }
 
@@ -233,4 +256,4 @@ function reportRunExit(window, { name, projectPath, sessionId, manual = false, c
   });
 }
 
-module.exports = { ensureScheduleCreatorCommand, init, reportRunExit };
+module.exports = { ensureScheduleCreatorCommand, init, reportRunExit, SHIPPED_CREATOR_TEMPLATE_SHA256 };
