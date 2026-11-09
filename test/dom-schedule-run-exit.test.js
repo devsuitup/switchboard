@@ -72,6 +72,8 @@ test('a fast failure survives the later successful launch acknowledgement', asyn
   };
   h.window.formatDate = () => 'today';
   h.window.ICONS = { schedule: () => '<svg></svg>' };
+  const defaultsFilename = path.join(__dirname, '../public/setting-defaults.js');
+  vm.runInContext(fs.readFileSync(defaultsFilename, 'utf8'), h.context, { filename: defaultsFilename });
   const filename = path.join(__dirname, '../public/schedules-view.js');
   vm.runInContext(fs.readFileSync(filename, 'utf8'), h.context, { filename });
   const item = h.window.buildScheduleItem({ projectPath: '/p', known: true, archived: false }, { file: 'schedule-nightly.md', filePath: '/p/schedule-nightly.md', name: 'Nightly', slug: 'nightly', cron: '* * * * *', cronText: 'every min', problems: [], enabled: true, linked: false, catchUp: false, nextRunMs: Date.now() + 60000, runs: [] }, { now: Date.now(), catchUpActive: true });

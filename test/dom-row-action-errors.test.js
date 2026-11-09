@@ -7,6 +7,7 @@ const { deleteSessionRefusal } = require('../delete-session-guard');
 
 function setup(t, extra = {}) {
   const h = setupSidebarDom();
+  h.window.schedulesTabEnabled = true;
   const confirm = h.window.appConfirm;
   const confirmations = [];
   h.window.appConfirm = options => {

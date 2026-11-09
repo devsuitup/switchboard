@@ -3602,6 +3602,69 @@ body { display: flex; flex-direction: column; }
   color: #8888a8;
 }
 
+.sidebar-tab[hidden] { display: none; }
+
+.memory-schedule-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  margin-top: 5px;
+  color: #e0a030;
+}
+
+.schedule-play-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid rgba(100,220,120,0.3);
+  color: #5ec46a;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 0;
+  opacity: 0;
+  transition: all 0.15s;
+  margin-left: auto;
+  align-self: center;
+}
+
+.memory-item:hover .schedule-play-btn,
+.schedule-play-btn:focus-visible {
+  opacity: 0.7;
+}
+
+.schedule-play-btn:hover {
+  opacity: 1 !important;
+  background: rgba(100,220,120,0.1);
+  color: #5ec46a;
+}
+
+.schedule-play-btn.running {
+  opacity: 1 !important;
+  color: #e0a030;
+  border-color: rgba(224,160,48,0.3);
+}
+
+.schedule-play-btn.running svg {
+  animation: spin-schedule 1s linear infinite;
+}
+
+.schedule-play-btn.done {
+  opacity: 1 !important;
+  color: #5ec46a;
+  border-color: rgba(100,220,120,0.4);
+  background: rgba(100,220,120,0.1);
+}
+
+@keyframes spin-schedule {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .memory-file-count {
   font-size: 10px;
   color: #7a7a90;

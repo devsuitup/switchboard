@@ -33,11 +33,12 @@ function setup(t, run = () => ({ ok: true })) {
   vm.runInContext(extractFunction(activitySource, 'rowSessionIds'), ctx, { filename: activityFilename,
     lineOffset: activitySource.slice(0, activitySource.indexOf('function rowSessionIds')).split('\n').length - 1 });
   loadAppFunctions(ctx, { functions: ['getExpandedSlugs', 'showScheduleSessions', 'openScheduleRun'], installSpies: false });
-  for (const name of ['app-notices.js', 'memory-workfiles-view.js', 'schedules-view.js']) {
+  for (const name of ['setting-defaults.js', 'app-notices.js', 'memory-workfiles-view.js', 'schedules-view.js']) {
     const filename = path.join(__dirname, '../public', name);
     assert.ok(fs.existsSync(filename), 'the Schedules renderer exists');
     vm.runInContext(fs.readFileSync(filename, 'utf8'), ctx, { filename });
   }
+  w.schedulesTabEnabled = true;
   w.renderSchedules(data);
   const button = w.document.querySelector('.schedule-run-btn');
   const titles = [];

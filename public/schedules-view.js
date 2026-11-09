@@ -1,5 +1,21 @@
 'use strict';
 
+window.schedulesTabEnabled = SETTING_DEFAULTS.schedulesTab;
+
+window._applySchedulesTab = enabled => {
+  window.schedulesTabEnabled = enabled;
+  const tab = document.querySelector('.sidebar-tab[data-tab="schedules"]');
+  tab.hidden = !enabled;
+  tab.disabled = !enabled;
+  tab.tabIndex = enabled ? 0 : -1;
+  if (!enabled) {
+    setSchedulesVisible(false);
+    if (activeTab === 'schedules') document.querySelector('.sidebar-tab[data-tab="sessions"]').click();
+  }
+  if (activeTab === 'memory') loadMemories();
+  if (typeof refreshSidebar === 'function') refreshSidebar();
+};
+
 let schedulesVisible = false;
 let schedulesTimer = null;
 let schedulesRequest = 0;
@@ -58,6 +74,7 @@ async function loadSchedules() {
 }
 
 function showSchedules(projectPath) {
+  if (!window.schedulesTabEnabled) return;
   schedulesProject = projectPath || null;
   document.querySelector('.sidebar-tab[data-tab="schedules"]')?.click();
   loadSchedules();

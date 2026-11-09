@@ -180,7 +180,12 @@ session.
 
 ### Run now
 
-The **Schedules** tab (clock icon, after Agent Files) lists scheduled tasks by
+The **Schedules tab** option in **Global Settings** is off by default. With it
+off, schedule files appear in **Agent Files**, where you can open them or use
+**Run now**. Saving the option switches these surfaces immediately, without a
+restart. Scheduled tasks and their result records keep running with either setting.
+
+When enabled, the **Schedules** tab (clock icon, after Agent Files) lists scheduled tasks by
 project, including disabled tasks and archived projects. Each task shows its
 schedule in plain words, local next-run time, enabled state and up to 20 recent
 runs. **Run now** starts a run at once. **Turn on** and **Turn off** edit its
@@ -193,9 +198,10 @@ while visible. No search is offered here. Invalid files show their problems;
 unknown projects cannot be run or opened. Archived projects stay suspended even
 if their schedules are enabled. The Work Files tab remains available.
 
-A running task says **Running**. Other runs say **No result recorded** with a
-transcript hint, including **replied; exit code unknown** when a reply exists.
-Reply text does not prove a successful exit. Results are not yet stored. Use
+A running task says **Running**. Recorded outcomes show the exit code, signal,
+launch refusal or spawn failure and are kept across restarts. Runs without a
+record say **No result recorded** with a transcript hint, including **replied;
+exit code unknown** when a reply exists. Reply text does not prove a successful exit. Use
 **Show history in Sessions** for older runs; runs predating v0.0.90 have no
 schedule marker and cannot be attributed. Creation still uses the project
 header’s **Create scheduled task** command.

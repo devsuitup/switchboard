@@ -2709,6 +2709,7 @@ window.addEventListener('focus', () => refitOpenTerminals({ fitOffscreen: true }
 document.querySelectorAll('.sidebar-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     const tabName = tab.dataset.tab;
+    if (tabName === 'schedules' && !window.schedulesTabEnabled) return;
     if (tabName === activeTab) return;
     searchGeneration++;
     activeTab = tabName;
@@ -2911,6 +2912,7 @@ setTimeout(() => {
 // --- Init: restore settings ---
 (async () => {
   const global = await window.api.getSetting('global');
+  window._applySchedulesTab(global?.schedulesTab ?? SETTING_DEFAULTS.schedulesTab);
   if (global) {
     if (global.sidebarWidth) {
       document.getElementById('sidebar').style.width = global.sidebarWidth + 'px';

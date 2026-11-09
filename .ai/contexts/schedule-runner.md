@@ -475,6 +475,20 @@ PROJECTS_DIR scans), `test/schedule-next-run.test.js` (descriptions and DST).
 
 ## Schedules tab (#792, slice A2)
 
+Global Settings → **Schedules tab** persists `global.schedulesTab`, defaulting
+to `SETTING_DEFAULTS.schedulesTab` (false). Only renderer surfaces are gated.
+The startup settings restore and Settings Save call `_applySchedulesTab`:
+hidden/disabled clock tab with tabindex -1 when off, no programmatic route,
+and a return to Sessions when the active tab is disabled. Saving applies live,
+reloads Agent Files if open, cancels schedule refreshes and refreshes sidebar notices.
+`file-lists.js` always supplies project command schedules, marked `schedule`;
+Agent Files filters those entries only when the tab is on. Its file search
+index keeps them available so switching requires no reindex. With the tab off,
+the prior schedule icon, Run now and editor are restored. Archive choices,
+Undo, re-enable offers and recovery hints use their pre-A2 names and Agent
+Files wording; when on they retain the A2 counts and Schedules links.
+No main-side scheduler, IPC, result persistence or re-enable skip is gated.
+
 `public/schedules-view.js` consumes `list-schedules` on open, after Open, after
 Run now/toggle while visible, on relevant projects-changed events (900 ms debounce, 3000 ms maximum
 wait) and on minute boundaries while visible. The event allowlist is `archive`,
@@ -524,7 +538,7 @@ This ordering also applies in isolated instances. Archive offers and Undo receiv
 the same stateDir via archiveDeps.reenable and reenableScheduleFiles; the writer
 continues to perform file effects outside SQL. Skip failure prevents enabling.
 
-Archive choices keep their default and file lists, but display counts and a
+With the tab enabled, Archive choices keep their default and file lists, but display counts and a
 Schedules tab reference. Undo uses a count; the re-enable offer adds Show in
 Schedules for its project. Failure text continues to name failed schedules.
 

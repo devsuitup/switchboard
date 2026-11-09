@@ -33,6 +33,7 @@ const SETTING_DEFAULTS = {
   shellProfile: 'auto',
   activityReporting: false, // see .ai/contexts/activitywatch.md
   remoteTriggers: false,
+  schedulesTab: false,
   lastSeenVersion: null, // see docs/changelog.md
 };
 
