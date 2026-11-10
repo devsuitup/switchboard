@@ -79,12 +79,12 @@ function transact(command) {
   else if (sample.ms < 5 && sample.rows <= 32 && sample.bytes <= 65536) chunkSize = Math.min(32, chunkSize + 1);
   return result;
 }
-function chunkUnit(fn, count) {
+function chunkUnit(fn, count, reserve = { rows: 1, bytes: 536 }) {
   const previous = { bytes: budget.bytes, rows: budget.rows };
   raw.exec('SAVEPOINT writer_unit');
   try {
     const result = fn();
-    if (count && (budget.rows > 31 || budget.bytes > 65000)) {
+    if (count && (budget.rows > 32 - reserve.rows || budget.bytes > 65536 - reserve.bytes)) {
       raw.exec('ROLLBACK TO writer_unit');
       Object.assign(budget, previous);
       return { deferred: true };
@@ -96,10 +96,49 @@ function chunkUnit(fn, count) {
 let searchFtsRecreated = false;
 if (!readonly) {
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS project_delete_fences (
+    projectKey TEXT PRIMARY KEY, epoch INTEGER NOT NULL, operationId TEXT, blocked INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS project_delete_operations (
+    operationId TEXT PRIMARY KEY, projectKey TEXT NOT NULL, expectedEpoch INTEGER NOT NULL,
+    ownedEpoch INTEGER, manifestHash TEXT NOT NULL, membershipDigest TEXT NOT NULL,
+    writerMembershipDigest TEXT NOT NULL, optionsJson TEXT NOT NULL, state TEXT NOT NULL,
+    phase TEXT NOT NULL, startRevision INTEGER, lastRevision INTEGER, nextUnit INTEGER NOT NULL,
+    totalUnits INTEGER NOT NULL, sealed INTEGER NOT NULL, errorJson TEXT,
+    createdAt INTEGER NOT NULL, finishedAt INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_delete_state ON project_delete_operations(projectKey, state);
+  CREATE INDEX IF NOT EXISTS idx_project_delete_terminal ON project_delete_operations(finishedAt, operationId);
+  CREATE TABLE IF NOT EXISTS project_delete_units (
+    operationId TEXT NOT NULL REFERENCES project_delete_operations(operationId) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, category TEXT NOT NULL, targetJson TEXT NOT NULL,
+    status TEXT NOT NULL, resultJson TEXT, PRIMARY KEY(operationId, ordinal)
+  );
+  CREATE TRIGGER IF NOT EXISTS project_delete_units_cascade AFTER DELETE ON project_delete_operations
+    BEGIN DELETE FROM project_delete_units WHERE operationId = OLD.operationId; END;
+`);
+
 db.pragma('journal_mode = WAL');
 db.pragma('busy_timeout = 100');
 
 db.pragma('synchronous = NORMAL');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS session_requests (
+    stemKey TEXT PRIMARY KEY, suppliedHash TEXT, rawHash TEXT, family TEXT NOT NULL,
+    actualStem TEXT NOT NULL, resultBytes BLOB, createdAt INTEGER NOT NULL,
+    completedAt INTEGER, revision INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS session_request_commands (
+    domainId TEXT NOT NULL, actionToken TEXT NOT NULL, command TEXT NOT NULL,
+    argsHash TEXT NOT NULL, rawHash TEXT, outcomeJson TEXT NOT NULL,
+    revision INTEGER NOT NULL, createdAt INTEGER NOT NULL,
+    PRIMARY KEY(domainId, actionToken)
+  );
+  CREATE INDEX IF NOT EXISTS idx_session_request_conflicts
+    ON session_request_commands(domainId, command, rawHash);
+`);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS session_meta (
@@ -909,7 +948,68 @@ if (!readonly) try {
   console.warn('Bridge UUID repair failed; will retry on next database open:', err.message);
 }
 
+let preparedDeletionStatements;
+function deletionStatements() {
+return preparedDeletionStatements ??= {
+  fence: db.prepare('SELECT * FROM project_delete_fences WHERE projectKey = ?'),
+  setFence: !readonly && db.prepare(`INSERT INTO project_delete_fences(projectKey, epoch, operationId, blocked) VALUES (?, ?, ?, ?)
+    ON CONFLICT(projectKey) DO UPDATE SET epoch=excluded.epoch, operationId=excluded.operationId, blocked=excluded.blocked`),
+  operation: db.prepare('SELECT * FROM project_delete_operations WHERE operationId = ?'),
+  insert: !readonly && db.prepare(`INSERT INTO project_delete_operations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+  progress: !readonly && db.prepare(`UPDATE project_delete_operations SET state=?, phase=?, lastRevision=?, nextUnit=?, sealed=?, errorJson=?, finishedAt=? WHERE operationId=?`),
+  active: db.prepare('SELECT * FROM project_delete_operations WHERE sealed = 0 ORDER BY createdAt, operationId'),
+  terminal: db.prepare('SELECT operationId, finishedAt FROM project_delete_operations WHERE sealed = 1 ORDER BY finishedAt DESC, operationId DESC'),
+  units: db.prepare('SELECT * FROM project_delete_units WHERE operationId = ? ORDER BY ordinal'),
+  addUnit: !readonly && db.prepare('INSERT INTO project_delete_units VALUES (?, ?, ?, ?, ?, ?)'),
+  unitResult: !readonly && db.prepare('UPDATE project_delete_units SET status=?, resultJson=? WHERE operationId=? AND ordinal=?'),
+  purgeUnits: !readonly && db.prepare('DELETE FROM project_delete_units WHERE operationId=? AND ordinal IN (SELECT ordinal FROM project_delete_units WHERE operationId=? LIMIT 16)'),
+  purgeOperation: !readonly && db.prepare('DELETE FROM project_delete_operations WHERE operationId=?'),
+};
+}
+const projectDeletion = {
+  fence: key => deletionStatements().fence.get(key) || null,
+  setFence: (key, epoch, id, blocked) => deletionStatements().setFence.run(key, epoch, id, blocked),
+  operation: id => deletionStatements().operation.get(id) || null,
+  insert: row => deletionStatements().insert.run(...['operationId', 'projectKey', 'expectedEpoch', 'ownedEpoch', 'manifestHash',
+    'membershipDigest', 'writerMembershipDigest', 'optionsJson', 'state', 'phase', 'startRevision', 'lastRevision',
+    'nextUnit', 'totalUnits', 'sealed', 'errorJson', 'createdAt', 'finishedAt'].map(key => row[key] ?? null)),
+  progress: row => deletionStatements().progress.run(row.state, row.phase, row.lastRevision, row.nextUnit, row.sealed, row.errorJson, row.finishedAt, row.operationId),
+  active: () => deletionStatements().active.all(), terminal: () => deletionStatements().terminal.all(),
+  units: id => deletionStatements().units.all(id),
+  addUnit: (id, ordinal, unit) => deletionStatements().addUnit.run(id, ordinal, unit.category, JSON.stringify(unit.target), 'pending', null),
+  unitResult: (id, ordinal, status, result) => deletionStatements().unitResult.run(status, JSON.stringify(result ?? null), id, ordinal),
+  purgeUnits: id => deletionStatements().purgeUnits.run(id, id),
+  purgeOperation: id => deletionStatements().purgeOperation.run(id),
+  metadataFields: () => db.prepare('SELECT * FROM session_meta_fields ORDER BY sessionId, field').all(),
+};
+
+let preparedRequestStatements;
+const requestSchemaAvailable = () => db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('session_requests', 'session_request_commands')").get().n === 2;
+function requestStatements() {
+  return preparedRequestStatements ??= {
+    get: db.prepare('SELECT * FROM session_requests WHERE stemKey=?'),
+    receipt: db.prepare('SELECT * FROM session_request_commands WHERE domainId=? AND actionToken=?'),
+    conflict: db.prepare("SELECT outcomeJson FROM session_request_commands WHERE domainId=? AND command='recordSessionRequestConflict' AND rawHash=? ORDER BY revision LIMIT 1"),
+    insert: !readonly && db.prepare('INSERT INTO session_requests VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'),
+    publish: !readonly && db.prepare('UPDATE session_requests SET resultBytes=?, completedAt=?, revision=? WHERE stemKey=? AND resultBytes IS NULL'),
+    addReceipt: !readonly && db.prepare('INSERT INTO session_request_commands VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
+  };
+}
+const sessionRequests = {
+  available: requestSchemaAvailable,
+  get: key => requestSchemaAvailable() ? requestStatements().get.get(key) || null : null,
+  receipt: (key, token) => requestSchemaAvailable() ? requestStatements().receipt.get(key, token) || null : null,
+  conflict: (key, hash) => requestSchemaAvailable() ? requestStatements().conflict.get(key, hash)?.outcomeJson || null : null,
+  insert: row => requestStatements().insert.run(row.stemKey, row.suppliedHash, row.rawHash, row.family,
+    row.actualStem, row.resultBytes, row.createdAt, row.completedAt, row.revision),
+  publish: row => requestStatements().publish.run(row.resultBytes, row.completedAt, row.revision, row.stemKey),
+  addReceipt: row => requestStatements().addReceipt.run(row.domainId, row.actionToken, row.command, row.argsHash,
+    row.rawHash, row.outcomeJson, row.revision, row.createdAt),
+};
+
 return {
+  sessionRequests,
+  projectDeletion,
   beginSearchEntry, appendSearchBody, publishSearchEntry,
   connection: db, transact, chunkUnit, changeCount: totalChanges, measurements: () => measured.slice(), nextChunkSize: () => chunkSize,
   rekeySessionMeta,

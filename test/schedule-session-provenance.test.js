@@ -4,6 +4,8 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { isolatedHome } = require('./fixtures/isolated-home.cjs');
+const realHome = process.env.SWITCHBOARD_TEST_REAL_HOME || os.homedir();
 const { setupSidebarDom } = require('./dom-setup');
 const { readSessionFile, readSessionDisplayHeader } = require('../read-session-file');
 
@@ -33,26 +35,23 @@ test('readers only accept a nonempty schedule marker on a user record', () => {
   }
 });
 
-function runIsolated(code) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-schedule-provenance-'));
-  try {
-    const result = spawnSync(require('electron'), ['-e', code], {
-      cwd: path.join(__dirname, '..'), encoding: 'utf8', timeout: 60000,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: path.join(root, 'data'), SWITCHBOARD_TEST_HOME: root },
-    });
-    assert.equal(result.status, 0, result.stderr || result.error?.message);
-    return JSON.parse(result.stdout.trim().split('\n').pop());
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+function runIsolated(t, code, projectNames = []) {
+  const home = isolatedHome(t, { realHome, projects: () => projectNames.map(name => path.join(home.home, name)) });
+  home.install();
+  const root = home.home;
+  const result = spawnSync(require('electron'), ['-e', code], {
+    cwd: path.join(__dirname, '..'), encoding: 'utf8', timeout: 60000,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', SWITCHBOARD_DATA_DIR: path.join(root, 'data'), SWITCHBOARD_TEST_HOME: root },
+  });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  return JSON.parse(result.stdout.trim().split('\n').pop());
 }
 
-test('runner provenance survives full indexing, SQLite, header refresh and sidebar rendering', () => {
-  const projects = runIsolated(`
+test('runner provenance survives full indexing, SQLite, header refresh and sidebar rendering', t => {
+  const projects = runIsolated(t, `
     const assert = require('node:assert/strict');
     const fs = require('node:fs');
     const path = require('node:path');
-    require('node:os').homedir = () => process.env.SWITCHBOARD_TEST_HOME;
     const db = require('./test/fixtures/writer-store.cjs');
     const cache = require('./session-cache');
     const { createScheduleSession } = require('./src/main/schedules/schedule-runner');
@@ -85,7 +84,7 @@ test('runner provenance survives full indexing, SQLite, header refresh and sideb
     for (const run of runs) assert.equal(db.getCachedSession(run.sessionId).scheduleSlug, schedule.slug, 'header refresh backfills marker');
     console.log(JSON.stringify(cache.buildProjectsFromCache(true)));
     db.closeDb();
-  `);
+  `, ['project']);
   const ctx = setupSidebarDom();
   try {
     ctx.sidebar.renderProjects(projects, true);
@@ -99,8 +98,8 @@ test('runner provenance survives full indexing, SQLite, header refresh and sideb
   }
 });
 
-test('schema upgrade preserves old cached rows without guessing schedule provenance', () => {
-  const row = runIsolated(`
+test('schema upgrade preserves old cached rows without guessing schedule provenance', t => {
+  const row = runIsolated(t, `
     const fs = require('node:fs');
     const path = require('node:path');
     const Database = require('better-sqlite3');

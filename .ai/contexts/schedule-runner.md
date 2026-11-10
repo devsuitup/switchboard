@@ -12,6 +12,33 @@ test uses a module-specific loader and checks eager and lazy stub consumption.
 
 **Purpose**: in-process cron that fires user-defined Claude tasks on a schedule. Stores schedules as Markdown files with YAML frontmatter inside each project's `.claude/commands/schedule-*.md`. Spawns `claude --resume <sid> -p "..."` as a detached child process when the cron expression matches.
 
+## Test home isolation
+
+The runner captures `os.homedir()` at module load. Tests that can create schedule
+transcripts use `test/fixtures/isolated-home.cjs`: construct `isolatedHome(t)`
+and call its `install()` before requiring the runner, including indirect imports
+through `archived-projects`. Installation sets both `HOME` and `USERPROFILE` and
+evicts the runner's require cache so a previous import cannot retain another
+home. The after hook checks expected disposable project folders and rejects
+only real-home folders belonging to fired projects or the fixtures' temporary
+root prefixes. Exact checks include resolved paths and legacy unbounded encoded
+names; unrelated CLI folder creation or deletion is allowed. The original
+directory is only listed; its files are never read or changed. The hook restores
+the environment and cache and removes the disposable home even on failure.
+`SWITCHBOARD_TEST_REAL_HOME` points this guard at a fake real home for leak and
+concurrent-writer tests. Nothing sets this variable in normal runs.
+The prefix rule is strict on purpose: a leftover folder from an older, leaking
+run fails every local run until it is moved out of the real projects directory
+by hand. The failure names the folder.
+Catch-up callbacks only record fired projects; assertions run in the file-level
+after hook, outside the scheduler's launch-error catch.
+
+The re-enable and catch-up tests fire the shipped scheduler; the Archive VM
+uses the same disposable home. Run now stubs transcript creation and expects
+no project folders. The provenance test runs in a separate Electron process
+and is excluded from Node-only local verification. The slug-group DOM fixture
+and `fixtures/browser-mode.cjs` simulate schedule data without loading a writer.
+
 ## Key files
 
 | File | LOC | Role |

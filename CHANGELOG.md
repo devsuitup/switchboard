@@ -18,6 +18,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - Triggers keep working after a cancelled update without replaying the actions the update had cancelled. (#1066)
 - Creating a session from a trigger no longer moves your keyboard focus to the terminal. (#1066)
 - Triggers can deliver a prompt to a sandboxed session on a system where other users' processes or processes in nested namespaces exist, instead of waiting for proof that never completes. (#1066)
+- Restarting no longer reopens a finished background tab or shows a false "Restore failed" notice when its worker cannot be found. You can still open the conversation from the sidebar. (#1065)
 
 ## v0.0.104 — 2026-11-09
 

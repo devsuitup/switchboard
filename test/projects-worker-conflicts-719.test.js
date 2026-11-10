@@ -82,7 +82,7 @@ for (const afterChunk of [1, 2]) {
   test(`T5.2 shipped writer preserves its committed ACK and refuses interleaved remaining effects, afterChunk=${afterChunk}`, async () => {
     const settings = new Map(), names = new Map(), replies = [];
     let changes = 0, handle, yielded = 0;
-    const db = { transact: fn => fn(), changeCount: () => changes,
+    const db = { projectDeletion: { active: () => [] }, transact: fn => fn(), changeCount: () => changes,
       getSetting: key => settings.get(key), setSetting: (key, value) => { settings.set(key, value); changes++; },
       listSettingKeys: () => [...settings.keys()], setName: (id, name) => { names.set(id, name); changes++; },
       chunkUnit: fn => ({ result: fn() }), nextChunkSize: () => 1, searchFtsRecreated: false };
@@ -98,7 +98,8 @@ for (const afterChunk of [1, 2]) {
           if (++yielded === afterChunk) handle({ id: 2, command: 'setName', args: ['external', 'new'] });
         } }
           : name === '../session-index-store' ? { openSessionIndexStore: () => db }
-            : name === '../session-index-commands' ? require('../session-index-commands') : require(name) });
+            : name === '../session-index-commands' ? require('../session-index-commands')
+              : name === '../src/main/projects/project-delete-progress' ? require('../src/main/projects/project-delete-progress') : require(name) }, { filename: path.join(__dirname, '../workers/session-index-writer.js') });
     handle({ id: 1, command: 'effects', args: [[{ name: 'setName', args: ['a', 'first'] }, { name: 'setName', args: ['b', 'second'] }], 0] });
     await done;
     const reply = replies.find(r => r.id === 1 && !r.started);

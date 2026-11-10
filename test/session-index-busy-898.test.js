@@ -17,6 +17,7 @@ function writerHarness() {
   const data = new Map(), pauses = [], atClose = [];
   let nextId = 0, changes = 0, remaining = 0, attempts = 0, failure;
   const store = {
+    projectDeletion: { active: () => [] },
     getSetting: key => data.get(key),
     listSettingKeys: prefix => [...data.keys()].filter(key => key.startsWith(prefix)),
     setSetting(key, value) { data.set(key, value); changes++; },

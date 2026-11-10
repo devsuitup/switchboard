@@ -283,5 +283,5 @@ function parseDispatchOutput(stdout) {
 
 module.exports = {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, dispatchRefusal, isHostedJob,
-  sessionIdFromLinkScanPath, stripShellNoise, JOB_ID_RE, JOB_STATES, SESSION_ID_RE,
+  sessionIdFromLinkScanPath, sessionIdField, stripShellNoise, JOB_ID_RE, JOB_STATES, SESSION_ID_RE,
 };

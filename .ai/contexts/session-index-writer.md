@@ -2,7 +2,149 @@
 
 Scope: one writable WAL connection in a Node worker; one main-side readonly
 connection remains for the existing synchronous reads. Independent read workers,
-removal of main's connection, durable receipts and outcome recovery belong to step 2.
+removal of main's connection and general outcome recovery belong to step 2.
+The dormant #474 A4b1 deletion substrate below provides operation-specific receipts.
+
+## Dormant consumed-request journal (#380 S1b1)
+
+Writable reconciliation adds `session_requests` (one lowercase safe filename
+stem per data directory) and `session_request_commands` (stem/actionToken
+receipts). Neither table is cache data or references session/cache rows.
+Deletion receipt maintenance, transcript removal, cache clear/rebuild and
+processed-result removal must never expire these records. Existing deletion
+tables, `projectDeletion`, `commitTransaction` and startup recovery are retained.
+Both domains share `_writer_revision`; a journal result and its receipt are one
+indivisible worker unit with one revision increment in `commitTransaction`.
+The adaptive 32-row/65536-byte/10 ms policy and first oversized-unit exception
+remain unchanged. There is no additional writable connection or FULL scope;
+the existing WAL/NORMAL process-crash boundary does not promise power-loss
+durability. Node22 fixture transactions do not qualify native crash ordering.
+
+The command registry and admitted/drained typed facade expose:
+
+| Port | Contract |
+|---|---|
+| `querySessionRequestOutcome({stemKey, suppliedHash?, rawHash?})` | Ordered worker read, without mutation/revision/settings ACK. Returns absent, owned, pending, completed or conflict. Read errors reject; cached readonly absence is never an outcome fence. |
+| `recordConsumedSessionStatusRequest` | First-wins typed status bytes or typed open-session refusal; requires supplied hash. A later competing candidate cannot replace owner bytes, timestamps, physical publication stem or owner revision. |
+| `claimSessionResultNamespace` | Minimal legacy/action filename tombstone, optionally adopting known pre-upgrade result bytes. An unknown supplied/raw identity remains owned and cannot grant an exact replay. This is not launch or retry authority. |
+| `recordSessionResultPublication` | Complete an existing matching legacy/action claim once with saved result bytes. Mismatched identity/family cannot overwrite its pending or final state. Unknown identity cannot complete an uncertain effect with a new token. |
+| `recordSessionRequestConflict` | Immutable conflict bytes keyed by owning stem and raw SHA256; repeated raw conflicts return the first bytes and timestamps. Requires an existing owner. |
+
+Only an omitted family defaults to `session-status`; explicitly supplied
+invalid families are refused, including null and other falsy values.
+
+Outcomes carry `owner` for the original namespace and `conflict` separately
+when applicable; `conflict:null` means no conflict envelope has been recorded.
+Without supplied/raw identity an occupied stem is `owned`, even if it contains
+terminal bytes. A matching identity reports `pending` or `completed`; a
+different identity reports `conflict`. Case aliases share the lowercase key;
+the original `actualStem` remains unchanged. Action publication stems must be
+lowercase; legacy and typed stems preserve actual spelling. Non-UUID safe
+legacy basenames remain valid. Validation checks the complete `<stem>.json`
+basename on the host platform, so an empty stem or a space/dot before the
+suffix does not become a new legacy restriction; NUL and path components are
+refused.
+
+Mutating inputs carry actionToken and argsHash. Producers use the exported
+`hashSessionRequestCommand(command, input)` in `session-index-commands.js`:
+sorted exact command arguments, including result bytes, family, supplied/raw
+identity, actual spelling and token, excluding argsHash itself. Buffer and
+Uint8Array candidates hash identically across structured clone. The worker
+verifies the hash before receipt lookup. Same command/token/args returns the
+original receipt without writes; different arguments or command for that token
+reject with `SESSION_REQUEST_TOKEN_CONFLICT`. A mismatched candidate digest
+rejects with `SESSION_REQUEST_ARGS_HASH`. Distinct concurrent candidates use
+distinct tokens; a losing candidate gets the first owner's record and a
+receipt for its own command. Owner revision remains historical while that
+new receipt has its own commit revision.
+
+SQL stores result bytes as BLOBs. Receipt JSON base64-encodes bytes without
+parsing or rebuilding public envelopes. Statements are lazy; write statements
+are prepared only on writable connections. Readonly pre-migration opens do
+not create tables: `sessionRequests.available()` is false and raw snapshots
+return null. The authoritative command rejects unavailable schema, rather
+than treating it as absence.
+
+Consumers must query exact replay before gathering current state; a consume
+ACK is required before publication or input cleanup. A lost/rejected/late ACK
+does not prove rollback. An explicit subsequent ordered query recovers any
+committed bytes; a late ACK must not revive an abandoned publication attempt.
+The generic transport is unchanged and does not replay unknown writes. All
+five ports use normal admission, shutdown tracking and drain behavior.
+
+This slice has no trigger caller, namespace lock, publisher, status gatherer or
+new external endpoint. S1b2 owns universal existing-family guards/publication;
+S1b3 owns typed status dispatch/evidence. A pending legacy/action claim never
+permits re-executing an uncertain old effect; existing #1022 recovery remains
+responsible for reconciling it.
+
+## Dormant project deletion substrate (#474 A4b1)
+
+Writable schema reconciliation adds `project_delete_fences`,
+`project_delete_operations` and `project_delete_units`, with project/state and
+terminal-retention indexes. A cascade trigger also removes units when foreign
+keys are disabled. Existing stores upgrade additively; readonly opens do not
+create these tables and can open an unmigrated database. Deletion statements
+are prepared lazily on first use; header/fence/progress writes, unit results
+and bounded receipt maintenance statements are prepared only by a writable
+connection. Readonly connections can read deletion tables after migration.
+
+`src/main/projects/project-delete-progress.js` owns the dormant admission,
+staging, effect transaction hook, status, fence and restart primitives.
+`commitTransaction` is shared with the worker's existing transaction/BUSY
+wrapper: the hook receives the exact next revision and writes progress before
+the revision and COMMIT. Rollback undoes both effect and progress. No completed
+array grows in a header; results live in ordinal unit rows.
+
+Admission compares the integer `_writer_revision`, canonical host/path epoch
+and durable snapshot digest before claiming an epoch and inserting the header.
+An optional synchronous first-effect hook shares that transaction and records
+the first unit result/cursor there. It requires a completely staged bounded
+manifest; larger manifests stage before a later effect transaction. This is a
+trusted backend seam, with no worker command for admission or effects. The
+manifest hash binds the supplied manifest and ordered targets. Staging admits
+at most 16 units per transaction and defers targets using the production
+savepoint budget with progress/revision overhead reserved. Effects run one unit
+per transaction, checking ownership, seal, hash, staging and revision inside
+that transaction. The first indivisible oversized unit retains the existing
+budget exception. An unexpected synchronous exception rolls back its chunk;
+the caller must fence/reconcile the open receipt, rather than infer rollback
+of earlier chunks. A recorded failed unit seals partial.
+
+Worker bootstrap includes recovered operation/project identities in
+`ready.recoveredProjectDeletions` and seals every unfinished header partial before `ready`, one
+transaction per header, advances only its matching owned epoch and never
+replays pending effects. There are at most 32 active headers. Maintenance
+deletes at most 16 unit rows per transaction; terminal details are limited to
+128 receipts and seven days after maintenance converges. Epoch high-water rows
+survive receipt removal. Each admit/apply/fence/recover call performs at most
+one purge transaction; large receipts leave excess terminal headers for later
+calls. Snapshot reads retain no hard wall-time bound.
+
+Only `getProjectDeletionState`, `readProjectDeletionScope` and
+`fenceProjectDeletion` are forwarded by the typed facade. The two read ports
+run consistent reads directly on the worker connection without revision or
+settings-mirror publication. Fence is a service-boundary operation with the
+existing BUSY retry policy and publishes a settings ACK only when it changed
+the revision. It rereads durable state after sealing. Epoch checks reject an
+old buffered/unsent unit when it eventually reaches the dormant effect seam;
+there is no completion generator to cancel in this slice.
+
+`absent` and `inProgress` give no terminal proof. Only a matching absent fence
+can record `notStarted`. Missing/expired receipts after epoch advancement give
+`unknown` with `noLateCommit:true`, without fabricated completed lists. Fresh
+hidden/settings/metadata observations carry `readRevision`, distinct from
+receipt `lastRevision`. A terminal receipt is immutable; an old fence cannot
+clear a newer owner. Same-hash duplicate admission observes the receipt and
+never replays effects; a notStarted tombstone rejects admission.
+
+Scope readback supplies raw persisted rows, metadata/provenance, folder mappings,
+settings-key presence and conservative cross-project ownership evidence. It is
+not proof of runtime inventory, metadata-only orphan ownership or settings
+erasure safety. A4b3 owns that validation and the shared identity/hash extraction.
+No archive-workflow exclusion, metadata deletion engine, complete command,
+main/IPC/UI caller or general producer cancellation is added here. See
+[project-delete.md](project-delete.md) for the remaining slice boundaries.
 
 The #820 column reconcile adds `runtime TEXT DEFAULT 'claude'` and `sessionFile TEXT`
 on writable opens only, without setting `mustReindex` or deleting rows. Existing

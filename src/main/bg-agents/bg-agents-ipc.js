@@ -153,6 +153,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
   ipcMain.handle('dispatch-bg-agent', (_event, fields) => bgAgents.dispatch(fields));
   ipcMain.handle('bg-agent-live-job', (_event, sessionId) => bgAgents.liveJobCheck(String(sessionId || '')));
   const restoring = new Map();
+  let restoreScan;
   const waitForDescriptor = job => new Promise(resolve => {
     let unsubscribe;
     let timer;
@@ -190,17 +191,26 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       const global = await getSetting('global');
       const item = global?.openWorkingSet?.find(item => item.sessionId === sessionId && item.bg === true);
       if (!item) return refuse('session is not a saved background entry in the working set');
-      const lookup = bgAgents.findRestoreJob(sessionId, item.attachJobId);
+      if (!restoreScan || Date.now() >= restoreScan.expiresAt) {
+        restoreScan = { records: new Map(), expiresAt: Date.now() + 1000 };
+      }
+      const lookup = bgAgents.findRestoreJob(sessionId, item.attachJobId, { findNewer: true, restoreScan });
       if (!lookup.known || !lookup.job) return { ...refuse(lookup.reason || 'background job record unavailable'), ...(lookup.missing ? { missing: true } : {}) };
       job = lookup.job;
+      const tasks = job.taskEvidence;
+      const check = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
+      if (!check.known) return refuse(check.reason || 'conversation liveness unknown');
+      job.state = check.state;
+      if (lookup.supersededBy && ['dead', 'unknown'].includes(check.workerLiveness)
+        || job.state === 'done' && check.workerLiveness === 'unknown' && tasks?.valid && tasks.terminal
+          && tasks.inFlight === 0 && tasks.queued === 0 && tasks.tasks.every(task => task.doneAt !== null)) {
+        return { action: 'retire', jobId: job.id };
+      }
       if (!attachOnly) {
         const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('../shared/project-operation-gate');
         admission = projectOperationGate.tryAdmit(item.projectPath);
         if (!admission) return refuse(PROJECT_OPERATION_ERROR);
       }
-      const check = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
-      if (!check.known) return refuse(check.reason || 'conversation liveness unknown');
-      job.state = check.state;
       if (check.workerLiveness !== 'live' && check.workerLiveness !== 'dead') return refuse('worker liveness unknown — not respawned');
       if (check.workerLiveness === 'dead') {
         if (attachOnly) return refuse('worker is not live — not attached');

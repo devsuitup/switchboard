@@ -99,13 +99,14 @@ function setup({ savedSet, liveIds, batchFails = false }) {
     function settlePtyOpen() {}
     function schedulePersistWorkingSet() {}
     function pollActiveSessions() {}
+    function sessionItemEl() { return null; }
   `, ctx);
   loadAppFunctions(ctx, {
     functions: ['rowSessionIds', 'rowHeadId', 'rowOpenId'], sourcePath: path.join(__dirname, '../public/session-activity-dom.js'),
   });
   vm.runInContext(topLevelDeclarations(APP_SRC, ['restoreMode', 'LIVE_ELSEWHERE_NOTICE_MS', 'skippedWorkingSetEntries', 'restoreSavedIndex', 'restoreAwaitingConsent', 'restoreInFlight', 'restoreIndexingDone', 'continuationRetryCancelled', 'openingSessions', 'dormantWorkingSet'])
     .replace(/^const /gm, 'var ').replace(/^let /gm, 'var '), ctx);
-  loadAppFunctions(ctx, { functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow', 'clearDormantRow', 'indexedRowOf',
+  loadAppFunctions(ctx, { functions: ['persistWorkingSet', 'pendingRestoreEntries', 'runRestore', 'openSession', 'openSessionNow', 'clearDormantRow', 'dormantRowIds', 'syncDormantRow', 'indexedRowOf',
     ...['prepareBackgroundRestore'].filter(name => APP_SRC.includes(`function ${name}(`))] });
   if (APP_SRC.includes('function showLiveElsewhereNotice(')) {
     vm.runInContext(functionSource(APP_SRC, 'showRestoreNotice'), ctx);
@@ -530,6 +531,42 @@ test('C3 background preparations overlap and completed tabs retain saved order',
     await restoring;
   }
   assert.deepEqual(vm.runInContext('JSON.stringify([...openSessions.keys()])', h.ctx), '["x","y"]');
+});
+
+for (const held of ['dormantWorkingSet', 'skippedWorkingSetEntries']) {
+  test(`1065 M3 clicking a retired ${held} entry opens the conversation in the same click`, async t => {
+    const item = { sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' };
+    const h = setup({ savedSet: [item], liveIds: [] });
+    t.after(() => h.dom.window.close());
+    h.ctx.item = item;
+    vm.runInContext(`${held}.set('x', { item, index: 0 });`, h.ctx);
+    let restores = 0;
+    h.dom.window.api.restoreBackgroundJob = async () => { restores++; return { action: 'retire', jobId: '1234abcd' }; };
+    await vm.runInContext('openSession(sessionMap.get("x"))', h.ctx);
+    assert.deepEqual(h.openTerminalCalls, ['x'], 'retired background conversation must open on the first user click');
+    assert.equal(restores, 1);
+    assert.equal(vm.runInContext('skippedWorkingSetEntries.has("x") || dormantWorkingSet.has("x")', h.ctx), false);
+    assert.equal(h.dom.window.document.querySelector('.app-notice'), null);
+    await h.persist();
+    assert.equal(h.settings.global.openWorkingSet[0].bg, undefined);
+  });
+}
+
+test('1065 retired background entry disappears silently and stays absent on the next restart', async t => {
+  const item = { sessionId: 'x', projectPath: '/px', bg: true, attachJobId: '1234abcd' };
+  const h = setup({ savedSet: [item], liveIds: [] });
+  t.after(() => h.dom.window.close());
+  h.dom.window.api.restoreBackgroundJob = async () => ({ action: 'retire', jobId: '1234abcd' });
+  await h.restore();
+  assert.equal(h.dom.window.document.querySelector('.app-notice'), null, 'finished job must not show a failure notice');
+  assert.deepEqual(h.openTerminalCalls, []);
+  await h.persist();
+  assert.deepEqual(h.settings.global.openWorkingSet, [], 'finished job must leave the saved working set');
+  const next = setup({ savedSet: h.settings.global.openWorkingSet, liveIds: [] });
+  t.after(() => next.dom.window.close());
+  next.dom.window.api.restoreBackgroundJob = async () => assert.fail('retired job retried on next restart');
+  await next.restore();
+  assert.equal(next.dom.window.document.querySelector('.app-notice'), null);
 });
 
 for (const missing of [true, false]) {
