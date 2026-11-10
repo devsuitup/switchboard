@@ -44,8 +44,14 @@ the snapshot, so changing a control programmatically without its `change` event
 cannot accept a mismatched plan; dispatch `change` to refresh it. Cancellation,
 replacement and other closure paths make late responses inert. Requests are
 ignored rather than aborted, so the hook owns any external request cleanup.
-Callers using the hook must bound their requests. The dialog adds no timeout;
-A4 will show a pending state while a request is outstanding.
+The dialog bounds each preview wait to 15 seconds. A timeout leaves Confirm
+disabled with an inline recovery message; a later response from that request
+cannot install a plan. Changing an answer requests a fresh preview with a new
+deadline. The deadline timer is cleared on settlement, choice changes and every
+close path. This bounds the dialog wait, not the lifetime of the external work.
+While the current request is outstanding, a literal `role=status` message says
+“Preparing preview…” and the dialog has `aria-busy=true`. Settlement hides the
+status and clears the busy state; obsolete responses cannot clear a newer wait.
 
 A synchronous throw or rejected refresh shows its message as literal inline
 `role=alert` text, leaves Confirm disabled and keeps Cancel available. Changing
