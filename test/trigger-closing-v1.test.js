@@ -349,20 +349,39 @@ test('a cancellation that lands while the journal commit is pending stores the c
   assert.equal(result.reason, 'Switchboard is closing.');
 });
 
-for (const change of [false, true]) {
-  test(`an open whose target ${change ? 'changes while the journal query is pending stores the target refusal' : 'stays unchanged publishes opened'}`, async t => {
+const heldTargetChanges = {
+  'PTY replaced': [f => { f.session.pty = { pid: 2 }; }, 'session target changed'],
+  'map binding removed': [f => { f.sessions.delete(NEW); }, 'session target changed'],
+  'map binding replaced': [f => { f.sessions.set(NEW, { ...f.session }); }, 'session target changed'],
+  'conflicting binding with a surviving alias': [f => { f.sessions.set('alias', f.session); f.sessions.set(NEW, { ...f.session }); }, 'session target changed'],
+  'session exited': [f => { f.session.exited = true; }, 'session target changed'],
+  'became remote': [f => { f.session.host = 'server'; }, 'remote sessions are not supported'],
+  'became a plain terminal': [f => { f.session.isPlainTerminal = true; }, 'plain terminal sessions are not supported'],
+  'became background': [f => { f.session.backgrounded = true; }, 'background session is not supported'],
+};
+for (const [name, [apply, reason]] of Object.entries(heldTargetChanges)) {
+  test(`an open whose target ${name} while the journal query is pending stores the refusal and keeps its evidence`, async t => {
     const f = openingStack(t);
-    const journalled = await journalledPublication(t, f, async () => { if (change) f.session.generation++; });
+    const generation = f.session.generation;
+    const journalled = await journalledPublication(t, f, async () => { apply(f); });
     f.nameStarted.then(() => f.releaseName());
     const result = await f.run();
+    assert.equal(f.session.generation, generation, 'the generation is constant');
     const stored = JSON.parse(nodeFs.readFileSync(journalled.resultPath, 'utf8'));
-    if (change) {
-      assert.equal(stored.ok, false); assert.equal(stored.reason, 'session target changed'); assert.equal(stored.created, true);
-      assert.equal(result.reason, 'session target changed');
-    } else {
-      assert.equal(stored.ok, true); assert.equal(stored.outcome, 'opened');
-    }
+    assert.equal(stored.ok, false); assert.equal(stored.outcome, 'refused'); assert.equal(stored.reason, reason);
+    assert.equal(stored.created, true); assert.equal(stored.sessionId, NEW);
+    assert.equal(result.reason, reason); assert.equal(result.created, true);
     assert.equal(f.events.filter(e => e[0] === 'deliver').length, 1);
+  });
+}
+for (const [name, apply] of [['unchanged', () => {}], ['re-keyed to the same object', f => { f.sessions.delete(NEW); f.sessions.set('re-keyed', f.session); }]]) {
+  test(`an open whose target is ${name} during the held journal query publishes opened`, async t => {
+    const f = openingStack(t);
+    const journalled = await journalledPublication(t, f, async () => { apply(f); });
+    f.nameStarted.then(() => f.releaseName());
+    await f.run();
+    const stored = JSON.parse(nodeFs.readFileSync(journalled.resultPath, 'utf8'));
+    assert.equal(stored.ok, true); assert.equal(stored.outcome, 'opened');
   });
 }
 

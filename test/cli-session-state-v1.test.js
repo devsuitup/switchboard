@@ -359,3 +359,28 @@ for (const offset of [0, 1]) {
     assert.equal(calls, 0);
   });
 }
+
+for (const code of ['EACCES', 'EPERM']) {
+  test(`a denied (${code}) PID namespace link on the anchor makes the observation uncertain and withholds every byte`, async t => {
+    const w = createWorld(t);
+    const pinned = w.pin();
+    await pinned.binding.admit(w.deadline);
+    pinned.binding.beginStep('private note');
+    assert.equal(pinned.ctx.getCliStatus(ID).status, 'idle', 'positive control: the admitted binding is usable');
+    denyNamespace(w, 100, code);
+    const observed = observe(w);
+    assert.equal(observed.uncertain, true);
+    assert.equal(observed.identity, undefined);
+    assert.equal(observed.writer, undefined);
+    assert.equal(pinned.ctx.getCliStatus(ID), undefined);
+    assert.throws(() => pinned.handle.write('private note'));
+    assert.throws(() => pinned.handle.write('\r'));
+    assert.deepEqual(w.writes, []);
+  });
+}
+test('the same world with a readable anchor namespace link observes a usable writer', t => {
+  const w = createWorld(t);
+  const observed = observe(w);
+  assert.equal(observed.uncertain, false);
+  assert.ok(observed.identity);
+});
