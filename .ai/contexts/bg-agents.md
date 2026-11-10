@@ -1,5 +1,9 @@
 # Context: bg-agents
 
+Dispatch and saved background restore use the shared project operation gate;
+see [project-operation-gate.md](project-operation-gate.md). Restore uses the saved
+working-set project identity and exempts `attachOnly`.
+
 **Purpose**: The Agents view — a graphical replacement for the `claude agents`
 TUI. Lists the daemon's `--bg` sessions and the external interactive ones,
 attaches/stops/respawns/deletes/dispatches through the CLI. User doc:

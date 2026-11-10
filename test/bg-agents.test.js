@@ -71,6 +71,44 @@ function boot(dir, { cli = fakeCli(), sessionState = fakeSessionState(), attache
 
 test.afterEach(() => bgAgents.stop());
 
+test('dispatch refuses a held project before the CLI and resumes after release', async t => {
+  const dir = mkTmp();
+  t.after(() => rmTmp(dir));
+  const { cli } = boot(dir);
+  const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+  const held = projectOperationGate.hold(dir);
+  t.after(() => held.release());
+  const result = await bgAgents.dispatch({ prompt: 'hello', cwd: dir });
+  assert.equal(result.ok, false, 'held project must refuse dispatch-bg-agent');
+  assert.match(result.error, /project.*operation|being deleted/i);
+  assert.equal(cli.calls.length, 0);
+  const other = fs.mkdtempSync(path.join(dir, 'other-'));
+  assert.equal((await bgAgents.dispatch({ prompt: 'hello', cwd: other })).ok, true);
+  held.release();
+  assert.equal((await bgAgents.dispatch({ prompt: 'hello', cwd: dir })).ok, true);
+});
+
+test('dispatch keeps admission until the asynchronous background CLI finishes', async t => {
+  const dir = mkTmp();
+  t.after(() => rmTmp(dir));
+  let finish;
+  boot(dir, { cli: { runClaude: args => args[0] === '--bg' ? new Promise(resolve => { finish = resolve; })
+    : Promise.resolve({ code: 0, stdout: '[]', stderr: '' }) } });
+  const pending = bgAgents.dispatch({ prompt: 'hello', cwd: dir });
+  assert.equal(typeof finish, 'function');
+  const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+  const held = projectOperationGate.hold(dir);
+  t.after(() => held.release());
+  let ready = false;
+  held.ready.then(() => { ready = true; });
+  await Promise.resolve();
+  assert.equal(ready, false, 'hold must wait for background dispatch');
+  assert.equal((await bgAgents.dispatch({ prompt: 'late', cwd: dir })).ok, false);
+  finish({ code: 0, stdout: 'Started background session cccccccc', stderr: '' });
+  assert.equal((await pending).ok, true);
+  await held.ready;
+});
+
 test('B-F4 Stop on a working job without a descriptor keeps the main shortcut and never probes workers', async () => {
   const dir = mkTmp();
   try {

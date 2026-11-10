@@ -27,6 +27,45 @@ const { shellSingleQuote, parseTmuxField } = require('../src/main/remote/remote-
 const UUID = '3f2a9c10-7b1d-4e55-9a60-0123456789ab';
 const silentLog = { info() {}, warn() {}, error() {} };
 
+test('remote launch refuses a held alias and path, leaving another host available', async t => {
+  const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+  const held = projectOperationGate.hold('/srv/app', 'vps');
+  t.after(() => held.release());
+  const calls = [];
+  const deps = { hasHost: () => true, launchBlockReason: () => null,
+    adapter: { launch: async (alias, fields) => { calls.push(alias); return { ok: true, descriptor: { ...fields, tmux: 'test' } }; } },
+    attach: async () => ({ ok: true }),
+  };
+  const request = alias => handleLaunchRequest({ alias, sessionId: UUID, cwd: '/srv/app', options: {} }, deps);
+  const result = await request('vps');
+  assert.equal(result.ok, false, 'held project must refuse remote-launch-session');
+  assert.match(result.error, /project.*operation|being deleted/i);
+  assert.deepEqual(calls, []);
+  assert.equal((await request('other')).ok, true);
+  held.release();
+  assert.equal((await request('vps')).ok, true);
+});
+
+test('remote launch keeps its reservation until asynchronous launch and attach finish', async t => {
+  let finishLaunch;
+  const deps = { hasHost: () => true, launchBlockReason: () => null,
+    adapter: { launch: () => new Promise(resolve => { finishLaunch = resolve; }) }, attach: async () => ({ ok: true }) };
+  const request = () => handleLaunchRequest({ alias: 'vps', sessionId: UUID, cwd: '/srv/app', options: {} }, deps);
+  const pending = request();
+  assert.equal(typeof finishLaunch, 'function');
+  const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+  const held = projectOperationGate.hold('/srv/app', 'vps');
+  t.after(() => held.release());
+  let ready = false;
+  held.ready.then(() => { ready = true; });
+  await Promise.resolve();
+  assert.equal(ready, false, 'hold must wait for remote spawn');
+  assert.equal((await request()).ok, false);
+  finishLaunch({ ok: true, descriptor: { tmux: 'test' } });
+  assert.equal((await pending).ok, true);
+  await held.ready;
+});
+
 test('the script is an exact string: directory check, tmux and claude checks, detached tmux session running claude', () => {
   const script = buildLaunchScript({ sessionId: UUID, cwd: '/srv/app', options: {} });
   assert.equal(script,

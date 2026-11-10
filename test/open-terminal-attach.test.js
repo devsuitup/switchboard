@@ -10,6 +10,75 @@ const MAIN_FILENAME = path.join(__dirname, '..', 'main.js');
 const MAIN = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const PRELOAD = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
 
+function launchFixture() {
+  const handlers = new Map(), spawned = [];
+  const root = path.resolve(__dirname, '..');
+  const context = {
+    require: require('node:module').createRequire(MAIN_FILENAME), fs, path, os: require('node:os'), process,
+    mainWindow: {}, unsavedGuard: { launchAllowed: () => true }, activeSessions: new Map(),
+    ipcMain: { handle: (name, fn) => handlers.set(name, fn) },
+    getCachedFolder: () => null, isRemoteFolder: () => false, remoteIndexer: { findSessionAlias: () => null },
+    resolveSessionRealCwd: () => root, PROJECTS_DIR: path.join(root, '.work-files', 'gate-transcripts'),
+    encodeProjectPath: require('../encode-project-path').encodeProjectPath,
+    normalizePtySize: require('../src/main/terminals/pty-size').normalizePtySize,
+    getSetting: () => ({}), SETTING_DEFAULTS: { shellProfile: 'test' },
+    resolveShell: () => ({ path: '/bin/bash' }), isWslShell: () => false,
+    log: { info() {}, warn() {}, error() {} },
+    sessionTransitions: { snapshotContinuationsBeforeSpawn: async () => null },
+    sessionTranscriptExists: () => true, getHarness: require('../harnesses').getHarness,
+    quoteArgvForShell: (_shell, args) => args.join(' '), shellArgs: (_shell, cmd) => [cmd],
+    cleanPtyEnv: {}, scheduleProjects: () => ({ add: async () => {} }),
+    activityReporter: { sessionStarted() {} },
+    cliSessionState: { ensureWatching: () => true },
+    spawnPty: (...args) => { spawned.push(args); return { pid: 4242 }; }, trackWindowsPty() {},
+    createComposerState: require('../src/main/terminals/composer-state').createComposerState,
+    revealIfSdkSession() {}, notifyRendererProjectsChanged() {}, wireSessionPty() {}, getMcpState: () => null,
+  };
+  const start = MAIN.indexOf("ipcMain.handle('open-terminal'");
+  vm.runInNewContext(MAIN.slice(start, MAIN.indexOf('\n});', start) + 4), context, {
+    filename: MAIN_FILENAME, lineOffset: MAIN.slice(0, start).split('\n').length - 1,
+  });
+  return { root, context, spawned, open: (id, project, isNew, options) => handlers.get('open-terminal')(null, id, project, isNew, { mcpEmulation: false, ...options }) };
+}
+
+for (const [mode, isNew, options] of [['new', true, {}], ['resume', false, {}], ['fork', true, { forkFrom: 'source' }]]) {
+  test(`held project refuses open-terminal ${mode} and release restores the launch`, async t => {
+    const h = launchFixture();
+    const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+    const held = projectOperationGate.hold(h.root);
+    t.after(() => held.release());
+    const refused = await h.open(mode, h.root, isNew, options);
+    assert.equal(refused.ok, false, `held project must refuse open-terminal ${mode}`);
+    assert.match(refused.error, /project.*operation|being deleted/i);
+    assert.equal(h.spawned.length, 0);
+    held.release();
+    const result = await h.open(mode, h.root, isNew, options);
+    assert.equal(result.ok, true, result.error);
+    assert.equal(h.spawned.length, 1);
+  });
+}
+
+test('open-terminal keeps an admitted asynchronous launch reserved until the PTY is registered', async t => {
+  const h = launchFixture();
+  let finishSnapshot;
+  h.context.sessionTransitions.snapshotContinuationsBeforeSpawn = () => new Promise(resolve => { finishSnapshot = resolve; });
+  const pending = h.open('pending', h.root, true, {});
+  assert.equal(typeof finishSnapshot, 'function');
+  const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+  const held = projectOperationGate.hold(h.root);
+  t.after(() => held.release());
+  let ready = false;
+  held.ready.then(() => { ready = true; });
+  await Promise.resolve();
+  assert.equal(ready, false, 'hold must wait for open-terminal asynchronous preparation');
+  assert.equal((await h.open('late', h.root, true, {})).ok, false);
+  assert.equal(h.spawned.length, 0);
+  finishSnapshot(null);
+  assert.equal((await pending).ok, true);
+  await held.ready;
+  assert.equal(h.context.activeSessions.has('pending'), true);
+});
+
 test('background handoff is registered and the local record retains pre-launch eligibility', () => {
   assert.match(MAIN, /ipcMain\.handle\('send-session-to-background'/);
   assert.match(MAIN, /preLaunch: !isAttach && !!sessionOptions\?\.preLaunchCmd/);

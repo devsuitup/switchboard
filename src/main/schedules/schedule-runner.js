@@ -726,6 +726,7 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
         runningTasks.delete(taskKey);
         log.error(`[schedule] Failed to run ${schedule.name}:`, err);
       });
+      return launched;
     } catch (err) {
       log.error(`[schedule] Failed to run ${schedule.name}:`, err);
     }
@@ -753,7 +754,7 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
       return;
     }
     pruneScheduleState(stateDir, entry);
-    launch(schedule, due < nowMinute ? due : null);
+    return launch(schedule, due < nowMinute ? due : null);
   }
 
   function check(onTick) {
@@ -780,15 +781,27 @@ function startScheduler(log, runCommand, { resumeSource, stateDir, projects } = 
     }
 
     for (const schedule of schedules) {
+      const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('../shared/project-operation-gate');
+      const admission = projectOperationGate.tryAdmit(schedule.projectPath);
+      if (!admission) {
+        log.info(`[schedule] Skipping ${schedule.name}: ${PROJECT_OPERATION_ERROR}`);
+        continue;
+      }
+      let launched;
+      try {
       if (schedule.catchUp && state) {
         try {
-          checkCatchUp(schedule, state, now.getTime());
+          launched = checkCatchUp(schedule, state, now.getTime());
           continue;
         } catch (err) {
           log.warn(`[schedule] Cannot keep the catch-up record of ${schedule.name}, running on cron only:`, err.message);
         }
       }
-      if (onTick && cronMatches(schedule.cron, now)) launch(schedule, null);
+      if (onTick && cronMatches(schedule.cron, now)) launched = launch(schedule, null);
+      } finally {
+        if (launched?.then) Promise.resolve(launched).then(() => admission.release(), () => admission.release());
+        else admission.release();
+      }
     }
   }
 

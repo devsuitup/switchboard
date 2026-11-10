@@ -1,5 +1,10 @@
 # Context: schedule-runner
 
+Project launch admission is shared with terminal, background and remote launches;
+see [project-operation-gate.md](project-operation-gate.md). Scheduler admission
+precedes catch-up claims and transcript creation. Run now holds its reservation
+until the spawn acknowledgement settles.
+
 Main-process modules live in `src/main/schedules/` (ADR 0005, step 8):
 `schedule-runner.js`, `schedule-ipc.js` and `run-schedule-now-target.js` are siblings.
 Their project and home based schedule paths remain unchanged. The Run now VM

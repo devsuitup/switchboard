@@ -1,5 +1,9 @@
 # Context: trigger-watcher
 
+At #474 A3's base, versioned session actions still refuse as unimplemented;
+there is no trigger launch executor. A future executor must reserve the shared
+[project operation gate](project-operation-gate.md) before asynchronous spawn.
+
 Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 `src/main/triggers/` (ADR 0005, step 8). The watcher's lazy tab mutex import is
 `../terminals/tab-input-lock`; its home based trigger directory is unchanged.

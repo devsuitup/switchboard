@@ -26,7 +26,7 @@ function fakeBgAgents() {
   };
 }
 
-function restoreFixture(t, { saved = [{ sessionId: 's1', bg: true, attachJobId: 'aaaaaaaa' }], state = 'working', liveness = 'dead', descriptors = [], verbResult = { ok: true } } = {}) {
+function restoreFixture(t, { saved = [{ sessionId: 's1', projectPath: '/restore-project', bg: true, attachJobId: 'aaaaaaaa' }], state = 'working', liveness = 'dead', descriptors = [], verbResult = { ok: true } } = {}) {
   const { handlers, ipcMain } = fakeIpc();
   const bg = fakeBgAgents();
   const listeners = new Set();
@@ -49,6 +49,28 @@ function restoreFixture(t, { saved = [{ sessionId: 's1', bg: true, attachJobId: 
     handoff: job => unsubscribe.respawnForHandoff(job), restore: (id = 's1', options) => restore({}, id, options), bg, seen, live, listeners,
     publish: value => { live.value = value; for (const fn of listeners) fn(); } };
 }
+
+test('restore refuses a held project without respawning and attachOnly remains available', async t => {
+  const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+  const h = restoreFixture(t, { descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }] });
+  const held = projectOperationGate.hold('/restore-project');
+  t.after(() => held.release());
+  const result = await h.restore();
+  assert.equal(result.action, 'refuse', 'held project must refuse restore-background-job');
+  assert.match(result.reason, /project.*operation|being deleted/i);
+  assert.equal(h.seen.some(c => c[0] === 'respawn'), false);
+  held.release();
+  assert.equal((await h.restore()).action, 'attach');
+  h.publish([{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1', pid: 4242 }]);
+});
+
+test('attachOnly can attach a live background worker in a held project', async t => {
+  const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+  const h = restoreFixture(t, { liveness: 'live', descriptors: [{ kind: 'bg', jobId: 'aaaaaaaa', sessionId: 's1' }] });
+  const held = projectOperationGate.hold('/restore-project');
+  t.after(() => held.release());
+  assert.equal((await h.restore('s1', { attachOnly: true })).action, 'attach');
+});
 
 for (const saved of [[], [{ sessionId: 's1' }]]) {
   test(`B-T7 refuses ${saved.length ? 'non-bg' : 'absent'} saved entry before reading jobs`, async t => {
