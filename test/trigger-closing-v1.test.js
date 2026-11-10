@@ -111,14 +111,17 @@ for (const [kind, disturb] of [
   });
 }
 
-function openingStack(t, { prompt = 'hello' } = {}) {
+function openingStack(t, { prompt = 'hello', reattach = false } = {}) {
   const s = stack(t);
   const events = [];
   const session = { pty: { pid: 1 }, generation: 7, cwd: project, projectPath: project };
   let releaseName; const nameStarted = new Promise(resolve => { s.signalName = resolve; });
+  if (reattach) s.sessions.set(NEW, session);
   stack.onSend = payload => queueMicrotask(() => {
-    const permit = s.bridge.consumePermit(payload.requestId, s.event(), { sessionId: payload.tabKey, projectPath: payload.project, isNew: payload.mode === 'new', sessionOptions: {} });
+    const permit = s.bridge.consumePermit(payload.requestId, s.event(), { sessionId: payload.tabKey, projectPath: payload.project, isNew: payload.mode === 'new',
+      sessionOptions: payload.mode === 'reattach' ? { reattachOnly: true } : {} });
     if (!permit) return;
+    if (payload.mode === 'reattach') { s.ack(payload); return; }
     s.sessions.set(payload.tabKey, session);
     s.bridge.markOpened(payload.requestId, session);
     s.ack(payload);
@@ -138,7 +141,8 @@ function openingStack(t, { prompt = 'hello' } = {}) {
     acquireSessionLock: async () => () => events.push(['release-fifo']), acquireTabLock: async () => () => events.push(['release-mutex']),
     saveMarker: marker => events.push(['marker', marker.phase]), publish: result => events.push(['result', result]),
     deliver: async ({ pinned }) => { events.push(['deliver']); return { ok: true, submitted: 'assumed', wrote: true, text_written: true, enter_written: true }; } };
-  const run = () => createTriggerActions().execute({ version: 1, action: 'open', new: { project, name: 'Task' }, ...(prompt ? { prompt } : {}) }, STEM, execution);
+  const trigger = reattach ? { version: 1, action: 'open', sessionId: NEW } : { version: 1, action: 'open', new: { project, name: 'Task' }, ...(prompt ? { prompt } : {}) };
+  const run = () => createTriggerActions().execute(trigger, STEM, execution);
   return { ...s, nameStarted, events, session, execution, run, releaseName: () => releaseName() };
 }
 test('an action past its successful ACK is cancelled by a committed update and never revived by rollback', async t => {
@@ -372,6 +376,22 @@ for (const [name, [apply, reason]] of Object.entries(heldTargetChanges)) {
     assert.equal(stored.created, true); assert.equal(stored.sessionId, NEW);
     assert.equal(result.reason, reason); assert.equal(result.created, true);
     assert.equal(f.events.filter(e => e[0] === 'deliver').length, 1);
+  });
+}
+for (const reattach of [false, true]) {
+  test(`an open whose generation changes while the journal query is pending stores the target refusal (${reattach ? 'no-prompt reattach' : 'new with prompt'})`, async t => {
+    const f = openingStack(t, { reattach });
+    const journal = await journalledPublication(t, f, async () => { f.session.generation++; },
+      reattach ? { version: 1, action: 'open', sessionId: NEW } : undefined);
+    if (!reattach) f.nameStarted.then(() => f.releaseName());
+    const result = await f.run();
+    const stored = JSON.parse(nodeFs.readFileSync(journal.resultPath, 'utf8'));
+    assert.equal(stored.ok, false); assert.equal(stored.outcome, 'refused'); assert.equal(stored.reason, 'session target changed');
+    assert.equal(result.reason, 'session target changed');
+    if (!reattach) { assert.equal(stored.created, true); assert.equal(f.events.filter(e => e[0] === 'deliver').length, 1); }
+    else assert.equal(stored.resumed, false);
+    assert.equal(f.events.filter(e => e[0] === 'release-mutex').length, 1);
+    assert.equal(f.events.filter(e => e[0] === 'release-fifo').length, 1);
   });
 }
 for (const [name, apply] of [['unchanged', () => {}], ['re-keyed to the same object', f => { f.sessions.delete(NEW); f.sessions.set('re-keyed', f.session); }]]) {
