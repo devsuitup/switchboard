@@ -525,3 +525,32 @@ for (const value of [[], null, 7, 'legacy', true]) {
     });
   }
 }
+
+function caseVariants(stem) {
+  const positions = [...stem].map((ch, index) => /[a-f]/.test(ch) ? index : -1).filter(index => index >= 0);
+  return [...Array(2 ** positions.length).keys()].map(mask => [...stem].map((ch, index) => {
+    const bit = positions.indexOf(index);
+    return bit >= 0 && (mask >> bit) & 1 ? ch.toUpperCase() : ch;
+  }).join('')).filter(name => name !== request);
+}
+for (const aliases of [1, 7]) {
+  test(`${aliases} case alias${aliases > 1 ? 'es' : ''} waiting on one UUID do not block an unrelated UUID`, async t => {
+    const s = spies();
+    const gate = deferred(); const reached = deferred();
+    s.gate = gate.promise; s.onDispatch = reached.resolve;
+    const r = await rig(t, { live: true, ctx: s.ctx });
+    await reached.promise;
+    for (const name of caseVariants(request).slice(0, aliases)) {
+      fs.writeFileSync(path.join(r.dir, name + '.json'), JSON.stringify(payload));
+      r.notifyFile(name + '.json');
+    }
+    await r.settle();
+    const unrelated = '99999999-9999-4999-8999-999999999999';
+    fs.writeFileSync(path.join(r.dir, unrelated + '.json'), JSON.stringify({ version: 1, action: 'open' }));
+    r.notifyFile(unrelated + '.json');
+    await until(() => fs.existsSync(path.join(r.dir, 'processed', unrelated + '.result.json')), 'the unrelated UUID progresses while the owner is held');
+    assert.equal(fs.existsSync(r.output), false);
+    gate.resolve();
+    await until(() => fs.existsSync(r.output), 'the owner commits');
+  });
+}

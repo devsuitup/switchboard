@@ -2164,17 +2164,25 @@ function start(ctx) {
   // see docs/decisions/0003-trigger-delivery-per-tab.md
   const { acquireTabInput: acquireTabLock } = require('../terminals/tab-input-lock');
 
+  const namespaceOf = filename => filename.slice(0, -5).toLowerCase();
+  const activeNamespaces = new Map();
+  const hasSlot = filename => activeNamespaces.has(namespaceOf(filename)) || activeNamespaces.size < MAX_INFLIGHT;
+
   function scheduleNext() {
-    while (waitQueue.length > 0 && inFlight.size < MAX_INFLIGHT) {
-      const filename = waitQueue.shift();
+    for (let index = 0; index < waitQueue.length;) {
+      const filename = waitQueue[index];
       // Dedup: may have been enqueued twice before a slot opened
-      if (inFlight.has(filename) || retained.has(filename)) continue;
+      if (inFlight.has(filename) || retained.has(filename)) { waitQueue.splice(index, 1); continue; }
+      if (!hasSlot(filename)) { index++; continue; }
+      waitQueue.splice(index, 1);
       dispatch(filename);
     }
   }
 
   function dispatch(filename) {
     inFlight.add(filename);
+    const namespaceKey = namespaceOf(filename);
+    activeNamespaces.set(namespaceKey, (activeNamespaces.get(namespaceKey) || 0) + 1);
     let releaseNamespace;
     acquireNamespace(filename).then(release => {
       releaseNamespace = release;
@@ -2189,6 +2197,8 @@ function start(ctx) {
       .finally(() => {
         releaseNamespace?.();
         inFlight.delete(filename);
+        if (activeNamespaces.get(namespaceKey) > 1) activeNamespaces.set(namespaceKey, activeNamespaces.get(namespaceKey) - 1);
+        else activeNamespaces.delete(namespaceKey);
         if (!closed && retained.has(filename) && !retryTimers.has(filename)) {
           const attempt = retryAttempts.get(filename) || 0;
           retryAttempts.set(filename, attempt + 1);
@@ -2229,7 +2239,7 @@ function start(ctx) {
       catch { return; }
     }
 
-    if (inFlight.size >= MAX_INFLIGHT) {
+    if (!hasSlot(filename)) {
       // W4: backpressure — queue for later
       waitQueue.push(filename);
       return;
