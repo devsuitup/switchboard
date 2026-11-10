@@ -1,0 +1,160 @@
+# Project deletion: read-only planning (#474 A4a)
+
+`src/main/projects/project-delete-plan.js` exports
+`createProjectDeletePlanner(deps)`. It has no production caller yet. A4b owns
+writer completion; A4c owns admission, tokens, IPC, actual process stops and
+composition of the ports below; A4d owns both UI entry points. Existing Delete
+and Archive behavior is unchanged by this library.
+
+`preview({projectPath, folderKey?, options})` returns
+`{ok:true, plan}` or `{ok:false, code, error}`. The five options are required
+booleans: `sessions`, `settings`, `schedules`, `transcripts`,
+`stopBackgroundJobs`. Unknown request/option fields and true physical choices
+are rejected. There is no worktree consent input in A4.
+
+An ok response means the inventory could be assembled. A plan with any
+`refusals` is **not confirmable**. Consumers must inspect this list, rather
+than treating ok as permission to stop, write or hide anything.
+
+`revalidate(plan)` returns `{same, plan}`; unavailable discovery returns
+`{same:false, plan:null}`. It resolves the bound host/path against a new known
+snapshot even for a remote project with no backing cache groups. It does not
+silently recover a remote failure by selecting local. A changed writer revision
+alone does not change the fingerprint. A refusal always makes same false.
+
+## Injected read ports
+
+Every port must be read-only and asynchronous. No port may call the current
+`getProjectsSnapshot` from main.js, `groupDiskIds` from archived-projects.js,
+writer refresh/backfill/reconciliation, or a retirement/apply-and-persist path:
+those can write during preview. The existing schedule list is insufficient
+because it silently skips unreadable matching files. A4c must supply a bounded
+reader retaining those candidates. Neither Electron nor SQLite is imported by
+this module.
+
+The planner passes `{signal, limit, deadline}` to all ports. Ownership also
+receives `snapshot`. Ports must honor the deadline/AbortSignal, bound IO,
+record sizes and total bytes before allocating replies, and use a worker or
+bounded asynchronous IO for discovery/hashing. They must not recursively scan
+the filesystem synchronously on main. The planner limits total inventory items
+to 20,000 (configurable downwards or up to a hard ceiling of 50,000), and total
+wall time to 10 seconds (configurable up to 15 seconds). A timed-out port cannot
+advance to later ports. Abort does not make a port with side effects safe.
+
+1. `waitForIndex(budget)` waits for already-running normal indexing. It must
+   never start a refresh or change persisted state. An unavailable/unfinished
+   scan fails closed within the deadline.
+2. `readSnapshot(budget)` performs a writer-ordered consistent read and returns
+   `{revision, complete, initialScanComplete, declaredHosts, projects}`.
+   `revision` is a nonempty opaque string; `declaredHosts` contains alias
+   strings. Each known project is `{alias, projectPath, folderKeys,
+   cacheFolderKeys?}`. Include hidden/archived/registered projects and known
+   runtime projects, not just visible sidebar rows. `folderKeys` are verified
+   lookup mappings; optional `cacheFolderKeys` enumerates known backing groups
+   that must be rediscovered (an empty registered project need not have any).
+3. `discoverOwnership(project, budgetAndSnapshot)` returns
+   `{complete, groups, members, candidates}`. Include all verified backing
+   groups, archived rows, every continuation and subagent, filesystem candidates
+   missing from the index, and separately known child worktrees. `complete:true`
+   certifies exhaustive discovery, not merely that a cache query succeeded.
+4. `discoverSchedules(project, budget)` returns
+   `{complete, schedules, candidates}`. Inventory exact identities and paths,
+   including disabled, invalid, unreadable, disappeared and linked matches.
+   Never silently skip failed directory reads; use complete:false or candidates.
+5. `readRuntimeState(project, budget)` returns
+   `{complete, tabs, jobs, candidates}`. Cover active, dormant, saved and pending
+   restored tabs, transcriptless terminals, daemon jobs, scheduler claims/runs,
+   remote liveness and external process evidence, including jobs without tabs.
+   Correlate background/schedule identity rather than assuming no tab means dead.
+6. `readRevision(budget)` is another writer-ordered fence returning the current
+   revision string. A change since readSnapshot refuses the entire preview.
+
+All arrays, including candidates and empty arrays, are explicit. A rejected
+port produces DISCOVERY_UNAVAILABLE unless it supplies a specific error code;
+incomplete, stale, over-budget and timed-out snapshots cannot yield a plan.
+Snapshots/results are cloned so sorting and augmentation do not mutate ports.
+There are no write, stop, token, gate-hold or persistence dependencies.
+
+## Ownership and evidence records
+
+Every scoped row carries an explicit `alias:null|string` and `projectPath`.
+Do not omit the host and infer local. Local paths use normalize-project-path
+and Windows case folding; remote paths use POSIX normalization with case kept,
+without local realpath. Both are absolute. FolderKey is a lookup hint, never
+authority: its known mapping, parsed alias and requested path must all agree.
+Absent folderKey selects only a known local identity. Undeclared, conflicting
+or missing remote mappings refuse.
+
+Groups carry `folderKey`, `runtime:'claude'|'codex'`, `verified:true` and optional
+`parentProjectPath`. Parent membership must be verified independently. The
+existing `.claude/worktrees/<name>` nesting is also recognized; other worktree
+layouts need their explicit parent. Children are returned with effect kept;
+prefix siblings and other hosts are not members. Selected groups have effect
+selected. Duplicate/unverified/host-conflicting groups refuse.
+
+Members carry `id`, `conversationId`, `partId`, `subagentId:null|string`,
+`folderKey`, `cwd`, `runtime`, `verified`, `indexed`, `present`, and `liveness`.
+Include additional exact transcript/session IDs, parent IDs, archived state,
+sessionFile and ownership/file identity evidence when applicable; raw record
+fields survive in the plan and digest. Members must match their verified
+backing group's runtime, exact project/cwd and host. Missing/unindexed/linked
+or unsupported members refuse; they are not silently dropped from a count.
+
+Tabs and jobs carry unique `id`, `runtime` (also terminal for tabs), `verified`,
+`liveness`, and any `name`, `conversationId`, `jobId`, `scheduleId`, `background`
+and restore-kind details. Stop evidence is
+`{state:'stopped'|'running'|'unknown', source, targetId?, ...identityEvidence}`.
+Sources are pty, descriptor, remote, job or external. The adapter must prove
+ownership and reliable liveness with PID/start/generation/remote evidence; a
+bare request to kill is not stopped evidence. Include that evidence in the
+record so replacement changes its fingerprint. Unsupported runtime evidence,
+including Codex without a reliable descriptor, stays unknown. Running external
+processes refuse. Live controlled targets are listed in stops with exact
+evidence. Background jobs without fresh stopBackgroundJobs consent are named,
+marked excluded and cause a refusal. No actual stop occurs here.
+
+Schedules carry unique `id` and `path`, `verified`, `readable`, `enabled`, optional
+`linked`, and `problems`. Keep schedule/run identities and ownership/file
+evidence in these records. Unreadable or unverified schedules refuse even though
+A4 keeps their bytes. Invalid schedules stay inspectable with warnings.
+Candidates carry a path/id and reason; every candidate causes an explicit
+refusal. Ports can restrict candidates to the requested scope, but unknown
+ownership must not become a silent omission.
+
+## Plan and downstream obligations
+
+The frozen DeletePlan fields are project, groups, members, tabs, stops,
+schedules, categories, counts, warnings, refusals, membershipDigest,
+fingerprint, revision. All detail is retained beyond ten entries.
+ProjectIdentity is `{key, entry, alias, projectPath}`. The key binds canonical
+host/path; entry follows existing local or alias-qualified hidden-entry spelling.
+
+membershipDigest binds the full scoped group/member/tab/job/schedule inventory
+and ownership, independently of revision. Fingerprint also binds the five
+options, exact stop identities, category capability and warning/refusal state.
+Inventory ordering and object-key ordering are canonicalized. revision is only
+the writer fence; it cannot stand in for membership or process evidence.
+
+Shared path-only settings keys are unavailable when another known host has the
+same path spelling after separator/trailing normalization. Selecting their
+erasure produces a refusal. Otherwise sessions means discard versus archive,
+and settings means delete versus keep. Physical files, memory, .work-files,
+worktrees, project directory and branches stay kept. Retained transcripts can
+restore transcript titles; retained schedules can reactivate on re-add. All
+server files stay kept remotely.
+
+A4c must revalidate under its project operation gate after acceptance, reject
+any changed/refused plan, independently verify actual process exits and writer
+outcomes, and never enlarge consent. This read-only planner does not lock
+external writers or prevent filesystem/process races. The later service owns
+final process/schedule correlation, snapshots at admission and recovery.
+
+## Evidence boundary
+
+`test/project-delete-plan.test.js` loads the production module with plain
+require and uses isolated in-memory read-port implementations. It exercises the
+public planning/revalidation API, AC8 host/path isolation, read fences, candidate
+refusals, full details, schedule and background inventory, timeout/item limits
+and zero effects. No SQLite, live PTY, remote host, IPC, UI or real filesystem
+discovery adapter is claimed by this slice. A4b real-store tests must use the
+Node-20-compatible conversation-store fixture; this suite opens no store.
