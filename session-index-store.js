@@ -79,12 +79,12 @@ function transact(command) {
   else if (sample.ms < 5 && sample.rows <= 32 && sample.bytes <= 65536) chunkSize = Math.min(32, chunkSize + 1);
   return result;
 }
-function chunkUnit(fn, count) {
+function chunkUnit(fn, count, reserve = { rows: 1, bytes: 536 }) {
   const previous = { bytes: budget.bytes, rows: budget.rows };
   raw.exec('SAVEPOINT writer_unit');
   try {
     const result = fn();
-    if (count && (budget.rows > 31 || budget.bytes > 65000)) {
+    if (count && (budget.rows > 32 - reserve.rows || budget.bytes > 65536 - reserve.bytes)) {
       raw.exec('ROLLBACK TO writer_unit');
       Object.assign(budget, previous);
       return { deferred: true };
@@ -95,6 +95,29 @@ function chunkUnit(fn, count) {
 
 let searchFtsRecreated = false;
 if (!readonly) {
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS project_delete_fences (
+    projectKey TEXT PRIMARY KEY, epoch INTEGER NOT NULL, operationId TEXT, blocked INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS project_delete_operations (
+    operationId TEXT PRIMARY KEY, projectKey TEXT NOT NULL, expectedEpoch INTEGER NOT NULL,
+    ownedEpoch INTEGER, manifestHash TEXT NOT NULL, membershipDigest TEXT NOT NULL,
+    writerMembershipDigest TEXT NOT NULL, optionsJson TEXT NOT NULL, state TEXT NOT NULL,
+    phase TEXT NOT NULL, startRevision INTEGER, lastRevision INTEGER, nextUnit INTEGER NOT NULL,
+    totalUnits INTEGER NOT NULL, sealed INTEGER NOT NULL, errorJson TEXT,
+    createdAt INTEGER NOT NULL, finishedAt INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_project_delete_state ON project_delete_operations(projectKey, state);
+  CREATE INDEX IF NOT EXISTS idx_project_delete_terminal ON project_delete_operations(finishedAt, operationId);
+  CREATE TABLE IF NOT EXISTS project_delete_units (
+    operationId TEXT NOT NULL REFERENCES project_delete_operations(operationId) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL, category TEXT NOT NULL, targetJson TEXT NOT NULL,
+    status TEXT NOT NULL, resultJson TEXT, PRIMARY KEY(operationId, ordinal)
+  );
+  CREATE TRIGGER IF NOT EXISTS project_delete_units_cascade AFTER DELETE ON project_delete_operations
+    BEGIN DELETE FROM project_delete_units WHERE operationId = OLD.operationId; END;
+`);
 
 db.pragma('journal_mode = WAL');
 db.pragma('busy_timeout = 100');
@@ -909,7 +932,40 @@ if (!readonly) try {
   console.warn('Bridge UUID repair failed; will retry on next database open:', err.message);
 }
 
+const deletionStatements = {
+  fence: db.prepare('SELECT * FROM project_delete_fences WHERE projectKey = ?'),
+  setFence: db.prepare(`INSERT INTO project_delete_fences(projectKey, epoch, operationId, blocked) VALUES (?, ?, ?, ?)
+    ON CONFLICT(projectKey) DO UPDATE SET epoch=excluded.epoch, operationId=excluded.operationId, blocked=excluded.blocked`),
+  operation: db.prepare('SELECT * FROM project_delete_operations WHERE operationId = ?'),
+  insert: db.prepare(`INSERT INTO project_delete_operations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+  progress: db.prepare(`UPDATE project_delete_operations SET state=?, phase=?, lastRevision=?, nextUnit=?, sealed=?, errorJson=?, finishedAt=? WHERE operationId=?`),
+  active: db.prepare('SELECT * FROM project_delete_operations WHERE sealed = 0 ORDER BY createdAt, operationId'),
+  terminal: db.prepare('SELECT operationId, finishedAt FROM project_delete_operations WHERE sealed = 1 ORDER BY finishedAt DESC, operationId DESC'),
+  units: db.prepare('SELECT * FROM project_delete_units WHERE operationId = ? ORDER BY ordinal'),
+  addUnit: db.prepare('INSERT INTO project_delete_units VALUES (?, ?, ?, ?, ?, ?)'),
+  unitResult: db.prepare('UPDATE project_delete_units SET status=?, resultJson=? WHERE operationId=? AND ordinal=?'),
+  purgeUnits: db.prepare('DELETE FROM project_delete_units WHERE operationId=? AND ordinal IN (SELECT ordinal FROM project_delete_units WHERE operationId=? LIMIT 16)'),
+  purgeOperation: db.prepare('DELETE FROM project_delete_operations WHERE operationId=?'),
+};
+const projectDeletion = {
+  fence: key => deletionStatements.fence.get(key) || null,
+  setFence: (key, epoch, id, blocked) => deletionStatements.setFence.run(key, epoch, id, blocked),
+  operation: id => deletionStatements.operation.get(id) || null,
+  insert: row => deletionStatements.insert.run(...['operationId', 'projectKey', 'expectedEpoch', 'ownedEpoch', 'manifestHash',
+    'membershipDigest', 'writerMembershipDigest', 'optionsJson', 'state', 'phase', 'startRevision', 'lastRevision',
+    'nextUnit', 'totalUnits', 'sealed', 'errorJson', 'createdAt', 'finishedAt'].map(key => row[key] ?? null)),
+  progress: row => deletionStatements.progress.run(row.state, row.phase, row.lastRevision, row.nextUnit, row.sealed, row.errorJson, row.finishedAt, row.operationId),
+  active: () => deletionStatements.active.all(), terminal: () => deletionStatements.terminal.all(),
+  units: id => deletionStatements.units.all(id),
+  addUnit: (id, ordinal, unit) => deletionStatements.addUnit.run(id, ordinal, unit.category, JSON.stringify(unit.target), 'pending', null),
+  unitResult: (id, ordinal, status, result) => deletionStatements.unitResult.run(status, JSON.stringify(result ?? null), id, ordinal),
+  purgeUnits: id => deletionStatements.purgeUnits.run(id, id),
+  purgeOperation: id => deletionStatements.purgeOperation.run(id),
+  metadataFields: () => db.prepare('SELECT * FROM session_meta_fields ORDER BY sessionId, field').all(),
+};
+
 return {
+  projectDeletion,
   beginSearchEntry, appendSearchBody, publishSearchEntry,
   connection: db, transact, chunkUnit, changeCount: totalChanges, measurements: () => measured.slice(), nextChunkSize: () => chunkSize,
   rekeySessionMeta,

@@ -1,5 +1,56 @@
 # Project deletion: read-only planning (#474 A4a)
 
+## Persisted progress substrate (#474 A4b1)
+
+`project-delete-progress.js` is a dormant backend library. Its store schema,
+transaction hooks, budgets and worker routing are documented in
+[session-index-writer.md](session-index-writer.md#dormant-project-deletion-substrate-474-a4b1).
+There is no `completeProjectDeletion` command or production deletion caller.
+The existing planner and its fingerprint semantics are unchanged.
+
+`operationId(project, expectedEpoch, uuid?)` binds a canonical `[alias,path]`
+hash, epoch and UUID. Receipt eviction cannot make that ID valid at a newer
+epoch. `createProjectDeleteProgress(store)` exposes trusted `admit`, `stage`,
+`apply`, `readScope`, `read`, `fence`, `recover` and `purge` seams. A substrate
+manifest supplies the bound ID/project, expectedProjectEpoch, integer
+expectedRevision, membershipDigest, writerMembershipDigest, five boolean
+options and ordered `{category,target}` units. The substrate validates its
+shape and freezes its hash; full manifest inventory/ownership validation
+belongs to A4b3 before any real deletion effect is supplied. It does not make
+arbitrary callbacks safe. Effects are synchronous database work only.
+
+`readProjectDeletionScope({project})` returns
+`{writerRevision,projectEpoch,writerMembershipDigest,scope}` on the worker.
+The digest conservatively includes all cached ownership rows and folder
+mappings, plus selected metadata/provenance and settings-key names. It can
+refuse after unrelated durable changes; it cannot certify complete runtime
+membership or settings ownership. A4b3 will build the authoritative durable
+projection and share the planner's pure identity helpers.
+
+`getProjectDeletionState({operationId,project})` reports actual staged unit
+results as completed/kept/failed/pending lists, plus total/staged/unstaged
+counts. Before staging finishes, unstaged targets are deliberately unknown
+to the receipt. A committed prefix stays `inProgress` until sealed; a fence
+or restart seals it `partial` without undoing that prefix. Readback includes
+current projectHidden/settingsPresent/metadata with `readRevision`; these
+are separate from recorded effects and `lastRevision`.
+
+`fenceProjectDeletion({operationId,project,expectedProjectEpoch})` closes an
+owned operation or records a positive sealed `notStarted` tombstone only at
+the encoded unchanged epoch. An observation of absence has no such meaning.
+After expiry/removal, status is `unknown` when the epoch has advanced, and
+noLateCommit remains provable for that old ID. Foreign IDs refuse; old
+fences preserve newer ownership. The persisted epoch/seal guard rejects a
+later attempt to run an old unit.
+
+Archive workflow exclusion and epoch-aware existing producers remain A4b2;
+actual metadata/settings effects and manifest validation remain A4b3; the
+complete bounded command and queued-producer fencing remain A4b4. Main
+recovery holds, stop evidence and filesystem inspection remain A4c. This
+slice makes no AC2/AC3/AC10 or complete AC9 claim and needs `no-changelog`.
+
+## Read-only planner
+
 `src/main/projects/project-delete-plan.js` exports
 `createProjectDeletePlanner(deps)`. It has no production caller yet. A4b owns
 writer completion; A4c owns admission, tokens, IPC, actual process stops and
