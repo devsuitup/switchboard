@@ -116,7 +116,7 @@ function createSessionRequestCommands(db) {
 function createWriterCommands(db) {
   const settings = { getSetting: db.getSetting, setSetting: db.setSetting, scheduleName: () => null };
   const patch = fields => db.setSetting('global', { ...(db.getSetting('global') || {}), ...fields });
-  const entryProject = entry => { const { alias, folder } = parseFolderKey(entry); return { alias, projectPath: folder }; };
+  const entryProject = entry => { const { alias, folder } = parseFolderKey(entry); return { alias, projectPath: alias && folder === '' ? '/' : folder }; };
   const groupProjects = groups => archive.validArchiveGroups(groups).map(group => ({ alias: parseFolderKey(group.folderKey).alias, projectPath: group.projectPath }));
   const fence = project => db.projectDeletion?.fence(projectIdentity(project).key) || { epoch: 0, blocked: 0 };
   function epochs(projects, allowBlocked = false) {
@@ -243,6 +243,7 @@ function createWriterCommands(db) {
       archive.retireArchivedEntries(db.getSetting, db.setSetting, current, entries);
     },
     dismissReenableOffer(projectPath, folderKey, proof) {
+      if (typeof projectPath !== 'string' || projectPath === '') return { error: 'invalid project path' };
       guard([{ alias: parseFolderKey(folderKey).alias, projectPath }], proof);
       return archive.dismissReenableOffer(projectPath, folderKey, { ...settings, notify() {} });
     },

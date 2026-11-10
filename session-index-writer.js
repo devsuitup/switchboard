@@ -252,7 +252,8 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         if (!updates.has('archivedProjects')) break;
         const entries = Object.keys(archived).filter(entry => !Object.hasOwn(updates.get('archivedProjects'), entry));
         try {
-          await request('retireArchivedEntries', entries, snapshot, workflowProof());
+          const proof = workflowProof();
+          await request('retireArchivedEntries', entries, snapshot, ...(proof === undefined ? [] : [proof]));
           break;
         } catch (error) {
           if (error.code !== 'WRITER_STALE') throw error;
@@ -352,7 +353,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     'dropRemoteFolder',
     'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries', 'setName']) writer[name] = (...args) => request(name, ...args);
   const groupProjects = groups => archive.validArchiveGroups(groups).map(group => ({ alias: parseFolderKey(group.folderKey).alias, projectPath: group.projectPath }));
-  const entryProject = entry => { const { alias, folder } = parseFolderKey(entry); return { alias, projectPath: folder }; };
+  const entryProject = entry => { const { alias, folder } = parseFolderKey(entry); return { alias, projectPath: alias && folder === '' ? '/' : folder }; };
   const workflowTargets = {
     archiveProjectFolders: groupProjects,
     undoArchiveProjectFolders: groupProjects,

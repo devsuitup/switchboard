@@ -385,6 +385,13 @@ visibility and worktree archive changes, not just changes to selected keys.
 Schedule names are still read on main after the write acknowledgment. Effect-free
 reads use the acknowledged mirror without waiting for pending writes.
 
+Without an epoch proof, retirement retains its two-argument transport shape.
+Archive keys remain exact storage keys: the remote-root key `host::` decodes to
+`/` only for workflow and writer identity guards, never for persistence. Remote
+POSIX and host-qualified Windows paths retain the archive identity adapter.
+Dismissal validates empty or non-string paths before the writer identity guard,
+returning the legacy error without changing offers or notifying the renderer.
+
 ## Continuations and shutdown
 
 Refresh and retained-live release await linked-source preparation before opening
