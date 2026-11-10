@@ -182,3 +182,42 @@ for (const mode of ['mixed-death', 'mixed-start', 'unreadable-start', 'replaced'
     assert.equal((await f.live(ID, () => false)).known, false);
   });
 }
+
+const { createWorld } = require('./fixtures/trigger-sandbox-world.cjs');
+function expireDuring(w, offset) {
+  const counts = { reads: 0, afterExpiry: 0, expired: false };
+  const readLink = w.procFs.readlinkSync;
+  const readFile = w.procFs.readFileSync;
+  w.procFs.readFileSync = (p, ...args) => { if (counts.expired) counts.afterExpiry++; return readFile(p, ...args); };
+  w.procFs.readlinkSync = p => {
+    if (counts.expired) counts.afterExpiry++;
+    const value = readLink(p);
+    if (p === '/proc/100/ns/pid' && ++counts.reads === 3) { w.setClock(w.deadline + offset); counts.expired = true; }
+    return value;
+  };
+  return counts;
+}
+const observe = w => w.reader.observeTabWriterV1({ session: w.session, pty: w.session.pty, generation: 7, ptyStart: '10', deadline: w.deadline });
+for (const offset of [0, 1]) {
+  test(`v1 observation finishing at deadline + ${offset} returns no usable writer or identity`, t => {
+    const w = createWorld(t); const counts = expireDuring(w, offset);
+    const observed = observe(w);
+    assert.equal(counts.expired, true);
+    assert.equal(observed.uncertain, true);
+    assert.equal(observed.writer, undefined);
+    assert.equal(observed.identity, undefined);
+    assert.equal(counts.afterExpiry, 0, 'no further proc read starts once expiry is known');
+  });
+}
+test('v1 observation finishing just before the deadline stays usable', t => {
+  const w = createWorld(t); expireDuring(w, -1);
+  const observed = observe(w);
+  assert.equal(observed.uncertain, false);
+  assert.equal(observed.writer.sessionId, ID);
+  assert.ok(observed.identity);
+});
+test('v1 observation expiring during the descriptor reread is refused', t => {
+  const w = createWorld(t); let reads = 0;
+  w.descriptorFs.readFileSync = (p, ...args) => { const value = fs.readFileSync(p, ...args); if (++reads === 2) w.expire(); return value; };
+  assert.equal(observe(w).uncertain, true);
+});

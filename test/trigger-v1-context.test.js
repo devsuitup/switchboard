@@ -122,3 +122,13 @@ test('real reader: replacement between text and Enter leaves only the original t
   assert.throws(() => p.handle.write('\r'), /session target changed/);
   assert.deepEqual(w.writes.map(entry => [entry.data, entry.start]), [['private note', '30']]);
 });
+for (const offset of [0, 1]) {
+  test(`pinned status is undefined when the final anchor read ends at deadline + ${offset}`, t => {
+    const w = createWorld(t); let reads = 0;
+    const readLink = w.procFs.readlinkSync;
+    w.procFs.readlinkSync = p => { const value = readLink(p); if (p === '/proc/100/ns/pid' && ++reads === 3) w.setClock(w.deadline + offset); return value; };
+    const pinned = w.pin();
+    assert.equal(pinned.ctx.getCliStatus(ID), undefined);
+    assert.equal(pinned.binding.observation.uncertain, true);
+  });
+}

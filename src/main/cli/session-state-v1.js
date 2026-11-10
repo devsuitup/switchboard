@@ -189,7 +189,8 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
     if (candidate.descriptor.kind !== 'interactive' || !candidate.state) return unavailable;
     const again = mapped(candidate, procScan(deadline));
     if (!again || JSON.stringify(again) !== JSON.stringify(writer) || !sameFile(candidate, deadline)
-      || !chain.every(p => unchangedProc(p, deadline)) || session.pty !== pty || session.generation !== generation) return unavailable;
+      || !chain.every(p => unchangedProc(p, deadline)) || session.pty !== pty || session.generation !== generation
+      || expired(deadline)) return unavailable;
     const normalized = { ...candidate.raw, ...candidate.state, pid: writer.pid, rawPid: candidate.raw.pid,
       procStart: writer.start, namespace: writer.namespace };
     return { supported: true, uncertain: false, writer: normalized,

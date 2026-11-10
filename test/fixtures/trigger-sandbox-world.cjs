@@ -63,7 +63,7 @@ function createWorld(t, { historical = false } = {}) {
   }
   const pin = () => ctx.pinDelivery(ID, ctx.getPtyForSession(ID), false, { v1: true, deadline });
   return { root, dir, reader, procFs, descriptorFs, ctx, pin, session, map, lifecycle, source, writer, writes, observations,
-    deadline, clock: () => clock, expire: () => { clock = deadline + 1; } };
+    deadline, clock: () => clock, setClock: value => { clock = value; }, expire: () => { clock = deadline + 1; } };
 }
 
 module.exports = { createWorld, ID, B };
