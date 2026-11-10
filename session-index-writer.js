@@ -13,6 +13,7 @@ const { createWriterWorkerClient } = require('./session-index-writer-client');
 const { createCacheEffects } = require('./cache-effects');
 const { projectArchiveWorkflows, archiveProjectIdentity } = require('./src/main/projects/project-archive-workflow');
 const { worktreeParentPath } = require('./public/worktree-nesting');
+const { stable } = require('./src/main/projects/project-delete-identity');
 
 // see .ai/contexts/session-index-writer.md
 function createSessionIndexWriter(options = {}, cache = require('./session-cache')) {
@@ -130,6 +131,11 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     if (!admitted()) return Promise.reject(new Error('writer is closing'));
     return track(commandScope.run(owner, () => Promise.resolve().then(fn)));
   };
+  const deletionResult = (input, state) => {
+    if (state.state === 'committed' && state.invalidation) notify(state.invalidation.sessionIds);
+    workflows.settleDeletion(input, state);
+    return state;
+  };
   const writer = {
     ready,
     initializeCache(ctx) {
@@ -145,9 +151,28 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     async recordSessionRequestConflict(input) { return request('recordSessionRequestConflict', input); },
     async claimSessionResultNamespace(input) { return request('claimSessionResultNamespace', input); },
     async recordSessionResultPublication(input) { return request('recordSessionResultPublication', input); },
-    async getProjectDeletionState(input) { return request('getProjectDeletionState', input); },
+    async getProjectDeletionState(input) { return deletionResult(input, await request('getProjectDeletionState', input)); },
     async readProjectDeletionScope(input) { return request('readProjectDeletionScope', input); },
-    async fenceProjectDeletion(input) { return request('fenceProjectDeletion', input); },
+    async fenceProjectDeletion(input) { await workflows.waitForHold(input.project); return deletionResult(input, await request('fenceProjectDeletion', input)); },
+    completeProjectDeletion(input) {
+      if (!admitted()) return Promise.reject(new Error('writer is closing'));
+      let lease;
+      try { lease = workflows.deletionLease(input); }
+      catch (error) { return Promise.reject(error); }
+      const hash = stable(input);
+      if (lease.hash && lease.hash !== hash) return Promise.reject(Object.assign(new Error('Operation manifest changed'), { code: 'DELETION_HASH' }));
+      if (lease.completion) return lease.completion;
+      lease.hash = hash;
+      lease.completion = admit(async () => {
+        await lease.hold.ready;
+        try { return deletionResult(input, await request('completeProjectDeletion', input)); }
+        catch (error) {
+          if (['DELETION_ID', 'DELETION_MANIFEST', 'DELETION_OWNERSHIP', 'WRITER_STALE', 'DELETION_SCOPE', 'SHARED_SETTINGS', 'SETTINGS_OWNERSHIP_UNKNOWN', 'PROJECT_EPOCH_STALE', 'DELETION_LIMIT', 'DELETION_HASH', 'DELETION_TERMINAL', 'DELETION_BUSY'].includes(error.code)) workflows.settleDeletion(input, { terminal: true });
+          throw error;
+        }
+      });
+      return lease.completion;
+    },
     async patchGlobal(fields) { return request('patchGlobal', fields); },
     async renameSession(id, name) { return request('renameSession', id, name); },
     async rekeySessionMeta(from, to) { return request('rekeySessionMeta', from, to); },
@@ -251,16 +276,24 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         });
         if (!updates.has('archivedProjects')) break;
         const lease = workflows.current();
-        const entries = Object.keys(archived).filter(entry => !Object.hasOwn(updates.get('archivedProjects'), entry)
-          && (!lease || lease.projects.some(project => project.key === archiveProjectIdentity(entryProject(entry)).key)));
+        const cleared = Object.keys(archived).filter(entry => !Object.hasOwn(updates.get('archivedProjects'), entry));
+        const entries = cleared.filter(entry =>
+          !lease || lease.projects.some(project => project.key === archiveProjectIdentity(entryProject(entry)).key));
+        const keepArchived = retired => {
+          if (showArchived) return;
+          const skipped = new Set(cleared.filter(entry => !retired.includes(entry)));
+          kept = kept.filter(project => !skipped.has(archive.archivedEntry(project.remoteAlias || null, project.projectPath)));
+        };
+        keepArchived(entries);
         if (!entries.length) break;
         try {
           const proof = workflowProof();
-          await request('retireArchivedEntries', entries, snapshot, ...(proof === undefined ? [] : [proof]));
+          const retired = await request('retireArchivedEntries', entries, snapshot, ...(proof === undefined ? [] : [proof]));
+          keepArchived(retired || entries);
           break;
         } catch (error) {
           if (error.code !== 'WRITER_STALE') throw error;
-          if (attempt === 2) break;
+          if (attempt === 2) { keepArchived([]); break; }
         }
       }
       const offers = backend.getSetting('scheduleReenableOffers') || {};
@@ -374,7 +407,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     }),
   };
   for (const [name, fn] of Object.entries(writer)) {
-    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'reserveProjectDeletion', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate', 'releaseLiveSession'].includes(name)) continue;
+    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'reserveProjectDeletion', 'completeProjectDeletion', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate', 'releaseLiveSession'].includes(name)) continue;
     if (workflowTargets[name]) {
       writer[name] = (...args) => {
         if (!admitted()) return Promise.reject(new Error('writer is closing'));

@@ -408,9 +408,76 @@ epoch request. New archive/Undo/offer mutations still refuse reservations.
 Real-store tests cover the settings/session matrix, exact parts/subagents,
 historical/orphan sentinels, shared-key refusal, rollback, temporary publication,
 and retained disposable transcripts reindexed by the production cache/effects
-facade after reopen. These are AC2/AC3 engine witnesses; A4b4 still owns complete
-command integration, and A4c/d own stop/IPC/renderer behavior. Node 20 skips real
+facade after reopen. These are AC2/AC3 engine witnesses; the A4b4 integration
+below exercises the complete command. A4c/d own stop/IPC/renderer behavior. Node 20 skips real
 stores when the native ABI and node:sqlite fallback are unavailable.
+
+## Complete command and recovery integration (A4b4)
+
+`writer.completeProjectDeletion(manifest)` is an internal backend command. Main,
+IPC and both user entry points still use their previous contracts. The facade
+reserves archive exclusion synchronously, shares it across `withCache` facades,
+awaits existing workflows and forwards once. Backend fencing also waits for an
+existing reservation's readiness. An unresolved operation pins even an externally
+reserved hold: release refuses until positive terminal or no-late-commit evidence.
+Different operation IDs cannot share that hold; the second command refuses before
+submission, preventing either ACK from stranding the other's exclusion.
+Timeouts, failed sealing and unavailable transport retain exclusion. Reads of
+absent/inProgress state do not release it. Fresh committed readback supplies exact
+session/restore/folder invalidations; exceptions and late transport ACKs alone do
+not publish them. No filesystem callback belongs to this command.
+
+The dedicated worker iterator validates the manifest, admits its epoch/header,
+stages frozen units in batches of at most sixteen, applies exact session/folder
+and optional settings units, then applies one final logical group. Hide, direct
+archive/offer subtraction, local registration subtraction, saved working-set
+pruning and the sealed receipt commit together. Tiny manifests (at most two units
+and 16,000 manifest bytes) can admit and complete in one transaction. Larger
+operations expose committed prefixes and never claim atomicity across chunks.
+Each chunk verifies its exact previous revision, owned unsealed epoch and current
+row/link/folder ownership inside its transaction. Conflict or effect failure seals
+fresh partial state; failure to seal remains unresolved for fence/bootstrap.
+The failed unit and pending units stay distinguishable. Bootstrap seals unfinished
+operations before ready and returns their identities; it never resumes them.
+
+The receipt's manifestHash contains a request hash and a full ordered-unit hash.
+This permits identical duplicate commands to return recorded status even when
+staging was interrupted, without reconstructing targets from changed ownership.
+Changed input under the same ID refuses. Expired receipts remain unknown and
+epoch-bearing IDs cannot re-enter after receipt eviction. Readback reports both
+the exact committed revision and fresh observation revision; selected metadata is
+read by receipt IDs after its cache rows disappear.
+
+Worker messages bind cache, session FTS and metadata targets to epochs when
+received. The binding survives every requeued unit and is rechecked before each
+effect, including staged FTS publication. Ownership comes from supplied row paths,
+durable rows/links/folder mappings and deletion-unit history. Ambiguous ownership
+refuses. A session target unowned at receipt retains that uncertainty: a later
+deletion epoch invalidates its old units even if ownership evidence subsequently
+appears. It cannot adopt that evidence to publish staged search after admission.
+Old producers cannot publish after admission; new selected producers stay
+blocked through committed deletion until explicit fresh re-add. A sealed partial
+allows newly bound reindexing and a newly validated cleanup operation, while old
+deletion IDs remain sealed. After detailed history is purged, an unowned session
+producer is conservatively refused when fences exist; proven unrelated owners
+remain usable. Whole-global renderer saves remain A4d's producer boundary.
+
+Budgets retain the shipped indivisible-unit exception. Ledger/revision space is
+reserved by progress staging/apply, but an oversized final global/archive/registry
+setting and its atomic logical group can exceed row/byte/time targets. Real-store
+tests record SQL measurements, including a 180,000-character retained global
+payload; this is not proof of a strict bounded transaction. No wall-clock deadline
+assertions are used for deletion execution.
+
+Held/blocked archive retirements are excluded from both persistence and the
+rendered unarchived result, including when unrelated retirement exhausts its stale
+retry budget, while unrelated successful retirements continue. Native worker
+integration additions stay in the existing Electron-spawning suites and must be
+run in CI. Local witnesses load the full shipped worker with a VM filename and a
+real SQLite shim store; a second readonly connection inspects intermediate commits.
+Node 20 uses the fixture's supported guard. #380 journal tables and their revision
+contract are unchanged. Main sender/admission/stop and renderer recovery acceptance
+remain A4c/d.
 
 ## Evidence boundary
 

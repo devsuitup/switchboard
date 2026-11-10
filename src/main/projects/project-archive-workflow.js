@@ -16,7 +16,7 @@ function archiveProjectIdentity(project) {
 // see .ai/contexts/project-delete.md
 function projectArchiveWorkflows(client) {
   if (gates.has(client)) return gates.get(client);
-  const active = new Map(), holds = new Map(), scope = new AsyncLocalStorage();
+  const active = new Map(), holds = new Map(), deletions = new Map(), scope = new AsyncLocalStorage();
   const identities = (projects, skipInvalid = false) => [...new Map(projects.flatMap(project => {
     try { const identity = archiveProjectIdentity(project); return [[identity.key, identity]]; }
     catch (failure) { if (skipInvalid && failure.code === 'DELETION_ID') return []; throw failure; }
@@ -72,17 +72,38 @@ function projectArchiveWorkflows(client) {
     for (const project of targets) holds.set(project.key, token);
     const waiting = [...new Set(targets.flatMap(project => [...(active.get(project.key) || [])]))];
     let released = false, ready = false;
-    return {
+    const hold = {
       ready: Promise.all(waiting.map(lease => lease.settled)).then(() => { ready = true; }),
       release() {
         if (!ready) throw error('WORKFLOW_BUSY');
+        if ([...deletions.values()].some(lease => lease.hold === hold)) throw error('WORKFLOW_BUSY');
         if (released) return;
         released = true;
         for (const project of targets) if (holds.get(project.key) === token) holds.delete(project.key);
       },
     };
+    token.hold = hold;
+    return hold;
   }
-  const gate = { run, reserve, current, assertLive };
+  const waitForHold = project => holds.get(archiveProjectIdentity(project).key)?.hold.ready;
+  function deletionLease(input) {
+    const { bind } = require('./project-delete-progress');
+    const project = bind(input);
+    if (!deletions.has(input.operationId)) {
+      const existing = holds.get(project.key)?.hold;
+      if (existing && [...deletions.values()].some(lease => lease.hold === existing)) throw error('WORKFLOW_BUSY');
+      deletions.set(input.operationId, { hold: existing || reserve([input.project]), owned: !existing });
+    }
+    return deletions.get(input.operationId);
+  }
+  function settleDeletion(input, state) {
+    const lease = deletions.get(input.operationId);
+    if (lease && (state.terminal || state.noLateCommit)) {
+      deletions.delete(input.operationId);
+      if (lease.owned) lease.hold.release();
+    }
+  }
+  const gate = { run, reserve, current, assertLive, waitForHold, deletionLease, settleDeletion };
   gates.set(client, gate);
   return gate;
 }

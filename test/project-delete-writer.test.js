@@ -71,9 +71,10 @@ function setup(t, { empty = false, sharedHost = false } = {}) {
       inventory, groups, members, membershipDigest: shared.membershipDigest(project, inventory),
       options: { settings, sessions, schedules: false, transcripts: false, stopBackgroundJobs: false } };
   }
-  const reopen = () => { db.closeDb(); db = openStore(); };
-  t.after(() => { db.closeDb(); if (prior === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = prior; fs.rmSync(root, { recursive: true, force: true }); });
-  return { get db() { return db; }, root, project, groups, members, selected, kept, manifest, reopen, bytes, beforeBytes, journal, requestInput };
+  const reopen = () => { db.closeDb(); db = openStore(); }, readers = [];
+  const openReader = () => { const reader = openStore({ readonly: true }); readers.push(reader); return reader; };
+  t.after(() => { for (const reader of readers) if (reader.connection.open) reader.closeDb(); db.closeDb(); if (prior === undefined) delete process.env.SWITCHBOARD_DATA_DIR; else process.env.SWITCHBOARD_DATA_DIR = prior; fs.rmSync(root, { recursive: true, force: true }); });
+  return { get db() { return db; }, root, project, groups, members, selected, kept, manifest, reopen, bytes, beforeBytes, journal, requestInput, openReader };
 }
 
 function execute(h, input) {
@@ -87,6 +88,458 @@ function execute(h, input) {
   while (!progress.read(substrate).terminal) progress.apply(substrate, unit => engine.applyDeletionUnit(h.db, unit));
   return { validated, units, state: progress.read(substrate) };
 }
+
+test('COMPLETE archives retained metadata, keeps unselected settings and seals final logical removal', supported, async t => {
+  const h = setup(t), input = h.manifest();
+  h.db.setSetting('scheduleProjects', [h.root, '/kept']);
+  h.db.setSetting('archivedProjects', { [h.root]: { knownSessionIds: [], disabledSchedules: ['kept.md'] } });
+  h.db.setSetting('scheduleReenableOffers', { [h.root]: { disabledSchedules: ['kept.md'] } });
+  const fresh = h.manifest(); Object.assign(input, fresh);
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const reply = await worker.post('completeProjectDeletion', input);
+  assert.equal(reply.error, undefined, 'complete command must execute the exact manifest');
+  assert.equal(reply.result.state, 'committed');
+  assert.equal(reply.result.projectHidden, true);
+  assert.equal(reply.result.metadata.length, h.members.length, 'committed readback observes retained metadata after cache removal');
+  for (const member of h.members) { assert.equal(h.db.getMeta(member.id).archived, 1); assert.equal(h.db.getMeta(member.id).name, 'app ' + member.id); }
+  deep(h.db.getSetting('project:' + h.root), { sentinel: 'selected settings' }, 'A-erase-unselected-settings: settings=false retains selected sentinel');
+  assert.equal(h.db.getSetting('archivedProjects')[h.root], undefined);
+  assert.equal(h.db.getSetting('scheduleReenableOffers')[h.root], undefined);
+  deep(h.db.getSetting('scheduleProjects'), ['/kept']);
+  deep(h.bytes(), h.beforeBytes);
+  const revision = h.db.getSetting('_writer_revision');
+  const duplicate = await worker.post('completeProjectDeletion', input);
+  assert.equal(duplicate.error, undefined); assert.equal(duplicate.result.state, 'committed');
+  assert.equal(h.db.getSetting('_writer_revision'), revision, 'same hash never re-enters destructive work');
+  const mismatch = await worker.post('completeProjectDeletion', { ...input, options: { ...input.options, settings: true } });
+  assert.equal(mismatch.error?.code, 'DELETION_HASH');
+});
+
+test('COMPLETE interrupted chunks persist partial prefix without hiding or unregistering', supported, async t => {
+  const h = setup(t);
+  h.db.setSetting('scheduleProjects', [h.root]);
+  const input = h.manifest(true, true), reader = h.openReader();
+  const original = h.db.transact;
+  let injected = false, commits = 0, prefixHidden;
+  h.db.transact = fn => {
+    const result = original(fn); commits++;
+    const operation = reader.projectDeletion.operation(input.operationId);
+    if (!injected && operation?.nextUnit > 0 && !operation.sealed) {
+      injected = true;
+      prefixHidden = reader.getSetting('global').hiddenProjects?.includes(h.root) || false;
+      deep(reader.getSetting('scheduleProjects'), [h.root], 'registration remains until final unit');
+      original(() => h.db.setSetting('_writer_revision', (h.db.getSetting('_writer_revision') || 0) + 1));
+    }
+    return result;
+  };
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const reply = await worker.post('completeProjectDeletion', input);
+  assert.equal(prefixHidden, false, 'B4-hide-before-last-unit: partial prefix remains visible');
+  assert.equal(reply.error, undefined, 'failure must return durable partial state');
+  assert.equal(injected, true, 'intermediate real-store commit observed');
+  assert.equal(reply.result.state, 'partial', 'B4-no-chunk-revision-fence: unrelated revision seals remainder partial');
+  assert.equal(reply.result.projectHidden, false);
+  assert.ok(reply.result.completed.length > 0); assert.ok(reply.result.remaining.length > 0);
+  assert.ok(commits > 2);
+  deep(reader.getSetting('scheduleProjects'), [h.root]);
+  reader.closeDb();
+});
+
+test('COMPLETE tiny empty manifest commits admission and finalization in one transaction', supported, async t => {
+  const h = setup(t, { empty: true }); h.groups.length = 0;
+  const input = h.manifest(), before = h.db.getSetting('_writer_revision');
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const reply = await worker.post('completeProjectDeletion', input);
+  assert.equal(reply.error, undefined, 'tiny complete command is executable');
+  assert.equal(reply.result.state, 'committed');
+  assert.equal(reply.result.lastRevision, before + 1, 'tiny completion has one exact commit revision');
+});
+
+test('COMPLETE refuses shared-host settings without mutation and leaves #380 journal intact', supported, async t => {
+  const h = setup(t, { sharedHost: true }), input = h.manifest(true, true);
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db), before = h.db.changeCount();
+  const refused = await worker.post('completeProjectDeletion', input);
+  assert.equal(refused.error?.code, 'SHARED_SETTINGS', 'complete repeats durable shared-key ownership checks');
+  assert.equal(h.db.changeCount(), before);
+  const kept = await worker.post('completeProjectDeletion', h.manifest(false, true));
+  assert.equal(kept.error, undefined); assert.equal(kept.result.state, 'committed');
+  deep(createWriterCommands(h.db).querySessionRequestOutcome({ stemKey: h.requestInput.stemKey, rawHash: h.requestInput.rawHash }).owner, h.journal.owner);
+  assert.equal(h.db.getMeta('head'), null);
+});
+
+test('COMPLETE fences staged search publication and new selected producers until explicit re-add', supported, async t => {
+  const h = setup(t); h.db.nextChunkSize = () => 1;
+  let launch, deletion, captured = false;
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db, message => {
+    if (message.started && !captured) {
+      captured = true;
+      queueMicrotask(() => { deletion = worker.post('completeProjectDeletion', h.manifest(false, true)); launch(); });
+    }
+  });
+  const launched = new Promise(resolve => { launch = resolve; });
+  const search = worker.post('upsertSearchEntries', [{ id: 'head', type: 'session', folder: 'selected-a', body: 'queued stale body' }]);
+  await launched;
+  const done = await deletion, old = await search;
+  assert.equal(done.error, undefined, 'deletion takes priority over the old publication');
+  assert.equal(done.result.state, 'committed');
+  assert.equal(old.error?.code, 'PROJECT_EPOCH_STALE', 'publishSearchEntry must recheck the received epoch');
+  for (const [command, args] of [
+    ['upsertSearchEntries', [[{ id: 'head', type: 'session', folder: 'selected-a', body: 'new stale body' }]]],
+    ['upsertCachedSessions', [[h.selected[0]]]], ['setName', ['head', 'resurrection']],
+  ]) {
+    const blocked = await worker.post(command, ...args);
+    assert.equal(blocked.error?.code, 'PROJECT_EPOCH_STALE', `${command} stays blocked after commit`);
+  }
+  assert.equal(h.db.connection.prepare("SELECT COUNT(*) AS n FROM search_map WHERE id='head'").get().n, 0);
+  const commands = createWriterCommands(h.db);
+  commitTransaction(h.db, () => commands.revealAddedProject(h.root, commands.readProjectArchiveEpochs([h.project], true)));
+  assert.equal((await worker.post('upsertCachedSessions', [h.selected[0]])).error, undefined, 'fresh producer works after explicit re-add');
+});
+
+test('A-revive-deleted-offer: COMPLETE rejects fetched old archive and offer completions even after re-add', supported, async t => {
+  const h = setup(t), commands = createWriterCommands(h.db);
+  h.db.setSetting('scheduleReenableOffers', { [h.root]: { disabledSchedules: ['kept.md'] } });
+  const proof = commands.readProjectArchiveEpochs([h.project]);
+  const offer = commands.beginOffer(h.root, proof);
+  const accepted = commitTransaction(h.db, () => commands.beginArchive([{ entry: h.root, record: { knownSessionIds: [] }, disabledFiles: [] }], proof)).result;
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const reply = await worker.post('completeProjectDeletion', h.manifest());
+  assert.equal(reply.error, undefined, 'complete command seals the deletion epoch');
+  commitTransaction(h.db, () => commands.revealAddedProject(h.root, commands.readProjectArchiveEpochs([h.project], true)));
+  let staleError;
+  try { commands.completeOffer(h.root, offer, { enabled: [], failed: [] }, proof); } catch (error) { staleError = error; }
+  assert.equal(h.db.getSetting('scheduleReenableOffers')[h.root], undefined, 'A-revive-deleted-offer: stale completion cannot persist fetched offer after COMPLETE');
+  assert.throws(() => { if (staleError) throw staleError; }, { code: 'PROJECT_EPOCH_STALE' }, 'A-revive-deleted-offer: fetched offer cannot resurrect deleted identity');
+  assert.throws(() => commands.completeArchive(accepted, {}, proof), { code: 'PROJECT_EPOCH_STALE' });
+  assert.equal(h.db.getSetting('scheduleReenableOffers')[h.root], undefined);
+});
+
+for (const boundary of ['before', 'prefix', 'final']) test(`COMPLETE facade retains unknown ${boundary} ACK hold until terminal fence/readback`, supported, async t => {
+  const h = setup(t), input = h.manifest();
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db), notifications = [];
+  const client = { ...worker.client };
+  let submissions = 0, lose = true;
+  client.request = async (name, ...args) => {
+    if (name === 'completeProjectDeletion') {
+      submissions++;
+      if (boundary === 'final') await worker.client.request(name, ...args);
+      if (boundary === 'prefix') {
+        const iterator = engine.completeProjectDeletion(h.db, args[0]);
+        iterator.next().value(); iterator.next().value(); iterator.next().value();
+      }
+      if (lose) { lose = false; throw Object.assign(new Error('ACK outcome unknown'), { code: 'WRITER_TIMEOUT' }); }
+    }
+    return worker.client.request(name, ...args);
+  };
+  const writer = createSessionIndexWriter({ client, readonlyBackend: h.db, onSessionsChanged: ids => notifications.push(ids) }, {});
+  await writer.ready;
+  assert.equal(typeof writer.completeProjectDeletion, 'function', 'facade must expose the complete command');
+  await assert.rejects(writer.completeProjectDeletion(input), { code: 'WRITER_TIMEOUT' });
+  assert.equal(notifications.length, 0, 'exception never publishes invalidations');
+  assert.throws(() => writer.reserveProjectDeletion([h.project]), { code: 'WORKFLOW_BUSY' }, 'unknown ACK retains exclusion');
+  const observed = await writer.getProjectDeletionState(input);
+  assert.equal(observed.state, boundary === 'before' ? 'absent' : boundary === 'prefix' ? 'inProgress' : 'committed');
+  if (boundary !== 'final') {
+    assert.throws(() => writer.reserveProjectDeletion([h.project]), { code: 'WORKFLOW_BUSY' }, 'nonterminal observation retains exclusion');
+    const fenced = await writer.fenceProjectDeletion(input);
+    assert.equal(fenced.state, boundary === 'before' ? 'notStarted' : 'partial');
+    assert.equal(fenced.noLateCommit, true);
+    const late = await worker.post('completeProjectDeletion', input);
+    assert.ok(late.error || late.result.terminal, 'late request never re-enters a sealed operation');
+  } else deep(notifications, [h.members.map(row => row.id).sort()], 'positively reconciled commit publishes exact invalidations');
+  const hold = writer.reserveProjectDeletion([h.project]); await hold.ready; hold.release();
+  assert.equal(submissions, 1, 'reconciliation never replays complete');
+});
+
+test('COMPLETE rechecks current ownership inside each chunk despite unchanged revision', supported, async t => {
+  const h = setup(t), input = h.manifest(false, true), transact = h.db.transact;
+  let changed = false;
+  h.db.transact = fn => {
+    const value = transact(fn), row = h.db.projectDeletion.operation(input.operationId);
+    if (!changed && row?.nextUnit > 0 && !row.sealed) {
+      changed = true;
+      h.db.upsertCachedSessions([{ ...h.selected[0], projectPath: path.join(h.root, 'foreign') }]);
+    }
+    return value;
+  };
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db), reply = await worker.post('completeProjectDeletion', input);
+  assert.equal(reply.error, undefined);
+  assert.equal(changed, true);
+  assert.equal(reply.result.state, 'partial', 'changed ownership seals remaining deletion before effects');
+  assert.equal(reply.result.projectHidden, false);
+  assert.ok(h.db.getCachedSession('head'), 'foreign row survives');
+});
+
+test('COMPLETE large manifest stages before effects and exposes exact receipts on every real commit', supported, async t => {
+  const h = setup(t);
+  const extra = Array.from({ length: 48 }, (_, i) => ({ ...h.selected[0], sessionId: 'bulk-' + i, continuationIndex: null }));
+  h.db.upsertCachedSessions(extra);
+  for (const row of extra) { h.db.setName(row.sessionId, 'bulk'); h.members.push({ ...h.members[0], id: row.sessionId, partId: row.sessionId }); }
+  const input = h.manifest(true, true), reader = openStore({ readonly: true }), transact = h.db.transact;
+  let commits = 0, preparing = 0, applying = 0;
+  try {
+    h.db.transact = fn => {
+      const result = transact(fn), row = reader.projectDeletion.operation(input.operationId);
+      if (row) {
+        commits++;
+        assert.equal(row.lastRevision, reader.getSetting('_writer_revision'), 'every receipt revision is visible with its exact commit');
+        if (row.phase === 'preparing') { preparing++; assert.equal(reader.getMeta('head').name, 'app head', 'staging has no metadata effects'); }
+        if (!row.sealed) { applying += row.nextUnit > 0 ? 1 : 0; assert.equal(reader.getSetting('global').hiddenProjects?.includes(h.root) || false, false, 'no prefix hides project'); }
+      }
+      return result;
+    };
+    const worker = require('./fixtures/project-deletion-worker.cjs')(h.db), reply = await worker.post('completeProjectDeletion', input);
+    assert.equal(reply.error, undefined); assert.equal(reply.result.state, 'committed');
+    assert.ok(preparing > 1 && applying > 1 && commits > 48, 'bounded staging and effects yield observable intermediate commits');
+    assert.equal(reader.getMeta('head'), null); assert.equal(reader.getSetting('project:' + h.root), null);
+    assert.equal(reply.result.completed.at(-1).category, 'finalize');
+    deep(h.bytes(), h.beforeBytes);
+  } finally { reader.closeDb(); }
+});
+
+test('COMPLETE duplicate of partially staged manifest returns recorded state without restaging', supported, async t => {
+  const h = setup(t), input = h.manifest(), iterator = engine.completeProjectDeletion(h.db, input);
+  iterator.next().value();
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const before = h.db.changeCount(), reply = await worker.post('completeProjectDeletion', input);
+  assert.equal(reply.error, undefined, 'same hash duplicate after unstaged recovery returns recorded status');
+  assert.equal(reply.result.state, 'partial');
+  assert.equal(reply.result.unstagedUnits, reply.result.totalUnits);
+  assert.equal(reply.result.metadata.length, h.members.length, 'unstaged readback keeps fresh durable metadata observations');
+  assert.equal(h.db.changeCount(), before, 'duplicate never restages or applies units');
+});
+
+test('COMPLETE responsive transport timeout keeps exclusion through late ACK until fresh readback', supported, async t => {
+  const h = setup(t), input = h.manifest(), { EventEmitter } = require('node:events');
+  const { createWriterWorkerClient } = require('../session-index-writer-client');
+  const port = new EventEmitter(), timers = new Set(), notifications = [], mirrors = [];
+  let delayed;
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  port.terminate = async () => 0;
+  port.postMessage = message => {
+    port.emit('message', { id: message.id, started: true });
+    if (message.command === 'completeProjectDeletion') { delayed = message; return; }
+    void worker.post(message.command, ...message.args).then(reply => port.emit('message', { ...reply, id: message.id }));
+  };
+  const client = createWriterWorkerClient({ workerFactory: () => port, timeoutMs: 27,
+    setTimeout(fn, ms) { const timer = { fn, ms }; timers.add(timer); return timer; }, clearTimeout(timer) { timers.delete(timer); },
+    onSettings: entries => mirrors.push(entries) });
+  const writer = createSessionIndexWriter({ client, readonlyBackend: h.db, onSessionsChanged: ids => notifications.push(ids) }, {});
+  port.emit('message', { ready: true, settings: [] }); await writer.ready;
+  try {
+    const executing = writer.completeProjectDeletion(input), rejected = assert.rejects(executing, { code: 'WRITER_TIMEOUT' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(delayed, 'completion posted once to responsive worker');
+    const deadline = [...timers].find(timer => timer.ms === 27); assert.ok(deadline); deadline.fn();
+    await rejected;
+    port.emit('message', { heartbeat: true });
+    const late = await worker.post(delayed.command, ...delayed.args);
+    port.emit('message', { ...late, id: delayed.id });
+    assert.ok(mirrors.length > 1, 'late ACK still updates transport settings');
+    assert.equal(notifications.length, 0, 'late transport ACK alone never publishes facade completion');
+    assert.throws(() => writer.reserveProjectDeletion([h.project]), { code: 'WORKFLOW_BUSY' });
+    assert.equal((await writer.getProjectDeletionState(input)).state, 'committed');
+    deep(notifications, [h.members.map(row => row.id).sort()]);
+    const hold = writer.reserveProjectDeletion([h.project]); await hold.ready; hold.release();
+  } finally { await client.terminate(); }
+});
+
+test('COMPLETE reports an indivisible oversized final setting measurement', supported, async t => {
+  const h = setup(t, { empty: true }); h.groups.length = 0;
+  h.db.setSetting('global', { sentinel: 'oversized', payload: 'x'.repeat(180000), openWorkingSet: [] });
+  const input = h.manifest(), worker = require('./fixtures/project-deletion-worker.cjs')(h.db), reply = await worker.post('completeProjectDeletion', input);
+  assert.equal(reply.error, undefined); assert.equal(reply.result.state, 'committed');
+  const oversized = h.db.measurements().filter(sample => sample.bytes > 65536);
+  assert.ok(oversized.length > 0, 'indivisible final write is measured rather than called hard-bounded');
+  t.diagnostic('oversized final measurements: ' + JSON.stringify(oversized));
+});
+
+test('COMPLETE fenced prefix permits fresh reindex and a new cleanup manifest without replaying old deletion', supported, async t => {
+  const h = setup(t), input = h.manifest(false, true);
+  let worker, fenced, queued = false;
+  const transact = h.db.transact;
+  h.db.transact = fn => {
+    const result = transact(fn), row = h.db.projectDeletion.operation(input.operationId);
+    if (!queued && row?.nextUnit > 0 && !row.sealed) {
+      queued = true;
+      queueMicrotask(() => { fenced = worker.post('fenceProjectDeletion', input); });
+    }
+    return result;
+  };
+  worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  const old = await worker.post('completeProjectDeletion', input);
+  assert.equal(old.error, undefined); assert.equal(old.result.state, 'partial');
+  assert.equal(Object.hasOwn(old, 'settings'), true, 'prefix ACK retains settings publication after an intervening fence');
+  assert.equal((await fenced).result.noLateCommit, true);
+  const revision = h.db.getSetting('_writer_revision');
+  assert.equal((await worker.post('completeProjectDeletion', input)).result.state, 'partial');
+  assert.equal(h.db.getSetting('_writer_revision'), revision, 'old command cannot replay');
+  const reindex = await worker.post('upsertCachedSessions', h.selected);
+  assert.equal(reindex.error, undefined, 'freshly bound reindex after sealed partial is allowed');
+  const fresh = await worker.post('completeProjectDeletion', h.manifest(false, true));
+  assert.equal(fresh.error, undefined, 'fresh cleanup admission accepts sealed partial epoch');
+  assert.equal(fresh.result.state, 'committed');
+});
+
+for (const boundary of ['before', 'prefix', 'final']) test(`COMPLETE store replacement after ${boundary} seals recovery before ready and never replays`, supported, async t => {
+  const h = setup(t), input = h.manifest(false, true);
+  if (boundary === 'prefix') {
+    const iterator = engine.completeProjectDeletion(h.db, input);
+    iterator.next().value(); iterator.next().value(); iterator.next().value();
+  } else if (boundary === 'final') for (const step of engine.completeProjectDeletion(h.db, input)) step();
+  h.reopen();
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db), ready = worker.messages.find(message => message.ready);
+  assert.equal(ready.recoveredProjectDeletions.length, boundary === 'prefix' ? 1 : 0, 'recovery identities supplied before worker ready');
+  const observed = await worker.post('getProjectDeletionState', input);
+  assert.equal(observed.result.state, boundary === 'before' ? 'absent' : boundary === 'prefix' ? 'partial' : 'committed');
+  assert.equal(observed.result.projectHidden, boundary === 'final');
+  if (boundary === 'before') assert.equal((await worker.post('fenceProjectDeletion', input)).result.state, 'notStarted');
+  const changes = h.db.changeCount(), duplicate = await worker.post('completeProjectDeletion', input);
+  assert.ok(duplicate.error || duplicate.result.terminal);
+  assert.equal(h.db.changeCount(), changes, 'replacement never re-enters old completion');
+  assert.equal(h.db.getMeta('head')?.name || null, boundary === 'final' ? null : 'app head');
+  deep(h.bytes(), h.beforeBytes);
+});
+
+test('COMPLETE detailed receipt eviction preserves old-epoch no-late-commit proof', supported, async t => {
+  const h = setup(t), input = h.manifest(), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  assert.equal((await worker.post('completeProjectDeletion', input)).result.state, 'committed');
+  const progress = createProjectDeleteProgress(h.db, { now: () => Date.now() + 8 * 86400000 });
+  while (h.db.projectDeletion.operation(input.operationId)) assert.equal(progress.purge(), true);
+  const before = h.db.changeCount(), observed = await worker.post('getProjectDeletionState', input);
+  assert.equal(observed.result.state, 'unknown'); assert.equal(observed.result.noLateCommit, true);
+  const old = await worker.post('completeProjectDeletion', input);
+  assert.ok(old.error, 'evicted operation cannot re-enter');
+  assert.equal(h.db.changeCount(), before);
+  const forged = await worker.post('completeProjectDeletion', { ...input, expectedProjectEpoch: observed.result.projectEpoch });
+  assert.equal(forged.error?.code, 'DELETION_ID', 'old operation ID cannot be relabelled with a current epoch');
+});
+
+test('COMPLETE unsent transport request arriving after positive fence cannot commit', supported, async t => {
+  const h = setup(t), input = h.manifest(false, true), { EventEmitter } = require('node:events');
+  const { createWriterWorkerClient } = require('../session-index-writer-client');
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db), port = new EventEmitter();
+  let submissions = 0;
+  port.terminate = async () => 0;
+  port.postMessage = message => {
+    submissions++;
+    void worker.post(message.command, ...message.args).then(reply => port.emit('message', { ...reply, id: message.id }));
+  };
+  const client = createWriterWorkerClient({ workerFactory: () => port, timeoutMs: 10000 });
+  try {
+    const queued = client.request('completeProjectDeletion', input).then(value => ({ value }), error => ({ error }));
+    assert.equal(submissions, 0);
+    assert.equal((await worker.post('fenceProjectDeletion', input)).result.state, 'notStarted');
+    port.emit('message', { ready: true, settings: [] });
+    assert.ok((await queued).error, 'previously unsent completion refuses after fence');
+    assert.equal(submissions, 1); assert.equal(h.db.getMeta('head').name, 'app head');
+    assert.equal((await worker.post('getProjectDeletionState', input)).result.projectHidden, false);
+  } finally { await client.terminate(); }
+});
+
+test('COMPLETE reserves before its first await and waits for fetched offer filesystem effects and ACK', supported, async t => {
+  const h = setup(t), archive = require('../archived-projects');
+  const file = path.join(h.root, '.claude', 'commands', 'schedule-file.md'), stateDir = path.join(h.root, 'claims');
+  fs.writeFileSync(file, '---\nname: retained\nenabled: false\ncron: * * * * *\ncatch-up: true\n---\nfixture\n');
+  h.db.setSetting('scheduleReenableOffers', { [h.root]: { disabledSchedules: [file], archivedAt: 'before' } });
+  let fetched, proceed, completions = 0, effects = 0;
+  const fetchedPromise = new Promise(resolve => { fetched = resolve; }), proceedPromise = new Promise(resolve => { proceed = resolve; });
+  const worker = require('./fixtures/project-deletion-worker.cjs')(h.db), client = { ...worker.client };
+  client.requestForWorkflow = (_id, command, ...args) => client.request(command, ...args);
+  client.retireWorkflow = () => {};
+  client.fenceWorkflow = async () => {};
+  client.request = async (name, ...args) => {
+    if (name === 'completeProjectDeletion') completions++;
+    const result = await worker.client.request(name, ...args);
+    if (name === 'beginOffer') { fetched(); await proceedPromise; }
+    return result;
+  };
+  const writer = createSessionIndexWriter({ client, readonlyBackend: h.db }, {}); await writer.ready;
+  const enabling = writer.reenableOfferedSchedules(h.root, null, { notify() {}, reenable(files) { effects++; return archive.reenableScheduleFiles(files, h.root, { stateDir }); } });
+  await fetchedPromise;
+  const stale = h.manifest(), deleting = writer.completeProjectDeletion(stale);
+  const refusal = assert.rejects(deleting, { code: 'WRITER_STALE' });
+  await assert.rejects(writer.reenableOfferedSchedules(h.root, null, { notify() {}, reenable() { effects++; } }), { code: 'WORKFLOW_BUSY' });
+  await new Promise(resolve => setImmediate(resolve));
+  const early = completions; proceed(); assert.equal((await enabling).ok, true); await refusal;
+  assert.equal(early, 0, 'COMPLETE cannot overtake fetched offer filesystem effects and completion ACK');
+  assert.equal(effects, 1, 'reservation refuses new filesystem effects');
+  const retained = h.bytes(), claims = fs.readdirSync(stateDir).map(name => fs.readFileSync(path.join(stateDir, name), 'utf8'));
+  assert.match(fs.readFileSync(file, 'utf8'), /enabled: true/); assert.ok(claims.length > 0);
+  assert.equal((await writer.completeProjectDeletion(h.manifest())).state, 'committed');
+  deep(h.bytes(), retained, 'complete keeps schedule and source bytes after admitted old effects');
+  deep(fs.readdirSync(stateDir).map(name => fs.readFileSync(path.join(stateDir, name), 'utf8')), claims, 'complete keeps catch-up claim bytes');
+  await assert.rejects(writer.reenableOfferedSchedules(h.root, null, { notify() {}, reenable() { effects++; } }), { code: 'PROJECT_EPOCH_STALE' });
+  assert.equal(effects, 1, 'old deletion cannot re-enable schedules after commit');
+});
+
+test('COMPLETE producer fence accepts unrelated metadata and FTS with ownership supplied by the same effects batch', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db);
+  assert.equal((await worker.post('completeProjectDeletion', h.manifest(false, true))).result.state, 'committed');
+  const row = { sessionId: 'new-unrelated', folder: 'other-new', projectPath: h.kept[0].projectPath };
+  const reply = await worker.post('effects', [
+    { name: 'setName', args: [row.sessionId, 'unrelated app name'] },
+    { name: 'upsertCachedSessions', args: [[row]] },
+    { name: 'upsertSearchEntries', args: [[{ id: row.sessionId, folder: row.folder, type: 'session', title: 'unrelated', body: 'unrelated searchable' }]] },
+  ], h.db.getSetting('_writer_revision'));
+  assert.equal(reply.error, undefined, 'same-batch row ownership authorizes unrelated metadata and search after another project deletion');
+  assert.equal(h.db.getMeta(row.sessionId).name, 'unrelated app name');
+  assert.equal(h.db.getCachedSession(row.sessionId).projectPath, row.projectPath);
+  assert.equal(h.db.searchByType('session', 'searchable').length, 1);
+  assert.equal(h.db.getMeta('head'), null, 'selected metadata stays erased');
+});
+
+test('COMPLETE competing operation IDs refuse before sharing an owned archive hold', supported, async t => {
+  const h = setup(t), worker = require('./fixtures/project-deletion-worker.cjs')(h.db), client = { ...worker.client };
+  let committed, firstAck, secondAck, submissions = 0;
+  const committedPromise = new Promise(resolve => { committed = resolve; });
+  const firstPromise = new Promise(resolve => { firstAck = resolve; }), secondPromise = new Promise(resolve => { secondAck = resolve; });
+  client.request = async (name, ...args) => {
+    if (name !== 'completeProjectDeletion') return worker.client.request(name, ...args);
+    if (++submissions === 1) { const result = await worker.client.request(name, ...args); committed(); await firstPromise; return result; }
+    await secondPromise;
+    return worker.client.request(name, ...args);
+  };
+  const writer = createSessionIndexWriter({ client, readonlyBackend: h.db }, {}); await writer.ready;
+  const outcome = promise => promise.then(value => ({ value }), error => ({ error }));
+  const first = outcome(writer.completeProjectDeletion(h.manifest())); await committedPromise;
+  const second = outcome(writer.completeProjectDeletion(h.manifest()));
+  await new Promise(resolve => setImmediate(resolve));
+  firstAck(); const firstResult = await first; secondAck(); const secondResult = await second;
+  assert.equal(submissions, 1, 'competing deletion cannot share an owned archive hold');
+  assert.equal(firstResult.value?.state, 'committed', 'first ACK cannot be stranded by another operation lease');
+  assert.equal(secondResult.error?.code, 'WORKFLOW_BUSY');
+  const hold = writer.reserveProjectDeletion([h.project]); await hold.ready; hold.release();
+});
+
+test('COMPLETE rejects a search producer whose ownership was unknown when received before deletion admission', supported, async t => {
+  const h = setup(t); h.db.nextChunkSize = () => 1;
+  let worker, deletion, launch, captured = false;
+  const launched = new Promise(resolve => { launch = resolve; });
+  worker = require('./fixtures/project-deletion-worker.cjs')(h.db, message => {
+    if (message.started && !captured) {
+      captured = true;
+      queueMicrotask(() => {
+        const folderKey = 'future-folder', id = 'future-id';
+        commitTransaction(h.db, () => {
+          h.db.setFolderMeta(folderKey, h.root, 1);
+          h.db.upsertCachedSessions([{ sessionId: id, folder: folderKey, projectPath: h.root }]);
+          h.db.setName(id, 'newly proven member');
+        });
+        h.groups.push({ ...h.project, folderKey, runtime: 'claude', verified: true, effect: 'selected' });
+        h.members.push({ ...h.members[0], id, partId: id, folderKey });
+        deletion = worker.post('completeProjectDeletion', h.manifest(false, true)); launch();
+      });
+    }
+  });
+  const search = worker.post('upsertSearchEntries', [{ id: 'future-id', type: 'session', folder: 'future-folder', body: 'x'.repeat(32768) }]);
+  await launched;
+  const deleted = await deletion, old = await search;
+  assert.equal(deleted.error, undefined);
+  assert.equal(deleted.result.state, 'committed', 'initially unowned producer cannot interrupt deletion after it claims the new owner');
+  assert.equal(old.error?.code, 'PROJECT_EPOCH_STALE', 'unknown-at-receipt producer must recheck before staged publication');
+  assert.equal(h.db.connection.prepare("SELECT COUNT(*) AS n FROM search_map WHERE id='future-id'").get().n, 0);
+});
 
 test('validation resolves each distinct owner path at most once', supported, t => {
   const h = setup(t), input = h.manifest(true);

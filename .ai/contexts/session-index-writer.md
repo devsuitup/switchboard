@@ -513,6 +513,20 @@ Tests use temporary isolated data dirs. No live application process or packaged
 build is used by these tests. The report in .work-files/codex-report-6166c.md records
 the final executed file census and packaged qualification checklist.
 
+## Project deletion completion (A4b4)
+
+A4b4 adds dedicated completeProjectDeletion dispatch beside deletion scope/status
+and terminal fence controls; see [project-delete.md](project-delete.md),
+"Complete command and recovery integration (A4b4)". Each deletion iterator turn
+owns its progress transaction rather than passing through generic effects.
+Tiny completions may commit once; staged/effect prefixes remain observable and
+revision/epoch/ownership fenced. Final logical removal and receipt sealing are
+atomic, subject to the documented indivisible oversized-setting exception.
+Producer epoch bindings are captured on message receipt and rechecked across
+all selected cache/FTS/metadata units, including search-staging publication.
+The facade holds archive exclusion through unknown outcomes and only releases
+after terminal/no-late-commit proof. No main/IPC/UI caller is connected yet.
+
 ## Projects ACK baseline (#719)
 
 Effects replies carry committedRevision captured inside the last owned SQLite

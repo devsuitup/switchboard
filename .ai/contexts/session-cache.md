@@ -2863,3 +2863,19 @@ failure. Cleanup releases the child, terminates only that child by PID if
 necessary, and uses disposable files. Linux/macOS skip the Windows test;
 platform/error-policy tests cover their immediate-rethrow behaviour with VM
 platform injection. This validates a lock scenario, not its frequency in use.
+
+## Project deletion writer boundary (A4b4)
+
+The internal completeProjectDeletion backend invalidates only manifest-owned
+session rows, metrics, session search/staging and continuation choices. Retained
+conversation metadata is archived with names/pins preserved; selected discard
+erases both metadata and provenance. Memory/work-file search and physical files
+remain. Final hide/offer/archive/registration/restore changes occur only with the
+last sealed committed receipt. Interleaved writes seal a visible partial prefix.
+Raw cache/search/metadata producer messages now carry worker-received project
+epoch bindings through every chunk and the final staged-search publication.
+Fresh reindexing is allowed after sealed partial, or after explicit re-add for a
+committed deletion. Existing computed effects retain WRITER_STALE precedence.
+ACK or positively reconciled committed status supplies exact invalidations to
+the facade observer; main touched state and renderer pending saves remain A4c/d.
+See [project-delete.md](project-delete.md) for ownership, recovery and budget limits.

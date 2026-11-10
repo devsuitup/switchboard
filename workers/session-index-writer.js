@@ -5,6 +5,7 @@ const { setTimeout: delay, setImmediate: yieldTurn } = require('node:timers/prom
 const { openSessionIndexStore } = require('../session-index-store');
 const { createWriterCommands } = require('../session-index-commands');
 const { createProjectDeleteProgress, commitTransaction } = require('../src/main/projects/project-delete-progress');
+const { completeProjectDeletion, bindDeletionProducer, assertDeletionProducer } = require('../src/main/projects/project-delete-writer');
 
 // see .ai/contexts/session-index-writer.md
 const db = openSessionIndexStore({ readonly: false });
@@ -97,6 +98,7 @@ function* units(name, args) {
 }
 
 function* commandUnits(message) {
+  if (message.command === 'completeProjectDeletion') { yield* completeProjectDeletion(db, message.args[0]); return; }
   if (message.command === 'fenceWorkflow') {
     yield () => {
       const workflowId = message.args[0];
@@ -132,7 +134,7 @@ async function drain() {
   while (queue.length) {
     const interactive = queue.findIndex(job => !backgroundCommands.has(job.command) && !['close', 'drain'].includes(job.command));
     const background = queue.findIndex(job => backgroundCommands.has(job.command));
-    const control = queue.findIndex(job => job.command === 'fenceWorkflow');
+    const control = queue.findIndex(job => ['fenceWorkflow', 'fenceProjectDeletion'].includes(job.command));
     const index = control >= 0 ? control : interactive >= 0 && (interactiveBurst < 4 || background < 0) ? interactive : background >= 0 ? background : 0;
     const message = queue.splice(index, 1)[0];
     if (backgroundCommands.has(message.command)) interactiveBurst = 0;
@@ -147,11 +149,13 @@ async function drain() {
         parentPort.postMessage({ id: message.id, result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result,
           ...(message.mutated ? { settings: settings() } : {}) });
       } else {
+        if (message.bindingError) throw message.bindingError;
+        assertDeletionProducer(db, message.producerBinding || []);
         if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope', 'querySessionRequestOutcome', 'readProjectArchiveEpochs', 'fenceWorkflow', 'retireWorkflow'].includes(message.command)) message.result = unit.value();
-        else if (message.command === 'fenceProjectDeletion') {
+        else if (['fenceProjectDeletion', 'completeProjectDeletion'].includes(message.command)) {
           const before = db.getSetting('_writer_revision') || 0;
           message.result = await transaction(message.command, null, undefined, unit.value);
-          message.mutated = (db.getSetting('_writer_revision') || 0) !== before;
+          message.mutated ||= (db.getSetting('_writer_revision') || 0) !== before;
         }
         else if (message.command === 'beginOffer') {
           message.result = unit.value();
@@ -167,6 +171,7 @@ async function drain() {
             deferred = null;
             let next = unit, result, count = 0;
             while (!next.done) {
+              assertDeletionProducer(db, message.producerBinding || []);
               const applied = db.chunkUnit(next.value, count);
               if (applied.deferred) { deferred = next; break; }
               result = applied.result;
@@ -194,7 +199,11 @@ async function drain() {
 
 const heartbeat = setInterval(() => parentPort.postMessage({ heartbeat: true }), 1000);
 heartbeat.unref();
-parentPort.on('message', message => { queue.push(message); void drain(); });
+parentPort.on('message', message => {
+  try { message.producerBinding = bindDeletionProducer(db, message.command, message.args); }
+  catch (error) { message.bindingError = error; }
+  queue.push(message); void drain();
+});
 const recoveredProjectDeletions = [];
 for (let recovered; (recovered = deletionProgress.recover());) recoveredProjectDeletions.push(recovered);
 parentPort.postMessage({ ready: true, settings: settings(), searchFtsRecreated: db.searchFtsRecreated, recoveredProjectDeletions });
