@@ -4177,6 +4177,7 @@ if (!app.isPackaged) {
       require('./src/main/triggers/trigger-watcher').start(createTriggerContext({
         activeSessions, log, getCliStatus: (id) => cliSessionState.getStatus(id), projectsDir: PROJECTS_DIR,
         lifecycle: triggerLifecycleDeps(),
+        sessionRequests: writer,
         getLiveDescriptor: (id) => cliSessionState.findLiveProcess(id),
         resolveSessionId: (id) => sessionTransitions.currentSessionId(id),
         get remote() {

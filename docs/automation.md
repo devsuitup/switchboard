@@ -250,6 +250,22 @@ the launch acknowledgement or another run is launched successfully.
 
 ## Triggers
 
+A trigger's filename owns its result for the lifetime of the app's data
+directory. Keep the same request and filename to retrieve its saved result;
+use a new filename for a new request. Filename case aliases share ownership.
+A different request reusing that name preserves the first result and receives
+`processed/<stem>.conflict-<rawSHA256>.result.json`; its original bytes are
+archived beside it as `<stem>.conflict-<rawSHA256>.request`.
+
+If result publication fails, Switchboard keeps the input and retries the saved
+result after 250 ms, 1 s, 5 s, then every 30 s, and after restart. It does not
+repeat the session action or keyboard input. An interrupted request with no
+saved result is refused or reconciled from its action marker. Unreadable input,
+journal failures and uncertain pre-upgrade artifacts are retained without a
+fallback result. Legacy result filenames preserve their spelling; versioned
+action results keep lowercase UUID filenames. Removing a processed file does
+not free its filename for a different request.
+
 ### Open or create a visible local session
 
 Publish a UTF-8 JSON file named with a fresh lowercase UUID in the triggers
@@ -935,15 +951,14 @@ nothing went out; read them as `(result.steps || []).length === 0`.
 
 **An exception while deciding a trigger's fate** — a body that is valid JSON but
 not a usable shape, such as `null` or a non-object chain step — still ends in a
-result and a deletion: `{ "ok": false, "error": "internal error: <message>",
+journalled result and, after successful publication, deletion: `{ "ok": false, "error": "internal error: <message>",
 "internal": true }`. Only this path sets `internal: true`, so "the watcher
 broke" can be told from "the trigger was refused" without parsing `error`.
 
-**When deleting the trigger fails** (permissions, a locked file, a non-regular
-entry), the file stays, the result is still written, the failure is logged, and
-the name is remembered for the life of the process, so a later event on it never
-runs the command twice. A name that has a result in `processed/` has been
-processed, whatever the directory still shows.
+**When publication or cleanup fails**, the input is retained where possible,
+the error is logged, and retry uses the saved outcome. An unreadable or
+non-regular input is retained without a result. A pending claim is reconciled
+or refused after interruption; it never authorizes automatic effect replay.
 
 **`processed/` is never pruned.** Callers that write many triggers clean it
 themselves.

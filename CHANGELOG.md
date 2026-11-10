@@ -9,9 +9,11 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - File triggers can open an exact local conversation, create a named session in a known project and deliver a prompt, or stop an idle local session with an optional final note, without changing your selection or keyboard focus. (#1022)
 
 ### Changed
+- A trigger reusing a finished trigger's file name is no longer run again: it receives the earlier result or a conflict file. (#380)
 - The Browser choice replaces Chrome in settings and session dialogs, keeping your saved choices as Off or Claude in Chrome. (#812)
 
 ### Fixed
+- Triggers wait while the session index is unavailable, and a trigger whose result could not be published is kept and retried. (#380)
 - Restarting no longer reopens a finished background tab or shows a false "Restore failed" notice when its worker cannot be found. You can still open the conversation from the sidebar. (#1065)
 
 ## v0.0.104 — 2026-11-09

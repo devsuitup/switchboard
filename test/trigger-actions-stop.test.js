@@ -424,7 +424,7 @@ for (const before of [undefined, 'Save a final note']) {
     const { EventEmitter } = require('node:events');
     const { createTriggerContext } = require('../src/main/triggers/trigger-context');
     const { createTriggerRendererBridge } = require('../src/main/triggers/trigger-renderer-bridge');
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const { stopLocalSession } = require('../src/main/terminals/stop-session');
     const { createComposerState } = require('../src/main/terminals/composer-state');
     const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-file-stop-')));

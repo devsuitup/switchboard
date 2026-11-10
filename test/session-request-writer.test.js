@@ -180,6 +180,18 @@ test('conflict envelopes and receipts replay by original stem plus raw hash afte
   assert.deepEqual(h.query().owner, first.owner);
 });
 
+test('an owner replay cannot be recorded as its own conflict', supported, t => {
+  const h = setup(t);
+  const first = h.consume(h.candidate({ rawHash: sha('d') }));
+  for (const identity of [{ rawHash: sha('d') }, { rawHash: sha('e'), suppliedHash: sha('a') }]) {
+    const input = h.bind('recordSessionRequestConflict', { stemKey: 'abc', actualStem: 'ABC',
+      ...identity, resultBytes: Buffer.from('not a conflict\n'), actionToken: randomUUID() });
+    assert.throws(() => h.send('recordSessionRequestConflict', input), { code: 'SESSION_REQUEST_INPUT' }, 'an owner replay must refuse conflict recording');
+    assert.deepEqual(h.query().owner, first.owner);
+    assert.equal(h.query({ stemKey: 'abc', rawHash: sha('d'), suppliedHash: sha('a') }).state, 'completed');
+  }
+});
+
 test('result, receipt and revision rollback together when receipt insertion fails', supported, t => {
   const h = setup(t);
   h.commands();
@@ -213,7 +225,10 @@ test('readonly pre-migration opens need no journal schema; writable reopen upgra
   try {
     assert.equal(reader.getSetting('sentinel'), 7);
     assert.equal(reader.sessionRequests.available(), false);
-    assert.equal(reader.sessionRequests.get('abc'), null);
+    for (const read of [() => reader.sessionRequests.get('abc'), () => reader.sessionRequests.receipt('abc', 'token'),
+      () => reader.sessionRequests.conflict('abc', sha('b'))]) {
+      assert.throws(read, { code: 'SESSION_REQUEST_SCHEMA' }, 'raw reads must distinguish missing schema from absence');
+    }
     assert.throws(() => commandModule.createWriterCommands(reader).querySessionRequestOutcome({ stemKey: 'abc' }), { code: 'SESSION_REQUEST_SCHEMA' }, 'missing readonly journal schema is never authoritative absence');
     assert.equal(reader.connection.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name IN ('session_requests','session_request_commands')").get().n, 0);
   } finally { reader?.closeDb(); }

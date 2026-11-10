@@ -35,8 +35,8 @@ function createSessionRequestCommands(db) {
     const row = store.get(key);
     return row ? { ...row, resultBytes: row.resultBytes === null ? null : Buffer.from(row.resultBytes) } : null;
   };
-  const matches = (owner, input) => input.suppliedHash != null ? owner.suppliedHash === input.suppliedHash
-    : owner.suppliedHash === null && input.rawHash != null && owner.rawHash === input.rawHash;
+  const matches = (owner, input) => (input.rawHash != null && owner.rawHash === input.rawHash)
+    || (input.suppliedHash != null && owner.suppliedHash === input.suppliedHash);
   function querySessionRequestOutcome(input) {
     const stemKey = sessionRequestStem(input.stemKey);
     for (const key of ['suppliedHash', 'rawHash']) if (input[key] != null && !hashValid(input[key])) throw requestError('SESSION_REQUEST_INPUT', 'Invalid request hash');
@@ -80,6 +80,7 @@ function createSessionRequestCommands(db) {
     let owner = readOwner(stemKey), outcome;
     if (conflict) {
       if (!owner) throw requestError('SESSION_REQUEST_ABSENT', 'A conflict requires an owned namespace');
+      if (owner.rawHash === input.rawHash || matches(owner, input)) throw requestError('SESSION_REQUEST_INPUT', 'An owner replay is not a conflict');
       const saved = store.conflict(stemKey, input.rawHash);
       const result = saved ? deserializeRequestOutcome(saved).conflict : {
         stemKey, actualStem: input.actualStem, rawHash: input.rawHash, resultBytes: Buffer.from(input.resultBytes), createdAt: now, revision,

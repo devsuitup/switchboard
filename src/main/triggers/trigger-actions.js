@@ -224,18 +224,9 @@ async function resolveLocalTarget(sessionId, deps = {}) {
   return { ok: true, sessionId, cwd, project: admitted.project, ...target, transcriptIdentity: identity };
 }
 
-function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.now } = {}) {
+function createTriggerActions({ fs = nativeFs, log, now = Date.now } = {}) {
   const limiter = createNewSessionLimiter({ now });
   const error = (...args) => { try { log?.error(...args); } catch {} };
-  function remove(file, retained) {
-    try { fs.unlinkSync(file); return true; }
-    catch (err) {
-      if (err.code === 'ENOENT') return true;
-      retained?.();
-      error('[trigger-watcher] v1 cleanup failed:', file, err.message);
-      return false;
-    }
-  }
   function readState(resultPath, markerPath) {
     function read(file) {
       const stat = fs.lstatSync(file);
@@ -262,7 +253,7 @@ function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.
     }
     try {
       const result = read(resultPath);
-      if (object(result) && own(result, 'version')) return { result, committed: true };
+      if (object(result) && result.version === 1 && ['open', 'stop'].includes(result.action) && !own(result, 'type')) return { result, committed: true };
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
@@ -285,18 +276,15 @@ function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.
       throw err;
     }
   }
-  function publish({ result, resultPath, triggerPath, markerPath, retained, committed = false }) {
+  async function publish({ result, namespace, retained }) {
     try {
-      if (!committed) {
-        fs.writeFileSync(resultPath + '.tmp', JSON.stringify(result) + '\n', 'utf8');
-        renameWithRetry(resultPath + '.tmp', resultPath);
-      }
+      if (!namespace?.publish) throw new Error('request namespace decision is required');
+      await namespace.publish(result);
     } catch (err) {
       retained?.();
       error('[trigger-watcher] v1 result publication failed:', err.message);
       return false;
     }
-    if (remove(triggerPath, retained)) remove(markerPath, retained);
     return true;
   }
   return { limiter, readState, publish, refusal,
