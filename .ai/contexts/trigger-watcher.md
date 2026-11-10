@@ -412,8 +412,12 @@ The `/proc` scan tolerates entries it cannot use: a process that exited during
 the scan (`ENOENT`/`ESRCH`) and a process whose PID namespace link is denied
 (`EACCES`/`EPERM`) do not make it incomplete, because the former no longer
 exists and the latter is read for its status and start only. A denied entry
-whose NSpid and start match the descriptor, or a denied anchor, still makes the
-observation uncertain. `test/trigger-actions-readiness.test.js` drives the
+whose NSpid and start match a live descriptor candidate (checked for every
+candidate, so a competing writer cannot disappear from the uniqueness check), or
+a denied anchor, still makes the observation uncertain. The absolute deadline is
+rechecked between the descriptor `lstat` and content reads, and between the
+`status`, `stat` and namespace reads of each process; an expired scan starts no
+further read or `/proc` enumeration. `test/trigger-actions-readiness.test.js` drives the
 shipped `scripts/claude-sandbox.sh` and node-pty against the real `/proc`.
 
 ### Open target after waits
@@ -421,7 +425,11 @@ shipped `scripts/claude-sandbox.sh` and node-pty against the real `/proc`.
 `executeOpen` retains the session object, PTY and generation once the target is
 accepted and checks them again, with the map binding and eligibility, after the
 tab lock, the name save and the prompt delivery, immediately before a success is
-published. A same-object re-key keeps the action valid. The watcher-supplied
+published. For an existing tab (reattach) the object, PTY and generation are
+snapshotted when the entry is pinned, before the tab lock; a change by the time
+the lock is held is refused before any renderer dispatch, and the ACK-time and
+final checks compare against the same snapshot. Any other object bound under
+the requested ID refuses the action; a same-object re-key keeps it valid. The watcher-supplied
 staleness check runs right after the session FIFO is acquired, before any target
 work; a refusal refunds an unretained rate token.
 
@@ -433,6 +441,12 @@ commitment happened after it, even after a rolled-back update makes
 `launchAllowed()` true again. An invalid capture refuses with
 `Switchboard is closing.` at every check, including the guarded prompt/Enter
 writes, keeping the confirmed `created`/`resumed` and partial-delivery evidence.
+Right before publication, open and stop normalize the result against the same
+capture: a failed result (an open's also when it succeeded) whose action was
+cancelled becomes the `Switchboard is closing.` refusal, so a late name-save,
+liveness or lookup failure cannot replace it. Established effects and
+`uncertain` stay on the result; a stop that already completed (`closed`) is not
+rewritten.
 
 ### Sandbox control directory
 

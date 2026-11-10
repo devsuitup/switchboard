@@ -21,6 +21,7 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
       try {
         const stat = descriptorFs.lstatSync(file);
         if (!stat.isFile() || stat.size > 65536) { complete = false; continue; }
+        if (expired(deadline)) { complete = false; break; }
         const text = descriptorFs.readFileSync(file, 'utf8');
         const descriptor = parseDescriptor(text);
         if (!descriptor) { complete = false; continue; }
@@ -33,13 +34,15 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
   function sameFile(candidate, deadline) {
     try {
       return !expired(deadline) && stamp(descriptorFs.lstatSync(candidate.file)) === candidate.stamp
-        && descriptorFs.readFileSync(candidate.file, 'utf8') === candidate.text;
+        && !expired(deadline) && descriptorFs.readFileSync(candidate.file, 'utf8') === candidate.text;
     } catch { return false; }
   }
   function proc(pid, deadline) {
     if (expired(deadline)) throw new Error('deadline');
     const status = procFs.readFileSync(`/proc/${pid}/status`, 'utf8');
+    if (expired(deadline)) throw new Error('deadline');
     const stat = procFs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    if (expired(deadline)) throw new Error('deadline');
     let namespace;
     try { namespace = procFs.readlinkSync(`/proc/${pid}/ns/pid`); }
     catch (error) { if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error; namespace = null; }

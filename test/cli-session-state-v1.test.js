@@ -281,3 +281,59 @@ test('an expired descriptor scan starts no /proc enumeration', t => {
   assert.equal(observe(w).uncertain, true);
   assert.equal(enumerations, 0);
 });
+
+function expireOnce(w, target, name, offset = 1) {
+  const object = target === 'descriptor' ? w.descriptorFs : w.procFs;
+  const original = object[name];
+  const state = { fired: false, after: [] };
+  object[name] = (...args) => {
+    if (state.fired) state.after.push(name);
+    const value = original(...args);
+    if (!state.fired) { state.fired = true; w.setClock(w.deadline + offset); }
+    return value;
+  };
+  return state;
+}
+function trackAfter(w, state, target, names) {
+  const object = target === 'descriptor' ? w.descriptorFs : w.procFs;
+  for (const name of names) {
+    const original = object[name];
+    object[name] = (...args) => { if (state.fired) state.after.push(name); return original(...args); };
+  }
+}
+test('expiry after a descriptor lstat starts no content read', t => {
+  const w = createWorld(t);
+  const state = expireOnce(w, 'descriptor', 'lstatSync');
+  trackAfter(w, state, 'descriptor', ['readFileSync']);
+  assert.equal(observe(w).uncertain, true);
+  assert.deepEqual(state.after, []);
+});
+test('expiry after the descriptor revalidation lstat starts no content reread', t => {
+  const w = createWorld(t);
+  let lstats = 0; const lstat = w.descriptorFs.lstatSync; const state = { fired: false, after: [] };
+  w.descriptorFs.lstatSync = (...args) => { const value = lstat(...args); if (++lstats === 2) { state.fired = true; w.setClock(w.deadline + 1); } return value; };
+  const read = w.descriptorFs.readFileSync;
+  w.descriptorFs.readFileSync = (...args) => { if (state.fired) state.after.push('readFileSync'); return read(...args); };
+  assert.equal(observe(w).uncertain, true);
+  assert.deepEqual(state.after, []);
+});
+test('expiry after a /proc status read starts no stat or namespace read', t => {
+  const w = createWorld(t);
+  const state = { fired: false, after: [] };
+  const read = w.procFs.readFileSync;
+  w.procFs.readFileSync = (p, ...args) => { if (state.fired) state.after.push(p); const value = read(p, ...args); if (!state.fired && p.endsWith('/status')) { state.fired = true; w.setClock(w.deadline + 1); } return value; };
+  const link = w.procFs.readlinkSync;
+  w.procFs.readlinkSync = p => { if (state.fired) state.after.push(p); return link(p); };
+  assert.equal(observe(w).uncertain, true);
+  assert.deepEqual(state.after, []);
+});
+test('expiry after a /proc stat read starts no namespace read', t => {
+  const w = createWorld(t);
+  const state = { fired: false, after: [] };
+  const read = w.procFs.readFileSync;
+  w.procFs.readFileSync = (p, ...args) => { const value = read(p, ...args); if (!state.fired && p.endsWith('/stat')) { state.fired = true; w.setClock(w.deadline + 1); } return value; };
+  const link = w.procFs.readlinkSync;
+  w.procFs.readlinkSync = p => { if (state.fired) state.after.push(p); return link(p); };
+  assert.equal(observe(w).uncertain, true);
+  assert.deepEqual(state.after, []);
+});
