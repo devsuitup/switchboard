@@ -345,3 +345,17 @@ for (const offset of [0, 1]) {
     assert.deepEqual(state.after, []);
   });
 }
+for (const offset of [0, 1]) {
+  test(`an observation already expired on entry (deadline + ${offset}) performs no I/O`, t => {
+    const w = createWorld(t); let calls = 0;
+    for (const object of [w.descriptorFs, w.procFs]) {
+      for (const name of Object.keys(object)) {
+        const original = object[name];
+        if (typeof original === 'function') object[name] = (...args) => { calls++; return original(...args); };
+      }
+    }
+    w.setClock(w.deadline + offset);
+    assert.equal(observe(w).uncertain, true);
+    assert.equal(calls, 0);
+  });
+}
