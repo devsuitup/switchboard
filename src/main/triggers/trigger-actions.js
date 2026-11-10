@@ -321,6 +321,7 @@ async function executeStop(trigger, execution) {
   const before = own(trigger, 'before');
   let effects = { ...evidence }, pinned, entry, session, pty, generation, tabKey, ready, writerIdentity;
   let releaseSession, releaseTab, stopRequested = false, noteFinished = false;
+  const noteEntry = {};
   const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, ...extra });
   const bound = read => boundedRead(read, { now, deadline });
   const pause = ms => new Promise(resolve => setTimeout(resolve, Math.max(0, Math.min(ms, deadline - now()))));
@@ -358,7 +359,7 @@ async function executeStop(trigger, execution) {
     const status = pinned.ctx.getCliStatus?.(id);
     if (status?.kind === 'schedule') reject('scheduled session is not supported');
     if (status?.kind === 'bg') reject('background session is not supported');
-    const staleBusy = completion?.source === 'transcript' && status
+    let staleBusy = completion?.source === 'transcript' && status
       && status.statusUpdatedAt === completion.statusUpdatedAt && status.status === completion.status;
     if (staleBusy) {
       const turn = pinned.ctx.getTranscriptTurn?.(id);
@@ -367,6 +368,17 @@ async function executeStop(trigger, execution) {
       if (!turn?.closed || turn.closedAt !== completion.closedAt || turn.lastEntryAt !== completion.lastEntryAt
         || !original || !current || original.dev !== String(current.dev) || original.ino !== String(current.ino) || original.filePath !== current.filePath
         || !completion.busy && pinned.ctx.isSessionBusy(id)) reject('session busy');
+    }
+    let awaitingDescriptor = false;
+    if (completion?.source === 'busy_flag') {
+      if (pinned.ctx.isSessionBusy(id)) reject('session busy');
+      if (status && ['busy', 'shell'].includes(status.status)
+        && Number.isFinite(status.statusUpdatedAt) && status.statusUpdatedAt <= completion.completedAt) {
+        staleBusy = true;
+        const { transcriptOwnEntryAt, transcriptShowsTurnOver } = require('./trigger-watcher');
+        const ownAt = transcriptOwnEntryAt(pinned.ctx, id, completion.enterAt, trigger.before, noteEntry);
+        awaitingDescriptor = ownAt === null || !transcriptShowsTurnOver(pinned.ctx, id, status, ownAt, now(), false);
+      }
     }
     if (!staleBusy && (pinned.ctx.isSessionBusy(id) || status?.status === 'busy')) reject('session busy');
     if (!staleBusy && status?.status === 'waiting') reject('session waiting on a dialog');
@@ -379,7 +391,7 @@ async function executeStop(trigger, execution) {
       reject('session composer unavailable', { detail: describeBusyComposer(null, quietMs, now()) });
     }
     if (composer.pending > 0) reject('session has unsubmitted input', { detail: describeBusyComposer(composer, quietMs, now()) });
-    return { remaining: Math.max(0, (composer.lastInputAt || 0) + quietMs - now()), composer };
+    return { remaining: Math.max(awaitingDescriptor ? 25 : 0, (composer.lastInputAt || 0) + quietMs - now()), composer };
   }
   function marker(phase) {
     try {
@@ -437,7 +449,7 @@ async function executeStop(trigger, execution) {
     if (!releaseTab) reject('session action timed out');
     check(); target();
     ready = await deps.broker.waitForReady(deadline);
-    if (!ready?.ok) reject(ready?.reason || 'renderer not ready');
+    if (!ready?.ok) reject(before && now() >= deadline ? 'note step not finished' : ready?.reason || 'renderer not ready');
     pinned.binding.validateAction = () => {
       const state = ready.validate();
       if (!state.ok) throw Object.assign(new Error(state.reason), { deliveryRefusal: true });
@@ -479,6 +491,8 @@ async function executeStop(trigger, execution) {
     }
     while (true) {
       check(before ? 'note step not finished' : 'session input not quiet');
+      target(true);
+      if (session.exited) return { ...fail(null), ok: true, outcome: 'closed', reason: null };
       const state = sample(effects.delivery?.final_turn);
       if (state.remaining > 0) { await pause(Math.min(25, state.remaining)); continue; }
       check(before ? 'note step not finished' : 'session input not quiet');

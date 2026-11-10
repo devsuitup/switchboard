@@ -930,7 +930,8 @@ function waitForBusyFall(sessionId, ctx, deadlineMs, enterAtMs, turnObserved = f
     } else if (hasRisen) {
       if (idleSince === null) idleSince = now;
       if (now - idleSince >= settleMs) {
-        return resolve({ timedOut: false, sessionExited: false, waited_ms: now - start, source: 'busy_flag' });
+        return resolve({ timedOut: false, sessionExited: false, waited_ms: now - start, source: 'busy_flag',
+          ...(requireCompleted ? { completedAt: now, enterAt: enterAtMs } : {}) });
       }
     } else if (!requireCompleted && now >= riseDeadline) {
       // Never rose within the bound: turn never observed, not an error.
@@ -2273,4 +2274,4 @@ function start(ctx) {
   };
 }
 
-module.exports = { deliverSingle, start, getTriggersDir, getQuietMs, describeBusyComposer, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };
+module.exports = { deliverSingle, start, getTriggersDir, getQuietMs, describeBusyComposer, weakestSubmitted, SUBMITTED_RANK, normalizeCwd, submitWithVerify, waitForCliIdleAfter, waitForBusyFall, transcriptOwnEntryAt, transcriptShowsTurnOver, isCompactCommand, REASON_REMOTE_NO_FRESH_PULL, REASON_REMOTE_SHELL };

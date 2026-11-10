@@ -230,10 +230,90 @@ test('the sidebar IPC and trigger lifecycle use the same normal-session stop bac
   const begin = source.indexOf("ipcMain.handle('stop-session'");
   vm.runInContext(source.slice(begin, source.indexOf('\n});', begin) + 4), context, { filename });
   const failed = handler({}, ID);
-  assert.equal(failed.ok, false, 'a rejected kill request must not look successful');
-  assert.equal(session.stopRequested, true); assert.equal(kills.length, 1);
+  assert.equal(failed.ok, true, 'the sidebar preserves its successful IPC reply even when kill reports false');
+  assert.equal(session.stopRequested, false, 'a genuine failed request must not label a later natural exit Stopped');
+  assert.equal(kills.length, 1);
   assert.match(source.slice(source.indexOf('function triggerLifecycleDeps'), source.indexOf('async function validateTriggerOpen')),
     /stopLocalSession\(session, tabKey, killPty\)/);
+});
+
+test('a pending real kill is successful for a second trigger stop without another kill', async t => {
+  const { killPty } = require('../src/main/terminals/pty-ops');
+  const { stopLocalSession } = require('../src/main/terminals/stop-session');
+  const f = fixture(t); let calls = 0;
+  f.session.pty.kill = () => { calls++; };
+  assert.equal(stopLocalSession(f.session, ID, killPty).ok, true);
+  f.lifecycle.stop = (session, key) => stopLocalSession(session, key, killPty);
+  f.start(); await f.flush();
+  assert.equal(f.done(), false, 'a pending kill must wait for pinned exit, not refuse');
+  f.session.exited = true;
+  assert.equal((await f.finish()).outcome, 'closed'); assert.equal(calls, 1);
+});
+
+for (const kind of ['false', 'throw']) {
+  test(`genuine first kill ${kind} clears Stop attribution before a natural exit`, async t => {
+    const { stopLocalSession } = require('../src/main/terminals/stop-session');
+    const { processExitLabel } = require('../public/process-exit');
+    const f = fixture(t);
+    f.lifecycle.stop = (session, key) => stopLocalSession(session, key, () => {
+      if (kind === 'throw') throw new Error('dead PTY');
+      return false;
+    });
+    f.start(); assert.equal((await f.finish()).reason, 'session stop failed');
+    assert.equal(processExitLabel({ exitCode: 0, stopped: !!f.session.stopRequested }), 'Exited (code 0)',
+      'a rejected kill must not turn a later natural exit into Stopped');
+  });
+}
+
+for (const status of ['busy', 'shell']) {
+  test(`OSC completion waits for stale ${status} descriptor to become idle without a second note`, async t => {
+    const f = fixture(t, { onEnter: () => {
+      const stamp = Date.now();
+      setTimeout(() => { f.session._cliBusy = false; f.setStatus(status, stamp); }, 10);
+      setTimeout(() => { f.setStatus('idle'); }, 400);
+    }, onKill: session => { session.exited = true; } });
+    f.start({ before: 'Save a note' });
+    for (let i = 0; i < 30; i++) await f.tick(10);
+    assert.equal(f.done(), false, 'stale descriptor activity is not a new turn');
+    assert.equal(f.kills(), 0, 'wait for descriptor or transcript confirmation');
+    const r = await f.finish();
+    assert.equal(r.outcome, 'closed', JSON.stringify(r)); assert.equal(r.delivery.final_turn.source, 'busy_flag');
+    assert.equal(f.kills(), 1); assert.deepEqual(f.writes, ['Save a note', '\r']);
+  });
+}
+
+test('stop before readiness deadline reports the unfinished note without writing', async t => {
+  const f = fixture(t, { timeout: 60 });
+  f.lifecycle.broker.waitForReady = () => new Promise(resolve => setTimeout(() => resolve({ ok: false, reason: 'renderer not ready' }), 60));
+  f.start({ before: 'Save a note' });
+  const r = await f.finish();
+  assert.equal(r.reason, 'note step not finished'); assert.equal(f.kills(), 0); assert.deepEqual(f.writes, []);
+});
+
+for (const newer of ['busy stamp', 'busy rise', 'no update', 'equal stamp']) {
+  test(`OSC completed note with ${newer} rechecks the same descriptor before stop`, async t => {
+    const f = fixture(t, { onEnter: () => {
+      setTimeout(() => { f.session._cliBusy = false; }, 10);
+    } });
+    const save = f.execution.saveMarker;
+    f.execution.saveMarker = value => {
+      save(value);
+      if (value.phase !== 'note-delivered') return;
+      if (newer === 'busy stamp') f.setStatus('busy', Date.now() + 1);
+      if (newer === 'busy rise') f.session._cliBusy = true;
+      if (newer === 'equal stamp') f.setStatus('busy', value.delivery.final_turn.completedAt);
+    };
+    f.start({ before: 'Save a note' }); const r = await f.finish();
+    assert.equal(r.reason, newer === 'no update' || newer === 'equal stamp' ? 'note step not finished' : 'session busy');
+    assert.equal(f.kills(), 0); assert.deepEqual(f.writes, ['Save a note', '\r']);
+  });
+}
+
+test('natural exit during a bare quiet wait closes the pinned target without a kill', async t => {
+  const f = fixture(t); f.input('x\x7f'); f.start(); await f.flush();
+  f.session.exited = true; f.map.delete(ID);
+  const r = await f.finish();
+  assert.equal(r.outcome, 'closed'); assert.equal(f.kills(), 0); assert.deepEqual(f.writes, []);
 });
 
 for (const newer of ['turn', 'busy flag', 'none']) {

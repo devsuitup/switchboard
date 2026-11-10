@@ -2098,7 +2098,8 @@ ipcMain.handle('stop-session', (_event, sessionId) => {
     detachPty(session, sessionId);
     return { ok: true, detached: true };
   }
-  return require('./src/main/terminals/stop-session').stopLocalSession(session, sessionId, killPty);
+  require('./src/main/terminals/stop-session').stopLocalSession(session, sessionId, killPty);
+  return { ok: true };
 });
 
 const REMOTE_STOP_SYNC_TIMEOUT_MS = 20000;

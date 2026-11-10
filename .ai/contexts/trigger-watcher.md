@@ -8,7 +8,7 @@ produce `outcome: 'refused'` with `PROJECT_OPERATION_ERROR` as the reason,
 working-set write. The renderer cleans failed placeholders and replies so the
 broker retires the consumed permit; the action refunds its new-session rate
 reservation. Existing-session reattachment and legacy delivery start no process
-and remain exempt. Stop still refuses as unimplemented.
+and remain exempt. Stop is implemented without spawning and remains exempt.
 
 Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 `src/main/triggers/` (ADR 0005, step 8). The watcher's lazy tab mutex import is
@@ -148,7 +148,22 @@ Both the sidebar IPC and the trigger call `stopLocalSession` in
 `killPty`. Attach detachment remains separate. A kill request is not closure:
 the trigger waits for the pinned object's `exited` flag. Timeout returns
 `session stop not confirmed`, `uncertain:true`; a note timeout never initiates
-termination. A natural exit after confirmed note completion counts as closed.
+termination. A natural exit during a bare quiet wait or after confirmed note
+completion counts as closed, provided the pinned generation and PTY still match.
+
+The sidebar retains its historical `{ok:true}` reply for a normal open session,
+including a failed kill request. The trigger treats a genuine first-request
+failure as `session stop failed`. Both callers accept a PTY already in
+`killedPtys` as termination pending without invoking kill again. A genuine
+failure clears `stopRequested` so a later natural exit is not labelled Stopped.
+
+A completed OSC busy fall records its completion and Enter timestamps. A
+busy/shell descriptor stamped at or before that completion is stale: stop waits
+within the original deadline for descriptor idle or the note's own closed,
+quiet transcript turn. It never sends the note again. A later busy stamp or
+busy rise refuses new activity. Composer, ownership and target checks remain
+active during this wait. Expiration while waiting for renderer readiness with
+`before` returns `note step not finished`; closing keeps its dedicated reason.
 
 Markers record the claimed/prompt-attempted/note-delivered/note-finished and
 stop-requested phases. Confirmed kill requests set `stop_requested:true`;

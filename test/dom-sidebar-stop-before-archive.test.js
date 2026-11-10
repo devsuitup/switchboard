@@ -14,6 +14,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const { createRequire } = require('node:module');
 
 const { setupSidebarDom, answerChoiceDialog } = require('./dom-setup');
 
@@ -59,6 +63,31 @@ function remoteSession(id, alias, alive, extra = {}) {
 
 function headerFor(ctx, project) {
   return ctx.document.getElementById('ph-' + ctx.sidebar.folderId(project.projectPath, project.remoteAlias));
+}
+
+for (const failed of [false, true]) {
+  test(`sidebar second Stop and Archive preserve success while exit is pending (kill throws: ${failed})`, async () => {
+    const { killPty } = require('../src/main/terminals/pty-ops');
+    const filename = path.resolve(__dirname, '../main.js');
+    const source = fs.readFileSync(filename, 'utf8'); let handler, kills = 0;
+    const entry = { generation: 7, pty: { kill() { kills++; if (failed) throw new Error('already dead'); } } };
+    const context = vm.createContext({ require: createRequire(filename), activeSessions: new Map([['s1', entry]]),
+      ipcMain: { handle: (_name, fn) => { handler = fn; } }, killPty, detachPty() {} });
+    const begin = source.indexOf("ipcMain.handle('stop-session'");
+    vm.runInContext(source.slice(begin, source.indexOf('\n});', begin) + 4), context, { filename });
+    const ctx = setupSidebarDom();
+    try {
+      const calls = installRecordingApi(ctx, { stopSession: id => handler({}, id) });
+      assert.equal(handler({}, 's1').ok, true, 'first sidebar Stop retains its previous IPC contract');
+      assert.equal(handler({}, 's1').ok, true, 'second sidebar Stop accepts termination pending');
+      const row = localSession('s1');
+      ctx.window.sessionMap.set('s1', row); ctx.window.activePtyIds.add('s1');
+      ctx.sidebar.renderProjects([{ projectPath: row.projectPath, sessions: [row] }], true);
+      await ctx.document.querySelector('.session-archive-btn').onclick(new ctx.window.MouseEvent('click'));
+      assert.equal(calls.filter(c => c.method === 'archiveSession').length, 1, 'Archive must not abort while termination is pending');
+      assert.equal(kills, 1, 'the PTY kill is not repeated');
+    } finally { ctx.destroy(); }
+  });
 }
 
 // ---------------------------------------------------------------------------
