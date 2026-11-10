@@ -3,6 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const { performance } = require('node:perf_hooks');
 const { createProjectDeletePlanner } = require('../src/main/projects/project-delete-plan');
 
 const projectPath = path.posix.resolve('/planning-fixture');
@@ -291,4 +293,191 @@ test('inherited options cannot conceal unknown own fields', async () => {
   const inherited = Object.assign(Object.create(options), { one: false, two: false, three: false, four: false, five: false });
   const reply = await f.planner.preview(f.request({ options: inherited }));
   assert.equal(reply.code, 'INVALID_REQUEST', 'options must contain exactly the five own boolean fields');
+});
+
+const running = { state: 'running', source: 'descriptor', targetId: 'controlled' };
+const hasRefusal = (plan, code) => plan.refusals.some(row => row.code === code);
+
+test('large synchronous discovery yields and refuses within its deadline', async t => {
+  const f = fixture();
+  f.state.snapshot.projects = [f.state.snapshot.projects[0]];
+  f.state.ownership.groups = Array.from({ length: 4000 }, (_, i) => group(`g-${i}`, null, { projectPath: `${projectPath}/child-${i}` }));
+  const original = fs.realpathSync.native;
+  t.after(() => { fs.realpathSync.native = original; });
+  fs.realpathSync.native = value => {
+    const start = performance.now();
+    while (performance.now() - start < 1) { /* bounded fake filesystem latency */ }
+    return value;
+  };
+  const start = performance.now();
+  const reply = await createProjectDeletePlanner({ ...f.deps, timeoutMs: 100 }).preview(f.request());
+  const elapsed = performance.now() - start;
+  assert.equal(reply.code, 'DISCOVERY_TIMEOUT', 'slow synchronous inventory must time out');
+  assert.ok(elapsed < 350, `deadline must yield within a small margin, took ${elapsed}ms`);
+});
+
+test('local canonicalization calls realpath once per distinct path per preview', async t => {
+  const f = fixture();
+  f.state.ownership.members = Array.from({ length: 100 }, (_, i) => member(`p-${i}`));
+  const calls = new Map();
+  const original = fs.realpathSync.native;
+  t.after(() => { fs.realpathSync.native = original; });
+  fs.realpathSync.native = value => { calls.set(value, (calls.get(value) || 0) + 1); return value; };
+  await planFor(f);
+  assert.deepEqual([...calls.values()], [1], 'each distinct local path is canonicalized once');
+  calls.clear();
+  await planFor(f);
+  assert.deepEqual([...calls.values()], [1], 'memo belongs to this planning call');
+});
+
+for (const kind of ['member', 'tab', 'job']) test(`selected folder with conflicting ${kind} ownership refuses instead of disappearing`, async () => {
+  const f = fixture();
+  const row = member('conflict', null, { projectPath: `${projectPath}/sub` });
+  if (kind === 'member') f.state.ownership.members.push(row);
+  else f.state.runtime[`${kind}s`].push(row);
+  assert.ok(hasRefusal(await planFor(f), 'MEMBER_OWNERSHIP'), 'selected-folder conflict must refuse');
+});
+
+test('membership survives stop and volatile transcript evidence while fingerprint tracks liveness', async () => {
+  const f = fixture();
+  f.state.ownership.members = [member('live', null, { liveness: running, sessionFile: `${projectPath}/live.jsonl`, size: 10, mtimeMs: 1 })];
+  const before = await planFor(f);
+  f.state.ownership.members[0].liveness = { state: 'stopped', source: 'descriptor' };
+  const stopped = await planFor(f);
+  assert.equal(stopped.membershipDigest, before.membershipDigest, 'stopping must not change membership');
+  assert.notEqual(stopped.fingerprint, before.fingerprint, 'stopping must change fingerprint');
+  Object.assign(f.state.ownership.members[0], { size: 20, mtimeMs: 2, fileEvidence: { size: 20, mtimeMs: 2 } });
+  assert.equal((await planFor(f)).membershipDigest, before.membershipDigest, 'volatile file evidence is not membership');
+  f.state.ownership.members[0].partId = 'replacement';
+  assert.notEqual((await planFor(f)).membershipDigest, before.membershipDigest, 'part identity is membership');
+});
+
+test('transcript size and mtime never change membership', async () => {
+  const f = fixture();
+  f.state.ownership.members = [member('file', null, { sessionFile: `${projectPath}/file.jsonl`, size: 10, mtimeMs: 1 })];
+  const before = await planFor(f);
+  Object.assign(f.state.ownership.members[0], { size: 20, mtimeMs: 2, fileEvidence: { size: 20, mtimeMs: 2 } });
+  assert.equal((await planFor(f)).membershipDigest, before.membershipDigest, 'transcript size and mtime are not membership');
+});
+
+test('inventory processing lets event loop timers fire', async () => {
+  const f = fixture();
+  f.state.ownership.members = Array.from({ length: 2000 }, (_, i) => member(`p-${i}`));
+  let fired = false;
+  const timer = setTimeout(() => { fired = true; }, 0);
+  try {
+    await planFor(f);
+    assert.equal(fired, true, 'inventory batches must yield to deadline timers');
+  } finally { clearTimeout(timer); }
+});
+
+for (const kind of ['tab', 'job']) test(`duplicate ${kind} ids refuse`, async () => {
+  const f = fixture();
+  f.state.runtime[`${kind}s`] = [member('duplicate'), member('duplicate')];
+  assert.ok(hasRefusal(await planFor(f), 'MEMBER_OWNERSHIP'), 'runtime ids must be unique');
+});
+
+for (const flag of [{ scheduleId: 'schedule' }, { background: true }, { jobId: 'job' }]) test(`running member ${Object.keys(flag)[0]} requires consent`, async () => {
+  const f = fixture();
+  f.state.ownership.members = [member('background', null, { ...flag, liveness: running })];
+  const plan = await planFor(f);
+  assert.ok(hasRefusal(plan, 'BACKGROUND_CONSENT'), 'member background markers require consent');
+  assert.equal(plan.stops[0].excluded, true);
+  assert.equal(hasRefusal(await planFor(f, { options: { ...options, stopBackgroundJobs: true } }), 'BACKGROUND_CONSENT'), false);
+});
+
+test('sort order uses code units', async () => {
+  const f = fixture();
+  f.state.ownership.members = [member('a'), member('Z')];
+  assert.deepEqual((await planFor(f)).members.map(row => row.id), ['Z', 'a'], 'canonical sorting uses code units');
+});
+
+test('duplicate known canonical identities select deterministically and check every settings spelling', async t => {
+  const f = fixture();
+  const other = `${projectPath}-link`;
+  const original = fs.realpathSync.native;
+  t.after(() => { fs.realpathSync.native = original; });
+  fs.realpathSync.native = value => value === path.resolve(other) ? path.resolve(projectPath) : value;
+  f.state.snapshot.projects = [identity(null), identity(null, { projectPath: other }), identity('alpha', { projectPath: other.replace(/\\/g, '/') })];
+  const before = await planFor(f);
+  assert.equal(before.categories.settings.available, false, 'all selected spellings protect shared settings');
+  f.state.snapshot.projects.reverse();
+  const after = await planFor(f);
+  assert.equal(after.project.entry, before.project.entry, 'known-row order must not select identity spelling');
+  assert.equal(after.fingerprint, before.fingerprint);
+});
+
+test('known-row permutation cannot choose a different local entry spelling', async t => {
+  const f = fixture();
+  const original = fs.realpathSync.native;
+  t.after(() => { fs.realpathSync.native = original; });
+  fs.realpathSync.native = () => path.resolve(projectPath);
+  f.state.snapshot.projects = [identity(null), identity(null, { projectPath: `${projectPath}-link` })];
+  const before = await planFor(f);
+  f.state.snapshot.projects.reverse();
+  assert.deepEqual((await planFor(f)).project, before.project, 'known-row permutations must select the same project entry');
+});
+
+test('request is cloned before validating accessor-backed options', async () => {
+  const f = fixture();
+  let reads = 0;
+  const inputOptions = { ...options, get sessions() { return ++reads > 1 ? 'unsafe' : false; } };
+  const reply = await f.planner.preview(f.request({ options: inputOptions }));
+  assert.equal(reply.ok, true);
+  assert.equal(reply.plan.categories.sessions.selected, false, 'only validated cloned values enter the plan');
+  assert.equal(reads, 1, 'clone request once before validation');
+});
+
+test('Windows case-variant local paths share identity', { skip: process.platform !== 'win32' }, async t => {
+  const f = fixture();
+  const original = fs.realpathSync.native;
+  t.after(() => { fs.realpathSync.native = original; });
+  fs.realpathSync.native = value => value;
+  const result = await f.planner.preview(f.request({ projectPath: projectPath.toUpperCase() }));
+  assert.equal(result.ok, true, 'Windows local identity must fold case');
+});
+
+test('undeclared remote host refuses even with valid mapping', async () => {
+  const f = fixture(); f.state.snapshot.declaredHosts = [];
+  assert.equal((await f.planner.preview(f.request({ folderKey: 'alpha::group-a' }))).code, 'IDENTITY_UNAVAILABLE', 'undeclared host must refuse');
+});
+
+test('AC8 foreign running jobs never become stop targets', async () => {
+  const f = fixture();
+  f.state.runtime.jobs = [member('foreign-job', 'alpha', { liveness: running })];
+  const plan = await planFor(f, { options: { ...options, stopBackgroundJobs: true } });
+  assert.deepEqual(plan.stops, [], 'other-host job must never be stopped');
+});
+
+test('missing ownership explicitly refuses', async () => {
+  const f = fixture(); const row = member(); delete row.alias; f.state.ownership.members = [row];
+  assert.ok(hasRefusal(await planFor(f), 'OWNERSHIP_UNKNOWN'), 'unknown host ownership must refuse');
+});
+
+for (const extra of [{ verified: false }, { runtime: 'mystery' }]) test(`selected group ${Object.keys(extra)[0]} is verified`, async () => {
+  const f = fixture(); Object.assign(f.state.ownership.groups[0], extra);
+  assert.ok(hasRefusal(await planFor(f), 'GROUP_OWNERSHIP'), 'selected group ownership and runtime must be verified');
+});
+
+test('unverified child group never becomes a kept verified group', async () => {
+  const f = fixture();
+  f.state.ownership.groups.push(group('child', null, { projectPath: `${projectPath}/child`, parentProjectPath: projectPath, verified: false }));
+  assert.equal((await planFor(f)).groups.some(row => row.folderKey === 'child'), false, 'kept child groups require verification');
+});
+
+test('duplicate member ids explicitly refuse', async () => {
+  const f = fixture(); f.state.ownership.members = [member(), member()];
+  assert.ok(hasRefusal(await planFor(f), 'MEMBER_OWNERSHIP'), 'duplicate member ids must refuse');
+});
+
+for (const extra of [{ verified: false }, { linked: true }]) test(`schedule ${Object.keys(extra)[0]} ownership refuses`, async () => {
+  const f = fixture();
+  f.state.schedules.schedules = [identity(null, { id: 'schedule', path: '/schedule.md', verified: true, readable: true, ...extra })];
+  assert.ok(hasRefusal(await planFor(f), 'SCHEDULE_OWNERSHIP'), 'schedule verification and links must refuse');
+});
+
+test('revalidation of identical refused plans always returns same false', async () => {
+  const f = fixture(); f.state.ownership.members = [member('uncertain', null, { present: false })];
+  const plan = await planFor(f);
+  assert.equal((await f.planner.revalidate(plan)).same, false, 'a matching refused fingerprint cannot authorize execution');
 });

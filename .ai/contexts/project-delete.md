@@ -74,6 +74,13 @@ port produces DISCOVERY_UNAVAILABLE unless it supplies a specific error code;
 incomplete, stale, over-budget and timed-out snapshots cannot yield a plan.
 Snapshots/results are cloned so sorting and augmentation do not mutate ports.
 There are no write, stop, token, gate-hold or persistence dependencies.
+The input is cloned before validation, so accessors cannot replace validated
+values. Each planning call memoizes local realpath by distinct resolved path;
+ownership and cwd checks reuse that memo. Inventory processing yields via
+setImmediate after at most 32 rows or 8 milliseconds of work and checks the
+deadline before each row and after yielding. One synchronous filesystem call
+cannot be interrupted; adapters must still bound individual calls and record
+sizes. Sort keys are computed once per row and compared by code units.
 
 ## Ownership and evidence records
 
@@ -96,9 +103,11 @@ Members carry `id`, `conversationId`, `partId`, `subagentId:null|string`,
 `folderKey`, `cwd`, `runtime`, `verified`, `indexed`, `present`, and `liveness`.
 Include additional exact transcript/session IDs, parent IDs, archived state,
 sessionFile and ownership/file identity evidence when applicable; raw record
-fields survive in the plan and digest. Members must match their verified
+fields survive in the plan and fingerprint. Members must match their verified
 backing group's runtime, exact project/cwd and host. Missing/unindexed/linked
 or unsupported members refuse; they are not silently dropped from a count.
+Any raw member, tab or job claiming a selected folder but failing exact
+host/path ownership produces MEMBER_OWNERSHIP instead of silently disappearing.
 
 Tabs and jobs carry unique `id`, `runtime` (also terminal for tabs), `verified`,
 `liveness`, and any `name`, `conversationId`, `jobId`, `scheduleId`, `background`
@@ -112,6 +121,9 @@ including Codex without a reliable descriptor, stays unknown. Running external
 processes refuse. Live controlled targets are listed in stops with exact
 evidence. Background jobs without fresh stopBackgroundJobs consent are named,
 marked excluded and cause a refusal. No actual stop occurs here.
+The background classification also includes running members/tabs with
+background:true, jobId or scheduleId. Duplicate tab/job IDs cause
+MEMBER_OWNERSHIP, as duplicate member IDs do.
 
 Schedules carry unique `id` and `path`, `verified`, `readable`, `enabled`, optional
 `linked`, and `problems`. Keep schedule/run identities and ownership/file
@@ -129,15 +141,32 @@ fingerprint, revision. All detail is retained beyond ten entries.
 ProjectIdentity is `{key, entry, alias, projectPath}`. The key binds canonical
 host/path; entry follows existing local or alias-qualified hidden-entry spelling.
 
-membershipDigest binds the full scoped group/member/tab/job/schedule inventory
-and ownership, independently of revision. Fingerprint also binds the five
-options, exact stop identities, category capability and warning/refusal state.
-Inventory ordering and object-key ordering are canonicalized. revision is only
-the writer fence; it cannot stand in for membership or process evidence.
+membershipDigest binds identity and ownership only, independently of revision.
+Its project is canonical alias/projectPath, without the display entry spelling.
+For each group/member/tab/job/schedule it includes alias and canonical
+projectPath, plus these fields when present: id, folderKey, runtime,
+conversationId, partId, subagentId, parentSessionId, sessionId, jobId, scheduleId,
+sessionFile, path (including schedule id/path), effect and kind, and canonical
+cwd/parentProjectPath. These are the complete field allowlist. It excludes
+liveness, stop evidence/targets, names, verification flags and volatile file
+evidence such as size/mtime, including nested file evidence. A4c can therefore
+compare membership after stopping processes without interpreting an expected
+liveness change as new membership.
+
+Fingerprint binds membershipDigest, the full scoped raw group/member/tab/job/
+schedule records (including liveness and file evidence), the five options,
+exact stop identities/evidence, categories and warning/refusal state. Stopping
+changes fingerprint while preserving membershipDigest. Inventory and object
+key ordering are canonicalized; identity projections are sorted independently
+of volatile raw fields. revision is only the writer fence and is excluded from
+both hashes. It cannot stand in for membership or process evidence.
 
 Shared path-only settings keys are unavailable when another known host has the
 same path spelling after separator/trailing normalization. Selecting their
-erasure produces a refusal. Otherwise sessions means discard versus archive,
+erasure produces a refusal. When multiple known rows share one canonical
+identity, canonical row sorting selects the display entry deterministically,
+and every selected spelling participates in the shared-settings check.
+Otherwise sessions means discard versus archive,
 and settings means delete versus keep. Physical files, memory, .work-files,
 worktrees, project directory and branches stay kept. Retained transcripts can
 restore transcript titles; retained schedules can reactivate on re-add. All

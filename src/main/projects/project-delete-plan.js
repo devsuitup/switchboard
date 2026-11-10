@@ -11,21 +11,25 @@ const isRecord = value => value !== null && typeof value === 'object' && !Array.
 const text = value => typeof value === 'string' && value.length > 0 && !value.includes('\0');
 const fail = (code, error) => Object.assign(new Error(error), { code });
 
-function canonicalPath(value, alias) {
+function canonicalPath(value, alias, memo = new Map()) {
   if (!text(value)) throw fail('IDENTITY_UNAVAILABLE', 'A known absolute project path is required.');
   if (alias !== null) {
     if (!isValidAlias(alias) || !path.posix.isAbsolute(value)) throw fail('IDENTITY_UNAVAILABLE', 'Remote identity is unavailable.');
     return path.posix.normalize(value).replace(/\/$/, '') || '/';
   }
   if (!path.isAbsolute(value)) throw fail('IDENTITY_UNAVAILABLE', 'A local absolute path is required.');
-  const normalized = normalizeProjectPath(path.resolve(value));
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  const absolute = path.resolve(value);
+  if (!memo.has(absolute)) {
+    const normalized = normalizeProjectPath(absolute);
+    memo.set(absolute, process.platform === 'win32' ? normalized.toLowerCase() : normalized);
+  }
+  return memo.get(absolute);
 }
 
-function identity(value) {
+function identity(value, memo) {
   if (!isRecord(value) || !Object.hasOwn(value, 'alias')) throw fail('IDENTITY_UNAVAILABLE', 'Ownership must include an explicit host.');
   const alias = value.alias;
-  const projectPath = canonicalPath(value.projectPath, alias);
+  const projectPath = canonicalPath(value.projectPath, alias, memo);
   return { key: JSON.stringify([alias, projectPath]), entry: alias === null ? path.resolve(value.projectPath) : `${alias}::${projectPath}`, alias, projectPath };
 }
 
@@ -36,7 +40,7 @@ function stable(value) {
 }
 
 const digest = value => createHash('sha256').update(stable(value)).digest('hex');
-const ordered = values => values.sort((a, b) => stable(a).localeCompare(stable(b), 'en'));
+const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 
 function validateRequest(request) {
   if (!isRecord(request) || Object.keys(request).some(key => !['projectPath', 'folderKey', 'options'].includes(key))
@@ -49,18 +53,20 @@ function validateRequest(request) {
   }
 }
 
-function resolveProject(request, snapshot, boundKey) {
-  const known = snapshot.projects.map(row => ({ row, project: identity(row) }));
+async function resolveProject(request, snapshot, boundKey, memo, each, ordered) {
+  const known = [];
+  await each(snapshot.projects, row => { known.push({ row, project: identity(row, memo) }); });
+  await ordered(known);
   let matches;
   if (boundKey !== undefined) {
     matches = known.filter(item => item.project.key === boundKey);
   } else if (request.folderKey === undefined) {
-    const key = identity({ projectPath: request.projectPath, alias: null }).key;
+    const key = identity({ projectPath: request.projectPath, alias: null }, memo).key;
     matches = known.filter(item => item.project.key === key);
   } else {
     const mappings = known.filter(item => Array.isArray(item.row.folderKeys) && item.row.folderKeys.includes(request.folderKey));
     const hintedAlias = parseFolderKey(request.folderKey).alias;
-    const key = identity({ projectPath: request.projectPath, alias: hintedAlias }).key;
+    const key = identity({ projectPath: request.projectPath, alias: hintedAlias }, memo).key;
     if (mappings.some(item => item.project.alias !== hintedAlias || item.project.key !== key)) throw fail('IDENTITY_UNAVAILABLE', 'Folder and path hints conflict.');
     matches = mappings.filter(item => item.project.key === key);
   }
@@ -78,11 +84,32 @@ function createProjectDeletePlanner(deps) {
     let timer;
     const controller = new AbortController();
     try {
-      validateRequest(input);
       const request = structuredClone(input);
+      validateRequest(request);
       const budget = { signal: controller.signal, limit: maxItems, deadline: Date.now() + timeoutMs };
       const expired = () => {
         if (controller.signal.aborted || Date.now() >= budget.deadline) throw fail('DISCOVERY_TIMEOUT', 'Planning timed out; retry after indexing settles.');
+      };
+      const memo = new Map();
+      let batchCount = 0, batchStart = Date.now();
+      const each = async (values, visit) => {
+        for (const value of values) {
+          expired();
+          visit(value);
+          if (++batchCount >= 32 || Date.now() - batchStart >= 8) {
+            await new Promise(resolve => setImmediate(resolve));
+            expired();
+            batchCount = 0; batchStart = Date.now();
+          }
+        }
+      };
+      const ordered = async values => {
+        const keyed = [];
+        await each(values, value => { keyed.push({ value, key: stable(value) }); });
+        keyed.sort((a, b) => compare(a.key, b.key));
+        for (let i = 0; i < keyed.length; i++) values[i] = keyed[i].value;
+        expired();
+        return values;
       };
       let itemCount = 0;
       const items = value => {
@@ -102,7 +129,7 @@ function createProjectDeletePlanner(deps) {
         complete(snapshot);
         if (snapshot.initialScanComplete !== true || !text(snapshot.revision)) throw fail('SNAPSHOT_INCOMPLETE', 'Wait for the normal initial index and writer fence.');
         items(snapshot.projects); items(snapshot.declaredHosts);
-        const { project, known } = resolveProject(request, snapshot, boundKey);
+        const { project, known } = await resolveProject(request, snapshot, boundKey, memo, each, ordered);
         const ownership = structuredClone(await deps.discoverOwnership(project, { ...budget, snapshot }));
         expired(); complete(ownership);
         const rawGroups = items(ownership.groups), rawMembers = items(ownership.members);
@@ -117,49 +144,67 @@ function createProjectDeletePlanner(deps) {
         const refuse = (code, target, error) => refusals.push({ code, target, error });
         const own = row => {
           try {
-            const candidate = identity(row);
+            const candidate = identity(row, memo);
             return candidate.alias === project.alias && candidate.projectPath === project.projectPath;
           } catch {
             refuse('OWNERSHIP_UNKNOWN', row?.id || row?.folderKey || null, 'Resolve the missing host/path ownership before retrying.');
             return false;
           }
         };
-        for (const candidate of [...ownershipCandidates, ...scheduleCandidates, ...runtimeCandidates]) {
+        await each([...ownershipCandidates, ...scheduleCandidates, ...runtimeCandidates], candidate => {
           refuse('DISCOVERY_CANDIDATE', candidate.path || candidate.id || null, candidate.reason || 'Resolve the unindexed or unmappable candidate.');
-        }
+        });
         const groups = [];
-        for (const row of rawGroups) {
+        await each(rawGroups, row => {
           if (own(row)) groups.push({ ...row, effect: 'selected' });
           else if (row.alias === project.alias) {
             const parent = row.parentProjectPath || worktreeParentPath(row.projectPath?.replace(/\\/g, '/'));
-            if (parent && canonicalPath(parent, row.alias) === project.projectPath && row.verified === true) groups.push({ ...row, effect: 'kept' });
+            if (parent && canonicalPath(parent, row.alias, memo) === project.projectPath && row.verified === true) groups.push({ ...row, effect: 'kept' });
           }
-        }
+        });
         const selectedGroups = groups.filter(row => row.effect === 'selected');
         const folders = new Set();
-        for (const row of selectedGroups) {
+        const folderRuntimes = new Map();
+        await each(selectedGroups, row => {
           if (!text(row.folderKey) || row.verified !== true || !['claude', 'codex'].includes(row.runtime)
             || parseFolderKey(row.folderKey).alias !== project.alias || folders.has(row.folderKey)) {
             refuse('GROUP_OWNERSHIP', row.folderKey, 'Verify the unique cache group host/path/runtime.');
           }
           folders.add(row.folderKey);
-        }
-        for (const item of known.filter(item => item.project.key === project.key)) {
-          for (const folder of items(item.row.cacheFolderKeys || [])) {
+          folderRuntimes.set(row.folderKey, row.runtime);
+        });
+        const selectedKnown = known.filter(item => item.project.key === project.key);
+        for (const item of selectedKnown) {
+          await each(items(item.row.cacheFolderKeys || []), folder => {
             if (!folders.has(folder)) refuse('GROUP_MISSING', folder, 'Reconcile the missing backing cache group before retrying.');
-          }
+          });
         }
-        const members = rawMembers.filter(own), tabs = rawTabs.filter(own), jobs = rawJobs.filter(own), schedules = rawSchedules.filter(own);
+        const scoped = async (rows, checkFolder = true) => {
+          const result = [];
+          await each(rows, row => {
+            if (own(row)) result.push(row);
+            else if (checkFolder && folders.has(row.folderKey)) refuse('MEMBER_OWNERSHIP', row.id, 'Selected folder conflicts with this record host/path ownership.');
+          });
+          return result;
+        };
+        const members = await scoped(rawMembers), tabs = await scoped(rawTabs), jobs = await scoped(rawJobs), schedules = await scoped(rawSchedules, false);
         const memberIds = new Set();
-        for (const member of members) {
+        await each(members, member => {
           if (!text(member.id) || !text(member.conversationId) || !text(member.partId) || memberIds.has(member.id)
             || member.verified !== true || member.indexed !== true || member.present !== true || member.linked === true
-            || !folders.has(member.folderKey) || !selectedGroups.some(group => group.folderKey === member.folderKey && group.runtime === member.runtime)
+            || !folders.has(member.folderKey) || folderRuntimes.get(member.folderKey) !== member.runtime
             || parseFolderKey(member.folderKey).alias !== project.alias
-            || canonicalPath(member.cwd, project.alias) !== project.projectPath || !['claude', 'codex'].includes(member.runtime)) {
+            || canonicalPath(member.cwd, project.alias, memo) !== project.projectPath || !['claude', 'codex'].includes(member.runtime)) {
             refuse('MEMBER_OWNERSHIP', member.id, 'Reindex and verify this exact conversation part and folder ownership.');
           }
           memberIds.add(member.id);
+        });
+        for (const rows of [tabs, jobs]) {
+          const ids = new Set();
+          await each(rows, row => {
+            if (!text(row.id) || ids.has(row.id)) refuse('MEMBER_OWNERSHIP', row.id, 'Runtime target IDs must be unique.');
+            ids.add(row.id);
+          });
         }
         const stops = [];
         const inspectLiveness = (row, kind) => {
@@ -176,28 +221,28 @@ function createProjectDeletePlanner(deps) {
           if (evidence.source === 'external' || !text(evidence.targetId)) {
             refuse('EXTERNAL_PROCESS', target, 'Stop the external process and verify its exit.'); return;
           }
-          const background = kind === 'job' || evidence.source === 'job' || row.background === true || Boolean(row.jobId);
+          const background = kind === 'job' || evidence.source === 'job' || row.background === true || Boolean(row.jobId) || Boolean(row.scheduleId);
           const excluded = background && !request.options.stopBackgroundJobs;
           stops.push({ kind, id: target, name: row.name || target, runtime: row.runtime, alias: project.alias,
             projectPath: project.projectPath, conversationId: row.conversationId || null, jobId: row.jobId || (kind === 'job' ? target : null),
             scheduleId: row.scheduleId || null, targetId: evidence.targetId, evidence, excluded });
           if (excluded) refuse('BACKGROUND_CONSENT', target, 'Explicitly consent to stopping this named background job.');
         };
-        members.forEach(row => inspectLiveness(row, 'member'));
-        tabs.forEach(row => inspectLiveness(row, 'tab'));
-        jobs.forEach(row => inspectLiveness(row, 'job'));
+        await each(members, row => inspectLiveness(row, 'member'));
+        await each(tabs, row => inspectLiveness(row, 'tab'));
+        await each(jobs, row => inspectLiveness(row, 'job'));
         const scheduleIds = new Set(), schedulePaths = new Set();
-        for (const row of schedules) {
+        await each(schedules, row => {
           if (!text(row.id) || !text(row.path) || row.verified !== true || row.linked === true
             || scheduleIds.has(row.id) || schedulePaths.has(row.path)) refuse('SCHEDULE_OWNERSHIP', row.path, 'Verify this schedule identity and ownership.');
           scheduleIds.add(row.id); schedulePaths.add(row.path);
           if (row.readable !== true) refuse('SCHEDULE_UNREADABLE', row.path, 'Restore read access and retry; the matching file is kept.');
           if (row.problems?.length) warnings.push({ code: 'SCHEDULE_INVALID', target: row.path, problems: row.problems });
-        }
+        });
         const settingsPath = value => path.posix.normalize(value.replace(/\\/g, '/')).replace(/\/$/, '') || '/';
-        const selectedSettingsPath = settingsPath(known.find(item => item.project.key === project.key).row.projectPath);
+        const selectedSettingsPaths = new Set(selectedKnown.map(item => settingsPath(item.row.projectPath)));
         const sharedSettings = known.some(item => item.project.alias !== project.alias
-          && settingsPath(item.row.projectPath) === selectedSettingsPath);
+          && selectedSettingsPaths.has(settingsPath(item.row.projectPath)));
         if (sharedSettings && request.options.settings) refuse('SHARED_SETTINGS', project.projectPath, 'Another host uses this path-only settings key; keep settings.');
         const categories = {
           sessions: { selected: request.options.sessions, available: true, effect: request.options.sessions ? 'discard' : 'archive' },
@@ -210,9 +255,24 @@ function createProjectDeletePlanner(deps) {
         warnings.push({ code: 'RETAINED_TRANSCRIPTS', error: 'Retained transcripts can restore transcript titles on re-add even when app names are discarded.' });
         if (schedules.length) warnings.push({ code: 'SCHEDULE_REACTIVATION', error: 'Kept schedule files may reactivate when this project is re-added.' });
         if (project.alias !== null) warnings.push({ code: 'REMOTE_FILES_KEPT', error: 'All remote server files are kept.' });
-        for (const list of [groups, members, tabs, stops, schedules, warnings, refusals]) ordered(list);
-        const membershipDigest = digest({ project, groups, members, tabs, jobs: ordered(jobs), schedules });
-        const fingerprint = digest({ membershipDigest, options: request.options, stops, categories, warnings, refusals });
+        for (const list of [groups, members, tabs, jobs, stops, schedules, warnings, refusals]) await ordered(list);
+        const membership = {};
+        for (const [kind, rows] of Object.entries({ groups, members, tabs, jobs, schedules })) {
+          const identities = [];
+          await each(rows, row => {
+            const record = { alias: row.alias, projectPath: canonicalPath(row.projectPath, row.alias, memo) };
+            for (const key of ['id', 'folderKey', 'runtime', 'conversationId', 'partId', 'subagentId', 'parentSessionId', 'sessionId', 'jobId', 'scheduleId', 'sessionFile', 'path', 'effect', 'kind']) {
+              if (Object.hasOwn(row, key)) record[key] = row[key];
+            }
+            for (const key of ['cwd', 'parentProjectPath']) {
+              if (Object.hasOwn(row, key)) record[key] = canonicalPath(row[key], row.alias, memo);
+            }
+            identities.push(record);
+          });
+          membership[kind] = await ordered(identities);
+        }
+        const membershipDigest = digest({ project: { alias: project.alias, projectPath: project.projectPath }, ...membership });
+        const fingerprint = digest({ membershipDigest, groups, members, tabs, jobs, schedules, options: request.options, stops, categories, warnings, refusals });
         const revision = await deps.readRevision(budget);
         expired();
         if (revision !== snapshot.revision) throw fail('SNAPSHOT_STALE', 'Writer changed during discovery; request a fresh preview.');
