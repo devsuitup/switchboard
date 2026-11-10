@@ -84,7 +84,9 @@ function createProjectDeletePlanner(deps) {
     let timer;
     const controller = new AbortController();
     try {
-      const request = structuredClone(input);
+      let request;
+      try { request = structuredClone(input); }
+      catch { throw fail('INVALID_REQUEST', 'Request fields must be cloneable data.'); }
       validateRequest(request);
       const budget = { signal: controller.signal, limit: maxItems, deadline: Date.now() + timeoutMs };
       const expired = () => {
@@ -142,6 +144,14 @@ function createProjectDeletePlanner(deps) {
         const rawTabs = items(runtime.tabs), rawJobs = items(runtime.jobs), runtimeCandidates = items(runtime.candidates);
         const refusals = [], warnings = [];
         const refuse = (code, target, error) => refusals.push({ code, target, error });
+        const rowPath = (row, key, code) => {
+          if (row[key] === null) return null;
+          try { return canonicalPath(row[key], row.alias, memo); }
+          catch {
+            refuse(code, row.id || row.folderKey || null, `Verify this record's absolute ${key}.`);
+            return null;
+          }
+        };
         const own = row => {
           try {
             const candidate = identity(row, memo);
@@ -159,7 +169,7 @@ function createProjectDeletePlanner(deps) {
           if (own(row)) groups.push({ ...row, effect: 'selected' });
           else if (row.alias === project.alias) {
             const parent = row.parentProjectPath || worktreeParentPath(row.projectPath?.replace(/\\/g, '/'));
-            if (parent && canonicalPath(parent, row.alias, memo) === project.projectPath && row.verified === true) groups.push({ ...row, effect: 'kept' });
+            if (parent && rowPath({ ...row, parentProjectPath: parent }, 'parentProjectPath', 'GROUP_OWNERSHIP') === project.projectPath && row.verified === true) groups.push({ ...row, effect: 'kept' });
           }
         });
         const selectedGroups = groups.filter(row => row.effect === 'selected');
@@ -194,7 +204,7 @@ function createProjectDeletePlanner(deps) {
             || member.verified !== true || member.indexed !== true || member.present !== true || member.linked === true
             || !folders.has(member.folderKey) || folderRuntimes.get(member.folderKey) !== member.runtime
             || parseFolderKey(member.folderKey).alias !== project.alias
-            || canonicalPath(member.cwd, project.alias, memo) !== project.projectPath || !['claude', 'codex'].includes(member.runtime)) {
+            || rowPath(member, 'cwd', 'MEMBER_OWNERSHIP') !== project.projectPath || !['claude', 'codex'].includes(member.runtime)) {
             refuse('MEMBER_OWNERSHIP', member.id, 'Reindex and verify this exact conversation part and folder ownership.');
           }
           memberIds.add(member.id);
@@ -265,12 +275,13 @@ function createProjectDeletePlanner(deps) {
               if (Object.hasOwn(row, key)) record[key] = row[key];
             }
             for (const key of ['cwd', 'parentProjectPath']) {
-              if (Object.hasOwn(row, key)) record[key] = canonicalPath(row[key], row.alias, memo);
+              if (Object.hasOwn(row, key)) record[key] = rowPath(row, key, kind === 'groups' ? 'GROUP_OWNERSHIP' : 'MEMBER_OWNERSHIP');
             }
             identities.push(record);
           });
           membership[kind] = await ordered(identities);
         }
+        await ordered(refusals);
         const membershipDigest = digest({ project: { alias: project.alias, projectPath: project.projectPath }, ...membership });
         const fingerprint = digest({ membershipDigest, groups, members, tabs, jobs, schedules, options: request.options, stops, categories, warnings, refusals });
         const revision = await deps.readRevision(budget);

@@ -75,7 +75,9 @@ incomplete, stale, over-budget and timed-out snapshots cannot yield a plan.
 Snapshots/results are cloned so sorting and augmentation do not mutate ports.
 There are no write, stop, token, gate-hold or persistence dependencies.
 The input is cloned before validation, so accessors cannot replace validated
-values. Each planning call memoizes local realpath by distinct resolved path;
+values. An uncloneable request is INVALID_REQUEST, including function-valued
+fields and Symbol options; a native DOMException code is never its reply code.
+Each planning call memoizes local realpath by distinct resolved path;
 ownership and cwd checks reuse that memo. Inventory processing yields via
 setImmediate after at most 32 rows or 8 milliseconds of work and checks the
 deadline before each row and after yielding. One synchronous filesystem call
@@ -152,6 +154,14 @@ liveness, stop evidence/targets, names, verification flags and volatile file
 evidence such as size/mtime, including nested file evidence. A4c can therefore
 compare membership after stopping processes without interpreting an expected
 liveness change as new membership.
+
+Nullable cwd/parentProjectPath fields stay null in the membership projection.
+A malformed row path produces a GROUP_OWNERSHIP refusal for a group or a
+MEMBER_OWNERSHIP refusal for a member, tab, job or schedule. The full plan
+remains inspectable with that refusal; a row path cannot turn the selected
+project's valid identity into a whole-preview IDENTITY_UNAVAILABLE failure.
+A retained conversation member still requires cwd to match its project;
+nullable dormant-tab cwd does not supply conversation ownership evidence.
 
 Fingerprint binds membershipDigest, the full scoped raw group/member/tab/job/
 schedule records (including liveness and file evidence), the five options,
