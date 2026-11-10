@@ -5,7 +5,7 @@ const { parseFolderKey } = require('../remote/remote-hosts');
 const { createProjectDeleteProgress, bind } = require('./project-delete-progress');
 const { archivedEntry } = require('../../../archived-projects');
 
-const readDurableScope = (db, input) => createProjectDeleteProgress(db).readScope(input);
+const readDurableScope = (db, input, memo) => createProjectDeleteProgress(db).readScope(input, memo);
 const settingsPath = (value, alias) => {
   const normalized = path.posix.normalize(value.replaceAll('\\', '/')).replace(/\/$/, '') || '/';
   return alias === null && process.platform === 'win32' ? normalized.toLowerCase() : normalized;
@@ -31,11 +31,11 @@ function validateDeletionManifest(db, input) {
     }
     return ownerKeys.get(row) === project.key;
   };
-  const project = identity(input.project, memo), binding = bind(input);
-  const snapshot = readDurableScope(db, { project: input.project });
+  const project = identity(input.project, memo), binding = bind(input, memo);
+  const snapshot = readDurableScope(db, { project: input.project }, memo);
   if (binding.expectedEpoch !== snapshot.projectEpoch || input.expectedRevision !== snapshot.writerRevision
     || input.writerMembershipDigest !== snapshot.writerMembershipDigest) throw fail('WRITER_STALE', 'Durable ownership or revision changed');
-  if (membershipDigest(input.project, input.inventory) !== input.membershipDigest) throw fail('DELETION_MANIFEST', 'Membership digest mismatch');
+  if (membershipDigest(input.project, input.inventory, memo) !== input.membershipDigest) throw fail('DELETION_MANIFEST', 'Membership digest mismatch');
   for (const kind of ['tabs', 'jobs', 'schedules']) {
     const seen = new Set();
     for (const row of input.inventory[kind]) {

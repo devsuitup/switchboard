@@ -356,8 +356,10 @@ conflicting durable links refuse rather than granting ID-wide authority.
 Validation indexes durable ownership once by session ID and folder, and indexes
 folder metadata and manifest groups before checking members. Each durable row's
 owner key is cached; group, member, runtime and owner path checks share one
-normalization memo for the validator. Scope reading and membership hashing keep
-their separate existing normalization boundaries. Validation therefore avoids
+normalization memo for the validator, including operation binding, scope reading
+and membership hashing. Each scope read also memoizes owner identities by raw
+host/path, including failed identities as nonmatches; standalone reads start
+fresh, and no memo survives a validation call or spans transactions. Validation therefore avoids
 per-member and per-linked-ID scans of the complete ownership inventory.
 Metadata-only history requires a parent, merged-part, continuation or bridge link
 from an owned persisted row and no foreign reference. Unowned orphan metadata
@@ -390,6 +392,7 @@ never seeded. Restore pruning requires a manifest-proven selected member/tab ID
 and a string project path matching the admitted identity's path, including
 transcriptless dormant tabs. The working-set producer persists no host field;
 the admitted restore targets supply the owner rather than saved-tab host hints.
+Restore pruning assumes session IDs are globally unique across local and remote hosts, since the working-set producer writes no remoteAlias.
 The returned invalidation targets do not touch mainTouchedCache or renderer
 maps/pending saves. A4d must also serialize the whole-global working-set producer.
 The finalization helper itself supplies neither cancellation nor admission;

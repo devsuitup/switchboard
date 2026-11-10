@@ -45,8 +45,8 @@ function membershipRecord(row, memo, rowPath = (value, key) => value[key] === nu
   for (const key of ['cwd', 'parentProjectPath']) if (Object.hasOwn(row, key)) record[key] = rowPath(row, key);
   return record;
 }
-function membershipDigest(project, inventory) {
-  const memo = new Map(), membership = {};
+function membershipDigest(project, inventory, memo = new Map()) {
+  const membership = {};
   for (const kind of ['groups', 'members', 'tabs', 'jobs', 'schedules']) {
     membership[kind] = inventory[kind].map(row => membershipRecord(row, memo)).sort((a, b) => compare(stable(a), stable(b)));
   }

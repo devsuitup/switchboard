@@ -12,14 +12,19 @@ const stable = value => Array.isArray(value) ? `[${value.map(stable).join(',')}]
 const hash = value => createHash('sha256').update(stable(value)).digest('hex');
 const WEEK = 7 * 86400000;
 
-function projectIdentity(project) {
+function projectIdentity(project, memo = new Map()) {
   if (!project || !Object.hasOwn(project, 'alias') || typeof project.projectPath !== 'string' || !project.projectPath || project.projectPath.includes('\0')) throw fail('DELETION_ID', 'Explicit project host and absolute path required');
   const { alias } = project;
   let projectPath;
   if (alias === null) {
     if (!path.isAbsolute(project.projectPath)) throw fail('DELETION_ID', 'Local project path must be absolute');
-    projectPath = normalizeProjectPath(path.resolve(project.projectPath));
-    if (process.platform === 'win32') projectPath = projectPath.toLowerCase();
+    const absolute = path.resolve(project.projectPath);
+    if (!memo.has(absolute)) {
+      let normalized = normalizeProjectPath(absolute);
+      if (process.platform === 'win32') normalized = normalized.toLowerCase();
+      memo.set(absolute, normalized);
+    }
+    projectPath = memo.get(absolute);
   } else {
     if (!isValidAlias(alias) || !path.posix.isAbsolute(project.projectPath)) throw fail('DELETION_ID', 'Invalid remote project');
     projectPath = path.posix.normalize(project.projectPath).replace(/\/$/, '') || '/';
@@ -27,15 +32,15 @@ function projectIdentity(project) {
   return { alias, projectPath, key: JSON.stringify([alias, projectPath]) };
 }
 
-function operationId(project, epoch, uuid = randomUUID()) {
+function operationId(project, epoch, uuid = randomUUID(), memo) {
   if (!Number.isSafeInteger(epoch) || epoch < 0 || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(uuid)) throw fail('DELETION_ID', 'Invalid operation epoch or UUID');
-  return `pd1:${hash(projectIdentity(project).key)}:${epoch}:${uuid}`;
+  return `pd1:${hash(projectIdentity(project, memo).key)}:${epoch}:${uuid}`;
 }
 
-function bind(input) {
-  const project = projectIdentity(input.project);
+function bind(input, memo) {
+  const project = projectIdentity(input.project, memo);
   const parts = typeof input.operationId === 'string' && /^pd1:([0-9a-f]{64}):(0|[1-9][0-9]*):([0-9a-f-]{36})$/i.exec(input.operationId);
-  if (!parts || !Number.isSafeInteger(Number(parts[2])) || operationId(input.project, Number(parts[2]), parts[3]) !== input.operationId
+  if (!parts || !Number.isSafeInteger(Number(parts[2])) || operationId(input.project, Number(parts[2]), parts[3], memo) !== input.operationId
     || (input.expectedProjectEpoch !== undefined && input.expectedProjectEpoch !== Number(parts[2]))) throw fail('DELETION_ID', 'Operation identity or epoch mismatch');
   return { ...project, expectedEpoch: Number(parts[2]), operationId: input.operationId };
 }
@@ -63,14 +68,20 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     return owner && !owner.sealed ? owner : null;
   };
   const expired = row => !!row.sealed && row.finishedAt < now() - WEEK;
-  function readScope({ project }) {
-    const identity = projectIdentity(project);
+  function readScope({ project }, memo = new Map()) {
+    const identity = projectIdentity(project, memo);
     return db.connection.transaction(() => {
+      const identities = new Map([[JSON.stringify([project.alias, project.projectPath]), identity.key]]);
       const ownership = db.getAllCached().map(row => ({ ...row })).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
       const rows = ownership.filter(row => {
         if (!row.projectPath || parseFolderKey(row.folder).alias !== identity.alias) return false;
-        try { return projectIdentity({ alias: identity.alias, projectPath: row.projectPath }).key === identity.key; }
-        catch { return false; }
+        const key = JSON.stringify([identity.alias, row.projectPath]);
+        if (!identities.has(key)) {
+          let owner = null;
+          try { owner = projectIdentity({ alias: identity.alias, projectPath: row.projectPath }, memo).key; } catch {}
+          identities.set(key, owner);
+        }
+        return identities.get(key) === identity.key;
       });
       const ids = new Set(rows.flatMap(row => [row.sessionId, ...durableRowLinks(row)]));
       const metadata = [...db.getAllMeta(true).values()].filter(row => ids.has(row.sessionId));
