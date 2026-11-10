@@ -471,8 +471,14 @@ capture: a result of an action that was cancelled, successful or not, becomes
 the `Switchboard is closing.` refusal, so a late name-save, liveness or lookup
 failure, or a close committed after a successful stop, cannot publish another
 outcome. Established effects (`created`, `resumed`, `stop_requested`, delivery
-evidence) and `uncertain` stay on the result. A result already published is
-never rewritten.
+evidence) and `uncertain` stay on the result. The normalization runs twice:
+before the result is handed to the publisher, and again by the request
+namespace right after it has awaited the journal and immediately before it sends
+the terminal journal command (`namespace.publish(result, finalize)`), so a
+cancellation that lands while the journal is slow is stored as the refusal. The
+action returns the finalized result. Once the journal command has been sent the
+result is committed: a later cancellation does not rewrite it, and a result
+already published is never rewritten.
 
 ### Sandbox control directory
 

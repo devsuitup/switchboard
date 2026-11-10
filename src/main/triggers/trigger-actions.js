@@ -276,10 +276,10 @@ function createTriggerActions({ fs = nativeFs, log, now = Date.now } = {}) {
       throw err;
     }
   }
-  async function publish({ result, namespace, retained }) {
+  async function publish({ result, namespace, retained, finalize }) {
     try {
       if (!namespace?.publish) throw new Error('request namespace decision is required');
-      await namespace.publish(result);
+      await namespace.publish(result, finalize);
     } catch (err) {
       retained?.();
       error('[trigger-watcher] v1 result publication failed:', err.message);
@@ -512,10 +512,12 @@ async function executeStop(trigger, execution) {
       { ...(!error.stopRefusal ? { error: error.message } : {}),
         ...(stopRequested || before && effects.enter_written && !noteFinished ? { uncertain: true } : {}), ...error.extra });
     }
-    if (!allowed() && result.reason !== 'Switchboard is closing.') {
-      result = { ...result, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' };
-    }
-    await execution.publish(result);
+    const finalize = pending => {
+      result = !allowed() && pending.reason !== 'Switchboard is closing.'
+        ? { ...pending, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' } : pending;
+      return result;
+    };
+    await execution.publish(finalize(result), finalize);
     return result;
   } finally {
     try { pinned?.ctx.forgetTranscriptTurn?.(id); } catch {}
@@ -720,10 +722,12 @@ async function executeOpen(trigger, execution) {
         ...(step?.text_written ? { wrote: true, text_written: true, enter_written: !!step.enter_written,
           submitted: step.enter_written ? 'assumed' : 'no', ...(expired() && step.enter_written ? { uncertain: true } : {}) } : {}) });
     }
-    if (!allowed() && result.reason !== 'Switchboard is closing.') {
-      result = { ...result, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' };
-    }
-    await execution.publish(result);
+    const finalize = pending => {
+      result = !allowed() && pending.reason !== 'Switchboard is closing.'
+        ? { ...pending, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' } : pending;
+      return result;
+    };
+    await execution.publish(finalize(result), finalize);
     return result;
   } finally {
     reservation?.refund();

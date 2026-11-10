@@ -1254,10 +1254,10 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   // I1: atomic result write — write to .tmp then rename so pollers never
   // observe a partial JSON file.
-  async function writeResult(result) {
+  async function writeResult(result, finalize) {
     if (versioned) {
       canonicalizePaths();
-      if (!await actions.publish({ result, namespace: guarded, retained: onEntryRetained })) {
+      if (!await actions.publish({ result, namespace: guarded, retained: onEntryRetained, finalize })) {
         publicationFailed = true;
         throw new Error('action result publication failed');
       }

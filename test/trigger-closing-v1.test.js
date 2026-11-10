@@ -306,3 +306,45 @@ for (const commit of [false, true]) {
     assert.equal(f.events.filter(e => e[0] === 'result').length, 1);
   });
 }
+
+const os = require('node:os');
+const nodeFs = require('node:fs');
+const nodePath = require('node:path');
+const { createJournal } = require('./fixtures/session-request-journal.cjs');
+const { createSessionRequestNamespace } = require('../src/main/triggers/session-request-namespace');
+const { createSessionRequestPublication } = require('../src/main/triggers/session-request-publication');
+
+async function journalledPublication(t, f) {
+  const root = nodeFs.realpathSync(nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), 'sb-closing-journal-')));
+  t.after(() => nodeFs.rmSync(root, { recursive: true, force: true }));
+  const processed = nodePath.join(root, 'processed');
+  nodeFs.mkdirSync(processed);
+  const input = nodePath.join(root, STEM + '.json');
+  nodeFs.writeFileSync(input, JSON.stringify({ version: 1, action: 'open', new: { project, name: 'Task' }, prompt: 'hello' }));
+  const base = createJournal();
+  let hold = Promise.resolve();
+  const journal = Object.fromEntries(Object.entries(base).map(([name, fn]) => [name, async (...args) => { await hold; return fn(...args); }]));
+  const publisher = createSessionRequestPublication({ fs: nodeFs, renameWithRetry: nodeFs.renameSync });
+  const namespace = createSessionRequestNamespace({ fs: nodeFs, journal, publisher, actions: createTriggerActions(), processedDir: processed });
+  const guarded = await namespace.begin(STEM, input);
+  const actions = createTriggerActions();
+  f.execution.publish = async (result, finalize) => {
+    let release; hold = new Promise(resolve => { release = resolve; });
+    const publishing = actions.publish({ result, namespace: guarded, finalize });
+    const undo = await f.rollback();
+    undo();
+    release();
+    assert.equal(await publishing, true);
+  };
+  return { resultPath: nodePath.join(processed, STEM + '.result.json') };
+}
+test('a cancellation that lands while the journal commit is pending stores the closing refusal', async t => {
+  const f = openingStack(t);
+  const journalled = await journalledPublication(t, f);
+  f.nameStarted.then(() => f.releaseName());
+  const result = await f.run();
+  const stored = JSON.parse(nodeFs.readFileSync(journalled.resultPath, 'utf8'));
+  assert.equal(stored.ok, false); assert.equal(stored.outcome, 'refused'); assert.equal(stored.reason, 'Switchboard is closing.');
+  assert.equal(stored.created, true);
+  assert.equal(result.reason, 'Switchboard is closing.');
+});
