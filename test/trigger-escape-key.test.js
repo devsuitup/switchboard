@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { start } = require('../src/main/triggers/trigger-watcher');
+const { start } = require('./fixtures/trigger-watcher.cjs');
 const { createTriggerContext } = require('../src/main/triggers/trigger-context');
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };

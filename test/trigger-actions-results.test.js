@@ -7,6 +7,8 @@ const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
+const { createJournal } = require('./fixtures/session-request-journal.cjs');
+const { createHash } = require('node:crypto');
 
 const request = '12345678-1234-1234-1234-123456789abc';
 const id = 'abcdef01-2345-6789-abcd-0123456789ab';
@@ -23,11 +25,10 @@ async function rig(t, options = {}) {
   if (options.prior) fs.writeFileSync(output, JSON.stringify(options.prior) + '\n');
   if (options.marker) fs.writeFileSync(marker, JSON.stringify(options.marker));
   if (options.readError) fs.writeFileSync(options.errorOnMarker ? marker : output, '{}');
-  const body = options.raw ?? JSON.stringify(Object.hasOwn(options, 'payload') ? options.payload : payload);
-  const makeInput = () => (options.directoryInput ? fs.mkdirSync(input) : fs.writeFileSync(input, body));
-  if (!options.orphan && !options.live) makeInput();
+  const body = JSON.stringify(Object.hasOwn(options, 'payload') ? options.payload : payload);
+  if (!options.orphan && !options.live) fs.writeFileSync(input, body);
   if (!options.live) options.setup?.({ input, output, marker });
-  if (options.stale && !options.orphan && !options.live) fs.utimesSync(input, new Date(0), new Date(0));
+  if (options.stale && !options.orphan) fs.utimesSync(input, new Date(0), new Date(0));
   let notify;
   let publications = 0;
   let recoveryReads = 0;
@@ -55,10 +56,6 @@ async function rig(t, options = {}) {
     },
     closeSync(fd) { descriptors.delete(fd); return fs.closeSync(fd); },
     watch: (_dir, _opts, callback) => { notify = callback; return { on() {}, close() {} }; },
-    lstatSync(file, ...args) {
-      if (options.inspectError && file === input) throw options.inspectError;
-      return fs.lstatSync(file, ...args);
-    },
     unlinkSync(file) {
       events.push(path.basename(file));
       if (options.failUnlink && file === input) throw new Error('unlink denied');
@@ -78,32 +75,34 @@ async function rig(t, options = {}) {
     process: { env: { ...process.env, SWITCHBOARD_TRIGGERS_DIR: dir }, platform: process.platform, pid: process.pid },
     Buffer, console, setTimeout, clearTimeout, setInterval, clearInterval, setImmediate,
   }, { filename });
-  const watcher = module.exports.start({ log: { info() {}, warn() {}, error: (...args) => errors.push(args) },
+  const watcher = module.exports.start({ sessionRequests: createJournal(), log: { info() {}, warn() {}, error: (...args) => errors.push(args) },
     getPtyForSession() { return null; }, isSessionBusy: () => false, ...options.ctx });
   t.after(() => { watcher.close(); fs.rmSync(dir, { recursive: true, force: true }); });
   if (options.live) {
     options.setup?.({ input, output, marker });
-    makeInput();
-    if (options.stale) fs.utimesSync(input, new Date(0), new Date(0));
+    fs.writeFileSync(input, body);
     notify('rename', name + '.json');
   }
   async function settle() { for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve)); }
   await settle();
-  return { dir, input, output, marker, events, errors, notifyFile: file => notify('rename', file), publications: () => publications, recoveryReads: () => recoveryReads, notify: () => notify('rename', request + '.json'), settle };
+  return { dir, input, output, marker, body, events, errors, notifyFile: file => notify('rename', file), publications: () => publications, recoveryReads: () => recoveryReads, notify: () => notify('rename', request + '.json'), settle };
 }
 
-for (const state of ['marker']) {
-  test(`uppercase v1 refuses its filename despite existing ${state}`, async t => {
+for (const state of ['result', 'marker']) {
+  test(`uppercase v1 preserves an unjournalled ${state} and archives the colliding input`, async t => {
     const r = await rig(t, { name: request.toUpperCase(), live: true,
       setup({ output, marker }) {
         fs.writeFileSync(state === 'result' ? output : marker, JSON.stringify({ ...payload, mode: 'resume' }));
       },
     });
-    assert.equal(JSON.parse(fs.readFileSync(r.output, 'utf8')).reason, 'trigger filename must be a lowercase UUID', 'uppercase v1 must validate instead of recovering canonical state');
+    assert.equal(fs.existsSync(r.input), false);
+    assert.ok(fs.readdirSync(path.dirname(r.output)).some(name => name.endsWith('.request')), 'unknown pre-upgrade identity cannot authorize ordinary publication');
+    if (state === 'result') assert.deepEqual(JSON.parse(fs.readFileSync(r.output, 'utf8')), { ...payload, mode: 'resume' });
+    else assert.equal(JSON.parse(fs.readFileSync(r.output, 'utf8')).reason, 'interrupted by restart');
     assert.ok(fs.readdirSync(path.dirname(r.output)).includes(request + '.result.json'));
   });
   for (const [live, name] of [true, false].flatMap(live => [request.toUpperCase(), request].map(name => [live, name]))) {
-    test(`legacy ${name} runs despite v1 ${state} for its UUID; ${live ? 'live' : 'startup'}`, async t => {
+    test(`legacy ${name} preserves pre-upgrade v1 ${state}; ${live ? 'live' : 'startup'}`, async t => {
       const written = [];
       const r = await rig(t, { name, live, payload: { sessionId: id, command: 'legacy command' },
         setup({ output, marker }) {
@@ -118,13 +117,9 @@ for (const state of ['marker']) {
       const legacyOutput = path.join(path.dirname(r.output), name + '.result.json');
       const deadline = performance.now() + 2500;
       while (fs.existsSync(r.input) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
-      assert.deepEqual(written, ['legacy command', '\r'], 'legacy input must execute despite unrelated v1 recovery state');
-      if (live) assert.equal(r.recoveryReads(), 0, 'legacy input never reads v1 recovery state');
-      assert.equal(fs.existsSync(legacyOutput), true, 'legacy client must receive its own result');
-      const result = JSON.parse(fs.readFileSync(legacyOutput, 'utf8'));
-      assert.equal(result.ok, true);
-      assert.equal(Object.hasOwn(result, 'version'), false);
-      assert.ok(fs.readdirSync(path.dirname(r.output)).includes(name + '.result.json'), 'legacy publication keeps the original filename spelling');
+      assert.deepEqual(written, [], 'an occupied namespace must prevent legacy delivery');
+      assert.ok(fs.existsSync(r.output), 'pre-upgrade state is preserved or reconciled');
+      assert.ok(fs.readdirSync(path.dirname(legacyOutput)).some(file => file.startsWith(name + '.conflict-') && file.endsWith('.request')));
     });
   }
 }
@@ -253,39 +248,26 @@ test('recovery rejects an actual FIFO without opening it', { skip: process.platf
 for (const errorOnMarker of [false, true]) {
   for (const failure of ['SyntaxError', 'EISDIR', 'EBUSY']) {
     for (const legacy of [true, false]) {
-      test(`recovery ${failure} on ${errorOnMarker ? 'marker' : 'result'} lets legacy=${legacy} finish`, async t => {
+      test(`unreadable pre-upgrade ${failure} on ${errorOnMarker ? 'marker' : 'result'} retains legacy=${legacy}`, async t => {
         const readError = failure === 'SyntaxError' ? new SyntaxError('corrupt JSON') : Object.assign(new Error(failure), { code: failure });
         const r = await rig(t, { readError, errorOnMarker, payload: legacy ? {} : payload });
-        if (!errorOnMarker) {
-          assert.equal(fs.existsSync(r.input), true, 'an uninspectable result keeps its input untouched');
-          assert.equal(fs.readFileSync(r.output, 'utf8'), '{}', 'an uninspectable result is never overwritten');
-          assert.equal(r.publications(), 0);
-          assert.ok(r.errors.length);
-          return;
-        }
-        assert.equal(fs.existsSync(r.input), false, 'recovery errors must not strand a readable trigger');
-        const result = JSON.parse(fs.readFileSync(r.output, 'utf8'));
-        if (legacy) assert.deepEqual(result, { ok: false, error: 'missing required field: sessionId', sessionId: null, submitted: 'no', wrote: false, steps_total: 0 });
-        else {
-          assert.equal(result.reason, 'trigger recovery state unavailable');
-          assert.equal(result.outcome, 'refused');
-          assert.equal(result.error, readError.message);
-        }
+        assert.deepEqual(fs.readFileSync(r.input, 'utf8'), r.body, 'unreadable ownership cannot authorize cleanup');
+        assert.equal(r.publications(), 0, 'guard failure cannot publish a generic fallback');
       });
     }
   }
 }
 
-test('a real oversized state file refuses v1 without stranding input', async t => {
+test('a real oversized marker retains input without a fallback result', async t => {
   const r = await rig(t, { setup: ({ marker }) => fs.writeFileSync(marker, ' '.repeat(65537)) });
-  assert.equal(fs.existsSync(r.input), false, 'oversized state must yield a terminal refusal');
-  assert.equal(JSON.parse(fs.readFileSync(r.output, 'utf8')).reason, 'trigger recovery state unavailable');
+  assert.equal(fs.existsSync(r.input), true);
+  assert.equal(fs.existsSync(r.output), false);
 });
 
-test('a real corrupt marker lets legacy validation publish its normal result', async t => {
+test('a real corrupt marker prevents legacy validation from publishing over uncertain ownership', async t => {
   const r = await rig(t, { payload: {}, setup: ({ marker }) => fs.writeFileSync(marker, '{broken') });
-  assert.equal(fs.existsSync(r.input), false, 'corrupt state must not suppress legacy validation');
-  assert.equal(JSON.parse(fs.readFileSync(r.output, 'utf8')).error, 'missing required field: sessionId');
+  assert.equal(fs.existsSync(r.input), true);
+  assert.equal(fs.existsSync(r.output), false);
 });
 
 test('a real state symlink is refused before its target is read', async t => {
@@ -301,14 +283,13 @@ test('a real state symlink is refused before its target is read', async t => {
     }
   } });
   if (!supported) return;
-  const result = JSON.parse(fs.readFileSync(r.output, 'utf8'));
-  assert.equal(result.reason, 'trigger recovery state unavailable');
-  assert.equal(result.error, 'recovery state must be a regular file');
+  assert.equal(fs.existsSync(r.output), false);
+  assert.equal(fs.existsSync(r.input), true);
 });
 
-test('a legacy result without version is not recovery state', async t => {
+test('a legacy result without version still owns its pre-upgrade namespace', async t => {
   const r = await rig(t, { prior: { ok: true, sessionId: id, submitted: 'confirmed' } });
-  assert.equal(JSON.parse(fs.readFileSync(r.output, 'utf8')).reason, 'session action not implemented in this build');
+  assert.deepEqual(JSON.parse(fs.readFileSync(r.output, 'utf8')), { ok: true, sessionId: id, submitted: 'confirmed' });
   assert.equal(fs.existsSync(r.input), false);
 });
 
@@ -338,7 +319,7 @@ for (const [name, value, reason] of [
   });
 }
 
-test('v1 publishes once before removing input and never overwrites a result on duplicate UUID', async t => {
+test('v1 publishes once and archives a different action reusing the UUID without changing the result', async t => {
   const r = await rig(t);
   assert.equal(r.publications(), 1);
   const original = fs.readFileSync(r.output, 'utf8');
@@ -350,6 +331,10 @@ test('v1 publishes once before removing input and never overwrites a result on d
   assert.equal(r.publications(), 1, 'a duplicate UUID must reuse its first result');
   assert.equal(fs.readFileSync(r.output, 'utf8'), original);
   assert.equal(fs.existsSync(r.input), false);
+  const raw = JSON.stringify({ ...payload, action: 'stop' });
+  const base = request + '.conflict-' + createHash('sha256').update(raw).digest('hex');
+  assert.equal(fs.readFileSync(path.join(path.dirname(r.output), base + '.request'), 'utf8'), raw);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(path.dirname(r.output), base + '.result.json'), 'utf8')).reason, 'request id conflict');
 });
 
 test('v1 failed publication retains input and suppresses replay in this watcher', async t => {
@@ -369,7 +354,7 @@ test('v1 committed result wins over stale input and marker after restart', async
   assert.deepEqual(JSON.parse(fs.readFileSync(r.output, 'utf8')), prior);
   assert.equal(r.publications(), 0);
   assert.equal(fs.existsSync(r.input), false);
-  assert.equal(fs.existsSync(r.marker), false);
+  assert.equal(fs.existsSync(r.marker), true, 'unknown pre-upgrade input identity cannot clean an unrelated marker');
 });
 
 for (const orphan of [false, true]) {
@@ -385,7 +370,7 @@ for (const orphan of [false, true]) {
     assert.equal(result.submitted, 'assumed');
     assert.equal(result.wrote, true);
     assert.equal(result.enter_written, true);
-    assert.equal(fs.existsSync(r.marker), false);
+    assert.equal(fs.existsSync(r.marker), !orphan, 'a colliding input cannot clean the pre-upgrade marker');
   });
 }
 
@@ -445,63 +430,46 @@ function assertNoDuplicateEffects(s) {
 }
 
 const duplicates = {
-  'legacy input for the same target': { payload: { sessionId: id, command: 'replay', wait: 'none', timeout_ms: 500 } },
-  'legacy input for another target': { payload: { sessionId: other, command: 'replay to B', wait: 'none' } },
-  'valid versioned input': { payload: { version: 1, action: 'open', sessionId: other } },
-  'invalid versioned input': { payload: { version: 1, action: 'open' } },
-  'stale legacy input': { payload: { sessionId: id, command: 'replay' }, stale: true },
-  'stale versioned input': { payload, stale: true },
-  'oversized input': { payload: { version: 1, action: 'open', sessionId: id, prompt: 'x'.repeat(70000) } },
+  'legacy input for the same target': { body: { sessionId: id, command: 'replay', wait: 'none', timeout_ms: 500 } },
+  'legacy input for another target': { body: { sessionId: other, command: 'replay to B', wait: 'none' } },
+  'valid versioned input': { body: { version: 1, action: 'open', sessionId: other } },
+  'different action': { body: { ...payload, action: 'stop' } },
+  'invalid versioned input': { body: { version: 1, action: 'open', sessionId: 'not-a-uuid' } },
+  'stale legacy input': { body: { sessionId: id, command: 'replay' }, stale: true },
+  'stale versioned input': { body: { version: 1, action: 'open', sessionId: other }, stale: true },
+  'oversized input': { body: { version: 1, action: 'open', sessionId: id, prompt: 'x'.repeat(70000) } },
   'malformed JSON': { raw: '{not json' },
-  'null JSON': { payload: null },
-  'nonregular input': { directoryInput: true },
-  'input inspection failure': { inspectError: Object.assign(new Error('denied'), { code: 'EACCES' }) },
+  'null JSON': { body: null },
 };
 for (const [kind, extra] of Object.entries(duplicates)) {
-  for (const live of [false, true]) {
-    for (const name of [request, request.toUpperCase()]) {
-      test(`a committed result survives a ${kind} (${live ? 'live' : 'startup'}, ${name === request ? 'lowercase' : 'uppercase'} UUID)`, async t => {
-        const s = spies();
-        const r = await rig(t, { ...extra, name, live, prior: committed, ctx: s.ctx });
-        assert.equal(fs.readFileSync(r.output, 'utf8'), committedBytes);
-        assert.equal(r.publications(), 0);
-        assert.deepEqual(fs.readdirSync(path.dirname(r.output)), [request + '.result.json'], 'no other result file is published');
-        assertNoDuplicateEffects(s);
-        assert.equal(fs.existsSync(r.input), Boolean(extra.directoryInput), 'removable duplicates are cleaned, nonregular ones are never deleted recursively');
+  for (const name of [request, request.toUpperCase()]) {
+    test(`a later ${kind} under a committed UUID has no effect and leaves the first result unchanged (${name === request ? 'lowercase' : 'uppercase'} name)`, async t => {
+      const s = spies();
+      const r = await rig(t, { live: true, ctx: s.ctx, payload: { version: 1, action: 'open' } });
+      const first = fs.readFileSync(r.output);
+      assert.equal(JSON.parse(first).outcome, 'refused');
+      const duplicate = path.join(r.dir, name + '.json');
+      if (name !== request || !fs.existsSync(duplicate)) {
+        fs.writeFileSync(duplicate, extra.raw ?? JSON.stringify(extra.body));
+        if (extra.stale) fs.utimesSync(duplicate, new Date(0), new Date(0));
         r.notifyFile(name + '.json');
-        await r.settle();
-        assert.equal(fs.readFileSync(r.output, 'utf8'), committedBytes);
-        assertNoDuplicateEffects(s);
-        if (extra.directoryInput) assert.equal(r.events.filter(event => event === name + '.json').length, 1, 'a retained input is not processed again');
-      });
-    }
+      }
+      await until(() => !fs.existsSync(duplicate), 'the duplicate is consumed');
+      await r.settle();
+      assert.deepEqual(fs.readFileSync(r.output), first);
+      assertNoDuplicateEffects(s);
+      assert.ok(fs.readdirSync(path.dirname(r.output)).some(file => file.includes('.conflict-')), 'the reused id is archived as a conflict');
+      r.notifyFile(name + '.json');
+      await r.settle();
+      assert.deepEqual(fs.readFileSync(r.output), first);
+      assertNoDuplicateEffects(s);
+    });
   }
 }
-test('a committed result keeps its bytes and a retained duplicate is not retried after an unlink failure', async t => {
-  const s = spies();
-  const r = await rig(t, { prior: committed, failUnlink: true, payload: { sessionId: other, command: 'replay' }, ctx: s.ctx });
-  assert.equal(fs.readFileSync(r.output, 'utf8'), committedBytes);
-  r.notify();
-  await r.settle();
-  assert.equal(r.events.filter(event => event === request + '.json').length, 1);
-  assert.equal(fs.existsSync(r.input), true);
-  assertNoDuplicateEffects(s);
-  assert.ok(r.errors.length);
-});
-test('an unreadable committed result is never overwritten and its duplicate input is retained', async t => {
-  const s = spies();
-  const r = await rig(t, { readError: Object.assign(new Error('EBUSY'), { code: 'EBUSY' }), payload: { sessionId: other, command: 'replay' }, ctx: s.ctx });
-  assert.equal(fs.readFileSync(r.output, 'utf8'), '{}');
-  assert.equal(fs.existsSync(r.input), true);
-  r.notify();
-  await r.settle();
-  assert.equal(r.publications(), 0);
-  assertNoDuplicateEffects(s);
-});
 
 for (const [kind, variant, outcome] of [['versioned', payload, 'refused'], ['legacy for another target', { sessionId: other, command: 'replay to B' }, 'refused'],
   ['versioned', payload, 'opened'], ['legacy for another target', { sessionId: other, command: 'replay to B' }, 'opened']]) {
-  test(`an uppercase ${kind} duplicate queues behind the active owner and cannot touch its ${outcome} result`, async t => {
+  test(`an uppercase ${kind} duplicate is serialized behind the active owner and cannot touch its ${outcome} result`, async t => {
     const s = spies();
     s.opens = outcome === 'opened';
     const gate = deferred();
@@ -516,16 +484,10 @@ for (const [kind, variant, outcome] of [['versioned', payload, 'refused'], ['leg
     r.notifyFile(request.toUpperCase() + '.json');
     await r.settle();
     assert.equal(s.dispatches, 1, 'the variant is not a second owner');
-    assert.equal(fs.existsSync(upper), true, 'the variant stays queued');
-    assert.equal(fs.existsSync(r.output), false, 'the variant publishes no filename refusal while the owner is active');
+    assert.equal(fs.existsSync(upper), true, 'the variant waits');
+    assert.equal(fs.existsSync(r.output), false, 'the variant publishes nothing while the owner is active');
     assert.equal(fs.existsSync(r.marker), true, "the active owner's marker is untouched");
     assert.equal(s.lookups.includes(other), false);
-
-    const unrelated = '99999999-9999-4999-8999-999999999999';
-    fs.writeFileSync(path.join(r.dir, unrelated + '.json'), JSON.stringify({ version: 1, action: 'open' }));
-    r.notifyFile(unrelated + '.json');
-    await until(() => fs.existsSync(path.join(r.dir, 'processed', unrelated + '.result.json')), 'an unrelated UUID progresses while the first ACK is held');
-    assert.equal(fs.existsSync(upper), true);
 
     gate.resolve();
     await until(() => fs.existsSync(r.output), 'the owner commits its result');
@@ -533,67 +495,14 @@ for (const [kind, variant, outcome] of [['versioned', payload, 'refused'], ['leg
     if (outcome === 'refused') assert.equal(JSON.parse(first).reason, 'renderer refused');
     else assert.equal(JSON.parse(first).outcome, 'opened');
     await until(() => !fs.existsSync(r.input) && !fs.existsSync(r.marker), 'the owner removes its input and marker');
-    await until(() => !fs.existsSync(upper), 'the queued variant drains after release');
-    fs.writeFileSync(r.input, JSON.stringify({ sessionId: other, command: 'late legacy duplicate' }));
-    r.notify();
-    r.notify();
-    await until(() => !fs.existsSync(r.input), 'the late duplicate is removed');
+    await until(() => !fs.existsSync(upper), 'the queued variant is processed after the release');
     await r.settle();
     assert.deepEqual(fs.readFileSync(r.output), first);
-    assert.equal(r.publications(), 1, 'exactly one terminal commit');
     assert.equal(s.dispatches, 1);
     assert.deepEqual(s.writes, []);
     assert.equal(s.lookups.includes(other), false);
   });
 }
-test('a committed result that appears while the owner waits is preserved at publication', async t => {
-  const s = spies();
-  const gate = deferred();
-  const reached = deferred();
-  s.gate = gate.promise;
-  s.onDispatch = reached.resolve;
-  const r = await rig(t, { live: true, ctx: s.ctx });
-  await reached.promise;
-  const external = JSON.stringify({ version: 1, action: 'open', ok: false, outcome: 'refused', reason: 'external', sessionId: id }) + '\n';
-  fs.writeFileSync(r.output, external);
-  gate.resolve();
-  await until(() => !fs.existsSync(r.input), 'the owner finishes');
-  await r.settle();
-  assert.equal(fs.readFileSync(r.output, 'utf8'), external);
-  assert.equal(r.publications(), 0);
-  assert.equal(fs.existsSync(r.marker), false);
-});
-for (const failure of ['failPublish', 'failUnlink']) {
-  test(`ownership is released after ${failure}: the queued variant is drained`, async t => {
-    const s = spies();
-    const gate = deferred();
-    const reached = deferred();
-    s.gate = gate.promise;
-    s.onDispatch = reached.resolve;
-    const r = await rig(t, { live: true, ctx: s.ctx, [failure]: true });
-    await reached.promise;
-    const upper = path.join(r.dir, request.toUpperCase() + '.json');
-    fs.writeFileSync(upper, JSON.stringify(payload));
-    r.notifyFile(request.toUpperCase() + '.json');
-    await r.settle();
-    assert.equal(fs.existsSync(upper), true);
-    gate.resolve();
-    if (failure === 'failUnlink') await until(() => !fs.existsSync(upper), 'the variant sees the committed result and is cleaned');
-    else await until(() => r.errors.filter(entry => /publication failed/.test(entry[0])).length >= 2, 'the variant is processed once the owner released');
-    assert.equal(s.dispatches, 1);
-  });
-}
-test('startup scanning serializes case variants of one UUID into a single terminal commit', async t => {
-  const s = spies();
-  const r = await rig(t, { ctx: s.ctx, setup: ({ input }) => fs.writeFileSync(path.join(path.dirname(input), request.toUpperCase() + '.json'), JSON.stringify(payload)) });
-  await until(() => !fs.existsSync(r.input) && !fs.existsSync(path.join(r.dir, request.toUpperCase() + '.json')), 'both variants are consumed');
-  assert.equal(r.publications(), 1, 'one terminal commit for the canonical UUID');
-  const first = fs.readFileSync(r.output);
-  r.notifyFile(request.toUpperCase() + '.json');
-  r.notify();
-  await r.settle();
-  assert.deepEqual(fs.readFileSync(r.output), first);
-});
 
 for (const value of [[], null, 7, 'legacy', true]) {
   for (const name of [request, request.toUpperCase()]) {

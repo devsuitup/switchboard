@@ -6,6 +6,8 @@ const { whatsNewOnStartup } = require('./src/main/app/changelog');
 const { isProjectHidden } = require('./public/worktree-nesting');
 const { createHash } = require('node:crypto');
 const path = require('node:path');
+const { archiveProjectIdentity: projectIdentity } = require('./src/main/projects/project-archive-workflow');
+const { parseFolderKey } = require('./src/main/remote/remote-hosts');
 
 const requestError = (code, message) => Object.assign(new Error(message), { code });
 const requestBytes = value => Buffer.isBuffer(value) || (ArrayBuffer.isView(value) && value.BYTES_PER_ELEMENT === 1);
@@ -33,8 +35,8 @@ function createSessionRequestCommands(db) {
     const row = store.get(key);
     return row ? { ...row, resultBytes: row.resultBytes === null ? null : Buffer.from(row.resultBytes) } : null;
   };
-  const matches = (owner, input) => input.suppliedHash != null ? owner.suppliedHash === input.suppliedHash
-    : owner.suppliedHash === null && input.rawHash != null && owner.rawHash === input.rawHash;
+  const matches = (owner, input) => (input.rawHash != null && owner.rawHash === input.rawHash)
+    || (input.suppliedHash != null && owner.suppliedHash === input.suppliedHash);
   function querySessionRequestOutcome(input) {
     const stemKey = sessionRequestStem(input.stemKey);
     for (const key of ['suppliedHash', 'rawHash']) if (input[key] != null && !hashValid(input[key])) throw requestError('SESSION_REQUEST_INPUT', 'Invalid request hash');
@@ -78,6 +80,7 @@ function createSessionRequestCommands(db) {
     let owner = readOwner(stemKey), outcome;
     if (conflict) {
       if (!owner) throw requestError('SESSION_REQUEST_ABSENT', 'A conflict requires an owned namespace');
+      if (owner.rawHash === input.rawHash || matches(owner, input)) throw requestError('SESSION_REQUEST_INPUT', 'An owner replay is not a conflict');
       const saved = store.conflict(stemKey, input.rawHash);
       const result = saved ? deserializeRequestOutcome(saved).conflict : {
         stemKey, actualStem: input.actualStem, rawHash: input.rawHash, resultBytes: Buffer.from(input.resultBytes), createdAt: now, revision,
@@ -114,8 +117,37 @@ function createSessionRequestCommands(db) {
 function createWriterCommands(db) {
   const settings = { getSetting: db.getSetting, setSetting: db.setSetting, scheduleName: () => null };
   const patch = fields => db.setSetting('global', { ...(db.getSetting('global') || {}), ...fields });
+  const entryProject = entry => { const { alias, folder } = parseFolderKey(entry); return { alias, projectPath: alias && folder === '' ? '/' : folder }; };
+  const groupProjects = groups => archive.validArchiveGroups(groups).map(group => ({ alias: parseFolderKey(group.folderKey).alias, projectPath: group.projectPath }));
+  const fence = project => db.projectDeletion?.fence(projectIdentity(project).key) || { epoch: 0, blocked: 0 };
+  function epochs(projects, allowBlocked = false) {
+    return projects.map(project => {
+      const current = fence(project);
+      if (!allowBlocked && current.blocked) throw requestError('PROJECT_EPOCH_STALE', 'Project is pending deletion or deleted');
+      return { project, epoch: current.epoch };
+    });
+  }
+  function guard(projects, proof, reopen = false) {
+    for (const project of projects) {
+      const identity = projectIdentity(project), current = fence(project);
+      const expected = proof?.find(item => projectIdentity(item.project).key === identity.key)?.epoch;
+      if ((proof ? expected === undefined || expected !== current.epoch : current.epoch !== 0) || (!reopen && current.blocked)) {
+        throw requestError('PROJECT_EPOCH_STALE', 'Project epoch changed before writer admission');
+      }
+      if (reopen && current.operationId && !db.projectDeletion.operation(current.operationId)?.sealed) throw requestError('PROJECT_EPOCH_STALE', 'Project still owns unfinished deletion');
+    }
+  }
+  function reopen(projects, proof) {
+    guard(projects, proof, true);
+    for (const project of projects) {
+      const identity = projectIdentity(project), current = fence(project);
+      if (current.epoch >= Number.MAX_SAFE_INTEGER) throw requestError('PROJECT_EPOCH_STALE', 'Project epoch exhausted');
+      db.projectDeletion?.setFence(identity.key, current.epoch + 1, null, 0);
+    }
+  }
   return {
     ...createSessionRequestCommands(db),
+    readProjectArchiveEpochs: epochs,
     patchGlobal: patch,
     cleanupWorktree(projectPath) {
       let removed = 0;
@@ -154,7 +186,8 @@ function createWriterCommands(db) {
       const row = db.getCachedSession(from);
       db.rekeySessionMeta(from, to, row?.customTitle || row?.aiTitle || row?.summary);
     },
-    hideProject(entry, kind, scope) {
+    hideProject(entry, kind, scope, proof) {
+      guard([scope ? { alias: scope.alias, projectPath: entryProject(entry).projectPath } : entryProject(entry)], proof);
       const global = db.getSetting('global') || {};
       const fields = {};
       if (scope || global.hiddenProjectScopes) {
@@ -165,8 +198,12 @@ function createWriterCommands(db) {
       patch({ hiddenProjects: [...new Set([...(global.hiddenProjects || []), entry])],
         hiddenProjectKinds: { ...global.hiddenProjectKinds, [entry]: kind }, ...fields });
     },
-    clearArchivedEntry: (alias, projectPath) => archive.clearArchivedEntry(db.getSetting, db.setSetting, alias, projectPath),
-    unhideProject(entry, alias, projectPath) {
+    clearArchivedEntry(alias, projectPath, proof) {
+      guard([{ alias, projectPath }], proof);
+      return archive.clearArchivedEntry(db.getSetting, db.setSetting, alias, projectPath);
+    },
+    unhideProject(entry, alias, projectPath, proof) {
+      reopen([{ alias, projectPath }], proof);
       archive.clearArchivedEntry(db.getSetting, db.setSetting, alias, projectPath);
       const global = db.getSetting('global') || {};
       if (!isProjectHidden([entry], alias, projectPath, global.hiddenProjectScopes)) return;
@@ -179,7 +216,8 @@ function createWriterCommands(db) {
       }
       patch(fields);
     },
-    revealAddedProject(projectPath) {
+    revealAddedProject(projectPath, proof) {
+      reopen([{ alias: null, projectPath }], proof);
       const global = db.getSetting('global') || {};
       if (isProjectHidden(global.hiddenProjects, null, projectPath, global.hiddenProjectScopes)) {
         const kinds = { ...global.hiddenProjectKinds };
@@ -193,19 +231,26 @@ function createWriterCommands(db) {
       }
       archive.clearArchivedEntry(db.getSetting, db.setSetting, null, projectPath);
     },
-    retireArchivedEntries(entries, snapshot) {
+    retireArchivedEntries(entries, snapshot, proof) {
       const current = db.getSetting('archivedProjects') || {};
+      entries = entries.filter(entry => Object.hasOwn(current, entry));
+      guard(entries.map(entryProject), proof);
       const state = { archivedProjects: current, hiddenProjects: (db.getSetting('global') || {}).hiddenProjects || [],
         hiddenProjectScopes: (db.getSetting('global') || {}).hiddenProjectScopes || {},
         scheduleReenableOffers: db.getSetting('scheduleReenableOffers') || {} };
       if (JSON.stringify(state) !== JSON.stringify(snapshot)) {
         throw Object.assign(new Error('archive snapshot changed before writer admission'), { code: 'WRITER_STALE' });
       }
-      archive.retireArchivedEntries(db.getSetting, db.setSetting, current, entries.filter(entry => Object.hasOwn(current, entry)));
+      archive.retireArchivedEntries(db.getSetting, db.setSetting, current, entries);
     },
-    dismissReenableOffer: (projectPath, folderKey) => archive.dismissReenableOffer(projectPath, folderKey, { ...settings, notify() {} }),
-    beginOffer(entry) { return (db.getSetting('scheduleReenableOffers') || {})[entry] || null; },
-    completeOffer(entry, original, result) {
+    dismissReenableOffer(projectPath, folderKey, proof) {
+      if (typeof projectPath !== 'string' || projectPath === '') return { error: 'invalid project path' };
+      guard([{ alias: parseFolderKey(folderKey).alias, projectPath }], proof);
+      return archive.dismissReenableOffer(projectPath, folderKey, { ...settings, notify() {} });
+    },
+    beginOffer(entry, proof) { guard([entryProject(entry)], proof); return (db.getSetting('scheduleReenableOffers') || {})[entry] || null; },
+    completeOffer(entry, original, result, proof) {
+      guard([entryProject(entry)], proof);
       const offers = { ...(db.getSetting('scheduleReenableOffers') || {}) };
       if (JSON.stringify(offers[entry]) !== JSON.stringify(original)) return false;
       const failed = result.failed.map(f => ({ name: f.name, error: f.error }));
@@ -214,7 +259,8 @@ function createWriterCommands(db) {
       db.setSetting('scheduleReenableOffers', offers);
       return true;
     },
-    beginArchive(entries) {
+    beginArchive(entries, proof) {
+      guard(entries.map(({ entry }) => entryProject(entry)), proof);
       const archived = { ...(db.getSetting('archivedProjects') || {}) };
       const offers = { ...(db.getSetting('scheduleReenableOffers') || {}) };
       for (const { entry, record, disabledFiles } of entries) {
@@ -227,7 +273,8 @@ function createWriterCommands(db) {
       db.setSetting('scheduleReenableOffers', offers);
       return entries.map(({ entry }) => ({ entry, record: archived[entry] }));
     },
-    completeArchive(entries, disabled) {
+    completeArchive(entries, disabled, proof) {
+      guard(entries.map(({ entry }) => entryProject(entry)), proof);
       const archived = { ...(db.getSetting('archivedProjects') || {}) };
       if (entries.some(({ entry, record }) => JSON.stringify(archived[entry]) !== JSON.stringify(record))) return false;
       for (const { entry, record } of entries) {
@@ -237,7 +284,8 @@ function createWriterCommands(db) {
       db.setSetting('archivedProjects', archived);
       return true;
     },
-    undoArchiveProjectFolders(groups, archivedAt) {
+    undoArchiveProjectFolders(groups, archivedAt, proof) {
+      guard(groupProjects(groups), proof);
       const schedules = [];
       const result = archive.undoArchiveProjectFolders(groups, archivedAt, { ...settings, notify() {},
         reenable(filePaths, projectRoot) {

@@ -9,7 +9,7 @@ const { spawnSync } = require('node:child_process');
 const cli = require('../cli-session-state');
 const { encodeProjectPath } = require('../encode-project-path');
 const { createTriggerContext } = require('../src/main/triggers/trigger-context');
-const { start } = require('../src/main/triggers/trigger-watcher');
+const { start } = require('./fixtures/trigger-watcher.cjs');
 const { resolveLocalTarget, resolveProject } = require('../src/main/triggers/trigger-actions');
 const { createComposerState } = require('../src/main/terminals/composer-state');
 

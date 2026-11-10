@@ -10,7 +10,7 @@ const os = require('node:os');
 const path = require('node:path');
 const cli = require('../cli-session-state');
 const { createTriggerContext } = require('../src/main/triggers/trigger-context');
-const { start } = require('../src/main/triggers/trigger-watcher');
+const { start } = require('./fixtures/trigger-watcher.cjs');
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 

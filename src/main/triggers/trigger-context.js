@@ -92,6 +92,7 @@ function createTriggerContext(deps) {
     },
   };
   if (deps.lifecycle) ctx.lifecycle = deps.lifecycle;
+  ctx.sessionRequests = deps.sessionRequests;
   ctx.lookupDeliveryFallback = async (id, deadline, { v1 = false } = {}) => {
     const tabs = live().filter(eligible);
     if (v1) {

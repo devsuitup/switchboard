@@ -1227,48 +1227,27 @@ async function deliverSingle({ ctx, sessionId, command, wait = 'idle', entry: se
 
 /**
  * Process a single trigger file (by basename, e.g. "abc-123.json").
- * Never throws — all errors land in the result file.
  *
  * @param {function} [acquireSessionLock] (sessionId) => Promise<releaseFn>;
  *        awaited right after sessionId is known valid, released in the
  *        `finally` below so a second trigger for the same session cannot
  *        touch its PTY/composer until this one is fully done.
  */
-async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryRetained, acquireSessionLock, acquireTabLock, actions) {
+async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryRetained, acquireSessionLock, acquireTabLock, actions, namespace) {
   // Only handle *.json files, ignore the processed/ subdir itself and
   // any stray files.
   if (!name.endsWith('.json')) return;
 
   const triggerPath = path.join(triggersDir, name);
   const uuid        = name.slice(0, -5); // strip ".json"
-  let resultPath  = path.join(processedDir, uuid + '.result.json');
-  const resultTmp   = resultPath + '.tmp'; // I1: atomic write temp path
   let markerPath = path.join(processedDir, uuid + '.action.json');
   let versioned = false;
   let recoveryError;
-  const canonicalName = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid);
-
-  const uuidShaped = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid);
-  const canonicalStem = uuid.toLowerCase();
-
-  // see .ai/contexts/trigger-watcher.md, "Committed result precedence"
-  function yieldsToCommittedResult() {
-    const canonicalResult = path.join(processedDir, canonicalStem + '.result.json');
-    try {
-      if (!actions.committedResult(canonicalResult)) return false;
-    } catch (err) {
-      if (onEntryRetained) onEntryRetained();
-      safeLogError(ctx, '[trigger-watcher] Existing result could not be inspected, input left untouched:', name, err.message);
-      return true;
-    }
-    actions.publish({ resultPath: canonicalResult, triggerPath, markerPath: path.join(processedDir, canonicalStem + '.action.json'),
-      retained: onEntryRetained, committed: true });
-    return true;
-  }
+  let guarded;
+  let publicationFailed = false;
 
   function canonicalizePaths() {
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
-      resultPath = path.join(processedDir, uuid.toLowerCase() + '.result.json');
       markerPath = path.join(processedDir, uuid.toLowerCase() + '.action.json');
     }
   }
@@ -1278,10 +1257,12 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   async function writeResult(result) {
     if (versioned) {
       canonicalizePaths();
-      actions.publish({ result, resultPath, triggerPath, markerPath, retained: onEntryRetained });
+      if (!await actions.publish({ result, namespace: guarded, retained: onEntryRetained })) {
+        publicationFailed = true;
+        throw new Error('action result publication failed');
+      }
       return;
     }
-    if (uuidShaped && yieldsToCommittedResult()) return;
     // Every result carries `submitted`; an unstated one is the safe value.
     if (result.submitted === undefined) result.submitted = SUBMITTED_NO;
     if (result.wrote === undefined) result.wrote = writeAttempted;
@@ -1297,21 +1278,10 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
         : result.compaction_observed === true;
     }
     try {
-      fs.writeFileSync(resultTmp, JSON.stringify(result) + '\n', 'utf8');
-      renameWithRetry(resultTmp, resultPath);
+      await guarded.publish(result);
     } catch (err) {
-      safeLogError(ctx, '[trigger-watcher] Failed to write result file:', err.message);
-    }
-    try {
-      fs.unlinkSync(triggerPath);
-    } catch (err) {
-      if (err.code !== 'ENOENT') {
-        // onEntryRetained() first: the guarantee it records must not depend
-        // on whether the log call after it succeeds.
-        if (onEntryRetained) onEntryRetained();
-        safeLogError(ctx, '[trigger-watcher] Trigger file survived processing, will not be run again:',
-          name, err.message);
-      }
+      publicationFailed = true;
+      throw err;
     }
   }
 
@@ -1323,37 +1293,12 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   let compactStepsTotal = 0;
   let writeAttempted = false;
 
-  function recoverState() {
-    try {
-      const state = actions.readState(resultPath, markerPath);
-      if (state) {
-        actions.publish({ ...state, resultPath, triggerPath, markerPath, retained: onEntryRetained });
-        return true;
-      }
-    } catch (err) {
-      recoveryError = err;
-      safeLogError(ctx, '[trigger-watcher] v1 recovery state unavailable:', name, err.message);
-    }
-    return false;
-  }
-
   try {
-
-  if (uuidShaped && yieldsToCommittedResult()) return;
+  guarded = await namespace.begin(uuid, triggerPath);
+  if (guarded.done) return;
 
   // ── 1. lstat + size guard (C1 + C2) ──────────────────────────────────────
-  let stat;
-  try {
-    stat = fs.lstatSync(triggerPath); // C2: lstat does NOT follow symlinks
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      if (canonicalName) recoverState();
-      return;
-    }
-    ctx.log.error('[trigger-watcher] Trigger file could not be inspected:', name, err.message);
-    await writeResult({ ok: false, error: 'trigger could not be inspected: ' + err.message });
-    return;
-  }
+  const stat = guarded.opened.stat;
 
   if (!stat.isFile()) {
     // C2: reject symlinks, directories, device nodes, etc.
@@ -1379,10 +1324,9 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       Math.round(ageMs) + 'ms old, max ' + maxAgeMs + 'ms');
     let staleTrigger;
     try {
-      staleTrigger = JSON.parse(fs.readFileSync(triggerPath, 'utf8'));
+      staleTrigger = guarded.trigger;
       versioned = isVersioned(staleTrigger, uuid);
     } catch {}
-    if (versioned && canonicalName && recoverState()) return;
     const stale = {
       ok:        false,
       submitted: SUBMITTED_NO,
@@ -1407,7 +1351,7 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
       await new Promise(r => setTimeout(r, 50));
     }
     try {
-      const raw = fs.readFileSync(triggerPath, 'utf8');
+      const raw = guarded.opened.bytes.toString('utf8');
       trigger   = JSON.parse(raw);
       lastParseErr = null;
       break; // success
@@ -1429,7 +1373,6 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
 
   if (isVersioned(trigger, uuid)) {
     versioned = true;
-    if (canonicalName && recoverState()) return;
     const evidence = { steps_total: 0 };
     if (!recoveryError && !validateTrigger(trigger, uuid, evidence) && ctx.lifecycle) {
       const deadline = Date.now() + (trigger.timeout_ms ?? getIdleTimeout());
@@ -2120,10 +2063,16 @@ async function processTriggerFile(name, ctx, triggersDir, processedDir, onEntryR
   });
 
   } catch (err) {
+    if (!guarded || publicationFailed) {
+      onEntryRetained?.();
+      safeLogError(ctx, '[trigger-watcher] Request guard/publication failed; input retained:', name, err?.message);
+      return;
+    }
     // see .ai/contexts/trigger-watcher.md, "Removing the entry"
     safeLogError(ctx, '[trigger-watcher] Trigger processing threw, writing a generic failure result:',
       name, err && err.message);
-    await writeResult({ ok: false, error: 'internal error: ' + (err && err.message), internal: true });
+    try { await writeResult({ ok: false, error: 'internal error: ' + (err && err.message), internal: true }); }
+    catch (error) { onEntryRetained?.(); safeLogError(ctx, '[trigger-watcher] Result publication failed; input retained:', name, error?.message); }
   } finally {
     if (releaseTabLock) releaseTabLock();
     if (forgetTranscript) {
@@ -2157,6 +2106,10 @@ function start(ctx) {
   const triggersDir  = getTriggersDir();
   const processedDir = path.join(triggersDir, 'processed');
   const actions = createTriggerActions({ fs, renameWithRetry, log: ctx.log });
+  const { createSessionRequestPublication } = require('./session-request-publication');
+  const { createSessionRequestNamespace } = require('./session-request-namespace');
+  const publisher = createSessionRequestPublication({ fs, renameWithRetry, log: ctx.log });
+  const namespace = createSessionRequestNamespace({ fs, journal: ctx.sessionRequests, publisher, actions, processedDir });
 
   // Ensure directories exist
   try {
@@ -2177,6 +2130,19 @@ function start(ctx) {
   // Entries that were processed but stayed in the directory — see
   // .ai/contexts/trigger-watcher.md.
   const retained = new Set();
+  const namespaceLocks = new Map();
+  const retryTimers = new Map();
+  const retryAttempts = new Map();
+  let closed = false;
+  async function acquireNamespace(filename) {
+    const key = filename.slice(0, -5).toLowerCase(), previous = namespaceLocks.get(key) || Promise.resolve();
+    let release;
+    const tail = previous.then(() => new Promise(resolve => { release = resolve; }));
+    namespaceLocks.set(key, tail);
+    await previous;
+    await Promise.resolve();
+    return () => { release(); if (namespaceLocks.get(key) === tail) namespaceLocks.delete(key); };
+  }
 
   // see .ai/contexts/trigger-watcher.md, "Session serialization"
   const sessionLocks = new Map(); // sessionId -> tail Promise of the queue
@@ -2198,37 +2164,42 @@ function start(ctx) {
   // see docs/decisions/0003-trigger-delivery-per-tab.md
   const { acquireTabInput: acquireTabLock } = require('../terminals/tab-input-lock');
 
-  // see .ai/contexts/trigger-watcher.md, "Canonical request ownership"
-  const owners = new Set();
-  const ownerKey = filename => {
-    const stem = filename.slice(0, -5);
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stem) ? stem.toLowerCase() : null;
-  };
-  const ownedElsewhere = filename => { const key = ownerKey(filename); return key !== null && owners.has(key); };
-
   function scheduleNext() {
-    for (let index = 0; index < waitQueue.length && inFlight.size < MAX_INFLIGHT;) {
-      const filename = waitQueue[index];
-      if (inFlight.has(filename) || retained.has(filename)) { waitQueue.splice(index, 1); continue; }
-      if (ownedElsewhere(filename)) { index++; continue; }
-      waitQueue.splice(index, 1);
+    while (waitQueue.length > 0 && inFlight.size < MAX_INFLIGHT) {
+      const filename = waitQueue.shift();
+      // Dedup: may have been enqueued twice before a slot opened
+      if (inFlight.has(filename) || retained.has(filename)) continue;
       dispatch(filename);
     }
   }
 
   function dispatch(filename) {
     inFlight.add(filename);
-    const key = ownerKey(filename);
-    if (key !== null) owners.add(key);
-    processTriggerFile(filename, ctx, triggersDir, processedDir, () => retained.add(filename), acquireSessionLock, acquireTabLock, actions)
+    let releaseNamespace;
+    acquireNamespace(filename).then(release => {
+      releaseNamespace = release;
+      if (closed) return;
+      return processTriggerFile(filename, ctx, triggersDir, processedDir, () => retained.add(filename), acquireSessionLock, acquireTabLock, actions, namespace);
+    })
       .catch((err) => {
         retained.add(filename);
-        safeLogError(ctx, '[trigger-watcher] Trigger processing threw, will not be run again:',
+        safeLogError(ctx, '[trigger-watcher] Trigger processing threw; retained input will be retried:',
           filename, err && err.message);
       })
       .finally(() => {
+        releaseNamespace?.();
         inFlight.delete(filename);
-        if (key !== null) owners.delete(key);
+        if (!closed && retained.has(filename) && !retryTimers.has(filename)) {
+          const attempt = retryAttempts.get(filename) || 0;
+          retryAttempts.set(filename, attempt + 1);
+          const timer = setTimeout(() => {
+            retryTimers.delete(filename);
+            retained.delete(filename);
+            handleFile(filename);
+          }, [250, 1000, 5000, 30000][Math.min(attempt, 3)]);
+          timer.unref?.();
+          retryTimers.set(filename, timer);
+        } else if (!retained.has(filename)) retryAttempts.delete(filename);
         scheduleNext();
       });
   }
@@ -2238,6 +2209,7 @@ function start(ctx) {
   // MAX_INFLIGHT backpressure (waitQueue) for either origin of a filename.
   // See .ai/contexts/trigger-watcher.md, "Startup scan".
   function handleFile(filename) {
+    if (closed) return;
     if (!filename || !filename.endsWith('.json')) return;
     // Ignore files inside subdirectories (e.g. processed/) — fs.watch on
     // Linux only reports the basename for non-recursive watches, but be
@@ -2257,8 +2229,9 @@ function start(ctx) {
       catch { return; }
     }
 
-    if (inFlight.size >= MAX_INFLIGHT || ownedElsewhere(filename)) {
-      if (!waitQueue.includes(filename)) waitQueue.push(filename);
+    if (inFlight.size >= MAX_INFLIGHT) {
+      // W4: backpressure — queue for later
+      waitQueue.push(filename);
       return;
     }
     dispatch(filename);
@@ -2301,6 +2274,10 @@ function start(ctx) {
 
   return {
     close() {
+      closed = true;
+      for (const timer of retryTimers.values()) clearTimeout(timer);
+      retryTimers.clear();
+      waitQueue.length = 0;
       try { watcher.close(); } catch {}
     },
   };

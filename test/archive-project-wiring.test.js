@@ -42,8 +42,8 @@ test('archive-project: wires the real effects into archiveProjectFolders', () =>
     /mergeProjects: mergePlaceholderSessions,/, /activeSessions,/, /notify: \(\) => notifyRendererProjectsChanged\('archive'\),/,
   ]) assert.match(deps, wiring);
   const facade = read('session-index-writer.js');
-  assert.ok(facade.includes("await request('beginArchive', entries)"));
-  assert.ok(facade.includes("await request('completeArchive', accepted, completed)"));
+  assert.ok(facade.includes("await request('beginArchive', entries, workflowProof())"));
+  assert.ok(facade.includes("await request('completeArchive', accepted, completed, workflowProof())"));
   assert.ok(facade.includes('deps.mergeProjects(await writer.buildProjectsFromCache(true))'));
 });
 

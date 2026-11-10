@@ -123,7 +123,7 @@ test('a half-typed sentence refuses the trigger, and a submitted one lets it thr
   const ctx     = createTriggerContext({
     activeSessions: sessions, log: silentLog, isPtyAlive: () => true,
   });
-  const watcher = require('../src/main/triggers/trigger-watcher').start(ctx);
+  const watcher = require('./fixtures/trigger-watcher.cjs').start(ctx);
 
   try {
     // 1. The user types a sentence and does not submit it.

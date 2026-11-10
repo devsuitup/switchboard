@@ -951,6 +951,7 @@ if (!readonly) try {
 let preparedDeletionStatements;
 function deletionStatements() {
 return preparedDeletionStatements ??= {
+  hasFences: db.prepare('SELECT 1 FROM project_delete_fences LIMIT 1'),
   fence: db.prepare('SELECT * FROM project_delete_fences WHERE projectKey = ?'),
   setFence: !readonly && db.prepare(`INSERT INTO project_delete_fences(projectKey, epoch, operationId, blocked) VALUES (?, ?, ?, ?)
     ON CONFLICT(projectKey) DO UPDATE SET epoch=excluded.epoch, operationId=excluded.operationId, blocked=excluded.blocked`),
@@ -958,7 +959,7 @@ return preparedDeletionStatements ??= {
   insert: !readonly && db.prepare(`INSERT INTO project_delete_operations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
   progress: !readonly && db.prepare(`UPDATE project_delete_operations SET state=?, phase=?, lastRevision=?, nextUnit=?, sealed=?, errorJson=?, finishedAt=? WHERE operationId=?`),
   active: db.prepare('SELECT * FROM project_delete_operations WHERE sealed = 0 ORDER BY createdAt, operationId'),
-  terminal: db.prepare('SELECT operationId, finishedAt FROM project_delete_operations WHERE sealed = 1 ORDER BY finishedAt DESC, operationId DESC'),
+  terminal: db.prepare('SELECT operationId, finishedAt, phase FROM project_delete_operations WHERE sealed = 1 ORDER BY finishedAt DESC, operationId DESC'),
   units: db.prepare('SELECT * FROM project_delete_units WHERE operationId = ? ORDER BY ordinal'),
   addUnit: !readonly && db.prepare('INSERT INTO project_delete_units VALUES (?, ?, ?, ?, ?, ?)'),
   unitResult: !readonly && db.prepare('UPDATE project_delete_units SET status=?, resultJson=? WHERE operationId=? AND ordinal=?'),
@@ -967,6 +968,7 @@ return preparedDeletionStatements ??= {
 };
 }
 const projectDeletion = {
+  hasFences: () => !!deletionStatements().hasFences.get(),
   fence: key => deletionStatements().fence.get(key) || null,
   setFence: (key, epoch, id, blocked) => deletionStatements().setFence.run(key, epoch, id, blocked),
   operation: id => deletionStatements().operation.get(id) || null,
@@ -986,6 +988,7 @@ const projectDeletion = {
 let preparedRequestStatements;
 const requestSchemaAvailable = () => db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('session_requests', 'session_request_commands')").get().n === 2;
 function requestStatements() {
+  if (!requestSchemaAvailable()) throw Object.assign(new Error('Request journal schema is unavailable'), { code: 'SESSION_REQUEST_SCHEMA' });
   return preparedRequestStatements ??= {
     get: db.prepare('SELECT * FROM session_requests WHERE stemKey=?'),
     receipt: db.prepare('SELECT * FROM session_request_commands WHERE domainId=? AND actionToken=?'),
@@ -997,9 +1000,9 @@ function requestStatements() {
 }
 const sessionRequests = {
   available: requestSchemaAvailable,
-  get: key => requestSchemaAvailable() ? requestStatements().get.get(key) || null : null,
-  receipt: (key, token) => requestSchemaAvailable() ? requestStatements().receipt.get(key, token) || null : null,
-  conflict: (key, hash) => requestSchemaAvailable() ? requestStatements().conflict.get(key, hash)?.outcomeJson || null : null,
+  get: key => requestStatements().get.get(key) || null,
+  receipt: (key, token) => requestStatements().receipt.get(key, token) || null,
+  conflict: (key, hash) => requestStatements().conflict.get(key, hash)?.outcomeJson || null,
   insert: row => requestStatements().insert.run(row.stemKey, row.suppliedHash, row.rawHash, row.family,
     row.actualStem, row.resultBytes, row.createdAt, row.completedAt, row.revision),
   publish: row => requestStatements().publish.run(row.resultBytes, row.completedAt, row.revision, row.stemKey),

@@ -17,6 +17,10 @@ const rawCommands = new Set(['setSetting', 'deleteSetting', 'toggleStar', 'setSt
   'setCachedContinuationIndex', 'setCachedFileSize', 'setInitialScanComplete']);
 const settings = () => db.listSettingKeys('').map(key => [key, db.getSetting(key)]);
 const queue = [];
+const sealedWorkflows = new Set();
+const assertWorkflow = message => {
+  if (message.workflowId && sealedWorkflows.has(message.workflowId)) throw Object.assign(new Error('project workflow is sealed'), { code: 'WORKFLOW_SEALED' });
+};
 let running = false, interactiveBurst = 0;
 const backgroundCommands = new Set(['effects', 'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries',
   'applySearchFileBatch', 'setCachedEntrypoints', 'setCachedCustomTitles', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'dropRemoteFolder', 'cleanupWorktree']);
@@ -93,6 +97,20 @@ function* units(name, args) {
 }
 
 function* commandUnits(message) {
+  if (message.command === 'fenceWorkflow') {
+    yield () => {
+      const workflowId = message.args[0];
+      sealedWorkflows.add(workflowId);
+      for (let i = queue.length - 1; i >= 0; i--) if (queue[i].workflowId === workflowId) {
+        const cancelled = queue.splice(i, 1)[0];
+        parentPort.postMessage({ id: cancelled.id, error: { message: 'project workflow is sealed', code: 'WORKFLOW_SEALED' },
+          ...(cancelled.mutated ? { settings: settings() } : {}) });
+      }
+      return true;
+    };
+    return;
+  }
+  if (message.command === 'retireWorkflow') { yield () => sealedWorkflows.delete(message.args[0]); return; }
   if (message.command === 'getProjectDeletionState') { yield () => deletionProgress.read(message.args[0]); return; }
   if (message.command === 'readProjectDeletionScope') { yield () => deletionProgress.readScope(message.args[0]); return; }
   if (message.command === 'fenceProjectDeletion') { yield () => deletionProgress.fence(message.args[0]); return; }
@@ -114,11 +132,13 @@ async function drain() {
   while (queue.length) {
     const interactive = queue.findIndex(job => !backgroundCommands.has(job.command) && !['close', 'drain'].includes(job.command));
     const background = queue.findIndex(job => backgroundCommands.has(job.command));
-    const index = interactive >= 0 && (interactiveBurst < 4 || background < 0) ? interactive : background >= 0 ? background : 0;
+    const control = queue.findIndex(job => job.command === 'fenceWorkflow');
+    const index = control >= 0 ? control : interactive >= 0 && (interactiveBurst < 4 || background < 0) ? interactive : background >= 0 ? background : 0;
     const message = queue.splice(index, 1)[0];
     if (backgroundCommands.has(message.command)) interactiveBurst = 0;
     else interactiveBurst++;
     try {
+      assertWorkflow(message);
       if (!message.started) { message.started = true; parentPort.postMessage({ id: message.id, started: true }); }
       message.iterator ||= commandUnits(message);
       const unit = message.deferred || message.iterator.next();
@@ -127,7 +147,7 @@ async function drain() {
         parentPort.postMessage({ id: message.id, result: message.command === 'effects' ? { committedRevision: message.committedRevision } : message.result,
           ...(message.mutated ? { settings: settings() } : {}) });
       } else {
-        if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope', 'querySessionRequestOutcome'].includes(message.command)) message.result = unit.value();
+        if (['close', 'drain', 'measurements', 'getProjectDeletionState', 'readProjectDeletionScope', 'querySessionRequestOutcome', 'readProjectArchiveEpochs', 'fenceWorkflow', 'retireWorkflow'].includes(message.command)) message.result = unit.value();
         else if (message.command === 'fenceProjectDeletion') {
           const before = db.getSetting('_writer_revision') || 0;
           message.result = await transaction(message.command, null, undefined, unit.value);
@@ -143,6 +163,7 @@ async function drain() {
           const buffered = [unit];
           let deferred;
           const acknowledgment = await transaction(message.command, () => {
+            assertWorkflow(message);
             deferred = null;
             let next = unit, result, count = 0;
             while (!next.done) {

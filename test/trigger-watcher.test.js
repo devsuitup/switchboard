@@ -214,7 +214,7 @@ async function runCompactEvidenceCase(t, { chain = false, evidence = 'none', des
     const composerState = session.composerState;
     Object.defineProperty(session, 'composerState', { get() { started(); return composerState; } });
     if (['missing', 'missing-then-future'].includes(evidence)) fs.unlinkSync(transcript);
-    watcher = require('../src/main/triggers/trigger-watcher').start(ctx);
+    watcher = require('./fixtures/trigger-watcher.cjs').start(ctx);
     writeTrigger(tmp, 'i488', {
       sessionId, timeout_ms: deadline + 700,
       ...(chain ? { chain: [{ command: '/compact', timeout_ms: deadline },
@@ -389,7 +389,7 @@ test('happy path: trigger → pty.write called, result ok:true, trigger deleted'
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-happy-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -433,7 +433,7 @@ test('unknown sessionId: result ok:false with session not found, no PTY write', 
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const ctx        = makeCtx('real-session');
     watcher = start(ctx);
 
@@ -468,7 +468,7 @@ test('malformed JSON: result ok:false with error, trigger deleted, no PTY write'
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const ctx        = makeCtx('any-session');
     watcher = start(ctx);
 
@@ -501,7 +501,7 @@ test('missing required field (no command): result ok:false, no PTY write', async
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-nocommand-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -535,7 +535,7 @@ test('wait:idle while busy → flips to idle after 150ms → write happens, wait
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000'; // generous timeout
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     let busy = true;
     const SESSION_ID = 'sess-idle-' + Date.now();
     const ctx = makeCtx(SESSION_ID, () => busy);
@@ -578,7 +578,7 @@ test('wait:idle timeout: busy stays true → ok:false, error "not sent", no PTY 
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200'; // short timeout for test
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-timeout-' + Date.now();
     const ctx = makeCtx(SESSION_ID, () => true); // always busy
     watcher = start(ctx);
@@ -618,7 +618,7 @@ test('C1 size cap: trigger > 64 KB rejected before read, result ok:false', async
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-c1-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -646,29 +646,26 @@ test('C1 size cap: trigger > 64 KB rejected before read, result ok:false', async
 });
 
 // C2: symlink rejection
-test('C2 symlink: symlinked trigger rejected, result ok:false', async () => {
+test('C2 symlink: symlinked trigger retains its entry and publishes nothing', async () => {
   const tmp = mkTmp();
   let watcher;
   try {
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-c2-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
 
     const uuid      = 'c2-' + Date.now();
     const linkPath  = path.join(tmp, uuid + '.json');
-    // Symlink to /etc/hostname (always exists on Linux)
     fs.symlinkSync('/etc/hostname', linkPath);
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
-    await waitForFile(resultPath, 2000);
-
-    const result = readResult(path.join(tmp, 'processed'), uuid);
-    assert.equal(result.ok, false);
-    assert.match(result.error, /regular file/i);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(resultPath), false);
+    assert.ok(fs.lstatSync(linkPath).isSymbolicLink(), 'the unsafe entry is retained');
 
     assert.deepEqual(ctx._written, [], 'no PTY write for symlink trigger');
 
@@ -679,9 +676,6 @@ test('C2 symlink: symlinked trigger rejected, result ok:false', async () => {
     cleanup(tmp);
   }
 });
-
-// W1: SyntaxError retry — trigger is initially truncated JSON but becomes valid after 30 ms.
-// We simulate this by writing valid JSON directly (the retry should succeed on first attempt);
 // then we test the "retry-then-fail" path: both attempts get bad JSON → ok:false.
 test('W1 partial-write retry: truncated JSON on both attempts → ok:false after retry', async () => {
   const tmp = mkTmp();
@@ -690,7 +684,7 @@ test('W1 partial-write retry: truncated JSON on both attempts → ok:false after
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const ctx    = makeCtx('any-session');
     watcher = start(ctx);
 
@@ -723,7 +717,7 @@ test('W2 command length cap: command > 4 KB rejected, result ok:false', async ()
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-w2-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -759,7 +753,7 @@ test('W3 forbidden control chars: \\r in command rejected, result ok:false', asy
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-w3-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -794,7 +788,7 @@ test('W4 concurrency cap: 12 simultaneous triggers all get processed', async () 
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     // W4 bounds concurrent trigger *files*, independent of sessionId — a
     // dozen triggers on one session are now serialized by session (see the
     // "session serialization" tests), so this test uses 12 distinct sessions
@@ -852,7 +846,7 @@ test('W5 session exits during wait:idle → ok:false, error contains "session ex
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-w5-' + Date.now();
     const ctx = makeCtx(SESSION_ID, () => true); // stays busy
     watcher = start(ctx);
@@ -892,7 +886,7 @@ test('PTY write throws: result ok:false with pty write failed error', async () =
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-ptythrow-' + Date.now();
     const ctx        = makeCtx(SESSION_ID, () => false, { ptyThrows: true });
     watcher = start(ctx);
@@ -923,7 +917,7 @@ test('inFlight dedup: same filename event fired twice → processed at most once
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-dedup-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -958,7 +952,7 @@ test('I4 NaN timeout: invalid SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS uses default (
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = 'not-a-number'; // I4: triggers NaN guard
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-i4-' + Date.now();
     // Always busy — with a valid timeout this resolves to timedOut; without NaN guard it never resolves
     const ctx = makeCtx(SESSION_ID, () => true);
@@ -999,7 +993,7 @@ test('W6 timeout_ms: per-trigger timeout_ms honored, overrides env-var fallback'
     // env var set to 50 ms — without per-trigger override this would time out
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '50';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     let busy = true;
     const SESSION_ID = 'sess-tmout-override-' + Date.now();
     const ctx = makeCtx(SESSION_ID, () => busy);
@@ -1041,7 +1035,7 @@ test('W6 timeout_ms invalid: negative → ok:false, error "invalid timeout_ms", 
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-neg-tmout-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1077,7 +1071,7 @@ test('W6 timeout_ms invalid: non-integer float (1.5) → ok:false, no PTY write'
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-float-tmout-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1113,7 +1107,7 @@ test('W6 timeout_ms invalid: value > 600000 → ok:false, no PTY write', async (
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-cap-tmout-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1149,7 +1143,7 @@ test('W6 timeout_ms invalid: string type ("500") → ok:false, no PTY write', as
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-str-tmout-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1187,7 +1181,7 @@ test('W6 timeout_ms absent: falls back to env-var; env-var absent → falls back
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '300'; // env var: 300 ms
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-fallback-' + Date.now();
     // Always busy — with the env-var 300 ms timeout this should time out
     const ctx = makeCtx(SESSION_ID, () => true);
@@ -1229,7 +1223,7 @@ test('W7 dead on arrival: liveness false at lookup → ok:false, no wait, no wri
     process.env.SWITCHBOARD_TRIGGERS_DIR             = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS  = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-dead-' + Date.now();
     const ctx = makeCtx(SESSION_ID, () => false, { alive: false });
     watcher = start(ctx);
@@ -1264,7 +1258,7 @@ test('W7 dies during wait: alive at lookup, dead before write → ok:false with 
     process.env.SWITCHBOARD_TRIGGERS_DIR             = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS  = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-dies-' + Date.now();
     let busy = true;
     const ctx = makeCtx(SESSION_ID, () => busy);
@@ -1302,7 +1296,7 @@ test('W7 default helper: real-pid mock passes default signal-0 probe → happy p
     process.env.SWITCHBOARD_TRIGGERS_DIR             = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS  = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-default-alive-' + Date.now();
     const ctx = makeCtx(SESSION_ID);
     delete ctx.isPtyAlive; // force the default signal-0 path
@@ -1394,7 +1388,7 @@ test('chain happy path: 3-step chain → 3 PTY writes, result ok:true with steps
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-happy-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1449,7 +1443,7 @@ test('chain+command mutually exclusive: both present → ok:false, error mention
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-both-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1485,7 +1479,7 @@ test('chain validation: empty array → ok:false, error mentions chain', async (
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-empty-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1516,7 +1510,7 @@ test('chain validation: length > 20 → ok:false, error mentions chain', async (
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-long-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1550,7 +1544,7 @@ test('chain validation: step without command string → ok:false', async () => {
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-badstep-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1585,7 +1579,7 @@ test('chain validation: step command too long → ok:false, no PTY write', async
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-longcmd-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1620,7 +1614,7 @@ test('chain validation: step command with forbidden chars → ok:false, no PTY w
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-ctrlcmd-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1660,7 +1654,7 @@ test('chain timeout mid-chain: global timeout fires → ok:false, partial:true, 
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-timeout-' + Date.now();
     let busy = false;
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
@@ -1726,7 +1720,7 @@ test('chain session exit mid-chain: session exits during step 1 turn wait → ok
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-exit-' + Date.now();
     let busy = false;
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
@@ -1788,7 +1782,7 @@ test('chain per-step timeout_ms: step with short per-step timeout fires before g
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-steptmout-' + Date.now();
     let busy = false;
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
@@ -1849,7 +1843,7 @@ test('chain validation: invalid per-step timeout_ms → ok:false, no PTY write',
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-badtmout-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID);
     watcher = start(ctx);
@@ -1889,7 +1883,7 @@ test('chain instant-reply mid-chain: step 1 never sets busy → verify-retries t
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '10000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-instant-' + Date.now();
     let busy = false;
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
@@ -1964,7 +1958,7 @@ test('submit-verify single: busy never rises → retry Enter, submit_retries:1',
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-verify-noRise-' + Date.now();
     const ctx = makeCtx(SESSION_ID, () => false); // busy never rises
     watcher = start(ctx);
@@ -1999,7 +1993,7 @@ test('submit-verify single: busy rises fast → no retry, submit_retries:0', asy
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-verify-rise-' + Date.now();
     // Busy rises the moment the discrete Enter ('\r') is written — the verify
     // poll observes the rising edge on its first tick → no retry.
@@ -2042,7 +2036,7 @@ test('submit-verify chain final step silent: retry traced on steps[last].submit_
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '10000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-verify-finalsilent-' + Date.now();
     let busy = false;
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
@@ -2104,7 +2098,7 @@ test('submit-verify chain happy: auto-turn rises every step → submit_retries:0
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-verify-happy-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID); // auto-turn: busy@50, idle@600 per '\r'
     watcher = start(ctx);
@@ -2154,7 +2148,7 @@ test('politeness: a non-empty composer blocks every write and renounces with "no
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '300';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-polite-busy-' + Date.now();
     const ctx       = makeCtx(SESSION_ID);
     ctx._composer.pending = 5; // the user has a half-written sentence
@@ -2189,7 +2183,7 @@ test('politeness: an empty and quiet composer lets the write through', async () 
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-polite-free-' + Date.now();
     const ctx       = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -2221,7 +2215,7 @@ test('politeness: a composer that was typed into a moment ago is not free yet', 
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '300';
     process.env.SWITCHBOARD_TRIGGER_QUIET_MS        = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-polite-fresh-' + Date.now();
     const ctx       = makeCtx(SESSION_ID);
     // Counter back at zero — an Enter that validated a slash-command completion
@@ -2262,7 +2256,7 @@ test('politeness: SWITCHBOARD_TRIGGER_QUIET_MS="" falls back to the default wind
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '300';
     process.env.SWITCHBOARD_TRIGGER_QUIET_MS        = '';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-polite-emptyenv-' + Date.now();
     const ctx       = makeCtx(SESSION_ID);
     ctx._composer.pending     = 0;
@@ -2302,7 +2296,7 @@ test('W7: a PTY that dies during the politeness wait is not written to', async (
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-polite-dies-' + Date.now();
     const ctx       = makeCtx(SESSION_ID);
     // Alive and busy at the moment the trigger lands: the pre-flight probe
@@ -2342,7 +2336,7 @@ test('W7: a chain step whose PTY dies during the politeness wait writes nothing'
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-dies-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID);
     ctx._composer.pending     = 5;
@@ -2384,7 +2378,7 @@ test('politeness: a ctx with no getComposerState is treated as busy, not as free
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '300';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-polite-blind-' + Date.now();
     const ctx       = makeCtx(SESSION_ID);
     delete ctx.getComposerState; // a transport that cannot see the composer
@@ -2417,7 +2411,7 @@ test('politeness: the bare recovery Enter is withheld when the user types during
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-polite-recovery-' + Date.now();
     const ctx       = makeCtx(SESSION_ID); // busy never rises → recovery Enter path
     const origWrite = ctx._ptyProcess.write.bind(ctx._ptyProcess);
@@ -2454,7 +2448,7 @@ test('submitted: activity seen after our write yields "activity", never "confirm
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-submitted-confirmed-' + Date.now();
     const ctx       = makeChainCtx(SESSION_ID); // auto-turn: busy 50ms after '\r' (idle@600)
     const origWrite = ctx._ptyProcess.write.bind(ctx._ptyProcess);
@@ -2497,7 +2491,7 @@ test('submitted: an ordinary clean write — idle beforehand, activity observed,
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-submitted-genuine-confirmed-' + Date.now();
     const ctx       = makeChainCtx(SESSION_ID); // auto-turn: busy 50ms after '\r' (idle@600); composer untouched
     watcher = start(ctx);
@@ -2531,7 +2525,7 @@ test('submitted: the composer stays non-empty after our own Enter (it did not ta
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-submitted-stuck-' + Date.now();
     // No auto-turn: busy never rises on its own, mirroring the field incident
     // where the injected Enter did not register as a submit at all.
@@ -2582,7 +2576,7 @@ test('submitted: a chain reports the weakest of its steps, and a blocked later s
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-polite-' + Date.now();
     const ctx       = makeChainCtx(SESSION_ID);
     const origWrite = ctx._ptyProcess.write.bind(ctx._ptyProcess);
@@ -2634,7 +2628,7 @@ test('chain per-step submitted: a confirmed step and a non-confirmed step in the
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-perstep-mixed-' + Date.now();
     // noAutoTurn: full manual control over busy, so step 0 can be driven to
     // "confirmed" and step 1 (the final step) can be driven to "assumed"
@@ -2704,7 +2698,7 @@ test('chain per-step submitted: a step refused before writing (composer never fr
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-perstep-refused-' + Date.now();
     const ctx       = makeChainCtx(SESSION_ID);
     const origWrite = ctx._ptyProcess.write.bind(ctx._ptyProcess);
@@ -2755,7 +2749,7 @@ test('wait: an unrecognised value is refused loudly, before any write', async ()
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-wait-typo-' + Date.now();
     const ctx       = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -2788,7 +2782,7 @@ test('wait: an absent field keeps the "none" default', async () => {
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-wait-absent-' + Date.now();
     const ctx       = makeCtx(SESSION_ID, () => true); // busy: 'idle' would stall
     watcher = start(ctx);
@@ -2819,7 +2813,7 @@ test('submitted: a validation refusal before any write carries submitted "no"', 
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-submitted-no-' + Date.now();
     const ctx       = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -2856,7 +2850,7 @@ test('renouncing: a chain waiting on an idle that never comes writes nothing and
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-never-idle-' + Date.now();
     // Busy from the first poll and never released: `wait:"idle"` is unsatisfiable.
     const ctx     = makeChainCtx(SESSION_ID, { initiallyBusy: true, noAutoTurn: true });
@@ -2897,7 +2891,7 @@ test('renouncing: a single command waiting on an idle that never comes says "not
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-cmd-never-idle-' + Date.now();
     // A session stays busy for as long as a delegated agent runs, so this is the
     // path that fires most often in service.
@@ -2937,7 +2931,7 @@ test('renouncing: a chain whose first step was written reports "chain timeout", 
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-stuck-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
     let busy  = false;
@@ -2992,35 +2986,29 @@ function recordingLog() {
   };
 }
 
-test('unremovable entry: failure is logged instead of swallowed', async () => {
+test('unremovable entry: unsafe entry is retained and logged without a result', async () => {
   const tmp = mkTmp();
   let watcher;
   try {
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-unremovable-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     ctx.log          = recordingLog();
     watcher = start(ctx);
-
-    // A directory named <uuid>.json: lstat succeeds, isFile() is false, so the
-    // watcher writes a result — and unlink() on a directory always fails.
     const uuid  = 'unremovable-' + Date.now();
     const entry = path.join(tmp, uuid + '.json');
     fs.mkdirSync(entry);
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
-    await waitForFile(resultPath);
-
-    const result = readResult(path.join(tmp, 'processed'), uuid);
-    assert.equal(result.ok, false);
-    assert.match(result.error, /regular file/);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(resultPath), false);
     assert.equal(fs.existsSync(entry), true, 'precondition: the entry cannot be unlinked');
 
     assert.ok(
-      ctx.log._errors.some(m => /survived processing/.test(m)),
+      ctx.log._errors.some(m => /input retained/.test(m)),
       'a removal failure must be logged, not swallowed by a bare catch; got: ' +
         JSON.stringify(ctx.log._errors),
     );
@@ -3033,14 +3021,14 @@ test('unremovable entry: failure is logged instead of swallowed', async () => {
   }
 });
 
-test('unremovable entry: a later event on the same name is never processed again', async () => {
+test('unremovable entry: a corrected regular input can be admitted on retry', async () => {
   const tmp = mkTmp();
   let watcher;
   try {
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-noreplay-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     ctx.log          = recordingLog();
@@ -3052,20 +3040,15 @@ test('unremovable entry: a later event on the same name is never processed again
 
     const processedDir = path.join(tmp, 'processed');
     const resultPath   = path.join(processedDir, uuid + '.result.json');
-    await waitForFile(resultPath);
-    assert.equal(readResult(processedDir, uuid).ok, false, 'first pass rejected the entry');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(resultPath), false, 'unsafe entry has no result or consumed claim');
 
-    // The entry survived processing. Make the same name appear again — a valid
-    // trigger this time. It must NOT be picked up: it was already processed.
     fs.rmdirSync(entry);
     writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
-    await new Promise(r => setTimeout(r, 600));
-
-    assert.deepEqual(ctx._written, [],
-      'a name whose entry survived processing must never reach the PTY again');
-    assert.equal(readResult(processedDir, uuid).ok, false,
-      'the original result must not be overwritten by a second run');
+    await waitForFile(resultPath, 2000);
+    assert.ok(ctx._written.includes('/clear'));
+    assert.equal(readResult(processedDir, uuid).ok, true);
 
   } finally {
     if (watcher) watcher.close();
@@ -3075,7 +3058,7 @@ test('unremovable entry: a later event on the same name is never processed again
   }
 });
 
-test('a throwing ctx yields a definitive result (no unhandled rejection), and a later attempt is not blocked', async () => {
+test('a throwing ctx yields a definitive result (no unhandled rejection), and replay returns the saved failure', async () => {
   const tmp = mkTmp();
   let watcher;
   const rejections = [];
@@ -3085,7 +3068,7 @@ test('a throwing ctx yields a definitive result (no unhandled rejection), and a 
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-throwing-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     ctx.log          = recordingLog();
@@ -3119,17 +3102,14 @@ test('a throwing ctx yields a definitive result (no unhandled rejection), and a 
       'the failure must be logged; got: ' + JSON.stringify(ctx.log._errors),
     );
 
-    // Nothing was left unresolved by the first attempt — a result was written
-    // and the trigger was deleted — so a fresh trigger dropped under the same
-    // name afterwards is a new attempt, not a replay, and must go through.
     shouldThrow = false;
     fs.rmSync(resultPath);
     writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
     await waitForFile(resultPath, 2000);
 
     const secondResult = readResult(processedDir, uuid);
-    assert.equal(secondResult.ok, true, 'a fresh trigger with the same name must not be blocked by retained');
-    assert.ok(ctx._written.includes('/clear'), 'the second, valid attempt reaches the PTY');
+    assert.deepEqual(secondResult, firstResult, 'same request replays the journalled failure');
+    assert.deepEqual(ctx._written, [], 'replay cannot repeat the effect');
 
   } finally {
     process.removeListener('unhandledRejection', onRejection);
@@ -3140,13 +3120,6 @@ test('a throwing ctx yields a definitive result (no unhandled rejection), and a 
   }
 });
 
-// ── Defects found in adversarial review of PR #166 ────────────────────────────
-// Two paths could decide a trigger's fate without ever calling writeResult():
-// a throw before/during shape validation (destructuring `null`, or a chain
-// step that isn't an object), and a non-ENOENT lstat failure. Both used to
-// leave the trigger on disk forever with no result file. See
-// .ai/contexts/trigger-watcher.md, "Removing the entry".
-
 test('trigger body is JSON null: destructuring throws, but the entry is still resolved', async () => {
   const tmp = mkTmp();
   let watcher;
@@ -3154,7 +3127,7 @@ test('trigger body is JSON null: destructuring throws, but the entry is still re
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const ctx = makeCtx('any-session');
     watcher = start(ctx);
 
@@ -3187,7 +3160,7 @@ test('chain step is not an object: property access throws, but the entry is stil
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const ctx = makeCtx('any-session');
     watcher = start(ctx);
 
@@ -3212,7 +3185,7 @@ test('chain step is not an object: property access throws, but the entry is stil
   }
 });
 
-test('lstat fails with a non-ENOENT error: result written and trigger deleted, not silently returned', async () => {
+test('lstat fails with a non-ENOENT error: input retained and no result published', async () => {
   const tmp = mkTmp();
   let watcher;
   const realLstatSync = fs.lstatSync;
@@ -3220,17 +3193,13 @@ test('lstat fails with a non-ENOENT error: result written and trigger deleted, n
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-lstat-eperm-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
 
     const uuid        = 'lstat-eperm-' + Date.now();
     const triggerPath = path.join(tmp, uuid + '.json');
-
-    // Simulate a share-lock / permission error a real filesystem can raise —
-    // distinct from ENOENT, which is the one case this function must still
-    // treat as "nothing to report" (see the ENOENT branch just above).
     fs.lstatSync = (p, ...rest) => {
       if (p === triggerPath) {
         const err = new Error('EPERM: operation not permitted, lstat ' + p);
@@ -3243,13 +3212,9 @@ test('lstat fails with a non-ENOENT error: result written and trigger deleted, n
     writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
 
     const resultPath = path.join(tmp, 'processed', uuid + '.result.json');
-    await waitForFile(resultPath, 2000);
-
-    const result = readResult(path.join(tmp, 'processed'), uuid);
-    assert.equal(result.ok, false);
-    assert.match(result.error, /could not be inspected/i);
-    assert.equal(fs.existsSync(triggerPath), false,
-      'trigger file must be deleted even when lstat itself fails');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(resultPath), false);
+    assert.equal(fs.existsSync(triggerPath), true, 'unhashable input must be retained');
     assert.deepEqual(ctx._written, [], 'no PTY write when lstat fails');
 
   } finally {
@@ -3261,13 +3226,6 @@ test('lstat fails with a non-ENOENT error: result written and trigger deleted, n
   }
 });
 
-// ── Defects found in the third adversarial review of PR #166 ──────────────────
-// All four poll loops call ctx back on a deferred `setTimeout` tick, not just
-// their first, synchronous call. A throw from that deferred tick used to have
-// nothing to catch it — not the Promise executor (already returned), not
-// processTriggerFile's try/catch, not dispatch()'s .catch(). See
-// .ai/contexts/trigger-watcher.md, "Poll loops must reject, not throw".
-
 test('a hook that throws starting from the SECOND tick of the composer-free poll does not escape as an uncaughtException', async () => {
   const tmp = mkTmp();
   let watcher;
@@ -3278,7 +3236,7 @@ test('a hook that throws starting from the SECOND tick of the composer-free poll
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-composer-deferred-throw-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     ctx.log          = recordingLog();
@@ -3331,7 +3289,7 @@ test('a hook that throws starting from the SECOND tick of the idle-wait poll doe
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-idle-deferred-throw-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     ctx.log          = recordingLog();
@@ -3383,7 +3341,7 @@ test('writeResult never throws even when ctx.log.error itself throws (no uncaugh
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-log-throws-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     let logCalls = 0;
@@ -3392,10 +3350,6 @@ test('writeResult never throws even when ctx.log.error itself throws (no uncaugh
       error: (...a) => { logCalls++; throw new Error('logger is broken'); },
     };
     watcher = start(ctx);
-
-    // A directory named <uuid>.json: lstat succeeds, isFile() is false ->
-    // writeResult({ok:false}) runs; unlink() on a directory then fails
-    // (non-ENOENT), reaching the retained path whose own log call throws.
     const uuid  = 'log-throws-' + Date.now();
     const entry = path.join(tmp, uuid + '.json');
     fs.mkdirSync(entry);
@@ -3403,15 +3357,13 @@ test('writeResult never throws even when ctx.log.error itself throws (no uncaugh
     const processedDir = path.join(tmp, 'processed');
     const resultPath   = path.join(processedDir, uuid + '.result.json');
 
-    await waitForFile(resultPath, 2000);
+    await new Promise(resolve => setTimeout(resolve, 100));
 
     assert.ok(logCalls > 0, 'precondition: the throwing logger was reached');
     assert.deepEqual(uncaughtErrors, [], 'a broken logger must not surface as an uncaughtException');
     assert.deepEqual(rejections, [], 'a broken logger must not surface as an unhandledRejection');
 
-    const result = readResult(processedDir, uuid);
-    assert.equal(result.ok, false);
-    assert.match(result.error, /regular file/);
+    assert.equal(fs.existsSync(resultPath), false, 'guard failure publishes no fallback');
     assert.equal(fs.existsSync(entry), true,
       'the entry could not be unlinked and must stay on disk (retained)');
 
@@ -3425,7 +3377,7 @@ test('writeResult never throws even when ctx.log.error itself throws (no uncaugh
   }
 });
 
-test('benign ENOENT race on unlink does not retain the name: a later reuse of the same uuid is processed', async () => {
+test('benign ENOENT race on unlink does not retain the name: a different request reusing the uuid is archived', async () => {
   const tmp = mkTmp();
   let watcher;
   const realUnlinkSync = fs.unlinkSync;
@@ -3433,7 +3385,7 @@ test('benign ENOENT race on unlink does not retain the name: a later reuse of th
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-enoent-race-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     ctx.log          = recordingLog();
@@ -3443,11 +3395,6 @@ test('benign ENOENT race on unlink does not retain the name: a later reuse of th
     const triggerPath  = path.join(tmp, uuid + '.json');
     const processedDir = path.join(tmp, 'processed');
     const resultPath   = path.join(processedDir, uuid + '.result.json');
-
-    // Fake an external actor deleting the trigger file behind our back, just
-    // before our own unlinkSync call — the documented "benign ENOENT" race
-    // between two events on the same file (see .ai/contexts/trigger-watcher.md,
-    // "Removing the entry").
     let sawUnlinkAttempt = false;
     fs.unlinkSync = (p, ...rest) => {
       if (p === triggerPath && !sawUnlinkAttempt) {
@@ -3470,18 +3417,14 @@ test('benign ENOENT race on unlink does not retain the name: a later reuse of th
       'ENOENT on unlink must stay silent, not be logged as a survived entry; got: ' +
         JSON.stringify(ctx.log._errors),
     );
-
-    // A brand-new, legitimate trigger reuses the same uuid (e.g. a retried
-    // harness call). It must be picked up like any fresh trigger, not ignored
-    // as if the name had been retained.
     fs.rmSync(resultPath);
     writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear-second' });
 
-    await waitForFile(resultPath, 2000);
-    assert.equal(readResult(processedDir, uuid).ok, true,
-      'a name freed by a benign ENOENT race must not stay retained');
-    assert.ok(ctx._written.includes('/clear-second'),
-      'the reused trigger must reach the PTY, not be silently ignored');
+    const deadline = Date.now() + 2000;
+    while (fs.existsSync(triggerPath) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(fs.existsSync(triggerPath), false);
+    assert.ok(fs.readdirSync(processedDir).some(name => name.endsWith('.request')), 'the new payload is archived as a conflict');
+    assert.equal(ctx._written.includes('/clear-second'), false, 'a different request cannot execute under the old filename');
 
   } finally {
     fs.unlinkSync = realUnlinkSync;
@@ -3506,7 +3449,7 @@ test('writeResult never throws when the result write itself fails AND ctx.log.er
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-write-fails-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     let logCalls = 0;
@@ -3520,27 +3463,20 @@ test('writeResult never throws when the result write itself fails AND ctx.log.er
     const triggerPath  = writeTrigger(tmp, uuid, { sessionId: SESSION_ID, command: '/clear' });
     const processedDir = path.join(tmp, 'processed');
     const resultTmpPath = path.join(processedDir, uuid + '.result.json.tmp');
-
-    // Force the .tmp write inside writeResult() to fail, so its own catch's
-    // (now-guarded) log call is exercised — the branch the previous mutation
-    // probe found untested.
     fs.writeFileSync = (p, ...rest) => {
       if (p === resultTmpPath) throw new Error('disk full (simulated)');
       return realWriteFileSync.call(fs, p, ...rest);
     };
-
-    // Poll for the trigger file being gone rather than for a result file —
-    // the result write is the thing we are forcing to fail.
     const deadline = Date.now() + 2000;
-    while (fs.existsSync(triggerPath) && Date.now() < deadline) {
+    while (logCalls === 0 && Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 20));
     }
 
     assert.ok(logCalls > 0, 'precondition: the throwing logger was reached');
     assert.deepEqual(uncaughtErrors, [], 'a broken logger must not surface as an uncaughtException');
     assert.deepEqual(rejections, [], 'a broken logger must not surface as an unhandledRejection');
-    assert.equal(fs.existsSync(triggerPath), false,
-      'the unlink must still run even though the result write failed first');
+    assert.equal(fs.existsSync(triggerPath), true,
+      'failed publication retains the original input');
 
   } finally {
     fs.writeFileSync = realWriteFileSync;
@@ -3560,7 +3496,7 @@ test('internal field: the generic catch marks internal:true; a validation refusa
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const ctx = makeCtx('any-session');
     watcher = start(ctx);
 
@@ -3614,7 +3550,7 @@ test('outer generic-catch log call cannot escape even when ctx.log.error throws 
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const ctx = makeCtx('any-session');
     let logCalls = 0;
     ctx.log = {
@@ -3656,7 +3592,7 @@ test('outer generic-catch log call cannot escape even when ctx.log.error throws 
   }
 });
 
-test('dispatch() backstop log call cannot escape even when ctx.log.error throws (name still ends up retained)', async () => {
+test('dispatch() backstop log call cannot escape even when ctx.log.error throws (unsafe entry is retried)', async () => {
   const tmp = mkTmp();
   let watcher;
   const uncaughtErrors = [];
@@ -3665,25 +3601,13 @@ test('dispatch() backstop log call cannot escape even when ctx.log.error throws 
   const onRejection = (err) => rejections.push(err);
   process.on('uncaughtException', onUncaught);
   process.on('unhandledRejection', onRejection);
-
-  // dispatch()'s own .catch() only fires if processTriggerFile() itself
-  // rejects -- which, with both writeResult() try/catch blocks now safe,
-  // only still happens if onEntryRetained() (== retained.add(filename), a
-  // Set the caller never sees) throws. This forces exactly that, to reach
-  // the one remaining call site without touching module internals: a
-  // directory-shaped trigger makes writeResult()'s unlink fail twice (the
-  // validation-refusal write, then the outer catch's own fallback write),
-  // so Set.prototype.add is patched to throw only for the 2nd and 3rd
-  // .add() call carrying this trigger's exact filename -- letting
-  // dispatch()'s own (4th) retained.add(filename) call go through for real,
-  // which is the guarantee under test.
   const realSetAdd = Set.prototype.add;
   let addCallsForFile = 0;
   try {
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const ctx = makeCtx('any-session');
     let logCalls = 0;
     ctx.log = {
@@ -3699,7 +3623,7 @@ test('dispatch() backstop log call cannot escape even when ctx.log.error throws 
     Set.prototype.add = function (value) {
       if (value === filename) {
         addCallsForFile++;
-        if (addCallsForFile === 2 || addCallsForFile === 3) {
+        if (addCallsForFile === 2) {
           throw new Error('retained set is broken (simulated)');
         }
       }
@@ -3707,32 +3631,26 @@ test('dispatch() backstop log call cannot escape even when ctx.log.error throws 
     };
 
     fs.mkdirSync(entry);
-
-    // No result-file poll: the write inside writeResult() races the induced
-    // throw, so poll for the trigger to stop being reprocessed instead.
     const deadline = Date.now() + 2000;
-    while (addCallsForFile < 4 && Date.now() < deadline) {
+    while (addCallsForFile < 3 && Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 20));
     }
     await new Promise(r => setTimeout(r, 100)); // let dispatch()'s .finally() settle
 
     Set.prototype.add = realSetAdd;
 
-    assert.ok(addCallsForFile >= 4,
-      'precondition: retained.add(filename) was reached a 4th time, from dispatch()\'s own catch');
+    assert.ok(addCallsForFile >= 3,
+      'precondition: retained.add(filename) was reached a third time, from dispatch()\'s own catch');
     assert.ok(logCalls > 0, 'precondition: the throwing logger was reached');
     assert.deepEqual(uncaughtErrors, [],
       'a broken logger in dispatch()\'s backstop must not surface as an uncaughtException');
     assert.deepEqual(rejections, [],
       'a broken logger in dispatch()\'s backstop must not surface as an unhandledRejection');
-
-    // The name must be genuinely retained: drop a fresh, valid trigger under
-    // the same uuid and confirm it is never picked up.
     fs.rmdirSync(entry);
     writeTrigger(tmp, uuid, { sessionId: 'any-session', command: '/clear' });
     await new Promise(r => setTimeout(r, 400));
-    assert.deepEqual(ctx._written, [],
-      'the name must stay retained -- dispatch()\'s own retained.add(filename) must have gone through');
+    assert.ok(ctx._written.includes('/clear'),
+      'an unconsumed unsafe entry may be corrected and admitted on the scheduled retry');
 
   } finally {
     Set.prototype.add = realSetAdd;
@@ -3745,9 +3663,6 @@ test('dispatch() backstop log call cannot escape even when ctx.log.error throws 
   }
 });
 
-// ── submitted: the strength order and what "activity" refuses to claim ────────
-// see .ai/contexts/trigger-watcher.md ("submitted")
-
 test('submitted: a session already busy before our write never reports "confirmed"', async () => {
   const tmp = mkTmp();
   let watcher;
@@ -3755,7 +3670,7 @@ test('submitted: a session already busy before our write never reports "confirme
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-preexisting-busy-' + Date.now();
     // Busy from the start and never idle: every busy reading the watcher takes
     // predates its own write, so no observation of ours caused it.
@@ -3784,7 +3699,7 @@ test('submitted: a session already busy before our write never reports "confirme
 });
 
 test('submitted: the strength order is total, and "confirmed" sits strictly above "activity"', () => {
-  const { weakestSubmitted, SUBMITTED_RANK } = require('../src/main/triggers/trigger-watcher');
+  const { weakestSubmitted, SUBMITTED_RANK } = require('./fixtures/trigger-watcher.cjs');
 
   const ORDER = ['no', 'assumed', 'activity', 'confirmed'];
 
@@ -3824,7 +3739,7 @@ test('chain "activity" fold: a step that never observes busy pulls the whole cha
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-fold-assumed-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
     let busy = false;
@@ -3885,7 +3800,7 @@ test('chain "activity" fold: a step observed only through its retry still counts
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-fold-retry-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
     let busy = false;
@@ -3938,7 +3853,7 @@ test('chain "confirmed" fold: every step idle beforehand, observed, and read bac
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-fold-confirmed-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID); // auto-turn on every '\r'; composer untouched throughout
     watcher = start(ctx);
@@ -3977,7 +3892,7 @@ test('chain "confirmed" fold: one step composer readback is inconclusive -> pull
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-fold-weak-confirm-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID); // auto-turn on every '\r'
     let writeCount = 0;
@@ -4032,7 +3947,7 @@ test('chain "confirmed" false positive: a busy blip right after step 0\'s turn m
     // suite-wide fast default so that relationship holds regardless of it.
     process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS     = '300';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-chain-busyfall-flicker-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
 
@@ -4109,7 +4024,7 @@ test('waitForBusyFall settle window: busy that keeps reasserting must never let 
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
     process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS     = '300';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-busyfall-oscillate-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
 
@@ -4187,7 +4102,7 @@ test('waitForBusyFall settle window: a turn finishing with too little margin bef
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
     process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS     = '300';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-busyfall-tight-deadline-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
 
@@ -4256,7 +4171,7 @@ test('submitted: busy observed between a step\'s text write and its own Enter mu
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-midbusy-gate-' + Date.now();
     const STEP1_TEXT = 'resume the task';
     let busy = false;
@@ -4344,7 +4259,7 @@ test('total_waited_ms: equals the sum of steps[*].waited_ms, including each step
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-total-waited-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
     // The composer is not free when the single step is first attempted -- it
@@ -4391,7 +4306,7 @@ test('waited_ms (single command): includes the submit-verification poll, not onl
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-waited-ms-verify-' + Date.now();
     // Busy never rises: submitWithVerify runs its full first window, then the
     // recovery Enter, then a second full window -- two ~400ms windows worth
@@ -4426,7 +4341,7 @@ test('submitted: preBusy must be sampled before the write, not after -- a sessio
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-prebusy-order-' + Date.now();
 
     // Deterministic ORDER, not a race: busy is true until the instant our own
@@ -4482,7 +4397,7 @@ test('submitted: busy observed between a step\'s text write and its own Enter mu
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '4000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-midbusy-bare-' + Date.now();
     const COMMAND = '/clear';
     let busy = false;
@@ -4543,7 +4458,7 @@ test('submitted: busy asserted mid-window (not at the text write itself) between
     // see the busy schedule below for why only continuous polling catches it.
     process.env.SWITCHBOARD_SUBMIT_ENTER_DELAY_MS = '50';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-midbusy-window-' + Date.now();
     const COMMAND = 'resume the task';
     let scheduleStart = null;
@@ -4602,7 +4517,7 @@ test('session serialization: two triggers on the same session run one after anot
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '3000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-serialize-same-' + Date.now();
 
     // Trigger A blocks on wait:'idle' until busy flips false at +200ms.
@@ -4679,7 +4594,7 @@ test('session serialization: two triggers on different sessions still run in par
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '3000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_A = 'sess-serialize-parallel-a-' + Date.now();
     const SESSION_C = 'sess-serialize-parallel-c-' + Date.now();
 
@@ -4774,7 +4689,7 @@ test('session serialization: two triggers on different sessions still run in par
 // only by accident of `path.normalize`'s POSIX behavior never being exercised.
 test('normalizeCwd: case, separators, the long-path prefix and a bare root fold correctly on Windows',
   { skip: process.platform !== 'win32' && 'Windows-only path forms (case-fold, \\\\?\\, UNC)' }, () => {
-  const { normalizeCwd } = require('../src/main/triggers/trigger-watcher');
+  const { normalizeCwd } = require('./fixtures/trigger-watcher.cjs');
 
   assert.equal(normalizeCwd('C:\\Projects\\Foo'), normalizeCwd('c:/projects/foo/'),
     'case, separator style and a trailing slash must not matter');
@@ -4787,14 +4702,14 @@ test('normalizeCwd: case, separators, the long-path prefix and a bare root fold 
 
 test('normalizeCwd: case is NOT folded on a case-sensitive filesystem (the POSIX contrast)',
   { skip: process.platform === 'win32' && 'covered by the Windows case-folding test above' }, () => {
-  const { normalizeCwd } = require('../src/main/triggers/trigger-watcher');
+  const { normalizeCwd } = require('./fixtures/trigger-watcher.cjs');
 
   assert.notEqual(normalizeCwd('/Projects/Foo'), normalizeCwd('/projects/foo'),
     'ext4 and friends are case-sensitive -- folding case here would fold together two real, distinct paths');
 });
 
 test('normalizeCwd: a trailing separator is stripped and a genuinely different path is not folded, on every platform', () => {
-  const { normalizeCwd } = require('../src/main/triggers/trigger-watcher');
+  const { normalizeCwd } = require('./fixtures/trigger-watcher.cjs');
 
   const base = path.join(os.tmpdir(), 'sw-normalize-test', 'foo');
   assert.equal(normalizeCwd(base + path.sep), normalizeCwd(base),
@@ -4809,14 +4724,14 @@ test('normalizeCwd: a trailing separator is stripped and a genuinely different p
 // ONLY by `n.length > 1`. That guard alone must not be trusted: it stops
 // working the instant path.sep is a single character, which it always is.
 test('normalizeCwd: a bare root (exactly path.sep) is never collapsed to an empty string', () => {
-  const { normalizeCwd } = require('../src/main/triggers/trigger-watcher');
+  const { normalizeCwd } = require('./fixtures/trigger-watcher.cjs');
 
   assert.equal(normalizeCwd(path.sep), path.sep,
     'the root must round-trip unchanged, not be stripped down to ""');
 });
 
 test('normalizeCwd: malformed input always returns null, regardless of platform', () => {
-  const { normalizeCwd } = require('../src/main/triggers/trigger-watcher');
+  const { normalizeCwd } = require('./fixtures/trigger-watcher.cjs');
 
   assert.equal(normalizeCwd(undefined), null, 'undefined has nothing to compare');
   assert.equal(normalizeCwd(null), null, 'null has nothing to compare');
@@ -4831,7 +4746,7 @@ test('target guard: expectedCwd absent -- behavior is unchanged even when the se
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-guard-absent-' + Date.now();
     // The session's real cwd disagrees with nothing in particular, because
     // nothing declared an expectation -- the guard must never even look.
@@ -4867,7 +4782,7 @@ test('target guard: expectedCwd concordant (differently spelled but the same rea
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-guard-match-' + Date.now();
     const sessionCwd = 'C:\\Projects\\Foo';
     // Case/separator/trailing-slash folding is a Windows-only property of
@@ -4910,7 +4825,7 @@ test('target guard: expectedCwd discordant -- refused, nothing written, distinct
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-guard-mismatch-' + Date.now();
     const ctx = makeCtx(SESSION_ID, () => false, { cwd: 'C:\\Projects\\real' });
     watcher = start(ctx);
@@ -4949,7 +4864,7 @@ test('target guard: session cwd indeterminate -- refused, distinct result shape 
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-guard-unknown-' + Date.now();
     // No opts.cwd at all -- the session entry carries no cwd, exactly like a
     // ctx that predates this field (or a session whose registry entry hasn't
@@ -4994,7 +4909,7 @@ test('target guard: a malformed expectedCwd (empty string) is refused before any
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     // makeCtx registers a session under this id (with no cwd) despite its
     // name -- so without the shape check below, this would reach the target
     // guard and be refused there instead, as "cwd indeterminate"
@@ -5034,7 +4949,7 @@ test('target guard: a mismatched expectedCwd on a chain refuses the whole chain 
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-guard-chain-' + Date.now();
     const ctx = makeCtx(SESSION_ID, () => false, { cwd: 'C:\\Projects\\real' });
     watcher = start(ctx);
@@ -5077,7 +4992,7 @@ test('target guard: a refusal (single command) releases the session lock -- a le
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-guard-lock-single-' + Date.now();
     const realCwd    = path.join(os.tmpdir(), 'sw-guard-lock-test', 'real');
     const ctx = makeCtx(SESSION_ID, () => false, { cwd: realCwd });
@@ -5127,7 +5042,7 @@ test('target guard: a chain refused at step 0 releases the session lock -- a leg
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-guard-lock-chain-' + Date.now();
     const realCwd    = path.join(os.tmpdir(), 'sw-guard-lock-test', 'real');
     const ctx = makeCtx(SESSION_ID, () => false, { cwd: realCwd });
@@ -5181,7 +5096,7 @@ test('startup scan: a trigger already on disk before start() is called is still 
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-scan-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
 
@@ -5217,7 +5132,7 @@ test('startup scan: a trigger older than SWITCHBOARD_TRIGGER_MAX_AGE_MS is refus
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
     process.env.SWITCHBOARD_TRIGGER_MAX_AGE_MS  = '1000'; // 1s
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-stale-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
 
@@ -5263,7 +5178,7 @@ test('startup scan: the max-age threshold is read live per trigger, not cached a
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-liveage-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -5307,7 +5222,7 @@ test('startup scan: never descends into processed/ -- a leftover file there is n
     process.env.SWITCHBOARD_TRIGGERS_DIR        = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-noscan-processed-' + Date.now();
     const ctx        = makeCtx(SESSION_ID);
 
@@ -5351,7 +5266,7 @@ test('startup scan vs watcher race: a file present at start() is dispatched exac
     // when we fire a duplicate 'rename' event on it a moment later.
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '60000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-race-' + Date.now();
     // wait:'none' skips the idle wait; SWITCHBOARD_SUBMIT_VERIFY_MS is 400ms
     // (set at the top of this file), so the trigger stays in-flight for at
@@ -5405,7 +5320,7 @@ test('startup scan respects MAX_INFLIGHT: only 8 of 12 pre-existing triggers sta
     // entirely by flipping busy to false below, never by the idle timeout.
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '60000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
 
     const COUNT = 12; // MAX_INFLIGHT (8) + 4 queued
     const uuids      = Array.from({ length: COUNT }, (_, i) => `scanmax-${Date.now()}-${i}`);
@@ -5500,7 +5415,7 @@ test('waitForBusyFall waits for the rise: a busy flag that lags a genuine multi-
     // (suite-wide, 400ms) verify-window timing.
     process.env.SWITCHBOARD_BUSY_RISE_WAIT_MS       = '1000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-busyfall-late-rise-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
 
@@ -5579,7 +5494,7 @@ test('waitForBusyFall rise-wait bound: a command with no observable turn is not 
     // the suite-wide SWITCHBOARD_SUBMIT_VERIFY_MS default.
     process.env.SWITCHBOARD_BUSY_RISE_WAIT_MS       = '150';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-busyfall-never-rises-' + Date.now();
     // Busy never rises, for either step, ever -- a legitimate case (a step
     // whose command produces nothing this transport can observe).
@@ -5633,7 +5548,7 @@ test('waitForBusyFall regression: a session already busy when the call begins mu
     // below would catch it.
     process.env.SWITCHBOARD_BUSY_RISE_WAIT_MS       = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-busyfall-already-busy-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
 
@@ -5701,7 +5616,7 @@ test('waitForBusyFall settle window still applies once a rise is observed (uncha
     process.env.SWITCHBOARD_BUSY_FALL_SETTLE_MS     = '600';
     process.env.SWITCHBOARD_BUSY_RISE_WAIT_MS       = '2000'; // generous -- not what's under test here
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-busyfall-settle-after-rise-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
 
@@ -5781,7 +5696,7 @@ test('steps_total: a chain that runs to completion reports the chain length as w
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '2000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-steps-total-ok-' + Date.now();
     const ctx = makeChainCtx(SESSION_ID);
     watcher = start(ctx);
@@ -5822,7 +5737,7 @@ test('steps_total: a chain truncated by a timeout still reports the full length,
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '5000';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-steps-total-timeout-' + Date.now();
     let busy = false;
     const ctx = makeChainCtx(SESSION_ID, { noAutoTurn: true });
@@ -5889,7 +5804,7 @@ test('steps_total: a single-command trigger reports 1', async () => {
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-steps-total-single-' + Date.now();
     const ctx = makeCtx(SESSION_ID);
     watcher = start(ctx);
@@ -5918,7 +5833,7 @@ test('steps_total: a failure path that never sent anything still carries the fie
     process.env.SWITCHBOARD_TRIGGERS_DIR            = tmp;
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
     const SESSION_ID = 'sess-steps-total-notsent-' + Date.now();
     // Always busy → the initial idle wait times out, nothing is written.
     const ctx = makeChainCtx(SESSION_ID, { initiallyBusy: true, noAutoTurn: true });
@@ -5965,7 +5880,7 @@ test('session handle seam: an entry with only a fake handle (no node-pty) is pil
     process.env.SWITCHBOARD_TRIGGER_IDLE_TIMEOUT_MS = '200';
 
     const { createTriggerContext } = require('../src/main/triggers/trigger-context');
-    const { start } = require('../src/main/triggers/trigger-watcher');
+    const { start } = require('./fixtures/trigger-watcher.cjs');
 
     const SESSION_ID = 'sess-fake-handle-' + Date.now();
     const written = [];

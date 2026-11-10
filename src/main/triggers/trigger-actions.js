@@ -224,53 +224,39 @@ async function resolveLocalTarget(sessionId, deps = {}) {
   return { ok: true, sessionId, cwd, project: admitted.project, ...target, transcriptIdentity: identity };
 }
 
-function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.now } = {}) {
+function createTriggerActions({ fs = nativeFs, log, now = Date.now } = {}) {
   const limiter = createNewSessionLimiter({ now });
   const error = (...args) => { try { log?.error(...args); } catch {} };
-  function remove(file, retained) {
-    try { fs.unlinkSync(file); return true; }
-    catch (err) {
-      if (err.code === 'ENOENT') return true;
-      retained?.();
-      error('[trigger-watcher] v1 cleanup failed:', file, err.message);
-      return false;
+  function readState(resultPath, markerPath) {
+    function read(file) {
+      const stat = fs.lstatSync(file);
+      if (!stat.isFile()) throw new Error('recovery state must be a regular file');
+      if (stat.size > 64 * 1024) throw new Error('recovery state too large (max 64 KB)');
+      let fd;
+      try {
+        const flags = process.platform === 'win32' ? fs.constants.O_RDONLY
+          : fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
+        fd = fs.openSync(file, flags);
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile()) throw new Error('recovery state must be a regular file');
+        if (opened.size > 64 * 1024) throw new Error('recovery state too large (max 64 KB)');
+        const buffer = Buffer.alloc(64 * 1024 + 1);
+        let size = 0;
+        while (size < buffer.length) {
+          const count = fs.readSync(fd, buffer, size, buffer.length - size, size);
+          if (count === 0) break;
+          size += count;
+        }
+        if (size > 64 * 1024) throw new Error('recovery state too large (max 64 KB)');
+        return JSON.parse(buffer.toString('utf8', 0, size));
+      } finally { if (fd !== undefined) fs.closeSync(fd); }
     }
-  }
-  function read(file) {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile()) throw new Error('recovery state must be a regular file');
-    if (stat.size > 64 * 1024) throw new Error('recovery state too large (max 64 KB)');
-    let fd;
-    try {
-      const flags = process.platform === 'win32' ? fs.constants.O_RDONLY
-        : fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0);
-      fd = fs.openSync(file, flags);
-      const opened = fs.fstatSync(fd);
-      if (!opened.isFile()) throw new Error('recovery state must be a regular file');
-      if (opened.size > 64 * 1024) throw new Error('recovery state too large (max 64 KB)');
-      const buffer = Buffer.alloc(64 * 1024 + 1);
-      let size = 0;
-      while (size < buffer.length) {
-        const count = fs.readSync(fd, buffer, size, buffer.length - size, size);
-        if (count === 0) break;
-        size += count;
-      }
-      if (size > 64 * 1024) throw new Error('recovery state too large (max 64 KB)');
-      return JSON.parse(buffer.toString('utf8', 0, size));
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
-  }
-  function committedResult(resultPath) {
     try {
       const result = read(resultPath);
-      return object(result) && own(result, 'version') ? result : null;
+      if (object(result) && result.version === 1 && ['open', 'stop'].includes(result.action) && !own(result, 'type')) return { result, committed: true };
     } catch (err) {
-      if (err.code === 'ENOENT') return null;
-      throw err;
+      if (err.code !== 'ENOENT') throw err;
     }
-  }
-  function readState(resultPath, markerPath) {
-    const committed = committedResult(resultPath);
-    if (committed) return { result: committed, committed: true };
     try {
       const marker = read(markerPath);
       if (!object(marker) || marker.version !== 1) throw new Error('invalid v1 action marker');
@@ -290,21 +276,18 @@ function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.
       throw err;
     }
   }
-  function publish({ result, resultPath, triggerPath, markerPath, retained, committed = false }) {
+  async function publish({ result, namespace, retained }) {
     try {
-      if (!committed && !committedResult(resultPath)) {
-        fs.writeFileSync(resultPath + '.tmp', JSON.stringify(result) + '\n', 'utf8');
-        renameWithRetry(resultPath + '.tmp', resultPath);
-      }
+      if (!namespace?.publish) throw new Error('request namespace decision is required');
+      await namespace.publish(result);
     } catch (err) {
       retained?.();
       error('[trigger-watcher] v1 result publication failed:', err.message);
       return false;
     }
-    if (remove(triggerPath, retained)) remove(markerPath, retained);
     return true;
   }
-  return { limiter, readState, committedResult, publish, refusal,
+  return { limiter, readState, publish, refusal,
     execute(trigger, stem, execution) {
       const evidence = { steps_total: 0 };
       const invalid = validateTrigger(trigger, stem, evidence);

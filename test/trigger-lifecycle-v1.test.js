@@ -10,7 +10,7 @@ const { fixture: rendererFixture } = require('./fixtures/trigger-renderer-open.c
 const cli = require('../cli-session-state');
 const { createTriggerRendererBridge } = require('../src/main/triggers/trigger-renderer-bridge');
 const { createTriggerContext } = require('../src/main/triggers/trigger-context');
-const { start } = require('../src/main/triggers/trigger-watcher');
+const { start } = require('./fixtures/trigger-watcher.cjs');
 const { resolveLocalTarget, resolveProject } = require('../src/main/triggers/trigger-actions');
 const { validateTriggerOpen } = require('../src/main/triggers/trigger-launch');
 const { encodeProjectPath } = require('../encode-project-path');
@@ -175,13 +175,13 @@ test('an open request that ages out while queued behind another is refused as st
   process.env.SWITCHBOARD_TRIGGER_MAX_AGE_MS = '60';
   const secondId = '31234567-89ab-cdef-0123-456789abcdef';
   let parsed = false;
-  const read = fs.readFileSync;
-  fs.readFileSync = function (file, ...args) {
-    const value = read.call(this, file, ...args);
+  const open = fs.openSync;
+  fs.openSync = function (file, ...args) {
+    const descriptor = open.call(this, file, ...args);
     if (String(file) === path.join(f.dirs.triggers, secondId + '.json')) parsed = true;
-    return value;
+    return descriptor;
   };
-  t.after(() => { fs.readFileSync = read; });
+  t.after(() => { fs.openSync = open; });
   const dispatchesBefore = f.sent.filter(([channel]) => channel === 'trigger-session-action').length;
   const second = f.publish({ version: 1, action: 'open', sessionId: ID, prompt: 'expired queued prompt', timeout_ms: 5000 }, secondId);
   await until(() => parsed, 'the second request was parsed while fresh');

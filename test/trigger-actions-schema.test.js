@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { start } = require('../src/main/triggers/trigger-watcher');
+const { start } = require('./fixtures/trigger-watcher.cjs');
 
 const id = 'abcdef01-2345-6789-abcd-0123456789ab';
 const request = '12345678-1234-1234-1234-123456789abc';
