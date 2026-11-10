@@ -2369,12 +2369,21 @@ async function launchNewSession(project, sessionOptions, restoreSessionId, flags
   } finally {
     delete pendingSessions.get(sessionId)?.openingActive;
     if (flags.triggerAction) settlePtyOpen(sessionId, result);
+    if (flags.triggerAction && !result?.ok) {
+      destroySession(sessionId);
+      pendingSessions.delete(sessionId);
+      sessionMap.delete(sessionId);
+      for (const projects of [cachedProjects, cachedAllProjects]) {
+        for (const project of projects) project.sessions = project.sessions.filter(s => s.sessionId !== sessionId);
+      }
+      refreshSidebar();
+    }
   }
   if (!result?.ok) {
+    if (flags.triggerAction) throw Object.assign(new Error(result?.error || 'session open failed'), { reason: result?.reason || 'session open failed' });
     entry.terminal.write(`\r\nError: ${result?.error || 'The terminal backend is unavailable'}\r\n`);
     entry.closed = true;
     if (flags.activate !== false) showSession(sessionId);
-    if (flags.triggerAction) throw Object.assign(new Error(result?.error || 'session open failed'), { reason: result?.reason || 'session open failed' });
     return null;
   }
   if (flags.triggerAction) entry.triggerGeneration = result.generation;
@@ -2664,14 +2673,18 @@ async function openSessionNow(session, customOptions, { automatic = false, fromR
     return false;
   }
   if (!result.ok) {
+    if (triggerAction) {
+      destroySession(sessionId);
+      onOpenError?.(result.error, result.reason, result.generation ?? null);
+      return false;
+    }
     if (automatic || entry.attach) {
       showSessionActionFailure(automatic ? 'Restore' : 'Attach background', session, backgroundRestoreJobId ? `Job ${backgroundRestoreJobId}: ${result.error}` : result.error,
         entry.attach ? 'Check the background session in the Agents view, then open it from the sidebar to retry attaching.'
           : 'Check the transcript and connection, then open the session from the sidebar to retry restoring.');
       const held = skippedWorkingSetEntries.get(sessionId);
       const index = restoreSavedIndex.get(sessionId) ?? [...openSessions.keys()].indexOf(sessionId);
-      if (triggerAction) onOpenError?.(result.error, result.reason, result.generation ?? null);
-      else onOpenError?.(result.error);
+      onOpenError?.(result.error);
       destroySession(sessionId);
       if (automatic || held) {
         skippedWorkingSetEntries.set(sessionId, {

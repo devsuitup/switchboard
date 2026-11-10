@@ -17,6 +17,7 @@ function fixture(t) {
     cachedProjects: [], cachedAllProjects: [], restoreInFlight: new Map(), restoreSavedIndex: new Map(),
     dormantWorkingSet: new Map(), skippedWorkingSetEntries: new Map(), gridViewActive: false,
     sessionOpenedOutsideRestore: false, sessionActionNoticeId: () => '', clearAppNotice() {},
+    showSessionActionFailure: (...args) => calls.push(['notice', ...args]),
     clearDormantRow: () => false, cleanDisplayName: x => x,
     resolveResumeSession: () => { throw new Error('continuation chooser must not run'); },
     prepareBackgroundRestore: () => { throw new Error('background override must not run'); },

@@ -22,12 +22,12 @@ async function validateTriggerOpen(permit, deps) {
   if (permit.mode === 'reattach') return { ok: true };
   try {
     if (await deps.remoteTarget(permit.tabKey)) return fail('remote sessions are not supported');
-    const checked = await deps.liveElsewhere(permit.tabKey, permit.deadline);
-    if (!checked?.known) return fail('session liveness unavailable');
-    if (checked.live) return fail(checked.live.kind === 'schedule' ? 'scheduled session is not supported'
-      : checked.live.kind === 'bg' ? 'background session is not supported' : 'session live elsewhere');
-    if (!valid()) return fail('session action timed out');
     if (permit.mode === 'resume') {
+      const checked = await deps.liveElsewhere(permit.tabKey, permit.deadline);
+      if (!checked?.known) return fail('session liveness unavailable');
+      if (checked.live) return fail(checked.live.kind === 'schedule' ? 'scheduled session is not supported'
+        : checked.live.kind === 'bg' ? 'background session is not supported' : 'session live elsewhere');
+      if (!valid()) return fail('session action timed out');
       const target = await deps.resolveTarget(permit.tabKey, { ...deps, deadline: permit.deadline });
       if (!target.ok) return target;
       if (target.cwd !== permit.target?.cwd || target.transcript !== permit.target?.transcript

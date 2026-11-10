@@ -125,7 +125,7 @@ async function resolveProject(project, deps) {
       || !object(snapshot.hiddenProjectKinds)) return fail('project lookup unavailable');
   } catch (error) { return { ...fail(error.code === 'TRIGGER_DEADLINE' ? 'session action timed out' : 'project lookup unavailable'), error: error.message }; }
   if (deps.now && deps.now() >= deps.deadline) return fail('session action timed out');
-  const knownPath = key => snapshot.allProjects.some(entry => object(entry) && !entry.remoteAlias && !entry.host
+  const knownPath = key => snapshot.allProjects.find(entry => object(entry) && !entry.remoteAlias && !entry.host
     && typeof entry.projectPath === 'string' && normalize(entry.projectPath) === key);
   if (typeof deps.recordedCwd === 'string') {
     const cwdKey = normalize(deps.recordedCwd);
@@ -133,11 +133,12 @@ async function resolveProject(project, deps) {
   }
   const key = normalize(project);
   if (snapshot.hiddenProjects.some(entry => typeof entry === 'string' && path.isAbsolute(entry) && normalize(entry) === key)) return fail('project is archived');
-  if (!knownPath(key)) return fail('unknown project');
+  const known = knownPath(key);
+  if (!known) return fail('unknown project');
   try {
     if (!fs.statSync(project).isDirectory()) return fail('project directory does not exist');
   } catch { return fail('project directory does not exist'); }
-  return { ok: true, project };
+  return { ok: true, project: known.projectPath };
 }
 
 async function resolveLocalTarget(sessionId, deps = {}) {

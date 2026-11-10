@@ -15,8 +15,13 @@ are checked without requiring a descriptor. Linux maps raw PID + start through
 host-visible NSpid/stat/ns evidence, independently of any local PTY, demands a
 unique mapping and rereads file/process identity. Zero or multiple matches and
 unsupported identity yield known:false. Zombie/exited host writers and ancestry
-links cannot supply live proof. Windows compares native anchor start identity
-twice; unsupported identities remain unknown. Native probes receive
+links cannot supply live proof. On Windows, two dead native PID reads establish
+absence, including for an unanchored descriptor. Two native anchor start probes
+that both mismatch establish a stale descriptor. Both paths reread the unchanged
+descriptor before excluding it; mixed, unavailable or replaced evidence stays
+unknown. Linux keeps zero mappings and start mismatches unknown because the raw
+PID can belong to another namespace. Windows compares live native anchor start
+identity twice; unsupported live identities remain unknown. Native probes receive
 the remaining budget, have a reader-owned deadline race and cannot initiate a
 second probe after expiry. A proven live refusal takes precedence over other
 uncertain files. Conversation-specific exclusion

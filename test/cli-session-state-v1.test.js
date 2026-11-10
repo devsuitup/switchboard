@@ -122,7 +122,7 @@ test('v1 native process rechecks do not start another probe after the shared dea
   const f = fixture(t); let clock = 10, probes = 0;
   const token = '134000000000000000';
   f.write({ pid: 300, pidDomain: 'win32:anchor', procStart: token });
-  state.init({ dir: f.dir, platform: 'win32', now: () => clock, activeSessions: new Map(), readParentPid: () => 1,
+  state.init({ dir: f.dir, platform: 'win32', now: () => clock, activeSessions: new Map(), readParentPid: () => 1, isProcessAlive: () => true,
     readProcStartMany: async () => { probes++; clock = 20; return new Map([[300, token]]); } });
   const result = await state.liveElsewhereV1Checked(ID, () => false, () => [], { deadline: 20 });
   assert.equal(result.known, false); assert.equal(probes, 1, 'the expired action must not initiate its second native probe');
@@ -132,10 +132,53 @@ test('a stalled v1 native process probe returns unknown at its own action deadli
   const f = fixture(t); const token = '134000000000000000';
   let probes = 0;
   f.write({ pid: 300, pidDomain: 'win32:anchor', procStart: token });
-  state.init({ dir: f.dir, platform: 'win32', activeSessions: new Map(), readParentPid: () => 1,
+  state.init({ dir: f.dir, platform: 'win32', activeSessions: new Map(), readParentPid: () => 1, isProcessAlive: () => true,
     readProcStartMany: () => { probes++; return new Promise(() => {}); } });
   const pending = state.liveElsewhereV1Checked(ID, () => false, () => [], { deadline: Date.now() + 250 });
   const result = await Promise.race([pending, new Promise(resolve => setTimeout(() => resolve({ watchdog: true }), 500))]);
   assert.equal(probes, 1, 'the stalled native port must actually have been reached');
   assert.equal(result.known, false, 'the raw reader itself must enforce the deadline');
 });
+
+for (const anchor of [true, false]) {
+  test(`Windows twice-dead ${anchor ? 'anchor' : 'unanchored'} descriptor establishes absence`, async t => {
+    const f = fixture(t); let reads = 0;
+    f.write(anchor ? { pid: 300, pidDomain: 'win32:anchor', procStart: '134000000000000000' } : { pid: 300 });
+    state.init({ dir: f.dir, platform: 'win32', activeSessions: new Map(),
+      isProcessAlive: () => { reads++; return false; }, readProcStartMany: async () => new Map() });
+    assert.deepEqual(await f.live(ID, () => false), { known: true, live: null });
+    assert.equal(reads, 2, 'absence requires two native PID reads');
+  });
+}
+
+test('Windows twice-mismatched anchor start establishes stale absence', async t => {
+  const f = fixture(t); let probes = 0;
+  f.write({ pid: 300, pidDomain: 'win32:anchor', procStart: '134000000000000000' });
+  state.init({ dir: f.dir, platform: 'win32', activeSessions: new Map(), isProcessAlive: () => true,
+    readProcStartMany: async () => { probes++; return new Map([[300, '135000000000000000']]); } });
+  assert.deepEqual(await f.live(ID, () => false), { known: true, live: null });
+  assert.equal(probes, 2);
+});
+
+test('Linux mismatched start remains unknown even when native PID reads say dead', async t => {
+  const f = fixture(t);
+  f.write({ procStart: '31' });
+  assert.equal((await f.live(ID, () => false)).known, false);
+});
+
+for (const mode of ['mixed-death', 'mixed-start', 'unreadable-start', 'replaced']) {
+  test(`Windows ${mode} evidence remains unknown`, async t => {
+    const f = fixture(t); let reads = 0, probes = 0;
+    const token = '134000000000000000';
+    f.write({ pid: 300, pidDomain: 'win32:anchor', procStart: token });
+    state.init({ dir: f.dir, platform: 'win32', activeSessions: new Map(),
+      isProcessAlive: () => mode === 'mixed-death' ? ++reads !== 1 : true,
+      readProcStartMany: async () => {
+        probes++;
+        if (mode === 'replaced' && probes === 2) f.write({ pid: 300, procStart: '136000000000000000' });
+        return new Map([[300, mode === 'unreadable-start' || mode === 'mixed-death' ? null
+          : mode === 'mixed-start' && probes === 1 ? token : '135000000000000000']]);
+      } });
+    assert.equal((await f.live(ID, () => false)).known, false);
+  });
+}

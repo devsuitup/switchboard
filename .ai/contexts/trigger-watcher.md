@@ -49,6 +49,15 @@ deadline/closing/target check for the launch integration; it does not
 itself prove liveness, transcript validity, defaults, eligibility or readiness.
 Main supplies these checks through `trigger-launch.js` and pending-open
 serialization shared by all ordinary and permit-bearing opens.
+Project admission returns the matched local `allProjects.projectPath` spelling
+for the permit, renderer and new-session cwd, including case, separators, `..`
+and Windows 8.3 aliases. Resume keeps its separately verified recorded cwd.
+The final descriptor liveness scan applies to resume; new has a freshly reserved
+UUID and revalidates project admission without scanning unrelated descriptors.
+Prompt delivery still requires the new launch's descriptor readiness proof.
+Renderer trigger refusals destroy the terminal without restore notices, skipped
+restore entries or working-set writes. Failed or expired new opens also remove
+their pending/sidebar rows so a later save cannot retain a fresh placeholder.
 If the renderer joins an ordinary pending exact resume, main revalidates its
 recorded launch mode/source, transcript/cwd, liveness and generation before the
 ACK. `ensureJoined` also covers an ordinary entry created while the permit was

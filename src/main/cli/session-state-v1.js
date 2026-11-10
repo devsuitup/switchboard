@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procFs = fs, descriptorFs = fs,
-  readProcStartMany, readParentPid, readCliProcess, scheduledRuns, procStartMatches }) {
+  readProcStartMany, readParentPid, readCliProcess, scheduledRuns, procStartMatches, isProcessAlive }) {
   const expired = deadline => now() >= deadline;
   const unknown = reason => ({ known: false, reason });
   function stamp(stat) { return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':'); }
@@ -127,12 +127,26 @@ function createV1Reader({ dir, parseDescriptor, parseState, platform, now, procF
             if (chain && chain.every(p => unchangedProc(p, deadline))) owned = true;
           }
         }
-      } else if (platform === 'win32' && candidate.raw.pidDomain === 'win32:anchor'
-        && /^\d{15,}$/.test(String(candidate.raw.procStart))) {
+      } else if (platform === 'win32') {
         try {
+          const firstAlive = isProcessAlive(candidate.raw.pid);
+          if (expired(deadline)) return unknown('descriptor deadline');
+          const secondAlive = isProcessAlive(candidate.raw.pid);
+          if (firstAlive === false && secondAlive === false) {
+            if (sameFile(candidate, deadline)) continue;
+            unresolved = true; continue;
+          }
+          if (candidate.raw.pidDomain !== 'win32:anchor' || !/^\d{15,}$/.test(String(candidate.raw.procStart))) {
+            unresolved = true; continue;
+          }
           const first = (await probe([candidate.raw.pid], deadline))?.get(candidate.raw.pid);
           if (expired(deadline)) return unknown('descriptor deadline');
           const second = (await probe([candidate.raw.pid], deadline))?.get(candidate.raw.pid);
+          if (first != null && second != null && !procStartMatches(first, candidate.raw.procStart)
+            && !procStartMatches(second, candidate.raw.procStart)) {
+            if (sameFile(candidate, deadline)) continue;
+            unresolved = true; continue;
+          }
           if (first != null && second != null && procStartMatches(first, candidate.raw.procStart)
             && procStartMatches(second, candidate.raw.procStart)) {
             writer = { pid: candidate.raw.pid, start: String(candidate.raw.procStart), namespace: null };

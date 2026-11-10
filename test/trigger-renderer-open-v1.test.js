@@ -1,6 +1,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { loadAppFunctions } = require('./app-source');
 const { fixture, ID, OTHER, request } = require('./fixtures/trigger-renderer-open.cjs');
 test('exact resume preserves current focus, defaults and ordinary persistence', async t => {
@@ -107,9 +110,57 @@ test('a renderer failure after a successful backend ACK retains that request gen
   assert.equal(ack.ok, false); assert.equal(ack.generation, 7);
 });
 
-test('an absent new-session backend result closes its failed ordinary placeholder', async t => {
+test('an absent new-session backend result removes its failed placeholder', async t => {
   const h = fixture(t); h.w.api.openTerminal = async () => undefined;
   await h.f.handleTriggerSessionAction(request({ mode: 'new', requestedSessionId: null, name: 'Name' }));
   assert.equal(h.calls.find(c => c[0] === 'ack')?.[1].ok, false);
-  assert.equal(h.w.openSessions.get(ID)?.closed, true);
+  assert.equal(h.w.openSessions.has(ID), false);
+  assert.equal(h.w.pendingSessions.has(ID), false);
+  assert.equal(h.w.sessionMap.has(ID), false);
+  for (const projects of [h.w.cachedProjects, h.w.cachedAllProjects]) {
+    assert.equal(projects.some(p => p.sessions.some(s => s.sessionId === ID)), false);
+  }
+});
+
+function persistence(t, h) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sw-trigger-persist-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, JSON.stringify({ openWorkingSet: [] }));
+  Object.assign(h.w, { exitingApp: false, activeSessionId: OTHER, pendingRestoreEntries: () => [] });
+  h.w.api.getSetting = async () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  h.w.api.setSetting = async (_key, value) => fs.writeFileSync(file, JSON.stringify(value));
+  const { persistWorkingSet } = loadAppFunctions(h.context, { declarations: ['_persistChain'], functions: ['persistWorkingSet'] });
+  return { persistWorkingSet, read: () => JSON.parse(fs.readFileSync(file, 'utf8')) };
+}
+
+test('a refused trigger resume has no restore or persisted working-set effect', async t => {
+  const h = fixture(t); const disk = persistence(t, h);
+  h.w.api.openTerminal = async () => ({ ok: false, error: 'blocked', reason: 'session live elsewhere' });
+  await h.f.handleTriggerSessionAction(request());
+  assert.equal(h.w.skippedWorkingSetEntries.size, 0, 'a refused trigger must not become a skipped restore');
+  assert.equal(h.calls.some(c => c[0] === 'notice'), false, 'trigger refusal must not show a Restore notice');
+  assert.equal(h.calls.some(c => c[0] === 'persist'), false, 'trigger refusal must not schedule a working-set write');
+  assert.equal(h.w.openSessions.has(ID), false);
+  assert.equal(h.calls.find(c => c[0] === 'ack')?.[1].reason, 'session live elsewhere');
+  assert.deepEqual(disk.read().openWorkingSet, []);
+  await disk.persistWorkingSet();
+  assert.deepEqual(disk.read().openWorkingSet, [], 'a later save must not restore the refused conversation');
+});
+
+test('a new trigger deadline after entry creation removes all placeholder state', async t => {
+  const h = fixture(t); const disk = persistence(t, h);
+  const op = request({ mode: 'new', requestedSessionId: null, name: 'Name' });
+  const create = h.w.createTerminalEntry;
+  h.w.createTerminalEntry = session => { const entry = create(session); op.deadline = 0; return entry; };
+  await h.f.handleTriggerSessionAction(op);
+  assert.equal(h.w.openSessions.has(ID), false, 'the expired trigger must destroy its open placeholder');
+  assert.equal(h.w.pendingSessions.has(ID), false);
+  assert.equal(h.w.sessionMap.has(ID), false);
+  for (const projects of [h.w.cachedProjects, h.w.cachedAllProjects]) {
+    assert.equal(projects.some(p => p.sessions.some(s => s.sessionId === ID)), false);
+  }
+  assert.equal(h.calls.some(c => c[0] === 'open' || c[0] === 'persist'), false);
+  await disk.persistWorkingSet();
+  assert.deepEqual(disk.read().openWorkingSet, [], 'an expired placeholder must not be persisted as fresh');
 });

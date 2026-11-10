@@ -352,7 +352,7 @@ function init(ctx) {
     readProcStartMany: ctx.readProcStartMany || ctx.readProcStart ? readProcStartMany
       : (pids, deadline) => platform === 'win32'
         ? probeProcStartWindows(pids, Math.max(1, Math.min(PROBE_TIMEOUT_MS, deadline - now()))) : readProcStartMany(pids),
-    readParentPid, readCliProcess, scheduledRuns, procStartMatches });
+    readParentPid, readCliProcess, scheduledRuns, procStartMatches, isProcessAlive });
   processTableEnabled = !ctx.readParentPid && (platform === 'win32' || platform === 'darwin');
   readProcessTable = ctx.readProcessTable || defaultReadProcessTable;
   processTableEpoch++;

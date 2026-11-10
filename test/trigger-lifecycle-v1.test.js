@@ -112,6 +112,7 @@ test('file -> watcher -> broker -> renderer -> main -> verified resume prompt ->
 });
 test('file -> ordinary new lifecycle saves exact new name before prompt', async t => {
   const f = await fixture(t);
+  fs.writeFileSync(path.join(f.dirs.sessions, '999999.json'), '{');
   const result = await f.publish({ version: 1, action: 'open', new: { project: f.dirs.project, name: '  Next task  ' }, prompt: 'hello', timeout_ms: 3000 });
   assert.equal(result.outcome, 'opened', JSON.stringify(result)); assert.equal(result.created, true);
   assert.notEqual(result.sessionId, ID); assert.equal(f.renderer.w.pendingSessions.get(result.sessionId)?.session.name, 'Next task');
@@ -119,6 +120,25 @@ test('file -> ordinary new lifecycle saves exact new name before prompt', async 
   assert.deepEqual(f.events.find(e => e[0] === 'name').slice(1), [result.sessionId, 'Next task']);
   assert.equal(f.renderer.calls.some(c => c[0] === 'focus'), false);
 });
+
+for (const variant of ['case', 'separator', 'parent', 'short-temp']) {
+  test(`new trigger ${variant} project alias launches with the known spelling`, {
+    skip: variant !== 'parent' && process.platform !== 'win32' ? 'Windows path alias'
+      : variant === 'short-temp' && !os.tmpdir().includes('~') ? 'requires the brief short TEMP run' : false,
+  }, async t => {
+    const f = await fixture(t);
+    const project = variant === 'case' ? f.dirs.project.toUpperCase()
+      : variant === 'separator' ? f.dirs.project.replace(/\\/g, '/')
+        : variant === 'parent' ? f.dirs.project + path.sep + '..' + path.sep + 'project'
+          : path.join(os.tmpdir(), path.relative(fs.realpathSync.native(os.tmpdir()), f.dirs.project));
+    assert.notEqual(project, f.dirs.project, 'the request must use a distinct spelling');
+    const result = await f.publish({ version: 1, action: 'open', new: { project, name: 'Alias' }, prompt: 'hello', timeout_ms: 3000 });
+    assert.equal(result.outcome, 'opened', JSON.stringify(result));
+    assert.equal(f.events.find(e => e[0] === 'spawn')?.[2].cwd, f.dirs.project, 'spawn must use the known project spelling');
+    assert.equal(f.sent.find(([channel]) => channel === 'trigger-session-action')?.[1].project, f.dirs.project);
+    assert.equal(f.renderer.w.pendingSessions.get(result.sessionId)?.projectPath, f.dirs.project);
+  });
+}
 
 test('file request joins an ordinary pending exact resume with one spawn and resumed false', async t => {
   const f = await fixture(t); let release;

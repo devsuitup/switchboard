@@ -267,6 +267,15 @@ Omit `prompt` to open alone. An already-open session is ensured open without
 spawning another CLI. Closed sessions need a readable local transcript, verified
 recorded cwd and a known project. Live external, background, scheduled, remote
 and plain-terminal targets are refused. Unknown liveness is refused too.
+On Windows, a descriptor whose native PID is dead on two reads is absent;
+an anchor whose start identity mismatches on two probes is stale. Both require
+an unchanged descriptor on recheck. Mixed or unavailable evidence still refuses
+the resume. On Linux, an absent host PID or mismatched start stays unknown
+because the descriptor may identify a process inside another PID namespace.
+New-session triggers use the known project's saved path spelling and a freshly
+reserved UUID; unrelated descriptor scan failures do not block creation.
+A refused trigger leaves no restore notice or saved working-set entry, and a
+failed or expired new open removes its placeholder from the sidebar.
 
 Create a session in an existing known local project using its ordinary saved
 defaults (replace the path with an absolute path native to your host):
