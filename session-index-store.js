@@ -958,7 +958,7 @@ return preparedDeletionStatements ??= {
   insert: !readonly && db.prepare(`INSERT INTO project_delete_operations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
   progress: !readonly && db.prepare(`UPDATE project_delete_operations SET state=?, phase=?, lastRevision=?, nextUnit=?, sealed=?, errorJson=?, finishedAt=? WHERE operationId=?`),
   active: db.prepare('SELECT * FROM project_delete_operations WHERE sealed = 0 ORDER BY createdAt, operationId'),
-  terminal: db.prepare('SELECT operationId, finishedAt FROM project_delete_operations WHERE sealed = 1 ORDER BY finishedAt DESC, operationId DESC'),
+  terminal: db.prepare('SELECT operationId, finishedAt, phase FROM project_delete_operations WHERE sealed = 1 ORDER BY finishedAt DESC, operationId DESC'),
   units: db.prepare('SELECT * FROM project_delete_units WHERE operationId = ? ORDER BY ordinal'),
   addUnit: !readonly && db.prepare('INSERT INTO project_delete_units VALUES (?, ?, ?, ?, ?, ?)'),
   unitResult: !readonly && db.prepare('UPDATE project_delete_units SET status=?, resultJson=? WHERE operationId=? AND ordinal=?'),

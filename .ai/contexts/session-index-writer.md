@@ -463,6 +463,16 @@ window.
 
 ## Qualification
 
+Archive workflow admission and cancellation now share one client-scoped gate
+across withCache facades; see [project-delete.md](project-delete.md),
+"Archive workflow exclusion (A4b2)". `readProjectArchiveEpochs` and workflow
+fence/retirement controls are read/control turns without a revision increment
+or settings publication. Archive mutations retain the ordinary single
+commitTransaction revision increment. Deletion receipt purge uses a bounded
+maintenance transaction outside that data revision, avoiding self-staling
+owned deletion chunks. The #380 session-request tables, commands and receipt
+revision behavior coexist unchanged with these APIs.
+
 Source tests and Electron-as-Node integration cover real SQLite readonly failure,
 crash before commit, lost ACK after commit, lock exhaustion/release, queued close,
 remap completion during close, atomic metric visibility, old-build reopening,

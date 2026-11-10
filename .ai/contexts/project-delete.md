@@ -263,6 +263,65 @@ outcomes, and never enlarge consent. This read-only planner does not lock
 external writers or prevent filesystem/process races. The later service owns
 final process/schedule correlation, snapshots at admission and recovery.
 
+## Archive workflow exclusion (A4b2)
+
+`project-archive-workflow.js` maintains a WeakMap per writer client. All
+`withCache` facades share canonical host/path keys. Archive, Undo, offer,
+retirement, clear, dismiss, hide and explicit reopen acquire their complete
+sorted key set atomically; conflicting workflows refuse with WORKFLOW_BUSY.
+Retirement includes a worktree's parent only while that parent has an archive
+record that can actually be retired; a retained child without such a record
+does not inherit its parent's workflow reservation. The archive-only identity
+adapter preserves legacy host-qualified Windows path inputs by projecting
+their separators and drive into a rooted host path; the stricter deletion
+identity contract is unchanged.
+The lease covers refresh/effects, worker requests, async injected callbacks,
+catch-up claims, schedule rewrites and completion ACKs.
+
+The library-only `reserveProjectDeletion(projects)` reserves synchronously
+before returning `{ready, release}`. `ready` waits for already admitted
+workflows; new conflicting workflows refuse immediately. A4b4 must retain the
+reservation until deletion ACK or terminal fence/readback after an unknown
+outcome. `release` is idempotent after readiness and refuses early release.
+There is no deletion caller, IPC or UI in A4b2.
+
+Each admitted workflow reads fresh archive epoch proofs on the writer before
+its first mutation. Begin/completion, retirement, Undo, clear/dismiss and hide
+check those proofs against durable project_delete_fences. Pending/deleted
+identities and supplied proofs omitting an affected identity refuse, including
+at epoch zero. Only fresh explicit add/unhide may reopen: they advance
+the epoch and clear blocked without resetting any receipt or scope. They
+refuse while an unfinished deletion owns the identity. Legacy unfenced
+epoch-zero calls retain their results; old epoch proofs cannot survive re-add.
+
+Private workflow IDs tag every client request including cache effects.
+Timeout or unknown transport outcome seals the lease, suppresses callbacks
+that have not started, and waits for a worker cancellation barrier. The
+client removes unsent requests before submitting that barrier. The worker
+seals the ID at a service boundary, removes queued/deferred commands, and
+checks the seal at dispatch and transaction admission. Barrier ACK follows
+the last executing transaction. This cancels future work; already committed
+chunks are retained. Cancelled commands with committed prefixes still publish current settings
+on their error reply, preserving the acknowledged mirror after partial work.
+A failed/unreachable barrier retains the lease and deletion remains held.
+Posted commands are never replayed across restart;
+a replacement can ACK only after the client has awaited old-worker termination.
+Client seals retire only when the facade and all its requests have retired;
+the worker then receives an ordered retirement control command.
+
+Receipt retention uses a separate bounded store transaction without advancing
+_writer_revision: sealed-receipt maintenance changes neither project data nor
+membership. This preserves the next owned admission/apply chunk's exact
+revision. Each turn deletes at most sixteen unit rows, keeps phase=purging
+unavailable from its first turn, and drains an existing purge before selecting
+another receipt. Durable epoch high-water marks are retained.
+
+The race suite loads the facade directly and the unwrapped production worker
+in a VM with a real conversation-store fixture and Node 20 skip guard. It
+asserts disposable schedule/claim bytes, sibling sharing, async callbacks,
+epoch ABA refusal and queue cancellation. A4b4 still owes the real completion
+integration witness for AC10; no metadata-deletion completion is claimed here.
+
 ## Evidence boundary
 
 `test/project-delete-plan.test.js` loads the production module with plain

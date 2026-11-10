@@ -8,6 +8,8 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
   const queue = [];
   const active = new Map();
   const terminations = new Set();
+  const sealedWorkflows = new Set();
+  const retiredWorkflows = new Set();
   let bootResolve, bootReject;
   const ready = new Promise((resolve, reject) => { bootResolve = resolve; bootReject = reject; });
   ready.catch(() => {});
@@ -76,7 +78,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
       const job = queue.shift();
       active.set(job.id, job);
       const current = worker;
-      try { current.postMessage({ id: job.id, command: job.command, args: job.args }); }
+      try { current.postMessage({ id: job.id, command: job.command, args: job.args, ...(job.workflowId ? { workflowId: job.workflowId } : {}) }); }
       catch (error) { void fail(current, error); return; }
       if (worker !== current) return;
     }
@@ -119,6 +121,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
       if (message.settings) onSettings(message.settings);
       const error = message.error ? Object.assign(new Error(message.error.message), { code: message.error.code, requestId: job.id }) : null;
       settle(job, error, message.result);
+      retireWorkflow(job.workflowId, false);
       dispatch();
     });
     current.on('error', error => { void fail(current, error); });
@@ -134,11 +137,33 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
     return enqueue(command, args);
   }
 
-  function enqueue(command, args) {
+  function enqueue(command, args, workflowId) {
     return new Promise((resolve, reject) => {
-      queue.push({ id: ++nextId, command, args, resolve, reject });
+      queue.push({ id: ++nextId, command, args, workflowId, resolve, reject });
       dispatch();
     });
+  }
+
+  function requestForWorkflow(workflowId, command, ...args) {
+    if (sealedWorkflows.has(workflowId)) return Promise.reject(Object.assign(new Error('project workflow is sealed'), { code: 'WORKFLOW_SEALED' }));
+    if (closing || stopped) return Promise.reject(new Error('writer is closing or shut down'));
+    return enqueue(command, args, workflowId);
+  }
+  function fenceWorkflow(workflowId) {
+    sealedWorkflows.add(workflowId);
+    for (let i = queue.length - 1; i >= 0; i--) if (queue[i].workflowId === workflowId) {
+      settle(queue.splice(i, 1)[0], Object.assign(new Error('project workflow is sealed'), { code: 'WORKFLOW_SEALED' }));
+    }
+    return request('fenceWorkflow', workflowId);
+  }
+  function retireWorkflow(workflowId, requested = true) {
+    if (!workflowId) return;
+    if (requested) retiredWorkflows.add(workflowId);
+    if (!retiredWorkflows.has(workflowId)) return;
+    if ([...active.values(), ...queue].some(job => job.workflowId === workflowId)) return;
+    retiredWorkflows.delete(workflowId);
+    if (!sealedWorkflows.delete(workflowId)) return;
+    void request('retireWorkflow', workflowId).catch(() => {});
   }
 
   function close() {
@@ -157,7 +182,7 @@ function createWriterWorkerClient({ workerFactory, onSettings = () => {}, onBusy
   }
 
   start();
-  return { ready, request, close, terminate };
+  return { ready, request, requestForWorkflow, fenceWorkflow, retireWorkflow, close, terminate };
 }
 
 module.exports = { createWriterWorkerClient };

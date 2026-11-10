@@ -37,6 +37,44 @@ function setup(t) {
   };
 }
 
+test('retention admission and apply keep the next owned chunk valid', supported, t => {
+  const h = setup(t), p = h.progress();
+  const { createWriterCommands, hashSessionRequestCommand } = require('../session-index-commands');
+  const commands = createWriterCommands(h.db);
+  const input = { stemKey: 'kept-request', actualStem: 'kept-request', actionToken: 'claim', family: 'action', rawHash: 'a'.repeat(64) };
+  input.argsHash = hashSessionRequestCommand('claimSessionResultNamespace', input);
+  const receipt = commitTransaction(h.db, () => commands.claimSessionResultNamespace(input)).result;
+  assert.equal(receipt.receipt.revision, h.db.getSetting('_writer_revision'), 'session-request commit has its single exact revision');
+  const large = h.manifest(Array.from({ length: 160 }, (_, i) => ({ category: 'probe', target: i })));
+  p.admit(large);
+  for (let i = 0; i < large.units.length; i += 16) p.stage(large, large.units.slice(i, i + 16));
+  p.fence(large);
+  for (let i = 0; i < 128; i++) p.fence(h.manifest([]));
+  const next = h.manifest();
+  p.admit(next);
+  assert.doesNotThrow(() => p.stage(next, next.units), 'retention must not stale its own admission');
+  p.apply(next, () => ({ status: 'completed' }));
+  assert.doesNotThrow(() => p.apply(next, () => ({ status: 'completed' })), 'retention must not stale its own apply');
+  assert.deepEqual(commands.querySessionRequestOutcome({ stemKey: input.stemKey, rawHash: input.rawHash }).owner, receipt.owner, 'deletion retention leaves #380 ownership and bytes untouched');
+  assert.equal(h.db.sessionRequests.receipt(input.stemKey, input.actionToken).revision, receipt.receipt.revision);
+});
+
+test('retention finishes one purging receipt before selecting another', supported, t => {
+  const h = setup(t), p = h.progress();
+  const large = h.manifest(Array.from({ length: 160 }, (_, i) => ({ category: 'probe', target: i })));
+  p.admit(large);
+  for (let i = 0; i < large.units.length; i += 16) p.stage(large, large.units.slice(i, i + 16));
+  p.fence(large);
+  h.advance(1);
+  for (let i = 0; i < 128; i++) p.fence(h.manifest([]));
+  const firstRemaining = h.db.projectDeletion.units(large.operationId).length;
+  h.advance(8 * 86400000);
+  p.purge();
+  assert.equal(h.db.projectDeletion.units(large.operationId).length, firstRemaining - 16, 'continue the existing purging receipt');
+  assert.equal(h.db.projectDeletion.terminal().filter(row => row.phase === 'purging').length, 1);
+  assert.equal(p.read(large).receiptAvailable, false);
+});
+
 test('existing database gains writable-only deletion tables without erasing existing data', supported, t => {
   const h = setup(t);
   h.db.setSetting('sentinel', 7);

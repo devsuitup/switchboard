@@ -257,9 +257,11 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     return { operationId: unfinished.operationId, project: { alias, projectPath } };
   }
   function purge() {
-    const candidate = store.terminal().find((row, index) => index >= 128 || row.finishedAt < now() - WEEK);
+    const terminal = store.terminal();
+    const candidate = terminal.find(row => row.phase === 'purging')
+      || terminal.find((row, index) => index >= 128 || row.finishedAt < now() - WEEK);
     if (!candidate) return false;
-    commitTransaction(db, () => {
+    db.transact(() => {
       const row = store.operation(candidate.operationId);
       if (row.phase !== 'purging') {
         row.phase = 'purging';
@@ -276,4 +278,4 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
   return { readScope, admit, stage, apply, read, fence, recover, purge };
 }
 
-module.exports = { createProjectDeleteProgress, operationId, commitTransaction };
+module.exports = { createProjectDeleteProgress, operationId, commitTransaction, projectIdentity };

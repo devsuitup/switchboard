@@ -11,6 +11,8 @@ const { createWhatsNew } = require('./src/main/app/changelog');
 const { remapProjectTranscripts } = require('./project-remap');
 const { createWriterWorkerClient } = require('./session-index-writer-client');
 const { createCacheEffects } = require('./cache-effects');
+const { projectArchiveWorkflows } = require('./src/main/projects/project-archive-workflow');
+const { worktreeParentPath } = require('./public/worktree-nesting');
 
 // see .ai/contexts/session-index-writer.md
 function createSessionIndexWriter(options = {}, cache = require('./session-cache')) {
@@ -44,6 +46,17 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     onSettings: entries => { mirror.clear(); for (const [key, value] of entries) mirror.set(key, value); if (backend) backend.applySettingsAcknowledgment(entries); },
     ...options.clientOptions,
   });
+  const workflows = projectArchiveWorkflows(client);
+  const workflowProof = () => workflows.current()?.proof;
+  const send = async (name, ...args) => {
+    workflows.assertLive();
+    const lease = workflows.current();
+    try { return await (lease ? client.requestForWorkflow(lease.id, name, ...args) : client.request(name, ...args)); }
+    catch (error) {
+      if (lease && (error.code === 'WRITER_TIMEOUT' || /outcome unknown|timed out|exited/.test(error.message))) lease.sealed = true;
+      throw error;
+    }
+  };
   let backend, recorder, cacheTail = Promise.resolve(), closing, accepting = true, terminated = false;
   const pending = new Set();
   const commandScope = new AsyncLocalStorage();
@@ -60,7 +73,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
   ready.catch(() => {});
   const request = (name, ...args) => !admitted() ? Promise.reject(new Error('writer is closing')) : track(ready.then(async () => {
     const notifyChanges = prepareSessionsChanged([{ name, args }]);
-    const value = await client.request(name, ...args);
+    const value = await send(name, ...args);
     notifyChanges?.();
     return value;
   }));
@@ -93,7 +106,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         const notifyChanges = prepareSessionsChanged(effects);
         let acknowledgment;
         try {
-          acknowledgment = effects.length ? await client.request('effects', effects, revision) : null;
+          acknowledgment = effects.length ? await send('effects', effects, revision) : null;
           if (folder !== undefined) cache.applyContinuationRefresh?.(folder, continuationCollector, true);
         }
         catch (error) {
@@ -125,7 +138,8 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       cache.init({ ...ctx, writer, db: recorder.adapter });
       recorder.finish();
     },
-    withCache(otherCache) { return createSessionIndexWriter({ client }, otherCache); },
+    withCache(otherCache) { return createSessionIndexWriter({ ...options, client, readonlyBackend: backend || options.readonlyBackend }, otherCache); },
+    reserveProjectDeletion(projects) { return workflows.reserve(projects); },
     async querySessionRequestOutcome(input) { return request('querySessionRequestOutcome', input); },
     async recordConsumedSessionStatusRequest(input) { return request('recordConsumedSessionStatusRequest', input); },
     async recordSessionRequestConflict(input) { return request('recordSessionRequestConflict', input); },
@@ -181,7 +195,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           return { entry, disabledFiles, record: { archivedAt: now,
             knownSessionIds: archive.knownIdsForGroup({ projects, activeSessions: deps.activeSessions, diskIds: diskIds[i], alias, projectPath: group.projectPath }) } };
         });
-        const accepted = await request('beginArchive', entries);
+        const accepted = await request('beginArchive', entries, workflowProof());
         const registered = await writer.scheduleRegistry(deps.seedProjects).list();
         const completed = {};
         for (const { group, alias } of targets) {
@@ -190,24 +204,26 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
           for (const schedule of archive.archivePlanForGroups([group], { registered, scan: deps.scan, realpath: deps.realpath })) {
             if (!schedule.disableable || !opts?.disableSchedules?.includes(schedule.filePath)) continue;
             let result;
-            try { result = deps.setEnabled(schedule.filePath, false, { projectRoot: group.projectPath }); }
+            workflows.assertLive();
+            try { result = await deps.setEnabled(schedule.filePath, false, { projectRoot: group.projectPath }); }
             catch (error) { result = { error: error.message }; }
             if (result.ok) { completed[entry].push(schedule.filePath); disabled.push(schedule.name); }
             else failed.push({ name: schedule.name, error: result.error });
           }
         }
-        const completedArchive = await request('completeArchive', accepted, completed);
+        const completedArchive = await request('completeArchive', accepted, completed, workflowProof());
         deps.notify();
         if (!completedArchive) return { error: 'archive changed before schedule completion', disabled };
         return { ok: true, archivedAt: now, disabled, failed };
       } catch (error) { return { error: error.message, disabled }; }
     },
     async undoArchiveProjectFolders(groups, archivedAt, deps) {
-      const result = await request('undoArchiveProjectFolders', groups, archivedAt);
+      const result = await request('undoArchiveProjectFolders', groups, archivedAt, workflowProof());
       if (result.error) return result;
       const enabled = [], failed = [];
       for (const { filePaths, projectRoot } of result.schedules) {
-        const restored = (deps.reenable || archive.reenableScheduleFiles)(filePaths, projectRoot);
+        workflows.assertLive();
+        const restored = await (deps.reenable || archive.reenableScheduleFiles)(filePaths, projectRoot);
         enabled.push(...restored.enabled);
         failed.push(...restored.failed.map(f => ({ name: f.name, error: f.error })));
       }
@@ -236,7 +252,7 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
         if (!updates.has('archivedProjects')) break;
         const entries = Object.keys(archived).filter(entry => !Object.hasOwn(updates.get('archivedProjects'), entry));
         try {
-          await request('retireArchivedEntries', entries, snapshot);
+          await request('retireArchivedEntries', entries, snapshot, workflowProof());
           break;
         } catch (error) {
           if (error.code !== 'WRITER_STALE') throw error;
@@ -256,17 +272,18 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
     async reenableOfferedSchedules(projectPath, folderKey, deps) {
       if (typeof projectPath !== 'string' || projectPath === '') return { error: 'invalid project path' };
       const entry = archive.archivedEntry(parseFolderKey(folderKey).alias, projectPath);
-      const offer = await request('beginOffer', entry);
+      const offer = await request('beginOffer', entry, workflowProof());
       if (!offer) return { ok: true, enabled: [], failed: [] };
-      const result = (deps.reenable || archive.reenableScheduleFiles)(offer.disabledSchedules, projectPath);
-      const completed = await request('completeOffer', entry, offer, result);
+      workflows.assertLive();
+      const result = await (deps.reenable || archive.reenableScheduleFiles)(offer.disabledSchedules, projectPath);
+      const completed = await request('completeOffer', entry, offer, result, workflowProof());
       deps.notify();
       if (!completed) return { error: 'schedule offer changed before completion', enabled: result.enabled,
         failed: result.failed.map(f => ({ name: f.name, error: f.error })) };
       return { ok: true, enabled: result.enabled, failed: result.failed.map(f => ({ name: f.name, error: f.error })) };
     },
     async dismissReenableOffer(projectPath, folderKey, deps) {
-      const result = await request('dismissReenableOffer', projectPath, folderKey);
+      const result = await request('dismissReenableOffer', projectPath, folderKey, workflowProof());
       if (result.ok) deps.notify();
       return result;
     },
@@ -324,14 +341,49 @@ function createSessionIndexWriter(options = {}, cache = require('./session-cache
       await client.request('drain');
     },
     measurements: () => request('measurements'),
+    clearArchivedEntry: (alias, projectPath) => request('clearArchivedEntry', alias, projectPath, workflowProof()),
+    hideProject: (entry, kind, scope) => request('hideProject', entry, kind, scope, workflowProof()),
+    unhideProject: (entry, alias, projectPath) => request('unhideProject', entry, alias, projectPath, workflowProof()),
+    revealAddedProject: projectPath => request('revealAddedProject', projectPath, workflowProof()),
   };
   for (const name of ['setSetting', 'deleteSetting', 'toggleStar', 'setStarred', 'setArchived', 'deleteCachedSession',
     'deleteSearchSession', 'deleteCachedFolder', 'deleteSearchFolder', 'deleteSearchType', 'applySearchFileBatch',
     'setCachedEntrypoints', 'setCachedCustomTitles', 'setCachedContinuationIndex', 'setCachedFileSize', 'setInitialScanComplete',
-    'clearArchivedEntry', 'hideProject', 'unhideProject', 'revealAddedProject', 'dropRemoteFolder',
+    'dropRemoteFolder',
     'upsertCachedSessions', 'replaceSessionMetrics', 'upsertSearchEntries', 'setName']) writer[name] = (...args) => request(name, ...args);
+  const groupProjects = groups => archive.validArchiveGroups(groups).map(group => ({ alias: parseFolderKey(group.folderKey).alias, projectPath: group.projectPath }));
+  const entryProject = entry => { const { alias, folder } = parseFolderKey(entry); return { alias, projectPath: folder }; };
+  const workflowTargets = {
+    archiveProjectFolders: groupProjects,
+    undoArchiveProjectFolders: groupProjects,
+    reenableOfferedSchedules: (projectPath, folderKey) => [{ alias: parseFolderKey(folderKey).alias, projectPath }],
+    dismissReenableOffer: (projectPath, folderKey) => [{ alias: parseFolderKey(folderKey).alias, projectPath }],
+    clearArchivedEntry: (alias, projectPath) => [{ alias, projectPath }],
+    hideProject: (entry, _kind, scope) => [{ ...entryProject(entry), ...(scope ? { alias: scope.alias } : {}) }],
+    unhideProject: (entry, alias, projectPath) => [{ alias, projectPath }],
+    revealAddedProject: projectPath => [{ alias: null, projectPath }],
+    applyAndPersistArchived: projects => projects.flatMap(project => {
+      const identity = { alias: project.remoteAlias || null, projectPath: project.projectPath };
+      const parent = worktreeParentPath(project.projectPath);
+      return parent === null || !Object.hasOwn(backend.getSetting('archivedProjects') || {}, archive.archivedEntry(identity.alias, parent))
+        ? [identity] : [identity, { ...identity, projectPath: parent }];
+    }),
+  };
   for (const [name, fn] of Object.entries(writer)) {
-    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate', 'releaseLiveSession'].includes(name)) continue;
+    if (typeof fn !== 'function' || ['initializeCache', 'withCache', 'reserveProjectDeletion', 'scheduleRegistry', 'createWhatsNew', 'closeDb', 'drain', 'beginShutdown', 'terminate', 'releaseLiveSession'].includes(name)) continue;
+    if (workflowTargets[name]) {
+      writer[name] = (...args) => {
+        if (!admitted()) return Promise.reject(new Error('writer is closing'));
+        if (name === 'applyAndPersistArchived' && !backend) return admit(async () => { await ready; return writer[name](...args); });
+        if (['reenableOfferedSchedules', 'dismissReenableOffer'].includes(name) && (typeof args[0] !== 'string' || !args[0])) return admit(() => fn(...args));
+        return track(commandScope.run(owner, () => workflows.run(workflowTargets[name](...args), async lease => {
+          await ready;
+          lease.proof = await request('readProjectArchiveEpochs', lease.projects.map(({ alias, projectPath }) => ({ alias, projectPath })), ['unhideProject', 'revealAddedProject'].includes(name));
+          return fn(...args);
+        })));
+      };
+      continue;
+    }
     writer[name] = (...args) => admit(() => fn(...args));
   }
   return writer;
