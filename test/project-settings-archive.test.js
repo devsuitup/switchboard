@@ -5,6 +5,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { isolatedHome } = require('./fixtures/isolated-home.cjs');
+const realHome = process.env.SWITCHBOARD_1064_REAL_HOME || os.homedir();
+const firedProjects = new Set();
+const home = isolatedHome(test, { realHome, projects: () => [...firedProjects] });
+home.install();
 const vm = require('node:vm');
 const { createHash } = require('node:crypto');
 const { createRequire } = require('node:module');
@@ -228,7 +233,7 @@ async function schedulerHarness(t, h) {
     static now() { return clock.now; }
   }
   const runnerContext = vm.createContext({
-    require: name => name === 'os' ? { homedir: () => h.dir } : localRequire(name), module: { exports: {} },
+    require: name => name === 'os' ? { homedir: () => home.home } : localRequire(name), module: { exports: {} },
     process: { env: {} }, Date: Clock, setTimeout: fn => { const timer = { fn }; timers.push(timer); return timer; },
     setInterval: () => ({}), clearTimeout() {}, clearInterval() {},
   });
@@ -242,7 +247,7 @@ async function schedulerHarness(t, h) {
   const runs = [];
   const resume = new EventEmitter();
   const stop = runnerContext.module.exports.startScheduler(log,
-    (_args, cwd, _name, done) => { runs.push(cwd); done(); },
+    (_args, cwd, _name, done) => { firedProjects.add(cwd); runs.push(cwd); done(); },
     { projects, resumeSource: resume, stateDir });
   t.after(stop);
   await settle();

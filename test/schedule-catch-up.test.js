@@ -9,11 +9,19 @@ const fs           = require('fs');
 const os           = require('os');
 const path         = require('path');
 const EventEmitter = require('events');
+const { isolatedHome } = require('./fixtures/isolated-home.cjs');
+const realHome = process.env.SWITCHBOARD_1064_REAL_HOME || os.homedir();
+const firedProjects = new Set();
+const home = isolatedHome(test, { realHome, projects: () => [...firedProjects] });
+home.install();
 
-const ROOT = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-catch-up-')));
-process.env.HOME = ROOT;
-process.env.USERPROFILE = ROOT;
+const ROOT = home.home;
+const previousDataDir = process.env.SWITCHBOARD_DATA_DIR;
 delete process.env.SWITCHBOARD_DATA_DIR;
+test.after(() => {
+  if (previousDataDir === undefined) delete process.env.SWITCHBOARD_DATA_DIR;
+  else process.env.SWITCHBOARD_DATA_DIR = previousDataDir;
+});
 
 const { startScheduler, claimScheduleMinute, scanSchedules } = require('../src/main/schedules/schedule-runner');
 
@@ -21,8 +29,6 @@ const STATE_DIR = path.join(ROOT, 'data', 'schedule-state');
 const PROJECT = path.join(ROOT, 'project');
 const COMMANDS = path.join(PROJECT, '.claude', 'commands');
 const FOLDER = path.join(ROOT, '.claude', 'projects', require('../encode-project-path').encodeProjectPath(PROJECT));
-
-test.after(() => fs.rmSync(ROOT, { recursive: true, force: true }));
 
 const at = (day, hour, minute, second = 0) => new Date(2026, 0, day, hour, minute, second).getTime();
 
@@ -35,12 +41,11 @@ function writeSchedule({ cron, catchUp = true, file = 'schedule-report.md', catc
 }
 
 function rig(schedule) {
+  firedProjects.clear();
   for (const dir of [path.join(ROOT, 'data'), path.join(ROOT, '.claude'), PROJECT]) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   fs.mkdirSync(COMMANDS, { recursive: true });
-  fs.mkdirSync(FOLDER, { recursive: true });
-  fs.writeFileSync(path.join(FOLDER, 'seed.jsonl'), JSON.stringify({ type: 'user', cwd: PROJECT }) + '\n');
   if (schedule) writeSchedule(schedule);
 
   const runs = [];
@@ -54,6 +59,8 @@ function rig(schedule) {
   };
   let hold = false;
   const run = (argv, cwd, name, onDone, identity) => {
+    firedProjects.add(cwd);
+    home.assertProjects([...firedProjects]);
     runs.push({ argv, cwd, name, identity });
     if (hold) pending.push(onDone); else onDone();
   };
@@ -62,8 +69,7 @@ function rig(schedule) {
     holdRuns() { hold = true; },
     finishRuns() { hold = false; pending.splice(0).forEach((done) => done()); },
     start: (stateDir = STATE_DIR) => startScheduler(log, run, { resumeSource: resume, stateDir, projects: () => [PROJECT] }),
-    firstMessages: () => fs.readdirSync(FOLDER)
-      .filter((f) => f !== 'seed.jsonl')
+    firstMessages: () => (fs.existsSync(FOLDER) ? fs.readdirSync(FOLDER) : [])
       .map((f) => JSON.parse(fs.readFileSync(path.join(FOLDER, f), 'utf8').split('\n')[0]).message.content),
   };
 }
@@ -78,6 +84,8 @@ for (const catchUp of [false, true]) {
     fakeClock(t, at(5, 12, 0, 30));
     let acknowledge;
     const stop = startScheduler({ info() {}, warn() {}, error() {} }, () => {
+      firedProjects.add(PROJECT);
+      home.assertProjects([...firedProjects]);
       return new Promise(resolve => { acknowledge = resolve; });
     }, { resumeSource: r.resume, stateDir: STATE_DIR, projects: () => [PROJECT] });
     t.after(stop);

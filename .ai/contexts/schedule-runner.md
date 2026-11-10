@@ -12,6 +12,25 @@ test uses a module-specific loader and checks eager and lazy stub consumption.
 
 **Purpose**: in-process cron that fires user-defined Claude tasks on a schedule. Stores schedules as Markdown files with YAML frontmatter inside each project's `.claude/commands/schedule-*.md`. Spawns `claude --resume <sid> -p "..."` as a detached child process when the cron expression matches.
 
+## Test home isolation
+
+The runner captures `os.homedir()` at module load. Tests that can create schedule
+transcripts use `test/fixtures/isolated-home.cjs`: construct `isolatedHome(t)`
+and call its `install()` before requiring the runner, including indirect imports
+through `archived-projects`. Installation sets both `HOME` and `USERPROFILE` and
+evicts the runner's require cache so a previous import cannot retain another
+home. The after hook checks expected disposable project folders and compares
+the original projects directory's names before restoring the environment and
+cache and removing the disposable home. The original directory is only listed;
+its files are never read or changed. `SWITCHBOARD_1064_REAL_HOME` lets a fully
+isolated test process also guard the developer directory by name.
+
+The re-enable and catch-up tests fire the shipped scheduler; the Archive VM
+uses the same disposable home. Run now stubs transcript creation and expects
+no project folders. The provenance test runs in a separate Electron process
+and is excluded from Node-only local verification. The slug-group DOM fixture
+and `fixtures/browser-mode.cjs` simulate schedule data without loading a writer.
+
 ## Key files
 
 | File | LOC | Role |

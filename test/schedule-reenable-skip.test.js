@@ -4,6 +4,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { isolatedHome } = require('./fixtures/isolated-home.cjs');
+const realHome = process.env.SWITCHBOARD_1064_REAL_HOME || os.homedir();
+const firedProjects = new Set();
+const home = isolatedHome(test, { realHome, projects: () => [...firedProjects] });
+home.install();
 const runner = require('../src/main/schedules/schedule-runner');
 const { reenableScheduleFiles } = require('../archived-projects');
 
@@ -32,7 +37,7 @@ function schedulerClock(t, h, runs, projects = () => [h.project], resumeSource) 
   let interval;
   t.mock.method(global, 'setTimeout', callback => { initial = callback; return {}; });
   t.mock.method(global, 'setInterval', callback => { interval = callback; return {}; });
-  const stop = runner.startScheduler(quiet, (...args) => { runs.push(args); args[3](); }, { stateDir: h.stateDir, projects, resumeSource });
+  const stop = runner.startScheduler(quiet, (...args) => { firedProjects.add(args[1]); runs.push(args); args[3](); }, { stateDir: h.stateDir, projects, resumeSource });
   t.after(stop);
   return { stop, tick(time) { t.mock.timers.setTime(time); (interval || initial)(); } };
 }
