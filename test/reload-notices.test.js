@@ -128,7 +128,7 @@ for (const first of ['reload', 'restore']) {
       } else {
         assert.match(text, /sidebar.*retry/);
       }
-      assert.doesNotMatch(text, /continuation choice|choose/);
+      assert.doesNotMatch(text.replaceAll(h.root, ''), /continuation choice|choose/);
       assert.equal(text.match(/Reload conversation/g)?.length, 1);
     }
     assert.deepEqual(h.spawned, []);

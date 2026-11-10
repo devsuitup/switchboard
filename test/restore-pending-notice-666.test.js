@@ -110,10 +110,10 @@ test('a thrown continuation retry reports only entries still held and not open',
   await assert.rejects(h.ctx.markRestoreIndexingDone(), /retry interrupted/);
   const alert = h.dom.window.document.querySelector('[data-notice-id="Restore:batch"][role="alert"]');
   assert.ok(alert, 'the remaining held entry must be reported after a thrown retry');
-  assert.match(alert.textContent, /second/);
+  assert.match(alert.textContent, /\(second\)/);
   assert.match(alert.textContent, /retry interrupted/);
   assert.match(alert.textContent, /Open it from the sidebar to retry restoring/);
-  assert.doesNotMatch(alert.textContent, /old|third/);
+  assert.doesNotMatch(alert.textContent.replaceAll(h.root, ''), /old|third/);
   assert.deepEqual(h.spawned.map(call => call.id), ['old']);
   assert.equal(h.dom.window.document.querySelector('[data-notice-id="Restore:pending"]'), null);
 });
