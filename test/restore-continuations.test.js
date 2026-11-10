@@ -119,7 +119,7 @@ for (const location of ['same folder', 'other folder', 'nested folder']) {
     const notice = h.dom.window.document.querySelector('[data-notice-id="Restore:pending"][role="status"]');
     assert.ok(notice);
     assert.match(notice.textContent, /waiting for indexing/i);
-    assert.doesNotMatch(notice.textContent, /failed/i);
+    assert.doesNotMatch(notice.textContent.replaceAll(h.root, ''), /failed/i);
     assert.equal(h.dom.window.document.querySelector('#app-notices [role="alert"]'), null);
   });
 }
