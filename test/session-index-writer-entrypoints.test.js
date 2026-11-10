@@ -6,8 +6,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { extractFunction } = require('./app-source');
+const { createSessionIndexWriter } = require('../session-index-writer');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
+
+test('request journal entrypoints forward exact candidate bytes through the admitted writer client', async () => {
+  const calls = [], expected = { state: 'completed' };
+  const writer = createSessionIndexWriter({ readonlyBackend: {}, client: { ready: Promise.resolve(),
+    request: async (...args) => { calls.push(args); return expected; } } }, {});
+  await writer.ready;
+  const input = { stemKey: 'a', resultBytes: Buffer.from('unchanged\n') };
+  for (const name of ['querySessionRequestOutcome', 'recordConsumedSessionStatusRequest', 'recordSessionRequestConflict',
+    'claimSessionResultNamespace', 'recordSessionResultPublication']) {
+    assert.equal(typeof writer[name], 'function', `${name} is a typed writer entrypoint`);
+    assert.equal(await writer[name](input), expected);
+    assert.deepEqual(calls.at(-1), [name, input], 'forwarding preserves command identity and exact arguments');
+  }
+});
 
 test('the projects watcher timer logs a rejected refresh instead of leaking its rejection', async () => {
   let watch, timer;

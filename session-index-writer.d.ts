@@ -43,8 +43,42 @@ export type ProjectDeletionScope = {
   scope: { rows: unknown[]; metadata: unknown[]; fields: unknown[]; ownership: unknown[]; folders: unknown[]; settingsKeys: string[] };
 };
 
+export type SessionRequestFamily = 'session-status' | 'open-session' | 'legacy' | 'action';
+export type SessionRequestRecord = Readonly<{
+  stemKey: string; actualStem: string; family: SessionRequestFamily;
+  suppliedHash: string | null; rawHash: string | null; resultBytes: Uint8Array | null;
+  createdAt: number; completedAt: number | null; revision: number;
+}>;
+export type SessionRequestReceipt = Readonly<{
+  domainId: string; actionToken: string; argsHash: string; revision: number; createdAt: number;
+}>;
+export type SessionRequestConflict = Readonly<{
+  stemKey: string; actualStem: string; rawHash: string; resultBytes: Uint8Array; createdAt: number; revision: number;
+}>;
+export type SessionRequestOutcome = (
+  | { state: 'absent'; stemKey: string }
+  | { state: 'owned'; owner: SessionRequestRecord }
+  | { state: 'pending'; owner: SessionRequestRecord & { readonly resultBytes: null } }
+  | { state: 'completed'; owner: SessionRequestRecord & { readonly resultBytes: Uint8Array; readonly completedAt: number } }
+  | { state: 'conflict'; owner: SessionRequestRecord; conflict: SessionRequestConflict | null }
+) & { receipt?: SessionRequestReceipt };
+export type SessionRequestCommand = {
+  stemKey: string; actualStem: string; actionToken: string; argsHash: string;
+};
+export type ConsumedSessionStatusRequest = SessionRequestCommand & {
+  suppliedHash: string; rawHash?: string; family?: 'session-status' | 'open-session'; resultBytes: Uint8Array;
+};
+export type SessionResultNamespace = SessionRequestCommand & {
+  suppliedHash?: string | null; rawHash?: string | null; family: 'legacy' | 'action'; resultBytes?: Uint8Array;
+};
+
 export interface SessionIndexWriter {
   readonly ready: Promise<void>;
+  querySessionRequestOutcome(input: { stemKey: string; suppliedHash?: string; rawHash?: string }): Promise<SessionRequestOutcome>;
+  recordConsumedSessionStatusRequest(input: ConsumedSessionStatusRequest): Promise<SessionRequestOutcome>;
+  recordSessionRequestConflict(input: SessionRequestCommand & { rawHash: string; resultBytes: Uint8Array }): Promise<SessionRequestOutcome>;
+  claimSessionResultNamespace(input: SessionResultNamespace): Promise<SessionRequestOutcome>;
+  recordSessionResultPublication(input: SessionResultNamespace & { resultBytes: Uint8Array }): Promise<SessionRequestOutcome>;
   getProjectDeletionState(input: DeletionReference): Promise<ProjectDeletionState>;
   readProjectDeletionScope(input: { project: DeletionProject }): Promise<ProjectDeletionScope>;
   fenceProjectDeletion(input: DeletionReference & { expectedProjectEpoch: number }): Promise<ProjectDeletionState>;

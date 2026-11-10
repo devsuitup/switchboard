@@ -7,6 +7,16 @@ scan clears failed-folder retry scope and backoff, including an exhausted retry
 budget, and scans all projects. Concurrent callers still share the in-flight
 scan; automatic `get-projects` calls retain the failed-folder retry policy.
 
+The #380 S1b1 `session_requests` and `session_request_commands` tables are
+data-dir-lifetime journals, not rebuildable cache. Cache schema migrations,
+folder/session/search deletion, metadata removal and #474 project-deletion
+receipt trimming must leave ownership tombstones, consumed result bytes and
+conflict receipts intact. They have no cache/meta foreign keys. Readonly
+pre-migration connections do not require these tables; authoritative outcome
+queries use the ordered writer, never the readonly cache snapshot. See
+[session-index-writer.md](session-index-writer.md) for the dormant ports,
+receipt/revision transaction and NORMAL durability boundary.
+
 ## Key files
 
 | File | LOC | Role |
