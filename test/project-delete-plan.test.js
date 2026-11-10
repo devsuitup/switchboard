@@ -47,6 +47,42 @@ async function planFor(f, changes) {
   return result.plan;
 }
 
+test('nullable row paths remain nullable in a confirmable membership projection', async () => {
+  const f = fixture();
+  f.state.ownership.groups[0].parentProjectPath = null;
+  f.state.runtime.tabs.push(identity(null, { id: 'dormant', runtime: 'terminal', verified: true,
+    cwd: null, liveness: { state: 'stopped', source: 'pty' } }));
+  const plan = await planFor(f);
+  assert.deepEqual(plan.refusals, []);
+  assert.equal(plan.groups[0].parentProjectPath, null);
+  assert.equal(plan.tabs[0].cwd, null);
+});
+
+for (const [kind, key] of [['tab', 'cwd'], ['group', 'parentProjectPath'], ['member', 'cwd']]) {
+  test(`relative ${kind} path causes a row ownership refusal rather than project identity failure`, async () => {
+    const f = fixture();
+    if (kind === 'tab') f.state.runtime.tabs.push(identity(null, { id: 'dormant', runtime: 'terminal', verified: true,
+      cwd: 'rel', liveness: { state: 'stopped', source: 'pty' } }));
+    if (kind === 'group') f.state.ownership.groups[0][key] = 'rel';
+    if (kind === 'member') f.state.ownership.members.push(member('bad-cwd', null, { cwd: 'rel' }));
+    const plan = await planFor(f);
+    assert.ok(plan.refusals.some(row => row.code === (kind === 'group' ? 'GROUP_OWNERSHIP' : 'MEMBER_OWNERSHIP')));
+  });
+}
+
+for (const value of [() => {}, Symbol('option')]) {
+  test(`uncloneable request ${typeof value} is INVALID_REQUEST`, async () => {
+    const f = fixture();
+    const request = f.request();
+    if (typeof value === 'function') request.extra = value;
+    else request.options.sessions = value;
+    const result = await f.planner.preview(request);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'INVALID_REQUEST');
+    assert.deepEqual(f.state.events, []);
+  });
+}
+
 test('empty preview waits for indexing and fences a read-only complete plan', async () => {
   const f = fixture();
   const before = structuredClone(f.state);
