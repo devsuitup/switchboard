@@ -57,7 +57,8 @@ for (const state of ['done', 'failed', 'stopped']) {
   }
 }
 
-test('1065 m1 concurrent restore lookups scan the jobs directory once per call cycle', async t => {
+test('1065fix2 async restore lookups share a bounded jobs snapshot', async t => {
+  t.mock.timers.enable({ apis: ['Date'] });
   const write = fixture(t);
   write('aaaaaaaa', { sessionId: SID });
   write('bbbbbbbb', { sessionId: OTHER });
@@ -78,18 +79,43 @@ test('1065 m1 concurrent restore lookups scan the jobs directory once per call c
   const saved = [{ sessionId: SID, bg: true, attachJobId: 'aaaaaaaa' }, { sessionId: OTHER, bg: true, attachJobId: 'bbbbbbbb' }];
   require('../src/main/bg-agents/bg-agents-ipc').init({
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) }, bgAgents: bg,
-    getMainWindow: () => null, log: { warn() {} }, getSetting: () => ({ openWorkingSet: saved }),
+    getMainWindow: () => null, log: { warn() {} }, getSetting: async () => {
+      await new Promise(resolve => setImmediate(resolve));
+      return { openWorkingSet: saved };
+    },
   });
   const restore = handlers.get('restore-background-job');
-  const results = await Promise.all([restore({}, SID), restore({}, OTHER)]);
+  const results = [await restore({}, SID), await restore({}, OTHER)];
   assert.deepEqual(results.map(result => result.action), ['refuse', 'refuse']);
-  assert.equal(scans, 1, 'concurrent saved entries share one directory scan');
-  assert.deepEqual([...reads.values()], [1, 1], 'each state is read once in the restore call cycle');
-  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(scans, 1, 'async saved entries share one directory scan within the time window');
+  assert.deepEqual([...reads.values()], [1, 1], 'each state is read once within the time window');
+  t.mock.timers.tick(1001);
   write('aaaaaaaa', { state: 'done', sessionId: SID, updatedAt: '2026-11-04T06:28:00Z' });
   await restore({}, SID);
-  assert.equal(scans, 2, 'the next call cycle must refresh the directory');
-  assert.deepEqual([...reads.values()], [2, 2], 'the next call cycle must read fresh job records');
+  assert.equal(scans, 2, 'an expired snapshot must refresh the directory');
+  assert.deepEqual([...reads.values()], [2, 2], 'an expired snapshot must read fresh job records');
+});
+
+test('1065fix2 a resumeSessionId-only candidate does not supersede a saved job', t => {
+  const write = fixture(t);
+  write('aaaaaaaa', { updatedAt: '2026-11-04T06:28:00Z' });
+  write('bbbbbbbb', { updatedAt: '2026-11-10T06:28:00Z', sessionId: undefined, resumeSessionId: SID });
+  const lookup = bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true });
+  assert.equal(lookup.known, true);
+  assert.equal(lookup.supersededBy, undefined, 'a resume origin alone must not supersede the saved working job');
+});
+
+test('1065fix2 a shared restore snapshot is keyed by jobs directory', t => {
+  const first = fixture(t);
+  first('aaaaaaaa', { updatedAt: '2026-11-04T06:28:00Z' });
+  first('bbbbbbbb', { updatedAt: '2026-11-10T06:28:00Z', sessionId: OTHER });
+  const restoreScan = { records: new Map() };
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true, restoreScan }).supersededBy, undefined);
+  const second = fixture(t);
+  second('aaaaaaaa', { updatedAt: '2026-11-04T06:28:00Z' });
+  second('bbbbbbbb', { updatedAt: '2026-11-10T06:28:00Z', sessionId: SID });
+  assert.equal(bg.findRestoreJob(SID, 'aaaaaaaa', { findNewer: true, restoreScan }).supersededBy,
+    'bbbbbbbb', 'a different jobs directory must supply fresh records');
 });
 
 test('1065 a newer job must match the conversation before superseding a saved job', t => {

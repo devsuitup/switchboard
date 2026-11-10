@@ -191,9 +191,8 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       const global = await getSetting('global');
       const item = global?.openWorkingSet?.find(item => item.sessionId === sessionId && item.bg === true);
       if (!item) return refuse('session is not a saved background entry in the working set');
-      if (!restoreScan) {
-        restoreScan = { records: new Map() };
-        setImmediate(() => { restoreScan = null; });
+      if (!restoreScan || Date.now() >= restoreScan.expiresAt) {
+        restoreScan = { records: new Map(), expiresAt: Date.now() + 1000 };
       }
       const lookup = bgAgents.findRestoreJob(sessionId, item.attachJobId, { findNewer: true, restoreScan });
       if (!lookup.known || !lookup.job) return { ...refuse(lookup.reason || 'background job record unavailable'), ...(lookup.missing ? { missing: true } : {}) };

@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const {
   parseJobState, parseCliList, mergeRoster, dispatchArgs, parseDispatchOutput, stripShellNoise, JOB_ID_RE,
-  dispatchRefusal, isHostedJob, SESSION_ID_RE, sessionIdFromLinkScanPath,
+  dispatchRefusal, isHostedJob, SESSION_ID_RE, sessionIdFromLinkScanPath, sessionIdField,
 } = require('./bg-agents-roster');
 const { resolveProjectRoots, projectRootFromPattern, worktreeRootFromPattern } = require('../../../project-root');
 const { classifyWorkerLiveness, workerTimestamp } = require('./bg-worker-liveness');
@@ -438,6 +438,11 @@ async function continuationJobCheck(sessionId, { excludeJobId, workerLiveness = 
 }
 
 function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false, findNewer = false, restoreScan } = {}) {
+  if (restoreScan && restoreScan.jobsDir !== jobsDir) {
+    restoreScan.jobsDir = jobsDir;
+    restoreScan.records.clear();
+    delete restoreScan.names;
+  }
   const same = value => typeof value === 'string' && value.toLowerCase() === sessionId.toLowerCase();
   const listed = id => roster.find(e => e.kind === 'background' && e.id === id) || null;
   const identity = (raw, id) => [raw?.sessionId, raw?.resumeSessionId,
@@ -457,7 +462,8 @@ function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false
     if (!job?.state || (raw.id && raw.id !== id)) throw new Error(`job ${id} has an unknown or unreadable state`);
     const rawTarget = raw.resumeSessionId ?? raw.sessionId;
     const resumeTarget = typeof rawTarget === 'string' && SESSION_ID_RE.test(rawTarget) ? rawTarget.toLowerCase() : null;
-    return { job: { ...job, id, resumeTarget }, matches: ignoreUnrelatedInvalid ? identity(raw, id).some(same) : same(raw.sessionId) || same(raw.resumeSessionId) || same(job.sessionId) };
+    const ownSessionId = sessionIdFromLinkScanPath(raw.linkScanPath) || sessionIdField(raw.sessionId);
+    return { job: { ...job, id, resumeTarget }, ownSessionId, matches: ignoreUnrelatedInvalid ? identity(raw, id).some(same) : same(raw.sessionId) || same(raw.resumeSessionId) || same(job.sessionId) };
   };
   try {
     if (typeof attachJobId === 'string' && JOB_ID_RE.test(attachJobId)) {
@@ -476,7 +482,7 @@ function findRestoreJob(sessionId, attachJobId, { ignoreUnrelatedInvalid = false
           for (const id of names.filter(id => JOB_ID_RE.test(id) && id !== attachJobId)) {
             try {
               const candidate = read(id);
-              if (same(candidate.job.sessionId) && workerTimestamp(candidate.job.updatedAt) > workerTimestamp(record.job.updatedAt)
+              if (same(candidate.ownSessionId) && workerTimestamp(candidate.job.updatedAt) > workerTimestamp(record.job.updatedAt)
                 && (!newer || workerTimestamp(candidate.job.updatedAt) > workerTimestamp(newer.updatedAt))) newer = candidate.job;
             } catch {}
           }

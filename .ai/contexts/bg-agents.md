@@ -66,10 +66,13 @@ undated candidates cannot establish supersession. Superseded entries retire
 with dead or unknown worker liveness, even with pending task evidence. Live
 workers always follow the attach path, including idle `done` workers. Without
 supersession, dead `done` jobs retain automatic recovery. Legacy lookups retain
-their unique-match requirement. Concurrent explicit-id restore lookups share directory
-names and parsed state records for one event-loop call cycle; the next cycle discards
-that snapshot and reads fresh evidence. The cache holds at most one record per
-job encountered in that cycle and does not persist across restore batches.
+their unique-match requirement. Explicit-id restore lookups share directory names
+and parsed state records for a fixed one-second window, including calls separated
+by asynchronous settings reads. The snapshot is keyed by jobs directory; a directory
+change or an expired window reads fresh evidence. It holds at most one record per
+job encountered in that window. Supersession reads the candidate's own identity
+directly from `linkScanPath` or a valid `sessionId`; `parseJobState` retains its
+`resumeSessionId` fallback for other callers.
 
 The `retire` result makes `prepareBackgroundRestore` release the skipped,
 dormant and in-flight slots, clear its Restore notice and schedule persistence
