@@ -14,7 +14,7 @@ receipt trimming must leave ownership tombstones, consumed result bytes and
 conflict receipts intact. They have no cache/meta foreign keys. Readonly
 pre-migration connections do not require these tables; authoritative outcome
 queries use the ordered writer, never the readonly cache snapshot. See
-[session-index-writer.md](session-index-writer.md) for the dormant ports,
+[session-index-writer.md](session-index-writer.md) for the journal ports,
 receipt/revision transaction and NORMAL durability boundary.
 
 ## Key files

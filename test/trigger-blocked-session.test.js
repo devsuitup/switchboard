@@ -16,7 +16,7 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 
-const { start } = require('../src/main/triggers/trigger-watcher');
+const { start } = require('./fixtures/trigger-watcher.cjs');
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 

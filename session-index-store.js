@@ -986,6 +986,7 @@ const projectDeletion = {
 let preparedRequestStatements;
 const requestSchemaAvailable = () => db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('session_requests', 'session_request_commands')").get().n === 2;
 function requestStatements() {
+  if (!requestSchemaAvailable()) throw Object.assign(new Error('Request journal schema is unavailable'), { code: 'SESSION_REQUEST_SCHEMA' });
   return preparedRequestStatements ??= {
     get: db.prepare('SELECT * FROM session_requests WHERE stemKey=?'),
     receipt: db.prepare('SELECT * FROM session_request_commands WHERE domainId=? AND actionToken=?'),
@@ -997,9 +998,9 @@ function requestStatements() {
 }
 const sessionRequests = {
   available: requestSchemaAvailable,
-  get: key => requestSchemaAvailable() ? requestStatements().get.get(key) || null : null,
-  receipt: (key, token) => requestSchemaAvailable() ? requestStatements().receipt.get(key, token) || null : null,
-  conflict: (key, hash) => requestSchemaAvailable() ? requestStatements().conflict.get(key, hash)?.outcomeJson || null : null,
+  get: key => requestStatements().get.get(key) || null,
+  receipt: (key, token) => requestStatements().receipt.get(key, token) || null,
+  conflict: (key, hash) => requestStatements().conflict.get(key, hash)?.outcomeJson || null,
   insert: row => requestStatements().insert.run(row.stemKey, row.suppliedHash, row.rawHash, row.family,
     row.actualStem, row.resultBytes, row.createdAt, row.completedAt, row.revision),
   publish: row => requestStatements().publish.run(row.resultBytes, row.completedAt, row.revision, row.stemKey),

@@ -18,7 +18,7 @@ const os     = require('os');
 const path   = require('path');
 const { setTimeout: realSetTimeout } = require('node:timers');
 
-const { start, waitForCliIdleAfter } = require('../src/main/triggers/trigger-watcher');
+const { start, waitForCliIdleAfter } = require('./fixtures/trigger-watcher.cjs');
 
 const silent = { info() {}, warn() {}, error() {}, debug() {} };
 
