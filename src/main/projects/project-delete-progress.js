@@ -56,6 +56,11 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
   const store = db.projectDeletion;
   const revision = () => db.getSetting('_writer_revision') || 0;
   const fenceRow = key => store.fence(key) || { epoch: 0, operationId: null, blocked: 0 };
+  const otherOwner = project => {
+    const fence = fenceRow(project.key);
+    const owner = fence.operationId && fence.operationId !== project.operationId && store.operation(fence.operationId);
+    return owner && !owner.sealed ? owner : null;
+  };
   const expired = row => !!row.sealed && row.finishedAt < now() - WEEK;
   function readScope({ project }) {
     const identity = projectIdentity(project);
@@ -63,7 +68,8 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
       const ownership = db.getAllCached().map(row => ({ ...row })).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
       const rows = ownership.filter(row => {
         if (!row.projectPath || parseFolderKey(row.folder).alias !== identity.alias) return false;
-        return projectIdentity({ alias: identity.alias, projectPath: row.projectPath }).key === identity.key;
+        try { return projectIdentity({ alias: identity.alias, projectPath: row.projectPath }).key === identity.key; }
+        catch { return false; }
       });
       const ids = new Set(rows.map(row => row.sessionId));
       const metadata = [...db.getAllMeta(true).values()].filter(row => ids.has(row.sessionId));
@@ -93,9 +99,12 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
       const row = store.operation(input.operationId), fence = fenceRow(project.key);
       const observed = observations(project);
       if (!row || expired(row)) {
-        const advanced = fence.epoch > project.expectedEpoch;
+        const advanced = !!fence.blocked && fence.epoch > project.expectedEpoch;
+        const owner = otherOwner(project);
         return { state: row || advanced ? 'unknown' : 'absent', terminal: false, noLateCommit: advanced,
-          receiptAvailable: false, projectEpoch: fence.epoch, reason: row || advanced ? 'receipt-expired-or-unavailable' : 'not-observed', ...observed };
+          receiptAvailable: false, projectEpoch: fence.epoch,
+          reason: owner ? 'project-owned-by-another-operation' : row || advanced ? 'receipt-expired-or-unavailable' : 'not-observed',
+          ...(owner ? { ownerOperationId: owner.operationId } : {}), ...observed };
       }
       if (row.projectKey !== project.key) throw fail('DELETION_ID', 'Receipt belongs to another project');
       const units = store.units(input.operationId).map(unit => ({ ordinal: unit.ordinal, category: unit.category, target: JSON.parse(unit.targetJson), status: unit.status, result: JSON.parse(unit.resultJson) }));
@@ -144,6 +153,7 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
         if (existing.projectKey !== project.key || existing.manifestHash !== manifestHash) throw fail('DELETION_HASH', 'Operation ID reused with different manifest');
         return;
       }
+      if (otherOwner(project)) throw fail('DELETION_BUSY', 'Project is owned by another unsealed operation');
       const snapshot = readScope(input);
       if (snapshot.projectEpoch !== project.expectedEpoch) throw fail('DELETION_TERMINAL', 'Operation epoch has advanced');
       if (snapshot.writerRevision !== copy.expectedRevision) throw fail('WRITER_STALE', 'Writer revision changed before admission');
@@ -225,6 +235,7 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
       if (row?.sealed) { row = null; return; }
       if (row) { seal(row, 'partial', { reason: 'fenced' }); return; }
       const current = fenceRow(project.key);
+      if (otherOwner(project)) return;
       if (current.epoch !== project.expectedEpoch) return;
       if (current.epoch >= Number.MAX_SAFE_INTEGER) throw fail('DELETION_ID', 'Project epoch exhausted');
       store.setFence(project.key, current.epoch + 1, null, 1);
@@ -255,7 +266,7 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     return true;
   }
   function trimReceipts() {
-    while (store.terminal().length > 128) purge();
+    if (store.terminal().length > 128) purge();
   }
   return { readScope, admit, stage, apply, read, fence, recover, purge };
 }

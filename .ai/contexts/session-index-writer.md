@@ -11,8 +11,10 @@ Writable schema reconciliation adds `project_delete_fences`,
 `project_delete_operations` and `project_delete_units`, with project/state and
 terminal-retention indexes. A cascade trigger also removes units when foreign
 keys are disabled. Existing stores upgrade additively; readonly opens do not
-create these tables. Store methods prepare reads, header/fence/progress writes,
-unit results and bounded receipt maintenance.
+create these tables and can open an unmigrated database. Deletion statements
+are prepared lazily on first use; header/fence/progress writes, unit results
+and bounded receipt maintenance statements are prepared only by a writable
+connection. Readonly connections can read deletion tables after migration.
 
 `src/main/projects/project-delete-progress.js` owns the dormant admission,
 staging, effect transaction hook, status, fence and restart primitives.
@@ -41,9 +43,10 @@ Worker bootstrap includes recovered operation/project identities in
 transaction per header, advances only its matching owned epoch and never
 replays pending effects. There are at most 32 active headers. Maintenance
 deletes at most 16 unit rows per transaction; terminal details are limited to
-128 receipts and seven days. Epoch high-water rows survive receipt removal.
-Terminal-count trimming can require multiple bounded maintenance transactions;
-no hard total wall-time bound is claimed for this maintenance or snapshot reads.
+128 receipts and seven days after maintenance converges. Epoch high-water rows
+survive receipt removal. Each admit/apply/fence/recover call performs at most
+one purge transaction; large receipts leave excess terminal headers for later
+calls. Snapshot reads retain no hard wall-time bound.
 
 Only `getProjectDeletionState`, `readProjectDeletionScope` and
 `fenceProjectDeletion` are forwarded by the typed facade. The two read ports

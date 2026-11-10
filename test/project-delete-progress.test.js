@@ -48,6 +48,93 @@ test('existing database gains writable-only deletion tables without erasing exis
   assert.equal(h.db.connection.prepare("SELECT COUNT(*) AS n FROM project_delete_operations").get().n, 0);
 });
 
+test('readonly opening an unmigrated database needs no deletion tables', supported, t => {
+  const h = setup(t);
+  h.db.setSetting('sentinel', 7);
+  h.db.connection.exec('DROP TABLE project_delete_units; DROP TABLE project_delete_operations; DROP TABLE project_delete_fences');
+  let reader;
+  assert.doesNotThrow(() => { reader = openStore({ readonly: true }); }, 'readonly bootstrap must tolerate missing deletion tables');
+  try {
+    assert.equal(reader.getSetting('sentinel'), 7);
+    assert.equal(reader.connection.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name LIKE 'project_delete_%' AND type='table'").get().n, 0);
+  } finally { reader?.closeDb(); }
+});
+
+for (const alias of [null, 'remote']) {
+  test(`scope ignores malformed ${alias === null ? 'local' : 'remote'} rows but digests their ownership`, supported, t => {
+    const h = setup(t), p = h.progress();
+    const project = alias === null ? h.project : { alias, projectPath: '/workspace' };
+    const before = p.readScope({ project });
+    h.db.upsertCachedSessions([{ sessionId: 'malformed', folder: alias === null ? '-local' : 'remote::-workspace',
+      projectPath: alias === null ? 'relative/path' : 'C:\\workspace', summary: null, created: null, modified: null }]);
+    let after;
+    assert.doesNotThrow(() => { after = p.readScope({ project }); }, 'malformed cached ownership must not poison scope reads');
+    assert.equal(after.scope.rows.length, 0, 'malformed row never matches the project');
+    assert.equal(after.scope.ownership.length, 1, 'raw ownership remains in the digest');
+    assert.notEqual(after.writerMembershipDigest, before.writerMembershipDigest);
+  });
+}
+
+test('admission refuses another unsealed owner without writes', supported, t => {
+  const h = setup(t), p = h.progress(), x = h.manifest();
+  p.admit(x);
+  const y = h.manifest(), before = p.read(x), changes = h.db.changeCount();
+  assert.throws(() => p.admit(y), { code: 'DELETION_BUSY' }, 'a second operation cannot take an unsealed owner');
+  assert.deepEqual(p.read(x), before, 'refusal preserves the owner receipt and epoch');
+  assert.equal(h.db.changeCount(), changes, 'busy admission is write-free');
+  p.stage(x, x.units);
+  p.apply(x, () => 'done'); p.apply(x, () => 'done');
+  assert.equal(p.read(x).state, 'committed');
+});
+
+test('foreign absent fence preserves an unsealed owner and its ability to commit', supported, t => {
+  const h = setup(t), p = h.progress(), x = h.manifest();
+  p.admit(x);
+  const y = h.manifest(), before = p.read(x), changes = h.db.changeCount();
+  const refused = p.fence(y);
+  assert.deepEqual(p.read(x), before, 'foreign fence must preserve the owner receipt and epoch');
+  assert.equal(refused.reason, 'project-owned-by-another-operation');
+  assert.equal(refused.ownerOperationId, x.operationId);
+  assert.equal(refused.noLateCommit, false);
+  assert.equal(refused.terminal, false);
+  assert.equal(h.db.changeCount(), changes, 'foreign fence is write-free');
+  p.stage(x, x.units);
+  p.apply(x, () => 'done');
+  assert.equal(p.fence(x).state, 'partial', 'only the owning fence seals its prefix');
+  assert.equal(p.read(x).noLateCommit, true);
+});
+
+test('sealing a displaced unsealed receipt cannot clear another fence owner', supported, t => {
+  const h = setup(t), p = h.progress(), x = h.manifest();
+  p.admit(x);
+  const key = h.db.connection.prepare('SELECT projectKey FROM project_delete_operations WHERE operationId=?').get(x.operationId).projectKey;
+  const y = operationId(h.project, p.read(x).projectEpoch);
+  h.db.projectDeletion.setFence(key, 9, y, 1);
+  p.fence(x);
+  assert.equal(h.db.projectDeletion.fence(key).operationId, y, 'sealing must not clear a different owner');
+  assert.equal(h.db.projectDeletion.fence(key).epoch, 9, 'sealing must not advance a different owned epoch');
+});
+
+test('automatic retention bounds maintenance turns for a large receipt', supported, t => {
+  const h = setup(t), p = h.progress();
+  const large = h.manifest(Array.from({ length: 160 }, (_, i) => ({ category: 'probe', target: i })));
+  p.admit(large);
+  for (let i = 0; i < large.units.length; i += 16) p.stage(large, large.units.slice(i, i + 16));
+  p.fence(large);
+  for (let i = 0; i < 127; i++) {
+    h.advance(1);
+    const m = h.manifest([]); p.admit(m); p.apply(m, () => assert.fail('empty manifest'));
+  }
+  h.advance(1);
+  const m = h.manifest([]); p.admit(m);
+  const before = h.db.changeCount();
+  p.apply(m, () => assert.fail('empty manifest'));
+  assert.ok(h.db.changeCount() - before <= 24, 'one completion must not drain a large receipt in an unbounded loop');
+  assert.ok(h.db.projectDeletion.units(large.operationId).length > 0, 'remaining purge work waits for later calls');
+  for (let i = 0; i < 12; i++) p.fence(m);
+  assert.equal(h.db.projectDeletion.terminal().length, 128, 'later calls converge to the retention cap');
+});
+
 test('admission, effects, progress and exact revision commit or roll back together', supported, t => {
   const h = setup(t), p = h.progress(), m = h.manifest();
   p.admit(m);

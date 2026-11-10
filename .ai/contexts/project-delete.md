@@ -26,6 +26,8 @@ mappings, plus selected metadata/provenance and settings-key names. It can
 refuse after unrelated durable changes; it cannot certify complete runtime
 membership or settings ownership. A4b3 will build the authoritative durable
 projection and share the planner's pure identity helpers.
+Malformed cached project paths never match a project; their raw ownership rows
+remain in the digest so corruption cannot silently remove ownership evidence.
 
 `getProjectDeletionState({operationId,project})` reports actual staged unit
 results as completed/kept/failed/pending lists, plus total/staged/unstaged
@@ -42,6 +44,23 @@ After expiry/removal, status is `unknown` when the epoch has advanced, and
 noLateCommit remains provable for that old ID. Foreign IDs refuse; old
 fences preserve newer ownership. The persisted epoch/seal guard rejects a
 later attempt to run an old unit.
+
+An unsealed owner excludes a second operation on the same project. Admission
+refuses `DELETION_BUSY` without writes. Fencing a never-admitted foreign ID
+returns a nonterminal observation with reason `project-owned-by-another-operation`
+and `ownerOperationId`, preserving the current epoch, revision and owner.
+Only the owning operation's fence seals that owner. The persisted `blocked`
+flag marks the epoch high-water fence used by missing-receipt readback to prove
+that an older ID cannot commit.
+
+Automatic retention performs at most one purge transaction per call, deleting
+at most 16 units. A large receipt can temporarily leave more than 128 terminal
+headers; later calls or explicit maintenance finish trimming it.
+
+A4b4 obligation: an unrelated writer commit between chunks currently causes
+`apply` to throw `WRITER_STALE`, leaving the operation `inProgress`. Completion
+must either tolerate unrelated revision bumps using the membership digest or
+deterministically seal the committed prefix as partial.
 
 Archive workflow exclusion and epoch-aware existing producers remain A4b2;
 actual metadata/settings effects and manifest validation remain A4b3; the

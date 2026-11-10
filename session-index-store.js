@@ -932,35 +932,38 @@ if (!readonly) try {
   console.warn('Bridge UUID repair failed; will retry on next database open:', err.message);
 }
 
-const deletionStatements = {
+let preparedDeletionStatements;
+function deletionStatements() {
+return preparedDeletionStatements ??= {
   fence: db.prepare('SELECT * FROM project_delete_fences WHERE projectKey = ?'),
-  setFence: db.prepare(`INSERT INTO project_delete_fences(projectKey, epoch, operationId, blocked) VALUES (?, ?, ?, ?)
+  setFence: !readonly && db.prepare(`INSERT INTO project_delete_fences(projectKey, epoch, operationId, blocked) VALUES (?, ?, ?, ?)
     ON CONFLICT(projectKey) DO UPDATE SET epoch=excluded.epoch, operationId=excluded.operationId, blocked=excluded.blocked`),
   operation: db.prepare('SELECT * FROM project_delete_operations WHERE operationId = ?'),
-  insert: db.prepare(`INSERT INTO project_delete_operations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-  progress: db.prepare(`UPDATE project_delete_operations SET state=?, phase=?, lastRevision=?, nextUnit=?, sealed=?, errorJson=?, finishedAt=? WHERE operationId=?`),
+  insert: !readonly && db.prepare(`INSERT INTO project_delete_operations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+  progress: !readonly && db.prepare(`UPDATE project_delete_operations SET state=?, phase=?, lastRevision=?, nextUnit=?, sealed=?, errorJson=?, finishedAt=? WHERE operationId=?`),
   active: db.prepare('SELECT * FROM project_delete_operations WHERE sealed = 0 ORDER BY createdAt, operationId'),
   terminal: db.prepare('SELECT operationId, finishedAt FROM project_delete_operations WHERE sealed = 1 ORDER BY finishedAt DESC, operationId DESC'),
   units: db.prepare('SELECT * FROM project_delete_units WHERE operationId = ? ORDER BY ordinal'),
-  addUnit: db.prepare('INSERT INTO project_delete_units VALUES (?, ?, ?, ?, ?, ?)'),
-  unitResult: db.prepare('UPDATE project_delete_units SET status=?, resultJson=? WHERE operationId=? AND ordinal=?'),
-  purgeUnits: db.prepare('DELETE FROM project_delete_units WHERE operationId=? AND ordinal IN (SELECT ordinal FROM project_delete_units WHERE operationId=? LIMIT 16)'),
-  purgeOperation: db.prepare('DELETE FROM project_delete_operations WHERE operationId=?'),
+  addUnit: !readonly && db.prepare('INSERT INTO project_delete_units VALUES (?, ?, ?, ?, ?, ?)'),
+  unitResult: !readonly && db.prepare('UPDATE project_delete_units SET status=?, resultJson=? WHERE operationId=? AND ordinal=?'),
+  purgeUnits: !readonly && db.prepare('DELETE FROM project_delete_units WHERE operationId=? AND ordinal IN (SELECT ordinal FROM project_delete_units WHERE operationId=? LIMIT 16)'),
+  purgeOperation: !readonly && db.prepare('DELETE FROM project_delete_operations WHERE operationId=?'),
 };
+}
 const projectDeletion = {
-  fence: key => deletionStatements.fence.get(key) || null,
-  setFence: (key, epoch, id, blocked) => deletionStatements.setFence.run(key, epoch, id, blocked),
-  operation: id => deletionStatements.operation.get(id) || null,
-  insert: row => deletionStatements.insert.run(...['operationId', 'projectKey', 'expectedEpoch', 'ownedEpoch', 'manifestHash',
+  fence: key => deletionStatements().fence.get(key) || null,
+  setFence: (key, epoch, id, blocked) => deletionStatements().setFence.run(key, epoch, id, blocked),
+  operation: id => deletionStatements().operation.get(id) || null,
+  insert: row => deletionStatements().insert.run(...['operationId', 'projectKey', 'expectedEpoch', 'ownedEpoch', 'manifestHash',
     'membershipDigest', 'writerMembershipDigest', 'optionsJson', 'state', 'phase', 'startRevision', 'lastRevision',
     'nextUnit', 'totalUnits', 'sealed', 'errorJson', 'createdAt', 'finishedAt'].map(key => row[key] ?? null)),
-  progress: row => deletionStatements.progress.run(row.state, row.phase, row.lastRevision, row.nextUnit, row.sealed, row.errorJson, row.finishedAt, row.operationId),
-  active: () => deletionStatements.active.all(), terminal: () => deletionStatements.terminal.all(),
-  units: id => deletionStatements.units.all(id),
-  addUnit: (id, ordinal, unit) => deletionStatements.addUnit.run(id, ordinal, unit.category, JSON.stringify(unit.target), 'pending', null),
-  unitResult: (id, ordinal, status, result) => deletionStatements.unitResult.run(status, JSON.stringify(result ?? null), id, ordinal),
-  purgeUnits: id => deletionStatements.purgeUnits.run(id, id),
-  purgeOperation: id => deletionStatements.purgeOperation.run(id),
+  progress: row => deletionStatements().progress.run(row.state, row.phase, row.lastRevision, row.nextUnit, row.sealed, row.errorJson, row.finishedAt, row.operationId),
+  active: () => deletionStatements().active.all(), terminal: () => deletionStatements().terminal.all(),
+  units: id => deletionStatements().units.all(id),
+  addUnit: (id, ordinal, unit) => deletionStatements().addUnit.run(id, ordinal, unit.category, JSON.stringify(unit.target), 'pending', null),
+  unitResult: (id, ordinal, status, result) => deletionStatements().unitResult.run(status, JSON.stringify(result ?? null), id, ordinal),
+  purgeUnits: id => deletionStatements().purgeUnits.run(id, id),
+  purgeOperation: id => deletionStatements().purgeOperation.run(id),
   metadataFields: () => db.prepare('SELECT * FROM session_meta_fields ORDER BY sessionId, field').all(),
 };
 
