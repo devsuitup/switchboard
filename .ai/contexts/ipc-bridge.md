@@ -767,6 +767,11 @@ native job per foreground local PTY (`src/main/terminals/`, ADR 0005).
 At app ready, main configures the singleton once and starts it without awaiting
 startup. `windowsJobHelper()` only retrieves it; configuring it again with
 different function bindings throws instead of silently keeping the first ones.
+Requests for the same job ID run through a per-ID FIFO. An observation retains
+its pending reply while release, termination or reassignment waits behind it;
+different IDs remain independent. Replies advance that ID's queue, and helper
+failure settles both in-flight and waiting requests. The PowerShell wire format
+and job IDs remain unchanged.
 First and restored tabs never wait for compilation. Queued assignments wait for
 `ready` (15 s startup deadline). Node reads the packaged `.ps1` with asar-aware
 fs.readFileSync; build.files includes src/**/*, and no archive path goes to
@@ -870,6 +875,13 @@ Natural PTY exit never waits for job assignment or observation. An unsettled
 assignment is released immediately; only an already assigned job is observed
 in the background. Main records an ended-tree proof only while session identity,
 PTY and generation still match, independently of its normal exit cleanup.
+Each wire also records the latest generation under the tab and known real ID
+in `activeSessions.statusGenerations`, surviving removal from `activeSessions`.
+Status accepts a retained exit proof only when its generation matches that
+latest wire, rechecked after asynchronous reads. A delayed observation from an
+older session object cannot confirm death of a reopened ID, even after the new
+PTY has exited and its active entry has been removed. Missing generation
+ownership leaves liveness unknown.
 
 App quit retains the existing 1500 ms shutdown drain and adds no await. It calls
 the same synchronous pty.kill; the existing unref'd 25 ms native-exit poll can

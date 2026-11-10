@@ -15,6 +15,7 @@ function gather(options = {}) {
   assert.equal(typeof status.createSessionStatus, 'function', 'main status gatherer must exist');
   const session = { generation: 1, pty: { pid: 42 }, statusPtyStart: '100', startedAt: 10, ...options.session };
   const sessions = new Map([[id, session], [from, { generation: 2, pty: { pid: 43 } }]]);
+  sessions.statusGenerations = new Map([[id, session.generation], [from, 2]]);
   const service = status.createSessionStatus({ activeSessions: sessions, now: () => 1000,
     getKnown: () => ({ sessionId: id }), readHead: async () => ({ state: 'closed', observedAt: 30, lastEntryAt: 20 }), ...options, sessions: undefined });
   return { service, session, sessions };

@@ -26,9 +26,33 @@ function rig(beforeWire = () => {}) {
   const { wireSessionPty } = loadAppFunctions(context, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
   beforeWire(pty);
   wireSessionPty(session, id, pty);
-  return { session, sessions, pty, events, wire: () => wireSessionPty(session, id, pty), data: text => data(text),
+  return { session, sessions, pty, events, wire: (next = session, target = pty) => wireSessionPty(next, id, target), data: text => data(text),
     exit: () => { const pending = exits.map(fn => fn({ exitCode: 0 })); return Promise.all(pending); }, time: at => { clock = at; } };
 }
+
+test('F2: old observation after a reopened id exits cannot prove the new generation dead', async () => {
+  const h = rig(); let resolveOld, exitNew;
+  h.pty.statusTreeExit = new Promise(resolve => { resolveOld = resolve; });
+  const finishing = h.exit();
+  try {
+    assert.equal(h.sessions.has(id), false, 'old exit cleanup must finish before its observation');
+    const nextPty = { pid: 43, onData() {}, onExit(fn) { exitNew = fn; } };
+    const next = { kind: 'local-pty', pty: nextPty };
+    h.sessions.set(id, next); h.wire(next, nextPty);
+    assert.notEqual(next.generation, h.session.generation);
+    await exitNew({ exitCode: 0 });
+    assert.equal(h.sessions.has(id), false, 'the reopened generation has also finished');
+    resolveOld({ ended: true, observedAt: 50 });
+    await finishing;
+    await new Promise(resolve => setImmediate(resolve));
+    const service = createSessionStatus({ activeSessions: h.sessions, exits: h.sessions.statusExits,
+      getKnown: () => ({ sessionId: id }), probe: async () => ({ known: true, live: null }) });
+    const result = await service.gather(id);
+    assert.equal(result.state, 'unknown', 'an old observation must not prove the reopened generation dead');
+    assert.equal(result.evidence, 'none');
+    assert.equal(result.evidence_at, null);
+  } finally { resolveOld(null); await finishing; }
+});
 test('M1: an unready Windows helper cannot delay process-exited or activeSessions deletion', async () => {
   const { EventEmitter } = require('node:events');
   const { createWindowsJobHelper } = require('../src/main/terminals/windows-job-helper');

@@ -2732,6 +2732,8 @@ function wireSessionPty(session, sessionId, ptyProcess) {
   session.exitDrain = new Promise(resolve => { resolveExitDrain = resolve; });
   session.generation = ++ptyGenerationCounter;
   const statusGeneration = session.generation;
+  (activeSessions.statusGenerations ||= new Map()).set(sessionId.toLowerCase(), statusGeneration);
+  if (session.realSessionId) activeSessions.statusGenerations.set(session.realSessionId.toLowerCase(), statusGeneration);
   session._statusOsc = { generation: statusGeneration };
   ptyProcess.onData(data => {
     if (session.generation !== statusGeneration || session.pty && session.pty !== ptyProcess) return;

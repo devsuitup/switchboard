@@ -83,7 +83,8 @@ function createSessionStatus({ activeSessions, getKnown = () => null, readHead =
         }
       }
     }
-    if (exit?.confirmed && !matches.length && !job && !proof.ambiguous
+    if (exit?.confirmed && Number.isInteger(exit.generation) && exit.generation === activeSessions.statusGenerations?.get(key(id))
+      && !matches.length && !job && !proof.ambiguous
       && snapshot.liveness !== 'alive' && probeObservation?.known && !probeObservation.live) {
       snapshot = { liveness: 'dead' }; proof = { confirmedExit: true, ptyHere: false };
       result.evidence = 'confirmed-exit'; decisive = exit.at;
