@@ -24,7 +24,11 @@ type ArchiveRuntime = {
   now(): string;
 };
 type Logger = { warn(...args: unknown[]): void; info(...args: unknown[]): void };
-type OfferRuntime = { notify(): void };
+type ReenableResult = { enabled: string[]; failed: Array<{ name: string; filePath: string; error: string }> };
+type OfferRuntime = {
+  notify(): void;
+  reenable?(files: string[], projectRoot: string): ReenableResult | Promise<ReenableResult>;
+};
 
 export type DeletionProject = { alias: string | null; projectPath: string };
 export type DeletionReference = { operationId: string; project: DeletionProject };
@@ -81,6 +85,7 @@ export interface SessionIndexWriter {
   recordSessionResultPublication(input: SessionResultNamespace & { resultBytes: Uint8Array }): Promise<SessionRequestOutcome>;
   getProjectDeletionState(input: DeletionReference): Promise<ProjectDeletionState>;
   readProjectDeletionScope(input: { project: DeletionProject }): Promise<ProjectDeletionScope>;
+  reserveProjectDeletion(projects: DeletionProject[]): { ready: Promise<void>; release(): void };
   fenceProjectDeletion(input: DeletionReference & { expectedProjectEpoch: number }): Promise<ProjectDeletionState>;
   rekeySessionMeta(fromId: string, toId: string): Promise<void>;
   completeRepairFolders(folders: string[]): Promise<void>;
@@ -111,6 +116,7 @@ export interface SessionIndexWriter {
   applyProjectsWorkerEffects(result: { effects: Effect[]; keptLiveRows: Array<[string, string]> }): Promise<void>;
   buildProjectsFromCache(showArchived: boolean): Promise<Project[]>;
   archiveProjectFolders(groups: ArchiveGroup[], opts: { disableSchedules?: string[] }, deps: ArchiveRuntime): Promise<ArchiveResult>;
+  undoArchiveProjectFolders(groups: ArchiveGroup[], archivedAt: string, deps: OfferRuntime): Promise<unknown>;
   applyAndPersistArchived(projects: Project[], showArchived: boolean): Promise<Project[]>;
   clearArchivedEntry(alias: string | null, projectPath: string): Promise<boolean>;
   reenableOfferedSchedules(projectPath: string, folderKey: string | null, deps: OfferRuntime): Promise<unknown>;
