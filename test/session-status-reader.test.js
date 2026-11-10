@@ -5,6 +5,24 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createTaskRecordsClient } = require('../task-records-client');
+test('m1: status reads leave the shared head revision and later broadcast unchanged', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-status-isolation-'));
+  const file = path.join(root, 'head.jsonl'), id = 'status-isolation';
+  const client = createTaskRecordsClient();
+  t.after(async () => { await client.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', timestamp: '2026-11-10T00:00:00Z', message: { content: 'Continue' } }) + '\n');
+  await client.read(file, id, { turnOnly: true });
+  const before = structuredClone(client.snapshots());
+  fs.appendFileSync(file, JSON.stringify({ type: 'user', timestamp: '2026-11-10T00:01:00Z', message: { content: '[Request interrupted by user]' } }) + '\n');
+  const head = await client.readHeadForStatus(file, id, Date.now() + 2000);
+  assert.equal(head.state, 'closed');
+  assert.deepEqual(client.snapshots(), before, 'status must not publish');
+  await client.ownerAlive(id, 1);
+  assert.deepEqual(client.snapshots()[0].headTurn, before[0].headTurn, 'status must not change the next broadcast or revision');
+  await client.read(file, id, { turnOnly: true });
+  assert.equal(client.snapshots()[0].headTurn.revision, before[0].headTurn.revision + 1,
+    'status must not consume a shared turn revision');
+});
 test('head-only status reads an initially empty reader without publishing or mutating task snapshots', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-status-head-'));
   const file = path.join(root, 'head.jsonl'), id = 'abcdef01-2345-6789-abcd-0123456789ab';

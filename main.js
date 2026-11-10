@@ -2850,17 +2850,16 @@ function wireSessionPty(session, sessionId, ptyProcess) {
       try {
       const realId = session.realSessionId || sessionId;
       if (ptyProcess.statusTreeExit) {
-        const tree = await ptyProcess.statusTreeExit;
-        if (session.generation !== statusGeneration || session.pty !== ptyProcess
-          || (session.realSessionId || sessionId) !== realId) return;
-        if (tree?.ended && !suppress && session.generation === statusGeneration
-          && session.pty === ptyProcess && !session.isAttach && !session.isPlainTerminal && !session.host
-          && !session.backgrounding && !session.backgrounded && !session.detaching
-          && (activeSessions.get(realId) === session || !activeSessions.has(realId))) {
-          (activeSessions.statusExits ||= new Map()).set(realId.toLowerCase(), {
-            confirmed: true, generation: statusGeneration, at: tree.observedAt,
-          });
-        }
+        void Promise.resolve(ptyProcess.statusTreeExit).then(tree => {
+          if (tree?.ended && !suppress && (session.realSessionId || sessionId) === realId && session.generation === statusGeneration
+            && session.pty === ptyProcess && !session.isAttach && !session.isPlainTerminal && !session.host
+            && !session.backgrounding && !session.backgrounded && !session.detaching
+            && (activeSessions.get(realId) === session || !activeSessions.has(realId))) {
+            (activeSessions.statusExits ||= new Map()).set(realId.toLowerCase(), {
+              confirmed: true, generation: statusGeneration, at: tree.observedAt,
+            });
+          }
+        }).catch(() => {});
       }
       const releaseReal = !activeSessions.has(realId) || activeSessions.get(realId) === session;
       const releaseOriginal = !activeSessions.has(sessionId) || activeSessions.get(sessionId) === session;
@@ -3343,7 +3342,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   const session = {
     pty: ptyProcess, rendererAttached: true, exited: false,
     launchMode, launchSourceId: resumeSourceId, launchStartedAt,
-    hostPtyStart: cliSessionState.deliveryPtyStart(ptyProcess.pid),
+    ...(triggerPermit ? { hostPtyStart: cliSessionState.deliveryPtyStart(ptyProcess.pid) } : {}),
+    statusPtyStart: cliSessionState.deliveryPtyStart(ptyProcess.pid),
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
     projectPath, firstResize: true,
     // see .ai/contexts/trigger-watcher.md, "Target guard"

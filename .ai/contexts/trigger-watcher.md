@@ -34,6 +34,31 @@ Status follows no in-memory continuation alias and invokes no delivery/input,
 renderer, lifecycle, capability, profile or admission operation. A new UUID is
 required for a new observation. See [automation](../../docs/automation.md).
 
+The owned status pin uses the actual PTY object, its generation, PID and a
+separate `statusPtyStart` captured at spawn. The v1 delivery `hostPtyStart`
+remains captured only for trigger launches. A missing or uncertain second
+descriptor observation drops descriptor evidence while preserving the current
+owned PTY; two present writers with different identities are ambiguous.
+
+`statusHead` computes the transcript head without storing it in the task head
+map or advancing its revision. Status reads cannot affect later snapshots or
+continued-rekey head selection. Evidence time comes from the transcript entry.
+
+Main's hosted roster adapter does not yet produce verified hosted jobs. Job
+evidence in production currently requires a live `kind: 'bg'` descriptor with a
+matching roster job ID; synthetic verified hosted rows only exercise the port.
+
+Exit cleanup never waits for Windows job assignment or observation. An
+unsettled assignment is released immediately, cancelling a queued assignment;
+no exit proof is manufactured. An already assigned job may be observed in the
+background. Its result is recorded only for the same session identity, PTY and
+generation. A rekey or replacement skips that proof, while normal owner death,
+renderer notification, session removal and live-row release run independently.
+
+The replay store-reopen fixture waits for result publication and input cleanup,
+not a fixed count of event-loop turns. A delayed ordered query reproduces the
+previous premature file assertion independently of OS scheduling.
+
 ## Shared result namespace (#380 S1b2)
 
 `session-request-namespace.js` holds the ownership decision for every legacy

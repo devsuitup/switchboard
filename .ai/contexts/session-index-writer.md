@@ -23,6 +23,8 @@ IPC. The request returns its head directly, expires/removes its pending waiter,
 and ignores late replies. The worker reads only that transcript head, without
 task ingestion, rekey, owner updates or task-snapshot broadcasts. Existing task
 reader methods retain their notification behavior.
+Status head computation also leaves the shared head cache and turn revision
+unchanged, so a later snapshot or continued rekey cannot inherit a status read.
 
 Writable reconciliation adds `session_requests` (one lowercase safe filename
 stem per data directory) and `session_request_commands` (stem/actionToken

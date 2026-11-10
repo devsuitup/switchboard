@@ -39,10 +39,10 @@ function createSessionStatus({ activeSessions, getKnown = () => null, readHead =
       state: 'unknown', detail: 'not-found', liveness: 'unknown', headTurn: 'unknown', descriptorStatus: null,
       evidence: 'none', evidence_at: null, pid: null, jobId: null };
     const pin = session && { generation: session.generation, pty: session.pty, pid: session.pty?.pid,
-      start: session.hostPtyStart, namespace: session.namespace };
+      start: session.statusPtyStart };
     const current = () => !session || session.isAttach || direct(id).length === 1 && direct(id)[0] === session && !session.exited
       && session.generation === pin.generation && session.pty === pin.pty && session.pty?.pid === pin.pid
-      && session.hostPtyStart === pin.start && session.namespace === pin.namespace;
+      && session.statusPtyStart === pin.start;
     let snapshot = { liveness: 'unknown' }, proof = { ambiguous: matches.length > 1 }, decisive = null;
     let descriptor, ownedIdentity, probeObservation;
     const identity = observation => observation?.writer && JSON.stringify([observation.identity,
@@ -61,7 +61,11 @@ function createSessionStatus({ activeSessions, getKnown = () => null, readHead =
     if (!current() || !currentJob()) proof.ambiguous = true;
     if (ownedIdentity) {
       if (now() >= deadline) descriptor = null;
-      else if (identity(observeOwned(session, deadline)) !== ownedIdentity) proof.ambiguous = true;
+      else {
+        const observation = observeOwned(session, deadline);
+        if (!observation?.writer || observation.uncertain) descriptor = null;
+        else if (identity(observation) !== ownedIdentity) proof.ambiguous = true;
+      }
     }
     if (snapshot.liveness !== 'alive' && !proof.ambiguous && (!known?.cli || known.cli === 'claude')) {
       const observation = await bounded(() => probe(id, deadline));

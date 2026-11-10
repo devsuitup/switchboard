@@ -866,6 +866,11 @@ plain close. Detach releases before Ctrl-Z/write or fallback kill. Confirmed
 background handoff awaits release before scheduling its kill; continuation
 rekeying also requests release.
 
+Natural PTY exit never waits for job assignment or observation. An unsettled
+assignment is released immediately; only an already assigned job is observed
+in the background. Main records an ended-tree proof only while session identity,
+PTY and generation still match, independently of its normal exit cleanup.
+
 App quit retains the existing 1500 ms shutdown drain and adds no await. It calls
 the same synchronous pty.kill; the existing unref'd 25 ms native-exit poll can
 issue best-effort protected termination if the root exits while that drain is

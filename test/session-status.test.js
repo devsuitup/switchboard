@@ -13,7 +13,7 @@ const from = '20000000-0000-4000-8000-000000000001';
 const payload = { version: 1, type: 'session-status', requestId: id, from, sessionId: id };
 function gather(options = {}) {
   assert.equal(typeof status.createSessionStatus, 'function', 'main status gatherer must exist');
-  const session = { generation: 1, pty: { pid: 42 }, hostPtyStart: '100', namespace: 'ns:1', startedAt: 10, ...options.session };
+  const session = { generation: 1, pty: { pid: 42 }, statusPtyStart: '100', startedAt: 10, ...options.session };
   const sessions = new Map([[id, session], [from, { generation: 2, pty: { pid: 43 } }]]);
   const service = status.createSessionStatus({ activeSessions: sessions, now: () => 1000,
     getKnown: () => ({ sessionId: id }), readHead: async () => ({ state: 'closed', observedAt: 30, lastEntryAt: 20 }), ...options, sessions: undefined });
@@ -45,12 +45,29 @@ for (const [name, options, expected] of [
   const { service } = gather(options), result = await service.gather(id);
   assert.deepEqual([result.state, result.detail], expected);
 });
-test('generation, PTY, start and namespace are rechecked after a head await', async () => {
-  for (const replace of [s => s.generation++, s => { s.pty = { pid: 42 }; }, s => { s.hostPtyStart = '200'; }, s => { s.namespace = 'ns:2'; }]) {
+test('production generation and PTY pins are rechecked after a head await', async () => {
+  for (const replace of [s => s.generation++, s => { s.pty = { pid: 42 }; }]) {
     const h = gather({ readHead: async () => { replace(h.session); return { state: 'closed' }; } });
     const result = await h.service.gather(id);
     assert.equal(result.state, 'unknown'); assert.equal(result.pid, null); assert.equal(result.evidence, 'none');
   }
+});
+for (const missing of [null, { uncertain: true }, { uncertain: true, writer: { pid: 99 } }]) {
+  test(`M2: unavailable descriptor reread retains owned PTY liveness: ${JSON.stringify(missing)}`, async () => {
+    let reads = 0;
+    const h = gather({ observeOwned: () => ++reads === 1
+      ? { writer: { pid: 42, procStart: '30', status: 'waiting', waitingFor: 'permission' } } : missing });
+    const result = await h.service.gather(id);
+    assert.deepEqual([result.state, result.liveness, result.evidence, result.descriptorStatus],
+      ['idle', 'alive', 'owned-pty', null], 'missing descriptor must drop only its evidence');
+  });
+}
+test('descriptor with matching bg job supplies job evidence when hosted verification is unavailable', async () => {
+  const h = gather({ hosted: () => ({ id: 'job1', verified: false, live: false }),
+    probe: async () => ({ known: true, live: { kind: 'bg', pid: 60, procStart: '30', jobId: 'job1' } }) });
+  h.sessions.delete(id);
+  const result = await h.service.gather(id);
+  assert.deepEqual([result.state, result.liveness, result.evidence, result.jobId], ['idle', 'alive', 'background-job', 'job1']);
 });
 test('STATUS-PROBE-UNBOUNDED: one absolute 2000ms deadline, late probe cannot rewrite result', async () => {
   let now = 0, resolveProbe, settled = false;
@@ -311,13 +328,23 @@ test('typed replay survives writer store reopen and processed deletion after aut
   skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22',
 }, async t => {
   let db = openStore(); t.after(() => db.closeDb());
-  const r = await rig(t, { stem: id, payload, journal: createJournal(db), ctx: { sessionStatus: {
+  const journal = createJournal(db), query = journal.querySessionRequestOutcome;
+  let delayed = false;
+  journal.querySessionRequestOutcome = async input => {
+    if (!delayed) { delayed = true; await new Promise(resolve => setTimeout(resolve, 80)); }
+    return query(input);
+  };
+  const r = await rig(t, { stem: id, payload, journal,
+    until: ({ processed, input }) => fs.existsSync(path.join(processed, id + '.result.json')) && !fs.existsSync(input),
+    ctx: { sessionStatus: {
     author: () => true, gather: async () => ({ state: 'idle', sessionId: id }),
   } } });
   const output = path.join(r.processed, id + '.result.json'); assert.ok(fs.existsSync(output));
   const bytes = fs.readFileSync(output); fs.unlinkSync(output); db.closeDb(); db = openStore();
   let gathers = 0;
-  const next = await rig(t, { stem: id, payload, stale: true, journal: createJournal(db), ctx: { sessionStatus: {
+  const next = await rig(t, { stem: id, payload, stale: true, journal: createJournal(db),
+    until: ({ processed, input }) => fs.existsSync(path.join(processed, id + '.result.json')) && !fs.existsSync(input),
+    ctx: { sessionStatus: {
     author: () => false, gather: async () => { gathers++; return { state: 'busy' }; },
   } } });
   assert.deepEqual(fs.readFileSync(path.join(next.processed, id + '.result.json')), bytes); assert.equal(gathers, 0);
