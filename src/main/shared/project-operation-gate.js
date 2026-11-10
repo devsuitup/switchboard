@@ -21,7 +21,7 @@ function createProjectOperationGate() {
     if (!entry.held) entries.delete(key);
   };
   const tryAdmitAll = (projects, alias = null) => {
-    const keys = [...new Set(projects.map(project => keyFor(project, alias)))];
+    const keys = [...new Set(projects.filter(project => project != null && project !== '').map(project => keyFor(project, alias)))];
     if (keys.some(key => entries.get(key)?.held)) return null;
     const admitted = keys.map(key => [key, entryFor(key)]);
     for (const [, entry] of admitted) entry.active++;

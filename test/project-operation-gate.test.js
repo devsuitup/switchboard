@@ -71,3 +71,31 @@ test('local real paths and their relative spelling share admission', () => {
   assert.equal(gate.tryAdmit(require('node:path').relative(process.cwd(), __dirname)), null);
   held.release();
 });
+
+for (const alias of [null, 'vps']) {
+  test(`missing project entries do not reserve a fallback identity for host ${alias}`, async () => {
+    const gate = createProjectOperationGate();
+    const held = gate.hold(alias ? '/' : process.cwd(), alias);
+    for (const project of [null, undefined, '']) {
+      const admission = gate.tryAdmit(project, alias);
+      assert.ok(admission, 'a missing project must be admitted without a fallback key');
+      admission.release();
+      admission.release();
+    }
+    const admission = gate.tryAdmitAll([null, undefined, '', '/another'], alias);
+    assert.ok(admission, 'missing entries must not refuse another real project');
+    assert.equal(gate.tryAdmitAll([null, alias ? '/' : process.cwd()], alias), null,
+      'a held real identity must still refuse a mixed reservation');
+    held.release();
+    const noProject = gate.tryAdmitAll([null, undefined, ''], alias);
+    const fallback = gate.hold(alias ? '/' : process.cwd(), alias);
+    let ready = false;
+    fallback.ready.then(() => { ready = true; });
+    await Promise.resolve();
+    assert.equal(ready, true, 'no-project admission must not delay a hold of the fallback identity');
+    noProject.release();
+    fallback.release();
+    admission.release();
+    gate.tryAdmitAll([], alias).release();
+  });
+}

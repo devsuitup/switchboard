@@ -10,6 +10,11 @@ It returns `null` when held, otherwise an idempotent `{ release() }` reservation
 `tryAdmitAll(projectPaths, alias = null)` reserves every normalized identity
 synchronously or refuses the whole set when any key is held. Equivalent keys
 are deduplicated and one idempotent release drains all admitted keys.
+Admission ignores `null`, `undefined` and empty-string entries before deriving
+keys. A list with no real project returns a no-op reservation. In particular,
+a panel terminal with no `projectPath` reserves only its resolved cwd, without
+inheriting the app's cwd or a remote `/` fallback. Real entries in a mixed list
+still participate in atomic admission and hold draining.
 Launchers keep that reservation across asynchronous preparation and spawn, and
 release on success, refusal, rejection or throw. It is a spawn reservation, not
 a lifetime lock for an already running session.

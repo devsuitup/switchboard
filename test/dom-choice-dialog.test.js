@@ -45,6 +45,140 @@ function planRequests() {
 
 const flushPlans = () => new Promise(resolve => setImmediate(resolve));
 
+function planClock(ctx, t) {
+  let now = 0;
+  let id = 0;
+  const timers = new Map();
+  t.mock.method(ctx.window, 'setTimeout', (callback, delay) => {
+    const handle = ++id;
+    timers.set(handle, { at: now + delay, callback });
+    return handle;
+  });
+  t.mock.method(ctx.window, 'clearTimeout', handle => timers.delete(handle));
+  return {
+    timers,
+    advance(ms) {
+      now += ms;
+      for (const [handle, timer] of [...timers]) {
+        if (timer.at > now) continue;
+        timers.delete(handle);
+        timer.callback();
+      }
+    },
+  };
+}
+
+test('choice plan: pending status is visible and clears after the current preview resolves', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const { requests, onChange } = planRequests();
+    const pending = open(ctx, { onChange });
+    const status = shown(ctx).querySelector('[role="status"]');
+    assert.ok(status, 'an outstanding preview must show a pending status');
+    assert.equal(status.hidden, false);
+    assert.match(status.textContent, /prepar.*preview/i);
+    assert.equal(shown(ctx).querySelector('[role="dialog"]').getAttribute('aria-busy'), 'true');
+    requests[0].resolve({ token: 'ready' });
+    await flushPlans();
+    assert.equal(status.hidden, true);
+    assert.equal(shown(ctx).querySelector('[role="dialog"]').getAttribute('aria-busy'), 'false');
+    assert.equal(confirmBtn(ctx).disabled, false);
+    box(ctx, 'a').click();
+    assert.equal(status.hidden, false, 'changing a choice must show pending again');
+    requests[1].reject(new Error('Cannot prepare preview'));
+    await flushPlans();
+    assert.equal(status.hidden, true, 'a failed preview must stop showing pending');
+    assert.equal(confirmBtn(ctx).disabled, true);
+    cancelBtn(ctx).click();
+    assert.equal(await pending, null);
+  } finally { ctx.destroy(); }
+});
+
+test('choice plan: timeout shows an inline error and late success cannot restore confirmation', async t => {
+  const ctx = setupSidebarDom();
+  try {
+    const clock = planClock(ctx, t);
+    const { requests, onChange } = planRequests();
+    const pending = open(ctx, { onChange });
+    clock.advance(14999);
+    await flushPlans();
+    const alert = shown(ctx).querySelector('[role="alert"]');
+    assert.equal(alert.hidden, true);
+    clock.advance(1);
+    await flushPlans();
+    assert.equal(alert.hidden, false, 'a hung preview must show an inline timeout error after 15 seconds');
+    assert.match(alert.textContent, /too long|timed out/i);
+    assert.equal(confirmBtn(ctx).disabled, true);
+    assert.equal(cancelBtn(ctx).disabled, false);
+    assert.equal(shown(ctx).querySelector('[role="status"]').hidden, true);
+    requests[0].resolve({ token: 'too-late' });
+    await flushPlans();
+    assert.equal(confirmBtn(ctx).disabled, true, 'a timed-out request must never enable Confirm later');
+    confirmBtn(ctx).dispatchEvent(new ctx.window.MouseEvent('click', { bubbles: true }));
+    key(ctx, shown(ctx).querySelector('.modal-dialog'), 'Enter');
+    assert.ok(overlay(ctx));
+    assert.equal(ctx.window.localStorage.length, 0);
+    assert.equal(clock.timers.size, 0);
+    box(ctx, 'b').click();
+    assert.equal(alert.hidden, true, 'changing an answer must clear the timeout error');
+    const plan = { token: 'retry' };
+    requests[1].resolve(plan);
+    await flushPlans();
+    assert.equal(confirmBtn(ctx).disabled, false);
+    assert.equal(clock.timers.size, 0, 'a successful preview must release its timer');
+    confirmBtn(ctx).click();
+    assert.deepEqual({ ...await pending }, { a: true, b: false, plan });
+  } finally { ctx.destroy(); }
+});
+
+test('choice plan: changing an answer replaces its deadline and stale settlement keeps pending visible', async t => {
+  const ctx = setupSidebarDom();
+  try {
+    const clock = planClock(ctx, t);
+    const { requests, onChange } = planRequests();
+    const pending = open(ctx, { onChange });
+    clock.advance(10000);
+    box(ctx, 'a').click();
+    assert.equal(clock.timers.size, 1, 'only the current preview deadline must remain scheduled');
+    requests[0].resolve({ token: 'obsolete' });
+    await flushPlans();
+    assert.equal(shown(ctx).querySelector('[role="status"]').hidden, false);
+    clock.advance(5000);
+    await flushPlans();
+    assert.equal(shown(ctx).querySelector('[role="alert"]').hidden, true, 'an old deadline must not expire the current preview');
+    clock.advance(10000);
+    await flushPlans();
+    assert.equal(shown(ctx).querySelector('[role="alert"]').hidden, false);
+    assert.equal(confirmBtn(ctx).disabled, true);
+    cancelBtn(ctx).click();
+    assert.equal(await pending, null);
+  } finally { ctx.destroy(); }
+});
+
+for (const result of ['resolve', 'reject', 'cancel']) {
+  test(`choice plan: ${result} clears the pending deadline`, async t => {
+    const ctx = setupSidebarDom();
+    try {
+      const clock = planClock(ctx, t);
+      const { requests, onChange } = planRequests();
+      const pending = open(ctx, { onChange });
+      assert.equal(clock.timers.size, 1, 'a pending preview must schedule one bounded deadline');
+      if (result === 'cancel') cancelBtn(ctx).click();
+      else {
+        if (result === 'resolve') requests[0].resolve({ token: 'ready' });
+        else requests[0].reject(new Error('Preview failed'));
+        await flushPlans();
+      }
+      assert.equal(clock.timers.size, 0, 'settling or cancelling must clear the preview timer');
+      if (result !== 'cancel') cancelBtn(ctx).click();
+      assert.equal(await pending, null);
+      clock.advance(15000);
+      await flushPlans();
+      assert.equal(overlay(ctx), null);
+    } finally { ctx.destroy(); }
+  });
+}
+
 for (const withHook of [false, true]) {
   for (const callback of ['danger', 'label']) {
     test(`choice initialization: throwing ${callback} leaves no modal with hook ${withHook}`, async () => {
