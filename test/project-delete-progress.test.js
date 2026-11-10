@@ -135,6 +135,48 @@ test('automatic retention bounds maintenance turns for a large receipt', support
   assert.equal(h.db.projectDeletion.terminal().length, 128, 'later calls converge to the retention cap');
 });
 
+test('partially purged receipt is unavailable from the first bounded turn through removal', supported, t => {
+  const h = setup(t), p = h.progress();
+  const large = h.manifest(Array.from({ length: 160 }, (_, i) => ({ category: 'probe', target: i })));
+  p.admit(large);
+  for (let i = 0; i < large.units.length; i += 16) p.stage(large, large.units.slice(i, i + 16));
+  for (let i = 0; i < 5; i++) p.apply(large, () => ({ status: 'completed' }));
+  p.fence(large);
+  assert.equal(p.read(large).completed.length, 5, 'the intact receipt records the committed prefix');
+  for (let i = 0; i < 128; i++) {
+    h.advance(1);
+    const m = h.manifest([]); p.admit(m); p.apply(m, () => assert.fail('empty manifest'));
+  }
+  assert.equal(h.db.projectDeletion.units(large.operationId).length, 144, 'only one bounded purge turn ran');
+  let state = p.read(large);
+  assert.equal(state.receiptAvailable, false, 'a partially purged receipt must be unavailable');
+  assert.equal(state.reason, 'receipt-expired-or-unavailable');
+  assert.equal(state.noLateCommit, true, 'the sealed epoch still forbids late commits');
+  h.reopen();
+  const reopened = h.progress();
+  assert.equal(reopened.read(large).receiptAvailable, false, 'unavailability persists across reopening the store');
+  for (let i = 0; i < 9; i++) assert.equal(reopened.purge(), true);
+  assert.ok(!h.db.projectDeletion.operation(large.operationId), 'the bounded turns drain the header');
+  state = reopened.read(large);
+  assert.equal(state.receiptAvailable, false, 'a removed receipt stays unavailable');
+  assert.equal(state.reason, 'receipt-expired-or-unavailable');
+  assert.equal(state.noLateCommit, true, 'the epoch fence survives receipt removal');
+});
+
+test('missing receipt retains no-late-commit proof after a later epoch clears blocked', supported, t => {
+  const h = setup(t), p = h.progress(), m = h.manifest([]);
+  p.fence(m);
+  h.advance(8 * 86400000);
+  assert.equal(p.purge(), true);
+  assert.ok(!h.db.projectDeletion.operation(m.operationId));
+  const fence = h.db.connection.prepare('SELECT * FROM project_delete_fences').get();
+  h.db.projectDeletion.setFence(fence.projectKey, fence.epoch + 1, null, 0);
+  const state = p.read(m);
+  assert.equal(state.receiptAvailable, false);
+  assert.equal(state.noLateCommit, true, 'an advanced epoch forbids late commits even with blocked cleared');
+  assert.equal(state.reason, 'receipt-expired-or-unavailable');
+});
+
 test('admission, effects, progress and exact revision commit or roll back together', supported, t => {
   const h = setup(t), p = h.progress(), m = h.manifest();
   p.admit(m);

@@ -98,10 +98,10 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     return db.connection.transaction(() => {
       const row = store.operation(input.operationId), fence = fenceRow(project.key);
       const observed = observations(project);
-      if (!row || expired(row)) {
-        const advanced = !!fence.blocked && fence.epoch > project.expectedEpoch;
+      if (!row || expired(row) || row.phase === 'purging') {
+        const advanced = fence.epoch > project.expectedEpoch;
         const owner = otherOwner(project);
-        return { state: row || advanced ? 'unknown' : 'absent', terminal: false, noLateCommit: advanced,
+        return { state: row || advanced ? 'unknown' : 'absent', terminal: false, noLateCommit: !!row?.sealed || advanced,
           receiptAvailable: false, projectEpoch: fence.epoch,
           reason: owner ? 'project-owned-by-another-operation' : row || advanced ? 'receipt-expired-or-unavailable' : 'not-observed',
           ...(owner ? { ownerOperationId: owner.operationId } : {}), ...observed };
@@ -260,6 +260,11 @@ function createProjectDeleteProgress(db, { now = Date.now } = {}) {
     const candidate = store.terminal().find((row, index) => index >= 128 || row.finishedAt < now() - WEEK);
     if (!candidate) return false;
     commitTransaction(db, () => {
+      const row = store.operation(candidate.operationId);
+      if (row.phase !== 'purging') {
+        row.phase = 'purging';
+        store.progress(row);
+      }
       store.purgeUnits(candidate.operationId);
       if (!store.units(candidate.operationId).length) store.purgeOperation(candidate.operationId);
     });

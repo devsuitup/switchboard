@@ -49,16 +49,21 @@ An unsealed owner excludes a second operation on the same project. Admission
 refuses `DELETION_BUSY` without writes. Fencing a never-admitted foreign ID
 returns a nonterminal observation with reason `project-owned-by-another-operation`
 and `ownerOperationId`, preserving the current epoch, revision and owner.
-Only the owning operation's fence seals that owner. The persisted `blocked`
-flag marks the epoch high-water fence used by missing-receipt readback to prove
-that an older ID cannot commit.
+Only the owning operation's fence seals that owner. The persisted epoch
+high-water mark proves that an older ID cannot commit, even after a later
+re-add/unhide clears `blocked`. The `blocked` flag gates archive workflows.
 
 Automatic retention performs at most one purge transaction per call, deleting
-at most 16 units. A large receipt can temporarily leave more than 128 terminal
-headers; later calls or explicit maintenance finish trimming it.
+at most 16 units. The first purge transaction marks the sealed header as
+`purging`, making the receipt unavailable before any unit results disappear.
+Readback retains the sealed/epoch proof of no late commit during and after
+purging. A large receipt can temporarily leave more than 128 terminal headers;
+later calls or explicit maintenance finish trimming it.
 
 A4b4 obligation: an unrelated writer commit between chunks currently causes
-`apply` to throw `WRITER_STALE`, leaving the operation `inProgress`. Completion
+`apply` to throw `WRITER_STALE`, leaving the operation `inProgress`. Admission
+of another deletion of the same project also refuses `DELETION_BUSY` until
+fence/recover frees the owner. Completion
 must either tolerate unrelated revision bumps using the membership digest or
 deterministically seal the committed prefix as partial.
 
