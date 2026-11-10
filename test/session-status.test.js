@@ -327,7 +327,7 @@ test('typed unexpected parent flush failure retains visible committed bytes and 
   const bytes = fs.readFileSync(output); assert.deepEqual(fs.readFileSync(r.input), r.body);
   fail = false; await r.retry(); assert.deepEqual(fs.readFileSync(output), bytes); assert.equal(gathers, 1);
 });
-for (const polluted of [false, true]) test('typed replay survives writer store reopen and processed deletion after author closes' + (polluted ? ' with a mixed-case ambient owner' : ''), {
+for (const polluted of [false, true]) test('typed replay survives writer store reopen and processed deletion after author closes' + (polluted ? ' with fixture isolation from a mixed-case ambient owner' : ''), {
   skip: !openStore.supported && 'native SQLite ABI differs; node:sqlite requires Node 22',
 }, async t => {
   let ambient;
@@ -336,7 +336,7 @@ for (const polluted of [false, true]) test('typed replay survives writer store r
     const previous = process.env.SWITCHBOARD_DATA_DIR;
     process.env.SWITCHBOARD_DATA_DIR = dir;
     t.after(() => {
-      ambient.closeDb();
+      ambient?.closeDb();
       if (previous === undefined) delete process.env.SWITCHBOARD_DATA_DIR;
       else process.env.SWITCHBOARD_DATA_DIR = previous;
       fs.rmSync(dir, { recursive: true, force: true });

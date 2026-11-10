@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const os = require('node:os');
+const transitions = require('../session-transitions');
 const { loadAppFunctions } = require('./app-source');
 const { createSessionStatus } = require('../src/main/triggers/session-status');
 const id = 'abcdef01-2345-6789-abcd-0123456789ab';
@@ -26,9 +28,59 @@ function rig(beforeWire = () => {}) {
   const { wireSessionPty } = loadAppFunctions(context, { functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js') });
   beforeWire(pty);
   wireSessionPty(session, id, pty);
-  return { session, sessions, pty, events, wire: (next = session, target = pty) => wireSessionPty(next, id, target), data: text => data(text),
+  return { session, sessions, pty, events, wire: (next = session, target = pty, key = id) => wireSessionPty(next, key, target), data: text => data(text),
     exit: () => { const pending = exits.map(fn => fn({ exitCode: 0 })); return Promise.all(pending); }, time: at => { clock = at; } };
 }
+
+test('FIX4 rekey carries the wired generation through real fork detection to confirmed exit', async t => {
+  const h = rig(), nextId = '20000000-0000-4000-8000-000000000001';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-status-rekey-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const folder = 'project'; fs.mkdirSync(path.join(dir, folder));
+  Object.assign(h.session, { projectFolder: folder, knownJsonlFiles: new Set(), knownSubagents: new Map() });
+  transitions.init({ PROJECTS_DIR: dir, activeSessions: h.sessions,
+    getMainWindow: () => null, log: { info() {}, warn() {}, debug() {}, error() {} },
+    rekeyMcpServer() {}, setTimeout: () => ({ unref() {} }) });
+  fs.writeFileSync(path.join(dir, folder, nextId + '.jsonl'), JSON.stringify({ type: 'user', forkedFrom: { sessionId: id } }) + '\n');
+  transitions.detectSessionTransitions(folder);
+  assert.equal(h.sessions.get(nextId), h.session, 'real detection must publish the rekey');
+  h.pty.statusTreeExit = Promise.resolve({ ended: true, observedAt: 50 });
+  await h.exit();
+  await new Promise(resolve => setImmediate(resolve));
+  const service = createSessionStatus({ activeSessions: h.sessions, exits: h.sessions.statusExits,
+    getKnown: sessionId => ({ sessionId }), probe: async () => ({ known: true, live: null }) });
+  const result = await service.gather(nextId);
+  assert.equal(result.state, 'exited', 'rekeyed exit must retain its wired generation');
+  assert.equal(result.evidence, 'confirmed-exit');
+  assert.equal(h.sessions.statusGenerations.has(id), false, 'old identity must release its generation');
+  h.sessions.statusExits.set(id, { confirmed: true, generation: h.session.generation, at: 50 });
+  assert.equal((await service.gather(id)).evidence, 'none', 'discarded identity cannot authorize an old proof');
+});
+
+test('FIX4 generations are bounded by live sessions and retained exit proofs', async () => {
+  const h = rig();
+  await h.exit();
+  assert.equal(h.sessions.statusGenerations.size, 0, 'raw exit must discard its generation');
+  let firstProof;
+  for (let i = 0; i < 300; i++) {
+    const key = `closed-${i}`;
+    let exit;
+    const pty = { pid: 43 + i, statusTreeExit: Promise.resolve({ ended: true, observedAt: 50 }),
+      onData() {}, onExit(fn) { exit = fn; } };
+    const session = { kind: 'local-pty', pty };
+    h.sessions.set(key, session); h.wire(session, pty, key);
+    await exit({ exitCode: 0 });
+    await new Promise(resolve => setImmediate(resolve));
+    if (!i) firstProof = h.sessions.statusExits.get(key);
+  }
+  assert.ok(h.sessions.statusExits.size <= 256, 'exit proof retention must be bounded');
+  assert.equal(h.sessions.statusGenerations.size, h.sessions.statusExits.size, 'evicted proofs must release their generations');
+  assert.equal(h.sessions.statusGenerations.has('closed-0'), false);
+  h.sessions.statusExits.set('closed-0', firstProof);
+  const service = createSessionStatus({ activeSessions: h.sessions, exits: h.sessions.statusExits,
+    getKnown: sessionId => ({ sessionId }), probe: async () => ({ known: true, live: null }) });
+  assert.equal((await service.gather('closed-0')).evidence, 'none', 'pruning must not allow stale proof reuse');
+});
 
 test('F2: old observation after a reopened id exits cannot prove the new generation dead', async () => {
   const h = rig(); let resolveOld, exitNew;

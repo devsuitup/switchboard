@@ -554,22 +554,15 @@ test('refreshFolder keeps a running session\'s row when its folder no longer res
 });
 
 async function runExitHandler({ releaseLiveSession }) {
-  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8').replace(/\r\n/g, '\n');
-  const start = main.indexOf('  ptyProcess.onExit(');
-  const end = main.indexOf('\n  });', start) + '\n  });'.length;
-  assert.ok(start > 0 && end > start, 'the PTY exit handler is found in main.js');
   const calls = { released: [], notified: 0, warned: [], deletedBeforeRelease: null };
-  const session = { stopRequested: false, realSessionId: 'real', generation: 1 };
+  const session = { stopRequested: false, realSessionId: 'real' };
   const activeSessions = new Map([['real', session], ['orig', session]]);
   let handler = null;
+  const ptyProcess = { onData() {}, onExit: cb => { handler = cb; } };
   const ctx = vm.createContext({
-    resolveExitDrain: () => { calls.exitDrained = true; },
-    ptyProcess: { onExit: (cb) => { handler = cb; } },
-    statusGeneration: session.generation,
-    session,
+    ptyGenerationCounter: 0,
     holdBackgroundExit: require('../src/main/bg-agents/bg-handoff').holdBackgroundExit,
     sessionTransitions: require('../session-transitions'),
-    sessionId: 'orig',
     activeSessions,
     ptyExitSignalName: () => null,
     shutdownMcpServer: () => {},
@@ -588,8 +581,13 @@ async function runExitHandler({ releaseLiveSession }) {
     notifyRendererProjectsChanged: () => { calls.notified++; },
     log: { warn: (m) => calls.warned.push(m) },
   });
-  vm.runInContext(main.slice(start, end), ctx, { filename: path.join(__dirname, '../main.js') });
+  const { wireSessionPty } = require('./app-source').loadAppFunctions(ctx, {
+    functions: ['wireSessionPty'], sourcePath: path.join(__dirname, '../main.js'),
+  });
+  wireSessionPty(session, 'orig', ptyProcess);
   await handler({ exitCode: 0, signal: 0 });
+  await session.exitDrain;
+  calls.exitDrained = true;
   return calls;
 }
 

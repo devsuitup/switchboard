@@ -2734,6 +2734,13 @@ function wireSessionPty(session, sessionId, ptyProcess) {
   const statusGeneration = session.generation;
   (activeSessions.statusGenerations ||= new Map()).set(sessionId.toLowerCase(), statusGeneration);
   if (session.realSessionId) activeSessions.statusGenerations.set(session.realSessionId.toLowerCase(), statusGeneration);
+  const discardStatusGeneration = () => {
+    for (const [id, generation] of activeSessions.statusGenerations) {
+      if (generation === statusGeneration && activeSessions.statusExits?.get(id)?.generation !== generation) {
+        activeSessions.statusGenerations.delete(id);
+      }
+    }
+  };
   session._statusOsc = { generation: statusGeneration };
   ptyProcess.onData(data => {
     if (session.generation !== statusGeneration || session.pty && session.pty !== ptyProcess) return;
@@ -2860,8 +2867,13 @@ function wireSessionPty(session, sessionId, ptyProcess) {
             (activeSessions.statusExits ||= new Map()).set(realId.toLowerCase(), {
               confirmed: true, generation: statusGeneration, at: tree.observedAt,
             });
+            while (activeSessions.statusExits.size > 256) {
+              const [id, proof] = activeSessions.statusExits.entries().next().value;
+              activeSessions.statusExits.delete(id);
+              if (activeSessions.statusGenerations.get(id) === proof.generation) activeSessions.statusGenerations.delete(id);
+            }
           }
-        }).catch(() => {});
+        }).catch(() => {}).finally(discardStatusGeneration);
       }
       const releaseReal = !activeSessions.has(realId) || activeSessions.get(realId) === session;
       const releaseOriginal = !activeSessions.has(sessionId) || activeSessions.get(sessionId) === session;
@@ -2878,6 +2890,7 @@ function wireSessionPty(session, sessionId, ptyProcess) {
       }
       if (activeSessions.get(realId) === session) activeSessions.delete(realId);
       if (activeSessions.get(sessionId) === session) activeSessions.delete(sessionId);
+      if (!ptyProcess.statusTreeExit) discardStatusGeneration();
       if (releaseReal) activityReporter.sessionEnded(realId);
       if (releaseOriginal) activityReporter.sessionEnded(sessionId);
       try {

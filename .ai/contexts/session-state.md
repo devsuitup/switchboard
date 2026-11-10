@@ -23,6 +23,16 @@ an idle observation only closes an older open head. Late output/exit from a
 replaced generation is ignored. `workers/task-records.js` binds observedAt to
 the transcript head's original event time and preserves it on unchanged reads.
 Status read completion and request observed_at are separate from evidence_at.
+`publishRekey`, shared by initial identity detection, fork, clear and continuation,
+moves the current status generation to the normalized new id and discards the
+old id's proof and generation. A reopened id still receives a globally increasing
+PTY generation. Status rejects proofs without a matching registered generation.
+Exit cleanup releases generations without tree evidence; pending observations
+release them on settlement unless they retained a proof. The exit-proof map keeps
+at most 256 entries in insertion order and evicts each proof's matching generation
+with it. This bounds completed-session retention without treating eviction as
+evidence of death. `test/session-status-main.test.js` exercises shipped PTY wiring,
+real fork detection, exit projection, retention and stale-proof rejection.
 Current blocking waitingFor values other than input beat open/shell; unread,
 attention and response-ready are never blocking proof.
 
