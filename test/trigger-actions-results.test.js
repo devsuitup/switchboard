@@ -479,6 +479,8 @@ for (const [kind, variant, outcome] of [['versioned', payload, 'refused'], ['leg
     const r = await rig(t, { live: true, ctx: s.ctx });
     await reached.promise;
     const upper = path.join(r.dir, request.toUpperCase() + '.json');
+    const sameFile = fs.existsSync(upper);
+    const overwritesOwner = sameFile && JSON.stringify(variant) !== r.body;
     fs.writeFileSync(upper, JSON.stringify(variant));
     r.notifyFile(request.toUpperCase() + '.json');
     r.notifyFile(request.toUpperCase() + '.json');
@@ -494,8 +496,15 @@ for (const [kind, variant, outcome] of [['versioned', payload, 'refused'], ['leg
     const first = fs.readFileSync(r.output);
     if (outcome === 'refused') assert.equal(JSON.parse(first).reason, 'renderer refused');
     else assert.equal(JSON.parse(first).outcome, 'opened');
-    await until(() => !fs.existsSync(r.input) && !fs.existsSync(r.marker), 'the owner removes its input and marker');
-    await until(() => !fs.existsSync(upper), 'the queued variant is processed after the release');
+    if (overwritesOwner) {
+      // On a case-insensitive filesystem the uppercase name is the owner's own input file: rewriting it
+      // is a modification, so the owner's cleanup refuses to remove changed bytes (publisher.cleanup).
+      await r.settle();
+      assert.equal(fs.readFileSync(r.input, 'utf8'), JSON.stringify(variant), 'the modified input is retained, not removed');
+    } else {
+      await until(() => !fs.existsSync(r.input) && !fs.existsSync(r.marker), 'the owner removes its input and marker');
+      await until(() => !fs.existsSync(upper), 'the queued variant is processed after the release');
+    }
     await r.settle();
     assert.deepEqual(fs.readFileSync(r.output), first);
     assert.equal(s.dispatches, 1);
