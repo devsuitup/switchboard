@@ -112,7 +112,7 @@ function createSessionRequestNamespace({ fs, journal, publisher, actions, proces
       if (family === 'action') {
         const state = actions.readState(resultFile(outcome.owner), marker);
         await publish(state?.result || actions.refusal(trigger, 'interrupted by restart', { uncertain: true }));
-      } else await publish({ ok: false, submitted: 'unknown', wrote: true, steps_total: 0,
+      } else await publish({ ok: false, submitted: 'no', wrote: true, steps_total: 0,
         error: 'interrupted by restart', reason: 'an earlier attempt may have executed; no automatic retry was performed', uncertain: true });
       return { done: true };
     }

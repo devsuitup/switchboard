@@ -49,7 +49,7 @@ test('lost claim ACK publishes nothing and retry refuses uncertain legacy effect
   assert.equal(r.effects(), 0, 'a committed pending claim never authorizes repeating an uncertain effect');
   assert.equal(fs.existsSync(r.input), false);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(r.processed, r.stem + '.result.json'), 'utf8')), {
-    ok: false, submitted: 'unknown', wrote: true, steps_total: 0,
+    ok: false, submitted: 'no', wrote: true, steps_total: 0,
     error: 'interrupted by restart', reason: 'an earlier attempt may have executed; no automatic retry was performed', uncertain: true,
   }, 'an uncertain claim must block transport re-arming');
 });

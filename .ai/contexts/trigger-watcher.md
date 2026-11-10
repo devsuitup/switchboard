@@ -33,7 +33,7 @@ archived as a conflict. A subsequent archive rename notification republishes
 the saved result without deleting that marker; genuine pending/orphan recovery
 still removes its marker after publication. Equal raw bytes replay the owner
 across filename case aliases, even when one spelling fails action validation.
-Pending legacy claims publish `submitted: 'unknown'`, `wrote: true` and a
+Pending legacy claims publish `submitted: 'no'`, `wrote: true` and a
 non-retryable interruption error, because earlier delivery cannot be excluded.
 Only absent owners require a pre-upgrade processed-directory scan; journalled
 owners use direct artifact checks.
