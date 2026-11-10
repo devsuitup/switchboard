@@ -259,6 +259,7 @@ function createTriggerContext(deps) {
     function check(phase) {
       const boundedWrite = phase === 'text' || v1;
       if (v1 && ctx.lifecycle?.launchAllowed() === false) fail('Switchboard is closing.');
+      if (v1) binding.validateAction?.();
       if (v1 && binding.expectedCwd !== undefined) {
         const normalize = require('./trigger-watcher').normalizeCwd;
         if (normalize(session.cwd) === null) fail("this session's cwd could not be determined; refusing rather than risk targeting the wrong session");
@@ -340,6 +341,7 @@ function createTriggerContext(deps) {
       if (binding.reset || observed.outcome === 'other') return null;
       return binding.effectiveId;
     };
+    binding.checkStop = () => check('stop');
     const handle = { isAlive: () => valid() && entry.handle.isAlive(), write(data) {
       const outcome = check(data === '\r' ? 'enter' : 'text');
       const preId = binding.effectiveId;

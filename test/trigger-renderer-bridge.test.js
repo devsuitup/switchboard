@@ -13,6 +13,28 @@ test('the renderer broker is an Electron-free production module', () => {
   assert.equal(typeof require(modulePath).createTriggerRendererBridge, 'function');
 });
 
+test('stop obtains renderer readiness without an action command and loses it on reload', async () => {
+  const r = rig();
+  assert.equal(typeof r.bridge.waitForReady, 'function', 'stop needs a readiness-only broker operation');
+  let settled = false;
+  const pending = r.bridge.waitForReady(200).then(value => { settled = true; return value; });
+  await r.flush(); assert.equal(settled, false); assert.equal(r.sent.length, 0);
+  r.ready(); const ready = await pending;
+  assert.equal(ready.ok, true); assert.equal(ready.validate().ok, true); assert.equal(r.sent.length, 0);
+  r.wc.emit('did-start-navigation', {}, 'reload', false, true);
+  assert.equal(ready.validate().reason, 'renderer unavailable');
+  r.bridge.dispose();
+});
+
+test('stop readiness expires or closes without a late command', async () => {
+  const r = rig();
+  assert.equal(typeof r.bridge.waitForReady, 'function', 'stop needs bounded readiness');
+  const pending = r.bridge.waitForReady(200); await r.tick(200);
+  assert.equal((await pending).reason, 'renderer not ready'); r.ready(); assert.equal(r.sent.length, 0);
+  r.closing(); assert.equal((await r.bridge.waitForReady(300)).reason, 'Switchboard is closing.');
+  r.bridge.dispose(); assert.equal(r.timers.size, 0);
+});
+
 const A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 const project = path.resolve('broker-project');

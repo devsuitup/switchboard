@@ -109,18 +109,23 @@ function killPty(session, sessionId, { platform = process.platform, ...closeOpti
   if (!session || !session.pty || killedPtys.has(session.pty)) return false;
   const pty = session.pty;
   killedPtys.add(pty);
+  const kill = () => {
+    const issued = withPty({ pty }, 'kill', target => target.kill(), sessionId);
+    if (!issued) killedPtys.delete(pty);
+    return issued;
+  };
   if (platform === 'win32' && session.kind === 'local-pty' && !session.exited && pty._agent?.exitCode === undefined
     && !session.isAttach && !session.detaching && !session.backgrounding && !session.backgrounded && !session.host) {
     const record = jobsByPty.get(pty);
     if (record && !record.released) {
       record.closing = true;
-      closeWindowsPty(pty, () => withPty({ pty }, 'kill', target => target.kill(), sessionId),
+      closeWindowsPty(pty, kill,
         () => record.jobs.terminate(record.id), closeOptions);
-      return true;
+      return killedPtys.has(pty);
     }
   }
   void releaseWindowsPty(pty);
-  return withPty(session, 'kill', (pty) => pty.kill(), sessionId);
+  return kill();
 }
 
 function writePty(session, data, sessionId) {
@@ -148,4 +153,4 @@ function ptyExitSignalName(signal, signals = os.constants.signals) {
   return Object.keys(signals).find((name) => signals[name] === signal) || `signal ${signal}`;
 }
 
-module.exports = { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, releaseWindowsPty, withPty, resizePty, killPty, writePty, detachPty, ptyExitSignalName };
+module.exports = { setPtyOpLogger, guardPtyInputErrors, trackWindowsPty, releaseWindowsPty, withPty, isKilled, resizePty, killPty, writePty, detachPty, ptyExitSignalName };

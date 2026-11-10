@@ -275,6 +275,10 @@ function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.
       for (const key of ['wrote', 'text_written', 'enter_written', 'created', 'resumed']) if (marker[key] === true) result[key] = true;
       if (['no', 'assumed', 'activity', 'confirmed'].includes(marker.submitted)) result.submitted = marker.submitted;
       if (marker.steps_total === 0 || marker.steps_total === 1) result.steps_total = marker.steps_total;
+      if (marker.action === 'stop') {
+        if (marker.phase === 'stop-requested' || marker.stop_requested === true) result.stop_requested = true;
+        if (object(marker.delivery)) result.delivery = marker.delivery;
+      }
       return { result, committed: false };
     } catch (err) {
       if (err.code === 'ENOENT') return null;
@@ -302,9 +306,229 @@ function createTriggerActions({ fs = nativeFs, renameWithRetry, log, now = Date.
       if (!invalid && trigger.action === 'open' && execution?.ctx.lifecycle) {
         return executeOpen(trigger, { ...execution, limiter, now, evidence, requestId: stem });
       }
+      if (!invalid && trigger.action === 'stop' && execution?.ctx.lifecycle) {
+        return executeStop(trigger, { ...execution, now, evidence, requestId: stem });
+      }
       return refusal(trigger, invalid || UNAVAILABLE, evidence);
     },
   };
+}
+
+async function executeStop(trigger, execution) {
+  const { ctx, deadline, now, evidence } = execution;
+  const deps = ctx.lifecycle;
+  const id = trigger.sessionId.toLowerCase();
+  const before = own(trigger, 'before');
+  let effects = { ...evidence }, pinned, entry, session, pty, generation, tabKey, ready, writerIdentity;
+  let releaseSession, releaseTab, stopRequested = false, noteFinished = false;
+  const noteEntry = {};
+  const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, ...extra });
+  const bound = read => boundedRead(read, { now, deadline });
+  const pause = ms => new Promise(resolve => setTimeout(resolve, Math.max(0, Math.min(ms, deadline - now()))));
+  const reject = (reason, extra) => { throw Object.assign(new Error(reason), { stopRefusal: true, extra }); };
+  const check = (timeout = 'session action timed out') => {
+    if (!deps.launchAllowed()) reject('Switchboard is closing.');
+    if (now() >= deadline) reject(timeout, stopRequested ? { uncertain: true } : undefined);
+    const state = ready?.validate();
+    if (state && !state.ok) reject(state.reason);
+  };
+  const eligibility = target => target.host != null ? 'remote sessions are not supported'
+    : target.isPlainTerminal ? 'plain terminal sessions are not supported'
+      : target.isAttach || target.backgrounding || target.backgrounded ? 'background session is not supported' : null;
+  async function lock(acquire, key) {
+    const pending = Promise.resolve(acquire(key, deadline));
+    let obtained = false;
+    try { const release = await bound(() => pending); obtained = true; return release; }
+    finally { if (!obtained) void pending.then(release => release?.()).catch(() => {}); }
+  }
+  function target(allowExited = false) {
+    if (session.generation !== generation || session.pty !== pty) reject('session target changed');
+    if (allowExited && session.exited) return;
+    const matches = [...deps.activeSessions].filter(([, value]) => value === session);
+    if (session.exited || matches.length !== 1) reject('session target changed');
+    tabKey = matches[0][0];
+    const reason = eligibility(session); if (reason) reject(reason);
+  }
+  function sample(completion) {
+    target();
+    if (session.sandbox && !pinned.ctx.getCliStatus?.(id)) reject('session state unavailable');
+    pinned.binding.checkStop();
+    const identity = pinned.binding.observation?.identity;
+    if (writerIdentity != null && identity !== writerIdentity) reject('session target changed');
+    writerIdentity ??= identity;
+    const status = pinned.ctx.getCliStatus?.(id);
+    if (status?.kind === 'schedule') reject('scheduled session is not supported');
+    if (status?.kind === 'bg') reject('background session is not supported');
+    let staleBusy = completion?.source === 'transcript' && status
+      && status.statusUpdatedAt === completion.statusUpdatedAt && status.status === completion.status;
+    if (staleBusy) {
+      const turn = pinned.ctx.getTranscriptTurn?.(id);
+      const original = completion.transcriptIdentity;
+      const current = turn?.compactionCursor;
+      if (!turn?.closed || turn.closedAt !== completion.closedAt || turn.lastEntryAt !== completion.lastEntryAt
+        || !original || !current || original.dev !== String(current.dev) || original.ino !== String(current.ino) || original.filePath !== current.filePath
+        || !completion.busy && pinned.ctx.isSessionBusy(id)) reject('session busy');
+    }
+    let awaitingDescriptor = false;
+    if (completion?.source === 'busy_flag') {
+      if (pinned.ctx.isSessionBusy(id)) reject('session busy');
+      if (status && ['busy', 'shell'].includes(status.status)
+        && Number.isFinite(status.statusUpdatedAt) && status.statusUpdatedAt <= completion.completedAt) {
+        staleBusy = true;
+        const { transcriptOwnEntryAt, transcriptShowsTurnOver } = require('./trigger-watcher');
+        const ownAt = transcriptOwnEntryAt(pinned.ctx, id, completion.enterAt, trigger.before, noteEntry);
+        awaitingDescriptor = ownAt === null || !transcriptShowsTurnOver(pinned.ctx, id, status, ownAt, now(), false);
+      }
+    }
+    if (!staleBusy && (pinned.ctx.isSessionBusy(id) || status?.status === 'busy')) reject('session busy');
+    if (!staleBusy && status?.status === 'waiting') reject('session waiting on a dialog');
+    if (!staleBusy && status?.status === 'shell') reject('session running a shell command');
+    if (!status || !['idle', 'busy', 'shell'].includes(status.status)) reject('session state unavailable');
+    const composer = pinned.ctx.getComposerState?.(id);
+    const { describeBusyComposer, getQuietMs } = require('./trigger-watcher');
+    const quietMs = getQuietMs();
+    if (!composer || !Number.isFinite(composer.pending) || composer.pending < 0) {
+      reject('session composer unavailable', { detail: describeBusyComposer(null, quietMs, now()) });
+    }
+    if (composer.pending > 0) reject('session has unsubmitted input', { detail: describeBusyComposer(composer, quietMs, now()) });
+    return { remaining: Math.max(awaitingDescriptor ? 25 : 0, (composer.lastInputAt || 0) + quietMs - now()), composer };
+  }
+  function marker(phase) {
+    try {
+      const saved = { version: 1, action: 'stop', mode: 'stop', phase, requestId: execution.requestId,
+        requestedSessionId: id, sessionId: id, tabKey, generation, deadline, ...effects };
+      if (saved.delivery) { saved.delivery = { ...saved.delivery }; delete saved.delivery.command; }
+      delete saved.command;
+      execution.saveMarker(saved);
+    } catch (error) { reject('action state could not be saved', { error: error.message, ...(stopRequested ? { uncertain: true } : {}) }); }
+  }
+  async function run() {
+    check();
+    releaseSession = await lock(execution.acquireSessionLock, id);
+    if (!releaseSession) reject('session action timed out');
+    check();
+    const stale = execution.checkStale?.(); if (stale) reject(stale.reason, { error: stale.error });
+    entry = ctx.getPtyForSession(id);
+    if (entry?.ambiguous) reject('ambiguous normalized local tab id; nothing was written');
+    if (!entry && ctx.lookupDeliveryFallback) {
+      const found = await bound(() => ctx.lookupDeliveryFallback(id, deadline, { v1: true }));
+      if (found.background) reject('background session is not supported');
+      if (found.ambiguous) reject('ambiguous descriptor-to-tab ownership; nothing was written');
+      entry = found.entry;
+    }
+    if (!entry) {
+      if (await bound(() => deps.remoteTarget(id))) reject('remote sessions are not supported');
+      let live;
+      try { live = await bound(() => deps.liveElsewhere(id, deadline)); }
+      catch (error) { reject(error.code === 'TRIGGER_DEADLINE' ? 'session action timed out' : 'session liveness unavailable', { error: error.message }); }
+      if (!live?.known) reject('session liveness unavailable');
+      if (live.live) reject(live.live.kind === 'schedule' ? 'scheduled session is not supported'
+        : live.live.kind === 'bg' ? 'background session is not supported' : 'session live elsewhere');
+      const row = await bound(() => deps.getCachedSession(id));
+      const folder = await bound(() => deps.getCachedFolder(id));
+      if (row?.remoteAlias || row?.host || typeof folder === 'string' && folder.includes('::')) reject('remote sessions are not supported');
+      let known = !!row || !!folder;
+      if (!known && deps.projectsDir) {
+        const fs = deps.fs || nativeFs;
+        let folders;
+        try { folders = fs.readdirSync(deps.projectsDir, { withFileTypes: true }); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; folders = []; }
+        for (const folder of folders) {
+          check();
+          if (!folder.isDirectory() || folder.name.includes('::')) continue;
+          if (fs.readdirSync(path.join(deps.projectsDir, folder.name)).some(name => name.endsWith('.jsonl') && name.slice(0, -6).toLowerCase() === id)) { known = true; break; }
+        }
+      }
+      return fail(known ? 'session not open here' : 'session not found', { outcome: 'not-found' });
+    }
+    session = entry.session; pty = entry.ptyProcess; generation = session.generation;
+    target();
+    pinned = ctx.pinDelivery(id, entry, false, { v1: true, deadline });
+    pinned.binding.expectedCwd = trigger.expectedCwd;
+    releaseTab = await lock(execution.acquireTabLock, session);
+    if (!releaseTab) reject('session action timed out');
+    check(); target();
+    ready = await deps.broker.waitForReady(deadline);
+    if (!ready?.ok) reject(before && now() >= deadline ? 'note step not finished' : ready?.reason || 'renderer not ready');
+    pinned.binding.validateAction = () => {
+      const state = ready.validate();
+      if (!state.ok) throw Object.assign(new Error(state.reason), { deliveryRefusal: true });
+    };
+    check(); target();
+    if (own(trigger, 'expectedCwd')) {
+      const { normalizeCwd } = require('./trigger-watcher');
+      const cwd = normalizeCwd(session.cwd);
+      if (cwd === null) reject("this session's cwd could not be determined; refusing rather than risk targeting the wrong session");
+      if (cwd !== normalizeCwd(trigger.expectedCwd)) reject("expectedCwd does not match this session's actual cwd");
+    }
+    if (before) {
+      marker('claimed');
+      let delivered;
+      try {
+        pinned.binding.checkStop();
+        writerIdentity = pinned.binding.observation?.identity;
+        marker('prompt-attempted');
+        delivered = await execution.deliver({ sessionId: id, command: trigger.before, wait: 'idle', expectedCwd: trigger.expectedCwd,
+          entry, pinned, deadline, waitForFinalTurn: true });
+      } catch (error) {
+        const step = pinned.binding.step;
+        delivered = { ok: false, reason: error.message, error: error.message,
+          wrote: !!step?.text_written, text_written: !!step?.text_written, enter_written: !!step?.enter_written,
+          submitted: step?.enter_written ? 'assumed' : 'no' };
+      }
+      effects = { ...effects, ...delivered, delivery: delivered };
+      delete effects.ok; delete effects.reason; delete effects.error;
+      marker('note-delivered');
+      if (!deps.launchAllowed()) reject('Switchboard is closing.');
+      if (!delivered.ok || delivered.timedOut || now() >= deadline || !delivered.final_turn
+        || delivered.final_turn.timedOut || delivered.final_turn.sessionExited
+        || !['descriptor', 'transcript', 'busy_flag'].includes(delivered.final_turn.source)) {
+        reject('note step not finished', delivered.enter_written ? { uncertain: true } : undefined);
+      }
+      noteFinished = true;
+      check(); target(true);
+      if (session.exited) return { ...fail(null), ok: true, outcome: 'closed', reason: null };
+    }
+    while (true) {
+      check(before ? 'note step not finished' : 'session input not quiet');
+      target(true);
+      if (session.exited) return { ...fail(null), ok: true, outcome: 'closed', reason: null };
+      const state = sample(effects.delivery?.final_turn);
+      if (state.remaining > 0) { await pause(Math.min(25, state.remaining)); continue; }
+      check(before ? 'note step not finished' : 'session input not quiet');
+      marker(noteFinished ? 'note-finished' : 'claimed');
+      const final = sample(effects.delivery?.final_turn);
+      if (final.remaining > 0) continue;
+      check(before ? 'note step not finished' : 'session input not quiet');
+      let stopped;
+      try { stopped = deps.stop(session, tabKey); }
+      catch (error) { reject('session stop failed', { error: error.message }); }
+      if (!stopped?.ok || stopped.detached) reject('session stop failed', { ...(stopped?.error ? { error: stopped.error } : {}) });
+      stopRequested = true; effects.stop_requested = true;
+      marker('stop-requested');
+      break;
+    }
+    while (true) {
+      check('session stop not confirmed'); target(true);
+      if (session.exited) return { ...fail(null), ok: true, outcome: 'closed', reason: null };
+      await pause(25);
+    }
+  }
+  let result;
+  try {
+    try { result = await run(); }
+    catch (error) {
+      result = fail(error.stopRefusal ? error.message : error.code === 'TRIGGER_DEADLINE' ? 'session action timed out'
+        : error.deliveryRefusal ? error.message : 'session stop failed',
+      { ...(!error.stopRefusal ? { error: error.message } : {}),
+        ...(stopRequested || before && effects.enter_written && !noteFinished ? { uncertain: true } : {}), ...error.extra });
+    }
+    await execution.publish(result);
+    return result;
+  } finally {
+    try { pinned?.ctx.forgetTranscriptTurn?.(id); } catch {}
+    releaseTab?.(); releaseSession?.();
+  }
 }
 
 async function executeOpen(trigger, execution) {

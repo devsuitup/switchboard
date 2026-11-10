@@ -5,6 +5,7 @@ const { randomUUID } = require('node:crypto');
 function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAllowed,
   now = Date.now, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout }) {
   const pending = new Map();
+  const readyWaiters = new Set();
   let document = null;
   let disposed = false;
   const failure = (reason, error) => ({ ok: false, reason, ...(error ? { error } : {}) });
@@ -29,6 +30,7 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
     state.ready = false;
     state.frame = null;
     state.epoch = randomUUID();
+    for (const waiter of [...readyWaiters]) if (waiter.state === state) waiter.finish(failure(reason));
     for (const record of [...pending.values()]) if (record.document === state) finish(record, failure(reason), true);
   }
 
@@ -128,8 +130,35 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
     if (!senderMatches(state, event) || !launchAllowed()) return null;
     state.ready = true;
     state.frame = event.senderFrame;
+    for (const waiter of [...readyWaiters]) if (waiter.state === state) waiter.finish(readiness(state));
     for (const record of pending.values()) if (record.document === state) void dispatch(record);
     return { documentEpoch: state.epoch };
+  }
+
+  function readiness(state) {
+    const epoch = state.epoch;
+    return { ok: true, validate() {
+      if (!launchAllowed()) return failure('Switchboard is closing.');
+      return available(state) && state.ready && state.epoch === epoch && state.frame === state.wc.mainFrame
+        ? { ok: true } : failure('renderer unavailable');
+    } };
+  }
+
+  function waitForReady(deadline) {
+    if (!launchAllowed()) return Promise.resolve(failure('Switchboard is closing.'));
+    const state = document;
+    if (!available(state)) return Promise.resolve(failure('window not available'));
+    if (now() >= deadline) return Promise.resolve(failure('renderer not ready'));
+    if (state.ready) return Promise.resolve(readiness(state));
+    return new Promise(resolve => {
+      const waiter = { state, finish(result) {
+        if (!readyWaiters.delete(waiter)) return;
+        clearTimeoutFn(waiter.timer);
+        resolve(result);
+      } };
+      readyWaiters.add(waiter);
+      waiter.timer = setTimeoutFn(() => waiter.finish(failure(launchAllowed() ? 'renderer not ready' : 'Switchboard is closing.')), Math.max(0, deadline - now()));
+    });
   }
 
   async function ensureJoined(requestId, entry) {
@@ -235,7 +264,7 @@ function createTriggerRendererBridge({ ipcMain, getWindow, getSession, launchAll
 
   ipcMain.handle('trigger-actions-ready', ready);
   ipcMain.on('trigger-session-action-result', reply);
-  return { attach, request, consumePermit, checkPermit, markOpened, ensureJoined, revoke, dispose };
+  return { attach, request, waitForReady, consumePermit, checkPermit, markOpened, ensureJoined, revoke, dispose };
 }
 
 module.exports = { createTriggerRendererBridge };

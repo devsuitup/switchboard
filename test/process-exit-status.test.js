@@ -271,7 +271,9 @@ test('main names the signal node-pty reports and forwards it with the exit code'
   for (const send of sends) assert.match(send, /, exitCode, exitSignal, stopped, session\.generation\)$/);
   assert.match(MAIN_SRC, /const stopped = !!session\.stopRequested;/);
   const stopHandler = MAIN_SRC.slice(MAIN_SRC.indexOf("ipcMain.handle('stop-session'"), MAIN_SRC.indexOf("ipcMain.handle('remote-stop-session'"));
-  assert.match(stopHandler, /session\.stopRequested = true;\s*killPty\(session, sessionId\);/, 'a Stop is recorded before the signal is sent');
+  assert.match(stopHandler, /stopLocalSession\(session, sessionId, killPty\)/);
+  const stopBackend = fs.readFileSync(path.join(ROOT, 'src/main/terminals/stop-session.js'), 'utf8');
+  assert.match(stopBackend, /session\.stopRequested = true;[\s\S]*?kill\(session, sessionId\)/, 'a Stop is recorded before the signal is sent');
   assert.match(MAIN_SRC, /attachedSession\.stopRequested = true;\s*killPty\(attachedSession, sessionId\);/);
   assert.ok(MAIN_SRC.includes('session.generation = ++ptyGenerationCounter;'), 'every wired pty gets the next generation');
   assert.equal(MAIN_SRC.match(/return \{\s*ok: true, reattached: (true|false), [^}]*generation: (session|remoteSession)\.generation,?\s*\}/g).length, 3, 'all three open-terminal replies carry the generation');

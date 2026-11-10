@@ -24,7 +24,8 @@ separate qualification; these probes do not replace their assertions.
 Main instantiates `createTriggerRendererBridge`, binds it to each window and
 supplies it to the watcher. The renderer registers `handleTriggerSessionAction`
 before startup and announces readiness only after project load and restore
-succeed. v1 open/new are active; stop retains slice B's refusal.
+succeed. v1 open/new and stop are active; stop waits only for renderer readiness,
+then uses the shared main-side stop backend and pinned PTY exit confirmation.
 
 | Direction | Channel | Preload API / payload |
 | --- | --- | --- |
@@ -698,6 +699,12 @@ closes a given pty once (a `WeakSet` of killed ptys), and `resizePty` /
 `writePty` return false on a killed pty. `test/pty-ops-conpty-kill.test.js`
 proves it against the real node-pty in a child process (Windows only): with the
 guard removed the child dies with 3221226356.
+
+A synchronous `pty.kill()` failure removes that PTY from the issued-kill set.
+This applies to plain close and the tracked Windows close callback. A later
+`stopLocalSession` retries rather than treating the failed request as pending;
+successful requests retain the once-only guard. The sidebar IPC still replies
+`{ok:true}` for a normal open session even when the backend reports failure.
 
 Both ConPTY suites use `test/pty-ops-conpty-stage.js` to copy node-pty into
 TEMP. A reusable stage requires `.complete`, `node-pty/package.json` and every

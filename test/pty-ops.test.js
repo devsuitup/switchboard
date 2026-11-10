@@ -151,6 +151,24 @@ test('killPty kills a live pty once and ignores later kills', () => {
   assert.deepEqual(pty.calls, [['kill']]);
 });
 
+for (const tracked of [false, true]) {
+  test(`killPty retries after a throw instead of leaving a failed kill pending (Windows job: ${tracked})`, async () => {
+    const { isKilled, trackWindowsPty } = require('../src/main/terminals/pty-ops');
+    const pty = makeLivePty(); const session = { pty }; let attempts = 0;
+    const options = { platform: tracked ? 'win32' : 'linux', schedule: () => ({ unref() {} }) };
+    if (tracked) {
+      session.kind = 'local-pty'; pty.onExit = () => {};
+      await trackWindowsPty(pty, { platform: 'win32', jobs: { assign: async () => true, terminate() {} } });
+    }
+    pty.kill = () => { if (++attempts === 1) throw new Error('kill denied'); };
+    assert.equal(killPty(session, 's1', options), false);
+    assert.equal(isKilled(session), false, 'a failed kill must not be reported as issued');
+    assert.equal(killPty(session, 's1', options), true);
+    assert.equal(killPty(session, 's1', options), false);
+    assert.equal(attempts, 2);
+  });
+}
+
 test('resizePty and writePty do nothing once the pty was killed', () => {
   const pty = makeLivePty();
   const session = { pty };
