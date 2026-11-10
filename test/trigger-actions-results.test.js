@@ -497,8 +497,6 @@ for (const [kind, variant, outcome] of [['versioned', payload, 'refused'], ['leg
     if (outcome === 'refused') assert.equal(JSON.parse(first).reason, 'renderer refused');
     else assert.equal(JSON.parse(first).outcome, 'opened');
     if (overwritesOwner) {
-      // On a case-insensitive filesystem the uppercase name is the owner's own input file: rewriting it
-      // is a modification, so the owner's cleanup refuses to remove changed bytes (publisher.cleanup).
       await r.settle();
       assert.equal(fs.readFileSync(r.input, 'utf8'), JSON.stringify(variant), 'the modified input is retained, not removed');
     } else {
