@@ -1,5 +1,15 @@
 # Context: trigger-watcher
 
+Versioned trigger new/open and closed-session resume reserve the shared
+[project operation gate](project-operation-gate.md) in `open-terminal`, before
+asynchronous spawn preparation and through PTY registration. Held projects
+produce `outcome: 'refused'` with `PROJECT_OPERATION_ERROR` as the reason,
+`created:false`/`resumed:false`, and no session registration, name save or
+working-set write. The renderer cleans failed placeholders and replies so the
+broker retires the consumed permit; the action refunds its new-session rate
+reservation. Existing-session reattachment and legacy delivery start no process
+and remain exempt. Stop still refuses as unimplemented.
+
 Main-process modules `trigger-watcher.js` and `trigger-context.js` live in
 `src/main/triggers/` (ADR 0005, step 8). The watcher's lazy tab mutex import is
 `../terminals/tab-input-lock`; its home based trigger directory is unchanged.

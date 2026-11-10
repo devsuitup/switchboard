@@ -540,6 +540,10 @@ async function dispatch(fields) {
   if (!fs.existsSync(built.cwd)) return { ok: false, error: `project directory no longer exists: ${built.cwd}` };
   const refusal = dispatchRefusal(dispatchSettings(built.cwd) || {});
   if (refusal) return { ok: false, error: refusal };
+  const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('../shared/project-operation-gate');
+  const admission = projectOperationGate.tryAdmit(built.cwd);
+  if (!admission) return { ok: false, error: PROJECT_OPERATION_ERROR };
+  try {
   const result = await run(built.args, { cwd: built.cwd, timeout: VERB_TIMEOUT_MS });
   if (result.code !== 0) {
     return { ok: false, error: String(result.stderr).trim() || `claude --bg exited with ${result.code}` };
@@ -547,6 +551,7 @@ async function dispatch(fields) {
   const id = parseDispatchOutput(result.stdout);
   await reconcile();
   return { ok: true, id };
+  } finally { admission.release(); }
 }
 
 function liveJobCheck(sessionId, { workerLiveness = new Map(), excludeJobId } = {}) {

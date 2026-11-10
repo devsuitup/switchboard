@@ -14,6 +14,7 @@ change without re-reading `main.js`, now ~4100 LOC.
 | The fast pre-commit check (staged lint, test selection) | [fast-check](fast-check.md) |
 | SQLite, indexing, search, heatmap aggregation, fs.watch | [session-cache](session-cache.md) |
 | Cron schedules, schedule `.md` files, `claude --resume -p` spawn | [schedule-runner](schedule-runner.md) |
+| Project operation admission, launch reservations and draining in-flight spawns | [project-operation-gate](project-operation-gate.md) |
 | Subagent sidebar grouping, transcript view, parent→child wiring | [subagent-observability](subagent-observability.md) |
 | Memory/.work-files tabs, CodeMirror panel, format/delete buttons | [viewer-panel](viewer-panel.md) |
 | New IPC, preload bridge changes, renderer ↔ main protocol | [ipc-bridge](ipc-bridge.md) |

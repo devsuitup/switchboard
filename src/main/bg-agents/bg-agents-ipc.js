@@ -134,7 +134,16 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     return pending;
   };
   ipcMain.handle('bg-agent-verb', async (_event, verb, id) => {
-    if (verb === 'respawn') return (await runRespawn(id)).result;
+    if (verb === 'respawn') {
+      const global = await getSetting?.('global');
+      const item = global?.openWorkingSet?.find(item => item.bg === true && (item.attachJobId
+        ? item.attachJobId === id : bgAgents.findRestoreJob(item.sessionId)?.job?.id === id));
+      const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('../shared/project-operation-gate');
+      const admission = item ? projectOperationGate.tryAdmit(item.projectPath) : null;
+      if (item && !admission) return { ok: false, error: PROJECT_OPERATION_ERROR };
+      try { return (await runRespawn(id)).result; }
+      finally { admission?.release(); }
+    }
     const check = await checkVerb(verb, id);
     if (!check.ok) return check;
     const result = await bgAgents.runVerb(verb, id);
@@ -173,6 +182,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
   };
   const restoreBackgroundJob = async (sessionId, { attachOnly = false } = {}) => {
     let job;
+    let admission;
     const refuse = (reason, recovery) => ({ action: 'refuse', ...(job ? { jobId: job.id } : {}),
       reason: job ? `Job ${job.id} (${job.state}): ${reason}` : reason, ...(recovery ? { recovery } : {}) });
     try {
@@ -183,6 +193,11 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       const lookup = bgAgents.findRestoreJob(sessionId, item.attachJobId);
       if (!lookup.known || !lookup.job) return { ...refuse(lookup.reason || 'background job record unavailable'), ...(lookup.missing ? { missing: true } : {}) };
       job = lookup.job;
+      if (!attachOnly) {
+        const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('../shared/project-operation-gate');
+        admission = projectOperationGate.tryAdmit(item.projectPath);
+        if (!admission) return refuse(PROJECT_OPERATION_ERROR);
+      }
       const check = await bgAgents.conversationCheck(job.id, { workerLiveness: 'all' });
       if (!check.known) return refuse(check.reason || 'conversation liveness unknown');
       job.state = check.state;
@@ -198,6 +213,7 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
       if (await waitForDescriptor(job)) return { action: 'attach', sessionId, jobId: job.id };
       return refuse('live worker has no attachable background descriptor — not attached');
     } catch (err) { return refuse(err.message || String(err)); }
+    finally { admission?.release(); }
   };
   ipcMain.handle('restore-background-job', (_event, sessionId, options) => {
     if (restoring.has(sessionId)) return restoring.get(sessionId);

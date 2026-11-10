@@ -134,6 +134,10 @@ async function handleLaunchRequest(payload, deps) {
   const blocked = deps.launchBlockReason(alias);
   if (blocked) return { ok: false, error: blocked };
 
+  const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('../shared/project-operation-gate');
+  const admission = projectOperationGate.tryAdmit(payload.cwd, alias);
+  if (!admission) return { ok: false, error: PROJECT_OPERATION_ERROR };
+  try {
   const launched = await deps.adapter.launch(alias, { sessionId: payload.sessionId, cwd: payload.cwd, options: payload.options });
   if (!launched.ok) return launched;
 
@@ -142,7 +146,10 @@ async function handleLaunchRequest(payload, deps) {
     const why = (attachResult && attachResult.error) || 'no response';
     return { ok: false, error: `the session was started on ${remoteHostLabel(alias, deps.getHosts?.())} as ${launched.descriptor.tmux} but attaching failed: ${why}` };
   }
-  return { ok: true, descriptor: launched.descriptor, attachResult };
+  const result = { ok: true, descriptor: launched.descriptor, attachResult };
+  await deps.register?.(result);
+  return result;
+  } finally { admission.release(); }
 }
 
 module.exports = {
