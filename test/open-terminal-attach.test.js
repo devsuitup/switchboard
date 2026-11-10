@@ -90,6 +90,24 @@ test('attach to an existing job bypasses held project and cwd gates', async t =>
   assert.match(h.spawned[0][1].join(' '), /claude attach aaaaaaaa/);
 });
 
+test('a panel terminal without a project is admitted while the app cwd project is held', async t => {
+  const h = launchFixture();
+  const cwd = path.join(h.root, 'test');
+  h.context.resolvePanelTerminalCwd = () => ({ ok: true, cwd });
+  const { projectOperationGate } = require('../src/main/shared/project-operation-gate');
+  const held = projectOperationGate.hold(process.cwd());
+  t.after(() => held.release());
+  const result = await h.open('no-project-panel', null, true, { type: 'terminal', panelFor: 'owner' });
+  assert.equal(result.ok, true, 'a null project must not gate the panel terminal on the app cwd');
+  assert.equal(h.spawned.length, 1);
+  assert.equal(h.spawned[0][2].cwd, cwd);
+  const heldCwd = projectOperationGate.hold(cwd);
+  t.after(() => heldCwd.release());
+  assert.equal((await h.open('held-panel-cwd', null, true, { type: 'terminal', panelFor: 'owner' })).ok, false,
+    'the resolved panel cwd must still be gated');
+  assert.equal(h.spawned.length, 1);
+});
+
 test('worktree launch keeps both identities reserved through preparation and releases both on error', async t => {
   const h = launchFixture();
   const cwd = path.join(h.root, 'test');
