@@ -88,6 +88,42 @@ function execute(h, input) {
   return { validated, units, state: progress.read(substrate) };
 }
 
+test('validation resolves each distinct owner path at most once', supported, t => {
+  const h = setup(t), input = h.manifest(true);
+  const filename = require.resolve('../src/main/projects/project-delete-writer');
+  const nativeRequire = require('node:module').createRequire(filename), resolutions = new Map();
+  const count = (value, alias, memo) => {
+    if (alias !== null) return;
+    const absolute = path.resolve(value);
+    if (!memo?.has(absolute)) resolutions.set(absolute, (resolutions.get(absolute) || 0) + 1);
+  };
+  const module = { exports: {} };
+  require('node:vm').runInNewContext(fs.readFileSync(filename, 'utf8'), { module, exports: module.exports, process,
+    require: id => id === './project-delete-identity' ? { ...shared,
+      identity(value, memo) { count(value.projectPath, value.alias, memo); return shared.identity(value, memo); },
+      canonicalPath(value, alias, memo) { count(value, alias, memo); return shared.canonicalPath(value, alias, memo); },
+    } : nativeRequire(id) }, { filename });
+  const result = module.exports.validateDeletionManifest(h.db, input);
+  deep(result.sessionIds, h.members.map(row => row.id).sort());
+  assert.ok(resolutions.size >= 3, 'selected and foreign local ownership paths are exercised');
+  for (const [ownerPath, calls] of resolutions) assert.equal(calls, 1, `owner path resolved once: ${ownerPath}`);
+});
+
+test('validation scales to 5000 persisted members within 1500ms', supported, t => {
+  const h = setup(t), rows = [];
+  for (let i = h.selected.length; i < 5000; i++) {
+    const sessionId = 'scale-' + i;
+    rows.push({ sessionId, folder: h.groups[0].folderKey, projectPath: h.root, messageCount: 1 });
+    h.members.push({ ...h.members[0], id: sessionId, partId: sessionId });
+  }
+  h.db.upsertCachedSessions(rows);
+  const input = h.manifest(true), start = performance.now();
+  const validated = api().validateDeletionManifest(h.db, input), elapsed = performance.now() - start;
+  assert.equal(validated.sessionIds.length, 5001);
+  t.diagnostic(`5000 persisted members, ${h.db.getAllCached().length} ownership rows: ${elapsed.toFixed(1)}ms`);
+  assert.ok(elapsed < 1500, `validation must finish below 1500ms, took ${elapsed.toFixed(1)}ms`);
+});
+
 for (const settings of [false, true]) for (const sessions of [false, true]) {
   test(`exact persisted matrix settings=${settings} sessions=${sessions}`, supported, t => {
     const h = setup(t), input = h.manifest(settings, sessions), beforeFields = h.db.projectDeletion.metadataFields();
@@ -221,12 +257,12 @@ test('prepared finalization merges current settings by identity and never seeds 
   h.db.setSetting('scheduleReenableOffers', { [h.root]: { selected: true }, [remote]: { remote: true } });
   h.db.setSetting('scheduleProjects', [h.root, path.join(h.root, '.work-files', 'worktrees', 'child')]);
   h.db.setSetting('global', { sentinel: 'latest', hiddenProjects: [h.root], hiddenProjectKinds: { [h.root]: 'repository' },
-    openWorkingSet: [{ sessionId: 'head', projectPath: h.root }, { sessionId: 'head', projectPath: '/srv/other', host: 'host' }, { sessionId: 'orphan', projectPath: h.root }, { sessionId: 'worktree', projectPath: h.kept[2].projectPath }] });
+    openWorkingSet: [{ sessionId: 'head', projectPath: h.root, active: true }, { sessionId: 'head', projectPath: '/srv/other', active: false }, { sessionId: 'orphan', projectPath: h.root, active: false }, { sessionId: 'worktree', projectPath: h.kept[2].projectPath, active: false }] });
   commitTransaction(h.db, () => { for (const unit of units) engine.applyDeletionUnit(h.db, unit); }); h.reopen();
   const global = h.db.getSetting('global');
   assert.equal(global.sentinel, 'latest'); assert.equal(global.hiddenProjectScopes?.[h.root], undefined, 'legacy unscoped mark remains unscoped');
   assert.equal(global.hiddenProjectKinds[h.root], 'delete', 'final hide uses the existing delete kind');
-  assert.equal(global.openWorkingSet.length, 3, 'prune only proven selected ID and host/path');
+  assert.equal(global.openWorkingSet.length, 3, 'prune only proven selected ID and project path');
   deep(h.db.getSetting('archivedProjects'), { [remote]: { remote: true } });
   deep(h.db.getSetting('scheduleReenableOffers'), { [remote]: { remote: true } });
   deep(h.db.getSetting('scheduleProjects'), [h.kept[2].projectPath]);
@@ -270,9 +306,12 @@ test('remote finalization keeps local schedule registration and absent registry 
     expectedRevision: scope.writerRevision, writerMembershipDigest: scope.writerMembershipDigest, inventory, groups, members,
     membershipDigest: shared.membershipDigest(remoteProject, inventory), options: { sessions: false, settings: false, schedules: false, transcripts: false, stopBackgroundJobs: false } };
   const validated = engine.validateDeletionManifest(h.db, input);
+  const keptTabs = [{ sessionId: 'remote', projectPath: '/srv/elsewhere', active: false }, { sessionId: 'unselected', projectPath: '/srv/other', active: false }];
+  h.db.setSetting('global', { openWorkingSet: [{ sessionId: 'remote', projectPath: '/srv/other', active: true, bg: true, attachJobId: 'job' }, ...keptTabs] });
   h.db.setSetting('scheduleProjects', ['/srv/other', h.root]);
   commitTransaction(h.db, () => { for (const unit of engine.buildFinalizationUnits(validated)) engine.applyDeletionUnit(h.db, unit); });
   deep(h.db.getSetting('scheduleProjects'), ['/srv/other', h.root]);
+  deep(h.db.getSetting('global').openWorkingSet, keptTabs, 'remote saved tabs use proven IDs and paths without host fields');
   h.db.deleteSetting('scheduleProjects');
   commitTransaction(h.db, () => { for (const unit of engine.buildFinalizationUnits(validated)) engine.applyDeletionUnit(h.db, unit); });
   assert.equal(h.db.getSetting('scheduleProjects'), null);

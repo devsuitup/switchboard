@@ -6,8 +6,6 @@ const { createProjectDeleteProgress, bind } = require('./project-delete-progress
 const { archivedEntry } = require('../../../archived-projects');
 
 const readDurableScope = (db, input) => createProjectDeleteProgress(db).readScope(input);
-const rowOwner = row => identity({ alias: parseFolderKey(row.folder).alias, projectPath: row.projectPath });
-const sameOwner = (row, project) => { try { return rowOwner(row).key === project.key; } catch { return false; } };
 const settingsPath = (value, alias) => {
   const normalized = path.posix.normalize(value.replaceAll('\\', '/')).replace(/\/$/, '') || '/';
   return alias === null && process.platform === 'win32' ? normalized.toLowerCase() : normalized;
@@ -24,7 +22,16 @@ function validateDeletionManifest(db, input) {
     || Object.values(input.inventory).reduce((n, rows) => n + rows.length, 0) > 50000
     || !Array.isArray(input.groups) || !Array.isArray(input.members)
     || stable(input.groups) !== stable(input.inventory.groups) || stable(input.members) !== stable(input.inventory.members)) throw fail('DELETION_MANIFEST', 'Explicit options and identical complete inventory required');
-  const project = identity(input.project), binding = bind(input);
+  const memo = new Map(), ownerKeys = new Map();
+  const sameOwner = (row, project) => {
+    if (!ownerKeys.has(row)) {
+      let key = null;
+      try { key = identity({ alias: parseFolderKey(row.folder).alias, projectPath: row.projectPath }, memo).key; } catch {}
+      ownerKeys.set(row, key);
+    }
+    return ownerKeys.get(row) === project.key;
+  };
+  const project = identity(input.project, memo), binding = bind(input);
   const snapshot = readDurableScope(db, { project: input.project });
   if (binding.expectedEpoch !== snapshot.projectEpoch || input.expectedRevision !== snapshot.writerRevision
     || input.writerMembershipDigest !== snapshot.writerMembershipDigest) throw fail('WRITER_STALE', 'Durable ownership or revision changed');
@@ -32,7 +39,7 @@ function validateDeletionManifest(db, input) {
   for (const kind of ['tabs', 'jobs', 'schedules']) {
     const seen = new Set();
     for (const row of input.inventory[kind]) {
-      if (!text(row.id) || seen.has(row.id) || row.verified !== true || identity(row).key !== project.key
+      if (!text(row.id) || seen.has(row.id) || row.verified !== true || identity(row, memo).key !== project.key
         || row.linked === true || (kind !== 'schedules' && !['claude', 'codex', 'terminal'].includes(row.runtime))) throw fail('DELETION_OWNERSHIP', 'Runtime inventory contradicts selected identity');
       seen.add(row.id);
     }
@@ -40,30 +47,39 @@ function validateDeletionManifest(db, input) {
   const fence = db.projectDeletion.fence(project.key);
   if (fence?.blocked) throw fail('PROJECT_EPOCH_STALE', 'Project is blocked');
   const { rows, ownership, folders } = snapshot.scope;
+  const ownershipById = new Map(), ownershipByFolder = new Map(), folderMeta = new Map(folders), groupsByFolder = new Map();
+  for (const row of ownership) {
+    ownershipById.set(row.sessionId, row);
+    if (!ownershipByFolder.has(row.folder)) ownershipByFolder.set(row.folder, []);
+    ownershipByFolder.get(row.folder).push(row);
+    sameOwner(row, project);
+  }
+  for (const group of input.groups) if (!groupsByFolder.has(group.folderKey)) groupsByFolder.set(group.folderKey, group);
   const groupKeys = new Set(), exclusiveFolders = [];
   for (const group of input.groups) {
     if (group.effect === 'kept') {
-      if (identity(group).key === project.key) throw fail('DELETION_OWNERSHIP', 'Selected group cannot be kept');
+      if (identity(group, memo).key === project.key) throw fail('DELETION_OWNERSHIP', 'Selected group cannot be kept');
       continue;
     }
     if (group.effect !== 'selected' || group.verified !== true || !text(group.folderKey) || groupKeys.has(group.folderKey)
-      || !['claude', 'codex'].includes(group.runtime) || identity(group).key !== project.key || parseFolderKey(group.folderKey).alias !== project.alias) throw fail('DELETION_OWNERSHIP', 'Unverified group ownership');
-    const stored = folders.find(([folder]) => folder === group.folderKey)?.[1];
+      || !['claude', 'codex'].includes(group.runtime) || identity(group, memo).key !== project.key || parseFolderKey(group.folderKey).alias !== project.alias) throw fail('DELETION_OWNERSHIP', 'Unverified group ownership');
+    const stored = folderMeta.get(group.folderKey);
     if (!stored || !sameOwner({ folder: group.folderKey, projectPath: stored.projectPath }, project)) throw fail('DELETION_OWNERSHIP', 'Group lacks durable mapping');
     groupKeys.add(group.folderKey);
-    if (ownership.filter(row => row.folder === group.folderKey).every(row => sameOwner(row, project))) exclusiveFolders.push(group.folderKey);
+    if ((ownershipByFolder.get(group.folderKey) || []).every(row => sameOwner(row, project))) exclusiveFolders.push(group.folderKey);
   }
   const selectedRows = new Map(rows.map(row => [row.sessionId, row])), ids = new Set();
   const metadataIds = new Set([...db.getAllMeta().keys(), ...db.projectDeletion.metadataFields().map(row => row.sessionId)]);
   const linked = new Set(rows.flatMap(links)), foreignLinks = new Set(ownership.filter(row => !sameOwner(row, project)).flatMap(links));
   for (const member of input.members) {
     if (!text(member.id) || !text(member.conversationId) || !text(member.partId) || member.linked === true
-      || ids.has(member.id) || member.verified !== true || identity(member).key !== project.key
-      || !groupKeys.has(member.folderKey) || member.cwd !== null && canonicalPath(member.cwd, member.alias) !== project.projectPath
+      || ids.has(member.id) || member.verified !== true || identity(member, memo).key !== project.key
+      || !groupKeys.has(member.folderKey) || member.cwd !== null && canonicalPath(member.cwd, member.alias, memo) !== project.projectPath
       || !['claude', 'codex'].includes(member.runtime)
-      || input.groups.find(group => group.folderKey === member.folderKey)?.runtime !== member.runtime) throw fail('DELETION_OWNERSHIP', 'Invalid exact member');
+      || groupsByFolder.get(member.folderKey)?.runtime !== member.runtime) throw fail('DELETION_OWNERSHIP', 'Invalid exact member');
     const row = selectedRows.get(member.id);
-    if (foreignLinks.has(member.id) || ownership.some(other => other.sessionId === member.id && !sameOwner(other, project))) throw fail('DELETION_OWNERSHIP', 'Ambiguous session ID ownership');
+    const owner = ownershipById.get(member.id);
+    if (foreignLinks.has(member.id) || owner && !sameOwner(owner, project)) throw fail('DELETION_OWNERSHIP', 'Ambiguous session ID ownership');
     if (row) {
       if (row.folder !== member.folderKey || member.metadataOnly === true || member.indexed !== true || member.present !== true
         || (row.parentSessionId || null) !== (member.parentSessionId || null)) throw fail('DELETION_OWNERSHIP', 'Member contradicts durable row');
@@ -71,7 +87,7 @@ function validateDeletionManifest(db, input) {
     ids.add(member.id);
   }
   if (rows.some(row => !ids.has(row.sessionId) || !groupKeys.has(row.folder))
-    || [...linked].some(id => metadataIds.has(id) && !ownership.some(row => row.sessionId === id) && !ids.has(id))) throw fail('DELETION_OWNERSHIP', 'Exact persisted membership is incomplete');
+    || [...linked].some(id => metadataIds.has(id) && !ownershipById.has(id) && !ids.has(id))) throw fail('DELETION_OWNERSHIP', 'Exact persisted membership is incomplete');
   const durableOwners = [...ownership, ...folders.map(([folder, row]) => ({ folder, projectPath: row.projectPath }))];
   const keys = db.listSettingKeys('project:').filter(key => settingsPath(key.slice(8), project.alias) === settingsPath(input.project.projectPath, project.alias));
   if (input.options.settings) {
@@ -122,7 +138,8 @@ function applyDeletionUnit(db, { category, target }) {
     const ids = new Set(target.restoreTargets.map(row => row.sessionId));
     const openWorkingSet = (current.openWorkingSet || []).filter(row => {
       if (!ids.has(row.sessionId)) return true;
-      try { return identity({ alias: row.host ?? row.remoteAlias ?? null, projectPath: row.projectPath }).key !== project.key; } catch { return true; }
+      if (typeof row.projectPath !== 'string') return true;
+      try { return canonicalPath(row.projectPath, project.alias) !== project.projectPath; } catch { return true; }
     });
     db.setSetting('global', { ...current, hiddenProjects, hiddenProjectKinds: { ...current.hiddenProjectKinds, [hiddenEntry]: 'delete' },
       ...(current.hiddenProjectScopes || Object.keys(scopes).length ? { hiddenProjectScopes: scopes } : {}),

@@ -353,6 +353,12 @@ five explicit boolean options and identical inventory/member/group copies.
 It recomputes membership, checks persisted row/folder ownership and refuses
 foreign, duplicate, missing or unproven targets. Session IDs have no host column;
 conflicting durable links refuse rather than granting ID-wide authority.
+Validation indexes durable ownership once by session ID and folder, and indexes
+folder metadata and manifest groups before checking members. Each durable row's
+owner key is cached; group, member, runtime and owner path checks share one
+normalization memo for the validator. Scope reading and membership hashing keep
+their separate existing normalization boundaries. Validation therefore avoids
+per-member and per-linked-ID scans of the complete ownership inventory.
 Metadata-only history requires a parent, merged-part, continuation or bridge link
 from an owned persisted row and no foreign reference. Unowned orphan metadata
 stays outside the manifest. Linked historical
@@ -380,8 +386,10 @@ preserves unscoped legacy marks, directly subtracts archive/offer keys matching
 the selected canonical identity, and subtracts only the selected local stored
 schedule registration.
 Remote finalization never removes local registration; absent registries are
-never seeded. Restore pruning requires a selected member/tab ID plus matching
-host/path, including transcriptless dormant tabs from the admitted inventory.
+never seeded. Restore pruning requires a manifest-proven selected member/tab ID
+and a string project path matching the admitted identity's path, including
+transcriptless dormant tabs. The working-set producer persists no host field;
+the admitted restore targets supply the owner rather than saved-tab host hints.
 The returned invalidation targets do not touch mainTouchedCache or renderer
 maps/pending saves. A4d must also serialize the whole-global working-set producer.
 The finalization helper itself supplies neither cancellation nor admission;
