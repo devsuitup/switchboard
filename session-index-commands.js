@@ -78,6 +78,7 @@ function createSessionRequestCommands(db) {
     let owner = readOwner(stemKey), outcome;
     if (conflict) {
       if (!owner) throw requestError('SESSION_REQUEST_ABSENT', 'A conflict requires an owned namespace');
+      if (owner.rawHash === input.rawHash || matches(owner, input)) throw requestError('SESSION_REQUEST_INPUT', 'An owner replay is not a conflict');
       const saved = store.conflict(stemKey, input.rawHash);
       const result = saved ? deserializeRequestOutcome(saved).conflict : {
         stemKey, actualStem: input.actualStem, rawHash: input.rawHash, resultBytes: Buffer.from(input.resultBytes), createdAt: now, revision,

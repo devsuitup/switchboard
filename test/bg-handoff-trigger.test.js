@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { sendToBackground } = require('../src/main/bg-agents/bg-handoff');
 const { createTriggerContext } = require('../src/main/triggers/trigger-context');
-const { start } = require('../src/main/triggers/trigger-watcher');
+const { start } = require('./fixtures/trigger-watcher.cjs');
 const { createComposerState } = require('../src/main/terminals/composer-state');
 
 async function until(predicate) {

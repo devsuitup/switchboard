@@ -138,12 +138,13 @@ for (const fail of [false, true]) {
     const errors = [];
     const trigger = path.join(dir, 'bad.json');
     fs.writeFileSync(trigger, '{');
-    const watcher = api.start({ log: { info() {}, warn() {}, error: (...args) => errors.push(args) } });
+    const watcher = api.start({ sessionRequests: require('./fixtures/session-request-journal.cjs').createJournal(),
+      log: { info() {}, warn() {}, error: (...args) => errors.push(args) } });
     t.after(() => watcher.close());
     await new Promise((resolve, reject) => {
       const deadline = Date.now() + 2000;
       function poll() {
-        if (!fs.existsSync(trigger)) return resolve();
+        if (fail ? calls.length > 0 : !fs.existsSync(trigger)) return resolve();
         if (Date.now() >= deadline) return reject(new Error('trigger not processed'));
         setTimeout(poll, 10);
       }
@@ -153,6 +154,7 @@ for (const fail of [false, true]) {
     const dest = path.join(dir, 'processed', 'bad.result.json');
     assert.equal(calls[0].dest, dest);
     assert.equal(fs.existsSync(dest), !fail);
+    assert.equal(fs.existsSync(trigger), fail, 'publication failure retains input for retry');
     if (fail) {
       assert.equal(fs.existsSync(dest + '.tmp'), true, 'result loss and orphan temp stay unchanged');
       assert.ok(errors.some(args => args.includes(error.message)));

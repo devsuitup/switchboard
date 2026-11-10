@@ -17,7 +17,7 @@ const path   = require('path');
 
 const {
   submitWithVerify, waitForCliIdleAfter, isCompactCommand, start,
-} = require('../src/main/triggers/trigger-watcher');
+} = require('./fixtures/trigger-watcher.cjs');
 
 const T0 = 1_000_000;
 

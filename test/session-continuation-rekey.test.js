@@ -12,7 +12,7 @@ const path = require('node:path');
 const transitions = require('../session-transitions');
 const cli = require('../cli-session-state');
 const { createTriggerContext } = require('../src/main/triggers/trigger-context');
-const { start } = require('../src/main/triggers/trigger-watcher');
+const { start } = require('./fixtures/trigger-watcher.cjs');
 const log = { info() {}, debug() {}, warn() {}, error() {} };
 const ft = n => String(134360000000000000n + BigInt(n) * 1000n);
 

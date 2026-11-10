@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { start } = require('../src/main/triggers/trigger-watcher');
+const { start } = require('./fixtures/trigger-watcher.cjs');
 const { createTriggerActions } = require('../src/main/triggers/trigger-actions');
 const ID = '01234567-89ab-cdef-0123-456789abcdef';
 const STEM = '21234567-89ab-cdef-0123-456789abcdef';
@@ -52,7 +52,8 @@ for (const phase of ['claimed', 'prompt-attempted', 'stop-requested']) for (cons
       assert.ok(r.delivery, 'recorded note evidence must survive restart');
       assert.equal(r.delivery.enterAt, 123);
     }
-    assert.equal(fs.existsSync(f.marker), false); assert.equal(fs.existsSync(f.input), false);
+    assert.equal(fs.existsSync(f.marker), !orphan); assert.equal(fs.existsSync(f.input), false);
+    if (!orphan) assert.ok(fs.readdirSync(path.dirname(f.result)).some(file => file.endsWith('.request')), 'unknown marker/input identity is archived as a conflict');
   });
 }
 
@@ -63,23 +64,32 @@ test('committed closed result wins over leftover input and stop marker, includin
   fs.writeFileSync(f.input, JSON.stringify({ version: 1, action: 'stop', sessionId: ID, before: 'Never replay' }));
   const calls = watch(t, f.dir);
   for (let i = 0; i < 30 && fs.existsSync(f.input); i++) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal(fs.existsSync(f.input), false); assert.equal(fs.existsSync(f.marker), false);
+  assert.equal(fs.existsSync(f.input), false); assert.equal(fs.existsSync(f.marker), true);
   fs.writeFileSync(f.input, JSON.stringify({ version: 1, action: 'stop', sessionId: ID }));
   for (let i = 0; i < 30 && fs.existsSync(f.input); i++) await new Promise(resolve => setTimeout(resolve, 5));
   assert.equal(fs.readFileSync(f.result, 'utf8'), bytes); assert.equal(calls(), 0);
 });
 
-test('failed stop result rename retains input and marker for restart; failed unlink leaves immutable result authoritative', t => {
+test('failed stop result rename retains input and marker for restart; failed unlink leaves immutable result authoritative', async t => {
   const f = directory(t); const marker = { version: 1, action: 'stop', sessionId: ID, phase: 'stop-requested' };
   fs.writeFileSync(f.input, '{}'); fs.writeFileSync(f.marker, JSON.stringify(marker));
   const result = { version: 1, action: 'stop', outcome: 'refused', reason: 'session stop not confirmed', uncertain: true };
   let retained = 0;
   const args = { result, resultPath: f.result, triggerPath: f.input, markerPath: f.marker, retained: () => retained++ };
   const broken = createTriggerActions({ renameWithRetry: () => { throw new Error('disk'); } });
-  assert.equal(broken.publish(args), false); assert.equal(retained, 1);
+  const { createSessionRequestPublication } = require('../src/main/triggers/session-request-publication');
+  const { sha } = require('./fixtures/session-request-watcher.cjs');
+  const expected = sha(Buffer.from('{}'));
+  const namespace = publisher => ({ publish(value) {
+    publisher.publish(f.result, Buffer.from(JSON.stringify(value) + '\n'));
+    publisher.cleanup(f.input, expected, f.marker);
+  } });
+  args.namespace = namespace(createSessionRequestPublication({ fs, renameWithRetry: () => { throw new Error('disk'); } }));
+  assert.equal(await broken.publish(args), false); assert.equal(retained, 1);
   assert.equal(fs.existsSync(f.input), true); assert.equal(fs.existsSync(f.marker), true);
   assert.equal(broken.readState(f.result, f.marker).result.stop_requested, true);
   const unlink = createTriggerActions({ fs: { ...fs, unlinkSync: () => { throw new Error('unlink'); } }, renameWithRetry: fs.renameSync });
-  assert.equal(unlink.publish(args), true); assert.equal(retained, 2);
+  args.namespace = namespace(createSessionRequestPublication({ fs: { ...fs, unlinkSync: () => { throw new Error('unlink'); } }, renameWithRetry: fs.renameSync }));
+  assert.equal(await unlink.publish(args), false); assert.equal(retained, 2);
   assert.deepEqual(unlink.readState(f.result, f.marker).result, result);
 });

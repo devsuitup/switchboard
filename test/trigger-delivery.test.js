@@ -15,12 +15,12 @@ const path = require('node:path');
 const { setTimeout: realSetTimeout } = require('node:timers');
 const cli = require('../cli-session-state');
 const { createTriggerContext } = require('../src/main/triggers/trigger-context');
-const { start } = require('../src/main/triggers/trigger-watcher');
+const { start } = require('./fixtures/trigger-watcher.cjs');
 const log = { info() {}, warn() {}, error() {}, debug() {} };
 const iso = ms => new Date(ms).toISOString();
 
 function fixture(t, platform = 'linux', key = 'direct', options = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-592-delivery-'));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-592-delivery-')));
   const dir = path.join(root, 'descriptors');
   const projectsDir = path.join(root, 'projects');
   const folder = path.join(projectsDir, 'proj');
@@ -183,12 +183,19 @@ async function eventOrResult(event, result) {
 
 function triggerRead(t, f, id) {
   const file = path.join(f.triggers, id + '.json');
-  const read = fs.readFileSync;
-  return new Promise(resolve => t.mock.method(fs, 'readFileSync', (...args) => {
-    const content = read(...args);
-    if (args[0] === file) resolve();
-    return content;
-  }));
+  const open = fs.openSync, read = fs.readSync, descriptors = new Set();
+  return new Promise(resolve => {
+    t.mock.method(fs, 'openSync', (...args) => {
+      const fd = open(...args);
+      if (args[0] === file) descriptors.add(fd);
+      return fd;
+    });
+    t.mock.method(fs, 'readSync', (...args) => {
+      const count = read(...args);
+      if (descriptors.has(args[0])) resolve();
+      return count;
+    });
+  });
 }
 
 test('ADR admission delay: the chain total contains only published step waits', async t => {

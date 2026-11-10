@@ -1,5 +1,49 @@
 # Context: trigger-watcher
 
+## Shared result namespace (#380 S1b2)
+
+`session-request-namespace.js` holds the ownership decision for every legacy
+and #1022 action entry, including malformed, oversized and stale input and
+orphan-marker recovery. `start` serializes lowercase filename stems separately
+from the existing session and tab locks. Main injects the ordered writer facade
+through `createTriggerContext({sessionRequests: writer})`; absent or rejected
+journal access retains input and publishes no generic error result.
+
+The guard hashes a stable regular-file descriptor, checks lstat/fstat identity
+before and after the read, and streams oversized requests in bounded chunks
+with a two-second hash deadline. It keeps the existing partial-JSON retry
+before claiming identity. Supplied object keys are sorted, UUID identifiers
+normalized, and exact prompt/array order retained; invalid inputs use raw
+identity. A pending claim never authorizes repeating uncertain legacy effects.
+Existing action markers reconcile interrupted effects without executing them.
+
+Unjournalled results are adopted byte-for-byte with unknown request identity.
+An unjournalled marker can be reconciled into an interrupted result, but cannot
+prove that a currently present input matches. Unreadable or ambiguous artifacts
+retain the input. An incoming different request is journalled as a conflict,
+published at `processed/<actualStem>.conflict-<rawSHA256>.result.json`, then
+archived at the adjacent `.request` path. Existing archive bytes are checked
+before cleanup; a different archive is never replaced. Owner bytes and spelling
+survive case aliases, cache rebuild and processed-file removal. Legacy uses its
+original spelling; action ordinary results keep canonical lowercase spelling.
+Action recovery requires action open/stop, not merely a version property.
+
+`session-request-publication.js` publishes acknowledged saved bytes: temp write,
+file fsync, atomic rename, supported parent fsync, then input/marker cleanup.
+Unexpected errors retain input; a failed post-rename flush cannot retract visible
+bytes, so retry publishes identical bytes. Windows directory open/flush errors
+EISDIR/EPERM/EACCES/EINVAL/ENOTSUP/EBADF are treated as unsupported and logged
+once per publisher; other errors fail. This policy does not claim power-loss
+durability with WAL/NORMAL. Action `publish` requires the namespace publication
+port; it has no independent filesystem cleanup path.
+
+Retained entries retry after 250 ms, 1 s, 5 s, then 30 s capped, and at startup.
+Retries query the writer before effects, so publication loss cannot repeat
+delivery, launch or stop. Watcher close cancels all retry timers. There is no
+input unlink in the watcher's finally branch. Tests inject the writer commands
+through `test/fixtures/session-request-journal.cjs`; real-store tests retain the
+Node20 unsupported-SQLite skip guard. No new typed endpoint is introduced.
+
 Versioned trigger new/open and closed-session resume reserve the shared
 [project operation gate](project-operation-gate.md) in `open-terminal`, before
 asynchronous spawn preparation and through PTY registration. Held projects
@@ -193,8 +237,9 @@ and strings under UUID-shaped filenames of either case. They retain their
 exact legacy result shapes, including null's generic internal-error result
 and logging. The standalone v1 validator still rejects non-objects first.
 Regular-file, 64 KiB, age and parse/retry guards remain transport guards before
-dispatch. Unparseable, oversized or non-regular input cannot be classified into
-the versioned family; those errors retain the legacy transport envelope.
+dispatch. Unparseable or oversized stable regular input keeps the legacy
+transport envelope after the namespace decision. Non-regular or unhashable
+input is retained without a result.
 
 Supported schemas (publish UTF-8 JSON by same-directory atomic rename):
 
@@ -260,30 +305,29 @@ New allocates its ID only after project admission. Successful opens return
 evidence survive later refusals. Stop returns `closed` only on pinned exit.
 OS/parser details belong in `error`, not stable codes.
 
-Versioned terminal results use the existing temporary-write/rename-retry helper
-at `processed/<uuid>.result.json`. Publication precedes input removal, and
-marker removal follows successful input removal. A committed v1 result is
-immutable and wins over duplicate canonical v1 input,
-and over any action marker. Publication failure retains input/marker and
-suppresses replay in memory; cleanup failure also suppresses reprocessing.
-Legacy publication, including deletion after a failed result write, is unchanged.
+Versioned terminal results retain `processed/<uuid>.result.json` and the
+existing public envelope. The shared publisher now serves both families:
+writer ACK, temporary write/file flush/rename/parent flush, then input and marker
+cleanup. Matching requests replay stored bytes; different supplied requests
+preserve the owner's result and use conflict sidecar/archive publication.
+Publication and cleanup failures schedule retry without repeating effects.
 
-Recovery applies to inputs only after they parse as versioned and only when
-their filenames already use the canonical lowercase UUID spelling. Legacy
-inputs never read or obey v1 recovery state, even when they reuse its UUID.
+Namespace ownership precedes family dispatch, including legacy input that
+reuses an action UUID. Unjournalled results/markers are occupied with unknown
+identity, not permission to overwrite or deliver. Marker recovery is guarded
+and can reconcile an interrupted action without executing it.
 Recovery reads lstat each result/marker before opening it, then open with
 `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` where available on POSIX, or `O_RDONLY`
 alone on Windows. Descriptor fstat must still identify a regular file of at
 most 64 KiB. Reads use that descriptor with a 64 KiB + 1 byte ceiling, reject
 overflow even after file growth, and always close the descriptor. The initial
 lstat rejects symlinks, FIFOs and other types before opening them; POSIX open
-flags also protect against path replacement. A parsed legacy result without
-`version` is no recovery state. Inspection/read/parse failures are logged and
-remembered; schema-valid v1 requests refuse with
-`trigger recovery state unavailable`, with OS/parser details in `error`.
-Schema errors take precedence over recovery and staleness refusals. Invalid
-orphan state without an input is logged without replaying an action.
-Stale v1 requests run schema validation before their age refusal, including
+flags also protect against path replacement. Action result recovery requires
+version 1, action open/stop and no `type` field. A legacy result still occupies
+its namespace even though it is not an action recovery envelope. Unreadable
+or uncertain ownership retains input with no fallback result. Invalid orphan
+state is logged without replaying an action.
+For an unoccupied namespace, stale v1 requests validate schema before age, including
 strict version and lowercase filename checks. V1 publication always uses the
 canonical lowercase spelling: a stale or invalid v1 file named in uppercase
 gets its result only at the lowercase path. Legacy publication keeps its
@@ -2391,110 +2435,35 @@ and exceptions retain the conservative true default.
 
 ### Removing the entry
 
-`writeResult()` is the single place a trigger's fate is decided: it writes the
-result atomically (`.tmp` + rename) and then unlinks the trigger. Every `return`
-in `processTriggerFile()` that produces a result goes through it. The body of
-`processTriggerFile()` (everything past the `*.json` filename check) also runs
-inside one `try`/`catch`: any exception raised anywhere in it — shape
-validation, session lookup, the PTY write, a step in a `chain` — is caught and
-turned into `writeResult({ ok: false, error: 'internal error: ' + err.message,
-internal: true })` before the function returns. `internal: true` is set on
-this path only, so a caller can tell "our code broke" apart from a validation
-refusal without parsing `error` text (see `docs/automation.md`, "Reading a
-result"). Between the two, there is no "processed but left behind" path — the
-trigger directory lists exactly what is still pending.
-Two review findings on the previous version of this file (a `null` trigger
-body, and a `chain` step that is not an object) both threw *before* any
-`writeResult()` call was reached; the wrapping `try`/`catch` is what closes
-that gap, rather than validating every field defensively before use.
+Every ordinary result passes the namespace publication decision. The guard
+runs before all old validation/effect paths and owns direct marker recovery;
+see "Shared result namespace" above. Journal/guard/publication failures retain
+the input and schedule an ordered-query retry, without a generic result.
 
-That outer `try`/`catch`, however, only catches a throw from the *synchronous*
-call into `processTriggerFile()`'s body. `waitForComposerFree`,
-`pollForBusyObserved`, `waitForBusyFall` and `waitForIdle` all poll on a
-recursive `setTimeout` — every tick after the first runs from inside a timer
-callback, a stack frame the outer `try`/`catch` never sees. All four share one
-`pollLoop(check)` helper whose `tick()` wraps every call to `check` (first and
-all later ones) in its own `try`/`catch` and routes a throw to that promise's
-`reject` — which the `await` sites inside `processTriggerFile()` then hand to
-the outer `try`/`catch` like any other exception. Before this, a throw from
-one of these ctx hooks on the second tick or later had nothing to catch it:
-not the original `Promise` executor (already returned), not
-`processTriggerFile()`'s `try`/`catch`, not `dispatch()`'s `.catch()` — it
-surfaced as an `uncaughtException` on the whole process. See
-`pollLoop` in `trigger-watcher.js`.
+After admission, ordinary processing exceptions still produce
+`{ok:false,error:'internal error: …',internal:true}` through `writeResult`.
+Publication failures propagate to the guarded catch and cannot be translated
+into a second candidate result. Broken backstop loggers are swallowed by
+`safeLogError`. Poll loops reject deferred callback exceptions to that catch.
 
-`writeResult()` itself is written to never throw, full stop — including when
-`ctx.log.error` (supplied by the caller, out of this module's control) itself
-throws. Both of its `try`/`catch` blocks route their own logging through
-`safeLogError()`, which swallows whatever the logger throws, and the unlink
-branch calls `onEntryRetained()` *before* attempting to log — a guarantee this
-module makes must not depend on whether the log call that merely describes it
-succeeds.
+Input cleanup follows successful publication, never a finally branch. A
+matching replay uses immutable journal bytes. A different request is archived
+as a conflict. An interrupted pending effect is reconciled or refused; retry
+does not run it again. Benign cleanup ENOENT is accepted. Other cleanup errors
+are logged and retried using the saved outcome. Unsafe/unreadable input has no
+consumed claim, so replacing it with a stable regular file may later admit it.
 
-Two consequences worth knowing:
-
-- **`ENOENT` on the unlink is not a failure.** Two `rename` events for the same
-  file can both reach processing; the loser finds the file already gone. That is
-  the intended end state, so it stays silent. The same holds for the initial
-  `lstat`: `ENOENT` there means the file vanished before it could be inspected,
-  and returns without writing a result — there is nothing to report.
-- **Any other unlink error marks the name `retained`.** This is the only path
-  that still adds to `retained` in the running process. The entry could not be
-  removed, so a later filesystem event on that name would re-run a command that
-  already ran. `retained` (a `Set` in `start()`) makes the watcher ignore the
-  name for the process's lifetime, and the failure is logged at error level
-  rather than swallowed. This trades "processed at least once" for "never
-  processed twice", which is the direction the transport must fail in: the
-  result file is already written, so nothing is lost by refusing to look at the
-  leftover again. The `Set` only ever holds names whose removal failed, so it
-  does not grow in normal operation.
-
-A non-`ENOENT` `lstat` error no longer returns silently either: it goes through
-`writeResult()` like everything else, with `error: 'trigger could not be
-inspected: ' + err.message`. It does not call into `retained` directly — if the
-unlink that follows inside `writeResult()` also fails, that is caught by the
-one `retained` path described above, same as for any other trigger.
-
-`dispatch()` still wraps the call to `processTriggerFile()` in a `.catch()`
-that logs and marks the name `retained`. With the internal `try`/`catch` now
-covering the whole function body, this outer `.catch()` should never fire in
-practice — a broken `ctx.log` alone can no longer reach it, since every log
-call between it and `processTriggerFile()`'s own generic catch is now
-`safeLogError()`-guarded too. It stays as a last-resort backstop for the one
-thing genuinely outside this module's control: `retained.add(filename)`
-(a plain `Set`) itself throwing. `retained.add(filename)` runs *before* the
-logging in this `.catch()`, same ordering rule as everywhere else.
-
-Only two `ctx.log.error()` calls sit downstream of every other one in this
-file, and both are `safeLogError()`-guarded: the generic catch's own log line
-above, and `dispatch()`'s `.catch()` here. Every other `ctx.log.warn` /
-`.info` / `.error()` call inside `processTriggerFile()`'s body is deliberately
-*not* wrapped individually — each one precedes a `return` through
-`writeResult()` inside the same outer `try`, so a throw from any of them is
-already caught by the generic catch above, and (if that catch's own guarded
-log and `writeResult()` retry somehow both fail) by `dispatch()`'s catch in
-turn. Wrapping every site individually would duplicate that protection
-without closing any gap the two backstops don't already close. The four
-`ctx.log.*` calls in `start()` itself (directory creation, watcher startup,
-the `fs.watch` `error` event) are a different case: they describe the
-watcher's own lifecycle, not any one trigger's fate, and are out of scope for
-this guarantee.
-
-**Known gap, deliberately not fixed**: if writing the result file fails, the
-trigger is deleted anyway. The two invariants ("always a result", "never twice")
-cannot both hold there, and "never twice" wins.
-
-`processed/` **has no retention policy** — result files accumulate without bound
-and nothing prunes them.
+`processed/` has no automatic pruning policy. Manually removing a result
+does not remove its data-directory-lifetime ownership tombstone.
 
 ## Invariants
 
-- **Never throws out of the watcher callback** — `processTriggerFile()`'s body runs inside one `try`/`catch`; any exception, anticipated or not, lands in the result file via `writeResult()` before the function returns. `dispatch()`'s own `.catch()` is a backstop for the case that should no longer occur.
+- **Never throws out of the watcher callback** — ordinary processing errors produce guarded terminal results; guard/publication errors retain input without a fallback. Dispatch logs through a safe backstop.
 - **Poll loops must reject, not throw** — `waitForComposerFree`, `pollForBusyObserved`, `waitForBusyFall` and `waitForIdle` all share `pollLoop()`, which converts a throw from *any* tick (including the ones run from inside `setTimeout`, not just the first synchronous one) into that promise's rejection. Without this, a throw on a deferred tick has no `try`/`catch` above it — see "Removing the entry".
-- **`writeResult()` never throws** — both of its internal `try`/`catch` blocks route their own logging through `safeLogError()`, which cannot itself throw, and the unlink branch records `onEntryRetained()` before logging. A broken `ctx.log` cannot skip either guarantee.
+- **Publication failures stop cleanup** — `writeResult()` propagates journal/filesystem errors to the retained-input catch. No generic fallback can overwrite an acknowledged outcome.
 - **A broken `ctx.log` cannot crash the process from either backstop** — the generic catch's own log line and `dispatch()`'s own `.catch()` log line are both `safeLogError()`-guarded. An unguarded log call throwing there would otherwise become an `unhandledRejection`, which terminates the process by default under Node — see "Removing the entry".
 - **Deduplication via `inFlight` Set** — noisy `rename` events for the same file (common on Linux inotify) are coalesced; a file is processed at most once per appearance.
-- **A processed trigger never runs twice** — normally because it was deleted; when the deletion fails, because its name is in `retained`. A trigger that threw internally is not exempt from this: it still gets a result and a deletion, so it is not "retained" on that account.
+- **A consumed effect never runs twice** — pending and completed writer ownership survives process restart and processed-file removal. Timers retry publication or reconciliation, not input effects.
 - **`accessSync` guard** — the `rename` event fires both on file creation and deletion; the existence check prevents processing a deletion event.
 - **Directories ignored** — non-`*.json` filenames and any name containing `/` or `path.sep` are skipped.
 - **Invalid `timeout_ms` releases the semaphore** — validation happens before the session look-up and before any wait (only the same-session FIFO precedes it); a bad value produces a result file and returns at once, so its `MAX_INFLIGHT` slot is freed immediately.

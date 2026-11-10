@@ -12,6 +12,7 @@ What changes for you in each release of Switchboard. How to write an entry: [doc
 - The Browser choice replaces Chrome in settings and session dialogs, keeping your saved choices as Off or Claude in Chrome. (#812)
 
 ### Fixed
+- A trigger whose result could not be published is kept and retried, and a different request reusing a finished request's file name no longer erases its result. (#380)
 - Restarting no longer reopens a finished background tab or shows a false "Restore failed" notice when its worker cannot be found. You can still open the conversation from the sidebar. (#1065)
 
 ## v0.0.104 — 2026-11-09

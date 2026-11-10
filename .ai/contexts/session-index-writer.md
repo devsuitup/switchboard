@@ -5,7 +5,12 @@ connection remains for the existing synchronous reads. Independent read workers,
 removal of main's connection and general outcome recovery belong to step 2.
 The dormant #474 A4b1 deletion substrate below provides operation-specific receipts.
 
-## Dormant consumed-request journal (#380 S1b1)
+## Consumed-request journal (#380 S1b1/S1b2)
+
+Main passes the admitted writer facade as `sessionRequests` through
+`createTriggerContext` to the watcher. Existing legacy and action requests now
+claim their lowercase filename namespace before effects and journal terminal
+bytes before publication. No typed trigger endpoint is enabled by S1b2.
 
 Writable reconciliation adds `session_requests` (one lowercase safe filename
 stem per data directory) and `session_request_commands` (stem/actionToken
@@ -61,9 +66,15 @@ new receipt has its own commit revision.
 SQL stores result bytes as BLOBs. Receipt JSON base64-encodes bytes without
 parsing or rebuilding public envelopes. Statements are lazy; write statements
 are prepared only on writable connections. Readonly pre-migration opens do
-not create tables: `sessionRequests.available()` is false and raw snapshots
-return null. The authoritative command rejects unavailable schema, rather
+not create tables: `sessionRequests.available()` is false and raw get/receipt/
+conflict reads throw `SESSION_REQUEST_SCHEMA`. The authoritative command also rejects unavailable schema, rather
 than treating it as absence.
+
+Conflict recording rejects both the owner's own raw hash and a matching supplied
+identity with `SESSION_REQUEST_INPUT`; an owner replay cannot poison subsequent
+ordered queries with its own conflict receipt. The plain-Node fake-parentPort
+worker fixture exercises all five commands and checks transaction rollback when
+receipt insertion fails, including claim and consumed-result insertion.
 
 Consumers must query exact replay before gathering current state; a consume
 ACK is required before publication or input cleanup. A lost/rejected/late ACK

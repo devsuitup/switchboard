@@ -19,7 +19,7 @@ const fs     = require('fs');
 const os     = require('os');
 const path   = require('path');
 
-const { start, waitForBusyFall, waitForCliIdleAfter } = require('../src/main/triggers/trigger-watcher');
+const { start, waitForBusyFall, waitForCliIdleAfter } = require('./fixtures/trigger-watcher.cjs');
 const { createTriggerContext } = require('../src/main/triggers/trigger-context');
 const { classifyTranscriptTail, createTranscriptTurnReader, promptMatches } = require('../transcript-turn');
 
