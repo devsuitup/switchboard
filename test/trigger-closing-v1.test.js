@@ -14,7 +14,7 @@ const { EventEmitter } = require('node:events');
 const realNow = Date.now.bind(Date);
 const { createTriggerRendererBridge } = require('../src/main/triggers/trigger-renderer-bridge');
 const { createTriggerActions } = require('../src/main/triggers/trigger-actions');
-const { fixture: stopFixture } = require('./fixtures/trigger-stop.cjs');
+const { fixture: stopFixture, ID: STOP_ID } = require('./fixtures/trigger-stop.cjs');
 const NEW = '11234567-89ab-cdef-0123-456789abcdef';
 const STEM = '21234567-89ab-cdef-0123-456789abcdef';
 const ENTRY = 'abcdef01-2345-6789-abcd-0123456789ab';
@@ -220,9 +220,9 @@ for (const [name, settle] of [
   });
 }
 
-function cancellableStop(t) {
+function cancellableStop(t, options) {
   const s = stack(t);
-  const f = stopFixture(t);
+  const f = stopFixture(t, options);
   f.lifecycle.launchAllowed = s.attempts.launchAllowed; f.lifecycle.captureAuthority = s.attempts.capture;
   const backend = [];
   const stopCall = f.lifecycle.stop;
@@ -314,13 +314,14 @@ const { createJournal } = require('./fixtures/session-request-journal.cjs');
 const { createSessionRequestNamespace } = require('../src/main/triggers/session-request-namespace');
 const { createSessionRequestPublication } = require('../src/main/triggers/session-request-publication');
 
-async function journalledPublication(t, f) {
+async function journalledPublication(t, f, duringHold = async () => { const undo = await f.rollback(); undo(); },
+  trigger = { version: 1, action: 'open', new: { project, name: 'Task' }, prompt: 'hello' }) {
   const root = nodeFs.realpathSync(nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), 'sb-closing-journal-')));
   t.after(() => nodeFs.rmSync(root, { recursive: true, force: true }));
   const processed = nodePath.join(root, 'processed');
   nodeFs.mkdirSync(processed);
   const input = nodePath.join(root, STEM + '.json');
-  nodeFs.writeFileSync(input, JSON.stringify({ version: 1, action: 'open', new: { project, name: 'Task' }, prompt: 'hello' }));
+  nodeFs.writeFileSync(input, JSON.stringify(trigger));
   const base = createJournal();
   let hold = Promise.resolve();
   const journal = Object.fromEntries(Object.entries(base).map(([name, fn]) => [name, async (...args) => { await hold; return fn(...args); }]));
@@ -331,8 +332,7 @@ async function journalledPublication(t, f) {
   f.execution.publish = async (result, finalize) => {
     let release; hold = new Promise(resolve => { release = resolve; });
     const publishing = actions.publish({ result, namespace: guarded, finalize });
-    const undo = await f.rollback();
-    undo();
+    await duringHold();
     release();
     assert.equal(await publishing, true);
   };
@@ -348,3 +348,41 @@ test('a cancellation that lands while the journal commit is pending stores the c
   assert.equal(stored.created, true);
   assert.equal(result.reason, 'Switchboard is closing.');
 });
+
+for (const change of [false, true]) {
+  test(`an open whose target ${change ? 'changes while the journal query is pending stores the target refusal' : 'stays unchanged publishes opened'}`, async t => {
+    const f = openingStack(t);
+    const journalled = await journalledPublication(t, f, async () => { if (change) f.session.generation++; });
+    f.nameStarted.then(() => f.releaseName());
+    const result = await f.run();
+    const stored = JSON.parse(nodeFs.readFileSync(journalled.resultPath, 'utf8'));
+    if (change) {
+      assert.equal(stored.ok, false); assert.equal(stored.reason, 'session target changed'); assert.equal(stored.created, true);
+      assert.equal(result.reason, 'session target changed');
+    } else {
+      assert.equal(stored.ok, true); assert.equal(stored.outcome, 'opened');
+    }
+    assert.equal(f.events.filter(e => e[0] === 'deliver').length, 1);
+  });
+}
+
+for (const cancel of [false, true]) {
+  test(`a successful stop ${cancel ? 'cancelled while the journal query is pending stores the closing refusal' : 'with no cancellation stores closed'}`, async t => {
+    const c = cancellableStop(t, { onKill: session => { session.exited = true; } });
+    const journalled = await journalledPublication(t, c.f, async () => { if (cancel) { const undo = await c.s.rollback(); undo(); } },
+      { version: 1, action: 'stop', sessionId: STOP_ID });
+    c.f.start();
+    const result = await c.f.finish();
+    const stored = JSON.parse(nodeFs.readFileSync(journalled.resultPath, 'utf8'));
+    assert.equal(c.backend.length, 1);
+    assert.equal(stored.stop_requested, true);
+    if (cancel) {
+      assert.equal(stored.ok, false); assert.equal(stored.outcome, 'refused'); assert.equal(stored.reason, 'Switchboard is closing.');
+      assert.equal(result.reason, 'Switchboard is closing.');
+    } else {
+      assert.equal(stored.ok, true); assert.equal(stored.outcome, 'closed');
+    }
+    assert.equal(c.f.events.filter(e => e[0] === 'release-mutex').length, 1);
+    assert.equal(c.f.events.filter(e => e[0] === 'release-fifo').length, 1);
+  });
+}

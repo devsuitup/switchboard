@@ -532,6 +532,7 @@ async function executeOpen(trigger, execution) {
   let id = isNew ? null : trigger.sessionId.toLowerCase();
   let effects = { ...evidence };
   let releaseSession, releaseTab, reservation, pinned;
+  let acceptedCheck = null;
   const fail = (reason, extra = {}) => refusal(trigger, reason, { ...effects, sessionId: id, ok: false, outcome: 'refused', reason, ...extra });
   const authority = deps.captureAuthority?.();
   const allowed = () => deps.launchAllowed() && authority?.valid() !== false;
@@ -684,6 +685,7 @@ async function executeOpen(trigger, execution) {
     const acceptedPty = firstTarget?.pty ?? session.pty;
     const acceptedGeneration = firstTarget?.generation ?? session.generation;
     const targetChanged = () => sessionChanged(session, acceptedPty, acceptedGeneration);
+    acceptedCheck = targetChanged;
     if (!pinned) {
       entry = ctx.getPtyForSession(id);
       if (entry?.session !== session) return fail('session target changed');
@@ -723,8 +725,9 @@ async function executeOpen(trigger, execution) {
           submitted: step.enter_written ? 'assumed' : 'no', ...(expired() && step.enter_written ? { uncertain: true } : {}) } : {}) });
     }
     const finalize = pending => {
-      result = !allowed() && pending.reason !== 'Switchboard is closing.'
-        ? { ...pending, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' } : pending;
+      const next = pending.ok && acceptedCheck ? acceptedCheck() || pending : pending;
+      result = !allowed() && next.reason !== 'Switchboard is closing.'
+        ? { ...next, ok: false, outcome: 'refused', reason: 'Switchboard is closing.', error: 'Switchboard is closing.' } : next;
       return result;
     };
     await execution.publish(finalize(result), finalize);

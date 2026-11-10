@@ -398,10 +398,10 @@ async function until(predicate, label) {
   assert.ok(predicate(), label);
 }
 function spies() {
-  const s = { lookups: [], writes: [], effects: 0, dispatches: 0, gate: null, onDispatch: null, opens: false, sessions: new Map() };
+  const s = { lookups: [], writes: [], effects: 0, dispatches: 0, gate: null, onDispatch: null, opens: false, sessions: new Map(), authorityValid: true };
   const session = { pty: { pid: 1 }, generation: 7, cwd: '/p', projectPath: '/p' };
   const lifecycle = {
-    launchAllowed: () => true, activeSessions: s.sessions,
+    launchAllowed: () => true, activeSessions: s.sessions, captureAuthority: () => ({ valid: () => s.authorityValid }),
     remoteTarget: async () => { s.effects++; return false; },
     liveElsewhere: async () => { s.effects++; return { known: true, live: null }; },
     resolveTarget: async () => { s.effects++; return { ok: true, cwd: '/p', project: '/p', transcript: 't', transcriptIdentity: 'i' }; },
@@ -577,3 +577,31 @@ test('a result committed in the journal while the owner publishes wins over the 
   assert.equal(fs.existsSync(r.input), false);
   assertNoDuplicateEffects(s);
 });
+
+for (const cancel of [false, true]) {
+  test(`through the watcher, an opened result ${cancel ? 'cancelled while the journal query is pending is stored as the closing refusal' : 'with no cancellation is stored as opened'}`, async t => {
+    const s = spies(); s.opens = true;
+    const base = createJournal();
+    let armed = false; let fired = false;
+    const journal = Object.fromEntries(Object.entries(base).map(([name, fn]) => [name, async (...args) => {
+      if (name === 'querySessionRequestOutcome' && s.dispatches >= 1 && !fired) {
+        fired = true; armed = true;
+        await Promise.resolve();
+        if (cancel) s.authorityValid = false;
+      }
+      return fn(...args);
+    }]));
+    const r = await rig(t, { live: true, ctx: { ...s.ctx, sessionRequests: journal } });
+    await until(() => fs.existsSync(r.output), 'the request reaches a result');
+    assert.equal(armed, true);
+    const stored = JSON.parse(fs.readFileSync(r.output, 'utf8'));
+    if (cancel) {
+      assert.equal(stored.ok, false); assert.equal(stored.outcome, 'refused'); assert.equal(stored.reason, 'Switchboard is closing.');
+      assert.equal(stored.resumed, true);
+    } else {
+      assert.equal(stored.ok, true); assert.equal(stored.outcome, 'opened');
+    }
+    assert.equal(r.publications(), 1);
+    await until(() => !fs.existsSync(r.input), 'the input is cleaned');
+  });
+}

@@ -475,8 +475,12 @@ evidence) and `uncertain` stay on the result. The normalization runs twice:
 before the result is handed to the publisher, and again by the request
 namespace right after it has awaited the journal and immediately before it sends
 the terminal journal command (`namespace.publish(result, finalize)`), so a
-cancellation that lands while the journal is slow is stored as the refusal. The
-action returns the finalized result. Once the journal command has been sent the
+cancellation that lands while the journal is slow is stored as the refusal. An
+open also rechecks its accepted target (object, map binding, PTY, generation,
+eligibility) at that point: a successful result whose target changed during the
+journal wait is stored as `session target changed`, with the launch and delivery
+evidence kept; cancellation keeps precedence. The action returns the finalized
+result. Once the journal command has been sent the
 result is committed: a later cancellation does not rewrite it, and a result
 already published is never rewritten.
 
