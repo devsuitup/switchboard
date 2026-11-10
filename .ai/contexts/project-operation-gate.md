@@ -7,6 +7,9 @@ There is no deletion caller in A3 and no renderer API. This slice takes
 
 `tryAdmit(projectPath, alias = null)` synchronously checks and reserves admission.
 It returns `null` when held, otherwise an idempotent `{ release() }` reservation.
+`tryAdmitAll(projectPaths, alias = null)` reserves every normalized identity
+synchronously or refuses the whole set when any key is held. Equivalent keys
+are deduplicated and one idempotent release drains all admitted keys.
 Launchers keep that reservation across asynchronous preparation and spawn, and
 release on success, refusal, rejection or throw. It is a spawn reservation, not
 a lifetime lock for an already running session.
@@ -23,8 +26,9 @@ drain notifications. Empty entries are removed; there are no timers.
 Local keys use the shared realpath normalizer, absolute paths and Windows case
 folding. Remote keys use alias plus normalized POSIX path, preserve path case,
 and never consult the local filesystem. Keys are exact identities, not directory
-prefixes; another host, child worktree or another project is independent. Remote
-symlink equivalence requires a canonical path from the caller.
+prefixes; another host, child worktree or another project is independent. Launch
+callers with both project membership and a distinct spawn cwd reserve both keys.
+Remote symlink equivalence requires a canonical path from the caller.
 
 Admissions at this base:
 
@@ -32,14 +36,25 @@ Admissions at this base:
   or transcript creation, retaining admission until the launcher acknowledgement.
 - Run now reserves the validated real project before transcript creation and
   awaits the shared launcher before releasing.
-- `open-terminal` reserves the resolved spawn cwd before asynchronous continuation
-  snapshots, MCP preparation or schedule registration, through PTY registration.
-  Existing live reattachment and remote tmux attachment return earlier.
+- Every non-attach `open-terminal` mode reserves both `projectPath` and the resolved
+  spawn cwd before asynchronous continuation snapshots, MCP preparation or schedule
+  registration, through PTY registration, and releases both in the same `finally`.
+  This includes resume/fork into child worktrees and panel terminals whose cwd
+  comes from `panelTarget.cwd`. Plain terminals follow the same rule.
+  Existing live reattachment and remote tmux attachment return earlier. Local
+  `type: 'attach'` skips admission entirely: attaching to an existing job starts
+  no new work, consistently with `attachOnly` background restore.
 - Background dispatch reserves its validated cwd through CLI completion and
   roster reconciliation. Restore reserves the main-owned saved working-set
   `projectPath` through classification, respawn and descriptor discovery;
   `attachOnly` is exempt. Parsed job state has no cwd field, so it is not used
   as a guessed identity. A4 must reconcile saved project membership in its preview.
+- Agents-view `bg-agent-verb` respawn reserves the matching saved background
+  entry's `projectPath` through the respawn acknowledgement and releases in
+  `finally`. Saved entries match by `attachJobId`, or by restore's job lookup for
+  legacy entries. Jobs outside the saved working set have no saved project key;
+  this slice does not infer one from parsed job state. Stop/delete verbs and
+  check-only preview do not launch work and retain their existing behavior.
 - Remote launch reserves alias plus validated launch cwd through SSH launch,
   attachment and the IPC's registration callback. The shared launch service
   awaits that callback before releasing, so an operation awaiting `ready` sees

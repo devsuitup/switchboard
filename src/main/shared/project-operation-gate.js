@@ -20,20 +20,26 @@ function createProjectOperationGate() {
     for (const resolve of entry.drained.splice(0)) resolve();
     if (!entry.held) entries.delete(key);
   };
-  return {
-    tryAdmit(project, alias = null) {
-      const key = keyFor(project, alias);
-      const entry = entryFor(key);
-      if (entry.held) return null;
-      entry.active++;
-      let released = false;
-      return { release() {
-        if (released) return;
-        released = true;
+  const tryAdmitAll = (projects, alias = null) => {
+    const keys = [...new Set(projects.map(project => keyFor(project, alias)))];
+    if (keys.some(key => entries.get(key)?.held)) return null;
+    const admitted = keys.map(key => [key, entryFor(key)]);
+    for (const [, entry] of admitted) entry.active++;
+    let released = false;
+    return { release() {
+      if (released) return;
+      released = true;
+      for (const [key, entry] of admitted) {
         entry.active--;
         settle(key, entry);
-      } };
+      }
+    } };
+  };
+  return {
+    tryAdmit(project, alias = null) {
+      return tryAdmitAll([project], alias);
     },
+    tryAdmitAll,
     hold(project, alias = null) {
       const key = keyFor(project, alias);
       const entry = entryFor(key);

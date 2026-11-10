@@ -134,7 +134,16 @@ function init({ ipcMain, bgAgents, getMainWindow, log, activeSessions, cliSessio
     return pending;
   };
   ipcMain.handle('bg-agent-verb', async (_event, verb, id) => {
-    if (verb === 'respawn') return (await runRespawn(id)).result;
+    if (verb === 'respawn') {
+      const global = await getSetting?.('global');
+      const item = global?.openWorkingSet?.find(item => item.bg === true && (item.attachJobId
+        ? item.attachJobId === id : bgAgents.findRestoreJob(item.sessionId)?.job?.id === id));
+      const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('../shared/project-operation-gate');
+      const admission = item ? projectOperationGate.tryAdmit(item.projectPath) : null;
+      if (item && !admission) return { ok: false, error: PROJECT_OPERATION_ERROR };
+      try { return (await runRespawn(id)).result; }
+      finally { admission?.release(); }
+    }
     const check = await checkVerb(verb, id);
     if (!check.ok) return check;
     const result = await bgAgents.runVerb(verb, id);

@@ -3028,8 +3028,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   }
 
   const { projectOperationGate, PROJECT_OPERATION_ERROR } = require('./src/main/shared/project-operation-gate');
-  const admission = projectOperationGate.tryAdmit(spawnCwd);
-  if (!admission) return { ok: false, error: PROJECT_OPERATION_ERROR };
+  const admission = isAttach ? null : projectOperationGate.tryAdmitAll([projectPath, spawnCwd]);
+  if (!isAttach && !admission) return { ok: false, error: PROJECT_OPERATION_ERROR };
   try {
   // Spawn new PTY
   if (!fs.existsSync(spawnCwd)) {
@@ -3284,7 +3284,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     mcpError,
     generation: session.generation,
   };
-  } finally { admission.release(); }
+  } finally { admission?.release(); }
 });
 
 // --- IPC: activity-trace (fire-and-forget, opt-in) ---
