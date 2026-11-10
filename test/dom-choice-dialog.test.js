@@ -35,6 +35,219 @@ const box = (ctx, id) => shown(ctx).querySelector(`input[type="checkbox"][data-c
 const confirmBtn = (ctx) => shown(ctx).querySelector('.choice-dialog-confirm');
 const cancelBtn = (ctx) => shown(ctx).querySelector('.choice-dialog-cancel');
 
+function planRequests() {
+  const requests = [];
+  const onChange = values => new Promise((resolve, reject) => {
+    requests.push({ values: { ...values }, resolve, reject });
+  });
+  return { requests, onChange };
+}
+
+const flushPlans = () => new Promise(resolve => setImmediate(resolve));
+
+test('choice plan: restored answers request an initial plan and block click and Enter until ready', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    ctx.window.localStorage.setItem('k.b', '0');
+    const { requests, onChange } = planRequests();
+    const pending = open(ctx, { onChange });
+    assert.equal(confirmBtn(ctx).disabled, true, 'Confirm must be disabled during initial planning');
+    assert.equal(ctx.document.activeElement, cancelBtn(ctx));
+    assert.deepEqual(requests[0].values, { a: true, b: false });
+    confirmBtn(ctx).click();
+    confirmBtn(ctx).dispatchEvent(new ctx.window.MouseEvent('click', { bubbles: true }));
+    key(ctx, shown(ctx).querySelector('.modal-dialog'), 'Enter');
+    assert.ok(overlay(ctx), 'pending planning cannot be accepted by any activation path');
+    assert.equal(ctx.window.localStorage.getItem('k.a'), null);
+    const plan = { token: 'initial' };
+    requests[0].resolve(plan);
+    await flushPlans();
+    assert.equal(confirmBtn(ctx).disabled, false);
+    confirmBtn(ctx).click();
+    assert.deepEqual({ ...await pending }, { a: true, b: false, plan });
+    assert.equal(ctx.window.localStorage.getItem('k.a'), '1');
+  } finally { ctx.destroy(); }
+});
+
+test('choice plan: an older response cannot enable Confirm while the current request is pending', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const { requests, onChange } = planRequests();
+    const pending = open(ctx, { onChange });
+    box(ctx, 'a').click();
+    assert.equal(requests.length, 2, 'each changed selection must request a new plan');
+    requests[0].resolve({ token: 'stale' });
+    await flushPlans();
+    assert.equal(confirmBtn(ctx).disabled, true, 'an obsolete plan must not enable Confirm');
+    key(ctx, shown(ctx).querySelector('.modal-dialog'), 'Enter');
+    assert.ok(overlay(ctx));
+    const plan = { token: 'current' };
+    requests[1].resolve(plan);
+    await flushPlans();
+    confirmBtn(ctx).click();
+    assert.deepEqual({ ...await pending }, { a: false, b: true, plan });
+  } finally { ctx.destroy(); }
+});
+
+test('choice plan: late success or failure cannot replace a current ready plan', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    for (const rejected of [false, true]) {
+      ctx.window.localStorage.clear();
+      const { requests, onChange } = planRequests();
+      const pending = open(ctx, { onChange });
+      box(ctx, 'a').click();
+      assert.equal(requests.length, 2, 'both choice snapshots must be planned');
+      const plan = { token: 'latest' };
+      requests[1].resolve(plan);
+      await flushPlans();
+      if (rejected) requests[0].reject(new Error('obsolete failure'));
+      else requests[0].resolve({ token: 'obsolete' });
+      await flushPlans();
+      assert.equal(confirmBtn(ctx).disabled, false);
+      assert.equal(shown(ctx).querySelector('[role="alert"]').hidden, true);
+      confirmBtn(ctx).click();
+      assert.deepEqual({ ...await pending }, { a: false, b: true, plan });
+    }
+  } finally { ctx.destroy(); }
+});
+
+test('choice plan: returning to the same answers still requires the newest request', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const { requests, onChange } = planRequests();
+    const pending = open(ctx, { onChange });
+    box(ctx, 'a').click();
+    box(ctx, 'a').click();
+    assert.equal(requests.length, 3, 'each change, including a return to old answers, must refresh');
+    requests[0].resolve({ token: 'same-answers-old-request' });
+    requests[1].resolve({ token: 'different-answers' });
+    await flushPlans();
+    assert.equal(confirmBtn(ctx).disabled, true);
+    const plan = { token: 'newest' };
+    requests[2].resolve(plan);
+    await flushPlans();
+    confirmBtn(ctx).click();
+    assert.deepEqual({ ...await pending }, { a: true, b: true, plan });
+  } finally { ctx.destroy(); }
+});
+
+test('choice plan: failed refresh clears the old plan, shows literal error and allows retry', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const { requests, onChange } = planRequests();
+    const pending = open(ctx, { onChange });
+    assert.equal(requests.length, 1, 'opening must request a plan');
+    requests[0].resolve({ token: 'before-change' });
+    await flushPlans();
+    box(ctx, 'b').click();
+    requests[1].reject(new Error('<img src=x> refresh failed'));
+    await flushPlans();
+    assert.equal(confirmBtn(ctx).disabled, true);
+    assert.equal(cancelBtn(ctx).disabled, false);
+    const error = shown(ctx).querySelector('[role="alert"]');
+    assert.equal(error.hidden, false);
+    assert.equal(error.textContent, '<img src=x> refresh failed');
+    assert.equal(error.querySelector('img'), null);
+    confirmBtn(ctx).dispatchEvent(new ctx.window.MouseEvent('click', { bubbles: true }));
+    key(ctx, shown(ctx).querySelector('.modal-dialog'), 'Enter');
+    assert.ok(overlay(ctx), 'failed refresh must not accept the previous token');
+    assert.equal(ctx.window.localStorage.length, 0);
+    box(ctx, 'b').click();
+    assert.equal(error.hidden, true);
+    const plan = { token: 'retry' };
+    requests[2].resolve(plan);
+    await flushPlans();
+    confirmBtn(ctx).click();
+    assert.deepEqual({ ...await pending }, { a: true, b: true, plan });
+  } finally { ctx.destroy(); }
+});
+
+test('choice plan: synchronous hook errors leave Cancel usable', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const pending = open(ctx, { onChange: () => { throw new Error('Planning unavailable'); } });
+    assert.equal(confirmBtn(ctx).disabled, true, 'synchronous planning failure must disable Confirm');
+    assert.equal(shown(ctx).querySelector('[role="alert"]').textContent, 'Planning unavailable');
+    key(ctx, cancelBtn(ctx), 'Enter');
+    assert.equal(await pending, null);
+    assert.equal(ctx.window.localStorage.length, 0);
+  } finally { ctx.destroy(); }
+});
+
+test('choice plan: cancellation ignores late responses and leaves the next queued question alone', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    for (const rejected of [false, true]) {
+      const { requests, onChange } = planRequests();
+      const pending = open(ctx, { onChange });
+      assert.equal(requests.length, 1, 'initial plan must be requested');
+      const next = open(ctx, { title: 'Next' });
+      key(ctx, ctx.document.body, 'Escape');
+      assert.equal(await pending, null);
+      assert.equal(ctx.window.localStorage.length, 0);
+      if (rejected) requests[0].reject(new Error('after cancellation'));
+      else requests[0].resolve({ token: 'after cancellation' });
+      await flushPlans();
+      assert.equal(shown(ctx).querySelector('h2').textContent, 'Next');
+      assert.equal(confirmBtn(ctx).disabled, false);
+      cancelBtn(ctx).click();
+      assert.equal(await next, null);
+    }
+  } finally { ctx.destroy(); }
+});
+
+test('choice plan: a response for values changed without an event cannot be accepted', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const { requests, onChange } = planRequests();
+    const pending = open(ctx, { onChange });
+    assert.equal(requests.length, 1, 'initial plan must be requested');
+    box(ctx, 'a').checked = false;
+    requests[0].resolve({ token: 'wrong-answers' });
+    await flushPlans();
+    assert.equal(confirmBtn(ctx).disabled, true, 'only a response matching the live answers may be installed');
+    box(ctx, 'a').dispatchEvent(new ctx.window.Event('change', { bubbles: true }));
+    const plan = { token: 'matching' };
+    requests[1].resolve(plan);
+    await flushPlans();
+    box(ctx, 'b').checked = false;
+    confirmBtn(ctx).click();
+    assert.ok(overlay(ctx), 'acceptance must recheck the plan against the live answers');
+    assert.equal(ctx.window.localStorage.length, 0);
+    cancelBtn(ctx).click();
+    assert.equal(await pending, null);
+  } finally { ctx.destroy(); }
+});
+
+test('choice plan: radio changes refresh the plan and an empty enabled group stays blocked', async () => {
+  const ctx = setupSidebarDom();
+  try {
+    const { requests, onChange } = planRequests();
+    const options = [{ id: 'one', label: 'One' }, { id: 'two', label: 'Two' }];
+    const pending = open(ctx, { options, onChange });
+    assert.equal(requests.length, 1, 'radio selection must be included in initial planning');
+    assert.deepEqual(requests[0].values, { choice: 'one', a: true, b: true });
+    shown(ctx).querySelector('input[type="radio"][data-choice-id="two"]').click();
+    assert.equal(requests.length, 2);
+    const plan = { token: 'two' };
+    requests[1].resolve(plan);
+    await flushPlans();
+    confirmBtn(ctx).click();
+    assert.deepEqual({ ...await pending }, { choice: 'two', a: true, b: true, plan });
+    requests[0].resolve({ token: 'closed' });
+    await flushPlans();
+    const blocked = open(ctx, { options: options.map(option => ({ ...option, disabled: true })), onChange });
+    requests[2].resolve({ token: 'no-enabled-option' });
+    await flushPlans();
+    assert.equal(confirmBtn(ctx).disabled, true);
+    key(ctx, shown(ctx).querySelector('.modal-dialog'), 'Enter');
+    assert.ok(overlay(ctx));
+    cancelBtn(ctx).click();
+    assert.equal(await blocked, null);
+  } finally { ctx.destroy(); }
+});
+
 test('secondary action resolves its id on click and Enter while Cancel keeps initial focus', async () => {
   const ctx = setupSidebarDom();
   try {
